@@ -8,8 +8,6 @@
     <title>Runtime Stats &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
-    <script src="../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="runtime-stats">
-<h1>Runtime Stats<a class="headerlink" href="#runtime-stats" title="Link to this heading"></a></h1>
+<h1>Runtime Stats<a class="headerlink" href="#runtime-stats" title="Link to this heading">¶</a></h1>
 <p>Runtime stats are used to collect the per-query velox runtime events for
 offline query analysis purpose. The collected stats can provide insights into
 the operator level query execution internals, such as how much time a query
@@ -57,7 +55,7 @@ are stored in OperatorStats structure. The query system can aggregate the
 operator level stats collected from each driver by pipeline and task for
 analysis.</p>
 <section id="memory-arbitration">
-<h2>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Link to this heading"></a></h2>
+<h2>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Link to this heading">¶</a></h2>
 <p>These stats are reported by all operators.</p>
 <table class="docutils align-default">
 <colgroup>
@@ -106,7 +104,7 @@ reclaimed from the requestor itself.</p></td>
 </table>
 </section>
 <section id="hashbuild-hashaggregation">
-<h2>HashBuild, HashAggregation<a class="headerlink" href="#hashbuild-hashaggregation" title="Link to this heading"></a></h2>
+<h2>HashBuild, HashAggregation<a class="headerlink" href="#hashbuild-hashaggregation" title="Link to this heading">¶</a></h2>
 <p>These stats are reported only by HashBuild and HashAggregation operators.</p>
 <table class="docutils align-default">
 <colgroup>
@@ -146,7 +144,7 @@ hash build operators. This stat is only reported by the HashBuild operator.</p><
 </table>
 </section>
 <section id="tablewriter">
-<h2>TableWriter<a class="headerlink" href="#tablewriter" title="Link to this heading"></a></h2>
+<h2>TableWriter<a class="headerlink" href="#tablewriter" title="Link to this heading">¶</a></h2>
 <p>These stats are reported only by TableWriter operator</p>
 <table class="docutils align-default">
 <colgroup>
@@ -169,7 +167,7 @@ hash build operators. This stat is only reported by the HashBuild operator.</p><
 </table>
 </section>
 <section id="spilling">
-<h2>Spilling<a class="headerlink" href="#spilling" title="Link to this heading"></a></h2>
+<h2>Spilling<a class="headerlink" href="#spilling" title="Link to this heading">¶</a></h2>
 <p>These stats are reported by operators that support spilling.</p>
 <table class="docutils align-default">
 <colgroup>
@@ -309,7 +307,7 @@ underlying filesystem.</p></td>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

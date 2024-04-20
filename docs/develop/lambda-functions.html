@@ -8,8 +8,6 @@
     <title>How to add a lambda function? &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
-    <script src="../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,10 +40,10 @@
           <div class="body" role="main">
             
   <section id="how-to-add-a-lambda-function">
-<h1>How to add a lambda function?<a class="headerlink" href="#how-to-add-a-lambda-function" title="Link to this heading"></a></h1>
+<h1>How to add a lambda function?<a class="headerlink" href="#how-to-add-a-lambda-function" title="Link to this heading">¶</a></h1>
 <p>This article assumes familiarity with <a class="reference external" href="https://prestodb.io/blog/2020/03/02/presto-lambda">Presto’s lambda functions</a>.</p>
 <section id="introduction">
-<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading"></a></h2>
+<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h2>
 <p>Velox supports lambda functions which are used to implement computations over
 arrays and maps. Lambda functions are higher order functions that take
 arguments which are functions themselves. For example, the <a class="reference internal" href="../functions/presto/array.html#filter" title="filter"><code class="xref py py-func docutils literal notranslate"><span class="pre">filter()</span></code></a>
@@ -105,7 +103,7 @@ if “b” is even and odd elements if “b” is odd.</p>
 <p>Note: At the time of writing Presto didn’t support this syntax.</p>
 </section>
 <section id="function-vector">
-<h2>Function Vector<a class="headerlink" href="#function-vector" title="Link to this heading"></a></h2>
+<h2>Function Vector<a class="headerlink" href="#function-vector" title="Link to this heading">¶</a></h2>
 <p>In Velox, lambda functions must be implemented as vector functions. These
 receive their lambda inputs as vectors of type FUNCTION. For example,
 the “filter” function receives two vectors: a vector of type ARRAY and another
@@ -178,7 +176,7 @@ usually are the rows the lambda function is evaluated on, e.g. the “rows”
 parameter to VectorFunction::apply() method.</p>
 </section>
 <section id="end-to-end-flow">
-<h2>End-to-End Flow<a class="headerlink" href="#end-to-end-flow" title="Link to this heading"></a></h2>
+<h2>End-to-End Flow<a class="headerlink" href="#end-to-end-flow" title="Link to this heading">¶</a></h2>
 <p>A lambda function call in an expression tree is represented by a CallTypedExpr
 node with a LambdaTypedExpr child. The “filter(a, x -&gt; x % 2 = 0)” would be
 represented like this:</p>
@@ -195,7 +193,7 @@ LambdaExpr::evalSpecialForm() creates instances of Callable and stores them in
 a FunctionVector.</p>
 </section>
 <section id="lambda-function-signature">
-<h2>Lambda Function Signature<a class="headerlink" href="#lambda-function-signature" title="Link to this heading"></a></h2>
+<h2>Lambda Function Signature<a class="headerlink" href="#lambda-function-signature" title="Link to this heading">¶</a></h2>
 <p>To specify a signature of a lambda function use “function(argType1, argType2,..,
 returnType)” syntax for the type of the lambda argument. Here is an example of
 the signature of the “filter” function:</p>
@@ -210,7 +208,7 @@ the signature of the “filter” function:</p>
 </div>
 </section>
 <section id="testing">
-<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading"></a></h2>
+<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
 <p>Testing framework fully supports evaluating lambda expression. Just write
 an expression as you would in Presto SQL:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span><span class="s">&quot;filter(a, x -&gt; (x &gt;= b))&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span>
@@ -295,7 +293,7 @@ an array(integer) and “b” an integer.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

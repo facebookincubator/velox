@@ -8,8 +8,6 @@
     <title>UnsafeRow &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
-    <script src="../../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -43,7 +41,7 @@
           <div class="body" role="main">
             
   <section id="unsaferow">
-<h1>UnsafeRow<a class="headerlink" href="#unsaferow" title="Link to this heading"></a></h1>
+<h1>UnsafeRow<a class="headerlink" href="#unsaferow" title="Link to this heading">¶</a></h1>
 <p>Velox supports two data serialization formats out of the box:
 <a class="reference external" href="https://prestodb.io/docs/current/develop/serialized-page.html">PrestoPage</a>
 and UnsafeRow. These formats are used in data shuffle. Velox applications
@@ -93,7 +91,7 @@ bytes for the value.</p>
 <p>Long decimals are stored as binary, the content is serialized java BigInteger
 which has function <code class="docutils literal notranslate"><span class="pre">toByteArray</span></code> to serialize and constructor <code class="docutils literal notranslate"><span class="pre">BigInteger(byte[]</span> <span class="pre">var)</span></code> to deserialize.</p>
 <section id="examples">
-<h2>Examples<a class="headerlink" href="#examples" title="Link to this heading"></a></h2>
+<h2>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h2>
 <p>A row with two columns, INTEGER and BIGINT, has fixed serialized size of 24
 bytes. 8 bytes for null flags. 8 bytes for the value of the first column.
 8 bytes for the value of the second column. Note that we use at least 8 bytes
@@ -139,7 +137,7 @@ of size 3 [1 =&gt; 10, 2 =&gt; 20, 3 =&gt; 30] uses 104 bytes.</p>
 </ul>
 </section>
 <section id="batches-of-rows">
-<h2>Batches of Rows<a class="headerlink" href="#batches-of-rows" title="Link to this heading"></a></h2>
+<h2>Batches of Rows<a class="headerlink" href="#batches-of-rows" title="Link to this heading">¶</a></h2>
 <p>It is common for engines to require the serialization of a batch of rows. In
 these cases, a batch of serialized UnsafeRows can be created by successively
 serializing the row size then the UnsafeRow buffer, in the following manner:</p>
@@ -219,7 +217,7 @@ part of the UnsafeRow payload, which are all expected to be little endian.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

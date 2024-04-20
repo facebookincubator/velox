@@ -8,8 +8,6 @@
     <title>How to add a scalar function? &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
-    <script src="../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,9 +40,9 @@
           <div class="body" role="main">
             
   <section id="how-to-add-a-scalar-function">
-<h1>How to add a scalar function?<a class="headerlink" href="#how-to-add-a-scalar-function" title="Link to this heading"></a></h1>
+<h1>How to add a scalar function?<a class="headerlink" href="#how-to-add-a-scalar-function" title="Link to this heading">¶</a></h1>
 <section id="simple-functions">
-<h2>Simple Functions<a class="headerlink" href="#simple-functions" title="Link to this heading"></a></h2>
+<h2>Simple Functions<a class="headerlink" href="#simple-functions" title="Link to this heading">¶</a></h2>
 <p>This document describes the main concepts, features, and examples of the simple
 function API in Velox. For more real-world API usage examples, check
 <strong>velox/example/SimpleFunctions.cpp</strong>.</p>
@@ -186,7 +184,7 @@ and out_type for string and complex types can be found in <a class="reference in
 <p>Note: Do not pay too much attention to complex type mappings at the moment.
 They are included here for completeness.</p>
 <section id="null-behavior">
-<h3>Null Behavior<a class="headerlink" href="#null-behavior" title="Link to this heading"></a></h3>
+<h3>Null Behavior<a class="headerlink" href="#null-behavior" title="Link to this heading">¶</a></h3>
 <p>Most functions have default null behavior, e.g. a null value in any of the
 arguments produces a null result. The expression evaluation engine
 automatically produces nulls for such inputs, eliding a call to the actual
@@ -211,7 +209,7 @@ an artificial example of a ceil function that returns 0 for null input:</p>
 references to allow for specifying null values. callNullable() can also return
 void to indicate that the function does not produce null values.</p>
 <section id="null-free-fast-path">
-<h4>Null-Free Fast Path<a class="headerlink" href="#null-free-fast-path" title="Link to this heading"></a></h4>
+<h4>Null-Free Fast Path<a class="headerlink" href="#null-free-fast-path" title="Link to this heading">¶</a></h4>
 <p>A “callNullFree” function may be implemented in place of or along side “call”
 and/or “callNullable” functions. When only the “callNullFree” function is
 implemented, evaluation of the function will be skipped and null will
@@ -254,7 +252,7 @@ interface upon access.</p>
 </section>
 </section>
 <section id="determinism">
-<h3>Determinism<a class="headerlink" href="#determinism" title="Link to this heading"></a></h3>
+<h3>Determinism<a class="headerlink" href="#determinism" title="Link to this heading">¶</a></h3>
 <p>By default simple functions are assumed to be deterministic, e.g. given the
 same inputs they always produce the same results. If this is not the case,
 the function must define a static constexpr bool is_deterministic member:</p>
@@ -275,7 +273,7 @@ the function must define a static constexpr bool is_deterministic member:</p>
 </div>
 </section>
 <section id="all-ascii-fast-path">
-<h3>All-ASCII Fast Path<a class="headerlink" href="#all-ascii-fast-path" title="Link to this heading"></a></h3>
+<h3>All-ASCII Fast Path<a class="headerlink" href="#all-ascii-fast-path" title="Link to this heading">¶</a></h3>
 <p>Functions that process string inputs must work correctly for UTF-8 inputs.
 However, these functions often can be implemented more efficiently if input is
 known to contain only ASCII characters. Such functions can provide a “call”
@@ -317,7 +315,7 @@ scan the strings to determine whether they are ASCII or not.</p>
 </div>
 </section>
 <section id="zero-copy-string-result">
-<h3>Zero-copy String Result<a class="headerlink" href="#zero-copy-string-result" title="Link to this heading"></a></h3>
+<h3>Zero-copy String Result<a class="headerlink" href="#zero-copy-string-result" title="Link to this heading">¶</a></h3>
 <p>Functions like <a class="reference internal" href="../functions/presto/string.html#substr" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> and <a class="reference internal" href="../functions/presto/string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a> can produce zero-copy results by
 referencing input strings. To do that they must define a reuse_strings_from_arg
 member variable and initialize it to the index of the argument whose strings
@@ -355,7 +353,7 @@ can be used to set the result to an empty string.</p>
 </div>
 </section>
 <section id="access-to-session-properties-and-constant-inputs">
-<h3>Access to Session Properties and Constant Inputs<a class="headerlink" href="#access-to-session-properties-and-constant-inputs" title="Link to this heading"></a></h3>
+<h3>Access to Session Properties and Constant Inputs<a class="headerlink" href="#access-to-session-properties-and-constant-inputs" title="Link to this heading">¶</a></h3>
 <p>Some functions require access to session properties such as session’s timezone.
 Some examples are the <a class="reference internal" href="../functions/presto/datetime.html#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>, <a class="reference internal" href="../functions/presto/datetime.html#hour" title="hour"><code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code></a>, and <a class="reference internal" href="../functions/presto/datetime.html#minute" title="minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">minute()</span></code></a> Presto
 functions. Other functions could benefit from pre-processing some of the
@@ -432,7 +430,7 @@ reported as output for every single active row. If there are no active rows,
 the exception will not be raised.</p>
 </section>
 <section id="registration">
-<h3>Registration<a class="headerlink" href="#registration" title="Link to this heading"></a></h3>
+<h3>Registration<a class="headerlink" href="#registration" title="Link to this heading">¶</a></h3>
 <p>Use registerFunction template to register simple functions.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">class</span><span class="o">&gt;</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">Func</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">TReturn</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="p">...</span><span class="w"> </span><span class="n">TArgs</span><span class="o">&gt;</span>
 <span class="kt">void</span><span class="w"> </span><span class="n">registerFunction</span><span class="p">(</span>
@@ -540,7 +538,7 @@ For example, to specify rand signature with a constant seed argument:</p>
 </div>
 </section>
 <section id="variadic-arguments">
-<h3>Variadic Arguments<a class="headerlink" href="#variadic-arguments" title="Link to this heading"></a></h3>
+<h3>Variadic Arguments<a class="headerlink" href="#variadic-arguments" title="Link to this heading">¶</a></h3>
 <p>The last argument to a simple function may be marked “Variadic”. This means
 invocations of this function may include 0..N arguments of that type at the end
 of the call.  While not a true type in Velox, “Variadic” can be thought of as a
@@ -593,7 +591,7 @@ syntactic type, and behaves somewhat similarly to Array.</p>
 </section>
 </section>
 <section id="vector-functions">
-<h2>Vector Functions<a class="headerlink" href="#vector-functions" title="Link to this heading"></a></h2>
+<h2>Vector Functions<a class="headerlink" href="#vector-functions" title="Link to this heading">¶</a></h2>
 <p>Simple functions process a single row and produce a single value as a result.
 Vector functions process a batch or rows and produce a vector of results.
 Some of the defining features of these functions are:</p>
@@ -625,7 +623,7 @@ implement the “apply” method.</p>
 </pre></div>
 </div>
 <section id="input-rows">
-<h3>Input rows<a class="headerlink" href="#input-rows" title="Link to this heading"></a></h3>
+<h3>Input rows<a class="headerlink" href="#input-rows" title="Link to this heading">¶</a></h3>
 <p>The “rows” parameter specifies the set of rows in the incoming batch to
 process. This set may not include all the rows. By default, a vector function
 is assumed to have the default null behavior, e.g. null in any input produces
@@ -669,7 +667,7 @@ the specified rows in a way that’s rather similar to a standard for loop.</p>
 </div>
 </section>
 <section id="input-vectors">
-<h3>Input vectors<a class="headerlink" href="#input-vectors" title="Link to this heading"></a></h3>
+<h3>Input vectors<a class="headerlink" href="#input-vectors" title="Link to this heading">¶</a></h3>
 <p>The “args” parameter is an std::vector of Velox vectors containing the values
 of the function arguments. These vectors are not necessarily flat and may be
 dictionary or constant encoded. However, a deterministic function that takes
@@ -688,7 +686,7 @@ vector. A helper class exec::DecodedArgs can be used to decode multiple argument
 </div>
 </section>
 <section id="result-vector">
-<h3>Result vector<a class="headerlink" href="#result-vector" title="Link to this heading"></a></h3>
+<h3>Result vector<a class="headerlink" href="#result-vector" title="Link to this heading">¶</a></h3>
 <p>The “result” parameter is a raw pointer to VectorPtr, which is a
 std::shared_ptr to BaseVector. It can be null, may point to a scratch vector
 that is maybe reusable or a partially populated vector whose contents must be
@@ -760,7 +758,7 @@ cardinality function for maps:</p>
 </div>
 </section>
 <section id="simple-implementation">
-<h3>Simple implementation<a class="headerlink" href="#simple-implementation" title="Link to this heading"></a></h3>
+<h3>Simple implementation<a class="headerlink" href="#simple-implementation" title="Link to this heading">¶</a></h3>
 <p>Vector function interface is very flexible and allows for many interesting
 optimizations. It may also feel very complicated. Let’s see how we can use
 DecodedVector and BaseVector::ensureWritable to implement the “power(a, b)”
@@ -826,7 +824,7 @@ comes only from introducing optimization paths. Developers need to decide
 whether that complexity is justified on a case by case basis.</p>
 </section>
 <section id="try-expression-support">
-<h3>TRY expression support<a class="headerlink" href="#try-expression-support" title="Link to this heading"></a></h3>
+<h3>TRY expression support<a class="headerlink" href="#try-expression-support" title="Link to this heading">¶</a></h3>
 <p>A built-in TRY expression evaluates input expression and handles certain types
 of errors by returning NULL. It is used for the cases where it is preferable
 that queries produce NULL or default values instead of failing when corrupt
@@ -862,7 +860,7 @@ wraps the “call” and “callNullable” methods in a try-catch and reports e
 using context.setError.</p>
 </section>
 <section id="id1">
-<span id="id2"></span><h3>Registration<a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
+<span id="id2"></span><h3>Registration<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <p>Use exec::registerVectorFunction to register a stateless vector function.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="n">registerVectorFunction</span><span class="p">(</span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span>
@@ -923,7 +921,7 @@ once and reuse it for all the batches of data.</p>
 </div>
 </section>
 <section id="function-signature">
-<span id="id3"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Link to this heading"></a></h3>
+<span id="id3"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Link to this heading">¶</a></h3>
 <p>It is recommended to use FunctionSignatureBuilder to create FunctionSignature
 instances. FunctionSignatureBuilder and FunctionSignature support Java-like
 generics, variable number of arguments and lambdas. Here are some examples.</p>
@@ -1005,7 +1003,7 @@ types.</p>
 </section>
 </section>
 <section id="testing">
-<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading"></a></h2>
+<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
 <p>Add a test using FunctionBaseTest from
 velox/functions/prestosql/tests/utils/FunctionBaseTest.h as a base class. Name your test
 and the .cpp file &lt;function-name&gt;Test, e.g. CardinalityTest in
@@ -1073,7 +1071,7 @@ result. Here is an example of a test for simple function “sqrt”:</p>
 </div>
 </section>
 <section id="function-names">
-<h2>Function names<a class="headerlink" href="#function-names" title="Link to this heading"></a></h2>
+<h2>Function names<a class="headerlink" href="#function-names" title="Link to this heading">¶</a></h2>
 <p>For both simple and vector functions, their names are case insensitive. Function
 names are converted to lower case automatically when the functions are
 registered and when they are resolved for a given expression.</p>
@@ -1091,7 +1089,7 @@ names:</p>
 </ul>
 </section>
 <section id="function-resolution-order">
-<h2>Function Resolution order<a class="headerlink" href="#function-resolution-order" title="Link to this heading"></a></h2>
+<h2>Function Resolution order<a class="headerlink" href="#function-resolution-order" title="Link to this heading">¶</a></h2>
 <p>Vector functions have precedence over simple functions during function resolution. If a function <cite>foo</cite> has
 multiple implementations, then the order in which function resolution will proceed is as follows:</p>
 <blockquote>
@@ -1115,7 +1113,7 @@ and return the signature with highest concrete types count. (a concrete type is 
 When number of concrete types are the same, the call is ambiguous, and it’s undefined which function is called.</p>
 </section>
 <section id="benchmarking">
-<h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Link to this heading"></a></h2>
+<h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Link to this heading">¶</a></h2>
 <p>Add a benchmark using folly::Benchmark framework and FunctionBenchmarkBase
 from velox/functions/lib/benchmarks/FunctionBenchmarkBase.h as a base class.
 Benchmarks are a great way to check if an optimization is working, evaluate
@@ -1123,7 +1121,7 @@ how much benefit it brings and decide whether it is worth the additional
 complexity.</p>
 </section>
 <section id="documenting">
-<h2>Documenting<a class="headerlink" href="#documenting" title="Link to this heading"></a></h2>
+<h2>Documenting<a class="headerlink" href="#documenting" title="Link to this heading">¶</a></h2>
 <p>If a function implements Presto semantics, document it by adding an entry to
 one of the <cite>*.rst</cite> files in velox/docs/functions. Each file documents a set of
 related functions. E.g. math.rst contains all of the mathematical functions,
@@ -1226,7 +1224,7 @@ functions are listed in alphabetical order.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

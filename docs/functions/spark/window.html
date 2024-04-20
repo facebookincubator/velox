@@ -8,8 +8,6 @@
     <title>Window functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
-    <script src="../../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,11 +40,11 @@
           <div class="body" role="main">
             
   <section id="window-functions">
-<h1>Window functions<a class="headerlink" href="#window-functions" title="Link to this heading"></a></h1>
+<h1>Window functions<a class="headerlink" href="#window-functions" title="Link to this heading">¶</a></h1>
 <p>Spark window functions can be used to compute SQL window functions.
 More details about window functions can be found at <a class="reference internal" href="../../develop/window.html"><span class="doc">Window functions</span></a></p>
 <section id="value-functions">
-<h2>Value functions<a class="headerlink" href="#value-functions" title="Link to this heading"></a></h2>
+<h2>Value functions<a class="headerlink" href="#value-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py">
 <span class="sig-name descname"><span class="pre">nth_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span></dt>
@@ -57,28 +55,28 @@ The offset should be a positive int literal. If the offset is greater than the n
 in the window, null is returned. It is an error for the offset to be zero or negative.</p>
 </section>
 <section id="rank-functions">
-<h2>Rank functions<a class="headerlink" href="#rank-functions" title="Link to this heading"></a></h2>
+<h2>Rank functions<a class="headerlink" href="#rank-functions" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="row_number">
-<span class="sig-name descname"><span class="pre">row_number</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#row_number" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">row_number</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#row_number" title="Link to this definition">¶</a></dt>
 <dd></dd></dl>
 
 <p>Returns a unique, sequential number to each row, starting with one, according to the ordering of rows within the window partition.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="rank">
-<span class="sig-name descname"><span class="pre">rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#rank" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#rank" title="Link to this definition">¶</a></dt>
 <dd></dd></dl>
 
 <p>Returns the rank of a value in a group of values. The rank is one plus the number of rows preceding the row that are not peer with the row. Thus, the values in the ordering will produce gaps in the sequence. The ranking is performed for each window partition.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="dense_rank">
-<span class="sig-name descname"><span class="pre">dense_rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dense_rank" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">dense_rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dense_rank" title="Link to this definition">¶</a></dt>
 <dd></dd></dl>
 
 <p>Returns the rank of a value in a group of values. This is similar to rank(), except that tie values do not produce gaps in the sequence.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="ntile">
-<span class="sig-name descname"><span class="pre">ntile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#ntile" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">ntile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#ntile" title="Link to this definition">¶</a></dt>
 <dd></dd></dl>
 
 <p>Divides the rows for each window partition into n buckets ranging from 1 to at most <code class="docutils literal notranslate"><span class="pre">n</span></code>. Bucket values will differ by at most 1. If the number of rows in the partition does not divide evenly into the number of buckets, then the remainder values are distributed one per bucket, starting with the first bucket.</p>
@@ -160,7 +158,7 @@ in the window, null is returned. It is an error for the offset to be zero or neg
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

@@ -8,8 +8,6 @@
     <title>Decimal Operators &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
-    <script src="../../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,27 +40,27 @@
           <div class="body" role="main">
             
   <section id="decimal-operators">
-<h1>Decimal Operators<a class="headerlink" href="#decimal-operators" title="Link to this heading"></a></h1>
+<h1>Decimal Operators<a class="headerlink" href="#decimal-operators" title="Link to this heading">¶</a></h1>
 <p>When calculating the result precision and scale of arithmetic operators,
 the formulas follow Hive which is based on the SQL standard and MS SQL:</p>
 <p><a class="reference external" href="https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf">https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf</a></p>
 <p><a class="reference external" href="https://msdn.microsoft.com/en-us/library/ms190476.aspx">https://msdn.microsoft.com/en-us/library/ms190476.aspx</a></p>
 <section id="addition-and-subtraction">
-<h2>Addition and Subtraction<a class="headerlink" href="#addition-and-subtraction" title="Link to this heading"></a></h2>
+<h2>Addition and Subtraction<a class="headerlink" href="#addition-and-subtraction" title="Link to this heading">¶</a></h2>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span><span class="p">,</span> <span class="n">p2</span> <span class="o">-</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
 <span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
 <section id="multiplication">
-<h2>Multiplication<a class="headerlink" href="#multiplication" title="Link to this heading"></a></h2>
+<h2>Multiplication<a class="headerlink" href="#multiplication" title="Link to this heading">¶</a></h2>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="n">p1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span>
 <span class="n">s</span> <span class="o">=</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">s2</span>
 </pre></div>
 </div>
 </section>
 <section id="division">
-<h2>Division<a class="headerlink" href="#division" title="Link to this heading"></a></h2>
+<h2>Division<a class="headerlink" href="#division" title="Link to this heading">¶</a></h2>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">s2</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
 <span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
 </pre></div>
@@ -79,20 +77,20 @@ precision and scale are adjusted.</p>
 with the calculated decimal type.</p>
 </section>
 <section id="decimal-functions">
-<h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading"></a></h2>
+<h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="unscaled_value">
-<span class="sig-name descname"><span class="pre">unscaled_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#unscaled_value" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">unscaled_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#unscaled_value" title="Link to this definition">¶</a></dt>
 <dd><p>Return the unscaled bigint value of a short decimal <code class="docutils literal notranslate"><span class="pre">x</span></code>.
 Supported type is: SHORT_DECIMAL.</p>
 </dd></dl>
 
 </section>
 <section id="decimal-special-forms">
-<h2>Decimal Special Forms<a class="headerlink" href="#decimal-special-forms" title="Link to this heading"></a></h2>
+<h2>Decimal Special Forms<a class="headerlink" href="#decimal-special-forms" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="make_decimal">
-<span class="sig-name descname"><span class="pre">make_decimal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">nullOnOverflow</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#make_decimal" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">make_decimal</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">nullOnOverflow</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#make_decimal" title="Link to this definition">¶</a></dt>
 <dd><p>Create <code class="docutils literal notranslate"><span class="pre">decimal</span></code> of requsted precision and scale from an unscaled bigint value <code class="docutils literal notranslate"><span class="pre">x</span></code>.
 By default, the value of <code class="docutils literal notranslate"><span class="pre">nullOnOverflow</span></code> is true, and null will be returned when <code class="docutils literal notranslate"><span class="pre">x</span></code> is too large for the result precision.
 Otherwise, exception will be thrown when <code class="docutils literal notranslate"><span class="pre">x</span></code> overflows.</p>
@@ -100,7 +98,7 @@ Otherwise, exception will be thrown when <code class="docutils literal notransla
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="decimal_round">
-<span class="sig-name descname"><span class="pre">decimal_round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">decimal</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">decimal</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#decimal_round" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">decimal_round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">decimal</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">decimal</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#decimal_round" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">decimal</span></code> rounded to a new scale using HALF_UP rounding mode. In HALF_UP rounding, the digit 5 is rounded up.
 <code class="docutils literal notranslate"><span class="pre">scale</span></code> is the new scale to be rounded to. It is 0 by default, and integer in [INT_MIN, INT_MAX] is allowed to be its value.
 When the absolute value of scale exceeds the maximum precision of long decimal (38), the round logic is equivalent to the case where it is 38 as we cannot exceed the maximum precision.
@@ -215,7 +213,7 @@ The result precision is decided with the number of integral digits and the resul
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

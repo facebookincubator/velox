@@ -8,8 +8,6 @@
     <title>printExprWithStats &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
-    <script src="../../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -43,7 +41,7 @@
           <div class="body" role="main">
             
   <section id="printexprwithstats">
-<h1>printExprWithStats<a class="headerlink" href="#printexprwithstats" title="Link to this heading"></a></h1>
+<h1>printExprWithStats<a class="headerlink" href="#printexprwithstats" title="Link to this heading">¶</a></h1>
 <p>Velox collects a number of statistics during query execution that allow us to
 reason about the execution dynamic and troubleshoot performance issues.
 Initially these statistics were collected at the operator level and accessed
@@ -52,7 +50,7 @@ individual expressions and introduced a helper function printExprWithStats to
 print the expression tree annotated with runtime stats. This allows us to
 identify bottlenecks in the individual functions.</p>
 <section id="id1">
-<h2>printExprWithStats<a class="headerlink" href="#id1" title="Link to this heading"></a></h2>
+<h2>printExprWithStats<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <p>This is a helper method that can be used to print out the expression tree
 annotated with runtime statistics for individual expressions. The stats include
 CPU time and number of processed rows.</p>
@@ -135,7 +133,7 @@ computed the results on all the necessary rows.</p>
 </div>
 </section>
 <section id="exprsetlistener">
-<h2>ExprSetListener<a class="headerlink" href="#exprsetlistener" title="Link to this heading"></a></h2>
+<h2>ExprSetListener<a class="headerlink" href="#exprsetlistener" title="Link to this heading">¶</a></h2>
 <p>One can register a listener that is invoked on destruction of the ExprSet and
 receives the aggregated runtime statistics for the whole expression tree. The
 statistics of the individual expressions as combined based on the expression
@@ -234,7 +232,7 @@ analysis.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

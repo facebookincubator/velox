@@ -8,8 +8,6 @@
     <title>Expression, Aggregation, and Window Fuzzer &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
-    <script src="../../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -43,9 +41,9 @@
           <div class="body" role="main">
             
   <section id="expression-aggregation-and-window-fuzzer">
-<h1>Expression, Aggregation, and Window Fuzzer<a class="headerlink" href="#expression-aggregation-and-window-fuzzer" title="Link to this heading"></a></h1>
+<h1>Expression, Aggregation, and Window Fuzzer<a class="headerlink" href="#expression-aggregation-and-window-fuzzer" title="Link to this heading">¶</a></h1>
 <section id="expression-fuzzer">
-<h2>Expression Fuzzer<a class="headerlink" href="#expression-fuzzer" title="Link to this heading"></a></h2>
+<h2>Expression Fuzzer<a class="headerlink" href="#expression-fuzzer" title="Link to this heading">¶</a></h2>
 <p>Velox allows users to define UDFs (user-defined functions) and UDAFs
 (user-defined aggregate functions) and provides a fuzzer tools to test the
 engine and UDFs thoroughly. These tools are being used to test builtin Presto
@@ -61,7 +59,7 @@ the same: using regular evaluation path and using simplified evaluation that
 flattens all input vectors before evaluating an expression.</p>
 </section>
 <section id="aggregation-fuzzer">
-<h2>Aggregation Fuzzer<a class="headerlink" href="#aggregation-fuzzer" title="Link to this heading"></a></h2>
+<h2>Aggregation Fuzzer<a class="headerlink" href="#aggregation-fuzzer" title="Link to this heading">¶</a></h2>
 <p>The Aggregation Fuzzer tests the HashAggregation operator, the StreamingAggregation
 operator and UDAFs by generating random aggregations and evaluating these on
 random input vectors.</p>
@@ -162,7 +160,7 @@ tested:</p>
 </div>
 </section>
 <section id="window-fuzzer">
-<h2>Window Fuzzer<a class="headerlink" href="#window-fuzzer" title="Link to this heading"></a></h2>
+<h2>Window Fuzzer<a class="headerlink" href="#window-fuzzer" title="Link to this heading">¶</a></h2>
 <p>The Window fuzzer tests the Window operator with window and aggregation
 functions by generating random window queries and evaluating them on
 random input vectors. Results of the window queries can be compared to
@@ -179,7 +177,7 @@ plans and verifies that results match. These plans include</p>
 that require custom result verifiers are left unverified.</p>
 </section>
 <section id="how-to-integrate">
-<h2>How to integrate<a class="headerlink" href="#how-to-integrate" title="Link to this heading"></a></h2>
+<h2>How to integrate<a class="headerlink" href="#how-to-integrate" title="Link to this heading">¶</a></h2>
 <p>To integrate with the Expression Fuzzer, create a test, register all scalar
 functions supported by the engine, and call <code class="docutils literal notranslate"><span class="pre">FuzzerRunner::run()</span></code> defined in
 <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/expression/tests/ExpressionFuzzer.h">FuzzerRunner.h</a>. See <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/expression/tests/ExpressionFuzzerTest.cpp">ExpressionFuzzerTest.cpp</a>.</p>
@@ -193,7 +191,7 @@ order of inputs and optionally provide custom result verifiers. The Fuzzer
 also allows to provide custom input generators for individual functions.</p>
 </section>
 <section id="how-to-run">
-<h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading"></a></h2>
+<h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading">¶</a></h2>
 <p>All fuzzers support a number of powerful command line arguments.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">–-steps</span></code>: How many iterations to run. Each iteration generates and evaluates one expression or aggregation. Default is 10.</p></li>
@@ -243,7 +241,7 @@ also allows to provide custom input generators for individual functions.</p>
 <span class="pre">--logtostderr=1</span></code></p>
 </section>
 <section id="how-to-reproduce-failures">
-<h2>How to reproduce failures<a class="headerlink" href="#how-to-reproduce-failures" title="Link to this heading"></a></h2>
+<h2>How to reproduce failures<a class="headerlink" href="#how-to-reproduce-failures" title="Link to this heading">¶</a></h2>
 <p>When Fuzzer test fails, a seed number and the evaluated expression are
 printed to the log. An example is given below. Developers can use <code class="docutils literal notranslate"><span class="pre">--seed</span></code>
 with this seed number to rerun the exact same expression with the same inputs,
@@ -267,7 +265,7 @@ expression are determined by both the seed and the pool of all UDFs to choose
 from. So make sure you use the same configuration when reproducing a failure.</p>
 </section>
 <section id="accurate-on-disk-reproduction">
-<h2>Accurate on-disk reproduction<a class="headerlink" href="#accurate-on-disk-reproduction" title="Link to this heading"></a></h2>
+<h2>Accurate on-disk reproduction<a class="headerlink" href="#accurate-on-disk-reproduction" title="Link to this heading">¶</a></h2>
 <p>Sometimes developers may want to capture an issue and investigate later,
 possibly by someone else using a different machine. Using <code class="docutils literal notranslate"><span class="pre">--seed</span></code> is not
 sufficient to accurately reproduce the failure in this scenario. This could be
@@ -430,7 +428,7 @@ Result: ROW&lt;_col0:ARRAY&lt;INTEGER&gt;,_col1:ARRAY&lt;INTEGER&gt;&gt;
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

@@ -8,8 +8,6 @@
     <title>Memory Management &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
-    <script src="../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,9 +40,9 @@
           <div class="body" role="main">
             
   <section id="memory-management">
-<h1>Memory Management<a class="headerlink" href="#memory-management" title="Link to this heading"></a></h1>
+<h1>Memory Management<a class="headerlink" href="#memory-management" title="Link to this heading">¶</a></h1>
 <section id="background">
-<h2>Background<a class="headerlink" href="#background" title="Link to this heading"></a></h2>
+<h2>Background<a class="headerlink" href="#background" title="Link to this heading">¶</a></h2>
 <p>The Velox memory system is built on top of the <a class="reference external" href="https://man7.org/linux/man-pages/man2/mmap.2.html">std::mmap</a> library to avoid the
 <a class="reference external" href="https://stackoverflow.com/questions/3770457/what-is-memory-fragmentation">memory fragmentation issue</a> with std::malloc. It provides the basic
 memory allocation functions for query execution as well as the advanced
@@ -87,7 +85,7 @@ unused Velox memory back to the OS when the server is detected under low memory
 condition.</p>
 </section>
 <section id="overall-design">
-<h2>Overall Design<a class="headerlink" href="#overall-design" title="Link to this heading"></a></h2>
+<h2>Overall Design<a class="headerlink" href="#overall-design" title="Link to this heading">¶</a></h2>
 <p>Velox memory system consists of the following major memory components: memory
 manager (<em>MemoryManager</em>), memory allocator (<em>MemoryAllocator</em>), file cache
 (<em>AsyncDataCache</em>), memory arbitrator (<em>MemoryArbitrator</em>) and a number of memory
@@ -138,7 +136,7 @@ memory and file cache to maximize the memory efficiency. The rest of the
 document describes each memory component in detail.</p>
 </section>
 <section id="memory-manager">
-<h2>Memory Manager<a class="headerlink" href="#memory-manager" title="Link to this heading"></a></h2>
+<h2>Memory Manager<a class="headerlink" href="#memory-manager" title="Link to this heading">¶</a></h2>
 <a class="reference internal image-reference" href="../_images/memory-manager.png"><img alt="Memory Manager" class="align-center" src="../_images/memory-manager.png" style="width: 600px;" /></a>
 <p>The memory manager is created on server startup with the provided
 <em>MemoryManagerOption</em>. It creates a memory allocator instance to manage the
@@ -190,7 +188,7 @@ memory limit (<em>MemoryManagerOptions::arbitratorCapacity</em>) to be smaller t
 limit (<em>MemoryManagerOptions::allocatorCapacity</em>) (refer to <a class="reference external" href="#server-oom-prevention">OOM prevention section</a>
 for detail).</p>
 <section id="memory-system-setup">
-<h3>Memory System Setup<a class="headerlink" href="#memory-system-setup" title="Link to this heading"></a></h3>
+<h3>Memory System Setup<a class="headerlink" href="#memory-system-setup" title="Link to this heading">¶</a></h3>
 <p>Here is the code block from Prestissimo that initializes the Velox memory system:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">PrestoServer::initializeVeloxMemory</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 2</span><span class="w">   </span><span class="k">auto</span><span class="o">*</span><span class="w"> </span><span class="n">systemConfig</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SystemConfig</span><span class="o">::</span><span class="n">instance</span><span class="p">();</span>
@@ -235,7 +233,7 @@ config</p></li>
 </section>
 </section>
 <section id="memory-pool">
-<h2>Memory Pool<a class="headerlink" href="#memory-pool" title="Link to this heading"></a></h2>
+<h2>Memory Pool<a class="headerlink" href="#memory-pool" title="Link to this heading">¶</a></h2>
 <p>The memory pool provides memory allocation functions for query execution. It
 also tracks a query’s memory usage for per-query memory limit enforcement.
 As shown in the Query Memory Pool Hierarchy figure, a query creates a tree of
@@ -267,7 +265,7 @@ directly. Hence, the operator pool is <em>LEAF</em> type and all the others are
 <em>AGGREGATE</em> type. We only enforce the memory limit check at the root query
 pool.</p>
 <section id="memory-usage-tracking">
-<h3>Memory Usage Tracking<a class="headerlink" href="#memory-usage-tracking" title="Link to this heading"></a></h3>
+<h3>Memory Usage Tracking<a class="headerlink" href="#memory-usage-tracking" title="Link to this heading">¶</a></h3>
 <p>To track query memory usage, a leaf operator pool needs to propagate the memory
 usage all the way up to the root query pool and check the memory limit for
 every allocation, but this would be slow. Hence, memory pool uses a memory
@@ -385,12 +383,12 @@ from the memory arbitrator and throws an query memory capacity exceeded error
 </ol>
 </section>
 <section id="memory-pool-apis">
-<h3>Memory Pool APIs<a class="headerlink" href="#memory-pool-apis" title="Link to this heading"></a></h3>
+<h3>Memory Pool APIs<a class="headerlink" href="#memory-pool-apis" title="Link to this heading">¶</a></h3>
 <p>Memory pool has three sets of APIs for memory pool management, memory allocation
 and memory arbitration. The following is a list of the major APIs to use in each
 of the three sets.</p>
 <section id="memory-pool-management">
-<h4>Memory Pool Management<a class="headerlink" href="#memory-pool-management" title="Link to this heading"></a></h4>
+<h4>Memory Pool Management<a class="headerlink" href="#memory-pool-management" title="Link to this heading">¶</a></h4>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Creates a root memory pool with specified &#39;name&#39; and &#39;maxCapacity&#39;.</span>
 <span class="c1">/// &#39;reclaimer&#39; is provided for memory arbitration process.</span>
 <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">MemoryPool</span><span class="o">&gt;</span><span class="w"> </span><span class="n">MemoryManager</span><span class="o">::</span><span class="n">addRootPool</span><span class="p">(</span>
@@ -425,7 +423,7 @@ of the three sets.</p>
 </div>
 </section>
 <section id="memory-allocation">
-<h4>Memory Allocation<a class="headerlink" href="#memory-allocation" title="Link to this heading"></a></h4>
+<h4>Memory Allocation<a class="headerlink" href="#memory-allocation" title="Link to this heading">¶</a></h4>
 <p>The memory pool provides three types of memory allocations. If a user needs a
 large chunk of buffer allocation and the allocated buffer doesn’t need to be
 contiguous, then it can use <em>MemoryPool::allocateNonContiguous</em> to allocate a
@@ -474,7 +472,7 @@ how to allocate memory based on the actual allocation size (see
 </div>
 </section>
 <section id="memory-arbitration">
-<h4>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Link to this heading"></a></h4>
+<h4>Memory Arbitration<a class="headerlink" href="#memory-arbitration" title="Link to this heading">¶</a></h4>
 <p>The <a class="reference external" href="#memory-arbitrator">memory arbitrator section</a> below discusses how these memory arbitration
 related methods are used in the memory arbitration and reclaim process.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns the number of bytes that haven&#39;t been reserved for use, and can be</span>
@@ -520,7 +518,7 @@ related methods are used in the memory arbitration and reclaim process.</p>
 </section>
 </section>
 <section id="memory-arbitrator">
-<h2>Memory Arbitrator<a class="headerlink" href="#memory-arbitrator" title="Link to this heading"></a></h2>
+<h2>Memory Arbitrator<a class="headerlink" href="#memory-arbitrator" title="Link to this heading">¶</a></h2>
 <p>The memory arbitrator is used to arbitrate the memory capacity across running
 queries to achieve fair memory sharing and prevent a query from running out of
 its memory limit. To arbitrate memory capacity between running queries, the
@@ -540,7 +538,7 @@ used memory from the query itself if it has exceeded its max memory capacity,
 or increases its capacity by reclaiming used memory from the other queries with
 the largest memory capacity in the system.</p>
 <section id="memory-arbitration-process">
-<h3>Memory Arbitration Process<a class="headerlink" href="#memory-arbitration-process" title="Link to this heading"></a></h3>
+<h3>Memory Arbitration Process<a class="headerlink" href="#memory-arbitration-process" title="Link to this heading">¶</a></h3>
 <a class="reference internal image-reference" href="../_images/memory-arbitration.png"><img alt="Memory Arbitration Process" class="align-center" src="../_images/memory-arbitration.png" style="width: 800px;" /></a>
 <p>The end-to-end memory arbitration process in <em>SharedArbitrator</em> works as follows:</p>
 <ol class="arabic simple">
@@ -624,7 +622,7 @@ reclaimer moves its driver thread out of suspension state
 </ol>
 </section>
 <section id="memory-reclaim-process">
-<h3>Memory Reclaim Process<a class="headerlink" href="#memory-reclaim-process" title="Link to this heading"></a></h3>
+<h3>Memory Reclaim Process<a class="headerlink" href="#memory-reclaim-process" title="Link to this heading">¶</a></h3>
 <p>Here is the memory reclaim process within a query:</p>
 <ol class="arabic simple">
 <li><p>The memory arbitrator invokes <em>MemoryPool::reclaim</em> method of a candidate
@@ -667,7 +665,7 @@ actual data processing to allow the memory arbitrator to reclaim memory.</p>
 </section>
 </section>
 <section id="memory-allocator">
-<h2>Memory Allocator<a class="headerlink" href="#memory-allocator" title="Link to this heading"></a></h2>
+<h2>Memory Allocator<a class="headerlink" href="#memory-allocator" title="Link to this heading">¶</a></h2>
 <p>The memory allocator manages the physical memory allocations for both query
 memory allocated through memory pool and cache memory allocated directly from
 file cache. The memory allocator ensures the total allocated memory is always
@@ -684,7 +682,7 @@ one is better in the future. Users can choose the allocator for their
 application by setting <em>MemoryManagerOptions::useMmapAllocator</em> (see
 <a class="reference external" href="#memory-system-setup">memory system setup section</a> for example).</p>
 <section id="non-contiguous-allocation">
-<h3>Non-Contiguous Allocation<a class="headerlink" href="#non-contiguous-allocation" title="Link to this heading"></a></h3>
+<h3>Non-Contiguous Allocation<a class="headerlink" href="#non-contiguous-allocation" title="Link to this heading">¶</a></h3>
 <a class="reference internal image-reference" href="../_images/size-class.png"><img alt="Size Class" class="align-center" src="../_images/size-class.png" style="width: 500px;" /></a>
 <p>A non-contiguous allocation is defined as an <em>Allocation</em> object which consists
 of a number of PageRun(s). Each page run contains a contiguous buffer and the
@@ -790,7 +788,7 @@ mapped in <em>SizeClass::pageMapped_</em> and the allocation succeeds.</p></li>
 </ol>
 </section>
 <section id="contiguous-allocation">
-<h3>Contiguous Allocation<a class="headerlink" href="#contiguous-allocation" title="Link to this heading"></a></h3>
+<h3>Contiguous Allocation<a class="headerlink" href="#contiguous-allocation" title="Link to this heading">¶</a></h3>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">MemoryAllocator::allocateContiguous</span><span class="p">(</span>
 <span class="w">   </span><span class="n">MachinePageCount</span><span class="w"> </span><span class="n">numPages</span><span class="p">,</span>
 <span class="w">   </span><span class="n">Allocation</span><span class="o">*</span><span class="w"> </span><span class="n">collateral</span><span class="p">,</span>
@@ -809,7 +807,7 @@ allocation, the memory allocator calls std::munmap to return the physical
 memory back to the OS right away.</p>
 </section>
 <section id="small-allocation">
-<h3>Small Allocation<a class="headerlink" href="#small-allocation" title="Link to this heading"></a></h3>
+<h3>Small Allocation<a class="headerlink" href="#small-allocation" title="Link to this heading">¶</a></h3>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="o">*</span><span class="w"> </span><span class="nf">MmapAllocator::allocateBytes</span><span class="p">(</span>
 <span class="w">   </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">bytes</span><span class="p">,</span>
 <span class="w">   </span><span class="kt">uint16_t</span><span class="w"> </span><span class="n">alignment</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinAlignment</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="p">;</span>
@@ -834,7 +832,7 @@ these ad-hoc small allocations in practice.</p>
 </section>
 </section>
 <section id="server-oom-prevention">
-<h2>Server OOM Prevention<a class="headerlink" href="#server-oom-prevention" title="Link to this heading"></a></h2>
+<h2>Server OOM Prevention<a class="headerlink" href="#server-oom-prevention" title="Link to this heading">¶</a></h2>
 <p>The memory allocator ensures all the memory usage from Velox doesn’t exceed
 system memory limit. This is critical to prevent the server from running out
 of memory as we expect Velox to use a significant portion of the server memory
@@ -958,7 +956,7 @@ to the transient spiky memory usage from non-Velox components in a query system.
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

@@ -8,8 +8,6 @@
     <title>Dictionary Encoding &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
-    <script src="../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,9 +40,9 @@
           <div class="body" role="main">
             
   <section id="dictionary-encoding">
-<h1>Dictionary Encoding<a class="headerlink" href="#dictionary-encoding" title="Link to this heading"></a></h1>
+<h1>Dictionary Encoding<a class="headerlink" href="#dictionary-encoding" title="Link to this heading">¶</a></h1>
 <section id="introduction">
-<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading"></a></h2>
+<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h2>
 <p>Velox makes extensive use of Dictionary encoding to avoid data copying.
 Dictionary encoding is used to compactly represent repeated values and to
 represent a subset of rows without copying data.</p>
@@ -108,7 +106,7 @@ vector two layers deep: Dict(Dict(Flat)). A projection using a function like <a 
 may add another layer of dictionary on top: Dict(Dict(Dict(Flat))).</p>
 </section>
 <section id="nulls">
-<h2>Nulls<a class="headerlink" href="#nulls" title="Link to this heading"></a></h2>
+<h2>Nulls<a class="headerlink" href="#nulls" title="Link to this heading">¶</a></h2>
 <p>Dictionary vector has a nulls buffer separate from the nulls buffer of
 the base vector. This allows dictionary vectors to add nulls to a base vector
 which may not have nulls. This flexibility comes in handy in the
@@ -123,7 +121,7 @@ corresponding to null entries are undefined.</p>
 vector from a nulls buffer, an indices buffer and a base vector.</p>
 </section>
 <section id="decodedvector">
-<span id="decoded-vector"></span><h2>DecodedVector<a class="headerlink" href="#decodedvector" title="Link to this heading"></a></h2>
+<span id="decoded-vector"></span><h2>DecodedVector<a class="headerlink" href="#decodedvector" title="Link to this heading">¶</a></h2>
 <p>As we’ve seen a vector can have many layers of dictionaries: Dict(Dict(….Dict
 (Flat)…)). How do we access the data in such a vector? We use DecodedVector,
 which works for all types, or SimpleVector&lt;T&gt;, which works only for primitive
@@ -289,9 +287,9 @@ constant, dictionary and sequence, but detailed description of these is out of
 scope for this article.</p>
 </section>
 <section id="optimizations">
-<h2>Optimizations<a class="headerlink" href="#optimizations" title="Link to this heading"></a></h2>
+<h2>Optimizations<a class="headerlink" href="#optimizations" title="Link to this heading">¶</a></h2>
 <section id="memory-reuse">
-<h3>Memory Reuse<a class="headerlink" href="#memory-reuse" title="Link to this heading"></a></h3>
+<h3>Memory Reuse<a class="headerlink" href="#memory-reuse" title="Link to this heading">¶</a></h3>
 <p>DecodedVector allocates memory. Reuse instances of DecodedVector to reduce
 memory allocations.</p>
 <p>Use LocalDecodedVector when implementing a VectorFunction. LocalDecodedVector
@@ -329,7 +327,7 @@ a few more for intermediate input vectors.</p>
 </div>
 </section>
 <section id="flat-and-constant-encodings">
-<h3>Flat and Constant Encodings<a class="headerlink" href="#flat-and-constant-encodings" title="Link to this heading"></a></h3>
+<h3>Flat and Constant Encodings<a class="headerlink" href="#flat-and-constant-encodings" title="Link to this heading">¶</a></h3>
 <p>Often it is useful to provide a separate code path for constant or flat
 vectors with no nulls. Use DecodedVector::isConstantMapping() and
 DecodedVector::isFlatMapping() to tell whether the vector is constant or flat
@@ -443,7 +441,7 @@ the rows of interest.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

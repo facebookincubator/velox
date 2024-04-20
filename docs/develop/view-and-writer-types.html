@@ -8,8 +8,6 @@
     <title>View and Writer Types &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
-    <script src="../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,12 +40,12 @@
           <div class="body" role="main">
             
   <section id="view-and-writer-types">
-<h1>View and Writer Types<a class="headerlink" href="#view-and-writer-types" title="Link to this heading"></a></h1>
+<h1>View and Writer Types<a class="headerlink" href="#view-and-writer-types" title="Link to this heading">¶</a></h1>
 <p>View types and writer types are used as the input and output parameter types
 respectively for complex and string types in the simple function interface of
 both scalar and aggregate functions.</p>
 <section id="inputs-view-types">
-<h2>Inputs (View Types)<a class="headerlink" href="#inputs-view-types" title="Link to this heading"></a></h2>
+<h2>Inputs (View Types)<a class="headerlink" href="#inputs-view-types" title="Link to this heading">¶</a></h2>
 <p>Input complex types are represented in the simple function interface using light-weight lazy
 access abstractions that enable efficient direct access to the underlying data in Velox
 vectors.
@@ -264,7 +262,7 @@ assigned. And in such a case, the assignment has undefined behavior.</p>
 </div>
 </section>
 <section id="outputs-writer-types">
-<span id="outputs-write"></span><h2>Outputs (Writer Types)<a class="headerlink" href="#outputs-writer-types" title="Link to this heading"></a></h2>
+<span id="outputs-write"></span><h2>Outputs (Writer Types)<a class="headerlink" href="#outputs-writer-types" title="Link to this heading">¶</a></h2>
 <p>Outputs of complex types are represented using special writers that are designed in a way that
 minimizes data copying by writing directly to Velox vectors.</p>
 <p><strong>ArrayWriter&lt;V&gt;</strong></p>
@@ -347,7 +345,7 @@ primitives.</p>
 </ul>
 </section>
 <section id="limitations">
-<h2>Limitations<a class="headerlink" href="#limitations" title="Link to this heading"></a></h2>
+<h2>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h2>
 <p>1. If a function throws an exception while writing a complex type, then the output of the
 row being written as well as the output of the next row are undefined. Hence, it’s recommended
 to avoid throwing exceptions after writing has started for a complex output within the function.</p>
@@ -423,7 +421,7 @@ to avoid throwing exceptions after writing has started for a complex output with
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

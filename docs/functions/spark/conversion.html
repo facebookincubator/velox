@@ -8,8 +8,6 @@
     <title>Conversion Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
-    <script src="../../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -33,13 +31,13 @@
           <div class="body" role="main">
             
   <section id="conversion-functions">
-<h1>Conversion Functions<a class="headerlink" href="#conversion-functions" title="Link to this heading"></a></h1>
+<h1>Conversion Functions<a class="headerlink" href="#conversion-functions" title="Link to this heading">¶</a></h1>
 <p>Casting from UNKNOWN type to all other scalar types is supported, e.g., cast(NULL as int).</p>
 <section id="cast-to-integral-types">
-<h2>Cast to Integral Types<a class="headerlink" href="#cast-to-integral-types" title="Link to this heading"></a></h2>
+<h2>Cast to Integral Types<a class="headerlink" href="#cast-to-integral-types" title="Link to this heading">¶</a></h2>
 <p>Integral types include bigint, integer, smallint, and tinyint.</p>
 <section id="from-integral-types">
-<h3>From integral types<a class="headerlink" href="#from-integral-types" title="Link to this heading"></a></h3>
+<h3>From integral types<a class="headerlink" href="#from-integral-types" title="Link to this heading">¶</a></h3>
 <p>Casting one integral type to another is allowed. When the input value exceeds the range of result type,
 a value of the result type is created forcedly with the input value.</p>
 <p>Valid examples:</p>
@@ -51,7 +49,7 @@ a value of the result type is created forcedly with the input value.</p>
 </div>
 </section>
 <section id="from-floating-point-types">
-<h3>From floating-point types<a class="headerlink" href="#from-floating-point-types" title="Link to this heading"></a></h3>
+<h3>From floating-point types<a class="headerlink" href="#from-floating-point-types" title="Link to this heading">¶</a></h3>
 <p>Casting from floating-point input to an integral type truncates the input value.
 It is allowed when the truncated result exceeds the range of result type.</p>
 <p>Valid examples</p>
@@ -69,7 +67,7 @@ It is allowed when the truncated result exceeds the range of result type.</p>
 </div>
 </section>
 <section id="from-strings">
-<h3>From strings<a class="headerlink" href="#from-strings" title="Link to this heading"></a></h3>
+<h3>From strings<a class="headerlink" href="#from-strings" title="Link to this heading">¶</a></h3>
 <p>Casting a string to an integral type is allowed if the string represents a number within the range of result type.
 Casting from strings that represent floating-point numbers truncates the decimal part of the input value.
 Casting from invalid input values throws.</p>
@@ -101,7 +99,7 @@ Casting from invalid input values throws.</p>
 </div>
 </section>
 <section id="from-decimal">
-<h3>From decimal<a class="headerlink" href="#from-decimal" title="Link to this heading"></a></h3>
+<h3>From decimal<a class="headerlink" href="#from-decimal" title="Link to this heading">¶</a></h3>
 <p>The decimal part will be truncated for casting to an integer.
 It is allowed when the truncated result exceeds the range of result type.</p>
 <p>Valid examples</p>
@@ -116,9 +114,9 @@ It is allowed when the truncated result exceeds the range of result type.</p>
 </section>
 </section>
 <section id="cast-to-string">
-<h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Link to this heading"></a></h2>
+<h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Link to this heading">¶</a></h2>
 <section id="from-timestamp">
-<h3>From TIMESTAMP<a class="headerlink" href="#from-timestamp" title="Link to this heading"></a></h3>
+<h3>From TIMESTAMP<a class="headerlink" href="#from-timestamp" title="Link to this heading">¶</a></h3>
 <p>Casting a timestamp to a string returns ISO 8601 format with space as separator between date and time,
 and the year part is padded with zeros to 4 characters.
 The conversion precision is microsecond, and trailing zeros are not appended.
@@ -136,9 +134,9 @@ When the year exceeds 9999, a positive sign is added.</p>
 </section>
 </section>
 <section id="cast-to-date">
-<h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading"></a></h2>
+<h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading">¶</a></h2>
 <section id="id1">
-<h3>From strings<a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
+<h3>From strings<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <p>All Spark supported patterns are allowed:</p>
 <blockquote>
 <div><ul class="simple">
@@ -178,9 +176,9 @@ Casting from invalid input values throws.</p>
 </section>
 </section>
 <section id="cast-to-decimal">
-<h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Link to this heading"></a></h2>
+<h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Link to this heading">¶</a></h2>
 <section id="from-varchar">
-<h3>From varchar<a class="headerlink" href="#from-varchar" title="Link to this heading"></a></h3>
+<h3>From varchar<a class="headerlink" href="#from-varchar" title="Link to this heading">¶</a></h3>
 <p>Casting varchar to a decimal of given precision and scale is allowed.
 The behavior is similar with Presto except Spark allows leading and trailing white-spaces in input varchars.</p>
 <p>Valid example</p>
@@ -264,7 +262,7 @@ The behavior is similar with Presto except Spark allows leading and trailing whi
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

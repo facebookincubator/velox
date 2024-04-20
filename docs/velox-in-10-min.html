@@ -8,8 +8,6 @@
     <title>Velox in 10 minutes &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="_static/nature.css?v=0f882399" />
-    <script src="_static/jquery.js?v=5d32c60e"></script>
-    <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="_static/documentation_options.js?v=5929fcd5"></script>
     <script src="_static/doctools.js?v=9a2dae69"></script>
     <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -41,7 +39,7 @@
           <div class="body" role="main">
             
   <section id="velox-in-10-minutes">
-<h1>Velox in 10 minutes<a class="headerlink" href="#velox-in-10-minutes" title="Link to this heading"></a></h1>
+<h1>Velox in 10 minutes<a class="headerlink" href="#velox-in-10-minutes" title="Link to this heading">¶</a></h1>
 <p>This is a quick introduction into Velox, the new C++ vectorized database
 acceleration library aimed at optimizing query engines and data processing
 systems. This tutorial was inspired by <a class="reference external" href="https://github.com/facebookresearch/torcharrow/blob/main/tutorial/tutorial.ipynb">TorchArrow in 10 minutes</a>
@@ -64,7 +62,7 @@ to parse SQL.</p>
 <p>The code used in this tutorial is available in <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/exec/tests/VeloxIn10MinDemo.cpp">velox/exec/tests/VeloxIn10MinDemo.cpp</a>.</p>
 <p>Let’s get started.</p>
 <section id="vectors">
-<h2>Vectors<a class="headerlink" href="#vectors" title="Link to this heading"></a></h2>
+<h2>Vectors<a class="headerlink" href="#vectors" title="Link to this heading">¶</a></h2>
 <p>Velox uses columnar representation of the data similar to Arrow called vectors.
 Let’s create two vectors to store 64-bit integers and one vector to store strings.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makeFlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">});</span>
@@ -93,7 +91,7 @@ Let’s create two vectors to store 64-bit integers and one vector to store stri
 Velox vectors.</p>
 </section>
 <section id="expressions">
-<h2>Expressions<a class="headerlink" href="#expressions" title="Link to this heading"></a></h2>
+<h2>Expressions<a class="headerlink" href="#expressions" title="Link to this heading">¶</a></h2>
 <p>Now, let’s compute a sum of ‘a’ and ‘b’ by evaluating ‘a + b’ expression.</p>
 <p>First we use DuckDB SQL parser to parse the expression into a fully typed
 expression tree. Then, we use Velox APIs to compile the expression tree into
@@ -211,9 +209,9 @@ which contains a detailed step-by-step example of constructing and evaluating
 expression trees using non-test library APIs.</p>
 </section>
 <section id="queries">
-<h2>Queries<a class="headerlink" href="#queries" title="Link to this heading"></a></h2>
+<h2>Queries<a class="headerlink" href="#queries" title="Link to this heading">¶</a></h2>
 <section id="aggregations">
-<h3>Aggregations<a class="headerlink" href="#aggregations" title="Link to this heading"></a></h3>
+<h3>Aggregations<a class="headerlink" href="#aggregations" title="Link to this heading">¶</a></h3>
 <p>We can calculate sum and average of ‘a’ and ‘b’ by creating and
 executing a query plan with an aggregation node:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span>
@@ -244,7 +242,7 @@ guide. Check out <a class="reference internal" href="develop/aggregations.html">
 into aggregation-specific optimizations available in Velox.</p>
 </section>
 <section id="sorting">
-<h3>Sorting<a class="headerlink" href="#sorting" title="Link to this heading"></a></h3>
+<h3>Sorting<a class="headerlink" href="#sorting" title="Link to this heading">¶</a></h3>
 <p>We can sort data using the OrderBy plan node.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span>
 <span class="w">    </span><span class="p">.</span><span class="n">values</span><span class="p">({</span><span class="n">data</span><span class="p">})</span>
@@ -284,7 +282,7 @@ into aggregation-specific optimizations available in Velox.</p>
 </div>
 </section>
 <section id="filtering">
-<h3>Filtering<a class="headerlink" href="#filtering" title="Link to this heading"></a></h3>
+<h3>Filtering<a class="headerlink" href="#filtering" title="Link to this heading">¶</a></h3>
 <p>We can filter data using Filter node.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">().</span><span class="n">values</span><span class="p">({</span><span class="n">data</span><span class="p">}).</span><span class="n">filter</span><span class="p">(</span><span class="s">&quot;a % 2 == 0&quot;</span><span class="p">).</span><span class="n">planNode</span><span class="p">();</span>
 
@@ -302,7 +300,7 @@ into aggregation-specific optimizations available in Velox.</p>
 </div>
 </section>
 <section id="connectors">
-<h3>Connectors<a class="headerlink" href="#connectors" title="Link to this heading"></a></h3>
+<h3>Connectors<a class="headerlink" href="#connectors" title="Link to this heading">¶</a></h3>
 <p>We have seen how to use Velox to perform computation on in-memory vectors
 provided by the caller. Velox can also pull data from connectors. There are
 two connectors to choose from. Hive connector reads DWRF and Parquet
@@ -338,7 +336,7 @@ provide a split.</p>
 </div>
 </section>
 <section id="joins">
-<h3>Joins<a class="headerlink" href="#joins" title="Link to this heading"></a></h3>
+<h3>Joins<a class="headerlink" href="#joins" title="Link to this heading">¶</a></h3>
 <p>We can now join TPC-H nation and region tables to count number of nations in
 each region and sort results by region name. We need to use one TableScan node
 for nations table and another for region table. We also need to provide splits
@@ -474,7 +472,7 @@ example in the code.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

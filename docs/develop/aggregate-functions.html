@@ -8,8 +8,6 @@
     <title>How to add an aggregate function? &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
-    <script src="../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=9a2dae69"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,7 +40,7 @@
           <div class="body" role="main">
             
   <section id="how-to-add-an-aggregate-function">
-<h1>How to add an aggregate function?<a class="headerlink" href="#how-to-add-an-aggregate-function" title="Link to this heading"></a></h1>
+<h1>How to add an aggregate function?<a class="headerlink" href="#how-to-add-an-aggregate-function" title="Link to this heading">¶</a></h1>
 <p>Aggregate functions are calculated by the HashAggregation operator.
 There can be one or more aggregate functions in a single operator.
 Here are some examples.</p>
@@ -112,7 +110,7 @@ computing running total that uses <a class="reference internal" href="../functio
 </pre></div>
 </div>
 <section id="memory-layout">
-<h2>Memory Layout<a class="headerlink" href="#memory-layout" title="Link to this heading"></a></h2>
+<h2>Memory Layout<a class="headerlink" href="#memory-layout" title="Link to this heading">¶</a></h2>
 <p>HashAggregation operator stores data in rows. Each row corresponds to a unique combination of grouping key values. Global aggregations store data in a single row.</p>
 <p>Aggregate functions can be classified by the type of their accumulators into three groups:</p>
 <ul class="simple">
@@ -196,7 +194,7 @@ create a new class that extends velox::exec::Aggregate base class
 </ul>
 </section>
 <section id="simple-function-interface">
-<h2>Simple Function Interface<a class="headerlink" href="#simple-function-interface" title="Link to this heading"></a></h2>
+<h2>Simple Function Interface<a class="headerlink" href="#simple-function-interface" title="Link to this heading">¶</a></h2>
 <p>This section describes the main concepts and the simple interface of
 aggregation functions. Examples of aggregation functions implemented through
 the simple-function interface can be found at velox/exec/tests/SimpleAverageAggregate.cpp
@@ -234,7 +232,7 @@ that converts the aggregation function’s raw input directly to its intermediat
 states. Finally, the author must define a struct named <cite>AccumulatorType</cite> in
 the aggregation function class. We explain each part in more details below.</p>
 <section id="default-null-behavior">
-<h3>Default-Null Behavior<a class="headerlink" href="#default-null-behavior" title="Link to this heading"></a></h3>
+<h3>Default-Null Behavior<a class="headerlink" href="#default-null-behavior" title="Link to this heading">¶</a></h3>
 <p>When adding raw inputs or intermediate states to accumulators, aggregation
 functions of default-null behavior ignore the input values that are nulls. For
 raw inputs that consist of multiple columns, an entire row is ignored if at
@@ -255,7 +253,7 @@ an example of non-default-null behavior.</p>
 in the <cite>AccumulatorType</cite> struct.</p>
 </section>
 <section id="tointermediate">
-<h3>toIntermediate<a class="headerlink" href="#tointermediate" title="Link to this heading"></a></h3>
+<h3>toIntermediate<a class="headerlink" href="#tointermediate" title="Link to this heading">¶</a></h3>
 <p>The author can optionally define a static method <cite>toIntermediate()</cite> that
 converts a raw input to an intermediate state. If defined, this function is
 used in query plans that abandon the partial aggregation step. If the aggregaiton function has
@@ -298,7 +296,7 @@ exec::optional_arg_type&lt;Generic&lt;T1&gt;&gt; in);</p>
 </table>
 </section>
 <section id="accumulatortype-of-default-null-behavior">
-<h3>AccumulatorType of Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-default-null-behavior" title="Link to this heading"></a></h3>
+<h3>AccumulatorType of Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-default-null-behavior" title="Link to this heading">¶</a></h3>
 <p>For aggregaiton functions of default-null behavior, the author defines an
 <cite>AccumulatorType</cite> struct as follows.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span>
@@ -346,7 +344,7 @@ initialize all accumulators.</p>
 <p>Notice that <cite>writeIntermediateResult</cite> and <cite>writeFinalResult</cite> are expected to not
 modify contents in the accumulator.</p>
 <section id="addinput">
-<h4>addInput<a class="headerlink" href="#addinput" title="Link to this heading"></a></h4>
+<h4>addInput<a class="headerlink" href="#addinput" title="Link to this heading">¶</a></h4>
 <p>This method adds raw input values to <em>this</em> accumulator. It receives a
 <cite>HashStringAllocator*</cite> followed by <cite>exec::arg_type&lt;T1&gt;</cite>-typed values, one for
 each argument type <cite>Ti</cite> wrapped in InputType.</p>
@@ -355,7 +353,7 @@ ignored before <cite>addInput</cite> is called. After <cite>addInput</cite> is c
 accumulator is assumed to be non-null.</p>
 </section>
 <section id="combine">
-<h4>combine<a class="headerlink" href="#combine" title="Link to this heading"></a></h4>
+<h4>combine<a class="headerlink" href="#combine" title="Link to this heading">¶</a></h4>
 <p>This method adds an input intermediate state to <em>this</em> accumulator. It receives
 a <cite>HashStringAllocator*</cite> and one <cite>exec::arg_type&lt;IntermediateType&gt;</cite> value. With
 default-null behavior, nulls among the input intermediate states are ignored
@@ -363,7 +361,7 @@ before <cite>combine</cite> is called. After <cite>combine</cite> is called, <em
 assumed to be non-null.</p>
 </section>
 <section id="writeintermediateresult">
-<h4>writeIntermediateResult<a class="headerlink" href="#writeintermediateresult" title="Link to this heading"></a></h4>
+<h4>writeIntermediateResult<a class="headerlink" href="#writeintermediateresult" title="Link to this heading">¶</a></h4>
 <p>This method writes <em>this</em> accumulator out to an intermediate state vector. It
 has an out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite>. This
 method returns true if it writes a non-null value to <cite>out</cite>, or returns false
@@ -373,7 +371,7 @@ nulls in the intermediate state vector without <cite>writeIntermediateResult</ci
 called.</p>
 </section>
 <section id="writefinalresult">
-<h4>writeFinalResult<a class="headerlink" href="#writefinalresult" title="Link to this heading"></a></h4>
+<h4>writeFinalResult<a class="headerlink" href="#writefinalresult" title="Link to this heading">¶</a></h4>
 <p>This method writes <em>this</em> accumulator out to a final result vector. It
 has an out-parameter of the type <cite>exec::out_type&lt;OutputType&gt;&amp;</cite>. This
 method returns true if it writes a non-null value to <cite>out</cite>, or returns false
@@ -383,7 +381,7 @@ nulls in the final result vector without <cite>writeFinalResult</cite> being cal
 </section>
 </section>
 <section id="accumulatortype-of-non-default-null-behavior">
-<h3>AccumulatorType of Non-Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-non-default-null-behavior" title="Link to this heading"></a></h3>
+<h3>AccumulatorType of Non-Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-non-default-null-behavior" title="Link to this heading">¶</a></h3>
 <p>For aggregaiton functions of non-default-null behavior, the author defines an
 <cite>AccumulatorType</cite> struct as follows.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span>
@@ -424,7 +422,7 @@ the same as those for default-null behavior.</p>
 <p>Same as the case for default-null behavior, <cite>writeIntermediateResult</cite> and
 <cite>writeFinalResult</cite> are expected to not modify contents in the accumulator.</p>
 <section id="id1">
-<h4>addInput<a class="headerlink" href="#id1" title="Link to this heading"></a></h4>
+<h4>addInput<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <p>This method receives a <cite>HashStringAllocator*</cite> followed by
 <cite>exec::optional_arg_type&lt;T1&gt;</cite> values, one for each argument type <cite>Ti</cite> wrapped
 in InputType.</p>
@@ -436,21 +434,21 @@ accumulator that’s already non-null remains non-null regardless of the return
 value of <cite>addInput</cite>.</p>
 </section>
 <section id="id2">
-<h4>combine<a class="headerlink" href="#id2" title="Link to this heading"></a></h4>
+<h4>combine<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <p>This method receives a <cite>HashStringAllocator*</cite> and an
 <cite>exec::optional_arg_type&lt;IntermediateType&gt;</cite> value. This method is called on
 all intermediate states even if some are nulls. Same as <cite>addInput</cite>, this method
 returns a boolean meaning whether <em>this</em> accumulator is non-null after the call.</p>
 </section>
 <section id="id3">
-<h4>writeIntermediateResult<a class="headerlink" href="#id3" title="Link to this heading"></a></h4>
+<h4>writeIntermediateResult<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
 <p>This method has an out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite>
 and a boolean flag <cite>nonNullGroup</cite> indicating whether <em>this</em> accumulator is
 non-null. This method returns true if it writes a non-null value to <cite>out</cite>, or
 return false meaning a null should be written to the intermediate state vector.</p>
 </section>
 <section id="id4">
-<h4>writeFinalResult<a class="headerlink" href="#id4" title="Link to this heading"></a></h4>
+<h4>writeFinalResult<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
 <p>This method writes <em>this</em> accumulator out to a final result vector. It has an
 out-parameter of the type <cite>exec::out_type&lt;OutputType&gt;&amp;</cite> and a boolean flag
 <cite>nonNullGroup</cite> indicating whether <em>this</em> accumulator is non-null. This method
@@ -459,7 +457,7 @@ null should be written to the final result vector.</p>
 </section>
 </section>
 <section id="limitations">
-<h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading"></a></h3>
+<h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h3>
 <p>The simple aggregation function interface currently has three limitations.</p>
 <ol class="arabic simple">
 <li><p>All values read or written by the aggrgeaiton function must be part of the
@@ -473,10 +471,10 @@ add this support.</p></li>
 </section>
 </section>
 <section id="vector-function-interface">
-<h2>Vector Function Interface<a class="headerlink" href="#vector-function-interface" title="Link to this heading"></a></h2>
+<h2>Vector Function Interface<a class="headerlink" href="#vector-function-interface" title="Link to this heading">¶</a></h2>
 <p>Aggregation functions that cannot use the simple-function interface can be written as vector funcitons.</p>
 <section id="accumulator-size">
-<h3>Accumulator size<a class="headerlink" href="#accumulator-size" title="Link to this heading"></a></h3>
+<h3>Accumulator size<a class="headerlink" href="#accumulator-size" title="Link to this heading">¶</a></h3>
 <p>The implementation of the velox::exec::Aggregate interface can start with <em>accumulatorFixedWidthSize()</em> method.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Returns the fixed number of bytes the accumulator takes on a group</span>
 <span class="c1">// row. Variable width accumulators will reference the variable</span>
@@ -556,7 +554,7 @@ location of the accumulator.</p>
 </div>
 </section>
 <section id="initialization">
-<h3>Initialization<a class="headerlink" href="#initialization" title="Link to this heading"></a></h3>
+<h3>Initialization<a class="headerlink" href="#initialization" title="Link to this heading">¶</a></h3>
 <p>Once you have accumulatorFixedWidthSize(), the next method to implement is initializeNewGroupsInternal().</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Initializes null flags and accumulators for newly encountered groups.</span>
 <span class="c1">// @param groups Pointers to the start of the new group rows.</span>
@@ -569,7 +567,7 @@ location of the accumulator.</p>
 <p>This method is called by the HashAggregation operator every time it encounters new combinations of the grouping keys. This method should initialize the accumulators for the new groups. For example, partial “count” and “sum” aggregates would set the accumulators to zero. Many aggregate functions would set null flags to true by calling the exec::Aggregate::setAllNulls(groups, indices) helper method.</p>
 </section>
 <section id="groupby-aggregation">
-<h3>GroupBy aggregation<a class="headerlink" href="#groupby-aggregation" title="Link to this heading"></a></h3>
+<h3>GroupBy aggregation<a class="headerlink" href="#groupby-aggregation" title="Link to this heading">¶</a></h3>
 <p>At this point you have accumulatorFixedWidthSize() and initializeNewGroupsInternal() methods implemented. Now, we can proceed to implementing the end-to-end group-by aggregation. We need the following pieces:</p>
 <ul class="simple">
 <li><dl class="simple">
@@ -785,7 +783,7 @@ implement toIntermediate() method which simply returns the input unmodified.</p>
 <p>GroupBy aggregation code path is done. We proceed to global aggregation.</p>
 </section>
 <section id="global-aggregation">
-<h3>Global aggregation<a class="headerlink" href="#global-aggregation" title="Link to this heading"></a></h3>
+<h3>Global aggregation<a class="headerlink" href="#global-aggregation" title="Link to this heading">¶</a></h3>
 <p>Global aggregation is similar to group-by aggregation, but there is only one
 group and one accumulator. After implementing group-by aggregation, the only
 thing needed to enable global aggregation is to implement
@@ -870,7 +868,7 @@ these correctly.</p>
 </section>
 </section>
 <section id="factory-function">
-<h2>Factory function<a class="headerlink" href="#factory-function" title="Link to this heading"></a></h2>
+<h2>Factory function<a class="headerlink" href="#factory-function" title="Link to this heading">¶</a></h2>
 <p>We can now write a factory function that creates an instance of the new
 aggregation function and register it by calling exec::registerAggregateFunction
 (…) and specifying function name and signatures.</p>
@@ -974,7 +972,7 @@ result type is the same as input value type.</p>
 </div>
 </section>
 <section id="testing">
-<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading"></a></h2>
+<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
 <p>It is time to put all the pieces together and test how well the new function
 works.</p>
 <p>Use AggregationTestBase from velox/aggregates/tests/AggregationTestBase.h as a
@@ -1033,18 +1031,18 @@ and <a class="reference internal" href="../functions/presto/aggregate.html#min_b
 inputs in the presence of ties.</p>
 </section>
 <section id="function-names">
-<h2>Function names<a class="headerlink" href="#function-names" title="Link to this heading"></a></h2>
+<h2>Function names<a class="headerlink" href="#function-names" title="Link to this heading">¶</a></h2>
 <p>Same as scalar functions, aggregate function names are case insensitive. The names
 are converted to lower case automatically when the functions are registered and
 when they are resolved for a given expression.</p>
 </section>
 <section id="documentation">
-<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading"></a></h2>
+<h2>Documentation<a class="headerlink" href="#documentation" title="Link to this heading">¶</a></h2>
 <p>Finally, document the new function by adding an entry to velox/docs/functions/presto/aggregate.rst</p>
 <p>You can see the documentation for all functions at <a class="reference internal" href="../functions/presto/aggregate.html"><span class="doc">Aggregate Functions</span></a> and read about how documentation is generated at <a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/docs#velox-documentation">https://github.com/facebookincubator/velox/tree/main/velox/docs#velox-documentation</a></p>
 </section>
 <section id="accumulator">
-<h2>Accumulator<a class="headerlink" href="#accumulator" title="Link to this heading"></a></h2>
+<h2>Accumulator<a class="headerlink" href="#accumulator" title="Link to this heading">¶</a></h2>
 <p>In Velox, efficient use of memory is a priority. This includes both optimizing
 the total amount of memory used as well as the number of memory allocations.
 Note that runtime statistics reported by Velox include both peak memory usage
@@ -1287,14 +1285,14 @@ object returned by trackRowSize goes out of scope, the counter is updated to
 add memory allocated since object’s creation.</p>
 </section>
 <section id="end-to-end-testing">
-<h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Link to this heading"></a></h2>
+<h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Link to this heading">¶</a></h2>
 <p>To confirm that aggregate function works end to end as part of query, update testAggregations() test in TestHiveAggregationQueries.java in presto_cpp repo to add a query that uses the new function.</p>
 <div class="highlight-java notranslate"><div class="highlight"><pre><span></span><span class="n">assertQuery</span><span class="p">(</span><span class="s">&quot;SELECT orderkey, array_agg(linenumber) FROM lineitem GROUP BY 1&quot;</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 <section id="overwrite-intermediate-type-in-presto">
-<h2>Overwrite Intermediate Type in Presto<a class="headerlink" href="#overwrite-intermediate-type-in-presto" title="Link to this heading"></a></h2>
+<h2>Overwrite Intermediate Type in Presto<a class="headerlink" href="#overwrite-intermediate-type-in-presto" title="Link to this heading">¶</a></h2>
 <p>Sometimes we need to change the intermediate type of aggregation function in
 Presto, due to the differences in implementation or in the type information
 worker node receives.  This is done in Presto class
@@ -1410,7 +1408,7 @@ example pull request can be found at
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>

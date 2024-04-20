@@ -8,8 +8,6 @@
     <title>Array Functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
-    <script src="../../_static/jquery.js?v=5d32c60e"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
@@ -42,10 +40,10 @@
           <div class="body" role="main">
             
   <section id="array-functions">
-<h1>Array Functions<a class="headerlink" href="#array-functions" title="Link to this heading"></a></h1>
+<h1>Array Functions<a class="headerlink" href="#array-functions" title="Link to this heading">¶</a></h1>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="aggregate">
-<span class="sig-name descname"><span class="pre">aggregate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">merge</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">finish)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#aggregate" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">aggregate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">merge</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">finish)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#aggregate" title="Link to this definition">¶</a></dt>
 <dd><p>Applies a binary operator to an initial state and all elements in the array, and reduces this to a single state.
 The final state is converted into the final result by applying a finish function.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">aggregate</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">acc</span> <span class="o">+</span> <span class="n">x</span><span class="p">,</span> <span class="n">acc</span> <span class="o">-&gt;</span> <span class="n">acc</span> <span class="o">*</span> <span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="mi">60</span>
@@ -55,7 +53,7 @@ The final state is converted into the final result by applying a finish function
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="array">
-<span class="sig-name descname"><span class="pre">array</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">E</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">E1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">En)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">E1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">En</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">array</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">E</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">E1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">En)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">E1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">En</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an array with the given elements.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]</span>
 </pre></div>
@@ -64,7 +62,7 @@ The final state is converted into the final result by applying a finish function
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="array_contains">
-<span class="sig-name descname"><span class="pre">array_contains</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#array_contains" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">array_contains</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#array_contains" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if the array contains the value.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_contains</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 </pre></div>
@@ -73,7 +71,7 @@ The final state is converted into the final result by applying a finish function
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="array_intersect">
-<span class="sig-name descname"><span class="pre">array_intersect</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(E1))</span> <span class="pre">-&gt;</span> <span class="pre">array(E2</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_intersect" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">array_intersect</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(E1))</span> <span class="pre">-&gt;</span> <span class="pre">array(E2</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_intersect" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an array of the elements in the intersection of array1 and array2, without duplicates.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_intersect</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">));</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">]</span>
 </pre></div>
@@ -82,7 +80,7 @@ The final state is converted into the final result by applying a finish function
 
 <dl class="py function">
 <dt class="sig sig-object py" id="array_max">
-<span class="sig-name descname"><span class="pre">array_max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_max" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">array_max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_max" title="Link to this definition">¶</a></dt>
 <dd><p>Returns maximum non-NULL element of the array. Returns NULL if array is empty or all elements are NULL.
 When E is DOUBLE or REAL, returns NaN if any element is NaN.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="mi">3</span>
@@ -96,7 +94,7 @@ When E is DOUBLE or REAL, returns NaN if any element is NaN.</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="array_min">
-<span class="sig-name descname"><span class="pre">array_min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_min" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">array_min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_min" title="Link to this definition">¶</a></dt>
 <dd><p>Returns minimum non-NULL element of the array. Returns NULL if array is empty or all elements are NULL.
 When E is DOUBLE or REAL, NaN value is considered greater than any non-NaN value.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>SELECT array_min(array(1, 2, 3）); -- 1
@@ -112,7 +110,7 @@ SELECT array_min(array(NULL, float(&#39;nan&#39;))); -- NaN
 
 <dl class="py function">
 <dt class="sig sig-object py" id="array_remove">
-<span class="sig-name descname"><span class="pre">array_remove</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#array_remove" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">array_remove</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#array_remove" title="Link to this definition">¶</a></dt>
 <dd><p>Remove all elements that equal <code class="docutils literal notranslate"><span class="pre">element</span></code> from array <code class="docutils literal notranslate"><span class="pre">x</span></code>. Returns NULL as result if <code class="docutils literal notranslate"><span class="pre">element</span></code> is NULL.
 If array <code class="docutils literal notranslate"><span class="pre">x</span></code> is empty array, returns empty array. If all elements in array <code class="docutils literal notranslate"><span class="pre">x</span></code> are NULL but <code class="docutils literal notranslate"><span class="pre">element</span></code> is not NULL,
 returns array <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
@@ -127,7 +125,7 @@ returns array <code class="docutils literal notranslate"><span class="pre">x</sp
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="array_repeat">
-<span class="sig-name descname"><span class="pre">array_repeat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_repeat" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">array_repeat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_repeat" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an array containing <code class="docutils literal notranslate"><span class="pre">element</span></code> <code class="docutils literal notranslate"><span class="pre">count</span></code> times. If <code class="docutils literal notranslate"><span class="pre">count</span></code> is negative or zero,
 returns empty array. If <code class="docutils literal notranslate"><span class="pre">element</span></code> is NULL, returns an array containing <code class="docutils literal notranslate"><span class="pre">count</span></code> NULLs.
 If <code class="docutils literal notranslate"><span class="pre">count</span></code> is NULL, returns NULL as result. Throws an exception if <code class="docutils literal notranslate"><span class="pre">count</span></code> exceeds 10’000.</p>
@@ -142,7 +140,7 @@ If <code class="docutils literal notranslate"><span class="pre">count</span></co
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="array_sort">
-<span class="sig-name descname"><span class="pre">array_sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_sort" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">array_sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_sort" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an array which has the sorted order of the input array(E). The elements of array(E) must
 be orderable. Null elements will be placed at the end of the returned array.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_sort</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
@@ -156,7 +154,7 @@ be orderable. Null elements will be placed at the end of the returned array.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="concat">
-<span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(E1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(En))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">E1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">En</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#concat" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(E1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(En))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">E1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">En</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#concat" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the concatenation of array(E), array(E1), …, array(En).</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">concat</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">array</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">array</span><span class="p">(</span><span class="mi">6</span><span class="p">));</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]</span>
 </pre></div>
@@ -165,7 +163,7 @@ be orderable. Null elements will be placed at the end of the returned array.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="filter">
-<span class="sig-name descname"><span class="pre">filter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">func)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#filter" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">filter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">func)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#filter" title="Link to this definition">¶</a></dt>
 <dd><p>Filters the input array using the given predicate.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">filter</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="nb">filter</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">i</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="n">i</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
@@ -176,14 +174,14 @@ be orderable. Null elements will be placed at the end of the returned array.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="in">
-<span class="sig-name descname"><span class="pre">in</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#in" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">in</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#in" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if value matches at least one of the elements of the array.
 Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE input types.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="size">
-<span class="sig-name descname"><span class="pre">size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#size" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#size" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the size of the array. Returns null for null input
 if <a class="reference internal" href="../../configs.html"><span class="doc">spark.legacy_size_of_null</span></a> is set to false.
 Otherwise, returns -1 for null input.</p>
@@ -191,7 +189,7 @@ Otherwise, returns -1 for null input.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="sort_array">
-<span class="sig-name descname"><span class="pre">sort_array</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#sort_array" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">sort_array</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#sort_array" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an array which has the sorted order of the input array. The elements of array must
 be orderable. Null elements will be placed at the beginning of the returned array.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">sort_array</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
@@ -217,7 +215,7 @@ order or at the end of the returned array in descending order.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="transform">
-<span class="sig-name descname"><span class="pre">transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#transform" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#transform" title="Link to this definition">¶</a></dt>
 <dd><p>Transforms elements in an array using the function.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">transform</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="n">transform</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">i</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">+</span> <span class="n">i</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">5</span><span class="p">]</span>
@@ -308,7 +306,7 @@ order or at the end of the returned array in descending order.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
     </div>
   </body>
 </html>
