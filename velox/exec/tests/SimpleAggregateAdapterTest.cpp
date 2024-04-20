@@ -18,11 +18,13 @@
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using facebook::velox::common::testutil::TestValue;
 using facebook::velox::functions::aggregate::test::AggregationTestBase;
+using facebook::velox::window::test::WindowTestBase;
 
 namespace facebook::velox::aggregate::test {
 namespace {
@@ -30,7 +32,6 @@ namespace {
 const char* const kSimpleAvg = "simple_avg";
 const char* const kSimpleArrayAgg = "simple_array_agg";
 const char* const kSimpleCountNulls = "simple_count_nulls";
-const char* const kSimpleFunctionStateAgg = "simple_function_state_agg";
 
 class SimpleAverageAggregationTest : public AggregationTestBase {
  protected:
@@ -484,6 +485,7 @@ TEST_F(SimpleCountNullsAggregationTest, basic) {
 }
 
 // A testing aggregation function that uses the function state.
+template <bool testCompanion>
 class FunctionStateTestAggregate {
  public:
   using InputType = Row<int64_t, int64_t>; // Input vector type wrapped in Row.
@@ -497,12 +499,60 @@ class FunctionStateTestAggregate {
     std::vector<VectorPtr> constantInputs;
   };
 
+  static void checkConstantInputs(
+      const std::vector<VectorPtr>& constantInputs) {
+    // Check that the constantInputs is {nullptr, 1}
+    VELOX_CHECK_EQ(constantInputs.size(), 2);
+    VELOX_CHECK_NULL(constantInputs[0]);
+    VELOX_CHECK(constantInputs[1]->isConstantEncoding());
+    VELOX_CHECK_EQ(
+        constantInputs[1]
+            ->template asUnchecked<SimpleVector<int64_t>>()
+            ->valueAt(0),
+        1);
+  }
+
   static void initialize(
       FunctionState& state,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& rawInputTypes,
       const TypePtr& resultType,
       const std::vector<VectorPtr>& constantInputs) {
+    auto expectedRawInputTypes = {BIGINT(), BIGINT()};
+    auto expectedIntermediateType = ROW({BIGINT(), DOUBLE()});
+
+    if constexpr (testCompanion) {
+      if (step == core::AggregationNode::Step::kPartial) {
+        VELOX_CHECK(std::equal(
+            rawInputTypes.begin(),
+            rawInputTypes.end(),
+            expectedRawInputTypes.begin(),
+            expectedRawInputTypes.end()));
+        checkConstantInputs(constantInputs);
+      } else if (step == core::AggregationNode::Step::kIntermediate) {
+        VELOX_CHECK_EQ(rawInputTypes.size(), 1);
+        VELOX_CHECK(rawInputTypes[0]->equivalent(*expectedIntermediateType));
+
+        VELOX_CHECK_EQ(constantInputs.size(), 1);
+        VELOX_CHECK_NULL(constantInputs[0]);
+      } else {
+        VELOX_FAIL("Unexpected aggregation step");
+      }
+    } else {
+      VELOX_CHECK(std::equal(
+          rawInputTypes.begin(),
+          rawInputTypes.end(),
+          expectedRawInputTypes.begin(),
+          expectedRawInputTypes.end()));
+      if (step == core::AggregationNode::Step::kPartial ||
+          step == core::AggregationNode::Step::kSingle) {
+        checkConstantInputs(constantInputs);
+      } else {
+        VELOX_CHECK_EQ(constantInputs.size(), 1);
+        VELOX_CHECK_NULL(constantInputs[0]);
+      }
+    }
+
     state.step = step;
     state.rawInputTypes = rawInputTypes;
     state.resultType = resultType;
@@ -517,27 +567,24 @@ class FunctionStateTestAggregate {
         HashStringAllocator* /*allocator*/,
         const FunctionState& /*state*/) {}
 
-    void checkpoint(FunctionState* state) {
-      TestValue::adjust(
-          "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
-          state);
-    }
-
     void addInput(
         HashStringAllocator* /*allocator*/,
         exec::arg_type<int64_t> data,
-        exec::arg_type<int64_t> increment,
+        exec::arg_type<int64_t> /*increment*/,
         const FunctionState& state) {
-      checkpoint(const_cast<FunctionState*>(&state));
+      VELOX_CHECK_EQ(state.constantInputs.size(), 2);
+      VELOX_CHECK(state.constantInputs[1]->isConstantEncoding());
+      auto constant = state.constantInputs[1]
+                          ->template asUnchecked<SimpleVector<int64_t>>()
+                          ->valueAt(0);
       sum += data;
-      count += increment;
+      count += constant;
     }
 
     void combine(
         HashStringAllocator* /*allocator*/,
         exec::arg_type<IntermediateType> other,
         const FunctionState& state) {
-      checkpoint(const_cast<FunctionState*>(&state));
       VELOX_CHECK(other.at<0>().has_value());
       VELOX_CHECK(other.at<1>().has_value());
       sum += other.at<0>().value();
@@ -547,7 +594,6 @@ class FunctionStateTestAggregate {
     bool writeIntermediateResult(
         exec::out_type<IntermediateType>& out,
         const FunctionState& state) {
-      checkpoint(const_cast<FunctionState*>(&state));
       out = std::make_tuple(sum, count);
       return true;
     }
@@ -555,7 +601,6 @@ class FunctionStateTestAggregate {
     bool writeFinalResult(
         exec::out_type<OutputType>& out,
         const FunctionState& state) {
-      checkpoint(const_cast<FunctionState*>(&state));
       out = sum / count;
       return true;
     }
@@ -564,6 +609,7 @@ class FunctionStateTestAggregate {
   using AccumulatorType = Accumulator;
 };
 
+template <bool testCompanion>
 exec::AggregateRegistrationResult registerSimpleFunctionStateTestAggregate(
     const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -585,100 +631,28 @@ exec::AggregateRegistrationResult registerSimpleFunctionStateTestAggregate(
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_LE(argTypes.size(), 2, "{} takes 2 argument", name);
         return std::make_unique<
-            SimpleAggregateAdapter<FunctionStateTestAggregate>>(resultType);
+            SimpleAggregateAdapter<FunctionStateTestAggregate<testCompanion>>>(
+            resultType);
       },
       true /*registerCompanionFunctions*/,
       true /*overwrite*/);
 }
 
 void registerFunctionStateTestAggregate() {
-  registerSimpleFunctionStateTestAggregate(kSimpleFunctionStateAgg);
+  registerSimpleFunctionStateTestAggregate<false>(
+      "simple_function_state_agg_main");
+  registerSimpleFunctionStateTestAggregate<true>(
+      "simple_function_state_agg_companion");
 }
 
 class SimpleFunctionStateAggregationTest : public AggregationTestBase {
  protected:
-  SimpleFunctionStateAggregationTest() {
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+
+    disableTestIncremental();
+    disableTestStreaming();
     registerFunctionStateTestAggregate();
-  }
-
-  static void checkRowTypeEqual(TypePtr expected, TypePtr actual) {
-    VELOX_CHECK(expected->isRow());
-    VELOX_CHECK(actual->isRow());
-    VELOX_CHECK_EQ(expected->asRow().size(), actual->asRow().size());
-    for (auto i = 0; i < expected->asRow().size(); i++) {
-      VELOX_CHECK_EQ(expected->asRow().childAt(i), actual->asRow().childAt(i));
-    }
-  }
-
-  static void checkState(
-      FunctionStateTestAggregate::FunctionState* state,
-      const std::vector<TypePtr>& rawInputTypes,
-      const TypePtr& intermediateType,
-      const TypePtr& resultType,
-      const std::vector<VectorPtr>& constantInputs) {
-    VELOX_CHECK(!state->rawInputTypes.empty());
-    VELOX_CHECK_NOT_NULL(state->resultType);
-
-    switch (state->step) {
-      case core::AggregationNode::Step::kPartial:
-      case core::AggregationNode::Step::kIntermediate:
-        if (state->rawInputTypes.size() == 1 &&
-            state->rawInputTypes[0]->isRow()) {
-          // Merge or merge_extract companion function.
-          VELOX_CHECK_EQ(rawInputTypes.size(), 1);
-          VELOX_CHECK(rawInputTypes[0]->isRow());
-          checkRowTypeEqual(rawInputTypes[0], state->rawInputTypes[0]);
-        } else {
-          VELOX_CHECK(std::equal(
-              rawInputTypes.begin(),
-              rawInputTypes.end(),
-              state->rawInputTypes.begin(),
-              state->rawInputTypes.end()));
-        }
-        if (state->resultType->isRow()) {
-          checkRowTypeEqual(intermediateType, state->resultType);
-        } else {
-          VELOX_CHECK_EQ(resultType, state->resultType)
-        }
-        break;
-
-      case core::AggregationNode::Step::kSingle:
-      case core::AggregationNode::Step::kFinal:
-        VELOX_CHECK(std::equal(
-            rawInputTypes.begin(),
-            rawInputTypes.end(),
-            state->rawInputTypes.begin(),
-            state->rawInputTypes.end()));
-        VELOX_CHECK_EQ(resultType, state->resultType);
-        break;
-
-      default:
-        VELOX_FAIL("Unknown aggregate step");
-        break;
-    }
-
-    VELOX_CHECK(!state->constantInputs.empty());
-    if (state->step == core::AggregationNode::Step::kPartial ||
-        state->step == core::AggregationNode::Step::kSingle) {
-      VELOX_CHECK_EQ(constantInputs.size(), state->constantInputs.size());
-      for (auto i = 0; i < constantInputs.size(); i++) {
-        auto expected = constantInputs[i];
-        auto actual = state->constantInputs[i];
-        if (expected == nullptr && actual == nullptr) {
-          continue;
-        } else {
-          VELOX_CHECK(expected != nullptr && actual != nullptr);
-          VELOX_CHECK(expected->isConstantEncoding());
-          VELOX_CHECK(actual->isConstantEncoding());
-          VELOX_CHECK_EQ(
-              expected->asUnchecked<SimpleVector<int64_t>>()->valueAt(0),
-              actual->asUnchecked<SimpleVector<int64_t>>()->valueAt(0));
-        }
-      }
-    } else {
-      VELOX_CHECK_EQ(state->constantInputs.size(), 1);
-      VELOX_CHECK_NULL(state->constantInputs[0]);
-    }
   }
 };
 
@@ -686,48 +660,14 @@ TEST_F(SimpleFunctionStateAggregationTest, aggregate) {
   auto inputVectors = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
   std::vector<double> finalResult = {2.5};
   auto expected = makeRowVector({makeFlatVector<double>(finalResult)});
-
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
-      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
-          [&](FunctionStateTestAggregate::FunctionState* state) {
-            checkState(
-                state,
-                {BIGINT(), BIGINT()},
-                ROW({BIGINT(), DOUBLE()}),
-                DOUBLE(),
-                {nullptr, makeConstant<int64_t>(1, 4)});
-          }));
   testAggregations(
-      {inputVectors}, {}, {"simple_function_state_agg(c0, 1)"}, {expected});
+      {inputVectors},
+      {},
+      {"simple_function_state_agg_main(c0, 1)"},
+      {expected});
 }
 
-TEST_F(SimpleFunctionStateAggregationTest, window) {
-  auto inputVectors =
-      makeRowVector({makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4})});
-  auto expected = makeRowVector(
-      {makeFlatVector<double>({1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0})});
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
-      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
-          [&](FunctionStateTestAggregate::FunctionState* state) {
-            checkState(
-                state,
-                {BIGINT(), BIGINT()},
-                ROW({BIGINT(), DOUBLE()}),
-                DOUBLE(),
-                {nullptr, makeConstant<int64_t>(1, 7)});
-          }));
-  auto plan =
-      PlanBuilder()
-          .values({inputVectors})
-          .window({"simple_function_state_agg(c0, 1) over (partition by c0)"})
-          .project({"w0"})
-          .planNode();
-  AssertQueryBuilder(plan).assertResults(expected);
-}
-
-TEST_F(SimpleFunctionStateAggregationTest, companionAggregateFunction) {
+TEST_F(SimpleFunctionStateAggregationTest, companionAggregate) {
   auto inputVectors = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
   std::vector<int64_t> accSum = {10};
   std::vector<double> accCount = {4.0};
@@ -740,21 +680,11 @@ TEST_F(SimpleFunctionStateAggregationTest, companionAggregateFunction) {
   std::vector<double> finalResult = {2.5};
   auto finalExpected = makeRowVector({makeFlatVector<double>(finalResult)});
 
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
-      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
-          [&](FunctionStateTestAggregate::FunctionState* state) {
-            checkState(
-                state,
-                {BIGINT(), BIGINT()},
-                ROW({BIGINT(), DOUBLE()}),
-                DOUBLE(),
-                {nullptr, makeConstant<int64_t>(1, 4)});
-          }));
   AssertQueryBuilder(
       PlanBuilder()
           .values({inputVectors})
-          .singleAggregation({}, {"simple_function_state_agg_partial(c0, 1)"})
+          .singleAggregation(
+              {}, {"simple_function_state_agg_companion_partial(c0, 1)"})
           .planNode())
       .assertResults(intermediateExpected);
 
@@ -764,42 +694,46 @@ TEST_F(SimpleFunctionStateAggregationTest, companionAggregateFunction) {
           makeFlatVector<double>({1.0, 1.0, 1.0, 1.0}),
       }),
   });
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
-      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
-          [&](FunctionStateTestAggregate::FunctionState* state) {
-            checkState(
-                state,
-                {ROW({BIGINT(), DOUBLE()})},
-                ROW({BIGINT(), DOUBLE()}),
-                ROW({BIGINT(), DOUBLE()}),
-                {nullptr, makeConstant<int64_t>(1, 4)});
-          }));
-  AssertQueryBuilder(
-      PlanBuilder()
-          .values({inputVectors})
-          .singleAggregation({}, {"simple_function_state_agg_merge(c0)"})
-          .planNode())
-      .assertResults(intermediateExpected);
 
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::aggregate::test::FunctionStateTestAggregate::checkpoint",
-      std::function<void(FunctionStateTestAggregate::FunctionState*)>(
-          [&](FunctionStateTestAggregate::FunctionState* state) {
-            checkState(
-                state,
-                {ROW({BIGINT(), DOUBLE()})},
-                ROW({BIGINT(), DOUBLE()}),
-                DOUBLE(),
-                {nullptr, makeConstant<int64_t>(1, 4)});
-          }));
   AssertQueryBuilder(
       PlanBuilder()
           .values({inputVectors})
           .singleAggregation(
-              {}, {"simple_function_state_agg_merge_extract(c0)"})
+              {}, {"simple_function_state_agg_companion_merge(c0)"})
+          .planNode())
+      .assertResults(intermediateExpected);
+
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({inputVectors})
+          .singleAggregation(
+              {}, {"simple_function_state_agg_companion_merge_extract(c0)"})
           .planNode())
       .assertResults(finalExpected);
+}
+
+class SimpleFunctionStateWindowTest : public WindowTestBase {
+ protected:
+  void SetUp() override {
+    WindowTestBase::SetUp();
+
+    registerFunctionStateTestAggregate();
+  }
+};
+
+TEST_F(SimpleFunctionStateWindowTest, window) {
+  auto inputVectors =
+      makeRowVector({makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4})});
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4}),
+      makeFlatVector<double>({1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0}),
+  });
+  WindowTestBase::testWindowFunction(
+      {inputVectors},
+      "simple_function_state_agg_main(c0, 1)",
+      {"partition by c0"},
+      {},
+      expected);
 }
 
 } // namespace

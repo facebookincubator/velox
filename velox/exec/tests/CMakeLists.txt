@@ -244,8 +244,13 @@ add_executable(velox_simple_aggregate_test SimpleAggregateAdapterTest.cpp
                                            Main.cpp)
 
 target_link_libraries(
-  velox_simple_aggregate_test velox_simple_aggregate velox_exec
-  velox_functions_aggregates_test_lib gtest gtest_main)
+  velox_simple_aggregate_test
+  velox_simple_aggregate
+  velox_exec
+  velox_functions_aggregates_test_lib
+  velox_functions_window_test_lib
+  gtest
+  gtest_main)
 
 add_library(velox_spiller_join_benchmark_base JoinSpillInputBenchmarkBase.cpp
                                               SpillerBenchmarkBase.cpp)

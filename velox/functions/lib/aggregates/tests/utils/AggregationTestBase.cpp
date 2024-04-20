@@ -1231,27 +1231,13 @@ void AggregationTestBase::testIncrementalAggregation(
     const auto& aggregateExpr = aggregate.call;
     const auto& functionName = aggregateExpr->name();
     auto input = extractArgColumns(aggregateExpr, data, pool());
-    const auto& inputType = aggregationNode.sources()[0]->outputType();
 
     HashStringAllocator allocator(pool());
     std::vector<core::LambdaTypedExprPtr> lambdas;
-    std::vector<VectorPtr> constantInputs;
     for (const auto& arg : aggregate.call->inputs()) {
-      if (dynamic_cast<const core::FieldAccessTypedExpr*>(arg.get())) {
-        constantInputs.push_back(nullptr);
-      } else if (
-          auto constant =
-              dynamic_cast<const core::ConstantTypedExpr*>(arg.get())) {
-        constantInputs.push_back(constant->toConstantVector(pool()));
-      } else if (
-          auto lambda =
+      if (auto lambda =
               std::dynamic_pointer_cast<const core::LambdaTypedExpr>(arg)) {
         lambdas.push_back(lambda);
-        for (const auto& name : lambda->signature()->names()) {
-          if (auto captureIndex = inputType->getChildIdxIfExists(name)) {
-            constantInputs.push_back(nullptr);
-          }
-        }
       }
     }
     auto queryCtxConfig = config;
@@ -1270,11 +1256,6 @@ void AggregationTestBase::testIncrementalAggregation(
     std::vector<char> group(kOffset + func->accumulatorFixedWidthSize());
     std::vector<char*> groups(inputSize, group.data());
     std::vector<vector_size_t> indices(1, 0);
-    func->initialize(
-        aggregationNode.step(),
-        aggregate.rawInputTypes,
-        func->resultType(),
-        constantInputs);
     func->initializeNewGroups(groups.data(), indices);
     func->addSingleGroupRawInput(
         group.data(), SelectivityVector(inputSize), input, false);
@@ -1314,24 +1295,11 @@ VectorPtr AggregationTestBase::testStreaming(
     vector_size_t rawInput2Size,
     const std::unordered_map<std::string, std::string>& config) {
   std::vector<TypePtr> rawInputTypes(rawInput1.size());
-  std::vector<VectorPtr> constantInputs1(rawInput1.size());
-  std::vector<VectorPtr> constantInputs2(rawInput2.size());
-  for (auto i = 0; i < rawInput1.size(); i++) {
-    rawInputTypes[i] = rawInput1[i]->type();
-    if (rawInput1[i]->isConstantEncoding()) {
-      constantInputs1[i] = rawInput1[i];
-    } else {
-      constantInputs1[i] = nullptr;
-    }
-  }
-
   std::transform(
-      rawInput2.begin(),
-      rawInput2.end(),
-      constantInputs2.begin(),
-      [](const VectorPtr& vec) {
-        return vec->isConstantEncoding() ? vec : nullptr;
-      });
+      rawInput1.begin(),
+      rawInput1.end(),
+      rawInputTypes.begin(),
+      [](const VectorPtr& vec) { return vec->type(); });
 
   HashStringAllocator allocator(pool());
   auto func =
@@ -1340,11 +1308,6 @@ VectorPtr AggregationTestBase::testStreaming(
   std::vector<char> group(kOffset + func->accumulatorFixedWidthSize());
   std::vector<char*> groups(maxRowCount, group.data());
   std::vector<vector_size_t> indices(maxRowCount, 0);
-  func->initialize(
-      core::AggregationNode::Step::kSingle,
-      rawInputTypes,
-      func->resultType(),
-      constantInputs1);
   func->initializeNewGroups(groups.data(), indices);
   if (testGlobal) {
     func->addSingleGroupRawInput(
@@ -1364,11 +1327,6 @@ VectorPtr AggregationTestBase::testStreaming(
   // Create a new function picking up the intermediate result.
   auto func2 =
       createAggregateFunction(functionName, rawInputTypes, allocator, config);
-  func2->initialize(
-      core::AggregationNode::Step::kSingle,
-      rawInputTypes,
-      func2->resultType(),
-      constantInputs2);
   func2->initializeNewGroups(groups.data(), indices);
   if (testGlobal) {
     func2->addSingleGroupIntermediateResults(
