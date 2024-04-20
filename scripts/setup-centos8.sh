@@ -61,7 +61,7 @@ function install_velox_deps_from_dnf {
     libdwarf-devel curl-devel libicu-devel bison flex libsodium-devel
 
   # install sphinx for doc gen
-  pip3 install sphinx sphinx-tabs breathe sphinx_rtd_theme
+  pip3.9 install sphinx sphinx-tabs breathe sphinx_rtd_theme
 }
 
 function install_conda {
@@ -101,7 +101,7 @@ function install_boost {
   (
    cd boost
    ./bootstrap.sh --prefix=/usr/local
-   ./b2 "-j$(nproc)" -d0 install threading=multi
+   ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
   )
 }
 

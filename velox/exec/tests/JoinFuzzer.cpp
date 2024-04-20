@@ -430,8 +430,8 @@ RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
   int32_t spillPct{0};
   if (injectSpill) {
     spillDirectory = exec::test::TempDirectoryPath::create();
-    builder.config(core::QueryConfig::kSpillEnabled, "true")
-        .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+    builder.config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kJoinSpillEnabled, true)
         .spillDirectory(spillDirectory->getPath());
     spillPct = 10;
   }
@@ -1221,16 +1221,16 @@ void JoinFuzzer::go() {
   size_t iteration = 0;
 
   while (!isDone(iteration, startTime)) {
-    LOG(INFO) << "==============================> Started iteration "
-              << iteration << " (seed: " << currentSeed_ << ")";
+    LOG(WARNING) << "==============================> Started iteration "
+                 << iteration << " (seed: " << currentSeed_ << ")";
 
     // Pick join type.
     const auto joinType = pickJoinType();
 
     verify(joinType);
 
-    LOG(INFO) << "==============================> Done with iteration "
-              << iteration;
+    LOG(WARNING) << "==============================> Done with iteration "
+                 << iteration;
 
     reSeed();
     ++iteration;
