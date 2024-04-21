@@ -198,7 +198,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions(randomSkip_);
-  splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
+  splitReader_->prepareSplit(metadataFilter_, runtimeStats_, rowIndexColumn_);
 }
 
 std::optional<RowVectorPtr> HiveDataSource::next(

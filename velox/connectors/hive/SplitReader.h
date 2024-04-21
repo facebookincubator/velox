@@ -91,7 +91,8 @@ class SplitReader {
   /// would be called only once per incoming split
   virtual void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
-      dwio::common::RuntimeStatistics& runtimeStats);
+      dwio::common::RuntimeStatistics& runtimeStats,
+      const std::shared_ptr<HiveColumnHandle>& rowIndexColumn);
 
   virtual uint64_t next(uint64_t size, VectorPtr& output);
 
@@ -124,7 +125,9 @@ class SplitReader {
 
   /// Create the dwio::common::RowReader object baseRowReader_, which owns the
   /// ColumnReaders that will be used to read the data
-  void createRowReader(std::shared_ptr<common::MetadataFilter> metadataFilter);
+  void createRowReader(
+      std::shared_ptr<common::MetadataFilter> metadataFilter,
+      const std::shared_ptr<HiveColumnHandle>& rowIndexColumn);
 
   /// Different table formats may have different meatadata columns.
   /// This function will be used to update the scanSpec for these columns.
@@ -134,8 +137,7 @@ class SplitReader {
 
   void setRowIndexColumnInfoIfNeed(
       const RowTypePtr& fileType,
-      std::vector<std::string>& columnNames,
-      std::vector<facebook::velox::TypePtr>& columnTypes);
+      const std::shared_ptr<HiveColumnHandle>& rowIndexColumn);
 
   void setPartitionValue(
       common::ScanSpec* spec,

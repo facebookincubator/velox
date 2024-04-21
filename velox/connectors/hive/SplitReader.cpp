@@ -140,7 +140,8 @@ void SplitReader::configureReaderOptions(
 
 void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStatistics& runtimeStats,
+    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn) {
   createReader();
 
   if (checkIfSplitIsEmpty(runtimeStats)) {
@@ -148,7 +149,7 @@ void SplitReader::prepareSplit(
     return;
   }
 
-  createRowReader(metadataFilter);
+  createRowReader(metadataFilter, rowIndexColumn);
 }
 
 uint64_t SplitReader::next(uint64_t size, VectorPtr& output) {
@@ -273,12 +274,12 @@ bool SplitReader::checkIfSplitIsEmpty(
 }
 
 void SplitReader::createRowReader(
-    std::shared_ptr<common::MetadataFilter> metadataFilter) {
+    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn) {
   auto& fileType = baseReader_->rowType();
   auto columnTypes = adaptColumns(fileType, baseReaderOpts_.getFileSchema());
   auto columnNames = fileType->names();
-
-  setRowIndexColumnInfoIfNeed(fileType, columnNames, columnTypes);
+  setRowIndexColumnInfoIfNeed(fileType, rowIndexColumn);
   configureRowReaderOptions(
       baseRowReaderOpts_,
       hiveTableHandle_->tableParameters(),
@@ -294,19 +295,19 @@ void SplitReader::createRowReader(
 
 void SplitReader::setRowIndexColumnInfoIfNeed(
     const RowTypePtr& fileType,
-    std::vector<std::string>& columnNames,
-    std::vector<facebook::velox::TypePtr>& columnTypes) {
-  if (hiveSplit_->rowIndexColumn.has_value()) {
-    auto rowIndexColumn = hiveSplit_->rowIndexColumn.value();
+    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn) {
+  if (rowIndexColumn != nullptr) {
+    auto& fileType = baseReader_->rowType();
+    auto rowIndexColumnName = rowIndexColumn->name();
     auto rowIndexMetaColIdx =
-        readerOutputType_->getChildIdxIfExists(rowIndexColumn);
+        readerOutputType_->getChildIdxIfExists(rowIndexColumnName);
     if (rowIndexMetaColIdx.has_value() &&
-        !fileType->containsChild(rowIndexColumn) &&
-        hiveSplit_->partitionKeys.find(rowIndexColumn) ==
+        !fileType->containsChild(rowIndexColumnName) &&
+        hiveSplit_->partitionKeys.find(rowIndexColumnName) ==
             hiveSplit_->partitionKeys.end()) {
       dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
       rowNumberColumnInfo.insertPosition = rowIndexMetaColIdx.value();
-      rowNumberColumnInfo.name = rowIndexColumn;
+      rowNumberColumnInfo.name = rowIndexColumnName;
       baseRowReaderOpts_.setRowNumberColumnInfo(std::move(rowNumberColumnInfo));
     }
   }
