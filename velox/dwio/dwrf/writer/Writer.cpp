@@ -39,14 +39,17 @@ dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
       .stripeIndex = context.stripeIndex(),
       .stripeRowCount = context.stripeRowCount(),
       .totalMemoryUsage = context.getTotalMemoryUsage(),
-      .stripeSizeEstimate = std::max(
-          context.getEstimatedStripeSize(context.stripeRawSize()),
-          // The stripe size estimate is only more accurate from the second
-          // stripe onward because it uses past stripe states in heuristics.
-          // We need to additionally bound it with output stream size based
-          // estimate for the first stripe.
-          context.stripeIndex() == 0 ? context.getEstimatedOutputStreamSize()
-                                     : 0)};
+      .stripeSizeEstimate = context.linearStripeSizeHeuristics()
+          ? std::max(
+                context.getEstimatedStripeSize(context.stripeRawSize()),
+                // The stripe size estimate is only more accurate from the
+                // second stripe onward because it uses past stripe states in
+                // heuristics. We need to additionally bound it with output
+                // stream size based estimate for the first stripe.
+                context.stripeIndex() == 0
+                    ? context.getEstimatedOutputStreamSize()
+                    : 0)
+          : context.getEstimatedOutputStreamSize()};
 }
 
 #define NON_RECLAIMABLE_SECTION_CHECK() \
@@ -417,11 +420,14 @@ void Writer::flushStripe(bool close) {
   });
 
   // Collects the memory increment from flushing data to output streams.
+  const auto postFlushStreamMemoryUsage =
+      context.getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM);
   const auto flushOverhead =
-      context.getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM) -
-      preFlushStreamMemoryUsage;
-  context.recordFlushOverhead(flushOverhead);
-  metrics.flushOverhead = flushOverhead;
+      postFlushStreamMemoryUsage > preFlushStreamMemoryUsage
+      ? postFlushStreamMemoryUsage - preFlushStreamMemoryUsage
+      : 0;
+  metrics.flushOverhead = static_cast<uint64_t>(flushOverhead);
+  context.recordFlushOverhead(metrics.flushOverhead);
 
   const auto postFlushMem = context.getTotalMemoryUsage();
 
