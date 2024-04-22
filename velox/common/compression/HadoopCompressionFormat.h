@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <folly/Expected.h>
 #include <cstdint>
+#include "velox/common/base/Status.h"
 
 namespace facebook::velox::common {
 
@@ -29,7 +31,7 @@ class HadoopCompressionFormat {
       uint64_t outputLength,
       uint64_t& actualDecompressedSize);
 
-  virtual uint64_t decompressInternal(
+  virtual folly::Expected<uint64_t, Status> decompressInternal(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,

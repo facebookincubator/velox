@@ -60,21 +60,23 @@ class Lz4FrameCodec : public Lz4CodecBase {
 
   uint64_t maxCompressedLength(uint64_t inputLength) override;
 
-  uint64_t compress(
+  folly::Expected<uint64_t, Status> compress(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,
       uint64_t outputLength) override;
 
-  uint64_t decompress(
+  folly::Expected<uint64_t, Status> decompress(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,
       uint64_t outputLength) override;
 
-  std::shared_ptr<StreamingCompressor> makeStreamingCompressor() override;
+  folly::Expected<std::shared_ptr<StreamingCompressor>, Status>
+  makeStreamingCompressor() override;
 
-  std::shared_ptr<StreamingDecompressor> makeStreamingDecompressor() override;
+  folly::Expected<std::shared_ptr<StreamingDecompressor>, Status>
+  makeStreamingDecompressor() override;
 
  protected:
   const LZ4F_preferences_t prefs_;
@@ -86,21 +88,17 @@ class Lz4RawCodec : public Lz4CodecBase {
 
   uint64_t maxCompressedLength(uint64_t inputLength) override;
 
-  uint64_t compress(
+  folly::Expected<uint64_t, Status> compress(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,
       uint64_t outputLength) override;
 
-  uint64_t decompress(
+  folly::Expected<uint64_t, Status> decompress(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,
       uint64_t outputLength) override;
-
-  std::shared_ptr<StreamingCompressor> makeStreamingCompressor() override;
-
-  std::shared_ptr<StreamingDecompressor> makeStreamingDecompressor() override;
 };
 
 class Lz4HadoopCodec : public Lz4RawCodec, public HadoopCompressionFormat {
@@ -109,21 +107,17 @@ class Lz4HadoopCodec : public Lz4RawCodec, public HadoopCompressionFormat {
 
   uint64_t maxCompressedLength(uint64_t inputLength) override;
 
-  uint64_t compress(
+  folly::Expected<uint64_t, Status> compress(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,
       uint64_t outputLength) override;
 
-  uint64_t decompress(
+  folly::Expected<uint64_t, Status> decompress(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,
       uint64_t outputLength) override;
-
-  std::shared_ptr<StreamingCompressor> makeStreamingCompressor() override;
-
-  std::shared_ptr<StreamingDecompressor> makeStreamingDecompressor() override;
 
   int32_t minimumCompressionLevel() const override;
 
@@ -132,7 +126,7 @@ class Lz4HadoopCodec : public Lz4RawCodec, public HadoopCompressionFormat {
   int32_t defaultCompressionLevel() const override;
 
  private:
-  uint64_t decompressInternal(
+  folly::Expected<uint64_t, Status> decompressInternal(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,

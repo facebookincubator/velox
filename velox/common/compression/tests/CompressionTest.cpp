@@ -23,7 +23,7 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/common/base/VeloxException.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/compression/Lz4Compression.h"
@@ -83,19 +83,21 @@ void checkCodecRoundtrip(
   std::vector<uint8_t> decompressed(data.size());
 
   // Compress with codec c1.
-  auto compressedSize = c1->compress(
+  auto maybeCompressedLength = c1->compress(
       data.data(), data.size(), compressed.data(), maxCompressedLen);
-  compressed.resize(compressedSize);
+  ASSERT_FALSE(maybeCompressedLength.hasError());
+  compressed.resize(maybeCompressedLength.value());
 
   // Decompress with codec c2.
-  auto decompressedSize = c2->decompress(
+  auto maybeDecompressedLength = c2->decompress(
       compressed.data(),
       compressed.size(),
       decompressed.data(),
       decompressed.size());
+  ASSERT_FALSE(maybeDecompressedLength.hasError());
 
   ASSERT_EQ(data, decompressed);
-  ASSERT_EQ(data.size(), decompressedSize);
+  ASSERT_EQ(data.size(), maybeDecompressedLength.value());
 }
 
 // Use same codec for both compression and decompression.
@@ -134,8 +136,10 @@ void streamingCompress(
     uint8_t* output = compressed.data() + compressedSize;
 
     // Compress once.
-    auto compressResult =
+    auto maybeCompressResult =
         compressor->compress(input, inputLength, output, outputLength);
+    ASSERT_FALSE(maybeCompressResult.hasError());
+    const auto& compressResult = maybeCompressResult.value();
     ASSERT_LE(compressResult.bytesRead, inputLength);
     ASSERT_LE(compressResult.bytesWritten, outputLength);
 
@@ -151,33 +155,43 @@ void streamingCompress(
 
     // Once every two iterations, do a flush.
     if (doFlush) {
-      StreamingCompressor::FlushResult flushResult;
+      bool outputTooSmall = false;
       do {
         outputLength = compressed.size() - compressedSize;
         output = compressed.data() + compressedSize;
-        flushResult = compressor->flush(output, outputLength);
+        auto maybeFlushResult = compressor->flush(output, outputLength);
+        ASSERT_FALSE(maybeFlushResult.hasError());
+
+        const auto& flushResult = maybeFlushResult.value();
         ASSERT_LE(flushResult.bytesWritten, outputLength);
         compressedSize += flushResult.bytesWritten;
-        if (flushResult.outputTooSmall) {
+
+        outputTooSmall = flushResult.outputTooSmall;
+        if (outputTooSmall) {
           compressed.resize(compressed.capacity() * 2);
         }
-      } while (flushResult.outputTooSmall);
+      } while (outputTooSmall);
     }
     doFlush = !doFlush;
   }
 
   // End the compressed stream.
-  StreamingCompressor::EndResult endResult;
+  bool outputTooSmall = false;
   do {
     int64_t outputLength = compressed.size() - compressedSize;
     uint8_t* output = compressed.data() + compressedSize;
-    endResult = compressor->end(output, outputLength);
+    auto maybeEndResult = compressor->end(output, outputLength);
+    ASSERT_FALSE(maybeEndResult.hasError());
+
+    const auto& endResult = std::move(maybeEndResult.value());
     ASSERT_LE(endResult.bytesWritten, outputLength);
     compressedSize += endResult.bytesWritten;
-    if (endResult.outputTooSmall) {
+
+    outputTooSmall = endResult.outputTooSmall;
+    if (outputTooSmall) {
       compressed.resize(compressed.capacity() * 2);
     }
-  } while (endResult.outputTooSmall);
+  } while (outputTooSmall);
   compressed.resize(compressedSize);
 }
 
@@ -201,8 +215,11 @@ void streamingDecompress(
     uint8_t* output = decompressed.data() + decompressedSize;
 
     // Decompress once.
-    auto result =
+    auto maybeDecompressResult =
         decompressor->decompress(input, inputLength, output, outputLength);
+    ASSERT_FALSE(maybeDecompressResult.hasError());
+
+    const auto& result = maybeDecompressResult.value();
     ASSERT_LE(result.bytesRead, inputLength);
     ASSERT_LE(result.bytesWritten, outputLength);
     ASSERT_TRUE(
@@ -225,11 +242,24 @@ void streamingDecompress(
   decompressed.resize(decompressedSize);
 }
 
+std::shared_ptr<StreamingCompressor> makeStreamingCompressor(Codec* codec) {
+  auto maybeCompressor = codec->makeStreamingCompressor();
+  VELOX_CHECK(maybeCompressor.hasValue());
+  return maybeCompressor.value();
+}
+
+std::shared_ptr<StreamingDecompressor> makeStreamingDecompressor(Codec* codec) {
+  auto maybeDecompressor = codec->makeStreamingDecompressor();
+  VELOX_CHECK(maybeDecompressor.hasValue());
+  return maybeDecompressor.value();
+}
+
 // Check the streaming compressor against one-shot decompression.
 void checkStreamingCompressor(Codec* codec, const std::vector<uint8_t>& data) {
   // Run streaming compression.
   std::vector<uint8_t> compressed;
-  streamingCompress(codec->makeStreamingCompressor(), data, compressed);
+  const auto& compressor = makeStreamingCompressor(codec);
+  streamingCompress(compressor, data, compressed);
 
   // Check decompressing the compressed data.
   std::vector<uint8_t> decompressed(data.size());
@@ -248,14 +278,15 @@ void checkStreamingDecompressor(
   // Create compressed data.
   auto maxCompressedLen = codec->maxCompressedLength(data.size());
   std::vector<uint8_t> compressed(maxCompressedLen);
-  auto compressedSize = codec->compress(
+  auto maybeCompressedLength = codec->compress(
       data.data(), data.size(), compressed.data(), maxCompressedLen);
-  compressed.resize(compressedSize);
+  ASSERT_FALSE(maybeCompressedLength.hasError());
+  compressed.resize(maybeCompressedLength.value());
 
   // Run streaming decompression.
   std::vector<uint8_t> decompressed;
-  streamingDecompress(
-      codec->makeStreamingDecompressor(), compressed, decompressed);
+  const auto& decompressor = makeStreamingDecompressor(codec);
+  streamingDecompress(decompressor, compressed, decompressed);
 
   // Check the decompressed data.
   ASSERT_EQ(data.size(), decompressed.size());
@@ -276,9 +307,7 @@ void checkStreamingRoundtrip(
 
 void checkStreamingRoundtrip(Codec* codec, const std::vector<uint8_t>& data) {
   checkStreamingRoundtrip(
-      codec->makeStreamingCompressor(),
-      codec->makeStreamingDecompressor(),
-      data);
+      makeStreamingCompressor(codec), makeStreamingDecompressor(codec), data);
 }
 } // namespace
 
@@ -362,8 +391,10 @@ TEST_P(CodecTest, getUncompressedLength) {
   auto inputLength = 100;
   auto input = makeRandomData(inputLength);
   std::vector<uint8_t> compressed(codec->maxCompressedLength(input.size()));
-  auto compressedLength = codec->compress(
+  auto maybeCompressedLength = codec->compress(
       input.data(), inputLength, compressed.data(), compressed.size());
+  ASSERT_FALSE(maybeCompressedLength.hasError());
+  auto compressedLength = maybeCompressedLength.value();
   compressed.resize(compressedLength);
 
   if (Codec::supportsGetUncompressedLength(getCompressionKind())) {
@@ -427,15 +458,15 @@ TEST_P(CodecTest, streamingDecompressorReuse) {
   }
 
   auto codec = makeCodec();
-  auto decompressor = codec->makeStreamingDecompressor();
+  const auto& decompressor = makeStreamingDecompressor(codec.get());
   checkStreamingRoundtrip(
-      codec->makeStreamingCompressor(), decompressor, makeRandomData(100));
+      makeStreamingCompressor(codec.get()), decompressor, makeRandomData(100));
 
   // StreamingDecompressor::reset() should allow reusing decompressor for a
   // new stream.
-  decompressor->reset();
+  ASSERT_TRUE(decompressor->reset().ok());
   checkStreamingRoundtrip(
-      codec->makeStreamingCompressor(), decompressor, makeRandomData(200));
+      makeStreamingCompressor(codec.get()), decompressor, makeRandomData(200));
 }
 
 INSTANTIATE_TEST_SUITE_P(

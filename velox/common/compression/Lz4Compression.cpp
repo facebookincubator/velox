@@ -23,8 +23,14 @@ namespace {
 constexpr int32_t kLz4DefaultCompressionLevel = 1;
 constexpr int32_t kLz4MinCompressionLevel = 1;
 
-void lz4Error(const char* prefixMessage, LZ4F_errorCode_t errorCode) {
-  VELOX_FAIL(prefixMessage, LZ4F_getErrorName(errorCode));
+#if (defined(LZ4_VERSION_NUMBER) && LZ4_VERSION_NUMBER < 10800)
+constexpr int32_t kLegacyLz4MaxCompressionLevel = 12;
+#endif
+
+static inline Status lz4Error(
+    const char* prefixMessage,
+    LZ4F_errorCode_t errorCode) {
+  return Status::IOError(prefixMessage, LZ4F_getErrorName(errorCode));
 }
 
 LZ4F_preferences_t defaultPreferences() {
@@ -46,20 +52,23 @@ class LZ4Compressor : public StreamingCompressor {
 
   ~LZ4Compressor() override;
 
-  void init();
+  Status init();
 
-  CompressResult compress(
+  folly::Expected<CompressResult, Status> compress(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,
       uint64_t outputLength) override;
 
-  FlushResult flush(uint8_t* output, uint64_t outputLength) override;
+  folly::Expected<FlushResult, Status> flush(
+      uint8_t* output,
+      uint64_t outputLength) override;
 
-  EndResult end(uint8_t* output, uint64_t outputLength) override;
+  folly::Expected<EndResult, Status> end(uint8_t* output, uint64_t outputLength)
+      override;
 
  protected:
-  void
+  Status
   compressBegin(uint8_t* output, size_t& outputLen, uint64_t& bytesWritten);
 
   int compressionLevel_;
@@ -78,17 +87,17 @@ class LZ4Decompressor : public StreamingDecompressor {
     }
   }
 
-  void init();
-
-  void reset() override;
-
-  DecompressResult decompress(
+  folly::Expected<DecompressResult, Status> decompress(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,
       uint64_t outputLength) override;
 
   bool isFinished() override;
+
+  Status reset() override;
+
+  Status init();
 
  protected:
   LZ4F_decompressionContext_t ctx_{nullptr};
@@ -104,18 +113,18 @@ LZ4Compressor::~LZ4Compressor() {
   }
 }
 
-void LZ4Compressor::init() {
+Status LZ4Compressor::init() {
   LZ4F_errorCode_t ret;
   prefs_ = defaultPreferences(compressionLevel_);
   firstTime_ = true;
 
   ret = LZ4F_createCompressionContext(&ctx_, LZ4F_VERSION);
-  if (LZ4F_isError(ret)) {
-    lz4Error("LZ4 init failed: ", ret);
-  }
+  VELOX_RETURN_IF(LZ4F_isError(ret), lz4Error("LZ4 init failed: ", ret));
+  return Status::OK();
 }
 
-StreamingCompressor::CompressResult LZ4Compressor::compress(
+folly::Expected<StreamingCompressor::CompressResult, Status>
+LZ4Compressor::compress(
     const uint8_t* input,
     uint64_t inputLength,
     uint8_t* output,
@@ -129,7 +138,7 @@ StreamingCompressor::CompressResult LZ4Compressor::compress(
     if (outputLength < LZ4F_HEADER_SIZE_MAX) {
       return CompressResult{0, 0, true};
     }
-    compressBegin(output, outputSize, bytesWritten);
+    VELOX_RETURN_UNEXPECTED(compressBegin(output, outputSize, bytesWritten));
   }
 
   if (outputSize < LZ4F_compressBound(inputSize, &prefs_)) {
@@ -138,15 +147,15 @@ StreamingCompressor::CompressResult LZ4Compressor::compress(
   }
   auto numBytesOrError = LZ4F_compressUpdate(
       ctx_, output, outputSize, input, inputSize, nullptr /* options */);
-  if (LZ4F_isError(numBytesOrError)) {
-    lz4Error("LZ4 compress update failed: ", numBytesOrError);
-  }
+  VELOX_RETURN_UNEXPECTED_IF(
+      LZ4F_isError(numBytesOrError),
+      lz4Error("LZ4 compress updated failed: ", numBytesOrError));
   bytesWritten += static_cast<int64_t>(numBytesOrError);
   VELOX_DCHECK_LE(bytesWritten, outputSize);
   return CompressResult{inputLength, bytesWritten, false};
 }
 
-StreamingCompressor::FlushResult LZ4Compressor::flush(
+folly::Expected<StreamingCompressor::FlushResult, Status> LZ4Compressor::flush(
     uint8_t* output,
     uint64_t outputLength) {
   auto outputSize = static_cast<size_t>(outputLength);
@@ -157,7 +166,7 @@ StreamingCompressor::FlushResult LZ4Compressor::flush(
     if (outputLength < LZ4F_HEADER_SIZE_MAX) {
       return FlushResult{0, true};
     }
-    compressBegin(output, outputSize, bytesWritten);
+    VELOX_RETURN_UNEXPECTED(compressBegin(output, outputSize, bytesWritten));
   }
 
   if (outputSize < LZ4F_compressBound(0, &prefs_)) {
@@ -167,15 +176,15 @@ StreamingCompressor::FlushResult LZ4Compressor::flush(
 
   auto numBytesOrError =
       LZ4F_flush(ctx_, output, outputSize, nullptr /* options */);
-  if (LZ4F_isError(numBytesOrError)) {
-    lz4Error("LZ4 flush failed: ", numBytesOrError);
-  }
+  VELOX_RETURN_UNEXPECTED_IF(
+      LZ4F_isError(numBytesOrError),
+      lz4Error("LZ4 flush failed: ", numBytesOrError));
   bytesWritten += static_cast<uint64_t>(numBytesOrError);
   VELOX_DCHECK_LE(bytesWritten, outputLength);
   return FlushResult{bytesWritten, false};
 }
 
-StreamingCompressor::EndResult LZ4Compressor::end(
+folly::Expected<StreamingCompressor::EndResult, Status> LZ4Compressor::end(
     uint8_t* output,
     uint64_t outputLength) {
   auto outputSize = static_cast<size_t>(outputLength);
@@ -186,7 +195,7 @@ StreamingCompressor::EndResult LZ4Compressor::end(
     if (outputLength < LZ4F_HEADER_SIZE_MAX) {
       return EndResult{0, true};
     }
-    compressBegin(output, outputSize, bytesWritten);
+    VELOX_RETURN_UNEXPECTED(compressBegin(output, outputSize, bytesWritten));
   }
 
   if (outputSize < LZ4F_compressBound(0, &prefs_)) {
@@ -196,51 +205,56 @@ StreamingCompressor::EndResult LZ4Compressor::end(
 
   auto numBytesOrError =
       LZ4F_compressEnd(ctx_, output, outputSize, nullptr /* options */);
-  if (LZ4F_isError(numBytesOrError)) {
-    lz4Error("LZ4 end failed: ", numBytesOrError);
-  }
+  VELOX_RETURN_UNEXPECTED_IF(
+      LZ4F_isError(numBytesOrError),
+      lz4Error("LZ4 end failed: ", numBytesOrError));
   bytesWritten += static_cast<uint64_t>(numBytesOrError);
   VELOX_DCHECK_LE(bytesWritten, outputLength);
   return EndResult{bytesWritten, false};
 }
 
-void LZ4Compressor::compressBegin(
+Status LZ4Compressor::compressBegin(
     uint8_t* output,
     size_t& outputLen,
     uint64_t& bytesWritten) {
   auto numBytesOrError = LZ4F_compressBegin(ctx_, output, outputLen, &prefs_);
-  if (LZ4F_isError(numBytesOrError)) {
-    lz4Error("LZ4 compress begin failed: ", numBytesOrError);
-  }
+  VELOX_RETURN_IF(
+      LZ4F_isError(numBytesOrError),
+      lz4Error("LZ4 compress begin failed: ", numBytesOrError));
   firstTime_ = false;
   output += numBytesOrError;
   outputLen -= numBytesOrError;
   bytesWritten += static_cast<uint64_t>(numBytesOrError);
+  return Status::OK();
 }
 
-void common::LZ4Decompressor::init() {
+Status common::LZ4Decompressor::init() {
   finished_ = false;
   auto ret = LZ4F_createDecompressionContext(&ctx_, LZ4F_VERSION);
-  if (LZ4F_isError(ret)) {
-    lz4Error("LZ4 init failed: ", ret);
-  }
+  VELOX_RETURN_IF(LZ4F_isError(ret), lz4Error("LZ4 init failed: ", ret));
+  return Status::OK();
 }
 
-void LZ4Decompressor::reset() {
+Status LZ4Decompressor::reset() {
 #if defined(LZ4_VERSION_NUMBER) && LZ4_VERSION_NUMBER >= 10800
   // LZ4F_resetDecompressionContext appeared in 1.8.0
   VELOX_CHECK_NOT_NULL(ctx_);
+  if (ctx_ == nullptr) {
+    return Status::Invalid("LZ4 decompression context is null.");
+  }
   LZ4F_resetDecompressionContext(ctx_);
   finished_ = false;
+  return Status::OK();
 #else
   if (ctx_ != nullptr) {
     LZ4F_freeDecompressionContext(ctx_);
   }
-  init();
+  return init();
 #endif
 }
 
-StreamingDecompressor::DecompressResult LZ4Decompressor::decompress(
+folly::Expected<StreamingDecompressor::DecompressResult, Status>
+LZ4Decompressor::decompress(
     const uint8_t* input,
     uint64_t inputLength,
     uint8_t* output,
@@ -250,9 +264,8 @@ StreamingDecompressor::DecompressResult LZ4Decompressor::decompress(
 
   auto ret = LZ4F_decompress(
       ctx_, output, &outputSize, input, &inputSize, nullptr /* options */);
-  if (LZ4F_isError(ret)) {
-    lz4Error("LZ4 decompress failed: ", ret);
-  }
+  VELOX_RETURN_UNEXPECTED_IF(
+      LZ4F_isError(ret), lz4Error("LZ4 decompress failed: ", ret));
   finished_ = (ret == 0);
   return DecompressResult{
       static_cast<uint64_t>(inputSize),
@@ -276,7 +289,7 @@ int32_t Lz4CodecBase::minimumCompressionLevel() const {
 
 int32_t Lz4CodecBase::maximumCompressionLevel() const {
 #if (defined(LZ4_VERSION_NUMBER) && LZ4_VERSION_NUMBER < 10800)
-  return 12;
+  return kLegacyLz4MaxCompressionLevel;
 #else
   return LZ4F_compressionLevel_max();
 #endif
@@ -303,7 +316,7 @@ uint64_t Lz4FrameCodec::maxCompressedLength(uint64_t inputLen) {
       LZ4F_compressFrameBound(static_cast<size_t>(inputLen), &prefs_));
 }
 
-uint64_t Lz4FrameCodec::compress(
+folly::Expected<uint64_t, Status> Lz4FrameCodec::compress(
     const uint8_t* input,
     uint64_t inputLength,
     uint8_t* output,
@@ -314,51 +327,54 @@ uint64_t Lz4FrameCodec::compress(
       input,
       static_cast<size_t>(inputLength),
       &prefs_);
-  if (LZ4F_isError(ret)) {
-    lz4Error("Lz4 compression failure: ", ret);
-  }
+  VELOX_RETURN_UNEXPECTED_IF(
+      LZ4F_isError(ret), lz4Error("Lz4 compression failure: ", ret));
   return static_cast<uint64_t>(ret);
 }
 
-uint64_t Lz4FrameCodec::decompress(
+folly::Expected<uint64_t, Status> Lz4FrameCodec::decompress(
     const uint8_t* input,
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
-  auto decompressor = makeStreamingDecompressor();
+  const auto maybeDecompressor = makeStreamingDecompressor();
+  VELOX_RETURN_UNEXPECTED_IF(
+      maybeDecompressor.hasError(), maybeDecompressor.error());
 
+  const auto& decompressor = maybeDecompressor.value();
   uint64_t bytesWritten = 0;
   while (!decompressor->isFinished() && inputLength != 0) {
-    auto result =
+    const auto maybeResult =
         decompressor->decompress(input, inputLength, output, outputLength);
+    VELOX_RETURN_UNEXPECTED_IF(maybeResult.hasError(), maybeResult.error());
+
+    const auto& result = maybeResult.value();
     input += result.bytesRead;
     inputLength -= result.bytesRead;
     output += result.bytesWritten;
     outputLength -= result.bytesWritten;
     bytesWritten += result.bytesWritten;
-    if (result.outputTooSmall) {
-      VELOX_FAIL("Lz4 decompression buffer too small.");
-    }
+    VELOX_RETURN_UNEXPECTED_IF(
+        result.outputTooSmall,
+        Status::IOError("Lz4 decompression buffer too small."));
   }
-  if (!decompressor->isFinished()) {
-    VELOX_FAIL("Lz4 compressed input contains less than one frame.");
-  }
-  if (inputLength != 0) {
-    VELOX_FAIL("Lz4 compressed input contains more than one frame.");
-  }
+  VELOX_RETURN_UNEXPECTED_IF(
+      !decompressor->isFinished() || inputLength != 0,
+      Status::IOError("Lz4 compressed input contains less than one frame."));
   return bytesWritten;
 }
 
-std::shared_ptr<StreamingCompressor> Lz4FrameCodec::makeStreamingCompressor() {
+folly::Expected<std::shared_ptr<StreamingCompressor>, Status>
+Lz4FrameCodec::makeStreamingCompressor() {
   auto ptr = std::make_shared<LZ4Compressor>(compressionLevel_);
-  ptr->init();
+  VELOX_RETURN_UNEXPECTED(ptr->init());
   return ptr;
 }
 
-std::shared_ptr<StreamingDecompressor>
+folly::Expected<std::shared_ptr<StreamingDecompressor>, Status>
 Lz4FrameCodec::makeStreamingDecompressor() {
   auto ptr = std::make_shared<LZ4Decompressor>();
-  ptr->init();
+  VELOX_RETURN_UNEXPECTED(ptr->init());
   return ptr;
 }
 
@@ -370,23 +386,7 @@ uint64_t Lz4RawCodec::maxCompressedLength(uint64_t inputLength) {
       LZ4_compressBound(static_cast<int>(inputLength)));
 }
 
-uint64_t Lz4RawCodec::decompress(
-    const uint8_t* input,
-    uint64_t inputLength,
-    uint8_t* output,
-    uint64_t outputLength) {
-  auto decompressedSize = LZ4_decompress_safe(
-      reinterpret_cast<const char*>(input),
-      reinterpret_cast<char*>(output),
-      static_cast<int>(inputLength),
-      static_cast<int>(outputLength));
-  if (decompressedSize < 0) {
-    VELOX_FAIL("Corrupt Lz4 compressed data.");
-  }
-  return static_cast<uint64_t>(decompressedSize);
-}
-
-uint64_t Lz4RawCodec::compress(
+folly::Expected<uint64_t, Status> Lz4RawCodec::compress(
     const uint8_t* input,
     uint64_t inputLength,
     uint8_t* output,
@@ -411,23 +411,24 @@ uint64_t Lz4RawCodec::compress(
         static_cast<int>(outputLength),
         compressionLevel_);
   }
-  if (compressedSize == 0) {
-    VELOX_FAIL("Lz4 compression failure.");
-  }
+  VELOX_RETURN_UNEXPECTED_IF(
+      compressedSize == 0, Status::IOError("Lz4 compression failure."));
   return static_cast<uint64_t>(compressedSize);
 }
 
-std::shared_ptr<StreamingCompressor> Lz4RawCodec::makeStreamingCompressor() {
-  VELOX_UNSUPPORTED(
-      "Streaming compression unsupported with LZ4 raw format. "
-      "Try using LZ4 frame format instead.");
-}
-
-std::shared_ptr<StreamingDecompressor>
-Lz4RawCodec::makeStreamingDecompressor() {
-  VELOX_UNSUPPORTED(
-      "Streaming decompression unsupported with LZ4 raw format. "
-      "Try using LZ4 frame format instead.");
+folly::Expected<uint64_t, Status> Lz4RawCodec::decompress(
+    const uint8_t* input,
+    uint64_t inputLength,
+    uint8_t* output,
+    uint64_t outputLength) {
+  auto decompressedSize = LZ4_decompress_safe(
+      reinterpret_cast<const char*>(input),
+      reinterpret_cast<char*>(output),
+      static_cast<int>(inputLength),
+      static_cast<int>(outputLength));
+  VELOX_RETURN_UNEXPECTED_IF(
+      decompressedSize < 0, Status::IOError("Lz4 decompression failure."));
+  return static_cast<uint64_t>(decompressedSize);
 }
 
 Lz4HadoopCodec::Lz4HadoopCodec() : Lz4RawCodec(kLz4DefaultCompressionLevel) {}
@@ -436,31 +437,35 @@ uint64_t Lz4HadoopCodec::maxCompressedLength(uint64_t inputLength) {
   return kPrefixLength + Lz4RawCodec::maxCompressedLength(inputLength);
 }
 
-uint64_t Lz4HadoopCodec::compress(
+folly::Expected<uint64_t, Status> Lz4HadoopCodec::compress(
     const uint8_t* input,
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
-  if (outputLength < kPrefixLength) {
-    VELOX_FAIL("Output buffer too small for Lz4HadoopCodec compression.");
-  }
+  VELOX_RETURN_UNEXPECTED_IF(
+      outputLength < kPrefixLength,
+      Status::IOError(
+          "Output buffer too small for Lz4HadoopCodec compression."));
 
-  uint64_t compressedSize = Lz4RawCodec::compress(
-      input, inputLength, output + kPrefixLength, outputLength - kPrefixLength);
-
-  // Prepend decompressed size in bytes and compressed size in bytes
-  // to be compatible with Hadoop Lz4RawCodec.
-  const uint32_t decompressedLength =
-      folly::Endian::big(static_cast<uint32_t>(inputLength));
-  const uint32_t compressedLength =
-      folly::Endian::big(static_cast<uint32_t>(compressedSize));
-  folly::storeUnaligned(output, decompressedLength);
-  folly::storeUnaligned(output + sizeof(uint32_t), compressedLength);
-
-  return kPrefixLength + compressedSize;
+  return Lz4RawCodec::compress(
+             input,
+             inputLength,
+             output + kPrefixLength,
+             outputLength - kPrefixLength)
+      .then([&](const auto& compressedSize) {
+        // Prepend decompressed size in bytes and compressed size in bytes
+        // to be compatible with Hadoop Lz4RawCodec.
+        const uint32_t decompressedLength =
+            folly::Endian::big(static_cast<uint32_t>(inputLength));
+        const uint32_t compressedLength =
+            folly::Endian::big(static_cast<uint32_t>(compressedSize));
+        folly::storeUnaligned(output, decompressedLength);
+        folly::storeUnaligned(output + sizeof(uint32_t), compressedLength);
+        return kPrefixLength + compressedSize;
+      });
 }
 
-uint64_t Lz4HadoopCodec::decompress(
+folly::Expected<uint64_t, Status> Lz4HadoopCodec::decompress(
     const uint8_t* input,
     uint64_t inputLength,
     uint8_t* output,
@@ -475,19 +480,6 @@ uint64_t Lz4HadoopCodec::decompress(
   return Lz4RawCodec::decompress(input, inputLength, output, outputLength);
 }
 
-std::shared_ptr<StreamingCompressor> Lz4HadoopCodec::makeStreamingCompressor() {
-  VELOX_UNSUPPORTED(
-      "Streaming compression unsupported with LZ4 Hadoop raw format. "
-      "Try using LZ4 frame format instead.");
-}
-
-std::shared_ptr<StreamingDecompressor>
-Lz4HadoopCodec::makeStreamingDecompressor() {
-  VELOX_UNSUPPORTED(
-      "Streaming decompression unsupported with LZ4 Hadoop raw format. "
-      "Try using LZ4 frame format instead.");
-}
-
 int32_t Lz4HadoopCodec::minimumCompressionLevel() const {
   return kUseDefaultCompressionLevel;
 }
@@ -500,7 +492,7 @@ int32_t Lz4HadoopCodec::defaultCompressionLevel() const {
   return kUseDefaultCompressionLevel;
 }
 
-uint64_t Lz4HadoopCodec::decompressInternal(
+folly::Expected<uint64_t, Status> Lz4HadoopCodec::decompressInternal(
     const uint8_t* input,
     uint64_t inputLength,
     uint8_t* output,

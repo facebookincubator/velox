@@ -56,15 +56,13 @@ bool HadoopCompressionFormat::tryDecompressHadoop(
       return false;
     }
     // Try decompressing and compare with expected decompressed length.
-    try {
-      auto decompressedSize = decompressInternal(
-          input, expectedCompressedSize, output, outputLength);
-      if (decompressedSize != expectedDecompressedSize) {
-        return false;
-      }
-    } catch (const VeloxException& e) {
+    auto maybeDecompressedSize =
+        decompressInternal(input, expectedCompressedSize, output, outputLength);
+    if (maybeDecompressedSize.hasError() ||
+        maybeDecompressedSize.value() != expectedDecompressedSize) {
       return false;
     }
+
     input += expectedCompressedSize;
     inputLength -= expectedCompressedSize;
     output += expectedDecompressedSize;
