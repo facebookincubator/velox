@@ -118,6 +118,10 @@ class MapConcatFunction : public exec::VectorFunction {
       for (vector_size_t i = 1; i < mapSize; i++) {
         if (combinedKeys->equalValueAt(
                 combinedKeys.get(), mapOffset + i, mapOffset + i - 1)) {
+          if (FLAGS_velox_exception_on_duplicate_map_values) {
+            // throw exception if flag is enabled and duplicates are found
+            throw std::invalid_argument("Duplicate keys found in map");
+          }
           duplicateCnt++;
           // "remove" duplicate entry
           uniqueKeys.setValid(mapOffset + i - 1, false);

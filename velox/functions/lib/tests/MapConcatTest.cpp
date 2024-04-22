@@ -225,6 +225,11 @@ TEST_F(MapConcatTest, duplicateKeys) {
         << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
         << result->toString(i);
   }
+
+  FLAGS_velox_exception_on_duplicate_map_values = true;
+  EXPECT_THROW(
+      evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap})),
+      VeloxUserError);
 }
 
 TEST_F(MapConcatTest, partiallyPopulated) {
