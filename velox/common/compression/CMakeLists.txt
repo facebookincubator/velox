@@ -21,5 +21,5 @@ add_library(
                            Lz4Compression.cpp HadoopCompressionFormat.cpp)
 target_link_libraries(
   velox_common_compression
-  PUBLIC Folly::folly lz4::lz4
+  PUBLIC velox_status Folly::folly lz4::lz4
   PRIVATE velox_exception)
