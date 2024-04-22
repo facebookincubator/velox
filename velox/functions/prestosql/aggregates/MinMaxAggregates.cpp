@@ -536,8 +536,7 @@ struct MinMaxNAccumulator {
       std::is_same_v<int128_t, T>,
       AlignedStlAllocator<T, sizeof(int128_t)>,
       StlAllocator<T>>;
-  using Heap = std::vector<T, Allocator>;
-  Heap heapValues;
+  std::vector<T, Allocator> heapValues;
 
   explicit MinMaxNAccumulator(HashStringAllocator* allocator)
       : heapValues{Allocator(allocator)} {}
@@ -972,7 +971,7 @@ exec::AggregateRegistrationResult registerMinMax(
               if (inputType->isLongDecimal()) {
                 return std::make_unique<TNumericN<int128_t>>(resultType);
               }
-              VELOX_NYI();
+              VELOX_UNREACHABLE();
             default:
               VELOX_CHECK(
                   false,
