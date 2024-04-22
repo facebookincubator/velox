@@ -271,12 +271,10 @@ class HashBuild final : public Operator {
   // at least one entry with null join keys.
   bool joinHasNullKeys_{false};
 
-  // Indicates whether the hash table ignore null keys.
-  bool ignoreNullKeys_{false};
-
   // Indicates whether drop duplicate rows. Rows containing duplicate keys
   // can be removed for left semi and anti join.
   bool dropDuplicates_{false};
+  bool abandonBuildNoDupHash_{false};
 
   // The type used to spill hash table which might attach a boolean column to
   // record the probed flag if 'needProbedFlagSpill_' is true.

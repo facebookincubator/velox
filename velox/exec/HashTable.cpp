@@ -1734,8 +1734,21 @@ template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::prepareJoinTable(
     std::vector<std::unique_ptr<BaseHashTable>> tables,
     int8_t spillInputStartPartitionBit,
-    folly::Executor* executor) {
+    folly::Executor* executor,
+    bool dropDuplicates) {
   buildExecutor_ = executor;
+  if (dropDuplicates) {
+    if (table_ != nullptr) {
+      // Set table_ to nullptr to trigger rehash.
+      rows_->pool()->freeContiguous(tableAllocation_);
+      table_ = nullptr;
+    }
+    // Call analyze to insert all unique values in row container to the
+    // table hashers' uniqueValues_;
+    if (!analyze()) {
+      setHashMode(HashMode::kHash, 0);
+    }
+  }
   otherTables_.reserve(tables.size());
   for (auto& table : tables) {
     otherTables_.emplace_back(std::unique_ptr<HashTable<ignoreNullKeys>>(
@@ -1765,6 +1778,15 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
     }
     if (useValueIds) {
       for (auto& other : otherTables_) {
+        if (dropDuplicates) {
+          // Before merging with the current hashers, all values in the row
+          // containers of other table need to be inserted into uniqueValues_.
+          if (!other->analyze()) {
+            other->setHashMode(HashMode::kHash, 0);
+            useValueIds = false;
+            break;
+          }
+        }
         for (auto i = 0; i < hashers_.size(); ++i) {
           hashers_[i]->merge(*other->hashers_[i]);
           if (!hashers_[i]->mayUseValueIds()) {

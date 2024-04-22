@@ -149,7 +149,6 @@ void HashBuild::setupTable() {
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
       joinNode_->isRightSemiProjectJoin()) {
     // Do not ignore null keys.
-    ignoreNullKeys_ = false;
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
@@ -170,7 +169,6 @@ void HashBuild::setupTable() {
     if (isLeftNullAwareJoinWithFilter(joinNode_)) {
       // We need to check null key rows in build side in case of null-aware anti
       // or left semi project join with filter set.
-      ignoreNullKeys_ = false;
       table_ = HashTable<false>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
@@ -389,24 +387,31 @@ void HashBuild::addInput(RowVectorPtr input) {
     return;
   }
 
-  numInputRows_ += input->size();
+  numInputRows_ += activeRows_.countSelected();
 
-  if (dropDuplicates_) {
+  if (dropDuplicates_ && !abandonBuildNoDupHash_) {
     const bool abandonEarly = abandonBuildNoDupHashEarly(table_->numDistinct());
     if (abandonEarly) {
       // The hash table is no longer directly constructed in addInput. The data
       // that was previously inserted into the hash table is already in the
       // RowContainer.
       addRuntimeStat("abandonBuildNoDupHash", RuntimeCounter(1));
-      dropDuplicates_ = false;
+      abandonBuildNoDupHash_ = true;
       table_->joinTableMayHaveDuplicates();
     } else {
+      // Before this step, all rows containing null keys that need to be
+      // excluded have already been excluded. The ignoreNullKeys parameter is
+      // no longer effective.
       table_->prepareForGroupProbe(
           *lookup_,
           input,
           activeRows_,
-          ignoreNullKeys_,
-          BaseHashTable::kNoSpillInputStartPartitionBit);
+          false,
+          isInputFromSpill() ? spillConfig_->startPartitionBit
+                             : BaseHashTable::kNoSpillInputStartPartitionBit);
+      if (lookup_->rows.empty()) {
+        return;
+      }
       table_->groupProbe(*lookup_);
       return;
     }
@@ -802,7 +807,8 @@ bool HashBuild::finishHashBuild() {
         isInputFromSpill() ? spillConfig()->startPartitionBit
                            : BaseHashTable::kNoSpillInputStartPartitionBit,
         allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                               : nullptr);
+                               : nullptr,
+        dropDuplicates_,);
   }
   stats_.wlock()->addRuntimeStat(
       BaseHashTable::kBuildWallNanos,

@@ -281,7 +281,8 @@ class BaseHashTable {
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
-      folly::Executor* executor = nullptr) = 0;
+      folly::Executor* executor = nullptr,
+      bool dropDuplicates = false) = 0;
 
   /// The hash table used for join build in left semi and anti join does not
   /// retain duplicate join keys by default. This is achieved by constructing
@@ -597,7 +598,8 @@ class HashTable : public BaseHashTable {
   void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
-      folly::Executor* executor = nullptr) override;
+      folly::Executor* executor = nullptr,
+      bool dropDuplicates = false) override;
 
   void prepareForJoinProbe(
       HashLookup& lookup,
