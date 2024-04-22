@@ -337,7 +337,7 @@ void registerFunctions(const std::string& prefix) {
       repeatMetadata());
 
   exec::registerStatefulVectorFunction(
-      prefix + "array_shuffle",
+      prefix + "shuffle",
       arrayShuffleWithCustomSeedSignatures(),
       makeArrayShuffleWithCustomSeed,
       arrayShuffleMetadata());

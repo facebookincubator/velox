@@ -29,7 +29,7 @@ class ArrayShuffleTest : public SparkFunctionBaseTest {
   testShuffle(const VectorPtr& input, int64_t seed, int32_t partitionId = 0) {
     setSparkPartitionId(partitionId);
     return evaluate(
-        fmt::format("array_shuffle(c0, {})", seed), makeRowVector({input}));
+        fmt::format("shuffle(c0, {})", seed), makeRowVector({input}));
   }
 
   template <typename T>
@@ -60,12 +60,10 @@ class ArrayShuffleTest : public SparkFunctionBaseTest {
 };
 
 TEST_F(ArrayShuffleTest, basic) {
-  auto input = makeNullableArrayVector<int64_t>({{1, 2, 3, 4, 5}});
-  auto result = makeNullableArrayVector<int64_t>({{3, 5, 4, 1, 2}});
-  auto stringInput =
-      makeNullableArrayVector<std::string>({{"a", "b", "c", "d"}});
-  auto stringResult =
-      makeNullableArrayVector<std::string>({{"a", "c", "b", "d"}});
+  auto input = makeArrayVector<int64_t>({{1, 2, 3, 4, 5}});
+  auto result = makeArrayVector<int64_t>({{3, 5, 4, 1, 2}});
+  auto stringInput = makeArrayVector<std::string>({{"a", "b", "c", "d"}});
+  auto stringResult = makeArrayVector<std::string>({{"a", "c", "b", "d"}});
   compareResult<int64_t>(testShuffle<int64_t>(input, 0), result, true);
   compareResult<std::string>(
       testShuffle<std::string>(stringInput, 0), stringResult, true);
