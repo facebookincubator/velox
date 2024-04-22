@@ -335,7 +335,6 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-comment \
          -Wno-int-in-bool-context \
          -Wno-redundant-move \
-         -Wno-array-bounds \
          -Wno-maybe-uninitialized \
          -Wno-unused-result \
          -Wno-format-overflow \
