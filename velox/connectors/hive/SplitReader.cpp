@@ -194,6 +194,11 @@ bool SplitReader::allPrefetchIssued() const {
   return baseRowReader_ && baseRowReader_->allPrefetchIssued();
 }
 
+void SplitReader::setConnectorQueryCtx(
+    const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx) {
+  connectorQueryCtx_ = std::move(connectorQueryCtx);
+}
+
 std::string SplitReader::toString() const {
   std::string partitionKeys;
   std::for_each(
