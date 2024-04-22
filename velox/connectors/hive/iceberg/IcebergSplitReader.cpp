@@ -77,7 +77,7 @@ void IcebergSplitReader::prepareSplit(
                 deleteFile,
                 hiveSplit_->filePath,
                 fileHandleFactory_,
-                connectorQueryCtx_.get(),
+                connectorQueryCtx_,
                 executor_,
                 hiveConfig_,
                 ioStats_,
