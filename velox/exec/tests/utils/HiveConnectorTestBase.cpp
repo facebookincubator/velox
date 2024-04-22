@@ -268,7 +268,9 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const std::vector<std::string>& partitionedBy,
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind) {
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
+        flushPolicyFactory) {
   return makeHiveInsertTableHandle(
       tableColumnNames,
       tableColumnTypes,
@@ -276,7 +278,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       nullptr,
       std::move(locationHandle),
       tableStorageFormat,
-      compressionKind);
+      compressionKind,
+      flushPolicyFactory);
 }
 
 // static
@@ -289,7 +292,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
-    const std::string& stripeSize) {
+    const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
+        flushPolicyFactory) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -339,22 +343,13 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
   VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
 
-  std::function<std::shared_ptr<dwio::common::FlushPolicy>()>
-      flushPolicyFactory = nullptr;
-  if (tableStorageFormat == dwio::common::FileFormat::DWRF) {
-    flushPolicyFactory = [stripeSize]() {
-      return std::make_shared<velox::dwrf::DefaultFlushPolicy>(
-          toCapacity(stripeSize, core::CapacityUnit::BYTE), 16777216);
-    };
-  }
-
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
       tableStorageFormat,
       bucketProperty,
       compressionKind,
-      std::move(flushPolicyFactory));
+      flushPolicyFactory);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>
