@@ -265,6 +265,7 @@ class BaseHashTable {
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       folly::Executor* executor = nullptr,
+      bool dropDuplicates = false,
       int8_t spillInputStartPartitionBit = kNoSpillInputStartPartitionBit) = 0;
 
   /// The hash table used for join build in left semi and anti join does not
@@ -590,6 +591,7 @@ class HashTable : public BaseHashTable {
   void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       folly::Executor* executor = nullptr,
+      bool dropDuplicates = false,
       int8_t spillInputStartPartitionBit =
           kNoSpillInputStartPartitionBit) override;
 
