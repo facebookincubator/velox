@@ -41,11 +41,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: "8-core"
-            type: "release"
-          - runner: "16-core"
-            type: "debug"
+        - runner: "16-core"
+        - type: ["debug", "release"]
     defaults:
       run:
         shell: bash
@@ -75,7 +72,6 @@ jobs:
             "-DVELOX_ENABLE_S3=ON"
             "-DVELOX_ENABLE_GCS=ON"
             "-DVELOX_ENABLE_ABFS=ON"
-            "-DVELOX_ENABLE_SUBSTRAIT=ON"
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
           )
           make '${{ matrix.type }}'
