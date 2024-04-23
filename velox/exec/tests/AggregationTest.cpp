@@ -503,7 +503,6 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
       "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
 }
 
-
 TEST_F(AggregationTest, missingLambdaFunction) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3}),
