@@ -99,7 +99,7 @@ struct WeekFunction : public InitSessionTimezone<T> {
 };
 
 template <typename T>
-struct YearOfWeekSparkFunction : public InitSessionTimezone<T> {
+struct YearOfWeekFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE int32_t computeYearOfWeek(const std::tm& dateTime) {
