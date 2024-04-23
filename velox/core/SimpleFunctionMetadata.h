@@ -590,8 +590,8 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
 
     builder.returnType(analysis.outputType);
     int32_t position = 0;
-    VELOX_CHECK_GT(ConstantChecker::getSize(), 0);
     for (const auto& arg : analysis.argsTypes) {
+      VELOX_CHECK_GT(ConstantChecker::getSize(), 0);
       if (ConstantChecker::isConstant[position++]) {
         builder.constantArgumentType(arg);
       } else {
