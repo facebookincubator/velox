@@ -156,7 +156,7 @@ class SelectivityVector {
     bits::fillBits(bits_.data(), 0, size_, false);
     begin_ = 0;
     end_ = 0;
-    allSelected_ = false;
+    allSelected_.reset();
   }
 
   /**
@@ -279,7 +279,7 @@ class SelectivityVector {
     if (begin_ == -1) {
       begin_ = 0;
       end_ = 0;
-      allSelected_ = false;
+      allSelected_.reset();
       return;
     }
     end_ = bits::findLastBit(bits_.data(), begin_, size_) + 1;
