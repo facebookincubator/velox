@@ -3341,6 +3341,25 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
           fromTimestampString("-2000-02-29 00:00:00.987"),
           "%Y-%m-%d %H:%i:%s.%f"));
 
+  setQueryTimeZone("GMT-8");
+
+  EXPECT_EQ(
+      "1969-12-31", dateFormat(fromTimestampString("1970-01-01"), "%Y-%m-%d"));
+  EXPECT_EQ(
+      "2000-02-28 04:00:00 PM",
+      dateFormat(
+          fromTimestampString("2000-02-29 00:00:00.987"), "%Y-%m-%d %r"));
+  EXPECT_EQ(
+      "2000-02-28 16:00:00.987000",
+      dateFormat(
+          fromTimestampString("2000-02-29 00:00:00.987"),
+          "%Y-%m-%d %H:%i:%s.%f"));
+  EXPECT_EQ(
+      "-2000-02-28 16:00:00.987000",
+      dateFormat(
+          fromTimestampString("-2000-02-29 00:00:00.987"),
+          "%Y-%m-%d %H:%i:%s.%f"));
+
   // User format errors or unsupported errors.
   const auto timestamp = fromTimestampString("-2000-02-29 00:00:00.987");
   VELOX_ASSERT_THROW(

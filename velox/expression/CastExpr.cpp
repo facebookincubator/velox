@@ -26,6 +26,7 @@
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/functions/lib/TimeUtils.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FunctionVector.h"
@@ -181,11 +182,7 @@ VectorPtr CastExpr::castFromDate(
     case TypeKind::TIMESTAMP: {
       static const int64_t kMillisPerDay{86'400'000};
       const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
-      const auto sessionTzName = queryConfig.sessionTimezone();
-      const auto* timeZone =
-          (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty())
-          ? date::locate_zone(sessionTzName)
-          : nullptr;
+      const auto* timeZone = functions::getTimeZoneFromConfig(queryConfig);
       auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         auto timestamp = Timestamp::fromMillis(
@@ -233,9 +230,8 @@ VectorPtr CastExpr::castToDate(
     }
     case TypeKind::TIMESTAMP: {
       const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
-      auto sessionTzName = queryConfig.sessionTimezone();
-      if (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty()) {
-        auto* timeZone = date::locate_zone(sessionTzName);
+      const auto* timeZone = functions::getTimeZoneFromConfig(queryConfig);
+      if (timeZone) {
         castTimestampToDate<true>(rows, input, context, castResult, timeZone);
       } else {
         castTimestampToDate<false>(rows, input, context, castResult);

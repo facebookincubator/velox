@@ -609,6 +609,26 @@ TEST_F(CastExprTest, stringToTimestamp) {
       Timestamp(946729316, 0),
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
+
+  setTimezone("GMT+8");
+  testCast<std::string, Timestamp>(
+      "timestamp",
+      {
+          "1970-01-01",
+          "1970-01-01 08:00:00",
+          "1970-01-01 00:00:00",
+          "1970-01-01 08:00:11",
+          "1970-01-01 09:00:00",
+          std::nullopt,
+      },
+      {
+          Timestamp(-28800, 0),
+          Timestamp(0, 0),
+          Timestamp(-28800, 0),
+          Timestamp(11, 0),
+          Timestamp(3600, 0),
+          std::nullopt,
+      });
 }
 
 TEST_F(CastExprTest, timestampToString) {
@@ -2397,8 +2417,8 @@ class TestingDictionaryToFewerRowsFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     const auto size = rows.size();
-    auto indices =
-        makeIndices(size, [](auto /*row*/) { return 0; }, context.pool());
+    auto indices = makeIndices(
+        size, [](auto /*row*/) { return 0; }, context.pool());
 
     result = BaseVector::wrapInDictionary(nullptr, indices, size, args[0]);
   }
