@@ -80,18 +80,11 @@ TEST_F(ArrayShuffleTest, basic) {
 }
 
 TEST_F(ArrayShuffleTest, nestedArrays) {
-  using innerArrayType = std::vector<std::optional<int64_t>>;
-  using outerArrayType =
-      std::vector<std::optional<std::vector<std::optional<int64_t>>>>;
-  innerArrayType a{1, 2, 3, 4};
-  innerArrayType b{5, 6};
-  innerArrayType c{6, 7, 8};
-  outerArrayType row1{{a}, {b}};
-  outerArrayType row2{std::nullopt, std::nullopt, {a}, {b}, {c}};
-  outerArrayType row3{{}};
-  outerArrayType row4{{{std::nullopt}}};
-  auto input =
-      makeNullableNestedArrayVector<int64_t>({{row1}, {row2}, {row3}, {row4}});
+  auto input = makeNestedArrayVectorFromJson<int64_t>(
+      {"[[1, 2, 3, 4], [5, 6]]",
+       "[null, null, [1, 2, 3, 4], [5, 6], [6, 7, 8]]",
+       "[[]]",
+       "[[null]]"});
   compareResult<Array<int64_t>>(
       testShuffle<Array<int64_t>>(input, 0, 0),
       testShuffle<int64_t>(input, 0, 0),
@@ -102,8 +95,8 @@ TEST_F(ArrayShuffleTest, constantEncoding) {
   vector_size_t size = 2;
   // Test empty array, array with null element,
   // array with duplicate elements, and array with distinct values.
-  auto valueVector = makeNullableArrayVector<int64_t>(
-      {{}, {std::nullopt, 0}, {5, 5}, {1, 2, 3}});
+  auto valueVector = makeArrayVectorFromJson<int64_t>(
+      {"[]", "[null, 0]", "[5, 5]", "[1, 2, 3]"});
 
   for (auto i = 0; i < valueVector->size(); i++) {
     auto input = BaseVector::wrapInConstant(size, i, valueVector);
@@ -116,13 +109,13 @@ TEST_F(ArrayShuffleTest, constantEncoding) {
 
 TEST_F(ArrayShuffleTest, dictEncoding) {
   // Test dict with repeated elements: {1,2,3} x 3, {4,5} x 2.
-  auto base = makeNullableArrayVector<int64_t>(
-      {{0},
-       {1, 2, 3},
-       {4, 5, std::nullopt},
-       {1, 2, 3},
-       {1, 2, 3},
-       {4, 5, std::nullopt}});
+  auto base = makeArrayVectorFromJson<int64_t>(
+      {"[0]",
+       "[1, 2 ,3]",
+       "[4, 5, null]",
+       "[1, 2 ,3]",
+       "[1, 2 ,3]",
+       "[4, 5, null]"});
   // Test repeated index elements and indices filtering (filter out element at
   // index 0).
   auto indices = makeIndices({3, 3, 4, 2, 2, 1, 1, 1});
