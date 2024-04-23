@@ -140,8 +140,7 @@ class TpchConnector final : public Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx)
-      override final {
+      ConnectorQueryCtx* connectorQueryCtx) override final {
     return std::make_unique<TpchDataSource>(
         outputType,
         tableHandle,

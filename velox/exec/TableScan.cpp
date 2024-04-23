@@ -153,7 +153,10 @@ RowVectorPtr TableScan::getOutput() {
         connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
             connectorSplit->connectorId, planNodeId(), connectorPool_);
         dataSource_ = connector_->createDataSource(
-            outputType_, tableHandle_, columnHandles_, connectorQueryCtx_);
+            outputType_,
+            tableHandle_,
+            columnHandles_,
+            connectorQueryCtx_.get());
         for (const auto& entry : dynamicFilters_) {
           dataSource_->addDynamicFilter(entry.first, entry.second);
         }
@@ -295,8 +298,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
        table = tableHandle_,
        columns = columnHandles_,
        connector = connector_,
-       ctx = operatorCtx_->createConnectorQueryCtx(
-           split->connectorId, planNodeId(), connectorPool_),
+       ctx = connectorQueryCtx_,
        task = operatorCtx_->task(),
        dynamicFilters = dynamicFilters_,
        split]() -> std::unique_ptr<connector::DataSource> {
@@ -312,7 +314,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
              &debugString});
 
         auto dataSource =
-            connector->createDataSource(type, table, columns, ctx);
+            connector->createDataSource(type, table, columns, ctx.get());
         if (task->isCancelled()) {
           return nullptr;
         }
@@ -325,6 +327,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
 }
 
 void TableScan::checkPreload() {
+  VELOX_CHECK_NOT_NULL(connectorQueryCtx_);
   auto* executor = connector_->executor();
   if (maxSplitPreloadPerDriver_ == 0 || !executor ||
       !connector_->supportsSplitPreload()) {

@@ -59,7 +59,7 @@ class SplitReader {
       const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
       const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
           partitionKeys,
-      const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx,
+      const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStats,
@@ -72,7 +72,7 @@ class SplitReader {
       const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
       const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
           partitionKeys,
-      const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx,
+      const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStats,
@@ -107,8 +107,7 @@ class SplitReader {
 
   bool allPrefetchIssued() const;
 
-  void setConnectorQueryCtx(
-      const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx);
+  void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
 
   std::string toString() const;
 
@@ -145,7 +144,7 @@ class SplitReader {
   const std::unordered_map<
       std::string,
       std::shared_ptr<HiveColumnHandle>>* const partitionKeys_;
-  std::shared_ptr<ConnectorQueryCtx> connectorQueryCtx_;
+  const ConnectorQueryCtx* connectorQueryCtx_;
   const std::shared_ptr<const HiveConfig> hiveConfig_;
 
   const RowTypePtr readerOutputType_;

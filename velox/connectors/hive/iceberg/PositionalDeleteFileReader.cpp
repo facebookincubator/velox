@@ -28,7 +28,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     const IcebergDeleteFile& deleteFile,
     const std::string& baseFilePath,
     FileHandleFactory* fileHandleFactory,
-    const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx,
+    const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStats,
@@ -97,7 +97,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   auto deleteFileInput = createBufferedInput(
       *deleteFileHandle,
       deleteReaderOpts,
-      connectorQueryCtx.get(),
+      connectorQueryCtx,
       ioStats_,
       executor_);
 

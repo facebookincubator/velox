@@ -43,7 +43,7 @@ class HiveDataSource : public DataSource {
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<ConnectorQueryCtx>& connectorQueryCtx,
+      const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
@@ -116,7 +116,7 @@ class HiveDataSource : public DataSource {
 
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
-  const std::shared_ptr<ConnectorQueryCtx> connectorQueryCtx_;
+  const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<HiveConfig> hiveConfig_;
   std::shared_ptr<io::IoStatistics> ioStats_;
 
