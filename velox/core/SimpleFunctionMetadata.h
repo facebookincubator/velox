@@ -591,7 +591,8 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
     builder.returnType(analysis.outputType);
     int32_t position = 0;
     for (const auto& arg : analysis.argsTypes) {
-      if (sizeof...(TArgs) > 0 && ConstantChecker::isConstant[position++]) {
+      if (ConstantChecker::getSize() > 0 &&
+          ConstantChecker::isConstant[position++]) {
         builder.constantArgumentType(arg);
       } else {
         builder.argumentType(arg);

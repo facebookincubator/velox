@@ -233,6 +233,10 @@ template <typename... TArgs>
 struct ConstantChecker {
   static constexpr bool isConstant[sizeof...(TArgs)] = {
       isConstantType<TArgs>::value...};
+
+  static constexpr size_t getSize() {
+    return sizeof...(TArgs);
+  }
 };
 
 /// CppToType templates for types introduced above.
