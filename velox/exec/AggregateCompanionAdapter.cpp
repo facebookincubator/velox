@@ -125,15 +125,17 @@ void AggregateCompanionFunctionBase::extractAccumulators(
 }
 
 void AggregateCompanionAdapter::PartialFunction::initialize(
-    core::AggregationNode::Step /*step*/,
+    core::AggregationNode::Step step,
     const std::vector<TypePtr>& rawInputType,
     const facebook::velox::TypePtr& resultType,
-    const std::vector<VectorPtr>& constantInputs) {
+    const std::vector<VectorPtr>& constantInputs,
+    std::optional<core::AggregationNode::Step> /*companionStep*/) {
   fn_->initialize(
-      core::AggregationNode::Step::kPartial,
+      step,
       rawInputType,
       resultType,
-      constantInputs);
+      constantInputs,
+      core::AggregationNode::Step::kPartial);
 }
 
 void AggregateCompanionAdapter::PartialFunction::extractValues(
@@ -144,15 +146,17 @@ void AggregateCompanionAdapter::PartialFunction::extractValues(
 }
 
 void AggregateCompanionAdapter::MergeFunction::initialize(
-    core::AggregationNode::Step /*step*/,
+    core::AggregationNode::Step step,
     const std::vector<TypePtr>& rawInputType,
     const facebook::velox::TypePtr& resultType,
-    const std::vector<VectorPtr>& constantInputs) {
+    const std::vector<VectorPtr>& constantInputs,
+    std::optional<core::AggregationNode::Step> /*companionStep*/) {
   fn_->initialize(
-      core::AggregationNode::Step::kIntermediate,
+      step,
       rawInputType,
       resultType,
-      constantInputs);
+      constantInputs,
+      core::AggregationNode::Step::kIntermediate);
 }
 
 void AggregateCompanionAdapter::MergeFunction::addRawInput(
@@ -270,7 +274,8 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
       core::AggregationNode::Step::kFinal,
       rawInputTypes,
       outputType,
-      constantInputs);
+      constantInputs,
+      core::AggregationNode::Step::kIntermediate);
   fn_->initializeNewGroups(groups, allSelectedRange);
   fn_->enableValidateIntermediateInputs();
   fn_->addIntermediateResults(groups, rows, args, false);

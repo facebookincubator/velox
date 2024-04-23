@@ -139,7 +139,9 @@ class Aggregate {
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& rawInputType,
       const TypePtr& resultType,
-      const std::vector<VectorPtr>& constantInputs) {}
+      const std::vector<VectorPtr>& constantInputs,
+      std::optional<core::AggregationNode::Step> companionStep = std::nullopt) {
+  }
 
   // Initializes null flags and accumulators for newly encountered groups.  This
   // function should be called only once for each group.

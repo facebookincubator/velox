@@ -497,6 +497,7 @@ class FunctionStateTestAggregate {
     std::vector<TypePtr> rawInputTypes;
     TypePtr resultType;
     std::vector<VectorPtr> constantInputs;
+    core::AggregationNode::Step companionStep;
   };
 
   static void checkConstantInputs(
@@ -517,19 +518,29 @@ class FunctionStateTestAggregate {
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& rawInputTypes,
       const TypePtr& resultType,
-      const std::vector<VectorPtr>& constantInputs) {
+      const std::vector<VectorPtr>& constantInputs,
+      std::optional<core::AggregationNode::Step> companionStep) {
     auto expectedRawInputTypes = {BIGINT(), BIGINT()};
     auto expectedIntermediateType = ROW({BIGINT(), DOUBLE()});
 
     if constexpr (testCompanion) {
-      if (step == core::AggregationNode::Step::kPartial) {
+      VELOX_CHECK(companionStep.has_value());
+      if (companionStep.value() == core::AggregationNode::Step::kPartial) {
         VELOX_CHECK(std::equal(
             rawInputTypes.begin(),
             rawInputTypes.end(),
             expectedRawInputTypes.begin(),
             expectedRawInputTypes.end()));
-        checkConstantInputs(constantInputs);
-      } else if (step == core::AggregationNode::Step::kIntermediate) {
+        if (step == core::AggregationNode::Step::kPartial ||
+            step == core::AggregationNode::Step::kSingle) {
+          // Only check constant inputs in partial and single step.
+          checkConstantInputs(constantInputs);
+        } else {
+          VELOX_CHECK_EQ(constantInputs.size(), 1);
+          VELOX_CHECK_NULL(constantInputs[0]);
+        }
+      } else if (
+          companionStep.value() == core::AggregationNode::Step::kIntermediate) {
         VELOX_CHECK_EQ(rawInputTypes.size(), 1);
         VELOX_CHECK(rawInputTypes[0]->equivalent(*expectedIntermediateType));
 
@@ -546,6 +557,7 @@ class FunctionStateTestAggregate {
           expectedRawInputTypes.end()));
       if (step == core::AggregationNode::Step::kPartial ||
           step == core::AggregationNode::Step::kSingle) {
+        // Only check constant inputs in partial and single step.
         checkConstantInputs(constantInputs);
       } else {
         VELOX_CHECK_EQ(constantInputs.size(), 1);
@@ -665,51 +677,15 @@ TEST_F(SimpleFunctionStateAggregationTest, aggregate) {
       {},
       {"simple_function_state_agg_main(c0, 1)"},
       {expected});
-}
-
-TEST_F(SimpleFunctionStateAggregationTest, companionAggregate) {
-  auto inputVectors = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
-  std::vector<int64_t> accSum = {10};
-  std::vector<double> accCount = {4.0};
-  auto intermediateExpected = makeRowVector({
-      makeRowVector({
-          makeFlatVector<int64_t>(accSum),
-          makeFlatVector<double>(accCount),
-      }),
-  });
-  std::vector<double> finalResult = {2.5};
-  auto finalExpected = makeRowVector({makeFlatVector<double>(finalResult)});
-
-  AssertQueryBuilder(
-      PlanBuilder()
-          .values({inputVectors})
-          .singleAggregation(
-              {}, {"simple_function_state_agg_companion_partial(c0, 1)"})
-          .planNode())
-      .assertResults(intermediateExpected);
-
-  inputVectors = makeRowVector({
-      makeRowVector({
-          makeFlatVector<int64_t>({1, 2, 3, 4}),
-          makeFlatVector<double>({1.0, 1.0, 1.0, 1.0}),
-      }),
-  });
-
-  AssertQueryBuilder(
-      PlanBuilder()
-          .values({inputVectors})
-          .singleAggregation(
-              {}, {"simple_function_state_agg_companion_merge(c0)"})
-          .planNode())
-      .assertResults(intermediateExpected);
-
-  AssertQueryBuilder(
-      PlanBuilder()
-          .values({inputVectors})
-          .singleAggregation(
-              {}, {"simple_function_state_agg_companion_merge_extract(c0)"})
-          .planNode())
-      .assertResults(finalExpected);
+  testAggregationsWithCompanion(
+      {inputVectors},
+      [](auto& /*builder*/) {},
+      {},
+      {"simple_function_state_agg_companion(c0, 1)"},
+      {{BIGINT(), BIGINT()}},
+      {},
+      {expected},
+      {});
 }
 
 class SimpleFunctionStateWindowTest : public WindowTestBase {

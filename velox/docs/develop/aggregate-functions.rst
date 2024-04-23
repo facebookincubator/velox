@@ -165,7 +165,8 @@ A simple aggregation function is implemented as a class as the following.
         FunctionState& state,
         const std::vector<TypePtr>& rawInputTypes,
         const TypePtr& resultType,
-        const std::vector<VectorPtr>& constantInputs) {
+        const std::vector<VectorPtr>& constantInputs,
+        std::optional<core::AggregationNode::Step> companionStep) {
       state.resultType = resultType;
     }
 

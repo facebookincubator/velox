@@ -53,9 +53,16 @@ class SimpleAggregateAdapter : public Aggregate {
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& rawInputTypes,
       const TypePtr& resultType,
-      const std::vector<VectorPtr>& constantInputs) override {
+      const std::vector<VectorPtr>& constantInputs,
+      std::optional<core::AggregationNode::Step> companionStep) override {
     if constexpr (support_initialize_function_state_) {
-      FUNC::initialize(state_, step, rawInputTypes, resultType, constantInputs);
+      FUNC::initialize(
+          state_,
+          step,
+          rawInputTypes,
+          resultType,
+          constantInputs,
+          companionStep);
     }
   }
 
