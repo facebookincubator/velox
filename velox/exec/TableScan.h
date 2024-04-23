@@ -20,6 +20,46 @@
 
 namespace facebook::velox::exec {
 
+/// Simple history based fallback row size estimator that is only used when
+/// underlying 'DataSource' does not support row size estimation.
+class RowSizeEstimator {
+ public:
+  static constexpr int64_t kDefaultConservativeRowSize = 2 << 20;
+  static constexpr float kDefaultDecayFactor = 0.9;
+
+  RowSizeEstimator(
+      const RowTypePtr& rowType,
+      int64_t conservativeRowSize = kDefaultConservativeRowSize,
+      float decayFactor = kDefaultDecayFactor);
+
+  void updateEstimator(const VectorPtr& resultVector);
+
+  int64_t estimatedRowSize() const;
+
+ private:
+  // Currently we identify a type to be potential large memory user by checking
+  // if it contains MAP or ARRAY types.
+  bool maybeLargeMemoryUser(const TypePtr& type);
+
+  // Returned as first batch estimation. For the first batch estimation, since
+  // there is no historical data to base on, this number is used as a
+  // conservative estimation.
+  //
+  // NOTE: This will only be applied if 'convervativeEstimate_' is true.
+  const int64_t conseravtiveRowSize_;
+
+  // If the vector provided to updateEstimator() has less average row size, we
+  // reduce 'estimatedRowSizeBytes_' with at most (no less than) this decay
+  // factor.
+  const float decayFactor_;
+
+  // When set to true, start initial estimation with 'conseravtiveRowSize_'. If
+  // there are MAP or ARRAY types in the output type, we set this to true upon
+  // estimator construction.
+  bool conservativeEstimate_;
+  int64_t estimatedRowSizeBytes_{connector::DataSource::kUnknownRowSize};
+};
+
 class TableScan : public SourceOperator {
  public:
   TableScan(
@@ -119,5 +159,9 @@ class TableScan : public SourceOperator {
   // Holds the current status of the operator. Used when debugging to understand
   // what operator is doing.
   std::atomic<const char*> curStatus_{""};
+
+  // Fallback row size estimator that will only be used if 'dataSource_' does
+  // not support row size estimation.
+  RowSizeEstimator rowSizeEstimator_;
 };
 } // namespace facebook::velox::exec

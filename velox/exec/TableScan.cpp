@@ -23,6 +23,55 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
+RowSizeEstimator::RowSizeEstimator(
+    const RowTypePtr& rowType,
+    int64_t conservativeRowSize,
+    float decayFactor)
+    : conseravtiveRowSize_(conservativeRowSize), decayFactor_(decayFactor) {
+  conservativeEstimate_ = maybeLargeMemoryUser(rowType);
+}
+
+bool RowSizeEstimator::maybeLargeMemoryUser(const TypePtr& type) {
+  if (type->isMap() || type->isArray()) {
+    return true;
+  }
+  for (auto& child : *type) {
+    if (maybeLargeMemoryUser(child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void RowSizeEstimator::updateEstimator(const VectorPtr& resultVec) {
+  VELOX_CHECK_NOT_NULL(resultVec);
+  auto resultRowVec = resultVec->as<RowVector>();
+  VELOX_CHECK_NOT_NULL(resultRowVec);
+  if (resultRowVec->size() == 0) {
+    return;
+  }
+  const auto numRows = resultRowVec->size();
+  if (numRows == 0) {
+    return;
+  }
+  auto estimatedRowSizeBytes = resultRowVec->retainedSize() / numRows;
+  if (estimatedRowSizeBytes < estimatedRowSizeBytes_) {
+    estimatedRowSizeBytes_ = std::max(
+        static_cast<int64_t>(estimatedRowSizeBytes),
+        static_cast<int64_t>(estimatedRowSizeBytes_ * decayFactor_));
+  } else {
+    estimatedRowSizeBytes_ = estimatedRowSizeBytes;
+  }
+}
+
+int64_t RowSizeEstimator::estimatedRowSize() const {
+  if (estimatedRowSizeBytes_ != connector::DataSource::kUnknownRowSize) {
+    return estimatedRowSizeBytes_;
+  }
+  return conservativeEstimate_ ? conseravtiveRowSize_
+                               : connector::DataSource::kUnknownRowSize;
+}
+
 TableScan::TableScan(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -47,7 +96,8 @@ TableScan::TableScan(
       readBatchSize_(driverCtx_->queryConfig().preferredOutputBatchRows()),
       maxReadBatchSize_(driverCtx_->queryConfig().maxOutputBatchRows()),
       getOutputTimeLimitMs_(
-          driverCtx_->queryConfig().tableScanGetOutputTimeLimitMs()) {
+          driverCtx_->queryConfig().tableScanGetOutputTimeLimitMs()),
+      rowSizeEstimator_{outputType_}{
   connector_ = connector::getConnector(tableHandle_->connectorId());
 }
 
@@ -202,7 +252,10 @@ RowVectorPtr TableScan::getOutput() {
       ++stats_.wlock()->numSplits;
 
       curStatus_ = "getOutput: dataSource_->estimatedRowSize";
-      const auto estimatedRowSize = dataSource_->estimatedRowSize();
+      auto estimatedRowSize = dataSource_->estimatedRowSize();
+      if (estimatedRowSize == connector::DataSource::kUnknownRowSize) {
+        estimatedRowSize = rowSizeEstimator_.estimatedRowSize();
+      }
       readBatchSize_ =
           estimatedRowSize == connector::DataSource::kUnknownRowSize
           ? outputBatchRows()
@@ -231,6 +284,9 @@ RowVectorPtr TableScan::getOutput() {
     }
     curStatus_ = "getOutput: dataSource_->next";
     auto dataOptional = dataSource_->next(readBatchSize, blockingFuture_);
+    if (dataOptional.has_value()) {
+      rowSizeEstimator_.updateEstimator(dataOptional.value());
+    }
     curStatus_ = "getOutput: checkPreload";
     checkPreload();
 

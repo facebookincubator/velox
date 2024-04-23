@@ -4242,3 +4242,29 @@ DEBUG_ONLY_TEST_F(
       {filePath},
       "SELECT c5, max(c0), max(c1), max(c2), max(c3), max(c4) FROM tmp group by c5");
 }
+
+TEST_F(TableScanTest, rowSizeEstimatorTest) {
+  auto numRows = 1000;
+  auto outputType = ROW({"a", "b"}, {BIGINT(), DOUBLE()});
+  auto output = makeVectors(1, numRows, outputType).back();
+  RowSizeEstimator estimator(outputType);
+  EXPECT_EQ(
+      estimator.estimatedRowSize(), connector::DataSource::kUnknownRowSize);
+  estimator.updateEstimator(output);
+  EXPECT_EQ(estimator.estimatedRowSize(), output->retainedSize() / numRows);
+
+  numRows = 500;
+  outputType =
+      ROW({"a", "b", "c", "d"}, {BIGINT(), DOUBLE(), DOUBLE(), TINYINT()});
+  output = makeVectors(1, numRows, outputType).back();
+  estimator.updateEstimator(output);
+  EXPECT_EQ(estimator.estimatedRowSize(), output->retainedSize() / numRows);
+
+  outputType = ROW({"a"}, {BIGINT()});
+  output = makeVectors(1, numRows, outputType).back();
+  auto prevSize = estimator.estimatedRowSize();
+  estimator.updateEstimator(output);
+  EXPECT_EQ(
+      estimator.estimatedRowSize(),
+      static_cast<int64_t>(prevSize * RowSizeEstimator::kDefaultDecayFactor));
+}
