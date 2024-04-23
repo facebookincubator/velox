@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/TableScan.h"
+#include <folly/synchronization/Baton.h>
+#include <folly/synchronization/Latch.h>
 #include <atomic>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/Fs.h"
@@ -1372,6 +1374,42 @@ TEST_F(TableScanTest, multipleSplits) {
   }
 }
 
+TEST_F(TableScanTest, preloadingSplitClose) {
+  auto filePaths = makeFilePaths(100);
+  auto vectors = makeVectors(100, 100);
+  for (int32_t i = 0; i < vectors.size(); i++) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  auto executors = ioExecutor_.get();
+  folly::Latch latch(executors->numThreads());
+  std::vector<folly::Baton<>> batons(executors->numThreads());
+  // Simulate a busy IO thread pool by blocking all threads.
+  for (auto& baton : batons) {
+    executors->add([&]() {
+      baton.wait();
+      latch.count_down();
+    });
+  }
+  ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
+  auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 2);
+  auto stats = getTableScanRuntimeStats(task);
+
+  // Verify that split preloading is enabled.
+  ASSERT_GT(stats.at("preloadedSplits").sum, 1);
+
+  task.reset();
+  // Once all task references are cleared, the count of deleted tasks should
+  // promptly match the count of created tasks.
+  ASSERT_EQ(Task::numCreatedTasks(), Task::numDeletedTasks());
+  // Clean blocking items in the IO thread pool.
+  for (auto& baton : batons) {
+    baton.post();
+  }
+  latch.wait();
+}
+
 TEST_F(TableScanTest, waitForSplit) {
   auto filePaths = makeFilePaths(10);
   auto vectors = makeVectors(10, 1'000);
@@ -1445,6 +1483,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
       core::PlanFragment{leafPlan},
       0,
       std::move(queryCtx),
+      Task::ExecutionMode::kParallel,
       std::move(consumer));
   leafTask->start(4);
 
@@ -4071,10 +4110,10 @@ TEST_F(TableScanTest, timestampPartitionKey) {
 TEST_F(TableScanTest, partitionKeyNotMatchPartitionKeysHandle) {
   auto vectors = makeVectors(1, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->path, vectors);
+  writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
-  auto split = HiveConnectorSplitBuilder(filePath->path)
+  auto split = HiveConnectorSplitBuilder(filePath->getPath())
                    .partitionKey("ds", "2021-12-02")
                    .build();
 
@@ -4088,7 +4127,9 @@ TEST_F(TableScanTest, partitionKeyNotMatchPartitionKeysHandle) {
   assertQuery(op, split, "SELECT c0 FROM tmp");
 }
 
-TEST_F(TableScanTest, memoryArbitrationWithSlowTableScan) {
+// TODO: re-enable this test once we add back driver suspension support for
+// table scan.
+TEST_F(TableScanTest, DISABLED_memoryArbitrationWithSlowTableScan) {
   const size_t numFiles{2};
   std::vector<std::shared_ptr<TempFilePath>> filePaths;
   std::vector<RowVectorPtr> vectorsForDuckDb;
@@ -4097,7 +4138,7 @@ TEST_F(TableScanTest, memoryArbitrationWithSlowTableScan) {
   for (auto i = 0; i < numFiles; ++i) {
     auto vectors = makeVectors(5, 128);
     filePaths.emplace_back(TempFilePath::create(true));
-    writeToFile(filePaths.back()->path, vectors);
+    writeToFile(filePaths.back()->tempFilePath(), vectors);
     for (const auto& vector : vectors) {
       vectorsForDuckDb.emplace_back(vector);
     }
@@ -4166,7 +4207,11 @@ TEST_F(TableScanTest, memoryArbitrationWithSlowTableScan) {
   queryThread.join();
 }
 
-DEBUG_ONLY_TEST_F(TableScanTest, memoryArbitrationByTableScanAllocation) {
+// TODO: re-enable this test once we add back driver suspension support for
+// table scan.
+DEBUG_ONLY_TEST_F(
+    TableScanTest,
+    DISABLED_memoryArbitrationByTableScanAllocation) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
