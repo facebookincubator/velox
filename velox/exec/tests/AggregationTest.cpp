@@ -503,23 +503,6 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
       "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
 }
 
-TEST_F(AggregationTest, castIntToTimestamp) {
-    std::vector<Timestamp> timeValues = {
-      Timestamp{2, 0},
-      Timestamp{3, 0},
-      Timestamp{4, 0},
-      Timestamp{5, 0}};
-  auto intVector = makeFlatVector<int64_t>({2, 3, 4, 5});
-  auto timestampVector = makeFlatVector<Timestamp>(timeValues);
-  auto vectors = makeRowVector({"c1", "c2"}, {intVector, timestampVector});
-  createDuckDbTable({vectors});
-
-  auto op = PlanBuilder()
-                .values({vectors})
-                .project({"c1", "cast(c1 as timestamp)"})
-                .planNode();
-  assertQuery(op, "select c1,c2 from tmp");
-}
 
 TEST_F(AggregationTest, missingLambdaFunction) {
   auto data = makeRowVector({

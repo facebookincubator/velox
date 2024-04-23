@@ -192,7 +192,8 @@ class CastExpr : public SpecialForm {
   VectorPtr castIntToTimestamp(
       const SelectivityVector& rows,
       const BaseVector& input,
-      exec::EvalCtx& context);
+      exec::EvalCtx& context,
+      const TypePtr& fromType);
 
   template <typename TInput, typename TOutput>
   void applyDecimalCastKernel(
