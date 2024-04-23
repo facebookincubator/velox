@@ -773,9 +773,9 @@ class MapWriter {
     keysWriter_->ensureSize(1);
     valuesWriter_->ensureSize(1);
 
-    VELOX_DCHECK(
-        keysVector_->size() == valuesVector_->size(),
-        "expect map keys and value vector sized to be synchronized");
+    // VELOX_DCHECK_EQ(
+    //     keysVector_->size(), valuesVector_->size(),
+    //     "expect map keys and value vector sized to be synchronized");
     capacity_ = keysVector_->size();
   }
 

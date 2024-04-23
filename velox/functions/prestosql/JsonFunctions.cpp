@@ -58,7 +58,7 @@ class JsonFormatFunction : public exec::VectorFunction {
     // json -> varchar
     return {exec::FunctionSignatureBuilder()
                 .returnType("varchar")
-                .argumentType("json")
+                .argumentType("varchar")
                 .build()};
   }
 };
