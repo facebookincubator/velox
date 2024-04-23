@@ -46,6 +46,7 @@ add_library(
   Options.cpp
   OutputStream.cpp
   ParallelFor.cpp
+  PercentUnitLoader.cpp
   Range.cpp
   Reader.cpp
   ReaderFactory.cpp

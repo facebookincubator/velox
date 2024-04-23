@@ -30,6 +30,7 @@ add_executable(
   LoggedExceptionTest.cpp
   MeasureTimeTests.cpp
   ParallelForTest.cpp
+  PercentUnitLoaderTests.cpp
   RangeTests.cpp
   ReadFileInputStreamTests.cpp
   ReaderTest.cpp
