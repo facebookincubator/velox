@@ -922,9 +922,9 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     }
   }
 
-  // For fixed interval like second, minute, hour, day and week
-  // we can truncate date by a simple arithmetic expression:
-  // floor(seconds / intervalSeconds) * intervalSeconds
+  /// For fixed interval like second, minute, hour, day and week
+  /// we can truncate date by a simple arithmetic expression:
+  /// floor(seconds / intervalSeconds) * intervalSeconds.
   FOLLY_ALWAYS_INLINE Timestamp
   adjustByArithmetic(long seconds, long intervalSeconds) {
     long s = seconds / intervalSeconds;
