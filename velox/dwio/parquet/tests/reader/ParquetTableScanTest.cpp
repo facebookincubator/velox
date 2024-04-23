@@ -116,12 +116,9 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     assertQuery(plan, splits_, sql);
   }
 
-  void loadData(
-      const std::string& filePath,
-      RowTypePtr rowType,
-      RowVectorPtr data,
-      const std::optional<std::string>& rowIndexColumn = std::nullopt) {
-    splits_ = {makeSplit(filePath, rowIndexColumn)};
+  void
+  loadData(const std::string& filePath, RowTypePtr rowType, RowVectorPtr data) {
+    splits_ = {makeSplit(filePath)};
     rowType_ = rowType;
     createDuckDbTable({data});
   }
@@ -132,10 +129,9 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   }
 
   std::shared_ptr<connector::hive::HiveConnectorSplit> makeSplit(
-      const std::string& filePath,
-      const std::optional<std::string>& rowIndexColumn = std::nullopt) {
+      const std::string& filePath) {
     auto split = makeHiveConnectorSplits(
-        filePath, 1, dwio::common::FileFormat::PARQUET, rowIndexColumn)[0];
+        filePath, 1, dwio::common::FileFormat::PARQUET)[0];
 
     return split;
   }
@@ -473,8 +469,7 @@ TEST_F(ParquetTableScanTest, rowIndex) {
               makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
               makeFlatVector<double>(20, [](auto row) { return row + 1; }),
               makeFlatVector<int64_t>(20, [](auto row) { return row; }),
-          }),
-      std::optional<std::string>("_tmp_metadata_row_index"));
+          }));
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
       assignments;
   assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(

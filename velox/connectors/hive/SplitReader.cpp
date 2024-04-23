@@ -279,7 +279,10 @@ void SplitReader::createRowReader(
   auto& fileType = baseReader_->rowType();
   auto columnTypes = adaptColumns(fileType, baseReaderOpts_.getFileSchema());
   auto columnNames = fileType->names();
-  setRowIndexColumnInfoIfNeed(fileType, rowIndexColumn);
+  if (rowIndexColumn != nullptr) {
+    setRowIndexColumn(fileType, rowIndexColumn);
+  }
+
   configureRowReaderOptions(
       baseRowReaderOpts_,
       hiveTableHandle_->tableParameters(),
@@ -293,23 +296,20 @@ void SplitReader::createRowReader(
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 
-void SplitReader::setRowIndexColumnInfoIfNeed(
+void SplitReader::setRowIndexColumn(
     const RowTypePtr& fileType,
     const std::shared_ptr<HiveColumnHandle>& rowIndexColumn) {
-  if (rowIndexColumn != nullptr) {
-    auto& fileType = baseReader_->rowType();
-    auto rowIndexColumnName = rowIndexColumn->name();
-    auto rowIndexMetaColIdx =
-        readerOutputType_->getChildIdxIfExists(rowIndexColumnName);
-    if (rowIndexMetaColIdx.has_value() &&
-        !fileType->containsChild(rowIndexColumnName) &&
-        hiveSplit_->partitionKeys.find(rowIndexColumnName) ==
-            hiveSplit_->partitionKeys.end()) {
-      dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
-      rowNumberColumnInfo.insertPosition = rowIndexMetaColIdx.value();
-      rowNumberColumnInfo.name = rowIndexColumnName;
-      baseRowReaderOpts_.setRowNumberColumnInfo(std::move(rowNumberColumnInfo));
-    }
+  auto rowIndexColumnName = rowIndexColumn->name();
+  auto rowIndexMetaColIdx =
+      readerOutputType_->getChildIdxIfExists(rowIndexColumnName);
+  if (rowIndexMetaColIdx.has_value() &&
+      !fileType->containsChild(rowIndexColumnName) &&
+      hiveSplit_->partitionKeys.find(rowIndexColumnName) ==
+          hiveSplit_->partitionKeys.end()) {
+    dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
+    rowNumberColumnInfo.insertPosition = rowIndexMetaColIdx.value();
+    rowNumberColumnInfo.name = rowIndexColumnName;
+    baseRowReaderOpts_.setRowNumberColumnInfo(std::move(rowNumberColumnInfo));
   }
 }
 
@@ -361,15 +361,12 @@ std::vector<TypePtr> SplitReader::adaptColumns(
     } else {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       if (!fileTypeIdx.has_value()) {
-        if (!hiveSplit_->rowIndexColumn.has_value() ||
-            fieldName != hiveSplit_->rowIndexColumn.value()) {
-          // Column is missing. Most likely due to schema evolution.
-          VELOX_CHECK(tableSchema);
-          childSpec->setConstantValue(BaseVector::createNullConstant(
-              tableSchema->findChild(fieldName),
-              1,
-              connectorQueryCtx_->memoryPool()));
-        }
+        // Column is missing. Most likely due to schema evolution.
+        VELOX_CHECK(tableSchema);
+        childSpec->setConstantValue(BaseVector::createNullConstant(
+            tableSchema->findChild(fieldName),
+            1,
+            connectorQueryCtx_->memoryPool()));
       } else {
         // Column no longer missing, reset constant value set on the spec.
         childSpec->setConstantValue(nullptr);

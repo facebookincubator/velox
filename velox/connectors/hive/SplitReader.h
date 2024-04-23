@@ -135,7 +135,7 @@ class SplitReader {
       const RowTypePtr& fileType,
       const std::shared_ptr<const velox::RowType>& tableSchema);
 
-  void setRowIndexColumnInfoIfNeed(
+  void setRowIndexColumn(
       const RowTypePtr& fileType,
       const std::shared_ptr<HiveColumnHandle>& rowIndexColumn);
 
