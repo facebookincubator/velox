@@ -131,7 +131,9 @@ TEST_F(AggregateWindowTest, variableWidthAggregate) {
 
 // Tests function with k RANGE PRECEDING (FOLLOWING) frames.
 TEST_F(AggregateWindowTest, rangeFrames) {
-  for (const auto& function : kAggregateFunctions) {
+  auto aggregateFunctions = kAggregateFunctions;
+  aggregateFunctions.push_back("array_agg(c2)");
+  for (const auto& function : aggregateFunctions) {
     // count function is skipped as DuckDB returns inconsistent results
     // with Velox for rows with empty frames. Velox expects empty frames to
     // return 0, but DuckDB returns null.
@@ -139,6 +141,38 @@ TEST_F(AggregateWindowTest, rangeFrames) {
       testKRangeFrames(function);
     }
   }
+}
+
+TEST_F(AggregateWindowTest, rangeNullsOrder) {
+  auto c0 = makeNullableFlatVector<int64_t>({1, 2, 1, std::nullopt});
+  auto input = makeRowVector({c0});
+
+  std::string overClause = "order by c0 asc nulls last";
+  // This frame corresponds to range between 0 preceding and 0 following
+  // (since c0 is used for both the ORDER BY and range frame column).
+  // So for each row the frame corresponds to all rows with the same value.
+
+  // This test validates that the null value doesn't mix in the range of
+  // adjacent rows.
+  std::string frameClause = "range between c0 preceding and c0 following";
+  auto arr =
+      makeNullableArrayVector<int64_t>({{1, 1}, {2}, {1, 1}, {std::nullopt}});
+  auto expected = makeRowVector({c0, arr});
+
+  WindowTestBase::testWindowFunction(
+      {input}, "array_agg(c0)", overClause, frameClause, expected);
+
+  overClause = "order by c0 asc nulls first";
+  WindowTestBase::testWindowFunction(
+      {input}, "array_agg(c0)", overClause, frameClause, expected);
+
+  overClause = "order by c0 desc nulls last";
+  WindowTestBase::testWindowFunction(
+      {input}, "array_agg(c0)", overClause, frameClause, expected);
+
+  overClause = "order by c0 desc nulls first";
+  WindowTestBase::testWindowFunction(
+      {input}, "array_agg(c0)", overClause, frameClause, expected);
 }
 
 // Test for aggregates that return NULL as the default value for empty frames
@@ -315,6 +349,43 @@ TEST_F(AggregateWindowTest, integerOverflowRowsFrame) {
        makeFlatVector<int64_t>({6, 6, 6, 6, 6, 6, 4, 4, 4, 4})});
   WindowTestBase::testWindowFunction(
       {input}, "count(c1)", overClause, frameClause, expected);
+
+  // Empty frame with overflowed frame end.
+  input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeConstant<int64_t>(30000000000, 4),
+  });
+  expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+      makeConstant<int64_t>(30000000000, 4),
+      makeNullConstant(TypeKind::BIGINT, 4),
+  });
+  WindowTestBase::testWindowFunction(
+      {input},
+      "sum(c0)",
+      "",
+      "rows between unbounded preceding and 30000000000 preceding",
+      expected);
+  WindowTestBase::testWindowFunction(
+      {input},
+      "sum(c0)",
+      "",
+      "rows between unbounded preceding and c1 preceding",
+      expected);
+
+  // Empty frame with overflowed frame start.
+  WindowTestBase::testWindowFunction(
+      {input},
+      "sum(c0)",
+      "",
+      "rows between 30000000000 following and unbounded following",
+      expected);
+  WindowTestBase::testWindowFunction(
+      {input},
+      "sum(c0)",
+      "",
+      "rows between c1 following and unbounded following",
+      expected);
 }
 
 }; // namespace

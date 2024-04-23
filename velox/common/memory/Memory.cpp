@@ -61,6 +61,8 @@ std::unique_ptr<MemoryArbitrator> createArbitrator(
       {.kind = options.arbitratorKind,
        .capacity =
            std::min(options.arbitratorCapacity, options.allocatorCapacity),
+       .reservedCapacity = options.arbitratorReservedCapacity,
+       .memoryPoolReservedCapacity = options.memoryPoolReservedCapacity,
        .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
        .memoryReclaimWaitMs = options.memoryReclaimWaitMs,
        .arbitrationStateCheckCb = options.arbitrationStateCheckCb,
@@ -264,7 +266,6 @@ int64_t MemoryManager::getTotalBytes() const {
 
 size_t MemoryManager::numPools() const {
   size_t numPools = defaultRoot_->getChildCount();
-  VELOX_CHECK_GE(numPools, 0);
   {
     std::shared_lock guard{mutex_};
     numPools += pools_.size() - sharedLeafPools_.size();

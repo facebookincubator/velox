@@ -143,7 +143,7 @@ class FakeMemoryOperator : public Operator {
       override {
     VELOX_CHECK(canReclaim());
     auto* driver = operatorCtx_->driver();
-    VELOX_CHECK(!driver->state().isOnThread() || driver->state().isSuspended);
+    VELOX_CHECK(!driver->state().isOnThread() || driver->state().suspended());
     VELOX_CHECK(driver->task()->pauseRequested());
     VELOX_CHECK_GT(targetBytes, 0);
 
@@ -160,14 +160,12 @@ class FakeMemoryOperator : public Operator {
       pool()->free(allocIt->buffer, allocIt->size);
       allocIt = allocations_.erase(allocIt);
     }
-    VELOX_CHECK_GE(totalBytes_, 0);
   }
 
  private:
   void clear() {
     for (auto& allocation : allocations_) {
       totalBytes_ -= allocation.free();
-      VELOX_CHECK_GE(totalBytes_, 0);
     }
     allocations_.clear();
     VELOX_CHECK_EQ(totalBytes_.load(), 0);
@@ -318,13 +316,14 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
     SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
     const auto oldStats = arbitrator_->stats();
     std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
-        newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+        newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
     ++numAddedPools_;
     std::shared_ptr<core::QueryCtx> orderByQueryCtx;
     if (sameQuery) {
       orderByQueryCtx = fakeMemoryQueryCtx;
     } else {
-      orderByQueryCtx = newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+      orderByQueryCtx =
+          newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
       ++numAddedPools_;
     }
 
@@ -418,14 +417,14 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
     SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
     const auto oldStats = arbitrator_->stats();
     std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
-        newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+        newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
     ++numAddedPools_;
     std::shared_ptr<core::QueryCtx> aggregationQueryCtx;
     if (sameQuery) {
       aggregationQueryCtx = fakeMemoryQueryCtx;
     } else {
       aggregationQueryCtx =
-          newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+          newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
       ++numAddedPools_;
     }
 
@@ -520,13 +519,14 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
     SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
     const auto oldStats = arbitrator_->stats();
     std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
-        newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+        newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
     ++numAddedPools_;
     std::shared_ptr<core::QueryCtx> joinQueryCtx;
     if (sameQuery) {
       joinQueryCtx = fakeMemoryQueryCtx;
     } else {
-      joinQueryCtx = newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+      joinQueryCtx =
+          newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
       ++numAddedPools_;
     }
 
@@ -639,7 +639,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, driverInitTriggeredArbitration) {
   createDuckDbTable(vectors);
   setupMemory(kMemoryCapacity, 0);
   std::shared_ptr<core::QueryCtx> queryCtx =
-      newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+      newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
   ASSERT_EQ(queryCtx->pool()->capacity(), 0);
   ASSERT_EQ(queryCtx->pool()->maxCapacity(), kMemoryCapacity);
 
@@ -669,7 +669,7 @@ DEBUG_ONLY_TEST_F(
   createDuckDbTable(vectors);
 
   std::shared_ptr<core::QueryCtx> queryCtx =
-      newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+      newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
   ASSERT_EQ(queryCtx->pool()->capacity(), 0);
 
   // Allocate a large chunk of memory to trigger memory reclaim during the query
@@ -763,7 +763,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, asyncArbitratonFromNonDriverContext) {
   }
   createDuckDbTable(vectors);
   std::shared_ptr<core::QueryCtx> queryCtx =
-      newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+      newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
   ASSERT_EQ(queryCtx->pool()->capacity(), 0);
 
   folly::EventCount aggregationAllocationWait;
@@ -861,7 +861,8 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, runtimeStats) {
 
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
   const auto outputDirectory = TempDirectoryPath::create();
-  const auto queryCtx = newQueryCtx(memoryManager_, executor_, memoryCapacity);
+  const auto queryCtx =
+      newQueryCtx(memoryManager_.get(), executor_.get(), memoryCapacity);
   auto writerPlan =
       PlanBuilder()
           .values(vectors)
@@ -919,7 +920,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, arbitrateMemoryFromOtherOperator) {
   for (bool sameDriver : {false, true}) {
     SCOPED_TRACE(fmt::format("sameDriver {}", sameDriver));
     std::shared_ptr<core::QueryCtx> queryCtx =
-        newQueryCtx(memoryManager_, executor_, kMemoryCapacity);
+        newQueryCtx(memoryManager_.get(), executor_.get(), kMemoryCapacity);
     ASSERT_EQ(queryCtx->pool()->capacity(), 0);
 
     std::atomic<bool> injectAllocationOnce{true};
@@ -1067,7 +1068,8 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
       queryThreads.emplace_back([&, i]() {
         std::shared_ptr<Task> task;
         try {
-          auto queryCtx = newQueryCtx(memoryManager_, executor_, queryCapacity);
+          auto queryCtx =
+              newQueryCtx(memoryManager_.get(), executor_.get(), queryCapacity);
           if (i == 0) {
             // Write task contains aggregate node, which does not support
             // multithread aggregation type resolver, so make sure it is built
@@ -1162,7 +1164,8 @@ TEST_F(SharedArbitrationTest, reserveReleaseCounters) {
           {
             std::lock_guard<std::mutex> l(mutex);
             auto oldNum = arbitrator_->stats().numReserves;
-            queries.emplace_back(newQueryCtx(memoryManager_, executor_));
+            queries.emplace_back(
+                newQueryCtx(memoryManager_.get(), executor_.get()));
             ASSERT_EQ(arbitrator_->stats().numReserves, oldNum + 1);
           }
         });
