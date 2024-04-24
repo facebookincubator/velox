@@ -328,7 +328,6 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
 }
 
 void TableScan::checkPreload() {
-  VELOX_CHECK_NOT_NULL(connectorQueryCtx_);
   auto* executor = connector_->executor();
   if (maxSplitPreloadPerDriver_ == 0 || !executor ||
       !connector_->supportsSplitPreload()) {
