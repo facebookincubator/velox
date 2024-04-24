@@ -95,9 +95,11 @@ HashBuild::HashBuild(
     types.emplace_back(inputType->childAt(channel));
   }
 
+  dropDuplicates_ = canDropDuplicates(joinNode_);
+
   // Identify the non-key build side columns and make a decoder for each.
   const int32_t numDependents = inputType->size() - numKeys;
-  if (numDependents > 0) {
+  if (!dropDuplicates_ && numDependents > 0) {
     // Number of join keys (numKeys) may be less then number of input columns
     // (inputType->size()). In this case numDependents is negative and cannot be
     // used to call 'reserve'. This happens when we join different probe side
@@ -106,12 +108,16 @@ HashBuild::HashBuild(
     dependentChannels_.reserve(numDependents);
     decoders_.reserve(numDependents);
   }
-  for (auto i = 0; i < inputType->size(); ++i) {
-    if (keyChannelMap_.find(i) == keyChannelMap_.end()) {
-      dependentChannels_.emplace_back(i);
-      decoders_.emplace_back(std::make_unique<DecodedVector>());
-      names.emplace_back(inputType->nameOf(i));
-      types.emplace_back(inputType->childAt(i));
+  if (!dropDuplicates_) {
+    // For left semi and anti join with no extra filter, hash table does not
+    // store dependent columns.
+    for (auto i = 0; i < inputType->size(); ++i) {
+      if (keyChannelMap_.find(i) == keyChannelMap_.end()) {
+        dependentChannels_.emplace_back(i);
+        decoders_.emplace_back(std::make_unique<DecodedVector>());
+        names.emplace_back(inputType->nameOf(i));
+        types.emplace_back(inputType->childAt(i));
+      }
     }
   }
 
@@ -159,11 +165,6 @@ void HashBuild::setupTable() {
             .minTableRowsForParallelJoinBuild(),
         pool());
   } else {
-    // (Left) semi and anti join with no extra filter only needs to know whether
-    // there is a match. Hence, no need to store entries with duplicate keys.
-    dropDuplicates_ = !joinNode_->filter() &&
-        (joinNode_->isLeftSemiFilterJoin() ||
-         joinNode_->isLeftSemiProjectJoin() || isAntiJoin(joinType_));
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
     if (isLeftNullAwareJoinWithFilter(joinNode_)) {
@@ -407,8 +408,7 @@ void HashBuild::addInput(RowVectorPtr input) {
           input,
           activeRows_,
           false,
-          isInputFromSpill() ? spillConfig_->startPartitionBit
-                             : BaseHashTable::kNoSpillInputStartPartitionBit);
+          BaseHashTable::kNoSpillInputStartPartitionBit);
       if (lookup_->rows.empty()) {
         return;
       }
