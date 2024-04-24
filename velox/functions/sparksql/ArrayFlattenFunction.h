@@ -29,6 +29,9 @@ template <typename T>
 struct ArrayFlattenFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T)
 
+  // INT_MAX - 15, keep the same limit with spark.
+  static constexpr int32_t kMaxNumberOfElements = 2147483632;
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Array<Generic<T1>>>& out,
       const arg_type<Array<Array<Generic<T1>>>>& arrays) {
@@ -41,6 +44,13 @@ struct ArrayFlattenFunction {
         return false;
       }
     }
+
+    VELOX_USER_CHECK_LE(
+        elementCount,
+        kMaxNumberOfElements,
+        "array flatten result exceeds the max array size limit {}",
+        kMaxNumberOfElements);
+
     out.reserve(elementCount);
     for (const auto& array : arrays) {
       out.add_items(array.value());
