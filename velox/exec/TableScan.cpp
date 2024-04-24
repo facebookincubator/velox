@@ -298,7 +298,8 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
        table = tableHandle_,
        columns = columnHandles_,
        connector = connector_,
-       ctx = connectorQueryCtx_,
+       ctx = operatorCtx_->createConnectorQueryCtx(
+           split->connectorId, planNodeId(), connectorPool_),
        task = operatorCtx_->task(),
        dynamicFilters = dynamicFilters_,
        split]() -> std::unique_ptr<connector::DataSource> {
