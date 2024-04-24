@@ -17,17 +17,17 @@
 
 #include <cmath>
 #include <type_traits>
-#include "velox/functions/Udf.h"
+#include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions::sparksql {
 
-template <typename TExecCtx, typename T>
+template <typename T>
 struct ArraySizeFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
+  VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
       int32_t& out,
-      const arg_type<velox::Array<T>>& inputArray) {
+      const arg_type<velox::Array<Any>>& inputArray) {
     out = inputArray.size();
   }
 };

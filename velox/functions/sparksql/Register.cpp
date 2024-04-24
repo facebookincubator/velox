@@ -60,14 +60,6 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
       {prefix + "array_remove"});
 }
 
-template <typename T>
-inline void registerArraySizeFunctions(const std::string& prefix) {
-  registerFunction<
-      ParameterBinder<sparksql::ArraySizeFunction, T>,
-      int32_t,
-      Array<T>>({prefix + "array_size"});
-}
-
 inline void registerArrayRemoveFunctions(const std::string& prefix) {
   registerArrayRemoveFunctions<int8_t>(prefix);
   registerArrayRemoveFunctions<int16_t>(prefix);
@@ -162,17 +154,8 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
 void registerFunctions(const std::string& prefix) {
   registerAllSpecialFormGeneralFunctions();
 
-  registerArraySizeFunctions<bool>(prefix);
-  registerArraySizeFunctions<int8_t>(prefix);
-  registerArraySizeFunctions<int16_t>(prefix);
-  registerArraySizeFunctions<int32_t>(prefix);
-  registerArraySizeFunctions<int64_t>(prefix);
-  registerArraySizeFunctions<int128_t>(prefix);
-  registerArraySizeFunctions<double>(prefix);
-  registerArraySizeFunctions<float>(prefix);
-  registerArraySizeFunctions<Varchar>(prefix);
-  registerArraySizeFunctions<Timestamp>(prefix);
-  registerArraySizeFunctions<Date>(prefix);
+  registerFunction<sparksql::ArraySizeFunction, int32_t, Array<Any>>(
+      {prefix + "array_size"});
 
   // Register size functions
   registerSize(prefix + "size");
