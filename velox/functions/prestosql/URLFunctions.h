@@ -136,7 +136,7 @@ FOLLY_ALWAYS_INLINE void urlEscape(
     bool usePlusForSpace = true,
     const uint64_t* doNotEncodeSymbolsBits = nullptr) {
   auto inputSize = input.size();
-  output.reserve(inputSize * 3);
+  output.resize(inputSize * 3);
 
   auto inputBuffer = input.data();
   auto outputBuffer = output.data();
@@ -155,12 +155,7 @@ FOLLY_ALWAYS_INLINE void urlEscape(
       outputBuffer[outIndex++] = p;
     }
   }
-  if constexpr (std::is_same<TOutString, std::string>::value) {
-    output = std::string(outputBuffer, outIndex);
-  } else {
-    // StringWriter, etc.
-    output.resize(outIndex);
-  }
+  output.resize(outIndex);
 }
 
 /// Performs initial validation of the URI.
