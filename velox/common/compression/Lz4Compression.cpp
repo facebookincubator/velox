@@ -138,7 +138,8 @@ LZ4Compressor::compress(
     if (outputLength < LZ4F_HEADER_SIZE_MAX) {
       return CompressResult{0, 0, true};
     }
-    VELOX_RETURN_UNEXPECTED(compressBegin(output, outputSize, bytesWritten));
+    VELOX_RETURN_UNEXPECTED_NOT_OK(
+        compressBegin(output, outputSize, bytesWritten));
   }
 
   if (outputSize < LZ4F_compressBound(inputSize, &prefs_)) {
@@ -151,6 +152,7 @@ LZ4Compressor::compress(
       LZ4F_isError(numBytesOrError),
       lz4Error("LZ4 compress updated failed: ", numBytesOrError));
   bytesWritten += static_cast<int64_t>(numBytesOrError);
+
   VELOX_DCHECK_LE(bytesWritten, outputSize);
   return CompressResult{inputLength, bytesWritten, false};
 }
@@ -166,7 +168,8 @@ folly::Expected<StreamingCompressor::FlushResult, Status> LZ4Compressor::flush(
     if (outputLength < LZ4F_HEADER_SIZE_MAX) {
       return FlushResult{0, true};
     }
-    VELOX_RETURN_UNEXPECTED(compressBegin(output, outputSize, bytesWritten));
+    VELOX_RETURN_UNEXPECTED_NOT_OK(
+        compressBegin(output, outputSize, bytesWritten));
   }
 
   if (outputSize < LZ4F_compressBound(0, &prefs_)) {
@@ -180,6 +183,7 @@ folly::Expected<StreamingCompressor::FlushResult, Status> LZ4Compressor::flush(
       LZ4F_isError(numBytesOrError),
       lz4Error("LZ4 flush failed: ", numBytesOrError));
   bytesWritten += static_cast<uint64_t>(numBytesOrError);
+
   VELOX_DCHECK_LE(bytesWritten, outputLength);
   return FlushResult{bytesWritten, false};
 }
@@ -195,7 +199,8 @@ folly::Expected<StreamingCompressor::EndResult, Status> LZ4Compressor::end(
     if (outputLength < LZ4F_HEADER_SIZE_MAX) {
       return EndResult{0, true};
     }
-    VELOX_RETURN_UNEXPECTED(compressBegin(output, outputSize, bytesWritten));
+    VELOX_RETURN_UNEXPECTED_NOT_OK(
+        compressBegin(output, outputSize, bytesWritten));
   }
 
   if (outputSize < LZ4F_compressBound(0, &prefs_)) {
@@ -209,6 +214,7 @@ folly::Expected<StreamingCompressor::EndResult, Status> LZ4Compressor::end(
       LZ4F_isError(numBytesOrError),
       lz4Error("LZ4 end failed: ", numBytesOrError));
   bytesWritten += static_cast<uint64_t>(numBytesOrError);
+
   VELOX_DCHECK_LE(bytesWritten, outputLength);
   return EndResult{bytesWritten, false};
 }
@@ -238,7 +244,6 @@ Status common::LZ4Decompressor::init() {
 Status LZ4Decompressor::reset() {
 #if defined(LZ4_VERSION_NUMBER) && LZ4_VERSION_NUMBER >= 10800
   // LZ4F_resetDecompressionContext appeared in 1.8.0
-  VELOX_CHECK_NOT_NULL(ctx_);
   if (ctx_ == nullptr) {
     return Status::Invalid("LZ4 decompression context is null.");
   }
@@ -337,44 +342,43 @@ folly::Expected<uint64_t, Status> Lz4FrameCodec::decompress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
-  const auto maybeDecompressor = makeStreamingDecompressor();
-  VELOX_RETURN_UNEXPECTED_IF(
-      maybeDecompressor.hasError(), maybeDecompressor.error());
+  return makeStreamingDecompressor().then(
+      [&](const auto& decompressor) -> folly::Expected<uint64_t, Status> {
+        uint64_t bytesWritten = 0;
+        while (!decompressor->isFinished() && inputLength != 0) {
+          auto maybeResult = decompressor->decompress(
+              input, inputLength, output, outputLength);
+          VELOX_RETURN_UNEXPECTED(maybeResult);
 
-  const auto& decompressor = maybeDecompressor.value();
-  uint64_t bytesWritten = 0;
-  while (!decompressor->isFinished() && inputLength != 0) {
-    const auto maybeResult =
-        decompressor->decompress(input, inputLength, output, outputLength);
-    VELOX_RETURN_UNEXPECTED_IF(maybeResult.hasError(), maybeResult.error());
-
-    const auto& result = maybeResult.value();
-    input += result.bytesRead;
-    inputLength -= result.bytesRead;
-    output += result.bytesWritten;
-    outputLength -= result.bytesWritten;
-    bytesWritten += result.bytesWritten;
-    VELOX_RETURN_UNEXPECTED_IF(
-        result.outputTooSmall,
-        Status::IOError("Lz4 decompression buffer too small."));
-  }
-  VELOX_RETURN_UNEXPECTED_IF(
-      !decompressor->isFinished() || inputLength != 0,
-      Status::IOError("Lz4 compressed input contains less than one frame."));
-  return bytesWritten;
+          const auto& result = maybeResult.value();
+          input += result.bytesRead;
+          inputLength -= result.bytesRead;
+          output += result.bytesWritten;
+          outputLength -= result.bytesWritten;
+          bytesWritten += result.bytesWritten;
+          VELOX_RETURN_UNEXPECTED_IF(
+              result.outputTooSmall,
+              Status::IOError("Lz4 decompression buffer too small."));
+        }
+        VELOX_RETURN_UNEXPECTED_IF(
+            !decompressor->isFinished() || inputLength != 0,
+            Status::IOError(
+                "Lz4 compressed input contains less than one frame."));
+        return bytesWritten;
+      });
 }
 
 folly::Expected<std::shared_ptr<StreamingCompressor>, Status>
 Lz4FrameCodec::makeStreamingCompressor() {
   auto ptr = std::make_shared<LZ4Compressor>(compressionLevel_);
-  VELOX_RETURN_UNEXPECTED(ptr->init());
+  VELOX_RETURN_UNEXPECTED_NOT_OK(ptr->init());
   return ptr;
 }
 
 folly::Expected<std::shared_ptr<StreamingDecompressor>, Status>
 Lz4FrameCodec::makeStreamingDecompressor() {
   auto ptr = std::make_shared<LZ4Decompressor>();
-  VELOX_RETURN_UNEXPECTED(ptr->init());
+  VELOX_RETURN_UNEXPECTED_NOT_OK(ptr->init());
   return ptr;
 }
 

@@ -483,22 +483,27 @@ void Status::moveFrom(Status& s) {
     if (FOLLY_UNLIKELY(condition)) {                  \
       return (::folly::makeUnexpected(status));       \
     }                                                 \
-  } while (0)
+  } while (false)
 
 /// Propagate any non-successful Status wrapped in folly::Unexpected to the
 /// caller.
-#define VELOX_RETURN_UNEXPECTED(status)                       \
+#define VELOX_RETURN_UNEXPECTED_NOT_OK(status)                \
   do {                                                        \
     ::facebook::velox::Status __s =                           \
         ::facebook::velox::internal::genericToStatus(status); \
     VELOX_RETURN_IF(!__s.ok(), ::folly::makeUnexpected(__s)); \
   } while (false)
 
-namespace internal {
+#define VELOX_RETURN_UNEXPECTED(expected)                    \
+  do {                                                       \
+    auto res = (expected);                                   \
+    VELOX_RETURN_UNEXPECTED_IF(res.hasError(), res.error()); \
+  } while (false)
 
-/// Common API for extracting Status from either Status or Result<T> (the latter
-/// is defined in Result.h).
-/// Useful for status check macros such as VELOX_RETURN_NOT_OK.
+namespace internal {
+/// Common API for extracting Status from either Status or Result<T> (the
+/// latter is defined in Result.h). Useful for status check macros such as
+/// VELOX_RETURN_NOT_OK.
 inline const Status& genericToStatus(const Status& st) {
   return st;
 }

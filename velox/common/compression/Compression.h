@@ -137,12 +137,12 @@ class Codec {
   virtual ~Codec() = default;
 
   /// Create a kind for the given compression algorithm with CodecOptions.
-  static std::unique_ptr<Codec> create(
+  static folly::Expected<std::unique_ptr<Codec>, Status> create(
       CompressionKind kind,
       const CodecOptions& codecOptions = CodecOptions{});
 
   /// Create a kind for the given compression algorithm.
-  static std::unique_ptr<Codec> create(
+  static folly::Expected<std::unique_ptr<Codec>, Status> create(
       CompressionKind kind,
       int32_t compressionLevel);
 
@@ -162,15 +162,18 @@ class Codec {
 
   /// Return the smallest supported compression level for the kind.
   /// Note: This function creates a temporary Codec instance.
-  static int32_t minimumCompressionLevel(CompressionKind kind);
+  static folly::Expected<int32_t, Status> minimumCompressionLevel(
+      CompressionKind kind);
 
   /// Return the largest supported compression level for the kind
   /// Note: This function creates a temporary Codec instance.
-  static int32_t maximumCompressionLevel(CompressionKind kind);
+  static folly::Expected<int32_t, Status> maximumCompressionLevel(
+      CompressionKind kind);
 
   /// Return the default compression level.
   /// Note: This function creates a temporary Codec instance.
-  static int32_t defaultCompressionLevel(CompressionKind kind);
+  static folly::Expected<int32_t, Status> defaultCompressionLevel(
+      CompressionKind kind);
 
   /// Return the smallest supported compression level.
   /// If the codec doesn't support compression level,
@@ -220,7 +223,7 @@ class Codec {
   /// function. This is useful when fixed-length compression blocks are required
   /// by the caller.
   /// Note: Only Gzip and Zstd codec supports this function.
-  virtual uint64_t compressFixedLength(
+  virtual folly::Expected<uint64_t, Status> compressFixedLength(
       const uint8_t* input,
       uint64_t inputLength,
       uint8_t* output,
@@ -239,30 +242,20 @@ class Codec {
 
   /// Create a streaming compressor instance.
   virtual folly::Expected<std::shared_ptr<StreamingCompressor>, Status>
-  makeStreamingCompressor() {
-    return folly::makeUnexpected(Status::Invalid(
-        "Streaming compression is unsupported with {} format.", name()));
-  }
+  makeStreamingCompressor();
 
   /// Create a streaming compressor instance.
   virtual folly::Expected<std::shared_ptr<StreamingDecompressor>, Status>
-  makeStreamingDecompressor() {
-    return folly::makeUnexpected(Status::Invalid(
-        "Streaming decompression is unsupported with {} format.", name()));
-  }
+  makeStreamingDecompressor();
 
   /// This Codec's compression type.
   virtual CompressionKind compressionKind() const = 0;
 
   /// The name of this Codec's compression type.
-  std::string name() const {
-    return compressionKindToString(compressionKind());
-  }
+  std::string name() const;
 
   /// This Codec's compression level, if applicable.
-  virtual int32_t compressionLevel() const {
-    return kUseDefaultCompressionLevel;
-  }
+  virtual int32_t compressionLevel() const;
 
  private:
   /// Initializes the codec's resources.
