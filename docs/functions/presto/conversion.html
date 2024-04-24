@@ -611,19 +611,39 @@ is the number of whole days in the interval, HH is then number of hours between 
 <section id="id6">
 <h3>From VARCHAR<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <p>Casting from a string to timestamp is allowed if the string represents a
-timestamp in the format <cite>YYYY-MM-DD</cite> followed by an optional <cite>hh:mm:ssZZ</cite>.
-Casting from invalid input values throws.</p>
-<p>Valid examples</p>
+timestamp in the format <cite>YYYY-MM-DD</cite> followed by an optional <cite>hh:mm:ss.MS</cite>.
+Seconds and milliseconds are optional. Casting from invalid input values throws.</p>
+<p>Valid examples:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
-<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00.123&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.123</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 02:01&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">02</span><span class="p">:</span><span class="mi">01</span><span class="p">:</span><span class="mi">00</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00-02:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">02</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
 </pre></div>
 </div>
-<p>Invalid example</p>
+<p>Invalid example:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012-Oct-23&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 </pre></div>
 </div>
+<p>Optionally, strings may also contain timezone information at the end. Timezone
+information may be offsets in the format <cite>+01:00</cite> or <cite>-02:00</cite>, for example, or
+timezone names, like <cite>UTC</cite>, <cite>Z</cite>, <cite>America/Los_Angeles</cite> and others,
+<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/type/tz/TimeZoneDatabase.cpp">as defined here</a>.</p>
+<p>For example, these strings contain valid timezone information:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00 +09:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00 UTC&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00 America/Sao_Paulo&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>If timezone information is specified in the string, the returned timestamp
+is adjusted to the corresponding timezone. Otherwise, the timestamp is
+assumed to be in the client session timezone, and adjusted accordingly
+based on the value of <cite>adjust_timestamp_to_session_timezone</cite>, as described below.</p>
+<p>The space between the hour and timezone definition is optional.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00 Z&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00Z&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Are both valid.</p>
 </section>
 <section id="id7">
 <h3>From DATE<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
