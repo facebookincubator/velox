@@ -109,7 +109,7 @@ Array Functions
 .. function:: flatten(array(array(E))) -> array(E)
 
     Transforms an array of arrays into a single array.
-    Returns NULL if the input is NULL or the input array contains any NULL element. ::
+    Returns NULL if the input is NULL or any of the input arrays is NULL. ::
 
         SELECT flatten(array(array(1, 2), array(3, 4))); -- [1, 2, 3, 4]
         SELECT flatten(array(array(1, 2), array(3, NULL))); -- [1, 2, 3, NULL]

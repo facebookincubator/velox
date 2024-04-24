@@ -16,10 +16,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
-using namespace facebook::velox;
 using namespace facebook::velox::test;
-using namespace facebook::velox::exec;
-using namespace facebook::velox::functions::test;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
