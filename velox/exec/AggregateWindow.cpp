@@ -391,6 +391,10 @@ class AggregateWindowFunction : public exec::WindowFunction {
   std::vector<TypePtr> argTypes_;
   std::vector<column_index_t> argIndices_;
   std::vector<VectorPtr> argVectors_;
+  // Constant input values for aggregate function. it should be empty if there
+  // are no constant inputs, aligned with inputTypes if there is at least one
+  // constant input, with non-constant inputs represented as nullptr, and must
+  // be instances of ConstantVector.
   std::vector<VectorPtr> constantInputs_;
 
   // This is a single aggregate row needed by the aggregate function for its

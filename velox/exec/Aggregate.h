@@ -133,8 +133,15 @@ class Aggregate {
   // UDAF.
   // @param step The aggregation step.
   // @param rawInputType The raw input type of the UDAF.
-  // @param resultType The result type of the UDAF.
-  // @param constantInputs Optional constant inputs.
+  // @param resultType The result type of the current aggregation step.
+  // @param constantInputs Optional constant input values for aggregate
+  // function. constantInputs should be empty if there are no constant inputs,
+  // aligned with inputTypes if there is at least one constant input, with
+  // non-constant inputs represented as nullptr, and must be instances of
+  // ConstantVector.
+  // @param companionStep The step used to register aggregate companion
+  // functions. kPartial for partial companion function, kIntermediate for merge
+  // and merge extract companion function.
   virtual void initialize(
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& rawInputType,

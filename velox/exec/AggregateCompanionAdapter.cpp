@@ -184,6 +184,20 @@ void AggregateCompanionAdapter::MergeFunction::extractValues(
   fn_->extractAccumulators(groups, numGroups, result);
 }
 
+void AggregateCompanionAdapter::MergeExtractFunction::initialize(
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& rawInputType,
+    const facebook::velox::TypePtr& resultType,
+    const std::vector<VectorPtr>& constantInputs,
+    std::optional<core::AggregationNode::Step> /*companionStep*/) {
+  fn_->initialize(
+      step,
+      rawInputType,
+      resultType,
+      constantInputs,
+      core::AggregationNode::Step::kFinal);
+}
+
 void AggregateCompanionAdapter::MergeExtractFunction::extractValues(
     char** groups,
     int32_t numGroups,
@@ -275,7 +289,7 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
       rawInputTypes,
       outputType,
       constantInputs,
-      core::AggregationNode::Step::kIntermediate);
+      core::AggregationNode::Step::kFinal);
   fn_->initializeNewGroups(groups, allSelectedRange);
   fn_->enableValidateIntermediateInputs();
   fn_->addIntermediateResults(groups, rows, args, false);

@@ -484,7 +484,10 @@ TEST_F(SimpleCountNullsAggregationTest, basic) {
   testAggregations({vectors}, {}, {"simple_count_nulls(c2)"}, {expected});
 }
 
-// A testing aggregation function that uses the function state.
+// A testing aggregate function calculates a weighted average by taking an
+// int64_t input value and a constant weight value as input. The sum of all
+// input values is divided by the sum of all weight values to produce the final
+// result. It is used to check for expectations in initialize method.
 template <bool testCompanion>
 class FunctionStateTestAggregate {
  public:
@@ -520,17 +523,14 @@ class FunctionStateTestAggregate {
       const TypePtr& resultType,
       const std::vector<VectorPtr>& constantInputs,
       std::optional<core::AggregationNode::Step> companionStep) {
-    auto expectedRawInputTypes = {BIGINT(), BIGINT()};
+    std::vector<TypePtr> expectedRawInputTypes = {BIGINT(), BIGINT()};
     auto expectedIntermediateType = ROW({BIGINT(), DOUBLE()});
 
     if constexpr (testCompanion) {
+      // Check for companion functions.
       VELOX_CHECK(companionStep.has_value());
       if (companionStep.value() == core::AggregationNode::Step::kPartial) {
-        VELOX_CHECK(std::equal(
-            rawInputTypes.begin(),
-            rawInputTypes.end(),
-            expectedRawInputTypes.begin(),
-            expectedRawInputTypes.end()));
+        VELOX_CHECK(rawInputTypes == expectedRawInputTypes);
         if (step == core::AggregationNode::Step::kPartial ||
             step == core::AggregationNode::Step::kSingle) {
           // Only check constant inputs in partial and single step.
@@ -540,7 +540,8 @@ class FunctionStateTestAggregate {
           VELOX_CHECK_NULL(constantInputs[0]);
         }
       } else if (
-          companionStep.value() == core::AggregationNode::Step::kIntermediate) {
+          companionStep.value() == core::AggregationNode::Step::kIntermediate ||
+          companionStep.value() == core::AggregationNode::Step::kFinal) {
         VELOX_CHECK_EQ(rawInputTypes.size(), 1);
         VELOX_CHECK(rawInputTypes[0]->equivalent(*expectedIntermediateType));
 
@@ -550,11 +551,7 @@ class FunctionStateTestAggregate {
         VELOX_FAIL("Unexpected aggregation step");
       }
     } else {
-      VELOX_CHECK(std::equal(
-          rawInputTypes.begin(),
-          rawInputTypes.end(),
-          expectedRawInputTypes.begin(),
-          expectedRawInputTypes.end()));
+      VELOX_CHECK(rawInputTypes == expectedRawInputTypes);
       if (step == core::AggregationNode::Step::kPartial ||
           step == core::AggregationNode::Step::kSingle) {
         // Only check constant inputs in partial and single step.
@@ -641,12 +638,12 @@ exec::AggregateRegistrationResult registerSimpleFunctionStateTestAggregate(
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_LE(argTypes.size(), 2, "{} takes 2 argument", name);
+        VELOX_CHECK_LE(argTypes.size(), 2, "{} takes at most 2 argument", name);
         return std::make_unique<
             SimpleAggregateAdapter<FunctionStateTestAggregate<testCompanion>>>(
             resultType);
       },
-      true /*registerCompanionFunctions*/,
+      testCompanion,
       true /*overwrite*/);
 }
 
@@ -698,15 +695,20 @@ class SimpleFunctionStateWindowTest : public WindowTestBase {
 };
 
 TEST_F(SimpleFunctionStateWindowTest, window) {
-  auto inputVectors =
-      makeRowVector({makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4})});
+  auto inputVectors = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5}),
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
+  });
+
   auto expected = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4}),
-      makeFlatVector<double>({1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0}),
+      inputVectors->childAt(0),
+      inputVectors->childAt(1),
+      makeFlatVector<double>(
+          {2.0, 2.0, 2.0, 5.0, 5.0, 5.0, 8.0, 8.0, 8.0, 10.5, 10.5, 12.0}),
   });
   WindowTestBase::testWindowFunction(
       {inputVectors},
-      "simple_function_state_agg_main(c0, 1)",
+      "simple_function_state_agg_main(c1, 1)",
       {"partition by c0"},
       {},
       expected);
