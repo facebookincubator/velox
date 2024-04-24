@@ -31,7 +31,9 @@ TEST(OptionsTests, setRowNumberColumnInfoTest) {
   rowNumberColumnInfo.insertPosition = 0;
   rowNumberColumnInfo.name = "test";
   rowReaderOptions.setRowNumberColumnInfo(rowNumberColumnInfo);
-  ASSERT_EQ(rowNumberColumnInfo, rowReaderOptions.getRowNumberColumnInfo());
+  auto rowNumberColumn = rowReaderOptions.getRowNumberColumnInfo().value();
+  ASSERT_EQ(rowNumberColumnInfo.insertPosition, rowNumberColumn.insertPosition);
+  ASSERT_EQ(rowNumberColumnInfo.name, rowNumberColumn.name);
 }
 
 TEST(OptionsTests, testRowNumberColumnInfoInCopy) {
@@ -44,6 +46,8 @@ TEST(OptionsTests, testRowNumberColumnInfoInCopy) {
   rowNumberColumnInfo.name = "test";
   rowReaderOptions.setRowNumberColumnInfo(rowNumberColumnInfo);
   RowReaderOptions rowReaderOptionsSecondCopy{rowReaderOptions};
-  ASSERT_EQ(
-      rowNumberColumnInfo, rowReaderOptionsSecondCopy.getRowNumberColumnInfo());
+  auto rowNumberColumn =
+      rowReaderOptionsSecondCopy.getRowNumberColumnInfo().value();
+  ASSERT_EQ(rowNumberColumnInfo.insertPosition, rowNumberColumn.insertPosition);
+  ASSERT_EQ(rowNumberColumnInfo.name, rowNumberColumn.name);
 }
