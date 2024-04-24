@@ -43,7 +43,7 @@ std::unique_ptr<velox::dwio::common::FileSink> abfsWriteFileSinkGenerator(
     auto fileSystem =
         filesystems::getFileSystem(fileURI, options.connectorProperties);
     return std::make_unique<dwio::common::WriteFileSink>(
-        fileSystem->openFileForWrite(fileURI, {{}, options.pool, std::nullopt}),
+        fileSystem->openFileForWrite(fileURI),
         fileURI,
         options.metricLogger,
         options.stats);
