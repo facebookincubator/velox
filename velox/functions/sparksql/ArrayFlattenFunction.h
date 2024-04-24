@@ -37,7 +37,7 @@ struct ArrayFlattenFunction {
       if (array.has_value()) {
         elementCount += array.value().size();
       } else {
-        // Return NULL if any element of the arrays is NULL.
+        // Return NULL if any of the nested arrays is NULL.
         return false;
       }
     }
