@@ -270,7 +270,7 @@ TEST_F(TableScanTest, allColumns) {
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
   ASSERT_TRUE(it->second.peakMemoryBytes > 0);
-  EXPECT_LT(0, exec::TableScan::ioWaitNanos());
+  ASSERT_LT(0, it->second.customStats.at("ioWaitNanos").sum);
 }
 
 TEST_F(TableScanTest, connectorStats) {
@@ -1378,7 +1378,7 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   auto filePaths = makeFilePaths(100);
   auto vectors = makeVectors(100, 100);
   for (int32_t i = 0; i < vectors.size(); i++) {
-    writeToFile(filePaths[i]->path, vectors[i]);
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
   }
   createDuckDbTable(vectors);
 
@@ -4110,10 +4110,10 @@ TEST_F(TableScanTest, timestampPartitionKey) {
 TEST_F(TableScanTest, partitionKeyNotMatchPartitionKeysHandle) {
   auto vectors = makeVectors(1, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->path, vectors);
+  writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
-  auto split = HiveConnectorSplitBuilder(filePath->path)
+  auto split = HiveConnectorSplitBuilder(filePath->getPath())
                    .partitionKey("ds", "2021-12-02")
                    .build();
 
@@ -4127,7 +4127,9 @@ TEST_F(TableScanTest, partitionKeyNotMatchPartitionKeysHandle) {
   assertQuery(op, split, "SELECT c0 FROM tmp");
 }
 
-TEST_F(TableScanTest, memoryArbitrationWithSlowTableScan) {
+// TODO: re-enable this test once we add back driver suspension support for
+// table scan.
+TEST_F(TableScanTest, DISABLED_memoryArbitrationWithSlowTableScan) {
   const size_t numFiles{2};
   std::vector<std::shared_ptr<TempFilePath>> filePaths;
   std::vector<RowVectorPtr> vectorsForDuckDb;
@@ -4136,7 +4138,7 @@ TEST_F(TableScanTest, memoryArbitrationWithSlowTableScan) {
   for (auto i = 0; i < numFiles; ++i) {
     auto vectors = makeVectors(5, 128);
     filePaths.emplace_back(TempFilePath::create(true));
-    writeToFile(filePaths.back()->path, vectors);
+    writeToFile(filePaths.back()->tempFilePath(), vectors);
     for (const auto& vector : vectors) {
       vectorsForDuckDb.emplace_back(vector);
     }
@@ -4205,7 +4207,11 @@ TEST_F(TableScanTest, memoryArbitrationWithSlowTableScan) {
   queryThread.join();
 }
 
-DEBUG_ONLY_TEST_F(TableScanTest, memoryArbitrationByTableScanAllocation) {
+// TODO: re-enable this test once we add back driver suspension support for
+// table scan.
+DEBUG_ONLY_TEST_F(
+    TableScanTest,
+    DISABLED_memoryArbitrationByTableScanAllocation) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
