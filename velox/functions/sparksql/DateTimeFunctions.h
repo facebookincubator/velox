@@ -780,7 +780,7 @@ struct MicrosToTimestampFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const TInput micros) {
-    result = Timestamp::fromMicros(micros);
+    result = Timestamp::fromMicrosNoError(micros);
   }
 };
 
