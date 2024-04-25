@@ -116,10 +116,10 @@ class StreamingDecompressor {
       uint8_t* output,
       uint64_t outputLength) = 0;
 
-  /// Return whether the compressed stream is finished.
+  // Return whether the compressed stream is finished.
   virtual bool isFinished() = 0;
 
-  /// Reinitialize decompressor, making it ready for a new compressed stream.
+  // Reinitialize decompressor, making it ready for a new compressed stream.
   virtual Status reset() = 0;
 };
 
@@ -136,17 +136,17 @@ class Codec {
  public:
   virtual ~Codec() = default;
 
-  /// Create a kind for the given compression algorithm with CodecOptions.
+  // Create a kind for the given compression algorithm with CodecOptions.
   static folly::Expected<std::unique_ptr<Codec>, Status> create(
       CompressionKind kind,
       const CodecOptions& codecOptions = CodecOptions{});
 
-  /// Create a kind for the given compression algorithm.
+  // Create a kind for the given compression algorithm.
   static folly::Expected<std::unique_ptr<Codec>, Status> create(
       CompressionKind kind,
       int32_t compressionLevel);
 
-  /// Return true if support for indicated kind has been enabled.
+  // Return true if support for indicated kind has been enabled.
   static bool isAvailable(CompressionKind kind);
 
   /// Return true if indicated kind supports extracting uncompressed length
@@ -157,7 +157,7 @@ class Codec {
   /// compressed length.
   static bool supportsCompressFixedLength(CompressionKind kind);
 
-  /// Return true if indicated kind supports creating streaming de/compressor.
+  // Return true if indicated kind supports creating streaming de/compressor.
   static bool supportsStreamingCompression(CompressionKind kind);
 
   /// Return the smallest supported compression level for the kind.
@@ -229,7 +229,7 @@ class Codec {
       uint8_t* output,
       uint64_t outputLength);
 
-  /// Maximum compressed length of given input length.
+  // Maximum compressed length of given input length.
   virtual uint64_t maxCompressedLength(uint64_t inputLength) = 0;
 
   /// Retrieves the actual uncompressed length of data using the specified
@@ -240,25 +240,25 @@ class Codec {
       uint64_t inputLength,
       const uint8_t* input) const;
 
-  /// Create a streaming compressor instance.
+  // Create a streaming compressor instance.
   virtual folly::Expected<std::shared_ptr<StreamingCompressor>, Status>
   makeStreamingCompressor();
 
-  /// Create a streaming compressor instance.
+  // Create a streaming compressor instance.
   virtual folly::Expected<std::shared_ptr<StreamingDecompressor>, Status>
   makeStreamingDecompressor();
 
-  /// This Codec's compression type.
+  // This Codec's compression type.
   virtual CompressionKind compressionKind() const = 0;
 
-  /// The name of this Codec's compression type.
+  // The name of this Codec's compression type.
   std::string name() const;
 
-  /// This Codec's compression level, if applicable.
+  // This Codec's compression level, if applicable.
   virtual int32_t compressionLevel() const;
 
  private:
-  /// Initializes the codec's resources.
+  // Initializes the codec's resources.
   virtual void init();
 };
 } // namespace facebook::velox::common

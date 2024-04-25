@@ -103,10 +103,8 @@ CompressionKind stringToCompressionKind(const std::string& kind) {
 void Codec::init() {}
 
 bool Codec::supportsGetUncompressedLength(CompressionKind kind) {
-  switch (kind) {
-    default:
-      return false;
-  }
+  // TODO: Return true if it's supported by compression kind.
+  return false;
 }
 
 bool Codec::supportsStreamingCompression(CompressionKind kind) {
@@ -119,10 +117,8 @@ bool Codec::supportsStreamingCompression(CompressionKind kind) {
 }
 
 bool Codec::supportsCompressFixedLength(CompressionKind kind) {
-  switch (kind) {
-    default:
-      return false;
-  }
+  // TODO: Return true if it's supported by compression kind.
+  return false;
 }
 
 folly::Expected<int32_t, Status> Codec::maximumCompressionLevel(
