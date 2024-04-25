@@ -21,11 +21,10 @@
 #include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions::sparksql {
-namespace {
+namespace detail {
 
-/// Performs initial validation of the URI.
-/// Checks if the URI contains ascii whitespaces or
-/// unescaped '%' chars.
+// Checks if the URI contains ascii whitespaces or
+// unescaped '%' chars.
 bool isValidURI(StringView input) {
   const char* p = input.data();
   const char* end = p + input.size();
@@ -33,7 +32,7 @@ bool isValidURI(StringView input) {
   buf[2] = '\0';
   char* endptr;
   for (; p < end; ++p) {
-    if (facebook::velox::functions::stringImpl::isAsciiWhiteSpace(*p)) {
+    if (stringImpl::isAsciiWhiteSpace(*p)) {
       return false;
     }
 
@@ -84,8 +83,10 @@ bool parse(const TInString& rawUrl, boost::cmatch& match) {
   return boost::regex_match(
       rawUrl.data(), rawUrl.data() + rawUrl.size(), match, kUriRegex);
 }
-// PARSE_URL(url, partToExtract) → string
-// PARSE_URL(url, partToExtract, key) → string
+} // namespace detail
+
+// parse_url(url, partToExtract) → string
+// parse_url(url, partToExtract, key) → string
 //
 // Extracts a part of a URL. The partToExtract argument can be one of
 // 'PROTOCOL', 'HOST', 'PATH', 'REF', 'AUTHORITY', 'FILE', 'USERINFO',
@@ -102,24 +103,12 @@ struct ParseUrlFunction {
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
-  static constexpr int kAuthPath = 3;
-  static constexpr int kQuery = 4;
-  static constexpr int kHost = 3;
-  static constexpr int kProto = 2;
-  static constexpr int kRef = 5;
-  // submatch indexes for authorityMatch
-  static constexpr int kPathHasAuth = 2;
-  static constexpr int kPathNoAuth = 3;
-  static constexpr int kUser = 1;
-  static constexpr int kPass = 2;
-  static constexpr int kPort = 4;
-
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url,
       const arg_type<Varchar>& partToExtract) {
     boost::cmatch match;
-    if (!parse(url, match)) {
+    if (!detail::parse(url, match)) {
       return false;
     }
     if (partToExtract == "PROTOCOL") {
@@ -142,72 +131,19 @@ struct ParseUrlFunction {
       }
       return simpleMatch(authorityMatch, kHost, result);
     } else if (partToExtract == "PATH") {
-      std::string_view path = submatch<std::string_view>(match, kAuthPath);
-      if (hasAuthority) {
-        path = submatch<std::string_view>(authAndPathMatch, 2);
-      }
-      result.setNoCopy(StringView(path.data(), path.size()));
-      return true;
-    }
-    // Path[?Query].
-    else if (partToExtract == "FILE") {
-      std::string_view path = submatch<std::string_view>(match, kAuthPath);
-      if (hasAuthority) {
-        path = submatch<std::string_view>(authAndPathMatch, 2);
-      }
-      std::string_view query = submatch<std::string_view>(match, kQuery);
-      if (!query.empty()) {
-        result.setNoCopy(StringView(
-            path.data(), (query.data() + query.size()) - path.data()));
-      } else {
-        result.setNoCopy(StringView(path.data(), path.size()));
-      }
-      return true;
-    }
-
-    // Username[:Password].
-    else if (partToExtract == "USERINFO") {
-      if (!hasAuthority) {
-        return false;
-      }
-      std::string_view username = submatch<std::string_view>(authorityMatch, 1);
-      std::string_view password = submatch<std::string_view>(authorityMatch, 2);
-      if (!password.empty()) {
-        result.setNoCopy(
-            StringView(username.data(), password.end() - username.begin()));
-        return true;
-      } else if (!username.empty()) {
-        result.setNoCopy(StringView(username.data(), username.size()));
-        return true;
-      } else {
-        return false;
-      }
-    }
-    // [Userinfo@]Host[:Port].
-    else if (partToExtract == "AUTHORITY") {
-      if (!hasAuthority) {
-        return false;
-      }
-      std::string_view host = submatch<std::string_view>(authorityMatch, kHost);
-      std::string_view first = host;
-      std::string_view last = host;
-
-      std::string_view username = submatch<std::string_view>(authorityMatch, 1);
-      std::string_view port = submatch<std::string_view>(authorityMatch, 4);
-      if (!username.empty()) {
-        first = username;
-      }
-      if (!port.empty()) {
-        last = port;
-      }
-      result.setNoCopy(StringView(first.data(), last.end() - first.begin()));
-      return true;
+      return matchPath(match, authAndPathMatch, hasAuthority, result);
+    } else if (partToExtract == "FILE") {
+      return matchFile(match, authAndPathMatch, hasAuthority, result);
+    } else if (partToExtract == "USERINFO") {
+      return matchUserinfo(match, authorityMatch, hasAuthority, result);
+    } else if (partToExtract == "AUTHORITY") {
+      return matchAuthority(authorityMatch, hasAuthority, result);
     }
 
     return false;
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& url,
       const arg_type<Varchar>& partToExtract,
@@ -221,7 +157,7 @@ struct ParseUrlFunction {
     }
 
     boost::cmatch match;
-    if (!parse(url, match)) {
+    if (!detail::parse(url, match)) {
       return false;
     }
 
@@ -234,16 +170,16 @@ struct ParseUrlFunction {
                     // start of next parameter
     );
 
-    auto query = submatch<StringView>(match, kQuery);
+    auto query = detail::submatch<StringView>(match, kQuery);
     const boost::cregex_iterator begin(
         query.data(), query.data() + query.size(), kQueryParamRegex);
     boost::cregex_iterator end;
 
     for (auto it = begin; it != end; ++it) {
       if (it->length(2) != 0) { // key shouldn't be empty.
-        auto k = submatch<StringView>((*it), 2);
+        auto k = detail::submatch<StringView>((*it), 2);
         if (key.compare(k) == 0) {
-          auto value = submatch<StringView>((*it), 3);
+          auto value = detail::submatch<StringView>((*it), 3);
           if (value != "") {
             result.setNoCopy(value);
             return true;
@@ -258,13 +194,13 @@ struct ParseUrlFunction {
   }
 
  private:
-  FOLLY_ALWAYS_INLINE bool matchAuthorityAndPath(
+  bool matchAuthorityAndPath(
       const boost::cmatch& urlMatch,
       boost::cmatch& authAndPathMatch,
       boost::cmatch& authorityMatch,
       bool& hasAuthority) {
     static const boost::regex kAuthorityAndPathRegex("//([^/]*)(/.*)?");
-    auto authorityAndPath = submatch<StringView>(urlMatch, kAuthPath);
+    auto authorityAndPath = detail::submatch<StringView>(urlMatch, kAuthPath);
     if (!boost::regex_match(
             authorityAndPath.begin(),
             authorityAndPath.end(),
@@ -293,18 +229,116 @@ struct ParseUrlFunction {
     hasAuthority = true;
     return true;
   }
+
   FOLLY_ALWAYS_INLINE bool simpleMatch(
       const boost::cmatch& urlMatch,
       const int index,
       out_type<Varchar>& result) {
-    std::string_view sub = submatch<std::string_view>(urlMatch, index);
+    StringView sub = detail::submatch<StringView>(urlMatch, index);
     if (sub.empty()) {
       return false;
     }
-    result.setNoCopy(StringView(sub.data(), sub.size()));
+    result.setNoCopy(sub);
     return true;
   }
+
+  bool matchPath(
+      const boost::cmatch& match,
+      const boost::cmatch& authAndPathMatch,
+      const bool hasAuthority,
+      out_type<Varchar>& result) {
+    StringView path = detail::submatch<StringView>(match, kAuthPath);
+    if (hasAuthority) {
+      path = detail::submatch<StringView>(authAndPathMatch, 2);
+    }
+    result.setNoCopy(path);
+    return true;
+  }
+
+  bool matchFile(
+      const boost::cmatch& match,
+      const boost::cmatch& authAndPathMatch,
+      const bool hasAuthority,
+      out_type<Varchar>& result) {
+    // Path[?Query].
+    std::string_view path =
+        detail::submatch<std::string_view>(match, kAuthPath);
+    if (hasAuthority) {
+      path = detail::submatch<std::string_view>(authAndPathMatch, 2);
+    }
+    std::string_view query = detail::submatch<std::string_view>(match, kQuery);
+    if (!query.empty()) {
+      result.setNoCopy(
+          StringView(path.data(), (query.data() + query.size()) - path.data()));
+    } else {
+      result.setNoCopy(StringView(path.data(), path.size()));
+    }
+    return true;
+  }
+
+  bool matchUserinfo(
+      const boost::cmatch& match,
+      const boost::cmatch& authorityMatch,
+      const bool hasAuthority,
+      out_type<Varchar>& result) {
+    // Username[:Password].
+    if (!hasAuthority) {
+      return false;
+    }
+    std::string_view username =
+        detail::submatch<std::string_view>(authorityMatch, kUser);
+    std::string_view password =
+        detail::submatch<std::string_view>(authorityMatch, kPass);
+    if (!password.empty()) {
+      result.setNoCopy(
+          StringView(username.data(), password.end() - username.begin()));
+      return true;
+    } else if (!username.empty()) {
+      result.setNoCopy(StringView(username.data(), username.size()));
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  bool matchAuthority(
+      const boost::cmatch& authorityMatch,
+      const bool hasAuthority,
+      out_type<Varchar>& result) {
+    // [Userinfo@]Host[:Port].
+    if (!hasAuthority) {
+      return false;
+    }
+    std::string_view host =
+        detail::submatch<std::string_view>(authorityMatch, kHost);
+    std::string_view first = host;
+    std::string_view last = host;
+
+    std::string_view username =
+        detail::submatch<std::string_view>(authorityMatch, kUser);
+    std::string_view port =
+        detail::submatch<std::string_view>(authorityMatch, kPort);
+    if (!username.empty()) {
+      first = username;
+    }
+    if (!port.empty()) {
+      last = port;
+    }
+    result.setNoCopy(StringView(first.data(), last.end() - first.begin()));
+    return true;
+  }
+
+  static constexpr int kAuthPath = 3;
+  static constexpr int kQuery = 4;
+  static constexpr int kHost = 3;
+  static constexpr int kProto = 2;
+  static constexpr int kRef = 5;
+  // submatch indexes for authorityMatch
+  static constexpr int kPathHasAuth = 2;
+  static constexpr int kPathNoAuth = 3;
+  static constexpr int kUser = 1;
+  static constexpr int kPass = 2;
+  static constexpr int kPort = 4;
 };
 
-} // namespace
 } // namespace facebook::velox::functions::sparksql

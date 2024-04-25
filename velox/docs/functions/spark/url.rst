@@ -5,24 +5,27 @@ URL Functions
 Introduction
 ------------
 
-The URL extraction function extracts components from HTTP URLs (or any valid URIs conforming to `RFC 3986 <https://tools.ietf.org/html/rfc3986.html>`_). The following syntax is supported:
+The URL extraction functions extract components from HTTP URLs (or any valid URIs conforming to `RFC 3986 <https://tools.ietf.org/html/rfc3986.html>`_). The following syntax is supported:
 
 .. code-block:: bash
 
-    [protocol:][//host[:port]][path][?query][#fragment]
+    [protocol]://[[userinfo@]host[:port]][[path][?query]][#ref]
 
 
 Consider for example the below URI:
 
 .. code-block::
 
-    http://www.ics.uci.edu/pub/ietf/uri/?k1=v1#Related
+    http://user:pass@example.com:8080/path1/p.php?k1=v1&k2=v2#Ref1
 
-    scheme    = http
-    authority = www.ics.uci.edu
-    path      = /pub/ietf/uri/
-    query     = k1=v1
-    fragment  = Related
+    protocol  = http
+    host      = example.com
+    path      = /path1/p.php
+    userinfo  = user:pass
+    authority = user:pass@example.com:8080
+    file      = /path1/p.php?k1=v1&k2=v2
+    query     = k1=v1&k2=v2
+    ref       = Ref1
 
 
 Invalid URI's
@@ -36,25 +39,29 @@ digits after the percent character "%". All the url extract functions will retur
     # Examples of url functions with Invalid URI's.
 
     # Invalid URI due to whitespace
-    SELECT url_extract_path('foo '); -- NULL (1 row)
-    SELECT url_extract_host('http://www.foo.com '); -- NULL (1 row)
+    SELECT parse_url('foo ', 'FILE'); -- NULL (1 row)
+    SELECT parse_url('http://www.foo.com ', 'FILE'); -- NULL (1 row)
 
     # Invalid URI due to improper escaping of '%'
-    SELECT url_extract_path('https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%'); -- NULL (1 row)
-    SELECT url_extract_host('https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%'); -- NULL (1 row)
+    SELECT parse_url('https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%', 'FILE'); -- NULL (1 row)
+    SELECT parse_url('https://www.ucu.edu.uy/agenda/evento/%%UCUrlCompartir%%', 'FILE'); -- NULL (1 row)
 
 .. spark:function:: parse_url(string, partToExtract) -> varchar
 
     Extracts a part from a URL. The part to extract can be one of the following:
 
+    * `PROTOCOL`: The protocol.
     * `HOST`: The host name.
     * `PATH`: The path.
+    * `USERINFO` : The username and/or password.
+    * `AUTHORITY` : The host and optionally userinfo and/or port.
+    * `FILE` : The file.
     * `QUERY`: The query.
-    * `FRAGMENT`: The fragment.
-    * `PROTOCOL`: The protocol.
+    * `REF` : The reference.
+
 
     :param string: The URL to extract the part from.
-    :param partToExtract: The part to extract from the URL.
+    :param partToExtract: The part to extract from the URL. Must be uppercase, lowercase values will return null.
     :return: The extracted part of the URL.
 
     .. code-block:: sql
@@ -68,7 +75,7 @@ digits after the percent character "%". All the url extract functions will retur
         SELECT parse_url('http://www.ics.uci.edu/pub/ietf/uri/?k1=v1#Related', 'QUERY');
         -- k1=v1
 
-        SELECT parse_url('http://www.ics.uci.edu/pub/ietf/uri/?k1=v1#Related', 'FRAGMENT');
+        SELECT parse_url('http://www.ics.uci.edu/pub/ietf/uri/?k1=v1#Related', 'REF');
         -- Related
 
         SELECT parse_url('http://www.ics.uci.edu/pub/ietf/uri/?k1=v1#Related', 'PROTOCOL');
