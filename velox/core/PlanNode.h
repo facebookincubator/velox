@@ -1914,13 +1914,16 @@ class UnnestNode : public PlanNode {
   /// must appear in the same order as unnestVariables.
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
+  /// @param outer If true, produces a row for each input row even if the
+  /// unnestNames is empty. The output columns are null in this case.
   UnnestNode(
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
       std::vector<FieldAccessTypedExprPtr> unnestVariables,
       const std::vector<std::string>& unnestNames,
       const std::optional<std::string>& ordinalityName,
-      const PlanNodePtr& source);
+      const PlanNodePtr& source,
+      const bool outer = false);
 
   /// The order of columns in the output is: replicated columns (in the order
   /// specified), unnested columns (in the order specified, for maps: key comes
@@ -1945,6 +1948,10 @@ class UnnestNode : public PlanNode {
     return withOrdinality_;
   }
 
+  bool outer() const {
+    return outer_;
+  }
+
   std::string_view name() const override {
     return "Unnest";
   }
@@ -1961,6 +1968,7 @@ class UnnestNode : public PlanNode {
   const bool withOrdinality_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
+  const bool outer_;
 };
 
 /// Checks that input contains at most one row. Return that row as is. If input

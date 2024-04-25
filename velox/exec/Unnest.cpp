@@ -30,7 +30,8 @@ Unnest::Unnest(
           operatorId,
           unnestNode->id(),
           "Unnest"),
-      withOrdinality_(unnestNode->withOrdinality()) {
+      withOrdinality_(unnestNode->withOrdinality()),
+      outer_(unnestNode->outer()) {
   const auto& inputType = unnestNode->sources()[0]->outputType();
   const auto& unnestVariables = unnestNode->unnestVariables();
   for (const auto& variable : unnestVariables) {
@@ -98,11 +99,17 @@ void Unnest::addInput(RowVectorPtr input) {
     auto currentSizes = rawSizes_[channel];
     auto currentIndices = rawIndices_[channel];
     for (auto row = 0; row < size; ++row) {
-      if (!currentDecoded.isNullAt(row)) {
-        auto unnestSize = currentSizes[currentIndices[row]];
-        if (rawMaxSizes_[row] < unnestSize) {
-          rawMaxSizes_[row] = unnestSize;
-        }
+      vector_size_t unnestSize = -1;
+      if (outer_ &&
+          (currentDecoded.isNullAt(row) ||
+           currentSizes[currentIndices[row]] == 0)) {
+        unnestSize = 1;
+      } else if (!currentDecoded.isNullAt(row)) {
+        unnestSize = currentSizes[currentIndices[row]];
+      }
+
+      if (rawMaxSizes_[row] < unnestSize) {
+        rawMaxSizes_[row] = unnestSize;
       }
     }
   }

@@ -822,12 +822,14 @@ UnnestNode::UnnestNode(
     std::vector<FieldAccessTypedExprPtr> unnestVariables,
     const std::vector<std::string>& unnestNames,
     const std::optional<std::string>& ordinalityName,
-    const PlanNodePtr& source)
+    const PlanNodePtr& source,
+    const bool outer)
     : PlanNode(id),
       replicateVariables_{std::move(replicateVariables)},
       unnestVariables_{std::move(unnestVariables)},
       withOrdinality_{ordinalityName.has_value()},
-      sources_{source} {
+      sources_{source},
+      outer_{outer} {
   // Calculate output type. First come "replicate" columns, followed by
   // "unnest" columns, followed by an optional ordinality column.
   std::vector<std::string> names;
@@ -888,6 +890,7 @@ folly::dynamic UnnestNode::serialize() const {
   if (withOrdinality_) {
     obj["ordinalityName"] = outputType()->names().back();
   }
+  obj["outer"] = outer_;
   return obj;
 }
 
@@ -909,7 +912,8 @@ PlanNodePtr UnnestNode::create(const folly::dynamic& obj, void* context) {
       std::move(unnestVariables),
       std::move(unnestNames),
       ordinalityName,
-      std::move(source));
+      std::move(source),
+      obj["outer"].asBool());
 }
 
 AbstractJoinNode::AbstractJoinNode(

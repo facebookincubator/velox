@@ -668,6 +668,8 @@ number starting with 1.
      - Names to use for expanded columns. One name per array column. Two names per map column.
    * - ordinalityName
      - Optional name for the ordinality column.
+   * - outer
+     - when true, each input values will be output at least once, even if the unnest array/map is empty.
 
 .. _TableWriteNode:
 

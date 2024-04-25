@@ -92,5 +92,7 @@ class Unnest : public Operator {
 
   // Next 'input_' row to process in getOutput().
   vector_size_t nextInputRow_{0};
+
+  const bool outer_;
 };
 } // namespace facebook::velox::exec
