@@ -28,37 +28,6 @@
 
 namespace facebook::velox::dwio::common::unit_loader_tools {
 
-class Measure {
- public:
-  explicit Measure(const std::function<void(uint64_t)>& blockedOnIoMsCallback)
-      : blockedOnIoMsCallback_{blockedOnIoMsCallback},
-        startTime_{std::chrono::high_resolution_clock::now()} {}
-
-  Measure(const Measure&) = delete;
-  Measure(Measure&&) = delete;
-  Measure& operator=(const Measure&) = delete;
-  Measure& operator=(Measure&& other) = delete;
-
-  ~Measure() {
-    auto timeBlockedOnIo =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::high_resolution_clock::now() - startTime_);
-    blockedOnIoMsCallback_(timeBlockedOnIo.count());
-  }
-
- private:
-  const std::function<void(uint64_t)>& blockedOnIoMsCallback_;
-  const std::chrono::time_point<std::chrono::high_resolution_clock> startTime_;
-};
-
-inline std::optional<Measure> measureBlockedOnIo(
-    const std::function<void(uint64_t)>& blockedOnIoMsCallback) {
-  if (blockedOnIoMsCallback) {
-    return std::make_optional<Measure>(blockedOnIoMsCallback);
-  }
-  return std::nullopt;
-}
-
 // This class can create many callbacks that can be distributed to unit loader
 // factories. Only when the last created callback is activated, this class will
 // emit the original callback.
