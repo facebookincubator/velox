@@ -97,9 +97,23 @@ struct UnaryMinusFunction {
 };
 
 template <typename T>
-struct DivideFunction {
+struct DoubleDivideFunction {
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
-  call(double& result, const double num, const double denom) {
+  call(TInput& result, const TInput num, const TInput denom) {
+    if (UNLIKELY(denom == 0)) {
+      return false;
+    }
+    result = num / denom;
+    return true;
+  }
+};
+
+template <typename T>
+struct LongDivideFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput num, const TInput denom) {
     if (UNLIKELY(denom == 0)) {
       return false;
     }

@@ -80,6 +80,16 @@ Mathematical Functions
         SELECT 2L / 2L; -- 1.0
         SELECT 3 / 0; -- NULL
 
+.. spark:function:: long_divide(x, y) -> long
+
+    Returns the results of dividing x by y.
+    Supported type is LONG.
+    Overflow results return null. Corresponds to Spark's operator ``div``. ::
+
+         SELECT 3 / 2; -- 1
+         SELECT 2L / 2L; -- 1
+         SELECT 3 / 0; -- NULL
+
 .. spark:function:: divide(x, y) -> decimal
 
     Returns the results of dividing x by y.
