@@ -26,21 +26,18 @@ class ArrayFlattenTest : public SparkFunctionBaseTest {
       const std::string& expression,
       const std::vector<VectorPtr>& input,
       const VectorPtr& expected) {
-    auto result = evaluate(expression, makeRowVector(input));
+    const auto result = evaluate(expression, makeRowVector(input));
     assertEqualVectors(expected, result);
   }
 };
 
 // Flatten integer arrays.
 TEST_F(ArrayFlattenTest, intArrays) {
-  const auto baseVector = makeArrayVector<int64_t>(
-      {{1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 6}});
-
-  // Create arrays of array vector using above base vector.
-  // [[1, 1], [2, 2], [3, 3]]
-  // [[4, 4]]
-  // [[5, 5], [6, 6]]
-  const auto arrayOfArrays = makeArrayVector({0, 3, 4}, baseVector);
+  const auto arrayOfArrays = makeNestedArrayVectorFromJson<int64_t>({
+      "[[1, 1], [2, 2], [3, 3]]",
+      "[[4, 4]]",
+      "[[5, 5], [6, 6]]",
+  });
 
   // [1, 1, 2, 2, 3, 3]
   // [4, 4]
@@ -53,20 +50,11 @@ TEST_F(ArrayFlattenTest, intArrays) {
 
 // Flatten arrays with null.
 TEST_F(ArrayFlattenTest, nullArray) {
-  const auto baseVector = makeNullableArrayVector<int64_t>(
-      {{{1, 1}},
-       std::nullopt,
-       {{3, 3}},
-       {{5, std::nullopt}},
-       {{std::nullopt, 6}},
-       {{std::nullopt, std::nullopt}},
-       {{}}});
-
-  // Create arrays of array vector using above base vector.
-  // [[1, 1], null, [3, 3]]
-  // null
-  // [[5, null], [null, 6], [null, null], []]
-  const auto arrayOfArrays = makeArrayVector({0, 3, 3}, baseVector, {1});
+  const auto arrayOfArrays = makeNestedArrayVectorFromJson<int64_t>({
+      "[[1, 1], null, [3, 3]]",
+      "null",
+      "[[5, null], [null, 6], [null, null], []]",
+  });
 
   // null
   // null

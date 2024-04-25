@@ -410,7 +410,7 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<UuidFunction, Varchar, Constant<int64_t>>({prefix + "uuid"});
 
   registerFunction<
-      sparksql::ArrayFlattenFunction,
+      ArrayFlattenFunction,
       Array<Generic<T1>>,
       Array<Array<Generic<T1>>>>({prefix + "flatten"});
 }

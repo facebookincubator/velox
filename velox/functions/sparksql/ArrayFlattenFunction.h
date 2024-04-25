@@ -19,12 +19,8 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// This class implements the array flatten function.
-///
-/// DEFINITION:
-/// flatten(x) → array
-/// Flattens an array(array(T)) to an array(T) by concatenating the contained
-/// arrays.
+/// flatten(array(array(E))) → array(E)
+/// Flattens nested array by concatenating the contained arrays.
 template <typename T>
 struct ArrayFlattenFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T)
