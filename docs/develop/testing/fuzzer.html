@@ -184,11 +184,13 @@ functions supported by the engine, and call <code class="docutils literal notran
 <p>Functions with known bugs can be excluded from testing using a skip-list.</p>
 <p>Integration with Aggregation Fuzzer is similar. Create a test, register all
 aggregate functions supported by the engine, and call
-<code class="docutils literal notranslate"><span class="pre">AggregationFuzzerRunner::run()</span></code> defined in <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/exec/tests/AggregationFuzzer.h">AggregationFuzzerRunner.h</a>. See
-<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/exec/tests/AggregationFuzzerTest.cpp">AggregationFuzzerTest.cpp</a>.</p>
+<code class="docutils literal notranslate"><span class="pre">AggregationFuzzerRunner::run()</span></code> defined in <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/exec/fuzzer/AggregationFuzzer.h">AggregationFuzzerRunner.h</a>. See
+<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/functions/prestosql/fuzzer/AggregationFuzzerTest.cpp">AggregationFuzzerTest.cpp</a>.</p>
 <p>Aggregation Fuzzer allows to indicate functions whose results depend on the
 order of inputs and optionally provide custom result verifiers. The Fuzzer
 also allows to provide custom input generators for individual functions.</p>
+<p>Integration with the Window Fuzzer is similar to Aggregation Fuzzer. See
+<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/exec/fuzzer/WindowFuzzer.h">WindowFuzzerRunner.h</a> and <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/functions/prestosql/fuzzer/WindowFuzzerTest.cpp">WindowFuzzerTest.cpp</a>.</p>
 </section>
 <section id="how-to-run">
 <h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading">¶</a></h2>
@@ -239,6 +241,16 @@ also allows to provide custom input generators for individual functions.</p>
 <span class="pre">--max_expression_trees_per_step=2</span>
 <span class="pre">--repro_persist_path=&lt;a_valid_local_path&gt;</span>
 <span class="pre">--logtostderr=1</span></code></p>
+<p><a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/functions/prestosql/fuzzer/WindowFuzzerTest.cpp">WindowFuzzerTest.cpp</a> and <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/functions/prestosql/fuzzer/AggregationFuzzerTest.cpp">AggregationFuzzerTest.cpp</a> allow results to be
+verified against Presto. To setup Presto as a reference DB, please follow these
+<a class="reference external" href="https://github.com/facebookincubator/velox/issues/8111">instructions</a>. The following flags control the connection to the presto
+cluster; <code class="docutils literal notranslate"><span class="pre">--presto_url</span></code> which is the http server url along with its port number
+and <code class="docutils literal notranslate"><span class="pre">--req_timeout_ms</span></code> which sets the request timeout in milliseconds. The
+timeout is set to 1000 ms by default but can be increased if this time is
+insufficient for certain queries. Example command:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">velox</span><span class="o">/</span><span class="n">functions</span><span class="o">/</span><span class="n">prestosql</span><span class="o">/</span><span class="n">fuzzer</span><span class="p">:</span><span class="n">velox_window_fuzzer_test</span> <span class="o">--</span><span class="n">enable_window_reference_verification</span> <span class="o">--</span><span class="n">presto_url</span><span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8080&quot;</span> <span class="o">--</span><span class="n">req_timeout_ms</span><span class="o">=</span><span class="mi">2000</span> <span class="o">--</span><span class="n">duration_sec</span><span class="o">=</span><span class="mi">60</span> <span class="o">--</span><span class="n">logtostderr</span><span class="o">=</span><span class="mi">1</span> <span class="o">--</span><span class="n">minloglevel</span><span class="o">=</span><span class="mi">0</span>
+</pre></div>
+</div>
 </section>
 <section id="how-to-reproduce-failures">
 <h2>How to reproduce failures<a class="headerlink" href="#how-to-reproduce-failures" title="Link to this heading">¶</a></h2>
