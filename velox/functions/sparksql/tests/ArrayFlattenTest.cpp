@@ -39,11 +39,11 @@ TEST_F(ArrayFlattenTest, intArrays) {
       "[[5, 5], [6, 6]]",
   });
 
-  // [1, 1, 2, 2, 3, 3]
-  // [4, 4]
-  // [5, 5, 6, 6]
-  const auto expected =
-      makeArrayVector<int64_t>({{1, 1, 2, 2, 3, 3}, {4, 4}, {5, 5, 6, 6}});
+  const auto expected = makeArrayVectorFromJson<int64_t>({
+      "[1, 1, 2, 2, 3, 3]",
+      "[4, 4]",
+      "[5, 5, 6, 6]"
+  });
 
   testExpression("flatten(c0)", {arrayOfArrays}, expected);
 }
@@ -56,11 +56,11 @@ TEST_F(ArrayFlattenTest, nullArray) {
       "[[5, null], [null, 6], [null, null], []]",
   });
 
-  // null
-  // null
-  // [[5, null, null, 6, null, null]]
-  const auto expected = makeNullableArrayVector<int64_t>(
-      {std::nullopt, std::nullopt, {{5, std::nullopt, std::nullopt, 6, std::nullopt, std::nullopt}}});
+  const auto expected = makeArrayVectorFromJson<int64_t>({
+      "null",
+      "null",
+      "[5, null, null, 6, null, null]"
+  });
 
   testExpression("flatten(c0)", {arrayOfArrays}, expected);
 }
