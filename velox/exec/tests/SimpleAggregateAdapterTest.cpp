@@ -29,6 +29,7 @@ namespace {
 const char* const kSimpleAvg = "simple_avg";
 const char* const kSimpleArrayAgg = "simple_array_agg";
 const char* const kSimpleCountNulls = "simple_count_nulls";
+const char* const kNumericSimpleSum = "simple_numeric_sum";
 
 class SimpleAverageAggregationTest : public AggregationTestBase {
  protected:
@@ -469,6 +470,100 @@ TEST_F(SimpleCountNullsAggregationTest, basic) {
 
   expected = makeRowVector({makeNullableFlatVector<int64_t>({3})});
   testAggregations({vectors}, {}, {"simple_count_nulls(c2)"}, {expected});
+}
+
+// A testing aggregation function that sum the numeric input
+// It is mainly for testing whether the simple aggregation adapter can handle
+// Generic IntermediateType and OutputType
+template <typename T>
+class SimpleNumericSumAggregate {
+ public:
+  using InputType = Row<Generic<T1>>; // Input vector type wrapped in Row.
+  using IntermediateType = Generic<T1>; // Intermediate result type.
+  using OutputType = Generic<T1>; // Output vector type.
+
+  struct Accumulator {
+    T sum;
+
+    Accumulator() = delete;
+
+    explicit Accumulator(HashStringAllocator* /*allocator*/) {
+      sum = 0;
+    }
+
+    void addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<Generic<T1>> input) {
+      sum += input.castTo<T>();
+    }
+
+    void combine(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<Generic<T1>> input) {
+      sum += input.castTo<T>();
+    }
+
+    bool writeFinalResult(exec::out_type<OutputType>& out) {
+      out.castTo<T>() = sum;
+      return true;
+    }
+
+    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+      out.castTo<T>() = sum;
+      return true;
+    }
+  };
+
+  using AccumulatorType = Accumulator;
+};
+
+exec::AggregateRegistrationResult registerLastAggregate(
+    const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("double")
+          .intermediateType("double")
+          .argumentType("double")
+          .build()};
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step /*step*/,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_LE(
+            argTypes.size(), 1, "{} takes at most one argument", name);
+        return std::make_unique<
+            SimpleAggregateAdapter<SimpleNumericSumAggregate<double>>>(
+            resultType);
+      },
+      false /*registerCompanionFunctions*/,
+      true /*overwrite*/);
+}
+
+class SimpleRegisterLastAggregationTest : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+    disallowInputShuffle();
+
+    registerLastAggregate(kNumericSimpleSum);
+  }
+};
+
+TEST_F(SimpleRegisterLastAggregationTest, basic) {
+  auto vectors = makeRowVector(
+      {makeNullableFlatVector<double>({1.1, 2.2, 3.3, 2.2, 1.1, 2.2}),
+       makeNullableFlatVector<double>({1.0, 2.0, 3.0, 4.0, 5.0, 6.0})});
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<double>({1.1, 2.2, 3.3}),
+       makeNullableFlatVector<double>({6.0, 12.0, 3.0})});
+  testAggregations({vectors}, {"c0"}, {"simple_numeric_sum(c1)"}, {expected});
 }
 
 } // namespace
