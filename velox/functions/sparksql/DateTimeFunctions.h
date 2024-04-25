@@ -803,7 +803,7 @@ struct MillisToTimestampFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const TInput millis) {
-    result = Timestamp::fromMillis(millis);
+    result = Timestamp::fromMillisNoError(millis);
   }
 };
 
