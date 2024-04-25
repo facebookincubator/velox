@@ -139,6 +139,15 @@ If <code class="docutils literal notranslate"><span class="pre">count</span></co
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="array_size">
+<span class="sig-name descname"><span class="pre">array_size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#array_size" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the size of the array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_size</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="mi">3</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="array_sort">
 <span class="sig-name descname"><span class="pre">array_sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_sort" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an array which has the sorted order of the input array(E). The elements of array(E) must
@@ -244,6 +253,7 @@ order or at the end of the returned array in descending order.</p>
 <li><a class="reference internal" href="#array_min"><code class="docutils literal notranslate"><span class="pre">array_min()</span></code></a></li>
 <li><a class="reference internal" href="#array_remove"><code class="docutils literal notranslate"><span class="pre">array_remove()</span></code></a></li>
 <li><a class="reference internal" href="#array_repeat"><code class="docutils literal notranslate"><span class="pre">array_repeat()</span></code></a></li>
+<li><a class="reference internal" href="#array_size"><code class="docutils literal notranslate"><span class="pre">array_size()</span></code></a></li>
 <li><a class="reference internal" href="#array_sort"><code class="docutils literal notranslate"><span class="pre">array_sort()</span></code></a></li>
 <li><a class="reference internal" href="#concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
 <li><a class="reference internal" href="#filter"><code class="docutils literal notranslate"><span class="pre">filter()</span></code></a></li>
