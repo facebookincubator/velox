@@ -26,13 +26,15 @@ SortBuffer::SortBuffer(
     velox::memory::MemoryPool* pool,
     tsan_atomic<bool>* nonReclaimableSection,
     const common::SpillConfig* spillConfig,
-    folly::Synchronized<velox::common::SpillStats>* spillStats)
+    folly::Synchronized<velox::common::SpillStats>* spillStats,
+    bool enableStableSort)
     : input_(input),
       sortCompareFlags_(sortCompareFlags),
       pool_(pool),
       nonReclaimableSection_(nonReclaimableSection),
       spillConfig_(spillConfig),
-      spillStats_(spillStats) {
+      spillStats_(spillStats),
+      enableStableSort_(enableStableSort) {
   VELOX_CHECK_GE(input_->size(), sortCompareFlags_.size());
   VELOX_CHECK_GT(sortCompareFlags_.size(), 0);
   VELOX_CHECK_EQ(sortColumnIndices.size(), sortCompareFlags_.size());
@@ -112,19 +114,36 @@ void SortBuffer::noMoreInput() {
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
     data_->listRows(&iter, numInputRows_, sortedRows_.data());
-    std::sort(
-        sortedRows_.begin(),
-        sortedRows_.end(),
-        [this](const char* leftRow, const char* rightRow) {
-          for (vector_size_t index = 0; index < sortCompareFlags_.size();
-               ++index) {
-            if (auto result = data_->compare(
-                    leftRow, rightRow, index, sortCompareFlags_[index])) {
-              return result < 0;
+    if (enableStableSort_) {
+      std::stable_sort(
+          sortedRows_.begin(),
+          sortedRows_.end(),
+          [this](const char* leftRow, const char* rightRow) {
+            for (vector_size_t index = 0; index < sortCompareFlags_.size();
+                 ++index) {
+              if (auto result = data_->compare(
+                      leftRow, rightRow, index, sortCompareFlags_[index])) {
+                return result < 0;
+              }
             }
-          }
-          return false;
-        });
+            return false;
+          });
+
+    } else {
+      std::sort(
+          sortedRows_.begin(),
+          sortedRows_.end(),
+          [this](const char* leftRow, const char* rightRow) {
+            for (vector_size_t index = 0; index < sortCompareFlags_.size();
+                 ++index) {
+              if (auto result = data_->compare(
+                      leftRow, rightRow, index, sortCompareFlags_[index])) {
+                return result < 0;
+              }
+            }
+            return false;
+          });
+    }
   } else {
     // Spill the remaining in-memory state to disk if spilling has been
     // triggered on this sort buffer. This is to simplify query OOM prevention

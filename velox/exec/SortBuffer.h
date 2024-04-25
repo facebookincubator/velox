@@ -37,7 +37,8 @@ class SortBuffer {
       velox::memory::MemoryPool* pool,
       tsan_atomic<bool>* nonReclaimableSection,
       const common::SpillConfig* spillConfig = nullptr,
-      folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
+      folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr,
+      bool enableStableSort = false);
 
   void addInput(const VectorPtr& input);
 
@@ -120,6 +121,8 @@ class SortBuffer {
   std::optional<uint64_t> estimatedOutputRowSize_{};
   // The number of rows that has been returned.
   size_t numOutputRows_{0};
+
+  bool enableStableSort_ = false;
 };
 
 } // namespace facebook::velox::exec

@@ -201,6 +201,10 @@ class QueryConfig {
   /// OrderBy spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kOrderBySpillEnabled = "order_by_spill_enabled";
 
+  /// OrderBy stable sort flag.
+  static constexpr const char* kOrderByStableSortEnabled =
+      "order_by_stable_sort_enabled";
+
   /// Window spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kWindowSpillEnabled = "window_spill_enabled";
 
@@ -507,6 +511,11 @@ class QueryConfig {
   /// spillEnabled()!
   bool orderBySpillEnabled() const {
     return get<bool>(kOrderBySpillEnabled, true);
+  }
+
+  // Returns 'is orderby stable sort enabled' flag.
+  bool orderByStableSortEnabled() const {
+    return get<bool>(kOrderByStableSortEnabled, false);
   }
 
   /// Returns true if spilling is enabled for Window operator. Must also

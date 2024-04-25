@@ -1453,4 +1453,75 @@ TEST_F(OrderByTest, reclaimFromCompletedOrderBy) {
   }
 }
 
+TEST_F(OrderByTest, stableSort) {
+  // the data already sorted by department and salary desc.
+  auto data = makeRowVector(
+      {"employee_name", "department", "salary"},
+      {
+          makeFlatVector<std::string>(std::vector<std::string>{
+              "Gerard Bondur",
+              "Mary Patterson",
+              "Jeff Firrelli",
+              "William Patterson",
+              "Diane Murphy",
+              "Anthony Bow",
+              "Leslie Jennings",
+              "Leslie Thompson",
+              "Larry Bott",
+              "Pamela Castillo",
+              "Barry Jones",
+              "Loui Bondur",
+              "Gerard Hernandez",
+              "George Vanauf",
+              "Steve Patterson",
+              "Julie Firrelli",
+              "Foon Yue Tseng"}),
+          makeFlatVector<std::string>(std::vector<std::string>{
+              "Accounting",
+              "Accounting",
+              "Accounting",
+              "Accounting",
+              "Accounting",
+              "Accounting",
+              "IT",
+              "IT",
+              "Sales",
+              "Sales",
+              "Sales",
+              "Sales",
+              "SCM",
+              "SCM",
+              "SCM",
+              "SCM",
+              "SCM"}),
+          makeFlatVector<int32_t>(std::vector<int32_t>{
+              11472,
+              9998,
+              8992,
+              8870,
+              8435,
+              6627,
+              8113,
+              5186,
+              11798,
+              11303,
+              10586,
+              10449,
+              6949,
+              10563,
+              9441,
+              9181,
+              6660}),
+
+      });
+
+  createDuckDbTable({data});
+
+  auto plan =
+      PlanBuilder().values({data}).orderBy({"department"}, false).planNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .config(core::QueryConfig::kOrderByStableSortEnabled, true)
+                  .assertResults(data);
+}
+
 } // namespace facebook::velox::exec::test

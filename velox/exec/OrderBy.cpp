@@ -66,7 +66,8 @@ OrderBy::OrderBy(
       pool(),
       &nonReclaimableSection_,
       spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
-      &spillStats_);
+      &spillStats_,
+      driverCtx->queryConfig().orderByStableSortEnabled());
 }
 
 void OrderBy::addInput(RowVectorPtr input) {
