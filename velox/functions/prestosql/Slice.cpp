@@ -60,10 +60,10 @@ class SliceFunction : public exec::VectorFunction {
         args[0]->typeKind(),
         TypeKind::ARRAY,
         "Function slice() requires first argument of type ARRAY");
-    VELOX_USER_CHECK_EQ(
-        args[1]->typeKind(),
-        TypeKind::BIGINT,
-        "Function slice() requires second argument of type BIGINT");
+    VELOX_USER_CHECK(
+        args[1]->typeKind() == TypeKind::INTEGER ||
+            args[1]->typeKind() == TypeKind::BIGINT,
+        "Function slice() requires second argument of type INTEGER or BIGINT");
     VELOX_USER_CHECK_EQ(
         args[1]->typeKind(),
         args[2]->typeKind(),
@@ -202,14 +202,17 @@ class SliceFunction : public exec::VectorFunction {
 };
 
 static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-  return {// array(T, bigint, bigint) -> array(T)
-          exec::FunctionSignatureBuilder()
-              .typeVariable("T")
-              .returnType("array(T)")
-              .argumentType("array(T)")
-              .argumentType("bigint")
-              .argumentType("bigint")
-              .build()};
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+  for (auto type : {"integer", "bigint"}) {
+    signatures.push_back(exec::FunctionSignatureBuilder()
+                             .typeVariable("T")
+                             .returnType("array(T)")
+                             .argumentType("array(T)")
+                             .argumentType(type)
+                             .argumentType(type)
+                             .build());
+  }
+  return signatures;
 }
 
 } // namespace
