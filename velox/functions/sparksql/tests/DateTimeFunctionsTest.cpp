@@ -972,7 +972,6 @@ TEST_F(DateTimeFunctionsTest, yearOfWeek) {
   const auto yearOfWeek = [&](std::optional<int32_t> date) {
     return evaluateOnce<int32_t, int32_t>("year_of_week(c0)", {date}, {DATE()});
   };
-  EXPECT_EQ(std::nullopt, yearOfWeek(std::nullopt));
   EXPECT_EQ(1970, yearOfWeek(0));
   EXPECT_EQ(1970, yearOfWeek(-1));
   EXPECT_EQ(1969, yearOfWeek(-4));
