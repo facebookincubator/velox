@@ -145,6 +145,8 @@ class Writer : public dwio::common::Writer {
 
   void abort() override;
 
+  bool shouldFlush();
+
  private:
   // Sets the memory reclaimers for all the memory pools used by this writer.
   void setMemoryReclaimers();

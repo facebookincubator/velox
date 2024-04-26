@@ -383,6 +383,14 @@ void Writer::abort() {
   arrowContext_.reset();
 }
 
+bool Writer::shouldFlush() {
+  if (flushPolicy_->shouldFlush(getStripeProgress(
+          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
+    return true;
+  }
+  return false;
+}
+
 parquet::WriterOptions getParquetOptions(
     const dwio::common::WriterOptions& options) {
   parquet::WriterOptions parquetOptions;
