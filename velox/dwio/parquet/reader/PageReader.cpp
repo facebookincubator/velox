@@ -31,6 +31,11 @@ namespace facebook::velox::parquet {
 using thrift::Encoding;
 using thrift::PageHeader;
 
+struct __attribute__((__packed__)) Int96Timestamp {
+  int32_t days;
+  uint64_t nanos;
+};
+
 void PageReader::seekToPage(int64_t row) {
   defineDecoder_.reset();
   repeatDecoder_.reset();

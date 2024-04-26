@@ -24,14 +24,45 @@ namespace facebook::velox::parquet {
 class TimestampColumnReader : public IntegerColumnReader {
  public:
   TimestampColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+      const TypePtr& requestedType,
       std::shared_ptr<const dwio::common::TypeWithId> fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec)
-      : IntegerColumnReader(requestedType, fileType, params, scanSpec) {}
+      : IntegerColumnReader(requestedType, fileType, params, scanSpec),
+        timestampPrecision_(params.timestampPrecision()) {}
 
   bool hasBulkPath() const override {
     return false;
+  }
+
+  void getValues(RowSet rows, VectorPtr* result) override {
+    getFlatValues<Timestamp, Timestamp>(rows, result, requestedType_);
+    if (allNull_) {
+      return;
+    }
+
+    // Adjust timestamp nanos to the requested precision.
+    VectorPtr resultVector = *result;
+    auto rawValues =
+        resultVector->asUnchecked<FlatVector<Timestamp>>()->mutableRawValues();
+    for (auto i = 0; i < numValues_; ++i) {
+      if (resultVector->isNullAt(i)) {
+        continue;
+      }
+      const auto timestamp = rawValues[i];
+      uint64_t nanos = timestamp.getNanos();
+      switch (timestampPrecision_) {
+        case TimestampPrecision::kMilliseconds:
+          nanos = nanos / 1'000'000 * 1'000'000;
+          break;
+        case TimestampPrecision::kMicroseconds:
+          nanos = nanos / 1'000 * 1'000;
+          break;
+        case TimestampPrecision::kNanoseconds:
+          break;
+      }
+      rawValues[i] = Timestamp(timestamp.getSeconds(), nanos);
+    }
   }
 
   void read(
@@ -44,6 +75,11 @@ class TimestampColumnReader : public IntegerColumnReader {
     readCommon<IntegerColumnReader, true>(rows);
     readOffset_ += rows.back() + 1;
   }
+
+ private:
+  // The requested precision can be specified from HiveConfig to read timestamp
+  // from Parquet.
+  TimestampPrecision timestampPrecision_;
 };
 
 } // namespace facebook::velox::parquet
