@@ -26,70 +26,76 @@ namespace {
 
 const int32_t kDefaultSeed = 42;
 
-struct Murmur3Hash;
-struct XxHash64;
-
-// A template struct that contains the seed and return type of the hash
-// function.
-template <typename HashClass>
-struct HashTraits {};
-
-template <>
-struct HashTraits<Murmur3Hash> {
-  using SeedType = int32_t;
-  using ReturnType = int32_t;
-};
-
-template <>
-struct HashTraits<XxHash64> {
-  using SeedType = int64_t;
-  using ReturnType = int64_t;
-};
-
 // Computes the hash value of input using the hash function in HashClass.
-template <typename HashClass, typename SeedType, typename ReturnType>
-ReturnType hashOne(int32_t input, SeedType seed) {
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    int32_t input,
+    typename HashClass::SeedType seed) {
   return HashClass::hashInt32(input, seed);
 }
 
-template <typename HashClass, typename SeedType, typename ReturnType>
-ReturnType hashOne(int64_t input, SeedType seed) {
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    int64_t input,
+    typename HashClass::SeedType seed) {
   return HashClass::hashInt64(input, seed);
 }
 
-template <typename HashClass, typename SeedType, typename ReturnType>
-ReturnType hashOne(float input, SeedType seed) {
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    float input,
+    typename HashClass::SeedType seed) {
   return HashClass::hashFloat(input, seed);
 }
 
-template <typename HashClass, typename SeedType, typename ReturnType>
-ReturnType hashOne(double input, SeedType seed) {
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    double input,
+    typename HashClass::SeedType seed) {
   return HashClass::hashDouble(input, seed);
 }
 
-template <typename HashClass, typename SeedType, typename ReturnType>
-ReturnType hashOne(int128_t input, SeedType seed) {
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    int128_t input,
+    typename HashClass::SeedType seed) {
   return HashClass::hashLongDecimal(input, seed);
 }
 
-template <typename HashClass, typename SeedType, typename ReturnType>
-ReturnType hashOne(Timestamp input, SeedType seed) {
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    Timestamp input,
+    typename HashClass::SeedType seed) {
   return HashClass::hashTimestamp(input, seed);
 }
 
-template <typename HashClass, typename SeedType, typename ReturnType>
-ReturnType hashOne(StringView input, SeedType seed) {
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    StringView input,
+    typename HashClass::SeedType seed) {
   return HashClass::hashBytes(input, seed);
 }
 
+template <typename HashClass, TypeKind kind>
+class PrimitiveVectorHasher;
+
+template <typename HashClass>
+class ArrayVectorHasher;
+
+template <typename HashClass>
+class MapVectorHasher;
+
+template <typename HashClass>
+class RowVectorHasher;
+
 // Class to compute hashes identical to one produced by Spark.
 // Hashes are computed using the algorithm implemented in HashClass.
-template <
-    typename HashClass,
-    typename SeedType = typename HashTraits<HashClass>::SeedType,
-    typename ReturnType = typename HashTraits<HashClass>::ReturnType>
+template <typename HashClass>
 class SparkVectorHasher {
  public:
+  using SeedType = typename HashClass::SeedType;
+  using ReturnType = typename HashClass::ReturnType;
+
   SparkVectorHasher(DecodedVector& decoded) : decoded_(decoded) {}
 
   virtual ~SparkVectorHasher() = default;
@@ -103,36 +109,33 @@ class SparkVectorHasher {
   }
 
   // Compute the hash value of input vector at index for non-null values.
-  virtual ReturnType hashNotNullAt(vector_size_t index, SeedType seed) = 0;
+  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) {
+    switch (decoded_.base()->typeKind()) {
+      case TypeKind::ARRAY:
+        return static_cast<ArrayVectorHasher<HashClass>*>(this)->hashValueAt(
+            index, seed);
+      case TypeKind::MAP:
+        return static_cast<MapVectorHasher<HashClass>*>(this)->hashValueAt(
+            index, seed);
+      case TypeKind::ROW:
+        return static_cast<RowVectorHasher<HashClass>*>(this)->hashValueAt(
+            index, seed);
+      default:
+        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            hashPrimitive, decoded_.base()->typeKind(), index, seed);
+    }
+  }
 
  protected:
   const DecodedVector& decoded_;
+
+ private:
+  template <TypeKind kind>
+  ReturnType hashPrimitive(vector_size_t index, SeedType seed) {
+    return static_cast<PrimitiveVectorHasher<HashClass, kind>*>(this)
+        ->hashValueAt(index, seed);
+  }
 };
-
-template <
-    typename HashClass,
-    TypeKind kind,
-    typename SeedType = typename HashTraits<HashClass>::SeedType,
-    typename ReturnType = typename HashTraits<HashClass>::ReturnType>
-class PrimitiveVectorHasher;
-
-template <
-    typename HashClass,
-    typename SeedType = typename HashTraits<HashClass>::SeedType,
-    typename ReturnType = typename HashTraits<HashClass>::ReturnType>
-class ArrayVectorHasher;
-
-template <
-    typename HashClass,
-    typename SeedType = typename HashTraits<HashClass>::SeedType,
-    typename ReturnType = typename HashTraits<HashClass>::ReturnType>
-class MapVectorHasher;
-
-template <
-    typename HashClass,
-    typename SeedType = typename HashTraits<HashClass>::SeedType,
-    typename ReturnType = typename HashTraits<HashClass>::ReturnType>
-class RowVectorHasher;
 
 template <typename HashClass, TypeKind kind>
 std::shared_ptr<SparkVectorHasher<HashClass>> createPrimitiveVectorHasher(
@@ -159,27 +162,29 @@ std::shared_ptr<SparkVectorHasher<HashClass>> createVectorHasher(
   }
 }
 
-template <
-    typename HashClass,
-    TypeKind kind,
-    typename SeedType,
-    typename ReturnType>
+template <typename HashClass, TypeKind kind>
 class PrimitiveVectorHasher : public SparkVectorHasher<HashClass> {
  public:
+  using SeedType = typename HashClass::SeedType;
+  using ReturnType = typename HashClass::ReturnType;
+
   PrimitiveVectorHasher(DecodedVector& decoded)
       : SparkVectorHasher<HashClass>(decoded) {}
 
-  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
-    return hashOne<HashClass, SeedType, ReturnType>(
+  ReturnType hashValueAt(vector_size_t index, SeedType seed) {
+    return hashOne<HashClass>(
         this->decoded_.template valueAt<typename TypeTraits<kind>::NativeType>(
             index),
         seed);
   }
 };
 
-template <typename HashClass, typename SeedType, typename ReturnType>
+template <typename HashClass>
 class ArrayVectorHasher : public SparkVectorHasher<HashClass> {
  public:
+  using SeedType = typename HashClass::SeedType;
+  using ReturnType = typename HashClass::ReturnType;
+
   ArrayVectorHasher(DecodedVector& decoded)
       : SparkVectorHasher<HashClass>(decoded) {
     base_ = decoded.base()->as<ArrayVector>();
@@ -190,7 +195,7 @@ class ArrayVectorHasher : public SparkVectorHasher<HashClass> {
     elementHasher_ = createVectorHasher<HashClass>(decodedElements_);
   }
 
-  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
+  ReturnType hashValueAt(vector_size_t index, SeedType seed) {
     auto size = base_->sizeAt(indices_[index]);
     auto offset = base_->offsetAt(indices_[index]);
 
@@ -208,9 +213,12 @@ class ArrayVectorHasher : public SparkVectorHasher<HashClass> {
   std::shared_ptr<SparkVectorHasher<HashClass>> elementHasher_;
 };
 
-template <typename HashClass, typename SeedType, typename ReturnType>
+template <typename HashClass>
 class MapVectorHasher : public SparkVectorHasher<HashClass> {
  public:
+  using SeedType = typename HashClass::SeedType;
+  using ReturnType = typename HashClass::ReturnType;
+
   MapVectorHasher(DecodedVector& decoded)
       : SparkVectorHasher<HashClass>(decoded) {
     base_ = decoded.base()->as<MapVector>();
@@ -223,7 +231,7 @@ class MapVectorHasher : public SparkVectorHasher<HashClass> {
     valueHasher_ = createVectorHasher<HashClass>(decodedValues_);
   }
 
-  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
+  ReturnType hashValueAt(vector_size_t index, SeedType seed) {
     auto size = base_->sizeAt(indices_[index]);
     auto offset = base_->offsetAt(indices_[index]);
 
@@ -244,9 +252,12 @@ class MapVectorHasher : public SparkVectorHasher<HashClass> {
   std::shared_ptr<SparkVectorHasher<HashClass>> valueHasher_;
 };
 
-template <typename HashClass, typename SeedType, typename ReturnType>
+template <typename HashClass>
 class RowVectorHasher : public SparkVectorHasher<HashClass> {
  public:
+  using SeedType = typename HashClass::SeedType;
+  using ReturnType = typename HashClass::ReturnType;
+
   RowVectorHasher(DecodedVector& decoded)
       : SparkVectorHasher<HashClass>(decoded) {
     base_ = decoded.base()->as<RowVector>();
@@ -261,7 +272,7 @@ class RowVectorHasher : public SparkVectorHasher<HashClass> {
     }
   }
 
-  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
+  ReturnType hashValueAt(vector_size_t index, SeedType seed) {
     ReturnType result = seed;
     for (auto i = 0; i < base_->childrenSize(); ++i) {
       result = hashers_[i]->hashAt(indices_[index], result);
@@ -280,8 +291,8 @@ class RowVectorHasher : public SparkVectorHasher<HashClass> {
 // HashClass contains the function like hashInt32
 template <
     typename HashClass,
-    typename SeedType = typename HashTraits<HashClass>::SeedType,
-    typename ReturnType = typename HashTraits<HashClass>::ReturnType>
+    typename SeedType = typename HashClass::SeedType,
+    typename ReturnType = typename HashClass::ReturnType>
 void applyWithType(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
@@ -327,6 +338,9 @@ void applyWithType(
 
 class Murmur3Hash final {
  public:
+  using SeedType = int32_t;
+  using ReturnType = int32_t;
+
   static uint32_t hashInt32(int32_t input, uint32_t seed) {
     uint32_t k1 = mixK1(input);
     uint32_t h1 = mixH1(seed, k1);
@@ -431,6 +445,9 @@ class Murmur3HashFunction final : public exec::VectorFunction {
 
 class XxHash64 final {
  public:
+  using SeedType = int64_t;
+  using ReturnType = int64_t;
+
   static uint64_t hashInt32(const int32_t input, uint64_t seed) {
     int64_t hash = seed + PRIME64_5 + 4L;
     hash ^= static_cast<int64_t>((input & 0xFFFFFFFFL) * PRIME64_1);
