@@ -12,32 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Linux Build
+name: Linux Nightly Build
 
 on:
-  push:
-    branches:
-      - "main"
-    paths:
-      - "velox/**"
-      - "!velox/docs/**"
-      - "CMakeLists.txt"
-      - "CMake/**"
-      - "third_party/**"
-      - "scripts/setup-ubuntu.sh"
-      - "scripts/setup-helper-functions.sh"
-      - ".github/workflows/linux-build.yml"
-
   pull_request:
-    paths:
-      - "velox/**"
-      - "!velox/docs/**"
-      - "CMakeLists.txt"
-      - "CMake/**"
-      - "third_party/**"
-      - "scripts/setup-ubuntu.sh"
-      - "scripts/setup-helper-functions.sh"
-      - ".github/workflows/linux-build.yml"
+
+  schedule:
+    - cron: '0 3 * * *'
+
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -51,8 +34,11 @@ jobs:
     name: Linux release with adapters
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: 8-core
-    container: ghcr.io/facebookincubator/velox-dev:adapters
+    runs-on: 4-core-ubuntu-gpu-t4
+    container:
+      image: ghcr.io/facebookincubator/velox-dev:adapters
+      options: >
+        --gpus all
     defaults:
       run:
         shell: bash
@@ -61,8 +47,8 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
-      CUDA_VERSION: "11.8"
-      CUDA_ARCHITECTURES: 60
+      CUDA_VERSION: "12.2" # matches the version installed on 4-core-ubuntu-gpu-t4
+      CUDA_ARCHITECTURES: native
     steps:
       - uses: actions/checkout@v4
 
@@ -73,12 +59,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # Allows to install arbitrary cuda-version whithout needing to update
-          # docker container before. It simplifies testing new/different versions
-          if ! yum list installed cuda-nvcc-$(echo ${CUDA_VERSION} | tr '.' '-') 1>/dev/null; then
-            source scripts/setup-centos8.sh
-            install_cuda ${CUDA_VERSION}
-          fi
+          source scripts/setup-centos8.sh
+          install_cuda ${CUDA_VERSION}
 
       - uses: assignUser/stash/restore@v1
         with:
@@ -91,7 +73,7 @@ jobs:
 
       - name: Make Release Build
         env:
-          MAKEFLAGS: 'NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4'
+          MAKEFLAGS: 'NUM_THREADS=4 MAX_HIGH_MEM_JOBS=2 MAX_LINK_JOBS=2'
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Without that, nvcc picks /usr/bin/c++ which is GCC 8
           CUDA_FLAGS: "-ccbin /opt/rh/gcc-toolset-9/root/usr/bin"
@@ -104,6 +86,7 @@ jobs:
             "-DVELOX_ENABLE_S3=ON"
             "-DVELOX_ENABLE_GCS=ON"
             "-DVELOX_ENABLE_ABFS=ON"
+            "-DVELOX_ENABLE_SUBSTRAIT=ON"
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
             "-DVELOX_ENABLE_GPU=ON"
           )
@@ -125,60 +108,3 @@ jobs:
         working-directory: _build/release
         run: |
           ctest -j 8 --output-on-failure --no-tests=error
-
-  ubuntu-debug:
-    runs-on: 8-core
-    # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
-    name: "Ubuntu debug with resolve_dependency"
-    env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache"
-    defaults:
-      run:
-        shell: bash
-        working-directory: velox
-    steps:
-
-      - name: Get Ccache Stash
-        uses: assignUser/stash/restore@v1
-        with:
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-ubuntu-debug-default
-
-      - name: Ensure Stash Dirs Exists
-        working-directory: ${{ github.workspace }}
-        run: |
-          mkdir -p '${{ env.CCACHE_DIR }}'
-
-      - uses: actions/checkout@v4
-        with:
-          path: velox
-
-      - name: Install Dependencies
-        run: |
-          source scripts/setup-ubuntu.sh && install_apt_deps
-
-      - name: Clear CCache Statistics
-        run: |
-          ccache -sz
-
-      - name: Make Debug Build
-        env:
-          VELOX_DEPENDENCY_SOURCE: BUNDLED
-          MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
-          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON"
-        run: |
-          make debug 
-
-      - name: CCache after
-        run: |
-          ccache -vs
-
-      - uses: assignUser/stash/save@v1
-        with:
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-ubuntu-debug-default
-
-      - name: Run Tests
-        run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error

@@ -131,8 +131,10 @@ void makeBitpackDict(
 class GpuDecoderTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    if (int device; cudaGetDevice(&device) != cudaSuccess) {
-      GTEST_SKIP() << "No CUDA detected, skipping all tests";
+    cudaError_t error;
+    if (int device; (error = cudaGetDevice(&device)) != cudaSuccess) {
+      GTEST_SKIP() << "No CUDA detected, skipping all tests."
+                   << " Error: (" << error << ") " << cudaGetErrorString(error);
     }
 
     CUDA_CHECK_FATAL(cudaEventCreate(&startEvent_));
@@ -618,8 +620,10 @@ int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv};
 
-  if (int device; cudaGetDevice(&device) != cudaSuccess) {
-    std::cerr << "No CUDA detected, skipping all tests" << std::endl;
+  cudaError_t error;
+  if (int device; (error = cudaGetDevice(&device)) != cudaSuccess) {
+    std::cerr << "No CUDA detected, skipping all tests."
+              << " Error: (" << error << ") " << cudaGetErrorString(error) << std::endl;
     return 0;
   }
 
