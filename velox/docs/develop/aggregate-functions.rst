@@ -152,14 +152,16 @@ A simple aggregation function is implemented as a class as the following.
     using IntermediateType = Array<Generic<T1>>;
     using OutputType = Array<Generic<T1>>;
 
-    // If UDAF does not require the use of FunctionState, it is necessary
-    // to declare an empty FunctionState struct.
+    // Define a struct for function-level states. Even if the aggregation function
+    // doesn't use function-level states, it is still necessary to define an empty
+    // FunctionState struct.
     struct FunctionState {
       // Optional.
       TypePtr resultType;
     };
 
-    // Optional. Used only when the UDAF needs to use FunctionState.
+    // Optional. Defined only when the aggregation function needs to use function-level states.
+    // This method is called once when the aggregation function is created.
     static void initialize(
         core::AggregationNode::Step step,
         FunctionState& state,
@@ -188,13 +190,13 @@ one argument. This is needed for the SimpleAggregateAdapter to parse input
 types for arbitrary aggregation functions properly.
 
 A FunctionState struct needs to be declared in the simple aggregation function
-class, it is used to hold the function-level variables that are typically
-computed once and used at every row when adding inputs to accumulators or
-extracting values from accumulators. For example, if the UDAF needs to get the
-result type or the raw input type of the aggregaiton function, the author can
-hold them in the FunctionState struct, and initialize them in the initialize()
-method. If the UDAF does not require the use ofFunctionState, it is necessary
-to declare an empty FunctionState struct.
+class. FunctionState is initialized once when the aggregation function is
+created and used at every row when adding inputs to accumulators or extracting
+values from accumulators. For example, if the aggregation function needs to get
+the result type or the raw input type of the aggregaiton function, the author
+can hold them in the FunctionState struct, and initialize them in the
+initialize() method. If the aggregation function does not require the use of
+FunctionState, it is necessary to declare an empty FunctionState struct.
 
 The author can define an optional flag `default_null_behavior_` indicating
 whether the aggregation function has default-null behavior. This flag is true
