@@ -418,6 +418,89 @@ length of the <code class="docutils literal notranslate"><span class="pre">strin
 <dd><p>Converts <code class="docutils literal notranslate"><span class="pre">string</span></code> to uppercase.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="word_stem">
+<span class="sig-name descname"><span class="pre">word_stem</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">word</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#word_stem" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the stem of <code class="docutils literal notranslate"><span class="pre">word</span></code> in the English language. If the <code class="docutils literal notranslate"><span class="pre">word</span></code> is not an English word,
+the <code class="docutils literal notranslate"><span class="pre">word</span></code> in lowercase is returned.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">word_stem</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">word</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lang</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the stem of <code class="docutils literal notranslate"><span class="pre">word</span></code> in the <code class="docutils literal notranslate"><span class="pre">lang</span></code> language. This function supports the following languages:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>lang</p></th>
+<th class="head"><p>Language</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ca</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Catalan</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">da</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Danish</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">de</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">German</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">en</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">English</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">es</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Spanish</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">eu</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Basque</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">fi</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Finnish</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">fr</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">French</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">hu</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Hungarian</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">hy</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Armenian</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ir</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Irish</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">it</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Italian</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">lt</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Lithuanian</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">nl</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Dutch</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">no</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Norwegian</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">pt</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Portuguese</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ro</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Romanian</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ru</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Russian</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">sv</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Swedish</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">tr</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Turkish</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<p>If the specified <code class="docutils literal notranslate"><span class="pre">lang</span></code> is not supported, this function throws a user error.</p>
+</dd></dl>
+
 <section id="unicode-functions">
 <h2>Unicode Functions<a class="headerlink" href="#unicode-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
@@ -463,6 +546,8 @@ length of the <code class="docutils literal notranslate"><span class="pre">strin
 <li><a class="reference internal" href="#substr"><code class="docutils literal notranslate"><span class="pre">substr()</span></code></a></li>
 <li><a class="reference internal" href="#trim"><code class="docutils literal notranslate"><span class="pre">trim()</span></code></a></li>
 <li><a class="reference internal" href="#upper"><code class="docutils literal notranslate"><span class="pre">upper()</span></code></a></li>
+<li><a class="reference internal" href="#word_stem"><code class="docutils literal notranslate"><span class="pre">word_stem()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">word_stem()</span></code></a></li>
 <li><a class="reference internal" href="#unicode-functions">Unicode Functions</a><ul>
 <li><a class="reference internal" href="#to_utf8"><code class="docutils literal notranslate"><span class="pre">to_utf8()</span></code></a></li>
 </ul>
