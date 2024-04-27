@@ -242,13 +242,17 @@ LocalWriteFile::LocalWriteFile(
           exists, "Failure in LocalWriteFile: path '{}' already exists.", path);
     }
   }
-  auto* file = fopen(buf.get(), "ab");
-  VELOX_CHECK_NOT_NULL(
-      file,
-      "fopen failure in LocalWriteFile constructor, {} {}.",
-      path,
-      folly::errnoStr(errno));
-  file_ = file;
+  fd_ = open(
+      buf.get(),
+      O_CREAT | O_WRONLY,
+      S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+  if (FOLLY_UNLIKELY(fd_ < 0)) {
+    VELOX_FAIL(
+        "open failure in LocalWriteFile constructor, rc {}: {}",
+        fd_,
+        folly::errnoStr(errno));
+  }
+  size_ = lseek(fd_, 0, SEEK_END);
 }
 
 LocalWriteFile::~LocalWriteFile() {
@@ -263,7 +267,8 @@ LocalWriteFile::~LocalWriteFile() {
 
 void LocalWriteFile::append(std::string_view data) {
   VELOX_CHECK(!closed_, "file is closed");
-  const uint64_t bytesWritten = fwrite(data.data(), 1, data.size(), file_);
+  size_ = lseek(fd_, 0, SEEK_END);
+  const uint64_t bytesWritten = ::write(fd_, data.data(), data.size());
   VELOX_CHECK_EQ(
       bytesWritten,
       data.size(),
@@ -276,11 +281,11 @@ void LocalWriteFile::append(std::string_view data) {
 
 void LocalWriteFile::append(std::unique_ptr<folly::IOBuf> data) {
   VELOX_CHECK(!closed_, "file is closed");
+  size_ = lseek(fd_, 0, SEEK_END);
   uint64_t totalBytesWritten{0};
   for (auto rangeIter = data->begin(); rangeIter != data->end(); ++rangeIter) {
     const auto bytesToWrite = rangeIter->size();
-    const auto bytesWritten =
-        fwrite(rangeIter->data(), 1, rangeIter->size(), file_);
+    const auto bytesWritten = ::write(fd_, rangeIter->data(), bytesToWrite);
     totalBytesWritten += bytesWritten;
     if (bytesWritten != bytesToWrite) {
       VELOX_FAIL(
@@ -300,21 +305,62 @@ void LocalWriteFile::append(std::unique_ptr<folly::IOBuf> data) {
   size_ += totalBytesWritten;
 }
 
-void LocalWriteFile::flush() {
+uint64_t LocalWriteFile::write(
+    std::unique_ptr<folly::IOBuf> data,
+    int64_t offset) {
   VELOX_CHECK(!closed_, "file is closed");
-  auto ret = fflush(file_);
+  uint64_t totalBytesWritten{0};
+  for (auto rangeIter = data->begin(); rangeIter != data->end(); ++rangeIter) {
+    const auto bytesToWrite = rangeIter->size();
+    const auto bytesWritten =
+        ::pwrite(fd_, rangeIter->data(), bytesToWrite, offset);
+    offset += bytesWritten;
+    totalBytesWritten += bytesWritten;
+    if (bytesWritten != bytesToWrite) {
+      VELOX_FAIL(
+          "fwrite failure in LocalWriteFile::write, {} vs {}: {}",
+          bytesWritten,
+          bytesToWrite,
+          folly::errnoStr(errno));
+    }
+  }
+  const auto totalBytesToWrite = data->computeChainDataLength();
   VELOX_CHECK_EQ(
-      ret,
+      totalBytesWritten,
+      totalBytesToWrite,
+      "Failure in LocalWriteFile::write, {} vs {}",
+      totalBytesWritten,
+      totalBytesToWrite);
+  size_ = lseek(fd_, 0, SEEK_END);
+  return totalBytesWritten;
+}
+
+void LocalWriteFile::truncate(uint64_t length) {
+  VELOX_CHECK(!closed_, "file is closed");
+  const auto rc = ::ftruncate(fd_, length);
+  if (rc != 0) {
+    VELOX_FAIL(
+        "ftruncate failure in LocalWriteFile::truncate: {}",
+        folly::errnoStr(errno));
+  }
+  size_ = length;
+}
+
+int32_t LocalWriteFile::flush() {
+  VELOX_CHECK(!closed_, "file is closed");
+  auto rc = ::fsync(fd_);
+  VELOX_CHECK_EQ(
+      rc,
       0,
-      "fflush failed in LocalWriteFile::flush: {}.",
+      "fsync failed in LocalWriteFile::flush: {}.",
       folly::errnoStr(errno));
 }
 
 void LocalWriteFile::close() {
   if (!closed_) {
-    auto ret = fclose(file_);
+    auto rc = ::close(fd_);
     VELOX_CHECK_EQ(
-        ret,
+        rc,
         0,
         "fwrite failure in LocalWriteFile::close: {}.",
         folly::errnoStr(errno));

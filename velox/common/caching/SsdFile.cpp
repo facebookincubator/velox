@@ -22,14 +22,13 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/process/TraceContext.h"
 
 #include <fcntl.h>
 #ifdef linux
 #include <linux/fs.h>
 #endif // linux
-#include <sys/ioctl.h>
-#include <sys/stat.h>
 #include <sys/types.h>
 #include <fstream>
 #include <numeric>
@@ -143,31 +142,23 @@ SsdFile::SsdFile(
 #ifdef linux
   oDirect = FLAGS_ssd_odirect ? O_DIRECT : 0;
 #endif // linux
-  fd_ = open(fileName_.c_str(), O_CREAT | O_RDWR | oDirect, S_IRUSR | S_IWUSR);
-  if (FOLLY_UNLIKELY(fd_ < 0)) {
-    ++stats_.openFileErrors;
-  }
   // TODO: add fault tolerant handling for open file errors.
-  VELOX_CHECK_GE(
-      fd_,
-      0,
-      "Cannot open or create {}. Error: {}",
-      filename,
-      folly::errnoStr(errno));
+  const auto fs = filesystems::getFileSystem(fileName_, nullptr);
+  writeFile_ = fs->openFileForWrite(fileName_);
+  readFile_ = fs->openFileForRead(fileName_);
 
-  if (disableFileCow) {
-    disableCow(fd_);
-  }
+//  if (disableFileCow) {
+//    disableCow(fd_);
+//  }
 
-  readFile_ = std::make_unique<LocalReadFile>(fd_);
-  uint64_t size = lseek(fd_, 0, SEEK_END);
+  uint64_t size = writeFile_->size();
   numRegions_ = size / kRegionSize;
   if (numRegions_ > maxRegions_) {
     numRegions_ = maxRegions_;
   }
   fileSize_ = numRegions_ * kRegionSize;
   if (size % kRegionSize > 0 || size > numRegions_ * kRegionSize) {
-    ftruncate(fd_, fileSize_);
+    writeFile_->truncate(fileSize_);
   }
   // The existing regions in the file are writable.
   writableRegions_.resize(numRegions_);
@@ -322,15 +313,15 @@ bool SsdFile::growOrEvictLocked() {
   process::TraceContext trace("SsdFile::growOrEvictLocked");
   if (numRegions_ < maxRegions_) {
     const auto newSize = (numRegions_ + 1) * kRegionSize;
-    const auto rc = ::ftruncate(fd_, newSize);
-    if (rc >= 0) {
-      fileSize_ = newSize;
-      writableRegions_.push_back(numRegions_);
-      regionSizes_[numRegions_] = 0;
-      erasedRegionSizes_[numRegions_] = 0;
-      ++numRegions_;
-      return true;
-    }
+    writeFile_->truncate(newSize);
+    //    if (rc >= 0) {
+    fileSize_ = newSize;
+    writableRegions_.push_back(numRegions_);
+    regionSizes_[numRegions_] = 0;
+    erasedRegionSizes_[numRegions_] = 0;
+    ++numRegions_;
+    return true;
+    //    }
 
     ++stats_.growFileErrors;
     LOG(ERROR) << "Failed to grow cache file " << fileName_ << " to "
@@ -460,12 +451,13 @@ bool SsdFile::write(
     uint64_t offset,
     uint64_t length,
     const std::vector<iovec>& iovecs) {
-  const auto ret = folly::pwritev(fd_, iovecs.data(), iovecs.size(), offset);
-  if (ret == length) {
+  const auto bytesWritten = writeFile_->write(
+      folly::IOBuf::wrapIov(iovecs.data(), iovecs.size()), offset);
+  if (bytesWritten == length) {
     return true;
   }
   VELOX_SSD_CACHE_LOG(ERROR)
-      << "Failed to write to SSD, file name: " << fileName_ << ", fd: " << fd_
+      << "Failed to write to SSD, file name: " << fileName_
       << ", size: " << iovecs.size() << ", offset: " << offset
       << ", error code: " << errno
       << ", error string: " << folly::errnoStr(errno);
@@ -474,7 +466,7 @@ bool SsdFile::write(
 }
 
 namespace {
-int32_t indexOfFirstMismatch(char* x, char* y, int n) {
+int32_t indexOfFirstMismatch(const char* x, const char* y, int n) {
   for (auto i = 0; i < n; ++i) {
     if (x[i] != y[i]) {
       return i;
@@ -486,11 +478,10 @@ int32_t indexOfFirstMismatch(char* x, char* y, int n) {
 
 void SsdFile::verifyWrite(AsyncDataCacheEntry& entry, SsdRun ssdRun) {
   process::TraceContext trace("SsdFile::verifyWrite");
-  auto testData = std::make_unique<char[]>(entry.size());
-  const auto rc = ::pread(fd_, testData.get(), entry.size(), ssdRun.offset());
-  VELOX_CHECK_EQ(rc, entry.size());
+  const auto testRead = readFile_->pread(ssdRun.offset(), entry.size());
+  VELOX_CHECK_EQ(testRead.size(), entry.size());
   if (entry.tinyData() != nullptr) {
-    if (::memcmp(testData.get(), entry.tinyData(), entry.size()) != 0) {
+    if (::memcmp(testRead.data(), entry.tinyData(), entry.size()) != 0) {
       VELOX_FAIL("bad read back");
     }
   } else {
@@ -501,7 +492,7 @@ void SsdFile::verifyWrite(AsyncDataCacheEntry& entry, SsdRun ssdRun) {
       const auto run = data.runAt(i);
       const auto compareSize = std::min<int64_t>(bytesLeft, run.numBytes());
       auto badIndex = indexOfFirstMismatch(
-          run.data<char>(), testData.get() + offset, compareSize);
+          run.data<char>(), testRead.data() + offset, compareSize);
       if (badIndex != -1) {
         VELOX_FAIL("Bad read back");
       }
@@ -557,10 +548,7 @@ void SsdFile::clear() {
 
 void SsdFile::deleteFile() {
   process::TraceContext trace("SsdFile::deleteFile");
-  if (fd_) {
-    close(fd_);
-    fd_ = 0;
-  }
+  writeFile_->close();
   auto rc = unlink(fileName_.c_str());
   if (rc < 0) {
     VELOX_SSD_CACHE_LOG(ERROR)
@@ -715,7 +703,7 @@ void SsdFile::checkpoint(bool force) {
     // thread of the cache write executor, if available. If there is none, we do
     // the sync on this thread at the end.
     auto fileSync = std::make_shared<AsyncSource<int>>(
-        [fd = fd_]() { return std::make_unique<int>(::fsync(fd)); });
+        [&file = writeFile_]() { return std::make_unique<int>(file->flush()); });
     if (executor_ != nullptr) {
       executor_->add([fileSync]() { fileSync->prepare(); });
     }

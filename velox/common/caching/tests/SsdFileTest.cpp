@@ -16,6 +16,7 @@
 
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -23,8 +24,11 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
+#include <fcntl.h>
+
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
+using namespace facebook::velox::filesystems;
 
 using facebook::velox::memory::MemoryAllocator;
 
@@ -44,6 +48,10 @@ class SsdFileTest : public testing::Test {
 
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
+  }
+
+  void SetUp() override {
+    filesystems::registerLocalFileSystem();
   }
 
   void TearDown() override {

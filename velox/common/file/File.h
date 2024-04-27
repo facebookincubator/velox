@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <unistd.h>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -148,9 +149,21 @@ class WriteFile {
     VELOX_NYI("IOBuf appending is not implemented");
   }
 
+  // Write data at a specified offset.
+  virtual uint64_t write(
+      std::unique_ptr<folly::IOBuf> /* data */,
+      int64_t /* offset */) {
+    VELOX_NYI("IOBuf write is not implemented");
+  }
+
+  // Truncate the file to a specified length.
+  virtual void truncate(uint64_t length) {
+    VELOX_NYI("truncate is not implemented");
+  }
+
   // Flushes any local buffers, i.e. ensures the backing medium received
   // all data that has been appended.
-  virtual void flush() = 0;
+  virtual int32_t flush() = 0;
 
   // Close the file. Any cleanup (disk flush, etc.) will be done here.
   virtual void close() = 0;
@@ -217,7 +230,9 @@ class InMemoryWriteFile final : public WriteFile {
 
   void append(std::string_view data) final;
   void append(std::unique_ptr<folly::IOBuf> data) final;
-  void flush() final {}
+  int32_t flush() final {
+    return 0;
+  }
   void close() final {}
   uint64_t size() const final;
 
@@ -284,7 +299,9 @@ class LocalWriteFile final : public WriteFile {
 
   void append(std::string_view data) final;
   void append(std::unique_ptr<folly::IOBuf> data) final;
-  void flush() final;
+  uint64_t write(std::unique_ptr<folly::IOBuf> data, int64_t offset) final;
+  void truncate(uint64_t length) final;
+  int32_t flush() final;
   void close() final;
 
   uint64_t size() const final {
@@ -292,7 +309,7 @@ class LocalWriteFile final : public WriteFile {
   }
 
  private:
-  FILE* file_;
+  int32_t fd_;
   uint64_t size_{0};
   bool closed_{false};
 };

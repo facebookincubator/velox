@@ -383,14 +383,15 @@ class SsdFile {
   // Map of file number and offset to location in file.
   folly::F14FastMap<FileCacheKey, SsdRun> entries_;
 
-  // File descriptor. 0 (stdin) means file not open.
-  int32_t fd_{0};
-
   // Size of the backing file in bytes. Must be multiple of kRegionSize.
   uint64_t fileSize_{0};
 
-  // ReadFile made from 'fd_'.
+  // A read-only file. All methods in this object should be thread safe.
   std::unique_ptr<ReadFile> readFile_;
+
+  // A write-only file. Nothing written to the file should be read back until it
+  // is closed.
+  std::unique_ptr<WriteFile> writeFile_;
 
   // Counters.
   SsdCacheStats stats_;
