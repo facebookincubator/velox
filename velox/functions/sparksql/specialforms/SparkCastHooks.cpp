@@ -21,7 +21,14 @@
 namespace facebook::velox::functions::sparksql {
 
 SparkCastHooks::SparkCastHooks(const core::QueryConfig& config)
-    : CastHooks(), legacyCast_(config.isLegacyCast()) {}
+    : CastHooks(), legacyCast_(config.sparklegacyCastToStr()) {
+  if (legacyCast_) {
+    vectorCastToStringOptions_.emptyElementResult =
+        VectorCastToStringOptions::EmptyElementResult::emptyBrackets;
+    vectorCastToStringOptions_.useBrackets = true;
+    vectorCastToStringOptions_.nullString = "";
+  }
+}
 
 Timestamp SparkCastHooks::castStringToTimestamp(const StringView& view) const {
   return util::fromTimestampString(view.data(), view.size());
@@ -70,45 +77,8 @@ bool SparkCastHooks::truncate() const {
   return true;
 }
 
-std::string SparkCastHooks::castMapToString(
-    const MapVector* mapVector,
-    const int row) const {
-  auto keys = mapVector->mapKeys();
-  auto values = mapVector->mapValues();
-  auto rawOffsets = mapVector->rawOffsets();
-  auto rawSizes = mapVector->rawSizes();
-
-  // spark.sql.legacy.castComplexTypesToString.enabled
-  // When true, maps and structs are wrapped by [] in casting to strings, and
-  // NULL elements of structs/maps/arrays will be omitted while converting to
-  // strings. Otherwise, if this is false, which is the default, maps and
-  // structs are wrapped by {}, and NULL elements will be converted to "null".
-  std::string_view leftBracket = legacyCast_ ? "[" : "{";
-  std::string_view rightBracket = legacyCast_ ? "]" : "}";
-  std::string_view nullString = legacyCast_ ? "" : "null";
-
-  std::stringstream out;
-  std::string_view delimiter = ", ";
-  out << leftBracket;
-  if (rawSizes[row] == 0) {
-    out << rightBracket;
-    return out.str();
-  }
-  for (vector_size_t i = 0; i < rawSizes[row]; i++) {
-    if (i > 0) {
-      out << delimiter;
-    }
-    out << keys->toString(rawOffsets[row] + i) << " ->";
-    vector_size_t index = rawOffsets[row] + i;
-    if (values->isNullAt(index)) {
-      if (!nullString.empty()) {
-        out << " " << nullString;
-      }
-    } else {
-      out << " " << values->toString(index);
-    }
-  }
-  out << rightBracket;
-  return out.str();
+const VectorCastToStringOptions& SparkCastHooks::vectorCastToStringOptions()
+    const {
+  return vectorCastToStringOptions_;
 }
 } // namespace facebook::velox::functions::sparksql

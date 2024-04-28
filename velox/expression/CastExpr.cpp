@@ -304,9 +304,10 @@ VectorPtr CastExpr::castFromMap(
   switch (toType->kind()) {
     case TypeKind::VARCHAR: {
       auto* resultFlatVector = castResult->as<FlatVector<StringView>>();
+      const auto& options = hooks_->vectorCastToStringOptions();
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         try {
-          auto output = hooks_->castMapToString(inputMapVector, row);
+          auto output = inputMapVector->toString(row, options);
           auto writer = exec::StringWriter<>(resultFlatVector, row);
           writer.resize(output.size());
           std::memcpy(writer.data(), output.data(), output.size());

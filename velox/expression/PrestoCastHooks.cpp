@@ -74,9 +74,8 @@ bool PrestoCastHooks::truncate() const {
   return false;
 }
 
-std::string PrestoCastHooks::castMapToString(
-    const MapVector* mapVector,
-    const int row) const {
-  return mapVector->toString(row);
+const VectorCastToStringOptions& PrestoCastHooks::vectorCastToStringOptions()
+    const {
+  return vectorCastToStringOptions_;
 }
 } // namespace facebook::velox::exec

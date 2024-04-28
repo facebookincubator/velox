@@ -2636,9 +2636,7 @@ TEST_F(CastExprTest, mapToVarchar) {
   testCast(
       makeMapVector<StringView, int64_t>(
           {{{"1", 2}, {"3a", 4}}, {{"5", 6}, {"7", 8}}}),
-      makeFlatVector<std::string>(
-          {"2 elements starting at 0 {1 => 2, 3a => 4}",
-           "2 elements starting at 2 {5 => 6, 7 => 8}"}));
+      makeFlatVector<std::string>({"{1=2, 3a=4}", "{5=6, 7=8}"}));
 }
 
 } // namespace

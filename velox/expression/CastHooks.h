@@ -45,7 +45,8 @@ class CastHooks {
   // Returns whether to cast to int by truncate.
   virtual bool truncate() const = 0;
 
-  virtual std::string castMapToString(const MapVector* mapVector, const int row)
+  // Returns the options to cast from map vector to string.
+  virtual const VectorCastToStringOptions& vectorCastToStringOptions()
       const = 0;
 };
 } // namespace facebook::velox::exec

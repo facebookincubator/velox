@@ -32,7 +32,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
 
   void setLegacyCast(bool value) {
     queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kLegacyCast, std::to_string(value)},
+        {core::QueryConfig::kSparklegacyCastToStr, std::to_string(value)},
     });
   }
 

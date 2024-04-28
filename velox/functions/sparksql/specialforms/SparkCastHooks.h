@@ -49,10 +49,13 @@ class SparkCastHooks : public exec::CastHooks {
   // Returns true.
   bool truncate() const override;
 
-  std::string castMapToString(const MapVector* mapVector, const int row)
-      const override;
+  const VectorCastToStringOptions& vectorCastToStringOptions() const override;
 
  private:
   const bool legacyCast_;
+  VectorCastToStringOptions vectorCastToStringOptions_ = {
+      .emptyElementResult =
+          VectorCastToStringOptions::EmptyElementResult::emptyBraces,
+      .separator = " ->"};
 };
 } // namespace facebook::velox::functions::sparksql
