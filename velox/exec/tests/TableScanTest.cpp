@@ -380,6 +380,45 @@ TEST_F(TableScanTest, columnPruning) {
   assertQuery(op, {filePath}, "SELECT c3, c0 FROM tmp");
 }
 
+// The file orcFileBySpark.orc is copied from a partitioned Hive table created
+// by spark-sql using the following DDL:
+// CREATE TABLE hive_tmp_orc_partitioned ( c0 bigint, c1 bigint )
+// USING ORC
+// PARTITIONED BY (c1)
+// LOCATION 's3a://yourbucket/hive_tmp_orc_partitioned';
+//
+// INSERT INTO hive_tmp_orc_partitioned
+// VALUES (1, 1), (2, null),(3, null);
+//
+// The file orcFileBySpark.orc is renamed from the orc file in the non-null
+// partition.
+TEST_F(TableScanTest, DISABLED_orcFileBySpark) {
+  std::string filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/orcFileBySpark.orc");
+
+  auto split = HiveConnectorSplitBuilder(filePath)
+                   .partitionKey("c1", std::nullopt)
+                   .build();
+  auto outputType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  ColumnHandleMap assignments = {
+      {"c0", regularColumn("c0", BIGINT())},
+      {"c1", partitionKey("c1", BIGINT())}};
+
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(outputType)
+                .assignments(assignments)
+                .endTableScan()
+                .planNode();
+
+  auto c0Vector = vectorMaker_.flatVector<int64_t>({1});
+  auto pkeyVector = vectorMaker_.flatVectorNullable<int64_t>({std::nullopt});
+  RowVectorPtr data = vectorMaker_.rowVector({c0Vector, pkeyVector});
+  duckDbQueryRunner_.createTable("tmp", {data});
+  std::string duckdbSql = "SELECT * FROM tmp";
+  assertQuery(op, split, duckdbSql);
+}
+
 TEST_F(TableScanTest, timestamp) {
   vector_size_t size = 10'000;
   auto rowVector = makeRowVector(
