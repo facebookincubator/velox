@@ -29,6 +29,35 @@ WindowPartition::WindowPartition(
   for (int i = 0; i < inputMapping_.size(); i++) {
     columns_.emplace_back(data_->columnAt(inputMapping_[i]));
   }
+
+  complete_ = true;
+}
+
+WindowPartition::WindowPartition(
+    RowContainer* data,
+    const std::vector<column_index_t>& inputMapping,
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
+    : data_(data), inputMapping_(inputMapping), sortKeyInfo_(sortKeyInfo) {
+  for (int i = 0; i < inputMapping_.size(); i++) {
+    columns_.emplace_back(data_->columnAt(inputMapping_[i]));
+  }
+
+  rows_.clear();
+  partition_ = folly::Range(rows_.data(), rows_.size());
+  complete_ = false;
+}
+
+void WindowPartition::addRows(const std::vector<char*>& rows) {
+  rows_.insert(rows_.end(), rows.begin(), rows.end());
+  partition_ = folly::Range(rows_.data(), rows_.size());
+}
+
+void WindowPartition::clearOutputRows(vector_size_t numRows) {
+  if (!complete_) {
+    data_->eraseRows(folly::Range<char**>(rows_.data(), numRows));
+    rows_.erase(rows_.begin(), rows_.begin() + numRows);
+    startRow_ += numRows;
+  }
 }
 
 void WindowPartition::extractColumn(
@@ -51,7 +80,7 @@ void WindowPartition::extractColumn(
     vector_size_t resultOffset,
     const VectorPtr& result) const {
   RowContainer::extractColumn(
-      partition_.data() + partitionOffset - offsetInPartition(),
+      partition_.data() + partitionOffset - startRow(),
       numRows,
       columns_[columnIndex],
       resultOffset,
@@ -63,6 +92,7 @@ void WindowPartition::extractNulls(
     vector_size_t partitionOffset,
     vector_size_t numRows,
     const BufferPtr& nullsBuffer) const {
+  VELOX_CHECK(isComplete());
   RowContainer::extractNulls(
       partition_.data() + partitionOffset,
       numRows,
@@ -98,6 +128,7 @@ WindowPartition::extractNulls(
     const BufferPtr& frameStarts,
     const BufferPtr& frameEnds,
     BufferPtr* nulls) const {
+  VELOX_CHECK(isComplete());
   VELOX_CHECK(validRows.hasSelections(), "Buffer has no active rows");
   auto [minFrame, maxFrame] =
       findMinMaxFrameBounds(validRows, frameStarts, frameEnds);
@@ -163,8 +194,8 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
       peerEnd = i;
       while (peerEnd <= lastPartitionRow) {
         if (peerCompare(
-                partition_[peerStart - offsetInPartition()],
-                partition_[peerEnd - offsetInPartition()])) {
+                partition_[peerStart - startRow_],
+                partition_[peerEnd - startRow_])) {
           break;
         }
         peerEnd++;
@@ -321,6 +352,7 @@ void WindowPartition::computeKRangeFrameBounds(
     vector_size_t numRows,
     const vector_size_t* rawPeerBuffer,
     vector_size_t* rawFrameBounds) const {
+  VELOX_CHECK(isComplete());
   // Start bounds require first match. End bounds require last match.
   if (sortKeyInfo_[0].second.isAscending()) {
     updateKRangeFrameBounds<true>(

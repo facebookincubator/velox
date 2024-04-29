@@ -671,11 +671,9 @@ RowVectorPtr Window::getOutput() {
     }
   }
 
-  if (currentPartition_->supportRowsStreaming() &&
+  if (!currentPartition_->isComplete() &&
       partitionOffset_ == currentPartition_->numRows()) {
-    if (!currentPartition_->buildNextRows()) {
-      return nullptr;
-    }
+    return nullptr;
   }
 
   auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);
@@ -684,6 +682,7 @@ RowVectorPtr Window::getOutput() {
 
   // Compute the output values of window functions.
   auto numResultRows = callApplyLoop(numOutputRows, result);
+  currentPartition_->clearOutputRows(numResultRows);
   return numResultRows < numOutputRows
       ? std::dynamic_pointer_cast<RowVector>(result->slice(0, numResultRows))
       : result;
