@@ -118,7 +118,9 @@ class MapConcatFunction : public exec::VectorFunction {
       for (vector_size_t i = 1; i < mapSize; i++) {
         if (combinedKeys->equalValueAt(
                 combinedKeys.get(), mapOffset + i, mapOffset + i - 1)) {
-          if (FLAGS_velox_exception_on_duplicate_map_values) {
+          const auto& config = context.execCtx()->queryCtx()->queryConfig();
+          const auto sparkThrowExceptionOnDuplicateMapEntry = config.sparkThrowExceptionOnDuplicateMapEntry();
+          if (sparkThrowExceptionOnDuplicateMapEntry) {
             // throw exception if flag is enabled and duplicates are found
             throw std::invalid_argument("Duplicate keys found in map");
           }

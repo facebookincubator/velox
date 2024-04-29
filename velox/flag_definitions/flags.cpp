@@ -105,8 +105,3 @@ DEFINE_bool(
     "exception. This is only used by test to control the test error output size");
 
 DEFINE_bool(velox_memory_use_hugepages, true, "Use explicit huge pages");
-
-DEFINE_bool(
-    velox_exception_on_duplicate_map_values,
-    false,
-    "Show exception when duplicate map values are found, required in Gluten for Spark map functions.");

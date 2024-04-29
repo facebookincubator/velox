@@ -303,6 +303,10 @@ class QueryConfig {
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
+  /// The 
+  static constexpr const char* kSparkThrowExceptionOnDuplicateMapEntry =
+      "spark.throw_exception_on_duplicate_map_entry";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -651,6 +655,10 @@ class QueryConfig {
     auto value = id.value();
     VELOX_CHECK_GE(value, 0, "Invalid Spark partition id.");
     return value;
+  }
+
+  bool sparkThrowExceptionOnDuplicateMapEntry() const {
+    return get<bool>(kSparkThrowExceptionOnDuplicateMapEntry, false);
   }
 
   bool exprTrackCpuUsage() const {

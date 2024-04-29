@@ -17,9 +17,6 @@
 #pragma once
 
 #include <string>
-#include <gflags/gflags.h>
-
-DECLARE_bool(velox_exception_on_duplicate_map_values);
 
 namespace facebook::velox::functions {
 

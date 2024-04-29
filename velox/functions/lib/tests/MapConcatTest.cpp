@@ -28,6 +28,18 @@ class MapConcatTest : public FunctionBaseTest {
         "map_concat_empty_nulls");
   }
 
+  void enableThrowExceptionOnDuplicateMapEntry() {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSparkThrowExceptionOnDuplicateMapEntry, "true"},
+    });
+  }
+
+  void disableThrowExceptionOnDuplicateMapEntry() {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSparkThrowExceptionOnDuplicateMapEntry, "false"},
+    });
+  }
+
   template <typename TKey, typename TValue>
   static std::vector<TKey> mapKeys(const std::map<TKey, TValue>& m) {
     std::vector<TKey> keys;
@@ -225,11 +237,26 @@ TEST_F(MapConcatTest, duplicateKeys) {
         << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
         << result->toString(i);
   }
+}
 
-  FLAGS_velox_exception_on_duplicate_map_values = true;
+TEST_F(MapConcatTest, duplicateKeysThrowException) {
+  vector_size_t size = 1'000;
+
+  std::map<std::string, int32_t> a = {
+      {"a1", 1}, {"a2", 2}, {"a3", 3}, {"a4", 4}};
+  std::map<std::string, int32_t> b = {
+      {"b1", 1}, {"b2", 2}, {"b3", 3}, {"b4", 4}, {"a2", -1}};
+  auto aMap = makeMapVector(size, a);
+  auto bMap = makeMapVector(size, b);
+
+  enableThrowExceptionOnDuplicateMapEntry();
   EXPECT_THROW(
       evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap})),
       VeloxUserError);
+
+  disableThrowExceptionOnDuplicateMapEntry();
+  auto result =
+      evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap}));
 }
 
 TEST_F(MapConcatTest, partiallyPopulated) {
