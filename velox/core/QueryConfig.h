@@ -303,7 +303,7 @@ class QueryConfig {
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
-  /// The 
+  /// The config to throw exception on duplicate map entry.
   static constexpr const char* kSparkThrowExceptionOnDuplicateMapEntry =
       "spark.throw_exception_on_duplicate_map_entry";
 
