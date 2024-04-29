@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
@@ -250,9 +251,9 @@ TEST_F(MapConcatTest, duplicateKeysThrowException) {
   auto bMap = makeMapVector(size, b);
 
   enableThrowExceptionOnDuplicateMapEntry();
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap})),
-      VeloxUserError);
+      "Duplicate map keys (a2) are not allowed");
 
   disableThrowExceptionOnDuplicateMapEntry();
   auto result =
