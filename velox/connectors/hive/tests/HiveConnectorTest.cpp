@@ -63,6 +63,11 @@ groupSubfields(const std::vector<Subfield>& subfields) {
   return grouped;
 }
 
+bool mapKeyIsNotNull(const ScanSpec& mapSpec) {
+  return dynamic_cast<IsNotNull*>(
+      mapSpec.childByName(ScanSpec::kMapKeysFieldName)->filter());
+}
+
 TEST_F(HiveConnectorTest, hiveConfig) {
   ASSERT_EQ(
       HiveConfig::insertExistingPartitionsBehaviorString(
@@ -210,7 +215,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_allSubscripts) {
         pool_.get());
     auto* c0 = scanSpec->childByName("c0");
     ASSERT_TRUE(c0->flatMapFeatureSelection().empty());
-    ASSERT_FALSE(c0->childByName(ScanSpec::kMapKeysFieldName)->filter());
+    ASSERT_TRUE(mapKeyIsNotNull(*c0));
     auto* values = c0->childByName(ScanSpec::kMapValuesFieldName);
     ASSERT_EQ(
         values->maxArrayElementsCount(),
@@ -229,7 +234,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_allSubscripts) {
       {},
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
-  ASSERT_FALSE(c0->childByName(ScanSpec::kMapKeysFieldName)->filter());
+  ASSERT_TRUE(mapKeyIsNotNull(*c0));
   auto* values = c0->childByName(ScanSpec::kMapValuesFieldName);
   ASSERT_EQ(
       values->maxArrayElementsCount(),
@@ -410,6 +415,25 @@ TEST_F(HiveConnectorTest, makeScanSpec_filterPartitionKey) {
       rowType, {}, filters, rowType, {{"ds", nullptr}}, {}, pool_.get());
   ASSERT_TRUE(scanSpec->childByName("c0")->projectOut());
   ASSERT_FALSE(scanSpec->childByName("ds")->projectOut());
+}
+
+TEST_F(HiveConnectorTest, makeScanSpec_prunedMapNonNullMapKey) {
+  auto rowType =
+      ROW({"c0"},
+          {ROW(
+              {{"c0c0", MAP(BIGINT(), MAP(BIGINT(), BIGINT()))},
+               {"c0c1", BIGINT()}})});
+  auto scanSpec = makeScanSpec(
+      rowType,
+      groupSubfields(makeSubfields({"c0.c0c1"})),
+      {},
+      nullptr,
+      {},
+      {},
+      pool_.get());
+  auto* c0 = scanSpec->childByName("c0");
+  ASSERT_EQ(c0->children().size(), 2);
+  ASSERT_TRUE(c0->childByName("c0c0")->isConstant());
 }
 
 TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {

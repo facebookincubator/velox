@@ -11,7 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-benchadapt==2024.3.20
-benchalerts==2024.1.10.1
-benchclients==2024.3.29.1
+--- a/Makefile
++++ b/Makefile
+@@ -3,7 +3,7 @@
+ EXEEXT=.exe
+ endif
+ CFLAGS=-O2
+-CPPFLAGS=-Iinclude
++CPPFLAGS=-Iinclude -fPIC
+ all: libstemmer.a stemwords$(EXEEXT)
+ libstemmer.a: $(snowball_sources:.c=.o)
+ 	$(AR) -cru $@ $^
