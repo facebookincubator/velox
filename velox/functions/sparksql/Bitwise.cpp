@@ -138,13 +138,13 @@ void registerBitwiseFunctions(const std::string& prefix) {
   registerFunction<BitCountFunction, int32_t, int64_t>({prefix + "bit_count"});
 
   registerFunction<BitGetFunction, int8_t, int8_t, int32_t>(
-      {prefix + "bit_get"});
+      {prefix + "bit_get", prefix + "getbit"});
   registerFunction<BitGetFunction, int8_t, int16_t, int32_t>(
-      {prefix + "bit_get"});
+      {prefix + "bit_get", prefix + "getbit"});
   registerFunction<BitGetFunction, int8_t, int32_t, int32_t>(
-      {prefix + "bit_get"});
+      {prefix + "bit_get", prefix + "getbit"});
   registerFunction<BitGetFunction, int8_t, int64_t, int32_t>(
-      {prefix + "bit_get"});
+      {prefix + "bit_get", prefix + "getbit"});
 
   registerFunction<ShiftLeftFunction, int32_t, int32_t, int32_t>(
       {prefix + "shiftleft"});

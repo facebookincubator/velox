@@ -41,6 +41,10 @@ Bitwise Functions
     The value of 'pos' argument must be between 0 and number of bits in 'x' - 1.
     Invalid 'pos' values result in an error.
 
+.. spark:function:: getbit(x, pos) -> tinyint
+
+    This is an alias for ``bit_get(x, pos)``.
+
 .. spark:function:: shiftleft(x, n) -> [same as x]
 
     Returns x bitwise left shifted by n bits. Supported types for 'x' are INTEGER and BIGINT.
