@@ -54,6 +54,7 @@ function install_build_prerequisites {
     build-essential \
     cmake \
     ccache \
+    curl \
     ninja-build \
     checkinstall \
     git \
