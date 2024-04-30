@@ -772,14 +772,12 @@ struct TimestampToMicrosFunction {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct MicrosToTimestampFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Timestamp>& result,
-      const TInput micros) {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result, const T& micros) {
     result = Timestamp::fromMicrosNoError(micros);
   }
 };
@@ -795,14 +793,12 @@ struct TimestampToMillisFunction {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct MillisToTimestampFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Timestamp>& result,
-      const TInput millis) {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result, const T& millis) {
     result = Timestamp::fromMillisNoError(millis);
   }
 };
