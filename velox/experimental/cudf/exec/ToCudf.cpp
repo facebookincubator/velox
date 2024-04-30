@@ -24,11 +24,19 @@ namespace facebook::velox::cudf_velox {
 
 bool CompileState::compile() {
   std::cout << "Calling cudfDriverAdapter" << std::endl;
-  return false;
-  /*
   auto operators = driver_.operators();
   auto& nodes = driverFactory_.planNodes;
+  std::cout << "Number of operators: " << operators.size() << std::endl;
+  for (auto& op : operators) {
+    std::cout << "  Operator: ID " << op->operatorId() << ": " << op->toString() << std::endl;
+  }
+  std::cout << "Number of plan nodes: " << nodes.size() << std::endl;
+  for (auto& node : nodes) {
+    std::cout << "  Plan node: ID " << node->id() << ": " << node->toString() << std::endl;
+  }
+  return false;
 
+  /*
   int32_t first = 0;
   int32_t operatorIndex = 0;
   int32_t nodeIndex = 0;
