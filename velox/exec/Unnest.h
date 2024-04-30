@@ -93,6 +93,8 @@ class Unnest : public Operator {
   // Next 'input_' row to process in getOutput().
   vector_size_t nextInputRow_{0};
 
+  // Allow the input values output at least once even the unnest cols is
+  // null/empty.
   const bool outer_;
 };
 } // namespace facebook::velox::exec
