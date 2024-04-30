@@ -13,8 +13,9 @@
 # limitations under the License.
 
 add_library(
-  velox_hive_iceberg_splitreader IcebergSplitReader.cpp IcebergSplit.cpp
-                                 PositionalDeleteFileReader.cpp)
+  velox_hive_iceberg_splitreader
+  IcebergSplitReader.cpp IcebergSplit.cpp PositionalDeleteFileReader.cpp
+  EqualityDeleteFileReader.cpp FilterUtil.cpp)
 
 target_link_libraries(velox_hive_iceberg_splitreader velox_connector
                       Folly::folly)

@@ -1761,6 +1761,27 @@ ExprSet::ExprSet(
   }
 }
 
+ExprSet::ExprSet(
+    const std::vector<std::shared_ptr<Expr>>& sources,
+    core::ExecCtx* execCtx)
+    : execCtx_(execCtx) {
+  clear();
+  exprs_ = sources;
+  std::vector<FieldReference*> allDistinctFields;
+  for (auto& expr : exprs_) {
+    Expr::mergeFields(
+        distinctFields_, multiplyReferencedFields_, expr->distinctFields());
+  }
+}
+
+void ExprSet::operator=(const ExprSet& another) {
+  exprs_ = another.exprs_;
+  distinctFields_ = another.distinctFields_;
+  multiplyReferencedFields_ = another.multiplyReferencedFields_;
+  toReset_ = another.toReset_;
+  memoizingExprs_ = another.memoizingExprs_;
+}
+
 namespace {
 void addStats(
     const exec::Expr& expr,
