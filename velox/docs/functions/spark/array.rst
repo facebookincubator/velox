@@ -196,6 +196,11 @@ Array Functions
         SELECT size(NULL, true); -- -1
         SELECT size(NULL, false); -- NULL
 
+.. function:: slice(array(E), start, length) -> array(E)
+
+    Returns a subarray starting from index ``start``(or starting from the end
+    if ``start`` is negative) with a length of ``length``.
+
 .. spark:function:: sort_array(array(E)) -> array(E)
 
     Returns an array which has the sorted order of the input array. The elements of array must

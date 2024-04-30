@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/Slice.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -48,6 +48,7 @@ namespace {
 /// After adjustment, for the output ArrayVector:
 /// rawOffsets vector [1, 4, 8]
 /// rawSizes vector   [2, 2, 2]
+template <TypeKind INDEX_TYPE>
 class SliceFunction : public exec::VectorFunction {
  public:
   void apply(
@@ -60,10 +61,11 @@ class SliceFunction : public exec::VectorFunction {
         args[0]->typeKind(),
         TypeKind::ARRAY,
         "Function slice() requires first argument of type ARRAY");
-    VELOX_USER_CHECK(
-        args[1]->typeKind() == TypeKind::INTEGER ||
-            args[1]->typeKind() == TypeKind::BIGINT,
-        "Function slice() requires second argument of type INTEGER or BIGINT");
+    VELOX_USER_CHECK_EQ(
+        args[1]->typeKind(),
+        INDEX_TYPE,
+        "Function slice() requires second argument of type {}",
+        velox::TypeTraits<INDEX_TYPE>::name);
     VELOX_USER_CHECK_EQ(
         args[1]->typeKind(),
         args[2]->typeKind(),
@@ -200,25 +202,43 @@ class SliceFunction : public exec::VectorFunction {
     return std::min(endIndex - start, length);
   }
 };
+} // namespace
 
-static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+template <TypeKind INDEX_TYPE>
+void registerSliceFunction(const std::string& prefix) {
+  using NativeType = typename TypeTraits<INDEX_TYPE>::NativeType;
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-  for (auto type : {"integer", "bigint"}) {
+  if constexpr (std::is_same_v<NativeType, int64_t>) {
     signatures.push_back(exec::FunctionSignatureBuilder()
                              .typeVariable("T")
                              .returnType("array(T)")
                              .argumentType("array(T)")
-                             .argumentType(type)
-                             .argumentType(type)
+                             .argumentType("bigint")
+                             .argumentType("bigint")
                              .build());
+  } else if constexpr (std::is_same_v<NativeType, int32_t>) {
+    signatures.push_back(exec::FunctionSignatureBuilder()
+                             .typeVariable("T")
+                             .returnType("array(T)")
+                             .argumentType("array(T)")
+                             .argumentType("integer")
+                             .argumentType("integer")
+                             .build());
+  } else {
+    VELOX_FAIL(
+        "Unsupported index type {} to register slice()",
+        velox::TypeTraits<INDEX_TYPE>::name);
   }
-  return signatures;
+
+  exec::registerVectorFunction(
+      prefix + "slice",
+      signatures,
+      std::make_unique<SliceFunction<INDEX_TYPE>>());
 }
 
-} // namespace
+template void registerSliceFunction<TypeKind::BIGINT>(
+    const std::string& prefix);
+template void registerSliceFunction<TypeKind::INTEGER>(
+    const std::string& prefix);
 
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_slice,
-    signatures(),
-    std::make_unique<SliceFunction>());
 } // namespace facebook::velox::functions
