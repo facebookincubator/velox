@@ -42,9 +42,15 @@ class SortBufferTest : public OperatorTestBase {
     rng_.seed(123);
   }
 
+  void TearDown() override {
+    pool_.reset();
+    rootPool_.reset();
+    OperatorTestBase::TearDown();
+  }
+
   common::SpillConfig getSpillConfig(const std::string& spillDir) const {
     return common::SpillConfig(
-        [&]() -> const std::string& { return spillDir; },
+        [spillDir]() -> const std::string& { return spillDir; },
         [&](uint64_t) {},
         "0.0.0",
         0,
@@ -73,11 +79,6 @@ class SortBufferTest : public OperatorTestBase {
       {true, true, false, CompareFlags::NullHandlingMode::kNullAsValue},
       {true, true, false, CompareFlags::NullHandlingMode::kNullAsValue}};
 
-  const int64_t maxBytes_ = 20LL << 20; // 20 MB
-  const std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::memoryManager()->addRootPool("SortBufferTest", maxBytes_)};
-  const std::shared_ptr<memory::MemoryPool> pool_{
-      rootPool_->addLeafChild("SortBufferTest", maxBytes_)};
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency())};
@@ -285,7 +286,7 @@ TEST_F(SortBufferTest, batchOutput) {
     SCOPED_TRACE(testData.debugString());
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = common::SpillConfig(
-        [&]() -> const std::string& { return spillDirectory->path; },
+        [&]() -> const std::string& { return spillDirectory->getPath(); },
         [&](uint64_t) {},
         "0.0.0",
         1000,
@@ -379,7 +380,7 @@ TEST_F(SortBufferTest, spill) {
     auto spillableReservationGrowthPct =
         testData.memoryReservationFailure ? 100000 : 100;
     auto spillConfig = common::SpillConfig(
-        [&]() -> const std::string& { return spillDirectory->path; },
+        [&]() -> const std::string& { return spillDirectory->getPath(); },
         [&](uint64_t) {},
         "0.0.0",
         1000,
@@ -453,7 +454,7 @@ TEST_F(SortBufferTest, emptySpill) {
   for (bool hasPostSpillData : {false, true}) {
     SCOPED_TRACE(fmt::format("hasPostSpillData {}", hasPostSpillData));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto spillConfig = getSpillConfig(spillDirectory->path);
+    auto spillConfig = getSpillConfig(spillDirectory->getPath());
     folly::Synchronized<common::SpillStats> spillStats;
     auto sortBuffer = std::make_unique<SortBuffer>(
         inputType_,

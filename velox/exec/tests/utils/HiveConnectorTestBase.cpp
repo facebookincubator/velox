@@ -17,15 +17,18 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 namespace facebook::velox::exec::test {
 
 HiveConnectorTestBase::HiveConnectorTestBase() {
   filesystems::registerLocalFileSystem();
+  tests::utils::registerFaultyFileSystem();
 }
 
 void HiveConnectorTestBase::SetUp() {
@@ -104,6 +107,19 @@ std::shared_ptr<exec::Task> HiveConnectorTestBase::assertQuery(
       plan, makeHiveConnectorSplits(filePaths), duckDbSql);
 }
 
+std::shared_ptr<Task> HiveConnectorTestBase::assertQuery(
+    const core::PlanNodePtr& plan,
+    const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
+    const std::string& duckDbSql,
+    const int32_t numPrefetchSplit) {
+  return AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(
+          core::QueryConfig::kMaxSplitPreloadPerDriver,
+          std::to_string(numPrefetchSplit))
+      .splits(splits)
+      .assertResults(duckDbSql);
+}
+
 std::vector<std::shared_ptr<TempFilePath>> HiveConnectorTestBase::makeFilePaths(
     int count) {
   std::vector<std::shared_ptr<TempFilePath>> filePaths;
@@ -172,7 +188,7 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
   for (auto filePath : filePaths) {
     splits.push_back(makeHiveConnectorSplit(
-        filePath->path,
+        filePath->getPath(),
         filePath->fileSize(),
         filePath->fileModifiedTime(),
         0,

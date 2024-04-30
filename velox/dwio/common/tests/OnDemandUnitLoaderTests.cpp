@@ -26,12 +26,13 @@ using facebook::velox::dwio::common::LoadUnit;
 using facebook::velox::dwio::common::OnDemandUnitLoaderFactory;
 using facebook::velox::dwio::common::UnitLoader;
 using facebook::velox::dwio::common::UnitLoaderFactory;
+using facebook::velox::dwio::common::test::getUnitsLoadedWithFalse;
 using facebook::velox::dwio::common::test::LoadUnitMock;
 using facebook::velox::dwio::common::test::ReaderMock;
 
 TEST(OnDemandUnitLoaderTests, LoadsCorrectlyWithReader) {
   size_t blockedOnIoCount = 0;
-  OnDemandUnitLoaderFactory factory([&](uint64_t) { ++blockedOnIoCount; });
+  OnDemandUnitLoaderFactory factory([&](auto) { ++blockedOnIoCount; });
   ReaderMock readerMock{{10, 20, 30}, {0, 0, 0}, factory};
   EXPECT_EQ(readerMock.unitsLoaded(), std::vector<bool>({false, false, false}));
   EXPECT_EQ(blockedOnIoCount, 0);
@@ -96,7 +97,7 @@ TEST(OnDemandUnitLoaderTests, LoadsCorrectlyWithNoCallback) {
 
 TEST(OnDemandUnitLoaderTests, UnitOutOfRange) {
   OnDemandUnitLoaderFactory factory(nullptr);
-  std::vector<bool> unitsLoaded(1, false);
+  std::vector<std::atomic_bool> unitsLoaded(getUnitsLoadedWithFalse(1));
   std::vector<std::unique_ptr<LoadUnit>> units;
   units.push_back(std::make_unique<LoadUnitMock>(10, 0, unitsLoaded, 0));
 
@@ -111,7 +112,7 @@ TEST(OnDemandUnitLoaderTests, UnitOutOfRange) {
 
 TEST(OnDemandUnitLoaderTests, CanRequestUnitMultipleTimes) {
   OnDemandUnitLoaderFactory factory(nullptr);
-  std::vector<bool> unitsLoaded(1, false);
+  std::vector<std::atomic_bool> unitsLoaded(getUnitsLoadedWithFalse(1));
   std::vector<std::unique_ptr<LoadUnit>> units;
   units.push_back(std::make_unique<LoadUnitMock>(10, 0, unitsLoaded, 0));
 

@@ -190,7 +190,8 @@ TEST_F(S3FileSystemTest, writeFileAndRead) {
   auto hiveConfig = minioServer_->hiveConfig();
   filesystems::S3FileSystem s3fs(hiveConfig);
   auto pool = memory::memoryManager()->addLeafPool("S3FileSystemTest");
-  auto writeFile = s3fs.openFileForWrite(s3File, {{}, pool.get()});
+  auto writeFile =
+      s3fs.openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
   auto s3WriteFile = dynamic_cast<filesystems::S3WriteFile*>(writeFile.get());
   std::string dataContent =
       "Dance me to your beauty with a burning violin"
@@ -251,5 +252,14 @@ TEST_F(S3FileSystemTest, writeFileAndRead) {
   }
   // Verify the last chunk.
   ASSERT_EQ(readFile->pread(contentSize * 250'000, contentSize), dataContent);
+}
+
+TEST_F(S3FileSystemTest, invalidConnectionSettings) {
+  auto hiveConfig =
+      minioServer_->hiveConfig({{"hive.s3.connect-timeout", "400"}});
+  VELOX_ASSERT_THROW(filesystems::S3FileSystem(hiveConfig), "Invalid duration");
+
+  hiveConfig = minioServer_->hiveConfig({{"hive.s3.socket-timeout", "abc"}});
+  VELOX_ASSERT_THROW(filesystems::S3FileSystem(hiveConfig), "Invalid duration");
 }
 } // namespace facebook::velox

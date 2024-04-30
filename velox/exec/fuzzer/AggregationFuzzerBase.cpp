@@ -405,7 +405,7 @@ velox::test::ResultOrError AggregationFuzzerBase::execute(
     int32_t spillPct{0};
     if (injectSpill) {
       spillDirectory = exec::test::TempDirectoryPath::create();
-      builder.spillDirectory(spillDirectory->path)
+      builder.spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kAggregationSpillEnabled, "true")
           .config(core::QueryConfig::kMaxSpillRunRows, randInt(32, 1L << 30));
@@ -787,7 +787,8 @@ void persistReproInfo(
 
 std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
     const std::string& prestoUrl,
-    const std::string& runnerName) {
+    const std::string& runnerName,
+    const uint32_t& reqTimeoutMs) {
   if (prestoUrl.empty()) {
     auto duckQueryRunner = std::make_unique<DuckQueryRunner>();
     duckQueryRunner->disableAggregateFunctions({
@@ -802,7 +803,10 @@ std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
     LOG(INFO) << "Using DuckDB as the reference DB.";
     return duckQueryRunner;
   } else {
-    return std::make_unique<PrestoQueryRunner>(prestoUrl, runnerName);
+    return std::make_unique<PrestoQueryRunner>(
+        prestoUrl,
+        runnerName,
+        static_cast<std::chrono::milliseconds>(reqTimeoutMs));
     LOG(INFO) << "Using Presto as the reference DB.";
   }
 }

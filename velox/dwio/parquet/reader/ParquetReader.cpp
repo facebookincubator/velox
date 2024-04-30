@@ -235,6 +235,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   auto& schema = fileMetaData_->schema;
   uint32_t curSchemaIdx = schemaIdx;
   auto& schemaElement = schema[curSchemaIdx];
+  bool isRepeated = false;
+  bool isOptional = false;
 
   if (schemaElement.__isset.repetition_type) {
     if (schemaElement.repetition_type !=
@@ -244,6 +246,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     if (schemaElement.repetition_type ==
         thrift::FieldRepetitionType::REPEATED) {
       maxRepeat++;
+      isRepeated = true;
+    }
+    if (schemaElement.repetition_type ==
+        thrift::FieldRepetitionType::OPTIONAL) {
+      isOptional = true;
     }
   }
 
@@ -279,6 +286,10 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // value children.
           if (schema[parentSchemaIdx].converted_type ==
               thrift::ConvertedType::MAP) {
+            // TODO: the group names need to be checked. According to the spec,
+            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
+            // the name of the schema element being 'key_value' is
+            // also an indication of this is a map type
             VELOX_CHECK_EQ(
                 schemaElement.repetition_type,
                 thrift::FieldRepetitionType::REPEATED);
@@ -296,7 +307,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 std::nullopt,
                 std::nullopt,
                 maxRepeat,
-                maxDefine);
+                maxDefine,
+                isOptional,
+                isRepeated);
           }
 
           // For backward-compatibility, a group annotated with MAP_KEY_VALUE
@@ -309,6 +322,12 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           VELOX_CHECK_EQ(children.size(), 1);
           const auto& child = children[0];
           auto type = child->type();
+          isRepeated = true;
+          // This level will not have the "isRepeated" info in the parquet
+          // schema since parquet schema will have a child layer which will have
+          // the "repeated info" which we are ignoring here, hence we set the
+          // isRepeated to true eg
+          // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
           return std::make_unique<ParquetTypeWithId>(
               std::move(type),
               std::move(*(ParquetTypeWithId*)child.get()).moveChildren(),
@@ -319,7 +338,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::nullopt,
               std::nullopt,
               maxRepeat + 1,
-              maxDefine);
+              maxDefine,
+              isOptional,
+              isRepeated);
         }
 
         default:
@@ -331,10 +352,14 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     } else {
       if (schemaElement.repetition_type ==
           thrift::FieldRepetitionType::REPEATED) {
-        VELOX_CHECK_LE(
-            children.size(), 2, "children size should not be larger than 2");
-        if (children.size() == 1) {
+        if (schema[parentSchemaIdx].converted_type ==
+            thrift::ConvertedType::LIST) {
+          // TODO: the group names need to be checked. According to spec,
+          // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+          // the name of the schema element being 'array' is
+          // also an indication of this is a list type
           // child of LIST
+          VELOX_CHECK_GE(children.size(), 1);
           auto type = TypeFactory<TypeKind::ARRAY>::create(children[0]->type());
           return std::make_unique<ParquetTypeWithId>(
               std::move(type),
@@ -346,9 +371,16 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::nullopt,
               std::nullopt,
               maxRepeat,
-              maxDefine);
-        } else if (children.size() == 2) {
+              maxDefine,
+              isOptional,
+              isRepeated);
+        } else if (
+            schema[parentSchemaIdx].converted_type ==
+                thrift::ConvertedType::MAP ||
+            schema[parentSchemaIdx].converted_type ==
+                thrift::ConvertedType::MAP_KEY_VALUE) {
           // children  of MAP
+          VELOX_CHECK_EQ(children.size(), 2);
           auto type = TypeFactory<TypeKind::MAP>::create(
               children[0]->type(), children[1]->type());
           return std::make_unique<ParquetTypeWithId>(
@@ -361,7 +393,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::nullopt,
               std::nullopt,
               maxRepeat,
-              maxDefine);
+              maxDefine,
+              isOptional,
+              isRepeated);
         }
       } else {
         // Row type
@@ -376,7 +410,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             std::nullopt,
             std::nullopt,
             maxRepeat,
-            maxDefine);
+            maxDefine,
+            isOptional,
+            isRepeated);
       }
     }
   } else { // leaf node
@@ -402,6 +438,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         logicalType_,
         maxRepeat,
         maxDefine,
+        isOptional,
+        isRepeated,
         precision,
         scale,
         type_length);
@@ -417,12 +455,14 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           std::move(children),
           curSchemaIdx,
           maxSchemaElementIdx,
-          columnIdx++,
+          columnIdx - 1, // was already incremented for leafTypePtr
           std::move(name),
           std::nullopt,
           std::nullopt,
           maxRepeat,
-          maxDefine - 1);
+          maxDefine - 1,
+          isOptional,
+          isRepeated);
     }
     return leafTypePtr;
   }
@@ -618,6 +658,9 @@ int64_t ReaderBase::rowGroupUncompressedSize(
     int32_t rowGroupIndex,
     const dwio::common::TypeWithId& type) const {
   if (type.column() != ParquetTypeWithId::kNonLeaf) {
+    VELOX_CHECK_LT(rowGroupIndex, fileMetaData_->row_groups.size());
+    VELOX_CHECK_LT(
+        type.column(), fileMetaData_->row_groups[rowGroupIndex].columns.size());
     return fileMetaData_->row_groups[rowGroupIndex]
         .columns[type.column()]
         .meta_data.total_uncompressed_size;

@@ -165,7 +165,7 @@ std::string capacityToString(int64_t capacity) {
 
 std::string MemoryPool::Stats::toString() const {
   return fmt::format(
-      "currentBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{}",
+      "currentBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{}",
       succinctBytes(currentBytes),
       succinctBytes(reservedBytes),
       succinctBytes(peakBytes),
@@ -176,7 +176,8 @@ std::string MemoryPool::Stats::toString() const {
       numReleases,
       numShrinks,
       numReclaims,
-      numCollisions);
+      numCollisions,
+      numCapacityGrowths);
 }
 
 bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
@@ -189,7 +190,8 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              numFrees,
              numReserves,
              numReleases,
-             numCollisions) ==
+             numCollisions,
+             numCapacityGrowths) ==
       std::tie(
              other.currentBytes,
              other.reservedBytes,
@@ -199,7 +201,8 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              other.numFrees,
              other.numReserves,
              other.numReleases,
-             other.numCollisions);
+             other.numCollisions,
+             other.numCapacityGrowths);
 }
 
 std::ostream& operator<<(std::ostream& os, const MemoryPool::Stats& stats) {
@@ -449,6 +452,11 @@ MemoryPoolImpl::~MemoryPoolImpl() {
       "Bad memory usage track state: {}",
       toString());
 
+  if (isRoot()) {
+    RECORD_HISTOGRAM_METRIC_VALUE(
+        kMetricMemoryPoolCapacityGrowCount, numCapacityGrowths_);
+  }
+
   if (destructionCb_ != nullptr) {
     destructionCb_(this);
   }
@@ -470,6 +478,7 @@ MemoryPool::Stats MemoryPoolImpl::statsLocked() const {
   stats.numReserves = numReserves_;
   stats.numReleases = numReleases_;
   stats.numCollisions = numCollisions_;
+  stats.numCapacityGrowths = numCapacityGrowths_;
   return stats;
 }
 
@@ -795,19 +804,14 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
 
   VELOX_CHECK_NULL(parent_);
 
+  ++numCapacityGrowths_;
   if (growCapacityCb_(requestor, size)) {
     TestValue::adjust(
         "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",
         this);
-    // NOTE: the memory reservation might still fail even if the memory grow
-    // callback succeeds. The reason is that we don't hold the root tracker's
-    // mutex lock while running the grow callback. Therefore, there is a
-    // possibility in theory that a concurrent memory reservation request
-    // might steal away the increased memory capacity after the grow callback
-    // finishes and before we increase the reservation. If it happens, we can
-    // simply fall back to retry the memory reservation from the leaf memory
-    // pool which should happen rarely.
-    return maybeIncrementReservation(size);
+    // NOTE: if memory arbitration succeeds, it should have already committed
+    // the reservation 'size' in the root memory pool.
+    return true;
   }
   VELOX_MEM_POOL_CAP_EXCEEDED(fmt::format(
       "Exceeded memory pool cap of {} with max {} when requesting {}, memory "
@@ -836,12 +840,16 @@ bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
       return false;
     }
   }
-  reservationBytes_ += size;
+  incrementReservationLocked(size);
+  return true;
+}
+
+void MemoryPoolImpl::incrementReservationLocked(uint64_t bytes) {
+  reservationBytes_ += bytes;
   if (!isLeaf()) {
-    cumulativeBytes_ += size;
+    cumulativeBytes_ += bytes;
     maybeUpdatePeakBytesLocked(reservationBytes_);
   }
-  return true;
 }
 
 void MemoryPoolImpl::release() {
@@ -1019,20 +1027,29 @@ uint64_t MemoryPoolImpl::shrink(uint64_t targetBytes) {
   return freeBytes;
 }
 
-uint64_t MemoryPoolImpl::grow(uint64_t bytes) noexcept {
+bool MemoryPoolImpl::grow(uint64_t growBytes, uint64_t reservationBytes) {
   if (parent_ != nullptr) {
-    return parent_->grow(bytes);
+    return parent_->grow(growBytes, reservationBytes);
   }
   // TODO: add to prevent from growing beyond the max capacity and the
   // corresponding support in memory arbitrator.
   std::lock_guard<std::mutex> l(mutex_);
   // We don't expect to grow a memory pool without capacity limit.
   VELOX_CHECK_NE(capacity_, kMaxMemory, "Can't grow with unlimited capacity");
-  VELOX_CHECK_LE(
-      capacity_ + bytes, maxCapacity_, "Can't grow beyond the max capacity");
-  capacity_ += bytes;
-  VELOX_CHECK_GE(capacity_, bytes);
-  return capacity_;
+  if (capacity_ + growBytes > maxCapacity_) {
+    return false;
+  }
+  if (reservationBytes_ + reservationBytes > capacity_ + growBytes) {
+    return false;
+  }
+
+  capacity_ += growBytes;
+  VELOX_CHECK_GE(capacity_, growBytes);
+  if (reservationBytes > 0) {
+    incrementReservationLocked(reservationBytes);
+    VELOX_CHECK_LE(reservationBytes, reservationBytes_);
+  }
+  return true;
 }
 
 void MemoryPoolImpl::abort(const std::exception_ptr& error) {
@@ -1069,6 +1086,14 @@ void MemoryPoolImpl::testingSetCapacity(int64_t bytes) {
   }
   std::lock_guard<std::mutex> l(mutex_);
   capacity_ = bytes;
+}
+
+void MemoryPoolImpl::testingSetReservation(int64_t bytes) {
+  if (parent_ != nullptr) {
+    return toImpl(parent_)->testingSetReservation(bytes);
+  }
+  std::lock_guard<std::mutex> l(mutex_);
+  reservationBytes_ = bytes;
 }
 
 bool MemoryPoolImpl::needRecordDbg(bool /* isAlloc */) {

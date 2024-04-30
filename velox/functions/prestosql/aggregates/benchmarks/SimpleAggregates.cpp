@@ -107,7 +107,7 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
     }
 
     filePath_ = TempFilePath::create();
-    writeToFile(filePath_->path, vectors);
+    writeToFile(filePath_->getPath(), vectors);
   }
 
   ~SimpleAggregatesBenchmark() override {
@@ -147,7 +147,8 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
     vector_size_t numResultRows = 0;
     auto task = makeTask(plan);
 
-    task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath_->path)));
+    task->addSplit(
+        "0", exec::Split(makeHiveConnectorSplit(filePath_->getPath())));
     task->noMoreSplits("0");
 
     suspender.dismiss();
@@ -164,7 +165,8 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
         "t",
         std::move(plan),
         0,
-        std::make_shared<core::QueryCtx>(executor_.get()));
+        std::make_shared<core::QueryCtx>(executor_.get()),
+        exec::Task::ExecutionMode::kParallel);
   }
 
  private:

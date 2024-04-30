@@ -74,8 +74,12 @@ class OutputBufferManagerTest : public testing::Test {
     auto queryCtx = std::make_shared<core::QueryCtx>(
         executor_.get(), core::QueryConfig(std::move(configSettings)));
 
-    auto task =
-        Task::create(taskId, std::move(planFragment), 0, std::move(queryCtx));
+    auto task = Task::create(
+        taskId,
+        std::move(planFragment),
+        0,
+        std::move(queryCtx),
+        Task::ExecutionMode::kParallel);
 
     bufferManager_->initializeTask(task, kind, numDestinations, numDrivers);
     return task;
@@ -717,8 +721,8 @@ TEST_F(OutputBufferManagerTest, destinationBuffer) {
       buffer.enqueue(makeSerializedPage(rowType_, 100));
     }
     DestinationBuffer destinationBuffer;
-    auto buffers = destinationBuffer.getData(
-        1, 0, noNotify, [] { return true; }, &buffer);
+    auto buffers =
+        destinationBuffer.getData(1, 0, noNotify, [] { return true; }, &buffer);
     ASSERT_TRUE(buffers.immediate);
     ASSERT_EQ(buffers.data.size(), 1);
     ASSERT_GT(buffers.data[0]->length(), 0);

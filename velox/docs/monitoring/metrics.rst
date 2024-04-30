@@ -156,6 +156,20 @@ Memory Management
      - Average
      - The average of total free memory capacity which is managed by the
        memory arbitrator.
+   * - arbitrator_free_reserved_capacity_bytes
+     - Average
+     - The average of free memory capacity reserved to ensure each query has
+       the minimal reuired capacity to run.
+   * - memory_pool_initial_capacity_bytes
+     - Histogram
+     - The distribution of a root memory pool's initial capacity in range of [0 256MB]
+       with 32 buckets. It is configured to report the capacity at P50, P90, P99,
+       and P100 percentiles.
+   * - memory_pool_capacity_growth_count
+     - Histogram
+     - The distribution of a root memory pool cappacity growth attemps through
+       memory arbitration in range of [0, 256] with 32 buckets. It is configured
+       to report the count at P50, P90, P99, and P100 percentiles.
    * - memory_pool_usage_leak_bytes
      - Sum
      - The leaf memory pool usage leak in bytes.
@@ -165,6 +179,11 @@ Memory Management
    * - memory_pool_capacity_leak_bytes
      - Sum
      - The root memory pool reservation leak in bytes.
+   * - memory_allocator_double_free_count
+     - Count
+     - Tracks the count of double frees in memory allocator, indicating the
+       possibility of buffer ownership issues when a buffer is freed more
+       than once.
 
 Spilling
 --------

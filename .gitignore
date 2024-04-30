@@ -280,6 +280,7 @@ settings.json
 
 # User's build configuration
 Makefile.config
+CMakeUserPresets.json
 
 # build, distribute, and bins (+ python proto bindings)
 build

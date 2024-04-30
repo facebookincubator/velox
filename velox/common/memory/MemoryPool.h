@@ -362,9 +362,15 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// 'targetBytes' is zero, the function frees all the free memory capacity.
   virtual uint64_t shrink(uint64_t targetBytes = 0) = 0;
 
-  /// Invoked to increase the memory pool's capacity by 'bytes'. The function
-  /// returns the memory pool's capacity after the growth.
-  virtual uint64_t grow(uint64_t bytes) noexcept = 0;
+  /// Invoked to increase the memory pool's capacity by 'growBytes' and commit
+  /// the reservation by 'reservationBytes'. The function makes the two updates
+  /// atomic. The function returns true if the updates succeed, otherwise false
+  /// and neither change will apply.
+  ///
+  /// NOTE: this should only be called by memory arbitrator when a root memory
+  /// pool tries to grow its capacity for a new reservation request which
+  /// exceeds its current capacity limit.
+  virtual bool grow(uint64_t growBytes, uint64_t reservationBytes = 0) = 0;
 
   /// Sets the memory reclaimer for this memory pool.
   ///
@@ -448,6 +454,11 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// The number of internal memory reservation collisions caused by
     /// concurrent memory requests.
     uint64_t numCollisions{0};
+    /// The number of memory capacity growth attempts through the memory
+    /// arbitration.
+    ///
+    /// NOTE: this only applies for the root memory pool.
+    uint64_t numCapacityGrowths{0};
 
     bool operator==(const Stats& rhs) const;
 
@@ -641,7 +652,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   uint64_t shrink(uint64_t targetBytes = 0) override;
 
-  uint64_t grow(uint64_t bytes) noexcept override;
+  bool grow(uint64_t growBytes, uint64_t reservationBytes = 0) override;
 
   void abort(const std::exception_ptr& error) override;
 
@@ -678,6 +689,8 @@ class MemoryPoolImpl : public MemoryPool {
   Stats stats() const override;
 
   void testingSetCapacity(int64_t bytes);
+
+  void testingSetReservation(int64_t bytes);
 
   MemoryManager* testingManager() const {
     return manager_;
@@ -839,6 +852,8 @@ class MemoryPoolImpl : public MemoryPool {
   // Tries to increment the reservation 'size' if it is within the limit and
   // returns true, otherwise the function returns false.
   bool maybeIncrementReservation(uint64_t size);
+
+  void incrementReservationLocked(uint64_t bytes);
 
   // Release memory reservation for an allocation free or memory release with
   // specified 'size'. If 'releaseOnly' is true, then we only release the unused
@@ -1017,20 +1032,26 @@ class MemoryPoolImpl : public MemoryPool {
 
   // Stats counters.
   // The number of memory allocations.
-  std::atomic<uint64_t> numAllocs_{0};
+  std::atomic_uint64_t numAllocs_{0};
 
   // The number of memory frees.
-  std::atomic<uint64_t> numFrees_{0};
+  std::atomic_uint64_t numFrees_{0};
 
   // The number of external memory reservations made through maybeReserve().
-  std::atomic<uint64_t> numReserves_{0};
+  std::atomic_uint64_t numReserves_{0};
 
   // The number of external memory releases made through release().
-  std::atomic<uint64_t> numReleases_{0};
+  std::atomic_uint64_t numReleases_{0};
 
   // The number of internal memory reservation collisions caused by concurrent
   // memory reservation requests.
-  std::atomic<uint64_t> numCollisions_{0};
+  std::atomic_uint64_t numCollisions_{0};
+
+  // The number of memory capacity growth attempts through the memory
+  // arbitration.
+  //
+  // NOTE: this only applies for root memory pool.
+  std::atomic_uint64_t numCapacityGrowths_{0};
 
   // Mutex for 'debugAllocRecords_'.
   std::mutex debugAllocMutex_;

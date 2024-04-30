@@ -129,8 +129,10 @@ struct SsdCacheStats {
   void operator=(const SsdCacheStats& other) {
     entriesWritten = tsanAtomicValue(other.entriesWritten);
     bytesWritten = tsanAtomicValue(other.bytesWritten);
+    checkpointsWritten = tsanAtomicValue(other.checkpointsWritten);
     entriesRead = tsanAtomicValue(other.entriesRead);
     bytesRead = tsanAtomicValue(other.bytesRead);
+    checkpointsRead = tsanAtomicValue(other.checkpointsRead);
     entriesCached = tsanAtomicValue(other.entriesCached);
     regionsCached = tsanAtomicValue(other.regionsCached);
     bytesCached = tsanAtomicValue(other.bytesCached);
@@ -151,8 +153,10 @@ struct SsdCacheStats {
 
   tsan_atomic<uint64_t> entriesWritten{0};
   tsan_atomic<uint64_t> bytesWritten{0};
+  tsan_atomic<uint64_t> checkpointsWritten{0};
   tsan_atomic<uint64_t> entriesRead{0};
   tsan_atomic<uint64_t> bytesRead{0};
+  tsan_atomic<uint64_t> checkpointsRead{0};
   tsan_atomic<uint64_t> entriesCached{0};
   tsan_atomic<uint64_t> regionsCached{0};
   tsan_atomic<uint64_t> bytesCached{0};
@@ -327,6 +331,11 @@ class SsdFile {
   // e.g. there was a crash during writing the checkpoint. Initializes
   // the files for making new checkpoints.
   void initializeCheckpoint();
+
+  // Writes 'iovecs' to the SSD file at the 'offset'. Returns true if the write
+  // succeeds; otherwise, log the error and return false.
+  bool
+  write(uint64_t offset, uint64_t length, const std::vector<iovec>& iovecs);
 
   // Synchronously logs that 'regions' are no longer valid in a possibly xisting
   // checkpoint.

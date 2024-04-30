@@ -1130,7 +1130,7 @@ TEST_F(AggregationTest, spillAll) {
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task = AssertQueryBuilder(plan)
-                  .spillDirectory(tempDirectory->path)
+                  .spillDirectory(tempDirectory->getPath())
                   .config(QueryConfig::kSpillEnabled, true)
                   .config(QueryConfig::kAggregationSpillEnabled, true)
                   .assertResults(results);
@@ -1581,7 +1581,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
     TestScopedSpillInjection scopedSpillInjection(100);
     auto task =
         AssertQueryBuilder(duckDbQueryRunner_)
-            .spillDirectory(tempDirectory->path)
+            .spillDirectory(tempDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .config(
@@ -1624,7 +1624,7 @@ TEST_F(AggregationTest, spillDuringOutputProcessing) {
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
-          .spillDirectory(tempDirectory->path)
+          .spillDirectory(tempDirectory->getPath())
           .config(QueryConfig::kSpillEnabled, true)
           .config(QueryConfig::kAggregationSpillEnabled, true)
           // Set very large output buffer size, the number of output rows is
@@ -1765,7 +1765,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, minSpillableMemoryReservation) {
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto task =
         AssertQueryBuilder(duckDbQueryRunner_)
-            .spillDirectory(spillDirectory->path)
+            .spillDirectory(spillDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .config(
@@ -1791,7 +1791,7 @@ TEST_F(AggregationTest, distinctWithSpilling) {
   core::PlanNodeId aggrNodeId;
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .spillDirectory(spillDirectory->path)
+                  .spillDirectory(spillDirectory->getPath())
                   .config(QueryConfig::kSpillEnabled, true)
                   .config(QueryConfig::kAggregationSpillEnabled, true)
                   .plan(PlanBuilder()
@@ -1815,7 +1815,7 @@ TEST_F(AggregationTest, spillingForAggrsWithDistinct) {
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
-          .spillDirectory(spillDirectory->path)
+          .spillDirectory(spillDirectory->getPath())
           .config(QueryConfig::kSpillEnabled, true)
           .config(QueryConfig::kAggregationSpillEnabled, true)
           .plan(PlanBuilder()
@@ -1843,7 +1843,7 @@ TEST_F(AggregationTest, spillingForAggrsWithSorting) {
     SCOPED_TRACE(sql);
     TestScopedSpillInjection scopedSpillInjection(100);
     auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                    .spillDirectory(spillDirectory->path)
+                    .spillDirectory(spillDirectory->getPath())
                     .config(QueryConfig::kSpillEnabled, true)
                     .config(QueryConfig::kAggregationSpillEnabled, true)
                     .plan(plan)
@@ -1889,7 +1889,7 @@ TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
-          .spillDirectory(spillDirectory->path)
+          .spillDirectory(spillDirectory->getPath())
           .config(QueryConfig::kSpillEnabled, true)
           .config(QueryConfig::kAggregationSpillEnabled, true)
           .plan(PlanBuilder()
@@ -2044,7 +2044,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
                             .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
                             .planNode())
                         .queryCtx(queryCtx)
-                        .spillDirectory(tempDirectory->path)
+                        .spillDirectory(tempDirectory->getPath())
                         .config(QueryConfig::kSpillEnabled, true)
                         .config(QueryConfig::kAggregationSpillEnabled, true)
                         .maxDrivers(1)
@@ -2184,7 +2184,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
                            .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
                            .planNode())
         .queryCtx(queryCtx)
-        .spillDirectory(tempDirectory->path)
+        .spillDirectory(tempDirectory->getPath())
         .config(QueryConfig::kSpillEnabled, true)
         .config(QueryConfig::kAggregationSpillEnabled, true)
         .maxDrivers(1)
@@ -2300,7 +2300,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
                 .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
                 .planNode())
             .queryCtx(queryCtx)
-            .spillDirectory(tempDirectory->path)
+            .spillDirectory(tempDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .maxDrivers(1)
@@ -2414,7 +2414,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
                 .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
                 .planNode())
             .queryCtx(queryCtx)
-            .spillDirectory(tempDirectory->path)
+            .spillDirectory(tempDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .maxDrivers(1)
@@ -2588,7 +2588,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
                 .capturePlanNodeId(aggregationPlanNodeId)
                 .planNode())
             .queryCtx(queryCtx)
-            .spillDirectory(tempDirectory->path)
+            .spillDirectory(tempDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .maxDrivers(1)
@@ -2704,7 +2704,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
         AssertQueryBuilder(nullptr)
             .plan(aggregationPlan)
             .queryCtx(queryCtx)
-            .spillDirectory(tempDirectory->path)
+            .spillDirectory(tempDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .maxDrivers(1)
@@ -2774,7 +2774,6 @@ void abortPool(memory::MemoryPool* pool) {
 } // namespace
 
 DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
-  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
   auto batches = makeVectors(rowType, 1000, 10);
 
@@ -2792,32 +2791,21 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
                 .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
                 .planNode())
-            .queryCtx(queryCtx)
             .copyResults(pool_.get());
 
-    folly::EventCount driverWait;
-    auto driverWaitKey = driverWait.prepareWait();
-    folly::EventCount testWait;
-    auto testWaitKey = testWait.prepareWait();
-
     std::atomic_bool injectOnce{true};
-    Operator* op;
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Driver::runInternal::noMoreInput",
-        std::function<void(Operator*)>(([&](Operator* testOp) {
-          if (testOp->operatorType() != "Aggregation") {
+        std::function<void(Operator*)>(([&](Operator* op) {
+          if (op->operatorType() != "Aggregation") {
             return;
           }
-          op = testOp;
           if (!injectOnce.exchange(false)) {
             return;
           }
@@ -2825,44 +2813,31 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
           ASSERT_EQ(
               driver->task()->enterSuspended(driver->state()),
               StopReason::kNone);
-          testWait.notify();
-          driverWait.wait(driverWaitKey);
+          testData.abortFromRootMemoryPool ? abortPool(op->pool()->root())
+                                           : abortPool(op->pool());
+          // We can't directly reclaim memory from this hash build operator as
+          // its driver thread is running and in suspension state.
+          ASSERT_GT(op->pool()->root()->currentBytes(), 0);
           ASSERT_EQ(
               driver->task()->leaveSuspended(driver->state()),
               StopReason::kAlreadyTerminated);
           VELOX_MEM_POOL_ABORTED("Memory pool aborted");
         })));
 
-    std::thread taskThread([&]() {
-      VELOX_ASSERT_THROW(
-          AssertQueryBuilder(
-              PlanBuilder()
-                  .values(batches)
-                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                  .planNode())
-              .queryCtx(queryCtx)
-              .maxDrivers(testData.numDrivers)
-              .assertResults(expectedResult),
-          "");
-    });
-
-    testWait.wait(testWaitKey);
-    ASSERT_TRUE(op != nullptr);
-    auto task = op->testingOperatorCtx()->task();
-    testData.abortFromRootMemoryPool ? abortPool(queryCtx->pool())
-                                     : abortPool(op->pool());
-    ASSERT_TRUE(op->pool()->aborted());
-    ASSERT_TRUE(queryCtx->pool()->aborted());
-    ASSERT_EQ(queryCtx->pool()->currentBytes(), 0);
-    driverWait.notify();
-    taskThread.join();
-    task.reset();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
+            .maxDrivers(testData.numDrivers)
+            .assertResults(expectedResult),
+        "Memory pool manually aborted");
     waitForAllTasksToBeDeleted();
   }
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
-  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
   auto batches = makeVectors(rowType, 1000, 10);
 
@@ -2880,72 +2855,50 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
                 .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
                 .planNode())
-            .queryCtx(queryCtx)
             .copyResults(pool_.get());
 
-    folly::EventCount driverWait;
-    auto driverWaitKey = driverWait.prepareWait();
-    folly::EventCount testWait;
-    auto testWaitKey = testWait.prepareWait();
-
     std::atomic_int numInputs{0};
-    Operator* op;
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Driver::runInternal::addInput",
-        std::function<void(Operator*)>(([&](Operator* testOp) {
-          if (testOp->operatorType() != "Aggregation") {
+        std::function<void(Operator*)>(([&](Operator* op) {
+          if (op->operatorType() != "Aggregation") {
             return;
           }
-          op = testOp;
-          ++numInputs;
-          if (numInputs != 2) {
+          if (++numInputs != 2) {
             return;
           }
           auto* driver = op->testingOperatorCtx()->driver();
           ASSERT_EQ(
               driver->task()->enterSuspended(driver->state()),
               StopReason::kNone);
-          testWait.notify();
-          driverWait.wait(driverWaitKey);
+          testData.abortFromRootMemoryPool ? abortPool(op->pool()->root())
+                                           : abortPool(op->pool());
+          // We can't directly reclaim memory from this hash build operator as
+          // its driver thread is running and in suspension state.
+          ASSERT_GT(op->pool()->root()->currentBytes(), 0);
           ASSERT_EQ(
               driver->task()->leaveSuspended(driver->state()),
               StopReason::kAlreadyTerminated);
+          ASSERT_TRUE(op->pool()->aborted());
+          ASSERT_TRUE(op->pool()->root()->aborted());
           VELOX_MEM_POOL_ABORTED("Memory pool aborted");
         })));
 
-    std::thread taskThread([&]() {
-      VELOX_ASSERT_THROW(
-          AssertQueryBuilder(
-              PlanBuilder()
-                  .values(batches)
-                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                  .planNode())
-              .queryCtx(queryCtx)
-              .maxDrivers(testData.numDrivers)
-              .assertResults(expectedResult),
-          "");
-    });
-
-    testWait.wait(testWaitKey);
-    ASSERT_TRUE(op != nullptr);
-    auto task = op->testingOperatorCtx()->task();
-    testData.abortFromRootMemoryPool ? abortPool(queryCtx->pool())
-                                     : abortPool(op->pool());
-    ASSERT_TRUE(op->pool()->aborted());
-    ASSERT_TRUE(queryCtx->pool()->aborted());
-    ASSERT_EQ(queryCtx->pool()->currentBytes(), 0);
-    driverWait.notify();
-    taskThread.join();
-    task.reset();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
+            .maxDrivers(testData.numDrivers)
+            .assertResults(expectedResult),
+        "Memory pool manually aborted");
     waitForAllTasksToBeDeleted();
   }
 }
@@ -3079,7 +3032,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
               .capturePlanNodeId(aggNodeId)
               .planNode(),
           duckDbQueryRunner_)
-          .spillDirectory(tempDirectory->path)
+          .spillDirectory(tempDirectory->getPath())
           .queryCtx(queryCtx)
           .config(QueryConfig::kSpillEnabled, true)
           .config(QueryConfig::kAggregationSpillEnabled, true)
@@ -3144,7 +3097,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
                              .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
                              .capturePlanNodeId(aggNodeId)
                              .planNode())
-          .spillDirectory(tempDirectory->path)
+          .spillDirectory(tempDirectory->getPath())
           .queryCtx(queryCtx)
           .config(QueryConfig::kSpillEnabled, true)
           .config(QueryConfig::kAggregationSpillEnabled, true)
@@ -3188,7 +3141,7 @@ TEST_F(AggregationTest, maxSpillBytes) {
     try {
       TestScopedSpillInjection scopedSpillInjection(100);
       AssertQueryBuilder(plan)
-          .spillDirectory(spillDirectory->path)
+          .spillDirectory(spillDirectory->getPath())
           .queryCtx(queryCtx)
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kAggregationSpillEnabled, true)
@@ -3233,7 +3186,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
     core::PlanNodeId aggrNodeId;
     auto task =
         AssertQueryBuilder(duckDbQueryRunner_)
-            .spillDirectory(spillDirectory->path)
+            .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, true)
             .config(core::QueryConfig::kAggregationSpillEnabled, true)
             .config(
@@ -3280,7 +3233,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     core::PlanNodeId aggrNodeId;
     auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                    .spillDirectory(spillDirectory->path)
+                    .spillDirectory(spillDirectory->getPath())
                     .config(core::QueryConfig::kSpillEnabled, true)
                     .config(core::QueryConfig::kAggregationSpillEnabled, true)
                     .config(
@@ -3352,7 +3305,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationOnNoMoreInput) {
     std::thread aggregationThread([&]() {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
-              .spillDirectory(spillDirectory->path)
+              .spillDirectory(spillDirectory->getPath())
               .config(core::QueryConfig::kSpillEnabled, true)
               .config(core::QueryConfig::kAggregationSpillEnabled, true)
               .queryCtx(aggregationQueryCtx)
@@ -3436,7 +3389,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationDuringOutput) {
     std::thread aggregationThread([&]() {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
-              .spillDirectory(spillDirectory->path)
+              .spillDirectory(spillDirectory->getPath())
               .config(core::QueryConfig::kSpillEnabled, true)
               .config(core::QueryConfig::kAggregationSpillEnabled, true)
               .config(

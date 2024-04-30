@@ -135,6 +135,10 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricArbitratorFreeCapacityBytes, facebook::velox::StatType::AVG);
 
+  DEFINE_METRIC(
+      kMetricArbitratorFreeReservedCapacityBytes,
+      facebook::velox::StatType::AVG);
+
   // Tracks the leaf memory pool usage leak in bytes.
   DEFINE_METRIC(
       kMetricMemoryPoolUsageLeakBytes, facebook::velox::StatType::SUM);
@@ -142,6 +146,31 @@ void registerVeloxMetrics() {
   // Tracks the leaf memory pool reservation leak in bytes.
   DEFINE_METRIC(
       kMetricMemoryPoolReservationLeakBytes, facebook::velox::StatType::SUM);
+
+  // The distribution of a root memory pool's initial capacity in range of [0,
+  // 256MB] with 32 buckets. It is configured to report the capacity at P50,
+  // P90, P99, and P100 percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricMemoryPoolInitialCapacityBytes,
+      8L << 20,
+      0,
+      256L << 20,
+      50,
+      90,
+      99,
+      100);
+
+  // The distribution of a root memory pool cappacity growth attempts through
+  // memory arbitration in range of [0, 256] with 32 buckets. It is configured
+  // to report the count at P50, P90, P99, and P100 percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricMemoryPoolCapacityGrowCount, 8, 0, 256, 50, 90, 99, 100);
+
+  // Tracks the count of double frees in memory allocator, indicating the
+  // possibility of buffer ownership issues when a buffer is freed more than
+  // once.
+  DEFINE_METRIC(
+      kMetricMemoryAllocatorDoubleFreeCount, facebook::velox::StatType::COUNT);
 
   /// ================== Spill related Counters =================
 

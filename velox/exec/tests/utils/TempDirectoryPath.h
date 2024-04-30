@@ -24,27 +24,39 @@
 
 namespace facebook::velox::exec::test {
 
-// It manages the lifetime of a temporary directory.
+/// Manages the lifetime of a temporary directory.
 class TempDirectoryPath {
  public:
-  static std::shared_ptr<TempDirectoryPath> create();
+  /// If 'enableFaultInjection' is true, we enable fault injection on the
+  /// created file directory.
+  static std::shared_ptr<TempDirectoryPath> create(
+      bool enableFaultInjection = false);
 
   virtual ~TempDirectoryPath();
-
-  const std::string path;
 
   TempDirectoryPath(const TempDirectoryPath&) = delete;
   TempDirectoryPath& operator=(const TempDirectoryPath&) = delete;
 
-  TempDirectoryPath() : path(createTempDirectory()) {}
-
-  static std::string createTempDirectory() {
-    char path[] = "/tmp/velox_test_XXXXXX";
-    const char* tempDirectoryPath = mkdtemp(path);
-    if (tempDirectoryPath == nullptr) {
-      throw std::logic_error("Cannot open temp directory");
-    }
-    return tempDirectoryPath;
+  /// If fault injection is enabled, the returned the file path has the faulty
+  /// file system prefix scheme. The velox fs then opens the directory through
+  /// the faulty file system. The actual file operation might either fails or
+  /// delegate to the actual file.
+  const std::string& getPath() const {
+    return path_;
   }
+
+ private:
+  static std::string createTempDirectory();
+
+  explicit TempDirectoryPath(bool enableFaultInjection)
+      : enableFaultInjection_(enableFaultInjection),
+        tempPath_(createTempDirectory()),
+        path_(
+            enableFaultInjection_ ? fmt::format("faulty:{}", tempPath_)
+                                  : tempPath_) {}
+
+  const bool enableFaultInjection_{false};
+  const std::string tempPath_;
+  const std::string path_;
 };
 } // namespace facebook::velox::exec::test

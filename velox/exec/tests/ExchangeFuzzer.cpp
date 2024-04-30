@@ -182,7 +182,7 @@ class ExchangeFuzzer : public VectorTestBase {
       // cleaning up the query if any portition of it fails.
       for (const auto& otherTask : tasks) {
         auto* taskPtr = otherTask.get();
-        otherTask->taskCompletionFuture(0)
+        otherTask->taskCompletionFuture()
             .via(executor_.get())
             .thenValue([&tasks, taskPtr](auto) {
               VELOX_CHECK(!taskPtr->isRunning());
@@ -494,6 +494,7 @@ class ExchangeFuzzer : public VectorTestBase {
         std::move(planFragment),
         destination,
         std::move(queryCtx),
+        Task::ExecutionMode::kParallel,
         std::move(consumer));
   }
 
@@ -525,7 +526,7 @@ int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
   memory::MemoryManagerOptions options;
   options.useMmapAllocator = true;
-  options.allocatorCapacity = 8UL << 30;
+  options.allocatorCapacity = 15UL << 30;
   options.useMmapArena = true;
   options.mmapArenaCapacityRatio = 1;
   memory::MemoryManager::initialize(options);

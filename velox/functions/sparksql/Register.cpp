@@ -24,9 +24,10 @@
 #include "velox/functions/lib/Repeat.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
-#include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
+#include "velox/functions/sparksql/ArrayFlattenFunction.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
+#include "velox/functions/sparksql/ArraySizeFunction.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
@@ -153,13 +154,13 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
 void registerFunctions(const std::string& prefix) {
   registerAllSpecialFormGeneralFunctions();
 
+  registerFunction<sparksql::ArraySizeFunction, int32_t, Array<Any>>(
+      {prefix + "array_size"});
+
   // Register size functions
   registerSize(prefix + "size");
 
   registerRegexpReplace(prefix);
-
-  registerFunction<JsonExtractScalarFunction, Varchar, Varchar, Varchar>(
-      {prefix + "get_json_object"});
 
   // Register string functions.
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
@@ -317,6 +318,8 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
   registerFunction<WeekFunction, int32_t, Timestamp>({prefix + "week_of_year"});
   registerFunction<WeekFunction, int32_t, Date>({prefix + "week_of_year"});
+  registerFunction<YearOfWeekFunction, int32_t, Date>(
+      {prefix + "year_of_week"});
 
   registerFunction<ToUtcTimestampFunction, Timestamp, Timestamp, Varchar>(
       {prefix + "to_utc_timestamp"});
@@ -407,6 +410,11 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "monotonically_increasing_id"});
 
   registerFunction<UuidFunction, Varchar, Constant<int64_t>>({prefix + "uuid"});
+
+  registerFunction<
+      ArrayFlattenFunction,
+      Array<Generic<T1>>,
+      Array<Array<Generic<T1>>>>({prefix + "flatten"});
 }
 
 } // namespace sparksql

@@ -258,7 +258,7 @@ const std::string& getColumnName(const common::Subfield& subfield) {
   VELOX_CHECK_GT(subfield.path().size(), 0);
   auto* field = dynamic_cast<const common::Subfield::NestedField*>(
       subfield.path()[0].get());
-  VELOX_CHECK(field);
+  VELOX_CHECK_NOT_NULL(field);
   return field->name();
 }
 
@@ -273,7 +273,7 @@ void checkColumnNameLowerCase(const std::shared_ptr<const Type>& type) {
 
     } break;
     case TypeKind::ROW: {
-      for (auto& outputName : type->asRow().names()) {
+      for (const auto& outputName : type->asRow().names()) {
         VELOX_CHECK(
             !std::any_of(outputName.begin(), outputName.end(), isupper));
       }
@@ -290,15 +290,15 @@ void checkColumnNameLowerCase(
     const SubfieldFilters& filters,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         infoColumns) {
-  for (auto& pair : filters) {
-    if (auto name = pair.first.toString();
-        isSynthesizedColumn(name, infoColumns)) {
+  for (const auto& filterIt : filters) {
+    const auto name = filterIt.first.toString();
+    if (isSynthesizedColumn(name, infoColumns)) {
       continue;
     }
-    auto& path = pair.first.path();
+    const auto& path = filterIt.first.path();
 
     for (int i = 0; i < path.size(); ++i) {
-      auto nestedField =
+      auto* nestedField =
           dynamic_cast<const common::Subfield::NestedField*>(path[i].get());
       if (nestedField == nullptr) {
         continue;
@@ -318,6 +318,20 @@ void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr) {
     checkColumnNameLowerCase(type);
   }
 }
+
+namespace {
+
+void filterOutNullMapKeys(const Type& rootType, common::ScanSpec& rootSpec) {
+  rootSpec.visit(rootType, [](const Type& type, common::ScanSpec& spec) {
+    if (type.isMap() && !spec.isConstant()) {
+      auto* keys = spec.childByName(common::ScanSpec::kMapKeysFieldName);
+      VELOX_CHECK_NOT_NULL(keys);
+      keys->addFilter(common::IsNotNull());
+    }
+  });
+}
+
+} // namespace
 
 std::shared_ptr<common::ScanSpec> makeScanSpec(
     const RowTypePtr& rowType,
@@ -348,7 +362,8 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     auto& type = rowType->childAt(i);
     auto it = outputSubfields.find(name);
     if (it == outputSubfields.end()) {
-      spec->addFieldRecursively(name, *type, i);
+      auto* fieldSpec = spec->addFieldRecursively(name, *type, i);
+      filterOutNullMapKeys(*type, *fieldSpec);
       filterSubfields.erase(name);
       continue;
     }
@@ -362,7 +377,9 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       }
       filterSubfields.erase(it);
     }
-    addSubfields(*type, subfieldSpecs, 1, pool, *spec->addField(name, i));
+    auto* fieldSpec = spec->addField(name, i);
+    addSubfields(*type, subfieldSpecs, 1, pool, *fieldSpec);
+    filterOutNullMapKeys(*type, *fieldSpec);
     subfieldSpecs.clear();
   }
 
@@ -376,6 +393,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       auto& type = dataColumns->findChild(fieldName);
       auto* fieldSpec = spec->getOrCreateChild(common::Subfield(fieldName));
       addSubfields(*type, subfieldSpecs, 1, pool, *fieldSpec);
+      filterOutNullMapKeys(*type, *fieldSpec);
       subfieldSpecs.clear();
     }
   }
@@ -450,10 +468,10 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
 
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
-    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     const Config* sessionProperties,
-    const std::shared_ptr<HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<HiveConnectorSplit>& hiveSplit) {
+    const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit) {
   configureReaderOptions(
       readerOptions,
       hiveConfig,
@@ -465,10 +483,10 @@ void configureReaderOptions(
 
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
-    const std::shared_ptr<HiveConfig>& hiveConfig,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     const Config* sessionProperties,
     const RowTypePtr& fileSchema,
-    const std::shared_ptr<HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::unordered_map<std::string, std::string>& tableParameters) {
   readerOptions.setLoadQuantum(hiveConfig->loadQuantum());
   readerOptions.setMaxCoalesceBytes(hiveConfig->maxCoalescedBytes());
@@ -502,10 +520,10 @@ void configureReaderOptions(
 void configureRowReaderOptions(
     dwio::common::RowReaderOptions& rowReaderOptions,
     const std::unordered_map<std::string, std::string>& tableParameters,
-    std::shared_ptr<common::ScanSpec> scanSpec,
-    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    const std::shared_ptr<common::MetadataFilter>& metadataFilter,
     const RowTypePtr& rowType,
-    std::shared_ptr<HiveConnectorSplit> hiveSplit) {
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit) {
   auto skipRowsIt =
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
   if (skipRowsIt != tableParameters.end()) {
@@ -569,12 +587,12 @@ bool applyPartitionFilter(
 } // namespace
 
 bool testFilters(
-    common::ScanSpec* scanSpec,
-    dwio::common::Reader* reader,
+    const common::ScanSpec* scanSpec,
+    const dwio::common::Reader* reader,
     const std::string& filePath,
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKey,
-    std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
+    const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeysHandle) {
   auto totalRows = reader->numberOfRows();
   const auto& fileTypeWithId = reader->typeWithId();
@@ -586,8 +604,11 @@ bool testFilters(
         // If missing column is partition key.
         auto iter = partitionKey.find(name);
         if (iter != partitionKey.end() && iter->second.has_value()) {
+          auto handlesIter = partitionKeysHandle.find(name);
+          VELOX_CHECK(handlesIter != partitionKeysHandle.end());
+
           return applyPartitionFilter(
-              (*partitionKeysHandle)[name]->dataType()->kind(),
+              handlesIter->second->dataType()->kind(),
               iter->second.value(),
               child->filter());
         }
@@ -724,7 +745,7 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     SubfieldFilters& filters,
     double& sampleRate) {
   auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
-  if (!call) {
+  if (call == nullptr) {
     return expr;
   }
   common::Filter* oldFilter = nullptr;
@@ -746,11 +767,13 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
       LOG(WARNING) << "Merging with " << oldFilter->toString();
     }
   }
+
   if (isNotExpr(expr, call, evaluator)) {
     auto inner = extractFiltersFromRemainingFilter(
         call->inputs()[0], evaluator, !negated, filters, sampleRate);
     return inner ? replaceInputs(call, {inner}) : nullptr;
   }
+
   if ((call->name() == "and" && !negated) ||
       (call->name() == "or" && negated)) {
     auto lhs = extractFiltersFromRemainingFilter(

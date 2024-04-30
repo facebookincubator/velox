@@ -226,6 +226,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         std::move(planFragment_),
         params.destination,
         std::move(queryCtx_),
+        Task::ExecutionMode::kParallel,
         // consumer
         [queue, copyResult = params.copyResult](
             const RowVectorPtr& vector, velox::ContinueFuture* future) {
@@ -277,7 +278,9 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     if (task_->error()) {
       // Wait for the task to finish (there's' a small period of time between
       // when the error is set on the Task and terminate is called).
-      task_->taskCompletionFuture(1'000'000).wait();
+      task_->taskCompletionFuture()
+          .within(std::chrono::microseconds(1'000'000))
+          .wait();
 
       // Wait for all task drivers to finish to avoid destroying the executor_
       // before task_ finished using it and causing a crash.
@@ -327,7 +330,8 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
         taskId_,
         std::move(planFragment_),
         params.destination,
-        std::move(queryCtx_));
+        std::move(queryCtx_),
+        Task::ExecutionMode::kSerial);
 
     if (!taskSpillDirectory_.empty()) {
       task_->setSpillDirectory(taskSpillDirectory_);

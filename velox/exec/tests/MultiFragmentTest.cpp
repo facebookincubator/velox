@@ -46,6 +46,15 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     exec::ExchangeSource::registerFactory(createLocalExchangeSource);
   }
 
+  void TearDown() override {
+    // There might be lingering exchange source on executor even after all tasks
+    // are deleted. This can cause memory leak because exchange source holds
+    // reference to memory pool. We need to make sure they are properly cleaned.
+    testingShutdownLocalExchangeSource();
+    vectors_.clear();
+    HiveConnectorTestBase::TearDown();
+  }
+
   static std::string makeTaskId(const std::string& prefix, int num) {
     return fmt::format("local://{}-{}", prefix, num);
   }
@@ -77,6 +86,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
         std::move(planFragment),
         destination,
         std::move(queryCtx),
+        Task::ExecutionMode::kParallel,
         std::move(consumer));
   }
 
@@ -97,11 +107,11 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       auto split = exec::Split(
           std::make_shared<connector::hive::HiveConnectorSplit>(
               kHiveConnectorId,
-              "file:" + filePath->path,
+              "file:" + filePath->getPath(),
               facebook::velox::dwio::common::FileFormat::DWRF),
           -1);
       task->addSplit("0", std::move(split));
-      VLOG(1) << filePath->path << "\n";
+      VLOG(1) << filePath->getPath() << "\n";
     }
     task->noMoreSplits("0");
   }
@@ -143,7 +153,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     filePaths_ = makeFilePaths(filePathCount);
     vectors_ = makeVectors(filePaths_.size(), rowsPerVector);
     for (int i = 0; i < filePaths_.size(); i++) {
-      writeToFile(filePaths_[i]->path, vectors_[i]);
+      writeToFile(filePaths_[i]->getPath(), vectors_[i]);
     }
     createDuckDbTable(vectors_);
   }
@@ -876,7 +886,7 @@ TEST_F(MultiFragmentTest, limit) {
       1'000, [](auto row) { return row; }, nullEvery(7))});
 
   auto file = TempFilePath::create();
-  writeToFile(file->path, {data});
+  writeToFile(file->getPath(), {data});
 
   // Make leaf task: Values -> PartialLimit(10) -> Repartitioning(0).
   auto leafTaskId = makeTaskId("leaf", 0);
@@ -890,7 +900,7 @@ TEST_F(MultiFragmentTest, limit) {
   leafTask->start(1);
 
   leafTask.get()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->path)));
+      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
 
   // Make final task: Exchange -> FinalLimit(10).
   auto plan = PlanBuilder()
@@ -2014,7 +2024,6 @@ TEST_F(MultiFragmentTest, compression) {
                                 .values({data}, false, kNumRepeats)
                                 .partitionedOutput({}, 1)
                                 .planNode();
-  const auto producerTaskId = "local://t1";
 
   const auto plan = test::PlanBuilder()
                         .exchange(asRowType(data->type()))
@@ -2024,7 +2033,9 @@ TEST_F(MultiFragmentTest, compression) {
   const auto expected =
       makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{6000000})});
 
-  const auto test = [&](float minCompressionRatio, bool expectSkipCompression) {
+  const auto test = [&](const std::string& producerTaskId,
+                        float minCompressionRatio,
+                        bool expectSkipCompression) {
     PartitionedOutput::testingSetMinCompressionRatio(minCompressionRatio);
     auto producerTask = makeTask(producerTaskId, producerPlan);
     producerTask->start(1);
@@ -2051,8 +2062,8 @@ TEST_F(MultiFragmentTest, compression) {
     }
   };
 
-  test(0.7, false);
-  test(0.0000001, true);
+  test("local://t1", 0.7, false);
+  test("local://t2", 0.0000001, true);
 }
 
 } // namespace

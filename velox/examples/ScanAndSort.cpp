@@ -130,7 +130,8 @@ int main(int argc, char** argv) {
       "my_write_task",
       writerPlanFragment,
       /*destination=*/0,
-      std::make_shared<core::QueryCtx>(executor.get()));
+      std::make_shared<core::QueryCtx>(executor.get()),
+      exec::Task::ExecutionMode::kParallel);
 
   // next() starts execution using the client thread. The loop pumps output
   // vectors out of the task (there are none in this query fragment).
@@ -159,7 +160,8 @@ int main(int argc, char** argv) {
       "my_read_task",
       readPlanFragment,
       /*destination=*/0,
-      std::make_shared<core::QueryCtx>(executor.get()));
+      std::make_shared<core::QueryCtx>(executor.get()),
+      exec::Task::ExecutionMode::kParallel);
 
   // Now that we have the query fragment and Task structure set up, we will
   // add data to it via `splits`.
@@ -168,7 +170,7 @@ int main(int argc, char** argv) {
   // HiveConnectorSplit for each file, using the same HiveConnector id defined
   // above, the local file path (the "file:" prefix specifies which FileSystem
   // to use; local, in this case), and the file format (DWRF/ORC).
-  for (auto& filePath : fs::directory_iterator(tempDir->path)) {
+  for (auto& filePath : fs::directory_iterator(tempDir->getPath())) {
     auto connectorSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
         kHiveConnectorId,
         "file:" + filePath.path().string(),

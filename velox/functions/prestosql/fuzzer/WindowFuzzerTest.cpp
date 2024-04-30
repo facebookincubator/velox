@@ -49,6 +49,12 @@ DEFINE_string(
     "source of truth. Otherwise, use DuckDB. Example: "
     "--presto_url=http://127.0.0.1:8080");
 
+DEFINE_uint32(
+    req_timeout_ms,
+    1000,
+    "Timeout in milliseconds for HTTP requests made to reference DB, "
+    "such as Presto. Example: --req_timeout_ms=2000");
+
 namespace facebook::velox::exec::test {
 namespace {
 
@@ -112,7 +118,8 @@ int main(int argc, char** argv) {
       std::shared_ptr<facebook::velox::exec::test::ResultVerifier>>
       customVerificationFunctions = {
           // Approx functions.
-          {"approx_distinct", std::make_shared<ApproxDistinctResultVerifier>()},
+          // https://github.com/facebookincubator/velox/issues/9531
+          {"approx_distinct", nullptr},
           {"approx_set", nullptr},
           {"approx_percentile", nullptr},
           {"approx_most_frequent", nullptr},
@@ -168,6 +175,7 @@ int main(int argc, char** argv) {
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   return Runner::run(
       initialSeed,
-      setupReferenceQueryRunner(FLAGS_presto_url, "window_fuzzer"),
+      setupReferenceQueryRunner(
+          FLAGS_presto_url, "window_fuzzer", FLAGS_req_timeout_ms),
       options);
 }

@@ -33,6 +33,7 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
@@ -56,9 +57,11 @@ class ExprTest : public testing::Test, public VectorTestBase {
 
   core::TypedExprPtr parseExpression(
       const std::string& text,
-      const RowTypePtr& rowType) {
+      const RowTypePtr& rowType,
+      const VectorPtr& complexConstants = nullptr) {
     auto untyped = parse::parseExpr(text, options_);
-    return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
+    return core::Expressions::inferTypes(
+        untyped, rowType, execCtx_->pool(), complexConstants);
   }
 
   core::TypedExprPtr parseExpression(
@@ -93,9 +96,27 @@ class ExprTest : public testing::Test, public VectorTestBase {
   template <typename T = exec::ExprSet>
   std::unique_ptr<T> compileExpression(
       const std::string& expr,
-      const RowTypePtr& rowType) {
-    auto parsedExpression = parseExpression(expr, rowType);
+      const RowTypePtr& rowType,
+      const VectorPtr& complexConstants = nullptr) {
+    auto parsedExpression = parseExpression(expr, rowType, complexConstants);
     return compileExpression<T>(parsedExpression);
+  }
+
+  std::unique_ptr<exec::ExprSet> compileNoConstantFolding(
+      const std::string& sql,
+      const RowTypePtr& rowType,
+      const VectorPtr& complexConstants = nullptr) {
+    auto expression = parseExpression(sql, rowType, complexConstants);
+    return compileNoConstantFolding(expression);
+  }
+
+  std::unique_ptr<exec::ExprSet> compileNoConstantFolding(
+      const core::TypedExprPtr& expression) {
+    std::vector<core::TypedExprPtr> expressions = {expression};
+    return std::make_unique<exec::ExprSet>(
+        std::move(expressions),
+        execCtx_.get(),
+        false /*enableConstantFolding*/);
   }
 
   std::unique_ptr<exec::ExprSet> compileMultiple(
@@ -770,8 +791,8 @@ TEST_P(ParameterizedExprTest, dictionaryAndConstantOverLazy) {
   auto row = makeRowVector({lazyVector});
   auto result = evaluate("plus5(c0)", row);
 
-  auto expected = makeFlatVector<int32_t>(
-      size, [](auto row) { return row + 5; }, isNullAt);
+  auto expected =
+      makeFlatVector<int32_t>(size, [](auto row) { return row + 5; }, isNullAt);
   assertEqualVectors(expected, result);
 
   // Wrap LazyVector in a dictionary (select only even rows).
@@ -1164,8 +1185,8 @@ TEST_P(ParameterizedExprTest, lazyVectors) {
 
   auto result = evaluate("c0 + coalesce(c0, 1)", row);
 
-  auto expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row * 2; }, nullptr);
+  auto expected =
+      makeFlatVector<int64_t>(size, [](auto row) { return row * 2; }, nullptr);
   assertEqualVectors(expected, result);
 
   // Make LazyVector with nulls
@@ -1175,8 +1196,8 @@ TEST_P(ParameterizedExprTest, lazyVectors) {
 
   result = evaluate("c0 + coalesce(c0, 1)", row);
 
-  expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row * 2; }, isNullAt);
+  expected =
+      makeFlatVector<int64_t>(size, [](auto row) { return row * 2; }, isNullAt);
   assertEqualVectors(expected, result);
 }
 
@@ -2415,7 +2436,7 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   // Enable saving vector and expression SQL for system errors only.
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   FLAGS_velox_save_input_on_expression_system_failure_path =
-      tempDirectory->path;
+      tempDirectory->getPath();
 
   try {
     evaluate("runtime_error(c0) + c1", data);
@@ -2449,7 +2470,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   }
 
   // Enable saving vector and expression SQL for all errors.
-  FLAGS_velox_save_input_on_expression_any_failure_path = tempDirectory->path;
+  FLAGS_velox_save_input_on_expression_any_failure_path =
+      tempDirectory->getPath();
   FLAGS_velox_save_input_on_expression_system_failure_path = "";
 
   try {
@@ -2712,6 +2734,39 @@ TEST_P(ParameterizedExprTest, constantToSql) {
           10,
           pool())),
       "NULL::STRUCT(a BOOLEAN, b STRUCT(c DOUBLE, d VARCHAR))");
+}
+
+TEST_P(ParameterizedExprTest, constantJsonToSql) {
+  core::TypedExprPtr expression = std::make_shared<const core::CallTypedExpr>(
+      VARCHAR(),
+      std::vector<core::TypedExprPtr>{makeConstantExpr("[1, 2, 3]", JSON())},
+      "json_format");
+
+  auto exprSet = compileNoConstantFolding(expression);
+
+  std::vector<VectorPtr> complexConstants;
+  auto sql = exprSet->expr(0)->toSql(&complexConstants);
+
+  auto copy =
+      compileNoConstantFolding(sql, ROW({}), makeRowVector(complexConstants));
+  ASSERT_EQ(
+      exprSet->toString(false /*compact*/), copy->toString(false /*compact*/))
+      << sql;
+}
+
+TEST_P(ParameterizedExprTest, lambdaToSql) {
+  auto exprSet = compileNoConstantFolding(
+      "transform(array[1, 2, 3], x -> (x + cardinality(array[10, 20, 30])))",
+      ROW({}));
+
+  std::vector<VectorPtr> complexConstants;
+  auto sql = exprSet->expr(0)->toSql(&complexConstants);
+
+  auto copy =
+      compileNoConstantFolding(sql, ROW({}), makeRowVector(complexConstants));
+  ASSERT_EQ(
+      exprSet->toString(false /*compact*/), copy->toString(false /*compact*/))
+      << sql;
 }
 
 TEST_P(ParameterizedExprTest, toSql) {

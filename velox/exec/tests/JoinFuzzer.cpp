@@ -405,15 +405,14 @@ std::vector<RowVectorPtr> flatten(const std::vector<RowVectorPtr>& vectors) {
 }
 
 RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
-  LOG(ERROR) << "Executing query plan with "
-             << executionStrategyToString(plan.executionStrategy)
-             << " strategy["
-             << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
-                     ? plan.numGroups
-                     : 0)
-             << " groups]" << (injectSpill ? " and spilling injection" : "")
-             << ": " << std::endl
-             << plan.plan->toString(true, true);
+  LOG(INFO) << "Executing query plan with "
+            << executionStrategyToString(plan.executionStrategy) << " strategy["
+            << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
+                    ? plan.numGroups
+                    : 0)
+            << " groups]" << (injectSpill ? " and spilling injection" : "")
+            << ": " << std::endl
+            << plan.plan->toString(true, true);
 
   AssertQueryBuilder builder(plan.plan);
   for (const auto& [planNodeId, nodeSplits] : plan.splits) {
@@ -431,9 +430,9 @@ RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
   int32_t spillPct{0};
   if (injectSpill) {
     spillDirectory = exec::test::TempDirectoryPath::create();
-    builder.config(core::QueryConfig::kSpillEnabled, "true")
-        .config(core::QueryConfig::kAggregationSpillEnabled, "true")
-        .spillDirectory(spillDirectory->path);
+    builder.config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kJoinSpillEnabled, true)
+        .spillDirectory(spillDirectory->getPath());
     spillPct = 10;
   }
 
@@ -983,7 +982,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   const auto tableScanDir = exec::test::TempDirectoryPath::create();
   addPlansWithTableScan(
-      tableScanDir->path,
+      tableScanDir->getPath(),
       joinType,
       nullAware,
       probeKeys,
@@ -1017,9 +1016,16 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       LOG(INFO) << "Testing plan #" << i << " with spilling";
       actual = execute(altPlans[i], /*=injectSpill=*/true);
       if (actual != nullptr && expected != nullptr) {
-        VELOX_CHECK(
-            assertEqualResults({expected}, {actual}),
-            "Logically equivalent plans produced different results");
+        try {
+          VELOX_CHECK(
+              assertEqualResults({expected}, {actual}),
+              "Logically equivalent plans produced different results");
+        } catch (const VeloxException& e) {
+          LOG(ERROR) << "Expected\n"
+                     << expected->toString(0, expected->size()) << "\nActual\n"
+                     << actual->toString(0, actual->size());
+          throw;
+        }
       } else {
         VELOX_CHECK(
             FLAGS_enable_oom_injection, "Got unexpected nullptr for results");
@@ -1206,24 +1212,25 @@ std::vector<std::vector<RowVectorPtr>> JoinFuzzer::splitInputByGroup(
 }
 
 void JoinFuzzer::go() {
-  VELOX_CHECK(
+  VELOX_USER_CHECK(
       FLAGS_steps > 0 || FLAGS_duration_sec > 0,
       "Either --steps or --duration_sec needs to be greater than zero.")
+  VELOX_USER_CHECK_GE(FLAGS_batch_size, 10, "Batch size must be at least 10.");
 
   const auto startTime = std::chrono::system_clock::now();
   size_t iteration = 0;
 
   while (!isDone(iteration, startTime)) {
-    LOG(INFO) << "==============================> Started iteration "
-              << iteration << " (seed: " << currentSeed_ << ")";
+    LOG(WARNING) << "==============================> Started iteration "
+                 << iteration << " (seed: " << currentSeed_ << ")";
 
     // Pick join type.
     const auto joinType = pickJoinType();
 
     verify(joinType);
 
-    LOG(INFO) << "==============================> Done with iteration "
-              << iteration;
+    LOG(WARNING) << "==============================> Done with iteration "
+                 << iteration;
 
     reSeed();
     ++iteration;

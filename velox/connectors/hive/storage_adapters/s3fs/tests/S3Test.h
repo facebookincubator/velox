@@ -21,7 +21,6 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/PortUtil.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
 #include "gtest/gtest.h"
@@ -35,9 +34,7 @@ static constexpr std::string_view kDummyPath = "s3://dummy/foo.txt";
 class S3Test : public testing::Test, public ::test::VectorTestBase {
  protected:
   void SetUp() override {
-    auto port = facebook::velox::exec::test::getFreePort();
-    minioServer_ =
-        std::make_unique<MinioServer>(fmt::format("127.0.0.1:{}", port));
+    minioServer_ = std::make_unique<MinioServer>();
     minioServer_->start();
     ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
   }
@@ -90,7 +87,8 @@ class S3Test : public testing::Test, public ::test::VectorTestBase {
         folly::Range<char*>(middle, sizeof(middle)),
         folly::Range<char*>(
             nullptr,
-            (char*)(uint64_t)(15 + kOneMB - 500000 - sizeof(head) - sizeof(middle) - sizeof(tail))),
+            (char*)(uint64_t)(15 + kOneMB - 500000 - sizeof(head) -
+                              sizeof(middle) - sizeof(tail))),
         folly::Range<char*>(tail, sizeof(tail))};
     ASSERT_EQ(15 + kOneMB, readFile->preadv(0, buffers));
     ASSERT_EQ(std::string_view(head, sizeof(head)), "aaaaabbbbbcc");

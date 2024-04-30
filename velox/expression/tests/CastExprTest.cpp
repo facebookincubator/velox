@@ -574,6 +574,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
 TEST_F(CastExprTest, stringToTimestamp) {
   std::vector<std::optional<std::string>> input{
       "1970-01-01",
+      "1970-01-01 00:00 America/Sao_Paulo",
       "2000-01-01",
       "1970-01-01 00:00:00",
       "2000-01-01 12:21:56",
@@ -582,11 +583,30 @@ TEST_F(CastExprTest, stringToTimestamp) {
   };
   std::vector<std::optional<Timestamp>> expected{
       Timestamp(0, 0),
+      Timestamp(10800, 0),
       Timestamp(946684800, 0),
       Timestamp(0, 0),
       Timestamp(946729316, 0),
       Timestamp(7200, 0),
       std::nullopt,
+  };
+  testCast<std::string, Timestamp>("timestamp", input, expected);
+
+  // Try with a different session timezone.
+  setTimezone("America/Los_Angeles");
+  input = {
+      "1970-01-01 00:00",
+      "1970-01-01 00:00 +00:00",
+      "1970-01-01 00:00 +01:00",
+      "1970-01-01 00:00 America/Sao_Paulo",
+      "2000-01-01 12:21:56Z",
+  };
+  expected = {
+      Timestamp(28800, 0),
+      Timestamp(0, 0),
+      Timestamp(-3600, 0),
+      Timestamp(10800, 0),
+      Timestamp(946729316, 0),
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
 }
@@ -765,7 +785,7 @@ TEST_F(CastExprTest, timestampAdjustToTimezone) {
           Timestamp(946713600, 0),
           Timestamp(0, 0),
           Timestamp(946758116, 0),
-          Timestamp(-21600, 0),
+          Timestamp(-50400, 0),
           std::nullopt,
           Timestamp(957164400, 0),
       });
@@ -2385,8 +2405,8 @@ class TestingDictionaryToFewerRowsFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     const auto size = rows.size();
-    auto indices = makeIndices(
-        size, [](auto /*row*/) { return 0; }, context.pool());
+    auto indices =
+        makeIndices(size, [](auto /*row*/) { return 0; }, context.pool());
 
     result = BaseVector::wrapInDictionary(nullptr, indices, size, args[0]);
   }
