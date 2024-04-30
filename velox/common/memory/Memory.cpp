@@ -61,6 +61,8 @@ std::unique_ptr<MemoryArbitrator> createArbitrator(
       {.kind = options.arbitratorKind,
        .capacity =
            std::min(options.arbitratorCapacity, options.allocatorCapacity),
+       .reservedCapacity = options.arbitratorReservedCapacity,
+       .memoryPoolReservedCapacity = options.memoryPoolReservedCapacity,
        .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
        .memoryReclaimWaitMs = options.memoryReclaimWaitMs,
        .arbitrationStateCheckCb = options.arbitrationStateCheckCb,
@@ -103,7 +105,12 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
   VELOX_USER_CHECK_GE(capacity(), 0);
   VELOX_CHECK_GE(allocator_->capacity(), arbitrator_->capacity());
   MemoryAllocator::alignmentCheck(0, alignment_);
-  defaultRoot_->grow(defaultRoot_->maxCapacity());
+  const bool ret = defaultRoot_->grow(defaultRoot_->maxCapacity(), 0);
+  VELOX_CHECK(
+      ret,
+      "Failed to set max capacity {} for {}",
+      succinctBytes(defaultRoot_->maxCapacity()),
+      defaultRoot_->name());
   const size_t numSharedPools =
       std::max(1, FLAGS_velox_memory_num_shared_leaf_pools);
   sharedLeafPools_.reserve(numSharedPools);
@@ -264,7 +271,6 @@ int64_t MemoryManager::getTotalBytes() const {
 
 size_t MemoryManager::numPools() const {
   size_t numPools = defaultRoot_->getChildCount();
-  VELOX_CHECK_GE(numPools, 0);
   {
     std::shared_lock guard{mutex_};
     numPools += pools_.size() - sharedLeafPools_.size();

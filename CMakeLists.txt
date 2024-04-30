@@ -123,7 +123,7 @@ option(
 option(VELOX_FORCE_COLORED_OUTPUT
        "Always produce ANSI-colored output (GNU/Clang only)." OFF)
 
-if(${VELOX_BUILD_MINIMAL})
+if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
@@ -339,10 +339,7 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-maybe-uninitialized \
          -Wno-unused-result \
          -Wno-format-overflow \
-         -Wno-strict-aliasing \
-         -Wno-type-limits \
-         -Wno-stringop-overflow \
-         -Wno-stringop-overread")
+         -Wno-strict-aliasing")
   endif()
 
   set(KNOWN_WARNINGS
@@ -361,6 +358,10 @@ if(${VELOX_ENABLE_GPU})
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    # it will fail later in the build otherwise
+    message(FATAL_ERROR "-DCMAKE_CUDA_ARCHITECTURES= must be set")
+  endif()
   if(CMAKE_BUILD_TYPE MATCHES Debug)
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
@@ -546,6 +547,9 @@ endif()
 
 set_source(xsimd)
 resolve_dependency(xsimd 10.0.0)
+
+set(stemmer_SOURCE BUNDLED)
+resolve_dependency(stemmer)
 
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)

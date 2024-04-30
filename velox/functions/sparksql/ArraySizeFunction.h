@@ -15,17 +15,20 @@
  */
 #pragma once
 
-#include <folly/Benchmark.h>
+#include <cmath>
+#include <type_traits>
+#include "velox/functions/Macros.h"
 
-namespace facebook::velox::functions::prestosql {
+namespace facebook::velox::functions::sparksql {
 
-#define ISJSONSCALAR_BENCHMARK_NAMED_PARAM(type, name, iter, jsonSize) \
-  BENCHMARK_RELATIVE_NAMED_PARAM(                                      \
-      name, type##_i_##iter##_jSize_##jsonSize, iter, #jsonSize)
+template <typename T>
+struct ArraySizeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
 
-#define ISJSONSCALAR_BENCHMARK_NAMED_PARAM_TWO_FUNCS(             \
-    type, func1, func2, iter, jsonSize)                           \
-  ISJSONSCALAR_BENCHMARK_NAMED_PARAM(type, func1, iter, jsonSize) \
-  ISJSONSCALAR_BENCHMARK_NAMED_PARAM(type, func2, iter, jsonSize)
-
-} // namespace facebook::velox::functions::prestosql
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& out,
+      const arg_type<velox::Array<Any>>& inputArray) {
+    out = inputArray.size();
+  }
+};
+} // namespace facebook::velox::functions::sparksql

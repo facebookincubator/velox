@@ -185,12 +185,14 @@ TypedExprPtr Expressions::inferTypes(
   VELOX_CHECK_NOT_NULL(expr);
 
   if (auto lambdaExpr = std::dynamic_pointer_cast<const LambdaExpr>(expr)) {
-    return resolveLambdaExpr(lambdaExpr, inputRow, lambdaInputTypes, pool);
+    return resolveLambdaExpr(
+        lambdaExpr, inputRow, lambdaInputTypes, pool, complexConstants);
   }
 
   if (auto call = std::dynamic_pointer_cast<const CallExpr>(expr)) {
     if (!expr->getInputs().empty()) {
-      if (auto returnType = tryResolveCallWithLambdas(call, inputRow, pool)) {
+      if (auto returnType = tryResolveCallWithLambdas(
+              call, inputRow, pool, complexConstants)) {
         return returnType;
       }
     }
@@ -199,8 +201,15 @@ TypedExprPtr Expressions::inferTypes(
   // try rebuilding complex constant type from vector
   if (auto fun = std::dynamic_pointer_cast<const CallExpr>(expr)) {
     if (fun->getFunctionName() == "__complex_constant") {
-      VELOX_CHECK(complexConstants);
+      VELOX_CHECK_NOT_NULL(
+          complexConstants,
+          "Expression contains __complex_constant function call, but complexConstants is missing")
+
       auto ccInputRow = complexConstants->as<RowVector>();
+      VELOX_CHECK_NOT_NULL(
+          ccInputRow,
+          "Expected RowVector for complexConstants: {}",
+          complexConstants->toString());
       auto name =
           std::dynamic_pointer_cast<const FieldAccessExpr>(fun->getInputs()[0])
               ->getFieldName();
@@ -277,7 +286,8 @@ TypedExprPtr Expressions::resolveLambdaExpr(
     const std::shared_ptr<const core::LambdaExpr>& lambdaExpr,
     const TypePtr& inputRow,
     const std::vector<TypePtr>& lambdaInputTypes,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const VectorPtr& complexConstants) {
   auto names = lambdaExpr->inputNames();
   auto body = lambdaExpr->body();
 
@@ -301,7 +311,7 @@ TypedExprPtr Expressions::resolveLambdaExpr(
   auto lambdaRow = ROW(std::move(names), std::move(types));
 
   return std::make_shared<LambdaTypedExpr>(
-      signature, inferTypes(body, lambdaRow, pool));
+      signature, inferTypes(body, lambdaRow, pool, complexConstants));
 }
 
 namespace {
@@ -396,7 +406,8 @@ const exec::FunctionSignature* findLambdaSignature(
 TypedExprPtr Expressions::tryResolveCallWithLambdas(
     const std::shared_ptr<const CallExpr>& callExpr,
     const TypePtr& inputRow,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const VectorPtr& complexConstants) {
   auto signature = findLambdaSignature(callExpr);
 
   if (signature == nullptr) {
@@ -409,7 +420,8 @@ TypedExprPtr Expressions::tryResolveCallWithLambdas(
   std::vector<TypePtr> childTypes(numArgs);
   for (auto i = 0; i < numArgs; ++i) {
     if (!isLambdaArgument(signature->argumentTypes()[i])) {
-      children[i] = inferTypes(callExpr->getInputs()[i], inputRow, pool);
+      children[i] = inferTypes(
+          callExpr->getInputs()[i], inputRow, pool, complexConstants);
       childTypes[i] = children[i]->type();
     }
   }
@@ -429,8 +441,12 @@ TypedExprPtr Expressions::tryResolveCallWithLambdas(
         lambdaTypes.push_back(type);
       }
 
-      children[i] =
-          inferTypes(callExpr->getInputs()[i], inputRow, lambdaTypes, pool);
+      children[i] = inferTypes(
+          callExpr->getInputs()[i],
+          inputRow,
+          lambdaTypes,
+          pool,
+          complexConstants);
     }
   }
 

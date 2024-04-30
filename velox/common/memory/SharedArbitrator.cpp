@@ -34,7 +34,7 @@ namespace {
 
 // Returns the max capacity to grow of memory 'pool'. The calculation is based
 // on a memory pool's max capacity and its current capacity.
-uint64_t maxGrowBytes(const MemoryPool& pool) {
+uint64_t maxGrowCapacity(const MemoryPool& pool) {
   return pool.maxCapacity() - pool.capacity();
 }
 
@@ -64,24 +64,7 @@ std::string memoryPoolAbortMessage(
   return out.str();
 }
 
-std::vector<SharedArbitrator::Candidate> getCandidateStats(
-    const std::vector<std::shared_ptr<MemoryPool>>& pools) {
-  std::vector<SharedArbitrator::Candidate> candidates;
-  candidates.reserve(pools.size());
-  for (const auto& pool : pools) {
-    auto reclaimableBytesOpt = pool->reclaimableBytes();
-    const uint64_t reclaimableBytes = reclaimableBytesOpt.value_or(0);
-    candidates.push_back(
-        {reclaimableBytesOpt.has_value(),
-         reclaimableBytes,
-         pool->freeBytes(),
-         pool->currentBytes(),
-         pool.get()});
-  }
-  return candidates;
-}
-
-void sortCandidatesByFreeCapacity(
+void sortCandidatesByReclaimableFreeCapacity(
     std::vector<SharedArbitrator::Candidate>& candidates) {
   std::sort(
       candidates.begin(),
@@ -92,28 +75,22 @@ void sortCandidatesByFreeCapacity(
       });
 
   TestValue::adjust(
-      "facebook::velox::memory::SharedArbitrator::sortCandidatesByFreeCapacity",
+      "facebook::velox::memory::SharedArbitrator::sortCandidatesByReclaimableFreeCapacity",
       &candidates);
 }
 
-void sortCandidatesByReclaimableMemory(
+void sortCandidatesByReclaimableUsedCapacity(
     std::vector<SharedArbitrator::Candidate>& candidates) {
   std::sort(
       candidates.begin(),
       candidates.end(),
       [](const SharedArbitrator::Candidate& lhs,
          const SharedArbitrator::Candidate& rhs) {
-        if (!lhs.reclaimable) {
-          return false;
-        }
-        if (!rhs.reclaimable) {
-          return true;
-        }
         return lhs.reclaimableBytes > rhs.reclaimableBytes;
       });
 
   TestValue::adjust(
-      "facebook::velox::memory::SharedArbitrator::sortCandidatesByReclaimableMemory",
+      "facebook::velox::memory::SharedArbitrator::sortCandidatesByReclaimableUsedCapacity",
       &candidates);
 }
 
@@ -169,67 +146,146 @@ const SharedArbitrator::Candidate& findCandidateWithLargestCapacity(
 } // namespace
 
 SharedArbitrator::SharedArbitrator(const MemoryArbitrator::Config& config)
-    : MemoryArbitrator(config), freeCapacity_(capacity_) {
-  RECORD_METRIC_VALUE(kMetricArbitratorFreeCapacityBytes, freeCapacity_);
+    : MemoryArbitrator(config),
+      freeReservedCapacity_(reservedCapacity_),
+      freeNonReservedCapacity_(capacity_ - freeReservedCapacity_) {
   VELOX_CHECK_EQ(kind_, config.kind);
+  updateFreeCapacityMetrics();
 }
 
 std::string SharedArbitrator::Candidate::toString() const {
   return fmt::format(
-      "CANDIDATE[{} RECLAIMABLE[{}] RECLAIMABLE_BYTES[{}] FREE_BYTES[{}]]",
+      "CANDIDATE[{}] RECLAIMABLE_BYTES[{}] FREE_BYTES[{}]]",
       pool->root()->name(),
-      reclaimable,
       succinctBytes(reclaimableBytes),
       succinctBytes(freeBytes));
 }
 
 SharedArbitrator::~SharedArbitrator() {
-  if (freeCapacity_ != capacity_) {
+  if (freeNonReservedCapacity_ + freeReservedCapacity_ != capacity_) {
     const std::string errMsg = fmt::format(
-        "\"There is unexpected free capacity not given back to arbitrator "
-        "on destruction: freeCapacity_ != capacity_ ({} vs {})\\n{}\"",
-        freeCapacity_,
+        "Unexpected free capacity leak in arbitrator: freeNonReservedCapacity_[{}] + freeReservedCapacity_[{}] != capacity_[{}])\\n{}",
+        freeNonReservedCapacity_,
+        freeReservedCapacity_,
         capacity_,
         toString());
     if (checkUsageLeak_) {
       VELOX_FAIL(errMsg);
     } else {
-      LOG(ERROR) << errMsg;
+      VELOX_MEM_LOG(ERROR) << errMsg;
     }
   }
+}
+
+std::vector<SharedArbitrator::Candidate> SharedArbitrator::getCandidateStats(
+    const std::vector<std::shared_ptr<MemoryPool>>& pools,
+    bool freeCapacityOnly) {
+  std::vector<SharedArbitrator::Candidate> candidates;
+  candidates.reserve(pools.size());
+  for (const auto& pool : pools) {
+    candidates.push_back(
+        {freeCapacityOnly ? 0 : reclaimableUsedCapacity(*pool),
+         reclaimableFreeCapacity(*pool),
+         pool->currentBytes(),
+         pool.get()});
+  }
+  return candidates;
+}
+
+void SharedArbitrator::updateFreeCapacityMetrics() const {
+  RECORD_METRIC_VALUE(
+      kMetricArbitratorFreeCapacityBytes,
+      freeNonReservedCapacity_ + freeReservedCapacity_);
+  RECORD_METRIC_VALUE(
+      kMetricArbitratorFreeReservedCapacityBytes, freeReservedCapacity_);
+}
+
+int64_t SharedArbitrator::maxReclaimableCapacity(const MemoryPool& pool) const {
+  return std::max<int64_t>(0, pool.capacity() - memoryPoolReservedCapacity_);
+}
+
+int64_t SharedArbitrator::reclaimableFreeCapacity(
+    const MemoryPool& pool) const {
+  return std::min<int64_t>(pool.freeBytes(), maxReclaimableCapacity(pool));
+}
+
+int64_t SharedArbitrator::reclaimableUsedCapacity(
+    const MemoryPool& pool) const {
+  const auto maxReclaimableBytes = maxReclaimableCapacity(pool);
+  const auto reclaimableBytes = pool.reclaimableBytes();
+  return std::min<int64_t>(maxReclaimableBytes, reclaimableBytes.value_or(0));
+}
+
+int64_t SharedArbitrator::minGrowCapacity(const MemoryPool& pool) const {
+  return std::max<int64_t>(
+      0,
+      std::min<int64_t>(pool.maxCapacity(), memoryPoolReservedCapacity_) -
+          pool.capacity());
 }
 
 uint64_t SharedArbitrator::growCapacity(
     MemoryPool* pool,
     uint64_t targetBytes) {
-  const int64_t bytesToReserve =
-      std::min<int64_t>(maxGrowBytes(*pool), targetBytes);
-  uint64_t reserveBytes;
-  uint64_t freeCapacity;
+  const auto freeCapacityMetricUpdateCb =
+      folly::makeGuard([this]() { updateFreeCapacityMetrics(); });
+  uint64_t reservedBytes{0};
   {
     std::lock_guard<std::mutex> l(mutex_);
     ++numReserves_;
-    reserveBytes = decrementFreeCapacityLocked(bytesToReserve);
-    pool->grow(reserveBytes);
-    freeCapacity = freeCapacity_;
+    const int64_t maxBytesToReserve =
+        std::min<int64_t>(maxGrowCapacity(*pool), targetBytes);
+    const int64_t minBytesToReserve = minGrowCapacity(*pool);
+    reservedBytes =
+        decrementFreeCapacityLocked(maxBytesToReserve, minBytesToReserve);
+    try {
+      checkedGrow(pool, reservedBytes, 0);
+    } catch (const VeloxRuntimeError& error) {
+      reservedBytes = 0;
+    }
   }
-  RECORD_METRIC_VALUE(kMetricArbitratorFreeCapacityBytes, freeCapacity);
-  return reserveBytes;
+  return reservedBytes;
+}
+
+uint64_t SharedArbitrator::decrementFreeCapacity(
+    uint64_t maxBytesToReserve,
+    uint64_t minBytesToReserve) {
+  uint64_t reservedBytes{0};
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    reservedBytes =
+        decrementFreeCapacityLocked(maxBytesToReserve, minBytesToReserve);
+  }
+  return reservedBytes;
+}
+
+uint64_t SharedArbitrator::decrementFreeCapacityLocked(
+    uint64_t maxBytesToReserve,
+    uint64_t minBytesToReserve) {
+  uint64_t allocatedBytes =
+      std::min<uint64_t>(freeNonReservedCapacity_, maxBytesToReserve);
+  freeNonReservedCapacity_ -= allocatedBytes;
+  if (allocatedBytes < minBytesToReserve) {
+    const uint64_t reservedBytes = std::min<uint64_t>(
+        minBytesToReserve - allocatedBytes, freeReservedCapacity_);
+    freeReservedCapacity_ -= reservedBytes;
+    allocatedBytes += reservedBytes;
+  }
+  return allocatedBytes;
 }
 
 uint64_t SharedArbitrator::shrinkCapacity(
     MemoryPool* pool,
     uint64_t targetBytes) {
+  const auto freeCapacityUpdateCb =
+      folly::makeGuard([this]() { updateFreeCapacityMetrics(); });
+
   uint64_t freedBytes{0};
-  uint64_t freeCapacity{0};
   {
     std::lock_guard<std::mutex> l(mutex_);
     ++numReleases_;
     freedBytes = pool->shrink(targetBytes);
     incrementFreeCapacityLocked(freedBytes);
-    freeCapacity = freeCapacity_;
   }
-  RECORD_METRIC_VALUE(kMetricArbitratorFreeCapacityBytes, freeCapacity);
   return freedBytes;
 }
 
@@ -238,6 +294,9 @@ uint64_t SharedArbitrator::shrinkCapacity(
     uint64_t targetBytes,
     bool allowSpill,
     bool allowAbort) {
+  const auto freeCapacityUpdateCb =
+      folly::makeGuard([this]() { updateFreeCapacityMetrics(); });
+
   ScopedArbitration scopedArbitration(this);
   if (targetBytes == 0) {
     targetBytes = capacity_;
@@ -261,12 +320,12 @@ uint64_t SharedArbitrator::shrinkCapacity(
     if (freedBytes >= targetBytes) {
       return freedBytes;
     }
-  }
-  if (allowAbort) {
-    if (allowSpill) {
+    if (allowAbort) {
       // Candidate stats may change after spilling.
       candidates = getCandidateStats(pools);
     }
+  }
+  if (allowAbort) {
     freedBytes += reclaimUsedMemoryFromCandidatesByAbort(
         candidates, targetBytes - freedBytes);
   }
@@ -278,19 +337,36 @@ void SharedArbitrator::testingFreeCapacity(uint64_t capacity) {
   incrementFreeCapacityLocked(capacity);
 }
 
+uint64_t SharedArbitrator::testingNumRequests() const {
+  return numRequests_;
+}
+
 bool SharedArbitrator::growCapacity(
     MemoryPool* pool,
     const std::vector<std::shared_ptr<MemoryPool>>& candidatePools,
     uint64_t targetBytes) {
+  const auto freeCapacityUpdateCb =
+      folly::makeGuard([this]() { updateFreeCapacityMetrics(); });
+
   ScopedArbitration scopedArbitration(pool, this);
   MemoryPool* requestor = pool->root();
-  if (FOLLY_UNLIKELY(requestor->aborted())) {
+  if (requestor->aborted()) {
     RECORD_METRIC_VALUE(kMetricArbitratorFailuresCount);
     ++numFailures_;
-    VELOX_MEM_POOL_ABORTED("The requestor has already been aborted");
+    VELOX_MEM_POOL_ABORTED("The requestor pool has been aborted");
   }
 
-  if (FOLLY_UNLIKELY(!ensureCapacity(requestor, targetBytes))) {
+  // Checks if the request pool already has enough free capacity for the new
+  // request. This could happen if there is multiple concurrent arbitration
+  // requests from the same query. When the first served request succeeds, it
+  // might have reserved enough memory capacity for the followup requests.
+  if (requestor->freeBytes() >= targetBytes) {
+    if (requestor->grow(0, targetBytes)) {
+      return true;
+    }
+  }
+
+  if (!ensureCapacity(requestor, targetBytes)) {
     RECORD_METRIC_VALUE(kMetricArbitratorFailuresCount);
     ++numFailures_;
     VELOX_MEM_LOG(ERROR) << "Can't grow " << requestor->name()
@@ -305,7 +381,6 @@ bool SharedArbitrator::growCapacity(
   }
 
   std::vector<Candidate> candidates;
-  candidates.reserve(candidatePools.size());
   int numRetries{0};
   for (;; ++numRetries) {
     // Get refreshed stats before the memory arbitration retry.
@@ -335,7 +410,7 @@ bool SharedArbitrator::growCapacity(
 bool SharedArbitrator::checkCapacityGrowth(
     const MemoryPool& pool,
     uint64_t targetBytes) const {
-  return (maxGrowBytes(pool) >= targetBytes) &&
+  return (maxGrowCapacity(pool) >= targetBytes) &&
       (capacityAfterGrowth(pool, targetBytes) <= capacity_);
 }
 
@@ -393,34 +468,47 @@ bool SharedArbitrator::handleOOM(
   return true;
 }
 
+void SharedArbitrator::checkedGrow(
+    MemoryPool* pool,
+    uint64_t growBytes,
+    uint64_t reservationBytes) {
+  const auto ret = pool->grow(growBytes, reservationBytes);
+  VELOX_CHECK(
+      ret,
+      "Failed to grow pool {} with {} and commit {} used reservation",
+      pool->name(),
+      succinctBytes(growBytes),
+      succinctBytes(reservationBytes));
+}
+
 bool SharedArbitrator::arbitrateMemory(
     MemoryPool* requestor,
     std::vector<Candidate>& candidates,
     uint64_t targetBytes) {
   VELOX_CHECK(!requestor->aborted());
-
   const uint64_t growTarget = std::min(
-      maxGrowBytes(*requestor),
+      maxGrowCapacity(*requestor),
       std::max(memoryPoolTransferCapacity_, targetBytes));
-  uint64_t freedBytes = decrementFreeCapacity(growTarget);
-  if (freedBytes >= targetBytes) {
-    requestor->grow(freedBytes);
-    return true;
-  }
-  VELOX_CHECK_LT(freedBytes, growTarget);
-
+  const uint64_t minGrowTarget = minGrowCapacity(*requestor);
+  uint64_t freedBytes = decrementFreeCapacity(growTarget, minGrowTarget);
   auto freeGuard = folly::makeGuard([&]() {
     // Returns the unused freed memory capacity back to the arbitrator.
     if (freedBytes > 0) {
       incrementFreeCapacity(freedBytes);
     }
   });
+  if (freedBytes >= targetBytes) {
+    checkedGrow(requestor, freedBytes, targetBytes);
+    freedBytes = 0;
+    return true;
+  }
+  VELOX_CHECK_LT(freedBytes, growTarget);
 
   freedBytes +=
       reclaimFreeMemoryFromCandidates(candidates, growTarget - freedBytes);
   if (freedBytes >= targetBytes) {
     const uint64_t bytesToGrow = std::min(growTarget, freedBytes);
-    requestor->grow(bytesToGrow);
+    checkedGrow(requestor, bytesToGrow, targetBytes);
     freedBytes -= bytesToGrow;
     return true;
   }
@@ -434,7 +522,6 @@ bool SharedArbitrator::arbitrateMemory(
     ++numFailures_;
     VELOX_MEM_POOL_ABORTED("The requestor pool has been aborted.");
   }
-
   VELOX_CHECK(!requestor->aborted());
 
   if (freedBytes < targetBytes) {
@@ -447,7 +534,7 @@ bool SharedArbitrator::arbitrateMemory(
   }
 
   const uint64_t bytesToGrow = std::min(freedBytes, growTarget);
-  requestor->grow(bytesToGrow);
+  checkedGrow(requestor, bytesToGrow, targetBytes);
   freedBytes -= bytesToGrow;
   return true;
 }
@@ -455,8 +542,8 @@ bool SharedArbitrator::arbitrateMemory(
 uint64_t SharedArbitrator::reclaimFreeMemoryFromCandidates(
     std::vector<Candidate>& candidates,
     uint64_t targetBytes) {
-  // Sort candidate memory pools based on their free capacity.
-  sortCandidatesByFreeCapacity(candidates);
+  // Sort candidate memory pools based on their reclaimable free capacity.
+  sortCandidatesByReclaimableFreeCapacity(candidates);
 
   uint64_t freedBytes{0};
   for (const auto& candidate : candidates) {
@@ -473,6 +560,7 @@ uint64_t SharedArbitrator::reclaimFreeMemoryFromCandidates(
     if (freedBytes >= targetBytes) {
       break;
     }
+    VELOX_CHECK_GE(candidate.pool->capacity(), memoryPoolReservedCapacity_);
   }
   numShrunkBytes_ += freedBytes;
   return freedBytes;
@@ -482,19 +570,16 @@ uint64_t SharedArbitrator::reclaimUsedMemoryFromCandidatesBySpill(
     MemoryPool* requestor,
     std::vector<Candidate>& candidates,
     uint64_t targetBytes) {
-  // Sort candidate memory pools based on their reclaimable memory.
-  sortCandidatesByReclaimableMemory(candidates);
+  // Sort candidate memory pools based on their reclaimable used capacity.
+  sortCandidatesByReclaimableUsedCapacity(candidates);
 
-  int64_t freedBytes{0};
+  uint64_t freedBytes{0};
   for (const auto& candidate : candidates) {
     VELOX_CHECK_LT(freedBytes, targetBytes);
-    if (!candidate.reclaimable || candidate.reclaimableBytes == 0) {
+    if (candidate.reclaimableBytes == 0) {
       break;
     }
-    const int64_t bytesToReclaim = std::max<int64_t>(
-        targetBytes - freedBytes, memoryPoolTransferCapacity_);
-    VELOX_CHECK_GT(bytesToReclaim, 0);
-    freedBytes += reclaim(candidate.pool, bytesToReclaim, false);
+    freedBytes += reclaim(candidate.pool, targetBytes - freedBytes, false);
     if ((freedBytes >= targetBytes) ||
         (requestor != nullptr && requestor->aborted())) {
       break;
@@ -508,16 +593,19 @@ uint64_t SharedArbitrator::reclaimUsedMemoryFromCandidatesByAbort(
     uint64_t targetBytes) {
   sortCandidatesByUsage(candidates);
 
-  int64_t freedBytes{0};
+  uint64_t freedBytes{0};
   for (const auto& candidate : candidates) {
     VELOX_CHECK_LT(freedBytes, targetBytes);
-    if (candidate.currentBytes == 0) {
+    if (candidate.pool->capacity() == 0) {
       break;
     }
     try {
       VELOX_MEM_POOL_ABORTED(fmt::format(
-          "Memory pool aborted to reclaim used memory, current usage {}",
-          succinctBytes(candidate.currentBytes)));
+          "Memory pool aborted to reclaim used memory, current usage {}, "
+          "memory pool details:\n{}\n{}",
+          succinctBytes(candidate.currentBytes),
+          candidate.pool->toString(),
+          candidate.pool->treeMemoryUsage()));
     } catch (VeloxRuntimeError&) {
       abort(candidate.pool, std::current_exception());
     }
@@ -533,21 +621,28 @@ uint64_t SharedArbitrator::reclaim(
     MemoryPool* pool,
     uint64_t targetBytes,
     bool isLocalArbitration) noexcept {
+  int64_t bytesToReclaim = std::min<uint64_t>(
+      std::max(targetBytes, memoryPoolTransferCapacity_),
+      maxReclaimableCapacity(*pool));
+  if (bytesToReclaim == 0) {
+    return 0;
+  }
   uint64_t reclaimDurationUs{0};
   uint64_t reclaimedBytes{0};
-  uint64_t freedBytes{0};
+  uint64_t reclaimedFreeBytes{0};
   MemoryReclaimer::Stats reclaimerStats;
   {
-    MicrosecondTimer reclaimTimer(&reclaimDurationUs);
     const uint64_t oldCapacity = pool->capacity();
+    MicrosecondTimer reclaimTimer(&reclaimDurationUs);
     try {
-      freedBytes = pool->shrink(targetBytes);
-      if (freedBytes < targetBytes) {
+      reclaimedFreeBytes = pool->shrink(bytesToReclaim);
+      bytesToReclaim -= reclaimedFreeBytes;
+      VELOX_CHECK_GE(bytesToReclaim, 0);
+      if (bytesToReclaim > 0) {
         if (isLocalArbitration) {
           incrementLocalArbitrationCount();
         }
-        pool->reclaim(
-            targetBytes - freedBytes, memoryReclaimWaitMs_, reclaimerStats);
+        pool->reclaim(bytesToReclaim, memoryReclaimWaitMs_, reclaimerStats);
       }
     } catch (const std::exception& e) {
       VELOX_MEM_LOG(ERROR) << "Failed to reclaim from memory pool "
@@ -561,16 +656,19 @@ uint64_t SharedArbitrator::reclaim(
     VELOX_CHECK_GE(oldCapacity, newCapacity);
     reclaimedBytes = oldCapacity - newCapacity;
   }
-  numReclaimedBytes_ += reclaimedBytes - freedBytes;
-  numShrunkBytes_ += freedBytes;
+  VELOX_CHECK_GE(reclaimedBytes, reclaimedFreeBytes);
+  numReclaimedBytes_ += reclaimedBytes - reclaimedFreeBytes;
+  numShrunkBytes_ += reclaimedFreeBytes;
   reclaimTimeUs_ += reclaimDurationUs;
   numNonReclaimableAttempts_ += reclaimerStats.numNonReclaimableAttempts;
-  VELOX_MEM_LOG_EVERY_MS(INFO, 1000)
-      << "Reclaimed from memory pool " << pool->name() << " with target of "
-      << succinctBytes(targetBytes) << ", actually reclaimed "
-      << succinctBytes(freedBytes) << " free memory and "
-      << succinctBytes(reclaimedBytes - freedBytes) << " used memory, spent "
-      << succinctMicros(reclaimDurationUs);
+  VELOX_MEM_LOG(INFO) << "Reclaimed from memory pool " << pool->name()
+                      << " with target of " << succinctBytes(targetBytes)
+                      << ", actually reclaimed "
+                      << succinctBytes(reclaimedFreeBytes)
+                      << " free memory and "
+                      << succinctBytes(reclaimedBytes - reclaimedFreeBytes)
+                      << " used memory, spent "
+                      << succinctMicros(reclaimDurationUs);
   return reclaimedBytes;
 }
 
@@ -591,44 +689,31 @@ void SharedArbitrator::abort(
   VELOX_CHECK(pool->aborted());
 }
 
-uint64_t SharedArbitrator::decrementFreeCapacity(uint64_t bytes) {
-  uint64_t reserveBytes;
-  uint64_t freeCapacity;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    reserveBytes = decrementFreeCapacityLocked(bytes);
-    freeCapacity = freeCapacity_;
-  }
-  RECORD_METRIC_VALUE(kMetricArbitratorFreeCapacityBytes, freeCapacity);
-  return reserveBytes;
-}
-
-uint64_t SharedArbitrator::decrementFreeCapacityLocked(uint64_t bytes) {
-  const uint64_t targetBytes = std::min(freeCapacity_, bytes);
-  VELOX_CHECK_LE(targetBytes, freeCapacity_);
-  freeCapacity_ -= targetBytes;
-  return targetBytes;
-}
-
 void SharedArbitrator::incrementFreeCapacity(uint64_t bytes) {
-  uint64_t freeCapacity;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    incrementFreeCapacityLocked(bytes);
-    freeCapacity = freeCapacity_;
-  }
-  RECORD_METRIC_VALUE(kMetricArbitratorFreeCapacityBytes, freeCapacity);
+  std::lock_guard<std::mutex> l(mutex_);
+  incrementFreeCapacityLocked(bytes);
 }
 
 void SharedArbitrator::incrementFreeCapacityLocked(uint64_t bytes) {
-  freeCapacity_ += bytes;
-  if (FOLLY_UNLIKELY(freeCapacity_ > capacity_)) {
+  incrementFreeReservedCapacityLocked(bytes);
+  freeNonReservedCapacity_ += bytes;
+  if (FOLLY_UNLIKELY(
+          freeNonReservedCapacity_ + freeReservedCapacity_ > capacity_)) {
     VELOX_FAIL(
-        "The free capacity {} is larger than the max capacity {}, {}",
-        succinctBytes(freeCapacity_),
+        "The free capacity {}/{} is larger than the max capacity {}, {}",
+        succinctBytes(freeNonReservedCapacity_),
+        succinctBytes(freeReservedCapacity_),
         succinctBytes(capacity_),
         toStringLocked());
   }
+}
+
+void SharedArbitrator::incrementFreeReservedCapacityLocked(uint64_t& bytes) {
+  VELOX_CHECK_LE(freeReservedCapacity_, reservedCapacity_);
+  const uint64_t freedBytes =
+      std::min(bytes, reservedCapacity_ - freeReservedCapacity_);
+  freeReservedCapacity_ += freedBytes;
+  bytes -= freedBytes;
 }
 
 MemoryArbitrator::Stats SharedArbitrator::stats() const {
@@ -647,7 +732,8 @@ MemoryArbitrator::Stats SharedArbitrator::statsLocked() const {
   stats.numShrunkBytes = numShrunkBytes_;
   stats.numReclaimedBytes = numReclaimedBytes_;
   stats.maxCapacityBytes = capacity_;
-  stats.freeCapacityBytes = freeCapacity_;
+  stats.freeCapacityBytes = freeNonReservedCapacity_ + freeReservedCapacity_;
+  stats.freeReservedCapacityBytes = freeReservedCapacity_;
   stats.reclaimTimeUs = reclaimTimeUs_;
   stats.numNonReclaimableAttempts = numNonReclaimableAttempts_;
   stats.numReserves = numReserves_;
@@ -732,7 +818,7 @@ void SharedArbitrator::startArbitration(const std::string& contextMsg) {
   }
 
   TestValue::adjust(
-      "facebook::velox::memory::SharedArbitrator::startArbitration", nullptr);
+      "facebook::velox::memory::SharedArbitrator::startArbitration", this);
 
   if (waitPromise.valid()) {
     uint64_t waitTimeUs{0};

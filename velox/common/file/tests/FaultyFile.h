@@ -26,9 +26,11 @@ struct FaultFileOperation {
     /// Injects faults for file read operations.
     kRead,
     kReadv,
+    kWrite,
     /// TODO: add to support fault injections for the other file operation
     /// types.
   };
+  static std::string typeString(Type type);
 
   const Type type;
 
@@ -44,6 +46,12 @@ struct FaultFileOperation {
   FaultFileOperation(Type _type, const std::string& _path)
       : type(_type), path(_path) {}
 };
+
+FOLLY_ALWAYS_INLINE std::ostream& operator<<(
+    std::ostream& o,
+    const FaultFileOperation::Type& type) {
+  return o << FaultFileOperation::typeString(type);
+}
 
 /// Fault injection parameters for file read API.
 struct FaultFileReadOperation : FaultFileOperation {
@@ -75,6 +83,17 @@ struct FaultFileReadvOperation : FaultFileOperation {
       : FaultFileOperation(FaultFileOperation::Type::kReadv, _path),
         offset(_offset),
         buffers(_buffers) {}
+};
+
+/// Fault injection parameters for file write API.
+struct FaultFileWriteOperation : FaultFileOperation {
+  std::string_view* data;
+
+  FaultFileWriteOperation(
+      const std::string& _path,
+      const std::string_view& _data)
+      : FaultFileOperation(FaultFileOperation::Type::kWrite, _path),
+        data(const_cast<std::string_view*>(&_data)) {}
 };
 
 /// The fault injection hook on the file operation path.
@@ -125,6 +144,7 @@ class FaultyReadFile : public ReadFile {
 class FaultyWriteFile : public WriteFile {
  public:
   FaultyWriteFile(
+      const std::string& path,
       std::shared_ptr<WriteFile> delegatedFile,
       FileFaultInjectionHook injectionHook);
 
@@ -143,6 +163,7 @@ class FaultyWriteFile : public WriteFile {
   }
 
  private:
+  const std::string path_;
   const std::shared_ptr<WriteFile> delegatedFile_;
   const FileFaultInjectionHook injectionHook_;
 };

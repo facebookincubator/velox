@@ -31,6 +31,7 @@
 #include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
+#include "velox/dwio/common/UnitLoader.h"
 #include "velox/dwio/common/encryption/Encryption.h"
 
 namespace facebook::velox::dwio::common {
@@ -44,7 +45,11 @@ enum class FileFormat {
   TEXT = 5,
   JSON = 6,
   PARQUET = 7,
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   ALPHA = 8,
+#else
+  NIMBLE = 8,
+#endif
   ORC = 9,
 };
 
@@ -140,11 +145,14 @@ class RowReaderOptions {
   // Function to track how much time we spend waiting on IO before reading rows
   // (in dwrf row reader). todo: encapsulate this and keySelectionCallBack_ in a
   // struct
-  std::function<void(uint64_t)> blockedOnIoCallback_;
-  std::function<void(uint64_t)> decodingTimeUsCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      blockedOnIoCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      decodingTimeCallback_;
   std::function<void(uint16_t)> stripeCountCallback_;
   bool eagerFirstStripeLoad = true;
   uint64_t skipRows_ = 0;
+  std::shared_ptr<UnitLoaderFactory> unitLoaderFactory_;
 
  public:
   RowReaderOptions() noexcept
@@ -352,20 +360,25 @@ class RowReaderOptions {
   }
 
   void setBlockedOnIoCallback(
-      std::function<void(int64_t)> blockedOnIoCallback) {
+      std::function<void(std::chrono::high_resolution_clock::duration)>
+          blockedOnIoCallback) {
     blockedOnIoCallback_ = std::move(blockedOnIoCallback);
   }
 
-  const std::function<void(int64_t)> getBlockedOnIoCallback() const {
+  const std::function<void(std::chrono::high_resolution_clock::duration)>
+  getBlockedOnIoCallback() const {
     return blockedOnIoCallback_;
   }
 
-  void setDecodingTimeUsCallback(std::function<void(int64_t)> decodingTimeUs) {
-    decodingTimeUsCallback_ = std::move(decodingTimeUs);
+  void setDecodingTimeCallback(
+      std::function<void(std::chrono::high_resolution_clock::duration)>
+          decodingTime) {
+    decodingTimeCallback_ = std::move(decodingTime);
   }
 
-  std::function<void(int64_t)> getDecodingTimeUsCallback() const {
-    return decodingTimeUsCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+  getDecodingTimeCallback() const {
+    return decodingTimeCallback_;
   }
 
   void setStripeCountCallback(
@@ -383,6 +396,15 @@ class RowReaderOptions {
 
   uint64_t getSkipRows() const {
     return skipRows_;
+  }
+
+  void setUnitLoaderFactory(
+      std::shared_ptr<UnitLoaderFactory> unitLoaderFactory) {
+    unitLoaderFactory_ = std::move(unitLoaderFactory);
+  }
+
+  const std::shared_ptr<UnitLoaderFactory>& getUnitLoaderFactory() const {
+    return unitLoaderFactory_;
   }
 
   const std::shared_ptr<folly::Executor>& getDecodingExecutor() const {

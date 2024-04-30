@@ -75,7 +75,6 @@ class SequenceVector : public SimpleVector<T> {
       }
 
       size_t offset = offsetOfIndex(idx);
-      VELOX_DCHECK_GE(offset, 0);
       return sequenceValues_->containsNullAt(offset);
     } else {
       return isNullAt(idx);
@@ -197,6 +196,20 @@ class SequenceVector : public SimpleVector<T> {
 
   bool isNullsWritable() const override {
     return false;
+  }
+
+  VectorPtr copyPreserveEncodings() const override {
+    return std::make_shared<SequenceVector<T>>(
+        BaseVector::pool_,
+        BaseVector::length_,
+        sequenceValues_->copyPreserveEncodings(),
+        AlignedBuffer::copy(BaseVector::pool_, sequenceLengths_),
+        SimpleVector<T>::stats_,
+        BaseVector::distinctValueCount_,
+        BaseVector::nullCount_,
+        SimpleVector<T>::isSorted_,
+        BaseVector::representedByteCount_,
+        BaseVector::storageByteCount_);
   }
 
  private:
