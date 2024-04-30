@@ -315,6 +315,26 @@ Returns null if <code class="docutils literal notranslate"><span class="pre">day
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="timestamp_micros">
+<span class="sig-name descname"><span class="pre">timestamp_micros</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#timestamp_micros" title="Link to this definition">¶</a></dt>
+<dd><p>Returns timestamp from the number of microseconds since UTC epoch.
+Supported types are: TINYINT, SMALLINT, INTEGER and BIGINT.:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">timestamp_micros</span><span class="p">(</span><span class="mi">1230219000123123</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2008-12-25 15:30:00.123123&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="timestamp_millis">
+<span class="sig-name descname"><span class="pre">timestamp_millis</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#timestamp_millis" title="Link to this definition">¶</a></dt>
+<dd><p>Returns timestamp from the number of milliseconds since UTC epoch.
+Supported types are: TINYINT, SMALLINT, INTEGER and BIGINT.:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">timestamp_millis</span><span class="p">(</span><span class="mi">1230219000123</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2008-12-25 15:30:00.123&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="to_unix_timestamp">
 <span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#to_unix_timestamp" title="Link to this definition">¶</a></dt>
 <dd><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(string)</span> <span class="pre">-&gt;</span> <span class="pre">integer</span></code>.</p>
@@ -344,6 +364,25 @@ Returns null if <code class="docutils literal notranslate"><span class="pre">day
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_date</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;0&#39;</span>
 <span class="n">SELECT</span> <span class="n">unix_date</span><span class="p">(</span><span class="s1">&#39;1970-01-02&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1&#39;</span>
 <span class="n">SELECT</span> <span class="n">unix_date</span><span class="p">(</span><span class="s1">&#39;1969-12-31&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-1&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="unix_micros">
+<span class="sig-name descname"><span class="pre">unix_micros</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#unix_micros" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of microseconds since 1970-01-01 00:00:00 UTC.:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_micros</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1000000</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="unix_millis">
+<span class="sig-name descname"><span class="pre">unix_millis</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#unix_millis" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of milliseconds since 1970-01-01 00:00:00 UTC. Truncates
+higher levels of precision.:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_millis</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1000</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -445,9 +484,13 @@ part of the 53rd week of year 2004, so the result is 2004. Only supports DATE ty
 <li><a class="reference internal" href="#month"><code class="docutils literal notranslate"><span class="pre">month()</span></code></a></li>
 <li><a class="reference internal" href="#next_day"><code class="docutils literal notranslate"><span class="pre">next_day()</span></code></a></li>
 <li><a class="reference internal" href="#second"><code class="docutils literal notranslate"><span class="pre">second()</span></code></a></li>
+<li><a class="reference internal" href="#timestamp_micros"><code class="docutils literal notranslate"><span class="pre">timestamp_micros()</span></code></a></li>
+<li><a class="reference internal" href="#timestamp_millis"><code class="docutils literal notranslate"><span class="pre">timestamp_millis()</span></code></a></li>
 <li><a class="reference internal" href="#to_unix_timestamp"><code class="docutils literal notranslate"><span class="pre">to_unix_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#to_utc_timestamp"><code class="docutils literal notranslate"><span class="pre">to_utc_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#unix_date"><code class="docutils literal notranslate"><span class="pre">unix_date()</span></code></a></li>
+<li><a class="reference internal" href="#unix_micros"><code class="docutils literal notranslate"><span class="pre">unix_micros()</span></code></a></li>
+<li><a class="reference internal" href="#unix_millis"><code class="docutils literal notranslate"><span class="pre">unix_millis()</span></code></a></li>
 <li><a class="reference internal" href="#unix_timestamp"><code class="docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#week_of_year"><code class="docutils literal notranslate"><span class="pre">week_of_year()</span></code></a></li>
 <li><a class="reference internal" href="#weekday"><code class="docutils literal notranslate"><span class="pre">weekday()</span></code></a></li>
