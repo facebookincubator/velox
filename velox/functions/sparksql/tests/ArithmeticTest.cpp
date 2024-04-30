@@ -268,6 +268,17 @@ TEST_F(ArithmeticTest, cosh) {
   EXPECT_TRUE(std::isnan(cosh(kNan).value_or(0)));
 }
 
+TEST_F(ArithmeticTest, rint) {
+  const auto rint = [&](std::optional<double> a) {
+    return evaluateOnce<double>("rint(c0)", a);
+  };
+
+  EXPECT_EQ(rint(2.3), 2.0);
+  EXPECT_EQ(rint(3.8), 4.0);
+  EXPECT_EQ(rint(-2.3), -2.0);
+  EXPECT_EQ(rint(-3.8), -4.0);
+}
+
 TEST_F(ArithmeticTest, unhex) {
   const auto unhex = [&](std::optional<std::string> a) {
     return evaluateOnce<std::string>("unhex(c0)", a);
