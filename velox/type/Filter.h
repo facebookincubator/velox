@@ -2266,7 +2266,7 @@ std::pair<std::vector<T>, bool> deDuplicateValues(
     }
   }
 
-  // In-place sort, remove duplicates, and later std::move to save memory
+  // In-place sort, remove duplicates, and later std::move to save memory.
   std::sort(values.begin(), values.end());
   auto last = std::unique(values.begin(), values.end());
   values.resize(std::distance(values.begin(), last));
