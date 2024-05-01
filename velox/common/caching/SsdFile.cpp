@@ -135,6 +135,7 @@ SsdFile::SsdFile(
     folly::Executor* executor)
     : fileName_(filename),
       maxRegions_(maxRegions),
+      disableFileCow_(disableFileCow),
       shardId_(shardId),
       checkpointIntervalBytes_(checkpointIntervalBytes),
       executor_(executor) {
@@ -155,7 +156,7 @@ SsdFile::SsdFile(
       filename,
       folly::errnoStr(errno));
 
-  if (disableFileCow) {
+  if (disableFileCow_) {
     disableCow(fd_);
   }
 
@@ -711,15 +712,6 @@ void SsdFile::checkpoint(bool force) {
   checkpointDeleted_ = false;
   bytesAfterCheckpoint_ = 0;
   try {
-    // We schedule the potentially long fsync of the cache file on another
-    // thread of the cache write executor, if available. If there is none, we do
-    // the sync on this thread at the end.
-    auto fileSync = std::make_shared<AsyncSource<int>>(
-        [fd = fd_]() { return std::make_unique<int>(::fsync(fd)); });
-    if (executor_ != nullptr) {
-      executor_->add([fileSync]() { fileSync->prepare(); });
-    }
-
     const auto checkRc = [&](int32_t rc, const std::string& errMsg) {
       if (rc < 0) {
         VELOX_FAIL("{} with rc {} :{}", errMsg, rc, folly::errnoStr(errno));
@@ -769,6 +761,15 @@ void SsdFile::checkpoint(bool force) {
       state.write(asChar(&offsetAndSize), sizeof(offsetAndSize));
     }
 
+    // We schedule the potentially long fsync of the cache file on another
+    // thread of the cache write executor, if available. If there is none, we do
+    // the sync on this thread at the end.
+    auto fileSync = std::make_shared<AsyncSource<int>>(
+        [fd = fd_]() { return std::make_unique<int>(::fsync(fd)); });
+    if (executor_ != nullptr) {
+      executor_->add([fileSync]() { fileSync->prepare(); });
+    }
+
     // NOTE: we need to ensure cache file data sync update completes before
     // updating checkpoint file.
     const auto fileSyncRc = fileSync->move();
@@ -790,6 +791,11 @@ void SsdFile::checkpoint(bool force) {
     const auto checkpointFd = checkRc(
         ::open(checkpointPath.c_str(), O_WRONLY),
         "Open of checkpoint file for sync");
+    // TODO: add this as file open option after we migrate to use velox
+    // filesystem for ssd file access.
+    if (disableFileCow_) {
+      disableCow(checkpointFd);
+    }
     VELOX_CHECK_GE(checkpointFd, 0);
     checkRc(::fsync(checkpointFd), "Sync of checkpoint file");
     ::close(checkpointFd);
@@ -822,6 +828,9 @@ void SsdFile::initializeCheckpoint() {
   }
   const auto logPath = fileName_ + kLogExtension;
   evictLogFd_ = ::open(logPath.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+  if (disableFileCow_) {
+    disableCow(evictLogFd_);
+  }
   if (evictLogFd_ < 0) {
     ++stats_.openLogErrors;
     // Failure to open the log at startup is a process terminating error.
