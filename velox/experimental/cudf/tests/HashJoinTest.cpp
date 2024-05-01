@@ -618,7 +618,7 @@ class HashJoinBuilder {
     int32_t spillPct{0};
     if (injectSpill) {
       spillDirectory = exec::test::TempDirectoryPath::create();
-      builder.spillDirectory(spillDirectory->path);
+      builder.spillDirectory(spillDirectory->getPath());
       config(core::QueryConfig::kSpillEnabled, "true");
       config(core::QueryConfig::kMaxSpillLevel, std::to_string(maxSpillLevel));
       config(core::QueryConfig::kJoinSpillEnabled, "true");
@@ -804,7 +804,7 @@ class CudfHashJoinTest : public HiveConnectorTestBase {
       std::vector<exec::Split> splits;
       splits.reserve(files[i].size());
       for (const auto& file : files[i]) {
-        splits.push_back(exec::Split(makeHiveConnectorSplit(file->path)));
+        splits.push_back(exec::Split(makeHiveConnectorSplit(file->getPath())));
       }
       splitInput.emplace(nodeIds[i], std::move(splits));
     }
@@ -1706,10 +1706,10 @@ TEST_P(MultiThreadedCudfHashJoinTest, bigintArray) {
 //   });
 //
 //   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-//   writeToFile(probeFile->path, probeVectors);
+//   writeToFile(probeFile->getPath(), probeVectors);
 //
 //   std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-//   writeToFile(buildFile->path, buildVectors);
+//   writeToFile(buildFile->getPath(), buildVectors);
 //
 //   createDuckDbTable("t", probeVectors);
 //   createDuckDbTable("u", buildVectors);
@@ -1733,8 +1733,8 @@ TEST_P(MultiThreadedCudfHashJoinTest, bigintArray) {
 //                   .planNode();
 //
 //   SplitInput splitInput = {
-//       {probeScanId, {exec::Split(makeHiveConnectorSplit(probeFile->path))}},
-//       {buildScanId, {exec::Split(makeHiveConnectorSplit(buildFile->path))}},
+//       {probeScanId, {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+//       {buildScanId, {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
 //   };
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -3199,10 +3199,10 @@ TEST_P(MultiThreadedCudfHashJoinTest, bigintArray) {
 //       });
 //
 //   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-//   writeToFile(probeFile->path, {probe});
+//   writeToFile(probeFile->getPath(), {probe});
 //
 //   std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-//   writeToFile(buildFile->path, {build});
+//   writeToFile(buildFile->getPath(), {build});
 //
 //   createDuckDbTable("t", {probe});
 //   createDuckDbTable("u", {build});
@@ -3227,8 +3227,8 @@ TEST_P(MultiThreadedCudfHashJoinTest, bigintArray) {
 //                   .planNode();
 //
 //   SplitInput splitInput = {
-//       {probeScanId, {exec::Split(makeHiveConnectorSplit(probeFile->path))}},
-//       {buildScanId, {exec::Split(makeHiveConnectorSplit(buildFile->path))}},
+//       {probeScanId, {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+//       {buildScanId, {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
 //   };
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -3799,10 +3799,10 @@ TEST_P(MultiThreadedCudfHashJoinTest, bigintArray) {
 //   });
 //
 //   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-//   writeToFile(probeFile->path, probeVectors);
+//   writeToFile(probeFile->getPath(), probeVectors);
 //
 //   std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-//   writeToFile(buildFile->path, buildVectors);
+//   writeToFile(buildFile->getPath(), buildVectors);
 //
 //   createDuckDbTable("t", probeVectors);
 //   createDuckDbTable("u", buildVectors);
@@ -3826,8 +3826,8 @@ TEST_P(MultiThreadedCudfHashJoinTest, bigintArray) {
 //                   .planNode();
 //
 //   SplitInput splitInput = {
-//       {probeScanId, {exec::Split(makeHiveConnectorSplit(probeFile->path))}},
-//       {buildScanId, {exec::Split(makeHiveConnectorSplit(buildFile->path))}},
+//       {probeScanId, {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+//       {buildScanId, {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
 //   };
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -3949,13 +3949,13 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //
 //   for (const auto& probeVector : probeVectors) {
 //     tempFiles.push_back(TempFilePath::create());
-//     writeToFile(tempFiles.back()->path, probeVector);
+//     writeToFile(tempFiles.back()->getPath(), probeVector);
 //   }
 //   createDuckDbTable("t", probeVectors);
 //
 //   for (const auto& buildVector : buildVectors) {
 //     tempFiles.push_back(TempFilePath::create());
-//     writeToFile(tempFiles.back()->path, buildVector);
+//     writeToFile(tempFiles.back()->getPath(), buildVector);
 //   }
 //   createDuckDbTable("u", buildVectors);
 //
@@ -3965,12 +3965,12 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //       std::vector<exec::Split> probeSplits;
 //       for (int i = 0; i < probeVectors.size(); ++i) {
 //         probeSplits.push_back(
-//             exec::Split(makeHiveConnectorSplit(tempFiles[i]->path)));
+//             exec::Split(makeHiveConnectorSplit(tempFiles[i]->getPath())));
 //       }
 //       std::vector<exec::Split> buildSplits;
 //       for (int i = 0; i < buildVectors.size(); ++i) {
 //         buildSplits.push_back(exec::Split(
-//             makeHiveConnectorSplit(tempFiles[probeSplits.size() + i]->path)));
+//             makeHiveConnectorSplit(tempFiles[probeSplits.size() + i]->getPath())));
 //       }
 //       SplitInput splits;
 //       splits.emplace(probeScanId, probeSplits);
@@ -4054,13 +4054,13 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //     });
 //     probeVectors.push_back(rowVector);
 //     tempFiles.push_back(TempFilePath::create());
-//     writeToFile(tempFiles.back()->path, rowVector);
+//     writeToFile(tempFiles.back()->getPath(), rowVector);
 //   }
 //   auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
 //     return [&] {
 //       std::vector<exec::Split> probeSplits;
 //       for (auto& file : tempFiles) {
-//         probeSplits.push_back(exec::Split(makeHiveConnectorSplit(file->path)));
+//         probeSplits.push_back(exec::Split(makeHiveConnectorSplit(file->getPath())));
 //       }
 //       SplitInput splits;
 //       splits.emplace(nodeId, probeSplits);
@@ -4579,18 +4579,18 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //     });
 //     probeVectors.push_back(rowVector);
 //     tempFiles.push_back(TempFilePath::create());
-//     writeToFile(tempFiles.back()->path, rowVector);
+//     writeToFile(tempFiles.back()->getPath(), rowVector);
 //   }
 //
 //   auto makeInputSplits = [&](const core::PlanNodeId& nodeId) {
 //     return [&] {
 //       std::vector<exec::Split> probeSplits;
 //       for (auto& file : tempFiles) {
-//         probeSplits.push_back(exec::Split(makeHiveConnectorSplit(file->path)));
+//         probeSplits.push_back(exec::Split(makeHiveConnectorSplit(file->getPath())));
 //       }
 //       // We add splits that have no rows.
 //       auto makeEmpty = [&]() {
-//         return exec::Split(HiveConnectorSplitBuilder(tempFiles.back()->path)
+//         return exec::Split(HiveConnectorSplitBuilder(tempFiles.back()->getPath())
 //                                .start(10000000)
 //                                .length(1)
 //                                .build());
@@ -4793,8 +4793,8 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //         });
 //     probeVectors.push_back(rowVector);
 //     tempFiles.push_back(TempFilePath::create());
-//     writeToFile(tempFiles.back()->path, rowVector);
-//     auto split = HiveConnectorSplitBuilder(tempFiles.back()->path)
+//     writeToFile(tempFiles.back()->getPath(), rowVector);
+//     auto split = HiveConnectorSplitBuilder(tempFiles.back()->getPath())
 //                      .partitionKey("p1", std::to_string(i))
 //                      .build();
 //     probeSplits.push_back(exec::Split(split));
@@ -5043,7 +5043,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //   // only gets executed when spilling is enabled. We don't care about if
 //   // spilling is really triggered in test or not.
 //   auto spillDirectory = exec::test::TempDirectoryPath::create();
-//   params.spillDirectory = spillDirectory->path;
+//   params.spillDirectory = spillDirectory->getPath();
 //   params.queryCtx->testingOverrideConfigUnsafe(
 //       {{core::QueryConfig::kSpillEnabled, "true"},
 //        {core::QueryConfig::kMaxSpillLevel, "0"}});
@@ -5072,12 +5072,12 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //   auto rowVector = makeRowVector(
 //       {makeFlatVector<int64_t>(size, [&](auto row) { return row; })});
 //   createDuckDbTable("u", {rowVector});
-//   writeToFile(filePaths[0]->path, rowVector);
+//   writeToFile(filePaths[0]->getPath(), rowVector);
 //   std::vector<RowVectorPtr> buildVectors{
 //       makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, 1, 2})})};
 //   createDuckDbTable("t", buildVectors);
 //   auto split =
-//       facebook::velox::exec::test::HiveConnectorSplitBuilder(filePaths[0]->path)
+//       facebook::velox::exec::test::HiveConnectorSplitBuilder(filePaths[0]->getPath())
 //           .partitionKey("k", "0")
 //           .build();
 //   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
@@ -5211,7 +5211,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //           .planNode(plan)
 //           .queryPool(std::move(queryPool))
 //           .injectSpill(false)
-//           .spillDirectory(testData.spillEnabled ? tempDirectory->path : "")
+//           .spillDirectory(testData.spillEnabled ? tempDirectory->getPath() : "")
 //           .referenceQuery(
 //               "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
 //           .config(core::QueryConfig::kSpillStartPartitionBit, "29")
@@ -5363,7 +5363,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //         .planNode(plan)
 //         .queryPool(std::move(queryPool))
 //         .injectSpill(false)
-//         .spillDirectory(tempDirectory->path)
+//         .spillDirectory(tempDirectory->getPath())
 //         .referenceQuery(
 //             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
 //         .config(core::QueryConfig::kSpillStartPartitionBit, "29")
@@ -5492,7 +5492,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //           .planNode(plan)
 //           .queryPool(std::move(queryPool))
 //           .injectSpill(false)
-//           .spillDirectory(enableSpilling ? tempDirectory->path : "")
+//           .spillDirectory(enableSpilling ? tempDirectory->getPath() : "")
 //           .referenceQuery(
 //               "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
@@ -5610,7 +5610,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //           .planNode(plan)
 //           .queryPool(std::move(queryPool))
 //           .injectSpill(false)
-//           .spillDirectory(enableSpilling ? tempDirectory->path : "")
+//           .spillDirectory(enableSpilling ? tempDirectory->getPath() : "")
 //           .referenceQuery(
 //               "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
@@ -5755,7 +5755,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //         .planNode(plan)
 //         .queryPool(std::move(queryPool))
 //         .injectSpill(false)
-//         .spillDirectory(tempDirectory->path)
+//         .spillDirectory(tempDirectory->getPath())
 //         .referenceQuery(
 //             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
 //         .config(core::QueryConfig::kSpillStartPartitionBit, "29")
@@ -6270,7 +6270,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //         .numDrivers(numDrivers_)
 //         .planNode(plan)
 //         .injectSpill(false)
-//         .spillDirectory(tempDirectory->path)
+//         .spillDirectory(tempDirectory->getPath())
 //         .referenceQuery(
 //             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
 //         .run();
@@ -6322,7 +6322,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //       // Always trigger spilling.
 //       .injectSpill(false)
 //       .maxSpillLevel(0)
-//       .spillDirectory(tempDirectory->path)
+//       .spillDirectory(tempDirectory->getPath())
 //       .referenceQuery(
 //           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
 //       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
@@ -6393,7 +6393,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //     try {
 //       TestScopedSpillInjection scopedSpillInjection(100);
 //       AssertQueryBuilder(plan)
-//           .spillDirectory(spillDirectory->path)
+//           .spillDirectory(spillDirectory->getPath())
 //           .queryCtx(queryCtx)
 //           .config(core::QueryConfig::kSpillEnabled, true)
 //           .config(core::QueryConfig::kJoinSpillEnabled, true)
@@ -6450,7 +6450,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //     try {
 //       TestScopedSpillInjection scopedSpillInjection(100);
 //       AssertQueryBuilder(plan)
-//           .spillDirectory(spillDirectory->path)
+//           .spillDirectory(spillDirectory->getPath())
 //           .queryCtx(queryCtx)
 //           .config(core::QueryConfig::kSpillEnabled, true)
 //           .config(core::QueryConfig::kJoinSpillEnabled, true)
@@ -6780,7 +6780,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //   const auto spillDirectory = exec::test::TempDirectoryPath::create();
 //   auto task =
 //       AssertQueryBuilder(duckDbQueryRunner_)
-//           .spillDirectory(spillDirectory->path)
+//           .spillDirectory(spillDirectory->getPath())
 //           .config(core::QueryConfig::kSpillEnabled, true)
 //           .config(core::QueryConfig::kJoinSpillEnabled, true)
 //           .config(core::QueryConfig::kSpillNumPartitionBits, 2)
@@ -6847,7 +6847,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 //     auto task =
 //         AssertQueryBuilder(duckDbQueryRunner_)
-//             .spillDirectory(spillDirectory->path)
+//             .spillDirectory(spillDirectory->getPath())
 //             .config(core::QueryConfig::kSpillEnabled, true)
 //             .config(core::QueryConfig::kJoinSpillEnabled, true)
 //             .config(core::QueryConfig::kSpillNumPartitionBits, 2)
@@ -6950,7 +6950,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //   VELOX_ASSERT_THROW(
 //       AssertQueryBuilder(plan)
 //           .queryCtx(joinQueryCtx)
-//           .spillDirectory(spillDirectory->path)
+//           .spillDirectory(spillDirectory->getPath())
 //           .config(core::QueryConfig::kSpillEnabled, true)
 //           .copyResults(pool()),
 //       injectedErrorMsg);
@@ -7116,7 +7116,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 //     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //         .numDrivers(1)
-//         .spillDirectory(spillDirectory->path)
+//         .spillDirectory(spillDirectory->getPath())
 //         .probeKeys({"t_k1"})
 //         .probeVectors(std::move(probeVectors))
 //         .buildKeys({"u_k1"})
@@ -7172,7 +7172,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //   const auto spillDirectory = exec::test::TempDirectoryPath::create();
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .numDrivers(1)
-//       .spillDirectory(spillDirectory->path)
+//       .spillDirectory(spillDirectory->getPath())
 //       .probeKeys({"t_k1"})
 //       .probeVectors(std::move(probeVectors))
 //       .buildKeys({"u_k1"})
@@ -7245,7 +7245,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 //     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //         .numDrivers(1)
-//         .spillDirectory(spillDirectory->path)
+//         .spillDirectory(spillDirectory->getPath())
 //         .probeKeys({"t_k1"})
 //         .probeVectors(std::move(probeVectors))
 //         .buildKeys({"u_k1"})
@@ -7303,7 +7303,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 //     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //         .numDrivers(numDrivers, true, true)
-//         .spillDirectory(spillDirectory->path)
+//         .spillDirectory(spillDirectory->getPath())
 //         .keyTypes({BIGINT()})
 //         .probeVectors(32, 5)
 //         .buildVectors(32, 5)
@@ -7348,7 +7348,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //     const auto spillDirectory = exec::test::TempDirectoryPath::create();
 //     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //         .numDrivers(1)
-//         .spillDirectory(spillDirectory->path)
+//         .spillDirectory(spillDirectory->getPath())
 //         .probeKeys({"t_k1"})
 //         .probeVectors(std::move(probeVectors))
 //         .buildKeys({"u_k1"})
@@ -7415,7 +7415,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //   const auto spillDirectory = exec::test::TempDirectoryPath::create();
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .numDrivers(1)
-//       .spillDirectory(spillDirectory->path)
+//       .spillDirectory(spillDirectory->getPath())
 //       .keyTypes({BIGINT()})
 //       .probeVectors(32, 5)
 //       .buildVectors(32, 5)
