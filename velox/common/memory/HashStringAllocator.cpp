@@ -350,6 +350,7 @@ void HashStringAllocator::removeFromFreeList(Header* header) {
 HashStringAllocator::Header* HashStringAllocator::allocate(
     int32_t size,
     bool exactSize) {
+  requestedContiguous_ |= exactSize;
   if (size > kMaxAlloc && exactSize) {
     VELOX_CHECK_LE(size, Header::kSizeMask);
     auto* header =

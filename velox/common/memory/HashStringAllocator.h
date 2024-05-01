@@ -142,6 +142,11 @@ class HashStringAllocator : public StreamArena {
       return *reinterpret_cast<Header**>(end() - kContinuedPtrSize);
     }
 
+    void setNextContinued(Header* nextContinued) {
+      VELOX_DCHECK(isContinued());
+      *reinterpret_cast<Header**>(end() - kContinuedPtrSize) = nextContinued;
+    }
+
     std::string toString();
 
    private:
@@ -313,6 +318,10 @@ class HashStringAllocator : public StreamArena {
   /// Frees all memory associated with 'this' and leaves 'this' ready for reuse.
   void clear() override;
 
+  const memory::AllocationPool& allocationPool() const {
+    return pool_;
+  }
+
   memory::MemoryPool* pool() const {
     return pool_.pool();
   }
@@ -337,6 +346,10 @@ class HashStringAllocator : public StreamArena {
   void checkEmpty() const;
 
   std::string toString() const;
+
+  void allowSplittingContiguous() {
+    allowSplittingContiguous_ = true;
+  }
 
  private:
   static constexpr int32_t kUnitSize = 16 * memory::AllocationTraits::kPageSize;
@@ -424,6 +437,17 @@ class HashStringAllocator : public StreamArena {
 
   // Sum of sizes in 'allocationsFromPool_'.
   int64_t sizeFromPool_{0};
+
+  // Indicates if this allocator has been requested contiguous memory
+  // explicitly. If this is true and 'allowSplittingContiguous_' is false, don't
+  // allow compaction which might split contiguous allocated block.
+  bool requestedContiguous_{false};
+
+  // Indicates that the caller allows the allocator to split the contiguous
+  // allocated memory when doing memory compaction.
+  bool allowSplittingContiguous_{false};
+
+  friend class HashStringAllocatorCompactor;
 };
 
 // Utility for keeping track of allocation between two points in
