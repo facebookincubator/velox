@@ -69,22 +69,19 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return deleteRows;
   }
 
-  std::vector<int64_t> makeSequenceRows(int32_t maxRowNumber) {
-    std::vector<int64_t> deleteRows;
-    deleteRows.resize(maxRowNumber);
-    std::iota(deleteRows.begin(), deleteRows.end(), 0);
-    return deleteRows;
-  }
+  std::vector<int64_t> makeSequenceRows(int32_t numRows, int8_t repeat = 1) {
+    VELOX_CHECK_GT(repeat, 0);
 
-  std::vector<std::vector<int64_t>> makeContinuousRows(
-      int32_t min,
-      int32_t max) {
-    std::vector<std::vector<int64_t>> deleteRows(
-        max - min + 1, std::vector<int64_t>(1));
-    for (auto i = min; i <= max; i++) {
-      deleteRows[i - min][0] = i;
+    auto maxValue = std::ceil((double)numRows / repeat);
+    std::vector<int64_t> values;
+    values.reserve(numRows);
+    for (int32_t i = 0; i < maxValue; i++) {
+      for (int8_t j = 0; j < repeat; j++) {
+        values.push_back(i);
+      }
     }
-    return deleteRows;
+    values.resize(numRows);
+    return values;
   }
 
   std::string getQuery(const std::vector<std::vector<int64_t>>& deleteRowsVec) {
@@ -101,7 +98,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       bool multipleBaseFiles,
       int32_t splitCount,
       int32_t numPrefetchSplits) {
-    auto dataFilePaths = writeDataFile(splitCount, rowCount);
+    auto dataFilePaths = writeDataFiles(rowCount, 1, splitCount);
     std::vector<std::shared_ptr<ConnectorSplit>> splits;
     // Keep the reference to the deleteFilePath, otherwise the corresponding
     // file will be deleted.
@@ -170,27 +167,58 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         deleteFiles);
   }
 
-  std::vector<RowVectorPtr> makeVectors(int32_t count, int32_t rowsPerVector) {
-    std::vector<RowVectorPtr> vectors;
-    for (int i = 0; i < count; i++) {
-      auto data = makeSequenceRows(rowsPerVector);
-      VectorPtr c0 = vectorMaker_.flatVector<int64_t>(data);
-      vectors.push_back(makeRowVector({"c0"}, {c0}));
+  std::vector<RowVectorPtr>
+  makeVectors(int32_t count, int32_t rowsPerVector, int32_t numColumns = 1) {
+    std::vector<TypePtr> types(numColumns, BIGINT());
+    std::vector<std::string> names;
+    for (int j = 0; j < numColumns; j++) {
+      names.push_back(fmt::format("c{}", j));
     }
 
-    return vectors;
+    std::vector<RowVectorPtr> rowVectors;
+    for (int i = 0; i < count; i++) {
+      std::vector<VectorPtr> vectors;
+
+      // Create the column values like below:
+      // c0 c1 c2
+      //  0  0  0
+      //  1  0  0
+      //  2  1  0
+      //  3  1  1
+      //  4  2  1
+      //  5  2  1
+      //  6  3  2
+      // ...
+      // In the first column c0, the values are continuously increasing and not
+      // repeating. In the second column c1, the values are continuously
+      // increasing and each value repeats once. And so on.
+      for (int j = 0; j < numColumns; j++) {
+        auto data = makeSequenceRows(rowsPerVector, j + 1);
+        vectors.push_back(vectorMaker_.flatVector<int64_t>(data));
+      }
+
+      rowVectors.push_back(makeRowVector(names, vectors));
+    }
+
+    rowType_ = std::make_shared<RowType>(std::move(names), std::move(types));
+
+    return rowVectors;
   }
 
-  std::vector<std::shared_ptr<TempFilePath>> writeDataFile(
-      int32_t splitCount,
-      uint64_t numRows) {
-    auto dataVectors = makeVectors(splitCount, numRows);
+  std::vector<std::shared_ptr<TempFilePath>> writeDataFiles(
+      uint64_t numRows,
+      int32_t numColumns = 1,
+      int32_t splitCount = 1) {
+    auto dataVectors = makeVectors(splitCount, numRows, numColumns);
+    VELOX_CHECK_EQ(dataVectors.size(), splitCount);
+
     std::vector<std::shared_ptr<TempFilePath>> dataFilePaths;
-    dataFilePaths.reserve(dataVectors.size());
-    for (auto i = 0; i < dataVectors.size(); i++) {
+    dataFilePaths.reserve(splitCount);
+    for (auto i = 0; i < splitCount; i++) {
       dataFilePaths.emplace_back(TempFilePath::create());
       writeToFile(dataFilePaths.back()->getPath(), dataVectors[i]);
     }
+
     createDuckDbTable(dataVectors);
     return dataFilePaths;
   }
