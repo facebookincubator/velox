@@ -21,25 +21,27 @@
 
 namespace facebook::velox::common {
 
-ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
+ScanSpec* ScanSpec::getOrCreateChild(const std::string& name, bool isTempNode) {
   if (auto it = this->childByFieldName_.find(name);
       it != this->childByFieldName_.end()) {
     return it->second;
   }
-  this->children_.push_back(std::make_unique<ScanSpec>(name));
+  this->children_.push_back(std::make_unique<ScanSpec>(name, isTempNode));
   auto* child = this->children_.back().get();
   this->childByFieldName_[child->fieldName()] = child;
   return child;
 }
 
-ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
+ScanSpec* ScanSpec::getOrCreateChild(
+    const Subfield& subfield,
+    bool isTempNode) {
   auto* container = this;
   const auto& path = subfield.path();
   for (size_t depth = 0; depth < path.size(); ++depth) {
     const auto element = path[depth].get();
     VELOX_CHECK_EQ(element->kind(), kNestedField);
     auto* nestedField = static_cast<const Subfield::NestedField*>(element);
-    container = container->getOrCreateChild(nestedField->name());
+    container = container->getOrCreateChild(nestedField->name(), isTempNode);
   }
   return container;
 }
@@ -55,18 +57,19 @@ bool ScanSpec::compareTimeToDropValue(
     }
     // Integer filters are before other filters if there is no
     // history data.
-    if (left->filter_ && right->filter_) {
-      if (left->filter_->kind() == right->filter_->kind()) {
+    if (!left->filters_.empty() && !right->filters_.empty()) {
+      if (left->filters_.back()->kind() == right->filters_.back()->kind()) {
         return left->fieldName_ < right->fieldName_;
       }
-      return left->filter_->kind() < right->filter_->kind();
+      return left->filters_.back()->kind() < right->filters_.back()->kind();
     }
+
     // If hasFilter() is true but 'filter_' is nullptr, we have a filter
     // on complex type members. The simple type filter goes first.
-    if (left->filter_) {
+    if (!left->filters_.empty()) {
       return true;
     }
-    if (right->filter_) {
+    if (!right->filters_.empty()) {
       return false;
     }
     return left->fieldName_ < right->fieldName_;
@@ -124,6 +127,20 @@ void ScanSpec::enableFilterInSubTree(bool value) {
   }
 }
 
+void ScanSpec::deleteTempNodes() {
+  for (auto it = children_.begin(); it != children_.end();) {
+    if ((*it)->isTempNode()) {
+      it = children_.erase(it);
+    } else {
+      if ((*it)->hasTempFilter()) {
+        (*it)->popFilter();
+        (*it)->setHasTempFilter(false);
+      }
+      ++it;
+    }
+  }
+}
+
 const std::vector<ScanSpec*>& ScanSpec::stableChildren() {
   std::lock_guard<std::mutex> l(mutex_);
   if (stableChildren_.empty()) {
@@ -157,7 +174,7 @@ bool ScanSpec::hasFilter() const {
 }
 
 bool ScanSpec::hasFilterApplicableToConstant() const {
-  if (filter_) {
+  if (!filters_.empty()) {
     return true;
   }
   for (auto& child : children_) {
@@ -196,7 +213,7 @@ void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
       // constant will have been evaluated at split start time. If
       // 'child' is constant there is no adaptation that can be
       // received.
-      child->filter_ = std::move(otherChild->filter_);
+      child->filters_ = std::move(otherChild->filters_);
       child->selectivity_ = otherChild->selectivity_;
     }
   }
@@ -402,8 +419,8 @@ std::string ScanSpec::toString() const {
   std::stringstream out;
   if (!fieldName_.empty()) {
     out << fieldName_;
-    if (filter_) {
-      out << " filter " << filter_->toString();
+    if (!filters_.empty()) {
+      out << " filter " << filters_.back()->toString();
       if (filterDisabled_) {
         out << " disabled";
       }
@@ -429,7 +446,7 @@ std::string ScanSpec::toString() const {
 }
 
 void ScanSpec::addFilter(const Filter& filter) {
-  filter_ = filter_ ? filter_->mergeWith(&filter) : filter.clone();
+  pushFilter(filter.clone());
 }
 
 ScanSpec* ScanSpec::addField(const std::string& name, column_index_t channel) {
@@ -563,8 +580,8 @@ void filterRows(
 } // namespace
 
 void ScanSpec::applyFilter(const BaseVector& vector, uint64_t* result) const {
-  if (filter_) {
-    filterRows(vector, *filter_, vector.size(), result);
+  if (!filters_.empty()) {
+    filterRows(vector, *filter(), vector.size(), result);
   }
   if (!vector.type()->isRow()) {
     // Filter on MAP or ARRAY children are pruning, and won't affect correctness
