@@ -219,7 +219,9 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
       fsStats_,
       fileHandleFactory_,
       executor_,
-      scanSpec_);
+      scanSpec_,
+      expressionEvaluator_,
+      totalRemainingFilterTime_);
 }
 
 std::unique_ptr<HivePartitionFunction> HiveDataSource::setupBucketConversion() {
@@ -321,8 +323,10 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   splitReader_ = createSplitReader();
+
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
+
   splitReader_->configureReaderOptions(randomSkip_);
   splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
   readerOutputType_ = splitReader_->readerOutputType();
@@ -615,6 +619,7 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
 void HiveDataSource::registerWaveDelegateHook(WaveDelegateHookFunction hook) {
   waveDelegateHook_ = hook;
 }
+
 std::shared_ptr<wave::WaveDataSource> toWaveDataSource();
 
 } // namespace facebook::velox::connector::hive
