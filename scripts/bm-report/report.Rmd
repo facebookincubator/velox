@@ -1,0 +1,221 @@
+---
+title: "Velox Build Metrics"
+execute:
+  warning: false
+  echo: false
+format:
+  html:
+    grid:
+        sidebar-width: 0px
+        body-width: 1800px
+        margin-width: 150px
+        gutter-width: 1.5rem
+    self-contained: true
+    page-layout: full
+    toc: false
+    margin-left: 30px
+    link-external-newwindow: true
+    theme: cosmo
+---
+
+```{r setup}
+library(gt)
+library(ggplot2)
+library(plotly)
+library(gdata)
+library(dplyr)
+
+cd <- cachem::cache_disk(rappdirs::user_cache_dir("velox-bm-report"))
+mgh <- memoise::memoise(gh::gh, cache = cd)
+mruns <- memoise::memoise(conbenchcoms::runs, cache = cd)
+mresults <- memoise::memoise(conbenchcoms::benchmark_results, cache = cd)
+
+runs <- mgh(
+  "GET /repos/facebookincubator/velox/actions/workflows/build-metrics.yml/runs",
+  status = "success",
+  branch = "main"
+) |> jsonlite::toJSON()
+
+newest_sha <- runs |>
+  jqr::jq(".workflow_runs | max_by(.updated_at) | .head_sha") |>
+  jsonlite::fromJSON()
+
+run_shas <- runs |>
+  jqr::jq("[.workflow_runs[].head_sha]") |>
+  jsonlite::fromJSON()
+run_ids <- mruns(run_shas) |>
+  filter(commit.branch == "facebookincubator:main", substr(id, 1, 2) == "BM") |>
+  pull(id)
+results <- run_ids |>
+  purrr::map_df(mresults) |>
+  mutate(
+    timestamp = lubridate::as_datetime(timestamp),
+    stats.data = unlist(stats.data),
+    type = case_when(
+      startsWith(run_id, "BM-debug") ~ "debug",
+      .default = "release"
+    )
+  )
+```
+::: {.panel-tabset}
+## Times
+```{r total-graphs}
+times_plot <- results |>
+  filter(tags.suite == "total", endsWith(tags.source, "time")) |>
+  mutate(
+    stats.data = lubridate::dseconds(stats.data),
+  ) |>
+  ggplot(aes(
+    x = timestamp,
+    y = stats.data,
+    group = interaction(tags.name, type), color = tags.name
+  )) +
+  facet_wrap(~type) +
+  geom_line() +
+  geom_point() +
+  scale_y_time() +
+  scale_x_datetime() +
+  labs(
+    title = "Velox Build Times",
+    x = "Date",
+    y = "Time in Minutes"
+  ) +
+  theme_minimal()
+ggplotly(times_plot)
+```
+```{r expensive-objects}
+compile_times <- results |>
+  filter(tags.suite == "compiling", commit.sha == newest_sha) |>
+  mutate(
+    stats.data = lubridate::dseconds(stats.data),
+  )
+compile_times |>
+  filter(type == "release") |>
+  select(tags.name, stats.data) |>
+  arrange(desc(stats.data)) |>
+  gt() |>
+  cols_label(
+    `tags.name` = "Object",
+    `stats.data` = "Time"
+  ) |>
+  cols_align(align = "left", columns = everything()) |>
+  tab_header(title = "Compile Times - Release") |>
+  opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
+
+compile_times |>
+  filter(type == "debug") |>
+  select(tags.name, stats.data) |>
+  arrange(desc(stats.data)) |>
+  gt() |>
+  cols_label(
+    `tags.name` = "Object",
+    `stats.data` = "Time"
+  ) |>
+  cols_align(align = "left", columns = everything()) |>
+  tab_header(title = "Compile Times - Debug") |>
+  opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
+
+link_times <- results |>
+  filter(tags.suite == "linking", commit.sha == newest_sha) |>
+  mutate(
+    stats.data = lubridate::dseconds(stats.data),
+  )
+
+link_times |>
+  filter(type == "release") |>
+  select(tags.name, stats.data) |>
+  arrange(desc(stats.data)) |>
+  gt() |>
+  cols_label(
+    `tags.name` = "Object",
+    `stats.data` = "Time"
+  ) |>
+  cols_align(align = "left", columns = everything()) |>
+  tab_header(title = "Link Times - Release") |>
+  opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
+
+link_times |>
+  filter(type == "debug") |>
+  select(tags.name, stats.data) |>
+  arrange(desc(stats.data)) |>
+  gt() |>
+  cols_label(
+    `tags.name` = "Object",
+    `stats.data` = "Time"
+  ) |>
+  cols_align(align = "left", columns = everything()) |>
+  tab_header(title = "Link Times - Debug") |>
+  opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
+```
+## Sizes
+```{r big-objects}
+size_formatter <- function() {
+  function(x) {
+    gdata::humanReadable(x, standard = "Unix")
+  }
+}
+create_byte <- function(bytes) {
+  stopifnot(is.numeric(bytes))
+  structure(
+    list(bytes = bytes),
+    class = "BytesObject"
+  )
+}
+Bytes <- Vectorize(create_byte, SIMPLIFY = FALSE)
+
+print.BytesObject <- function(x, ...) {
+  human_readable <- prettyunits::pretty_bytes(x$bytes)
+  cat(human_readable)
+}
+
+object_sizes <- results |>
+  filter(endsWith(tags.source, "size"), commit.sha == newest_sha) 
+sizes_plot <- results |>
+  filter(tags.suite == "executable", startsWith(tags.name, "total_")) |>
+  ggplot(aes(
+    x = timestamp,
+    y = stats.data,
+    group = interaction(tags.name, type), color = tags.name
+  )) +
+  facet_wrap(~type) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(labels = size_formatter()) +
+  scale_x_datetime() +
+  labs(
+    title = "Velox Object Sizes",
+    x = "Date",
+    y = "Size"
+  ) +
+  theme_minimal()
+ggplotly(sizes_plot)
+
+object_sizes |>
+  filter(type == "release") |>
+  select(tags.name, stats.data) |>
+  arrange(desc(stats.data)) |>
+  gt() |>
+  cols_label(
+    `tags.name` = "Object",
+    `stats.data` = "Size"
+  ) |>
+  fmt(columns = `stats.data`, fn = size_formatter()) |>
+  cols_align(align = "left", columns = everything()) |>
+  tab_header(title = "Object Sizes - Release") |>
+  opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
+
+object_sizes |>
+  filter(type == "debug") |>
+  select(tags.name, stats.data) |>
+  arrange(desc(stats.data)) |>
+  gt() |>
+  fmt(columns = `stats.data`, fn = size_formatter()) |>
+  cols_label(
+    `tags.name` = "Object",
+    `stats.data` = "Time"
+  ) |>
+  cols_align(align = "left", columns = everything()) |>
+  tab_header(title = "Object Sizes - Debug") |>
+  opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
+```
+:::
