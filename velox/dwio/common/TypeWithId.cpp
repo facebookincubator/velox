@@ -78,6 +78,8 @@ std::unique_ptr<TypeWithId> TypeWithId::create(
   uint32_t next = 1;
   std::vector<std::unique_ptr<TypeWithId>> children(type->size());
   for (int i = 0, size = type->size(); i < size; ++i) {
+    // Recursively create children if the corresponding field is needed and is
+    // not constant value, or is one of the extra fields required.
     auto* childSpec = spec.childByName(type->nameOf(i));
     if (childSpec && !childSpec->isConstant()) {
       children[i] = create(type->childAt(i), next, i);
