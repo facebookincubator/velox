@@ -42,6 +42,26 @@ bool ReaderMock::read(uint64_t maxRows) {
   return true;
 }
 
+void ReaderMock::seek(uint64_t rowNumber) {
+  uint64_t totalRows = 0;
+  uint64_t rowsLeft = rowNumber;
+  for (size_t unit = 0; unit < rowsPerUnit_.size(); ++unit) {
+    const uint64_t rowCount = rowsPerUnit_[unit];
+    if (rowsLeft < rowCount) {
+      currentUnit_ = unit;
+      currentRowInUnit_ = rowsLeft;
+      loader_->onSeek(currentUnit_, currentRowInUnit_);
+      return;
+    }
+    rowsLeft -= rowCount;
+    totalRows += rowCount;
+  }
+  VELOX_FAIL(
+      "Can't seek to possition {} in file. Must be less than: {}.",
+      rowNumber,
+      totalRows);
+}
+
 bool ReaderMock::loadUnit() {
   VELOX_CHECK(currentRowInUnit_ <= rowsPerUnit_[currentUnit_]);
   if (currentRowInUnit_ == rowsPerUnit_[currentUnit_]) {
@@ -51,11 +71,9 @@ bool ReaderMock::loadUnit() {
       return false;
     }
   }
-  if (currentRowInUnit_ == 0) {
-    auto& unit = loader_->getLoadedUnit(currentUnit_);
-    auto& unitMock = dynamic_cast<LoadUnitMock&>(unit);
-    VELOX_CHECK(unitMock.isLoaded());
-  }
+  auto& unit = loader_->getLoadedUnit(currentUnit_);
+  auto& unitMock = dynamic_cast<LoadUnitMock&>(unit);
+  VELOX_CHECK(unitMock.isLoaded());
   return true;
 }
 
