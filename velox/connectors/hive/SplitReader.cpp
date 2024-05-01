@@ -75,7 +75,9 @@ std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<io::IoStatistics>& ioStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec) {
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    core::ExpressionEvaluator* expressionEvaluator,
+    std::atomic<uint64_t>& totalRemainingFilterTime) {
   //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
   if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
       hiveSplit->customSplitInfo["table_format"] == "hive-iceberg") {
@@ -89,7 +91,9 @@ std::unique_ptr<SplitReader> SplitReader::create(
         ioStats,
         fileHandleFactory,
         executor,
-        scanSpec);
+        scanSpec,
+        expressionEvaluator,
+        totalRemainingFilterTime);
   } else {
     return std::unique_ptr<SplitReader>(new SplitReader(
         hiveSplit,

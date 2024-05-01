@@ -29,6 +29,8 @@ enum class FileContent {
   kEqualityDeletes,
 };
 
+fmt::underlying_t<FileContent> format_as(FileContent f);
+
 struct IcebergDeleteFile {
   FileContent content;
   const std::string filePath;
