@@ -642,6 +642,7 @@ bool applyPartitionFilter(
       VELOX_FAIL(
           "Bad type {} for partition value: {}", type->kind(), partitionValue);
   }
+  return true;
 }
 
 } // namespace
@@ -655,7 +656,8 @@ bool testFilters(
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeysHandle) {
   const auto totalRows = reader->numberOfRows();
-  const auto& fileTypeWithId = reader->typeWithId();
+  //  const auto& fileTypeWithId = reader->typeWithId();
+  const auto& fileType = reader->rowType();
   const auto& rowType = reader->rowType();
   for (const auto& child : scanSpec->children()) {
     if (child->filter()) {
@@ -685,14 +687,15 @@ bool testFilters(
           return false;
         }
       } else {
-        const auto& typeWithId = fileTypeWithId->childByName(name);
-        const auto columnStats = reader->columnStatistics(typeWithId->id());
+        const auto& type = rowType->findChild(name);
+        const auto columnStats =
+            reader->columnStatistics(rowType->getChildIdx(name));
+        VLOG(0) << "testFilters column name: " << name
+                << " type: " << type->kind() << " stats: " << columnStats.get()
+                << (columnStats ? columnStats->toString() : "no stats");
         if (columnStats != nullptr &&
             !testFilter(
-                child->filter(),
-                columnStats.get(),
-                totalRows.value(),
-                typeWithId->type())) {
+                child->filter(), columnStats.get(), totalRows.value(), type)) {
           VLOG(1) << "Skipping " << filePath
                   << " based on stats and filter for column "
                   << child->fieldName();
