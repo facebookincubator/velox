@@ -156,19 +156,12 @@ TEST_F(XxHash64Test, array) {
 
   // Nested array.
   {
-    using innerArrayType = std::vector<std::optional<int64_t>>;
-    using outerArrayType =
-        std::vector<std::optional<std::vector<std::optional<int64_t>>>>;
-
-    innerArrayType a{1, std::nullopt, 2, 3};
-    innerArrayType b{4, 5};
-    innerArrayType c{6, 7, 8};
-    outerArrayType row1{{a}, {b}};
-    outerArrayType row2{{a}, {c}};
-    outerArrayType row3{{{}}};
-    outerArrayType row4{{{std::nullopt}}};
-    auto arrayVector = makeNullableNestedArrayVector<int64_t>(
-        {{row1}, {row2}, {row3}, {row4}, std::nullopt});
+    auto arrayVector = makeNestedArrayVectorFromJson<int64_t>(
+        {"[[1, null, 2, 3], [4, 5]]",
+         "[[1, null, 2, 3], [6, 7, 8]]",
+         "[[]]",
+         "[[null]]",
+         "[null]"});
     assertEqualVectors(
         makeFlatVector<int64_t>(
             {-6041664978295882827, -1052942565807509112, 42, 42, 42}),

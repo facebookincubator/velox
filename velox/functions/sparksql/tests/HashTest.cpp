@@ -134,7 +134,7 @@ TEST_F(HashTest, Float) {
   EXPECT_EQ(hash<float>(-limits::infinity()), 427440766);
 }
 
-TEST_F(HashTest, Array) {
+TEST_F(HashTest, array) {
   assertEqualVectors(
       makeFlatVector<int32_t>({2101165938, 42, 1045631400}),
       hash(makeArrayVector<int64_t>({{1, 2, 3, 4, 5}, {}, {1, 2, 3}})));
@@ -146,19 +146,12 @@ TEST_F(HashTest, Array) {
 
   // Nested array.
   {
-    using innerArrayType = std::vector<std::optional<int64_t>>;
-    using outerArrayType =
-        std::vector<std::optional<std::vector<std::optional<int64_t>>>>;
-
-    innerArrayType a{1, std::nullopt, 2, 3};
-    innerArrayType b{4, 5};
-    innerArrayType c{6, 7, 8};
-    outerArrayType row1{{a}, {b}};
-    outerArrayType row2{{a}, {c}};
-    outerArrayType row3{{{}}};
-    outerArrayType row4{{{std::nullopt}}};
-    auto arrayVector = makeNullableNestedArrayVector<int64_t>(
-        {{row1}, {row2}, {row3}, {row4}, std::nullopt});
+    auto arrayVector = makeNestedArrayVectorFromJson<int64_t>(
+        {"[[1, null, 2, 3], [4, 5]]",
+         "[[1, null, 2, 3], [6, 7, 8]]",
+         "[[]]",
+         "[[null]]",
+         "[null]"});
     assertEqualVectors(
         makeFlatVector<int32_t>({2101165938, -992561130, 42, 42, 42}),
         hash(arrayVector));
@@ -192,7 +185,7 @@ TEST_F(HashTest, Array) {
   }
 }
 
-TEST_F(HashTest, Map) {
+TEST_F(HashTest, map) {
   auto mapVector = makeMapVector<int64_t, double>(
       {{{1, 17.0}, {2, 36.0}, {3, 8.0}, {4, 28.0}, {5, 24.0}, {6, 32.0}}});
   assertEqualVectors(
@@ -212,7 +205,7 @@ TEST_F(HashTest, Map) {
       hash(mapWithNullArrays));
 }
 
-TEST_F(HashTest, Row) {
+TEST_F(HashTest, row) {
   auto row = makeRowVector({
       makeFlatVector<int64_t>({1, 3}),
       makeFlatVector<int64_t>({2, 4}),
