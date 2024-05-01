@@ -127,7 +127,7 @@ TEST(OnDemandUnitLoaderTests, CanSeek) {
   EXPECT_EQ(blockedOnIoCount, 4);
 }
 
-TEST(OnDemandUnitLoaderTests, SeekOutOfRange) {
+TEST(OnDemandUnitLoaderTests, SeekOutOfRangeReaderError) {
   size_t blockedOnIoCount = 0;
   OnDemandUnitLoaderFactory factory([&](auto) { ++blockedOnIoCount; });
   ReaderMock readerMock{{10, 20, 30}, {0, 0, 0}, factory};
@@ -135,12 +135,30 @@ TEST(OnDemandUnitLoaderTests, SeekOutOfRange) {
   EXPECT_EQ(blockedOnIoCount, 0);
   readerMock.seek(59);
 
+  readerMock.seek(60);
+
   EXPECT_THAT(
-      [&]() { readerMock.seek(60); },
+      [&]() { readerMock.seek(61); },
       Throws<facebook::velox::VeloxRuntimeError>(Property(
           &facebook::velox::VeloxRuntimeError::message,
-          HasSubstr(
-              "Can't seek to possition 60 in file. Must be less than: 60."))));
+          HasSubstr("Can't seek to possition 61 in file. Must be up to 60."))));
+}
+
+TEST(OnDemandUnitLoaderTests, SeekOutOfRange) {
+  OnDemandUnitLoaderFactory factory(nullptr);
+  std::vector<std::atomic_bool> unitsLoaded(getUnitsLoadedWithFalse(1));
+  std::vector<std::unique_ptr<LoadUnit>> units;
+  units.push_back(std::make_unique<LoadUnitMock>(10, 0, unitsLoaded, 0));
+
+  auto unitLoader = factory.create(std::move(units));
+
+  unitLoader->onSeek(0, 10);
+
+  EXPECT_THAT(
+      [&]() { unitLoader->onSeek(0, 11); },
+      Throws<facebook::velox::VeloxRuntimeError>(Property(
+          &facebook::velox::VeloxRuntimeError::message,
+          HasSubstr("Row out of range"))));
 }
 
 TEST(OnDemandUnitLoaderTests, UnitOutOfRange) {

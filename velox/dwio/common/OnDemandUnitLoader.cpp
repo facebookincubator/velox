@@ -67,7 +67,7 @@ class OnDemandUnitLoader : public UnitLoader {
 
   void onSeek(uint32_t unit, uint64_t rowOffsetInUnit) override {
     VELOX_CHECK_LT(unit, loadUnits_.size(), "Unit out of range");
-    VELOX_CHECK_LT(
+    VELOX_CHECK_LE(
         rowOffsetInUnit, loadUnits_[unit]->getNumRows(), "Row out of range");
   }
 

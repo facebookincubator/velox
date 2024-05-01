@@ -56,8 +56,10 @@ void ReaderMock::seek(uint64_t rowNumber) {
     rowsLeft -= rowCount;
     totalRows += rowCount;
   }
-  VELOX_FAIL(
-      "Can't seek to possition {} in file. Must be less than: {}.",
+  VELOX_CHECK_EQ(
+      rowsLeft,
+      0,
+      "Can't seek to possition {} in file. Must be up to {}.",
       rowNumber,
       totalRows);
 }
