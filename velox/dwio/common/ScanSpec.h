@@ -44,19 +44,31 @@ class ScanSpec {
   static constexpr const char* kMapValuesFieldName = "values";
   static constexpr const char* kArrayElementsFieldName = "elements";
 
-  explicit ScanSpec(const std::string& name) : fieldName_(name) {}
+  explicit ScanSpec(const std::string& name, bool isTempNode = false)
+      : fieldName_(name), isTempNode_(isTempNode) {}
 
   // Filter to apply. If 'this' corresponds to a struct/list/map, this
   // can only be isNull or isNotNull, other filtering is given by
   // 'children'.
   common::Filter* filter() const {
-    return filter_.get();
+    return filters_.empty() ? nullptr : filters_.back().get();
   }
 
   // Sets 'filter_'. May be used at initialization or when adding a
   // pushed down filter, e.g. top k cutoff.
   void setFilter(std::unique_ptr<Filter> filter) {
-    filter_ = std::move(filter);
+    filters_.push_back(std::move(filter));
+  }
+
+  void updateFilter(std::unique_ptr<Filter> newFilter) {
+    if (!filters_.empty()) {
+      newFilter->mergeWith(filters_.back().get());
+    }
+    filters_.push_back(std::move(newFilter));
+  }
+
+  void restoreFilter() {
+    filters_.pop_back();
   }
 
   void addFilter(const Filter&);
@@ -196,13 +208,15 @@ class ScanSpec {
 
   /// Returns the ScanSpec corresponding to 'name'. Creates it if needed without
   /// any intermediate level.
-  ScanSpec* getOrCreateChild(const std::string& name);
+  ScanSpec* getOrCreateChild(const std::string& name, bool isTempNode = false);
 
   // Returns the ScanSpec corresponding to 'subfield'. Creates it if
   // needed, including any intermediate levels. This is used at
   // TableScan initialization to create the ScanSpec tree that
   // corresponds to the ColumnReader tree.
-  ScanSpec* getOrCreateChild(const Subfield& subfield);
+  ScanSpec* getOrCreateChild(const Subfield& subfield, bool isTempNode = false);
+
+  void deleteTempNodes();
 
   ScanSpec* childByName(const std::string& name) const {
     auto it = childByFieldName_.find(name);
@@ -230,11 +244,11 @@ class ScanSpec {
   // apply to Nimble format leaf nodes, because nulls are mixed in the encoding
   // with actual values.
   bool readsNullsOnly() const {
-    if (filter_) {
-      if (filter_->kind() == FilterKind::kIsNull) {
+    if (filters_.size() > 0) {
+      if (filters_.back()->kind() == FilterKind::kIsNull) {
         return true;
       }
-      if (filter_->kind() == FilterKind::kIsNotNull && !projectOut_ &&
+      if (filters_.back()->kind() == FilterKind::kIsNotNull && !projectOut_ &&
           !extractValues_) {
         return true;
       }
@@ -344,6 +358,18 @@ class ScanSpec {
     isFlatMapAsStruct_ = value;
   }
 
+  bool isTempNode() const {
+    return isTempNode_;
+  }
+
+  void setHasTempFilter(bool hasTempFilter) {
+    hasTempFilter_ = hasTempFilter;
+  }
+
+  bool hasTempFilter() const {
+    return hasTempFilter_;
+  }
+
  private:
   void reorder();
 
@@ -376,7 +402,7 @@ class ScanSpec {
   // True if a string dictionary or flat map in this field should be
   // returned as flat.
   bool makeFlat_ = false;
-  std::unique_ptr<common::Filter> filter_;
+  std::vector<std::shared_ptr<common::Filter>> filters_;
 
   // Filters that will be only used for row group filtering based on metadata.
   // The conjunctions among these filters are tracked in MetadataFilter, with
@@ -429,6 +455,11 @@ class ScanSpec {
   // This node represents a flat map column that need to be read as struct,
   // i.e. in table schema it is a MAP, but in result vector it is ROW.
   bool isFlatMapAsStruct_ = false;
+
+  // This node is temporary, will be used and deleted after intermediate
+  // processing stages, like Iceberg equality deletes.
+  bool isTempNode_ = false;
+  bool hasTempFilter_ = false;
 };
 
 template <typename F>
