@@ -9,7 +9,7 @@ set -euo pipefail
 # Run a GPU build and test
 pushd "$(dirname ${0})"
 
-#make cmake-gpu
+CUDA_ARCHITECTURES="native" make cmake-gpu
 make build
 
 cd _build/release
