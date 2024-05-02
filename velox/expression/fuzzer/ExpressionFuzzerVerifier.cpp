@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/expression/tests/ExpressionFuzzerVerifier.h"
+#include "velox/expression/fuzzer/ExpressionFuzzerVerifier.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
 #include <glog/logging.h>
@@ -24,9 +24,9 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/ReverseSignatureBinder.h"
-#include "velox/expression/tests/ExpressionFuzzer.h"
+#include "velox/expression/fuzzer/ExpressionFuzzer.h"
 
-namespace facebook::velox::test {
+namespace facebook::velox::fuzzer {
 
 namespace {
 
@@ -250,9 +250,9 @@ void ExpressionFuzzerVerifier::retryWithTry(
                 false, // canThrow
                 columnsToWrapInLazy)
             .result;
-  } catch (const std::exception& e) {
+  } catch (const std::exception&) {
     if (options_.findMinimalSubexpression) {
-      computeMinimumSubExpression(
+      test::computeMinimumSubExpression(
           {&execCtx_, {false, ""}},
           *vectorFuzzer_,
           plans,
@@ -281,9 +281,9 @@ void ExpressionFuzzerVerifier::retryWithTry(
                        : nullptr,
           false, // canThrow
           columnsToWrapInLazy);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       if (options_.findMinimalSubexpression) {
-        computeMinimumSubExpression(
+        test::computeMinimumSubExpression(
             {&execCtx_, {false, ""}},
             *vectorFuzzer_,
             plans,
@@ -339,9 +339,9 @@ void ExpressionFuzzerVerifier::go() {
           resultVectors ? BaseVector::copy(*resultVectors) : nullptr,
           true, // canThrow
           columnsToWrapInLazy);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       if (options_.findMinimalSubexpression) {
-        computeMinimumSubExpression(
+        test::computeMinimumSubExpression(
             {&execCtx_, {false, ""}},
             *vectorFuzzer_,
             plans,
@@ -374,4 +374,4 @@ void ExpressionFuzzerVerifier::go() {
   LOG(ERROR) << "Total failed: " << numFailed;
 }
 
-} // namespace facebook::velox::test
+} // namespace facebook::velox::fuzzer

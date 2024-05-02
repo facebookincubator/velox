@@ -45,11 +45,7 @@ enum class FileFormat {
   TEXT = 5,
   JSON = 6,
   PARQUET = 7,
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  ALPHA = 8,
-#else
   NIMBLE = 8,
-#endif
   ORC = 9,
 };
 
@@ -83,6 +79,7 @@ class SerDeOptions {
   inline static const std::string kFieldDelim{"field.delim"};
   inline static const std::string kCollectionDelim{"collection.delim"};
   inline static const std::string kMapKeyDelim{"mapkey.delim"};
+  inline static const std::string kEscapeChar{"escape.delim"};
 
   explicit SerDeOptions(
       uint8_t fieldDelim = '\1',

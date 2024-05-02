@@ -18,7 +18,7 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
-#include "velox/expression/tests/FuzzerRunner.h"
+#include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 DEFINE_int64(
@@ -27,7 +27,7 @@ DEFINE_int64(
     "Initial seed for random number generator used to reproduce previous "
     "results (0 means start with random seed).");
 
-using facebook::velox::test::FuzzerRunner;
+using facebook::velox::fuzzer::FuzzerRunner;
 
 int main(int argc, char** argv) {
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
@@ -64,7 +64,6 @@ int main(int argc, char** argv) {
       "regexp_extract",
       "regexp_extract_all",
       "regexp_like",
-      "map_top_n", // https://github.com/facebookincubator/velox/issues/9497
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   return FuzzerRunner::run(initialSeed, skipFunctions, {{}});
