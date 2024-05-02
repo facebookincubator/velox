@@ -357,6 +357,9 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   currentRowInStripe_ = rowNumber - firstRowOfStripe_[currentStripe_];
   previousRow_ = rowNumber;
 
+  const auto loadUnitIdx = currentStripe_ - firstStripe_;
+  unitLoader_->onSeek(loadUnitIdx, currentRowInStripe_);
+
   if (currentStripe_ != previousStripe) {
     // Different stripe. Let's load the new stripe.
     currentUnit_ = nullptr;
@@ -584,7 +587,8 @@ uint64_t DwrfRowReader::next(
   // reading of the data.
   auto strideSize = getReader().getFooter().rowIndexStride();
   strideIndex_ = strideSize > 0 ? currentRowInStripe_ / strideSize : 0;
-  unitLoader_->onRead(currentStripe_, currentRowInStripe_, rowsToRead);
+  const auto loadUnitIdx = currentStripe_ - firstStripe_;
+  unitLoader_->onRead(loadUnitIdx, currentRowInStripe_, rowsToRead);
   readNext(rowsToRead, mutation, result);
   currentRowInStripe_ += rowsToRead;
   return rowsToRead;

@@ -108,6 +108,8 @@ class SplitReader {
 
   bool allPrefetchIssued() const;
 
+  void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
+
   std::string toString() const;
 
  protected:
@@ -149,7 +151,7 @@ class SplitReader {
   const std::unordered_map<
       std::string,
       std::shared_ptr<HiveColumnHandle>>* const partitionKeys_;
-  const ConnectorQueryCtx* const connectorQueryCtx_;
+  const ConnectorQueryCtx* connectorQueryCtx_;
   const std::shared_ptr<const HiveConfig> hiveConfig_;
 
   const RowTypePtr readerOutputType_;
