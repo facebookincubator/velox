@@ -456,6 +456,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_prunedMapNonNullMapKey) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->children().size(), 2);
