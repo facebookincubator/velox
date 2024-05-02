@@ -26,8 +26,15 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 class InputFileName final : public exec::VectorFunction {
+ private:
+  uint64_t doNotEncodeSymbolsBits_[4] = {};
+
  public:
-  InputFileName() {}
+  InputFileName() {
+    for (auto p : "!$&'()*+,;=/:@") {
+      bits::setBit(doNotEncodeSymbolsBits_, static_cast<size_t>(p), true);
+    }
+  }
 
   void apply(
       const SelectivityVector& rows,
@@ -38,13 +45,9 @@ class InputFileName final : public exec::VectorFunction {
     context.ensureWritable(rows, VARCHAR(), result);
     auto driverCtx = context.driverCtx();
     auto inputFileName = driverCtx->inputFileName;
-    uint64_t doNotEncodeSymbolsBits[4] = {};
-    for (auto p : "!$&'()*+,;=/:@") {
-      bits::setBit(doNotEncodeSymbolsBits, static_cast<size_t>(p), true);
-    }
     std::string outFileName = inputFileName;
     facebook::velox::functions::detail::urlEscape(
-        outFileName, inputFileName, false, doNotEncodeSymbolsBits);
+        outFileName, inputFileName, false, doNotEncodeSymbolsBits_);
     context.moveOrCopyResult(
         std::make_shared<ConstantVector<StringView>>(
             context.pool(),
