@@ -1076,22 +1076,6 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
 }
 
 const std::vector<TypePtr>& defaultScalarTypes() {
-  // @TODO Add decimal TypeKinds to randType.
-  // Refer https://github.com/facebookincubator/velox/issues/3942
-  static std::vector<TypePtr> kScalarTypes{
-      BOOLEAN(),
-      TINYINT(),
-      SMALLINT(),
-      INTEGER(),
-      BIGINT(),
-      REAL(),
-      DOUBLE(),
-      VARCHAR(),
-      VARBINARY(),
-      TIMESTAMP(),
-      DATE(),
-      INTERVAL_DAY_TIME(),
-  };
   return kScalarTypes;
 }
 
