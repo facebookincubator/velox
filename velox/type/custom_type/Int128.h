@@ -25,6 +25,9 @@
 #include <cmath>
 #include <folly/dynamic.h>
 #include <iostream>
+#include <boost/multiprecision/cpp_int.hpp>
+#include <cstdint>
+#include <climits>
 
 namespace facebook::velox::type {
 
@@ -191,9 +194,13 @@ class int128 {
 
  public:
   friend std::hash<int128>;
-  int128(const int128& other) {
+  constexpr int128(const int128& other) {
     this->hi_ = other.hi_;
     this->lo_ = other.lo_;
+  }
+  constexpr int128(const boost::multiprecision::int128_t& boostValue) {
+    lo_ = static_cast<uint64_t>(boostValue);
+    hi_ = static_cast<int64_t>(boostValue >> 64);
   }
   constexpr int128() : hi_(0), lo_(0) {}
   constexpr int128(std::pair<int64_t, uint64_t> p)
@@ -227,6 +234,39 @@ class int128 {
     return dynamicObject;
   }
 
+  //To convert from boost to custom int128
+  const int128 ConvertBoostInt128ToCustomInt128(const boost::multiprecision::int128_t& boostValue) {
+    int128 value;
+    value.lo_ = static_cast<uint64_t>(boostValue);
+    value.hi_ = static_cast<int64_t>(boostValue >> 64);
+    return value;
+  }
+
+  const int128 multiply_uint64(uint64_t a, uint64_t b) const {
+    // Split the input numbers into two 32-bit halves to prevent overflow during
+    // multiplication.
+    uint64_t a_low = a & 0xFFFFFFFF;
+    uint64_t a_high = a >> 32;
+    uint64_t b_low = b & 0xFFFFFFFF;
+    uint64_t b_high = b >> 32;
+
+    // Multiply the parts to get intermediate 64-bit results.
+    uint64_t p0 = a_low * b_low;
+    uint64_t p1 = a_low * b_high;
+    uint64_t p2 = a_high * b_low;
+    uint64_t p3 = a_high * b_high;
+
+    // Calculate the carry from the lower to the higher 64-bit part.
+    uint64_t middle_sum = (p0 >> 32) + (p1 & 0xFFFFFFFF) + (p2 & 0xFFFFFFFF);
+    uint64_t carry = (middle_sum >> 32) + (p1 >> 32) + (p2 >> 32);
+
+    // Assemble the final 128-bit result.
+    int128 result;
+    result.lo_ = (middle_sum << 32) | (p0 & 0xFFFFFFFF);
+    result.hi_ = p3 + carry;
+
+    return result;
+  }
 
   int128& operator|=(int128 other) {
     hi_ |= other.hi_;
@@ -291,11 +331,11 @@ class int128 {
   bool operator!=(int128 other) const {
     return !(*this == other);
   }  
-  // TODO: davidmar implement != operator.
+ 
   bool operator!=(int other) const {
     return !(*this == other);
   }
-  //TODO: davidmar implement /= operator.
+ 
   int128 operator/=(int other) const {
     int128 temp = *this;
     temp = *this / int128(other);
@@ -442,6 +482,14 @@ class int128 {
     return result >= int128(0);
   }
 
+  //Int128 to boost int128
+  operator boost::multiprecision::int128_t() const {
+    boost::multiprecision::int128_t result = hi_;
+    result <<= 64; // Shift the high part to its correct position
+    result |= static_cast<uint64_t>(lo_); // Combine with the low part
+    return result;
+  }
+
   //TODO: implement division, current implementation is not viable
   constexpr int128 operator/(const int& other) const {
     return *this / int128(other);
@@ -450,44 +498,56 @@ class int128 {
     return *this / int128(other);
   }  
   constexpr int128 operator/(const int128& other) const {
-    if (other.lo_ == 0 && other.hi_ == 0) {
-        // Division by zero exception
-        throw std::invalid_argument("Division by Zero Exception");
-    }
-    int128 result = int128(1);
     int128 dividend(*this);
-    result = result + 1;
-    while (dividend >= other) {
-        dividend -= other;
-        result += 1;
+    int128 divisor(other);
+
+    // Handle division by zero as an error.
+    if (divisor.lo_ == 0 && divisor.hi_ == 0) {
+        throw std::runtime_error("Division by zero.");
     }
 
-    return result;
+    // Determine the sign of the result.
+    bool negative_result = (dividend.hi_ < 0) ^ (divisor.hi_ < 0);
 
-    //int128 rem = int128(0);
-    //int128 divisor = *other;
-    //int128 dividend = *this;
-    //if (divisor > dividend) {
-    //    if (rem > 0)
-    //      *rem = dividend;
-    //    return 0;
-    //}
-    //// Calculate the distance between most significant bits, 128 > shift >= 0.
-    //int shift = Distance(dividend, divisor);
-    //divisor <<= shift;
-    //int128 quotient = int128(0);
-    //for (; shift >= 0; –shift) {
-    //    quotient <<= 1;
-    //    if (dividend >= divisor) {
-    //      dividend -= divisor;
-    //      quotient |= 1;
-    //    }
-    //    divisor >>= 1;
-    //}
-    //if (rem > 0)
-    //    *rem = dividend;
-    //return quotient;
-    
+    // Use absolute values for the division.
+    int128 abs_dividend = dividend.hi_ < 0 ? -dividend : dividend;
+    int128 abs_divisor = divisor.hi_ < 0 ? -divisor : divisor;
+
+    int128 quotient(0, 0);
+    int128 remainder(0, 0);
+
+    // Long division algorithm.
+    for (int i = 127; i >= 0; --i) {
+        // Shift remainder left by 1 bit.
+        remainder = remainder << 1;
+        // Bring down the next bit of the dividend.
+        if (i >= 64) {
+          // We are working with the high part of the dividend.
+          remainder.lo_ |= (abs_dividend.hi_ >> (i - 64)) & 1;
+        } else {
+          // We are working with the low part of the dividend.
+          remainder.lo_ |= (abs_dividend.lo_ >> i) & 1;
+        }
+
+        // If the remainder is greater than or equal to the divisor, subtract
+        // and increment quotient.
+        if (!(remainder < abs_divisor)) {
+          remainder = remainder - abs_divisor;
+          if (i >= 64) {
+            quotient.hi_ |= (1LL << (i - 64));
+          } else {
+            quotient.lo_ |= (1LL << i);
+          }
+        }
+    }
+
+    // Apply the sign to the quotient.
+    if (negative_result) {
+        quotient = -quotient;
+    }
+
+    return quotient;
+
   }
 
   
@@ -500,20 +560,59 @@ class int128 {
   }
  
   constexpr int128 operator%(const int128& other) const {
-    if (other.lo_ == 0 && other.hi_ == 0) {
-        // Division by zero exception
-        throw std::invalid_argument("Division by Zero Exception");
-    }
-    int128 dividend(*this); // Copy of the dividend
+    //if (other.lo_ == 0 && other.hi_ == 0) {
+    //    // Division by zero exception
+    //    throw std::invalid_argument("Division by Zero Exception");
+    //}
+    //int128 dividend(*this); // Copy of the dividend
+    //int128 divisor(other);
+
+    ////dividend = dividend - divisor;
+    //// Perform modulo operation
+    //while (dividend >= divisor) {
+    //    dividend = dividend - divisor;
+    //}
+
+    //return dividend;
+
+    int128 dividend(*this);
     int128 divisor(other);
 
-    //dividend = dividend - divisor;
-    // Perform modulo operation
-    while (dividend >= divisor) {
-        dividend = dividend - divisor;
+    // Handle division by zero as an error.
+    if (divisor.lo_ == 0 && divisor.hi_ == 0) {
+        throw std::runtime_error("Division by zero.");
     }
 
-    return dividend;
+    // Determine the sign of the result.
+    bool negative_result = (dividend.hi_ < 0) ^ (divisor.hi_ < 0);
+
+    // Use absolute values for the division.
+    int128 abs_dividend = dividend.hi_ < 0 ? -dividend : dividend;
+    int128 abs_divisor = divisor.hi_ < 0 ? -divisor : divisor;
+
+    int128 remainder(0, 0);
+
+    // Long division algorithm.
+    for (int i = 127; i >= 0; --i) {
+        // Shift remainder left by 1 bit.
+        remainder = remainder << 1;
+        // Bring down the next bit of the dividend.
+        if (i >= 64) {
+          // We are working with the high part of the dividend.
+          remainder.lo_ |= (abs_dividend.hi_ >> (i - 64)) & 1;
+        } else {
+          // We are working with the low part of the dividend.
+          remainder.lo_ |= (abs_dividend.lo_ >> i) & 1;
+        }
+
+        // If the remainder is greater than or equal to the divisor, subtract
+        // and increment quotient.
+        if (!(remainder < abs_divisor)) {
+          remainder = remainder - abs_divisor;
+        }
+    }
+
+    return remainder;
   }  
 
  
@@ -526,11 +625,34 @@ class int128 {
   }
   //TODO: implement multply, current implementation is not viable
   constexpr int128 operator*(const int128& other) const {
-    int128 mul;
-    for (int i = 0; i < *this; i++) {
-        mul = mul + other;
+
+    // Determine the sign of the result.
+    bool negative = (this->hi_ < 0) ^ (other.hi_ < 0);
+
+    // Convert to unsigned for multiplication, taking the absolute value if
+    // necessary.
+    uint64_t a_low = this->lo_;
+    uint64_t a_high = (this->hi_ < 0) ? -this->hi_ : this->hi_;
+    uint64_t b_low = other.lo_;
+    uint64_t b_high = (other.hi_ < 0) ? -other.hi_ : other.hi_;
+
+    // Perform unsigned multiplication.
+    int128 result_unsigned = multiply_uint64(a_low, b_low);
+    result_unsigned.hi_ += a_low * b_high + a_high * b_low;
+
+    // Convert back to signed, adjusting the sign as necessary.
+    int128 result;
+    result.lo_ = result_unsigned.lo_;
+    result.hi_ = negative ? -result_unsigned.hi_ : result_unsigned.hi_;
+
+    // If the result is negative and there's a non-zero low part, we need to
+    // adjust the high part.
+    if (negative && result.lo_ != 0) {
+        result.hi_ -= 1;
     }
-    return mul;
+
+    return result;
+
   }  
   
   //TODO: implement multply=
@@ -558,6 +680,40 @@ class int128 {
     return uint128(this->hi_, this->lo_);
   }
 
+inline std::string toString(const int128 value) {
+    // Handle zero as a special case.
+    if (value.lo_ == 0 && value.hi_ == 0) {
+        return "0";
+    }
+
+    // Handle negative numbers.
+    bool is_negative = value.hi_ < 0;
+    int128 abs_value = is_negative
+        ? -value
+        : value; // Assuming you have unary minus implemented.
+
+    std::string result;
+    while (abs_value.hi_ != 0 || abs_value.lo_ != 0) {
+        int128 quotient = abs_value / 10;
+        int128 remainder = abs_value % 10;
+        auto div_result = std::make_pair(quotient, remainder);
+        abs_value = div_result.first; // Quotient becomes the new value to divide.
+        int64_t digit = div_result.second; // Remainder is the digit.
+        result.push_back( '0' + digit); // Convert digit to char and append to the result string.
+    }
+
+    // Since the digits are in reverse order, reverse the string to get the
+    // correct order.
+    std::reverse(result.begin(), result.end());
+
+    // Add the negative sign if the original number was negative.
+    if (is_negative) {
+        result.insert(result.begin(), '-');
+    }
+
+    return result;
+  }
+
 };
 
 bool mul_overflow(int128 a , int128 b ,int64_t result) {
@@ -575,7 +731,6 @@ bool mul_overflow(int128 a , int128 b ,int128 *result) {
   return true;
 
 } // namespace facebook
-
 
 } // namespace facebook::velox::type
 
@@ -606,6 +761,7 @@ double log(facebook::velox::type::int128 value) {
 
 
 } // namespace std
+
 
 namespace folly {
 template <>

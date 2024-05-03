@@ -2,6 +2,7 @@
 #include <stdexcept>
 
 #include <gtest/gtest.h>
+#include <string>
 #include "velox/type/custom_type/Int128.h"
 
 
@@ -300,21 +301,61 @@ TEST(Int128, GreatThan) {
 
         EXPECT_EQ(a > b, true);
 
-        a = int128(1);
-        EXPECT_EQ(a > b, false);
+        int128 d = int128(1);
+        EXPECT_EQ(d > b, false);
 
         EXPECT_EQ(a >= b, true);
 
         int128 c = int128(10);
 
         EXPECT_EQ(a >= c, true);
+
+        c = int128(2147483646, 2147483647);
+        d = int128(1147483646, 2147483647);
+
+        EXPECT_EQ(c > d, true);
+
+        d = int128(3147483646, 2147483647);
+
+        EXPECT_EQ(c > d, false);
+
+        int128 e = int128(9223372036854775807, 9223372036854775807);
+        int128 f = int128(9223372036854775807, 9223372036854775807);
+
+        EXPECT_EQ(e >= f, true);
+
+        f = int128(9223372036854775807, 8223372036854775807);
+
+        EXPECT_EQ(e >= f, true);
+
 }
 
 TEST(Int128, Division) {
-        int128 a = int128(10);
-        int128 b = int128(5);
+        int128 a = int128(0,10);
+        int128 b = int128(0,5);
 
         EXPECT_EQ(a / b, 2);
+
+        a = int128(30);
+        b = int128(3);
+
+        EXPECT_EQ(a / b, 10);
+
+        int128 c = int128(9223372036854775807,9223372036854775807);
+        int128 d = int128(3147483646, 3147483646);
+        
+        int128 x = c / d;
+
+        EXPECT_EQ(x.hi(), 0);
+        EXPECT_EQ(x.lo(), 2930395539);
+
+        int128 e = int128(9223372036854775807, 9223372036854775807);
+        int128 f = int128(6147483646, 6147483646);
+
+        int128 z = e / f;
+
+        EXPECT_EQ(z.hi(), 0);
+        EXPECT_EQ(z.lo(), 1500349178);
 }
 
 TEST(Int128, Modulo) {
@@ -326,6 +367,23 @@ TEST(Int128, Modulo) {
         int128 c = int128(13);
 
         EXPECT_EQ(c % b, 3);
+
+        int128 d = int128(9223372036854775807, 9223372036854775807);
+        int128 e = int128(3147483646, 3147483646);
+
+        int128 x = d % e;
+
+        EXPECT_EQ(x.hi(), 1540920613);
+        EXPECT_EQ(x.lo(), 1540920613);
+
+        int128 f = int128(0, 6223372036854775807);
+        int128 g = int128(0, 3147483646);
+
+        int128 z = f % g;
+
+        EXPECT_EQ(z.hi(), 0);
+        EXPECT_EQ(z.lo(), 1393216111);
+
 }
 
 TEST(Int128, Multiply) {
@@ -333,9 +391,33 @@ TEST(Int128, Multiply) {
         int128 b = int128(5);
 
         EXPECT_EQ(a * b, 50);
+
+        int128 c = int128(3147483646, 3147483646);
+        int128 d = int128(0, 2930395539);
+
+        int128 x = c * d;
+        EXPECT_EQ(x.hi(), 9223372035313855194);
+        EXPECT_EQ(x.lo(), 9223372035313855194);
+
+        //int128 z = x * x;
+        //EXPECT_EQ(z.hi(), 9223372035313855194);
+        //EXPECT_EQ(z.lo(), 9223372035313855194);
+
 }
 
+TEST(Int128, toString) {
+        int128 b = int128(155);
+        std::string test = b.toString(b);
+        EXPECT_EQ(test, "155");
 
+        int128 a = int128(200,155);
+        test = a.toString(a);
+        EXPECT_EQ(test, "3689348814741910323355");
+
+        int128 c = int128(9223372036854775807, 9223372036854775807);
+        test = c.toString(c);
+        EXPECT_EQ(test, "170141183460469231722463931679029329919");
+}
 
 //TEST(Int128, failTest) {
 //  EXPECT_EQ(0, 1);

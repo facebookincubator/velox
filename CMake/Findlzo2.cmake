@@ -16,8 +16,8 @@ find_library(LZO2_LIBRARY_DEBUG lzo2d PATHS ${LZO2_LIBRARYDIR})
 find_path(LZO2_INCLUDE_DIR lzo/lzo1a.h PATHS ${LZO2_INCLUDEDIR})
 
 select_library_configurations(LZO2)
-set(LZO2_LIBRARY "C:\\Users\\davidmar.AMR\\Downloads\\lzo-2.10\\lzo-2.10\\lzo2.lib")
-set(LZO2_INCLUDE_DIR "C:\\Users\\davidmar.AMR\\Downloads\\lzo-2.10\\lzo-2.10\\include")
+set(LZO2_LIBRARY "C:\\Users\\vjbulgar\\Downloads\\lzo-2.10\\lzo-2.10\\lzo2.lib")
+set(LZO2_INCLUDE_DIR "C:\\Users\\vjbulgar\\Downloads\\lzo-2.10\\lzo-2.10\\include")
 
 find_package_handle_standard_args(lzo2 DEFAULT_MSG LZO2_LIBRARY
                                   LZO2_INCLUDE_DIR)
