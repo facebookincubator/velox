@@ -5,16 +5,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Join Fuzzer &#8212; Velox  documentation</title>
+    <title>RowNumber Fuzzer &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9a2dae69"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
-    <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Debugging Tools" href="../debugging.html" />
-    <link rel="prev" title="Expression, Aggregation, and Window Fuzzer" href="fuzzer.html" /> 
+    <link rel="search" title="Search" href="../../search.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
@@ -22,16 +20,8 @@
         <li class="right" style="margin-right: 10px">
           <a href="../../genindex.html" title="General Index"
              accesskey="I">index</a></li>
-        <li class="right" >
-          <a href="../debugging.html" title="Debugging Tools"
-             accesskey="N">next</a> |</li>
-        <li class="right" >
-          <a href="fuzzer.html" title="Expression, Aggregation, and Window Fuzzer"
-             accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
-          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="../testing.html" accesskey="U">Testing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Join Fuzzer</a></li> 
+        <li class="nav-item nav-item-this"><a href="">RowNumber Fuzzer</a></li> 
       </ul>
     </div>  
 
@@ -40,44 +30,32 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="join-fuzzer">
-<h1>Join Fuzzer<a class="headerlink" href="#join-fuzzer" title="Link to this heading">¶</a></h1>
-<p>Join fuzzer tests all types of hash and merge joins with up to 5 join keys and
-up to 3 payload columns with and without spilling.</p>
-<p>At each iteration, fuzzer randomly picks a join type (INNER, LEFT, FULL, LEFT
-SEMI FILTER, LEFT SEMI PROJECT, ANTI), null-aware flag (if supported by the
-join type), number and types of join keys and payload columns. The fuzzer then
-generates probe-side and build-size inputs and constructs a Values -&gt; HashJoin
-query plan. When generating build-side data, the fuzzer generates either an
-empty dataset or a 10% sample (with replacement) of the probe-side keys
-combined with randomly generated payload. When generating the join plan node,
-fuzzer shuffles join keys and output columns and randomly drops some columns
-from the output.</p>
-<p>The fuzzer runs the query plan and compares the results with DuckDB.</p>
-<p>The fuzzer then generates a set of different but logically equivalent plans,
-runs them and verifies that results are the same. Each plan runs twice: with
-and without spilling.</p>
-<p>The logically equivalent plans are generated as follows:</p>
-<ul class="simple">
-<li><p>Flatten possibly encoded join inputs.</p></li>
-<li><dl class="simple">
-<dt>Flip join sides:</dt><dd><ul>
-<li><p>LEFT(a, b) =&gt; RIGHT(b, a)</p></li>
-<li><p>LEFT SEMI FILTER(a, b) =&gt; RIGHT SEMI FILTER(b, a)</p></li>
-<li><p>LEFT SEMI PROJECT(a, b) =&gt; RIGHT SEMI PROJECT(b, a)</p></li>
-</ul>
-</dd>
-</dl>
-</li>
-<li><p>Introduce round-robin local exchange before the join:
-Values -&gt; LocalExchange(ROUND_ROBIN) -&gt; HashJoin</p></li>
-<li><p>Replace HashJoin with OrderBy(join keys) + MergeJoin for supported join
-types (INNER, LEFT).</p></li>
-</ul>
+  <section id="rownumber-fuzzer">
+<h1>RowNumber Fuzzer<a class="headerlink" href="#rownumber-fuzzer" title="Link to this heading">¶</a></h1>
+<p>The RowNumberFuzzer is a testing tool that automatically generate equivalent query plans and then executes these plans
+to validate the consistency of the results. It works as follows:</p>
+<ol class="arabic simple">
+<li><p>Data Generation: It starts by generating a random set of input data, also known as a vector. This data can
+have a variety of encodings and data layouts to ensure thorough testing.</p></li>
+<li><p>Plan Generation: Generate two equivalent query plans, one is row-number over ValuesNode as the base plan.
+and the other is over TableScanNode as the alter plan.</p></li>
+<li><p>Query Execution: Executes those equivalent query plans using the generated data and asserts that the results are
+consistent across different plans.</p></li>
+</ol>
+<blockquote>
+<div><ol class="lowerroman simple">
+<li><p>Execute the base plan, compare the result with the reference (DuckDB or Presto) and use it as the expected result.</p></li>
+<li><p>Execute the alter plan multiple times with and without spill, and compare each result with the
+expected result.</p></li>
+</ol>
+</div></blockquote>
+<ol class="arabic simple" start="4">
+<li><p>Iteration: This process is repeated multiple times to ensure reliability and robustness.</p></li>
+</ol>
 <section id="how-to-run">
 <h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading">¶</a></h2>
-<p>Use velox_join_fuzzer_test binary to run join fuzzer:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">velox</span><span class="o">/</span><span class="n">exec</span><span class="o">/</span><span class="n">tests</span><span class="o">/</span><span class="n">velox_join_fuzzer_test</span>
+<p>Use velox_row_number_fuzzer_test binary to run rowNumber fuzzer:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">velox</span><span class="o">/</span><span class="n">exec</span><span class="o">/</span><span class="n">tests</span><span class="o">/</span><span class="n">velox_row_number_fuzzer_test</span> <span class="o">--</span><span class="n">seed</span> <span class="mi">123</span> <span class="o">--</span><span class="n">duration_sec</span> <span class="mi">60</span>
 </pre></div>
 </div>
 <p>By default, the fuzzer will go through 10 iterations. Use –steps
@@ -95,6 +73,8 @@ and <code class="docutils literal notranslate"><span class="pre">-–duration_se
 <li><p><code class="docutils literal notranslate"><span class="pre">--num_batches</span></code>: The number of input vectors of size <cite>–batch_size</cite> to
 generate. Default is 5.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--enable_spill</span></code>: Whether to test with spilling or not. Default is true.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--presto_url</span></code> The PrestoQueryRunner url along with its port number.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--req_timeout_ms</span></code> Timeout in milliseconds of an HTTP request to the PrestoQueryRunner.</p></li>
 </ul>
 <p>If running from CLion IDE, add <code class="docutils literal notranslate"><span class="pre">--logtostderr=1</span></code> to see the full output.</p>
 </section>
@@ -110,27 +90,17 @@ generate. Default is 5.</p></li>
   <div>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
-<li><a class="reference internal" href="#">Join Fuzzer</a><ul>
+<li><a class="reference internal" href="#">RowNumber Fuzzer</a><ul>
 <li><a class="reference internal" href="#how-to-run">How to run</a></li>
 </ul>
 </li>
 </ul>
 
   </div>
-  <div>
-    <h4>Previous topic</h4>
-    <p class="topless"><a href="fuzzer.html"
-                          title="previous chapter">Expression, Aggregation, and Window Fuzzer</a></p>
-  </div>
-  <div>
-    <h4>Next topic</h4>
-    <p class="topless"><a href="../debugging.html"
-                          title="next chapter">Debugging Tools</a></p>
-  </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
-      <li><a href="../../_sources/develop/testing/join-fuzzer.rst.txt"
+      <li><a href="../../_sources/develop/testing/row-number-fuzzer.rst.txt"
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
@@ -154,16 +124,8 @@ generate. Default is 5.</p></li>
         <li class="right" style="margin-right: 10px">
           <a href="../../genindex.html" title="General Index"
              >index</a></li>
-        <li class="right" >
-          <a href="../debugging.html" title="Debugging Tools"
-             >next</a> |</li>
-        <li class="right" >
-          <a href="fuzzer.html" title="Expression, Aggregation, and Window Fuzzer"
-             >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
-          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="../testing.html" >Testing Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Join Fuzzer</a></li> 
+        <li class="nav-item nav-item-this"><a href="">RowNumber Fuzzer</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
