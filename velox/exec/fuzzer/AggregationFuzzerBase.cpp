@@ -237,15 +237,32 @@ std::vector<std::string> AggregationFuzzerBase::generateKeys(
 std::vector<std::string> AggregationFuzzerBase::generateSortingKeys(
     const std::string& prefix,
     std::vector<std::string>& names,
-    std::vector<TypePtr>& types) {
+    std::vector<TypePtr>& types,
+    const bool isKRangeFrame) {
   std::vector<std::string> keys;
-  auto numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
+  vector_size_t numKeys;
+  TypePtr type;
+  if (isKRangeFrame) {
+    // If frame is k-range frame, sorting keys size should be 1 only
+    numKeys = 1;
+    type = vectorFuzzer_.randOrderableType(0);
+    // Pick scalar type which supports '+', '-' binary operations.
+    while (type == TIMESTAMP() || type == VARCHAR() || type == UNKNOWN() ||
+           type == VARBINARY() || type == BOOLEAN()) {
+      type = vectorFuzzer_.randOrderableType(0);
+    }
+  } else {
+    // Pick random, possibly complex, type.
+    numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
+    type = vectorFuzzer_.randOrderableType(2);
+  }
+
   for (auto i = 0; i < numKeys; ++i) {
     keys.push_back(fmt::format("{}{}", prefix, i));
-
-    // Pick random, possibly complex, type.
-    types.push_back(vectorFuzzer_.randOrderableType(2));
+    types.push_back(type);
     names.push_back(keys.back());
+
+    type = vectorFuzzer_.randOrderableType(2);
   }
 
   return keys;
@@ -301,7 +318,8 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
     std::vector<std::string> names,
     std::vector<TypePtr> types,
     const std::vector<std::string>& partitionKeys,
-    const CallableSignature& signature) {
+    const CallableSignature& signature,
+    std::string orderByKey) {
   names.push_back("row_number");
   types.push_back(BIGINT());
 
@@ -338,6 +356,9 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
         auto baseVector = vectorFuzzer_.fuzz(types[i], numPartitions);
         children.push_back(
             BaseVector::wrapInDictionary(nulls, indices, size, baseVector));
+      } else if (names[i] == orderByKey) {
+        // fuzzFlat the order by column for k Range bound frames.
+        children.push_back(vectorFuzzer_.fuzzFlat(types[i], size));
       } else {
         children.push_back(vectorFuzzer_.fuzz(types[i], size));
       }
