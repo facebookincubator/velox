@@ -657,7 +657,7 @@ class QueryConfig {
     return value;
   }
 
-  bool sparkThrowExceptionOnDuplicateMapEntry() const {
+  bool throwExceptionOnDuplicateMapKeys() const {
     return get<bool>(kThrowExceptionOnDuplicateMapKeys, false);
   }
 

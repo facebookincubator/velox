@@ -29,13 +29,13 @@ class MapConcatTest : public FunctionBaseTest {
         "map_concat_empty_nulls");
   }
 
-  void enableThrowExceptionOnDuplicateMapEntry() {
+  void enableThrowExceptionOnDuplicateMapKeys() {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"},
     });
   }
 
-  void disableThrowExceptionOnDuplicateMapEntry() {
+  void disableThrowExceptionOnDuplicateMapKeys() {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"},
     });
@@ -250,12 +250,12 @@ TEST_F(MapConcatTest, duplicateKeysThrowException) {
   auto aMap = makeMapVector(size, a);
   auto bMap = makeMapVector(size, b);
 
-  enableThrowExceptionOnDuplicateMapEntry();
+  enableThrowExceptionOnDuplicateMapKeys();
   VELOX_ASSERT_THROW(
       evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap})),
       "Duplicate map keys (a2) are not allowed");
 
-  disableThrowExceptionOnDuplicateMapEntry();
+  disableThrowExceptionOnDuplicateMapKeys();
   auto result =
       evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap}));
 }

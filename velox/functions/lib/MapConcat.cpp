@@ -115,11 +115,11 @@ class MapConcatFunction : public exec::VectorFunction {
         rawOffsets[row] -= duplicateCnt;
       }
       const auto& config = context.execCtx()->queryCtx()->queryConfig();
-      const auto sparkThrowExceptionOnDuplicateMapEntry = config.sparkThrowExceptionOnDuplicateMapEntry();
+      const auto throwExceptionOnDuplicateMapKeys = config.throwExceptionOnDuplicateMapKeys();
       for (vector_size_t i = 1; i < mapSize; i++) {
         if (combinedKeys->equalValueAt(
                 combinedKeys.get(), mapOffset + i, mapOffset + i - 1)) {
-          if (sparkThrowExceptionOnDuplicateMapEntry) {
+          if (throwExceptionOnDuplicateMapKeys) {
             auto duplicateKey = combinedKeys->wrappedVector()->toString(
                 combinedKeys->wrappedIndex(mapOffset + i));
             VELOX_USER_FAIL(
