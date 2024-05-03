@@ -371,7 +371,7 @@ void AggregationFuzzer::go() {
 
         auto partitionKeys = generateKeys("p", argNames, argTypes);
         auto sortingKeys = generateSortingKeys("s", argNames, argTypes);
-        auto input = generateInputDataWithRowNumber(
+        auto input = generateInputDataForWindowFuzzer(
             argNames, argTypes, partitionKeys, signature);
 
         logVectors(input);

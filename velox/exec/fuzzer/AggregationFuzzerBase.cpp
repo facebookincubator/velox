@@ -241,14 +241,41 @@ std::vector<std::string> AggregationFuzzerBase::generateKeys(
 std::vector<std::string> AggregationFuzzerBase::generateSortingKeys(
     const std::string& prefix,
     std::vector<std::string>& names,
-    std::vector<TypePtr>& types) {
+    std::vector<TypePtr>& types,
+    bool hasRowNumberKey,
+    bool rangeFrame) {
   std::vector<std::string> keys;
-  auto numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
+  vector_size_t numKeys;
+  vector_size_t maxDepth;
+  std::vector<TypePtr> sortingKeyTypes = kScalarTypes;
+
+  // If frame has kRange bound, only one sorting key should be present. If the
+  // row_number column is not present, generate this sorting key randomly; use
+  // the row_number column as sorting key otherwise.
+  if (rangeFrame) {
+    if (hasRowNumberKey) {
+      return keys;
+    } else {
+      numKeys = 1;
+      // Pick scalar type which supports '+', '-' binary operations.
+      sortingKeyTypes = {
+          TINYINT(),
+          SMALLINT(),
+          INTEGER(),
+          BIGINT(),
+          HUGEINT(),
+          REAL(),
+          DOUBLE()};
+      maxDepth = 0;
+    }
+  } else {
+    numKeys = randInt(1, 5);
+    maxDepth = 2;
+  }
+
   for (auto i = 0; i < numKeys; ++i) {
     keys.push_back(fmt::format("{}{}", prefix, i));
-
-    // Pick random, possibly complex, type.
-    types.push_back(vectorFuzzer_.randOrderableType(2));
+    types.push_back(vectorFuzzer_.randOrderableType(sortingKeyTypes, maxDepth));
     names.push_back(keys.back());
   }
 
@@ -301,13 +328,17 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
   return input;
 }
 
-std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
+std::vector<RowVectorPtr>
+AggregationFuzzerBase::generateInputDataForWindowFuzzer(
     std::vector<std::string> names,
     std::vector<TypePtr> types,
     const std::vector<std::string>& partitionKeys,
-    const CallableSignature& signature) {
-  names.push_back("row_number");
-  types.push_back(BIGINT());
+    const CallableSignature& signature,
+    const bool hasRowNumberKey) {
+  if (hasRowNumberKey) {
+    names.push_back("row_number");
+    types.push_back(BIGINT());
+  }
 
   auto generator = findInputGenerator(signature);
 
@@ -334,7 +365,8 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
     auto numPartitions = size ? randInt(1, size) : 1;
     auto indices = vectorFuzzer_.fuzzIndices(size, numPartitions);
     auto nulls = vectorFuzzer_.fuzzNulls(size);
-    for (auto i = children.size(); i < types.size() - 1; ++i) {
+    auto n = hasRowNumberKey ? types.size() - 1 : types.size();
+    for (auto i = children.size(); i < n; ++i) {
       if (partitionKeySet.find(names[i]) != partitionKeySet.end()) {
         // The partition keys are built with a dictionary over a smaller set of
         // values. This is done to introduce some repetition of key values for
@@ -346,8 +378,10 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
         children.push_back(vectorFuzzer_.fuzz(types[i], size));
       }
     }
-    children.push_back(vectorMaker.flatVector<int64_t>(
-        size, [&](auto /*row*/) { return rowNumber++; }));
+    if (hasRowNumberKey) {
+      children.push_back(vectorMaker.flatVector<int64_t>(
+          size, [&](auto /*row*/) { return rowNumber++; }));
+    }
     input.push_back(vectorMaker.rowVector(names, children));
   }
 

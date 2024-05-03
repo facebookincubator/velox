@@ -1025,31 +1025,8 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
       std::move(nulls), std::move(indices), vectorSize, baseResult);
 }
 
-namespace {
-
-const std::vector<TypePtr> defaultScalarTypes() {
-  // @TODO Add decimal TypeKinds to randType.
-  // Refer https://github.com/facebookincubator/velox/issues/3942
-  static std::vector<TypePtr> kScalarTypes{
-      BOOLEAN(),
-      TINYINT(),
-      SMALLINT(),
-      INTEGER(),
-      BIGINT(),
-      REAL(),
-      DOUBLE(),
-      VARCHAR(),
-      VARBINARY(),
-      TIMESTAMP(),
-      DATE(),
-      INTERVAL_DAY_TIME(),
-  };
-  return kScalarTypes;
-}
-} // namespace
-
 TypePtr randType(FuzzerGenerator& rng, int maxDepth) {
-  return randType(rng, defaultScalarTypes(), maxDepth);
+  return randType(rng, kScalarTypes, maxDepth);
 }
 
 TypePtr randType(
@@ -1074,7 +1051,7 @@ TypePtr randType(
 }
 
 TypePtr randOrderableType(FuzzerGenerator& rng, int maxDepth) {
-  return randOrderableType(rng, defaultScalarTypes(), maxDepth);
+  return randOrderableType(rng, kScalarTypes, maxDepth);
 }
 
 TypePtr randOrderableType(
@@ -1102,7 +1079,7 @@ TypePtr randOrderableType(
 }
 
 RowTypePtr randRowType(FuzzerGenerator& rng, int maxDepth) {
-  return randRowType(rng, defaultScalarTypes(), maxDepth);
+  return randRowType(rng, kScalarTypes, maxDepth);
 }
 
 RowTypePtr randRowType(
