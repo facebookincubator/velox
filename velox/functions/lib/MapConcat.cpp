@@ -20,8 +20,6 @@
 
 namespace facebook::velox::functions {
 namespace {
-static const char* kDuplicateKey = "Duplicate map keys ({}) are not allowed";
-
 // See documentation at https://prestodb.io/docs/current/functions/map.html
 template <bool EmptyForNull>
 class MapConcatFunction : public exec::VectorFunction {
@@ -116,15 +114,16 @@ class MapConcatFunction : public exec::VectorFunction {
       if (duplicateCnt) {
         rawOffsets[row] -= duplicateCnt;
       }
+      const auto& config = context.execCtx()->queryCtx()->queryConfig();
+      const auto sparkThrowExceptionOnDuplicateMapEntry = config.sparkThrowExceptionOnDuplicateMapEntry();
       for (vector_size_t i = 1; i < mapSize; i++) {
         if (combinedKeys->equalValueAt(
                 combinedKeys.get(), mapOffset + i, mapOffset + i - 1)) {
-          const auto& config = context.execCtx()->queryCtx()->queryConfig();
-          const auto sparkThrowExceptionOnDuplicateMapEntry = config.sparkThrowExceptionOnDuplicateMapEntry();
           if (sparkThrowExceptionOnDuplicateMapEntry) {
             auto duplicateKey = combinedKeys->wrappedVector()->toString(
                 combinedKeys->wrappedIndex(mapOffset + i));
-            VELOX_USER_FAIL(kDuplicateKey, duplicateKey);
+            VELOX_USER_FAIL(
+                "Duplicate map keys ({}) are not allowed", duplicateKey);
           }
           duplicateCnt++;
           // "remove" duplicate entry

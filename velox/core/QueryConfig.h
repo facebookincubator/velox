@@ -303,9 +303,9 @@ class QueryConfig {
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
-  /// The config to throw exception on duplicate map entry.
-  static constexpr const char* kSparkThrowExceptionOnDuplicateMapEntry =
-      "spark.throw_exception_on_duplicate_map_entry";
+  /// If true, throw exception on duplicate map entry else last entry wins.
+  static constexpr const char* kThrowExceptionOnDuplicateMapKeys =
+      "throw_exception_on_duplicate_map_keys";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
@@ -658,7 +658,7 @@ class QueryConfig {
   }
 
   bool sparkThrowExceptionOnDuplicateMapEntry() const {
-    return get<bool>(kSparkThrowExceptionOnDuplicateMapEntry, false);
+    return get<bool>(kThrowExceptionOnDuplicateMapKeys, false);
   }
 
   bool exprTrackCpuUsage() const {

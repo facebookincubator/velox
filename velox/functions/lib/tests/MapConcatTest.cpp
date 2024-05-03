@@ -31,13 +31,13 @@ class MapConcatTest : public FunctionBaseTest {
 
   void enableThrowExceptionOnDuplicateMapEntry() {
     queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kSparkThrowExceptionOnDuplicateMapEntry, "true"},
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"},
     });
   }
 
   void disableThrowExceptionOnDuplicateMapEntry() {
     queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kSparkThrowExceptionOnDuplicateMapEntry, "false"},
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"},
     });
   }
 
