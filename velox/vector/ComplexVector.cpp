@@ -59,6 +59,38 @@ std::string stringifyTruncatedElementList(
   return out.str();
 }
 
+std::string stringifyElementList(
+    vector_size_t start,
+    vector_size_t size,
+    const VectorCastToStringOptions& options,
+    const std::function<void(std::stringstream&, vector_size_t)>&
+        stringifyElementCB) {
+  if (size == 0) {
+    switch (options.emptyElementResult) {
+      case VectorCastToStringOptions::EmptyElementResult::emptyString:
+        return "<empty>";
+      case VectorCastToStringOptions::EmptyElementResult::emptyBraces:
+        return "{}";
+      case VectorCastToStringOptions::EmptyElementResult::emptyBrackets:
+        return "[]";
+    }
+  }
+
+  std::string_view openingDelimiter = options.useBrackets ? "[" : "{";
+  std::string_view closintDelimiter = options.useBrackets ? "]" : "}";
+
+  std::stringstream out;
+  out << openingDelimiter;
+  for (vector_size_t i = 0; i < size; i++) {
+    if (i > 0) {
+      out << options.delimiter;
+    }
+    stringifyElementCB(out, start + i);
+  }
+  out << closintDelimiter;
+  return out.str();
+}
+
 // static
 std::shared_ptr<RowVector> RowVector::createEmpty(
     std::shared_ptr<const Type> type,
@@ -1218,6 +1250,31 @@ std::string MapVector::toString(vector_size_t index) const {
       [this](std::stringstream& ss, vector_size_t index) {
         ss << keys_->toString(index) << " => " << values_->toString(index);
       });
+}
+
+std::string MapVector::toString(
+    vector_size_t index,
+    const VectorCastToStringOptions& options) const {
+  VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
+  if (isNullAt(index)) {
+    return "null";
+  }
+
+  auto stringifyElementCB = [this, &options](
+                                std::stringstream& ss, vector_size_t index) {
+    ss << keys_->toString(index) << options.separator;
+    std::string prefixForValue = options.shouldPrependSpace ? " " : "";
+    if (values_->isNullAt(index)) {
+      if (!options.nullString.empty()) {
+        ss << prefixForValue << options.nullString;
+      }
+    } else {
+      ss << prefixForValue << values_->toString(index);
+    }
+  };
+
+  return stringifyElementList(
+      rawOffsets_[index], rawSizes_[index], options, stringifyElementCB);
 }
 
 void MapVector::ensureWritable(const SelectivityVector& rows) {

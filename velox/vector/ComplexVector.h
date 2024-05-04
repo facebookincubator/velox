@@ -34,6 +34,37 @@ using column_index_t = uint32_t;
 constexpr column_index_t kConstantChannel =
     std::numeric_limits<column_index_t>::max();
 
+// Set of options that toString() accepts.
+struct VectorCastToStringOptions {
+  enum class EmptyElementResult {
+    /// result: <empty>
+    emptyString,
+    /// result: {}
+    emptyBraces,
+    /// result: []
+    emptyBrackets
+  };
+
+  // What to do with empty elements
+  EmptyElementResult emptyElementResult = EmptyElementResult::emptyString;
+
+  // When true, maps are wrapped by [] in casting to strings.
+  // Otherwise, if this is false, maps are wrapped by {}.
+  bool useBrackets = false;
+
+  // Delimiter between elements
+  std::string_view delimiter = ", ";
+
+  // String representation of NULL elements
+  std::string_view nullString = "null";
+
+  // Separator between key and value
+  std::string_view separator = " ->";
+
+  // Prepend space before each value
+  bool shouldPrependSpace = true;
+};
+
 class RowVector : public BaseVector {
  public:
   RowVector(const RowVector&) = delete;
@@ -631,6 +662,10 @@ class MapVector : public ArrayVectorBase {
   using BaseVector::toString;
 
   std::string toString(vector_size_t index) const override;
+
+  std::string toString(
+      vector_size_t index,
+      const VectorCastToStringOptions& options) const;
 
   // Sorts all maps smallest key first. This enables linear time
   // comparison and log time lookup.  This may only be done if there

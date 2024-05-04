@@ -303,6 +303,13 @@ class QueryConfig {
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
+  /// If true, maps and structs are wrapped by [] in casting to strings, and
+  /// NULL elements of structs/maps/arrays will be omitted while converting to
+  /// strings. Otherwise, maps and structs are wrapped by {}, and NULL elements
+  /// will be converted to "null".
+  static constexpr const char* kSparklegacyCastToStr =
+      "spark.legacy_cast_to_str";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -484,6 +491,10 @@ class QueryConfig {
 
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
+  }
+
+  bool sparklegacyCastToStr() const {
+    return get<bool>(kSparklegacyCastToStr, false);
   }
 
   /// Returns true if spilling is enabled.

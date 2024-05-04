@@ -73,4 +73,9 @@ const TimestampToStringOptions& PrestoCastHooks::timestampToStringOptions()
 bool PrestoCastHooks::truncate() const {
   return false;
 }
+
+const VectorCastToStringOptions& PrestoCastHooks::vectorCastToStringOptions()
+    const {
+  return vectorCastToStringOptions_;
+}
 } // namespace facebook::velox::exec

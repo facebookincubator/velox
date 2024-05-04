@@ -20,6 +20,16 @@
 
 namespace facebook::velox::functions::sparksql {
 
+SparkCastHooks::SparkCastHooks(const core::QueryConfig& config)
+    : CastHooks(), legacyCast_(config.sparklegacyCastToStr()) {
+  if (legacyCast_) {
+    vectorCastToStringOptions_.emptyElementResult =
+        VectorCastToStringOptions::EmptyElementResult::emptyBrackets;
+    vectorCastToStringOptions_.useBrackets = true;
+    vectorCastToStringOptions_.nullString = "";
+  }
+}
+
 Timestamp SparkCastHooks::castStringToTimestamp(const StringView& view) const {
   return util::fromTimestampString(view.data(), view.size());
 }
@@ -41,7 +51,7 @@ int32_t SparkCastHooks::castStringToDate(const StringView& dateString) const {
 }
 
 bool SparkCastHooks::legacy() const {
-  return false;
+  return legacyCast_;
 }
 
 StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
@@ -65,5 +75,10 @@ const TimestampToStringOptions& SparkCastHooks::timestampToStringOptions()
 
 bool SparkCastHooks::truncate() const {
   return true;
+}
+
+const VectorCastToStringOptions& SparkCastHooks::vectorCastToStringOptions()
+    const {
+  return vectorCastToStringOptions_;
 }
 } // namespace facebook::velox::functions::sparksql

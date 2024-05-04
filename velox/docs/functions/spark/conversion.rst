@@ -122,6 +122,33 @@ Valid examples
   SELECT cast(cast('0384-01-01 08:00:00.000' as timestamp) as string); -- '0384-01-01 08:00:00'
   SELECT cast(cast('-0010-02-01 10:00:00.000' as timestamp) as string); -- '-0010-02-01 10:00:00'
 
+From MAP
+^^^^^^^^
+
+Casting a map to a string returns a JSON string with spark.legacy_cast_to_str configuration. When true, maps 
+are wrapped by [] in casting to strings, and NULL elements of maps will be omitted while converting to strings.
+Otherwise, if this is false, which is the default, maps are wrapped by {}, and NULL elements will be converted to "null".
+
+Valid examples if spark.legacy_cast_to_str = false,
+
+::
+  
+  SELECT cast(map() as string); -- '{}'
+  SELECT cast(map(1.0, '2', 3.0, '4') as string); -- '{1.0 -> 2, 3.0 -> 4}'
+  SELECT cast(map(1.0, null, 3.0, '4') as string); -- '{1.0 -> null, 3.0 -> 4}'
+  SELECT cast(map(1, '', 3.0, '4') as string); -- '{1.0 -> , 3.0 -> 4}'
+  SELECT cast(map(1, ' 2', 3.0, '4') as string); -- '{1.0 ->  2, 3.0 -> 4}'
+
+Valid examples if spark.legacy_cast_to_str = true,
+
+::
+
+  SELECT cast(map() as string); -- '[]'
+  SELECT cast(map(1.0, '2', 3.0, '4') as string); -- '[1.0 -> 2, 3.0 -> 4]'
+  SELECT cast(map(1.0, null, 3.0, '4') as string); -- '[1.0 ->, 3.0 -> 4]'
+  SELECT cast(map(1, '', 3.0, '4') as string); -- '[1.0 -> , 3.0 -> 4]'
+  SELECT cast(map(1, ' 2', 3.0, '4') as string); -- '[1.0 ->  2, 3.0 -> 4]'
+
 Cast to Date
 ------------
 
