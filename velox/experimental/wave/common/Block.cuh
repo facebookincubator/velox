@@ -26,6 +26,9 @@
 
 namespace facebook::velox::wave {
 
+/// Converts an array of flags to an array of indices of set flags. The first
+/// index is given by 'start'. The number of indices is returned in 'size', i.e.
+/// this is 1 + the index of the last set flag.
 template <
     typename T,
     int32_t blockSize,
