@@ -20,6 +20,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
+#include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -159,6 +160,10 @@ class FunctionBaseTest : public testing::Test,
   // C++ value. Arguments should be referenced using c0, c1, .. cn.  Supports
   // integers, floats, booleans, and strings.
   //
+  // Custom types such as TimestampWithTimezone are resolved and return
+  // their internal physical type (CustomType<T>::type) using the
+  // `UnwrapCustomType` utility.
+  //
   // Example:
   //   std::optional<double> exp(std::optional<double> a) {
   //     return evaluateOnce<double>("exp(c0)", a);
@@ -166,7 +171,7 @@ class FunctionBaseTest : public testing::Test,
   //   EXPECT_EQ(1, exp(0));
   //   EXPECT_EQ(std::nullopt, exp(std::nullopt));
   template <typename ReturnType, typename... Args>
-  std::optional<ReturnType> evaluateOnce(
+  std::optional<typename UnwrapCustomType<ReturnType>::type> evaluateOnce(
       const std::string& expr,
       const std::optional<Args>&... args) {
     return evaluateOnce<ReturnType>(
@@ -176,7 +181,7 @@ class FunctionBaseTest : public testing::Test,
   }
 
   template <typename ReturnType, typename Args>
-  std::optional<ReturnType> evaluateOnce(
+  std::optional<typename UnwrapCustomType<ReturnType>::type> evaluateOnce(
       const std::string& expr,
       const std::vector<std::optional<Args>>& args,
       const std::vector<TypePtr>& types,
@@ -192,7 +197,7 @@ class FunctionBaseTest : public testing::Test,
   }
 
   template <typename ReturnType>
-  std::optional<ReturnType> evaluateOnce(
+  std::optional<typename UnwrapCustomType<ReturnType>::type> evaluateOnce(
       const std::string& expr,
       const RowVectorPtr rowVectorPtr,
       const std::optional<SelectivityVector>& rows = std::nullopt,
@@ -200,8 +205,9 @@ class FunctionBaseTest : public testing::Test,
     auto result =
         evaluate<SimpleVector<facebook::velox::test::EvalType<ReturnType>>>(
             expr, rowVectorPtr, rows, resultType);
-    return result->isNullAt(0) ? std::optional<ReturnType>{}
-                               : ReturnType(result->valueAt(0));
+    return result->isNullAt(0)
+        ? std::optional<typename UnwrapCustomType<ReturnType>::type>{}
+        : typename UnwrapCustomType<ReturnType>::type(result->valueAt(0));
   }
 
   core::TypedExprPtr parseExpression(
