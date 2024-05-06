@@ -50,7 +50,26 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="from_base64">
 <span class="sig-name descname"><span class="pre">from_base64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#from_base64" title="Link to this definition">¶</a></dt>
-<dd><p>Decodes binary data from the base64 encoded <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+<dd><p>Decodes a Base64-encoded <code class="docutils literal notranslate"><span class="pre">string</span></code> back into its original binary form.
+This function is capable of handling both fully padded and non-padded Base64 encoded strings.
+Partially padded Base64 strings are not supported and will result in an error.</p>
+<section id="examples">
+<h2>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h2>
+<p>Query with padded Base64 string:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">from_base64</span><span class="p">(</span><span class="s1">&#39;SGVsbG8gV29ybGQ=&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">72</span><span class="p">,</span> <span class="mi">101</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">111</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">87</span><span class="p">,</span> <span class="mi">111</span><span class="p">,</span> <span class="mi">114</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">100</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>Query with non-padded Base64 string:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">from_base64</span><span class="p">(</span><span class="s1">&#39;SGVsbG8gV29ybGQ&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">72</span><span class="p">,</span> <span class="mi">101</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">111</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">87</span><span class="p">,</span> <span class="mi">111</span><span class="p">,</span> <span class="mi">114</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">100</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>Query with partial-padded Base64 string:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">from_base64</span><span class="p">(</span><span class="s1">&#39;SGVsbG8gV29ybGQgZm9yIHZlbG94IQ=&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">Error</span> <span class="p">:</span> <span class="n">Base64</span><span class="p">::</span><span class="n">decode</span><span class="p">()</span> <span class="o">-</span> <span class="n">invalid</span> <span class="nb">input</span> <span class="n">string</span><span class="p">:</span> <span class="n">string</span> <span class="n">length</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">a</span> <span class="n">multiple</span> <span class="n">of</span> <span class="mf">4.</span>
+</pre></div>
+</div>
+<p>In the above examples, both the fully padded and non-padded Base64 strings (‘SGVsbG8gV29ybGQ=’ and ‘SGVsbG8gV29ybGQ’) decode to the binary representation of the text ‘Hello World’.
+While, partial-padded Base64 string ‘SGVsbG8gV29ybGQgZm9yIHZlbG94IQ=’ will lead to an velox error.</p>
+</section>
 </dd></dl>
 
 <dl class="py function">
