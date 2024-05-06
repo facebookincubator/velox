@@ -574,6 +574,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
 TEST_F(CastExprTest, stringToTimestamp) {
   std::vector<std::optional<std::string>> input{
       "1970-01-01",
+      "1970-01-01 00:00 America/Sao_Paulo",
       "2000-01-01",
       "1970-01-01 00:00:00",
       "2000-01-01 12:21:56",
@@ -582,11 +583,30 @@ TEST_F(CastExprTest, stringToTimestamp) {
   };
   std::vector<std::optional<Timestamp>> expected{
       Timestamp(0, 0),
+      Timestamp(10800, 0),
       Timestamp(946684800, 0),
       Timestamp(0, 0),
       Timestamp(946729316, 0),
       Timestamp(7200, 0),
       std::nullopt,
+  };
+  testCast<std::string, Timestamp>("timestamp", input, expected);
+
+  // Try with a different session timezone.
+  setTimezone("America/Los_Angeles");
+  input = {
+      "1970-01-01 00:00",
+      "1970-01-01 00:00 +00:00",
+      "1970-01-01 00:00 +01:00",
+      "1970-01-01 00:00 America/Sao_Paulo",
+      "2000-01-01 12:21:56Z",
+  };
+  expected = {
+      Timestamp(28800, 0),
+      Timestamp(0, 0),
+      Timestamp(-3600, 0),
+      Timestamp(10800, 0),
+      Timestamp(946729316, 0),
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
 }
@@ -690,7 +710,6 @@ TEST_F(CastExprTest, dateToTimestamp) {
 }
 
 TEST_F(CastExprTest, timestampToDate) {
-  setTimezone("");
   std::vector<std::optional<Timestamp>> inputTimestamps = {
       Timestamp(0, 0),
       Timestamp(946684800, 0),
@@ -746,6 +765,10 @@ TEST_F(CastExprTest, timestampInvalid) {
 }
 
 TEST_F(CastExprTest, timestampAdjustToTimezone) {
+  // Empty timezone is assumed to be GMT.
+  testCast<std::string, Timestamp>(
+      "timestamp", {"1970-01-01"}, {Timestamp(0, 0)});
+
   setTimezone("America/Los_Angeles");
 
   // Expect unix epochs to be converted to LA timezone (8h offset).
@@ -765,25 +788,14 @@ TEST_F(CastExprTest, timestampAdjustToTimezone) {
           Timestamp(946713600, 0),
           Timestamp(0, 0),
           Timestamp(946758116, 0),
-          Timestamp(-21600, 0),
+          Timestamp(-50400, 0),
           std::nullopt,
           Timestamp(957164400, 0),
       });
-
-  // Empty timezone is assumed to be GMT.
-  setTimezone("");
-  testCast<std::string, Timestamp>(
-      "timestamp", {"1970-01-01"}, {Timestamp(0, 0)});
 }
 
 TEST_F(CastExprTest, timestampAdjustToTimezoneInvalid) {
-  auto testFunc = [&]() {
-    testCast<std::string, Timestamp>(
-        "timestamp", {"1970-01-01"}, {Timestamp(1, 0)});
-  };
-
-  setTimezone("bla");
-  EXPECT_THROW(testFunc(), std::runtime_error);
+  VELOX_ASSERT_USER_THROW(setTimezone("bla"), "Unknown time zone: 'bla'");
 }
 
 TEST_F(CastExprTest, date) {

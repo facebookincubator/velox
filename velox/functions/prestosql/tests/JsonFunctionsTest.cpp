@@ -601,6 +601,30 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
       jsonExtract(kJson, "$.store.book[*].isbn"));
   EXPECT_EQ("\"Evelyn Waugh\"", jsonExtract(kJson, "$.store.book[1].author"));
 
+  // Paths without leading '$'.
+  auto json = R"({"x": {"a": 1, "b": [10, 11, 12]} })";
+  EXPECT_EQ(R"({"a": 1, "b": [10, 11, 12]})", jsonExtract(json, "x"));
+  EXPECT_EQ("1", jsonExtract(json, "x.a"));
+  EXPECT_EQ("[10, 11, 12]", jsonExtract(json, "x.b"));
+  EXPECT_EQ("12", jsonExtract(json, "x.b[2]"));
+  EXPECT_EQ(std::nullopt, jsonExtract(json, "x.c"));
+  EXPECT_EQ(std::nullopt, jsonExtract(json, "x.b[20]"));
+
+  // Paths with redundant '.'s.
+  json = R"([[[{"a": 1, "b": [1, 2, 3]}]]])";
+  EXPECT_EQ("1", jsonExtract(json, "$.[0][0][0].a"));
+  EXPECT_EQ("[1, 2, 3]", jsonExtract(json, "$.[0].[0].[0].b"));
+  EXPECT_EQ("[1, 2, 3]", jsonExtract(json, "$[0][0].[0].b"));
+  EXPECT_EQ("3", jsonExtract(json, "$[0][0][0].b.[2]"));
+  EXPECT_EQ("3", jsonExtract(json, "$.[0].[0][0].b.[2]"));
+
+  // Definite vs. non-definite paths.
+  EXPECT_EQ("[123]", jsonExtract(R"({"a": [{"b": 123}]})", "$.a[*].b"));
+  EXPECT_EQ("123", jsonExtract(R"({"a": [{"b": 123}]})", "$.a[0].b"));
+
+  EXPECT_EQ("[]", jsonExtract(R"({"a": [{"b": 123}]})", "$.a[*].c"));
+  EXPECT_EQ(std::nullopt, jsonExtract(R"({"a": [{"b": 123}]})", "$.a[0].c"));
+
   // TODO The following paths are supported by Presto via Jayway, but do not
   // work in Velox yet. Figure out how to add support for these.
   VELOX_ASSERT_THROW(jsonExtract(kJson, "$..price"), "Invalid JSON path");

@@ -112,12 +112,8 @@ class TableScanTest : public virtual HiveConnectorTestBase {
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
       const std::string& duckDbSql,
       const int32_t numPrefetchSplit) {
-    return AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(
-            core::QueryConfig::kMaxSplitPreloadPerDriver,
-            std::to_string(numPrefetchSplit))
-        .splits(makeHiveConnectorSplits(filePaths))
-        .assertResults(duckDbSql);
+    return HiveConnectorTestBase::assertQuery(
+        plan, makeHiveConnectorSplits(filePaths), duckDbSql, numPrefetchSplit);
   }
 
   // Run query with spill enabled.
@@ -270,7 +266,9 @@ TEST_F(TableScanTest, allColumns) {
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
   ASSERT_TRUE(it->second.peakMemoryBytes > 0);
-  EXPECT_LT(0, exec::TableScan::ioWaitNanos());
+  ASSERT_LT(0, it->second.customStats.at("ioWaitNanos").sum);
+  // Verifies there is no dynamic filter stats.
+  ASSERT_TRUE(it->second.dynamicFilterStats.empty());
 }
 
 TEST_F(TableScanTest, connectorStats) {
@@ -973,6 +971,23 @@ TEST_F(TableScanTest, subfieldPruningArrayType) {
           arrays->elements()->equalValueAt(expected->elements().get(), ki, kj));
     }
   }
+}
+
+TEST_F(TableScanTest, skipNullMapKeys) {
+  auto vector = makeRowVector({makeMapVector(
+      {0, 2},
+      makeNullableFlatVector<int64_t>({std::nullopt, 2}),
+      makeFlatVector<int64_t>({1, 2}))});
+  auto rowType = asRowType(vector->type());
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {vector});
+  auto plan = PlanBuilder().tableScan(rowType).planNode();
+  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto expected = makeRowVector({makeMapVector(
+      {0, 1},
+      makeNullableFlatVector(std::vector<std::optional<int64_t>>(1, 2)),
+      makeFlatVector(std::vector<int64_t>(1, 2)))});
+  AssertQueryBuilder(plan).split(split).assertResults(expected);
 }
 
 // Test reading files written before schema change, e.g. missing newly added
@@ -4228,7 +4243,8 @@ DEBUG_ONLY_TEST_F(
         if (!injectOnce.exchange(false)) {
           return;
         }
-        memory::memoryManager()->testingGrowPool(pool, 1 << 20);
+        VELOX_ASSERT_THROW(
+            pool->allocate(memory::memoryManager()->capacity()), "");
       }));
 
   auto op =

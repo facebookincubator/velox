@@ -210,7 +210,7 @@ DwrfRowReader::DwrfRowReader(
     : StripeReaderBase(reader),
       strideIndex_{0},
       options_(opts),
-      decodingTimeUsCallback_{options_.getDecodingTimeUsCallback()},
+      decodingTimeCallback_{options_.getDecodingTimeCallback()},
       columnSelector_{std::make_shared<ColumnSelector>(
           ColumnSelector::apply(opts.getSelector(), reader->getSchema()))},
       currentUnit_{nullptr} {
@@ -357,6 +357,9 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   currentRowInStripe_ = rowNumber - firstRowOfStripe_[currentStripe_];
   previousRow_ = rowNumber;
 
+  const auto loadUnitIdx = currentStripe_ - firstStripe_;
+  unitLoader_->onSeek(loadUnitIdx, currentRowInStripe_);
+
   if (currentStripe_ != previousStripe) {
     // Different stripe. Let's load the new stripe.
     currentUnit_ = nullptr;
@@ -480,7 +483,7 @@ void DwrfRowReader::readNext(
     VectorPtr& result) {
   if (!getSelectiveColumnReader()) {
     std::optional<std::chrono::steady_clock::time_point> startTime;
-    if (decodingTimeUsCallback_) {
+    if (decodingTimeCallback_) {
       // We'll use wall time since we have parallel decoding.
       // If we move to sequential decoding only, we can use CPU time.
       startTime.emplace(std::chrono::steady_clock::now());
@@ -492,10 +495,8 @@ void DwrfRowReader::readNext(
         "Mutation pushdown is only supported in selective reader");
     getColumnReader()->next(rowsToRead, result);
     if (startTime.has_value()) {
-      decodingTimeUsCallback_(
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::steady_clock::now() - startTime.value())
-              .count());
+      decodingTimeCallback_(
+          std::chrono::steady_clock::now() - startTime.value());
     }
     return;
   }
@@ -650,7 +651,8 @@ uint64_t DwrfRowReader::next(
   // reading of the data.
   auto strideSize = getReader().getFooter().rowIndexStride();
   strideIndex_ = strideSize > 0 ? currentRowInStripe_ / strideSize : 0;
-  unitLoader_->onRead(currentStripe_, currentRowInStripe_, rowsToRead);
+  const auto loadUnitIdx = currentStripe_ - firstStripe_;
+  unitLoader_->onRead(loadUnitIdx, currentRowInStripe_, rowsToRead);
   readNext(rowsToRead, mutation, result);
   currentRowInStripe_ += rowsToRead;
   return rowsToRead;

@@ -259,6 +259,7 @@ std::shared_ptr<Task> Task::create(
       std::move(onError));
 }
 
+// static
 std::shared_ptr<Task> Task::create(
     const std::string& taskId,
     core::PlanFragment planFragment,
@@ -273,42 +274,6 @@ std::shared_ptr<Task> Task::create(
       destination,
       std::move(queryCtx),
       mode,
-      std::move(consumerSupplier),
-      std::move(onError)));
-  task->initTaskPool();
-  return task;
-}
-
-std::shared_ptr<Task> Task::create(
-    const std::string& taskId,
-    core::PlanFragment planFragment,
-    int destination,
-    std::shared_ptr<core::QueryCtx> queryCtx,
-    Consumer consumer,
-    std::function<void(std::exception_ptr)> onError) {
-  return Task::create(
-      taskId,
-      std::move(planFragment),
-      destination,
-      std::move(queryCtx),
-      (consumer ? [c = std::move(consumer)]() { return c; }
-                : ConsumerSupplier{}),
-      std::move(onError));
-}
-
-std::shared_ptr<Task> Task::create(
-    const std::string& taskId,
-    core::PlanFragment planFragment,
-    int destination,
-    std::shared_ptr<core::QueryCtx> queryCtx,
-    ConsumerSupplier consumerSupplier,
-    std::function<void(std::exception_ptr)> onError) {
-  auto task = std::shared_ptr<Task>(new Task(
-      taskId,
-      std::move(planFragment),
-      destination,
-      std::move(queryCtx),
-      Task::ExecutionMode::kParallel,
       std::move(consumerSupplier),
       std::move(onError)));
   task->initTaskPool();
@@ -2833,9 +2798,18 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   if (shrunkBytes >= targetBytes) {
     return shrunkBytes;
   }
-  return shrunkBytes +
-      memory::MemoryReclaimer::reclaim(
-             task->pool(), targetBytes - shrunkBytes, maxWaitMs, stats);
+  uint64_t reclaimedBytes{0};
+  try {
+    reclaimedBytes = memory::MemoryReclaimer::reclaim(
+        task->pool(), targetBytes - shrunkBytes, maxWaitMs, stats);
+  } catch (...) {
+    // Set task error before resumes the task execution as the task operator
+    // might not be in consistent state anymore. This prevents any off thread
+    // from running again.
+    task->setError(std::current_exception());
+    std::rethrow_exception(std::current_exception());
+  }
+  return shrunkBytes + reclaimedBytes;
 }
 
 void Task::MemoryReclaimer::abort(

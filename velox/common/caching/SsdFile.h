@@ -138,6 +138,7 @@ struct SsdCacheStats {
     bytesCached = tsanAtomicValue(other.bytesCached);
     entriesAgedOut = tsanAtomicValue(other.entriesAgedOut);
     regionsAgedOut = tsanAtomicValue(other.regionsAgedOut);
+    regionsEvicted = tsanAtomicValue(other.regionsEvicted);
     numPins = tsanAtomicValue(other.numPins);
 
     openFileErrors = tsanAtomicValue(other.openFileErrors);
@@ -162,6 +163,7 @@ struct SsdCacheStats {
   tsan_atomic<uint64_t> bytesCached{0};
   tsan_atomic<uint64_t> entriesAgedOut{0};
   tsan_atomic<uint64_t> regionsAgedOut{0};
+  tsan_atomic<uint64_t> regionsEvicted{0};
   tsan_atomic<int32_t> numPins{0};
 
   tsan_atomic<uint32_t> openFileErrors{0};
@@ -272,6 +274,11 @@ class SsdFile {
   /// Returns true if copy on write is disabled for this file. Used in testing.
   bool testingIsCowDisabled() const;
 
+  /// Return the SSD file path.
+  const std::string& fileName() const {
+    return fileName_;
+  }
+
  private:
   // 4 first bytes of a checkpoint file. Allows distinguishing between format
   // versions.
@@ -349,6 +356,9 @@ class SsdFile {
 
   // Maximum size of the backing file in kRegionSize units.
   const int32_t maxRegions_;
+
+  // True if copy on write should be disabled.
+  const bool disableFileCow_;
 
   // Serializes access to all private data members.
   mutable std::shared_mutex mutex_;

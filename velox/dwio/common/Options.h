@@ -45,7 +45,7 @@ enum class FileFormat {
   TEXT = 5,
   JSON = 6,
   PARQUET = 7,
-  ALPHA = 8,
+  NIMBLE = 8,
   ORC = 9,
 };
 
@@ -79,6 +79,7 @@ class SerDeOptions {
   inline static const std::string kFieldDelim{"field.delim"};
   inline static const std::string kCollectionDelim{"collection.delim"};
   inline static const std::string kMapKeyDelim{"mapkey.delim"};
+  inline static const std::string kEscapeChar{"escape.delim"};
 
   explicit SerDeOptions(
       uint8_t fieldDelim = '\1',
@@ -141,8 +142,10 @@ class RowReaderOptions {
   // Function to track how much time we spend waiting on IO before reading rows
   // (in dwrf row reader). todo: encapsulate this and keySelectionCallBack_ in a
   // struct
-  std::function<void(uint64_t)> blockedOnIoCallback_;
-  std::function<void(uint64_t)> decodingTimeUsCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      blockedOnIoCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      decodingTimeCallback_;
   std::function<void(uint16_t)> stripeCountCallback_;
   bool eagerFirstStripeLoad = true;
   uint64_t skipRows_ = 0;
@@ -354,20 +357,25 @@ class RowReaderOptions {
   }
 
   void setBlockedOnIoCallback(
-      std::function<void(int64_t)> blockedOnIoCallback) {
+      std::function<void(std::chrono::high_resolution_clock::duration)>
+          blockedOnIoCallback) {
     blockedOnIoCallback_ = std::move(blockedOnIoCallback);
   }
 
-  const std::function<void(int64_t)> getBlockedOnIoCallback() const {
+  const std::function<void(std::chrono::high_resolution_clock::duration)>
+  getBlockedOnIoCallback() const {
     return blockedOnIoCallback_;
   }
 
-  void setDecodingTimeUsCallback(std::function<void(int64_t)> decodingTimeUs) {
-    decodingTimeUsCallback_ = std::move(decodingTimeUs);
+  void setDecodingTimeCallback(
+      std::function<void(std::chrono::high_resolution_clock::duration)>
+          decodingTime) {
+    decodingTimeCallback_ = std::move(decodingTime);
   }
 
-  std::function<void(int64_t)> getDecodingTimeUsCallback() const {
-    return decodingTimeUsCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+  getDecodingTimeCallback() const {
+    return decodingTimeCallback_;
   }
 
   void setStripeCountCallback(

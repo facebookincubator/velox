@@ -75,6 +75,12 @@ Array Functions
         SELECT array_repeat(100, 0); -- []
         SELECT array_repeat(100, -1); -- []
 
+.. spark:function:: array_size(array(E)) -> integer
+    
+        Returns the size of the array. ::
+    
+            SELECT array_size(array(1, 2, 3)); -- 3
+
 .. spark:function:: array_sort(array(E)) -> array(E)
 
     Returns an array which has the sorted order of the input array(E). The elements of array(E) must
@@ -99,6 +105,15 @@ Array Functions
         SELECT filter(array(1, 2, 3), x -> x % 2 == 1); -- [1, 3]
         SELECT filter(array(0, 2, 3), (x, i) -> x > i); -- [2, 3]
         SELECT filter(array(0, null, 2, 3, null), x -> x IS NOT NULL); -- [0, 2, 3]
+
+.. function:: flatten(array(array(E))) -> array(E)
+
+    Transforms an array of arrays into a single array.
+    Returns NULL if the input is NULL or any of the nested arrays is NULL. ::
+
+        SELECT flatten(array(array(1, 2), array(3, 4))); -- [1, 2, 3, 4]
+        SELECT flatten(array(array(1, 2), array(3, NULL))); -- [1, 2, 3, NULL]
+        SELECT flatten(array(array(1, 2), NULL, array(3, 4))); -- NULL
 
 .. spark:function:: in(value, array(E)) -> boolean
 

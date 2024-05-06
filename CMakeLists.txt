@@ -123,7 +123,7 @@ option(
 option(VELOX_FORCE_COLORED_OUTPUT
        "Always produce ANSI-colored output (GNU/Clang only)." OFF)
 
-if(${VELOX_BUILD_MINIMAL})
+if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
@@ -546,6 +546,9 @@ endif()
 
 set_source(xsimd)
 resolve_dependency(xsimd 10.0.0)
+
+set(stemmer_SOURCE BUNDLED)
+resolve_dependency(stemmer)
 
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
