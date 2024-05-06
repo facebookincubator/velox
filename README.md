@@ -84,18 +84,12 @@ dependencies for a given platform.
 
 ### Setting up on macOS
 
-On an Intel MacOS machine you can setup and then build like so:
+On a MacOS machine (either Intel or Apple silicon) you can setup and then build like so:
 
 ```shell
+$ export INSTALL_PREFIX=/Users/$USERNAME/velox/velox_dependency_install
 $ ./scripts/setup-macos.sh
 $ make
-```
-
-On an M1 MacOS machine you can build like so:
-
-```shell
-$ CPU_TARGET="arm64" ./scripts/setup-macos.sh
-$ CPU_TARGET="arm64" make
 ```
 
 You can also produce intel binaries on an M1, use `CPU_TARGET="sse"` for the above.
