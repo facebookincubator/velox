@@ -40,11 +40,15 @@ if(ON_APPLE_M1)
   # folly will wrongly assume x86_64 if this is not set
   set(CMAKE_LIBRARY_ARCHITECTURE aarch64)
 endif()
+
+# TODO: handle this better
+set(BUILD_SHARED_LIBS ON)
 # Suppress all warnings
 set(FOLLY_CXX_FLAGS -w)
 # Enable INT128 support
 set(FOLLY_HAVE_INT128_T ON)
 FetchContent_MakeAvailable(folly)
+unset(BUILD_SHARED_LIBS)
 
 # Folly::folly is not valid for FC but we want to match FindFolly
 add_library(Folly::folly ALIAS folly)
@@ -62,7 +66,7 @@ set_target_properties(
              $<TARGET_PROPERTY:folly_base,INTERFACE_INCLUDE_DIRECTORIES>)
 
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
-  add_dependencies(folly glog gflags_static fmt::fmt)
+  add_dependencies(folly glog gflags::gflags fmt::fmt)
 endif()
 
 set(FOLLY_BENCHMARK_STATIC_LIB
