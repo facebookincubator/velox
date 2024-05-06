@@ -32,6 +32,14 @@ bool MemConfig::isValueExists(const std::string& key) const {
   return values_.find(key) != values_.end();
 }
 
+void MemConfig::initialize() {
+  if (auto it = values_.find(QueryConfig::kSessionTimezone);
+      it != values_.end()) {
+    // Exception is thrown if the timezone cannot be recognized.
+    timezoneID_ = util::getTimeZoneID(it->second);
+  }
+}
+
 folly::Optional<std::string> MemConfigMutable::get(
     const std::string& key) const {
   auto lockedValues = values_.rlock();
@@ -46,13 +54,6 @@ folly::Optional<std::string> MemConfigMutable::get(
 bool MemConfigMutable::isValueExists(const std::string& key) const {
   auto lockedValues = values_.rlock();
   return lockedValues->find(key) != lockedValues->end();
-}
-
-void MemConfig::validateConfig() {
-  // Validate if timezone name can be recognized.
-  if (isValueExists(QueryConfig::kSessionTimezone)) {
-    util::getTimeZoneID(values_[QueryConfig::kSessionTimezone]);
-  }
 }
 
 } // namespace facebook::velox::core

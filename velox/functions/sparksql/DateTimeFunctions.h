@@ -176,9 +176,8 @@ struct UnixTimestampParseFunction {
 
  protected:
   void setTimezone(const core::QueryConfig& config) {
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      sessionTzID_ = util::getTimeZoneID(sessionTzName);
+    if (config.sessionTimezoneID() != -1) {
+      sessionTzID_ = config.sessionTimezoneID();
     }
   }
 
@@ -367,9 +366,8 @@ struct GetTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    auto sessionTimezoneName = config.sessionTimezone();
-    if (!sessionTimezoneName.empty()) {
-      sessionTimezoneId_ = util::getTimeZoneID(sessionTimezoneName);
+    if (config.sessionTimezoneID() != -1) {
+      sessionTimezoneId_ = config.sessionTimezoneID();
     }
     if (format != nullptr) {
       formatter_ = buildJodaDateTimeFormatter(

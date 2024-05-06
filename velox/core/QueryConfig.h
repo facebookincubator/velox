@@ -482,6 +482,10 @@ class QueryConfig {
     return get<std::string>(kSessionTimezone, "");
   }
 
+  int64_t sessionTimezoneID() const {
+    return config_->sessionTimezoneId();
+  }
+
   bool exprEvalSimplified() const {
     return get<bool>(kExprEvalSimplified, false);
   }

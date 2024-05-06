@@ -25,10 +25,9 @@ void castFromTimestamp(
     const SelectivityVector& rows,
     VectorPtr& result) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
-  const auto& sessionTzName = config.sessionTimezone();
   int64_t sessionTzID = 0;
-  if (!sessionTzName.empty()) {
-    sessionTzID = util::getTimeZoneID(sessionTzName);
+  if (config.sessionTimezoneID() != -1) {
+    sessionTzID = config.sessionTimezoneID();
   }
   const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
 

@@ -1287,9 +1287,9 @@ struct DateParseFunction {
       isConstFormat_ = true;
     }
 
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      sessionTzID_ = util::getTimeZoneID(sessionTzName);
+    auto sessionTzID = config.sessionTimezoneID();
+    if (sessionTzID != -1) {
+      sessionTzID_ = sessionTzID;
     }
   }
 
@@ -1402,9 +1402,9 @@ struct ParseDateTimeFunction {
       isConstFormat_ = true;
     }
 
-    auto sessionTzName = config.sessionTimezone();
-    if (!sessionTzName.empty()) {
-      sessionTzID_ = util::getTimeZoneID(sessionTzName);
+    auto sessionTzID = config.sessionTimezoneID();
+    if (sessionTzID != -1) {
+      sessionTzID_ = sessionTzID;
     }
   }
 

@@ -54,6 +54,11 @@ class Config {
     }
   }
 
+  virtual int64_t sessionTimezoneId() const {
+    VELOX_UNSUPPORTED(
+        "method sessionTimezoneId() is not supported by this config");
+  };
+
   virtual bool isValueExists(const std::string& key) const = 0;
 
   virtual const std::unordered_map<std::string, std::string>& values() const {
@@ -71,14 +76,14 @@ class MemConfig : public Config {
  public:
   explicit MemConfig(const std::unordered_map<std::string, std::string>& values)
       : values_(values) {
-    validateConfig();
+    initialize();
   }
 
   explicit MemConfig() : values_{} {}
 
   explicit MemConfig(std::unordered_map<std::string, std::string>&& values)
       : values_(std::move(values)) {
-    validateConfig();
+    initialize();
   }
 
   folly::Optional<std::string> get(const std::string& key) const override;
@@ -93,10 +98,18 @@ class MemConfig : public Config {
     return values_;
   }
 
- private:
-  // Validate if configurations are valid.
-  void validateConfig();
+  // Returns session timezone ID. Returns -1 if session timezone is not set.
+  int64_t sessionTimezoneId() const override {
+    return timezoneID_;
+  }
 
+ private:
+  // Initializes configurations. Throws exception if invalid configuration is
+  // provided.
+  void initialize();
+
+  // Session timezone ID.
+  int64_t timezoneID_ = -1;
   std::unordered_map<std::string, std::string> values_;
 };
 

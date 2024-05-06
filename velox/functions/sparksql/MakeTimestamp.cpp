@@ -186,11 +186,9 @@ std::shared_ptr<exec::VectorFunction> createMakeTimestampFunction(
     const std::string& /* name */,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config) {
-  const auto sessionTzName = config.sessionTimezone();
-  VELOX_USER_CHECK(
-      !sessionTzName.empty(),
-      "make_timestamp requires session time zone to be set.")
-  const auto sessionTzID = util::getTimeZoneID(sessionTzName);
+  const auto sessionTzID = config.sessionTimezoneID();
+  VELOX_USER_CHECK_NE(
+      sessionTzID, -1, "make_timestamp requires session time zone to be set.")
 
   const auto& secondsType = inputArgs[5].type;
   VELOX_USER_CHECK(
