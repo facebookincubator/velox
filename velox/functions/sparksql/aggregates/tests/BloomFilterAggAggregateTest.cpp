@@ -32,11 +32,15 @@ class BloomFilterAggAggregateTest
     allowInputShuffle();
   }
 
-  VectorPtr getSerializedBloomFilter(int32_t capacity) {
+  VectorPtr getSerializedBloomFilter(
+      int32_t capacity,
+      bool shouldInsertValue = true) {
     BloomFilter bloomFilter;
     bloomFilter.reset(capacity);
-    for (auto i = 0; i < 9; ++i) {
-      bloomFilter.insert(folly::hasher<int64_t>()(i));
+    if (shouldInsertValue) {
+      for (auto i = 0; i < 9; ++i) {
+        bloomFilter.insert(folly::hasher<int64_t>()(i));
+      }
     }
     std::string data;
     data.resize(bloomFilter.serializedSize());
@@ -72,14 +76,46 @@ TEST_F(BloomFilterAggAggregateTest, emptyInput) {
 }
 
 TEST_F(BloomFilterAggAggregateTest, withNullInput) {
-  // The first 10 values range from 0 to 9, and the last 10 values are nulls
-  auto vectors = {makeRowVector({makeFlatVector<int64_t>(
-      20,
-      [](vector_size_t row) { return row % 9; },
-      [](vector_size_t row) { return row > 9; })})};
+  auto vectors = {makeRowVector({makeNullableFlatVector<int64_t>(
+      {0,
+       1,
+       2,
+       std::nullopt,
+       3,
+       4,
+       5,
+       std::nullopt,
+       std::nullopt,
+       6,
+       7,
+       8,
+       std::nullopt,
+       std::nullopt})})};
   // The expected value is the serialized bloom filter
   auto expected = {makeRowVector({getSerializedBloomFilter(4)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
+}
+
+TEST_F(BloomFilterAggAggregateTest, allNullInput) {
+  // The bloom_filter_agg do not support test streaming when it's inputs are all
+  // NULL, because the result of streaming will be null
+  disableTestStreaming();
+  // The expected value is the serialized bloom filter
+  auto expected = {makeRowVector({getSerializedBloomFilter(4, false)})};
+  auto vectors1 = {makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})})};
+  testAggregations(vectors1, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
+  auto vectors2 = {makeRowVector({makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt})})};
+  testAggregations(vectors2, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
+  auto vectors3 = {makeRowVector({makeNullableFlatVector<int64_t>(
+      {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt})})};
+  testAggregations(vectors3, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
 }
 
 TEST_F(BloomFilterAggAggregateTest, config) {
