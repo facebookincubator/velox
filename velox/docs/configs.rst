@@ -559,7 +559,14 @@ Each query can override the config by setting corresponding query session proper
      - integer
      -
      - Maximum concurrent TCP connections for a single http client.
-
+   * - hive.s3.max-attempts
+     - integer
+     -
+     - Maximum attempts for connections to a single http client.
+   * - hive.s3.retry-mode
+     - string
+     -
+     - 'standard' or 'adaptive', use DefaultRetryStrategy if it's empty.
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 .. list-table::
