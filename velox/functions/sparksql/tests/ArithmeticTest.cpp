@@ -353,6 +353,21 @@ TEST_F(ArithmeticTest, log1p) {
   EXPECT_TRUE(std::isnan(log1p(kNan).value_or(0)));
 }
 
+TEST_F(ArithmetricTest, expm1) {
+  static const auto expm1 = [&](std::optional<double> a) {
+    return evaluateOnce<double>("expm1(c0)", a);
+  }
+
+  const double kE = std::exp(1);
+
+  EXPECT_EQ(expm1(0), 0);
+  EXPECT_EQ(expm1(1), kE - 1);
+  // As this is only for high accuracy of little number, this is just an example
+  EXPECT_LT(expm1(1e-10), 1.00000000005e-10);
+  EXPECT_EQ(expm1(kInf), kInf);
+  EXPECT_TRUE(std::isnan(expm1(kNan).value_or(0)));
+}
+
 class BinTest : public SparkFunctionBaseTest {
  protected:
   std::optional<std::string> bin(std::optional<std::int64_t> arg) {
