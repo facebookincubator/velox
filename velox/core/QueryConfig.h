@@ -500,7 +500,7 @@ class QueryConfig {
   /// Returns 'is join spilling enabled' flag. Must also check the
   /// spillEnabled()!
   bool joinSpillEnabled() const {
-    return get<bool>(kJoinSpillEnabled, true);
+    return get<bool>(kJoinSpillEnabled, false);
   }
 
   /// Returns 'is orderby spilling enabled' flag. Must also check the
