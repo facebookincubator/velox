@@ -92,6 +92,18 @@ $ ./scripts/setup-macos.sh
 $ make
 ```
 
+With macOS 14.4 and XCode 15.3 where `m4` is missing, you can either
+1. install `m4` via `brew`:
+```shell
+$ brew install m4
+$ export PATH=/opt/homebrew/opt/m4/bin:$PATH
+```
+
+2. or use `gm4` instead:
+```shell
+$ M4=/usr/bin/gm4 make
+```
+
 You can also produce intel binaries on an M1, use `CPU_TARGET="sse"` for the above.
 
 ### Setting up on aarch64 Linux (Ubuntu 20.04 or later)
