@@ -48,7 +48,9 @@ namespace {
 /// After adjustment, for the output ArrayVector:
 /// rawOffsets vector [1, 4, 8]
 /// rawSizes vector   [2, 2, 2]
-template <TypeKind INDEX_TYPE>
+/// @tparam IndexKind The `TypeKind` of the function `Slice` start and length
+/// type.
+template <TypeKind IndexKind>
 class SliceFunction : public exec::VectorFunction {
  public:
   void apply(
@@ -63,9 +65,9 @@ class SliceFunction : public exec::VectorFunction {
         "Function slice() requires first argument of type ARRAY");
     VELOX_USER_CHECK_EQ(
         args[1]->typeKind(),
-        INDEX_TYPE,
+        IndexKind,
         "Function slice() requires second argument of type {}",
-        velox::TypeTraits<INDEX_TYPE>::name);
+        velox::TypeTraits<IndexKind>::name);
     VELOX_USER_CHECK_EQ(
         args[1]->typeKind(),
         args[2]->typeKind(),
@@ -204,36 +206,29 @@ class SliceFunction : public exec::VectorFunction {
 };
 } // namespace
 
-template <TypeKind INDEX_TYPE>
+template <TypeKind IndexKind>
 void registerSliceFunction(const std::string& prefix) {
-  using NativeType = typename TypeTraits<INDEX_TYPE>::NativeType;
+  using NativeType = typename TypeTraits<IndexKind>::NativeType;
+  auto indexKindName = TypeTraits<IndexKind>::name;
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-  if constexpr (std::is_same_v<NativeType, int64_t>) {
+  if constexpr (
+      std::is_same_v<NativeType, int64_t> ||
+      std::is_same_v<NativeType, int32_t>) {
     signatures.push_back(exec::FunctionSignatureBuilder()
                              .typeVariable("T")
                              .returnType("array(T)")
                              .argumentType("array(T)")
-                             .argumentType("bigint")
-                             .argumentType("bigint")
-                             .build());
-  } else if constexpr (std::is_same_v<NativeType, int32_t>) {
-    signatures.push_back(exec::FunctionSignatureBuilder()
-                             .typeVariable("T")
-                             .returnType("array(T)")
-                             .argumentType("array(T)")
-                             .argumentType("integer")
-                             .argumentType("integer")
+                             .argumentType(indexKindName)
+                             .argumentType(indexKindName)
                              .build());
   } else {
-    VELOX_FAIL(
-        "Unsupported index type {} to register slice()",
-        velox::TypeTraits<INDEX_TYPE>::name);
+    VELOX_FAIL("Unsupported index type {} to register slice()", indexKindName);
   }
 
   exec::registerVectorFunction(
       prefix + "slice",
       signatures,
-      std::make_unique<SliceFunction<INDEX_TYPE>>());
+      std::make_unique<SliceFunction<IndexKind>>());
 }
 
 template void registerSliceFunction<TypeKind::BIGINT>(

@@ -20,7 +20,9 @@
 
 namespace facebook::velox::functions {
 
-template <TypeKind INDEX_TYPE>
+/// @tparam IndexKind The `TypeKind` of the function `Slice` start and length
+/// type.
+template <TypeKind IndexKind>
 void registerSliceFunction(const std::string& prefix);
 
 extern template void registerSliceFunction<TypeKind::BIGINT>(

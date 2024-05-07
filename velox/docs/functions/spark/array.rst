@@ -201,6 +201,9 @@ Array Functions
     Returns a subarray starting from index ``start``(or starting from the end
     if ``start`` is negative) with a length of ``length``.
 
+        SELECT slice(array(1, 2, 3, 4), 2, 2); -- [2,3]
+        SELECT slice(array(1, 2, 3, 4), -2, 2); -- [3,4]
+
 .. spark:function:: sort_array(array(E)) -> array(E)
 
     Returns an array which has the sorted order of the input array. The elements of array must
