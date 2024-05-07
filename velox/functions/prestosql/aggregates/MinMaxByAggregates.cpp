@@ -30,6 +30,36 @@ namespace {
 /// greater than or less than the value in the 'accumulator'.
 template <bool greaterThan, typename T, typename TAccumulator>
 struct Comparator {
+  FOLLY_ALWAYS_INLINE static bool compare(T accumulator, T newComparison) {
+    if constexpr (greaterThan) {
+      return newComparison > accumulator;
+    } else {
+      return newComparison < accumulator;
+    }
+  }
+
+  static bool compare(
+      const TAccumulator& accumulator,
+      const DecodedVector& decoded,
+      vector_size_t index) {
+    static const CompareFlags kCompareFlags{
+        true, // nullsFirst
+        true, // ascending
+        false, // equalsOnly
+        CompareFlags::NullHandlingMode::kNullAsIndeterminate};
+
+    VELOX_USER_CHECK(
+        !decoded.base()->containsNullAt(decoded.index(index)),
+        "{} comparison not supported for values that contain nulls",
+        mapTypeKindToName(decoded.base()->typeKind()));
+
+    int32_t result = accumulator.compare(decoded, index, kCompareFlags).value();
+    if constexpr (greaterThan) {
+      return result < 0;
+    }
+    return result > 0;
+  }
+
   static bool compare(
       TAccumulator* accumulator,
       const DecodedVector& newComparisons,
@@ -1114,17 +1144,7 @@ std::string toString(const std::vector<TypePtr>& types) {
   return out.str();
 }
 
-template <
-    template <
-        typename U,
-        typename V,
-        bool B1,
-        template <bool B2, typename C1, typename C2>
-        class C>
-    class Aggregate,
-    bool isMaxFunc,
-    template <typename U, typename V>
-    class NAggregate>
+template <bool isMaxFunc, template <typename U, typename V> class NAggregate>
 exec::AggregateRegistrationResult registerMinMaxBy(
     const std::string& name,
     bool withCompanionFunctions,
@@ -1187,8 +1207,8 @@ exec::AggregateRegistrationResult registerMinMaxBy(
           return createNArg<NAggregate>(
               resultType, argTypes[0], argTypes[1], errorMessage);
         } else {
-          return create<Aggregate, Comparator, isMaxFunc>(
-              resultType, argTypes[0], argTypes[1], errorMessage, true);
+          return createAll<Comparator, isMaxFunc>(
+              resultType, argTypes[0], argTypes[1], errorMessage);
         }
       },
       withCompanionFunctions,
@@ -1201,9 +1221,9 @@ void registerMinMaxByAggregates(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerMinMaxBy<MinMaxByAggregateBase, true, MaxByNAggregate>(
+  registerMinMaxBy<true, MaxByNAggregate>(
       prefix + kMaxBy, withCompanionFunctions, overwrite);
-  registerMinMaxBy<MinMaxByAggregateBase, false, MinByNAggregate>(
+  registerMinMaxBy<false, MinByNAggregate>(
       prefix + kMinBy, withCompanionFunctions, overwrite);
 }
 
