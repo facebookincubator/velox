@@ -34,7 +34,8 @@ class InputFileNameTest : public SparkFunctionBaseTest {
         "t",
         std::move(plan),
         0,
-        std::make_shared<core::QueryCtx>(executor_.get()));
+        std::make_shared<core::QueryCtx>(executor_.get()),
+        exec::Task::ExecutionMode::kParallel);
     exec::DriverCtx driverCtx(task, 0, 0, 0, 0);
     return driverCtx;
   }
