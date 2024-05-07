@@ -725,7 +725,8 @@ uint64_t SharedArbitrator::reclaim(
     uint64_t targetBytes,
     bool isLocalArbitration) noexcept {
   int64_t bytesToReclaim = std::min<uint64_t>(
-      std::max(targetBytes, memoryPoolTransferCapacity_), pool->capacity());
+      std::max(targetBytes, memoryPoolTransferCapacity_),
+      reclaimableUsedCapacity(*pool));
   if (bytesToReclaim == 0) {
     return 0;
   }
