@@ -1152,7 +1152,7 @@ void HashTable<ignoreNullKeys>::pushNext(
 }
 
 template <bool ignoreNullKeys>
-FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
+FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbeForHashMode(
     RowContainer* rows,
     ProbeState& state,
     uint64_t hash,
@@ -1168,42 +1168,60 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
     return nullptr;
   };
 
-  if (hashMode_ == HashMode::kNormalizedKey) {
-    state.fullProbe<ProbeState::Operation::kInsert>(
-        *this,
-        -static_cast<int32_t>(sizeof(normalized_key_t)),
-        [&](char* group, int32_t /*row*/) {
-          if (RowContainer::normalizedKey(group) ==
-              RowContainer::normalizedKey(inserted)) {
-            if (nextOffset_) {
-              pushNext(rows, group, inserted);
-            }
-            return true;
+  state.fullProbe<ProbeState::Operation::kInsert>(
+      *this,
+      0,
+      [&](char* group, int32_t /*row*/) {
+        if (compareKeys(group, inserted)) {
+          if (nextOffset_ > 0) {
+            pushNext(rows, group, inserted);
           }
-          return false;
-        },
-        insertFn,
-        numTombstones_,
-        extraCheck,
-        partitionInfo);
-  } else {
-    state.fullProbe<ProbeState::Operation::kInsert>(
-        *this,
-        0,
-        [&](char* group, int32_t /*row*/) {
-          if (compareKeys(group, inserted)) {
-            if (nextOffset_ > 0) {
-              pushNext(rows, group, inserted);
-            }
-            return true;
+          return true;
+        }
+        return false;
+      },
+      insertFn,
+      numTombstones_,
+      extraCheck,
+      partitionInfo);
+}
+
+template <bool ignoreNullKeys>
+FOLLY_ALWAYS_INLINE void
+HashTable<ignoreNullKeys>::buildFullProbeForNormalizedKeyMode(
+    RowContainer* rows,
+    ProbeState& state,
+    uint64_t hash,
+    char* inserted,
+    bool extraCheck,
+    TableInsertPartitionInfo* partitionInfo) {
+  auto insertFn = [&](int32_t /*row*/, PartitionBoundIndexType index) {
+    if (partitionInfo != nullptr && !partitionInfo->inRange(index)) {
+      partitionInfo->addOverflow(inserted);
+      return nullptr;
+    }
+    storeRowPointer(index, hash, inserted);
+    return nullptr;
+  };
+  constexpr int32_t kKeyOffset =
+      -static_cast<int32_t>(sizeof(normalized_key_t));
+  state.fullProbe<ProbeState::Operation::kInsert>(
+      *this,
+      kKeyOffset,
+      [&](char* group, int32_t /*row*/) {
+        if (RowContainer::normalizedKey(group) ==
+            RowContainer::normalizedKey(inserted)) {
+          if (nextOffset_) {
+            pushNext(rows, group, inserted);
           }
-          return false;
-        },
-        insertFn,
-        numTombstones_,
-        extraCheck,
-        partitionInfo);
-  }
+          return true;
+        }
+        return false;
+      },
+      insertFn,
+      numTombstones_,
+      extraCheck,
+      partitionInfo);
 }
 
 template <bool ignoreNullKeys>
@@ -1223,13 +1241,63 @@ void HashTable<ignoreNullKeys>::insertForJoin(
     }
     return;
   }
-
-  ProbeState state;
-  for (auto i = 0; i < numGroups; ++i) {
-    state.preProbe(*this, hashes[i], i);
-    state.firstProbe(*this, 0);
-
-    buildFullProbe(rows, state, hashes[i], groups[i], i, partitionInfo);
+  auto i = 0;
+  constexpr int32_t groupSize = 64;
+  ProbeState states[groupSize];
+  constexpr int32_t kKeyOffset =
+      -static_cast<int32_t>(sizeof(normalized_key_t));
+  if (hashMode_ == HashMode::kNormalizedKey) {
+    for (; i + groupSize <= numGroups; i += groupSize) {
+      for (int32_t j = 0; j < groupSize; ++j) {
+        auto index = i + j;
+        states[j].preProbe(*this, hashes[index], index);
+      }
+      for (int32_t j = 0; j < groupSize; ++j) {
+        states[j].firstProbe(*this, kKeyOffset);
+      }
+      for (int32_t j = 0; j < groupSize; ++j) {
+        auto index = i + j;
+        buildFullProbeForNormalizedKeyMode(
+            rows,
+            states[j],
+            hashes[index],
+            groups[index],
+            index,
+            partitionInfo);
+      }
+    }
+    for (; i < numGroups; ++i) {
+      states[0].preProbe(*this, hashes[i], i);
+      states[0].firstProbe(*this, 0);
+      buildFullProbeForNormalizedKeyMode(
+          rows, states[0], hashes[i], groups[i], i, partitionInfo);
+    }
+  } else {
+    for (; i + groupSize <= numGroups; i += groupSize) {
+      for (int32_t j = 0; j < groupSize; ++j) {
+        auto index = i + j;
+        states[j].preProbe(*this, hashes[index], index);
+      }
+      for (int32_t j = 0; j < groupSize; ++j) {
+        states[j].firstProbe(*this, 0);
+      }
+      for (int32_t j = 0; j < groupSize; ++j) {
+        auto index = i + j;
+        buildFullProbeForHashMode(
+            rows,
+            states[j],
+            hashes[index],
+            groups[index],
+            index,
+            partitionInfo);
+      }
+    }
+    for (; i < numGroups; ++i) {
+      states[0].preProbe(*this, hashes[i], i);
+      states[0].firstProbe(*this, 0);
+      buildFullProbeForHashMode(
+          rows, states[0], hashes[i], groups[i], i, partitionInfo);
+    }
   }
 }
 

@@ -855,7 +855,15 @@ class HashTable : public BaseHashTable {
   // Finishes inserting an entry into a join hash table. If 'partitionInfo' is
   // not null and the insert falls out-side of the partition range, then insert
   // is not made but row is instead added to 'overflow' in 'partitionInfo'
-  void buildFullProbe(
+  void buildFullProbeForHashMode(
+      RowContainer* rows,
+      ProbeState& state,
+      uint64_t hash,
+      char* row,
+      bool extraCheck,
+      TableInsertPartitionInfo* partitionInfo);
+
+  void buildFullProbeForNormalizedKeyMode(
       RowContainer* rows,
       ProbeState& state,
       uint64_t hash,
