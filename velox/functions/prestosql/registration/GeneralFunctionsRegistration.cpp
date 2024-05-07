@@ -17,6 +17,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/prestosql/Cardinality.h"
+#include "velox/functions/prestosql/FailureFunction.h"
 #include "velox/functions/prestosql/GreatestLeast.h"
 #include "velox/functions/prestosql/InPredicate.h"
 
@@ -44,6 +45,14 @@ inline void registerAllGreatestLeastFunctions(const std::string& prefix) {
   registerGreatestLeastFunction<ShortDecimal<P1, S1>>(prefix);
   registerGreatestLeastFunction<Date>(prefix);
   registerGreatestLeastFunction<Timestamp>(prefix);
+}
+
+inline void registerFailFunctions(const std::string& prefix) {
+  registerFunction<FailFunction, UnknownValue, int32_t, Varchar>(
+      {prefix + "fail"});
+  registerFunction<FailFunction, UnknownValue, int32_t, Json>(
+      {prefix + "fail"});
+  registerFunction<FailFunction, UnknownValue, Varchar>({prefix + "fail"});
 }
 
 extern void registerSubscriptFunction(
@@ -83,6 +92,8 @@ void registerGeneralFunctions(const std::string& prefix) {
       {prefix + "cardinality"});
 
   registerAllSpecialFormGeneralFunctions();
+
+  registerFailFunctions(prefix);
 }
 
 } // namespace facebook::velox::functions
