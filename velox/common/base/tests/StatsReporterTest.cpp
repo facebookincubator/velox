@@ -23,6 +23,7 @@
 #include <unordered_set>
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/PeriodicStatsReporter.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::velox {
 
@@ -138,7 +139,7 @@ TEST_F(StatsReporterTest, trivialReporter) {
   EXPECT_EQ(100, reporter_->counterMap["key4"]);
 };
 
-class PeriodicStatsReportDaemonTest : public StatsReporterTest {};
+class PeriodicStatsReporterTest : public StatsReporterTest {};
 
 class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
  public:
@@ -193,21 +194,38 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
   memory::MemoryArbitrator::Stats stats_;
 };
 
-TEST_F(PeriodicStatsReportDaemonTest, basic) {
+TEST_F(PeriodicStatsReporterTest, basic) {
   TestStatsReportMemoryArbitrator arbitrator({});
   PeriodicStatsReporter::Options options;
+  options.arbitrator = &arbitrator;
   options.arbitratorStatsIntervalMs = 4'000;
-  PeriodicStatsReporter reporter(&arbitrator, options);
+  PeriodicStatsReporter periodicReporter(options);
 
-  reporter.start();
+  periodicReporter.start();
   std::this_thread::sleep_for(std::chrono::milliseconds(2'000));
+  // Stop right after sufficient wait to ensure the following reads from main
+  // thread does not trigger TSAN failures.
+  periodicReporter.stop();
 
   const auto& counterMap = reporter_->counterMap;
   ASSERT_EQ(counterMap.size(), 2);
   ASSERT_EQ(counterMap.count(kMetricArbitratorFreeCapacityBytes.str()), 1);
   ASSERT_EQ(
       counterMap.count(kMetricArbitratorFreeReservedCapacityBytes.str()), 1);
-  reporter.stop();
+}
+
+TEST_F(PeriodicStatsReporterTest, globalInstance) {
+  TestStatsReportMemoryArbitrator arbitrator({});
+  PeriodicStatsReporter::Options options;
+  options.arbitrator = &arbitrator;
+  options.arbitratorStatsIntervalMs = 4'000;
+  VELOX_ASSERT_THROW(
+      stopPeriodicStatsReporter(), "No periodic stats reporter to stop.");
+  ASSERT_NO_THROW(startPeriodicStatsReporter(options));
+  VELOX_ASSERT_THROW(
+      startPeriodicStatsReporter(options),
+      "The periodic stats reporter has already started.");
+  ASSERT_NO_THROW(stopPeriodicStatsReporter());
 }
 
 // Registering to folly Singleton with intended reporter type

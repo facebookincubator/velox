@@ -13,23 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include "velox/experimental/wave/exec/WaveOperator.h"
+#include <cstddef>
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 
-namespace facebook::velox::wave {
-
-class Filter : public WaveOperator {
- public:
-  Filter(RowTypePtr inputType, exec::ExprSet exprSet);
-
-  bool isStreaming() const override {
-    return true;
-  }
-
- private:
-  std::vector<Subfield> input_;
-};
-
-} // namespace facebook::velox::wave
+namespace facebook::velox::exec::test {
+void rowNumberFuzzer(
+    size_t seed,
+    std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner);
+}
