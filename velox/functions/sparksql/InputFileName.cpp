@@ -45,7 +45,7 @@ class InputFileName final : public exec::VectorFunction {
     context.ensureWritable(rows, VARCHAR(), result);
     auto driverCtx = context.driverCtx();
     auto inputFileName = driverCtx->inputFileName;
-    std::string outFileName = inputFileName;
+    std::string outFileName;
     facebook::velox::functions::detail::urlEscape(
         outFileName, inputFileName, false, doNotEncodeSymbolsBits_);
     context.moveOrCopyResult(
