@@ -96,6 +96,10 @@ Mathematical Functions
 
     Returns Euler's number raised to the power of ``x``.
 
+.. spark:function:: expm1(x) -> double
+
+    Returns Euler's number raised to the power of ``x`` minus 1 and this function is more accurate than exp(num) - 1whne the num is close to zero.
+
 .. spark:function:: floor(x) -> [same as x]
 
     Returns ``x`` rounded down to the nearest integer.
