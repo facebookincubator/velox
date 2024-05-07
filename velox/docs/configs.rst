@@ -562,11 +562,14 @@ Each query can override the config by setting corresponding query session proper
    * - hive.s3.max-attempts
      - integer
      -
-     - Maximum attempts for connections to a single http client.
+     - Maximum attempts for connections to a single http client, work together with retry-mode. By default, it's 3 for standard/adaptive mode
+       and 10 for legacy mode.
    * - hive.s3.retry-mode
      - string
      -
-     - 'standard' or 'adaptive', use DefaultRetryStrategy if it's empty.
+     - **Allowed values:** "standard", "adaptive", "legacy". By default use legacy mode, which only enables throttled retry for transient errors.
+       Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
+       Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate. 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 .. list-table::

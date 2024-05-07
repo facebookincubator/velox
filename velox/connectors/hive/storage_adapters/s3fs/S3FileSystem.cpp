@@ -564,7 +564,9 @@ class S3FileSystem::Impl {
     }
 
     auto retryStrategy = getRetryStrategy();
-    clientConfig.retryStrategy = retryStrategy;
+    if (retryStrategy.has_value()) {
+      clientConfig.retryStrategy = retryStrategy.value();
+    }
 
     auto credentialsProvider = getCredentialsProvider();
 
@@ -645,7 +647,8 @@ class S3FileSystem::Impl {
   }
 
   // Return a client RetryStrategy based on the config.
-  std::shared_ptr<Aws::Client::RetryStrategy> getRetryStrategy() const {
+  std::optional<std::shared_ptr<Aws::Client::RetryStrategy>> getRetryStrategy()
+      const {
     auto retryMode = hiveConfig_->s3RetryMode();
     auto maxAttempts = hiveConfig_->s3MaxAttempts();
     if (retryMode.has_value()) {
@@ -671,10 +674,22 @@ class S3FileSystem::Impl {
           // Otherwise, use default value 3.
           return std::make_shared<Aws::Client::AdaptiveRetryStrategy>();
         }
+      } else if (retryMode.value() == "legacy") {
+        if (maxAttempts.has_value()) {
+          VELOX_USER_CHECK(
+              (maxAttempts.value() > 0),
+              "Invalid configuration: specify 'max-attempts' > 0.");
+          return std::make_shared<Aws::Client::DefaultRetryStrategy>(
+              maxAttempts.value());
+        } else {
+          // Otherwise, use default value maxRetries = 10, scaleFactor = 25
+          return std::make_shared<Aws::Client::DefaultRetryStrategy>();
+        }
+      } else {
+        VELOX_USER_FAIL("Invalid retry mode for S3: {}", retryMode.value());
       }
     }
-    // By default use DefaultRetryStrategy.
-    return std::make_shared<Aws::Client::DefaultRetryStrategy>();
+    return std::nullopt;
   }
 
   // Make it clear that the S3FileSystem instance owns the S3Client.
