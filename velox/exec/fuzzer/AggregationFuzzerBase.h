@@ -17,6 +17,8 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -75,6 +77,8 @@ class AggregationFuzzerBase {
         referenceQueryRunner_{std::move(referenceQueryRunner)},
         vectorFuzzer_{getFuzzerOptions(timestampPrecision), pool_.get()} {
     filesystems::registerLocalFileSystem();
+    connector::registerConnectorFactory(
+        std::make_shared<connector::hive::HiveConnectorFactory>());
     auto configs = hiveConfigs;
     auto hiveConnector =
         connector::getConnectorFactory(
@@ -83,7 +87,8 @@ class AggregationFuzzerBase {
                 kHiveConnectorId,
                 std::make_shared<config::ConfigBase>(std::move(configs)));
     connector::registerConnector(hiveConnector);
-
+    dwrf::registerDwrfReaderFactory();
+    dwrf::registerDwrfWriterFactory();
     seed(initialSeed);
   }
 
