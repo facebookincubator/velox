@@ -78,51 +78,6 @@ The final state is converted into the final result by applying a finish function
 </div>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="array_max">
-<span class="sig-name descname"><span class="pre">array_max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_max" title="Link to this definition">¶</a></dt>
-<dd><p>Returns maximum non-NULL element of the array. Returns NULL if array is empty or all elements are NULL.
-When E is DOUBLE or REAL, returns NaN if any element is NaN.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="mi">3</span>
-<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
-<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">));</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
-<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">array</span><span class="p">());</span> <span class="o">--</span> <span class="n">NULL</span>
-<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="o">-</span><span class="mf">0.0001</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.0002</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.0003</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span><span class="p">)));</span> <span class="o">--</span> <span class="n">NaN</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="array_min">
-<span class="sig-name descname"><span class="pre">array_min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_min" title="Link to this definition">¶</a></dt>
-<dd><p>Returns minimum non-NULL element of the array. Returns NULL if array is empty or all elements are NULL.
-When E is DOUBLE or REAL, NaN value is considered greater than any non-NaN value.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>SELECT array_min(array(1, 2, 3）); -- 1
-SELECT array_min(array(-1, -2, -2）); -- -2
-SELECT array_min(array(-1, -2, NULL)); -- -2
-SELECT array_min(array(NULL, NULL)); -- NULL
-SELECT array_min(array()); -- NULL
-SELECT array_min(array(4.0, float(&#39;nan&#39;)]); -- 4.0
-SELECT array_min(array(NULL, float(&#39;nan&#39;))); -- NaN
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="array_remove">
-<span class="sig-name descname"><span class="pre">array_remove</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#array_remove" title="Link to this definition">¶</a></dt>
-<dd><p>Remove all elements that equal <code class="docutils literal notranslate"><span class="pre">element</span></code> from array <code class="docutils literal notranslate"><span class="pre">x</span></code>. Returns NULL as result if <code class="docutils literal notranslate"><span class="pre">element</span></code> is NULL.
-If array <code class="docutils literal notranslate"><span class="pre">x</span></code> is empty array, returns empty array. If all elements in array <code class="docutils literal notranslate"><span class="pre">x</span></code> are NULL but <code class="docutils literal notranslate"><span class="pre">element</span></code> is not NULL,
-returns array <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_remove</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
-<span class="n">SELECT</span> <span class="n">array_remove</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">),</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]</span>
-<span class="n">SELECT</span> <span class="n">array_remove</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">),</span> <span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
-<span class="n">SELECT</span> <span class="n">array_remove</span><span class="p">(</span><span class="n">array</span><span class="p">(),</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[]</span>
-<span class="n">SELECT</span> <span class="n">array_remove</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">),</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]</span>
-</pre></div>
-</div>
-</dd></dl>
-
 <dl class="spark function">
 <dt class="sig sig-object spark" id="array_repeat">
 <span class="sig-name descname"><span class="pre">array_repeat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">count</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_repeat" title="Link to this definition">¶</a></dt>
@@ -261,9 +216,6 @@ order or at the end of the returned array in descending order.</p>
 <li><a class="reference internal" href="#array"><code class="docutils literal notranslate"><span class="pre">array()</span></code></a></li>
 <li><a class="reference internal" href="#array_contains"><code class="docutils literal notranslate"><span class="pre">array_contains()</span></code></a></li>
 <li><a class="reference internal" href="#array_intersect"><code class="docutils literal notranslate"><span class="pre">array_intersect()</span></code></a></li>
-<li><a class="reference internal" href="#array_max"><code class="docutils literal notranslate"><span class="pre">array_max()</span></code></a></li>
-<li><a class="reference internal" href="#array_min"><code class="docutils literal notranslate"><span class="pre">array_min()</span></code></a></li>
-<li><a class="reference internal" href="#array_remove"><code class="docutils literal notranslate"><span class="pre">array_remove()</span></code></a></li>
 <li><a class="reference internal" href="#array_repeat"><code class="docutils literal notranslate"><span class="pre">array_repeat()</span></code></a></li>
 <li><a class="reference internal" href="#array_size"><code class="docutils literal notranslate"><span class="pre">array_size()</span></code></a></li>
 <li><a class="reference internal" href="#array_sort"><code class="docutils literal notranslate"><span class="pre">array_sort()</span></code></a></li>
