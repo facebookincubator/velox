@@ -46,4 +46,5 @@ target_link_libraries(
   velox_status
   Boost::headers
   Folly::folly
-  re2::re2)
+  re2::re2
+  double-conversion::double-conversion)

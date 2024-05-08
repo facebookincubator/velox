@@ -422,8 +422,8 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           -std::numeric_limits<double>::quiet_NaN(),
       },
       {
-          "1.2345678901234567E19",
-          "1.2345678901234567E8",
+          "1.234567890123457E19",
+          "1.234567890123457E8",
           "1.0E7",
           "12345.0",
           "0.001",
@@ -434,8 +434,8 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           "-0.001",
           "-12345.0",
           "-1.0E7",
-          "-1.2345678901234567E8",
-          "-1.2345678901234567E19",
+          "-1.234567890123457E8",
+          "-1.234567890123457E19",
           "Infinity",
           "-Infinity",
           "NaN",
@@ -1031,6 +1031,13 @@ TEST_F(CastExprTest, primitiveInvalidCornerCases) {
         {"tru"},
         "Non-whitespace character found after end of conversion");
   }
+}
+
+TEST_F(CastExprTest, doubleToStringCornerCases) {
+  testCast<double, std::string>(
+      "varchar",
+      {-0.000416, -1.000513, -1000513454644, 92348924513454644},
+      {"-4.16E-4", "-1.000513", "-1.000513454644E12", "9.234892451345464E16"});
 }
 
 TEST_F(CastExprTest, primitiveValidCornerCases) {

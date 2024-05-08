@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <double-conversion/double-conversion.h>
 #include <folly/Conv.h>
 #include <cctype>
 #include <string>
@@ -453,6 +454,12 @@ struct Converter<TypeKind::VARBINARY, void, TPolicy> {
   }
 };
 
+// Utility functions for converting floating point types to
+// string. The conversion tries to be as close to java as possible.
+std::string floatToString(const float& val);
+std::string doubleToString(const double& val);
+void normalizeStandardNotation(std::string& str);
+
 template <typename TPolicy>
 struct Converter<TypeKind::VARCHAR, void, TPolicy> {
   template <typename T>
@@ -464,24 +471,11 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
         return str;
       }
 
-      // Implementation below is close to String.of(double) of Java. For
-      // example, for some rare cases the result differs in precision by
-      // the least significant bit.
-      if (FOLLY_UNLIKELY(std::isinf(val) || std::isnan(val))) {
-        return folly::to<std::string>(val);
+      if constexpr (std::is_same_v<T, double>) {
+        return doubleToString(val);
+      } else {
+        return floatToString(val);
       }
-      if ((val > -10'000'000 && val <= -0.001) ||
-          (val >= 0.001 && val < 10'000'000) || val == 0.0) {
-        auto str = fmt::format("{}", val);
-        normalizeStandardNotation(str);
-        return str;
-      }
-      // Precision of float is at most 8 significant decimal digits. Precision
-      // of double is at most 17 significant decimal digits.
-      auto str =
-          fmt::format(std::is_same_v<T, float> ? "{:.7E}" : "{:.16E}", val);
-      normalizeScientificNotation(str);
-      return str;
     }
 
     return folly::to<std::string>(val);
@@ -501,56 +495,7 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
     return val ? "true" : "false";
   }
 
-  /// Normalize the given floating-point standard notation string in place, by
-  /// appending '.0' if it has only the integer part but no fractional part. For
-  /// example, for the given string '12345', replace it with '12345.0'.
-  static void normalizeStandardNotation(std::string& str) {
-    if (!FLAGS_experimental_enable_legacy_cast &&
-        str.find(".") == std::string::npos && isdigit(str[str.length() - 1])) {
-      str += ".0";
-    }
-  }
 
-  /// Normalize the given floating-point scientific notation string in place, by
-  /// removing the trailing 0s of the coefficient as well as the leading '+' and
-  /// 0s of the exponent. For example, for the given string '3.0000000E+005',
-  /// replace it with '3.0E5'. For '-1.2340000E-010', replace it with
-  /// '-1.234E-10'.
-  static void normalizeScientificNotation(std::string& str) {
-    size_t idxE = str.find('E');
-    VELOX_DCHECK_NE(
-        idxE,
-        std::string::npos,
-        "Expect a character 'E' in scientific notation.");
-
-    int endCoef = idxE - 1;
-    while (endCoef >= 0 && str[endCoef] == '0') {
-      --endCoef;
-    }
-    VELOX_DCHECK_GT(endCoef, 0, "Coefficient should not be all zeros.");
-
-    int pos = endCoef + 1;
-    if (str[endCoef] == '.') {
-      pos++;
-    }
-    str[pos++] = 'E';
-
-    int startExp = idxE + 1;
-    if (str[startExp] == '-') {
-      str[pos++] = '-';
-      startExp++;
-    }
-    while (startExp < str.length() &&
-           (str[startExp] == '0' || str[startExp] == '+')) {
-      startExp++;
-    }
-    VELOX_DCHECK_LT(
-        startExp, str.length(), "Exponent should not be all zeros.");
-    str.replace(pos, str.length() - startExp, str, startExp);
-    pos += str.length() - startExp;
-
-    str.resize(pos);
-  }
 };
 
 // Allow conversions from string to TIMESTAMP type.

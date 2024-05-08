@@ -27,7 +27,7 @@ by Velox. See details on bundling below.
 | flex              | 2.5.13          | No       |
 | bison             | 3.0.4           | No       |
 | cmake             | 3.14            | No       |
-| double-conversion | 3.1.5           | No       |
+| double-conversion | 3.1.4           | No       |
 | xsimd             | 10.0.0          | Yes      |
 | re2               | 2021-04-01      | Yes      |
 | fmt               | 10.1.1          | Yes      |

@@ -37,3 +37,15 @@ target_link_libraries(
   velox_functions_prestosql
   gtest
   gtest_main)
+
+add_executable(velox_cast_fuzzer_test CastFuzzerTest.cpp)
+
+target_link_libraries(
+  velox_cast_fuzzer_test
+  velox_fuzzer_util
+  velox_parse_utils
+  velox_aggregation_fuzzer_base
+  velox_expression_test_utility
+  velox_functions_prestosql
+  gtest
+  gtest_main)
