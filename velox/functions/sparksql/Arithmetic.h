@@ -351,46 +351,45 @@ struct ToHexBigintFunction {
   }
 };
 
-template <typename T>
-struct WidthBucketFunction {
-  FOLLY_ALWAYS_INLINE bool call(
-      int64_t& result,
-      double operand,
-      double bound1,
-      double bound2,
-      int64_t bucketCount) {
-    if (bucketCount <= 0 ||
-        bucketCount == std::numeric_limits<long long>::max() ||
-        std::isnan(operand) || bound1 == bound2 || std::isnan(bound1) ||
-        std::isinf(bound1) || std::isnan(bound2) || std::isinf(bound2)) {
-      return false;
-    }
-
-    double lower = std::min(bound1, bound2);
-    double upper = std::max(bound1, bound2);
-
-    if (operand < lower) {
-      result = 0;
-    } else if (operand > upper) {
-      VELOX_USER_CHECK_NE(
-          bucketCount,
-          std::numeric_limits<int64_t>::max(),
-          "Bucket for value {} is out of range",
-          operand);
-      result = bucketCount + 1;
-    } else {
-      result =
-          (int64_t)((double)bucketCount * (operand - lower) / (upper - lower) + 1);
-    }
-
-    if (bound1 > bound2) {
-      result = bucketCount - result + 1;
-    }
-    return true;
-  }
-};
-
 namespace detail {
+FOLLY_ALWAYS_INLINE bool
+isNull(double value, double min, double max, int64_t numBucket) {
+  return numBucket <= 0 || numBucket == std::numeric_limits<int64_t>::max() ||
+      std::isnan(value) || min == max || !std::isfinite(min) ||
+      !std::isfinite(max);
+}
+
+FOLLY_ALWAYS_INLINE int64_t computeBucketNumberNotNull(
+    double value,
+    double min,
+    double max,
+    int64_t numBucket) {
+  double lower = std::min(min, max);
+  double upper = std::max(min, max);
+
+  if (min < max) {
+    if (value < lower) {
+      return 0;
+    } else if (value >= upper) {
+      return numBucket + 1;
+    } else {
+      return static_cast<int64_t>(
+                 (numBucket * (value - lower) / (upper - lower))) +
+          1;
+    }
+  } else { // min > max case
+    if (value > upper) {
+      return 0;
+    } else if (value <= lower) {
+      return numBucket + 1;
+    } else {
+      return static_cast<int64_t>(
+                 (numBucket * (upper - value) / (upper - lower))) +
+          1;
+    }
+  }
+}
+
 FOLLY_ALWAYS_INLINE static int8_t fromHex(char c) {
   if (c >= '0' && c <= '9') {
     return c - '0';
@@ -406,6 +405,30 @@ FOLLY_ALWAYS_INLINE static int8_t fromHex(char c) {
   return -1;
 }
 } // namespace detail
+
+template <typename T>
+struct WidthBucketFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      TInput value,
+      TInput min,
+      TInput max,
+      int64_t numBucket) {
+    // NULL would be return if the input arguments don't follow conditions list
+    // belows:
+    // - `numBucket` must be greater than zero and be less than Long.MaxValue
+    // - `value`, `min`, and `max` cannot be NaN
+    // - `min` bound cannot equal `max`
+    // - `min` and `max` must be finite
+    if (detail::isNull(value, min, max, numBucket)) {
+      return false;
+    }
+
+    result = detail::computeBucketNumberNotNull(value, min, max, numBucket);
+    return true;
+  }
+};
 
 template <typename T>
 struct UnHexFunction {

@@ -88,6 +88,20 @@ void registerArithmeticFunctions(const std::string& prefix) {
       double,
       double,
       int64_t>({prefix + "width_bucket"});
+  registerFunction<
+      WidthBucketFunction,
+      int64_t,
+      int32_t,
+      int32_t,
+      int32_t,
+      int64_t>({prefix + "width_bucket"});
+  registerFunction<
+      WidthBucketFunction,
+      int64_t,
+      int64_t,
+      int64_t,
+      int64_t,
+      int64_t>({prefix + "width_bucket"});
   registerRandFunctions(prefix);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_add, prefix + "add");

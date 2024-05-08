@@ -246,3 +246,14 @@ Mathematical Functions
         SELECT unhex("b2323"); -- \x0B##
         SELECT unhex("G"); -- NULL
         SELECT unhex("G23"); -- NULL
+
+.. spark:function:: width_bucket(x, bound1, bound2, n) -> bigint
+
+    Returns the bucket number to which ``x`` would be assigned in an equiwidth histogram with ``n`` buckets,
+    in the range ``bound1`` to ``bound2``.
+
+        SELECT width_bucket(5.3, 0.2, 10.6, 5); -- 3
+        SELECT width_bucket(-2.1, 1.3, 3.4, 3); -- 0
+        SELECT width_bucket(8.1, 0.0, 5.7, 4); -- 5
+        SELECT width_bucket(-0.9, 5.2, 0.5, 2); -- 3
+        SELECT width_bucket(3.14, 0, 4, 0); -- NULL
