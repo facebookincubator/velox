@@ -144,6 +144,7 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
   properties = properties->enable_store_decimal_as_integer();
+  properties = properties->version(options.parquetVersion);
   return properties->build();
 }
 
@@ -394,6 +395,14 @@ parquet::WriterOptions getParquetOptions(
     parquetOptions.parquetWriteTimestampUnit =
         options.parquetWriteTimestampUnit.value();
   }
+
+  // Default Parquet file format version is 2.6.
+  if (options.parquetVersion == dwio::common::ParquetVersion::PARQUET_1_0) {
+    parquetOptions.parquetVersion = arrow::ParquetVersion::PARQUET_1_0;
+  } else {
+    parquetOptions.parquetVersion = arrow::ParquetVersion::PARQUET_2_6;
+  }
+
   return parquetOptions;
 }
 

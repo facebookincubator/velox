@@ -668,6 +668,15 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       connectorQueryCtx_->sessionProperties();
   options.schema = getNonPartitionTypes(dataChannels_, inputType_);
 
+  auto parquetVersion =
+      hiveConfig_->parquetWriterVersion(connectorSessionProperties);
+
+  if (parquetVersion == "PARQUET_1_0") {
+    options.parquetVersion = dwio::common::ParquetVersion::PARQUET_1_0;
+  } else {
+    options.parquetVersion = dwio::common::ParquetVersion::PARQUET_2_6;
+  }
+
   options.memoryPool = writerInfo_.back()->writerPool.get();
   options.compressionKind = insertTableHandle_->compressionKind();
   if (canReclaim()) {

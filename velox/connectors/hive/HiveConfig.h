@@ -193,6 +193,9 @@ class HiveConfig {
   static constexpr const char* kParquetWriteTimestampUnitSession =
       "hive.parquet.writer.timestamp_unit";
 
+  /// File format version to be used by Parquet writer.
+  static constexpr const char* kParquetWriterVersion = "parquet_writer_version";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* session) const;
 
@@ -271,6 +274,11 @@ class HiveConfig {
   /// Returns the timestamp unit used when writing timestamps into Parquet
   /// through Arrow bridge. 0: second, 3: milli, 6: micro, 9: nano.
   uint8_t parquetWriteTimestampUnit(const Config* session) const;
+
+  /// Returns the file format version used by the Parquet writer.
+  /// Default version is 2.6; 1.0 can be specified via session property or Hive
+  /// config.
+  std::string parquetWriterVersion(const Config* session) const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
     VELOX_CHECK_NOT_NULL(

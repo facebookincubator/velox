@@ -603,6 +603,8 @@ class ReaderOptions : public io::ReaderOptions {
   }
 };
 
+enum class ParquetVersion { PARQUET_1_0, PARQUET_2_6 };
+
 struct WriterOptions {
   TypePtr schema;
   velox::memory::MemoryPool* memoryPool;
@@ -613,6 +615,7 @@ struct WriterOptions {
   std::optional<uint64_t> maxDictionaryMemory{std::nullopt};
   std::map<std::string, std::string> serdeParameters;
   std::optional<uint8_t> parquetWriteTimestampUnit;
+  ParquetVersion parquetVersion;
 };
 
 } // namespace facebook::velox::dwio::common
