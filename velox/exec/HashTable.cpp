@@ -1152,13 +1152,16 @@ void HashTable<ignoreNullKeys>::pushNext(
 }
 
 template <bool ignoreNullKeys>
-FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbeForHashMode(
+template <bool isNormailizedKeyMode>
+FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
     RowContainer* rows,
     ProbeState& state,
     uint64_t hash,
     char* inserted,
     bool extraCheck,
     TableInsertPartitionInfo* partitionInfo) {
+  constexpr int32_t kKeyOffset =
+      -static_cast<int32_t>(sizeof(normalized_key_t));
   auto insertFn = [&](int32_t /*row*/, PartitionBoundIndexType index) {
     if (partitionInfo != nullptr && !partitionInfo->inRange(index)) {
       partitionInfo->addOverflow(inserted);
@@ -1167,61 +1170,81 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbeForHashMode(
     storeRowPointer(index, hash, inserted);
     return nullptr;
   };
-
-  state.fullProbe<ProbeState::Operation::kInsert>(
-      *this,
-      0,
-      [&](char* group, int32_t /*row*/) {
-        if (compareKeys(group, inserted)) {
-          if (nextOffset_ > 0) {
-            pushNext(rows, group, inserted);
+  if constexpr (isNormailizedKeyMode) {
+    state.fullProbe<ProbeState::Operation::kInsert>(
+        *this,
+        kKeyOffset,
+        [&](char* group, int32_t /*row*/) {
+          if (RowContainer::normalizedKey(group) ==
+              RowContainer::normalizedKey(inserted)) {
+            if (nextOffset_) {
+              pushNext(rows, group, inserted);
+            }
+            return true;
           }
-          return true;
-        }
-        return false;
-      },
-      insertFn,
-      numTombstones_,
-      extraCheck,
-      partitionInfo);
+          return false;
+        },
+        insertFn,
+        numTombstones_,
+        extraCheck,
+        partitionInfo);
+  } else {
+    state.fullProbe<ProbeState::Operation::kInsert>(
+        *this,
+        0,
+        [&](char* group, int32_t /*row*/) {
+          if (compareKeys(group, inserted)) {
+            if (nextOffset_ > 0) {
+              pushNext(rows, group, inserted);
+            }
+            return true;
+          }
+          return false;
+        },
+        insertFn,
+        numTombstones_,
+        extraCheck,
+        partitionInfo);
+  }
 }
 
 template <bool ignoreNullKeys>
-FOLLY_ALWAYS_INLINE void
-HashTable<ignoreNullKeys>::buildFullProbeForNormalizedKeyMode(
+template <bool isNormailizedKeyMode>
+FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::insertForJoinInternal(
     RowContainer* rows,
-    ProbeState& state,
-    uint64_t hash,
-    char* inserted,
-    bool extraCheck,
+    char** groups,
+    uint64_t* hashes,
+    int32_t numGroups,
     TableInsertPartitionInfo* partitionInfo) {
-  auto insertFn = [&](int32_t /*row*/, PartitionBoundIndexType index) {
-    if (partitionInfo != nullptr && !partitionInfo->inRange(index)) {
-      partitionInfo->addOverflow(inserted);
-      return nullptr;
-    }
-    storeRowPointer(index, hash, inserted);
-    return nullptr;
-  };
+  auto i = 0;
+  constexpr int32_t groupSize = 64;
+  ProbeState states[groupSize];
   constexpr int32_t kKeyOffset =
       -static_cast<int32_t>(sizeof(normalized_key_t));
-  state.fullProbe<ProbeState::Operation::kInsert>(
-      *this,
-      kKeyOffset,
-      [&](char* group, int32_t /*row*/) {
-        if (RowContainer::normalizedKey(group) ==
-            RowContainer::normalizedKey(inserted)) {
-          if (nextOffset_) {
-            pushNext(rows, group, inserted);
-          }
-          return true;
-        }
-        return false;
-      },
-      insertFn,
-      numTombstones_,
-      extraCheck,
-      partitionInfo);
+  int32_t keyOffset = 0;
+  if constexpr (isNormailizedKeyMode) {
+    keyOffset = kKeyOffset;
+  }
+  for (; i + groupSize <= numGroups; i += groupSize) {
+    for (int32_t j = 0; j < groupSize; ++j) {
+      auto index = i + j;
+      states[j].preProbe(*this, hashes[index], index);
+    }
+    for (int32_t j = 0; j < groupSize; ++j) {
+      states[j].firstProbe(*this, keyOffset);
+    }
+    for (int32_t j = 0; j < groupSize; ++j) {
+      auto index = i + j;
+      buildFullProbe<isNormailizedKeyMode>(
+          rows, states[j], hashes[index], groups[index], j != 0, partitionInfo);
+    }
+  }
+  for (; i < numGroups; ++i) {
+    states[0].preProbe(*this, hashes[i], i);
+    states[0].firstProbe(*this, keyOffset);
+    buildFullProbe<isNormailizedKeyMode>(
+        rows, states[0], hashes[i], groups[i], false, partitionInfo);
+  }
 }
 
 template <bool ignoreNullKeys>
@@ -1241,63 +1264,11 @@ void HashTable<ignoreNullKeys>::insertForJoin(
     }
     return;
   }
-  auto i = 0;
-  constexpr int32_t groupSize = 64;
-  ProbeState states[groupSize];
-  constexpr int32_t kKeyOffset =
-      -static_cast<int32_t>(sizeof(normalized_key_t));
   if (hashMode_ == HashMode::kNormalizedKey) {
-    for (; i + groupSize <= numGroups; i += groupSize) {
-      for (int32_t j = 0; j < groupSize; ++j) {
-        auto index = i + j;
-        states[j].preProbe(*this, hashes[index], index);
-      }
-      for (int32_t j = 0; j < groupSize; ++j) {
-        states[j].firstProbe(*this, kKeyOffset);
-      }
-      for (int32_t j = 0; j < groupSize; ++j) {
-        auto index = i + j;
-        buildFullProbeForNormalizedKeyMode(
-            rows,
-            states[j],
-            hashes[index],
-            groups[index],
-            index,
-            partitionInfo);
-      }
-    }
-    for (; i < numGroups; ++i) {
-      states[0].preProbe(*this, hashes[i], i);
-      states[0].firstProbe(*this, 0);
-      buildFullProbeForNormalizedKeyMode(
-          rows, states[0], hashes[i], groups[i], i, partitionInfo);
-    }
+    insertForJoinInternal<true>(rows, groups, hashes, numGroups, partitionInfo);
   } else {
-    for (; i + groupSize <= numGroups; i += groupSize) {
-      for (int32_t j = 0; j < groupSize; ++j) {
-        auto index = i + j;
-        states[j].preProbe(*this, hashes[index], index);
-      }
-      for (int32_t j = 0; j < groupSize; ++j) {
-        states[j].firstProbe(*this, 0);
-      }
-      for (int32_t j = 0; j < groupSize; ++j) {
-        auto index = i + j;
-        buildFullProbeForHashMode(
-            rows,
-            states[j],
-            hashes[index],
-            groups[index],
-            index,
-            partitionInfo);
-      }
-    }
-    for (; i < numGroups; ++i) {
-      states[0].preProbe(*this, hashes[i], i);
-      states[0].firstProbe(*this, 0);
-      buildFullProbeForHashMode(
-          rows, states[0], hashes[i], groups[i], i, partitionInfo);
-    }
+    insertForJoinInternal<false>(
+        rows, groups, hashes, numGroups, partitionInfo);
   }
 }
 

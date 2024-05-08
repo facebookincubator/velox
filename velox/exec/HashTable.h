@@ -855,7 +855,8 @@ class HashTable : public BaseHashTable {
   // Finishes inserting an entry into a join hash table. If 'partitionInfo' is
   // not null and the insert falls out-side of the partition range, then insert
   // is not made but row is instead added to 'overflow' in 'partitionInfo'
-  void buildFullProbeForHashMode(
+  template <bool isNormailizedKeyMode>
+  void buildFullProbe(
       RowContainer* rows,
       ProbeState& state,
       uint64_t hash,
@@ -863,12 +864,12 @@ class HashTable : public BaseHashTable {
       bool extraCheck,
       TableInsertPartitionInfo* partitionInfo);
 
-  void buildFullProbeForNormalizedKeyMode(
+  template <bool isNormailizedKeyMode>
+  void insertForJoinInternal(
       RowContainer* rows,
-      ProbeState& state,
-      uint64_t hash,
-      char* row,
-      bool extraCheck,
+      char** groups,
+      uint64_t* hashes,
+      int32_t numGroups,
       TableInsertPartitionInfo* partitionInfo);
 
   // Updates 'hashers_' to correspond to the keys in the
