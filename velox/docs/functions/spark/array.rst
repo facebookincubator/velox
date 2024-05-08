@@ -196,10 +196,10 @@ Array Functions
         SELECT size(NULL, true); -- -1
         SELECT size(NULL, false); -- NULL
 
-.. function:: slice(array(E), start, length) -> array(E)
+.. spark:function:: slice(array(E), start, length) -> array(E)
 
     Returns a subarray starting from index ``start``(array indices start at 1, or starting from the end
-    if ``start`` is negative) with a length of ``length``.
+    if ``start`` is negative) with the specified ``length``. Throws an exception if ``start`` is 0. ::
 
         SELECT slice(array(1, 2, 3, 4), 2, 2); -- [2,3]
         SELECT slice(array(1, 2, 3, 4), -2, 2); -- [3,4]

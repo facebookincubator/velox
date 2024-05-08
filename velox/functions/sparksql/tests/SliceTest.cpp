@@ -18,9 +18,7 @@
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-using namespace facebook::velox;
 using namespace facebook::velox::test;
-using namespace facebook::velox::functions::test;
 
 namespace facebook::velox::functions::sparksql::test {
 class SliceTest : public SparkFunctionBaseTest {
@@ -50,6 +48,11 @@ TEST_F(SliceTest, sparkTestCases) {
   // Slice with negative start index.
   expectedArrayVector = makeArrayVector<int64_t>({{4, 5}});
   testSlice("slice(C0, -3, 2)", {arrayVector}, expectedArrayVector);
+
+  // Slice with the 0 start index.
+  VELOX_ASSERT_THROW(
+      testSlice("slice(C0, 0, 2)", {arrayVector}, expectedArrayVector),
+      "SQL array indices start at 1");
 
   // Slice with string input.
   auto stringArrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
