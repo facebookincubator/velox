@@ -351,6 +351,46 @@ struct ToHexBigintFunction {
   }
 };
 
+template <typename T>
+struct WidthBucketFunction {
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      double operand,
+      double bound1,
+      double bound2,
+      int64_t bucketCount) {
+    if (bucketCount <= 0 ||
+        bucketCount == std::numeric_limits<long long>::max() ||
+        std::isnan(operand) || bound1 == bound2 || std::isnan(bound1) ||
+        std::isinf(bound1) || std::isnan(bound2) || std::isinf(bound2)) {
+      return false;
+    }
+
+    double lower = std::min(bound1, bound2);
+    double upper = std::max(bound1, bound2);
+
+    if (operand < lower) {
+      result = 0;
+    } else if (operand > upper) {
+      VELOX_USER_CHECK_NE(
+          bucketCount,
+          std::numeric_limits<int64_t>::max(),
+          "Bucket for value {} is out of range",
+          operand);
+      result = bucketCount + 1;
+    } else {
+      result =
+          (int64_t)((double)bucketCount * (operand - lower) / (upper - lower) +
+                    1);
+    }
+
+    if (bound1 > bound2) {
+      result = bucketCount - result + 1;
+    }
+    return true;
+  }
+};
+
 namespace detail {
 FOLLY_ALWAYS_INLINE static int8_t fromHex(char c) {
   if (c >= '0' && c <= '9') {
