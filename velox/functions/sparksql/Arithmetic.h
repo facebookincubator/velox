@@ -318,6 +318,19 @@ struct IsNanFunction {
   }
 };
 
+template <typename TExec>
+struct NormalizeNanFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void call(T& result, T a) {
+    static constexpr T kNan = std::numeric_limits<T>::quiet_NaN();
+    if (std::isnan(a)) {
+      result = kNan;
+    } else {
+      result = a;
+    }
+  }
+};
+
 template <typename T>
 struct ToHexVarbinaryFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);

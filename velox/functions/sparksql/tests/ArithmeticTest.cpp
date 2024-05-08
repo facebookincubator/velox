@@ -149,6 +149,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
   static constexpr double kNanDouble = std::numeric_limits<double>::quiet_NaN();
   static constexpr float kInf = std::numeric_limits<float>::infinity();
+  static constexpr float kInfDouble = std::numeric_limits<double>::infinity();
 };
 
 TEST_F(ArithmeticTest, UnaryMinus) {
@@ -434,6 +435,51 @@ TEST_F(ArithmeticTest, isNanDouble) {
   EXPECT_EQ(true, isNan(kNanDouble));
   EXPECT_EQ(true, isNan(0.0 / 0.0));
   EXPECT_EQ(false, isNan(std::nullopt));
+}
+
+TEST_F(ArithmeticTest, normalizeNanFloat) {
+  const auto normalizeNan = [&](float a) {
+    return evaluateOnce<float>("normalize_nan(c0)", std::optional<float>{a})
+        .value();
+  };
+
+  const auto toInt32 = [&](float a) {
+    uint32_t fInt;
+    std::memcpy(&fInt, &a, sizeof(a));
+    return fInt;
+  };
+
+  EXPECT_EQ(0.0f, normalizeNan(0.0f));
+  EXPECT_EQ(0.0f, normalizeNan(-0.0f));
+  EXPECT_EQ(1.0f, normalizeNan(1.0f));
+  EXPECT_EQ(
+      toInt32(kNan),
+      toInt32(normalizeNan(std::numeric_limits<float>::signaling_NaN())));
+  EXPECT_EQ(toInt32(kNan), toInt32(normalizeNan(std::nanf("1"))));
+  EXPECT_EQ(toInt32(kNan), toInt32(normalizeNan(std::nanf("2"))));
+}
+
+TEST_F(ArithmeticTest, normalizeNanDouble) {
+  const auto normalizeNan = [&](double a) {
+    return evaluateOnce<double>("normalize_nan(c0)", std::optional<double>{a})
+        .value();
+  };
+
+  const auto toInt64 = [&](double a) {
+    uint64_t fInt;
+    std::memcpy(&fInt, &a, sizeof(a));
+    return fInt;
+  };
+
+  EXPECT_EQ(0.0, normalizeNan(0.0));
+  EXPECT_EQ(0.0, normalizeNan(-0.0));
+  EXPECT_EQ(1.0, normalizeNan(1.0));
+
+  EXPECT_EQ(
+      toInt64(kNanDouble),
+      toInt64(normalizeNan(std::numeric_limits<double>::signaling_NaN())));
+  EXPECT_EQ(toInt64(kNanDouble), toInt64(normalizeNan(std::nan("1"))));
+  EXPECT_EQ(toInt64(kNanDouble), toInt64(normalizeNan(std::nan("2"))));
 }
 
 TEST_F(ArithmeticTest, hexWithBigint) {

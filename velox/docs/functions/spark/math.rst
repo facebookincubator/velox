@@ -152,6 +152,18 @@ Mathematical Functions
         SELECT CAST(1 as DECIMAL(20, 3)) * CAST(0 as DECIMAL(20, 3)); -- decimal 0.000000
         SELECT CAST(201e-38 as DECIMAL(38, 38)) * CAST(301e-38 as DECIMAL(38, 38)); -- decimal 0.0000000000000000000000000000000000000
 
+.. spark:function:: normalize_nan(x) -> [same as x]
+
+    In IEEE 754 any value with all bits of the exponent set and at least one 
+    bit of the fraction set represents a NaN. Therefore there can be many 
+    different NaN representations, including quiet and signaling NaNs with sign 
+    bit set or not.
+
+    If x is not a NaN, returns x unmodified. Otherwise, returns 
+    `std::numeric_limits<float>::quiet_NaN()` or `std::numeric_limits<double>::quiet_NaN()` 
+    based on type of x.
+    Supported types are: REAL, DOUBLE.
+
 .. spark:function:: not(x) -> boolean
 
     Logical not. ::
