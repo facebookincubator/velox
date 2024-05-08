@@ -656,7 +656,7 @@ class S3FileSystem::Impl {
         if (maxAttempts.has_value()) {
           VELOX_USER_CHECK(
               (maxAttempts.value() > 0),
-              "Invalid configuration: specify 'max-attempts' > 0.");
+              "Invalid configuration: specify 'hive.s3.max-attempts' > 0.");
           return std::make_shared<Aws::Client::StandardRetryStrategy>(
               maxAttempts.value());
         } else {
@@ -667,7 +667,7 @@ class S3FileSystem::Impl {
         if (maxAttempts.has_value()) {
           VELOX_USER_CHECK(
               (maxAttempts.value() > 0),
-              "Invalid configuration: specify 'max-attempts' > 0.");
+              "Invalid configuration: specify 'hive.s3.max-attempts' > 0.");
           return std::make_shared<Aws::Client::AdaptiveRetryStrategy>(
               maxAttempts.value());
         } else {
@@ -678,7 +678,7 @@ class S3FileSystem::Impl {
         if (maxAttempts.has_value()) {
           VELOX_USER_CHECK(
               (maxAttempts.value() > 0),
-              "Invalid configuration: specify 'max-attempts' > 0.");
+              "Invalid configuration: specify 'hive.s3.max-attempts' > 0.");
           return std::make_shared<Aws::Client::DefaultRetryStrategy>(
               maxAttempts.value());
         } else {
