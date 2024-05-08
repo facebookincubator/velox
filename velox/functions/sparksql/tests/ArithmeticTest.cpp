@@ -353,10 +353,10 @@ TEST_F(ArithmeticTest, log1p) {
   EXPECT_TRUE(std::isnan(log1p(kNan).value_or(0)));
 }
 
-TEST_F(ArithmetricTest, expm1) {
+TEST_F(ArithmeticTest, expm1) {
   static const auto expm1 = [&](std::optional<double> a) {
     return evaluateOnce<double>("expm1(c0)", a);
-  }
+  };
 
   const double kE = std::exp(1);
 
