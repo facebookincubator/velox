@@ -61,6 +61,10 @@ class AbfsFileSystemTest : public testing::Test {
  public:
   std::shared_ptr<filesystems::test::AzuriteServer> azuriteServer;
 
+  static void SetUpTestCase() {
+    registerAbfsFileSystem();
+  }
+
   void SetUp() override {
     auto port = facebook::velox::exec::test::getFreePort();
     azuriteServer = std::make_shared<filesystems::test::AzuriteServer>(port);
@@ -259,7 +263,7 @@ TEST_F(AbfsFileSystemTest, missingFile) {
       abfs.openFileForRead(abfsFile), error_code::kFileNotFound, "404");
 }
 
-TEST_F(AbfsFileSystemTest, OpenFileForWriteTest) {
+TEST_F(AbfsFileSystemTest, openFileForWriteTest) {
   const std::string abfsFile =
       filesystems::test::AzuriteABFSEndpoint + "writetest.txt";
   auto mockClient =

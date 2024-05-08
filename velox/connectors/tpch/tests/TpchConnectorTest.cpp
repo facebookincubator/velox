@@ -36,6 +36,8 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
 
   void SetUp() override {
     OperatorTestBase::SetUp();
+    connector::registerConnectorFactory(
+        std::make_shared<connector::tpch::TpchConnectorFactory>());
     auto tpchConnector =
         connector::getConnectorFactory(
             connector::tpch::TpchConnectorFactory::kTpchConnectorName)
@@ -46,6 +48,8 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
 
   void TearDown() override {
     connector::unregisterConnector(kTpchConnectorId);
+    connector::unregisterConnectorFactory(
+        connector::tpch::TpchConnectorFactory::kTpchConnectorName);
     OperatorTestBase::TearDown();
   }
 
