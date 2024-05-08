@@ -263,6 +263,13 @@ struct Log1pFunction {
 };
 
 template <typename T>
+struct Expm1Function {
+  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+    result = std::expm1(a);
+  }
+};
+
+template <typename T>
 struct CotFunction {
   FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = 1 / std::tan(a);
