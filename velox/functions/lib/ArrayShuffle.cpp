@@ -146,6 +146,7 @@ std::shared_ptr<exec::VectorFunction> makeArrayShuffleWithCustomSeed(
   VELOX_USER_CHECK_EQ(inputArgs.size(), 2);
   VELOX_USER_CHECK_EQ(inputArgs[1].type->kind(), TypeKind::BIGINT);
   VELOX_USER_CHECK_NOT_NULL(inputArgs[1].constantValue);
+  VELOX_CHECK(!inputArgs[1].constantValue->isNullAt(0));
 
   const auto seed =
       inputArgs[1]

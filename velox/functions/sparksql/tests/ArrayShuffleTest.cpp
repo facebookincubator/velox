@@ -33,10 +33,9 @@ class ArrayShuffleTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
-  void compareResult(
+  void assertDifferentSequence(
       const VectorPtr& result,
-      const VectorPtr& expected,
-      bool equal) {
+      const VectorPtr& expected) {
     DecodedVector decodedResult(*result.get());
     exec::VectorReader<Array<T>> readerResult(&decodedResult);
     DecodedVector decodedExpected(*expected.get());
@@ -44,17 +43,12 @@ class ArrayShuffleTest : public SparkFunctionBaseTest {
     for (auto i = 0; i < decodedExpected.size(); i++) {
       auto resultArray = readerResult[i].materialize();
       auto expectedArray = readerExpected[i].materialize();
-      if (equal) {
-        ASSERT_TRUE(std::equal(
-            resultArray.begin(), resultArray.end(), expectedArray.begin()));
-      } else {
-        if (resultArray.size() > 2) {
-          ASSERT_FALSE(std::equal(
-              resultArray.begin(), resultArray.end(), expectedArray.begin()));
-        }
-        ASSERT_TRUE(std::is_permutation(
+      if (resultArray.size() > 2) {
+        ASSERT_FALSE(std::equal(
             resultArray.begin(), resultArray.end(), expectedArray.begin()));
       }
+      ASSERT_TRUE(std::is_permutation(
+          resultArray.begin(), resultArray.end(), expectedArray.begin()));
     }
   }
 };
@@ -64,19 +58,14 @@ TEST_F(ArrayShuffleTest, basic) {
   auto result = makeArrayVector<int64_t>({{3, 5, 4, 1, 2}});
   auto stringInput = makeArrayVector<std::string>({{"a", "b", "c", "d"}});
   auto stringResult = makeArrayVector<std::string>({{"a", "c", "b", "d"}});
-  compareResult<int64_t>(testShuffle<int64_t>(input, 0), result, true);
-  compareResult<std::string>(
-      testShuffle<std::string>(stringInput, 0), stringResult, true);
+  assertEqualVectors(testShuffle<int64_t>(input, 0), result);
+  assertEqualVectors(testShuffle<std::string>(stringInput, 0), stringResult);
 
   // Assert results are different with different seeds / partition ids.
-  compareResult<int64_t>(
-      testShuffle<int64_t>(input, 0, 0),
-      testShuffle<int64_t>(input, 0, 1),
-      false);
-  compareResult<int64_t>(
-      testShuffle<int64_t>(input, 1, 0),
-      testShuffle<int64_t>(input, 0, 0),
-      false);
+  assertDifferentSequence<int64_t>(
+      testShuffle<int64_t>(input, 0, 0), testShuffle<int64_t>(input, 0, 1));
+  assertDifferentSequence<int64_t>(
+      testShuffle<int64_t>(input, 1, 0), testShuffle<int64_t>(input, 0, 0));
 }
 
 TEST_F(ArrayShuffleTest, nestedArrays) {
@@ -85,10 +74,9 @@ TEST_F(ArrayShuffleTest, nestedArrays) {
        "[null, null, [1, 2, 3, 4], [5, 6], [6, 7, 8]]",
        "[[]]",
        "[[null]]"});
-  compareResult<Array<int64_t>>(
+  assertEqualVectors(
       testShuffle<Array<int64_t>>(input, 0, 0),
-      testShuffle<int64_t>(input, 0, 0),
-      true);
+      testShuffle<int64_t>(input, 0, 0));
 }
 
 TEST_F(ArrayShuffleTest, constantEncoding) {
@@ -100,10 +88,10 @@ TEST_F(ArrayShuffleTest, constantEncoding) {
 
   for (auto i = 0; i < valueVector->size(); i++) {
     auto input = BaseVector::wrapInConstant(size, i, valueVector);
-    compareResult<int64_t>(
-        testShuffle<int64_t>(input, 0), testShuffle<int64_t>(input, 0), true);
-    compareResult<int64_t>(
-        testShuffle<int64_t>(input, 0), testShuffle<int64_t>(input, 1), false);
+    assertEqualVectors(
+        testShuffle<int64_t>(input, 0), testShuffle<int64_t>(input, 0));
+    assertDifferentSequence<int64_t>(
+        testShuffle<int64_t>(input, 0), testShuffle<int64_t>(input, 1));
   }
 }
 
@@ -121,8 +109,8 @@ TEST_F(ArrayShuffleTest, dictEncoding) {
   auto indices = makeIndices({3, 3, 4, 2, 2, 1, 1, 1});
   auto input = wrapInDictionary(indices, base);
 
-  compareResult<int64_t>(
-      testShuffle<int64_t>(input, 0), testShuffle<int64_t>(input, 0), true);
+  assertEqualVectors(
+      testShuffle<int64_t>(input, 0), testShuffle<int64_t>(input, 0));
 }
 
 } // namespace
