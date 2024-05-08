@@ -198,7 +198,7 @@ Array Functions
 
 .. function:: slice(array(E), start, length) -> array(E)
 
-    Returns a subarray starting from index ``start``(or starting from the end
+    Returns a subarray starting from index ``start``(array indices start at 1, or starting from the end
     if ``start`` is negative) with a length of ``length``.
 
         SELECT slice(array(1, 2, 3, 4), 2, 2); -- [2,3]
