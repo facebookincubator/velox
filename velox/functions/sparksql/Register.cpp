@@ -339,7 +339,8 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "shuffle",
       arrayShuffleWithCustomSeedSignatures(),
-      makeArrayShuffleWithCustomSeed);
+      makeArrayShuffleWithCustomSeed,
+      getMetadataForArrayShuffleWithCustomSeed());
 
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});

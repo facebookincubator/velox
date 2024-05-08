@@ -108,7 +108,8 @@ class ArrayShuffleFunction : public exec::VectorFunction {
 };
 } // namespace
 
-std::vector<std::shared_ptr<exec::FunctionSignature>> arrayShuffleSignatures() {
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+arrayShuffleWithRandomSeedSignatures() {
   return {// array(T) -> array(T)
           exec::FunctionSignatureBuilder()
               .typeVariable("T")
@@ -126,17 +127,23 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> arrayShuffleWithCustomSeed
               .build()};
 }
 
-exec::VectorFunctionMetadata arrayShuffleMetadata() {
+exec::VectorFunctionMetadata getMetadataForArrayShuffleWithRandomSeed() {
   return exec::VectorFunctionMetadataBuilder()
       .deterministic(false)
       .build();
 }
 
-std::shared_ptr<exec::VectorFunction> makeArrayShuffle(
+std::shared_ptr<exec::VectorFunction> makeArrayShuffleWithRandomSeed(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config) {
   return std::make_unique<ArrayShuffleFunction>(std::random_device{}());
+}
+
+exec::VectorFunctionMetadata getMetadataForArrayShuffleWithCustomSeed() {
+  return exec::VectorFunctionMetadataBuilder()
+      .deterministic(true)
+      .build();
 }
 
 std::shared_ptr<exec::VectorFunction> makeArrayShuffleWithCustomSeed(
