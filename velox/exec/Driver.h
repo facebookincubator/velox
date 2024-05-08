@@ -202,6 +202,7 @@ enum class BlockingReason {
   /// exit them because Task requested to yield or stop or after a certain time.
   /// This is the blocking reason used in such cases.
   kYield,
+  kReducedParallelism,
 };
 
 std::string blockingReasonToString(BlockingReason reason);

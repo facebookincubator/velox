@@ -85,6 +85,7 @@ class TableScan : public SourceOperator {
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::unique_ptr<connector::DataSource> dataSource_;
   bool noMoreSplits_ = false;
+  bool earlyTerminate_ = false;
   // Dynamic filters to add to the data source when it gets created.
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
       dynamicFilters_;

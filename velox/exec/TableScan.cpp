@@ -68,6 +68,12 @@ RowVectorPtr TableScan::getOutput() {
   const auto startTimeMs = getCurrentTimeMs();
   for (;;) {
     if (needNewSplit_) {
+      // table scan can't take more than 4G
+      if (driverCtx_->driverId !=0 && pool()->peakBytes() * (driverCtx_->driverId + 1) > 4 * 1024 * 1024 * 1024) {
+        earlyTerminate_ = true;
+        // = BlockingReason::kReducedParallelism;
+        return nullptr;
+      }
       // Check if our Task needs us to yield or we've been running for too long
       // w/o producing a result. In this case we return with the Yield blocking
       // reason and an already fulfilled future.
@@ -336,7 +342,7 @@ void TableScan::checkPreload() {
 }
 
 bool TableScan::isFinished() {
-  return noMoreSplits_;
+  return earlyTerminate_ || noMoreSplits_;
 }
 
 void TableScan::addDynamicFilter(
