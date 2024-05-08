@@ -262,9 +262,12 @@ struct Log1pFunction {
   }
 };
 
-template <typename T>
+
 struct Expm1Function {
   FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+    //std::expm1 is more accurate than the expression std::exp(num) - 1.0 if num is close to zero.
+    //Spark use java StrickMath we need to keep it as below
+    //this is aligned with https://docs.oracle.com/javase/8/docs/api/java/lang/StrictMath.html#expm1-double-
     result = std::expm1(a);
   }
 };
