@@ -647,6 +647,18 @@ The parameter controls the size when footer is fetched each time. Bigger value c
 <td><p>Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
 Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).</p></td>
 </tr>
+<tr class="row-even"><td><p>hive.orc.writer.linear-stripe-size-heuristics</p></td>
+<td><p>orc_writer_linear_stripe_size_heuristics</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Enables historical based stripe size estimation after compression.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.orc.writer.min-compression-size</p></td>
+<td><p>orc_writer_min_compression_size</p></td>
+<td><p>integer</p></td>
+<td><p>1024</p></td>
+<td><p>Minimal number of items in an encoded stream.</p></td>
+</tr>
 </tbody>
 </table>
 <section id="amazon-s3-configuration">
