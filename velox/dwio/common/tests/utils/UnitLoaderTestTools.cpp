@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/common/tests/utils/UnitLoaderTestTools.h"
+#include "velox/dwio/common/UnitLoaderTools.h"
 
 using facebook::velox::dwio::common::LoadUnit;
 
@@ -23,12 +24,19 @@ namespace facebook::velox::dwio::common::test {
 ReaderMock::ReaderMock(
     std::vector<uint64_t> rowsPerUnit,
     std::vector<uint64_t> ioSizes,
-    UnitLoaderFactory& factory)
+    UnitLoaderFactory& factory,
+    uint64_t rowsToSkip)
     : rowsPerUnit_{std::move(rowsPerUnit)},
       ioSizes_{std::move(ioSizes)},
       unitsLoaded_(std::vector<std::atomic_bool>(rowsPerUnit_.size())),
-      loader_{factory.create(getUnits())} {
+      loader_{factory.create(getUnits(), rowsToSkip)},
+      currentUnit_{0},
+      currentRowInUnit_{0} {
   VELOX_CHECK(rowsPerUnit_.size() == ioSizes_.size());
+  auto [currentUnit, currentRowInUnit] = unit_loader_tools::howMuchToSkip(
+      rowsToSkip, rowsPerUnit_.cbegin(), rowsPerUnit_.cend());
+  currentUnit_ = currentUnit;
+  currentRowInUnit_ = currentRowInUnit;
 }
 
 bool ReaderMock::read(uint64_t maxRows) {
