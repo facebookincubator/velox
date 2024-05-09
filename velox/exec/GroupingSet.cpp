@@ -427,39 +427,58 @@ void GroupingSet::initializeGlobalAggregation() {
   if (sortedAggregations_) {
     numAggregates += 1;
   }
-  for (const auto& aggregation : distinctAggregations_) {
-    if (aggregation != nullptr) {
-      numAggregates += 1;
-    }
-  }
   int32_t rowSizeOffset =
       bits::nbytes(numAggregates * RowContainer::kNumAccumulatorFlags);
   int32_t offset = rowSizeOffset + sizeof(int32_t);
   int32_t accumulatorFlagsOffset = 0;
   int32_t alignment = 1;
 
-  for (auto& aggregate : aggregates_) {
-    auto& function = aggregate.function;
+  for (int32_t i = 0; i < aggregates_.size(); i++) {
+    auto& aggregate = aggregates_[i];
+    if (!aggregate.distinct) {
+      auto& function = aggregate.function;
 
-    Accumulator accumulator{
-        aggregate.function.get(), aggregate.intermediateType};
+      Accumulator accumulator{
+          aggregate.function.get(), aggregate.intermediateType};
 
-    // Accumulator offset must be aligned by their alignment size.
-    offset = bits::roundUp(offset, accumulator.alignment());
+      // Accumulator offset must be aligned by their alignment size.
+      offset = bits::roundUp(offset, accumulator.alignment());
 
-    function->setAllocator(&stringAllocator_);
-    function->setOffsets(
-        offset,
-        RowContainer::nullByte(accumulatorFlagsOffset),
-        RowContainer::nullMask(accumulatorFlagsOffset),
-        RowContainer::initializedByte(accumulatorFlagsOffset),
-        RowContainer::initializedMask(accumulatorFlagsOffset),
-        rowSizeOffset);
+      function->setAllocator(&stringAllocator_);
+      function->setOffsets(
+          offset,
+          RowContainer::nullByte(accumulatorFlagsOffset),
+          RowContainer::nullMask(accumulatorFlagsOffset),
+          RowContainer::initializedByte(accumulatorFlagsOffset),
+          RowContainer::initializedMask(accumulatorFlagsOffset),
+          rowSizeOffset);
 
-    offset += accumulator.fixedWidthSize();
-    accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
-    alignment =
-        RowContainer::combineAlignments(accumulator.alignment(), alignment);
+      offset += accumulator.fixedWidthSize();
+      accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
+      alignment =
+          RowContainer::combineAlignments(accumulator.alignment(), alignment);
+    } else {
+      auto& aggregation = distinctAggregations_[i];
+      if (aggregation != nullptr) {
+        auto accumulator = aggregation->accumulator();
+
+        offset = bits::roundUp(offset, accumulator.alignment());
+
+        aggregation->setAllocator(&stringAllocator_);
+        aggregation->setOffsets(
+            offset,
+            RowContainer::nullByte(accumulatorFlagsOffset),
+            RowContainer::nullMask(accumulatorFlagsOffset),
+            RowContainer::initializedByte(accumulatorFlagsOffset),
+            RowContainer::initializedMask(accumulatorFlagsOffset),
+            rowSizeOffset);
+
+        offset += accumulator.fixedWidthSize();
+        accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
+        alignment =
+            RowContainer::combineAlignments(accumulator.alignment(), alignment);
+      }
+    }
   }
 
   if (sortedAggregations_) {
@@ -480,28 +499,6 @@ void GroupingSet::initializeGlobalAggregation() {
     accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
     alignment =
         RowContainer::combineAlignments(accumulator.alignment(), alignment);
-  }
-
-  for (const auto& aggregation : distinctAggregations_) {
-    if (aggregation != nullptr) {
-      auto accumulator = aggregation->accumulator();
-
-      offset = bits::roundUp(offset, accumulator.alignment());
-
-      aggregation->setAllocator(&stringAllocator_);
-      aggregation->setOffsets(
-          offset,
-          RowContainer::nullByte(accumulatorFlagsOffset),
-          RowContainer::nullMask(accumulatorFlagsOffset),
-          RowContainer::initializedByte(accumulatorFlagsOffset),
-          RowContainer::initializedMask(accumulatorFlagsOffset),
-          rowSizeOffset);
-
-      offset += accumulator.fixedWidthSize();
-      accumulatorFlagsOffset += RowContainer::kNumAccumulatorFlags;
-      alignment =
-          RowContainer::combineAlignments(accumulator.alignment(), alignment);
-    }
   }
 
   lookup_->hits[0] = rows_.allocateFixed(offset, alignment);
@@ -585,7 +582,7 @@ bool GroupingSet::getGlobalAggregationOutput(
 
   auto groups = lookup_->hits.data();
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
-    if (!aggregates_[i].sortingKeys.empty()) {
+    if (!aggregates_[i].sortingKeys.empty() || aggregates_[i].distinct) {
       continue;
     }
 
