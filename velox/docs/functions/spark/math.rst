@@ -251,6 +251,8 @@ Mathematical Functions
 
     Returns the bucket number to which ``x`` would be assigned in an equiwidth histogram with ``n`` buckets,
     in the range ``bound1`` to ``bound2``.
+    `n` must be greater than zero and be less than Long.MaxValue, `x`, `bound1`, and `bound2` cannot be NaN, `bound1` bound cannot equal `bound2`,
+    and `bound1` and `bound2` must be finite. Otherwise, the fucntion will return NULL.
 
         SELECT width_bucket(5.3, 0.2, 10.6, 5); -- 3
         SELECT width_bucket(-2.1, 1.3, 3.4, 3); -- 0

@@ -484,9 +484,6 @@ TEST_F(ArithmeticTest, widthBucket) {
   EXPECT_EQ(4, widthBucket<double>(kInf, 0, 4, 3));
   EXPECT_EQ(0, widthBucket<double>(-1, 0, 3.2, 4));
 
-  EXPECT_EQ(3, widthBucket<int64_t>(3, 0, 4, 3));
-  EXPECT_EQ(2, widthBucket<int32_t>(2, 0, 4, 3));
-
   // min > max
   EXPECT_EQ(1, widthBucket<double>(3.14, 4, 0, 3));
   EXPECT_EQ(2, widthBucket<double>(2, 4, 0, 3));

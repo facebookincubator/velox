@@ -370,23 +370,25 @@ FOLLY_ALWAYS_INLINE int64_t computeBucketNumberNotNull(
   if (min < max) {
     if (value < lower) {
       return 0;
-    } else if (value >= upper) {
-      return numBucket + 1;
-    } else {
-      return static_cast<int64_t>(
-                 (numBucket * (value - lower) / (upper - lower))) +
-          1;
     }
+
+    if (value >= upper) {
+      return numBucket + 1;
+    }
+    return static_cast<int64_t>(
+               (numBucket * (value - lower) / (upper - lower))) +
+        1;
+
   } else { // min > max case
     if (value > upper) {
       return 0;
-    } else if (value <= lower) {
-      return numBucket + 1;
-    } else {
-      return static_cast<int64_t>(
-                 (numBucket * (upper - value) / (upper - lower))) +
-          1;
     }
+    if (value <= lower) {
+      return numBucket + 1;
+    }
+    return static_cast<int64_t>(
+               (numBucket * (upper - value) / (upper - lower))) +
+        1;
   }
 }
 
@@ -415,8 +417,8 @@ struct WidthBucketFunction {
       TInput min,
       TInput max,
       int64_t numBucket) {
-    // NULL would be return if the input arguments don't follow conditions list
-    // belows:
+    // NULL would be returned if the input arguments don't follow conditions
+    // list belows:
     // - `numBucket` must be greater than zero and be less than Long.MaxValue
     // - `value`, `min`, and `max` cannot be NaN
     // - `min` bound cannot equal `max`
