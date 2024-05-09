@@ -493,6 +493,7 @@ TEST_F(ArithmeticTest, widthBucket) {
   // max - min + 1 > Long.MaxValue
   EXPECT_EQ(widthBucket<double>(5.3, 0, 9223372036854775807, 10), 1);
 
+  // cases to get null result
   EXPECT_EQ(widthBucket<double>(3.14, 0, 4, 0), std::nullopt);
   EXPECT_EQ(widthBucket<double>(kNan, 0, 4, 10), std::nullopt);
   EXPECT_EQ(widthBucket<double>(3.14, kNan, 0, 10), std::nullopt);

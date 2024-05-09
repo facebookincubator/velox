@@ -378,7 +378,6 @@ FOLLY_ALWAYS_INLINE int64_t computeBucketNumberNotNull(
     return static_cast<int64_t>(
                (numBucket * (value - lower) / (upper - lower))) +
         1;
-
   } else { // min > max case
     if (value > upper) {
       return 0;
