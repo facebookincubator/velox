@@ -418,10 +418,10 @@ struct WidthBucketFunction {
       int64_t numBucket) {
     // NULL would be returned if the input arguments don't follow conditions
     // list belows:
-    // - `numBucket` must be greater than zero and be less than Long.MaxValue
-    // - `value`, `min`, and `max` cannot be NaN
-    // - `min` bound cannot equal `max`
-    // - `min` and `max` must be finite
+    // - `numBucket` must be greater than zero and be less than Long.MaxValue.
+    // - `value`, `min`, and `max` cannot be NaN.
+    // - `min` bound cannot equal `max`.
+    // - `min` and `max` must be finite.
     if (detail::isNull(value, min, max, numBucket)) {
       return false;
     }
