@@ -730,6 +730,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
 
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b <= 10.0".
   filters.insert({"b", exec::lessThanOrEqualDouble(10.0)});
@@ -739,6 +740,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b between 10.0 and 14.0".
   filters.insert({"b", exec::betweenDouble(10.0, 14.0)});
@@ -748,6 +750,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b > 14.0".
   filters.insert({"b", exec::greaterThanDouble(14.0)});
@@ -757,6 +760,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b >= 14.0".
   filters.insert({"b", exec::greaterThanOrEqualDouble(14.0)});
@@ -766,6 +770,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 }
 
 TEST_F(ParquetReaderTest, varcharFilters) {
@@ -784,6 +789,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
 
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name <= 'CANADA'".
   filters.insert({"name", exec::lessThanOrEqual("CANADA")});
@@ -794,6 +800,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name > UNITED KINGDOM".
   filters.insert({"name", exec::greaterThan("UNITED KINGDOM")});
@@ -804,6 +811,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name >= 'UNITED KINGDOM'".
   filters.insert({"name", exec::greaterThanOrEqual("UNITED KINGDOM")});
@@ -815,6 +823,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name = 'CANADA'".
   filters.insert({"name", exec::equal("CANADA")});
@@ -825,6 +834,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name IN ('CANADA', 'UNITED KINGDOM')".
   filters.insert({"name", exec::in({std::string("CANADA"), "UNITED KINGDOM"})});
@@ -835,6 +845,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name IN ('UNITED STATES', 'CANADA', 'INDIA', 'RUSSIA')".
   filters.insert(
@@ -848,6 +859,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 }
 
 TEST_F(ParquetReaderTest, readDifferentEncodingsWithFilter) {
