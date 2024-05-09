@@ -714,6 +714,136 @@ inline std::string toString(const int128 value) {
     return result;
   }
 
+  int128 mul_check(uint64_t a, uint64_t b, bool& overflow) {
+    // Split the input numbers into two 32-bit halves to prevent overflow during
+    // multiplication.
+    uint64_t a_low = a & 0xFFFFFFFF;
+    uint64_t a_high = a >> 32;
+    uint64_t b_low = b & 0xFFFFFFFF;
+    uint64_t b_high = b >> 32;
+
+    // Multiply the parts to get intermediate 64-bit results.
+    uint64_t p0 = a_low * b_low;
+    uint64_t p1 = a_low * b_high;
+    uint64_t p2 = a_high * b_low;
+    uint64_t p3 = a_high * b_high;
+
+    // Calculate the carry from the lower to the higher 64-bit part.
+    uint64_t middle_sum = (p0 >> 32) + (p1 & 0xFFFFFFFF) + (p2 & 0xFFFFFFFF);
+    uint64_t carry = (middle_sum >> 32) + (p1 >> 32) + (p2 >> 32);
+
+    // Assemble the final 128-bit result.
+    int128 result;
+    result.lo_ = (middle_sum << 32) | (p0 & 0xFFFFFFFF);
+    result.hi_ = p3 + carry;
+
+    // Check for overflow. The overflow occurs if p3 is non-zero or if the carry
+    // from the middle sum overflows into the high part of the result.
+    overflow = (p3 != 0) || (carry > std::numeric_limits<uint64_t>::max() - p3);
+    return result;
+  }
+
+  // Function to check for overflow in int128 multiplication.
+  bool mul_overflow(const int128& a, const int128& b, int128* result) {
+    bool overflow = false;
+
+    // Multiply the low parts and check for overflow.
+    *result = mul_check(a.lo_, b.lo_, overflow);
+    if (overflow) {
+        return true; // Overflow occurred.
+    }
+
+    // Multiply the high parts and cross terms, checking for overflow at each
+    // step. If any of these multiplications overflow, the final result will
+    // overflow.
+    overflow = false;
+    int128 high_high = mul_check(
+        static_cast<uint64_t>(a.hi_), static_cast<uint64_t>(b.hi_), overflow);
+    if (overflow || high_high.hi_ != 0) {
+        return true; // Overflow occurred.
+    }
+
+    overflow = false;
+    int128 high_low = mul_check(static_cast<uint64_t>(a.hi_), b.lo_, overflow);
+    if (overflow) {
+        return true; // Overflow occurred.
+    }
+
+    overflow = false;
+    int128 low_high = mul_check(a.lo_, static_cast<uint64_t>(b.hi_), overflow);
+    if (overflow) {
+        return true; // Overflow occurred.
+    }
+
+    // Combine the results of the multiplications.
+    // Since we're only interested in overflow, we don't need to compute the
+    // exact result. We just need to check if any of the high parts would
+    // contribute to the final high part.
+    if (high_low.hi_ != 0 || low_high.hi_ != 0) {
+        return true; // Overflow occurred.
+    }
+
+    // Add the cross terms to the result and check for overflow.
+    result->hi_ += high_low.lo_ + low_high.lo_;
+    if (result->hi_ < high_low.lo_ || result->hi_ < low_high.lo_) {
+        return true; // Overflow occurred due to addition.
+    }
+
+    // Add the high part of the high_high multiplication if it's non-zero.
+    // This would also cause an overflow.
+    result->hi_ += high_high.lo_;
+    if (high_high.lo_ != 0 && result->hi_ < high_high.lo_) {
+        return true; // Overflow occurred due to addition.
+    }
+
+    return false;
+  }
+
+  // Function to check for overflow in int128 addition.
+  bool add_overflow(const int128& a, const int128& b, int128* result) {
+    // Perform addition on the low parts and check for carry.
+    uint64_t new_low = a.lo_ + b.lo_;
+    bool carry = new_low < a.lo_; // Check if carry occurred.
+
+    // Add the high parts along with the carry.
+    int64_t new_high = a.hi_ + b.hi_ + (carry ? 1 : 0);
+
+    // Check for overflow. Overflow occurs if:
+    // 1. The sign of a and b are the same, and the result has a different sign.
+    // 2. The high part overflowed due to carry.
+    if ((a.hi_ < 0 == b.hi_ < 0) && (new_high < 0 != a.hi_ < 0)) {
+        return true; // Overflow occurred.
+    }
+
+    // Set the result if no overflow occurred.
+    result->lo_ = new_low;
+    result->hi_ = new_high;
+    return false; // No overflow.
+  }
+
+  // Function to check for overflow in int128 subtraction.
+  bool sub_overflow(const int128& a, const int128& b, int128* result) {
+    // Perform subtraction on the low parts and check for borrow.
+    uint64_t new_low = a.lo_ - b.lo_;
+    bool borrow = a.lo_ < b.lo_; // Check if borrow occurred.
+
+    // Subtract the high parts, taking into account the borrow.
+    int64_t new_high = a.hi_ - b.hi_ - (borrow ? 1 : 0);
+
+    // Check for overflow. Overflow occurs if:
+    // 1. The sign of a and b are different, and the result has a different sign
+    // than a.
+    if ((a.hi_ < 0 != b.hi_ < 0) && (new_high < 0 != a.hi_ < 0)) {
+        return true; // Overflow occurred.
+    }
+
+    // Set the result if no overflow occurred.
+    result->lo_ = new_low;
+    result->hi_ = new_high;
+    return false; // No overflow.
+  }
+
+
 };
 
 bool mul_overflow(int128 a , int128 b ,int64_t result) {

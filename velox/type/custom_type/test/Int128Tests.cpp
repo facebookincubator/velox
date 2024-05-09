@@ -419,6 +419,49 @@ TEST(Int128, toString) {
         EXPECT_EQ(test, "170141183460469231722463931679029329919");
 }
 
+TEST(Int128, mul_overflow) {
+        int128 a = int128(9223372036854775807, 9223372036854775807);
+        int128 x;
+        EXPECT_EQ(a.mul_overflow(a,a,&x),true);
+
+        int128 c = int128(3147483646, 3147483646);
+        int128 d = int128(0, 2930395539);
+
+        int128 z;
+        EXPECT_EQ(c.mul_overflow(c, d, &z), false);
+
+}
+
+TEST(Int128, add_overflow) {
+        int128 a = int128(9223372036854775807, 9223372036854775807);
+        int128 x;
+        EXPECT_EQ(a.add_overflow(a, a, &x), true);
+
+        int128 c = int128(3147483646, 3147483646);
+        int128 d = int128(0, 2930395539);
+
+        int128 z;
+        EXPECT_EQ(c.add_overflow(c, d, &z), false);
+}
+
+TEST(Int128, sub_overflow) {
+        int128 a = int128(9223372036854775807, 9223372036854775807);
+        int128 x;
+        EXPECT_EQ(a.sub_overflow(a, -a, &x), true);
+
+        int128 c = int128(3147483646, 3147483646);
+        int128 d = int128(0, 2930395539);
+
+        int128 z;
+        EXPECT_EQ(c.sub_overflow(c, d, &z), false);
+
+        int128 e = int128(1, 1);
+        int128 f = int128(9223372036854775807, 9223372036854775807);
+
+        int128 y;
+        EXPECT_EQ(e.sub_overflow(e, -f, &y), true);
+}
+
 //TEST(Int128, failTest) {
 //  EXPECT_EQ(0, 1);
 //}
