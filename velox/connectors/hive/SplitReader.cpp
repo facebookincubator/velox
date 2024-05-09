@@ -71,7 +71,10 @@ std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<io::IoStatistics>& ioStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec) {
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    std::shared_ptr<exec::ExprSet>& remainingFilterExprSet,
+    core::ExpressionEvaluator* expressionEvaluator,
+    std::atomic<uint64_t>& totalRemainingFilterTime) {
   //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
   if (hiveSplit->customSplitInfo.count("table_format") > 0 &&
       hiveSplit->customSplitInfo["table_format"] == "hive-iceberg") {
@@ -85,7 +88,10 @@ std::unique_ptr<SplitReader> SplitReader::create(
         ioStats,
         fileHandleFactory,
         executor,
-        scanSpec);
+        scanSpec,
+        remainingFilterExprSet,
+        expressionEvaluator,
+        totalRemainingFilterTime);
   } else {
     return std::make_unique<SplitReader>(
         hiveSplit,
@@ -172,6 +178,11 @@ bool SplitReader::emptySplit() const {
 
 void SplitReader::resetSplit() {
   hiveSplit_.reset();
+}
+
+std::shared_ptr<const dwio::common::TypeWithId> SplitReader::baseFileSchema() {
+  VELOX_CHECK_NOT_NULL(baseReader_.get());
+  return baseReader_->typeWithId();
 }
 
 int64_t SplitReader::estimatedRowSize() const {

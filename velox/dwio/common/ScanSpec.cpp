@@ -19,6 +19,64 @@
 
 namespace facebook::velox::common {
 
+ScanSpec& ScanSpec::operator=(const ScanSpec& other) {
+  if (this != &other) {
+    numReads_ = other.numReads_;
+    subscript_ = other.subscript_;
+    fieldName_ = other.fieldName_;
+    channel_ = other.channel_;
+    constantValue_ = other.constantValue_;
+    projectOut_ = other.projectOut_;
+    extractValues_ = other.extractValues_;
+    makeFlat_ = other.makeFlat_;
+    filter_ = other.filter_;
+    metadataFilters_ = other.metadataFilters_;
+    selectivity_ = other.selectivity_;
+    enableFilterReorder_ = other.enableFilterReorder_;
+    children_ = other.children_;
+    stableChildren_ = other.stableChildren_;
+    childByFieldName_ = other.childByFieldName_;
+    valueHook_ = other.valueHook_;
+    isArrayElementOrMapEntry_ = other.isArrayElementOrMapEntry_;
+    maxArrayElementsCount_ = other.maxArrayElementsCount_;
+  }
+  return *this;
+}
+
+std::shared_ptr<ScanSpec> ScanSpec::clone() {
+  if (children_.empty()) {
+    return std::make_shared<ScanSpec>(*this);
+  }
+
+  std::vector<std::shared_ptr<ScanSpec>> childrenCopy;
+  folly::F14FastMap<std::string, ScanSpec*> childByFieldNameCopy;
+  std::vector<ScanSpec*> stableChildrenCopy;
+  stableChildrenCopy.resize(stableChildren_.size());
+
+  for (auto& child : children_) {
+    auto childCopy = child->clone();
+    if (child->filter_) {
+      childCopy->filter_ = child->filter_->clone();
+    }
+
+    childrenCopy.push_back(childCopy);
+    childByFieldNameCopy[childCopy->fieldName()] = childCopy.get();
+
+    auto iter =
+        std::find(stableChildren_.begin(), stableChildren_.end(), child.get());
+    if (iter != stableChildren_.end()) {
+      stableChildrenCopy[iter - stableChildren_.begin()] = childCopy.get();
+    }
+  }
+
+  auto copy = std::make_shared<ScanSpec>(*this);
+  copy->children_ = childrenCopy;
+  copy->childByFieldName_ = childByFieldNameCopy;
+  copy->stableChildren_ = stableChildrenCopy;
+
+  return copy;
+}
+
 ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
   auto container = this;
   auto& path = subfield.path();

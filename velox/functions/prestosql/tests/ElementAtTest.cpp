@@ -971,7 +971,7 @@ TEST_F(ElementAtTest, testCachingOptimzation) {
   }
 
   // Make a dummy eval context.
-  exec::ExprSet exprSet({}, &execCtx_);
+  exec::ExprSet exprSet(std::vector<core::TypedExprPtr>{}, &execCtx_);
   auto inputs = makeRowVector({});
   exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputs.get());
 

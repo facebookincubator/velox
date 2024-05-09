@@ -1242,7 +1242,7 @@ void StringFunctionsTest::testReplaceInPlace(
     auto replaceFunction =
         exec::getVectorFunction("replace", {VARCHAR(), VARCHAR()}, {}, config);
     SelectivityVector rows(tests.size());
-    ExprSet exprSet({}, &execCtx_);
+    ExprSet exprSet(std::vector<core::TypedExprPtr>{}, &execCtx_);
     RowVectorPtr inputRows = makeRowVector({});
     exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputRows.get());
     replaceFunction->apply(rows, functionInputs, VARCHAR(), evalCtx, resultPtr);

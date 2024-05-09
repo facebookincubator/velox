@@ -45,7 +45,9 @@ DECLARE_string(velox_save_input_on_expression_system_failure_path);
 namespace facebook::velox::exec {
 
 class ExprSet;
+
 class FieldReference;
+
 class VectorFunction;
 
 struct ExprStats {
@@ -672,6 +674,12 @@ class ExprSet {
       const std::vector<core::TypedExprPtr>& source,
       core::ExecCtx* execCtx,
       bool enableConstantFolding = true);
+
+  ExprSet(
+      const std::vector<std::shared_ptr<Expr>>& sources,
+      core::ExecCtx* execCtx);
+
+  void operator=(const ExprSet& another);
 
   virtual ~ExprSet();
 
