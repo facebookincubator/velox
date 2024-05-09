@@ -425,11 +425,11 @@ void GroupingSet::initializeGlobalAggregation() {
   // Allocate space for the null and initialized flags.
   int32_t numAggregates = aggregates_.size();
   if (sortedAggregations_) {
-    numAggregates += 1;
+    numAggregates++;
   }
   for (const auto& aggregation : distinctAggregations_) {
     if (aggregation != nullptr) {
-      numAggregates += 1;
+      numAggregates++;
     }
   }
   int32_t rowSizeOffset =
@@ -468,6 +468,7 @@ void GroupingSet::initializeGlobalAggregation() {
     offset = bits::roundUp(offset, accumulator.alignment());
 
     sortedAggregations_->setAllocator(&stringAllocator_);
+    DCHECK(RowContainer::nullByte(accumulatorFlagsOffset) < rowSizeOffset);
     sortedAggregations_->setOffsets(
         offset,
         RowContainer::nullByte(accumulatorFlagsOffset),
