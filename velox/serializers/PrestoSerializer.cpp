@@ -536,6 +536,10 @@ void read(
     VectorPtr& result) {
   const int32_t size = source->read<int32_t>();
   const auto numNewValues = sizeWithIncomingNulls(size, numIncomingNulls);
+
+  // If the Vector is alread flat this is a no-op, otherwise it converts result
+  // into a FlatVector.
+  BaseVector::flattenVector(result);
   result->resize(resultOffset + numNewValues);
 
   auto flatResult = result->asFlatVector<T>();
@@ -587,6 +591,9 @@ void read<StringView>(
   const int32_t size = source->read<int32_t>();
   const int32_t numNewValues = sizeWithIncomingNulls(size, numIncomingNulls);
 
+  // If the Vector is alread flat this is a no-op, otherwise it converts result
+  // into a FlatVector.
+  BaseVector::flattenVector(result);
   result->resize(resultOffset + numNewValues);
 
   auto flatResult = result->as<FlatVector<StringView>>();
@@ -752,6 +759,9 @@ void readArrayVector(
     velox::memory::MemoryPool* pool,
     const SerdeOpts& opts,
     VectorPtr& result) {
+  if (result->encoding() != VectorEncoding::Simple::ARRAY) {
+    BaseVector::ensureWritable(SelectivityVector::empty(), type, pool, result);
+  }
   ArrayVector* arrayVector = result->as<ArrayVector>();
 
   const auto resultElementsOffset = arrayVector->elements()->size();
@@ -808,6 +818,10 @@ void readMapVector(
     velox::memory::MemoryPool* pool,
     const SerdeOpts& opts,
     VectorPtr& result) {
+  if (result->encoding() != VectorEncoding::Simple::MAP) {
+    BaseVector::ensureWritable(SelectivityVector::empty(), type, pool, result);
+  }
+
   MapVector* mapVector = result->as<MapVector>();
   const auto resultElementsOffset = mapVector->mapKeys()->size();
   std::vector<TypePtr> childTypes = {type->childAt(0), type->childAt(1)};
@@ -864,7 +878,11 @@ void readRowVector(
     velox::memory::MemoryPool* pool,
     const SerdeOpts& opts,
     VectorPtr& result) {
-  auto* row = result->asUnchecked<RowVector>();
+  if (result->encoding() != VectorEncoding::Simple::ROW) {
+    BaseVector::ensureWritable(SelectivityVector::empty(), type, pool, result);
+  }
+  auto* row = result->as<RowVector>();
+
   BufferPtr combinedNulls;
   const uint64_t* childNulls = incomingNulls;
   int32_t numChildNulls = numIncomingNulls;
