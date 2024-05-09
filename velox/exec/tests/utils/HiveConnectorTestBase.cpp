@@ -23,9 +23,6 @@
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/writer/Writer.h"
-#endif
 
 namespace facebook::velox::exec::test {
 

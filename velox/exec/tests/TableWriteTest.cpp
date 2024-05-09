@@ -18,6 +18,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -34,12 +35,9 @@
 #include "folly/experimental/EventCount.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
-
-#include "velox/connectors/hive/HiveConfig.h"
-
-#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::core;
@@ -2399,9 +2397,9 @@ TEST_P(UnpartitionedTableWriterTest, flushPolicy) {
     }
   } testSettings[] = {{10, "1GB", 1}, {10, "1B", 10}};
 
+  auto rowType = ROW({"c0", "c1"}, {VARCHAR(), BIGINT()});
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto rowType = ROW({"c0", "c1"}, {VARCHAR(), BIGINT()});
 
     VectorFuzzer::Options options;
     options.nullRatio = 0.0;
