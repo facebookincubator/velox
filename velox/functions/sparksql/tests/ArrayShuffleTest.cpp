@@ -58,7 +58,7 @@ class ArrayShuffleTest : public SparkFunctionBaseTest {
 TEST_F(ArrayShuffleTest, basic) {
   testShuffle<int64_t>("[1, 2, 3, 4, 5]", "[3, 5, 4, 1, 2]", 0);
   testShuffle<std::string>(
-      "[\"a\", \"b\", \"c\", \"d\"]", "[\"a\", \"c\", \"b\", \"d\"]", 0);
+      R"(["a", "b", "c", "d"])", R"(["a", "c", "b", "d"])", 0);
 
   // Assert results are different with different seeds / partition ids.
   testShuffle<int64_t>("[1, 2, 3, 4, 5]", "[2, 1, 3, 4, 5]", 0, 1);
