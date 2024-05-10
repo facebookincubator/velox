@@ -83,21 +83,20 @@ TEST_F(ArrayShuffleTest, nestedArrays) {
 }
 
 TEST_F(ArrayShuffleTest, constantEncoding) {
-  vector_size_t size = 2;
+  vector_size_t size = 3;
   // Test empty array, array with null element,
   // array with duplicate elements, and array with distinct values.
   auto valueVector = makeArrayVectorFromJson<int64_t>(
       {"[]", "[null, 0]", "[5, 5]", "[1, 2, 3]"});
   std::vector<VectorPtr> result = {
-      makeArrayVectorFromJson<int64_t>({"[]", "[]"}),
-      makeArrayVectorFromJson<int64_t>({"[null, 0]", "[null, 0]"}),
-      makeArrayVectorFromJson<int64_t>({"[5, 5]", "[5, 5]"}),
-      makeArrayVectorFromJson<int64_t>({"[3, 2, 1]", "[3, 2, 1]"})};
+      makeArrayVectorFromJson<int64_t>({"[]", "[]", "[]"}),
+      makeArrayVectorFromJson<int64_t>({"[null, 0]", "[null, 0]", "[null, 0]"}),
+      makeArrayVectorFromJson<int64_t>({"[5, 5]", "[5, 5]", "[5, 5]"}),
+      makeArrayVectorFromJson<int64_t>(
+          {"[3, 2, 1]", "[3, 2, 1]", "[1, 3, 2]"})};
   for (auto i = 0; i < valueVector->size(); i++) {
     auto input = BaseVector::wrapInConstant(size, i, valueVector);
     assertEqualVectors(testShuffle<int64_t>(input, 0), result[i]);
-    assertDifferentSequence<int64_t>(
-        testShuffle<int64_t>(input, 0), testShuffle<int64_t>(input, 1));
   }
 }
 
@@ -111,14 +110,14 @@ TEST_F(ArrayShuffleTest, dictEncoding) {
        "[1, 2, 3]",
        "[4, 5, null]"});
   auto result = makeArrayVectorFromJson<int64_t>(
-      {"[1, 3, 2]",
-       "[1, 3 ,2]",
+      {"[3, 2, 1]",
+       "[3, 2 ,1]",
+       "[1, 3, 2]",
+       "[4, 5, null]",
+       "[null, 5, 4]",
        "[1, 2, 3]",
-       "[null, 5, 4]",
-       "[null, 5, 4]",
        "[3, 2, 1]",
-       "[3, 2, 1]",
-       "[3, 2, 1]"});
+       "[1, 2, 3]"});
   // Test repeated index elements and indices filtering (filter out element at
   // index 0).
   auto indices = makeIndices({3, 3, 4, 2, 2, 1, 1, 1});

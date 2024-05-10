@@ -109,7 +109,7 @@ class ArrayShuffleFunction : public exec::VectorFunction {
 } // namespace
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>
-arrayShuffleWithRandomSeedSignatures() {
+arrayShuffleWithSignatures() {
   return {// array(T) -> array(T)
           exec::FunctionSignatureBuilder()
               .typeVariable("T")
@@ -118,7 +118,21 @@ arrayShuffleWithRandomSeedSignatures() {
               .build()};
 }
 
-std::vector<std::shared_ptr<exec::FunctionSignature>> arrayShuffleWithCustomSeedSignatures() {
+exec::VectorFunctionMetadata getMetadataForArrayShuffle() {
+  return exec::VectorFunctionMetadataBuilder()
+      .deterministic(false)
+      .build();
+}
+
+std::shared_ptr<exec::VectorFunction> makeArrayShuffle(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config) {
+  return std::make_unique<ArrayShuffleFunction>(std::random_device{}());
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+arrayShuffleWithCustomSeedSignatures() {
     return {exec::FunctionSignatureBuilder()
               .typeVariable("T")
               .returnType("array(T)")
@@ -127,22 +141,9 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> arrayShuffleWithCustomSeed
               .build()};
 }
 
-exec::VectorFunctionMetadata getMetadataForArrayShuffleWithRandomSeed() {
-  return exec::VectorFunctionMetadataBuilder()
-      .deterministic(false)
-      .build();
-}
-
-std::shared_ptr<exec::VectorFunction> makeArrayShuffleWithRandomSeed(
-    const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& config) {
-  return std::make_unique<ArrayShuffleFunction>(std::random_device{}());
-}
-
 exec::VectorFunctionMetadata getMetadataForArrayShuffleWithCustomSeed() {
   return exec::VectorFunctionMetadataBuilder()
-      .deterministic(true)
+      .deterministic(false)
       .build();
 }
 

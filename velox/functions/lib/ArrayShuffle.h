@@ -20,23 +20,25 @@
 namespace facebook::velox::functions {
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>
-arrayShuffleWithRandomSeedSignatures();
+arrayShuffleWithSignatures();
+
+// This function returns metadata with 'deterministic' as false, it is used
+// with 'makeArrayShuffle'.
+exec::VectorFunctionMetadata getMetadataForArrayShuffle();
+
+// Shuffle with rand seed.
+std::shared_ptr<exec::VectorFunction> makeArrayShuffle(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>
 arrayShuffleWithCustomSeedSignatures();
 
 // This function returns metadata with 'deterministic' as false, it is used
-// with 'makeArrayShufflewithRandomSeed'.
-exec::VectorFunctionMetadata getMetadataForArrayShuffleWithRandomSeed();
-
-// Shuffle with rand seed.
-std::shared_ptr<exec::VectorFunction> makeArrayShuffleWithRandomSeed(
-    const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& config);
-
-// This function returns metadata with 'deterministic' as true, it is used with
-// 'makeArrayShuffleWithCustomSeed'.
+// with 'makeArrayShuffleWithCustomSeed'.
+// This function needs to generate different sequences for the constant input,
+// set 'deterministic' as false to prevent the constant folding.
 exec::VectorFunctionMetadata getMetadataForArrayShuffleWithCustomSeed();
 
 // Shuffle with custom seed (Spark's behavior).
