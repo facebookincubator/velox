@@ -468,7 +468,8 @@ void GroupingSet::initializeGlobalAggregation() {
     offset = bits::roundUp(offset, accumulator.alignment());
 
     sortedAggregations_->setAllocator(&stringAllocator_);
-    DCHECK(RowContainer::nullByte(accumulatorFlagsOffset) < rowSizeOffset);
+    VELOX_DCHECK_LT(
+        RowContainer::nullByte(accumulatorFlagsOffset), rowSizeOffset);
     sortedAggregations_->setOffsets(
         offset,
         RowContainer::nullByte(accumulatorFlagsOffset),
