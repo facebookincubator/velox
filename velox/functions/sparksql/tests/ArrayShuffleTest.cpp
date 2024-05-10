@@ -24,11 +24,15 @@ using namespace facebook::velox::test;
 
 class ArrayShuffleTest : public SparkFunctionBaseTest {
  protected:
-  VectorPtr
-  testShuffle(const VectorPtr& input, int64_t seed, int32_t partitionId = 0) {
+  void testShuffle(
+      const VectorPtr& input,
+      const VectorPtr& expected,
+      int64_t seed,
+      int32_t partitionId = 0) {
     setSparkPartitionId(partitionId);
-    return evaluate(
-        fmt::format("shuffle(c0, {})", seed), makeRowVector({input}));
+    assertEqualVectors(
+        evaluate(fmt::format("shuffle(c0, {})", seed), makeRowVector({input})),
+        expected);
   }
 
   template <typename T>
@@ -37,9 +41,7 @@ class ArrayShuffleTest : public SparkFunctionBaseTest {
       const std::vector<std::string>& expected,
       int64_t seed,
       int32_t partitionId = 0) {
-    assertEqualVectors(
-        testShuffle(input, seed, partitionId),
-        makeArrayVectorFromJson<T>(expected));
+    testShuffle(input, makeArrayVectorFromJson<T>(expected), seed, partitionId);
   }
 
   template <typename T>
@@ -74,7 +76,7 @@ TEST_F(ArrayShuffleTest, nestedArrays) {
        "[[1, 2, 3, 4], null, [5, 6], null, [6, 7, 8]]",
        "[[]]",
        "[[null]]"});
-  assertEqualVectors(testShuffle(input, 0, 0), result);
+  testShuffle(input, result, 0);
 }
 
 TEST_F(ArrayShuffleTest, constantEncoding) {
