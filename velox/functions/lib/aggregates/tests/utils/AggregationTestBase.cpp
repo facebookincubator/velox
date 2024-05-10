@@ -272,6 +272,55 @@ getFunctionNamesAndArgs(const std::vector<std::string>& aggregates) {
   }
   return std::make_pair(functionNames, aggregateArgs);
 }
+
+// Given a list of aggregation expressions, e.g., {"avg(c0)",
+// "\"$internal$count_distinct\"(c1)"}, fetch the function names from
+// AggregationNode of builder.planNode().
+std::vector<std::string> getFunctionNames(
+    std::function<void(exec::test::PlanBuilder&)> makeSource,
+    const std::vector<std::string>& aggregates,
+    memory::MemoryPool* pool) {
+  std::vector<std::string> functionNames;
+
+  PlanBuilder builder(pool);
+  makeSource(builder);
+
+  builder.singleAggregation({}, aggregates);
+  auto& aggregationNode =
+      static_cast<const core::AggregationNode&>(*builder.planNode());
+
+  for (const auto& aggregate : aggregationNode.aggregates()) {
+    const auto& aggregateExpr = aggregate.call;
+    const auto& name = aggregateExpr->name();
+
+    functionNames.push_back(name);
+  }
+
+  return functionNames;
+}
+
+// Given a list of aggregation expressions, check if any of aggregate functions
+// are order sensitive with metadata.
+bool hasOrderSensitive(
+    std::function<void(exec::test::PlanBuilder&)> makeSource,
+    const std::vector<std::string>& aggregates,
+    memory::MemoryPool* pool) {
+  auto functionNames = getFunctionNames(makeSource, aggregates, pool);
+  return std::any_of(
+      functionNames.begin(), functionNames.end(), [](const auto& functionName) {
+        auto* entry = exec::getAggregateFunctionEntry(functionName);
+        const auto& metadata = entry->metadata;
+        return metadata.orderSensitive;
+      });
+}
+// Same as above, but allows to specify input data instead of a function.
+bool hasOrderSensitive(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<std::string>& aggregates,
+    memory::MemoryPool* pool) {
+  return hasOrderSensitive(
+      [&](PlanBuilder& builder) { builder.values(data); }, aggregates, pool);
+}
 } // namespace
 
 void AggregationTestBase::testAggregationsWithCompanion(
@@ -372,7 +421,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     assertResults(queryBuilder);
   }
 
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  if (!groupingKeys.empty() && !hasOrderSensitive(data, aggregates, pool())) {
     SCOPED_TRACE("Run partial + final with spilling");
     PlanBuilder builder(pool());
     builder.values(dataWithExtraGroupingKey);
@@ -604,49 +653,6 @@ bool isTableScanSupported(const TypePtr& type) {
 
   return true;
 }
-
-// Given a list of aggregation expressions, e.g., {"avg(c0)",
-// "\"$internal$count_distinct\"(c1)"}, fetch the function names from
-// AggregationNode of builder.planNode()
-std::vector<std::string> getFunctionNames(
-    std::function<void(exec::test::PlanBuilder&)> makeSource,
-    const std::vector<std::string>& aggregates,
-    memory::MemoryPool* pool) {
-  std::vector<std::string> functionNames;
-
-  PlanBuilder builder(pool);
-  makeSource(builder);
-
-  builder.singleAggregation({}, aggregates);
-  auto& aggregationNode =
-      static_cast<const core::AggregationNode&>(*builder.planNode());
-
-  for (int i = 0; i < aggregationNode.aggregates().size(); ++i) {
-    const auto& aggregate = aggregationNode.aggregates()[i];
-
-    const auto& aggregateExpr = aggregate.call;
-    const auto& name = aggregateExpr->name();
-
-    functionNames.push_back(name);
-  }
-
-  return functionNames;
-}
-
-// Given a list of aggregation expressions, check if any of the agg function is
-// orderSensitive with metadata.
-bool hasOrderSensitive(
-    std::function<void(exec::test::PlanBuilder&)> makeSource,
-    const std::vector<std::string>& aggregates,
-    memory::MemoryPool* pool) {
-  auto functionNames = getFunctionNames(makeSource, aggregates, pool);
-  return std::any_of(
-      functionNames.begin(), functionNames.end(), [](const auto& functionName) {
-        auto* entry = exec::getAggregateFunctionEntry(functionName);
-        const auto& metadata = entry->metadata;
-        return metadata.orderSensitive;
-      });
-}
 } // namespace
 
 void AggregationTestBase::testReadFromFiles(
@@ -857,7 +863,8 @@ void AggregationTestBase::testAggregationsImpl(
     assertResults(queryBuilder);
   }
 
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  if (!groupingKeys.empty() &&
+      !hasOrderSensitive(makeSource, aggregates, pool())) {
     SCOPED_TRACE("Run partial + final with spilling");
     PlanBuilder builder(pool());
     makeSource(builder);
@@ -969,7 +976,8 @@ void AggregationTestBase::testAggregationsImpl(
     assertResults(queryBuilder);
   }
 
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  if (!groupingKeys.empty() &&
+      !hasOrderSensitive(makeSource, aggregates, pool())) {
     SCOPED_TRACE("Run single with spilling");
     PlanBuilder builder(pool());
     makeSource(builder);
@@ -1160,7 +1168,8 @@ void AggregationTestBase::testAggregations(
     testIncrementalAggregation(makeSource, aggregates, config);
   }
 
-  if (allowInputShuffle_ && !groupingKeys.empty()) {
+  if (!hasOrderSensitive(makeSource, aggregates, pool()) &&
+      !groupingKeys.empty()) {
     testStreamingAggregationsImpl(
         makeSource,
         groupingKeys,
