@@ -138,7 +138,7 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
   exec::registerStatefulVectorFunction(
       prefix + "shuffle",
-      arrayShuffleWithSignatures(),
+      arrayShuffleSignatures(),
       makeArrayShuffle,
       getMetadataForArrayShuffle());
 

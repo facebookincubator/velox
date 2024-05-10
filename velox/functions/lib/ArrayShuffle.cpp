@@ -108,20 +108,19 @@ class ArrayShuffleFunction : public exec::VectorFunction {
 };
 } // namespace
 
-std::vector<std::shared_ptr<exec::FunctionSignature>>
-arrayShuffleWithSignatures() {
+exec::VectorFunctionMetadata getMetadataForArrayShuffle() {
+  return exec::VectorFunctionMetadataBuilder()
+      .deterministic(false)
+      .build();
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>> arrayShuffleSignatures() {
   return {// array(T) -> array(T)
           exec::FunctionSignatureBuilder()
               .typeVariable("T")
               .returnType("array(T)")
               .argumentType("array(T)")
               .build()};
-}
-
-exec::VectorFunctionMetadata getMetadataForArrayShuffle() {
-  return exec::VectorFunctionMetadataBuilder()
-      .deterministic(false)
-      .build();
 }
 
 std::shared_ptr<exec::VectorFunction> makeArrayShuffle(
@@ -139,12 +138,6 @@ arrayShuffleWithCustomSeedSignatures() {
               .argumentType("array(T)")
               .constantArgumentType("bigint")
               .build()};
-}
-
-exec::VectorFunctionMetadata getMetadataForArrayShuffleWithCustomSeed() {
-  return exec::VectorFunctionMetadataBuilder()
-      .deterministic(false)
-      .build();
 }
 
 std::shared_ptr<exec::VectorFunction> makeArrayShuffleWithCustomSeed(

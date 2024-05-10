@@ -31,41 +31,22 @@ class ArrayShuffleTest : public SparkFunctionBaseTest {
     return evaluate(
         fmt::format("shuffle(c0, {})", seed), makeRowVector({input}));
   }
-
-  template <typename T>
-  void assertDifferentSequence(
-      const VectorPtr& result,
-      const VectorPtr& expected) {
-    DecodedVector decodedResult(*result.get());
-    exec::VectorReader<Array<T>> readerResult(&decodedResult);
-    DecodedVector decodedExpected(*expected.get());
-    exec::VectorReader<Array<T>> readerExpected(&decodedExpected);
-    for (auto i = 0; i < decodedExpected.size(); i++) {
-      auto resultArray = readerResult[i].materialize();
-      auto expectedArray = readerExpected[i].materialize();
-      if (resultArray.size() > 2) {
-        ASSERT_FALSE(std::equal(
-            resultArray.begin(), resultArray.end(), expectedArray.begin()));
-      }
-      ASSERT_TRUE(std::is_permutation(
-          resultArray.begin(), resultArray.end(), expectedArray.begin()));
-    }
-  }
 };
 
 TEST_F(ArrayShuffleTest, basic) {
   auto input = makeArrayVector<int64_t>({{1, 2, 3, 4, 5}});
   auto result = makeArrayVector<int64_t>({{3, 5, 4, 1, 2}});
+  auto resultForPartitionIdOne = makeArrayVector<int64_t>({{2, 1, 3, 4, 5}});
+  auto resultForSeesTwo = makeArrayVector<int64_t>({{4, 1, 3, 5, 2}});
   auto stringInput = makeArrayVector<std::string>({{"a", "b", "c", "d"}});
   auto stringResult = makeArrayVector<std::string>({{"a", "c", "b", "d"}});
   assertEqualVectors(testShuffle<int64_t>(input, 0), result);
   assertEqualVectors(testShuffle<std::string>(stringInput, 0), stringResult);
 
   // Assert results are different with different seeds / partition ids.
-  assertDifferentSequence<int64_t>(
-      testShuffle<int64_t>(input, 0, 0), testShuffle<int64_t>(input, 0, 1));
-  assertDifferentSequence<int64_t>(
-      testShuffle<int64_t>(input, 1, 0), testShuffle<int64_t>(input, 0, 0));
+  assertEqualVectors(
+      testShuffle<int64_t>(input, 0, 1), resultForPartitionIdOne);
+  assertEqualVectors(testShuffle<int64_t>(input, 2, 0), resultForSeesTwo);
 }
 
 TEST_F(ArrayShuffleTest, nestedArrays) {

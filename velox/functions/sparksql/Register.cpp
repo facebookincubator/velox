@@ -340,7 +340,7 @@ void registerFunctions(const std::string& prefix) {
       prefix + "shuffle",
       arrayShuffleWithCustomSeedSignatures(),
       makeArrayShuffleWithCustomSeed,
-      getMetadataForArrayShuffleWithCustomSeed());
+      getMetadataForArrayShuffle());
 
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
