@@ -16,7 +16,6 @@
 #include "velox/exec/TableScan.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
@@ -355,13 +354,7 @@ void TableScan::checkPreload() {
 
 void TableScan::setInputFileName(
     std::shared_ptr<connector::ConnectorSplit> split) {
-  if (auto hiveConnectorSplit =
-          std::dynamic_pointer_cast<connector::hive::HiveConnectorSplit>(
-              split)) {
-    driverCtx_->inputFileName = hiveConnectorSplit->getFileName();
-  } else {
-    driverCtx_->inputFileName = "";
-  }
+  driverCtx_->inputFileName = split->getFileName();
 }
 
 bool TableScan::isFinished() {
