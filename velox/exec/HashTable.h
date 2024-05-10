@@ -865,7 +865,7 @@ class HashTable : public BaseHashTable {
       TableInsertPartitionInfo* partitionInfo);
 
   template <bool isNormailizedKeyMode>
-  void insertForJoinInternal(
+  void insertForJoinWithPrefetch(
       RowContainer* rows,
       char** groups,
       uint64_t* hashes,

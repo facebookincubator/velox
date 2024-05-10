@@ -416,6 +416,9 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::fullProbe(
 }
 
 namespace {
+// Group prefetch size for join build & probe.
+constexpr int32_t kPrefetchSize = 64;
+
 // Normalized keys have non0-random bits. Bits need to be propagated
 // up to make a tag byte and down so that non-lowest bits of
 // normalized key affect the hash table index.
@@ -676,22 +679,21 @@ void HashTable<ignoreNullKeys>::joinNormalizedKeyProbe(HashLookup& lookup) {
   int32_t probeIndex = 0;
   int32_t numProbes = lookup.rows.size();
   const vector_size_t* rows = lookup.rows.data();
-  constexpr int32_t groupSize = 64;
-  ProbeState states[groupSize];
+  ProbeState states[kPrefetchSize];
   const uint64_t* keys = lookup.normalizedKeys.data();
   const uint64_t* hashes = lookup.hashes.data();
   char** hits = lookup.hits.data();
   constexpr int32_t kKeyOffset =
       -static_cast<int32_t>(sizeof(normalized_key_t));
-  for (; probeIndex + groupSize <= numProbes; probeIndex += groupSize) {
-    for (int32_t i = 0; i < groupSize; ++i) {
+  for (; probeIndex + kPrefetchSize <= numProbes; probeIndex += kPrefetchSize) {
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
       int32_t row = rows[probeIndex + i];
       states[i].preProbe(*this, hashes[row], row);
     }
-    for (int32_t i = 0; i < groupSize; ++i) {
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
       states[i].firstProbe(*this, kKeyOffset);
     }
-    for (int32_t i = 0; i < groupSize; ++i) {
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
       hits[states[i].row()] = states[i].joinNormalizedKeyFullProbe(*this, keys);
     }
   }
@@ -1210,30 +1212,29 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
 
 template <bool ignoreNullKeys>
 template <bool isNormailizedKeyMode>
-FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::insertForJoinInternal(
+FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::insertForJoinWithPrefetch(
     RowContainer* rows,
     char** groups,
     uint64_t* hashes,
     int32_t numGroups,
     TableInsertPartitionInfo* partitionInfo) {
   auto i = 0;
-  constexpr int32_t groupSize = 64;
-  ProbeState states[groupSize];
+  ProbeState states[kPrefetchSize];
   constexpr int32_t kKeyOffset =
       -static_cast<int32_t>(sizeof(normalized_key_t));
   int32_t keyOffset = 0;
   if constexpr (isNormailizedKeyMode) {
     keyOffset = kKeyOffset;
   }
-  for (; i + groupSize <= numGroups; i += groupSize) {
-    for (int32_t j = 0; j < groupSize; ++j) {
+  for (; i + kPrefetchSize <= numGroups; i += kPrefetchSize) {
+    for (int32_t j = 0; j < kPrefetchSize; ++j) {
       auto index = i + j;
       states[j].preProbe(*this, hashes[index], index);
     }
-    for (int32_t j = 0; j < groupSize; ++j) {
+    for (int32_t j = 0; j < kPrefetchSize; ++j) {
       states[j].firstProbe(*this, keyOffset);
     }
-    for (int32_t j = 0; j < groupSize; ++j) {
+    for (int32_t j = 0; j < kPrefetchSize; ++j) {
       auto index = i + j;
       buildFullProbe<isNormailizedKeyMode>(
           rows, states[j], hashes[index], groups[index], j != 0, partitionInfo);
@@ -1265,9 +1266,10 @@ void HashTable<ignoreNullKeys>::insertForJoin(
     return;
   }
   if (hashMode_ == HashMode::kNormalizedKey) {
-    insertForJoinInternal<true>(rows, groups, hashes, numGroups, partitionInfo);
+    insertForJoinWithPrefetch<true>(
+        rows, groups, hashes, numGroups, partitionInfo);
   } else {
-    insertForJoinInternal<false>(
+    insertForJoinWithPrefetch<false>(
         rows, groups, hashes, numGroups, partitionInfo);
   }
 }

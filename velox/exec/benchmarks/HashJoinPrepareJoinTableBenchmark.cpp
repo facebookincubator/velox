@@ -111,9 +111,9 @@ struct HashTableBenchmarkParams {
   }
 };
 
-class HashTableListJoinResultBenchmark : public VectorTestBase {
+class HashJoinPrepareJoinTableBenchmark : public VectorTestBase {
  public:
-  HashTableListJoinResultBenchmark()
+  HashJoinPrepareJoinTableBenchmark()
       : randomEngine_((std::random_device{}())) {}
 
   // Create join tables.
@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
   options.mmapArenaCapacityRatio = 1;
   memory::MemoryManager::initialize(options);
 
-  auto bm = std::make_unique<HashTableListJoinResultBenchmark>();
+  auto bm = std::make_unique<HashJoinPrepareJoinTableBenchmark>();
   std::vector<HashTableBenchmarkParams> params;
   // initArrayModeBenchmarkParams(params);
   initNormalizedKeyModeBenchmarkParams(params);
