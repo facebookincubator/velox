@@ -81,6 +81,11 @@ void registerUnaryIntegralWithTReturn(const std::vector<std::string>& aliases) {
   registerFunction<T, TReturn, int64_t>(aliases);
 }
 
+template <template <class> class T, typename TReturn>
+void registerUnaryFloatingWithTReturn(const std::vector<std::string>& aliases) {
+  registerFunction<T, TReturn, double>(aliases);
+}
+
 template <template <class> class T>
 void registerUnaryFloatingPoint(const std::vector<std::string>& aliases) {
   registerFunction<T, double, double>(aliases);

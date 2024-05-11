@@ -1071,6 +1071,42 @@ TEST_F(DateTimeFunctionsTest, millisToTimestamp) {
       util::fromTimestampString("-292275055-05-16T16:47:04.192"));
 }
 
+TEST_F(DateTimeFunctionsTest, secondsToTimestamp) {
+  const auto secondsToTimestamp = [&](double seconds) {
+    return evaluateOnce<Timestamp, double>("timestamp_seconds(c0)", seconds);
+  };
+  EXPECT_EQ(
+      secondsToTimestamp(1.0),
+      util::fromTimestampString("1970-01-01 00:00:01"));
+  EXPECT_EQ(
+      secondsToTimestamp(1230219000.123),
+      util::fromTimestampString("2008-12-25 15:30:00.123"));
+  EXPECT_EQ(
+      secondsToTimestamp(kMaxTinyint),
+      util::fromTimestampString("1970-01-01 00:02:07.000000000"));
+  EXPECT_EQ(
+      secondsToTimestamp(kMinTinyint),
+      util::fromTimestampString("1969-12-31T23:57:52.000000000"));
+  EXPECT_EQ(
+      secondsToTimestamp(kMaxSmallint),
+      util::fromTimestampString("1970-01-01T09:06:07.000000000"));
+  EXPECT_EQ(
+      secondsToTimestamp(kMinSmallint),
+      util::fromTimestampString("1969-12-31T14:53:52.000000000"));
+  EXPECT_EQ(
+      secondsToTimestamp(kMax),
+      util::fromTimestampString("2038-01-19T03:14:07.000000000"));
+  EXPECT_EQ(
+      secondsToTimestamp(kMin),
+      util::fromTimestampString("1901-12-13T20:45:52.000000000"));
+  EXPECT_THROW(
+      secondsToTimestamp(kMaxBigint),
+      VeloxUserError);
+  EXPECT_THROW(
+      secondsToTimestamp(kMinBigint),
+      VeloxUserError);
+}
+
 TEST_F(DateTimeFunctionsTest, timestampToMicros) {
   const auto timestampToMicros = [&](const StringView time) {
     return evaluateOnce<int64_t, Timestamp>(

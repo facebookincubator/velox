@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <math.h>
 
 #include <folly/dynamic.h>
 
@@ -190,6 +191,31 @@ struct Timestamp {
   /// timestmap to milliseconds.
   std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
   toTimePoint(bool allowOverflow = false) const;
+
+  static Timestamp fromSeconds(double seconds) {
+    if (seconds >= 0.0 || std::fmod(seconds, 1) == 0.0) {
+      return Timestamp((int64_t)(seconds / 1), (uint64_t)(round(std::fmod(seconds, 1) * 1'000 * 1000 ) * 1000));
+    }
+    auto second = (int64_t)(seconds / 1) - 1;
+    auto nano = std::fmod((seconds - second ), 1) * kMillisecondsInSecond * kNanosecondsInMillisecond;
+
+    return  Timestamp(second, nano);
+   }
+  static Timestamp fromSecondsNoError(double seconds)
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+  {
+    if (seconds >= 0.0 || std::fmod(seconds, 1) == 0.0) {
+      return Timestamp((int64_t)(seconds / 1), (uint64_t)(round(std::fmod(seconds, 1) * 1'000 * 1000 ) * 1000));
+    }
+    auto second = (int64_t)(seconds / 1) - 1;
+    auto nano = std::fmod((seconds - second ), 1) * kMillisecondsInSecond * kNanosecondsInMillisecond;
+
+    return  Timestamp(second, nano);
+  }
 
   static Timestamp fromMillis(int64_t millis) {
     if (millis >= 0 || millis % 1'000 == 0) {
