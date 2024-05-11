@@ -510,13 +510,14 @@ void SsdFile::updateStats(SsdCacheStats& stats) const {
   stats.readCheckpointErrors += stats_.readCheckpointErrors;
 }
 
-void SsdFile::clear() {
+void SsdFile::testingClear() {
   std::lock_guard<std::shared_mutex> l(mutex_);
   entries_.clear();
   std::fill(regionSizes_.begin(), regionSizes_.end(), 0);
   std::fill(erasedRegionSizes_.begin(), erasedRegionSizes_.end(), 0);
   writableRegions_.resize(numRegions_);
   std::iota(writableRegions_.begin(), writableRegions_.end(), 0);
+  tracker_.testingClear();
 }
 
 void SsdFile::deleteFile() {
@@ -582,9 +583,14 @@ bool SsdFile::removeFileEntries(
   }
   if (toFree.size() > 0) {
     clearRegionEntriesLocked(toFree);
-    writableRegions_.reserve(writableRegions_.size() + toFree.size());
+    writableRegions_.reserve(
+        std::min<size_t>(writableRegions_.size() + toFree.size(), numRegions_));
+    folly::F14FastSet<uint64_t> existingWritableRegions(
+        writableRegions_.begin(), writableRegions_.end());
     for (int32_t region : toFree) {
-      writableRegions_.push_back(region);
+      if (existingWritableRegions.count(region) == 0) {
+        writableRegions_.push_back(region);
+      }
     }
   }
 
@@ -863,8 +869,8 @@ void SsdFile::readCheckpoint(std::ifstream& state) {
       maxRegions_,
       "Trying to start from checkpoint with a different capacity");
   numRegions_ = readNumber<int32_t>(state);
-  std::vector<int64_t> scores(maxRegions);
-  state.read(asChar(scores.data()), maxRegions_ * sizeof(uint64_t));
+  std::vector<double> scores(maxRegions);
+  state.read(asChar(scores.data()), maxRegions_ * sizeof(double));
   std::unordered_map<uint64_t, StringIdLease> idMap;
   for (;;) {
     const auto id = readNumber<uint64_t>(state);
