@@ -109,32 +109,10 @@ class SparkVectorHasher {
   }
 
   // Compute the hash value of input vector at index for non-null values.
-  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) {
-    switch (decoded_.base()->typeKind()) {
-      case TypeKind::ARRAY:
-        return static_cast<ArrayVectorHasher<HashClass>*>(this)->hashValueAt(
-            index, seed);
-      case TypeKind::MAP:
-        return static_cast<MapVectorHasher<HashClass>*>(this)->hashValueAt(
-            index, seed);
-      case TypeKind::ROW:
-        return static_cast<RowVectorHasher<HashClass>*>(this)->hashValueAt(
-            index, seed);
-      default:
-        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            hashPrimitive, decoded_.base()->typeKind(), index, seed);
-    }
-  }
+  virtual ReturnType hashNotNullAt(vector_size_t index, SeedType seed) = 0;
 
  protected:
   const DecodedVector& decoded_;
-
- private:
-  template <TypeKind kind>
-  ReturnType hashPrimitive(vector_size_t index, SeedType seed) {
-    return static_cast<PrimitiveVectorHasher<HashClass, kind>*>(this)
-        ->hashValueAt(index, seed);
-  }
 };
 
 template <typename HashClass, TypeKind kind>
@@ -171,7 +149,7 @@ class PrimitiveVectorHasher : public SparkVectorHasher<HashClass> {
   PrimitiveVectorHasher(DecodedVector& decoded)
       : SparkVectorHasher<HashClass>(decoded) {}
 
-  ReturnType hashValueAt(vector_size_t index, SeedType seed) {
+  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
     return hashOne<HashClass>(
         this->decoded_.template valueAt<typename TypeTraits<kind>::NativeType>(
             index),
@@ -195,7 +173,7 @@ class ArrayVectorHasher : public SparkVectorHasher<HashClass> {
     elementHasher_ = createVectorHasher<HashClass>(decodedElements_);
   }
 
-  ReturnType hashValueAt(vector_size_t index, SeedType seed) {
+  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
     auto size = base_->sizeAt(indices_[index]);
     auto offset = base_->offsetAt(indices_[index]);
 
@@ -231,7 +209,7 @@ class MapVectorHasher : public SparkVectorHasher<HashClass> {
     valueHasher_ = createVectorHasher<HashClass>(decodedValues_);
   }
 
-  ReturnType hashValueAt(vector_size_t index, SeedType seed) {
+  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
     auto size = base_->sizeAt(indices_[index]);
     auto offset = base_->offsetAt(indices_[index]);
 
@@ -272,7 +250,7 @@ class RowVectorHasher : public SparkVectorHasher<HashClass> {
     }
   }
 
-  ReturnType hashValueAt(vector_size_t index, SeedType seed) {
+  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
     ReturnType result = seed;
     for (auto i = 0; i < base_->childrenSize(); ++i) {
       result = hashers_[i]->hashAt(indices_[index], result);
