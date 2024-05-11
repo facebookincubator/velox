@@ -14,38 +14,8 @@
 
 add_library(
   velox_aggregates
-  ApproxDistinctAggregate.cpp
-  ApproxMostFrequentAggregate.cpp
-  ApproxPercentileAggregate.cpp
-  ArbitraryAggregate.cpp
   ArrayAggAggregate.cpp
-  AverageAggregate.cpp
-  BitwiseAggregates.cpp
-  BitwiseXorAggregate.cpp
-  BoolAggregates.cpp
-  CentralMomentsAggregates.cpp
-  Compare.cpp
-  CountAggregate.cpp
-  CountIfAggregate.cpp
-  CovarianceAggregates.cpp
-  ChecksumAggregate.cpp
-  EntropyAggregates.cpp
-  GeometricMeanAggregate.cpp
-  HistogramAggregate.cpp
-  MapAggAggregate.cpp
-  MapUnionAggregate.cpp
-  MapUnionSumAggregate.cpp
-  MaxSizeForStatsAggregate.cpp
-  MinMaxAggregates.cpp
-  MinMaxByAggregates.cpp
-  MultiMapAggAggregate.cpp
-  PrestoHasher.cpp
-  ReduceAgg.cpp
-  RegisterAggregateFunctions.cpp
-  SetAggregates.cpp
-  SumAggregate.cpp
-  SumDataSizeForStatsAggregate.cpp
-  VarianceAggregates.cpp)
+  RegisterAggregateFunctions.cpp)
 
 target_link_libraries(
   velox_aggregates

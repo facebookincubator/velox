@@ -45,15 +45,18 @@ class AggregateWindowFunction : public exec::WindowFunction {
     argTypes_.reserve(args.size());
     argIndices_.reserve(args.size());
     argVectors_.reserve(args.size());
+    std::vector<VectorPtr> constants;
     for (const auto& arg : args) {
       argTypes_.push_back(arg.type);
       if (arg.constantValue) {
         argIndices_.push_back(kConstantChannel);
         argVectors_.push_back(arg.constantValue);
+        constants.push_back(arg.constantValue);
       } else {
         VELOX_CHECK(arg.index.has_value());
         argIndices_.push_back(arg.index.value());
         argVectors_.push_back(BaseVector::create(arg.type, 0, pool_));
+        constants.push_back(nullptr);
       }
     }
     // Create an Aggregate function object to do result computation. Window
@@ -63,6 +66,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
         name,
         core::AggregationNode::Step::kSingle,
         argTypes_,
+        constants,
         resultType,
         config);
     aggregate_->setAllocator(stringAllocator_);

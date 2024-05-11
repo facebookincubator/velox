@@ -100,6 +100,7 @@ std::vector<AggregateInfo> toAggregateInfo(
         isPartialOutput(step) ? core::AggregationNode::Step::kPartial
                               : core::AggregationNode::Step::kSingle,
         aggregate.rawInputTypes,
+        info.constantInputs,
         aggResultType,
         operatorCtx.driverCtx()->queryConfig());
 

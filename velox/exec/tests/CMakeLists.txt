@@ -241,7 +241,8 @@ target_link_libraries(
   gtest_main)
 
 add_library(velox_simple_aggregate SimpleAverageAggregate.cpp
-                                   SimpleArrayAggAggregate.cpp)
+                                   SimpleArrayAggAggregate.cpp
+                                   SimpleSumAggregate.cpp)
 
 target_link_libraries(velox_simple_aggregate velox_exec velox_expression
                       velox_expression_functions velox_aggregates)
@@ -251,6 +252,15 @@ add_executable(velox_simple_aggregate_test SimpleAggregateAdapterTest.cpp
 
 target_link_libraries(
   velox_simple_aggregate_test velox_simple_aggregate velox_exec
+  velox_functions_aggregates_test_lib gtest gtest_main)
+
+add_executable(
+  velox_simple_aggregate_experiment_test
+  SimpleAggregateAdapterExperimentTest.cpp
+  Main.cpp)
+
+target_link_libraries(
+  velox_simple_aggregate_experiment_test velox_simple_aggregate velox_exec
   velox_functions_aggregates_test_lib gtest gtest_main)
 
 add_library(velox_spiller_join_benchmark_base JoinSpillInputBenchmarkBase.cpp

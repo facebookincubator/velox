@@ -634,6 +634,7 @@ TEST_P(HashTableTest, clear) {
       "sum",
       core::AggregationNode::Step::kPartial,
       std::vector<TypePtr>{BIGINT()},
+      std::vector<VectorPtr>{nullptr},
       BIGINT(),
       config);
 

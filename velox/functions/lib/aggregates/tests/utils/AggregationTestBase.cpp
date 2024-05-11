@@ -1192,10 +1192,13 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
     const std::unordered_map<std::string, std::string>& config) {
   auto [intermediateType, finalType] = getResultTypes(functionName, inputTypes);
   core::QueryConfig queryConfig({config});
+  // TODO: get the correct constantInputs.
+  std::vector<VectorPtr> constantInputs{inputTypes.size(), nullptr};
   auto func = exec::Aggregate::create(
       functionName,
       core::AggregationNode::Step::kSingle,
       inputTypes,
+      constantInputs,
       finalType,
       queryConfig);
   func->setAllocator(&allocator);
