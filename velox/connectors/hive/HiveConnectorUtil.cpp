@@ -542,6 +542,11 @@ void configureReaderOptions(
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
   readerOptions.setNoCacheRetention(
       hiveConfig->cacheNoRetention(sessionProperties));
+  auto sessionTzName = hiveConfig->sessionTimezone(sessionProperties);
+  if (!sessionTzName.empty()) {
+    const auto timezone = date::locate_zone(sessionTzName);
+    readerOptions.setSessionTimezone(timezone);
+  }
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
