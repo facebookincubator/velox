@@ -143,7 +143,7 @@ function install_conda {
 
   mkdir -p conda && cd conda
   wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh
-  bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
+  ${SUDO} bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 
 function install_duckdb {
@@ -153,6 +153,8 @@ function install_duckdb {
     (
       cd duckdb
       cmake_install -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
+      # duckdb build process creates ccache dir with root ownership if dir does not exist
+      # Change ccache dir ownership to current user to avoid permission issues
       sudo chown -R $(id -u -n):$(id -g -n) $(ccache -k cache_dir)
     )
   fi
