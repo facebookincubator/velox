@@ -153,6 +153,7 @@ function install_duckdb {
     (
       cd duckdb
       cmake_install -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
+      sudo chown -R $(id -u -n):$(id -g -n) $(ccache -k cache_dir)
     )
   fi
 }
