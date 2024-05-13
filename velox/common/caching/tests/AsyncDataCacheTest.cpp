@@ -89,7 +89,10 @@ class AsyncDataCacheTest : public testing::Test {
     }
   }
 
-  void initializeCache(uint64_t maxBytes, int64_t ssdBytes = 0) {
+  void initializeCache(
+      uint64_t maxBytes,
+      int64_t ssdBytes = 0,
+      int8_t ssdPathNum = 1) {
     if (cache_ != nullptr) {
       cache_->shutdown();
     }
@@ -105,12 +108,16 @@ class AsyncDataCacheTest : public testing::Test {
       if (tempDirectory_ == nullptr) {
         tempDirectory_ = exec::test::TempDirectoryPath::create();
       }
+      std::string fileCachePrefix;
+      for (int8_t i = 0; i < ssdPathNum; ++i) {
+        fileCachePrefix +=
+            fmt::format("{}/multiCache{}/cache,", tempDirectory_->path, i);
+      }
+      if (!fileCachePrefix.empty()) {
+        fileCachePrefix.pop_back();
+      }
       ssdCache = std::make_unique<SsdCache>(
-          fmt::format("{}/cache", tempDirectory_->getPath()),
-          ssdBytes,
-          4,
-          executor(),
-          ssdBytes / 20);
+          fileCachePrefix, ssdBytes, 4, executor(), ssdBytes / 20);
     }
 
     memory::MemoryManagerOptions options;
@@ -1148,6 +1155,27 @@ DEBUG_ONLY_TEST_F(AsyncDataCacheTest, ttl) {
   auto statsTtl = cache_->refreshStats();
   EXPECT_EQ(statsTtl.numAgedOut, statsT1.numEntries);
   EXPECT_EQ(statsTtl.ssdStats->entriesAgedOut, statsT1.ssdStats->entriesCached);
+}
+
+TEST_F(AsyncDataCacheTest, multiCachePath) {
+  constexpr uint64_t kRamBytes = 32 << 20;
+  constexpr uint64_t kSsdBytes = 512UL << 20;
+
+  initializeCache(kRamBytes, kSsdBytes, 2);
+
+  ASSERT_EQ(
+      filesystems::getFileSystem(tempDirectory_->path, nullptr)
+          ->list(tempDirectory_->path)
+          .size(),
+      2);
+  ASSERT_EQ(
+      filesystems::getFileSystem(tempDirectory_->path, nullptr)
+              ->list(tempDirectory_->path + "/multiCache0")
+              .size() +
+          filesystems::getFileSystem(tempDirectory_->path, nullptr)
+              ->list(tempDirectory_->path + "/multiCache1")
+              .size(),
+      8);
 }
 
 // TODO: add concurrent fuzzer test.
