@@ -42,14 +42,14 @@ bool registerWindowFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
     WindowFunctionFactory factory,
-    StreamingProcessMetadata metadata) {
+    WindowFunctionMetadata metadata) {
   auto sanitizedName = sanitizeName(name);
   windowFunctions()[sanitizedName] = {
       std::move(signatures), std::move(factory), metadata};
   return true;
 }
 
-std::optional<StreamingProcessMetadata> getWindowFunctionMetadata(
+std::optional<WindowFunctionMetadata> getWindowFunctionMetadata(
     const std::string& name) {
   auto sanitizedName = sanitizeName(name);
   if (auto func = getWindowFunctionEntry(sanitizedName)) {

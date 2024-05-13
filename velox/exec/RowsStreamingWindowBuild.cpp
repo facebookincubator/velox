@@ -15,7 +15,6 @@
  */
 
 #include "velox/exec/RowsStreamingWindowBuild.h"
-#include "velox/exec/RowsStreamingWindowPartition.h"
 
 namespace facebook::velox::exec {
 
@@ -28,17 +27,14 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
 
 void RowsStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
   if (windowPartitions_.size() <= inputCurrentPartition_) {
-    windowPartitions_.push_back(std::make_shared<RowsStreamingWindowPartition>(
-        data_.get(),
-        folly::Range<char**>(nullptr, nullptr),
-        inversedInputChannels_,
-        sortKeyInfo_));
+    windowPartitions_.push_back(std::make_shared<WindowPartition>(
+        data_.get(), inversedInputChannels_, sortKeyInfo_));
   }
 
-  windowPartitions_[inputCurrentPartition_]->addNewRows(inputRows_);
+  windowPartitions_[inputCurrentPartition_]->addRows(inputRows_);
 
   if (isFinished) {
-    windowPartitions_[inputCurrentPartition_]->setInputRowsFinished();
+    windowPartitions_[inputCurrentPartition_]->setComplete();
     inputCurrentPartition_++;
   }
 

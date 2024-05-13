@@ -197,25 +197,33 @@ void Window::createWindowFunctions() {
 // Support 'rank' and
 // 'row_number' functions and the agg window function with default frame.
 bool Window::supportRowsStreaming() {
+  bool supportsStreaming = false;
+
   for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
     const auto& functionName = windowNodeFunction.functionCall->name();
     auto windowFunctionMetadata =
         exec::getWindowFunctionMetadata(functionName).value();
-    if (windowFunctionMetadata.processingUnit == ProcessingUnit::kPartition) {
-      return false;
-    }
 
-    const auto& frame = windowNodeFunction.frame;
-    bool isDefaultFrame =
-        (frame.startType == core::WindowNode::BoundType::kUnboundedPreceding &&
-         frame.endType == core::WindowNode::BoundType::kCurrentRow);
-    // Only support the agg window function with default frame.
-    if (!windowFunctionMetadata.ignoreFrame && !isDefaultFrame) {
-      return false;
+    if (windowFunctionMetadata.scope == Scope::kRows) {
+      const auto& frame = windowNodeFunction.frame;
+      bool isDefaultFrame =
+          (frame.startType ==
+               core::WindowNode::BoundType::kUnboundedPreceding &&
+           frame.endType == core::WindowNode::BoundType::kCurrentRow);
+      if (windowFunctionMetadata.supportsSlidingFrame ||
+          (!windowFunctionMetadata.supportsSlidingFrame && isDefaultFrame)) {
+        supportsStreaming = true;
+      } else {
+        supportsStreaming = false;
+        break;
+      }
+    } else {
+      supportsStreaming = false;
+      break;
     }
   }
 
-  return true;
+  return supportsStreaming;
 }
 
 void Window::addInput(RowVectorPtr input) {
@@ -605,8 +613,16 @@ vector_size_t Window::callApplyLoop(
   // This function requires that the currentPartition_ is available for output.
   VELOX_DCHECK_NOT_NULL(currentPartition_);
   while (numOutputRowsLeft > 0) {
-    auto rowsForCurrentPartition =
-        currentPartition_->numRows() - partitionOffset_;
+    auto totalRows = currentPartition_->numRows();
+    auto rowsForCurrentPartition = totalRows - partitionOffset_;
+
+    // For a partial window partition, currentPartition_->numRows() returns the
+    // number of remaining rows in the current partition that have not been
+    // processed.
+    if (!currentPartition_->isComplete() || rowsForCurrentPartition < 0) {
+      rowsForCurrentPartition = totalRows;
+    }
+
     if (rowsForCurrentPartition <= numOutputRowsLeft) {
       // Current partition can fit completely in the output buffer.
       // So output all its rows.
@@ -617,30 +633,19 @@ vector_size_t Window::callApplyLoop(
           result);
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
-      if (currentPartition_->supportRowsStreaming()) {
-        if (currentPartition_->processFinished()) {
-          callResetPartition();
-          if (currentPartition_ &&
-              partitionOffset_ == currentPartition_->numRows()) {
-            if (!currentPartition_->buildNextRows()) {
-              break;
-            }
-          }
 
-        } else {
-          // Break until the next getOutput call to handle the remaining data in
-          // currentPartition_.
+      if (currentPartition_->isComplete()) {
+        callResetPartition();
+
+        if (!currentPartition_) {
+          // The WindowBuild doesn't have any more partitions to process right
+          // now. So break until the next getOutput call.
           break;
         }
       } else {
-        callResetPartition();
-      }
-
-      if (!currentPartition_) {
-        // The WindowBuild doesn't have any more partitions to process right
-        // now. So break until the next getOutput call.
         break;
       }
+
     } else {
       // Current partition can fit only partially in the output buffer.
       // Call apply for the rows that can fit in the buffer and break from
@@ -677,11 +682,8 @@ RowVectorPtr Window::getOutput() {
     }
   }
 
-  if (currentPartition_->supportRowsStreaming() &&
-      partitionOffset_ == currentPartition_->numRows()) {
-    if (!currentPartition_->buildNextRows()) {
-      return nullptr;
-    }
+  if (!currentPartition_->isComplete() && currentPartition_->numRows() == 0) {
+    return nullptr;
   }
 
   auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);
@@ -690,6 +692,10 @@ RowVectorPtr Window::getOutput() {
 
   // Compute the output values of window functions.
   auto numResultRows = callApplyLoop(numOutputRows, result);
+  if (currentPartition_) {
+    currentPartition_->clearOutputRows(numResultRows);
+  }
+
   return numResultRows < numOutputRows
       ? std::dynamic_pointer_cast<RowVector>(result->slice(0, numResultRows))
       : result;

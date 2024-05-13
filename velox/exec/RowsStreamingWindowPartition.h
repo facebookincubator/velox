@@ -41,7 +41,7 @@ class RowsStreamingWindowPartition : public WindowPartition {
     }
   }
 
-  vector_size_t offsetInPartition() const override {
+  vector_size_t startRow() const override {
     return partitionStartRows_[currentPartition_];
   }
 

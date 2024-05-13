@@ -104,7 +104,7 @@ TEST_F(WindowTest, rankLikeWithEqualValue) {
           .config(core::QueryConfig::kMaxOutputBatchRows, "2")
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
-          .spillDirectory(spillDirectory->path)
+          .spillDirectory(spillDirectory->getPath())
           .assertResults(
               "SELECT *, sum(c1) over (order by c1 rows unbounded preceding) FROM tmp");
 }
@@ -142,7 +142,7 @@ TEST_F(WindowTest, rankLikeOptimization) {
           .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
-          .spillDirectory(spillDirectory->path)
+          .spillDirectory(spillDirectory->getPath())
           .assertResults(
               "SELECT *, rank() over (partition by p order by s), row_number() over (partition by p order by s), sum(d) over (partition by p order by s) FROM tmp");
 }

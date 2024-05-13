@@ -85,7 +85,7 @@ void registerRowNumber(const std::string& name, TypeKind resultTypeKind) {
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RowNumberFunction>(resultType);
       },
-      {exec::ProcessingUnit::kRows, true});
+      {exec::Scope::kRows, true});
 }
 
 void registerRowNumberInteger(const std::string& name) {
