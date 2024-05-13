@@ -118,7 +118,7 @@ class SsdPin {
   SsdRun run_;
 };
 
-// Metrics for SSD cache. Maintained by SsdFile and aggregated by SsdCache.
+/// Metrics for SSD cache. Maintained by SsdFile and aggregated by SsdCache.
 struct SsdCacheStats {
   SsdCacheStats() {}
 
@@ -152,20 +152,49 @@ struct SsdCacheStats {
     readCheckpointErrors = tsanAtomicValue(other.readCheckpointErrors);
   }
 
+  SsdCacheStats operator-(const SsdCacheStats& other) const {
+    SsdCacheStats result;
+    result.entriesWritten = entriesWritten - other.entriesWritten;
+    result.bytesWritten = bytesWritten - other.bytesWritten;
+    result.checkpointsWritten = checkpointsWritten - other.checkpointsWritten;
+    result.entriesRead = entriesRead - other.entriesRead;
+    result.bytesRead = bytesRead - other.bytesRead;
+    result.checkpointsRead = checkpointsRead - other.checkpointsRead;
+    result.entriesAgedOut = entriesAgedOut - other.entriesAgedOut;
+    result.regionsAgedOut = regionsAgedOut - other.regionsAgedOut;
+    result.regionsEvicted = regionsEvicted - other.regionsEvicted;
+    result.openFileErrors = openFileErrors - other.openFileErrors;
+    result.openCheckpointErrors =
+        openCheckpointErrors - other.openCheckpointErrors;
+    result.openLogErrors = openLogErrors - other.openLogErrors;
+    result.deleteCheckpointErrors =
+        deleteCheckpointErrors - other.deleteCheckpointErrors;
+    result.growFileErrors = growFileErrors - other.growFileErrors;
+    result.writeSsdErrors = writeSsdErrors - other.writeSsdErrors;
+    result.writeCheckpointErrors =
+        writeCheckpointErrors - other.writeCheckpointErrors;
+    result.readSsdErrors = readSsdErrors - other.readSsdErrors;
+    result.readCheckpointErrors =
+        readCheckpointErrors - other.readCheckpointErrors;
+    return result;
+  }
+
+  /// Snapshot stats
+  tsan_atomic<uint64_t> entriesCached{0};
+  tsan_atomic<uint64_t> regionsCached{0};
+  tsan_atomic<uint64_t> bytesCached{0};
+  tsan_atomic<int32_t> numPins{0};
+
+  /// Cumulative stats
   tsan_atomic<uint64_t> entriesWritten{0};
   tsan_atomic<uint64_t> bytesWritten{0};
   tsan_atomic<uint64_t> checkpointsWritten{0};
   tsan_atomic<uint64_t> entriesRead{0};
   tsan_atomic<uint64_t> bytesRead{0};
   tsan_atomic<uint64_t> checkpointsRead{0};
-  tsan_atomic<uint64_t> entriesCached{0};
-  tsan_atomic<uint64_t> regionsCached{0};
-  tsan_atomic<uint64_t> bytesCached{0};
   tsan_atomic<uint64_t> entriesAgedOut{0};
   tsan_atomic<uint64_t> regionsAgedOut{0};
   tsan_atomic<uint64_t> regionsEvicted{0};
-  tsan_atomic<int32_t> numPins{0};
-
   tsan_atomic<uint32_t> openFileErrors{0};
   tsan_atomic<uint32_t> openCheckpointErrors{0};
   tsan_atomic<uint32_t> openLogErrors{0};
@@ -250,7 +279,7 @@ class SsdFile {
   void updateStats(SsdCacheStats& stats) const;
 
   /// Resets this' to a post-construction empty state. See SsdCache::clear().
-  void clear();
+  void testingClear();
 
   // Deletes the backing file. Used in testing.
   void deleteFile();
@@ -275,6 +304,14 @@ class SsdFile {
   /// Return the SSD file path.
   const std::string& fileName() const {
     return fileName_;
+  }
+
+  std::vector<double> testingCopyScores() {
+    return tracker_.copyScores();
+  }
+
+  int32_t testingNumWritableRegions() const {
+    return writableRegions_.size();
   }
 
  private:

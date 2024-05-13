@@ -252,6 +252,12 @@ inline bool isSynthesizedColumn(
   return name == kPath || name == kBucket || infoColumns.count(name) != 0;
 }
 
+inline bool isRowIndexColumn(
+    const std::string& name,
+    std::shared_ptr<HiveColumnHandle> rowIndexColumn) {
+  return rowIndexColumn != nullptr && rowIndexColumn->name() == name;
+}
+
 } // namespace
 
 const std::string& getColumnName(const common::Subfield& subfield) {
@@ -343,6 +349,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
         partitionKeys,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         infoColumns,
+    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn,
     memory::MemoryPool* pool) {
   auto spec = std::make_shared<common::ScanSpec>("root");
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
@@ -351,6 +358,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
   for (auto& [subfield, _] : filters) {
     if (auto name = subfield.toString();
         !isSynthesizedColumn(name, infoColumns) &&
+        !isRowIndexColumn(name, rowIndexColumn) &&
         partitionKeys.count(name) == 0) {
       filterSubfields[getColumnName(subfield)].push_back(&subfield);
     }
@@ -360,6 +368,9 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
   for (int i = 0; i < rowType->size(); ++i) {
     auto& name = rowType->nameOf(i);
     auto& type = rowType->childAt(i);
+    if (isRowIndexColumn(name, rowIndexColumn)) {
+      continue;
+    }
     auto it = outputSubfields.find(name);
     if (it == outputSubfields.end()) {
       auto* fieldSpec = spec->addFieldRecursively(name, *type, i);
@@ -544,34 +555,11 @@ void configureRowReaderOptions(
   if (skipRowsIt != tableParameters.end()) {
     rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
   }
-
   rowReaderOptions.setScanSpec(scanSpec);
   rowReaderOptions.setMetadataFilter(metadataFilter);
-
-  std::vector<std::string> columnNames;
-  for (auto& spec : scanSpec->children()) {
-    if (spec->isConstant()) {
-      continue;
-    }
-    std::string name = spec->fieldName();
-    if (!spec->flatMapFeatureSelection().empty()) {
-      name += "#[";
-      name += folly::join(',', spec->flatMapFeatureSelection());
-      name += ']';
-    }
-    columnNames.push_back(std::move(name));
-  }
-  std::shared_ptr<dwio::common::ColumnSelector> cs;
-  if (columnNames.empty()) {
-    static const RowTypePtr kEmpty{ROW({}, {})};
-    cs = std::make_shared<dwio::common::ColumnSelector>(kEmpty);
-  } else {
-    cs = std::make_shared<dwio::common::ColumnSelector>(rowType, columnNames);
-  }
-  rowReaderOptions.select(cs);
-  if (hiveSplit) {
-    rowReaderOptions.range(hiveSplit->start, hiveSplit->length);
-  }
+  rowReaderOptions.select(
+      dwio::common::ColumnSelector::fromScanSpec(*scanSpec, rowType));
+  rowReaderOptions.range(hiveSplit->start, hiveSplit->length);
 }
 
 namespace {
