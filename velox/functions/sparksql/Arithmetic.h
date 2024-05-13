@@ -353,7 +353,7 @@ struct ToHexBigintFunction {
 
 namespace detail {
 FOLLY_ALWAYS_INLINE bool
-isNull(double value, double min, double max, int64_t numBucket) {
+shouldReturnsNull(double value, double min, double max, int64_t numBucket) {
   return numBucket <= 0 || numBucket == std::numeric_limits<int64_t>::max() ||
       std::isnan(value) || min == max || !std::isfinite(min) ||
       !std::isfinite(max);
@@ -422,7 +422,7 @@ struct WidthBucketFunction {
     // - `value`, `min`, and `max` cannot be NaN.
     // - `min` bound cannot equal `max`.
     // - `min` and `max` must be finite.
-    if (detail::isNull(value, min, max, numBucket)) {
+    if (detail::shouldReturnsNull(value, min, max, numBucket)) {
       return false;
     }
 
