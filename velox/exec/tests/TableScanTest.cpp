@@ -306,6 +306,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
   ASSERT_GT(it->second.rawInputBytes, 0);
+  EXPECT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
 }
 
 TEST_F(TableScanTest, connectorStats) {
