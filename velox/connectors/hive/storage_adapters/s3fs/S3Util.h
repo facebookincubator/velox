@@ -173,7 +173,7 @@ inline std::string getRequestID(
           getRequestID(error.GetResponseHeaders()));                                                                            \
       if (IsRetryableHttpResponseCode(error.GetResponseCode())) {                                                               \
         auto retryHint = fmt::format(                                                                                           \
-            " This request gets retriable response and has retried {} times, you may increase 'hive.s3.max-attempts'.",         \
+            " Request failed after retrying {} times. Try increasing the value of 'hive.s3.max-attempts'.",                     \
             outcome.GetRetryCount());                                                                                           \
         errMsg.append(retryHint);                                                                                               \
       }                                                                                                                         \

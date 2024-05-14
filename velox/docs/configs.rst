@@ -567,7 +567,8 @@ Each query can override the config by setting corresponding query session proper
    * - hive.s3.retry-mode
      - string
      -
-     - **Allowed values:** "standard", "adaptive", "legacy". By default use legacy mode, which only enables throttled retry for transient errors.
+     - **Allowed values:** "standard", "adaptive", "legacy". By default it's empty, S3 client will be created with RetryStrategy.
+       Legacy mode only enables throttled retry for transient errors.
        Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
        Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate. 
 ``Google Cloud Storage Configuration``

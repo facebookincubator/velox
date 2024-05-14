@@ -252,7 +252,7 @@ class HiveConfig {
 
   std::optional<uint32_t> s3MaxConnections() const;
 
-  std::optional<uint32_t> s3MaxAttempts() const;
+  std::optional<int32_t> s3MaxAttempts() const;
 
   std::optional<std::string> s3RetryMode() const;
 
