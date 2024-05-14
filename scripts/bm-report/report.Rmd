@@ -151,7 +151,7 @@ link_times |>
 ```{r big-objects}
 size_formatter <- function() {
   function(x) {
-    gdata::humanReadable(x, standard = "Unix")
+    prettyunits::pretty_bytes(x)
   }
 }
 
