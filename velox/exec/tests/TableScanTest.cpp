@@ -273,29 +273,32 @@ TEST_F(TableScanTest, allColumns) {
 }
 
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {
- auto vectors = makeVectors(10, 1'000);
+  auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
-  
+
   auto plan = PlanBuilder(pool_.get())
-                .startTableScan()
-                .outputType(rowType_)
-                .endTableScan()
-                .planNode();
+                  .startTableScan()
+                  .outputType(rowType_)
+                  .endTableScan()
+                  .planNode();
 
   std::unordered_map<std::string, std::string> config;
-  std::unordered_map<std::string, std::shared_ptr<Config>>
-          connectorConfigs = {};
+  std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs =
+      {};
   auto queryCtx = std::make_shared<core::QueryCtx>(
-      executor_.get(), core::QueryConfig(std::move(config)), connectorConfigs, nullptr);
-  
-  auto task =  AssertQueryBuilder(duckDbQueryRunner_)
-                .plan(std::move(plan))
-                .splits(makeHiveConnectorSplits({filePath}))
-                .queryCtx(queryCtx)
-                .assertResults("SELECT * FROM tmp");
- 
+      executor_.get(),
+      core::QueryConfig(std::move(config)),
+      connectorConfigs,
+      nullptr);
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(std::move(plan))
+                  .splits(makeHiveConnectorSplits({filePath}))
+                  .queryCtx(queryCtx)
+                  .assertResults("SELECT * FROM tmp");
+
   // A quick sanity check for memory usage reporting. Check that peak total
   // memory usage for the project node is > 0.
   auto planStats = toPlanStats(task->taskStats());
