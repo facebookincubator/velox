@@ -116,3 +116,73 @@ jobs:
             --pr_number "${{ github.event.number }}" \
             --sha "${{ inputs.ref || github.sha }}" \
             "/tmp/metrics"
+
+  upload-report:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    name: Generate and Upload Build Metric Report
+    # needs: metrics
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Git User
+        run: |
+          git config --global user.email "velox@users.noreply.github.com"
+          git config --global user.name "velox"
+
+      - uses: quarto-dev/quarto-actions/setup@c70b2f816b8d51a4badea651aee0602de0ad87bf
+      - uses: r-lib/actions/setup-r@fbafc3bc4ba114e72680c71e835c59b022606c46
+        with:
+          install-r: false
+          use-public-rspm: true
+
+      - name: Install Dependencies
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        shell: Rscript {0}
+        run: |
+          install.packages(
+          c(
+            "dplyr",
+            "gdata",
+            "ggplot2",
+            "gh",
+            "gt",
+            "hms",
+            "jqr",
+            "jsonlite",
+            "lubridate",
+            "memoise",
+            "plotly",
+            "purrr",
+            "remotes"
+            ))
+          remotes::install_github("conbench/conbenchcoms")
+
+      - name: Build Documentation
+        env:
+          CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
+          CONBENCH_EMAIL: "${{ secrets.CONBENCH_EMAIL }}"
+          CONBENCH_PASSWORD: "${{ secrets.CONBENCH_PASSWORD }}"
+
+        run: |
+          cd scripts/bm-report
+          quarto render report.Rmd
+
+      - name: Push Documentation
+        # if: ${{ github.event_name == 'push' && github.repository == 'facebookincubator/velox'}}
+        run: |
+          git checkout gh-pages
+          mkdir -p docs/bm-report
+          cp -R scripts/bm-report/report.html docs/bm-report/index.html
+          git add docs
+
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]
+          then
+            git commit -m "Update build metrics"
+            git push
+          fi
