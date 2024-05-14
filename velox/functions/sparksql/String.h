@@ -1233,4 +1233,144 @@ struct SoundexFunction {
       '0', '1', '2', '3', '0', '1', '2', '7', '0', '2', '2', '4', '5',
       '5', '0', '1', '2', '6', '2', '3', '0', '1', '7', '2', '0', '2'};
 };
+
+/// Implementation adopted from
+/// org.apache.commons.text.similarity.LevenshteinDistance.limitedCompare.
+template <typename T>
+struct LevenshteinDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right,
+      int32_t threshold) {
+    auto leftCodePoints = stringImpl::stringToCodePoints(left);
+    auto rightCodePoints = stringImpl::stringToCodePoints(right);
+    doCall<int32_t>(
+        result,
+        leftCodePoints.data(),
+        rightCodePoints.data(),
+        leftCodePoints.size(),
+        rightCodePoints.size(),
+        threshold);
+  }
+
+  void callAscii(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right,
+      int32_t threshold) {
+    auto leftCodePoints = reinterpret_cast<const uint8_t*>(left.data());
+    auto rightCodePoints = reinterpret_cast<const uint8_t*>(right.data());
+    doCall<uint8_t>(
+        result,
+        leftCodePoints,
+        rightCodePoints,
+        left.size(),
+        right.size(),
+        threshold);
+  }
+
+  void call(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    call(result, left, right, INT32_MAX);
+  }
+
+  void callAscii(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    callAscii(result, left, right, INT32_MAX);
+  }
+
+ private:
+  // This implementation only computes the distance if it's less than or equal
+  // to the threshold value, setting result as -1 if it's greater.
+  template <typename TCodePoint>
+  void doCall(
+      out_type<int32_t>& result,
+      const TCodePoint* leftCodePoints,
+      const TCodePoint* rightCodePoints,
+      size_t leftCodePointsSize,
+      size_t rightCodePointsSize,
+      int32_t threshold) {
+    if (leftCodePointsSize < rightCodePointsSize) {
+      doCall(
+          result,
+          rightCodePoints,
+          leftCodePoints,
+          rightCodePointsSize,
+          leftCodePointsSize,
+          threshold);
+      return;
+    }
+    if (leftCodePointsSize - rightCodePointsSize > threshold) {
+      result = -1;
+      return;
+    }
+    if (rightCodePointsSize == 0) {
+      result = leftCodePointsSize;
+      return;
+    }
+    std::vector<int32_t> distances;
+    distances.reserve(rightCodePointsSize);
+    // These fills ensure that the value above the rightmost entry of our
+    // stripe will be ignored in following loop iterations.
+    int32_t boundary = std::min<int64_t>(rightCodePointsSize, threshold);
+    auto i = 0;
+    for (; i < boundary; i++) {
+      distances.push_back(i + 1);
+    }
+    for (; i < rightCodePointsSize; i++) {
+      distances.push_back(INT32_MAX);
+    }
+
+    for (auto i = 0; i < leftCodePointsSize; i++) {
+      auto min = std::max<int32_t>(0, i - threshold);
+      int32_t maxValueWithThreshold;
+      int32_t max = rightCodePointsSize;
+      if (!__builtin_add_overflow(i + 1, threshold, &maxValueWithThreshold)) {
+        max = std::min<int64_t>(rightCodePointsSize, maxValueWithThreshold);
+      }
+      if (min > max) {
+        result = -1;
+        return;
+      }
+      int32_t leftUpDistance;
+      if (min == 0) {
+        leftUpDistance = distances[min];
+        if (leftCodePoints[i] == rightCodePoints[0]) {
+          distances[0] = i;
+        } else {
+          distances[0] = std::min(i, distances[0]) + 1;
+        }
+        min = 1;
+      } else {
+        leftUpDistance = distances[min - 1];
+        // Ignore entry left of leftmost.
+        distances[min - 1] = INT32_MAX;
+      }
+      for (int j = min; j < max; j++) {
+        auto leftUpDistanceNext = distances[j];
+        if (leftCodePoints[i] == rightCodePoints[j]) {
+          distances[j] = leftUpDistance;
+        } else {
+          distances[j] =
+              std::min(
+                  distances[j - 1], std::min(leftUpDistance, distances[j])) +
+              1;
+        }
+        leftUpDistance = leftUpDistanceNext;
+      }
+    }
+    result = distances[rightCodePointsSize - 1];
+    if (result > threshold) {
+      result = -1;
+    }
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
