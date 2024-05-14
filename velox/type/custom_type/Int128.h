@@ -714,7 +714,7 @@ inline std::string toString(const int128 value) {
     return result;
   }
 
-  int128 mul_check(uint64_t a, uint64_t b, bool& overflow) {
+  static int128 mul_check(uint64_t a, uint64_t b, bool& overflow) {
     // Split the input numbers into two 32-bit halves to prevent overflow during
     // multiplication.
     uint64_t a_low = a & 0xFFFFFFFF;
@@ -744,7 +744,7 @@ inline std::string toString(const int128 value) {
   }
 
   // Function to check for overflow in int128 multiplication.
-  bool mul_overflow(const int128& a, const int128& b, int128* result) {
+  static bool mul_overflow(const int128& a, const int128& b, int128* result) {
     bool overflow = false;
 
     // Multiply the low parts and check for overflow.
@@ -800,7 +800,7 @@ inline std::string toString(const int128 value) {
   }
 
   // Function to check for overflow in int128 addition.
-  bool add_overflow(const int128& a, const int128& b, int128* result) {
+  static bool add_overflow(const int128& a, const int128& b, int128* result) {
     // Perform addition on the low parts and check for carry.
     uint64_t new_low = a.lo_ + b.lo_;
     bool carry = new_low < a.lo_; // Check if carry occurred.
@@ -822,7 +822,7 @@ inline std::string toString(const int128 value) {
   }
 
   // Function to check for overflow in int128 subtraction.
-  bool sub_overflow(const int128& a, const int128& b, int128* result) {
+  static bool sub_overflow(const int128& a, const int128& b, int128* result) {
     // Perform subtraction on the low parts and check for borrow.
     uint64_t new_low = a.lo_ - b.lo_;
     bool borrow = a.lo_ < b.lo_; // Check if borrow occurred.
@@ -846,19 +846,19 @@ inline std::string toString(const int128 value) {
 
 };
 
-bool mul_overflow(int128 a , int128 b ,int64_t result) {
-  return true;
-
-}
+//bool mul_overflow(int128 a , int128 b ,int64_t result) {
+//  return int128::mul_overflow(a, b, result);
+//
+//}
 bool add_overflow(int128 a , int128 b ,int128* result) {
-  return true;
+  return int128::add_overflow(a,b,result);
 
 }bool sub_overflow(int128 a , int128 b ,int128* result) {
-  return true;
+  return int128::sub_overflow(a, b, result);
 
 }
 bool mul_overflow(int128 a , int128 b ,int128 *result) {
-  return true;
+  return int128::mul_overflow(a, b, result);
 
 } // namespace facebook
 
