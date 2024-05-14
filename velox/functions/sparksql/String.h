@@ -1181,4 +1181,78 @@ struct FindInSetFunction {
   }
 };
 
+template <typename T>
+struct SoundexFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  static constexpr bool is_default_ascii_behavior = true;
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    auto inputCodePoints = stringImpl::stringToCodePoints(input);
+    // doCall<int32_t>(result, input, inputCodePoints.data(), inputCodePoints.size());
+    callAscii(result, input);
+  }
+
+  void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    auto inputCodePoints = reinterpret_cast<const uint8_t*>(input.data());
+    doCall<uint8_t>(result, input, inputCodePoints, input.size());
+  }
+
+  template <typename TCodePoint>
+  void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const TCodePoint* inputCodePoints,
+      size_t inputCodePointsSize) {
+    if (inputCodePointsSize == 0) {
+      result.setEmpty();
+      return;
+    }
+    auto b = inputCodePoints[0];
+    if ('a' <= b && b <= 'z') {
+      b -= 32;
+    } else if (b < 'A' || 'Z' < b) {
+      result.setNoCopy(input);
+      return;
+    }
+    result.resize(4);
+    result.data()[0] = b;
+    int32_t sxi = 1;
+    int32_t idx = b - 'A';
+    char lastCode = kUSEnglishMapping[idx];
+    for (auto i = 1; i < inputCodePointsSize; ++i) {
+      b = inputCodePoints[i];
+      if ('a' <= b && b <= 'z') {
+        b -= 32;
+      } else if (b < 'A' || 'Z' < b) {
+        lastCode = '0';
+        continue;
+      }
+      idx = b - 'A';
+      char code = kUSEnglishMapping[idx];
+      if (code == '7') {
+        // ignore it
+      } else {
+        if (code != '0' && code != lastCode) {
+          result.data()[sxi++] = code;
+          if (sxi > 3) {
+            break;
+          }
+        }
+        lastCode = code;
+      }
+    }
+    for (; sxi < 3; sxi++) {
+      result.data()[sxi] = '0';
+    }
+  }
+
+ private:
+  static constexpr char kUSEnglishMapping[] = {'0', '1', '2', '3', '0', '1', '2', '7',
+    '0', '2', '2', '4', '5', '5', '0', '1', '2', '6', '2', '3', '0', '1', '7', '2', '0', '2'};
+};
 } // namespace facebook::velox::functions::sparksql
