@@ -150,8 +150,7 @@ jobs:
           CONBENCH_PASSWORD: "${{ secrets.CONBENCH_PASSWORD }}"
         run: |
           cd scripts/bm-report
-          nix-shell --run "quarto render report.Rmd"
-          nix-shell --run "quarto --version"
+          nix-shell --run "quarto render report.qmd"
 
       - name: Push Documentation
         # if: ${{ github.event_name == 'push' && github.repository == 'facebookincubator/velox'}}

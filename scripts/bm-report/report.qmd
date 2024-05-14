@@ -25,7 +25,6 @@ format:
 library(gt)
 library(ggplot2)
 library(plotly)
-library(gdata)
 library(dplyr)
 library(purrr)
 
@@ -230,21 +229,8 @@ link_times |>
 ```{r big-objects}
 size_formatter <- function(x) {
   function(x) {
-    gdata::humanReadable(x, standard = "Unix")
+    prettyunits::pretty_bytes(x)
   }
-}
-create_byte <- function(bytes) {
-  stopifnot(is.numeric(bytes))
-  structure(
-    list(bytes = bytes),
-    class = "BytesObject"
-  )
-}
-Bytes <- Vectorize(create_byte, SIMPLIFY = FALSE)
-
-print.BytesObject <- function(x, ...) {
-  human_readable <- prettyunits::pretty_bytes(x$bytes)
-  cat(human_readable)
 }
 
 object_sizes <- results |>
@@ -262,7 +248,7 @@ sizes_plot <- results |>
   facet_wrap(~type) +
   geom_line() +
   geom_point() +
-  # scale_y_continuous(labels = size_formatter()) +
+  scale_y_continuous(labels = size_formatter()) +
   scale_x_datetime() +
   labs(
     title = "Velox Object Sizes",
