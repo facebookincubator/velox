@@ -151,8 +151,21 @@ link_times |>
 ```{r big-objects}
 size_formatter <- function() {
   function(x) {
-    prettyunits::pretty_bytes(x)
+    gdata::humanReadable(x, standard = "Unix")
   }
+}
+create_byte <- function(bytes) {
+  stopifnot(is.numeric(bytes))
+  structure(
+    list(bytes = bytes),
+    class = "BytesObject"
+  )
+}
+Bytes <- Vectorize(create_byte, SIMPLIFY = FALSE)
+
+print.BytesObject <- function(x, ...) {
+  human_readable <- prettyunits::pretty_bytes(x$bytes)
+  cat(human_readable)
 }
 
 object_sizes <- results |>
