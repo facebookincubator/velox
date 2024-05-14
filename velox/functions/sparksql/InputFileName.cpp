@@ -15,7 +15,6 @@
  */
 
 #include "velox/functions/sparksql/InputFileName.h"
-#include <iostream>
 #include <utility>
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
@@ -42,6 +41,7 @@ class InputFileName final : public exec::VectorFunction {
       const TypePtr& /*outputType*/,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
+    VELOX_CHECK(args.empty());
     context.ensureWritable(rows, VARCHAR(), result);
     auto driverCtx = context.driverCtx();
     auto inputFileName = driverCtx->inputFileName;

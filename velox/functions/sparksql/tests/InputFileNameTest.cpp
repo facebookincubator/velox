@@ -41,7 +41,7 @@ class InputFileNameTest : public SparkFunctionBaseTest {
   }
 
   void testInputFileName(
-      const std::string fileName,
+      const std::string& fileName,
       const VectorPtr& value,
       const VectorPtr& expected) {
     auto selected = SelectivityVector(value->size());
