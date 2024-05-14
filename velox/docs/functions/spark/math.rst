@@ -217,7 +217,8 @@ Mathematical Functions
 .. spark:function:: rint(x) -> double
 
     Returns the double value that is closest in value to the argument and is 
-    equal to a mathematical integer. ::
+    equal to a mathematical integer.
+    If ``x`` is +/-Inf, it's returned unmodified. If ``x`` is Nan, Nan is returned. ::
 
         SELECT rint(12.3456); -- 12.0
 

@@ -149,6 +149,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
   static constexpr double kNanDouble = std::numeric_limits<double>::quiet_NaN();
   static constexpr float kInf = std::numeric_limits<float>::infinity();
+  static constexpr double kInfDouble = std::numeric_limits<double>::infinity();
 };
 
 TEST_F(ArithmeticTest, UnaryMinus) {
@@ -277,6 +278,17 @@ TEST_F(ArithmeticTest, rint) {
   EXPECT_EQ(rint(3.8), 4.0);
   EXPECT_EQ(rint(-2.3), -2.0);
   EXPECT_EQ(rint(-3.8), -4.0);
+
+  EXPECT_EQ(rint(2.5), 2.0);
+
+  EXPECT_TRUE(std::isnan(rint(kNanDouble).value()));
+  EXPECT_EQ(rint(kInfDouble), kInfDouble);
+  EXPECT_EQ(rint(-kInfDouble), -kInfDouble);
+  EXPECT_EQ(rint(0.0), 0.0);
+  EXPECT_EQ(rint(-0.0), -0.0);
+
+  EXPECT_EQ(rint(std::nextafter(1.0, 0.0)), 1.0);
+  EXPECT_EQ(rint(std::nextafter(1.0, 2.0)), 1.0);
 }
 
 TEST_F(ArithmeticTest, unhex) {
