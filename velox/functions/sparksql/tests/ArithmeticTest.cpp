@@ -270,8 +270,8 @@ TEST_F(ArithmeticTest, cosh) {
 }
 
 TEST_F(ArithmeticTest, rint) {
-  const auto rint = [&](std::optional<double> a) {
-    return evaluateOnce<double>("rint(c0)", a);
+  const auto rint = [&](double a) {
+    return evaluateOnce<double>("rint(c0)", std::optional(a)).value();
   };
 
   EXPECT_EQ(rint(2.3), 2.0);
@@ -281,7 +281,7 @@ TEST_F(ArithmeticTest, rint) {
 
   EXPECT_EQ(rint(2.5), 2.0);
 
-  EXPECT_TRUE(std::isnan(rint(kNanDouble).value()));
+  EXPECT_TRUE(std::isnan(rint(kNanDouble)));
   EXPECT_EQ(rint(kInfDouble), kInfDouble);
   EXPECT_EQ(rint(-kInfDouble), -kInfDouble);
   EXPECT_EQ(rint(0.0), 0.0);
@@ -289,6 +289,7 @@ TEST_F(ArithmeticTest, rint) {
 
   EXPECT_EQ(rint(std::nextafter(1.0, 0.0)), 1.0);
   EXPECT_EQ(rint(std::nextafter(1.0, 2.0)), 1.0);
+  EXPECT_EQ(rint(std::nextafter(1e+16, kInfDouble)), 1e+16 + 2);
 }
 
 TEST_F(ArithmeticTest, unhex) {

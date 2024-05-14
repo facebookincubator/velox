@@ -218,7 +218,7 @@ Mathematical Functions
 
     Returns the double value that is closest in value to the argument and is 
     equal to a mathematical integer.
-    If ``x`` is +/-Inf, it's returned unmodified. If ``x`` is Nan, Nan is returned. ::
+    Returns ``x`` if ``x`` is a positive or negative infinity or a NaN. ::
 
         SELECT rint(12.3456); -- 12.0
 
