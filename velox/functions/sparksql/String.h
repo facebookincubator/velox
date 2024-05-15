@@ -1195,32 +1195,24 @@ struct SoundexFunction {
       result.setEmpty();
       return;
     }
-    auto b = inputData[0];
-    if ('a' <= b && b <= 'z') {
-      b -= 32;
-    } else if (b < 'A' || 'Z' < b) {
+    if (!std::isalpha(inputData[0])) {
       // First character must be a letter, otherwise input is returned.
       result.setNoCopy(input);
       return;
     }
     result.resize(4);
-    result.data()[0] = b;
+    result.data()[0] = std::toupper(inputData[0]);
     int32_t sxi = 1;
-    int32_t idx = b - 'A';
+    int32_t idx = result.data()[0] - 'A';
     char lastCode = kUSEnglishMapping[idx];
     for (auto i = 1; i < inputSize; ++i) {
-      b = inputData[i];
-      if ('a' <= b && b <= 'z') {
-        b -= 32;
-      } else if (b < 'A' || 'Z' < b) {
+      if (!std::isalpha(inputData[i])) {
         lastCode = '0';
         continue;
       }
-      idx = b - 'A';
+      idx = std::toupper(inputData[i]) - 'A';
       char code = kUSEnglishMapping[idx];
-      if (code == '7') {
-        // ignore it
-      } else {
+      if (code != '7') {
         if (code != '0' && code != lastCode) {
           result.data()[sxi++] = code;
           if (sxi > 3) {
