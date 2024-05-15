@@ -423,7 +423,7 @@ void GroupingSet::initializeGlobalAggregation() {
   // requirements of all aggregate functions are satisfied.
 
   // Allocate space for the null and initialized flags.
-  int32_t numAggregates = aggregates_.size();
+  size_t numAggregates = aggregates_.size();
   if (sortedAggregations_) {
     numAggregates++;
   }
