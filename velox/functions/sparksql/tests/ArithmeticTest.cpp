@@ -370,7 +370,7 @@ TEST_F(ArithmeticTest, expm1) {
   EXPECT_EQ(expm1(0), 0);
   EXPECT_EQ(expm1(1), kE - 1);
   // As this is only for high accuracy of little number, we use a little number 1e-12 which can give the difference. 
-  // If you use exp - 1, the value may be 1.000009e-12, while the true value should be below 1.000000000000005e-12.
+  // If you use std::exp(x) - 1, the value may be 1.000009e-12, while the true value should be below 1.000000000000005e-12.
   EXPECT_LT(expm1(1e-12), 1.00009e-12);
 }
 

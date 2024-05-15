@@ -98,7 +98,7 @@ Mathematical Functions
 
 .. spark:function:: expm1(x) -> double
 
-    Returns Euler's number raised to the power of ``x``, minus 1, which is "exp(x)-1" in math, while this function is more accurate than exp(num) - 1 when the num is close to zero.
+    Returns Euler's number raised to the power of ``x``, minus 1, which is ``exp(x) - 1`` in math. This function expm1(x) is more accurate than ``std::exp(x) - 1`` when ``x`` is close zero.
     If the argument is NaN, the result is NaN.
     If the argument is positive infinity, then the result is positive infinity.
     If the argument is negative infinity, then the result is -1.0.
