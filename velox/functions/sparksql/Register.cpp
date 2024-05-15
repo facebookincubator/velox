@@ -29,6 +29,7 @@
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
+#include "velox/functions/sparksql/ArrayInsertFunction.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
@@ -465,6 +466,14 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<RaiseErrorFunction, UnknownValue, Varchar>(
       {prefix + "raise_error"});
+
+  registerFunction<
+      ArrayInsertFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      int32_t,
+      Generic<T1>,
+      bool>({prefix + "array_insert"});
 }
 
 } // namespace sparksql
