@@ -130,7 +130,7 @@ function install_fbthrift {
 }
 
 function install_conda {
-  MINICONDA_PATH=/opt/miniconda-for-velox
+  MINICONDA_PATH="${HOME:-/opt}/miniconda-for-velox"
   if [ -e ${MINICONDA_PATH} ]; then
     echo "File or directory already exists: ${MINICONDA_PATH}"
     return
@@ -142,8 +142,8 @@ function install_conda {
   fi
 
   mkdir -p conda && cd conda
-  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh
-  ${SUDO} bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
+  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh -O Miniconda3-latest-Linux-$ARCH.s
+  bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 
 function install_duckdb {
