@@ -188,6 +188,12 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT rtrim('kr', 'spark'); -- "spa"
 
+.. spark:function:: soundex(string) -> string
+
+    Returns Soundex code of the string. ::
+
+        SELECT soundex('Miller'); -- "M460"
+
 .. spark:function:: split(string, delimiter) -> array(string)
 
     Splits ``string`` on ``delimiter`` and returns an array. ::

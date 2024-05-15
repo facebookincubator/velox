@@ -17,7 +17,6 @@
 #include "velox/type/Type.h"
 
 #include <stdint.h>
-#include <iostream>
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
@@ -645,12 +644,8 @@ TEST_F(StringTest, soundex) {
   const auto soundex = [&](const std::optional<std::string>& input) {
     return evaluateOnce<std::string>("soundex(c0)", input);
   };
-  std::cout << "soundex: asxii" << std::endl;
   EXPECT_EQ(soundex("ZIN"), "Z500");
   EXPECT_EQ(soundex("SU"), "S000");
-  std::cout << "soundex: empty" << std::endl;
-  EXPECT_EQ(soundex(""), "");
-
   EXPECT_EQ(soundex("zZ"), "Z000");
   EXPECT_EQ(soundex("RAGSSEEESSSVEEWE"), "R221");
   EXPECT_EQ(soundex("Ashcraft"), "A261");
@@ -666,11 +661,11 @@ TEST_F(StringTest, soundex) {
   EXPECT_EQ(soundex("Moskovitz"), "M213");
   EXPECT_EQ(soundex("relyheewsgeessg"), "R422");
 
-  EXPECT_EQ(soundex("!!"), "!!");
-
-  std::cout << "soundex: utf8" << std::endl;
-  EXPECT_EQ(soundex("测试"), "测试");
   EXPECT_EQ(soundex("Tschüss"), "T220");
+
+  EXPECT_EQ(soundex(""), "");
+  EXPECT_EQ(soundex("!!"), "!!");
+  EXPECT_EQ(soundex("测试"), "测试");
 }
 
 TEST_F(StringTest, startsWith) {
