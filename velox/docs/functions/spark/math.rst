@@ -265,10 +265,13 @@ Mathematical Functions
 
 .. spark:function:: width_bucket(x, bound1, bound2, n) -> bigint
 
-    Returns the bucket number to which ``x`` would be assigned in an equiwidth histogram with ``n`` buckets,
+    Returns the zero-based bucket number to which ``x`` would be assigned in an equiwidth histogram with ``n`` buckets,
     in the range ``bound1`` to ``bound2``.
-    `n` must be greater than zero and be less than Long.MaxValue, `x` cannot be NaN, `bound1` bound cannot equal `bound2`,
-    and `bound1` and `bound2` must be finite. Otherwise, the fucntion will return NULL.
+    If x is outside of bound1 the result is 0.
+    If x is outside of bound2 the result is n + 1.
+    bound1 can be greater than bound2.
+    `n` must be a positive integral value, `x`, `bound1`, and `bound2` must be of type DOUBLE, finite, and cannot be NaN. `bound1` cannot equal `bound2`;
+    Otherwise, the function will return NULL.
 
         SELECT width_bucket(5.3, 0.2, 10.6, 5); -- 3
         SELECT width_bucket(-2.1, 1.3, 3.4, 3); -- 0

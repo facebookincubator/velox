@@ -352,45 +352,6 @@ struct ToHexBigintFunction {
 };
 
 namespace detail {
-FOLLY_ALWAYS_INLINE bool
-shouldReturnsNull(double value, double min, double max, int64_t numBucket) {
-  return numBucket <= 0 || numBucket == std::numeric_limits<int64_t>::max() ||
-      std::isnan(value) || min == max || !std::isfinite(min) ||
-      !std::isfinite(max);
-}
-
-FOLLY_ALWAYS_INLINE int64_t computeBucketNumberNotNull(
-    double value,
-    double min,
-    double max,
-    int64_t numBucket) {
-  double lower = std::min(min, max);
-  double upper = std::max(min, max);
-
-  if (min < max) {
-    if (value < lower) {
-      return 0;
-    }
-
-    if (value >= upper) {
-      return numBucket + 1;
-    }
-    return static_cast<int64_t>(
-               (numBucket * (value - lower) / (upper - lower))) +
-        1;
-  } else { // min > max case
-    if (value > upper) {
-      return 0;
-    }
-    if (value <= lower) {
-      return numBucket + 1;
-    }
-    return static_cast<int64_t>(
-               (numBucket * (upper - value) / (upper - lower))) +
-        1;
-  }
-}
-
 FOLLY_ALWAYS_INLINE static int8_t fromHex(char c) {
   if (c >= '0' && c <= '9') {
     return c - '0';
@@ -409,12 +370,11 @@ FOLLY_ALWAYS_INLINE static int8_t fromHex(char c) {
 
 template <typename T>
 struct WidthBucketFunction {
-  template <typename TInput>
   FOLLY_ALWAYS_INLINE bool call(
       int64_t& result,
-      TInput value,
-      TInput min,
-      TInput max,
+      double value,
+      double min,
+      double max,
       int64_t numBucket) {
     // NULL would be returned if the input arguments don't follow conditions
     // list belows:
@@ -422,12 +382,51 @@ struct WidthBucketFunction {
     // - `value`, `min`, and `max` cannot be NaN.
     // - `min` bound cannot equal `max`.
     // - `min` and `max` must be finite.
-    if (detail::shouldReturnsNull(value, min, max, numBucket)) {
+    if (shouldReturnsNull(value, min, max, numBucket)) {
       return false;
     }
 
-    result = detail::computeBucketNumberNotNull(value, min, max, numBucket);
+    result = computeBucketNumberNotNull(value, min, max, numBucket);
     return true;
+  }
+
+  static FOLLY_ALWAYS_INLINE bool
+  shouldReturnsNull(double value, double min, double max, int64_t numBucket) {
+    return numBucket <= 0 || numBucket == std::numeric_limits<int64_t>::max() ||
+        std::isnan(value) || min == max || !std::isfinite(min) ||
+        !std::isfinite(max);
+  }
+
+  static FOLLY_ALWAYS_INLINE int64_t computeBucketNumberNotNull(
+      double value,
+      double min,
+      double max,
+      int64_t numBucket) {
+    double lower = std::min(min, max);
+    double upper = std::max(min, max);
+
+    if (min < max) {
+      if (value < lower) {
+        return 0;
+      }
+
+      if (value >= upper) {
+        return numBucket + 1;
+      }
+      return static_cast<int64_t>(
+                 (numBucket * (value - lower) / (upper - lower))) +
+          1;
+    } else { // min > max case
+      if (value > upper) {
+        return 0;
+      }
+      if (value <= lower) {
+        return numBucket + 1;
+      }
+      return static_cast<int64_t>(
+                 (numBucket * (upper - value) / (upper - lower))) +
+          1;
+    }
   }
 };
 
