@@ -267,9 +267,9 @@ Mathematical Functions
 
     Returns the zero-based bucket number to which ``x`` would be assigned in an equiwidth histogram with ``n`` buckets,
     in the range ``bound1`` to ``bound2``.
-    If x is outside of bound1 the result is 0.
-    If x is outside of bound2 the result is n + 1.
-    bound1 can be greater than bound2.
+    `bound1` can be greater than `bound2`.
+    If `bound1` less than `bound2`, if `x` less than `bound1` return 0, if `x` greater than or equal to `bound2` return n + 1.
+    If `bound1` greater than `bound2`, if `x` greater than `bound1` return 0, if `x` less than or equal to `bound2` return n + 1.
     `n` must be a positive integral value, `x`, `bound1`, and `bound2` must be of type DOUBLE, finite, and cannot be NaN. `bound1` cannot equal `bound2`;
     Otherwise, the function will return NULL.
 
