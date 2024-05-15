@@ -302,6 +302,17 @@ framework is responsible for deterministic partitioning of the data and assignin
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="rint">
+<span class="sig-name descname"><span class="pre">rint</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#rint" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the double value that is closest in value to the argument and is
+equal to a mathematical integer.
+Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> if <code class="docutils literal notranslate"><span class="pre">x</span></code> is a positive or negative infinity or a NaN.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">rint</span><span class="p">(</span><span class="mf">12.3456</span><span class="p">);</span> <span class="o">--</span> <span class="mf">12.0</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="round">
 <span class="sig-name descname"><span class="pre">round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">d</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#round" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded to <code class="docutils literal notranslate"><span class="pre">d</span></code> decimal places using HALF_UP rounding mode.
@@ -409,6 +420,7 @@ When <code class="docutils literal notranslate"><span class="pre">x</span></code
 <li><a class="reference internal" href="#random"><code class="docutils literal notranslate"><span class="pre">random()</span></code></a></li>
 <li><a class="reference internal" href="#id6"><code class="docutils literal notranslate"><span class="pre">random()</span></code></a></li>
 <li><a class="reference internal" href="#remainder"><code class="docutils literal notranslate"><span class="pre">remainder()</span></code></a></li>
+<li><a class="reference internal" href="#rint"><code class="docutils literal notranslate"><span class="pre">rint()</span></code></a></li>
 <li><a class="reference internal" href="#round"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
 <li><a class="reference internal" href="#sec"><code class="docutils literal notranslate"><span class="pre">sec()</span></code></a></li>
 <li><a class="reference internal" href="#sinh"><code class="docutils literal notranslate"><span class="pre">sinh()</span></code></a></li>
