@@ -2758,7 +2758,7 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
   HashStringAllocator allocator{pool_.get()};
   DenseHll denseHll{
       std::string(distinctCountStatsVector->valueAt(0)).c_str(), &allocator};
-  ASSERT_EQ(denseHll.cardinality(), 1000);
+  ASSERT_EQ(denseHll.cardinality(), 1010);
   const auto maxDataSizeStatsVector =
       result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
   ASSERT_EQ(maxDataSizeStatsVector->valueAt(0), 7);

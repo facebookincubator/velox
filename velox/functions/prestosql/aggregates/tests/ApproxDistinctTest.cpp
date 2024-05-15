@@ -125,6 +125,31 @@ class ApproxDistinctTest : public AggregationTestBase {
           {expected});
     }
   }
+
+  // Test approx_distinct with inputs of type TInput. The underlying bits of the
+  // inputs are given in 'values' of TBase type. Note that TBase must be at
+  // least as wide as TInput.
+  template <typename TBase, typename TInput>
+  void testHash(const std::vector<TBase>& values, int64_t expected) {
+    std::vector<TInput> typedValues;
+    for (auto i = 0; i < values.size(); ++i) {
+      typedValues.push_back(*(TInput*)(&values[i]));
+    }
+    auto input = makeRowVector({
+        makeFlatVector<TInput>(typedValues),
+        makeConstant<double>(0.18802535624105074, values.size()),
+    });
+    auto expectedResult = makeRowVector({
+        makeConstant<int64_t>(expected, 1),
+    });
+
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .singleAggregation({}, {"approx_distinct(c0, c1)"})
+                    .planNode();
+    AssertQueryBuilder builder(plan);
+    builder.assertResults(expectedResult);
+  }
 };
 
 const std::vector<std::string> ApproxDistinctTest::kFruits = {
@@ -156,6 +181,39 @@ TEST_F(ApproxDistinctTest, groupByIntegers) {
   testGroupByAgg(keys, values, {{0, 17}, {1, 21}});
 }
 
+TEST_F(ApproxDistinctTest, testHash) {
+  std::vector<uint64_t> input{
+      219716167, 422847510, 489801358, 1958888195, 606515184, 851641245};
+  testHash<uint64_t, int8_t>(input, 5);
+  testHash<uint64_t, int16_t>(input, 5);
+  testHash<uint64_t, int32_t>(input, 5);
+  testHash<uint64_t, int64_t>(input, 5);
+  testHash<uint64_t, float>(input, 5);
+  testHash<uint64_t, double>(input, 5);
+
+  // Test that different NaN values are considered equivalent. Values in 'input'
+  // are uint64_t representations of float NaNs.
+  input = {0x7f800001, 0x7fffffff, 0xff800001, 0xffffffff};
+  testHash<uint64_t, float>(input, 1);
+
+  // Test that different NaN values are considered equivalent. Values in 'input'
+  // are uint64_t representations of double NaNs.
+  input = {
+      0x7ff0000000000001,
+      0x7fffffffffffffff,
+      0xfff0000000000001,
+      0xffffffffffffffff};
+  testHash<uint64_t, double>(input, 1);
+
+  // Test that 0.0 and -0.0 are not differentiated for float.
+  std::vector<float> floatInput{0.0f, -0.0f};
+  testHash<float, float>(floatInput, 1);
+
+  // Test that 0.0 and -0.0 are not differentiated for double.
+  std::vector<double> doubleInput{0.0, -0.0};
+  testHash<double, double>(doubleInput, 1);
+}
+
 TEST_F(ApproxDistinctTest, groupByStrings) {
   vector_size_t size = 1'000;
 
@@ -174,7 +232,7 @@ TEST_F(ApproxDistinctTest, groupByHighCardinalityIntegers) {
   auto keys = makeFlatVector<int32_t>(size, [](auto row) { return row % 2; });
   auto values = makeFlatVector<int32_t>(size, [](auto row) { return row; });
 
-  testGroupByAgg(keys, values, {{0, 488}, {1, 493}}, false);
+  testGroupByAgg(keys, values, {{0, 516}, {1, 507}}, false);
   testAggregations(
       {makeRowVector({keys, values})},
       {"c0"},
@@ -240,13 +298,13 @@ TEST_F(ApproxDistinctTest, globalAggHighCardinalityIntegers) {
   vector_size_t size = 1'000;
   auto values = makeFlatVector<int32_t>(size, [](auto row) { return row; });
 
-  testGlobalAgg(values, 977, false);
+  testGlobalAgg(values, 1010, false);
   testAggregations(
       {makeRowVector({values})},
       {},
       {"approx_set(c0)"},
       {"cardinality(a0)"},
-      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>({997}))})});
+      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>({1016}))})});
 }
 
 TEST_F(ApproxDistinctTest, globalAggVeryLowCardinalityIntegers) {
@@ -290,13 +348,13 @@ TEST_F(ApproxDistinctTest, globalAggIntegersWithError) {
 
   testGlobalAgg(values, common::hll::kLowestMaxStandardError, 1000);
   testGlobalAgg(values, 0.01, 1000);
-  testGlobalAgg(values, 0.1, 951);
-  testGlobalAgg(values, 0.2, 936);
-  testGlobalAgg(values, common::hll::kHighestMaxStandardError, 929);
+  testGlobalAgg(values, 0.1, 1080);
+  testGlobalAgg(values, 0.2, 1340);
+  testGlobalAgg(values, common::hll::kHighestMaxStandardError, 1814);
 
   values = makeFlatVector<int32_t>(50'000, folly::identity);
-  testGlobalAgg(values, common::hll::kLowestMaxStandardError, 50043);
-  testGlobalAgg(values, common::hll::kHighestMaxStandardError, 39069);
+  testGlobalAgg(values, common::hll::kLowestMaxStandardError, 50060);
+  testGlobalAgg(values, common::hll::kHighestMaxStandardError, 45437);
 }
 
 TEST_F(ApproxDistinctTest, globalAggAllNulls) {
@@ -382,7 +440,7 @@ TEST_F(ApproxDistinctTest, memoryLeakInMerge) {
                 .finalAggregation()
                 .capturePlanNodeId(finalAgg)
                 .planNode();
-  auto expected = makeFlatVector(std::vector<int64_t>({49810}));
+  auto expected = makeFlatVector(std::vector<int64_t>({50127}));
   auto task = assertQuery(op, {makeRowVector({expected})});
   // Should be significantly smaller than 500KB (the number before the fix),
   // because we should be able to convert to DenseHll in the process.
