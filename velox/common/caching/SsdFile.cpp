@@ -166,7 +166,7 @@ SsdFile::SsdFile(
   regionSizes_.resize(maxRegions_, 0);
   erasedRegionSizes_.resize(maxRegions_, 0);
   regionPins_.resize(maxRegions_, 0);
-  if (checkpointIntervalBytes_ > 0) {
+  if (checkpointEnabled()) {
     initializeCheckpoint();
   }
 }
@@ -432,8 +432,7 @@ void SsdFile::write(std::vector<CachePin>& pins) {
     storeIndex += numWritten;
   }
 
-  if ((checkpointIntervalBytes_ > 0) &&
-      (bytesAfterCheckpoint_ >= checkpointIntervalBytes_)) {
+  if (checkpointEnabled()) {
     checkpoint();
   }
 }
@@ -520,8 +519,8 @@ void SsdFile::testingClear() {
   tracker_.testingClear();
 }
 
-void SsdFile::deleteFile() {
-  process::TraceContext trace("SsdFile::deleteFile");
+void SsdFile::testingDeleteFile() {
+  process::TraceContext trace("SsdFile::testingDeleteFile");
   if (fd_) {
     close(fd_);
     fd_ = 0;
@@ -576,12 +575,15 @@ bool SsdFile::removeFileEntries(
   std::vector<int32_t> toFree;
   toFree.reserve(numRegions_);
   for (auto region = 0; region < numRegions_; ++region) {
-    if (erasedRegionSizes_[region] >
-        regionSizes_[region] * kMaxErasedSizePct / 100) {
+    if (regionPins_[region] == 0 &&
+        erasedRegionSizes_[region] >
+            regionSizes_[region] * kMaxErasedSizePct / 100) {
       toFree.push_back(region);
     }
   }
   if (toFree.size() > 0) {
+    VELOX_CHECK(!suspended_);
+    logEviction(toFree);
     clearRegionEntriesLocked(toFree);
     writableRegions_.reserve(
         std::min<size_t>(writableRegions_.size() + toFree.size(), numRegions_));
@@ -591,11 +593,14 @@ bool SsdFile::removeFileEntries(
       if (existingWritableRegions.count(region) == 0) {
         writableRegions_.push_back(region);
       }
+      VELOX_CHECK_EQ(regionSizes_[region], 0);
+      VELOX_CHECK_EQ(erasedRegionSizes_[region], 0);
     }
   }
 
   stats_.entriesAgedOut += entriesAgedOut;
   stats_.regionsAgedOut += toFree.size();
+  stats_.regionsEvicted += toFree.size();
   VELOX_SSD_CACHE_LOG(INFO)
       << "Removed " << entriesAgedOut << " entries from " << fileName_
       << ". And erased " << toFree.size() << " regions with "
@@ -605,7 +610,7 @@ bool SsdFile::removeFileEntries(
 }
 
 void SsdFile::logEviction(const std::vector<int32_t>& regions) {
-  if (checkpointIntervalBytes_ > 0) {
+  if (checkpointEnabled()) {
     const int32_t rc = ::write(
         evictLogFd_, regions.data(), regions.size() * sizeof(regions[0]));
     if (rc != regions.size() * sizeof(regions[0])) {
@@ -630,12 +635,12 @@ void SsdFile::deleteCheckpoint(bool keepLog) {
   }
 
   checkpointDeleted_ = true;
-  const auto logPath = fileName_ + kLogExtension;
+  const auto logPath = getEvictLogFilePath();
   int32_t logRc = 0;
   if (!keepLog) {
     logRc = ::unlink(logPath.c_str());
   }
-  const auto checkpointPath = fileName_ + kCheckpointExtension;
+  const auto checkpointPath = getCheckpointFilePath();
   const auto checkpointRc = ::unlink(checkpointPath.c_str());
   if ((logRc != 0) || (checkpointRc != 0)) {
     ++stats_.deleteCheckpointErrors;
@@ -668,7 +673,7 @@ inline const char* asChar(const T* ptr) {
 void SsdFile::checkpoint(bool force) {
   process::TraceContext trace("SsdFile::checkpoint");
   std::lock_guard<std::shared_mutex> l(mutex_);
-  if (!force && (bytesAfterCheckpoint_ < checkpointIntervalBytes_)) {
+  if (!needCheckpoint(force)) {
     return;
   }
 
@@ -698,7 +703,7 @@ void SsdFile::checkpoint(bool force) {
     }
 
     std::ofstream state;
-    const auto checkpointPath = fileName_ + kCheckpointExtension;
+    const auto checkpointPath = getCheckpointFilePath();
     try {
       state.exceptions(std::ofstream::failbit);
       state.open(checkpointPath, std::ios_base::out | std::ios_base::trunc);
@@ -789,19 +794,19 @@ void SsdFile::checkpoint(bool force) {
 }
 
 void SsdFile::initializeCheckpoint() {
-  if (checkpointIntervalBytes_ == 0) {
+  if (!checkpointEnabled()) {
     return;
   }
 
   bool hasCheckpoint = true;
-  std::ifstream state(fileName_ + kCheckpointExtension);
+  std::ifstream state(getCheckpointFilePath());
   if (!state.is_open()) {
     hasCheckpoint = false;
     ++stats_.openCheckpointErrors;
     VELOX_SSD_CACHE_LOG(INFO)
         << "Starting shard " << shardId_ << " without checkpoint";
   }
-  const auto logPath = fileName_ + kLogExtension;
+  const auto logPath = getEvictLogFilePath();
   evictLogFd_ = ::open(logPath.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
   if (disableFileCow_) {
     disableCow(evictLogFd_);

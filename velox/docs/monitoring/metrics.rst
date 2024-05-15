@@ -63,6 +63,16 @@ Task Execution
      - Count
      - The number of times that a driver has yielded from the thread when it
        hits the per-driver cpu time slice limit if enforced.
+   * - driver_queue_time_ms
+     - Histogram
+     - The distribution of driver queue latency in range of [0, 10s] with
+       20 buckets. It is configured to report the latency at P50, P90, P99,
+       and P100 percentiles.
+   * - driver_exec_time_ms
+     - Histogram
+     - The distribution of driver execution time in range of [0, 30s] with
+       30 buckets. It is configured to report the latency at P50, P90, P99,
+       and P100 percentiles.
 
 Memory Management
 -----------------
@@ -414,6 +424,12 @@ Spilling
    * - file_writer_early_flushed_raw_bytes
      - Sum
      - Number of bytes pre-maturely flushed from file writers because of memory reclaiming.
+   * - spill_memory_bytes
+     - Avg
+     - The current spilling memory usage in bytes.
+   * - spill_peak_memory_bytes
+     - Avg
+     - The peak spilling memory usage in bytes.
 
 Hive Connector
 --------------
