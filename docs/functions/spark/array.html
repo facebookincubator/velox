@@ -149,6 +149,20 @@ Returns NULL if the input is NULL or any of the nested arrays is NULL.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="get">
+<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#get" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an element of the array at the specified 0-based index.
+Returns NULL if index points outside of the array boundaries.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">get</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">get</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="mi">3</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">get</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">get</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">get</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">),</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="in">
 <span class="sig-name descname"><span class="pre">in</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#in" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if value matches at least one of the elements of the array.
@@ -235,6 +249,7 @@ order or at the end of the returned array in descending order.</p>
 <li><a class="reference internal" href="#concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
 <li><a class="reference internal" href="#filter"><code class="docutils literal notranslate"><span class="pre">filter()</span></code></a></li>
 <li><a class="reference internal" href="#flatten"><code class="docutils literal notranslate"><span class="pre">flatten()</span></code></a></li>
+<li><a class="reference internal" href="#get"><code class="docutils literal notranslate"><span class="pre">get()</span></code></a></li>
 <li><a class="reference internal" href="#in"><code class="docutils literal notranslate"><span class="pre">in()</span></code></a></li>
 <li><a class="reference internal" href="#shuffle"><code class="docutils literal notranslate"><span class="pre">shuffle()</span></code></a></li>
 <li><a class="reference internal" href="#size"><code class="docutils literal notranslate"><span class="pre">size()</span></code></a></li>
