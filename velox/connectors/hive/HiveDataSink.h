@@ -42,6 +42,8 @@ class LocationHandle : public ISerializable {
     kNew,
     /// Write to an existing table.
     kExisting,
+    /// Write to a temporary table.
+    kTemporary,
   };
 
   LocationHandle(
@@ -246,6 +248,8 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const HiveBucketProperty* bucketProperty() const;
 
   bool isExistingTable() const;
+
+  bool isTemporaryTable() const;
 
   folly::dynamic serialize() const override;
 

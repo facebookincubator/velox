@@ -846,6 +846,14 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
 }
 
 HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
+  if (insertTableHandle_->isTemporaryTable()) {
+    VELOX_CHECK(
+        insertTableHandle_->isBucketed() &&
+            !insertTableHandle_->isPartitioned(),
+        "Only bucketed but not partitioned tables can be temporary");
+    return HiveWriterParameters::UpdateMode::kAppend;
+  }
+
   if (insertTableHandle_->isExistingTable()) {
     if (insertTableHandle_->isPartitioned()) {
       const auto insertBehavior = hiveConfig_->insertExistingPartitionsBehavior(
@@ -892,6 +900,10 @@ bool HiveInsertTableHandle::isBucketed() const {
 
 bool HiveInsertTableHandle::isExistingTable() const {
   return locationHandle_->tableType() == LocationHandle::TableType::kExisting;
+}
+
+bool HiveInsertTableHandle::isTemporaryTable() const {
+  return locationHandle_->tableType() == LocationHandle::TableType::kTemporary;
 }
 
 folly::dynamic HiveInsertTableHandle::serialize() const {
