@@ -451,7 +451,8 @@ TEST_F(SumAggregationTest, decimalRangeOverflow) {
 }
 
 TEST_F(SumAggregationTest, sumFloat) {
-  auto data = makeRowVector({makeFlatVector<float>({2.00, 1.00})});
+  auto data =
+      makeRowVector({makeFlatVector<float>({3.4028235E38, 3.4028235E38})});
   createDuckDbTable({data});
 
   testAggregations(
