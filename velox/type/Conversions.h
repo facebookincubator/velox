@@ -69,16 +69,62 @@ struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
     return folly::to<T>(v);
   }
 
+  /// This is based on Presto java's castToBoolean method.
+  template <
+      class StringType,
+      typename = std::enable_if_t<
+          std::is_same_v<StringType, StringView> ||
+          std::is_same_v<StringType, folly::StringPiece> ||
+          std::is_same_v<StringType, std::string>>>
+  static bool castToBoolean(const StringType& v) {
+    size_t len;
+    const char* data;
+
+    if constexpr (std::is_same_v<StringType, StringView>) {
+      data = v.data();
+      len = v.size();
+    } else if constexpr (std::is_same_v<StringType, folly::StringPiece>) {
+      data = v.data();
+      len = v.size();
+    } else if constexpr (std::is_same_v<StringType, std::string>) {
+      data = v.c_str();
+      len = v.length();
+    }
+
+    if (len == 1) {
+      auto character = toupper(data[0]);
+      if (character == 'T' || character == '1') {
+        return true;
+      }
+      if (character == 'F' || character == '0') {
+        return false;
+      }
+    }
+
+    if ((len == 4) && (toupper(data[0]) == 'T') && (toupper(data[1]) == 'R') &&
+        (toupper(data[2]) == 'U') && (toupper(data[3]) == 'E')) {
+      return true;
+    }
+
+    if ((len == 5) && (toupper(data[0]) == 'F') && (toupper(data[1]) == 'A') &&
+        (toupper(data[2]) == 'L') && (toupper(data[3]) == 'S') &&
+        (toupper(data[4]) == 'E')) {
+      return false;
+    }
+
+    VELOX_USER_FAIL(fmt::format("Cannot cast {} to BOOLEAN", v));
+  }
+
   static T cast(folly::StringPiece v) {
-    return folly::to<T>(v);
+    return castToBoolean<folly::StringPiece>(v);
   }
 
   static T cast(const StringView& v) {
-    return folly::to<T>(folly::StringPiece(v));
+    return castToBoolean<StringView>(v);
   }
 
   static T cast(const std::string& v) {
-    return folly::to<T>(v);
+    return castToBoolean<std::string>(v);
   }
 
   static T cast(const bool& v) {
