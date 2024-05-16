@@ -30,12 +30,12 @@ static const char* kIndeterminateKeyErrorMessage =
     "map key cannot be indeterminate";
 static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
 
-/// @tparam throwForNull If true, will return null if input array is null or has
-/// null entries (Spark's behavior), instead of throwing exceptions (Presto's
-/// behavior).
-template <bool throwForNull>
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
+  // If throwOnNull is true, will return null if input array is null or has
+  // null entries (Spark's behavior), instead of throwing exceptions (Presto's
+  // behavior).
+  MapFromEntriesFunction(const bool throwOnNull) : throwOnNull_(throwOnNull) {}
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -98,7 +98,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     exec::LocalDecodedVector decodedRowVector(context);
     decodedRowVector.get()->decode(*inputValueVector);
     if (inputValueVector->typeKind() == TypeKind::UNKNOWN) {
-      if constexpr (throwForNull) {
+      if (throwOnNull_) {
         try {
           VELOX_USER_FAIL(kErrorMessageEntryNotNull);
         } catch (...) {
@@ -145,7 +145,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           // Check nulls in the top level row vector.
           const bool isMapEntryNull = decodedRowVector->isNullAt(offset + i);
           if (isMapEntryNull) {
-            if constexpr (!throwForNull) {
+            if (!throwOnNull_) {
               bits::setNull(mutableNulls, row);
               resetSize(row);
               break;
@@ -227,8 +227,9 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     }
 
     // For Presto, need construct map vector based on input nulls for possible
-    // outer expression like try(). For Spark, use the updated nulls unless it's empty.
-    if constexpr (throwForNull) {
+    // outer expression like try(). For Spark, use the updated nulls unless it's
+    // empty.
+    if (throwOnNull_) {
       nulls = inputArray->nulls();
     } else {
       if (decodedRowVector->size() == 0) {
@@ -248,20 +249,17 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     checkDuplicateKeys(mapVector, *remianingRows, context);
     return mapVector;
   }
+
+  bool throwOnNull_;
 };
 } // namespace
 
-void registerMapFromEntriesThrowForNullFunction(const std::string& name) {
+void registerMapFromEntriesFunction(
+    const std::string& name,
+    const bool throwOnNull) {
   exec::registerVectorFunction(
       name,
-      MapFromEntriesFunction</*ThrowForNull=*/true>::signatures(),
-      std::make_unique<MapFromEntriesFunction</*ThrowForNull=*/true>>());
-}
-
-void registerMapFromEntriesFunction(const std::string& name) {
-  exec::registerVectorFunction(
-      name,
-      MapFromEntriesFunction</*ThrowForNull=*/false>::signatures(),
-      std::make_unique<MapFromEntriesFunction</*ThrowForNull=*/false>>());
+      MapFromEntriesFunction::signatures(),
+      std::make_unique<MapFromEntriesFunction>(throwOnNull));
 }
 } // namespace facebook::velox::functions

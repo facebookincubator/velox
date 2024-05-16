@@ -20,8 +20,8 @@
 
 namespace facebook::velox::functions {
 
-void registerMapFromEntriesThrowForNullFunction(const std::string& name);
-
-void registerMapFromEntriesFunction(const std::string& name);
+void registerMapFromEntriesFunction(
+    const std::string& name,
+    const bool throwForNull);
 
 } // namespace facebook::velox::functions
