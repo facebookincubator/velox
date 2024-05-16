@@ -505,7 +505,7 @@ exec::AggregateRegistrationResult registerApproxDistinct(
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        TypePtr type = argTypes[0]->isVarbinary() ? BIGINT() : argTypes[0];
+        TypePtr type = hllAsRawInput ? BIGINT() : argTypes[0];
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             createApproxDistinct,
             type->kind(),
