@@ -58,7 +58,7 @@ struct ArrayInsertFunction {
       int32_t nextIdx = 0;
       for (const auto& item : *srcArray) {
         if (nextIdx == posIdx) {
-          out.push_back(*element);
+          element ? out.push_back(*element) : out.add_null();
           nextIdx++;
         }
         out.push_back(item);
@@ -66,7 +66,7 @@ struct ArrayInsertFunction {
       }
       while(nextIdx < newArrayLength) {
         if (nextIdx == posIdx) {
-          out.push_back(*element);
+          element ? out.push_back(*element) : out.add_null();
         } else {
           out.add_null();
         }
@@ -83,7 +83,7 @@ struct ArrayInsertFunction {
           "Array insert result exceeds the max array size limit {}",
           kMaxNumberOfElements);
         out.reserve(newArrayLength);
-        out.push_back(*element);
+        element ? out.push_back(*element) : out.add_null();
         int64_t nullsToFill = newArrayLength - 1 - srcArray->size();
         while (nullsToFill > 0)
         {
@@ -106,11 +106,14 @@ struct ArrayInsertFunction {
         int32_t nextIdx = 0;
         for (const auto& item : *srcArray) {
           if (nextIdx == posIdx) {
-            out.push_back(*element);
+            element ? out.push_back(*element) : out.add_null();
             nextIdx++;
           }
           out.push_back(item);
           nextIdx++;
+        }
+        if (nextIdx < newArrayLength) {
+          element ? out.push_back(*element) : out.add_null();
         }
       }
     }
