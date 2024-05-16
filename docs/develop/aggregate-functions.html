@@ -1016,8 +1016,7 @@ aggregation followed by local exchange on the grouping keys followed by
 final aggregation with forced spilling. Query runs using 4 threads.</p></li>
 </ul>
 <p>Query run with forced spilling is enabled only for group-by aggregations and
-only if <cite>allowInputShuffle_</cite> flag is enabled by calling allowInputShuffle
-() method from the SetUp(). Spill testing requires multiple batches of input.
+only if aggregate functions are not order-sensitive. Spill testing requires multiple batches of input.
 To split input data into multiple batches we add local exchange with
 round-robin repartitioning before the partial aggregation. This changes the order
 in which aggregation inputs are processed, hence, query results with spilling
