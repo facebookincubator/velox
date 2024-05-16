@@ -21,7 +21,91 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
-class UnnestTest : public OperatorTestBase {};
+class UnnestTest : public OperatorTestBase {
+ private:
+  RowVectorPtr makeExpectVector(
+      bool outer,
+      const std::vector<std::optional<double>> replicateCol,
+      const std::vector<std::optional<std::vector<std::optional<int32_t>>>>
+          unnestCol,
+      uint32_t numElements) {
+    std::vector<std::optional<double>> repeatValues(numElements);
+    std::vector<std::optional<int32_t>> unnestedValues(numElements);
+    std::vector<std::optional<int64_t>> ordinalValues(numElements);
+
+    auto index = 0;
+    for (auto i = 0; i < replicateCol.size(); i++) {
+      if (unnestCol[i].has_value() && !unnestCol[i].value().empty()) {
+        for (auto j = 0; j < unnestCol[i].value().size(); j++) {
+          repeatValues[index] = replicateCol[i];
+          unnestedValues[index] = unnestCol[i].value()[j];
+          ordinalValues[index] = j + 1;
+          index++;
+        }
+      } else if (outer) {
+        repeatValues[index] = replicateCol[i];
+        unnestedValues[index] = std::nullopt;
+        ordinalValues[index] = 1;
+        index++;
+      }
+    }
+    return makeRowVector(
+        {makeNullableFlatVector(repeatValues),
+         makeNullableFlatVector(unnestedValues),
+         makeNullableFlatVector(ordinalValues)});
+  }
+
+ protected:
+  void testArrayWithOrdinality(
+      bool outer,
+      const std::vector<std::optional<std::vector<std::optional<int32_t>>>>
+          unnestValues) {
+    auto arrayVector = vectorMaker_.arrayVectorNullable<int32_t>(unnestValues);
+    std::vector<std::optional<double>> replicateValues(unnestValues.size());
+    uint32_t numElements = 0;
+    for (auto i = 0; i < unnestValues.size(); ++i) {
+      if (unnestValues[i].has_value() && !unnestValues[i].value().empty()) {
+        numElements += unnestValues[i].value().size();
+      } else if (outer) {
+        numElements++;
+      }
+
+      replicateValues[i] = i == unnestValues.size() - 1
+          ? std::nullopt
+          : std::optional<double>((i + 1) * 1.1);
+    }
+
+    auto vector =
+        makeRowVector({makeNullableFlatVector(replicateValues), arrayVector});
+
+    auto op = PlanBuilder()
+                  .values({vector})
+                  .unnest({"c0"}, {"c1"}, "ordinal", outer)
+                  .planNode();
+
+    assertQuery(
+        op,
+        makeExpectVector(outer, replicateValues, unnestValues, numElements));
+
+    // Test with array wrapped in dictionary.
+    auto reversedIndices = makeIndicesInReverse(unnestValues.size());
+    auto vectorInDict = makeRowVector(
+        {makeNullableFlatVector(replicateValues),
+         wrapInDictionary(reversedIndices, 6, arrayVector)});
+    op = PlanBuilder()
+             .values({vectorInDict})
+             .unnest({"c0"}, {"c1"}, "ordinal", outer)
+             .planNode();
+
+    auto index = 0;
+    auto reversedUnnestValues = unnestValues;
+    std::reverse(reversedUnnestValues.begin(), reversedUnnestValues.end());
+    assertQuery(
+        op,
+        makeExpectVector(
+            outer, replicateValues, reversedUnnestValues, numElements));
+  }
+};
 
 TEST_F(UnnestTest, basicArray) {
   auto vector = makeRowVector({
@@ -42,65 +126,15 @@ TEST_F(UnnestTest, basicArray) {
 }
 
 TEST_F(UnnestTest, arrayWithOrdinality) {
-  auto array = vectorMaker_.arrayVectorNullable<int32_t>(
-      {{{1, 2, std::nullopt, 4}},
-       std::nullopt,
-       {{5, 6}},
-       {{}},
-       {{{{std::nullopt}}}},
-       {{7, 8, 9}}});
-  auto vector = makeRowVector(
-      {makeNullableFlatVector<double>({1.1, 2.2, 3.3, 4.4, 5.5, std::nullopt}),
-       array});
-
-  auto op = PlanBuilder()
-                .values({vector})
-                .unnest({"c0"}, {"c1"}, "ordinal")
-                .planNode();
-
-  auto expected = makeRowVector(
-      {makeNullableFlatVector<double>(
-           {1.1,
-            1.1,
-            1.1,
-            1.1,
-            3.3,
-            3.3,
-            5.5,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt}),
-       makeNullableFlatVector<int32_t>(
-           {1, 2, std::nullopt, 4, 5, 6, std::nullopt, 7, 8, 9}),
-       makeNullableFlatVector<int64_t>({1, 2, 3, 4, 1, 2, 1, 1, 2, 3})});
-  assertQuery(op, expected);
-
-  // Test with array wrapped in dictionary.
-  auto reversedIndices = makeIndicesInReverse(6);
-  auto vectorInDict = makeRowVector(
-      {makeNullableFlatVector<double>({1.1, 2.2, 3.3, 4.4, 5.5, std::nullopt}),
-       wrapInDictionary(reversedIndices, 6, array)});
-  op = PlanBuilder()
-           .values({vectorInDict})
-           .unnest({"c0"}, {"c1"}, "ordinal")
-           .planNode();
-
-  auto expectedInDict = makeRowVector(
-      {makeNullableFlatVector<double>(
-           {1.1,
-            1.1,
-            1.1,
-            2.2,
-            4.4,
-            4.4,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt}),
-       makeNullableFlatVector<int32_t>(
-           {7, 8, 9, std::nullopt, 5, 6, 1, 2, std::nullopt, 4}),
-       makeNullableFlatVector<int64_t>({1, 2, 3, 1, 1, 2, 1, 2, 3, 4})});
-  assertQuery(op, expectedInDict);
+  std::vector<std::optional<std::vector<std::optional<int>>>> array = {
+      {{1, 2, std::nullopt, 4}},
+      std::nullopt,
+      {{5, 6}},
+      {{}},
+      {{{{std::nullopt}}}},
+      {{7, 8, 9}}};
+  //   testArrayWithOrdinality(false, array);
+  testArrayWithOrdinality(true, array);
 }
 
 TEST_F(UnnestTest, basicMap) {
