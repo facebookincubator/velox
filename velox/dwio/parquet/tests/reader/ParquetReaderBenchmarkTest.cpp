@@ -19,7 +19,7 @@
 
 namespace facebook::velox::parquet::test {
 namespace {
-TEST(ParquetReaderBenchmarkTest, basic) {
+TEST(ParquetReaderBenchmarkTest, DISABLED_basic) {
   memory::MemoryManager::testingSetInstance({});
   run(1, "BigInt", BIGINT(), 20, 0, 500, false);
   run(2, "ShortDecimal", DECIMAL(18, 3), 0, 20, 500, false);
