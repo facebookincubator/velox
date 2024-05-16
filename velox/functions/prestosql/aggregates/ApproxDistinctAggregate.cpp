@@ -463,6 +463,7 @@ exec::AggregateRegistrationResult registerApproxDistinct(
           "real",
           "double",
           "varchar",
+          "varbinary",
           "timestamp",
           "date"}) {
       signatures.push_back(exec::AggregateFunctionSignatureBuilder()
