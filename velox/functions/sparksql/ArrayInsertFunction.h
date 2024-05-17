@@ -35,20 +35,20 @@ struct ArrayInsertFunction {
       const arg_type<Generic<T1>>* item,
       const arg_type<bool>* legacyNegativeIndex) {
     VELOX_USER_CHECK_NOT_NULL(
-      legacyNegativeIndex, "Parameter legacyNegativeIndex should not be NULL.")
+        legacyNegativeIndex,
+        "Parameter legacyNegativeIndex should not be NULL.")
     if (srcArray == nullptr || pos == nullptr) {
       return false;
     }
-    VELOX_USER_CHECK(
-      *pos != 0, "Array insert position should not be 0.")
+    VELOX_USER_CHECK(*pos != 0, "Array insert position should not be 0.")
 
     if (*pos > 0) {
       int64_t newArrayLength = std::max(srcArray->size() + 1, *pos);
       VELOX_USER_CHECK_LE(
-        newArrayLength,
-        kMaxNumberOfElements,
-        "Array insert result exceeds the max array size limit {}",
-        kMaxNumberOfElements);
+          newArrayLength,
+          kMaxNumberOfElements,
+          "Array insert result exceeds the max array size limit {}",
+          kMaxNumberOfElements);
 
       out.reserve(newArrayLength);
       int32_t posIdx = *pos - 1;
@@ -61,7 +61,7 @@ struct ArrayInsertFunction {
         out.push_back(element);
         nextIdx++;
       }
-      while(nextIdx < newArrayLength) {
+      while (nextIdx < newArrayLength) {
         if (nextIdx == posIdx) {
           item ? out.push_back(*item) : out.add_null();
         } else {
@@ -75,15 +75,14 @@ struct ArrayInsertFunction {
         int32_t baseOffset = *legacyNegativeIndex ? 1 : 0;
         int64_t newArrayLength = -*pos + baseOffset;
         VELOX_USER_CHECK_LE(
-          newArrayLength,
-          kMaxNumberOfElements,
-          "Array insert result exceeds the max array size limit {}",
-          kMaxNumberOfElements);
+            newArrayLength,
+            kMaxNumberOfElements,
+            "Array insert result exceeds the max array size limit {}",
+            kMaxNumberOfElements);
         out.reserve(newArrayLength);
         item ? out.push_back(*item) : out.add_null();
         int64_t nullsToFill = newArrayLength - 1 - srcArray->size();
-        while (nullsToFill > 0)
-        {
+        while (nullsToFill > 0) {
           out.add_null();
           nullsToFill--;
         }
@@ -91,13 +90,15 @@ struct ArrayInsertFunction {
           out.push_back(element);
         }
       } else {
-        int64_t posIdx = *pos + srcArray->size() + (*legacyNegativeIndex ? 0 : 1);
-        int64_t newArrayLength = std::max(int64_t(srcArray->size() + 1), posIdx + 1);
+        int64_t posIdx =
+            *pos + srcArray->size() + (*legacyNegativeIndex ? 0 : 1);
+        int64_t newArrayLength =
+            std::max(int64_t(srcArray->size() + 1), posIdx + 1);
         VELOX_USER_CHECK_LE(
-          newArrayLength,
-          kMaxNumberOfElements,
-          "Array insert result exceeds the max array size limit {}",
-          kMaxNumberOfElements);
+            newArrayLength,
+            kMaxNumberOfElements,
+            "Array insert result exceeds the max array size limit {}",
+            kMaxNumberOfElements);
         out.reserve(newArrayLength);
 
         int32_t nextIdx = 0;
