@@ -1857,7 +1857,6 @@ void HashProbe::prepareTableSpill(
     names.emplace_back(tableInputType->nameOf(channel));
     types.emplace_back(tableInputType->childAt(channel));
   }
-  const auto numDependents = tableInputType->size() - numKeys;
   for (auto i = 0; i < tableInputType->size(); ++i) {
     if (keyChannelMap.find(i) == keyChannelMap.end()) {
       names.emplace_back(tableInputType->nameOf(i));

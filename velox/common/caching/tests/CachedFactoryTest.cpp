@@ -134,7 +134,7 @@ TEST(CachedFactoryTest, basicExceptionHandling) {
   EXPECT_EQ(getCachedValue(val1), 2);
   EXPECT_EQ(*generated, 1);
   try {
-    auto val2 = factory.generate(3);
+    [[maybe_unused]] auto val2 = factory.generate(3);
     FAIL() << "Factory generation should have failed";
   } catch (const std::invalid_argument&) {
     // Expected.

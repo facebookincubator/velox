@@ -94,7 +94,6 @@ template <typename ColumnVisitor>
 void SelectiveByteRleColumnReader::readWithVisitor(
     RowSet rows,
     ColumnVisitor visitor) {
-  vector_size_t numRows = rows.back() + 1;
   if (boolRle_) {
     if (nullsInReadRange_) {
       boolRle_->readWithVisitor<true>(
