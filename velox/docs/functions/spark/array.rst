@@ -232,3 +232,19 @@ Array Functions
         SELECT zip_with(ARRAY[1, 2], ARRAY[3, 4], (x, y) -> x + y); -- [4, 6]
         SELECT zip_with(ARRAY['a', 'b', 'c'], ARRAY['d', 'e', 'f'], (x, y) -> concat(x, y)); -- ['ad', 'be', 'cf']
         SELECT zip_with(ARRAY['a'], ARRAY['d', null, 'f'], (x, y) -> coalesce(x, y)); -- ['a', null, 'f']
+
+.. spark:function:: array_insert(array(E), pos, E, legacyNegativeIndex) -> array(E)
+
+    Places new element into index pos of the input array.
+    Returns NULL if the input array or index is NULL. Array indices start at 1. The maximum negative index
+    is -1. When legacyNegativeIndex is true, the function is 0-based for negative indexes which means -1
+    points to the last but one position. When legacyNegativeIndex is false, the function is 1-based for
+    negative indexes and -1 points to the last position. Index above array size appends the array or prepends
+    the array if index is negative, with 'null' elements. ::
+
+        SELECT array_insert(NULL, 1, 0, false); -- NULL
+        SELECT array_insert(array(1, 2), NULL, 0, false); -- NULL
+        SELECT array_insert(array(1, 2), 1, 0, false); -- [0, 1, 2]
+        SELECT array_insert(array(1, 2), 4, 0, false); -- [1, 2, NULL, 0]
+        SELECT array_insert(array(1, 2), -1, 0, false); -- [1, 2, -1]
+        SELECT array_insert(array(1, 2), -1, 0, true); -- [1, -1, 2]
