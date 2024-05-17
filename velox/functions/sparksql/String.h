@@ -1189,28 +1189,27 @@ struct SoundexFunction {
   static constexpr int32_t reuse_strings_from_arg = 0;
 
   void call(out_type<Varchar>& result, const arg_type<Varchar>& input) {
-    auto inputData = reinterpret_cast<const uint8_t*>(input.data());
     size_t inputSize = input.size();
     if (inputSize == 0) {
       result.setEmpty();
       return;
     }
-    if (!std::isalpha(inputData[0])) {
+    if (!std::isalpha(input.data()[0])) {
       // First character must be a letter, otherwise input is returned.
       result.setNoCopy(input);
       return;
     }
     result.resize(4);
-    result.data()[0] = std::toupper(inputData[0]);
+    result.data()[0] = std::toupper(input.data()[0]);
     int32_t sxi = 1;
     int32_t idx = result.data()[0] - 'A';
     char lastCode = kUSEnglishMapping[idx];
     for (auto i = 1; i < inputSize; ++i) {
-      if (!std::isalpha(inputData[i])) {
+      if (!std::isalpha(input.data()[i])) {
         lastCode = '0';
         continue;
       }
-      idx = std::toupper(inputData[i]) - 'A';
+      idx = std::toupper(input.data()[i]) - 'A';
       char code = kUSEnglishMapping[idx];
       if (code != '7') {
         if (code != '0' && code != lastCode) {
@@ -1228,6 +1227,8 @@ struct SoundexFunction {
   }
 
  private:
+  /// Soundex mapping table.
+  /// For details, please see https://en.wikipedia.org/wiki/Soundex.
   static constexpr char kUSEnglishMapping[] = {
       '0', '1', '2', '3', '0', '1', '2', '7', '0', '2', '2', '4', '5',
       '5', '0', '1', '2', '6', '2', '3', '0', '1', '7', '2', '0', '2'};
