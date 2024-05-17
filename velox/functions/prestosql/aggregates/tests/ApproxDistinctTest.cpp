@@ -231,9 +231,8 @@ TEST_F(ApproxDistinctTest, globalAggStrings) {
 }
 
 TEST_F(ApproxDistinctTest, globalAggVarbinary) {
-  vector_size_t size = 1'000;
   auto values = makeFlatVector<StringView>(
-      size,
+      1'000,
       [&](auto row) { return StringView(kFruits[row % kFruits.size()]); },
       nullptr,
       VARBINARY());
