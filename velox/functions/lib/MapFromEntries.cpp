@@ -32,10 +32,9 @@ static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
 
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
-  // If throwOnNull is true, will return null if input array is null or has
-  // null entries (Spark's behavior), instead of throwing exceptions (Presto's
-  // behavior).
-  MapFromEntriesFunction(const bool throwOnNull) : throwOnNull_(throwOnNull) {}
+  // @param throwOnNull If true, throws exception when input array is null or
+  // contains null entry. Otherwise, returns null.
+  MapFromEntriesFunction(bool throwOnNull) : throwOnNull_(throwOnNull) {}
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -98,6 +97,8 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     exec::LocalDecodedVector decodedRowVector(context);
     decodedRowVector.get()->decode(*inputValueVector);
     if (inputValueVector->typeKind() == TypeKind::UNKNOWN) {
+      // For presto, if the input array(unknown) then all rows should have
+      // errors.
       if (throwOnNull_) {
         try {
           VELOX_USER_FAIL(kErrorMessageEntryNotNull);
@@ -145,16 +146,13 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           // Check nulls in the top level row vector.
           const bool isMapEntryNull = decodedRowVector->isNullAt(offset + i);
           if (isMapEntryNull) {
+            // The map vector needs to be valid because its consumed by
+            // checkDuplicateKeys before try sets invalid rows to null.
+            resetSize(row);
             if (!throwOnNull_) {
               bits::setNull(mutableNulls, row);
-              resetSize(row);
               break;
             }
-            // Presto: Set the sizes to 0 so that the final map vector generated
-            // is valid in case we are inside a try. The map vector needs to be
-            // valid because its consumed by checkDuplicateKeys before try
-            // sets invalid rows to null.
-            resetSize(row);
             VELOX_USER_FAIL(kErrorMessageEntryNotNull);
           }
 
@@ -250,13 +248,11 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     return mapVector;
   }
 
-  bool throwOnNull_;
+  const bool throwOnNull_;
 };
 } // namespace
 
-void registerMapFromEntriesFunction(
-    const std::string& name,
-    const bool throwOnNull) {
+void registerMapFromEntriesFunction(const std::string& name, bool throwOnNull) {
   exec::registerVectorFunction(
       name,
       MapFromEntriesFunction::signatures(),

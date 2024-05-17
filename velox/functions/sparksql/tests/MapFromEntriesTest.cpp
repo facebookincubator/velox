@@ -48,12 +48,9 @@ class MapFromEntriesTest : public SparkFunctionBaseTest {
         values);
   }
 
-  void verifyMapFromEntries(
-      const std::vector<VectorPtr>& input,
-      const VectorPtr& expected,
-      const std::string& funcArg = "c0") {
-    const std::string expr = fmt::format("map_from_entries({})", funcArg);
-    auto result = evaluate<MapVector>(expr, makeRowVector(input));
+  void verifyMapFromEntries(const VectorPtr& input, const VectorPtr& expected) {
+    const std::string expr = fmt::format("map_from_entries({})", "c0");
+    auto result = evaluate(expr, makeRowVector({input}));
     assertEqualVectors(expected, result);
   }
 };
@@ -70,7 +67,7 @@ TEST_F(MapFromEntriesTest, nullMapEntries) {
     auto input = makeArrayOfRowVector(data, rowType);
     auto expected =
         makeNullableMapVector<int32_t, int32_t>({std::nullopt, O({{1, 11}})});
-    verifyMapFromEntries({input}, expected, "c0");
+    verifyMapFromEntries(input, expected);
   }
   {
     // Create array(row(a,b)) where a, b sizes are 0 because all row(a, b)
@@ -87,7 +84,7 @@ TEST_F(MapFromEntriesTest, nullMapEntries) {
 
     auto expected =
         makeNullableMapVector<int32_t, int32_t>({std::nullopt, std::nullopt});
-    verifyMapFromEntries({input}, expected, "c0");
+    verifyMapFromEntries(input, expected);
   }
 }
 
