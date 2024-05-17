@@ -133,6 +133,21 @@ TEST_F(RemainderTest, int64) {
   EXPECT_EQ(-1, remainder<int64_t>(INT64_MIN, INT64_MAX));
 }
 
+TEST_F(RemainderTest, double) {
+  EXPECT_DOUBLE_EQ(0.0, remainder<double>(0.3, 0.3).value());
+  EXPECT_DOUBLE_EQ(0.2, remainder<double>(0.5, 0.3).value());
+  EXPECT_DOUBLE_EQ(-1.1, remainder<double>(-1.1, 2).value());
+  EXPECT_DOUBLE_EQ(0.1, remainder<double>(0.7, -0.3).value());
+}
+
+TEST_F(RemainderTest, float) {
+  EXPECT_FLOAT_EQ(0.0, remainder<float>(0.3, 0.3).value());
+  EXPECT_FLOAT_EQ(0.2, remainder<float>(0.5, 0.3).value());
+  EXPECT_FLOAT_EQ(-1.1, remainder<float>(-1.1, 2).value());
+  EXPECT_EQ(std::nullopt, remainder<float>(2.14159, 0.0));
+  EXPECT_FLOAT_EQ(0.1, remainder<float>(0.7, -0.3).value());
+}
+
 class ArithmeticTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>

@@ -49,6 +49,23 @@ struct RemainderFunction {
 };
 
 template <typename T>
+struct RemainderFloatFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput a, const TInput n) {
+    if (UNLIKELY(n == 0)) {
+      return false;
+    }
+    if (UNLIKELY(n == 1 || n == -1)) {
+      result = 0;
+    } else {
+      result = std::fmod(a, n);
+    }
+    return true;
+  }
+};
+
+template <typename T>
 struct PModIntFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a, const TInput n)
