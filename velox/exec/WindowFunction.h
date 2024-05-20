@@ -31,16 +31,19 @@ struct WindowFunctionArg {
   std::optional<const column_index_t> index;
 };
 
-/// The scope for calculating the window function in a streaming
-/// manner. kRows indicates that the calculation begins as soon as rows are
-/// available within a single partition, without waiting for all data in the
-/// partition to be ready. kPartition indicates that the calculation begins only
-/// when all rows in a partition are ready.
+/// The scope for calculating the window function. kRows indicates that the
+/// calculation begins as soon as rows are available within a single partition,
+/// without waiting for all data in the partition to be ready. kPartition
+/// indicates that the calculation begins only when all rows in a partition are
+/// ready.
 enum class Scope {
   kPartition,
   kRows,
 };
 
+/// A sliding window frame is a dynamic set of rows that moves relative to the
+/// current row being processed, allowing for calculations over a range of rows
+/// that can change as the query progresses.
 struct WindowFunctionMetadata {
   Scope scope;
   bool supportsSlidingFrame;
@@ -178,6 +181,7 @@ struct WindowFunctionEntry {
   WindowFunctionMetadata metadata;
 };
 
+/// Returns std::nullopt if the function doesn't exist in the WindowFunctionMap.
 std::optional<WindowFunctionMetadata> getWindowFunctionMetadata(
     const std::string& name);
 

@@ -45,7 +45,7 @@ bool registerWindowFunction(
     WindowFunctionMetadata metadata) {
   auto sanitizedName = sanitizeName(name);
   windowFunctions()[sanitizedName] = {
-      std::move(signatures), std::move(factory), metadata};
+      std::move(signatures), std::move(factory), std::move(metadata)};
   return true;
 }
 

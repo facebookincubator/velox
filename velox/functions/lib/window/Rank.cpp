@@ -109,7 +109,7 @@ void registerRankInternal(
     return std::make_unique<RankFunction<TRank, TResult>>(resultType);
   };
 
-  if constexpr (TRank == RankType::kRank) {
+  if constexpr (TRank == RankType::kRank || TRank == RankType::kDenseRank) {
     exec::registerWindowFunction(
         name,
         std::move(signatures),

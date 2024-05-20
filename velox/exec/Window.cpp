@@ -634,15 +634,17 @@ vector_size_t Window::callApplyLoop(
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
 
-      if (currentPartition_->isComplete()) {
-        callResetPartition();
+      if (!currentPartition_->isComplete()) {
+        // Still more data for the current partition would need to be processed.
+        // So resume on the next getOutput call.
+        break;
+      }
 
-        if (!currentPartition_) {
-          // The WindowBuild doesn't have any more partitions to process right
-          // now. So break until the next getOutput call.
-          break;
-        }
-      } else {
+      callResetPartition();
+
+      if (!currentPartition_) {
+        // The WindowBuild doesn't have any more partitions to process right
+        // now. So break until the next getOutput call.
         break;
       }
 
@@ -692,7 +694,7 @@ RowVectorPtr Window::getOutput() {
 
   // Compute the output values of window functions.
   auto numResultRows = callApplyLoop(numOutputRows, result);
-  if (currentPartition_) {
+  if (currentPartition_ && currentPartition_->isPartial()) {
     currentPartition_->clearOutputRows(numResultRows);
   }
 

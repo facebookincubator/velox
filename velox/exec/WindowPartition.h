@@ -20,6 +20,11 @@
 
 /// Simple WindowPartition that builds over the RowContainer used for storing
 /// the input rows in the Window Operator. This works completely in-memory.
+/// WindowPartition supports partial window partitioning to facilitate
+/// RowsStreamingWindowBuild, which means that subsequent calculations within
+/// the WindowPartition do not need to wait until the current partition is fully
+/// ready before commencing. Calculations can begin as soon as a portion of the
+/// rows are ready.
 /// TODO: This implementation will be revised for Spill to disk semantics.
 
 namespace facebook::velox::exec {
@@ -66,6 +71,10 @@ class WindowPartition {
 
   bool isComplete() const {
     return complete_;
+  }
+
+  bool isPartial() const {
+    return partial_;
   }
 
   void setComplete() {
@@ -221,6 +230,10 @@ class WindowPartition {
   // The partition offset of the first row in rows_.
   vector_size_t startRow_ = 0;
 
+  // Indicates that the partial window partitioning process has been completed.
   bool complete_ = false;
+
+  // Indicates partial window partition.
+  bool partial_ = false;
 };
 } // namespace facebook::velox::exec

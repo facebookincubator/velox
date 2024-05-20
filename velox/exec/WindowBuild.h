@@ -118,7 +118,7 @@ class WindowBuild {
   // Number of input rows.
   vector_size_t numRows_ = 0;
 
-  // Number of rows that be fit into an output block.
+  // The maximum number of rows that can fit into an output block.
   vector_size_t numRowsPerOutput_;
 };
 

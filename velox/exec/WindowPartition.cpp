@@ -45,6 +45,7 @@ WindowPartition::WindowPartition(
   rows_.clear();
   partition_ = folly::Range(rows_.data(), rows_.size());
   complete_ = false;
+  partial_ = true;
 }
 
 void WindowPartition::addRows(const std::vector<char*>& rows) {
