@@ -14,11 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/aggregates/Compare.h"
+#include "velox/functions/lib/aggregates/Compare.h"
 
-using namespace facebook::velox::functions::aggregate;
-
-namespace facebook::velox::aggregate::prestosql {
+namespace facebook::velox::functions::aggregate {
 
 int32_t compare(
     const SingleValueAccumulator* accumulator,
@@ -38,4 +36,16 @@ int32_t compare(
           mapTypeKindToName(decoded.base()->typeKind())));
   return result.value();
 }
-} // namespace facebook::velox::aggregate::prestosql
+
+int32_t compareWithNullAsValue(
+    const SingleValueAccumulator* accumulator,
+    const DecodedVector& decoded,
+    vector_size_t index) {
+  static const CompareFlags kCompareFlags{
+      true, // nullsFirst
+      true, // ascending
+      false, // equalsOnly
+      CompareFlags::NullHandlingMode::kNullAsValue};
+  return accumulator->compare(decoded, index, kCompareFlags).value();
+}
+} // namespace facebook::velox::functions::aggregate

@@ -80,6 +80,14 @@ General Aggregate Functions
 
     Returns the last non-null value of `x`.
 
+.. spark:function:: max(x) -> [same as x]
+
+    Returns the maximum value of ``x``.
+    ``x`` must be an orderable type.
+    Note: 1. the timestamp type represents a time instant in microsecond precision.
+          2. Map type is not orderable type in Spark.
+          3. Nested nulls are allowed within complex types.
+
 .. spark:function:: max_by(x, y) -> [same as x]
 
     Returns the value of `x` associated with the maximum value of `y`.
@@ -96,6 +104,14 @@ General Aggregate Functions
         ) AS t(x, y);
 
     Returns c
+
+.. spark:function:: min(x) -> [same as x]
+
+    Returns the minimum value of ``x``.
+    ``x`` must be an orderable type.
+    Note: 1. the timestamp type represents a time instant in microsecond precision.
+          2. Map type is not orderable type in Spark.
+          3. Nested nulls are allowed within complex types.
 
 .. spark:function:: min_by(x, y) -> [same as x]
 

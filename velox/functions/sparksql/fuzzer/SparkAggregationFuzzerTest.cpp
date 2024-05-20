@@ -82,6 +82,12 @@ int main(int argc, char** argv) {
           {"skewness", nullptr},
           {"kurtosis", nullptr},
           {"collect_list", makeArrayVerifier()},
+          // The Ascending sorting order used  'min' by Spark places nulls
+          // first.
+          {"min", nullptr},
+          // The Ascending sorting order used  'max' by Spark places nulls
+          // first.
+          {"max", nullptr},
       };
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
