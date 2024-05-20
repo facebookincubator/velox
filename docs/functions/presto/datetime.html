@@ -628,6 +628,14 @@ transition:</p>
 picked to be consistent with Presto.</p>
 <p><strong>Timezone Name Parsing</strong>: When parsing strings that contain timezone names, the
 list of supported timezones follow the definition <a class="reference external" href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones">here</a>.</p>
+<p><strong>Timezone Conversion</strong>: The <code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> operator sets the time zone of a timestamp:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">timestamp</span> <span class="s1">&#39;2012-10-31 01:00 UTC&#39;</span><span class="p">;</span>
+<span class="o">--</span> <span class="mi">2012</span><span class="o">-</span><span class="mi">10</span><span class="o">-</span><span class="mi">31</span> <span class="mi">01</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">UTC</span>
+
+<span class="n">SELECT</span> <span class="n">timestamp</span> <span class="s1">&#39;2012-10-31 01:00 UTC&#39;</span> <span class="n">AT</span> <span class="n">TIME</span> <span class="n">ZONE</span> <span class="s1">&#39;America/Los_Angeles&#39;</span><span class="p">;</span>
+<span class="o">--</span> <span class="mi">2012</span><span class="o">-</span><span class="mi">10</span><span class="o">-</span><span class="mi">30</span> <span class="mi">18</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span>
+</pre></div>
+</div>
 </section>
 </section>
 
