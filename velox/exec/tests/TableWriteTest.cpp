@@ -35,7 +35,6 @@
 #include "folly/experimental/EventCount.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 
@@ -535,9 +534,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionedBy,
       const std::shared_ptr<HiveBucketProperty> bucketProperty,
-      const std::optional<CompressionKind> compressionKind = {},
-      const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
-          flushPolicyFactory = nullptr) {
+      const std::optional<CompressionKind> compressionKind = {}) {
     return std::make_shared<core::InsertTableHandle>(
         kHiveConnectorId,
         makeHiveInsertTableHandle(
@@ -548,8 +545,7 @@ class TableWriteTest : public HiveConnectorTestBase {
             makeLocationHandle(
                 outputDirectoryPath, std::nullopt, outputTableType),
             fileFormat_,
-            compressionKind,
-            flushPolicyFactory));
+            compressionKind));
   }
 
   // Returns a table insert plan node.
@@ -565,9 +561,7 @@ class TableWriteTest : public HiveConnectorTestBase {
           connector::hive::LocationHandle::TableType::kNew,
       const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
       bool aggregateResult = true,
-      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr,
-      const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
-          flushPolicyFactory = nullptr) {
+      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr) {
     return createInsertPlan(
         inputPlan,
         inputPlan.planNode()->outputType(),
@@ -580,8 +574,7 @@ class TableWriteTest : public HiveConnectorTestBase {
         outputTableType,
         outputCommitStrategy,
         aggregateResult,
-        aggregationNode,
-        flushPolicyFactory);
+        aggregationNode);
   }
 
   PlanNodePtr createInsertPlan(
@@ -597,9 +590,7 @@ class TableWriteTest : public HiveConnectorTestBase {
           connector::hive::LocationHandle::TableType::kNew,
       const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
       bool aggregateResult = true,
-      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr,
-      const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
-          flushPolicyFactory = nullptr) {
+      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr) {
     if (numTableWriters == 1) {
       auto insertPlan = inputPlan
                             .addNode(addTableWriter(
@@ -612,8 +603,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     outputDirectoryPath,
                                     partitionedBy,
                                     bucketProperty,
-                                    compressionKind,
-                                    flushPolicyFactory),
+                                    compressionKind),
                                 bucketProperty != nullptr,
                                 outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_);
@@ -637,8 +627,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     outputDirectoryPath,
                                     partitionedBy,
                                     bucketProperty,
-                                    compressionKind,
-                                    flushPolicyFactory),
+                                    compressionKind),
                                 bucketProperty != nullptr,
                                 outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_)
@@ -679,8 +668,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                       outputDirectoryPath,
                       partitionedBy,
                       bucketProperty,
-                      compressionKind,
-                      flushPolicyFactory),
+                      compressionKind),
                   bucketProperty != nullptr,
                   outputCommitStrategy))
               .capturePlanNodeId(tableWriteNodeId_)
@@ -2353,10 +2341,7 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
         nullptr,
         compressionKind_,
         1,
-        connector::hive::LocationHandle::TableType::kNew,
-        CommitStrategy::kNoCommit,
-        true,
-        nullptr);
+        connector::hive::LocationHandle::TableType::kNew);
     const std::shared_ptr<Task> task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(QueryConfig::kTaskWriterCount, std::to_string(1))
@@ -2375,76 +2360,6 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
         stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
     ASSERT_EQ(stats[1].runtimeStats["numWrittenFiles"].sum, 1);
     ASSERT_EQ(stats[1].runtimeStats["numWrittenFiles"].count, 1);
-  }
-}
-
-TEST_P(UnpartitionedTableWriterTest, flushPolicy) {
-  // The runtime stats test only applies for dwrf file format.
-  if (fileFormat_ != dwio::common::FileFormat::DWRF) {
-    return;
-  }
-  struct {
-    int numInputVectors;
-    std::string maxStripeSize;
-    int expectedNumStripes;
-
-    std::string debugString() const {
-      return fmt::format(
-          "numInputVectors: {}, maxStripeSize: {}, expectedNumStripes: {}",
-          numInputVectors,
-          maxStripeSize,
-          expectedNumStripes);
-    }
-  } testSettings[] = {{10, "1GB", 1}, {10, "1B", 10}};
-
-  auto rowType = ROW({"c0", "c1"}, {VARCHAR(), BIGINT()});
-  for (const auto& testData : testSettings) {
-    SCOPED_TRACE(testData.debugString());
-
-    VectorFuzzer::Options options;
-    options.nullRatio = 0.0;
-    options.vectorSize = 1;
-    options.stringLength = 1L << 20;
-    VectorFuzzer fuzzer(options, pool());
-
-    std::vector<RowVectorPtr> vectors;
-    for (int i = 0; i < testData.numInputVectors; ++i) {
-      vectors.push_back(fuzzer.fuzzInputRow(rowType));
-    }
-
-    createDuckDbTable(vectors);
-
-    auto outputDirectory = TempDirectoryPath::create();
-    std::function<std::shared_ptr<dwio::common::FlushPolicy>()>
-        flushPolicyFactory = nullptr;
-    if (fileFormat_ == dwio::common::FileFormat::DWRF) {
-      const std::string stripeSize = testData.maxStripeSize;
-      flushPolicyFactory = [stripeSize]() {
-        return std::make_shared<facebook::velox::dwrf::DefaultFlushPolicy>(
-            toCapacity(stripeSize, core::CapacityUnit::BYTE), 16777216);
-      };
-    }
-
-    auto plan = createInsertPlan(
-        PlanBuilder().values(vectors),
-        rowType,
-        outputDirectory->getPath(),
-        {},
-        nullptr,
-        compressionKind_,
-        1,
-        connector::hive::LocationHandle::TableType::kNew,
-        CommitStrategy::kNoCommit,
-        true,
-        nullptr,
-        flushPolicyFactory);
-    const std::shared_ptr<Task> task =
-        AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .config(QueryConfig::kTaskWriterCount, std::to_string(1))
-            .assertResults("SELECT count(*) FROM tmp");
-    auto stats = task->taskStats().pipelineStats.front().operatorStats;
-    ASSERT_EQ(
-        stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
   }
 }
 
