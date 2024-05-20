@@ -156,6 +156,15 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       VectorPtr& result);
 
+  template <typename IntType>
+  void castIntegerToTimestamp(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      VectorPtr castResult,
+      const facebook::velox::date::time_zone* timeZone,
+      FlatVector<Timestamp>* resultFlatVector);
+
   template <typename Func>
   void applyToSelectedNoThrowLocal(
       EvalCtx& context,

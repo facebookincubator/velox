@@ -285,6 +285,27 @@ void CastExpr::castTimestampToDate(
   });
 }
 
+template <typename IntType>
+void CastExpr::castIntegerToTimestamp(
+
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    VectorPtr castResult,
+    const facebook::velox::date::time_zone* timeZone,
+    FlatVector<Timestamp>* resultFlatVector) {
+  applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+    auto timestamp = Timestamp::fromMillis(
+        static_cast<int64_t>(input.as<SimpleVector<IntType>>()->valueAt(row)) *
+
+        kMillisInSecond);
+    if (timeZone) {
+      timestamp.toGMT(*timeZone);
+    }
+    resultFlatVector->set(row, timestamp);
+  });
+}
+
 template <typename Func>
 void CastExpr::applyToSelectedNoThrowLocal(
     EvalCtx& context,

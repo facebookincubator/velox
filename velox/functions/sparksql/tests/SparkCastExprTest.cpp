@@ -198,51 +198,53 @@ TEST_F(SparkCastExprTest, invalidDate) {
       VARCHAR());
 }
 
-
 TEST_F(SparkCastExprTest, intToTimestamp) {
-
+  constexpr int64_t kMillisecondsInSecond = 1'000;
+  static constexpr int64_t kMaxSeconds =
+      std::numeric_limits<int64_t>::max() / kMillisecondsInSecond;
+  static constexpr int64_t kMinSeconds =
+      std::numeric_limits<int64_t>::min() / kMillisecondsInSecond - 1;
   std::vector<std::optional<std::int64_t>> input{
-    -946684800,
-    0,
-    94668480000,
-    946729316,
-    -50049331200
-  };
-  std::vector<std::optional<Timestamp>> expected{
-    Timestamp(-946684800, 0),
-    Timestamp(0, 0),
-    Timestamp(94668480000, 0),
-    Timestamp(946729316, 0),
-    Timestamp(-50049331200, 0)
-  };
-  testCast<std::int64_t, Timestamp>("timestamp", input, expected);
 
-  //int8_t to timestampConversion
-  std::vector<std::optional<std::int8_t>> int8Input{0,1};
+      -946684800,
+      0,
+      94668480000,
+      946729316,
+      -50049331200,
+      kMaxSeconds,
+      kMinSeconds + kMillisecondsInSecond};
+  std::vector<std::optional<Timestamp>> expected{
+      Timestamp(-946684800, 0),
+      Timestamp(0, 0),
+      Timestamp(94668480000, 0),
+      Timestamp(946729316, 0),
+      Timestamp(-50049331200, 0),
+      Timestamp(kMaxSeconds, 0),
+      Timestamp(kMinSeconds + kMillisecondsInSecond, 0)};
+  testCast<std::int64_t, Timestamp>("timestamp", input, expected);
+  // int8_t to timestampConversion
+  std::vector<std::optional<std::int8_t>> int8Input{0, 1};
   std::vector<std::optional<Timestamp>> int8Expected{
       Timestamp(0, 0),
       Timestamp(1, 0),
   };
   testCast<std::int8_t, Timestamp>("timestamp", int8Input, int8Expected);
-
-  //int16_t to timestampConversion
-  std::vector<std::optional<std::int16_t>> int16Input{0,1};
+  // int16_t to timestampConversion
+  std::vector<std::optional<std::int16_t>> int16Input{0, 1};
   std::vector<std::optional<Timestamp>> int16Expected{
       Timestamp(0, 0),
       Timestamp(1, 0),
   };
   testCast<std::int16_t, Timestamp>("timestamp", int16Input, int16Expected);
-
-  //int32_t to timestampConversion
-  std::vector<std::optional<std::int32_t>> int32Input{0,1};
+  // int32_t to timestampConversion
+  std::vector<std::optional<std::int32_t>> int32Input{0, 1};
   std::vector<std::optional<Timestamp>> int32Expected{
       Timestamp(0, 0),
       Timestamp(1, 0),
   };
   testCast<std::int32_t, Timestamp>("timestamp", int32Input, int32Expected);
-
-  //int64_t to timestampConversion
-  std::vector<std::optional<std::int64_t>> int64Input{0,1};
+  // int64_t to timestampConversion
+  std::vector<std::optional<std::int64_t>> int64Input{0, 1};
   std::vector<std::optional<Timestamp>> int64Expected{
       Timestamp(0, 0),
       Timestamp(1, 0),

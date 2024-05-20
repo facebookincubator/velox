@@ -262,51 +262,28 @@ VectorPtr CastExpr::castIntToTimestamp(
       (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty())
       ? date::locate_zone(sessionTzName)
       : nullptr;
-
   switch (fromType->kind()) {
-      case TypeKind::TINYINT:
-        applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-          auto timestamp = Timestamp::fromMillis(
-              static_cast<int64_t>(input.as<SimpleVector<int8_t>>()->valueAt(row)) * kMillisInSecond);
-          if (timeZone) {
-            timestamp.toGMT(*timeZone);
-          }
-          resultFlatVector->set(row, timestamp);
-        });
-        break;
-      case TypeKind::SMALLINT:
-        applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-          auto timestamp = Timestamp::fromMillis(
-              static_cast<int64_t>(input.as<SimpleVector<int16_t>>()->valueAt(row)) * kMillisInSecond);
-          if (timeZone) {
-            timestamp.toGMT(*timeZone);
-          }
-          resultFlatVector->set(row, timestamp);
-        });
-        break;
-      case TypeKind::INTEGER:
-        applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-          auto timestamp = Timestamp::fromMillis(
-              static_cast<int64_t>(input.as<SimpleVector<int32_t>>()->valueAt(row)) * kMillisInSecond);
-          if (timeZone) {
-            timestamp.toGMT(*timeZone);
-          }
-          resultFlatVector->set(row, timestamp);
-        });
-        break;
-      case TypeKind::BIGINT:
-        applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-          auto timestamp = Timestamp::fromMillis(
-              static_cast<int64_t>(input.as<SimpleVector<int64_t>>()->valueAt(row)) * kMillisInSecond);
-          if (timeZone) {
-            timestamp.toGMT(*timeZone);
-          }
-          resultFlatVector->set(row, timestamp);
-        });
-        break;
-      default:
-        break;
-    }
+    case TypeKind::TINYINT:
+      castIntegerToTimestamp<int8_t>(
+          rows, input, context, castResult, timeZone, resultFlatVector);
+      break;
+    case TypeKind::SMALLINT:
+      castIntegerToTimestamp<int16_t>(
+          rows, input, context, castResult, timeZone, resultFlatVector);
+      break;
+    case TypeKind::INTEGER:
+      castIntegerToTimestamp<int32_t>(
+          rows, input, context, castResult, timeZone, resultFlatVector);
+      break;
+    case TypeKind::BIGINT:
+      castIntegerToTimestamp<int64_t>(
+          rows, input, context, castResult, timeZone, resultFlatVector);
+      break;
+    default:
+      VELOX_UNREACHABLE(
+          "Cast from {} to Timestamp is not supported", fromType->kind());
+      break;
+  }
   return castResult;
 }
 
@@ -744,7 +721,10 @@ void CastExpr::applyPeeled(
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {
     result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
-  } else if ((fromType->isTinyint() || fromType->isSmallint() || fromType->isInteger() || fromType->isBigint()) && toType->isTimestamp()) {
+  } else if (
+      (fromType->isTinyint() || fromType->isSmallint() ||
+       fromType->isInteger() || fromType->isBigint()) &&
+      toType->isTimestamp()) {
     result = castIntToTimestamp(rows, input, context, fromType);
   } else if (fromType->isDecimal()) {
     switch (toType->kind()) {

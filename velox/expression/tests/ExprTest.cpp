@@ -2896,13 +2896,6 @@ TEST_P(ParameterizedExprTest, castExceptionContext) {
       "cast((c0) as BIGINT)",
       "Same as context.",
       "Cannot cast VARCHAR '1a' to BIGINT. Non-whitespace character found after end of conversion: \"a\"");
-
-  assertError(
-      "cast(c0 as timestamp)",
-      makeFlatVector(std::vector<int8_t>{1}),
-      "cast((c0) as TIMESTAMP)",
-      "Same as context.",
-      "Cannot cast TINYINT '1' to TIMESTAMP. Conversion to Timestamp is not supported");
 }
 
 TEST_P(ParameterizedExprTest, switchExceptionContext) {
