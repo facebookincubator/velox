@@ -170,8 +170,7 @@ __device__ int scatterIndices(
     int32_t end,
     int32_t* indices) {
   typedef cub::BlockScan<int32_t, kBlockSize> BlockScan;
-  extern __shared__ __align__(
-      alignof(typename BlockScan::TempStorage)) char smem[];
+  extern __shared__ char smem[];
   auto* scanStorage = reinterpret_cast<typename BlockScan::TempStorage*>(smem);
   int numMatch;
   bool match;
@@ -198,8 +197,7 @@ __device__ int scatterIndices(
     int32_t end,
     int32_t* indices) {
   typedef cub::BlockScan<int32_t, kBlockSize> BlockScan;
-  extern __shared__ __align__(
-      alignof(typename BlockScan::TempStorage)) char smem[];
+  extern __shared__ char smem[];
   auto* scanStorage = reinterpret_cast<typename BlockScan::TempStorage*>(smem);
   constexpr int kPerThread = 8;
   int numMatch[kPerThread];
@@ -411,8 +409,7 @@ __device__ void decodeMainlyConstant(GpuDecode& plan) {
 template <int kBlockSize, typename T, typename U>
 __device__ T sum(const U* values, int size) {
   using Reduce = cub::BlockReduce<T, kBlockSize>;
-  extern __shared__ __align__(
-      alignof(typename Reduce::TempStorage)) char smem[];
+  extern __shared__ char smem[];
   auto* reduceStorage = reinterpret_cast<typename Reduce::TempStorage*>(smem);
   T total = 0;
   for (int i = 0; i < size; i += kBlockSize) {
@@ -452,8 +449,7 @@ __device__ int upperBound(const T* data, int size, T target) {
 template <int kBlockSize, typename T>
 __device__ void decodeRle(GpuDecode::Rle& op) {
   using BlockScan = cub::BlockScan<int32_t, kBlockSize>;
-  extern __shared__ __align__(
-      alignof(typename BlockScan::TempStorage)) char smem[];
+  extern __shared__ char smem[];
   auto* scanStorage = reinterpret_cast<typename BlockScan::TempStorage*>(smem);
 
   static_assert(sizeof(*scanStorage) >= sizeof(int32_t) * kBlockSize);
@@ -511,6 +507,24 @@ __device__ void makeScatterIndices(GpuDecode::MakeScatterIndices& op) {
     *op.indicesCount = indicesCount;
   }
 }
+
+template <int kBlockSize>
+__device__ void setRowCountNoFilter(GpuDecode::RowCountNoFilter& op) {
+  auto numRows = op.numRows;
+  auto* status = op.status;
+  auto numCounts = roundUp(numRows, kBlockSize) / kBlockSize;
+  for (auto base = 0; base < numCounts; base += kBlockSize) {
+    auto idx = threadIdx.x + base;
+    if (idx < numCounts) {
+      // Every thread writes a row count and errors for kBlockSize rows. All
+      // errors are cleared and all row counts except the last are kBlockSize.
+      status[idx].numRows =
+          idx < numCounts - 1 ? kBlockSize : numRows - idx * kBlockSize;
+      memset(&status[base + threadIdx.x].errors, 0, sizeof(status->errors));
+    }
+  }
+}
+
 template <int32_t kBlockSize>
 __device__ void decodeSwitch(GpuDecode& op) {
   switch (op.step) {
@@ -538,6 +552,9 @@ __device__ void decodeSwitch(GpuDecode& op) {
     case DecodeStep::kMakeScatterIndices:
       detail::makeScatterIndices<kBlockSize>(op.data.makeScatterIndices);
       break;
+    case DecodeStep::kRowCountNoFilter:
+      detail::setRowCountNoFilter<kBlockSize>(op.data.rowCountNoFilter);
+      break;
     default:
       if (threadIdx.x == 0) {
         printf("ERROR: Unsupported DecodeStep (with shared memory)\n");
@@ -558,6 +575,7 @@ int32_t sharedMemorySizeForDecode(DecodeStep step) {
     case DecodeStep::kTrivial:
     case DecodeStep::kDictionaryOnBitpack:
     case DecodeStep::kSparseBool:
+    case DecodeStep::kRowCountNoFilter:
       return 0;
       break;
 

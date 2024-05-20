@@ -194,7 +194,7 @@ TEST_F(RowNumberTest, spill) {
   std::vector<RowVectorPtr> vectors = createVectors(8, rowType_, fuzzerOpts_);
   createDuckDbTable(vectors);
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  auto queryCtx = core::QueryCtx::create(executor_.get());
 
   struct {
     uint32_t spillPartitionBits;
@@ -211,7 +211,7 @@ TEST_F(RowNumberTest, spill) {
     core::PlanNodeId rowNumberPlanNodeId;
     auto task =
         AssertQueryBuilder(duckDbQueryRunner_)
-            .spillDirectory(spillDirectory->path)
+            .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, true)
             .config(core::QueryConfig::kRowNumberSpillEnabled, true)
             .config(
@@ -240,8 +240,8 @@ TEST_F(RowNumberTest, spill) {
         runtimeStats.at(Operator::kSpillReadBytes).sum,
         operatorStats.spilledBytes);
     ASSERT_GT(runtimeStats.at(Operator::kSpillReads).sum, 0);
-    ASSERT_GT(runtimeStats.at(Operator::kSpillReadTimeUs).sum, 0);
-    ASSERT_GT(runtimeStats.at(Operator::kSpillDeserializationTimeUs).sum, 0);
+    ASSERT_GT(runtimeStats.at(Operator::kSpillReadTime).sum, 0);
+    ASSERT_GT(runtimeStats.at(Operator::kSpillDeserializationTime).sum, 0);
 
     task.reset();
     waitForAllTasksToBeDeleted();
@@ -269,11 +269,11 @@ TEST_F(RowNumberTest, maxSpillBytes) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     try {
       TestScopedSpillInjection scopedSpillInjection(100);
       AssertQueryBuilder(plan)
-          .spillDirectory(spillDirectory->path)
+          .spillDirectory(spillDirectory->getPath())
           .queryCtx(queryCtx)
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kRowNumberSpillEnabled, true)
@@ -308,18 +308,18 @@ TEST_F(RowNumberTest, memoryUsage) {
   int64_t peakBytesWithOutSpilling = 0;
 
   for (const auto& spillEnable : {false, true}) {
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     const std::string spillEnableConfig = std::to_string(spillEnable);
 
     std::shared_ptr<Task> task;
     TestScopedSpillInjection scopedSpillInjection(100);
     AssertQueryBuilder(plan)
-        .spillDirectory(spillDirectory->path)
+        .spillDirectory(spillDirectory->getPath())
         .queryCtx(queryCtx)
         .config(core::QueryConfig::kSpillEnabled, spillEnableConfig)
         .config(core::QueryConfig::kRowNumberSpillEnabled, spillEnableConfig)
-        .spillDirectory(spillDirectory->path)
+        .spillDirectory(spillDirectory->getPath())
         .copyResults(pool_.get(), task);
 
     if (spillEnable) {

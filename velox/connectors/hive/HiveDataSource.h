@@ -119,6 +119,7 @@ class HiveDataSource : public DataSource {
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<HiveConfig> hiveConfig_;
   std::shared_ptr<io::IoStatistics> ioStats_;
+  std::shared_ptr<HiveColumnHandle> rowIndexColumn_;
 
  private:
   // Evaluates remainingFilter_ on the specified vector. Returns number of rows
@@ -140,6 +141,7 @@ class HiveDataSource : public DataSource {
 
   // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;
+  core::ExpressionEvaluator* const expressionEvaluator_;
 
   // Column handles for the Split info columns keyed on their column names.
   std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
@@ -149,7 +151,6 @@ class HiveDataSource : public DataSource {
   RowVectorPtr emptyOutput_;
   dwio::common::RuntimeStatistics runtimeStats_;
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
-  core::ExpressionEvaluator* expressionEvaluator_;
   uint64_t completedRows_ = 0;
 
   // Reusable memory for remaining filter evaluation.

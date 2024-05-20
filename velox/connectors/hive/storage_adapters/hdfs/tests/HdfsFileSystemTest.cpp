@@ -46,7 +46,7 @@ class HdfsFileSystemTest : public testing::Test {
       miniCluster = std::make_shared<filesystems::test::HdfsMiniCluster>();
       miniCluster->start();
       auto tempFile = createFile();
-      miniCluster->addFile(tempFile->path, destinationPath);
+      miniCluster->addFile(tempFile->getPath(), destinationPath);
     }
   }
 
@@ -64,7 +64,7 @@ class HdfsFileSystemTest : public testing::Test {
 
  private:
   static std::shared_ptr<::exec::test::TempFilePath> createFile() {
-    auto tempFile = ::exec::test::TempFilePath::create();
+    auto tempFile = exec::test::TempFilePath::create();
     tempFile->append("aaaaa");
     tempFile->append("bbbbb");
     tempFile->append(std::string(kOneMB, 'c'));

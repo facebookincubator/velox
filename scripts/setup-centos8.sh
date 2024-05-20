@@ -61,7 +61,7 @@ function install_velox_deps_from_dnf {
     libdwarf-devel curl-devel libicu-devel bison flex libsodium-devel
 
   # install sphinx for doc gen
-  pip3 install sphinx sphinx-tabs breathe sphinx_rtd_theme
+  pip3.9 install sphinx sphinx-tabs breathe sphinx_rtd_theme
 }
 
 function install_conda {
@@ -101,7 +101,7 @@ function install_boost {
   (
    cd boost
    ./bootstrap.sh --prefix=/usr/local
-   ./b2 "-j$(nproc)" -d0 install threading=multi
+   ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
   )
 }
 
@@ -132,7 +132,7 @@ function install_protobuf {
   )
 }
 
-FB_OS_VERSION="v2024.02.26.00"
+FB_OS_VERSION="v2024.04.01.00"
 
 function install_fizz {
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
@@ -183,6 +183,12 @@ function install_duckdb {
       cmake_install -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
     )
   fi
+}
+
+function install_cuda {
+  # See https://developer.nvidia.com/cuda-downloads
+  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
+  yum install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-devel-$(echo $1 | tr '.' '-')
 }
 
 function install_velox_deps {

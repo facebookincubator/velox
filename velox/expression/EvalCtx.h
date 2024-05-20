@@ -25,6 +25,7 @@
 
 namespace facebook::velox::exec {
 
+struct DriverCtx;
 class Expr;
 class ExprSet;
 class LocalDecodedVector;
@@ -36,7 +37,11 @@ class PeeledEncoding;
 // flags for Expr interpreter.
 class EvalCtx {
  public:
-  EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row);
+  EvalCtx(
+      core::ExecCtx* execCtx,
+      ExprSet* exprSet,
+      const RowVector* row,
+      DriverCtx* driverCtx = nullptr);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* execCtx);
@@ -77,6 +82,9 @@ class EvalCtx {
   void saveAndReset(ContextSaver& saver, const SelectivityVector& rows);
 
   void restore(ContextSaver& saver);
+
+  // @param status Must indicate an error. Cannot be "ok".
+  void setStatus(vector_size_t index, Status status);
 
   // If exceptionPtr is known to be a VeloxException use setVeloxExceptionError
   // instead.
@@ -189,12 +197,27 @@ class EvalCtx {
     errors_.reset();
   }
 
+  /// Boolean indicating whether exceptions that occur during expression
+  /// evaluation should be thrown directly or saved for later processing.
   bool throwOnError() const {
     return throwOnError_;
   }
 
   bool* mutableThrowOnError() {
     return &throwOnError_;
+  }
+
+  /// Boolean indicating whether to capture details when storing exceptions for
+  /// later processing (throwOnError_ == true).
+  ///
+  /// Conjunct expressions (AND, OR) require capturing error details, while TRY
+  /// and TRY_CAST expressions do not.
+  bool captureErrorDetails() const {
+    return captureErrorDetails_;
+  }
+
+  bool* mutableCaptureErrorDetails() {
+    return &captureErrorDetails_;
   }
 
   bool nullsPruned() const {
@@ -236,6 +259,10 @@ class EvalCtx {
 
   ExprSet* exprSet() const {
     return exprSet_;
+  }
+
+  DriverCtx* driverCtx() const {
+    return driverCtx_;
   }
 
   VectorEncoding::Simple wrapEncoding() const;
@@ -334,6 +361,7 @@ class EvalCtx {
   core::ExecCtx* const execCtx_;
   ExprSet* const exprSet_;
   const RowVector* row_;
+  DriverCtx* const driverCtx_;
   const bool cacheEnabled_;
   const uint32_t maxSharedSubexprResultsCached_;
   bool inputFlatNoNulls_;
@@ -351,6 +379,8 @@ class EvalCtx {
   // behavior.
   bool nullsPruned_{false};
   bool throwOnError_{true};
+
+  bool captureErrorDetails_{true};
 
   // True if the current set of rows will not grow, e.g. not under and IF or OR.
   bool isFinalSelection_{true};

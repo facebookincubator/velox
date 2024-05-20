@@ -62,6 +62,12 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
       const std::string& duckDbSql);
 
+  std::shared_ptr<Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
+      const std::string& duckDbSql,
+      const int32_t numPrefetchSplit);
+
   static std::vector<std::shared_ptr<TempFilePath>> makeFilePaths(int count);
 
   static std::vector<std::shared_ptr<connector::ConnectorSplit>>
@@ -87,7 +93,10 @@ class HiveConnectorTestBase : public OperatorTestBase {
   makeHiveConnectorSplits(
       const std::string& filePath,
       uint32_t splitCount,
-      dwio::common::FileFormat format);
+      dwio::common::FileFormat format,
+      const std::optional<
+          std::unordered_map<std::string, std::optional<std::string>>>&
+          partitionKeys = {});
 
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
       common::test::SubfieldFilters subfieldFilters = {},
@@ -120,7 +129,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& name,
       const TypePtr& dataType,
       const TypePtr& hiveType,
-      const std::vector<std::string>& requiredSubfields);
+      const std::vector<std::string>& requiredSubfields,
+      connector::hive::HiveColumnHandle::ColumnType columnType =
+          connector::hive::HiveColumnHandle::ColumnType::kRegular);
 
   /// @param targetDirectory Final directory of the target table after commit.
   /// @param writeDirectory Write directory of the target table before commit.

@@ -47,6 +47,7 @@ add_executable(
   ArraySumTest.cpp
   ArrayTrimTest.cpp
   ArrayUnionTest.cpp
+  ArgGeneratorTest.cpp
   BinaryFunctionsTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
@@ -97,6 +98,7 @@ add_executable(
   URLFunctionsTest.cpp
   Utf8Test.cpp
   WidthBucketArrayTest.cpp
+  WordStemTest.cpp
   ZipTest.cpp
   ZipWithTest.cpp)
 
@@ -112,6 +114,8 @@ target_link_libraries(
   velox_exec_test_lib
   velox_dwio_common_test_utils
   velox_vector_fuzzer
+  velox_expression_fuzzer_test_utility
+  velox_expression_fuzzer
   gtest
   gtest_main
   gflags::gflags

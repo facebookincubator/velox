@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 #pragma once
+
 #include <fmt/format.h>
+
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 
-#include "velox/vector/arrow/Abi.h"
-#include "velox/vector/arrow/Bridge.h"
+struct ArrowArrayStream;
 
 namespace facebook::velox::core {
 
@@ -157,17 +158,17 @@ class PlanNode : public ISerializable {
   /// 'addContext' is not null.
   ///
   /// @param addContext Optional lambda to add context for a given plan node.
-  /// Receives plan node ID, indentation and std::stringstring where to append
+  /// Receives plan node ID, indentation and std::stringstream where to append
   /// the context. Use indentation for second and subsequent lines of a
-  /// mult-line context. Do not use indentation for single-line context. Do not
+  /// multi-line context. Do not use indentation for single-line context. Do not
   /// add trailing new-line character for the last or only line of context.
   std::string toString(
       bool detailed = false,
       bool recursive = false,
-      std::function<void(
+      const std::function<void(
           const PlanNodeId& planNodeId,
           const std::string& indentation,
-          std::stringstream& stream)> addContext = nullptr) const {
+          std::stringstream& stream)>& addContext = nullptr) const {
     std::stringstream stream;
     toString(stream, detailed, recursive, 0, addContext);
     return stream.str();
@@ -210,10 +211,10 @@ class PlanNode : public ISerializable {
       bool detailed,
       bool recursive,
       size_t indentationSize,
-      std::function<void(
+      const std::function<void(
           const PlanNodeId& planNodeId,
           const std::string& indentation,
-          std::stringstream& stream)> addContext) const;
+          std::stringstream& stream)>& addContext) const;
 
   const std::string id_;
 };
@@ -1588,7 +1589,7 @@ class HashJoinNode : public AbstractJoinNode {
     if (nullAware) {
       VELOX_USER_CHECK(
           isNullAwareSupported(joinType),
-          "Null-aware flag is supported only for semi and anti joins");
+          "Null-aware flag is supported only for semi project and anti joins");
       VELOX_USER_CHECK_EQ(
           1, leftKeys_.size(), "Null-aware joins allow only one join key");
 

@@ -265,7 +265,7 @@ Spilling
        reservation grows along a series of powers of (1 + N / 100). If the memory reservation fails, it starts spilling.
    * - max_spill_level
      - integer
-     - 4
+     - 1
      - The maximum allowed spilling level with zero being the initial spilling level. Applies to hash join build
        spilling which might use recursive spilling when the build table is very large. -1 means unlimited.
        In this case an extremely large query might run out of spilling partition bits. The max spill level
@@ -471,6 +471,16 @@ Each query can override the config by setting corresponding query session proper
      - 9
      - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
        Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).
+   * - hive.orc.writer.linear-stripe-size-heuristics
+     - orc_writer_linear_stripe_size_heuristics
+     - bool
+     - true
+     - Enables historical based stripe size estimation after compression.
+   * - hive.orc.writer.min-compression-size
+     - orc_writer_min_compression_size
+     - integer
+     - 1024
+     - Minimal number of items in an encoded stream.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -524,6 +534,18 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - false
      - Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.
+   * - hive.s3.connect-timeout
+     - string
+     -
+     - Socket connect timeout.
+   * - hive.s3.socket-timeout
+     - string
+     -
+     - Socket read timeout.
+   * - hive.s3.max-connections
+     - integer
+     -
+     - Maximum concurrent TCP connections for a single http client.
 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

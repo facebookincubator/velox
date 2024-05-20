@@ -14,9 +14,17 @@ Mathematical Functions
 
     Returns inverse hyperbolic cosine of ``x``.
 
+.. spark::function:: asin(x) -> double
+
+    Returns the arc sine of ``x``.
+
 .. spark:function:: asinh(x) -> double
 
     Returns inverse hyperbolic sine of ``x``.
+
+.. spark::function:: atan(x) -> double
+
+    Returns the arc tangent of ``x``.
 
 .. spark:function:: atan2(y, x) -> double
 
@@ -58,6 +66,10 @@ Mathematical Functions
     Returns ``x`` rounded up to the nearest integer.  
     Supported types are: BIGINT and DOUBLE.
 
+.. spark::function:: cos(x) -> double
+
+    Returns the cosine of ``x``.
+
 .. spark:function:: cosh(x) -> double
 
     Returns the hyperbolic cosine of ``x``.
@@ -69,6 +81,10 @@ Mathematical Functions
 .. spark:function:: csc(x) -> double
 
     Returns the cosecant of ``x``.
+
+.. spark::function:: degrees(x) -> double
+
+    Converts angle x in radians to degrees.
 
 .. spark:function:: divide(x, y) -> double
 
@@ -197,6 +213,14 @@ Mathematical Functions
 .. spark:function:: remainder(n, m) -> [same as n]
 
     Returns the modulus (remainder) of ``n`` divided by ``m``. Corresponds to Spark's operator ``%``.
+
+.. spark:function:: rint(x) -> double
+
+    Returns the double value that is closest in value to the argument and is 
+    equal to a mathematical integer.
+    Returns ``x`` if ``x`` is a positive or negative infinity or a NaN. ::
+
+        SELECT rint(12.3456); -- 12.0
 
 .. spark:function:: round(x, d) -> [same as x]
 

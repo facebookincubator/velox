@@ -263,12 +263,6 @@ uint32_t Operator::outputBatchRows(
   }
 
   const uint64_t rowSize = averageRowSize.value();
-  VELOX_CHECK_GE(
-      rowSize,
-      0,
-      "The given average row size of {}.{} is negative.",
-      operatorType(),
-      operatorId());
 
   if (rowSize * queryConfig.maxOutputBatchRows() <
       queryConfig.preferredOutputBatchBytes()) {
@@ -372,7 +366,9 @@ void Operator::recordSpillStats() {
   if (lockedSpillStats->spillReadBytes != 0) {
     lockedStats->addRuntimeStat(
         kSpillReadBytes,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReadBytes)});
+        RuntimeCounter{
+            static_cast<int64_t>(lockedSpillStats->spillReadBytes),
+            RuntimeCounter::Unit::kBytes});
   }
 
   if (lockedSpillStats->spillReads != 0) {
@@ -383,30 +379,27 @@ void Operator::recordSpillStats() {
 
   if (lockedSpillStats->spillReadTimeUs != 0) {
     lockedStats->addRuntimeStat(
-        kSpillReadTimeUs,
+        kSpillReadTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillReadTimeUs)});
+            static_cast<int64_t>(lockedSpillStats->spillReadTimeUs) *
+                Timestamp::kNanosecondsInMicrosecond,
+            RuntimeCounter::Unit::kNanos});
   }
 
   if (lockedSpillStats->spillDeserializationTimeUs != 0) {
     lockedStats->addRuntimeStat(
-        kSpillDeserializationTimeUs,
-        RuntimeCounter{static_cast<int64_t>(
-            lockedSpillStats->spillDeserializationTimeUs)});
+        kSpillDeserializationTime,
+        RuntimeCounter{
+            static_cast<int64_t>(lockedSpillStats->spillDeserializationTimeUs) *
+                Timestamp::kNanosecondsInMicrosecond,
+            RuntimeCounter::Unit::kNanos});
   }
   lockedSpillStats->reset();
 }
 
 std::string Operator::toString() const {
   std::stringstream out;
-  if (auto task = operatorCtx_->task()) {
-    auto driverCtx = operatorCtx_->driverCtx();
-    out << operatorType() << "(" << operatorId() << ")<" << task->taskId()
-        << ":" << driverCtx->pipelineId << "." << driverCtx->driverId << " "
-        << this;
-  } else {
-    out << "<Terminated, no task>";
-  }
+  out << operatorType() << "[" << planNodeId() << "] " << operatorId();
   return out.str();
 }
 
@@ -510,6 +503,8 @@ void OperatorStats::add(const OperatorStats& other) {
   spilledFiles += other.spilledFiles;
 
   numNullKeys += other.numNullKeys;
+
+  dynamicFilterStats.add(other.dynamicFilterStats);
 }
 
 void OperatorStats::clear() {
@@ -543,6 +538,8 @@ void OperatorStats::clear() {
   spilledRows = 0;
   spilledPartitions = 0;
   spilledFiles = 0;
+
+  dynamicFilterStats.clear();
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
@@ -624,11 +621,11 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   }
   VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
   VELOX_CHECK(
-      !driver->state().isOnThread() || driver->state().isSuspended ||
+      !driver->state().isOnThread() || driver->state().suspended() ||
           driver->state().isTerminated,
       "driverOnThread {}, driverSuspended {} driverTerminated {} {}",
       driver->state().isOnThread(),
-      driver->state().isSuspended,
+      driver->state().suspended(),
       driver->state().isTerminated,
       pool->name());
   VELOX_CHECK(driver->task()->pauseRequested());
@@ -665,14 +662,20 @@ void Operator::MemoryReclaimer::abort(
     memory::MemoryPool* pool,
     const std::exception_ptr& /* error */) {
   std::shared_ptr<Driver> driver = ensureDriver();
-  if (FOLLY_UNLIKELY(driver == nullptr)) {
+  if (driver == nullptr) {
     return;
   }
   VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
   VELOX_CHECK(
-      !driver->state().isOnThread() || driver->state().isSuspended ||
+      !driver->state().isOnThread() || driver->state().suspended() ||
       driver->state().isTerminated);
   VELOX_CHECK(driver->task()->isCancelled());
+  if (driver->state().isOnThread() && driver->state().suspended()) {
+    // We can't abort an operator if it is running on a driver thread and
+    // suspended for memory arbitration. Otherwise, it might cause random crash
+    // when the driver thread throws after detects the aborted query.
+    return;
+  }
 
   // Calls operator close to free up major memory usage.
   op_->close();

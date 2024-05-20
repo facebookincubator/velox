@@ -31,7 +31,7 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
   PrestoQueryRunner(
       std::string coordinatorUri,
       std::string user,
-      std::chrono::milliseconds timeout = std::chrono::milliseconds{1000});
+      std::chrono::milliseconds timeout);
 
   /// Converts Velox query plan to Presto SQL. Supports Values -> Aggregation or
   /// Window with an optional Project on top.
@@ -85,6 +85,9 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
 
   std::optional<std::string> toSql(
       const std::shared_ptr<const velox::core::ProjectNode>& projectNode);
+
+  std::optional<std::string> toSql(
+      const std::shared_ptr<const velox::core::RowNumberNode>& rowNumberNode);
 
   std::string startQuery(const std::string& sql);
 

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <functional>
 
 #include "velox/dwio/common/UnitLoader.h"
@@ -26,16 +27,18 @@ class OnDemandUnitLoaderFactory
     : public velox::dwio::common::UnitLoaderFactory {
  public:
   explicit OnDemandUnitLoaderFactory(
-      std::function<void(uint64_t)> blockedOnIoMsCallback)
-      : blockedOnIoMsCallback_{std::move(blockedOnIoMsCallback)} {}
+      std::function<void(std::chrono::high_resolution_clock::duration)>
+          blockedOnIoCallback)
+      : blockedOnIoCallback_{std::move(blockedOnIoCallback)} {}
   ~OnDemandUnitLoaderFactory() override = default;
 
   std::unique_ptr<velox::dwio::common::UnitLoader> create(
-      std::vector<std::unique_ptr<velox::dwio::common::LoadUnit>> loadUnits)
-      override;
+      std::vector<std::unique_ptr<velox::dwio::common::LoadUnit>> loadUnits,
+      uint64_t rowsToSkip) override;
 
  private:
-  std::function<void(uint64_t)> blockedOnIoMsCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      blockedOnIoCallback_;
 };
 
 } // namespace facebook::velox::dwio::common

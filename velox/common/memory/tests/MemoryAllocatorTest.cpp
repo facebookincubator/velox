@@ -48,7 +48,7 @@ struct ProcessSize {
 };
 } // namespace
 
-static constexpr uint64_t kCapacityBytes = 1024UL * 1024 * 1024;
+static constexpr uint64_t kCapacityBytes = 1ULL << 30;
 static constexpr MachinePageCount kCapacityPages =
     (kCapacityBytes / AllocationTraits::kPageSize);
 
@@ -72,6 +72,9 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
       MemoryManagerOptions options;
       options.useMmapAllocator = true;
       options.allocatorCapacity = kCapacityBytes;
+      options.arbitratorCapacity = kCapacityBytes;
+      options.arbitratorReservedCapacity = 128 << 20;
+      options.memoryPoolReservedCapacity = 1 << 20;
       options.smallAllocationReservePct = 4;
       options.maxMallocBytes = maxMallocBytes_;
       memoryManager_ = std::make_unique<MemoryManager>(options);
@@ -84,6 +87,9 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
     } else {
       MemoryManagerOptions options;
       options.allocatorCapacity = kCapacityBytes;
+      options.arbitratorCapacity = kCapacityBytes;
+      options.arbitratorReservedCapacity = 128 << 20;
+      options.memoryPoolReservedCapacity = 1 << 20;
       if (!enableReservation_) {
         options.allocationSizeThresholdWithReservation = 0;
       }
@@ -626,10 +632,42 @@ TEST_P(MemoryAllocatorTest, allocationClass2) {
   allocation->clear();
 }
 
+TEST_P(MemoryAllocatorTest, stats) {
+  const std::vector<MachinePageCount>& sizes = instance_->sizeClasses();
+  MachinePageCount capacity = kCapacityPages;
+  for (auto i = 0; i < sizes.size(); ++i) {
+    std::unique_ptr<Allocation> allocation = std::make_unique<Allocation>();
+    auto size = sizes[i];
+    ASSERT_TRUE(allocate(size, *allocation));
+    ASSERT_GT(instance_->numAllocated(), 0);
+    instance_->freeNonContiguous(*allocation);
+    auto stats = instance_->stats();
+    ASSERT_EQ(0, stats.sizes[i].clocks());
+    ASSERT_EQ(stats.sizes[i].totalBytes, 0);
+    ASSERT_EQ(stats.sizes[i].numAllocations, 0);
+  }
+
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_time_allocations = true;
+  for (auto i = 0; i < sizes.size(); ++i) {
+    std::unique_ptr<Allocation> allocation = std::make_unique<Allocation>();
+    auto size = sizes[i];
+    ASSERT_TRUE(allocate(size, *allocation));
+    ASSERT_GT(instance_->numAllocated(), 0);
+    instance_->freeNonContiguous(*allocation);
+    auto stats = instance_->stats();
+    ASSERT_LT(0, stats.sizes[i].clocks());
+    ASSERT_GE(stats.sizes[i].totalBytes, size * AllocationTraits::kPageSize);
+    ASSERT_GE(stats.sizes[i].numAllocations, 1);
+  }
+}
+
 TEST_P(MemoryAllocatorTest, singleAllocation) {
   if (!useMmap_ && enableReservation_) {
     return;
   }
+  gflags::FlagSaver flagSaver;
+  FLAGS_velox_time_allocations = true;
   const std::vector<MachinePageCount>& sizes = instance_->sizeClasses();
   MachinePageCount capacity = kCapacityPages;
   for (auto i = 0; i < sizes.size(); ++i) {

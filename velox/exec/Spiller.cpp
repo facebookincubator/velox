@@ -227,8 +227,7 @@ Spiller::Spiller(
           memory::spillMemoryPool(),
           spillStats,
           fileCreateConfig) {
-  TestValue::adjust(
-      "facebook::velox::exec::Spiller", const_cast<HashBitRange*>(&bits_));
+  TestValue::adjust("facebook::velox::exec::Spiller", this);
 
   VELOX_CHECK(!spillProbedFlag_ || type_ == Type::kHashJoinBuild);
   VELOX_CHECK_EQ(container_ == nullptr, type_ == Type::kHashJoinProbe);
@@ -445,7 +444,7 @@ void Spiller::runSpill(bool lastRun) {
     }
     writes.push_back(std::make_shared<AsyncSource<SpillStatus>>(
         [partition, this]() { return writeSpill(partition); }));
-    if (executor_) {
+    if ((writes.size() > 1) && executor_ != nullptr) {
       executor_->add([source = writes.back()]() { source->prepare(); });
     }
   }

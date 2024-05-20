@@ -132,76 +132,99 @@ TEST(DateTimeUtilTest, fromDateStrInvalid) {
 }
 
 TEST(DateTimeUtilTest, castFromDateString) {
-  for (bool isIso8601 : {true, false}) {
-    EXPECT_EQ(0, castFromDateString("1970-01-01", isIso8601));
-    EXPECT_EQ(3789742, castFromDateString("12345-12-18", isIso8601));
+  for (ParseMode mode :
+       {ParseMode::kStandardCast, ParseMode::kNonStandardCast}) {
+    EXPECT_EQ(0, castFromDateString("1970-01-01", mode));
+    EXPECT_EQ(3789742, castFromDateString("12345-12-18", mode));
 
-    EXPECT_EQ(1, castFromDateString("1970-1-2", isIso8601));
-    EXPECT_EQ(1, castFromDateString("1970-01-2", isIso8601));
-    EXPECT_EQ(1, castFromDateString("1970-1-02", isIso8601));
+    EXPECT_EQ(1, castFromDateString("1970-1-2", mode));
+    EXPECT_EQ(1, castFromDateString("1970-01-2", mode));
+    EXPECT_EQ(1, castFromDateString("1970-1-02", mode));
 
-    EXPECT_EQ(1, castFromDateString("+1970-01-02", isIso8601));
-    EXPECT_EQ(-719893, castFromDateString("-1-1-1", isIso8601));
+    EXPECT_EQ(1, castFromDateString("+1970-01-02", mode));
+    EXPECT_EQ(-719893, castFromDateString("-1-1-1", mode));
 
-    EXPECT_EQ(0, castFromDateString(" 1970-01-01", isIso8601));
+    EXPECT_EQ(0, castFromDateString(" 1970-01-01", mode));
   }
 
-  EXPECT_EQ(3789391, castFromDateString("12345", false));
-  EXPECT_EQ(16436, castFromDateString("2015", false));
-  EXPECT_EQ(16495, castFromDateString("2015-03", false));
-  EXPECT_EQ(16512, castFromDateString("2015-03-18T", false));
-  EXPECT_EQ(16512, castFromDateString("2015-03-18T123123", false));
-  EXPECT_EQ(16512, castFromDateString("2015-03-18 123142", false));
-  EXPECT_EQ(16512, castFromDateString("2015-03-18 (BC)", false));
+  EXPECT_EQ(3789391, castFromDateString("12345", ParseMode::kNonStandardCast));
+  EXPECT_EQ(16436, castFromDateString("2015", ParseMode::kNonStandardCast));
+  EXPECT_EQ(16495, castFromDateString("2015-03", ParseMode::kNonStandardCast));
+  EXPECT_EQ(
+      16512, castFromDateString("2015-03-18T", ParseMode::kNonStandardCast));
+  EXPECT_EQ(
+      16512,
+      castFromDateString("2015-03-18T123123", ParseMode::kNonStandardCast));
+  EXPECT_EQ(
+      16512,
+      castFromDateString("2015-03-18 123142", ParseMode::kNonStandardCast));
+  EXPECT_EQ(
+      16512,
+      castFromDateString("2015-03-18 (BC)", ParseMode::kNonStandardCast));
 
-  EXPECT_EQ(0, castFromDateString("1970-01-01 ", false));
-  EXPECT_EQ(0, castFromDateString(" 1970-01-01 ", false));
+  EXPECT_EQ(0, castFromDateString("1970-01-01 ", ParseMode::kNonStandardCast));
+  EXPECT_EQ(0, castFromDateString(" 1970-01-01 ", ParseMode::kNonStandardCast));
 }
 
 TEST(DateTimeUtilTest, castFromDateStringInvalid) {
   auto testCastFromDateStringInvalid = [&](const StringView& str,
-                                           bool isIso8601) {
-    if (isIso8601) {
+                                           ParseMode mode) {
+    if (mode == ParseMode::kStandardCast) {
       VELOX_ASSERT_THROW(
-          castFromDateString(str, isIso8601),
+          castFromDateString(str, mode),
           fmt::format(
-              "Unable to parse date value: \"{}\"."
+              "Unable to parse date value: \"{}\". "
               "Valid date string pattern is (YYYY-MM-DD), "
               "and can be prefixed with [+-]",
               std::string(str.data(), str.size())));
-    } else {
+    } else if (mode == ParseMode::kNonStandardCast) {
       VELOX_ASSERT_THROW(
-          castFromDateString(str, isIso8601),
+          castFromDateString(str, mode),
           fmt::format(
-              "Unable to parse date value: \"{}\"."
+              "Unable to parse date value: \"{}\". "
               "Valid date string patterns include "
-              "(yyyy*, yyyy*-[m]m, yyyy*-[m]m-[d]d, "
-              "yyyy*-[m]m-[d]d *, yyyy*-[m]m-[d]dT*), "
+              "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
+              "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
+              "and any pattern prefixed with [+-]",
+              std::string(str.data(), str.size())));
+    } else if (mode == ParseMode::kNonStandardNoTimeCast) {
+      VELOX_ASSERT_THROW(
+          castFromDateString(str, mode),
+          fmt::format(
+              "Unable to parse date value: \"{}\". "
+              "Valid date string patterns include "
+              "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
+              "[y]y*-[m]m*-[d]d* *), "
               "and any pattern prefixed with [+-]",
               std::string(str.data(), str.size())));
     }
   };
 
-  for (bool isIso8601 : {true, false}) {
-    testCastFromDateStringInvalid("2012-Oct-23", isIso8601);
-    testCastFromDateStringInvalid("2012-Oct-23", isIso8601);
-    testCastFromDateStringInvalid("2015-03-18X", isIso8601);
-    testCastFromDateStringInvalid("2015/03/18", isIso8601);
-    testCastFromDateStringInvalid("2015.03.18", isIso8601);
-    testCastFromDateStringInvalid("20150318", isIso8601);
-    testCastFromDateStringInvalid("2015-031-8", isIso8601);
+  for (ParseMode mode :
+       {ParseMode::kStandardCast, ParseMode::kNonStandardCast}) {
+    testCastFromDateStringInvalid("2012-Oct-23", mode);
+    testCastFromDateStringInvalid("2012-Oct-23", mode);
+    testCastFromDateStringInvalid("2015-03-18X", mode);
+    testCastFromDateStringInvalid("2015/03/18", mode);
+    testCastFromDateStringInvalid("2015.03.18", mode);
+    testCastFromDateStringInvalid("20150318", mode);
+    testCastFromDateStringInvalid("2015-031-8", mode);
   }
 
-  testCastFromDateStringInvalid("12345", true);
-  testCastFromDateStringInvalid("2015", true);
-  testCastFromDateStringInvalid("2015-03", true);
-  testCastFromDateStringInvalid("2015-03-18 123412", true);
-  testCastFromDateStringInvalid("2015-03-18T", true);
-  testCastFromDateStringInvalid("2015-03-18T123412", true);
-  testCastFromDateStringInvalid("2015-03-18 (BC)", true);
+  testCastFromDateStringInvalid("12345", ParseMode::kStrict);
+  testCastFromDateStringInvalid("2015", ParseMode::kStrict);
+  testCastFromDateStringInvalid("2015-03", ParseMode::kStrict);
+  testCastFromDateStringInvalid("2015-03-18 123412", ParseMode::kStrict);
+  testCastFromDateStringInvalid("2015-03-18T", ParseMode::kStrict);
+  testCastFromDateStringInvalid("2015-03-18T123412", ParseMode::kStrict);
+  testCastFromDateStringInvalid("2015-03-18 (BC)", ParseMode::kStrict);
+  testCastFromDateStringInvalid("1970-01-01 ", ParseMode::kStrict);
+  testCastFromDateStringInvalid(" 1970-01-01 ", ParseMode::kStrict);
 
-  testCastFromDateStringInvalid("1970-01-01 ", true);
-  testCastFromDateStringInvalid(" 1970-01-01 ", true);
+  testCastFromDateStringInvalid(
+      "1970-01-01T01:00:47", ParseMode::kNonStandardNoTimeCast);
+  testCastFromDateStringInvalid(
+      "1970-01-01T01:00:47.000", ParseMode::kNonStandardNoTimeCast);
 }
 
 TEST(DateTimeUtilTest, fromTimeString) {
@@ -229,17 +252,22 @@ TEST(DateTimeUtilTest, fromTimeString) {
 }
 
 TEST(DateTimeUtilTest, fromTimeStrInvalid) {
-  EXPECT_THROW(fromTimeString(""), VeloxUserError);
-  EXPECT_THROW(fromTimeString("00"), VeloxUserError);
-  EXPECT_THROW(fromTimeString("00:00"), VeloxUserError);
+  const std::string errorMsg = "Unable to parse time value: ";
+  VELOX_ASSERT_THROW(fromTimeString(""), errorMsg);
+  VELOX_ASSERT_THROW(fromTimeString("00"), errorMsg);
+  VELOX_ASSERT_THROW(fromTimeString("00:"), errorMsg);
+  VELOX_ASSERT_THROW(fromTimeString("00:00:"), errorMsg);
+  VELOX_ASSERT_THROW(fromTimeString("00:00:00."), errorMsg);
+  VELOX_ASSERT_THROW(fromTimeString("00:00-00"), errorMsg);
+  VELOX_ASSERT_THROW(fromTimeString("00/00:00"), errorMsg);
 
   // Invalid hour, minutes and seconds.
-  EXPECT_THROW(fromTimeString("24:00:00"), VeloxUserError);
-  EXPECT_THROW(fromTimeString("00:61:00"), VeloxUserError);
-  EXPECT_THROW(fromTimeString("00:00:61"), VeloxUserError);
+  VELOX_ASSERT_THROW(fromTimeString("24:00:00"), errorMsg);
+  VELOX_ASSERT_THROW(fromTimeString("00:61:00"), errorMsg);
+  VELOX_ASSERT_THROW(fromTimeString("00:00:61"), errorMsg);
 
   // Trailing characters.
-  EXPECT_THROW(fromTimeString("00:00:00   12"), VeloxUserError);
+  VELOX_ASSERT_THROW(fromTimeString("00:00:00   12"), errorMsg);
 }
 
 // bash command to verify:
@@ -249,40 +277,86 @@ TEST(DateTimeUtilTest, fromTimestampString) {
   EXPECT_EQ(Timestamp(0, 0), fromTimestampString("1970-01-01"));
   EXPECT_EQ(Timestamp(946684800, 0), fromTimestampString("2000-01-01"));
 
+  EXPECT_EQ(Timestamp(0, 0), fromTimestampString("1970-01-01 00:00"));
   EXPECT_EQ(Timestamp(0, 0), fromTimestampString("1970-01-01 00:00:00"));
+  EXPECT_EQ(Timestamp(0, 0), fromTimestampString("1970-01-01 00:00:00    "));
+
   EXPECT_EQ(
       Timestamp(946729316, 0), fromTimestampString("2000-01-01 12:21:56"));
   EXPECT_EQ(
       Timestamp(946729316, 0), fromTimestampString("2000-01-01T12:21:56"));
   EXPECT_EQ(
       Timestamp(946729316, 0), fromTimestampString("2000-01-01T 12:21:56"));
-
-  // Test UTC offsets.
-  EXPECT_EQ(
-      Timestamp(7200, 0), fromTimestampString("1970-01-01 00:00:00-02:00"));
-  EXPECT_EQ(
-      Timestamp(946697400, 0),
-      fromTimestampString("2000-01-01 00:00:00Z-03:30"));
-  EXPECT_EQ(
-      Timestamp(1587583417, 0),
-      fromTimestampString("2020-04-23 04:23:37+09:00"));
 }
 
-TEST(DateTimeUtilTest, fromTimestampStrInvalid) {
-  // Needs at least a date.
-  EXPECT_THROW(fromTimestampString(""), VeloxUserError);
-  EXPECT_THROW(fromTimestampString("00:00:00"), VeloxUserError);
+TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
+  const std::string_view parserError = "Unable to parse timestamp value: ";
+  const std::string_view overflowError = "integer overflow: ";
+  const std::string_view timezoneError = "Unknown timezone value: ";
 
-  // Broken UTC offsets.
-  EXPECT_THROW(fromTimestampString("1970-01-01 00:00:00-asd"), VeloxUserError);
-  EXPECT_THROW(
-      fromTimestampString("1970-01-01 00:00:00+00:00:00"), VeloxUserError);
+  // Needs at least a date.
+  VELOX_ASSERT_THROW(fromTimestampString(""), parserError);
+  VELOX_ASSERT_THROW(fromTimestampString("00:00:00"), parserError);
 
   // Integer overflow during timestamp parsing.
-  EXPECT_THROW(
-      fromTimestampString("2773581570-01-01 00:00:00-asd"), VeloxUserError);
-  EXPECT_THROW(
-      fromTimestampString("-2147483648-01-01 00:00:00-asd"), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      fromTimestampString("2773581570-01-01 00:00:00-asd"), overflowError);
+  VELOX_ASSERT_THROW(
+      fromTimestampString("-2147483648-01-01 00:00:00-asd"), overflowError);
+
+  // Unexpected timezone definition.
+  VELOX_ASSERT_THROW(
+      fromTimestampString("1970-01-01 00:00:00     a"), parserError);
+  VELOX_ASSERT_THROW(fromTimestampString("1970-01-01 00:00:00Z"), parserError);
+  VELOX_ASSERT_THROW(fromTimestampString("1970-01-01 00:00:00Z"), parserError);
+  VELOX_ASSERT_THROW(
+      fromTimestampString("1970-01-01 00:00:00 UTC"), parserError);
+  VELOX_ASSERT_THROW(
+      fromTimestampString("1970-01-01 00:00:00 America/Los_Angeles"),
+      parserError);
+
+  // Parse timestamp with (broken) timezones.
+  VELOX_ASSERT_THROW(
+      fromTimestampWithTimezoneString("1970-01-01 00:00:00-asd"),
+      timezoneError);
+  VELOX_ASSERT_THROW(
+      fromTimestampWithTimezoneString("1970-01-01 00:00:00Z UTC"), parserError);
+  VELOX_ASSERT_THROW(
+      fromTimestampWithTimezoneString("1970-01-01 00:00:00+00:00:00"),
+      timezoneError);
+
+  // Can't have multiple spaces.
+  VELOX_ASSERT_THROW(
+      fromTimestampWithTimezoneString("1970-01-01 00:00:00  UTC"),
+      timezoneError);
+}
+
+TEST(DateTimeUtilTest, fromTimestampWithTimezoneString) {
+  // -1 means no timezone information.
+  auto expected = std::make_pair<Timestamp, int64_t>(Timestamp(0, 0), -1);
+  EXPECT_EQ(fromTimestampWithTimezoneString("1970-01-01 00:00:00"), expected);
+
+  // Test timezone offsets.
+  EXPECT_EQ(
+      fromTimestampWithTimezoneString("1970-01-01 00:00:00 -02:00"),
+      std::make_pair(Timestamp(0, 0), util::getTimeZoneID("-02:00")));
+  EXPECT_EQ(
+      fromTimestampWithTimezoneString("1970-01-01 00:00:00+13:36"),
+      std::make_pair(Timestamp(0, 0), util::getTimeZoneID("+13:36")));
+
+  EXPECT_EQ(
+      fromTimestampWithTimezoneString("1970-01-01 00:00:00Z"),
+      std::make_pair(Timestamp(0, 0), util::getTimeZoneID("UTC")));
+
+  EXPECT_EQ(
+      fromTimestampWithTimezoneString("1970-01-01 00:01:00 UTC"),
+      std::make_pair(Timestamp(60, 0), util::getTimeZoneID("UTC")));
+
+  EXPECT_EQ(
+      fromTimestampWithTimezoneString(
+          "1970-01-01 00:00:01 America/Los_Angeles"),
+      std::make_pair(
+          Timestamp(1, 0), util::getTimeZoneID("America/Los_Angeles")));
 }
 
 TEST(DateTimeUtilTest, toGMT) {

@@ -72,11 +72,8 @@ Blog posts are available [here](https://velox-lib.io/blog).
 
 ### Get the Velox Source
 ```
-git clone --recursive https://github.com/facebookincubator/velox.git
+git clone https://github.com/facebookincubator/velox.git
 cd velox
-# if you are updating an existing checkout
-git submodule sync --recursive
-git submodule update --init --recursive
 ```
 Once Velox is checked out, the first step is to install the dependencies.
 Details on the dependencies and how Velox manages some of them for you
@@ -87,18 +84,24 @@ dependencies for a given platform.
 
 ### Setting up on macOS
 
-On an Intel MacOS machine you can setup and then build like so:
+On a MacOS machine (either Intel or Apple silicon) you can setup and then build like so:
 
 ```shell
-$ ./scripts/setup-macos.sh 
+$ export INSTALL_PREFIX=/Users/$USERNAME/velox/velox_dependency_install
+$ ./scripts/setup-macos.sh
 $ make
 ```
 
-On an M1 MacOS machine you can build like so:
-
+With macOS 14.4 and XCode 15.3 where `m4` is missing, you can either
+1. install `m4` via `brew`:
 ```shell
-$ CPU_TARGET="arm64" ./scripts/setup-macos.sh
-$ CPU_TARGET="arm64" make
+$ brew install m4
+$ export PATH=/opt/homebrew/opt/m4/bin:$PATH
+```
+
+2. or use `gm4` instead:
+```shell
+$ M4=/usr/bin/gm4 make
 ```
 
 You can also produce intel binaries on an M1, use `CPU_TARGET="sse"` for the above.
@@ -117,7 +120,7 @@ $ CPU_TARGET="aarch64" make
 Once you have checked out Velox, you can setup and build like so:
 
 ```shell
-$ ./scripts/setup-ubuntu.sh 
+$ ./scripts/setup-ubuntu.sh
 $ make
 ```
 
@@ -135,7 +138,7 @@ Note that,
   * f16c
 * Velox tries to use the following (or equivalent) instruction sets where available:
   * On Intel CPUs
-    * avx  
+    * avx
     * avx2
     * sse
   * On ARM
@@ -167,7 +170,7 @@ contribute to the project.
 ## Community
 
 The main communication channel with the Velox OSS community is through the
-[the Velox-OSS Slack workspace](http://velox-oss.slack.com). 
+[the Velox-OSS Slack workspace](http://velox-oss.slack.com).
 Please reach out to **velox@meta.com** to get access to Velox Slack Channel.
 
 

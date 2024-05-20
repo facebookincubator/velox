@@ -18,6 +18,7 @@
 
 #include <vector>
 
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SuccinctPrinter.h"
@@ -57,9 +58,16 @@ class MemoryArbitrator {
     /// manager.
     int64_t capacity;
 
+    /// The memory capacity reserved to ensure each running query has minimal
+    /// capacity of 'memoryPoolReservedCapacity' to run.
+    int64_t reservedCapacity{0};
+
+    /// The minimal amount of memory capacity reserved for each query to run.
+    uint64_t memoryPoolReservedCapacity{0};
+
     /// The minimal memory capacity to transfer out of or into a memory pool
     /// during the memory arbitration.
-    uint64_t memoryPoolTransferCapacity{32 << 20};
+    uint64_t memoryPoolTransferCapacity{128 << 20};
 
     /// Specifies the max time to wait for memory reclaim by arbitration. The
     /// memory reclaim might fail if the max time has exceeded. This prevents
@@ -67,6 +75,10 @@ class MemoryArbitrator {
     /// for a hanging query task to pause. If it is zero, then there is no
     /// timeout.
     uint64_t memoryReclaimWaitMs{0};
+
+    /// If true, it allows memory arbitrator to reclaim used memory cross query
+    /// memory pools.
+    bool globalArbitrationEnabled{false};
 
     /// Provided by the query system to validate the state after a memory pool
     /// enters arbitration if not null. For instance, Prestissimo provides
@@ -121,7 +133,7 @@ class MemoryArbitrator {
   /// Invoked by the memory manager to allocate up to 'targetBytes' of free
   /// memory capacity without triggering memory arbitration. The function will
   /// grow the memory pool's capacity based on the free available memory
-  /// capacity in the arbitrator, and returns the actual growed capacity in
+  /// capacity in the arbitrator, and returns the actual grown capacity in
   /// bytes.
   virtual uint64_t growCapacity(MemoryPool* pool, uint64_t bytes) = 0;
 
@@ -186,6 +198,8 @@ class MemoryArbitrator {
     uint64_t maxCapacityBytes{0};
     /// The free memory capacity in bytes.
     uint64_t freeCapacityBytes{0};
+    /// The free reserved memory capacity in bytes.
+    uint64_t freeReservedCapacityBytes{0};
     /// The sum of all reclaim operation durations during arbitration in
     /// microseconds.
     uint64_t reclaimTimeUs{0};
@@ -208,6 +222,7 @@ class MemoryArbitrator {
         uint64_t _numReclaimedBytes,
         uint64_t _maxCapacityBytes,
         uint64_t _freeCapacityBytes,
+        uint64_t _freeReservedCapacityBytes,
         uint64_t _reclaimTimeUs,
         uint64_t _numNonReclaimableAttempts,
         uint64_t _numReserves,
@@ -239,14 +254,22 @@ class MemoryArbitrator {
  protected:
   explicit MemoryArbitrator(const Config& config)
       : capacity_(config.capacity),
+        reservedCapacity_(config.reservedCapacity),
+        memoryPoolReservedCapacity_(config.memoryPoolReservedCapacity),
         memoryPoolTransferCapacity_(config.memoryPoolTransferCapacity),
         memoryReclaimWaitMs_(config.memoryReclaimWaitMs),
+        globalArbitrationEnabled_(config.globalArbitrationEnabled),
         arbitrationStateCheckCb_(config.arbitrationStateCheckCb),
-        checkUsageLeak_(config.checkUsageLeak) {}
+        checkUsageLeak_(config.checkUsageLeak) {
+    VELOX_CHECK_LE(reservedCapacity_, capacity_);
+  }
 
   const uint64_t capacity_;
+  const uint64_t reservedCapacity_;
+  const uint64_t memoryPoolReservedCapacity_;
   const uint64_t memoryPoolTransferCapacity_;
   const uint64_t memoryReclaimWaitMs_;
+  const bool globalArbitrationEnabled_;
   const MemoryArbitrationStateCheckCB arbitrationStateCheckCb_;
   const bool checkUsageLeak_;
 };
@@ -301,6 +324,7 @@ class MemoryReclaimer {
 
     bool operator==(const Stats& other) const;
     bool operator!=(const Stats& other) const;
+    Stats& operator+=(const Stats& other);
   };
 
   virtual ~MemoryReclaimer() = default;
@@ -430,6 +454,23 @@ MemoryArbitrationContext* memoryArbitrationContext();
 /// Returns true if the running thread is under memory arbitration or not.
 bool underMemoryArbitration();
 
+/// Creates an async memory reclaim task with memory arbitration context set.
+/// This is to avoid recursive memory arbitration during memory reclaim.
+///
+/// NOTE: this must be called under memory arbitration.
+template <typename Item>
+std::shared_ptr<AsyncSource<Item>> createAsyncMemoryReclaimTask(
+    std::function<std::unique_ptr<Item>()> task) {
+  auto* arbitrationCtx = memory::memoryArbitrationContext();
+  VELOX_CHECK_NOT_NULL(arbitrationCtx);
+  return std::make_shared<AsyncSource<Item>>(
+      [asyncTask = std::move(task), arbitrationCtx]() -> std::unique_ptr<Item> {
+        VELOX_CHECK_NOT_NULL(arbitrationCtx);
+        memory::ScopedMemoryArbitrationContext ctx(arbitrationCtx->requestor);
+        return asyncTask();
+      });
+}
+
 /// The function triggers memory arbitration by shrinking memory pools from
 /// 'manager' by invoking shrinkPools API. If 'manager' is not set, then it
 /// shrinks from the process wide memory manager. If 'targetBytes' is zero, then
@@ -450,3 +491,15 @@ void testingRunArbitration(
     uint64_t targetBytes = 0,
     bool allowSpill = true);
 } // namespace facebook::velox::memory
+
+#if FMT_VERSION < 100100
+template <>
+struct fmt::formatter<facebook::velox::memory::MemoryArbitrator::Stats>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::memory::MemoryArbitrator::Stats s,
+      format_context& ctx) {
+    return formatter<std::string>::format(s.toString(), ctx);
+  }
+};
+#endif

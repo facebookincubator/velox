@@ -15,9 +15,13 @@
 add_executable(
   velox_functions_spark_test
   ArithmeticTest.cpp
+  ArrayFlattenTest.cpp
+  ArrayGetTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  ArraySizeTest.cpp
   ArraySortTest.cpp
+  ArrayShuffleTest.cpp
   BitwiseTest.cpp
   ComparisonsTest.cpp
   DateTimeFunctionsTest.cpp
@@ -45,6 +49,7 @@ add_executable(
   StringToMapTest.cpp
   UnscaledValueFunctionTest.cpp
   UuidTest.cpp
+  InputFileNameTest.cpp
   XxHash64Test.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)

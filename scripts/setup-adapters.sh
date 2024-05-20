@@ -27,7 +27,7 @@ MACHINE=$(uname -m)
 
 function install_aws_deps {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
-  local AWS_SDK_VERSION="1.11.169"
+  local AWS_SDK_VERSION="1.11.321"
 
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
   cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
@@ -144,7 +144,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
    # /etc/os-release is a standard way to query various distribution
    # information and is available everywhere
    LINUX_DISTRIBUTION=$(. /etc/os-release && echo ${ID})
-   if [[ "$LINUX_DISTRIBUTION" == "ubuntu" ]]; then
+   if [[ "$LINUX_DISTRIBUTION" == "ubuntu" || "$LINUX_DISTRIBUTION" == "debian" ]]; then
       apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev
       # Dependencies of GCS, probably a workaround until the docker image is rebuilt
       apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev

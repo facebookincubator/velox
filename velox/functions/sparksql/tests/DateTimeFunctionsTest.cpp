@@ -40,6 +40,8 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
   static constexpr int16_t kMaxSmallint = std::numeric_limits<int16_t>::max();
   static constexpr int8_t kMinTinyint = std::numeric_limits<int8_t>::min();
   static constexpr int8_t kMaxTinyint = std::numeric_limits<int8_t>::max();
+  static constexpr int64_t kMinBigint = std::numeric_limits<int64_t>::min();
+  static constexpr int64_t kMaxBigint = std::numeric_limits<int64_t>::max();
 
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
@@ -176,7 +178,7 @@ TEST_F(DateTimeFunctionsTest, year) {
 
 TEST_F(DateTimeFunctionsTest, yearDate) {
   const auto year = [&](std::optional<int32_t> date) {
-    return evaluateOnce<int32_t, int32_t>("year(c0)", {date}, {DATE()});
+    return evaluateOnce<int32_t>("year(c0)", DATE(), date);
   };
   EXPECT_EQ(std::nullopt, year(std::nullopt));
   EXPECT_EQ(1970, year(DATE()->toDays("1970-05-05")));
@@ -188,8 +190,7 @@ TEST_F(DateTimeFunctionsTest, yearDate) {
 TEST_F(DateTimeFunctionsTest, weekOfYear) {
   const auto weekOfYear = [&](const char* dateString) {
     auto date = std::make_optional(parseDate(dateString));
-    return evaluateOnce<int32_t, int32_t>("week_of_year(c0)", {date}, {DATE()})
-        .value();
+    return evaluateOnce<int32_t>("week_of_year(c0)", DATE(), date).value();
   };
 
   EXPECT_EQ(1, weekOfYear("1919-12-31"));
@@ -210,10 +211,11 @@ TEST_F(DateTimeFunctionsTest, weekOfYear) {
 
 TEST_F(DateTimeFunctionsTest, unixDate) {
   const auto unixDate = [&](std::string_view date) {
-    return evaluateOnce<int32_t, int32_t>(
+    return evaluateOnce<int32_t>(
         "unix_date(c0)",
-        {util::fromDateString(date.data(), date.length())},
-        {DATE()});
+        DATE(),
+        std::make_optional<int32_t>(
+            util::fromDateString(date.data(), date.length())));
   };
 
   EXPECT_EQ(unixDate("1970-01-01"), 0);
@@ -332,7 +334,7 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
 
 TEST_F(DateTimeFunctionsTest, lastDay) {
   const auto lastDayFunc = [&](const std::optional<int32_t> date) {
-    return evaluateOnce<int32_t, int32_t>("last_day(c0)", {date}, {DATE()});
+    return evaluateOnce<int32_t>("last_day(c0)", DATE(), date);
   };
 
   const auto lastDay = [&](const std::string& dateStr) {
@@ -523,7 +525,7 @@ TEST_F(DateTimeFunctionsTest, dateSubTinyint) {
 
 TEST_F(DateTimeFunctionsTest, dayOfYear) {
   const auto day = [&](std::optional<int32_t> date) {
-    return evaluateOnce<int32_t, int32_t>("dayofyear(c0)", {date}, {DATE()});
+    return evaluateOnce<int32_t>("dayofyear(c0)", DATE(), date);
   };
   EXPECT_EQ(std::nullopt, day(std::nullopt));
   EXPECT_EQ(100, day(parseDate("2016-04-09")));
@@ -533,7 +535,7 @@ TEST_F(DateTimeFunctionsTest, dayOfYear) {
 
 TEST_F(DateTimeFunctionsTest, dayOfMonth) {
   const auto day = [&](std::optional<int32_t> date) {
-    return evaluateOnce<int32_t, int32_t>("dayofmonth(c0)", {date}, {DATE()});
+    return evaluateOnce<int32_t>("dayofmonth(c0)", DATE(), date);
   };
   EXPECT_EQ(std::nullopt, day(std::nullopt));
   EXPECT_EQ(30, day(parseDate("2009-07-30")));
@@ -542,7 +544,7 @@ TEST_F(DateTimeFunctionsTest, dayOfMonth) {
 
 TEST_F(DateTimeFunctionsTest, dayOfWeekDate) {
   const auto dayOfWeek = [&](std::optional<int32_t> date) {
-    return evaluateOnce<int32_t, int32_t>("dayofweek(c0)", {date}, {DATE()});
+    return evaluateOnce<int32_t>("dayofweek(c0)", DATE(), date);
   };
 
   EXPECT_EQ(std::nullopt, dayOfWeek(std::nullopt));
@@ -566,7 +568,7 @@ TEST_F(DateTimeFunctionsTest, dayOfWeekDate) {
 
 TEST_F(DateTimeFunctionsTest, weekdayDate) {
   const auto weekday = [&](std::optional<int32_t> value) {
-    return evaluateOnce<int32_t, int32_t>("weekday(c0)", {value}, {DATE()});
+    return evaluateOnce<int32_t>("weekday(c0)", DATE(), value);
   };
 
   EXPECT_EQ(3, weekday(0));
@@ -591,8 +593,8 @@ TEST_F(DateTimeFunctionsTest, weekdayDate) {
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   const auto dateDiff = [&](std::optional<int32_t> endDate,
                             std::optional<int32_t> startDate) {
-    return evaluateOnce<int32_t, int32_t>(
-        "datediff(c0, c1)", {endDate, startDate}, {DATE(), DATE()});
+    return evaluateOnce<int32_t>(
+        "datediff(c0, c1)", {DATE(), DATE()}, endDate, startDate);
   };
 
   // Simple tests.
@@ -614,11 +616,13 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
 }
 
 TEST_F(DateTimeFunctionsTest, addMonths) {
-  const auto addMonths = [&](const std::string& dateString, int32_t value) {
-    return evaluateOnce<int32_t, int32_t>(
+  const auto addMonths = [&](const std::string& dateString,
+                             std::optional<int32_t> value) {
+    return evaluateOnce<int32_t>(
         "add_months(c0, c1)",
-        {parseDate(dateString), value},
-        {DATE(), INTEGER()});
+        {DATE(), INTEGER()},
+        std::make_optional(parseDate(dateString)),
+        value);
   };
 
   EXPECT_EQ(addMonths("2015-01-30", 1), parseDate("2015-02-28"));
@@ -644,8 +648,8 @@ TEST_F(DateTimeFunctionsTest, addMonths) {
 
 TEST_F(DateTimeFunctionsTest, monthDate) {
   const auto month = [&](const std::string& dateString) {
-    return evaluateOnce<int32_t, int32_t>(
-        "month(c0)", {parseDate(dateString)}, {DATE()});
+    return evaluateOnce<int32_t>(
+        "month(c0)", DATE(), std::make_optional(parseDate(dateString)));
   };
 
   EXPECT_EQ(4, month("2015-04-08"));
@@ -656,8 +660,8 @@ TEST_F(DateTimeFunctionsTest, monthDate) {
 
 TEST_F(DateTimeFunctionsTest, quarterDate) {
   const auto quarter = [&](const std::string& dateString) {
-    return evaluateOnce<int32_t, int32_t>(
-        "quarter(c0)", {parseDate(dateString)}, {DATE()});
+    return evaluateOnce<int32_t>(
+        "quarter(c0)", DATE(), std::make_optional(parseDate(dateString)));
   };
 
   EXPECT_EQ(2, quarter("2015-04-08"));
@@ -915,23 +919,14 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
 
 TEST_F(DateTimeFunctionsTest, makeYMInterval) {
   const auto fromYearAndMonth = [&](const std::optional<int32_t>& year,
-                                    const std::optional<std::int32_t>& month) {
-    auto result = evaluateOnce<int32_t, int32_t>(
-        "make_ym_interval(c0, c1)",
-        {year, month},
-        {INTEGER(), INTEGER()},
-        std::nullopt,
-        {INTERVAL_YEAR_MONTH()});
+                                    const std::optional<int32_t>& month) {
+    auto result =
+        evaluateOnce<int32_t>("make_ym_interval(c0, c1)", year, month);
     VELOX_CHECK(result.has_value());
     return INTERVAL_YEAR_MONTH()->valueToString(result.value());
   };
   const auto fromYear = [&](const std::optional<int32_t>& year) {
-    auto result = evaluateOnce<int32_t, int32_t>(
-        "make_ym_interval(c0)",
-        {year},
-        {INTEGER()},
-        std::nullopt,
-        {INTERVAL_YEAR_MONTH()});
+    auto result = evaluateOnce<int32_t>("make_ym_interval(c0)", year);
     VELOX_CHECK(result.has_value());
     return INTERVAL_YEAR_MONTH()->valueToString(result.value());
   };
@@ -966,6 +961,145 @@ TEST_F(DateTimeFunctionsTest, makeYMInterval) {
       fromYear(178956971), "Integer overflow in make_ym_interval(178956971)");
   VELOX_ASSERT_THROW(
       fromYear(-178956971), "Integer overflow in make_ym_interval(-178956971)");
+}
+
+TEST_F(DateTimeFunctionsTest, yearOfWeek) {
+  const auto yearOfWeek = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int32_t>("year_of_week(c0)", DATE(), date);
+  };
+  EXPECT_EQ(1970, yearOfWeek(0));
+  EXPECT_EQ(1970, yearOfWeek(-1));
+  EXPECT_EQ(1969, yearOfWeek(-4));
+  EXPECT_EQ(1970, yearOfWeek(-3));
+  EXPECT_EQ(1970, yearOfWeek(365));
+  EXPECT_EQ(1970, yearOfWeek(367));
+  EXPECT_EQ(1971, yearOfWeek(368));
+  EXPECT_EQ(2005, yearOfWeek(parseDate("2006-01-01")));
+  EXPECT_EQ(2006, yearOfWeek(parseDate("2006-01-02")));
+}
+
+TEST_F(DateTimeFunctionsTest, unixSeconds) {
+  const auto unixSeconds = [&](const StringView time) {
+    return evaluateOnce<int64_t>(
+        "unix_seconds(c0)",
+        std::make_optional(util::fromTimestampString(time)));
+  };
+  EXPECT_EQ(unixSeconds("1970-01-01 00:00:01"), 1);
+  EXPECT_EQ(unixSeconds("1970-01-01 00:00:00.000127"), 0);
+  EXPECT_EQ(unixSeconds("1969-12-31 23:59:59.999872"), -1);
+  EXPECT_EQ(unixSeconds("1970-01-01 00:35:47.483647"), 2147);
+  EXPECT_EQ(unixSeconds("1971-01-01 00:00:01.483647"), 31536001);
+}
+
+TEST_F(DateTimeFunctionsTest, microsToTimestamp) {
+  const auto microsToTimestamp = [&](std::optional<int64_t> micros) {
+    return evaluateOnce<Timestamp>("timestamp_micros(c0)", micros);
+  };
+  EXPECT_EQ(
+      microsToTimestamp(1000000),
+      util::fromTimestampString("1970-01-01 00:00:01"));
+  EXPECT_EQ(
+      microsToTimestamp(1230219000123123),
+      util::fromTimestampString("2008-12-25 15:30:00.123123"));
+
+  EXPECT_EQ(
+      microsToTimestamp(kMaxTinyint),
+      util::fromTimestampString("1970-01-01 00:00:00.000127"));
+  EXPECT_EQ(
+      microsToTimestamp(kMinTinyint),
+      util::fromTimestampString("1969-12-31 23:59:59.999872"));
+  EXPECT_EQ(
+      microsToTimestamp(kMaxSmallint),
+      util::fromTimestampString("1970-01-01 00:00:00.032767"));
+  EXPECT_EQ(
+      microsToTimestamp(kMinSmallint),
+      util::fromTimestampString("1969-12-31 23:59:59.967232"));
+  EXPECT_EQ(
+      microsToTimestamp(kMax),
+      util::fromTimestampString("1970-01-01 00:35:47.483647"));
+  EXPECT_EQ(
+      microsToTimestamp(kMin),
+      util::fromTimestampString("1969-12-31 23:24:12.516352"));
+  EXPECT_EQ(
+      microsToTimestamp(kMaxBigint),
+      util::fromTimestampString("294247-01-10 04:00:54.775807"));
+  EXPECT_EQ(
+      microsToTimestamp(kMinBigint),
+      util::fromTimestampString("-290308-12-21 19:59:05.224192"));
+}
+
+TEST_F(DateTimeFunctionsTest, millisToTimestamp) {
+  const auto millisToTimestamp = [&](int64_t millis) {
+    return evaluateOnce<Timestamp, int64_t>("timestamp_millis(c0)", millis);
+  };
+  EXPECT_EQ(
+      millisToTimestamp(1000),
+      util::fromTimestampString("1970-01-01 00:00:01"));
+  EXPECT_EQ(
+      millisToTimestamp(1230219000123),
+      util::fromTimestampString("2008-12-25 15:30:00.123"));
+
+  EXPECT_EQ(
+      millisToTimestamp(kMaxTinyint),
+      util::fromTimestampString("1970-01-01 00:00:00.127"));
+  EXPECT_EQ(
+      millisToTimestamp(kMinTinyint),
+      util::fromTimestampString("1969-12-31 23:59:59.872"));
+  EXPECT_EQ(
+      millisToTimestamp(kMaxSmallint),
+      util::fromTimestampString("1970-01-01 00:00:32.767"));
+  EXPECT_EQ(
+      millisToTimestamp(kMinSmallint),
+      util::fromTimestampString("1969-12-31 23:59:27.232"));
+  EXPECT_EQ(
+      millisToTimestamp(kMax),
+      util::fromTimestampString("1970-01-25 20:31:23.647"));
+  EXPECT_EQ(
+      millisToTimestamp(kMin),
+      util::fromTimestampString("1969-12-07 03:28:36.352"));
+  EXPECT_EQ(
+      millisToTimestamp(kMaxBigint),
+      util::fromTimestampString("292278994-08-17T07:12:55.807"));
+  EXPECT_EQ(
+      millisToTimestamp(kMinBigint),
+      util::fromTimestampString("-292275055-05-16T16:47:04.192"));
+}
+
+TEST_F(DateTimeFunctionsTest, timestampToMicros) {
+  const auto timestampToMicros = [&](const StringView time) {
+    return evaluateOnce<int64_t, Timestamp>(
+        "unix_micros(c0)", util::fromTimestampString(time));
+  };
+  EXPECT_EQ(timestampToMicros("1970-01-01 00:00:01"), 1000000);
+  EXPECT_EQ(timestampToMicros("2008-12-25 15:30:00.123123"), 1230219000123123);
+
+  EXPECT_EQ(timestampToMicros("1970-01-01 00:00:00.000127"), kMaxTinyint);
+  EXPECT_EQ(timestampToMicros("1969-12-31 23:59:59.999872"), kMinTinyint);
+  EXPECT_EQ(timestampToMicros("1970-01-01 00:00:00.032767"), kMaxSmallint);
+  EXPECT_EQ(timestampToMicros("1969-12-31 23:59:59.967232"), kMinSmallint);
+  EXPECT_EQ(timestampToMicros("1970-01-01 00:35:47.483647"), kMax);
+  EXPECT_EQ(timestampToMicros("1969-12-31 23:24:12.516352"), kMin);
+  EXPECT_EQ(timestampToMicros("294247-01-10 04:00:54.775807"), kMaxBigint);
+  EXPECT_EQ(
+      timestampToMicros("-290308-12-21 19:59:06.224192"), kMinBigint + 1000000);
+}
+
+TEST_F(DateTimeFunctionsTest, timestampToMillis) {
+  const auto timestampToMillis = [&](const StringView time) {
+    return evaluateOnce<int64_t, Timestamp>(
+        "unix_millis(c0)", util::fromTimestampString(time));
+  };
+  EXPECT_EQ(timestampToMillis("1970-01-01 00:00:01"), 1000);
+  EXPECT_EQ(timestampToMillis("2008-12-25 15:30:00.123"), 1230219000123);
+
+  EXPECT_EQ(timestampToMillis("1970-01-01 00:00:00.127"), kMaxTinyint);
+  EXPECT_EQ(timestampToMillis("1969-12-31 23:59:59.872"), kMinTinyint);
+  EXPECT_EQ(timestampToMillis("1970-01-01 00:00:32.767"), kMaxSmallint);
+  EXPECT_EQ(timestampToMillis("1969-12-31 23:59:27.232"), kMinSmallint);
+  EXPECT_EQ(timestampToMillis("1970-01-25 20:31:23.647"), kMax);
+  EXPECT_EQ(timestampToMillis("1969-12-07 03:28:36.352"), kMin);
+  EXPECT_EQ(timestampToMillis("292278994-08-17T07:12:55.807"), kMaxBigint);
+  EXPECT_EQ(timestampToMillis("-292275055-05-16T16:47:04.192"), kMinBigint);
 }
 
 } // namespace

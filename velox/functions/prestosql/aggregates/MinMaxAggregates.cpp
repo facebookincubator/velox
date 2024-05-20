@@ -55,24 +55,7 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       VectorPtr& result) const override {
-    const auto& input = args[0];
-    if (rows.isAllSelected()) {
-      result = input;
-      return;
-    }
-
-    auto* pool = BaseAggregate::allocator_->pool();
-
-    result = BaseVector::create(input->type(), rows.size(), pool);
-
-    // Set result to NULL for rows that are masked out.
-    {
-      BufferPtr nulls = allocateNulls(rows.size(), pool, bits::kNull);
-      rows.clearNulls(nulls);
-      result->setNulls(nulls);
-    }
-
-    result->copy(input.get(), rows, nullptr);
+    this->singleInputAsIntermediate(rows, args, result);
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -549,10 +532,14 @@ std::pair<vector_size_t*, vector_size_t*> rawOffsetAndSizes(
 template <typename T, typename Compare>
 struct MinMaxNAccumulator {
   int64_t n{0};
-  std::vector<T, StlAllocator<T>> heapValues;
+  using Allocator = std::conditional_t<
+      std::is_same_v<int128_t, T>,
+      AlignedStlAllocator<T, sizeof(int128_t)>,
+      StlAllocator<T>>;
+  std::vector<T, Allocator> heapValues;
 
   explicit MinMaxNAccumulator(HashStringAllocator* allocator)
-      : heapValues{StlAllocator<T>(allocator)} {}
+      : heapValues{Allocator(allocator)} {}
 
   int64_t getN() const {
     return n;
@@ -933,6 +920,18 @@ exec::AggregateRegistrationResult registerMinMax(
             .build());
   }
 
+  // decimal(p,s), bigint -> row(array(decimal(p,s)), bigint) ->
+  // array(decimal(p,s))
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .argumentType("bigint")
+          .intermediateType("row(bigint, array(DECIMAL(a_precision, a_scale)))")
+          .returnType("array(DECIMAL(a_precision, a_scale))")
+          .build());
+
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
@@ -969,7 +968,10 @@ exec::AggregateRegistrationResult registerMinMax(
             case TypeKind::TIMESTAMP:
               return std::make_unique<TNumericN<Timestamp>>(resultType);
             case TypeKind::HUGEINT:
-              return std::make_unique<TNumericN<int128_t>>(resultType);
+              if (inputType->isLongDecimal()) {
+                return std::make_unique<TNumericN<int128_t>>(resultType);
+              }
+              VELOX_UNREACHABLE();
             default:
               VELOX_CHECK(
                   false,

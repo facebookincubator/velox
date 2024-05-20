@@ -115,20 +115,36 @@ TEST_F(MakeTimestampTest, errors) {
     auto result = evaluate("make_timestamp(c0, c1, c2, c3, c4, c5)", data);
     facebook::velox::test::assertEqualVectors(expected, result);
   };
+  std::optional<int32_t> one = 1;
   const auto testInvalidSeconds = [&](std::optional<int64_t> microsec) {
-    auto result = evaluateOnce<Timestamp, int64_t>(
+    auto result = evaluateOnce<Timestamp>(
         "make_timestamp(c0, c1, c2, c3, c4, c5)",
-        {1, 1, 1, 1, 1, microsec},
-        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType});
+        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+        one,
+        one,
+        one,
+        one,
+        one,
+        microsec);
     EXPECT_EQ(result, std::nullopt);
   };
-  const auto testInvalidArguments = [&](int64_t microsec,
+  const auto testInvalidArguments = [&](std::optional<int64_t> microsec,
                                         const TypePtr& microsType) {
-    return evaluateOnce<Timestamp, int64_t>(
+    return evaluateOnce<Timestamp>(
         "make_timestamp(c0, c1, c2, c3, c4, c5)",
-        {1, 1, 1, 1, 1, microsec},
-        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType});
+        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+        one,
+        one,
+        one,
+        one,
+        one,
+        microsec);
   };
+
+  // Throw if no session time zone.
+  VELOX_ASSERT_USER_THROW(
+      testInvalidArguments(60007000, DECIMAL(16, 6)),
+      "make_timestamp requires session time zone to be set.");
 
   setQueryTimeZone("Asia/Shanghai");
   // Invalid input returns null.
@@ -166,11 +182,50 @@ TEST_F(MakeTimestampTest, errors) {
       "Scalar function signature is not supported: "
       "make_timestamp(INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, "
       "DECIMAL(16, 8)).");
-  // Throw if no session time zone.
-  setQueryTimeZone("");
-  VELOX_ASSERT_THROW(
-      testInvalidArguments(60007000, DECIMAL(16, 6)),
+}
+
+TEST_F(MakeTimestampTest, invalidTimezone) {
+  const auto microsType = DECIMAL(16, 6);
+  const auto year = makeFlatVector<int32_t>({2021, 2021, 2021, 2021, 2021});
+  const auto month = makeFlatVector<int32_t>({7, 7, 7, 7, 7});
+  const auto day = makeFlatVector<int32_t>({11, 11, 11, 11, 11});
+  const auto hour = makeFlatVector<int32_t>({6, 6, 6, -6, 6});
+  const auto minute = makeFlatVector<int32_t>({30, 30, 30, 30, 30});
+  const auto micros = makeNullableFlatVector<int64_t>(
+      {45678000, 1e6, 6e7, 59999999, std::nullopt}, microsType);
+  auto data = makeRowVector({year, month, day, hour, minute, micros});
+
+  // Time zone is not set.
+  VELOX_ASSERT_USER_THROW(
+      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5)", data),
       "make_timestamp requires session time zone to be set.");
+
+  // Invalid constant time zone.
+  setQueryTimeZone("GMT");
+  for (auto timeZone : {"Invalid", ""}) {
+    SCOPED_TRACE(fmt::format("timezone: {}", timeZone));
+    VELOX_ASSERT_USER_THROW(
+        evaluate(
+            fmt::format(
+                "make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timeZone),
+            data),
+        fmt::format("Unknown time zone: '{}'", timeZone));
+  }
+
+  // Invalid timezone from vector.
+  auto timeZones = makeFlatVector<StringView>(
+      {"GMT", "CET", "Asia/Shanghai", "Invalid", "GMT"});
+  data = makeRowVector({year, month, day, hour, minute, micros, timeZones});
+  VELOX_ASSERT_USER_THROW(
+      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", data),
+      "Unknown time zone: 'Invalid'");
+
+  timeZones =
+      makeFlatVector<StringView>({"GMT", "CET", "Asia/Shanghai", "", "GMT"});
+  data = makeRowVector({year, month, day, hour, minute, micros, timeZones});
+  VELOX_ASSERT_USER_THROW(
+      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", data),
+      "Unknown time zone: ''");
 }
 
 } // namespace

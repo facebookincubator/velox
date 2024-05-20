@@ -36,7 +36,7 @@ namespace {
 
 class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
  public:
-  explicit SimpleAggregatesBenchmark() {
+  SimpleAggregatesBenchmark() {
     OperatorTestBase::SetUpTestCase();
     HiveConnectorTestBase::SetUp();
 
@@ -107,7 +107,7 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
     }
 
     filePath_ = TempFilePath::create();
-    writeToFile(filePath_->path, vectors);
+    writeToFile(filePath_->getPath(), vectors);
   }
 
   ~SimpleAggregatesBenchmark() override {
@@ -147,7 +147,8 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
     vector_size_t numResultRows = 0;
     auto task = makeTask(plan);
 
-    task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath_->path)));
+    task->addSplit(
+        "0", exec::Split(makeHiveConnectorSplit(filePath_->getPath())));
     task->noMoreSplits("0");
 
     suspender.dismiss();
@@ -164,7 +165,8 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
         "t",
         std::move(plan),
         0,
-        std::make_shared<core::QueryCtx>(executor_.get()));
+        core::QueryCtx::create(executor_.get()),
+        exec::Task::ExecutionMode::kParallel);
   }
 
  private:
@@ -269,9 +271,10 @@ BENCHMARK_DRAW_LINE();
 
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
-  memory::MemoryManager::initialize({});
+  OperatorTestBase::SetUpTestCase();
   benchmark = std::make_unique<SimpleAggregatesBenchmark>();
   folly::runBenchmarks();
   benchmark.reset();
+  OperatorTestBase::TearDownTestCase();
   return 0;
 }

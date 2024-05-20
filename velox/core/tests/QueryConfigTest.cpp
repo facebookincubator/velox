@@ -30,7 +30,7 @@ class QueryConfigTest : public testing::Test {
 
 TEST_F(QueryConfigTest, emptyConfig) {
   std::unordered_map<std::string, std::string> configData;
-  auto queryCtx = std::make_shared<QueryCtx>(nullptr, std::move(configData));
+  auto queryCtx = QueryCtx::create(nullptr, std::move(configData));
   const QueryConfig& config = queryCtx->queryConfig();
 
   ASSERT_FALSE(config.isLegacyCast());
@@ -40,14 +40,29 @@ TEST_F(QueryConfigTest, setConfig) {
   std::string path = "/tmp/setConfig";
   std::unordered_map<std::string, std::string> configData(
       {{QueryConfig::kLegacyCast, "true"}});
-  auto queryCtx = std::make_shared<QueryCtx>(nullptr, std::move(configData));
+  auto queryCtx = QueryCtx::create(nullptr, std::move(configData));
   const QueryConfig& config = queryCtx->queryConfig();
 
   ASSERT_TRUE(config.isLegacyCast());
 }
 
+TEST_F(QueryConfigTest, invalidConfig) {
+  std::unordered_map<std::string, std::string> configData(
+      {{QueryConfig::kSessionTimezone, "Invalid"}});
+  VELOX_ASSERT_USER_THROW(
+      QueryCtx::create(nullptr, std::move(configData)),
+      "Unknown time zone: 'Invalid'");
+
+  auto queryCtx = QueryCtx::create(nullptr);
+  VELOX_ASSERT_USER_THROW(
+      queryCtx->testingOverrideConfigUnsafe({
+          {core::QueryConfig::kSessionTimezone, ""},
+      }),
+      "Unknown time zone: ''");
+}
+
 TEST_F(QueryConfigTest, memConfig) {
-  const std::string tz = "timezone1";
+  const std::string tz = "UTC";
   const std::unordered_map<std::string, std::string> configData(
       {{QueryConfig::kSessionTimezone, tz}});
 
@@ -72,7 +87,7 @@ TEST_F(QueryConfigTest, memConfig) {
         tz,
         cfg.Config::get<std::string>(QueryConfig::kSessionTimezone).value());
     ASSERT_FALSE(cfg.Config::get<std::string>("missing-entry").has_value());
-    const std::string tz2 = "timezone2";
+    const std::string tz2 = "PST";
     ASSERT_NO_THROW(cfg.setValue(QueryConfig::kSessionTimezone, tz2));
     ASSERT_EQ(
         tz2,
@@ -120,7 +135,7 @@ TEST_F(QueryConfigTest, taskWriterCountConfig) {
           QueryConfig::kTaskPartitionedWriterCount,
           std::to_string(testConfig.numPartitionedWriterCounter.value()));
     }
-    auto queryCtx = std::make_shared<QueryCtx>(nullptr, std::move(configData));
+    auto queryCtx = QueryCtx::create(nullptr, std::move(configData));
     const QueryConfig& config = queryCtx->queryConfig();
     ASSERT_EQ(config.taskWriterCount(), testConfig.expectedWriterCounter);
     ASSERT_EQ(
@@ -138,8 +153,7 @@ TEST_F(QueryConfigTest, enableExpressionEvaluationCacheConfig) {
     std::unordered_map<std::string, std::string> configData(
         {{core::QueryConfig::kEnableExpressionEvaluationCache,
           enableExpressionEvaluationCache ? "true" : "false"}});
-    auto queryCtx =
-        std::make_shared<core::QueryCtx>(nullptr, std::move(configData));
+    auto queryCtx = core::QueryCtx::create(nullptr, std::move(configData));
     const core::QueryConfig& config = queryCtx->queryConfig();
     ASSERT_EQ(
         config.isExpressionEvaluationCacheEnabled(),

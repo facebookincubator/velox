@@ -44,9 +44,9 @@ class HashProbe : public Operator {
     }
     // NOTE: if we can't apply dynamic filtering, then we can start early to
     // read input even before the hash table has been built.
-    const auto channels = operatorCtx_->driverCtx()->driver->canPushdownFilters(
-        this, keyChannels_);
-    return channels.empty();
+    return operatorCtx_->driverCtx()
+        ->driver->canPushdownFilters(this, keyChannels_)
+        .empty();
   }
 
   void addInput(RowVectorPtr input) override;
@@ -128,14 +128,17 @@ class HashProbe : public Operator {
         decodedFilterResult_.valueAt<bool>(row);
   }
 
-  // Populate filter input columns.
-  void fillFilterInput(vector_size_t size);
+  // Create a temporary input vector to be passed to the filter. This ensures it
+  // gets destroyed in case its wrapping an unloaded vector which eventually
+  // needs to be wrapped in fillOutput().
+  RowVectorPtr createFilterInput(vector_size_t size);
 
   // Prepare filter row selectivity for null-aware join. 'numRows'
   // specifies the number of rows in 'filterInputRows_' to process. If
   // 'filterPropagateNulls' is true, the probe input row which has null in any
   // probe filter column can't pass the filter.
   void prepareFilterRowsForNullAwareJoin(
+      RowVectorPtr& filterInput,
       vector_size_t numRows,
       bool filterPropagateNulls);
 
@@ -335,6 +338,12 @@ class HashProbe : public Operator {
   // Channel of probe keys in 'input_'.
   std::vector<column_index_t> keyChannels_;
 
+  // True if we have generated dynamic filters from the hash build join keys.
+  //
+  // NOTE: 'dynamicFilters_' might have been cleared once they have been pushed
+  // down to the upstream operators.
+  tsan_atomic<bool> hasGeneratedDynamicFilters_{false};
+
   // True if the join can become a no-op starting with the next batch of input.
   bool canReplaceWithDynamicFilter_{false};
 
@@ -366,7 +375,7 @@ class HashProbe : public Operator {
   // side. Used by right semi project join.
   bool probeSideHasNullKeys_{false};
 
-  // Rows in 'filterInput_' to apply 'filter_' to.
+  // Rows in the filter columns to apply 'filter_' to.
   SelectivityVector filterInputRows_;
 
   // Join filter.
@@ -383,11 +392,6 @@ class HashProbe : public Operator {
 
   // Maps from column index in hash table to channel in 'filterInputType_'.
   std::vector<IdentityProjection> filterTableProjections_;
-
-  // Temporary projection from probe and build for evaluating
-  // 'filter_'. This can always be reused since this does not escape
-  // this operator.
-  RowVectorPtr filterInput_;
 
   // The following six fields are used in null-aware anti join filter
   // processing.
@@ -464,7 +468,6 @@ class HashProbe : public Operator {
           // passed the filter, it never will, process it as a miss.
           // We're guaranteed to have space, at least the last row was never
           // written out since it was a miss.
-          VELOX_CHECK_GE(freeOutputRows, 0);
           onMiss(currentRow);
           freeOutputRows--;
         }

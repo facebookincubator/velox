@@ -46,6 +46,15 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     exec::ExchangeSource::registerFactory(createLocalExchangeSource);
   }
 
+  void TearDown() override {
+    // There might be lingering exchange source on executor even after all tasks
+    // are deleted. This can cause memory leak because exchange source holds
+    // reference to memory pool. We need to make sure they are properly cleaned.
+    testingShutdownLocalExchangeSource();
+    vectors_.clear();
+    HiveConnectorTestBase::TearDown();
+  }
+
   static std::string makeTaskId(const std::string& prefix, int num) {
     return fmt::format("local://{}-{}", prefix, num);
   }
@@ -67,7 +76,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       Consumer consumer = nullptr,
       int64_t maxMemory = memory::kMaxMemory) {
     auto configCopy = configSettings_;
-    auto queryCtx = std::make_shared<core::QueryCtx>(
+    auto queryCtx = core::QueryCtx::create(
         executor_.get(), core::QueryConfig(std::move(configCopy)));
     queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
         queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
@@ -77,6 +86,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
         std::move(planFragment),
         destination,
         std::move(queryCtx),
+        Task::ExecutionMode::kParallel,
         std::move(consumer));
   }
 
@@ -97,11 +107,11 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       auto split = exec::Split(
           std::make_shared<connector::hive::HiveConnectorSplit>(
               kHiveConnectorId,
-              "file:" + filePath->path,
+              "file:" + filePath->getPath(),
               facebook::velox::dwio::common::FileFormat::DWRF),
           -1);
       task->addSplit("0", std::move(split));
-      VLOG(1) << filePath->path << "\n";
+      VLOG(1) << filePath->getPath() << "\n";
     }
     task->noMoreSplits("0");
   }
@@ -143,7 +153,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     filePaths_ = makeFilePaths(filePathCount);
     vectors_ = makeVectors(filePaths_.size(), rowsPerVector);
     for (int i = 0; i < filePaths_.size(); i++) {
-      writeToFile(filePaths_[i]->path, vectors_[i]);
+      writeToFile(filePaths_[i]->getPath(), vectors_[i]);
     }
     createDuckDbTable(vectors_);
   }
@@ -876,7 +886,7 @@ TEST_F(MultiFragmentTest, limit) {
       1'000, [](auto row) { return row; }, nullEvery(7))});
 
   auto file = TempFilePath::create();
-  writeToFile(file->path, {data});
+  writeToFile(file->getPath(), {data});
 
   // Make leaf task: Values -> PartialLimit(10) -> Repartitioning(0).
   auto leafTaskId = makeTaskId("leaf", 0);
@@ -890,7 +900,7 @@ TEST_F(MultiFragmentTest, limit) {
   leafTask->start(1);
 
   leafTask.get()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->path)));
+      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
 
   // Make final task: Exchange -> FinalLimit(10).
   auto plan = PlanBuilder()
@@ -1839,17 +1849,22 @@ TEST_F(MultiFragmentTest, maxBytes) {
   test(32 * kMB);
 }
 
-/// Verify that ExchangeClient stats are populated even if task fails.
+// Verifies that ExchangeClient stats are populated even if task fails.
 DEBUG_ONLY_TEST_F(MultiFragmentTest, exchangeStatsOnFailure) {
-  // Trigger a failure after fetching first 10 pages.
+  // Triggers a failure after fetching first 10 pages.
+  std::atomic_uint64_t expectedReceivedPages{0};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::test::LocalExchangeSource",
-      std::function<void(void* data)>([&](void* data) {
-        int32_t numPages = *static_cast<int32_t*>(data);
-        if (numPages > 10) {
-          VELOX_FAIL("Forced failure after {} pages", numPages);
-        }
-      }));
+      std::function<void(exec::ExchangeSource * data)>(
+          [&](exec::ExchangeSource* source) {
+            auto* queue = source->testingQueue();
+            const auto receivedPages = queue->receivedPages();
+            if (receivedPages > 10) {
+              expectedReceivedPages = receivedPages;
+
+              VELOX_FAIL("Forced failure after {} pages", receivedPages);
+            }
+          }));
 
   std::string s(25, 'x');
   auto data = makeRowVector({
@@ -1880,7 +1895,10 @@ DEBUG_ONLY_TEST_F(MultiFragmentTest, exchangeStatsOnFailure) {
       << "Got: [" << task->errorMessage() << "]";
 
   auto stats = toPlanStats(task->taskStats());
-  EXPECT_EQ(10, stats.at("0").customStats.at("numReceivedPages").sum);
+
+  EXPECT_EQ(
+      expectedReceivedPages,
+      stats.at("0").customStats.at("numReceivedPages").sum);
 
   ASSERT_TRUE(waitForTaskCompletion(producerTask.get(), 3'000'000));
 }
@@ -2014,7 +2032,6 @@ TEST_F(MultiFragmentTest, compression) {
                                 .values({data}, false, kNumRepeats)
                                 .partitionedOutput({}, 1)
                                 .planNode();
-  const auto producerTaskId = "local://t1";
 
   const auto plan = test::PlanBuilder()
                         .exchange(asRowType(data->type()))
@@ -2024,7 +2041,9 @@ TEST_F(MultiFragmentTest, compression) {
   const auto expected =
       makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{6000000})});
 
-  const auto test = [&](float minCompressionRatio, bool expectSkipCompression) {
+  const auto test = [&](const std::string& producerTaskId,
+                        float minCompressionRatio,
+                        bool expectSkipCompression) {
     PartitionedOutput::testingSetMinCompressionRatio(minCompressionRatio);
     auto producerTask = makeTask(producerTaskId, producerPlan);
     producerTask->start(1);
@@ -2051,8 +2070,8 @@ TEST_F(MultiFragmentTest, compression) {
     }
   };
 
-  test(0.7, false);
-  test(0.0000001, true);
+  test("local://t1", 0.7, false);
+  test("local://t2", 0.0000001, true);
 }
 
 } // namespace

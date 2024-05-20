@@ -44,13 +44,16 @@ class MemoryReclaimerTest : public OperatorTestBase {
         "MemoryReclaimerTest",
         std::move(fakePlanFragment),
         0,
-        std::make_shared<core::QueryCtx>());
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel);
   }
 
   void SetUp() override {}
 
   void TearDown() override {}
 
+  std::shared_ptr<folly::CPUThreadPoolExecutor> executor_{
+      std::make_shared<folly::CPUThreadPoolExecutor>(4)};
   const std::shared_ptr<memory::MemoryPool> pool_;
   RowTypePtr rowType_;
   std::shared_ptr<Task> fakeTask_;
@@ -64,19 +67,20 @@ TEST_F(MemoryReclaimerTest, enterArbitrationTest) {
     auto reclaimer = exec::MemoryReclaimer::create();
     auto driver = Driver::testingCreate(
         std::make_unique<DriverCtx>(fakeTask_, 0, 0, 0, 0));
+    fakeTask_->testingIncrementThreads();
     if (underDriverContext) {
       driver->state().setThread();
       ScopedDriverThreadContext scopedDriverThreadCtx{*driver->driverCtx()};
       reclaimer->enterArbitration();
       ASSERT_TRUE(driver->state().isOnThread());
-      ASSERT_TRUE(driver->state().isSuspended);
+      ASSERT_TRUE(driver->state().suspended());
       reclaimer->leaveArbitration();
       ASSERT_TRUE(driver->state().isOnThread());
-      ASSERT_FALSE(driver->state().isSuspended);
+      ASSERT_FALSE(driver->state().suspended());
     } else {
       reclaimer->enterArbitration();
       ASSERT_FALSE(driver->state().isOnThread());
-      ASSERT_FALSE(driver->state().isSuspended);
+      ASSERT_FALSE(driver->state().suspended());
       reclaimer->leaveArbitration();
     }
   }
@@ -161,4 +165,99 @@ TEST(ReclaimableSectionGuard, basic) {
     ASSERT_FALSE(nonReclaimableSection);
   }
   ASSERT_TRUE(nonReclaimableSection);
+}
+
+TEST_F(MemoryReclaimerTest, parallelMemoryReclaimer) {
+  class MockMemoryReclaimer : public memory::MemoryReclaimer {
+   public:
+    static std::unique_ptr<MemoryReclaimer> create(
+        bool reclaimable,
+        uint64_t memoryBytes) {
+      return std::unique_ptr<MemoryReclaimer>(
+          new MockMemoryReclaimer(reclaimable, memoryBytes));
+    }
+
+    bool reclaimableBytes(const MemoryPool& pool, uint64_t& reclaimableBytes)
+        const override {
+      reclaimableBytes = 0;
+      if (!reclaimable_) {
+        return false;
+      }
+      reclaimableBytes = memoryBytes_;
+      return true;
+    }
+
+    uint64_t reclaim(
+        MemoryPool* pool,
+        uint64_t targetBytes,
+        uint64_t maxWaitMs,
+        Stats& stats) override {
+      VELOX_CHECK(reclaimable_);
+      const uint64_t reclaimedBytes = memoryBytes_;
+      memoryBytes_ = 0;
+      return reclaimedBytes;
+    }
+
+    uint64_t memoryBytes() const {
+      return memoryBytes_;
+    }
+
+   private:
+    MockMemoryReclaimer(bool reclaimable, uint64_t memoryBytes)
+        : reclaimable_(reclaimable), memoryBytes_(memoryBytes) {}
+
+    bool reclaimable_{false};
+    int reclaimCount_{0};
+    uint64_t memoryBytes_{0};
+  };
+
+  struct TestReclaimer {
+    bool reclaimable;
+    uint64_t memoryBytes;
+    uint64_t expectedMemoryBytesAfterReclaim;
+  };
+
+  struct {
+    bool hasExecutor;
+    uint64_t bytesToReclaim;
+    std::vector<TestReclaimer> testReclaimers;
+  } testSettings[] = {
+      {false, 100, {{true, 100, 0}, {true, 90, 90}, {false, 200, 200}}},
+      {true, 100, {{true, 100, 0}, {true, 90, 0}, {false, 200, 200}}},
+      {false, 110, {{true, 100, 0}, {true, 90, 0}, {false, 200, 200}}},
+      {true, 110, {{true, 100, 0}, {true, 90, 0}, {false, 200, 200}}},
+      {false, 100, {{true, 100, 100}, {true, 90, 90}, {true, 200, 0}}},
+      {true, 100, {{true, 100, 0}, {true, 90, 0}, {true, 200, 0}}},
+      {false, 80, {{true, 100, 100}, {true, 90, 90}, {true, 200, 0}}},
+      {true, 80, {{true, 100, 0}, {true, 90, 0}, {true, 200, 0}}}};
+
+  for (const auto& testData : testSettings) {
+    auto rootPool = memory::memoryManager()->addRootPool(
+        "parallelMemoryReclaimer",
+        kMaxMemory,
+        exec::ParallelMemoryReclaimer::create(
+            testData.hasExecutor ? executor_.get() : nullptr));
+    std::vector<MockMemoryReclaimer*> memoryReclaimers;
+    std::vector<std::shared_ptr<MemoryPool>> leafPools;
+    int reclaimerIdx{0};
+    for (const auto& testReclaimer : testData.testReclaimers) {
+      auto reclaimer = MockMemoryReclaimer::create(
+          testReclaimer.reclaimable, testReclaimer.memoryBytes);
+      leafPools.push_back(rootPool->addLeafChild(
+          std::to_string(reclaimerIdx++), true, std::move(reclaimer)));
+      memoryReclaimers.push_back(
+          static_cast<MockMemoryReclaimer*>(leafPools.back()->reclaimer()));
+    }
+
+    ScopedMemoryArbitrationContext context(rootPool.get());
+    memory::MemoryReclaimer::Stats stats;
+    rootPool->reclaim(testData.bytesToReclaim, 0, stats);
+    for (int i = 0; i < memoryReclaimers.size(); ++i) {
+      auto* memoryReclaimer = memoryReclaimers[i];
+      ASSERT_EQ(
+          memoryReclaimer->memoryBytes(),
+          testData.testReclaimers[i].expectedMemoryBytesAfterReclaim)
+          << i;
+    }
+  }
 }
