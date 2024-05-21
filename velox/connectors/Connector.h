@@ -64,6 +64,10 @@ struct ConnectorSplit {
   virtual std::string getFileName() const {
     return "";
   }
+
+  virtual std::string getFullFileName() const {
+    return "";
+  }
 };
 
 class ColumnHandle : public ISerializable {

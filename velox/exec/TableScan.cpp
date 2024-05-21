@@ -354,7 +354,7 @@ void TableScan::checkPreload() {
 
 void TableScan::setInputFileName(
     std::shared_ptr<connector::ConnectorSplit> split) {
-  driverCtx_->inputFileName = split->getFileName();
+  driverCtx_->inputFileName = split->getFullFileName();
 }
 
 bool TableScan::isFinished() {
