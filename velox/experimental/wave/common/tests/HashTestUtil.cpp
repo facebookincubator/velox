@@ -157,8 +157,6 @@ void setupGpuTable(
   table->sizeMask = numBuckets - 1;
   char* data = reinterpret_cast<char*>(table + 1);
   table->allocators = reinterpret_cast<RowAllocator*>(data);
-  auto allocatorBase =
-      reinterpret_cast<HashPartitionAllocator*>(table->allocators);
   data += sizeof(HashPartitionAllocator);
   auto freeSet = reinterpret_cast<FreeSetType*>(data);
   new (freeSet) FreeSetType();
