@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/GroupingSet.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Task.h"
 
@@ -71,6 +72,7 @@ GroupingSet::GroupingSet(
       rows_(operatorCtx->pool()),
       isAdaptive_(queryConfig_.hashAdaptivityEnabled()),
       pool_(*operatorCtx->pool()),
+      numPeers_(operatorCtx->task()->numDrivers(operatorCtx->driver())),
       spillStats_(spillStats) {
   VELOX_CHECK_NOT_NULL(nonReclaimableSection_);
   VELOX_CHECK(pool_.trackUsage());
@@ -856,6 +858,10 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
+  if (maybeSpill()) {
+    return;
+  }
+
   const auto currentUsage = pool_.currentBytes();
   const auto minReservationBytes =
       currentUsage * spillConfig_->minSpillableReservationPct / 100;
@@ -904,6 +910,32 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
                << " for memory pool " << pool_.name()
                << ", usage: " << succinctBytes(pool_.currentBytes())
                << ", reservation: " << succinctBytes(pool_.reservedBytes());
+}
+
+bool GroupingSet::maybeSpill() {
+  VELOX_CHECK_NOT_NULL(spillConfig_);
+  if (spiller_ == nullptr) {
+    return false;
+  }
+  const uint64_t nodeCurrentUsage = pool_.parent()->currentBytes();
+  const uint64_t nodePeakUsage = pool_.parent()->peakBytes();
+  const uint64_t spillTriggerUsage =
+      nodePeakUsage * (100 - spillConfig_->spillableReservationGrowthPct) / 100;
+  if (nodePeakUsage < spillTriggerUsage) {
+    return false;
+  }
+  const uint64_t reservedBytes = pool_.reservedBytes();
+  if (reservedBytes < nodeCurrentUsage / numPeers_) {
+    return false;
+  }
+  RECORD_METRIC_VALUE(kMetricMemorySelfReclaimCount);
+  {
+    memory::ScopedMemoryArbitrationContext ctx(&pool_);
+    spill();
+    pool_.release();
+  }
+  VELOX_CHECK_LE(pool_.reservedBytes(), reservedBytes);
+  return true;
 }
 
 void GroupingSet::ensureOutputFits() {

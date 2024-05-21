@@ -43,6 +43,9 @@ constexpr folly::StringPiece kMetricMemoryReclaimedBytes{
 constexpr folly::StringPiece kMetricMemoryReclaimCount{
     "velox.memory_reclaim_count"};
 
+constexpr folly::StringPiece kMetricMemorySelfReclaimCount{
+    "velox.memory_self_reclaim_count"};
+
 constexpr folly::StringPiece kMetricTaskMemoryReclaimCount{
     "velox.task_memory_reclaim_count"};
 

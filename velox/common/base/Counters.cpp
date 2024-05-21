@@ -266,6 +266,9 @@ void registerVeloxMetrics() {
   // Tracks the memory reclaim count on an operator.
   DEFINE_METRIC(kMetricMemoryReclaimCount, facebook::velox::StatType::COUNT);
 
+  // Tracks the memory reclaim count by an operator itself.
+  DEFINE_METRIC(kMetricMemorySelfReclaimCount, facebook::velox::StatType::COUNT);
+
   // Tracks op memory reclaim exec time in range of [0, 600s] with 20 buckets
   // and reports P50, P90, P99, and P100.
   DEFINE_HISTOGRAM_METRIC(
