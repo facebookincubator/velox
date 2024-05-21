@@ -14,17 +14,24 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
-using namespace facebook::velox::test;
+using namespace facebook::velox::functions;
 using namespace facebook::velox::functions::test;
+using namespace facebook::velox::test;
 
 namespace {
 
 class SliceTest : public FunctionBaseTest {
  protected:
   static const vector_size_t kVectorSize{1000};
+
+  static void SetUpTestCase() {
+    FunctionBaseTest::SetUpTestCase();
+    registerIntegerSliceFunction("spark_");
+  }
 
   void testSlice(
       const std::string& expression,
@@ -124,6 +131,32 @@ TEST_F(SliceTest, prestoTestCases) {
             expectedArrayVector),
         "SQL array indices start at 1");
   }
+}
+
+TEST_F(SliceTest, sparkTestCases) {
+  auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4, 5, 6}});
+  auto expectedArrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+  // Spark Slice() needs to parse integer literals as INTEGER, not BIGINT.
+  VELOX_ASSERT_THROW(
+      testSlice("spark_slice(C0, 1, 4)", {arrayVector}, expectedArrayVector),
+      "Scalar function signature is not supported: spark_slice(ARRAY<BIGINT>, BIGINT, BIGINT)");
+  options_.parseIntegerAsBigint = false;
+  testSlice("spark_slice(C0, 1, 4)", {arrayVector}, expectedArrayVector);
+
+  // Slice with negative start index.
+  expectedArrayVector = makeArrayVector<int64_t>({{4, 5}});
+  testSlice("spark_slice(C0, -3, 2)", {arrayVector}, expectedArrayVector);
+
+  // Slice with the 0 start index.
+  VELOX_ASSERT_THROW(
+      testSlice("spark_slice(C0, 0, 2)", {arrayVector}, expectedArrayVector),
+      "SQL array indices start at 1");
+
+  // Slice with string input.
+  auto stringArrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
+  auto expectedStringArrayVector = makeArrayVector<StringView>({{"b", "c"}});
+  testSlice("spark_slice(C0, 2, 2)", {stringArrayVector}, expectedStringArrayVector);
+  options_.parseIntegerAsBigint = true;
 }
 
 TEST_F(SliceTest, constantInputArray) {

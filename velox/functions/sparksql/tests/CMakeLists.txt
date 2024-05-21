@@ -44,7 +44,6 @@ add_executable(
   RandTest.cpp
   RegexFunctionsTest.cpp
   SizeTest.cpp
-  SliceTest.cpp
   SortArrayTest.cpp
   SparkCastExprTest.cpp
   SparkPartitionIdTest.cpp

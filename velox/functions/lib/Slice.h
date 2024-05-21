@@ -20,14 +20,9 @@
 
 namespace facebook::velox::functions {
 
-/// @tparam IndexKind The `TypeKind` of the function `Slice` start and length
-/// type.
-template <TypeKind IndexKind>
-void registerSliceFunction(const std::string& prefix);
+// Use BIGINT type for start and length(presto's behavior).
+void registerBigIntSliceFunction(const std::string& prefix);
 
-extern template void registerSliceFunction<TypeKind::BIGINT>(
-    const std::string& prefix);
-
-extern template void registerSliceFunction<TypeKind::INTEGER>(
-    const std::string& prefix);
+// Use INTEGER type for start and length(Spark's behavior).
+void registerIntegerSliceFunction(const std::string& prefix);
 } // namespace facebook::velox::functions

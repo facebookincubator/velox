@@ -23,10 +23,10 @@
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/Repeat.h"
+#include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/BinaryFunctions.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
-#include "velox/functions/prestosql/Slice.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
@@ -346,7 +346,7 @@ void registerFunctions(const std::string& prefix) {
       makeRepeatAllowNegativeCount,
       repeatMetadata());
 
-  registerSliceFunction<TypeKind::INTEGER>(prefix);
+  registerIntegerSliceFunction(prefix);
 
   exec::registerStatefulVectorFunction(
       prefix + "shuffle",

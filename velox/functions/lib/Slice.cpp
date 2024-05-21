@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/Slice.h"
+#include "velox/functions/lib/Slice.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 
@@ -205,6 +205,8 @@ class SliceFunction : public exec::VectorFunction {
 };
 } // namespace
 
+/// @tparam IndexKind The `TypeKind` of the function `Slice` start and length
+/// type.
 template <TypeKind Kind>
 void registerSliceFunction(const std::string& prefix) {
   using NativeType = typename TypeTraits<Kind>::NativeType;
@@ -229,9 +231,12 @@ void registerSliceFunction(const std::string& prefix) {
       prefix + "slice", signatures, std::make_unique<SliceFunction<Kind>>());
 }
 
-template void registerSliceFunction<TypeKind::BIGINT>(
-    const std::string& prefix);
-template void registerSliceFunction<TypeKind::INTEGER>(
-    const std::string& prefix);
+void registerBigIntSliceFunction(const std::string& prefix) {
+  registerSliceFunction<TypeKind::BIGINT>(prefix);
+}
+
+void registerIntegerSliceFunction(const std::string& prefix) {
+  registerSliceFunction<TypeKind::INTEGER>(prefix);
+}
 
 } // namespace facebook::velox::functions

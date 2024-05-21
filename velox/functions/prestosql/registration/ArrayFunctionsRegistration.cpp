@@ -19,10 +19,10 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/Repeat.h"
+#include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
-#include "velox/functions/prestosql/Slice.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
 
 namespace facebook::velox::functions {
@@ -140,7 +140,7 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "contains");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_arrays_overlap, prefix + "arrays_overlap");
-  registerSliceFunction<TypeKind::BIGINT>(prefix);
+  registerBigIntSliceFunction(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, prefix + "zip_with");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");

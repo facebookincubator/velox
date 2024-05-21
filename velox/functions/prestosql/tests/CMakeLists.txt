@@ -88,7 +88,6 @@ add_executable(
   ScalarFunctionRegTest.cpp
   SequenceTest.cpp
   SimpleComparisonMatcherTest.cpp
-  SliceTest.cpp
   SplitTest.cpp
   SplitToMapTest.cpp
   StringFunctionsTest.cpp
