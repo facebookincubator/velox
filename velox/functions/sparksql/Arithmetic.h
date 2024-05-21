@@ -415,9 +415,6 @@ struct WidthBucketFunction {
       if (value >= bound2) {
         return numBuckets + 1;
       }
-      return static_cast<int64_t>(
-                 (numBuckets * (value - bound1) / (bound2 - bound1))) +
-          1;
     } else { // bound1 > bound2 case
       if (value > bound1) {
         return 0;
@@ -425,10 +422,11 @@ struct WidthBucketFunction {
       if (value <= bound2) {
         return numBuckets + 1;
       }
-      return static_cast<int64_t>(
-                 (numBuckets * (bound1 - value) / (bound1 - bound2))) +
-          1;
     }
+    return static_cast<int64_t>(
+               (numBuckets * std::abs(value - bound1) /
+                std::abs(bound2 - bound1))) +
+        1;
   }
 };
 

@@ -282,6 +282,8 @@ Mathematical Functions
     `bound1` cannot equal `bound2`;
     Otherwise, the function will return NULL.
 
+    ::
+        
         SELECT width_bucket(-1.0, 0.0, 10.0, 5); -- 0
         SELECT width_bucket(0.1, 0.0, 10.0, 5); -- 1
         SELECT width_bucket(10.1, 0.0, 10.0, 5); -- 6
