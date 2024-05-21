@@ -34,6 +34,10 @@
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_memory_pool_debug_enabled);
 
+namespace facebook::velox::exec {
+class ParallelMemoryReclaimer;
+}
+
 namespace facebook::velox::memory {
 #define VELOX_MEM_POOL_CAP_EXCEEDED(errorMessage)                   \
   _VELOX_THROW(                                                     \
@@ -544,8 +548,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   mutable folly::SharedMutex poolMutex_;
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> children_;
 
-  friend class TestMemoryReclaimer;
   friend class MemoryReclaimer;
+  friend class velox::exec::ParallelMemoryReclaimer;
 };
 
 std::ostream& operator<<(std::ostream& out, MemoryPool::Kind kind);

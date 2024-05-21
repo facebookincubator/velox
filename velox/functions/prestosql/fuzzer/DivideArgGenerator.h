@@ -13,17 +13,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include <array>
+#include "velox/expression/fuzzer/DecimalArgGeneratorBase.h"
 
-namespace facebook::velox {
+namespace facebook::velox::exec::test {
 
-/// A static class that holds helper functions for DOUBLE type.
-class DoubleUtil {
+// An argument type generator for decimal divide Presto function.
+class DivideArgGenerator : public fuzzer::DecimalArgGeneratorBase {
  public:
-  static const std::array<double, 309> kPowersOfTen;
+  DivideArgGenerator() {
+    initialize(2);
+  }
 
-}; // DoubleUtil
-} // namespace facebook::velox
+ protected:
+  std::optional<std::pair<int, int>>
+  toReturnType(int p1, int s1, int p2, int s2) override {
+    if (s1 + s2 > 38) {
+      return std::nullopt;
+    }
+
+    auto p = std::min(38, p1 + s2 + std::max(0, s2 - s1));
+    auto s = std::max(s1, s2);
+    return {{p, s}};
+  }
+};
+
+} // namespace facebook::velox::exec::test
