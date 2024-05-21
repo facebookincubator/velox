@@ -498,6 +498,34 @@ TEST_F(MergeJoinTest, lazyVectors) {
           "SELECT c0, rc0, c1, rc1, c2, c3  FROM t, u WHERE t.c0 = u.rc0 and c1 + rc1 < 30");
 }
 
+TEST_F(MergeJoinTest, semiJoin) {
+  auto left =
+      makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 5, 6})});
+
+  auto right =
+      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 5, 7})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Semi join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "t0 > 1",
+              {"t0"},
+              core::JoinType::kLeftSemiFilter)
+          .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT t0 FROM t where t0 IN (SELECT u0 from u) and t0 > 1");
+}
+
 TEST_F(MergeJoinTest, nullKeys) {
   auto left = makeRowVector(
       {"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 5, std::nullopt})});

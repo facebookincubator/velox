@@ -35,7 +35,8 @@ MergeJoin::MergeJoin(
       numKeys_{joinNode->leftKeys().size()},
       joinNode_(joinNode) {
   VELOX_USER_CHECK(
-      joinNode_->isInnerJoin() || joinNode_->isLeftJoin(),
+      joinNode_->isInnerJoin() || joinNode_->isLeftJoin() ||
+          joinNode_->isLeftSemiFilterJoin(),
       "Merge join supports only inner and left joins. Other join types are not supported yet.");
 }
 
