@@ -503,6 +503,9 @@ TEST_F(ArithmeticTest, widthBucket) {
   EXPECT_EQ(widthBucket(kInf, 0, 4, kMaxInt64), std::nullopt);
   EXPECT_EQ(widthBucket(kInf, 4, 0, kMaxInt64), std::nullopt);
   EXPECT_EQ(widthBucket(5.3, 0.2, 10.6, 9223372036854775807), std::nullopt);
+
+  // value is infinite.
+  EXPECT_EQ(widthBucket(kInf, 0, 4, 3), 4);
 }
 
 class LogNTest : public SparkFunctionBaseTest {

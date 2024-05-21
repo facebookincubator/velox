@@ -373,58 +373,60 @@ struct WidthBucketFunction {
   FOLLY_ALWAYS_INLINE bool call(
       int64_t& result,
       double value,
-      double min,
-      double max,
-      int64_t numBucket) {
+      double bound1,
+      double bound2,
+      int64_t numBuckets) {
     // NULL would be returned if the input arguments don't follow conditions
     // list belows:
-    // - `numBucket` must be greater than zero and be less than Long.MaxValue.
-    // - `value`, `min`, and `max` cannot be NaN.
-    // - `min` bound cannot equal `max`.
-    // - `min` and `max` must be finite.
-    if (shouldReturnsNull(value, min, max, numBucket)) {
+    // - `numBuckets` must be greater than zero and be less than Long.MaxValue.
+    // - `value`, `bound1`, and `bound2` cannot be NaN.
+    // - `bound1` bound cannot equal `bound2`.
+    // - `bound1` and `bound2` must be finite.
+    if (shouldReturnsNull(value, bound1, bound2, numBuckets)) {
       return false;
     }
 
-    result = computeBucketNumberNotNull(value, min, max, numBucket);
+    result = computeBucketNumberNotNull(value, bound1, bound2, numBuckets);
     return true;
   }
 
-  static FOLLY_ALWAYS_INLINE bool
-  shouldReturnsNull(double value, double min, double max, int64_t numBucket) {
-    return numBucket <= 0 || numBucket == std::numeric_limits<int64_t>::max() ||
-        std::isnan(value) || min == max || !std::isfinite(min) ||
-        !std::isfinite(max);
+ private:
+  static FOLLY_ALWAYS_INLINE bool shouldReturnsNull(
+      double value,
+      double bound1,
+      double bound2,
+      int64_t numBuckets) {
+    return numBuckets <= 0 ||
+        numBuckets == std::numeric_limits<int64_t>::max() ||
+        std::isnan(value) || bound1 == bound2 || !std::isfinite(bound1) ||
+        !std::isfinite(bound2);
   }
 
   static FOLLY_ALWAYS_INLINE int64_t computeBucketNumberNotNull(
       double value,
-      double min,
-      double max,
-      int64_t numBucket) {
-    double lower = std::min(min, max);
-    double upper = std::max(min, max);
-
-    if (min < max) {
-      if (value < lower) {
+      double bound1,
+      double bound2,
+      int64_t numBuckets) {
+    if (bound1 < bound2) {
+      if (value < bound1) {
         return 0;
       }
 
-      if (value >= upper) {
-        return numBucket + 1;
+      if (value >= bound2) {
+        return numBuckets + 1;
       }
       return static_cast<int64_t>(
-                 (numBucket * (value - lower) / (upper - lower))) +
+                 (numBuckets * (value - bound1) / (bound2 - bound1))) +
           1;
-    } else { // min > max case
-      if (value > upper) {
+    } else { // bound1 > bound2 case
+      if (value > bound1) {
         return 0;
       }
-      if (value <= lower) {
-        return numBucket + 1;
+      if (value <= bound2) {
+        return numBuckets + 1;
       }
       return static_cast<int64_t>(
-                 (numBucket * (upper - value) / (upper - lower))) +
+                 (numBuckets * (bound1 - value) / (bound1 - bound2))) +
           1;
     }
   }
