@@ -1186,49 +1186,49 @@ struct SoundexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   static constexpr bool is_default_ascii_behavior = true;
-  static constexpr int32_t reuse_strings_from_arg = 0;
 
+  /// Soundex is a phonetic algorithm for indexing names by sound, for details,
+  /// please see https://en.wikipedia.org/wiki/Soundex.
   void call(out_type<Varchar>& result, const arg_type<Varchar>& input) {
     size_t inputSize = input.size();
     if (inputSize == 0) {
-      result.setEmpty();
+      result.resize(0);
       return;
     }
     if (!std::isalpha(input.data()[0])) {
       // First character must be a letter, otherwise input is returned.
-      result.setNoCopy(input);
+      result = input;
       return;
     }
     result.resize(4);
     result.data()[0] = std::toupper(input.data()[0]);
-    int32_t sxi = 1;
-    int32_t idx = result.data()[0] - 'A';
-    char lastCode = kUSEnglishMapping[idx];
+    int32_t soundexIndex = 1;
+    int32_t dataIndex = result.data()[0] - 'A';
+    char lastCode = kUSEnglishMapping[dataIndex];
     for (auto i = 1; i < inputSize; ++i) {
       if (!std::isalpha(input.data()[i])) {
         lastCode = '0';
         continue;
       }
-      idx = std::toupper(input.data()[i]) - 'A';
-      char code = kUSEnglishMapping[idx];
+      dataIndex = std::toupper(input.data()[i]) - 'A';
+      char code = kUSEnglishMapping[dataIndex];
       if (code != '7') {
         if (code != '0' && code != lastCode) {
-          result.data()[sxi++] = code;
-          if (sxi > 3) {
+          result.data()[soundexIndex++] = code;
+          if (soundexIndex > 3) {
             break;
           }
         }
         lastCode = code;
       }
     }
-    for (; sxi < 4; sxi++) {
-      result.data()[sxi] = '0';
+    for (; soundexIndex < 4; soundexIndex++) {
+      result.data()[soundexIndex] = '0';
     }
   }
 
  private:
-  /// Soundex mapping table.
-  /// For details, please see https://en.wikipedia.org/wiki/Soundex.
+  // Soundex mapping table.
   static constexpr char kUSEnglishMapping[] = {
       '0', '1', '2', '3', '0', '1', '2', '7', '0', '2', '2', '4', '5',
       '5', '0', '1', '2', '6', '2', '3', '0', '1', '7', '2', '0', '2'};

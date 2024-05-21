@@ -190,7 +190,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: soundex(string) -> string
 
-    Returns Soundex code of the string. If first character of ``string`` is not
+    Returns `Soundex code <https://en.wikipedia.org/wiki/Soundex>`_ of the string. If first character of ``string`` is not
     a letter, ``string`` is returned. ::
 
         SELECT soundex('Miller'); -- "M460"

@@ -648,10 +648,6 @@ TEST_F(StringTest, soundex) {
   EXPECT_EQ(soundex("SU"), "S000");
   EXPECT_EQ(soundex("zZ"), "Z000");
   EXPECT_EQ(soundex("RAGSSEEESSSVEEWE"), "R221");
-  EXPECT_EQ(soundex("Ashcraft"), "A261");
-  EXPECT_EQ(soundex("Aswcraft"), "A261");
-  EXPECT_EQ(soundex("Tymczak"), "T522");
-  EXPECT_EQ(soundex("Pfister"), "P236");
   EXPECT_EQ(soundex("Miller"), "M460");
   EXPECT_EQ(soundex("Peterson"), "P362");
   EXPECT_EQ(soundex("Peters"), "P362");
@@ -660,6 +656,19 @@ TEST_F(StringTest, soundex) {
   EXPECT_EQ(soundex("Moskowitz"), "M232");
   EXPECT_EQ(soundex("Moskovitz"), "M213");
   EXPECT_EQ(soundex("relyheewsgeessg"), "R422");
+
+  EXPECT_EQ(soundex("Robert"), "R163");
+  EXPECT_EQ(soundex("Rupert"), "R163");
+  EXPECT_EQ(soundex("Rubin"), "R150");
+
+  EXPECT_EQ(soundex("Ashcraft"), "A261");
+  EXPECT_EQ(soundex("Aswcraft"), "A261");
+
+  EXPECT_EQ(soundex("Tymczak"), "T522");
+
+  EXPECT_EQ(soundex("Pfister"), "P236");
+
+  EXPECT_EQ(soundex("Honeyman"), "H555");
 
   EXPECT_EQ(soundex("Tschüss"), "T220");
 
