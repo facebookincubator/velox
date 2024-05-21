@@ -506,6 +506,7 @@ TEST_F(ArithmeticTest, widthBucket) {
 
   // value is infinite.
   EXPECT_EQ(widthBucket(kInf, 0, 4, 3), 4);
+  EXPECT_EQ(widthBucket(-kInf, 0, 4, 3), 0);
 }
 
 class LogNTest : public SparkFunctionBaseTest {

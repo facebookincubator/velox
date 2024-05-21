@@ -382,16 +382,16 @@ struct WidthBucketFunction {
     // - `value`, `bound1`, and `bound2` cannot be NaN.
     // - `bound1` bound cannot equal `bound2`.
     // - `bound1` and `bound2` must be finite.
-    if (shouldReturnsNull(value, bound1, bound2, numBuckets)) {
+    if (shouldReturnNull(value, bound1, bound2, numBuckets)) {
       return false;
     }
 
-    result = computeBucketNumberNotNull(value, bound1, bound2, numBuckets);
+    result = computeBucketNumber(value, bound1, bound2, numBuckets);
     return true;
   }
 
  private:
-  static FOLLY_ALWAYS_INLINE bool shouldReturnsNull(
+  static FOLLY_ALWAYS_INLINE bool shouldReturnNull(
       double value,
       double bound1,
       double bound2,
@@ -402,7 +402,7 @@ struct WidthBucketFunction {
         !std::isfinite(bound2);
   }
 
-  static FOLLY_ALWAYS_INLINE int64_t computeBucketNumberNotNull(
+  static FOLLY_ALWAYS_INLINE int64_t computeBucketNumber(
       double value,
       double bound1,
       double bound2,
