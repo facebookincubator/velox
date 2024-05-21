@@ -1926,7 +1926,7 @@ void testFlatmapAsMapFieldLifeCycle(
   auto child =
       std::dynamic_pointer_cast<MapVector>(result->as<RowVector>()->childAt(0));
   BaseVector* rowPtr = result.get();
-  MapVector* childPtr = child.get();
+  // MapVector* childPtr = child.get();
   Buffer* rawNulls = child->nulls().get();
   BufferPtr sizes = child->sizes();
   Buffer* rawOffsets = child->offsets().get();
@@ -1947,7 +1947,7 @@ void testFlatmapAsMapFieldLifeCycle(
 
   auto mapKeys = child->mapKeys();
   auto rawSizes = child->sizes().get();
-  childPtr = child.get();
+  // childPtr = child.get();
   child.reset();
 
   EXPECT_TRUE(rowReader->next(batchSize, result));
