@@ -662,6 +662,7 @@ TEST_F(StringTest, soundex) {
   EXPECT_EQ(soundex("Rubin"), "R150");
 
   EXPECT_EQ(soundex("Ashcraft"), "A261");
+  EXPECT_EQ(soundex("Ashcroft"), "A261");
   EXPECT_EQ(soundex("Aswcraft"), "A261");
 
   EXPECT_EQ(soundex("Tymczak"), "T522");
