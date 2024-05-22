@@ -384,6 +384,11 @@ bool MergeJoin::addToOutput() {
         auto rightEnd =
             r == numRights - 1 ? rightMatch_->endIndex : right->size();
 
+        if (isLeftSemiFilterJoin(joinType_)) {
+          // LeftSemiFilter produce each row from the left at most once.
+          rightEnd = rightStart + 1;
+        }
+
         for (auto j = rightStart; j < rightEnd; ++j) {
           if (outputSize_ == outputBatchSize_) {
             leftMatch_->setCursor(l, i);
