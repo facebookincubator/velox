@@ -37,7 +37,7 @@ MergeJoin::MergeJoin(
   VELOX_USER_CHECK(
       joinNode_->isInnerJoin() || joinNode_->isLeftJoin() ||
           joinNode_->isLeftSemiFilterJoin(),
-      "Merge join supports only inner and left joins. Other join types are not supported yet.");
+      "Merge join supports only inner, left and left semi joins. Other join types are not supported yet.");
 }
 
 void MergeJoin::initialize() {
@@ -71,6 +71,12 @@ void MergeJoin::initialize() {
     if (outIndex.has_value()) {
       rightProjections_.emplace_back(i, outIndex.value());
     }
+  }
+
+  if (joinNode_->isLeftSemiFilterJoin()) {
+    VELOX_USER_CHECK(
+        rightProjections_.empty(),
+        "The right side projections should be empty for left semi join");
   }
 
   if (joinNode_->filter()) {
