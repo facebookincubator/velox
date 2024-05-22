@@ -424,8 +424,7 @@ struct WidthBucketFunction {
       }
     }
     return static_cast<int64_t>(
-               (numBuckets * std::abs(value - bound1) /
-                std::abs(bound2 - bound1))) +
+               (numBuckets * (value - bound1) / (bound2 - bound1))) +
         1;
   }
 };
