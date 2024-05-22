@@ -1138,10 +1138,10 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
 
   auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 8ULL);
-  auto col8 =
+  auto flbaCol =
       std::static_pointer_cast<const ParquetTypeWithId>(type->childAt(6));
-  EXPECT_EQ(col8->name_, "flba_field");
-  EXPECT_EQ(col8->parquetType_, thrift::Type::FIXED_LEN_BYTE_ARRAY);
+  EXPECT_EQ(flbaCol->name_, "flba_field");
+  EXPECT_EQ(flbaCol->parquetType_, thrift::Type::FIXED_LEN_BYTE_ARRAY);
 
   auto selectedType = ROW({"flba_field"}, {VARBINARY()});
   auto rowReaderOpts = getReaderOpts(selectedType);
@@ -1149,7 +1149,6 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   auto expected = std::string(1024, '*');
-
   VectorPtr result = BaseVector::create(selectedType, 0, &(*leafPool_));
   rowReader->next(1, result);
   EXPECT_EQ(
