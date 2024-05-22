@@ -503,7 +503,7 @@ TEST_F(MergeJoinTest, semiJoin) {
       makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 5, 6})});
 
   auto right =
-      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 1, 5, 7})});
+      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 7})});
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -517,12 +517,13 @@ TEST_F(MergeJoinTest, semiJoin) {
               {"t0"},
               {"u0"},
               PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
-              "",
+              "t0 > 1",
               {"t0"},
               core::JoinType::kLeftSemiFilter)
           .planNode();
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .assertResults("SELECT t0 FROM t where t0 IN (SELECT u0 from u)");
+      .assertResults(
+          "SELECT t0 FROM t where t0 IN (SELECT u0 from u) and t0 > 1");
 }
 
 TEST_F(MergeJoinTest, nullKeys) {
