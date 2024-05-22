@@ -375,6 +375,28 @@ When <code class="docutils literal notranslate"><span class="pre">x</span></code
 </div>
 </dd></dl>
 
+<dl class="spark function">
+<dt class="sig sig-object spark" id="width_bucket">
+<span class="sig-name descname"><span class="pre">width_bucket</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bound1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bound2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#width_bucket" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the zero-based bucket number to which <code class="docutils literal notranslate"><span class="pre">x</span></code> would be assigned in an equiwidth histogram with <code class="docutils literal notranslate"><span class="pre">n</span></code> buckets,
+in the range <code class="docutils literal notranslate"><span class="pre">bound1</span></code> to <code class="docutils literal notranslate"><span class="pre">bound2</span></code>.
+<cite>bound1</cite> can be greater than <cite>bound2</cite>.
+If <cite>bound1</cite> less than <cite>bound2</cite>, if <cite>x</cite> less than <cite>bound1</cite> return 0, if <cite>x</cite> greater than or equal to <cite>bound2</cite> return n + 1.
+If <cite>bound1</cite> greater than <cite>bound2</cite>, if <cite>x</cite> greater than <cite>bound1</cite> return 0, if <cite>x</cite> less than or equal to <cite>bound2</cite> return n + 1.
+<cite>n</cite> must be a positive integral value. <cite>x</cite>, <cite>bound1</cite>, and <cite>bound2</cite> cannot be NaN. <cite>bound1</cite>, and <cite>bound2</cite> must be finite.
+<cite>bound1</cite> cannot equal <cite>bound2</cite>;
+Otherwise, the function will return NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">width_bucket</span><span class="p">(</span><span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">10.0</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">width_bucket</span><span class="p">(</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">10.0</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">width_bucket</span><span class="p">(</span><span class="mf">10.1</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">10.0</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mi">6</span>
+<span class="n">SELECT</span> <span class="n">width_bucket</span><span class="p">(</span><span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">10.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mi">6</span>
+<span class="n">SELECT</span> <span class="n">width_bucket</span><span class="p">(</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">10.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mi">5</span>
+<span class="n">SELECT</span> <span class="n">width_bucket</span><span class="p">(</span><span class="mf">10.1</span><span class="p">,</span> <span class="mf">10.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">width_bucket</span><span class="p">(</span><span class="mf">10.1</span><span class="p">,</span> <span class="mf">10.0</span><span class="p">,</span> <span class="mf">10.0</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 
 
@@ -428,6 +450,7 @@ When <code class="docutils literal notranslate"><span class="pre">x</span></code
 <li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">subtract()</span></code></a></li>
 <li><a class="reference internal" href="#unaryminus"><code class="docutils literal notranslate"><span class="pre">unaryminus()</span></code></a></li>
 <li><a class="reference internal" href="#unhex"><code class="docutils literal notranslate"><span class="pre">unhex()</span></code></a></li>
+<li><a class="reference internal" href="#width_bucket"><code class="docutils literal notranslate"><span class="pre">width_bucket()</span></code></a></li>
 </ul>
 </li>
 </ul>
