@@ -101,7 +101,7 @@ class StringDecoder {
   const char* bufferStart_;
   const char* bufferEnd_;
   const char* const lastSafeWord_;
-  int length_;
+  const int length_;
 };
 
 } // namespace facebook::velox::parquet
