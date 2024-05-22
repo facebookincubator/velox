@@ -28,7 +28,7 @@ endfunction()
 function(velox_base_add_library TARGET)
   add_library(${TARGET} ${ARGN})
   install(TARGETS ${TARGET} DESTINATION lib/velox)
-  velox_install_library_headers()
+  # velox_install_library_headers()
 endfunction()
 
 # This is extremely hackish but presents an easy path to installation.
@@ -49,7 +49,7 @@ function(velox_add_library TARGET)
     # Create a library for each invocation.
     velox_base_add_library(${TARGET} ${ARGN})
   endif()
-  velox_install_library_headers()
+  # velox_install_library_headers()
 endfunction()
 
 function(velox_link_libraries TARGET)
