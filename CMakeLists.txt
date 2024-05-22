@@ -50,6 +50,7 @@ list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
 
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
+include(VeloxUtils)
 
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -68,6 +69,7 @@ option(
   "Build a minimal set of components, including DWIO (file format readers/writers).
    This will override other build options."
   OFF)
+option(VELOX_MONO_LIBRARY "Build a single library" ON)
 
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
