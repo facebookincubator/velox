@@ -372,10 +372,9 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     if (isRowIndexColumn(name, rowIndexColumn)) {
       continue;
     }
-    numChildren++;
     auto it = outputSubfields.find(name);
     if (it == outputSubfields.end()) {
-      auto* fieldSpec = spec->addFieldRecursively(name, *type, numChildren - 1);
+      auto* fieldSpec = spec->addFieldRecursively(name, *type, numChildren++);
       filterOutNullMapKeys(*type, *fieldSpec);
       filterSubfields.erase(name);
       continue;
@@ -390,7 +389,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       }
       filterSubfields.erase(it);
     }
-    auto* fieldSpec = spec->addField(name, numChildren - 1);
+    auto* fieldSpec = spec->addField(name, numChildren++);
     addSubfields(*type, subfieldSpecs, 1, pool, *fieldSpec);
     filterOutNullMapKeys(*type, *fieldSpec);
     subfieldSpecs.clear();
