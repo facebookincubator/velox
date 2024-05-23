@@ -41,25 +41,10 @@ struct RemainderFunction {
     // int64_t.
     if (UNLIKELY(n == 1 || n == -1)) {
       result = 0;
+    } else if constexpr (std::is_same_v<TInput, float> || std::is_same_v<TInput, double>) {
+      result = std::fmod(a, n);
     } else {
       result = a % n;
-    }
-    return true;
-  }
-};
-
-template <typename T>
-struct RemainderFloatFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool
-  call(TInput& result, const TInput a, const TInput n) {
-    if (UNLIKELY(n == 0)) {
-      return false;
-    }
-    if (UNLIKELY(n == 1 || n == -1)) {
-      result = 0;
-    } else {
-      result = std::fmod(a, n);
     }
     return true;
   }
