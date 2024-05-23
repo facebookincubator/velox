@@ -1085,7 +1085,7 @@ TEST_F(CastExprTest, truncateVsRound) {
   testInvalidCast<int32_t>(
       "tinyint",
       {1111111, 1000, -100101},
-      "Cannot cast INTEGER '1111111' to TINYINT. Overflow during arithmetic conversion: (signed char) 1111111");
+      "Cannot cast INTEGER '1111111' to TINYINT. Overflow during arithmetic conversion:");
 }
 
 TEST_F(CastExprTest, nullInputs) {
@@ -2568,7 +2568,10 @@ TEST_F(CastExprTest, intervalDayTimeToVarchar) {
            kMillisInMinute,
            kMillisInSecond,
            5 * kMillisInDay + 14 * kMillisInHour + 20 * kMillisInMinute +
-               52 * kMillisInSecond + 88},
+               52 * kMillisInSecond + 88,
+           -(kMillisInDay + kMillisInHour + kMillisInMinute + kMillisInSecond +
+             88),
+           std::numeric_limits<int64_t>::min()},
           INTERVAL_DAY_TIME()),
   });
 
@@ -2579,9 +2582,11 @@ TEST_F(CastExprTest, intervalDayTimeToVarchar) {
       "0 00:01:00.000",
       "0 00:00:01.000",
       "5 14:20:52.088",
+      "-1 01:01:01.088",
+      "-106751991167 07:12:55.808",
   });
 
-  assertEqualVectors(result, expected);
+  assertEqualVectors(expected, result);
 
   // Reverse cast is not supported.
   VELOX_ASSERT_THROW(

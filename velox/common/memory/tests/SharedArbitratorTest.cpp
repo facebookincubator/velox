@@ -359,7 +359,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, skipNonReclaimableTaskTest) {
             op->testingOperatorCtx()->operatorType() != "PartialAggregation") {
           return;
         }
-        if (op->pool()->currentBytes() == 0) {
+        if (op->pool()->usedBytes() == 0) {
           return;
         }
         if (op->testingOperatorCtx()->operatorType() == "PartialAggregation") {
@@ -384,29 +384,29 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, skipNonReclaimableTaskTest) {
         ++taskPausedCount;
       })));
 
+  const auto spillPlan = PlanBuilder()
+                             .values(vectors)
+                             .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                             .planNode();
   std::thread spillableThread([&]() {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    AssertQueryBuilder(PlanBuilder()
-                           .values(vectors)
-                           .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                           .planNode())
+    AssertQueryBuilder(spillPlan)
         .queryCtx(queryCtx)
         .spillDirectory(spillDirectory->getPath())
         .copyResults(pool());
   });
 
+  const auto nonSpillPlan = PlanBuilder()
+                                .values(vectors)
+                                .aggregation(
+                                    {"c0", "c1"},
+                                    {"array_agg(c2)"},
+                                    {},
+                                    core::AggregationNode::Step::kPartial,
+                                    false)
+                                .planNode();
   std::thread nonSpillableThread([&]() {
-    AssertQueryBuilder(PlanBuilder()
-                           .values(vectors)
-                           .aggregation(
-                               {"c0", "c1"},
-                               {"array_agg(c2)"},
-                               {},
-                               core::AggregationNode::Step::kPartial,
-                               false)
-                           .planNode())
-        .queryCtx(queryCtx)
-        .copyResults(pool());
+    AssertQueryBuilder(nonSpillPlan).queryCtx(queryCtx).copyResults(pool());
   });
 
   while (!blockedPartialAggregation || !blockedAggregation) {
@@ -1073,7 +1073,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, arbitrateMemoryFromOtherOperator) {
               if (!RE2::FullMatch(pool->name(), re)) {
                 return;
               }
-              if (pool->root()->currentBytes() == 0) {
+              if (pool->root()->usedBytes() == 0) {
                 return;
               }
               if (!injectReallocateOnce.exchange(false)) {
