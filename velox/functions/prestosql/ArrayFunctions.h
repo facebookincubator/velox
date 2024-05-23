@@ -34,14 +34,14 @@ struct ArrayMinMaxFunction {
   template <typename T>
   void update(T& currentValue, const T& candidateValue) {
     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-      using facebook::velox::util::floating_point::NaNAwareGreaterThan;
-      using facebook::velox::util::floating_point::NaNAwareLessThan;
       if constexpr (isMax) {
-        if (NaNAwareGreaterThan<T>{}(candidateValue, currentValue)) {
+        if (util::floating_point::NaNAwareGreaterThan<T>{}(
+                candidateValue, currentValue)) {
           currentValue = candidateValue;
         }
       } else {
-        if (NaNAwareLessThan<T>{}(candidateValue, currentValue)) {
+        if (util::floating_point::NaNAwareLessThan<T>{}(
+                candidateValue, currentValue)) {
           currentValue = candidateValue;
         }
       }
@@ -162,9 +162,8 @@ struct ArrayJoinFunction {
 
   template <typename C>
   void writeValue(out_type<velox::Varchar>& result, const C& value) {
-    result +=
-        util::Converter<TypeKind::VARCHAR, void, util::DefaultCastPolicy>::cast(
-            value);
+    // To VARCHAR converter never throws.
+    result += util::Converter<TypeKind::VARCHAR>::tryCast(value).value();
   }
 
   template <typename C>
@@ -836,7 +835,7 @@ struct ArrayUnionFunction {
 
   template <typename Out, typename In>
   void call(Out& out, const In& inputArray1, const In& inputArray2) {
-    folly::F14FastSet<typename In::element_t> elementSet;
+    util::floating_point::HashSetNaNAware<typename In::element_t> elementSet;
     bool nullAdded = false;
     auto addItems = [&](auto& inputArray) {
       for (const auto& item : inputArray) {
@@ -869,8 +868,15 @@ struct ArrayRemoveFunction {
   void call(Out& out, const In& inputArray, E element) {
     for (const auto& item : inputArray) {
       if (item.has_value()) {
-        if (element != item.value()) {
-          out.push_back(item.value());
+        if constexpr (std::is_floating_point_v<E>) {
+          if (!util::floating_point::NaNAwareEquals<E>{}(
+                  element, item.value())) {
+            out.push_back(item.value());
+          }
+        } else {
+          if (element != item.value()) {
+            out.push_back(item.value());
+          }
         }
       } else {
         out.add_null();
