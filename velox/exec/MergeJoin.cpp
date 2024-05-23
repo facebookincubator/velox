@@ -36,7 +36,8 @@ MergeJoin::MergeJoin(
       joinNode_(joinNode) {
   VELOX_USER_CHECK(
       joinNode_->isInnerJoin() || joinNode_->isLeftJoin() ||
-          joinNode_->isLeftSemiFilterJoin(),
+          joinNode_->isLeftSemiFilterJoin() ||
+          joinNode_->isRightSemiFilterJoin(),
       "Merge join supports only inner, left and left semi joins. Other join types are not supported yet.");
 }
 
@@ -63,6 +64,12 @@ void MergeJoin::initialize() {
     if (outIndex.has_value()) {
       leftProjections_.emplace_back(i, outIndex.value());
     }
+  }
+
+  if (joinNode_->isRightSemiFilterJoin()) {
+    VELOX_USER_CHECK(
+        leftProjections_.empty(),
+        "The left side projections should be empty for right semi join");
   }
 
   for (auto i = 0; i < rightType->size(); ++i) {
@@ -390,8 +397,10 @@ bool MergeJoin::addToOutput() {
         auto rightEnd =
             r == numRights - 1 ? rightMatch_->endIndex : right->size();
 
-        if (isLeftSemiFilterJoin(joinType_)) {
+        if (isLeftSemiFilterJoin(joinType_) ||
+            isRightSemiFilterJoin(joinType_)) {
           // LeftSemiFilter produce each row from the left at most once.
+          // RightSemiFilter produce each row from the right at most once.
           rightEnd = rightStart + 1;
         }
 

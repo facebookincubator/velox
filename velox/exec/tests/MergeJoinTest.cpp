@@ -500,7 +500,7 @@ TEST_F(MergeJoinTest, lazyVectors) {
 
 TEST_F(MergeJoinTest, semiJoin) {
   auto left =
-      makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 5, 6})});
+      makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 6})});
 
   auto right =
       makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 7})});
@@ -508,7 +508,7 @@ TEST_F(MergeJoinTest, semiJoin) {
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
 
-  // Semi join.
+  // Left Semi join.
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
       PlanBuilder(planNodeIdGenerator)
@@ -524,6 +524,21 @@ TEST_F(MergeJoinTest, semiJoin) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults(
           "SELECT t0 FROM t where t0 IN (SELECT u0 from u) and t0 > 1");
+
+  // Right Semi join.
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({left})
+             .mergeJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+                 "u0 > 1",
+                 {"u0"},
+                 core::JoinType::kRightSemiFilter)
+             .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT u0 FROM u where u0 IN (SELECT t0 from t) and u0 > 1");
 }
 
 TEST_F(MergeJoinTest, nullKeys) {
