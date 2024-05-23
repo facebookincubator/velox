@@ -971,10 +971,8 @@ exec::AggregateRegistrationResult registerMinMax(
               if (inputType->isLongDecimal()) {
                 return std::make_unique<TNumericN<int128_t>>(resultType);
               }
-              VELOX_UNREACHABLE();
             default:
-              VELOX_CHECK(
-                  false,
+              VELOX_UNREACHABLE(
                   "Unknown input type for {} aggregation {}",
                   name,
                   inputType->kindName());
@@ -1012,8 +1010,7 @@ exec::AggregateRegistrationResult registerMinMax(
               return std::make_unique<TNonNumeric>(
                   inputType, throwOnNestedNulls);
             default:
-              VELOX_CHECK(
-                  false,
+              VELOX_UNREACHABLE(
                   "Unknown input type for {} aggregation {}",
                   name,
                   inputType->kindName());
