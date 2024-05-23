@@ -161,9 +161,7 @@ class CastExpr : public SpecialForm {
       const SelectivityVector& rows,
       const BaseVector& input,
       exec::EvalCtx& context,
-      VectorPtr castResult,
-      const facebook::velox::date::time_zone* timeZone,
-      FlatVector<Timestamp>* resultFlatVector);
+      VectorPtr castResult);
 
   template <typename Func>
   void applyToSelectedNoThrowLocal(

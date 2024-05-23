@@ -255,35 +255,26 @@ VectorPtr CastExpr::castIntToTimestamp(
     const TypePtr& fromType) {
   VectorPtr castResult;
   context.ensureWritable(rows, TIMESTAMP(), castResult);
-  (*castResult).clearNulls(rows);
-  auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
-  const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
-  const auto sessionTzName = queryConfig.sessionTimezone();
-  const auto* timeZone =
-      (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty())
-      ? date::locate_zone(sessionTzName)
-      : nullptr;
   switch (fromType->kind()) {
     case TypeKind::TINYINT:
       castIntegerToTimestamp<int8_t>(
-          rows, input, context, castResult, timeZone, resultFlatVector);
+          rows, input, context, castResult);
       break;
     case TypeKind::SMALLINT:
       castIntegerToTimestamp<int16_t>(
-          rows, input, context, castResult, timeZone, resultFlatVector);
+          rows, input, context, castResult);
       break;
     case TypeKind::INTEGER:
       castIntegerToTimestamp<int32_t>(
-          rows, input, context, castResult, timeZone, resultFlatVector);
+          rows, input, context, castResult);
       break;
     case TypeKind::BIGINT:
       castIntegerToTimestamp<int64_t>(
-          rows, input, context, castResult, timeZone, resultFlatVector);
+          rows, input, context, castResult);
       break;
     default:
       VELOX_UNREACHABLE(
           "Cast from {} to Timestamp is not supported", fromType->kind());
-      break;
   }
   return castResult;
 } 

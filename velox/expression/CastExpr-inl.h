@@ -287,16 +287,21 @@ void CastExpr::castTimestampToDate(
 
 template <typename IntType>
 void CastExpr::castIntegerToTimestamp(
-
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
-    VectorPtr castResult,
-    const facebook::velox::date::time_zone* timeZone,
-    FlatVector<Timestamp>* resultFlatVector) {
+    VectorPtr castResult) {
+  (*castResult).clearNulls(rows);
+  auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
+  const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+  const auto sessionTzName = queryConfig.sessionTimezone();
+  const auto* timeZone =
+      (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty())
+      ? date::locate_zone(sessionTzName)
+      : nullptr;
   applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
     auto timestamp = Timestamp::fromMillis(
-        static_cast<int64_t>(input.as<SimpleVector<IntType>>()->valueAt(row)) *
+        (int64_t)(input.as<SimpleVector<IntType>>()->valueAt(row)) *
 
         kMillisInSecond);
     if (timeZone) {
