@@ -529,16 +529,24 @@ Status FieldToNode(
       // the encoding, not the schema level.
       const ::arrow::DictionaryType& dict_type =
           static_cast<const ::arrow::DictionaryType&>(*field->type());
-      std::shared_ptr<::arrow::Field> unpacked_field = ::arrow::field(
-          name, dict_type.value_type(), field->nullable(), field->metadata());
+      std::shared_ptr<::arrow::Field> unpacked_field =
+          ::std::make_shared<::arrow::Field>(
+              name,
+              dict_type.value_type(),
+              field->nullable(),
+              field->metadata());
       return FieldToNode(
           name, unpacked_field, properties, arrow_properties, out);
     }
     case ArrowTypeId::EXTENSION: {
       auto ext_type =
           std::static_pointer_cast<::arrow::ExtensionType>(field->type());
-      std::shared_ptr<::arrow::Field> storage_field = ::arrow::field(
-          name, ext_type->storage_type(), field->nullable(), field->metadata());
+      std::shared_ptr<::arrow::Field> storage_field =
+          ::std::make_shared<::arrow::Field>(
+              name,
+              ext_type->storage_type(),
+              field->nullable(),
+              field->metadata());
       return FieldToNode(
           name, storage_field, properties, arrow_properties, out);
     }
@@ -660,7 +668,7 @@ Status GroupToStruct(
     arrow_fields.push_back(out->children[i].field);
   }
   auto struct_type = ::arrow::struct_(arrow_fields);
-  out->field = ::arrow::field(
+  out->field = ::std::make_shared<::arrow::Field>(
       node.name(),
       struct_type,
       node.is_optional(),
@@ -745,14 +753,14 @@ Status MapToSchemaField(
   RETURN_NOT_OK(NodeToSchemaField(
       *key_value.field(1), current_levels, ctx, key_value_field, value_field));
 
-  key_value_field->field = ::arrow::field(
+  key_value_field->field = ::std::make_shared<::arrow::Field>(
       group.name(),
       ::arrow::struct_({key_field->field, value_field->field}),
       /*nullable=*/false,
       FieldIdMetadata(key_value.field_id()));
   key_value_field->level_info = current_levels;
 
-  out->field = ::arrow::field(
+  out->field = ::std::make_shared<::arrow::Field>(
       group.name(),
       std::make_shared<::arrow::MapType>(key_value_field->field),
       group.is_optional(),
@@ -838,7 +846,7 @@ Status ListToSchemaField(
     ARROW_ASSIGN_OR_RAISE(
         std::shared_ptr<ArrowType> type,
         GetTypeForNode(column_index, primitive_node, ctx));
-    auto item_field = ::arrow::field(
+    auto item_field = ::std::make_shared<::arrow::Field>(
         list_node.name(),
         type,
         /*nullable=*/false,
@@ -846,7 +854,7 @@ Status ListToSchemaField(
     RETURN_NOT_OK(PopulateLeaf(
         column_index, item_field, current_levels, ctx, out, child_field));
   }
-  out->field = ::arrow::field(
+  out->field = ::std::make_shared<::arrow::Field>(
       group.name(),
       ::arrow::list(child_field->field),
       group.is_optional(),
@@ -882,7 +890,7 @@ Status GroupToSchemaField(
     int16_t repeated_ancestor_def_level = current_levels.IncrementRepeated();
     RETURN_NOT_OK(
         GroupToStruct(node, current_levels, ctx, out, &out->children[0]));
-    out->field = ::arrow::field(
+    out->field = ::std::make_shared<::arrow::Field>(
         node.name(),
         ::arrow::list(out->children[0].field),
         /*nullable=*/false,
@@ -936,7 +944,8 @@ Status NodeToSchemaField(
       // a: repeated int32;
       int16_t repeated_ancestor_def_level = current_levels.IncrementRepeated();
       out->children.resize(1);
-      auto child_field = ::arrow::field(node.name(), type, /*nullable=*/false);
+      auto child_field = ::std::make_shared<::arrow::Field>(
+          node.name(), type, /*nullable=*/false);
       RETURN_NOT_OK(PopulateLeaf(
           column_index,
           child_field,
@@ -945,7 +954,7 @@ Status NodeToSchemaField(
           out,
           &out->children[0]));
 
-      out->field = ::arrow::field(
+      out->field = ::std::make_shared<::arrow::Field>(
           node.name(),
           ::arrow::list(child_field),
           /*nullable=*/false,
@@ -960,7 +969,7 @@ Status NodeToSchemaField(
       // A normal (required/optional) primitive node
       return PopulateLeaf(
           column_index,
-          ::arrow::field(
+          ::std::make_shared<::arrow::Field>(
               node.name(),
               type,
               node.is_optional(),
