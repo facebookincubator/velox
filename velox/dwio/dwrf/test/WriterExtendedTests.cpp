@@ -656,6 +656,147 @@ TEST_F(E2EWriterTest, MemoryPoolBasedFlushPolicyDictionaryEncoding) {
   }
 }
 
+// Many streams are not yet allocated prior to the first flush, hence first
+// flush is delayed if we rely on stream usage to estimate stripe size.
+TEST_F(E2EWriterTest, FlushPolicyDictionaryEncodingHugeWrites) {
+  const size_t batchCount = 1000;
+  const size_t batchSize = 10000;
+  auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
+
+  HiveTypeParser parser;
+  auto type = parser.parse(
+      "struct<"
+      "short_val:smallint,"
+      "int_val:int,"
+      "long_val:bigint,"
+    //   "string_val:string,"
+    //   "binary_val:binary,"
+      ">");
+
+  // Final file size 43MB-46MB
+  const uint32_t seed = 1630160118;
+  auto testCases = folly::make_array<FlushPolicyTestCase>(
+      FlushPolicyTestCase{
+          /*stripeSize=*/16 * kSizeMB,
+          /*dictSize=*/std::numeric_limits<int64_t>::max(),
+          /*numStripesLower=*/38,
+          /*numStripesUpper=*/38,
+          seed},
+      FlushPolicyTestCase{
+          /*stripeSize=*/32 * kSizeMB,
+          /*dictSize=*/std::numeric_limits<int64_t>::max(),
+          /*numStripesLower=*/15,
+          /*numStripesUpper=*/15,
+          seed},
+      FlushPolicyTestCase{
+          /*stripeSize=*/64 * kSizeMB,
+          /*dictSize=*/std::numeric_limits<int64_t>::max(),
+          /*numStripesLower=*/2,
+          /*numStripesUpper=*/2,
+          seed});
+
+  for (const auto& testCase : testCases) {
+    auto config = std::make_shared<Config>();
+    config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
+    config->set(Config::STRIPE_SIZE, testCase.stripeSize);
+    config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, 1.0f);
+    config->set(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 1.0f);
+    config->set(Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
+    // config->set<uint64_t>(dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN, 64UL);
+    // config->set(dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS, false);
+    auto batches = E2EWriterTestUtil::generateBatches(
+        type, batchCount, batchSize, testCase.seed, *pool);
+    testWriterDefaultFlushPolicy(
+        *pool,
+        type,
+        batches,
+        testCase.numStripesLower,
+        testCase.numStripesUpper,
+        config,
+        testCase.memoryBudget);
+  }
+
+  // Final file size 43MB-46MB
+  auto dictionaryEncodingTestCases = folly::make_array<FlushPolicyTestCase>(
+      FlushPolicyTestCase{
+          /*stripeSize=*/16 * kSizeMB,
+          /*dictSize=*/std::numeric_limits<int64_t>::max(),
+          /*numStripesLower=*/63,
+          /*numStripesUpper=*/63,
+          seed},
+      FlushPolicyTestCase{
+          /*stripeSize=*/32 * kSizeMB,
+          /*dictSize=*/std::numeric_limits<int64_t>::max(),
+          /*numStripesLower=*/29,
+          /*numStripesUpper=*/29,
+          seed},
+      FlushPolicyTestCase{
+          /*stripeSize=*/64 * kSizeMB,
+          /*dictSize=*/std::numeric_limits<int64_t>::max(),
+          /*numStripesLower=*/3,
+          /*numStripesUpper=*/3,
+          seed});
+
+  for (const auto& testCase : dictionaryEncodingTestCases) {
+    auto config = std::make_shared<Config>();
+    config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, 1.0f);
+    config->set(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 1.0f);
+    config->set(Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
+    config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
+    config->set(Config::STRIPE_SIZE, testCase.stripeSize);
+    // config->set<uint64_t>(dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN, 64UL);
+    // config->set(dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS, false);
+    auto batches = E2EWriterTestUtil::generateBatches(
+        type, batchCount, batchSize, testCase.seed, *pool);
+    testWriterDefaultFlushPolicy(
+        *pool,
+        type,
+        batches,
+        testCase.numStripesLower,
+        testCase.numStripesUpper,
+        config,
+        testCase.memoryBudget);
+  }
+
+  // Final file size 43MB-46MB
+  const uint32_t dictionaryFlushSeed = 1719796763;
+  auto dictionarySizeTestCases = folly::make_array<FlushPolicyTestCase>(
+      FlushPolicyTestCase{
+          /*stripeSize=*/std::numeric_limits<int64_t>::max(),
+          /*dictSize=*/4 * kSizeMB,
+          /*numStripesLower=*/319,
+          /*numStripesUpper=*/319,
+          dictionaryFlushSeed},
+      FlushPolicyTestCase{
+          /*stripeSize=*/std::numeric_limits<int64_t>::max(),
+          /*dictSize=*/16 * kSizeMB,
+          /*numStripesLower=*/63,
+          /*numStripesUpper=*/63,
+          dictionaryFlushSeed});
+
+  for (const auto& testCase : dictionarySizeTestCases) {
+    // Force writing with dictionary encoding.
+    auto config = std::make_shared<Config>();
+    config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, 1.0f);
+    config->set(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 1.0f);
+    config->set(Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
+    // config->set<uint64_t>(dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN, 64UL);
+    // config->set(dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS, false);
+
+    config->set(Config::MAX_DICTIONARY_SIZE, testCase.dictSize);
+    auto batches = E2EWriterTestUtil::generateBatches(
+        type, batchCount, batchSize, testCase.seed, *pool);
+    testWriterDefaultFlushPolicy(
+        *pool,
+        type,
+        batches,
+        testCase.numStripesLower,
+        testCase.numStripesUpper,
+        config,
+        testCase.memoryBudget);
+  }
+}
+
 // stream usage seems to have a delta that is close to compression block size?
 TEST_F(E2EWriterTest, MemoryPoolBasedFlushPolicyNestedTypes) {
   const size_t batchCount = 100;
