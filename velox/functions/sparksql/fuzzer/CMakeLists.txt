@@ -14,7 +14,7 @@
 
 add_executable(spark_aggregation_fuzzer_test SparkAggregationFuzzerTest.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   spark_aggregation_fuzzer_test
   velox_aggregation_fuzzer
   velox_aggregation_fuzzer_base

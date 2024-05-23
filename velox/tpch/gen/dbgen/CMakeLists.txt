@@ -5,7 +5,7 @@ project(dbgen CXX C)
 
 add_definitions(-DDBNAME=dss -DMAC -DORACLE -DTPCH)
 
-add_library(
+velox_base_add_library(
   velox_dbgen STATIC
   dbgen.cpp
   dbgen_gunk.cpp

@@ -59,10 +59,10 @@ set(SRCS
     VeloxToSubstraitType.cpp
     VariantToVectorConverter.cpp)
 
-add_library(velox_substrait_plan_converter ${SRCS})
+velox_add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter
                            PUBLIC ${PROTO_OUTPUT_DIR})
-target_link_libraries(velox_substrait_plan_converter velox_connector
+velox_link_libraries(velox_substrait_plan_converter velox_connector
                       velox_dwio_dwrf_common)
 
 if(${VELOX_BUILD_TESTING})

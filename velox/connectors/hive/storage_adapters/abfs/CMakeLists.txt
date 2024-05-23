@@ -14,12 +14,12 @@
 
 # for generated headers
 
-add_library(velox_abfs RegisterAbfsFileSystem.cpp)
+velox_add_library(velox_abfs RegisterAbfsFileSystem.cpp)
 
 if(VELOX_ENABLE_ABFS)
   target_sources(velox_abfs PRIVATE AbfsFileSystem.cpp AbfsUtils.cpp
                                     AbfsWriteFile.cpp)
-  target_link_libraries(
+  velox_link_libraries(
     velox_abfs
     PUBLIC velox_file
            velox_core

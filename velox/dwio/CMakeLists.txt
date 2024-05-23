@@ -11,8 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_link_libs INTERFACE)
-target_link_libraries(
+velox_add_library(velox_link_libs INTERFACE)
+velox_link_libraries(
   velox_link_libs
   INTERFACE velox_caching
             velox_dwio_catalog_fbhive

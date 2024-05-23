@@ -15,7 +15,7 @@ add_subdirectory(json)
 add_subdirectory(types)
 add_subdirectory(window)
 
-add_library(
+velox_add_library(
   velox_functions_prestosql_impl
   ArrayConstructor.cpp
   ArrayContains.cpp
@@ -62,7 +62,7 @@ add_library(
   Zip.cpp
   ZipWith.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   velox_functions_prestosql_impl
   velox_common_hyperloglog
   velox_functions_json
@@ -75,8 +75,10 @@ target_link_libraries(
   Folly::folly
   stemmer::stemmer)
 
+if(NOT VELOX_MONO_LIBRARY)
 set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE
                                                             high_memory_pool)
+endif()
 
 if(${VELOX_ENABLE_AGGREGATES})
   add_subdirectory(aggregates)

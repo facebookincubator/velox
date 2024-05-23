@@ -30,7 +30,7 @@ add_flex_bison_dependency(SignatureParserScanner SignatureParser)
 
 include_directories(${PROJECT_BINARY_DIR})
 include_directories(${FLEX_INCLUDE_DIRS})
-add_library(
+velox_add_library(
   velox_signature_parser ${BISON_SignatureParser_OUTPUTS}
                          ${FLEX_SignatureParserScanner_OUTPUTS} ParseUtil.cpp)
-target_link_libraries(velox_signature_parser velox_common_base velox_type)
+velox_link_libraries(velox_signature_parser velox_common_base velox_type)
