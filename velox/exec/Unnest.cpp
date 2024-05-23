@@ -30,7 +30,8 @@ Unnest::Unnest(
           unnestNode->id(),
           "Unnest"),
       withOrdinality_(unnestNode->withOrdinality()),
-      maxOutputSize_(outputBatchRows()) {
+      maxOutputSize_(outputBatchRows()),
+      isOuter_(unnestNode->isOuter()) {
   const auto& inputType = unnestNode->sources()[0]->outputType();
   const auto& unnestVariables = unnestNode->unnestVariables();
   for (const auto& variable : unnestVariables) {
@@ -73,36 +74,12 @@ void Unnest::addInput(RowVectorPtr input) {
   rawOffsets_.resize(unnestChannels_.size());
   rawIndices_.resize(unnestChannels_.size());
 
-  for (auto channel = 0; channel < unnestChannels_.size(); ++channel) {
-    const auto& unnestVector = input_->childAt(unnestChannels_[channel]);
-
-    auto& currentDecoded = unnestDecoded_[channel];
-    currentDecoded.decode(*unnestVector);
-
-    rawIndices_[channel] = currentDecoded.indices();
-
-    if (unnestVector->typeKind() == TypeKind::ARRAY) {
-      const auto* unnestBaseArray = currentDecoded.base()->as<ArrayVector>();
-      rawSizes_[channel] = unnestBaseArray->rawSizes();
-      rawOffsets_[channel] = unnestBaseArray->rawOffsets();
-    } else {
-      VELOX_CHECK(unnestVector->typeKind() == TypeKind::MAP);
-      const auto* unnestBaseMap = currentDecoded.base()->as<MapVector>();
-      rawSizes_[channel] = unnestBaseMap->rawSizes();
-      rawOffsets_[channel] = unnestBaseMap->rawOffsets();
-    }
-
-    // Count max number of elements per row.
-    auto* currentSizes = rawSizes_[channel];
-    auto* currentIndices = rawIndices_[channel];
-    for (auto row = 0; row < size; ++row) {
-      if (!currentDecoded.isNullAt(row)) {
-        const auto unnestSize = currentSizes[currentIndices[row]];
-        if (rawMaxSizes_[row] < unnestSize) {
-          rawMaxSizes_[row] = unnestSize;
-        }
-      }
-    }
+  // Count max number of elements per row.
+  if (isOuter_) {
+    rawOrdinalityIsNull_.resize(size, false);
+    countMaxNumElementsPerRow<true>(size);
+  } else {
+    countMaxNumElementsPerRow<false>(size);
   }
 }
 
@@ -126,7 +103,13 @@ RowVectorPtr Unnest::getOutput() {
     return nullptr;
   }
 
-  const auto output = generateOutput(rowRange);
+  RowVectorPtr output = nullptr;
+  if (isOuter_) {
+    output = generateOutput<true>(rowRange);
+  } else {
+    output = generateOutput<false>(rowRange);
+  }
+
   if (rowRange.lastRowEnd.has_value()) {
     // The last row is not processed completely.
     firstRowStart_ = rowRange.lastRowEnd.value();
@@ -258,6 +241,7 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
   return {elementIndices, nulls, identityMapping};
 }
 
+template <bool isOuter>
 VectorPtr Unnest::generateOrdinalityVector(const RowRange& range) {
   auto ordinalityVector = BaseVector::create<FlatVector<int64_t>>(
       BIGINT(), range.numElements, pool());
@@ -268,10 +252,17 @@ VectorPtr Unnest::generateOrdinalityVector(const RowRange& range) {
 
   VELOX_DCHECK_GT(range.size, 0);
 
+  vector_size_t index = 0;
   range.forEachRow(
-      [&](vector_size_t /*row*/, vector_size_t start, vector_size_t size) {
+      [&](vector_size_t row, vector_size_t start, vector_size_t size) {
+        if constexpr(isOuter) {
+          if (rawOrdinalityIsNull_[row]) {
+            ordinalityVector->setNull(index, true);
+          }
+        }
         std::iota(rawOrdinality, rawOrdinality + size, start + 1);
         rawOrdinality += size;
+        index += size;
       },
       rawMaxSizes_,
       firstRowStart_);
@@ -279,6 +270,7 @@ VectorPtr Unnest::generateOrdinalityVector(const RowRange& range) {
   return ordinalityVector;
 }
 
+template <bool isOuter>
 RowVectorPtr Unnest::generateOutput(const RowRange& range) {
   std::vector<VectorPtr> outputs(outputType_->size());
   generateRepeatedColumns(range, outputs);
@@ -309,7 +301,7 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
 
   if (withOrdinality_) {
     // Ordinality column is always at the end.
-    outputs.back() = generateOrdinalityVector(range);
+    outputs.back() = generateOrdinalityVector<isOuter>(range);
   }
 
   return std::make_shared<RowVector>(
@@ -318,6 +310,51 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
       BufferPtr(nullptr),
       range.numElements,
       std::move(outputs));
+}
+
+
+template <bool isOuter>
+void Unnest::countMaxNumElementsPerRow(int32_t size) {
+  for (auto channel = 0; channel < unnestChannels_.size(); ++channel) {
+    const auto& unnestVector = input_->childAt(unnestChannels_[channel]);
+
+    auto& currentDecoded = unnestDecoded_[channel];
+    currentDecoded.decode(*unnestVector);
+
+    rawIndices_[channel] = currentDecoded.indices();
+
+    if (unnestVector->typeKind() == TypeKind::ARRAY) {
+      const auto* unnestBaseArray = currentDecoded.base()->as<ArrayVector>();
+      rawSizes_[channel] = unnestBaseArray->rawSizes();
+      rawOffsets_[channel] = unnestBaseArray->rawOffsets();
+    } else {
+      VELOX_CHECK(unnestVector->typeKind() == TypeKind::MAP);
+      const auto* unnestBaseMap = currentDecoded.base()->as<MapVector>();
+      rawSizes_[channel] = unnestBaseMap->rawSizes();
+      rawOffsets_[channel] = unnestBaseMap->rawOffsets();
+    }
+
+    // Count max number of elements per row.
+    auto* currentSizes = rawSizes_[channel];
+    auto* currentIndices = rawIndices_[channel];
+    for (auto row = 0; row < size; ++row) {
+      if (!currentDecoded.isNullAt(row)) {
+        auto unnestSize = currentSizes[currentIndices[row]];
+        if constexpr (isOuter) {
+          if (unnestSize == 0) {
+            unnestSize = 1;
+            rawOrdinalityIsNull_[row] = true;
+          }
+        }
+        if (rawMaxSizes_[row] < unnestSize) {
+          rawMaxSizes_[row] = unnestSize;
+        }
+      } else if constexpr (isOuter) {
+        rawMaxSizes_[row] = 1;
+        rawOrdinalityIsNull_[row] = true;
+      }
+    }
+  }
 }
 
 VectorPtr Unnest::UnnestChannelEncoding::wrap(

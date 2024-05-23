@@ -474,6 +474,47 @@ TEST_P(UnnestTest, batchSize) {
   ASSERT_EQ(expectedNumVectors, stats.at(unnestId).outputVectors);
 }
 
+TEST_P(UnnestTest, basicArrayWithOuter) {
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeNullableArrayVector<int64_t>({
+        {1, 2, std::nullopt},
+        {},
+        {3}
+      }),
+  });
+
+  createDuckDbTable({vector});
+
+  // is_outer = false
+  auto op1 = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}, std::nullopt, false /* is_outer */).planNode();
+  auto params1 = makeCursorParameters(op1);
+  auto expected1 = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1, 3}),
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 3}),
+  });
+  assertQuery(params1, expected1);
+
+  // is_outer = true
+  auto op2 = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}, std::nullopt, true /* is_outer */).planNode();
+  auto params2 = makeCursorParameters(op2);
+  auto expected2 = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1, 2, 3}),
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, std::nullopt, 3}),
+  });
+  assertQuery(params2, expected2);
+
+  // ordinal = true && is_outer = true
+  auto op3 = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}, "ordinal", true /* is_outer */).planNode();
+  auto params3 = makeCursorParameters(op3);
+  auto expected3 = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1, 2, 3}),
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, std::nullopt, 3}),
+      makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 1}),
+  });
+  assertQuery(params3, expected3);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     UnnestTest,
     UnnestTest,

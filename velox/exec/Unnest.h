@@ -98,6 +98,7 @@ class Unnest : public Operator {
 
   // Generate output for 'rowRange' represented rows.
   // @param rowRange Range of rows to process.
+  template <bool isOuter>
   RowVectorPtr generateOutput(const RowRange& rowRange);
 
   // Invoked by generateOutput function above to generate the repeated output
@@ -105,6 +106,9 @@ class Unnest : public Operator {
   void generateRepeatedColumns(
       const RowRange& rowRange,
       std::vector<VectorPtr>& outputs);
+
+  template <bool isOuter>
+  void countMaxNumElementsPerRow(int32_t size);
 
   struct UnnestChannelEncoding {
     BufferPtr indices;
@@ -121,6 +125,7 @@ class Unnest : public Operator {
       const RowRange& rowRange);
 
   // Invoked by generateOutput for the ordinality column.
+  template <bool isOuter>
   VectorPtr generateOrdinalityVector(const RowRange& rowRange);
 
   const bool withOrdinality_;
@@ -142,5 +147,8 @@ class Unnest : public Operator {
 
   // Next 'input_' row to process in getOutput().
   vector_size_t nextInputRow_{0};
+
+  std::vector<bool> rawOrdinalityIsNull_;
+  const bool isOuter_;
 };
 } // namespace facebook::velox::exec
