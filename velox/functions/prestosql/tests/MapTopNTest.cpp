@@ -70,20 +70,20 @@ TEST_F(MapTopNTest, basic) {
 // equal.
 TEST_F(MapTopNTest, equalValues) {
   auto data = makeRowVector({
-      makeMapVectorFromJson<int32_t, int64_t>({
-          "{6:3, 2:5, 3:1, 4:4, 5:2, 1:3}",
-          "{1:3, 2:5, 3:null, 4:4, 5:2, 6:5 }",
-          "{1:null, 2:null, 3:1, 4:4, 5:null}",
-      }),
+      makeMapVectorFromJson<int32_t, int64_t>(
+          {"{6:3, 2:5, 3:1, 4:4, 5:2, 1:3}",
+           "{1:3, 2:5, 3:null, 4:4, 5:2, 6:5 }",
+           "{1:null, 2:null, 3:1, 4:4, 5:null}",
+           "{1:null, 2:null, 3:null, 4:null, 5:null}"}),
   });
 
   auto result = evaluate("map_top_n(c0, 3)", data);
 
-  auto expected = makeMapVectorFromJson<int32_t, int64_t>({
-      "{2:5, 4:4, 6:3}",
-      "{6:5, 2:5, 4:4}",
-      "{4:4, 3:1, 5:null}",
-  });
+  auto expected = makeMapVectorFromJson<int32_t, int64_t>(
+      {"{2:5, 4:4, 6:3}",
+       "{6:5, 2:5, 4:4}",
+       "{4:4, 3:1, 5:null}",
+       "{4:null, 3:null, 5:null}"});
 
   assertEqualVectors(expected, result);
 
