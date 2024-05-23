@@ -308,6 +308,7 @@ void SplitReader::setRowIndexColumn(
   auto rowIndexMetaColIdx =
       readerOutputType_->getChildIdxIfExists(rowIndexColumnName);
   dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
+  VELOX_CHECK(rowIndexMetaColIdx.has_value());
   rowNumberColumnInfo.insertPosition = rowIndexMetaColIdx.value();
   rowNumberColumnInfo.name = rowIndexColumnName;
   baseRowReaderOpts_.setRowNumberColumnInfo(std::move(rowNumberColumnInfo));

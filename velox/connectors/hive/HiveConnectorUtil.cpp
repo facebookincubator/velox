@@ -364,7 +364,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     }
   }
 
-  int j = -1;
+  int numChildren = 0;
   // Process columns that will be projected out.
   for (int i = 0; i < rowType->size(); ++i) {
     auto& name = rowType->nameOf(i);
@@ -372,10 +372,10 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     if (isRowIndexColumn(name, rowIndexColumn)) {
       continue;
     }
-    j++;
+    numChildren++;
     auto it = outputSubfields.find(name);
     if (it == outputSubfields.end()) {
-      auto* fieldSpec = spec->addFieldRecursively(name, *type, j);
+      auto* fieldSpec = spec->addFieldRecursively(name, *type, numChildren - 1);
       filterOutNullMapKeys(*type, *fieldSpec);
       filterSubfields.erase(name);
       continue;
@@ -390,7 +390,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       }
       filterSubfields.erase(it);
     }
-    auto* fieldSpec = spec->addField(name, j);
+    auto* fieldSpec = spec->addField(name, numChildren - 1);
     addSubfields(*type, subfieldSpecs, 1, pool, *fieldSpec);
     filterOutNullMapKeys(*type, *fieldSpec);
     subfieldSpecs.clear();
