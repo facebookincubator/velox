@@ -263,6 +263,9 @@ class GroupingSet {
   // 'toIntermediate'.
   std::vector<Accumulator> accumulators(bool excludeToIntermediate);
 
+  // Indicates this operator needs to trigger self spill.
+  bool maybeSpill();
+
   std::vector<column_index_t> keyChannels_;
 
   /// A subset of grouping keys on which the input is clustered.
@@ -294,6 +297,12 @@ class GroupingSet {
   // is under non-reclaimable execution section or not.
   tsan_atomic<bool>* const nonReclaimableSection_;
 
+  const size_t numPeers_;
+
+  const bool isAdaptive_;
+
+  folly::Synchronized<common::SpillStats>* const spillStats_;
+
   // Boolean indicating whether accumulators for a global aggregation (i.e.
   // aggregation with no grouping keys) have been initialized.
   bool globalAggregationInitialized_{false};
@@ -310,7 +319,6 @@ class GroupingSet {
   // aggregation
   HashStringAllocator stringAllocator_;
   memory::AllocationPool rows_;
-  const bool isAdaptive_;
 
   bool noMoreInput_{false};
 
@@ -364,8 +372,6 @@ class GroupingSet {
   // Temporary for case where an aggregate in toIntermediate() outputs post-init
   // state of aggregate for all rows.
   std::vector<char*> firstGroup_;
-
-  folly::Synchronized<common::SpillStats>* const spillStats_;
 };
 
 } // namespace facebook::velox::exec
