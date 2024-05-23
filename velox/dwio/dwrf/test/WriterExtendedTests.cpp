@@ -205,8 +205,8 @@ TEST_F(E2EWriterTest, FlushPolicyDictionaryEncoding) {
       FlushPolicyTestCase{
           /*stripeSize=*/2 * kSizeMB,
           /*dictSize=*/std::numeric_limits<int64_t>::max(),
-          /*numStripesLower=*/6,
-          /*numStripesUpper=*/6,
+          /*numStripesLower=*/5,
+          /*numStripesUpper=*/5,
           seed});
 
   for (const auto& testCase : testCases) {
@@ -547,8 +547,8 @@ TEST_F(E2EWriterTest, MemoryPoolBasedFlushPolicyDictionaryEncoding) {
       FlushPolicyTestCase{
           /*stripeSize=*/2 * kSizeMB,
           /*dictSize=*/std::numeric_limits<int64_t>::max(),
-          /*numStripesLower=*/18,
-          /*numStripesUpper=*/18,
+          /*numStripesLower=*/15,
+          /*numStripesUpper=*/15,
           seed},
       FlushPolicyTestCase{
           /*stripeSize=*/16 * kSizeMB,
@@ -678,8 +678,8 @@ TEST_F(E2EWriterTest, MemoryPoolBasedFlushPolicyNestedTypes) {
       FlushPolicyTestCase{
           /*stripeSize=*/2 * kSizeMB,
           /*dictSize=*/std::numeric_limits<int64_t>::max(),
-          /*numStripesLower=*/7,
-          /*numStripesUpper=*/7,
+          /*numStripesLower=*/5,
+          /*numStripesUpper=*/5,
           seed},
       FlushPolicyTestCase{
           /*stripeSize=*/4 * kSizeMB,

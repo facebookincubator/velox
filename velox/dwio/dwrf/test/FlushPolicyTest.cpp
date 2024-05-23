@@ -48,7 +48,7 @@ TEST_F(DefaultFlushPolicyTest, StripeProgressTest) {
           .stripeSizeThreshold = 200, .stripeSize = 400, .shouldFlush = true}};
   for (const auto& testCase : testCases) {
     DefaultFlushPolicy policy{
-        testCase.stripeSizeThreshold, /* dictionarySizeThreshold */ 0};
+        testCase.stripeSizeThreshold, /*dictionarySizeThreshold=*/0};
     EXPECT_EQ(
         testCase.shouldFlush,
         policy.shouldFlush(dwio::common::StripeProgress{
@@ -120,6 +120,8 @@ TEST_F(DefaultFlushPolicyTest, AdditionalCriteriaTest) {
     EXPECT_EQ(
         testCase.decision,
         policy.shouldFlushDictionary(
+            // StripeProgress is not used in this test.
+            dwio::common::StripeProgress{},
             testCase.stripeProgressDecision,
             testCase.overMemoryBudget,
             testCase.dictionarySize));
@@ -150,13 +152,33 @@ TEST_F(DefaultFlushPolicyTest, DictionaryCriteriaTest) {
 
   RowsPerStripeFlushPolicy policy({42});
   EXPECT_EQ(
-      FlushDecision::SKIP, policy.shouldFlushDictionary(false, false, context));
+      FlushDecision::SKIP,
+      policy.shouldFlushDictionary( // StripeProgress is not used in this test.
+          dwio::common::StripeProgress{},
+          /*stripeProgressDecision=*/false,
+          /*overMemoryBudget=*/false,
+          context));
   EXPECT_EQ(
-      FlushDecision::SKIP, policy.shouldFlushDictionary(false, true, context));
+      FlushDecision::SKIP,
+      policy.shouldFlushDictionary( // StripeProgress is not used in this test.
+          dwio::common::StripeProgress{},
+          /*stripeProgressDecision=*/false,
+          /*overMemoryBudget=*/true,
+          context));
   EXPECT_EQ(
-      FlushDecision::SKIP, policy.shouldFlushDictionary(true, false, context));
+      FlushDecision::SKIP,
+      policy.shouldFlushDictionary( // StripeProgress is not used in this test.
+          dwio::common::StripeProgress{},
+          /*stripeProgressDecision=*/true,
+          /*overMemoryBudget=*/false,
+          context));
   EXPECT_EQ(
-      FlushDecision::SKIP, policy.shouldFlushDictionary(true, true, context));
+      FlushDecision::SKIP,
+      policy.shouldFlushDictionary( // StripeProgress is not used in this test.
+          dwio::common::StripeProgress{},
+          /*stripeProgressDecision=*/true,
+          /*overMemoryBudget=*/true,
+          context));
 }
 
 TEST_F(DefaultFlushPolicyTest, FlushTest) {

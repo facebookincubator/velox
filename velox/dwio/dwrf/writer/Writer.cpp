@@ -186,9 +186,12 @@ void Writer::write(const VectorPtr& input) {
 
     bool doFlush = shouldFlush(context, numRowsToWrite);
     if (doFlush) {
+      // TODO: this is likely unneeded after the early dictionary tests. Should
+      // make the decision based on arbitration stats. Then we can potential
+      // simplify a lot of logic around trimming.
       // Try abandoning inefficiency dictionary encodings early and see if we
       // can delay the flush.
-      if (writer_->tryAbandonDictionaries(false)) {
+      if (writer_->tryAbandonDictionaries(/*force=*/false)) {
         doFlush = shouldFlush(context, numRowsToWrite);
       }
       if (doFlush) {
@@ -336,10 +339,10 @@ bool Writer::shouldFlush(const WriterContext& context, size_t nextWriteRows) {
   // If we are hitting memory budget before satisfying flush criteria, try
   // entering low memory mode to work with less memory-intensive encodings.
   bool overBudget = overMemoryBudget(context, nextWriteRows);
-  bool stripeProgressDecision =
-      flushPolicy_->shouldFlush(getStripeProgress(context));
+  auto stripeProgress = getStripeProgress(context);
+  bool stripeProgressDecision = flushPolicy_->shouldFlush(stripeProgress);
   auto dictionaryFlushDecision = flushPolicy_->shouldFlushDictionary(
-      stripeProgressDecision, overBudget, context);
+      stripeProgress, stripeProgressDecision, overBudget, context);
 
   if (FOLLY_UNLIKELY(
           dictionaryFlushDecision == FlushDecision::ABANDON_DICTIONARY)) {
@@ -351,6 +354,8 @@ bool Writer::shouldFlush(const WriterContext& context, size_t nextWriteRows) {
     overBudget = overMemoryBudget(context, nextWriteRows);
     stripeProgressDecision =
         flushPolicy_->shouldFlush(getStripeProgress(context));
+  } else if (dictionaryFlushDecision == FlushDecision::TEST_DICTIONARY) {
+    writer_->tryAbandonDictionaries(/*force=*/false);
   }
 
   const bool shouldFlush = overBudget || stripeProgressDecision ||
@@ -378,7 +383,7 @@ void Writer::enterLowMemoryMode() {
   if (FOLLY_UNLIKELY(
           context.checkLowMemoryMode() && context.stripeIndex() == 0)) {
     // Idempotent call to switch to less memory intensive encodings.
-    writer_->tryAbandonDictionaries(true);
+    writer_->tryAbandonDictionaries(/*force=*/true);
   }
 }
 

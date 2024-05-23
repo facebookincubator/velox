@@ -16,29 +16,51 @@
 
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 
+static constexpr size_t kNumDictioanryTestsPerStripe = 3UL;
+
 namespace facebook::velox::dwrf {
 
 DefaultFlushPolicy::DefaultFlushPolicy(
     uint64_t stripeSizeThreshold,
     uint64_t dictionarySizeThreshold)
     : stripeSizeThreshold_{stripeSizeThreshold},
-      dictionarySizeThreshold_{dictionarySizeThreshold} {}
+      dictionarySizeThreshold_{dictionarySizeThreshold},
+      dictionaryTestThreshold_{getDictionaryTestIncrement()} {}
+
+uint64_t DefaultFlushPolicy::getDictionaryTestIncrement() const {
+  return stripeSizeThreshold_ / kNumDictioanryTestsPerStripe;
+}
 
 FlushDecision DefaultFlushPolicy::shouldFlushDictionary(
+    const dwio::common::StripeProgress& stripeProgress,
     bool stripeProgressDecision,
     bool overMemoryBudget,
     int64_t dictionaryMemoryUsage) {
+  if (stripeProgressDecision) {
+    return FlushDecision::SKIP;
+  }
+
   if (dictionaryMemoryUsage > dictionarySizeThreshold_) {
     return FlushDecision::FLUSH_DICTIONARY;
+  }
+  if (stripeProgress.stripeSizeEstimate >= dictionaryTestThreshold_) {
+    // In the current implementation, since we don't ever change encoding
+    // decision after the first stripe, we don't need to ever reset this
+    // threshold.
+    dictionaryTestThreshold_ +=
+        stripeSizeThreshold_ / kNumDictioanryTestsPerStripe;
+    return FlushDecision::TEST_DICTIONARY;
   }
   return FlushDecision::SKIP;
 }
 
 FlushDecision DefaultFlushPolicy::shouldFlushDictionary(
+    const dwio::common::StripeProgress& stripeProgress,
     bool stripeProgressDecision,
     bool overMemoryBudget,
     const WriterContext& context) {
   return shouldFlushDictionary(
+      stripeProgress,
       stripeProgressDecision,
       overMemoryBudget,
       context.getMemoryUsage(MemoryUsageCategory::DICTIONARY));
@@ -81,5 +103,4 @@ bool RowsPerStripeFlushPolicy::shouldFlush(
 
   return stripeRowCount == rowsPerStripe_.at(stripeIndex);
 }
-
 } // namespace facebook::velox::dwrf

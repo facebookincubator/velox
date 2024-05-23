@@ -23,6 +23,7 @@
 namespace facebook::velox::dwrf {
 enum class FlushDecision {
   SKIP,
+  TEST_DICTIONARY,
   FLUSH_DICTIONARY,
   ABANDON_DICTIONARY,
 };
@@ -38,6 +39,7 @@ class DWRFFlushPolicy : virtual public dwio::common::FlushPolicy {
   /// Different actions can also be taken based on the additional checks.
   /// e.g. abandon dictionary encodings.
   virtual FlushDecision shouldFlushDictionary(
+      const dwio::common::StripeProgress& stripeProgress,
       bool stripeProgressDecision,
       bool overMemoryBudget,
       const WriterContext& context) = 0;
@@ -60,11 +62,13 @@ class DefaultFlushPolicy : public DWRFFlushPolicy {
   }
 
   FlushDecision shouldFlushDictionary(
+      const dwio::common::StripeProgress& stripeProgress,
       bool stripeProgressDecision,
       bool overMemoryBudget,
       int64_t dictionaryMemoryUsage);
 
   FlushDecision shouldFlushDictionary(
+      const dwio::common::StripeProgress& stripeProgress,
       bool stripeProgressDecision,
       bool overMemoryBudget,
       const WriterContext& context) override;
@@ -72,8 +76,11 @@ class DefaultFlushPolicy : public DWRFFlushPolicy {
   void onClose() override {}
 
  private:
+  uint64_t getDictionaryTestIncrement() const;
+
   const uint64_t stripeSizeThreshold_;
   const uint64_t dictionarySizeThreshold_;
+  uint64_t dictionaryTestThreshold_;
 };
 
 class RowsPerStripeFlushPolicy : public DWRFFlushPolicy {
@@ -85,6 +92,7 @@ class RowsPerStripeFlushPolicy : public DWRFFlushPolicy {
   bool shouldFlush(const dwio::common::StripeProgress& stripeProgress) override;
 
   FlushDecision shouldFlushDictionary(
+      const dwio::common::StripeProgress& /* stripeProgress */,
       bool /* stripeProgressDecision */,
       bool /* overMemoryBudget */,
       const WriterContext& /* context */) override {
@@ -110,6 +118,7 @@ class RowThresholdFlushPolicy : public DWRFFlushPolicy {
   }
 
   FlushDecision shouldFlushDictionary(
+      const dwio::common::StripeProgress& /* stripeProgress */,
       bool /* stripeProgressDecision */,
       bool /* overMemoryBudget */,
       const WriterContext& /* context */) override {
@@ -133,6 +142,7 @@ class LambdaFlushPolicy : public DWRFFlushPolicy {
   }
 
   FlushDecision shouldFlushDictionary(
+      const dwio::common::StripeProgress& /* stripeProgress */,
       bool /* unused */,
       bool /* unused */,
       const WriterContext& /* unused */) override {
