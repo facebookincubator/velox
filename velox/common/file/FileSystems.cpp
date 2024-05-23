@@ -52,6 +52,7 @@ void registerFileSystem(
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filePath,
     std::shared_ptr<const Config> properties) {
+  VELOX_CHECK_NOT_NULL(properties);
   const auto& filesystems = registeredFileSystems();
   for (const auto& p : filesystems) {
     if (p.first(filePath)) {
@@ -203,4 +204,9 @@ void registerLocalFileSystem() {
   registerFileSystem(
       LocalFileSystem::schemeMatcher(), LocalFileSystem::fileSystemGenerator());
 }
+
+std::shared_ptr<FileSystem> getLocalFileSystem() {
+  return LocalFileSystem::fileSystemGenerator()(nullptr, kFileScheme);
+}
+
 } // namespace facebook::velox::filesystems

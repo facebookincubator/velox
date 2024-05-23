@@ -20,6 +20,7 @@
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/core/Config.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
@@ -147,7 +148,8 @@ TEST_P(LocalFileTest, writeAndRead) {
 
     auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
     const auto& filename = tempFile->getPath();
-    auto fs = filesystems::getFileSystem(filename, {});
+    auto fs = filesystems::getFileSystem(
+        filename, std::make_shared<core::MemConfig>());
     fs->remove(filename);
     {
       auto writeFile = fs->openFileForWrite(filename);
@@ -163,7 +165,8 @@ TEST_P(LocalFileTest, writeAndRead) {
 TEST_P(LocalFileTest, viaRegistry) {
   auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
   const auto& filename = tempFile->getPath();
-  auto fs = filesystems::getFileSystem(filename, {});
+  auto fs =
+      filesystems::getFileSystem(filename, std::make_shared<core::MemConfig>());
   fs->remove(filename);
   {
     auto writeFile = fs->openFileForWrite(filename);
@@ -182,7 +185,8 @@ TEST_P(LocalFileTest, rename) {
   const auto b = fmt::format("{}/b", tempFolder->getPath());
   const auto newA = fmt::format("{}/newA", tempFolder->getPath());
   const std::string data("aaaaa");
-  auto localFs = filesystems::getFileSystem(a, nullptr);
+  auto localFs =
+      filesystems::getFileSystem(a, std::make_shared<core::MemConfig>());
   {
     auto writeFile = localFs->openFileForWrite(a);
     writeFile = localFs->openFileForWrite(b);
@@ -207,7 +211,9 @@ TEST_P(LocalFileTest, exists) {
   auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
   auto a = fmt::format("{}/a", tempFolder->getPath());
   auto b = fmt::format("{}/b", tempFolder->getPath());
-  auto localFs = filesystems::getFileSystem(a, nullptr);
+  // Test local filesystem via the getFileSystem API
+  auto localFs =
+      filesystems::getFileSystem(a, std::make_shared<core::MemConfig>());
   {
     auto writeFile = localFs->openFileForWrite(a);
     writeFile = localFs->openFileForWrite(b);
@@ -226,7 +232,8 @@ TEST_P(LocalFileTest, list) {
   const auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
   const auto a = fmt::format("{}/1", tempFolder->getPath());
   const auto b = fmt::format("{}/2", tempFolder->getPath());
-  auto localFs = filesystems::getFileSystem(a, nullptr);
+  auto localFs =
+      filesystems::getFileSystem(a, std::make_shared<core::MemConfig>());
   {
     auto writeFile = localFs->openFileForWrite(a);
     writeFile = localFs->openFileForWrite(b);
@@ -248,7 +255,8 @@ TEST_P(LocalFileTest, readFileDestructor) {
   }
   auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
   const auto& filename = tempFile->getPath();
-  auto fs = filesystems::getFileSystem(filename, {});
+  auto fs =
+      filesystems::getFileSystem(filename, std::make_shared<core::MemConfig>());
   fs->remove(filename);
   {
     auto writeFile = fs->openFileForWrite(filename);
@@ -283,7 +291,8 @@ TEST_P(LocalFileTest, mkdir) {
   auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
 
   std::string path = tempFolder->getPath();
-  auto localFs = filesystems::getFileSystem(path, nullptr);
+  auto localFs =
+      filesystems::getFileSystem(path, std::make_shared<core::MemConfig>());
 
   // Create 3 levels of directories and ensure they exist.
   path += "/level1/level2/level3";
@@ -308,7 +317,8 @@ TEST_P(LocalFileTest, rmdir) {
   auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
 
   std::string path = tempFolder->getPath();
-  auto localFs = filesystems::getFileSystem(path, nullptr);
+  auto localFs =
+      filesystems::getFileSystem(path, std::make_shared<core::MemConfig>());
 
   // Create 3 levels of directories and ensure they exist.
   path += "/level1/level2/level3";
@@ -340,7 +350,8 @@ TEST_P(LocalFileTest, rmdir) {
 TEST_P(LocalFileTest, fileNotFound) {
   auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
   auto path = fmt::format("{}/file", tempFolder->getPath());
-  auto localFs = filesystems::getFileSystem(path, nullptr);
+  auto localFs =
+      filesystems::getFileSystem(path, std::make_shared<core::MemConfig>());
   VELOX_ASSERT_RUNTIME_THROW_CODE(
       localFs->openFileForRead(path),
       error_code::kFileNotFound,
@@ -364,7 +375,8 @@ class FaultyFsTest : public ::testing::Test {
   void SetUp() {
     dir_ = exec::test::TempDirectoryPath::create(true);
     fs_ = std::dynamic_pointer_cast<tests::utils::FaultyFileSystem>(
-        filesystems::getFileSystem(dir_->getPath(), {}));
+        filesystems::getFileSystem(
+            dir_->getPath(), std::make_shared<core::MemConfig>()));
     VELOX_CHECK_NOT_NULL(fs_);
     readFilePath_ = fmt::format("{}/faultyTestReadFile", dir_->getPath());
     writeFilePath_ = fmt::format("{}/faultyTestWriteFile", dir_->getPath());

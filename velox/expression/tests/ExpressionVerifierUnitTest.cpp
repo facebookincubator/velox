@@ -89,7 +89,7 @@ TEST_F(ExpressionVerifierUnitTest, persistReproInfo) {
   filesystems::registerLocalFileSystem();
   auto reproFolder = exec::test::TempDirectoryPath::create();
   const auto reproPath = reproFolder->getPath();
-  auto localFs = filesystems::getFileSystem(reproPath, nullptr);
+  auto localFs = filesystems::getLocalFileSystem();
 
   ExpressionVerifierOptions options{false, reproPath.c_str(), false};
   ExpressionVerifier verifier{&execCtx_, options};

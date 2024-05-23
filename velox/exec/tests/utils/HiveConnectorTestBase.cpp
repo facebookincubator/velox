@@ -139,8 +139,9 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
     const std::optional<
         std::unordered_map<std::string, std::optional<std::string>>>&
         partitionKeys) {
-  auto file =
-      filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
+  auto file = filesystems::getFileSystem(
+                  filePath, std::make_shared<const core::MemConfig>())
+                  ->openFileForRead(filePath);
   const int64_t fileSize = file->size();
   // Take the upper bound.
   const int splitSize = std::ceil((fileSize) / splitCount);

@@ -336,8 +336,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(spilledFileSet.size(), spilledFiles.size());
     ASSERT_EQ(expectedNumSpilledFiles, spilledFileSet.size());
     // Verify the spilled file exist on file system.
-    std::shared_ptr<FileSystem> fs =
-        filesystems::getFileSystem(tempDir_->getPath(), nullptr);
+    std::shared_ptr<FileSystem> fs = filesystems::getLocalFileSystem();
     uint64_t totalFileBytes{0};
     for (const auto& spilledFile : spilledFileSet) {
       auto readFile = fs->openFileForRead(spilledFile);

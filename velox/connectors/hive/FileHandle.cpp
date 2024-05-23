@@ -43,8 +43,13 @@ std::shared_ptr<FileHandle> FileHandleGenerator::operator()(
   {
     MicrosecondTimer timer(&elapsedTimeUs);
     fileHandle = std::make_shared<FileHandle>();
-    fileHandle->file = filesystems::getFileSystem(filename, properties_)
-                           ->openFileForRead(filename);
+    if (properties_) {
+      fileHandle->file = filesystems::getFileSystem(filename, properties_)
+                             ->openFileForRead(filename);
+    } else {
+      fileHandle->file =
+          filesystems::getLocalFileSystem()->openFileForRead(filename);
+    }
     fileHandle->uuid = StringIdLease(fileIds(), filename);
     fileHandle->groupId = StringIdLease(fileIds(), groupName(filename));
     VLOG(1) << "Generating file handle for: " << filename
