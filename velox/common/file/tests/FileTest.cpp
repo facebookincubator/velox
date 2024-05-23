@@ -90,6 +90,13 @@ void readData(ReadFile* readFile, bool checkFileSize = true) {
   ASSERT_EQ(std::string_view(tail, sizeof(tail)), "ccddddd");
 }
 
+TEST(RegistrationTest, missingRegistration) {
+  VELOX_ASSERT_THROW(
+      filesystems::getFileSystem(
+          "/", std::make_shared<const core::MemConfig>()),
+      "No registered file system matched with file path '/'");
+}
+
 // We could templated this test, but that's kinda overkill for how simple it is.
 TEST(InMemoryFile, writeAndRead) {
   for (bool useIOBuf : {true, false}) {
