@@ -20,17 +20,11 @@ namespace facebook::velox::parquet {
 
 class StringDecoder {
  public:
-  StringDecoder(const char* start, const char* end)
+  StringDecoder(const char* start, const char* end, int fixedLength = -1)
       : bufferStart_(start),
         bufferEnd_(end),
         lastSafeWord_(end - simd::kPadding),
-        length_(-1) {}
-
-  StringDecoder(const char* start, const char* end, int length)
-      : bufferStart_(start),
-        bufferEnd_(end),
-        lastSafeWord_(end - simd::kPadding),
-        length_(length) {}
+        fixedLength_(fixedLength) {}
 
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
@@ -69,7 +63,7 @@ class StringDecoder {
 
         // We are at a non-null value on a row to visit.
         toSkip = visitor.process(
-            length_ > 0 ? readFixedString() : readString(), atEnd);
+            fixedLength_ > 0 ? readFixedString() : readString(), atEnd);
       }
       ++current;
       if (toSkip) {
@@ -94,14 +88,14 @@ class StringDecoder {
   }
 
   folly::StringPiece readFixedString() {
-    bufferStart_ += length_;
-    return folly::StringPiece(bufferStart_ - length_, length_);
+    bufferStart_ += fixedLength_;
+    return folly::StringPiece(bufferStart_ - fixedLength_, fixedLength_);
   }
 
   const char* bufferStart_;
   const char* bufferEnd_;
   const char* const lastSafeWord_;
-  const int length_;
+  const int fixedLength_;
 };
 
 } // namespace facebook::velox::parquet
