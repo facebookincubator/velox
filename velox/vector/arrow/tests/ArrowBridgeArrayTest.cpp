@@ -1618,7 +1618,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
           ASSERT_EQ(*vec.type(), *VARCHAR());
           EXPECT_EQ(vec.size(), 12);
         },
-        ArrowOptions{.exportToView = true});
+        ArrowOptions{.exportToStringView = true});
   }
 
   void testImportREE() {
@@ -1797,7 +1797,6 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     EXPECT_NO_THROW(importFromArrow(arrowSchema, arrowArray, pool_.get()));
   }
 
-  ArrowOptions options_;
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
 };

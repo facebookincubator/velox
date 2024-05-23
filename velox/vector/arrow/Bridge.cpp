@@ -39,20 +39,20 @@ static constexpr size_t kMaxBuffers{3};
 class VeloxToArrowBridgeHolder {
  public:
   VeloxToArrowBridgeHolder() {
-    buffers_.resize(num_buffers_);
-    bufferPtrs_.resize(num_buffers_);
-    for (size_t i = 0; i < num_buffers_; ++i) {
+    for (size_t i = 0; i < numBuffers_; ++i) {
       buffers_[i] = nullptr;
     }
   }
 
-  void resizeBuffers(size_t buffer_count) {
-    buffers_.resize(buffer_count);
-    bufferPtrs_.resize(buffer_count);
-    for (size_t i = num_buffers_; i < buffer_count; i++) {
+  void resizeBuffers(size_t bufferCount) {
+    if (bufferCount <= numBuffers_)
+      return;
+    buffers_.resize(bufferCount);
+    bufferPtrs_.resize(bufferCount);
+    for (size_t i = numBuffers_; i < bufferCount; i++) {
       buffers_[i] = nullptr;
     }
-    num_buffers_ = buffer_count;
+    numBuffers_ = bufferCount;
   }
 
   // Acquires a buffer at index `idx`.
@@ -100,14 +100,14 @@ class VeloxToArrowBridgeHolder {
 
  private:
   // Holds the count of total buffers
-  size_t num_buffers_ = kMaxBuffers;
+  size_t numBuffers_ = kMaxBuffers;
 
   // Holds the pointers to the arrow buffers.
-  std::vector<const void*> buffers_;
+  std::vector<const void*> buffers_{numBuffers_};
 
   // Holds ownership over the Buffers being referenced by the buffers vector
   // above.
-  std::vector<BufferPtr> bufferPtrs_;
+  std::vector<BufferPtr> bufferPtrs_{numBuffers_};
 
   // Auxiliary buffers to hold ownership over ArrowArray children structures.
   std::vector<std::unique_ptr<ArrowArray>> childrenPtrs_;
@@ -291,11 +291,11 @@ const char* exportArrowFormatStr(
     // We always map VARCHAR and VARBINARY to the "small" version (lower case
     // format string), which uses 32 bit offsets.
     case TypeKind::VARCHAR:
-      if (options.exportToView)
+      if (options.exportToStringView)
         return "vu";
       return "u"; // utf-8 string
     case TypeKind::VARBINARY:
-      if (options.exportToView)
+      if (options.exportToStringView)
         return "vz";
       return "z"; // binary
     case TypeKind::UNKNOWN:
@@ -558,6 +558,7 @@ VectorPtr createStringFlatVectorFromUtf8View(
   auto* bufferSizes = (uint64_t*)arrowArray.buffers[num_buffers - 1];
   std::vector<BufferPtr> stringViewBuffers(num_buffers - 3);
 
+  // Skipping buffer_id = 0 (nulls buffer) and buffer_id = 1 (values buffer)
   for (int32_t buffer_id = 2; buffer_id < num_buffers - 1; ++buffer_id) {
     stringViewBuffers[buffer_id - 2] = wrapInBufferView(
         arrowArray.buffers[buffer_id], bufferSizes[buffer_id - 2]);
@@ -568,7 +569,7 @@ VectorPtr createStringFlatVectorFromUtf8View(
   auto* rawStringViews = stringViews->asMutable<uint64_t>();
   auto* rawNulls = nulls->as<uint64_t>();
 
-  // Full copy for inline strings (length <= 12). For non-inline strings ,
+  // Full copy for inline strings (length <= 12). For non-inline strings,
   // convert 16-byte Arrow Utf8View [4-byte length, 4-byte prefix, 4-byte
   // buffer-index, 4-byte buffer-offset] to 16-byte Velox StringView [4-byte
   // length, 4-byte prefix, 8-byte buffer-ptr]
@@ -836,7 +837,7 @@ void exportFlat(
       break;
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
-      if (options.exportToView) {
+      if (options.exportToStringView) {
         exportValues(vec, rows, options, out, pool, holder);
         exportViews(
             *vec.asUnchecked<FlatVector<StringView>>(),
