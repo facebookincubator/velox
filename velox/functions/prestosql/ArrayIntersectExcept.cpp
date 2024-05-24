@@ -172,11 +172,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       auto offset = baseLeftArray->offsetAt(idx);
 
       outputSet.reset();
-      if (size == 0 || rightSet.empty()) {
-        return;
-      }
       rawNewOffsets[row] = indicesCursor;
-
       // Scans the array elements on the left-hand side.
       for (vector_size_t i = offset; i < (offset + size); ++i) {
         if (decodedLeftElements->isNullAt(i)) {
