@@ -192,6 +192,22 @@ The behavior is similar with Presto except Spark allows leading and trailing whi
 </div>
 </section>
 </section>
+<section id="cast-to-varbinary">
+<h2>Cast to Varbinary<a class="headerlink" href="#cast-to-varbinary" title="Link to this heading">¶</a></h2>
+<section id="id2">
+<h3>From integral types<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<p>Casting integral value to varbinary type is allowed.
+Bytes of input value are converted into an array of bytes in little-endian order.
+Supported types are tinyint, smallint, integer and bigint.</p>
+<p>Valid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mi">18</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">)</span> <span class="k">as</span> <span class="n">binary</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">12</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mi">180</span> <span class="k">as</span> <span class="n">smallint</span><span class="p">)</span> <span class="k">as</span> <span class="n">binary</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">00</span> <span class="n">B4</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mi">180000</span> <span class="k">as</span> <span class="n">integer</span><span class="p">)</span> <span class="k">as</span> <span class="n">binary</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">00</span> <span class="mi">02</span> <span class="n">BF</span> <span class="mi">20</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mi">180000</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">)</span> <span class="k">as</span> <span class="n">binary</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">00</span> <span class="mi">00</span> <span class="mi">00</span> <span class="mi">00</span> <span class="mi">00</span> <span class="mi">02</span> <span class="n">BF</span> <span class="mi">20</span><span class="p">]</span>
+</pre></div>
+</div>
+</section>
+</section>
 </section>
 
 
@@ -222,6 +238,10 @@ The behavior is similar with Presto except Spark allows leading and trailing whi
 </li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
 <li><a class="reference internal" href="#from-varchar">From varchar</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-varbinary">Cast to Varbinary</a><ul>
+<li><a class="reference internal" href="#id2">From integral types</a></li>
 </ul>
 </li>
 </ul>
