@@ -214,15 +214,14 @@ void registerSliceFunction(const std::string& prefix) {
       "Unsupported parameter type {} to register slice function",
       kindName);
 
-  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-  signatures.push_back(exec::FunctionSignatureBuilder()
-                           .typeVariable("T")
-                           .returnType("array(T)")
-                           .argumentType("array(T)")
-                           .argumentType(kindName)
-                           .argumentType(kindName)
-                           .build());
-
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures = {
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("array(T)")
+          .argumentType("array(T)")
+          .argumentType(kindName)
+          .argumentType(kindName)
+          .build()};
   exec::registerVectorFunction(
       prefix + "slice", signatures, std::make_unique<SliceFunction<Kind>>());
 }
