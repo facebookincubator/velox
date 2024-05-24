@@ -28,17 +28,21 @@ library(plotly)
 library(dplyr)
 library(purrr)
 
+# Cache conbench and gh api results for local development
 cd <- cachem::cache_disk(rappdirs::user_cache_dir("velox-bm-report"))
 mgh <- memoise::memoise(gh::gh, cache = cd)
 mruns <- memoise::memoise(conbenchcoms::runs, cache = cd)
 mresults <- memoise::memoise(conbenchcoms::benchmark_results, cache = cd)
 
+# Get latest runs of build-metric job 
 runs <- mgh(
   "GET /repos/facebookincubator/velox/actions/workflows/build-metrics.yml/runs",
   status = "success",
   branch = "main"
 ) |> jsonlite::toJSON()
 
+# Extract the commit sha of the most recent run. The results of the latest
+# run are displayed in the tables.
 newest_sha <- runs |>
   jqr::jq(".workflow_runs | max_by(.updated_at) | .head_sha") |>
   jsonlite::fromJSON()
@@ -49,6 +53,8 @@ run_shas <- runs |>
 run_ids <- mruns(run_shas) |>
   filter(commit.branch == "facebookincubator:main", substr(id, 1, 2) == "BM") |>
   pull(id)
+
+# Fetch the result and do clean/format the data
 results <- run_ids |>
   purrr::map_df(mresults) |>
   mutate(
@@ -79,6 +85,7 @@ format_tags <- function(x) {
 
 ## Times
 ```{r total-graphs}
+# Filter the data and layout the overview plots
 times_plot <- results |>
   filter(tags.suite == "total", endsWith(tags.source, "time")) |>
   mutate(
@@ -106,6 +113,7 @@ ggplotly(times_plot) |>
 ```
 
 ```{r expensive-objects-compile}
+# Format compile time data
 compile_times <- results |>
   filter(tags.suite == "compiling", commit.sha == newest_sha) |>
   mutate(
@@ -121,6 +129,7 @@ compile_times <- results |>
 ::: {.column width="49%"}
 
 ```{r compile-times-release}
+# Select and format the data to be displayed in the release compile time table
 compile_times |>
   filter(type == "release") |>
   select(tags.name, stats.data) |>
@@ -145,6 +154,7 @@ compile_times |>
 ::: {.column width="49%"}
 
 ```{r compile-times-debug}
+# Select and format the data to be displayed in the debug compile time table
 compile_times |>
   filter(type == "debug") |>
   select(tags.name, stats.data) |>
@@ -165,6 +175,7 @@ compile_times |>
 ::::
 
 ```{r expensive-objects-link}
+# Format linke time data
 link_times <- results |>
   filter(tags.suite == "linking", commit.sha == newest_sha) |>
   mutate(
@@ -181,6 +192,7 @@ link_times <- results |>
 ::: {.column width="49%"}
 
 ```{r link-times-release}
+# Select and format the data to be displayed in the release link time table
 link_times |>
   filter(type == "release") |>
   select(tags.name, stats.data) |>
@@ -205,6 +217,7 @@ link_times |>
 ::: {.column width="49%"}
 
 ```{r link-times-debug}
+# Select and format the data to be displayed in the debug link time table
 link_times |>
   filter(type == "debug") |>
   select(tags.name, stats.data) |>
@@ -227,17 +240,21 @@ link_times |>
 
 ## Sizes
 ```{r big-objects}
+# This is converts byte values into human-readable values in the tables
 size_formatter <- function(x) {
   function(x) {
     prettyunits::pretty_bytes(x)
   }
 }
 
+# Prepare object size data
 object_sizes <- results |>
   filter(endsWith(tags.source, "size"), commit.sha == newest_sha)  |>
   mutate(
     tags.name = glue::glue("`{tags.name}`")
   )
+
+# Filter the data and layout the size overview plots
 sizes_plot <- results |>
   filter(tags.suite == "executable", startsWith(tags.name, "total_")) |>
   ggplot(aes(
@@ -266,6 +283,7 @@ ggplotly(sizes_plot) |>
 ::: {.column width="49%"}
 
 ```{r object-sizes-release}
+# Select and format the data to be displayed in the release size table
 object_sizes |>
   filter(type == "release") |>
   select(tags.name, stats.data) |>
@@ -291,6 +309,7 @@ object_sizes |>
 ::: {.column width="49%"}
 
 ```{r object-sizes-debug}
+# Select and format the data to be displayed in the debug size table
 object_sizes |>
   filter(type == "debug") |>
   select(tags.name, stats.data) |>
