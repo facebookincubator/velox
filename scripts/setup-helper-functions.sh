@@ -171,6 +171,7 @@ function cmake_install {
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DBUILD_TESTING=OFF \
     "$@"
+
   cmake --build "${BINARY_DIR}"
   ${SUDO} cmake --install "${BINARY_DIR}"
 }
