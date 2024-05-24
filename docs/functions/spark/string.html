@@ -279,6 +279,16 @@ is any character contained in <code class="docutils literal notranslate"><span c
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="soundex">
+<span class="sig-name descname"><span class="pre">soundex</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#soundex" title="Link to this definition">¶</a></dt>
+<dd><p>Returns <a class="reference external" href="https://en.wikipedia.org/wiki/Soundex">Soundex code</a> of the string. If first character of <code class="docutils literal notranslate"><span class="pre">string</span></code> is not
+a letter, <code class="docutils literal notranslate"><span class="pre">string</span></code> is returned.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">soundex</span><span class="p">(</span><span class="s1">&#39;Miller&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s2">&quot;M460&quot;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="split">
 <span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delimiter</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#split" title="Link to this definition">¶</a></dt>
 <dd><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> on <code class="docutils literal notranslate"><span class="pre">delimiter</span></code> and returns an array.</p>
@@ -468,6 +478,7 @@ The specified character is any character contained in <code class="docutils lite
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">replace()</span></code></a></li>
 <li><a class="reference internal" href="#rpad"><code class="docutils literal notranslate"><span class="pre">rpad()</span></code></a></li>
 <li><a class="reference internal" href="#rtrim"><code class="docutils literal notranslate"><span class="pre">rtrim()</span></code></a></li>
+<li><a class="reference internal" href="#soundex"><code class="docutils literal notranslate"><span class="pre">soundex()</span></code></a></li>
 <li><a class="reference internal" href="#split"><code class="docutils literal notranslate"><span class="pre">split()</span></code></a></li>
 <li><a class="reference internal" href="#startswith"><code class="docutils literal notranslate"><span class="pre">startswith()</span></code></a></li>
 <li><a class="reference internal" href="#str_to_map"><code class="docutils literal notranslate"><span class="pre">str_to_map()</span></code></a></li>
