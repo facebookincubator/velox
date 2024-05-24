@@ -20,9 +20,9 @@
 
 namespace facebook::velox::functions {
 
-// Use BIGINT type for start and length(presto's behavior).
+// BIGINT type for start and length (presto's behavior).
 void registerBigIntSliceFunction(const std::string& prefix);
 
-// Use INTEGER type for start and length(Spark's behavior).
+// INTEGER type for start and length (Spark's behavior).
 void registerIntegerSliceFunction(const std::string& prefix);
 } // namespace facebook::velox::functions

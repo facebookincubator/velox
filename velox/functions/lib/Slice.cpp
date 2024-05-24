@@ -205,27 +205,23 @@ class SliceFunction : public exec::VectorFunction {
 };
 } // namespace
 
-/// @tparam IndexKind The `TypeKind` of the function `Slice` start and length
-/// type.
+/// @tparam Kind The type kind for start and length argument.
 template <TypeKind Kind>
 void registerSliceFunction(const std::string& prefix) {
-  using NativeType = typename TypeTraits<Kind>::NativeType;
   auto kindName = TypeTraits<Kind>::name;
+  VELOX_CHECK(
+      Kind == TypeKind::BIGINT || Kind == TypeKind::INTEGER,
+      "Unsupported parameter type {} to register slice function",
+      kindName);
+
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-  if constexpr (
-      std::is_same_v<NativeType, int64_t> ||
-      std::is_same_v<NativeType, int32_t>) {
-    signatures.push_back(exec::FunctionSignatureBuilder()
-                             .typeVariable("T")
-                             .returnType("array(T)")
-                             .argumentType("array(T)")
-                             .argumentType(kindName)
-                             .argumentType(kindName)
-                             .build());
-  } else {
-    VELOX_FAIL(
-        "Unsupported parameter type {} to register slice function", kindName);
-  }
+  signatures.push_back(exec::FunctionSignatureBuilder()
+                           .typeVariable("T")
+                           .returnType("array(T)")
+                           .argumentType("array(T)")
+                           .argumentType(kindName)
+                           .argumentType(kindName)
+                           .build());
 
   exec::registerVectorFunction(
       prefix + "slice", signatures, std::make_unique<SliceFunction<Kind>>());
