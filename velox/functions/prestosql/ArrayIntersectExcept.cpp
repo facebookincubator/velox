@@ -286,6 +286,10 @@ class ArraysOverlapFunction : public exec::VectorFunction {
       auto offset = baseLeftArray->offsetAt(idx);
       auto size = baseLeftArray->sizeAt(idx);
       bool hasNull = rightSet.hasNull;
+      if (size == 0 || (rightSet.set.size() == 0 && !hasNull)) {
+        resultBoolVector->set(row, false);
+        return;
+      }
       for (auto i = offset; i < (offset + size); ++i) {
         // For each element in the current row search for it in the rightSet.
         if (decodedLeftElements->isNullAt(i)) {
