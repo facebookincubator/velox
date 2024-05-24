@@ -142,7 +142,7 @@ function install_conda {
   fi
 
   mkdir -p conda && cd conda
-  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh -O Miniconda3-latest-Linux-$ARCH.s
+  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh -O Miniconda3-latest-Linux-$ARCH.sh
   bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 
