@@ -3,10 +3,10 @@ cmake_policy(SET CMP0063 NEW)
 
 project(dbgen CXX C)
 
-add_definitions(-DDBNAME=dss -DMAC -DORACLE -DTPCH)
 
-velox_base_add_library(
-  velox_dbgen STATIC
+add_library(
+  dbgen 
+  STATIC
   dbgen.cpp
   dbgen_gunk.cpp
   bm_utils.cpp
@@ -17,7 +17,8 @@ velox_base_add_library(
   speed_seed.cpp
   text.cpp)
 
-target_include_directories(velox_dbgen PRIVATE include)
+target_compile_definitions(dbgen PRIVATE DBNAME=dss MAC ORACLE TPCH)
+target_include_directories(dbgen PRIVATE include)
 
 # Suppress warnings when compiling dbgen.
-target_compile_options(velox_dbgen PRIVATE -w)
+target_compile_options(dbgen PRIVATE -w)
