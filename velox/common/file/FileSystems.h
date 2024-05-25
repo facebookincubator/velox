@@ -98,9 +98,14 @@ class FileSystem {
   std::shared_ptr<const Config> config_;
 };
 
+/// Get the filesystem based on the input filename and config.
+/// Config cannot be null.
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filename,
     std::shared_ptr<const Config> config);
+
+/// Get the local filesystem.
+std::shared_ptr<FileSystem> getLocalFileSystem();
 
 /// FileSystems must be registered explicitly.
 /// The registration function takes two parameters:

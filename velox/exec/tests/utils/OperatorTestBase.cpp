@@ -227,7 +227,7 @@ core::TypedExprPtr OperatorTestBase::parseExpr(
 
   // If a spilling directory was set, ensure it was removed after the task is
   // gone.
-  auto fs = filesystems::getFileSystem(spillDirectoryStr, nullptr);
+  auto fs = filesystems::getLocalFileSystem();
   EXPECT_FALSE(fs->exists(spillDirectoryStr));
 }
 

@@ -76,7 +76,7 @@ void TpchQueryBuilder::readFileSchema(
   dwio::common::ReaderOptions readerOptions{pool_.get()};
   readerOptions.setFileFormat(format_);
   auto uniqueReadFile =
-      filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
+      filesystems::getLocalFileSystem()->openFileForRead(filePath);
   std::shared_ptr<ReadFile> readFile;
   readFile.reset(uniqueReadFile.release());
   auto input = std::make_unique<dwio::common::BufferedInput>(

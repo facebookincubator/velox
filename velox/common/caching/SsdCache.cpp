@@ -46,8 +46,8 @@ SsdCache::SsdCache(
       filePrefix_.find("/") == 0,
       "Ssd path '{}' does not start with '/' that points to local file system.",
       filePrefix_);
-  filesystems::getFileSystem(filePrefix_, nullptr)
-      ->mkdir(std::filesystem::path(filePrefix).parent_path().string());
+  filesystems::getLocalFileSystem()->mkdir(
+      std::filesystem::path(filePrefix).parent_path().string());
 
   files_.reserve(numShards_);
   // Cache size must be a multiple of this so that each shard has the same max

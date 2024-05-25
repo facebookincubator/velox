@@ -153,8 +153,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     std::unordered_map<std::string, std::string> customSplitInfo;
     customSplitInfo["table_format"] = "hive-iceberg";
 
-    auto file = filesystems::getFileSystem(dataFilePath, nullptr)
-                    ->openFileForRead(dataFilePath);
+    auto file =
+        filesystems::getLocalFileSystem()->openFileForRead(dataFilePath);
     const int64_t fileSize = file->size();
 
     return std::make_shared<HiveIcebergSplit>(

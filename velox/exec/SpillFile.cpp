@@ -63,7 +63,7 @@ SpillWriteFile::SpillWriteFile(
     const std::string& pathPrefix,
     const std::string& fileCreateConfig)
     : id_(id), path_(fmt::format("{}-{}", pathPrefix, ordinalCounter_++)) {
-  auto fs = filesystems::getFileSystem(path_, nullptr);
+  auto fs = filesystems::getLocalFileSystem();
   file_ = fs->openFileForWrite(
       path_,
       filesystems::FileOptions{
@@ -322,7 +322,7 @@ SpillReadFile::SpillReadFile(
       stats_(stats) {
   constexpr uint64_t kMaxReadBufferSize =
       (1 << 20) - AlignedBuffer::kPaddedSize; // 1MB - padding.
-  auto fs = filesystems::getFileSystem(path_, nullptr);
+  auto fs = filesystems::getLocalFileSystem();
   auto file = fs->openFileForRead(path_);
   auto buffer = AlignedBuffer::allocate<char>(
       std::min<uint64_t>(size_, kMaxReadBufferSize), pool_);

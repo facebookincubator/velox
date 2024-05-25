@@ -160,7 +160,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     RowContainerTestBase::SetUp();
     rng_.seed(1);
     tempDirPath_ = exec::test::TempDirectoryPath::create();
-    fs_ = filesystems::getFileSystem(tempDirPath_->getPath(), nullptr);
+    fs_ = filesystems::getLocalFileSystem();
     containerType_ = ROW({
         {"bool_val", BOOLEAN()},
         {"tiny_val", TINYINT()},

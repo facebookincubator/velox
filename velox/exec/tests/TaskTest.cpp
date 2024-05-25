@@ -1669,7 +1669,7 @@ TEST_F(TaskTest, spillDirNotCreated) {
   ASSERT_EQ(stats.spilledRows, 0);
   // Check for spill folder without destroying the Task object to ensure its
   // destructor has not removed the directory if it was created earlier.
-  auto fs = filesystems::getFileSystem(tmpDirectoryPath, nullptr);
+  auto fs = filesystems::getLocalFileSystem();
   ASSERT_FALSE(fs->exists(tmpDirectoryPath));
 }
 

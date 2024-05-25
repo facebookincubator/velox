@@ -386,7 +386,7 @@ const std::string& Task::getOrCreateSpillDirectory() {
     return spillDirectory_;
   }
   try {
-    auto fileSystem = filesystems::getFileSystem(spillDirectory_, nullptr);
+    auto fileSystem = filesystems::getLocalFileSystem();
     fileSystem->mkdir(spillDirectory_);
   } catch (const std::exception& e) {
     VELOX_FAIL(
@@ -404,7 +404,7 @@ void Task::removeSpillDirectoryIfExists() {
     return;
   }
   try {
-    auto fs = filesystems::getFileSystem(spillDirectory_, nullptr);
+    auto fs = filesystems::getLocalFileSystem();
     fs->rmdir(spillDirectory_);
   } catch (const std::exception& e) {
     LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_

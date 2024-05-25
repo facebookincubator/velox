@@ -174,8 +174,7 @@ class TaskCursorBase : public TaskCursor {
 
     if (!params.spillDirectory.empty()) {
       taskSpillDirectory_ = params.spillDirectory + "/" + taskId_;
-      auto fileSystem =
-          velox::filesystems::getFileSystem(taskSpillDirectory_, nullptr);
+      auto fileSystem = velox::filesystems::getLocalFileSystem();
       VELOX_CHECK_NOT_NULL(fileSystem, "File System is null!");
       try {
         fileSystem->mkdir(taskSpillDirectory_);

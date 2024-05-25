@@ -210,10 +210,10 @@ TEST_F(HdfsFileSystemTest, fallbackToUseConfig) {
 }
 
 TEST_F(HdfsFileSystemTest, oneFsInstanceForOneEndpoint) {
-  auto hdfsFileSystem1 =
-      filesystems::getFileSystem(fullDestinationPath, nullptr);
-  auto hdfsFileSystem2 =
-      filesystems::getFileSystem(fullDestinationPath, nullptr);
+  auto hdfsFileSystem1 = filesystems::getFileSystem(
+      fullDestinationPath, std::make_shared<const core::MemConfig>());
+  auto hdfsFileSystem2 = filesystems::getFileSystem(
+      fullDestinationPath, std::make_shared<const core::MemConfig>());
   ASSERT_TRUE(hdfsFileSystem1 == hdfsFileSystem2);
 }
 
@@ -283,18 +283,9 @@ TEST_F(HdfsFileSystemTest, missingFileViaReadFile) {
 }
 
 TEST_F(HdfsFileSystemTest, schemeMatching) {
-  try {
-    auto fs = std::dynamic_pointer_cast<filesystems::HdfsFileSystem>(
-        filesystems::getFileSystem("/", nullptr));
-    FAIL() << "expected VeloxException";
-  } catch (VeloxException const& error) {
-    EXPECT_THAT(
-        error.message(),
-        testing::HasSubstr(
-            "No registered file system matched with file path '/'"));
-  }
   auto fs = std::dynamic_pointer_cast<filesystems::HdfsFileSystem>(
-      filesystems::getFileSystem(fullDestinationPath, nullptr));
+      filesystems::getFileSystem(
+          fullDestinationPath, std::make_shared<const core::MemConfig>()));
   ASSERT_TRUE(fs->isHdfsFile(fullDestinationPath));
 }
 

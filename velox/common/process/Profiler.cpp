@@ -312,7 +312,7 @@ void Profiler::start(const std::string& path) {
   char temp[1000] = {};
   gethostname(temp, sizeof(temp) - 1);
   hostname = std::string(temp);
-  fileSystem_ = velox::filesystems::getFileSystem(path, nullptr);
+  fileSystem_ = velox::filesystems::getLocalFileSystem();
   if (!fileSystem_) {
     LOG(ERROR) << "PROFILE: Failed to find file system for " << path
                << ". Profiler not started.";
