@@ -13,7 +13,7 @@
 # limitations under the License.
 
 add_executable(velox_gcsfile_example GCSFileSystemExample.cpp)
-velox_link_libraries(
+target_link_libraries(
   velox_gcsfile_example
   Folly::folly
   velox_file

@@ -14,17 +14,16 @@
 
 add_executable(velox_example_simple_functions SimpleFunctions.cpp)
 
-velox_link_libraries(velox_example_simple_functions velox_functions_lib
+target_link_libraries(velox_example_simple_functions velox_functions_lib
                       velox_core velox_expression re2::re2)
 
 add_executable(velox_example_expression_eval ExpressionEval.cpp)
 
-velox_link_libraries(velox_example_expression_eval velox_type velox_vector
+target_link_libraries(velox_example_expression_eval velox_type velox_vector
                       velox_caching velox_memory velox_expression)
 
 add_executable(velox_example_opaque_type OpaqueType.cpp)
-
-velox_link_libraries(velox_example_opaque_type velox_type velox_vector
+target_link_libraries(velox_example_opaque_type velox_type velox_vector
                       velox_caching velox_expression velox_memory)
 
 # This is disabled temporarily until we figure out why g++ is crashing linking
@@ -38,7 +37,7 @@ velox_link_libraries(velox_example_opaque_type velox_type velox_vector
 
 add_executable(velox_example_scan_orc ScanOrc.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   velox_example_scan_orc
   velox_type
   velox_vector
@@ -49,12 +48,11 @@ velox_link_libraries(
 
 add_executable(velox_example_vector_reader_writer VectorReaderWriter.cpp)
 
-velox_link_libraries(velox_example_vector_reader_writer velox_expression
+target_link_libraries(velox_example_vector_reader_writer velox_expression
                       velox_type velox_vector)
 
 add_executable(velox_example_operator_extensibility OperatorExtensibility.cpp)
-
-velox_link_libraries(
+target_link_libraries(
   velox_example_operator_extensibility
   velox_type
   velox_vector

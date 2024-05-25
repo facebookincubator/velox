@@ -20,7 +20,7 @@ target_link_libraries(
 
 add_executable(velox_aggregation_fuzzer_test AggregationFuzzerTest.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   velox_aggregation_fuzzer_test
   velox_aggregation_fuzzer
   velox_aggregation_fuzzer_base
@@ -34,7 +34,7 @@ velox_link_libraries(
 # Window Fuzzer
 add_executable(velox_window_fuzzer_test WindowFuzzerTest.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   velox_window_fuzzer_test
   velox_window_fuzzer
   velox_fuzzer_util

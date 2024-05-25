@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_fuzzer_connector OBJECT FuzzerConnector.cpp)
+add_library(velox_fuzzer_connector OBJECT FuzzerConnector.cpp)
 
-velox_link_libraries(velox_fuzzer_connector velox_connector
+target_link_libraries(velox_fuzzer_connector velox_connector
                       velox_vector_fuzzer)
 
 if(${VELOX_BUILD_TESTING})
