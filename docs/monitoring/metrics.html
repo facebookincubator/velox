@@ -150,8 +150,9 @@ with 20 buckets. It is configured to report latency at P50, P90, P99, and
 P100 percentiles.</p></td>
 </tr>
 <tr class="row-even"><td><p>memory_reclaim_bytes</p></td>
-<td><p>Sum</p></td>
-<td><p>The sum of reclaimed memory bytes.</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of reclaimed bytes in range of [0, 4GB] with 64 buckets
+and reports P50, P90, P99, and P100.</p></td>
 </tr>
 <tr class="row-odd"><td><p>task_memory_reclaim_count</p></td>
 <td><p>Count</p></td>
