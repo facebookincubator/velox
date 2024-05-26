@@ -25,6 +25,7 @@
 
 namespace facebook::velox::exec {
 
+struct DriverCtx;
 class Expr;
 class ExprSet;
 class LocalDecodedVector;
@@ -36,7 +37,11 @@ class PeeledEncoding;
 // flags for Expr interpreter.
 class EvalCtx {
  public:
-  EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row);
+  EvalCtx(
+      core::ExecCtx* execCtx,
+      ExprSet* exprSet,
+      const RowVector* row,
+      DriverCtx* driverCtx = nullptr);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* execCtx);
@@ -77,6 +82,9 @@ class EvalCtx {
   void saveAndReset(ContextSaver& saver, const SelectivityVector& rows);
 
   void restore(ContextSaver& saver);
+
+  // @param status Must indicate an error. Cannot be "ok".
+  void setStatus(vector_size_t index, const Status& status);
 
   // If exceptionPtr is known to be a VeloxException use setVeloxExceptionError
   // instead.
@@ -129,6 +137,12 @@ class EvalCtx {
       const ErrorVectorPtr& fromErrors,
       ErrorVectorPtr& toErrors) const;
 
+  /// Like above, but for a single row.
+  void addError(
+      vector_size_t row,
+      const ErrorVectorPtr& fromErrors,
+      ErrorVectorPtr& toErrors) const;
+
   // Given a mapping from element rows to top-level rows, add element-level
   // errors in errors_ to topLevelErrors.
   void addElementErrorsToTopLevel(
@@ -154,9 +168,12 @@ class EvalCtx {
         std::min(errors_->size(), rows.end()));
   }
 
-  // Returns the vector of errors or nullptr if no errors. This is
-  // intentionally a raw pointer to signify that the caller may not
-  // retain references to this.
+  /// Returns the vector of errors or nullptr if no errors. This is
+  /// intentionally a raw pointer to signify that the caller may not
+  /// retain references to this.
+  ///
+  /// When 'captureErrorDetails' is false, only null flags are being set, the
+  /// values are null std::shared_ptr and should not be used.
   ErrorVector* errors() const {
     return errors_.get();
   }
@@ -165,36 +182,41 @@ class EvalCtx {
     return &errors_;
   }
 
+  /// Make sure the error vector is addressable up to index `size`-1. Initialize
+  /// all
+  /// new elements to null.
+  void ensureErrorsVectorSize(vector_size_t size) {
+    ensureErrorsVectorSize(errors_, size);
+  }
+
   void swapErrors(ErrorVectorPtr& other) {
     std::swap(errors_, other);
   }
 
   /// Adds errors in 'this' to 'other'. Clears errors from 'this'.
-  void moveAppendErrors(ErrorVectorPtr& other) {
-    if (!errors_) {
-      return;
-    }
+  void moveAppendErrors(ErrorVectorPtr& other);
 
-    if (!other) {
-      std::swap(errors_, other);
-      return;
-    }
-
-    ensureErrorsVectorSize(other, errors_->size());
-    bits::forEachBit(
-        errors_->rawNulls(), 0, errors_->size(), bits::kNotNull, [&](auto row) {
-          other->set(row, errors_->valueAt(row));
-        });
-
-    errors_.reset();
-  }
-
+  /// Boolean indicating whether exceptions that occur during expression
+  /// evaluation should be thrown directly or saved for later processing.
   bool throwOnError() const {
     return throwOnError_;
   }
 
   bool* mutableThrowOnError() {
     return &throwOnError_;
+  }
+
+  /// Boolean indicating whether to capture details when storing exceptions for
+  /// later processing (throwOnError_ == true).
+  ///
+  /// Conjunct expressions (AND, OR) require capturing error details, while TRY
+  /// and TRY_CAST expressions do not.
+  bool captureErrorDetails() const {
+    return captureErrorDetails_;
+  }
+
+  bool* mutableCaptureErrorDetails() {
+    return &captureErrorDetails_;
   }
 
   bool nullsPruned() const {
@@ -236,6 +258,10 @@ class EvalCtx {
 
   ExprSet* exprSet() const {
     return exprSet_;
+  }
+
+  DriverCtx* driverCtx() const {
+    return driverCtx_;
   }
 
   VectorEncoding::Simple wrapEncoding() const;
@@ -311,9 +337,6 @@ class EvalCtx {
         rows, type, execCtx_->pool(), result, execCtx_->vectorPool());
   }
 
-  /// Make sure the vector is addressable up to index `size`-1. Initialize all
-  /// new elements to null.
-  void ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size) const;
   PeeledEncoding* getPeeledEncoding() {
     return peeledEncoding_.get();
   }
@@ -331,9 +354,25 @@ class EvalCtx {
   }
 
  private:
+  void ensureErrorsVectorSize(ErrorVectorPtr& errors, vector_size_t size) const;
+
+  // Updates 'errorPtr' to clear null at 'index' to indicate an error has
+  // occured without specifying error details.
+  void addError(vector_size_t index, ErrorVectorPtr& errorsPtr) const;
+
+  // Copy error from 'from' at index 'fromIndex' to 'to' at index 'toIndex'.
+  // No-op if 'from' doesn't have an error at 'fromIndex' or if 'to' already has
+  // an error at 'toIndex'.
+  void copyError(
+      const ErrorVector& from,
+      vector_size_t fromIndex,
+      ErrorVectorPtr& to,
+      vector_size_t toIndex) const;
+
   core::ExecCtx* const execCtx_;
   ExprSet* const exprSet_;
   const RowVector* row_;
+  DriverCtx* const driverCtx_;
   const bool cacheEnabled_;
   const uint32_t maxSharedSubexprResultsCached_;
   bool inputFlatNoNulls_;
@@ -351,6 +390,8 @@ class EvalCtx {
   // behavior.
   bool nullsPruned_{false};
   bool throwOnError_{true};
+
+  bool captureErrorDetails_{true};
 
   // True if the current set of rows will not grow, e.g. not under and IF or OR.
   bool isFinalSelection_{true};

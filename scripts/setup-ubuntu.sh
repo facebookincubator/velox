@@ -40,6 +40,7 @@ FMT_VERSION=10.1.1
 BOOST_VERSION=boost-1.84.0
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
+BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 export CMAKE_BUILD_TYPE=Release
 SUDO="${SUDO:-"sudo --preserve-env"}"
 
@@ -51,12 +52,16 @@ function install_build_prerequisites {
   ${SUDO} apt install -y libunwind-dev
   ${SUDO} apt install -y \
     build-essential \
-    cmake \
+    python3-pip \
     ccache \
+    curl \
     ninja-build \
     checkinstall \
     git \
     wget
+
+    # Install to /usr/local to make it available to all users.
+    ${SUDO} pip3 install cmake==3.28.3
 }
 
 # Install packages required for build.
@@ -141,6 +146,17 @@ function install_conda {
   bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 
+function install_duckdb {
+  if $BUILD_DUCKDB ; then
+    echo 'Building DuckDB'
+    wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/v0.8.1.tar.gz duckdb
+    (
+      cd duckdb
+      cmake_install -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
+    )
+  fi
+}
+
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
   if ! dpkg -l cuda-keyring 1>/dev/null; then
@@ -162,6 +178,7 @@ function install_velox_deps {
   run_and_time install_mvfst
   run_and_time install_fbthrift
   run_and_time install_conda
+  run_and_time install_duckdb
 }
 
 function install_apt_deps {

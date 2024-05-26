@@ -682,7 +682,11 @@ TEST_F(TestReader, testBlockedIoCallbackFiredBlocking) {
   std::optional<uint64_t> metricToIncrement;
 
   rowReaderOpts.setBlockedOnIoCallback(
-      [&metricToIncrement](uint64_t blockedTimeMs) {
+      [&metricToIncrement](
+          std::chrono::high_resolution_clock::duration blockedTime) {
+        const auto blockedTimeMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(blockedTime)
+                .count();
         if (metricToIncrement) {
           *metricToIncrement += blockedTimeMs;
         } else {
@@ -722,7 +726,11 @@ TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredNonBlocking) {
   std::optional<uint64_t> metricToIncrement;
 
   rowReaderOpts.setBlockedOnIoCallback(
-      [&metricToIncrement](uint64_t blockedTimeMs) {
+      [&metricToIncrement](
+          std::chrono::high_resolution_clock::duration blockedTime) {
+        const auto blockedTimeMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(blockedTime)
+                .count();
         if (metricToIncrement) {
           *metricToIncrement += blockedTimeMs;
         } else {
@@ -766,7 +774,11 @@ TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredWithFirstStripeLoad) {
   std::optional<uint64_t> metricToIncrement;
 
   rowReaderOpts.setBlockedOnIoCallback(
-      [&metricToIncrement](uint64_t blockedTimeMs) {
+      [&metricToIncrement](
+          std::chrono::high_resolution_clock::duration blockedTime) {
+        const auto blockedTimeMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(blockedTime)
+                .count();
         if (metricToIncrement) {
           *metricToIncrement += blockedTimeMs;
         } else {
@@ -1914,7 +1926,6 @@ void testFlatmapAsMapFieldLifeCycle(
   auto child =
       std::dynamic_pointer_cast<MapVector>(result->as<RowVector>()->childAt(0));
   BaseVector* rowPtr = result.get();
-  MapVector* childPtr = child.get();
   Buffer* rawNulls = child->nulls().get();
   BufferPtr sizes = child->sizes();
   Buffer* rawOffsets = child->offsets().get();
@@ -1935,7 +1946,6 @@ void testFlatmapAsMapFieldLifeCycle(
 
   auto mapKeys = child->mapKeys();
   auto rawSizes = child->sizes().get();
-  childPtr = child.get();
   child.reset();
 
   EXPECT_TRUE(rowReader->next(batchSize, result));
@@ -1947,7 +1957,6 @@ void testFlatmapAsMapFieldLifeCycle(
   EXPECT_NE(mapKeys, child->mapKeys());
   // there is a TODO in FlatMapColumnReader next() (result is not reused)
   // should be EQ; fix: https://fburl.com/code/wtrq8r5q
-  // EXPECT_EQ(childPtr, child.get());
   EXPECT_EQ(rowPtr, result.get());
 
   EXPECT_TRUE(rowReader->next(batchSize, result));
@@ -1959,7 +1968,6 @@ void testFlatmapAsMapFieldLifeCycle(
   EXPECT_NE(rawSizes, childCurr->sizes().get());
   EXPECT_NE(rawOffsets, childCurr->offsets().get());
   EXPECT_NE(keysPtr, childCurr->mapKeys().get());
-  // EXPECT_EQ(childPtr, childCurr.get());
   EXPECT_EQ(rowPtr, result.get());
 }
 
@@ -2214,7 +2222,7 @@ createWriterReader(
 
 } // namespace
 
-TEST_F(TestReader, appendRowNumberColumn) {
+TEST_F(TestReader, setRowNumberColumnInfo) {
   std::vector<std::vector<int32_t>> integerValues{
       {0, 1, 2, 3, 4},
       {5, 6, 7},
@@ -2230,7 +2238,10 @@ TEST_F(TestReader, appendRowNumberColumn) {
   spec->addAllChildFields(*schema);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
-  rowReaderOpts.setAppendRowNumberColumn(true);
+  RowNumberColumnInfo rowNumberColumnInfo;
+  rowNumberColumnInfo.insertPosition = 1;
+  rowNumberColumnInfo.name = "";
+  rowReaderOpts.setRowNumberColumnInfo(rowNumberColumnInfo);
   {
     SCOPED_TRACE("Selective no filter");
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -2256,7 +2267,10 @@ TEST_F(TestReader, reuseRowNumberColumn) {
   spec->addAllChildFields(*schema);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
-  rowReaderOpts.setAppendRowNumberColumn(true);
+  RowNumberColumnInfo rowNumberColumnInfo;
+  rowNumberColumnInfo.insertPosition = 1;
+  rowNumberColumnInfo.name = "";
+  rowReaderOpts.setRowNumberColumnInfo(rowNumberColumnInfo);
   {
     SCOPED_TRACE("Reuse passed in");
     auto rowReader = reader->createRowReader(rowReaderOpts);

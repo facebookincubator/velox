@@ -210,7 +210,7 @@ DwrfRowReader::DwrfRowReader(
     : StripeReaderBase(reader),
       strideIndex_{0},
       options_(opts),
-      decodingTimeUsCallback_{options_.getDecodingTimeUsCallback()},
+      decodingTimeCallback_{options_.getDecodingTimeCallback()},
       columnSelector_{std::make_shared<ColumnSelector>(
           ColumnSelector::apply(opts.getSelector(), reader->getSchema()))},
       currentUnit_{nullptr} {
@@ -308,7 +308,7 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         std::make_shared<dwio::common::OnDemandUnitLoaderFactory>(
             options_.getBlockedOnIoCallback());
   }
-  return unitLoaderFactory->create(std::move(loadUnits));
+  return unitLoaderFactory->create(std::move(loadUnits), 0);
 }
 
 uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
@@ -316,6 +316,7 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   if (isEmptyFile()) {
     return 0;
   }
+  nextRowNumber_.reset();
 
   // If we are reading only a portion of the file
   // (bounded by firstStripe_ and stripeCeiling_),
@@ -356,6 +357,9 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   currentStripe_ = seekToStripe;
   currentRowInStripe_ = rowNumber - firstRowOfStripe_[currentStripe_];
   previousRow_ = rowNumber;
+
+  const auto loadUnitIdx = currentStripe_ - firstStripe_;
+  unitLoader_->onSeek(loadUnitIdx, currentRowInStripe_);
 
   if (currentStripe_ != previousStripe) {
     // Different stripe. Let's load the new stripe.
@@ -480,7 +484,7 @@ void DwrfRowReader::readNext(
     VectorPtr& result) {
   if (!getSelectiveColumnReader()) {
     std::optional<std::chrono::steady_clock::time_point> startTime;
-    if (decodingTimeUsCallback_) {
+    if (decodingTimeCallback_) {
       // We'll use wall time since we have parallel decoding.
       // If we move to sequential decoding only, we can use CPU time.
       startTime.emplace(std::chrono::steady_clock::now());
@@ -492,18 +496,22 @@ void DwrfRowReader::readNext(
         "Mutation pushdown is only supported in selective reader");
     getColumnReader()->next(rowsToRead, result);
     if (startTime.has_value()) {
-      decodingTimeUsCallback_(
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::steady_clock::now() - startTime.value())
-              .count());
+      decodingTimeCallback_(
+          std::chrono::steady_clock::now() - startTime.value());
     }
     return;
   }
-  if (!options_.getAppendRowNumberColumn()) {
+  if (!options_.getRowNumberColumnInfo().has_value()) {
     getSelectiveColumnReader()->next(rowsToRead, result, mutation);
     return;
   }
-  readWithRowNumber(rowsToRead, mutation, result);
+  readWithRowNumber(
+      getSelectiveColumnReader(),
+      options_,
+      previousRow_,
+      rowsToRead,
+      mutation,
+      result);
 }
 
 uint64_t DwrfRowReader::skip(uint64_t numValues) {
@@ -514,77 +522,10 @@ uint64_t DwrfRowReader::skip(uint64_t numValues) {
   }
 }
 
-void DwrfRowReader::readWithRowNumber(
-    uint64_t rowsToRead,
-    const dwio::common::Mutation* mutation,
-    VectorPtr& result) {
-  auto* rowVector = result->asUnchecked<RowVector>();
-  column_index_t numChildren = 0;
-  for (auto& column : options_.getScanSpec()->children()) {
-    if (column->projectOut()) {
-      ++numChildren;
-    }
-  }
-  VectorPtr rowNumVector;
-  if (rowVector->childrenSize() != numChildren) {
-    VELOX_CHECK_EQ(rowVector->childrenSize(), numChildren + 1);
-    rowNumVector = rowVector->childAt(numChildren);
-    auto& rowType = rowVector->type()->asRow();
-    auto names = rowType.names();
-    auto types = rowType.children();
-    auto children = rowVector->children();
-    VELOX_DCHECK(!names.empty() && !types.empty() && !children.empty());
-    names.pop_back();
-    types.pop_back();
-    children.pop_back();
-    result = std::make_shared<RowVector>(
-        rowVector->pool(),
-        ROW(std::move(names), std::move(types)),
-        rowVector->nulls(),
-        rowVector->size(),
-        std::move(children));
-  }
-  getSelectiveColumnReader()->next(rowsToRead, result, mutation);
-  FlatVector<int64_t>* flatRowNum = nullptr;
-  if (rowNumVector && BaseVector::isVectorWritable(rowNumVector)) {
-    flatRowNum = rowNumVector->asFlatVector<int64_t>();
-  }
-  if (flatRowNum) {
-    flatRowNum->clearAllNulls();
-    flatRowNum->resize(result->size());
-  } else {
-    rowNumVector = std::make_shared<FlatVector<int64_t>>(
-        result->pool(),
-        BIGINT(),
-        nullptr,
-        result->size(),
-        AlignedBuffer::allocate<int64_t>(result->size(), result->pool()),
-        std::vector<BufferPtr>());
-    flatRowNum = rowNumVector->asUnchecked<FlatVector<int64_t>>();
-  }
-  auto rowOffsets = getSelectiveColumnReader()->outputRows();
-  VELOX_DCHECK_EQ(rowOffsets.size(), result->size());
-  auto* rawRowNum = flatRowNum->mutableRawValues();
-  for (int i = 0; i < rowOffsets.size(); ++i) {
-    rawRowNum[i] = previousRow_ + rowOffsets[i];
-  }
-  rowVector = result->asUnchecked<RowVector>();
-  auto& rowType = rowVector->type()->asRow();
-  auto names = rowType.names();
-  auto types = rowType.children();
-  auto children = rowVector->children();
-  names.emplace_back();
-  types.push_back(BIGINT());
-  children.push_back(rowNumVector);
-  result = std::make_shared<RowVector>(
-      rowVector->pool(),
-      ROW(std::move(names), std::move(types)),
-      rowVector->nulls(),
-      rowVector->size(),
-      std::move(children));
-}
-
 int64_t DwrfRowReader::nextRowNumber() {
+  if (nextRowNumber_.has_value()) {
+    return *nextRowNumber_;
+  }
   auto strideSize = getReader().getFooter().rowIndexStride();
   while (currentStripe_ < stripeCeiling_) {
     if (currentRowInStripe_ == 0) {
@@ -603,20 +544,21 @@ int64_t DwrfRowReader::nextRowNumber() {
     }
     checkSkipStrides(strideSize);
     if (currentRowInStripe_ < rowsInCurrentStripe_) {
-      return firstRowOfStripe_[currentStripe_] + currentRowInStripe_;
+      nextRowNumber_ = firstRowOfStripe_[currentStripe_] + currentRowInStripe_;
+      return *nextRowNumber_;
     }
   advanceToNextStripe:
     ++currentStripe_;
     currentRowInStripe_ = 0;
     currentUnit_ = nullptr;
   }
-  atEnd_ = true;
+  nextRowNumber_ = kAtEnd;
   return kAtEnd;
 }
 
 int64_t DwrfRowReader::nextReadSize(uint64_t size) {
   VELOX_DCHECK_GT(size, 0);
-  if (atEnd_) {
+  if (nextRowNumber() == kAtEnd) {
     return kAtEnd;
   }
   auto rowsToRead = std::min(size, rowsInCurrentStripe_ - currentRowInStripe_);
@@ -645,12 +587,14 @@ uint64_t DwrfRowReader::next(
     return 0;
   }
   auto rowsToRead = nextReadSize(size);
+  nextRowNumber_.reset();
   previousRow_ = nextRow;
   // Record strideIndex for use by the columnReader_ which may delay actual
   // reading of the data.
   auto strideSize = getReader().getFooter().rowIndexStride();
   strideIndex_ = strideSize > 0 ? currentRowInStripe_ / strideSize : 0;
-  unitLoader_->onRead(currentStripe_, currentRowInStripe_, rowsToRead);
+  const auto loadUnitIdx = currentStripe_ - firstStripe_;
+  unitLoader_->onRead(loadUnitIdx, currentRowInStripe_, rowsToRead);
   readNext(rowsToRead, mutation, result);
   currentRowInStripe_ += rowsToRead;
   return rowsToRead;

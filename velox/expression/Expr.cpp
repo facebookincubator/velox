@@ -402,7 +402,7 @@ bool Expr::evalArgsDefaultNulls(
       // An error adds itself to argument errors.
       if (context.errors()) {
         // There are new errors.
-        context.ensureErrorsVectorSize(*context.errorsPtr(), rows.rows().end());
+        context.ensureErrorsVectorSize(rows.rows().end());
         auto newErrors = context.errors();
         assert(newErrors); // lint
         if (flatNulls) {
@@ -696,14 +696,15 @@ std::string onTopLevelException(VeloxException::Type exceptionType, void* arg) {
     basePath = FLAGS_velox_save_input_on_expression_system_failure_path.c_str();
   }
   if (strlen(basePath) == 0) {
-    return context->expr()->toString();
+    return fmt::format("Top-level Expression: {}", context->expr()->toString());
   }
 
   // Save input vector to a file.
   context->persistDataAndSql(basePath);
 
   return fmt::format(
-      "{}. Input data: {}. SQL expression: {}. All SQL expressions: {}.",
+      "Top-level Expression: {}. Input data: {}. SQL expression: {}."
+      " All SQL expressions: {}. ",
       context->expr()->toString(),
       context->dataPath(),
       context->sqlPath(),
@@ -745,8 +746,9 @@ void Expr::evalFlatNoNullsImpl(
     const ExprSet* parentExprSet) {
   ExprExceptionContext exprExceptionContext{this, context.row(), parentExprSet};
   ExceptionContextSetter exceptionContext(
-      {parentExprSet ? onTopLevelException : onException,
-       parentExprSet ? (void*)&exprExceptionContext : this});
+      {.messageFunc = parentExprSet ? onTopLevelException : onException,
+       .arg = parentExprSet ? (void*)&exprExceptionContext : this,
+       .isEssential = parentExprSet != nullptr});
 
   if (!rows.hasSelections()) {
     checkOrSetEmptyResult(type(), context.pool(), result);
@@ -798,8 +800,9 @@ void Expr::eval(
   // exception.
   ExprExceptionContext exprExceptionContext{this, context.row(), parentExprSet};
   ExceptionContextSetter exceptionContext(
-      {parentExprSet ? onTopLevelException : onException,
-       parentExprSet ? (void*)&exprExceptionContext : this});
+      {.messageFunc = parentExprSet ? onTopLevelException : onException,
+       .arg = parentExprSet ? (void*)&exprExceptionContext : this,
+       .isEssential = parentExprSet != nullptr});
 
   if (!rows.hasSelections()) {
     checkOrSetEmptyResult(type(), context.pool(), result);
@@ -1805,14 +1808,18 @@ ExprSet::~ExprSet() {
       auto exprStats = stats();
 
       std::vector<std::string> sqls;
+      std::vector<VectorPtr> complexConstants;
       for (const auto& expr : exprs()) {
         try {
-          sqls.emplace_back(expr->toSql());
+          sqls.emplace_back(expr->toSql(&complexConstants));
         } catch (const std::exception& e) {
           LOG_EVERY_N(WARNING, 100) << "Failed to generate SQL: " << e.what();
           sqls.emplace_back("<failed to generate>");
         }
       }
+
+      // TODO Enhance listener API to allow passing 'complexConstants' in
+      // addition to SQL.
 
       auto uuid = makeUuid();
       for (const auto& listener : listeners) {

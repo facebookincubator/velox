@@ -111,11 +111,15 @@ class PlanBuilder {
   /// types (for all columns) in this argument as opposed to 'outputType', where
   /// you define the output types only. See 'missingColumns' test in
   /// 'TableScanTest'.
+  /// @param assignments Optional ColumnHandles.
   PlanBuilder& tableScan(
       const RowTypePtr& outputType,
       const std::vector<std::string>& subfieldFilters = {},
       const std::string& remainingFilter = "",
-      const RowTypePtr& dataColumns = nullptr);
+      const RowTypePtr& dataColumns = nullptr,
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<connector::ColumnHandle>>& assignments = {});
 
   /// Add a TableScanNode to scan a Hive table.
   ///
@@ -144,7 +148,10 @@ class PlanBuilder {
       const std::unordered_map<std::string, std::string>& columnAliases = {},
       const std::vector<std::string>& subfieldFilters = {},
       const std::string& remainingFilter = "",
-      const RowTypePtr& dataColumns = nullptr);
+      const RowTypePtr& dataColumns = nullptr,
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<connector::ColumnHandle>>& assignments = {});
 
   /// Add a TableScanNode to scan a TPC-H table.
   ///
@@ -160,6 +167,10 @@ class PlanBuilder {
   /// Helper class to build a custom TableScanNode.
   /// Uses a planBuilder instance to get the next plan id, memory pool, and
   /// parse options.
+  ///
+  /// Uses the hive connector by default. Specify outputType, tableHandle, and
+  /// assignments for other connectors. If these three are specified, all other
+  /// builder arguments will be ignored.
   class TableScanBuilder {
    public:
     TableScanBuilder(PlanBuilder& builder) : planBuilder_(builder) {}
@@ -177,6 +188,7 @@ class PlanBuilder {
     }
 
     /// @param outputType List of column names and types to read from the table.
+    /// This property is required.
     TableScanBuilder& outputType(RowTypePtr outputType) {
       outputType_ = std::move(outputType);
       return *this;

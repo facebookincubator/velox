@@ -140,7 +140,8 @@ class DwrfRowReader : public StrideIndexProvider,
   uint64_t rowsInCurrentStripe_;
   uint64_t strideIndex_;
   dwio::common::RowReaderOptions options_;
-  std::function<void(uint64_t)> decodingTimeUsCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      decodingTimeCallback_;
 
   // column selector
   std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
@@ -159,7 +160,7 @@ class DwrfRowReader : public StrideIndexProvider,
 
   dwio::common::ColumnReaderStatistics columnReaderStatistics_;
 
-  bool atEnd_{false};
+  std::optional<int64_t> nextRowNumber_;
 
   std::unique_ptr<dwio::common::UnitLoader> unitLoader_;
   DwrfUnit* currentUnit_;
@@ -182,11 +183,6 @@ class DwrfRowReader : public StrideIndexProvider,
   void checkSkipStrides(uint64_t strideSize);
 
   void readNext(
-      uint64_t rowsToRead,
-      const dwio::common::Mutation*,
-      VectorPtr& result);
-
-  void readWithRowNumber(
       uint64_t rowsToRead,
       const dwio::common::Mutation*,
       VectorPtr& result);

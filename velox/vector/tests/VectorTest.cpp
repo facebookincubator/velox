@@ -2248,6 +2248,13 @@ TEST_F(VectorTest, nestedLazy) {
       "An unloaded lazy vector cannot be wrapped by two different top level"
       " vectors.");
 
+  // Verify that if the original dictionary layer is destroyed without loading
+  // the underlying vector then the lazy vector can be wrapped in a new encoding
+  // layer.
+  dict.reset();
+  dict = BaseVector::wrapInDictionary(
+      nullptr, makeIndices(size, indexAt), size, lazy);
+
   // Verify that the unloaded dictionary can be nested as long as it has one top
   // level vector.
   EXPECT_NO_THROW(BaseVector::wrapInDictionary(
@@ -3764,6 +3771,18 @@ TEST_F(VectorTest, mapUpdateMultipleUpdates) {
   for (int i = 0; i < actual->size(); ++i) {
     ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
   }
+}
+
+TEST_F(VectorTest, arrayCopyTargetNullOffsets) {
+  auto target = BaseVector::create(ARRAY(BIGINT()), 11, pool());
+  auto offsetsRef = target->asUnchecked<ArrayVector>()->offsets();
+  ASSERT_TRUE(offsetsRef);
+  BaseVector::prepareForReuse(target, target->size());
+  ASSERT_FALSE(target->asUnchecked<ArrayVector>()->offsets());
+  auto source = makeArrayVector<int64_t>(
+      11, [](auto) { return 1; }, [](auto i, auto) { return i; });
+  target->copy(source.get(), 0, 0, source->size());
+  test::assertEqualVectors(source, target);
 }
 
 } // namespace

@@ -25,10 +25,15 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
-EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
+EvalCtx::EvalCtx(
+    core::ExecCtx* execCtx,
+    ExprSet* exprSet,
+    const RowVector* row,
+    DriverCtx* driverCtx)
     : execCtx_(execCtx),
       exprSet_(exprSet),
       row_(row),
+      driverCtx_(driverCtx),
       cacheEnabled_(execCtx->exprEvalCacheEnabled()),
       maxSharedSubexprResultsCached_(
           execCtx->queryCtx()
@@ -56,6 +61,7 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx)
     : execCtx_(execCtx),
       exprSet_(nullptr),
       row_(nullptr),
+      driverCtx_(nullptr),
       cacheEnabled_(execCtx->exprEvalCacheEnabled()),
       maxSharedSubexprResultsCached_(
           execCtx->queryCtx()
@@ -85,22 +91,17 @@ void EvalCtx::saveAndReset(ContextSaver& saver, const SelectivityVector& rows) {
 
 void EvalCtx::ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size)
     const {
-  auto oldSize = vector ? vector->size() : 0;
   if (!vector) {
     vector = std::make_shared<ErrorVector>(
         pool(),
         OpaqueType::create<void>(),
-        AlignedBuffer::allocate<bool>(size, pool(), false) /*nulls*/,
-        size /*length*/,
+        allocateNulls(size, pool(), bits::kNull),
+        size,
         AlignedBuffer::allocate<ErrorVector::value_type>(
             size, pool(), ErrorVector::value_type()),
-        std::vector<BufferPtr>(0),
-        SimpleVectorStats<std::shared_ptr<void>>{},
-        1 /*distinctValueCount*/,
-        size /*nullCount*/,
-        false /*isSorted*/,
-        size /*representedBytes*/);
+        std::vector<BufferPtr>{});
   } else if (vector->size() < size) {
+    const auto oldSize = vector->size();
     vector->resize(size, false);
     // Set all new positions to null, including the one to be set.
     for (auto i = oldSize; i < size; ++i) {
@@ -109,13 +110,17 @@ void EvalCtx::ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size)
   }
 }
 
+void EvalCtx::addError(vector_size_t index, ErrorVectorPtr& errorsPtr) const {
+  ensureErrorsVectorSize(errorsPtr, index + 1);
+  errorsPtr->setNull(index, false);
+}
+
 void EvalCtx::addError(
     vector_size_t index,
     const std::exception_ptr& exceptionPtr,
     ErrorVectorPtr& errorsPtr) const {
   ensureErrorsVectorSize(errorsPtr, index + 1);
   if (errorsPtr->isNullAt(index)) {
-    errorsPtr->setNull(index, false);
     errorsPtr->set(index, std::make_shared<std::exception_ptr>(exceptionPtr));
   }
 }
@@ -134,13 +139,33 @@ void EvalCtx::addErrors(
       return false;
     }
     if (!fromErrors->isNullAt(row) && toErrors->isNullAt(row)) {
-      toErrors->set(
-          row,
-          std::static_pointer_cast<std::exception_ptr>(
-              fromErrors->valueAt(row)));
+      toErrors->set(row, fromErrors->valueAt(row));
     }
     return true;
   });
+}
+
+void EvalCtx::addError(
+    vector_size_t row,
+    const ErrorVectorPtr& fromErrors,
+    ErrorVectorPtr& toErrors) const {
+  if (fromErrors != nullptr) {
+    copyError(*fromErrors, row, toErrors, row);
+  }
+}
+
+void EvalCtx::copyError(
+    const ErrorVector& from,
+    vector_size_t fromIndex,
+    ErrorVectorPtr& to,
+    vector_size_t toIndex) const {
+  const auto fromSize = from.size();
+  if (fromIndex < fromSize && !from.isNullAt(fromIndex)) {
+    ensureErrorsVectorSize(to, toIndex + 1);
+    if (to->isNullAt(toIndex)) {
+      to->set(toIndex, from.valueAt(fromIndex));
+    }
+  }
 }
 
 void EvalCtx::restore(ContextSaver& saver) {
@@ -149,16 +174,9 @@ void EvalCtx::restore(ContextSaver& saver) {
   peeledFields_ = std::move(saver.peeled);
   nullsPruned_ = saver.nullsPruned;
   if (errors_) {
-    int32_t errorSize = errors_->size();
     peeledEncoding_->applyToNonNullInnerRows(
         *saver.rows, [&](auto outerRow, auto innerRow) {
-          if (innerRow < errorSize && !errors_->isNullAt(innerRow)) {
-            addError(
-                outerRow,
-                *std::static_pointer_cast<std::exception_ptr>(
-                    errors_->valueAt(innerRow)),
-                saver.errors);
-          }
+          copyError(*errors_, innerRow, saver.errors, outerRow);
         });
   }
   errors_ = std::move(saver.errors);
@@ -170,7 +188,37 @@ namespace {
 auto throwError(const std::exception_ptr& exceptionPtr) {
   std::rethrow_exception(toVeloxException(exceptionPtr));
 }
+
+std::exception_ptr toVeloxUserError(const std::string& message) {
+  return std::make_exception_ptr(VeloxUserError(
+      __FILE__,
+      __LINE__,
+      __FUNCTION__,
+      "",
+      message,
+      error_source::kErrorSourceUser,
+      error_code::kInvalidArgument,
+      false /*retriable*/));
+}
+
 } // namespace
+
+void EvalCtx::setStatus(vector_size_t index, const Status& status) {
+  VELOX_CHECK(!status.ok(), "Status must be an error");
+
+  if (status.isUserError()) {
+    if (throwOnError_) {
+      VELOX_USER_FAIL(status.message());
+    }
+    if (captureErrorDetails_) {
+      addError(index, toVeloxUserError(status.message()), errors_);
+    } else {
+      addError(index, errors_);
+    }
+  } else {
+    VELOX_FAIL(status.message());
+  }
+}
 
 void EvalCtx::setError(
     vector_size_t index,
@@ -217,12 +265,7 @@ void EvalCtx::addElementErrorsToTopLevel(
   const auto* rawElementToTopLevelRows =
       elementToTopLevelRows->as<vector_size_t>();
   elementRows.applyToSelected([&](auto row) {
-    if (errors_->isIndexInRange(row) && !errors_->isNullAt(row)) {
-      addError(
-          rawElementToTopLevelRows[row],
-          *std::static_pointer_cast<std::exception_ptr>(errors_->valueAt(row)),
-          topLevelErrors);
-    }
+    copyError(*errors_, row, topLevelErrors, rawElementToTopLevelRows[row]);
   });
 }
 
@@ -243,6 +286,25 @@ void EvalCtx::convertElementErrorsToTopLevelNulls(
       bits::setNull(rawNulls, rawElementToTopLevelRows[row], true);
     }
   });
+}
+
+void EvalCtx::moveAppendErrors(ErrorVectorPtr& other) {
+  if (!errors_) {
+    return;
+  }
+
+  if (!other) {
+    std::swap(errors_, other);
+    return;
+  }
+
+  ensureErrorsVectorSize(other, errors_->size());
+  bits::forEachBit(
+      errors_->rawNulls(), 0, errors_->size(), bits::kNotNull, [&](auto row) {
+        other->set(row, errors_->valueAt(row));
+      });
+
+  errors_.reset();
 }
 
 const VectorPtr& EvalCtx::getField(int32_t index) const {

@@ -63,6 +63,11 @@ groupSubfields(const std::vector<Subfield>& subfields) {
   return grouped;
 }
 
+bool mapKeyIsNotNull(const ScanSpec& mapSpec) {
+  return dynamic_cast<IsNotNull*>(
+      mapSpec.childByName(ScanSpec::kMapKeysFieldName)->filter());
+}
+
 TEST_F(HiveConnectorTest, hiveConfig) {
   ASSERT_EQ(
       HiveConfig::insertExistingPartitionsBehaviorString(
@@ -87,7 +92,14 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_multilevel) {
   auto rowType = ROW({{"c0", columnType}});
   auto subfields = makeSubfields({"c0.c0c1[3][\"foo\"].c0c1c0"});
   auto scanSpec = makeScanSpec(
-      rowType, groupSubfields(subfields), {}, nullptr, {}, {}, pool_.get());
+      rowType,
+      groupSubfields(subfields),
+      {},
+      nullptr,
+      {},
+      {},
+      nullptr,
+      pool_.get());
   auto* c0c0 = scanSpec->childByName("c0")->childByName("c0c0");
   validateNullConstant(*c0c0, *BIGINT());
   auto* c0c1 = scanSpec->childByName("c0")->childByName("c0c1");
@@ -123,6 +135,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_mergeFields) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   auto* c0c0 = scanSpec->childByName("c0")->childByName("c0c0");
   ASSERT_FALSE(c0c0->childByName("c0c0c0")->isConstant());
@@ -146,6 +159,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_mergeArray) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->maxArrayElementsCount(), 2);
@@ -163,7 +177,8 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_mergeArrayNegative) {
   auto subfields = makeSubfields({"c0[1].c0c0", "c0[-1].c0c2"});
   auto groupedSubfields = groupSubfields(subfields);
   VELOX_ASSERT_USER_THROW(
-      makeScanSpec(rowType, groupedSubfields, {}, nullptr, {}, {}, pool_.get()),
+      makeScanSpec(
+          rowType, groupedSubfields, {}, nullptr, {}, {}, nullptr, pool_.get()),
       "Non-positive array subscript cannot be push down");
 }
 
@@ -179,6 +194,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_mergeMap) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(
@@ -207,10 +223,11 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_allSubscripts) {
         nullptr,
         {},
         {},
+        nullptr,
         pool_.get());
     auto* c0 = scanSpec->childByName("c0");
     ASSERT_TRUE(c0->flatMapFeatureSelection().empty());
-    ASSERT_FALSE(c0->childByName(ScanSpec::kMapKeysFieldName)->filter());
+    ASSERT_TRUE(mapKeyIsNotNull(*c0));
     auto* values = c0->childByName(ScanSpec::kMapValuesFieldName);
     ASSERT_EQ(
         values->maxArrayElementsCount(),
@@ -227,9 +244,10 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_allSubscripts) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
-  ASSERT_FALSE(c0->childByName(ScanSpec::kMapKeysFieldName)->filter());
+  ASSERT_TRUE(mapKeyIsNotNull(*c0));
   auto* values = c0->childByName(ScanSpec::kMapValuesFieldName);
   ASSERT_EQ(
       values->maxArrayElementsCount(),
@@ -250,6 +268,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_doubleMapKey) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   auto* keysFilter = scanSpec->childByName("c0")
                          ->childByName(ScanSpec::kMapKeysFieldName)
@@ -278,6 +297,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_doubleMapKey) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   keysFilter = scanSpec->childByName("c0")
                    ->childByName(ScanSpec::kMapKeysFieldName)
@@ -297,6 +317,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_doubleMapKey) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   keysFilter = scanSpec->childByName("c0")
                    ->childByName(ScanSpec::kMapKeysFieldName)
@@ -313,6 +334,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_doubleMapKey) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   keysFilter = scanSpec->childByName("c0")
                    ->childByName(ScanSpec::kMapKeysFieldName)
@@ -349,6 +371,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_filtersNotInRequiredSubfields) {
       ROW({{"c0", c0Type}, {"c1", c1Type}}),
       {},
       {},
+      nullptr,
       pool_.get());
   auto c0 = scanSpec->childByName("c0");
   ASSERT_FALSE(c0->isConstant());
@@ -394,6 +417,7 @@ TEST_F(HiveConnectorTest, makeScanSpec_duplicateSubfields) {
       nullptr,
       {},
       {},
+      nullptr,
       pool_.get());
   auto* c0 = scanSpec->childByName("c0");
   ASSERT_EQ(c0->children().size(), 2);
@@ -407,14 +431,41 @@ TEST_F(HiveConnectorTest, makeScanSpec_filterPartitionKey) {
   SubfieldFilters filters;
   filters.emplace(Subfield("ds"), exec::equal("2023-10-13"));
   auto scanSpec = makeScanSpec(
-      rowType, {}, filters, rowType, {{"ds", nullptr}}, {}, pool_.get());
+      rowType,
+      {},
+      filters,
+      rowType,
+      {{"ds", nullptr}},
+      {},
+      nullptr,
+      pool_.get());
   ASSERT_TRUE(scanSpec->childByName("c0")->projectOut());
   ASSERT_FALSE(scanSpec->childByName("ds")->projectOut());
 }
 
+TEST_F(HiveConnectorTest, makeScanSpec_prunedMapNonNullMapKey) {
+  auto rowType =
+      ROW({"c0"},
+          {ROW(
+              {{"c0c0", MAP(BIGINT(), MAP(BIGINT(), BIGINT()))},
+               {"c0c1", BIGINT()}})});
+  auto scanSpec = makeScanSpec(
+      rowType,
+      groupSubfields(makeSubfields({"c0.c0c1"})),
+      {},
+      nullptr,
+      {},
+      {},
+      nullptr,
+      pool_.get());
+  auto* c0 = scanSpec->childByName("c0");
+  ASSERT_EQ(c0->children().size(), 2);
+  ASSERT_TRUE(c0->childByName("c0c0")->isConstant());
+}
+
 TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
-  core::QueryCtx queryCtx;
-  exec::SimpleExpressionEvaluator evaluator(&queryCtx, pool_.get());
+  auto queryCtx = core::QueryCtx::create();
+  exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool_.get());
   auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), DECIMAL(20, 0)});
 
   auto expr = parseExpr("not (c0 > 0 or c1 > 0)", rowType);
@@ -452,8 +503,8 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
 }
 
 TEST_F(HiveConnectorTest, prestoTableSampling) {
-  core::QueryCtx queryCtx;
-  exec::SimpleExpressionEvaluator evaluator(&queryCtx, pool_.get());
+  auto queryCtx = core::QueryCtx::create();
+  exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool_.get());
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   auto expr = parseExpr("rand() < 0.5", rowType);

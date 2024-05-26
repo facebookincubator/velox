@@ -106,8 +106,8 @@ TEST_F(MemoryManagerTest, ctor) {
         "pools 1\nList of root pools:\n\t__sys_root__\n"
         "Memory Allocator[MALLOC capacity 4.00GB allocated bytes 0 "
         "allocated pages 0 mapped pages 0]\n"
-        "ARBITRATOR[SHARED CAPACITY[4.00GB] RUNNING[false] QUEUING[0] "
-        "STATS[numRequests 0 numSucceeded 0 numAborted 0 numFailures 0 "
+        "ARBITRATOR[SHARED CAPACITY[4.00GB] PENDING[0] "
+        "STATS[numRequests 0 numAborted 0 numFailures 0 "
         "numNonReclaimableAttempts 0 numReserves 0 numReleases 0 queueTime 0us "
         "arbitrationTime 0us reclaimTime 0us shrunkMemory 0B "
         "reclaimedMemory 0B maxCapacity 4.00GB freeCapacity 4.00GB freeReservedCapacity 0B]]]");
@@ -306,7 +306,7 @@ TEST_F(MemoryManagerTest, defaultMemoryManager) {
     ASSERT_THAT(
         managerA.toString(true),
         testing::HasSubstr(fmt::format(
-            "default_shared_leaf_pool_{} usage 0B reserved 0B peak 0B\n", i)));
+            "__sys_shared_leaf__{} usage 0B reserved 0B peak 0B\n", i)));
   }
 }
 
@@ -627,5 +627,4 @@ TEST_F(MemoryManagerTest, quotaEnforcement) {
     }
   }
 }
-
 } // namespace facebook::velox::memory

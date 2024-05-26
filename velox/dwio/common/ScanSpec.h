@@ -222,9 +222,11 @@ class ScanSpec {
     valueHook_ = valueHook;
   }
 
-  // Returns true if the corresponding reader only needs to reference
-  // the nulls stream. True if filter is is-null with or without value
-  // extraction or if filter is is-not-null and no value is extracted.
+  // Returns true if the corresponding reader only needs to reference the nulls
+  // stream.  True if filter is is-null with or without value extraction or if
+  // filter is is-not-null and no value is extracted.  Note that this does not
+  // apply to Nimble format leaf nodes, because nulls are mixed in the encoding
+  // with actual values.
   bool readsNullsOnly() const {
     if (filter_) {
       if (filter_->kind() == FilterKind::kIsNull) {
@@ -322,6 +324,18 @@ class ScanSpec {
     flatMapFeatureSelection_ = std::move(features);
   }
 
+  /// Invoke the function provided on each node of the ScanSpec tree.
+  template <typename F>
+  void visit(const Type& type, F&& f);
+
+  bool isFlatMapAsStruct() const {
+    return isFlatMapAsStruct_;
+  }
+
+  void setFlatMapAsStruct(bool value) {
+    isFlatMapAsStruct_ = value;
+  }
+
  private:
   void reorder();
 
@@ -401,7 +415,40 @@ class ScanSpec {
 
   // Used only for bulk reader to project flat map features.
   std::vector<std::string> flatMapFeatureSelection_;
+
+  // This node represents a flat map column that need to be read as struct,
+  // i.e. in table schema it is a MAP, but in result vector it is ROW.
+  bool isFlatMapAsStruct_ = false;
 };
+
+template <typename F>
+void ScanSpec::visit(const Type& type, F&& f) {
+  f(type, *this);
+  if (isConstant()) {
+    // Child specs are not populated in this case.
+    return;
+  }
+  switch (type.kind()) {
+    case TypeKind::ROW:
+      for (auto& child : children_) {
+        VELOX_CHECK_NE(child->channel(), kNoChannel);
+        child->visit(*type.childAt(child->channel()), std::forward<F>(f));
+      }
+      break;
+    case TypeKind::MAP:
+      childByName(kMapKeysFieldName)
+          ->visit(*type.childAt(0), std::forward<F>(f));
+      childByName(kMapValuesFieldName)
+          ->visit(*type.childAt(1), std::forward<F>(f));
+      break;
+    case TypeKind::ARRAY:
+      childByName(kArrayElementsFieldName)
+          ->visit(*type.childAt(0), std::forward<F>(f));
+      break;
+    default:
+      break;
+  }
+}
 
 // Returns false if no value from a range defined by stats can pass the
 // filter. True, otherwise.

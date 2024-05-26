@@ -26,7 +26,7 @@ by Velox. See details on bundling below.
 | boost             | 1.77.0          | Yes      |
 | flex              | 2.5.13          | No       |
 | bison             | 3.0.4           | No       |
-| cmake             | 3.14            | No       |
+| cmake             | 3.28            | No       |
 | double-conversion | 3.1.5           | No       |
 | xsimd             | 10.0.0          | Yes      |
 | re2               | 2021-04-01      | Yes      |
@@ -37,6 +37,7 @@ by Velox. See details on bundling below.
 | wangle            | v2024.04.01.00  | No       |
 | mvfst             | v2024.04.01.00  | No       |
 | fbthrift          | v2024.04.01.00  | No       |
+| libstemmer        | 2.2.0           | Yes      |
 | DuckDB (testing)  | 0.8.1           | Yes      |
 | cpr (testing)     | 1.10.15         | Yes      |
 

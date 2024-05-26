@@ -29,7 +29,7 @@ class MergeJoinTest : public HiveConnectorTestBase {
   CursorParameters makeCursorParameters(
       const std::shared_ptr<const core::PlanNode>& planNode,
       uint32_t preferredOutputBatchSize) {
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
 
     CursorParameters params;
     params.planNode = planNode;
@@ -576,12 +576,14 @@ TEST_F(MergeJoinTest, complexTypedFilter) {
           }
         }
 
-        assertQuery(
-            plan,
-            fmt::format(
-                "SELECT {} FROM t LEFT JOIN u ON t_c0 = u_c0 AND {}",
-                outputs,
-                queryFilter));
+        for (size_t outputBatchSize : {1000, 1024, 13}) {
+          assertQuery(
+              makeCursorParameters(plan, outputBatchSize),
+              fmt::format(
+                  "SELECT {} FROM t LEFT JOIN u ON t_c0 = u_c0 AND {}",
+                  outputs,
+                  queryFilter));
+        }
       };
 
   std::vector<std::vector<std::string>> outputLayouts{

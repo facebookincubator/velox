@@ -31,8 +31,6 @@
 
 namespace facebook::velox::dwio::common {
 
-velox::common::AlwaysTrue& alwaysTrue();
-
 class Timer {
  public:
   Timer() : startClocks_{folly::hardware_timestamp()} {}
@@ -62,7 +60,7 @@ void SelectiveColumnReader::prepareRead(
     vector_size_t offset,
     RowSet rows,
     const uint64_t* incomingNulls) {
-  const bool readsNullsOnly = scanSpec_->readsNullsOnly();
+  const bool readsNullsOnly = this->readsNullsOnly();
   seekTo(offset, readsNullsOnly);
   vector_size_t numRows = rows.back() + 1;
 

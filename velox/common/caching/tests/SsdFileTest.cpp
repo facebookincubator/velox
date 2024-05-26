@@ -42,13 +42,13 @@ class SsdFileTest : public testing::Test {
  protected:
   static constexpr int64_t kMB = 1 << 20;
 
-  static void SetUpTestCase() {
+  void SetUp() override {
     memory::MemoryManager::testingSetInstance({});
   }
 
   void TearDown() override {
     if (ssdFile_) {
-      ssdFile_->deleteFile();
+      ssdFile_->testingDeleteFile();
     }
     if (cache_) {
       cache_->shutdown();
@@ -56,22 +56,27 @@ class SsdFileTest : public testing::Test {
   }
 
   void initializeCache(
-      int64_t maxBytes,
       int64_t ssdBytes = 0,
-      bool setNoCowFlag = false) {
+      int64_t checkpointIntervalBytes = 0,
+      bool disableFileCow = false) {
     // tmpfs does not support O_DIRECT, so turn this off for testing.
     FLAGS_ssd_odirect = false;
     cache_ = AsyncDataCache::create(memory::memoryManager()->allocator());
-
     fileName_ = StringIdLease(fileIds(), "fileInStorage");
-
     tempDirectory_ = exec::test::TempDirectoryPath::create();
+    initializeSsdFile(ssdBytes, checkpointIntervalBytes, disableFileCow);
+  }
+
+  void initializeSsdFile(
+      int64_t ssdBytes = 0,
+      int64_t checkpointIntervalBytes = 0,
+      bool disableFileCow = false) {
     ssdFile_ = std::make_unique<SsdFile>(
         fmt::format("{}/ssdtest", tempDirectory_->getPath()),
         0, // shardId
         bits::roundUp(ssdBytes, SsdFile::kRegionSize) / SsdFile::kRegionSize,
-        0, // checkpointInternalBytes
-        setNoCowFlag);
+        checkpointIntervalBytes,
+        disableFileCow);
   }
 
   static void initializeContents(int64_t sequence, memory::Allocation& alloc) {
@@ -118,12 +123,12 @@ class SsdFileTest : public testing::Test {
     }
   }
 
-  // Gets consecutive entries from file 'fileId' starting at 'startOffset' with
+  // Gets consecutive entries from file 'fileId' starting at 'startOffset'  with
   // sizes between 'minSize' and 'maxSize'. Sizes start at 'minSize' and double
   // each time and go back to 'minSize' after exceeding 'maxSize'. This stops
   // after the total size has exceeded 'totalSize'. The entries are returned as
   // pins. The pins are exclusive for newly created entries and shared for
-  // existing ones. New entries are deterministically initialized from 'fileId'
+  // existing ones. New entries are deterministically  initialized from 'fileId'
   // and the entry's offset.
   std::vector<CachePin> makePins(
       uint64_t fileId,
@@ -229,6 +234,30 @@ class SsdFileTest : public testing::Test {
     readAndCheckPins(pins);
   }
 
+  // Reads back the found entries and check their contents, return the number of
+  // entries found.
+  int32_t checkEntries(const std::vector<TestEntry>& entries) {
+    int32_t numFound = 0;
+    for (auto& entry : entries) {
+      std::vector<CachePin> pins;
+      pins.push_back(cache_->findOrCreate(
+          RawFileCacheKey{fileName_.id(), entry.key.offset},
+          entry.size,
+          nullptr));
+      if (pins.back().entry()->isExclusive()) {
+        std::vector<SsdPin> ssdPins;
+        ssdPins.push_back(
+            ssdFile_->find(RawFileCacheKey{fileName_.id(), entry.key.offset}));
+        if (!ssdPins.back().empty()) {
+          ++numFound;
+          ssdFile_->load(ssdPins, pins);
+          checkContents(pins[0].entry()->data(), pins[0].entry()->size());
+        }
+      }
+    }
+    return numFound;
+  }
+
   std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
 
   std::shared_ptr<AsyncDataCache> cache_;
@@ -240,7 +269,7 @@ class SsdFileTest : public testing::Test {
 TEST_F(SsdFileTest, writeAndRead) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   std::vector<TestEntry> allEntries;
-  initializeCache(128 * kMB, kSsdSize);
+  initializeCache(kSsdSize);
   FLAGS_ssd_verify_write = true;
   for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
        startOffset += SsdFile::kRegionSize) {
@@ -280,9 +309,8 @@ TEST_F(SsdFileTest, writeAndRead) {
     }
   }
 
-  // We check how many entries are found. The earliest writes will have been
+  // We check howmany entries are found. The earliest writes will have been
   // evicted. We read back the found entries and check their contents.
-  int32_t numFound = 0;
   for (auto& entry : allEntries) {
     std::vector<CachePin> pins;
 
@@ -296,35 +324,118 @@ TEST_F(SsdFileTest, writeAndRead) {
       ssdPins.push_back(
           ssdFile_->find(RawFileCacheKey{fileName_.id(), entry.key.offset}));
       if (!ssdPins.back().empty()) {
-        ++numFound;
         ssdFile_->load(ssdPins, pins);
         checkContents(pins[0].entry()->data(), pins[0].entry()->size());
       }
     }
   }
+}
 
-  // Test cache writes with different iobufs sizes.
-  for (int numPins : {0, 1, IOV_MAX - 1, IOV_MAX, IOV_MAX + 1}) {
-    SCOPED_TRACE(fmt::format("numPins: {}", numPins));
-    auto pins = makePins(fileName_.id(), 0, 4096, 4096, 4096 * numPins);
-    EXPECT_EQ(pins.size(), numPins);
+TEST_F(SsdFileTest, checkpoint) {
+  constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
+  const int32_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
+  const auto fileNameAlt = StringIdLease(fileIds(), "fileInStorageAlt");
+  FLAGS_ssd_verify_write = true;
+  initializeCache(kSsdSize, checkpointIntervalBytes);
+
+  std::vector<TestEntry> allEntries;
+  for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
+       startOffset += SsdFile::kRegionSize) {
+    auto pins =
+        makePins(fileName_.id(), startOffset, 4096, 2048 * 1025, 62 * kMB);
+    // Each region has one entry from `fileNameAlt`.
+    pins.push_back(cache_->findOrCreate(
+        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset},
+        1024,
+        nullptr));
     ssdFile_->write(pins);
+    for (auto& pin : pins) {
+      EXPECT_EQ(ssdFile_.get(), pin.entry()->ssdFile());
+      allEntries.emplace_back(
+          pin.entry()->key(), pin.entry()->ssdOffset(), pin.entry()->size());
+    };
     readAndCheckPins(pins);
-    pins.clear();
   }
+  const auto originalRegionScores = ssdFile_->testingCopyScores();
+  EXPECT_EQ(originalRegionScores.size(), 16);
+
+  // Re-initialize SSD file from checkpoint.
+  ssdFile_->checkpoint(true);
+  initializeSsdFile(kSsdSize, checkpointIntervalBytes);
+  const auto recoveredRegionScores = ssdFile_->testingCopyScores();
+  EXPECT_EQ(recoveredRegionScores.size(), 16);
+  EXPECT_EQ(originalRegionScores, recoveredRegionScores);
+
+  // Reconstruct cache pins and check the recovered content from cache file.
+  for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
+       startOffset += SsdFile::kRegionSize) {
+    auto pins =
+        makePins(fileName_.id(), startOffset, 4096, 2048 * 1025, 62 * kMB);
+    pins.push_back(cache_->findOrCreate(
+        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset},
+        1024,
+        nullptr));
+    readAndCheckPins(pins);
+  }
+  // All entries can be found.
+  auto numEntriesFound = checkEntries(allEntries);
+  EXPECT_EQ(numEntriesFound, allEntries.size());
+
+  // Test removeFileEntries.
+  folly::F14FastSet<uint64_t> filesToRemove{fileName_.id()};
+  folly::F14FastSet<uint64_t> filesRetained{};
+  auto stats = ssdFile_->testingStats();
+  EXPECT_EQ(stats.entriesAgedOut, 0);
+  EXPECT_EQ(stats.regionsAgedOut, 0);
+  EXPECT_EQ(stats.regionsEvicted, 0);
+
+  // Block eviction.
+  auto ssdPins = pinAllRegions(allEntries);
+  ssdFile_->removeFileEntries(filesToRemove, filesRetained);
+  EXPECT_EQ(ssdFile_->testingNumWritableRegions(), 0);
+  EXPECT_EQ(filesRetained.size(), 1);
+  numEntriesFound = checkEntries(allEntries);
+  EXPECT_EQ(numEntriesFound, allEntries.size());
+  auto prevStats = stats;
+  stats = ssdFile_->testingStats();
+  EXPECT_EQ(stats.entriesAgedOut - prevStats.entriesAgedOut, 0);
+  EXPECT_EQ(stats.regionsAgedOut - prevStats.regionsAgedOut, 0);
+  EXPECT_EQ(stats.regionsEvicted - prevStats.regionsEvicted, 0);
+
+  // Unblock eviction.
+  ssdPins.clear();
+  filesRetained.clear();
+  ssdFile_->removeFileEntries(filesToRemove, filesRetained);
+  // All regions have been evicted and marked as writable.
+  EXPECT_EQ(ssdFile_->testingNumWritableRegions(), 16);
+  EXPECT_EQ(filesRetained.size(), 0);
+  numEntriesFound = checkEntries(allEntries);
+  EXPECT_EQ(numEntriesFound, 0);
+  prevStats = stats;
+  stats = ssdFile_->testingStats();
+  EXPECT_EQ(
+      stats.entriesAgedOut - prevStats.entriesAgedOut, allEntries.size() - 16);
+  EXPECT_EQ(stats.regionsAgedOut - prevStats.regionsAgedOut, 16);
+  EXPECT_EQ(stats.regionsEvicted - prevStats.regionsEvicted, 16);
+
+  // Re-initialize SSD file from checkpoint. Since all regions were evicted, no
+  // entries should be found.
+  initializeSsdFile(kSsdSize, checkpointIntervalBytes);
+  numEntriesFound = checkEntries(allEntries);
+  EXPECT_EQ(numEntriesFound, 0);
 }
 
 #ifdef VELOX_SSD_FILE_TEST_SET_NO_COW_FLAG
 TEST_F(SsdFileTest, disabledCow) {
   LOG(ERROR) << "here";
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
-  initializeCache(128 * kMB, kSsdSize, true);
+  initializeCache(kSsdSize, 0, true);
   EXPECT_TRUE(ssdFile_->testingIsCowDisabled());
 }
 
 TEST_F(SsdFileTest, notDisabledCow) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
-  initializeCache(128 * kMB, kSsdSize, false);
+  initializeCache(kSsdSize, 0, false);
   EXPECT_FALSE(ssdFile_->testingIsCowDisabled());
 }
 #endif // VELOX_SSD_FILE_TEST_SET_NO_COW_FLAG

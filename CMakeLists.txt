@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.28)
 message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
 
 # The policy allows us to change options without caching.
@@ -123,7 +123,7 @@ option(
 option(VELOX_FORCE_COLORED_OUTPUT
        "Always produce ANSI-colored output (GNU/Clang only)." OFF)
 
-if(${VELOX_BUILD_MINIMAL})
+if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
@@ -330,7 +330,6 @@ if("${ENABLE_ALL_WARNINGS}")
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
         "-Wno-implicit-fallthrough \
-         -Wno-empty-body \
          -Wno-class-memaccess \
          -Wno-comment \
          -Wno-int-in-bool-context \
@@ -546,6 +545,9 @@ endif()
 
 set_source(xsimd)
 resolve_dependency(xsimd 10.0.0)
+
+set(stemmer_SOURCE BUNDLED)
+resolve_dependency(stemmer)
 
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)

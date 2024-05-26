@@ -34,6 +34,10 @@
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_memory_pool_debug_enabled);
 
+namespace facebook::velox::exec {
+class ParallelMemoryReclaimer;
+}
+
 namespace facebook::velox::memory {
 #define VELOX_MEM_POOL_CAP_EXCEEDED(errorMessage)                   \
   _VELOX_THROW(                                                     \
@@ -237,9 +241,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) = 0;
 
   /// Re-allocates from an existing buffer with 'newSize' and update memory
-  /// usage counting accordingly. If 'newSize' is larger than the current buffer
-  /// 'size', the function will allocate a new buffer and free the old buffer.
-  /// If the new allocation fails, this method will throw and not free 'p'.
+  /// usage counting accordingly.
   virtual void* reallocate(void* p, int64_t size, int64_t newSize) = 0;
 
   /// Frees an allocated buffer.
@@ -318,8 +320,16 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// 'capacity()' is fixed and set to 'maxCapacity()' on creation.
   virtual int64_t capacity() const = 0;
 
-  /// Returns the currently used memory in bytes of this memory pool.
+  /// Returns the currently used memory in bytes of this memory pool. For
+  /// non-leaf memory pool, the function returns the aggregated memory
+  /// reservation from all its child memory pools.
   virtual int64_t currentBytes() const = 0;
+
+  /// Returns the currently used memory in bytes of this memory pool. It returns
+  /// the same usage as currentBytes() for leaf memory pool. But for non-leaf
+  /// memory pool, the function returns the aggregated used memory from all its
+  /// child memory pools.
+  virtual int64_t usedBytes() const = 0;
 
   /// Returns the peak memory usage in bytes of this memory pool.
   virtual int64_t peakBytes() const = 0;
@@ -362,9 +372,15 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// 'targetBytes' is zero, the function frees all the free memory capacity.
   virtual uint64_t shrink(uint64_t targetBytes = 0) = 0;
 
-  /// Invoked to increase the memory pool's capacity by 'bytes'. The function
-  /// returns the memory pool's capacity after the growth.
-  virtual uint64_t grow(uint64_t bytes) noexcept = 0;
+  /// Invoked to increase the memory pool's capacity by 'growBytes' and commit
+  /// the reservation by 'reservationBytes'. The function makes the two updates
+  /// atomic. The function returns true if the updates succeed, otherwise false
+  /// and neither change will apply.
+  ///
+  /// NOTE: this should only be called by memory arbitrator when a root memory
+  /// pool tries to grow its capacity for a new reservation request which
+  /// exceeds its current capacity limit.
+  virtual bool grow(uint64_t growBytes, uint64_t reservationBytes = 0) = 0;
 
   /// Sets the memory reclaimer for this memory pool.
   ///
@@ -540,8 +556,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   mutable folly::SharedMutex poolMutex_;
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> children_;
 
-  friend class TestMemoryReclaimer;
   friend class MemoryReclaimer;
+  friend class velox::exec::ParallelMemoryReclaimer;
 };
 
 std::ostream& operator<<(std::ostream& out, MemoryPool::Kind kind);
@@ -608,6 +624,8 @@ class MemoryPoolImpl : public MemoryPool {
     return currentBytesLocked();
   }
 
+  int64_t usedBytes() const override;
+
   int64_t peakBytes() const override {
     std::lock_guard<std::mutex> l(mutex_);
     return peakBytes_;
@@ -646,7 +664,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   uint64_t shrink(uint64_t targetBytes = 0) override;
 
-  uint64_t grow(uint64_t bytes) noexcept override;
+  bool grow(uint64_t growBytes, uint64_t reservationBytes = 0) override;
 
   void abort(const std::exception_ptr& error) override;
 
@@ -683,6 +701,8 @@ class MemoryPoolImpl : public MemoryPool {
   Stats stats() const override;
 
   void testingSetCapacity(int64_t bytes);
+
+  void testingSetReservation(int64_t bytes);
 
   MemoryManager* testingManager() const {
     return manager_;
@@ -844,6 +864,8 @@ class MemoryPoolImpl : public MemoryPool {
   // Tries to increment the reservation 'size' if it is within the limit and
   // returns true, otherwise the function returns false.
   bool maybeIncrementReservation(uint64_t size);
+
+  void incrementReservationLocked(uint64_t bytes);
 
   // Release memory reservation for an allocation free or memory release with
   // specified 'size'. If 'releaseOnly' is true, then we only release the unused

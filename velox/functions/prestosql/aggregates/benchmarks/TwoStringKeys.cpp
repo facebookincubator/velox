@@ -75,9 +75,8 @@ class TwoStringKeysBenchmark : public HiveConnectorTestBase {
 
     auto task = makeTask(plan);
 
-    vector_size_t numResultRows = 0;
     while (auto result = task->next()) {
-      numResultRows += result->size();
+      // no action
     }
 
     LOG(ERROR) << exec::printPlanWithStats(
@@ -113,7 +112,7 @@ class TwoStringKeysBenchmark : public HiveConnectorTestBase {
         "t",
         std::move(plan),
         0,
-        std::make_shared<core::QueryCtx>(executor_.get()),
+        core::QueryCtx::create(executor_.get()),
         exec::Task::ExecutionMode::kParallel);
 
     task->addSplit(

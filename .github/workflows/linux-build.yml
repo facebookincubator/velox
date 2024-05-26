@@ -70,6 +70,9 @@ jobs:
         # it doesn't work
         run: git config --global --add safe.directory /__w/velox/velox
 
+      - name: Install cmake
+        run: python3 -m pip install cmake==3.28.3
+
       - name: Install Dependencies
         run: |
           # Allows to install arbitrary cuda-version whithout needing to update
@@ -91,7 +94,7 @@ jobs:
       - name: Make Release Build
         env:
           MAKEFLAGS: 'NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4'
-          CUDA_ARCHITECTURES: 60
+          CUDA_ARCHITECTURES: 70
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Without that, nvcc picks /usr/bin/c++ which is GCC 8
           CUDA_FLAGS: "-ccbin /opt/rh/gcc-toolset-9/root/usr/bin"
@@ -104,7 +107,6 @@ jobs:
             "-DVELOX_ENABLE_S3=ON"
             "-DVELOX_ENABLE_GCS=ON"
             "-DVELOX_ENABLE_ABFS=ON"
-            "-DVELOX_ENABLE_SUBSTRAIT=ON"
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
             "-DVELOX_ENABLE_GPU=ON"
           )

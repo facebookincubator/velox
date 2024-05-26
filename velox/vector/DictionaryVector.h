@@ -64,7 +64,9 @@ class DictionaryVector : public SimpleVector<T> {
       std::optional<ByteCount> representedBytes = std::nullopt,
       std::optional<ByteCount> storageByteCount = std::nullopt);
 
-  virtual ~DictionaryVector() override = default;
+  virtual ~DictionaryVector() override {
+    dictionaryValues_->clearContainingLazyAndWrapped();
+  }
 
   bool mayHaveNulls() const override {
     VELOX_DCHECK(initialized_);
@@ -196,6 +198,7 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   void setDictionaryValues(VectorPtr dictionaryValues) {
+    dictionaryValues_->clearContainingLazyAndWrapped();
     dictionaryValues_ = dictionaryValues;
     initialized_ = false;
     setInternalState();
@@ -223,6 +226,21 @@ class DictionaryVector : public SimpleVector<T> {
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
 
   void validate(const VectorValidateOptions& options) const override;
+
+  VectorPtr copyPreserveEncodings() const override {
+    return std::make_shared<DictionaryVector<T>>(
+        BaseVector::pool_,
+        AlignedBuffer::copy(BaseVector::pool_, BaseVector::nulls_),
+        BaseVector::length_,
+        dictionaryValues_->copyPreserveEncodings(),
+        AlignedBuffer::copy(BaseVector::pool_, indices_),
+        SimpleVector<T>::stats_,
+        BaseVector::distinctValueCount_,
+        BaseVector::nullCount_,
+        SimpleVector<T>::isSorted_,
+        BaseVector::representedByteCount_,
+        BaseVector::storageByteCount_);
+  }
 
  private:
   // return the dictionary index for the specified vector index.

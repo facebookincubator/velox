@@ -161,7 +161,11 @@ struct MemoryManagerOptions {
   /// pool.
   uint64_t memoryPoolInitCapacity{256 << 20};
 
-  /// The minimal memory capacity reserved for a query memory pool to run.
+  /// The minimal query memory pool capacity that is ensured during arbitration.
+  /// During arbitration, memory arbitrator ensures the participants' memory
+  /// pool capacity to be no less than this value on a best-effort basis, for
+  /// more smooth executions of the queries, to avoid frequent arbitration
+  /// requests.
   uint64_t memoryPoolReservedCapacity{0};
 
   /// The minimal memory capacity to transfer out of or into a memory pool
@@ -172,6 +176,10 @@ struct MemoryManagerOptions {
   /// memory reclaim might fail if the max wait time has exceeded. If it is
   /// zero, then there is no timeout. The default is 5 mins.
   uint64_t memoryReclaimWaitMs{300'000};
+
+  /// If true, it allows memory arbitrator to reclaim used memory cross query
+  /// memory pools.
+  bool globalArbitrationEnabled{false};
 
   /// Provided by the query system to validate the state after a memory pool
   /// enters arbitration if not null. For instance, Prestissimo provides
@@ -275,7 +283,7 @@ class MemoryManager {
   /// Returns the memory manger's internal default root memory pool for testing
   /// purpose.
   MemoryPool& testingDefaultRoot() const {
-    return *defaultRoot_;
+    return *sysRoot_;
   }
 
   /// Returns the process wide leaf memory pool used for disk spilling.
@@ -285,10 +293,6 @@ class MemoryManager {
 
   const std::vector<std::shared_ptr<MemoryPool>>& testingSharedLeafPools() {
     return sharedLeafPools_;
-  }
-
-  bool testingGrowPool(MemoryPool* pool, uint64_t incrementBytes) {
-    return growPool(pool, incrementBytes);
   }
 
  private:
@@ -318,10 +322,9 @@ class MemoryManager {
   // Callback invoked by the root memory pool to request memory capacity growth.
   const MemoryPoolImpl::GrowCapacityCallback poolGrowCb_;
 
-  const std::shared_ptr<MemoryPool> defaultRoot_;
+  const std::shared_ptr<MemoryPool> sysRoot_;
   const std::shared_ptr<MemoryPool> spillPool_;
-
-  std::vector<std::shared_ptr<MemoryPool>> sharedLeafPools_;
+  const std::vector<std::shared_ptr<MemoryPool>> sharedLeafPools_;
 
   mutable folly::SharedMutex mutex_;
   // All user root pools allocated from 'this'.

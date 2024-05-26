@@ -221,7 +221,7 @@ is `std::optional<T>`.
 
 When `T` is Varchar, Varbinary, or a complex type, `exec::arg_type<T>`,
 `exec::optional_arg_type<T>`, and `exec::out_type<T>` are the corresponding
-view and writer types of `T`. A datailed explanaion can be found in :doc:`view-and-writer-types`.
+view and writer types of `T`. A detailed explanation can be found in :doc:`view-and-writer-types`.
 
 .. list-table::
    :widths: 25 25
@@ -976,8 +976,7 @@ The following query plans are being tested.
   final aggregation with forced spilling. Query runs using 4 threads.
 
 Query run with forced spilling is enabled only for group-by aggregations and
-only if `allowInputShuffle_` flag is enabled by calling allowInputShuffle
-() method from the SetUp(). Spill testing requires multiple batches of input.
+only if aggregate functions are not order-sensitive. Spill testing requires multiple batches of input.
 To split input data into multiple batches we add local exchange with
 round-robin repartitioning before the partial aggregation. This changes the order
 in which aggregation inputs are processed, hence, query results with spilling

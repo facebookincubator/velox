@@ -71,7 +71,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -85,7 +85,7 @@ jobs:
     name: Build
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: 16-core
+    runs-on: 16-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos8
     timeout-minutes: 120
     env:
@@ -197,6 +197,7 @@ jobs:
         env:
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
         run: |
+          python3 -m pip install cmake==3.28.3
           EXTRA_CMAKE_FLAGS="-DPYTHON_EXECUTABLE=$(which python3) $EXTRA_CMAKE_FLAGS"
           make debug
 
@@ -228,9 +229,9 @@ jobs:
           source .venv/bin/activate
           python3 -m pip install deepdiff
           python3 scripts/signature.py gh_bias_check presto spark
-          python3 scripts/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_contendor.json
+          python3 scripts/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_contender.json
           python3 scripts/signature.py bias_aggregates  /tmp/signatures/presto_aggregate_signatures_main.json \
-           /tmp/signatures/presto_aggregate_signatures_contendor.json /tmp/signatures/presto_aggregate_bias_functions \
+           /tmp/signatures/presto_aggregate_signatures_contender.json /tmp/signatures/presto_aggregate_bias_functions \
            /tmp/signatures/presto_aggregate_errors
 
       - name: Upload Signature Artifacts
@@ -246,8 +247,8 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         run: |
           # Remove irrelevant artifacts
-          rm *_bias_functions
-          rm *_signatures_main.json
+          rm -f *_bias_functions
+          rm -f *_signatures_main.json
           # Rename signature files as 'main' files
           for f in *_signatures_contender.json; do
             mv "$f" "${f/_contender.json/_main.json}"
@@ -264,14 +265,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: presto
-          path: velox/_build/debug/velox/expression/tests/velox_expression_fuzzer_test
+          path: velox/_build/debug/velox/expression/fuzzer/velox_expression_fuzzer_test
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload spark expression fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: spark_expression_fuzzer
-          path: velox/_build/debug/velox/expression/tests/spark_expression_fuzzer_test
+          path: velox/_build/debug/velox/expression/fuzzer/spark_expression_fuzzer_test
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload spark aggregation fuzzer
@@ -307,6 +308,13 @@ jobs:
         with:
           name: window
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
+          retention-days: "${{ env.RETENTION }}"
+
+      - name: Upload row number fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: row_number
+          path: velox/_build/debug//velox/exec/tests/velox_row_number_fuzzer_test
           retention-days: "${{ env.RETENTION }}"
 
   presto-fuzzer-run:
@@ -551,41 +559,6 @@ jobs:
           path: |
             /tmp/spark_fuzzer_repro
 
-  aggregate-fuzzer-run:
-    name: Aggregate Fuzzer
-    runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:centos8
-    needs: compile
-    timeout-minutes: 120
-    steps:
-
-      - name: Download aggregation fuzzer
-        uses: actions/download-artifact@v4
-        with:
-          name: aggregation
-
-      - name: Run Aggregate Fuzzer
-        run: |
-          mkdir -p /tmp/aggregate_fuzzer_repro/
-            rm -rfv /tmp/aggregate_fuzzer_repro/*
-            chmod -R 777 /tmp/aggregate_fuzzer_repro
-            chmod +x velox_aggregation_fuzzer_test
-            ./velox_aggregation_fuzzer_test \
-                --seed ${RANDOM} \
-                --duration_sec $DURATION \
-                --logtostderr=1 \
-                --minloglevel=1 \
-                --repro_persist_path=/tmp/aggregate_fuzzer_repro \
-            && echo -e "\n\nAggregation fuzzer run finished successfully."
-
-      - name: Archive aggregate production artifacts
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: aggregate-fuzzer-failure-artifacts
-          path: |
-            /tmp/aggregate_fuzzer_repro
-
   join-fuzzer-run:
     name: Join Fuzzer
     runs-on: ubuntu-latest
@@ -610,7 +583,7 @@ jobs:
                 --duration_sec $DURATION \
                 --logtostderr=1 \
                 --minloglevel=1 \
-            && echo -e "\n\nAggregation fuzzer run finished successfully."
+            && echo -e "\n\nJoin fuzzer run finished successfully."
 
       - name: Archive aggregate production artifacts
         if: ${{ !cancelled() }}
@@ -656,13 +629,36 @@ jobs:
             path: |
               /tmp/exchange_fuzzer_repro
 
+  row-number-fuzzer-run:
+    name: RowNumber Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
+    needs: compile
+    timeout-minutes: 120
+    steps:
+
+      - name: Download row number fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: row_number
+
+      - name: Run RowNumber Fuzzer
+        run: |
+          cat /proc/sys/vm/max_map_count
+          chmod +x velox_row_number_fuzzer_test
+          ./velox_row_number_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec ${{ env.DURATION }} \
+                --logtostderr=1 \
+                --minloglevel=1 \
+            && echo -e "\n\Row number fuzzer run finished successfully."
+
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
     needs: compile
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
-    if: ${{ github.event_name != 'pull_request' }}
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       LINUX_DISTRO: "centos"
@@ -824,7 +820,6 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
-    if: ${{ github.event_name != 'pull_request' }}
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       LINUX_DISTRO: "centos"

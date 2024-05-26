@@ -159,19 +159,24 @@ PrestoQueryRunner::PrestoQueryRunner(
 
 std::optional<std::string> PrestoQueryRunner::toSql(
     const core::PlanNodePtr& plan) {
-  if (auto projectNode =
+  if (const auto projectNode =
           std::dynamic_pointer_cast<const core::ProjectNode>(plan)) {
     return toSql(projectNode);
   }
 
-  if (auto windowNode =
+  if (const auto windowNode =
           std::dynamic_pointer_cast<const core::WindowNode>(plan)) {
     return toSql(windowNode);
   }
 
-  if (auto aggregationNode =
+  if (const auto aggregationNode =
           std::dynamic_pointer_cast<const core::AggregationNode>(plan)) {
     return toSql(aggregationNode);
+  }
+
+  if (const auto rowNumberNode =
+          std::dynamic_pointer_cast<const core::RowNumberNode>(plan)) {
+    return toSql(rowNumberNode);
   }
 
   VELOX_NYI();
@@ -500,6 +505,37 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   return sql.str();
 }
 
+std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const core::RowNumberNode>& rowNumberNode) {
+  if (!isSupportedDwrfType(rowNumberNode->sources()[0]->outputType())) {
+    return std::nullopt;
+  }
+
+  std::stringstream sql;
+  sql << "SELECT ";
+
+  const auto& inputType = rowNumberNode->sources()[0]->outputType();
+  for (auto i = 0; i < inputType->size(); ++i) {
+    appendComma(i, sql);
+    sql << inputType->nameOf(i);
+  }
+
+  sql << ", row_number() OVER (";
+
+  const auto& partitionKeys = rowNumberNode->partitionKeys();
+  if (!partitionKeys.empty()) {
+    sql << "partition by ";
+    for (auto i = 0; i < partitionKeys.size(); ++i) {
+      appendComma(i, sql);
+      sql << partitionKeys[i]->name();
+    }
+  }
+
+  sql << ") as row_number FROM tmp";
+
+  return sql.str();
+}
+
 std::multiset<std::vector<variant>> PrestoQueryRunner::execute(
     const std::string& sql,
     const std::vector<RowVectorPtr>& input,
@@ -575,12 +611,10 @@ std::vector<RowVectorPtr> PrestoQueryRunner::execute(const std::string& sql) {
   auto response = ServerResponse(startQuery(sql));
   response.throwIfFailed();
 
-  vector_size_t numResults = 0;
   std::vector<RowVectorPtr> queryResults;
   for (;;) {
     for (auto& result : response.queryResults(pool_.get())) {
       queryResults.push_back(result);
-      numResults += result->size();
     }
 
     if (response.queryCompleted()) {

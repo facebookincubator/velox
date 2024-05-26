@@ -106,6 +106,12 @@ class HiveConfig {
   /// The GCS service account configuration as json string
   static constexpr const char* kGCSCredentials = "hive.gcs.credentials";
 
+  /// The GCS maximum retry counter of transient errors.
+  static constexpr const char* kGCSMaxRetryCount = "hive.gcs.max-retry-count";
+
+  /// The GCS maximum time allowed to retry transient errors.
+  static constexpr const char* kGCSMaxRetryTime = "hive.gcs.max-retry-time";
+
   /// Maps table field names to file field names using names, not indices.
   // TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
   // right now this is only used for testing.
@@ -165,6 +171,18 @@ class HiveConfig {
       "hive.orc.writer.dictionary-max-memory";
   static constexpr const char* kOrcWriterMaxDictionaryMemorySession =
       "orc_optimized_writer_max_dictionary_memory";
+
+  /// Enables historical based stripe size estimation after compression.
+  static constexpr const char* kOrcWriterLinearStripeSizeHeuristics =
+      "hive.orc.writer.linear-stripe-size-heuristics";
+  static constexpr const char* kOrcWriterLinearStripeSizeHeuristicsSession =
+      "orc_writer_linear_stripe_size_heuristics";
+
+  /// Minimal number of items in an encoded stream.
+  static constexpr const char* kOrcWriterMinCompressionSize =
+      "hive.orc.writer.min-compression-size";
+  static constexpr const char* kOrcWriterMinCompressionSizeSession =
+      "orc_writer_min_compression_size";
 
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
@@ -230,6 +248,10 @@ class HiveConfig {
 
   std::string gcsCredentials() const;
 
+  std::optional<int> gcsMaxRetryCount() const;
+
+  std::optional<std::string> gcsMaxRetryTime() const;
+
   bool isOrcUseColumnNames(const Config* session) const;
 
   bool isFileColumnNamesReadAsLowerCase(const Config* session) const;
@@ -255,6 +277,10 @@ class HiveConfig {
   uint64_t orcWriterMaxStripeSize(const Config* session) const;
 
   uint64_t orcWriterMaxDictionaryMemory(const Config* session) const;
+
+  bool orcWriterLinearStripeSizeHeuristics(const Config* session) const;
+
+  uint64_t orcWriterMinCompressionSize(const Config* session) const;
 
   std::string writeFileCreateConfig() const;
 

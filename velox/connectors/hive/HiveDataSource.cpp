@@ -61,6 +61,10 @@ HiveDataSource::HiveDataSource(
     if (handle->columnType() == HiveColumnHandle::ColumnType::kSynthesized) {
       infoColumns_.emplace(handle->name(), handle);
     }
+
+    if (handle->columnType() == HiveColumnHandle::ColumnType::kRowIndex) {
+      rowIndexColumn_ = handle;
+    }
   }
 
   std::vector<std::string> readerRowNames;
@@ -153,6 +157,7 @@ HiveDataSource::HiveDataSource(
       hiveTableHandle_->dataColumns(),
       partitionKeys_,
       infoColumns_,
+      rowIndexColumn_,
       pool_);
   if (remainingFilter) {
     metadataFilter_ = std::make_shared<common::MetadataFilter>(
@@ -193,7 +198,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions(randomSkip_);
-  splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
+  splitReader_->prepareSplit(metadataFilter_, runtimeStats_, rowIndexColumn_);
 }
 
 std::optional<RowVectorPtr> HiveDataSource::next(
@@ -332,6 +337,7 @@ void HiveDataSource::setFromDataSource(
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
   scanSpec_ = std::move(source->scanSpec_);
   splitReader_ = std::move(source->splitReader_);
+  splitReader_->setConnectorQueryCtx(connectorQueryCtx_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
   source->ioStats_->merge(*ioStats_);

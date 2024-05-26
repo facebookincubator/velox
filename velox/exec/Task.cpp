@@ -259,6 +259,7 @@ std::shared_ptr<Task> Task::create(
       std::move(onError));
 }
 
+// static
 std::shared_ptr<Task> Task::create(
     const std::string& taskId,
     core::PlanFragment planFragment,
@@ -273,42 +274,6 @@ std::shared_ptr<Task> Task::create(
       destination,
       std::move(queryCtx),
       mode,
-      std::move(consumerSupplier),
-      std::move(onError)));
-  task->initTaskPool();
-  return task;
-}
-
-std::shared_ptr<Task> Task::create(
-    const std::string& taskId,
-    core::PlanFragment planFragment,
-    int destination,
-    std::shared_ptr<core::QueryCtx> queryCtx,
-    Consumer consumer,
-    std::function<void(std::exception_ptr)> onError) {
-  return Task::create(
-      taskId,
-      std::move(planFragment),
-      destination,
-      std::move(queryCtx),
-      (consumer ? [c = std::move(consumer)]() { return c; }
-                : ConsumerSupplier{}),
-      std::move(onError));
-}
-
-std::shared_ptr<Task> Task::create(
-    const std::string& taskId,
-    core::PlanFragment planFragment,
-    int destination,
-    std::shared_ptr<core::QueryCtx> queryCtx,
-    ConsumerSupplier consumerSupplier,
-    std::function<void(std::exception_ptr)> onError) {
-  auto task = std::shared_ptr<Task>(new Task(
-      taskId,
-      std::move(planFragment),
-      destination,
-      std::move(queryCtx),
-      Task::ExecutionMode::kParallel,
       std::move(consumerSupplier),
       std::move(onError)));
   task->initTaskPool();
@@ -447,6 +412,12 @@ void Task::removeSpillDirectoryIfExists() {
   }
 }
 
+uint64_t Task::driverCpuTimeSliceLimitMs() const {
+  return mode_ == Task::ExecutionMode::kSerial
+      ? 0
+      : queryCtx_->queryConfig().driverCpuTimeSliceLimitMs();
+}
+
 void Task::initTaskPool() {
   VELOX_CHECK_NULL(pool_);
   pool_ = queryCtx_->pool()->addAggregateChild(
@@ -488,8 +459,9 @@ std::unique_ptr<memory::MemoryReclaimer> Task::createNodeReclaimer(
   }
   // Sets memory reclaimer for the parent node memory pool on the first child
   // operator construction which has set memory reclaimer.
-  return isHashJoinNode ? HashJoinMemoryReclaimer::create()
-                        : exec::MemoryReclaimer::create();
+  return isHashJoinNode
+      ? HashJoinMemoryReclaimer::create()
+      : exec::ParallelMemoryReclaimer::create(queryCtx_->spillExecutor());
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Task::createExchangeClientReclaimer()
@@ -979,6 +951,7 @@ void Task::resume(std::shared_ptr<Task> self) {
 
   // Get the stats and free the resources of Drivers that were not on thread.
   for (auto& driver : offThreadDrivers) {
+    self->driversClosedByTask_.emplace_back(driver);
     driver->closeByTask();
   }
 }
@@ -1931,6 +1904,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   // Get the stats and free the resources of Drivers that were not on
   // thread.
   for (auto& driver : offThreadDrivers) {
+    driversClosedByTask_.emplace_back(driver);
     driver->closeByTask();
   }
 
@@ -2264,23 +2238,53 @@ ContinueFuture Task::taskCompletionFuture() {
 std::string Task::toString() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
   std::stringstream out;
-  out << "{Task " << shortId(taskId_) << " (" << taskId_ << ")";
+  out << "{Task " << shortId(taskId_) << " (" << taskId_ << ")" << std::endl;
 
   if (exception_) {
     out << "Error: " << errorMessageLocked() << std::endl;
   }
 
   if (planFragment_.planNode) {
-    out << "Plan: " << planFragment_.planNode->toString() << std::endl;
+    out << "Plan:\n"
+        << planFragment_.planNode->toString(true, true) << std::endl;
   }
 
-  out << " drivers:\n";
-  for (auto& driver : drivers_) {
+  size_t numRemainingDrivers{0};
+  for (const auto& driver : drivers_) {
     if (driver) {
-      out << driver->toString() << std::endl;
+      ++numRemainingDrivers;
     }
   }
 
+  if (numRemainingDrivers > 0) {
+    bool addedCaption{false};
+    for (auto& driver : drivers_) {
+      if (driver) {
+        if (!addedCaption) {
+          out << "drivers:\n";
+          addedCaption = true;
+        }
+        out << driver->toString() << std::endl;
+      }
+    }
+  }
+
+  if (!driversClosedByTask_.empty()) {
+    bool addedCaption{false};
+    for (auto& driver : driversClosedByTask_) {
+      auto zombieDriver = driver.lock();
+      if (zombieDriver) {
+        if (!addedCaption) {
+          out << "zombie drivers:\n";
+          addedCaption = true;
+        }
+        out << zombieDriver->toString()
+            << ", refcount: " << zombieDriver.use_count() - 1 << std::endl;
+      }
+    }
+  }
+
+  out << "}";
   return out.str();
 }
 
@@ -2819,7 +2823,7 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   }
 
   stats.reclaimWaitTimeUs += reclaimWaitTimeUs;
-  RECORD_METRIC_VALUE(kMetricTaskMemoryReclaimCount, 1);
+  RECORD_METRIC_VALUE(kMetricTaskMemoryReclaimCount);
   RECORD_HISTOGRAM_METRIC_VALUE(
       kMetricTaskMemoryReclaimWaitTimeMs, reclaimWaitTimeUs / 1'000);
 
@@ -2833,9 +2837,25 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   if (shrunkBytes >= targetBytes) {
     return shrunkBytes;
   }
-  return shrunkBytes +
-      memory::MemoryReclaimer::reclaim(
-             task->pool(), targetBytes - shrunkBytes, maxWaitMs, stats);
+
+  uint64_t reclaimedBytes{0};
+  try {
+    uint64_t reclaimExecTimeUs{0};
+    {
+      MicrosecondTimer timer{&reclaimExecTimeUs};
+      reclaimedBytes = memory::MemoryReclaimer::reclaim(
+          task->pool(), targetBytes - shrunkBytes, maxWaitMs, stats);
+    }
+    RECORD_HISTOGRAM_METRIC_VALUE(
+        kMetricTaskMemoryReclaimExecTimeMs, reclaimExecTimeUs / 1'000);
+  } catch (...) {
+    // Set task error before resumes the task execution as the task operator
+    // might not be in consistent state anymore. This prevents any off thread
+    // from running again.
+    task->setError(std::current_exception());
+    std::rethrow_exception(std::current_exception());
+  }
+  return shrunkBytes + reclaimedBytes;
 }
 
 void Task::MemoryReclaimer::abort(
@@ -2862,5 +2882,4 @@ void Task::MemoryReclaimer::abort(
         << "Timeout waiting for task to complete during query memory aborting.";
   }
 }
-
 } // namespace facebook::velox::exec

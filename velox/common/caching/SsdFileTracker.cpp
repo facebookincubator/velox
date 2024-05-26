@@ -30,19 +30,19 @@ void SsdFileTracker::fileTouched(int32_t totalEntries) {
 }
 
 void SsdFileTracker::regionFilled(int32_t region) {
-  const uint64_t best =
+  const double best =
       *std::max_element(regionScores_.begin(), regionScores_.end());
-  regionScores_[region] = std::max<int64_t>(regionScores_[region], best * 1.1);
+  regionScores_[region] = std::max<double>(regionScores_[region], best * 1.1);
 }
 
 std::vector<int32_t> SsdFileTracker::findEvictionCandidates(
     int32_t numCandidates,
     int32_t numRegions,
     const std::vector<int32_t>& regionPins) {
-  // Calculates average score of regions wiht no pins. Returns up to
-  // 'numCandidates' unpinned regions with score <= average, lowest
-  // scoring region first.
-  int64_t scoreSum = 0;
+  // Calculates average score of regions with no pins. Returns up to
+  // 'numCandidates' unpinned regions with score <= average, lowest scoring
+  // region first.
+  double scoreSum = 0;
   int32_t numUnpinned = 0;
   for (int i = 0; i < numRegions; ++i) {
     if (regionPins[i] > 0) {

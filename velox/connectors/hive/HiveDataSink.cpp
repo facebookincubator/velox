@@ -351,6 +351,7 @@ HiveDataSink::HiveDataSink(
       connectorQueryCtx_(connectorQueryCtx),
       commitStrategy_(commitStrategy),
       hiveConfig_(hiveConfig),
+      updateMode_(getUpdateMode()),
       maxOpenWriters_(hiveConfig_->maxPartitionsPerWriters(
           connectorQueryCtx->sessionProperties())),
       partitionChannels_(getPartitionChannels(insertTableHandle_)),
@@ -681,6 +682,11 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       hiveConfig_->orcWriterMaxDictionaryMemory(connectorSessionProperties));
   options.parquetWriteTimestampUnit =
       hiveConfig_->parquetWriteTimestampUnit(connectorSessionProperties);
+  options.orcMinCompressionSize = std::optional(
+      hiveConfig_->orcWriterMinCompressionSize(connectorSessionProperties));
+  options.orcLinearStripeSizeHeuristics =
+      std::optional(hiveConfig_->orcWriterLinearStripeSizeHeuristics(
+          connectorSessionProperties));
   options.serdeParameters = std::map<std::string, std::string>(
       insertTableHandle_->serdeParameters().begin(),
       insertTableHandle_->serdeParameters().end());
@@ -772,12 +778,10 @@ void HiveDataSink::splitInputRowsAndEnsureWriters() {
 HiveWriterParameters HiveDataSink::getWriterParameters(
     const std::optional<std::string>& partition,
     std::optional<uint32_t> bucketId) const {
-  const auto updateMode = getUpdateMode();
-
   auto [targetFileName, writeFileName] = getWriterFileNames(bucketId);
 
   return HiveWriterParameters{
-      updateMode,
+      updateMode_,
       partition,
       targetFileName,
       makePartitionDirectory(
@@ -965,14 +969,13 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
     RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
     LOG(WARNING) << "Can't reclaim from hive writer pool " << pool->name()
                  << " which is under non-reclaimable section, "
-                 << " used memory: " << succinctBytes(pool->currentBytes())
-                 << ", reserved memory: "
+                 << " reserved memory: "
                  << succinctBytes(pool->reservedBytes());
     ++stats.numNonReclaimableAttempts;
     return 0;
   }
 
-  const uint64_t memoryUsageBeforeReclaim = pool->currentBytes();
+  const uint64_t memoryUsageBeforeReclaim = pool->reservedBytes();
   const std::string memoryUsageTreeBeforeReclaim = pool->treeMemoryUsage();
   const auto writtenBytesBeforeReclaim = ioStats_->rawBytesWritten();
   const auto reclaimedBytes =
@@ -986,7 +989,7 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
     RECORD_METRIC_VALUE(
         kMetricFileWriterEarlyFlushedRawBytes, earlyFlushedRawBytes);
   }
-  const uint64_t memoryUsageAfterReclaim = pool->currentBytes();
+  const uint64_t memoryUsageAfterReclaim = pool->reservedBytes();
   if (memoryUsageAfterReclaim > memoryUsageBeforeReclaim) {
     VELOX_FAIL(
         "Unexpected memory growth after memory reclaim from {}, the memory usage before reclaim: {}, after reclaim: {}\nThe memory tree usage before reclaim:\n{}\nThe memory tree usage after reclaim:\n{}",

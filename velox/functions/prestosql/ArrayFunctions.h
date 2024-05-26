@@ -21,6 +21,7 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/type/Conversions.h"
+#include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::functions {
 
@@ -32,13 +33,27 @@ struct ArrayMinMaxFunction {
 
   template <typename T>
   void update(T& currentValue, const T& candidateValue) {
-    if constexpr (isMax) {
-      if (candidateValue > currentValue) {
-        currentValue = candidateValue;
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+      if constexpr (isMax) {
+        if (util::floating_point::NaNAwareGreaterThan<T>{}(
+                candidateValue, currentValue)) {
+          currentValue = candidateValue;
+        }
+      } else {
+        if (util::floating_point::NaNAwareLessThan<T>{}(
+                candidateValue, currentValue)) {
+          currentValue = candidateValue;
+        }
       }
     } else {
-      if (candidateValue < currentValue) {
-        currentValue = candidateValue;
+      if constexpr (isMax) {
+        if (candidateValue > currentValue) {
+          currentValue = candidateValue;
+        }
+      } else {
+        if (candidateValue < currentValue) {
+          currentValue = candidateValue;
+        }
       }
     }
   }
@@ -53,68 +68,10 @@ struct ArrayMinMaxFunction {
   }
 
   template <typename TReturn, typename TInput>
-  bool callForFloatOrDouble(TReturn& out, const TInput& array) {
-    bool hasNull = false;
-    auto it = array.begin();
-
-    // Find the first non-null item (if any)
-    while (it != array.end()) {
-      if (it->has_value()) {
-        break;
-      }
-
-      hasNull = true;
-      ++it;
-    }
-
-    // Return false if end of array is reached without finding a non-null item.
-    if (it == array.end()) {
-      return false;
-    }
-
-    // If first non-null item is NAN, return immediately.
-    auto currentValue = it->value();
-    if (std::isnan(currentValue)) {
-      assign(out, currentValue);
-      return true;
-    }
-
-    ++it;
-    while (it != array.end()) {
-      if (it->has_value()) {
-        auto newValue = it->value();
-        if (std::isnan(newValue)) {
-          assign(out, newValue);
-          return true;
-        }
-        update(currentValue, newValue);
-      } else {
-        hasNull = true;
-      }
-      ++it;
-    }
-
-    // If we found a null, return false. Note that, if we found
-    // a NAN, the function will return at earlier stage as soon as
-    // a NAN is observed.
-    if (hasNull) {
-      return false;
-    }
-
-    assign(out, currentValue);
-    return true;
-  }
-
-  template <typename TReturn, typename TInput>
   FOLLY_ALWAYS_INLINE bool call(TReturn& out, const TInput& array) {
     // Result is null if array is empty.
     if (array.size() == 0) {
       return false;
-    }
-
-    if constexpr (
-        std::is_same_v<TReturn, float> || std::is_same_v<TReturn, double>) {
-      return callForFloatOrDouble(out, array);
     }
 
     if (!array.mayHaveNulls()) {
@@ -205,9 +162,8 @@ struct ArrayJoinFunction {
 
   template <typename C>
   void writeValue(out_type<velox::Varchar>& result, const C& value) {
-    result +=
-        util::Converter<TypeKind::VARCHAR, void, util::DefaultCastPolicy>::cast(
-            value);
+    // To VARCHAR converter never throws.
+    result += util::Converter<TypeKind::VARCHAR>::tryCast(value).value();
   }
 
   template <typename C>
@@ -879,7 +835,7 @@ struct ArrayUnionFunction {
 
   template <typename Out, typename In>
   void call(Out& out, const In& inputArray1, const In& inputArray2) {
-    folly::F14FastSet<typename In::element_t> elementSet;
+    util::floating_point::HashSetNaNAware<typename In::element_t> elementSet;
     bool nullAdded = false;
     auto addItems = [&](auto& inputArray) {
       for (const auto& item : inputArray) {
@@ -912,8 +868,15 @@ struct ArrayRemoveFunction {
   void call(Out& out, const In& inputArray, E element) {
     for (const auto& item : inputArray) {
       if (item.has_value()) {
-        if (element != item.value()) {
-          out.push_back(item.value());
+        if constexpr (std::is_floating_point_v<E>) {
+          if (!util::floating_point::NaNAwareEquals<E>{}(
+                  element, item.value())) {
+            out.push_back(item.value());
+          }
+        } else {
+          if (element != item.value()) {
+            out.push_back(item.value());
+          }
         }
       } else {
         out.add_null();

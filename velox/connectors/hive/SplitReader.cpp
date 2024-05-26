@@ -41,7 +41,10 @@ VectorPtr newConstantFromString(
 
   if (type->isDate()) {
     auto copy = util::castFromDateString(
-        StringView(value.value()), util::ParseMode::kStandardCast);
+                    StringView(value.value()), util::ParseMode::kStandardCast)
+                    .thenOrThrow(folly::identity, [&](const Status& status) {
+                      VELOX_USER_FAIL("{}", status.message());
+                    });
     return std::make_shared<ConstantVector<int32_t>>(
         pool, size, false, type, std::move(copy));
   }
@@ -50,7 +53,10 @@ VectorPtr newConstantFromString(
     return std::make_shared<ConstantVector<StringView>>(
         pool, size, false, type, StringView(value.value()));
   } else {
-    auto copy = velox::util::Converter<kind>::cast(value.value());
+    auto copy = velox::util::Converter<kind>::tryCast(value.value())
+                    .thenOrThrow(folly::identity, [&](const Status& status) {
+                      VELOX_USER_FAIL("{}", status.message());
+                    });
     if constexpr (kind == TypeKind::TIMESTAMP) {
       copy.toGMT(Timestamp::defaultTimezone());
     }
@@ -140,7 +146,8 @@ void SplitReader::configureReaderOptions(
 
 void SplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStatistics& runtimeStats,
+    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn) {
   createReader();
 
   if (checkIfSplitIsEmpty(runtimeStats)) {
@@ -148,7 +155,7 @@ void SplitReader::prepareSplit(
     return;
   }
 
-  createRowReader(metadataFilter);
+  createRowReader(metadataFilter, rowIndexColumn);
 }
 
 uint64_t SplitReader::next(uint64_t size, VectorPtr& output) {
@@ -192,6 +199,11 @@ void SplitReader::updateRuntimeStats(
 
 bool SplitReader::allPrefetchIssued() const {
   return baseRowReader_ && baseRowReader_->allPrefetchIssued();
+}
+
+void SplitReader::setConnectorQueryCtx(
+    const ConnectorQueryCtx* connectorQueryCtx) {
+  connectorQueryCtx_ = connectorQueryCtx;
 }
 
 std::string SplitReader::toString() const {
@@ -273,21 +285,39 @@ bool SplitReader::checkIfSplitIsEmpty(
 }
 
 void SplitReader::createRowReader(
-    std::shared_ptr<common::MetadataFilter> metadataFilter) {
+    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn) {
   auto& fileType = baseReader_->rowType();
   auto columnTypes = adaptColumns(fileType, baseReaderOpts_.getFileSchema());
+  auto columnNames = fileType->names();
+  if (rowIndexColumn != nullptr) {
+    setRowIndexColumn(fileType, rowIndexColumn);
+  }
 
   configureRowReaderOptions(
       baseRowReaderOpts_,
       hiveTableHandle_->tableParameters(),
       scanSpec_,
       metadataFilter,
-      ROW(std::vector<std::string>(fileType->names()), std::move(columnTypes)),
+      ROW(std::move(columnNames), std::move(columnTypes)),
       hiveSplit_);
   // NOTE: we firstly reset the finished 'baseRowReader_' of previous split
   // before setting up for the next one to avoid doubling the peak memory usage.
   baseRowReader_.reset();
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
+}
+
+void SplitReader::setRowIndexColumn(
+    const RowTypePtr& fileType,
+    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn) {
+  auto rowIndexColumnName = rowIndexColumn->name();
+  auto rowIndexMetaColIdx =
+      readerOutputType_->getChildIdxIfExists(rowIndexColumnName);
+  dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
+  VELOX_CHECK(rowIndexMetaColIdx.has_value());
+  rowNumberColumnInfo.insertPosition = rowIndexMetaColIdx.value();
+  rowNumberColumnInfo.name = rowIndexColumnName;
+  baseRowReaderOpts_.setRowNumberColumnInfo(std::move(rowNumberColumnInfo));
 }
 
 std::vector<TypePtr> SplitReader::adaptColumns(
@@ -349,10 +379,16 @@ std::vector<TypePtr> SplitReader::adaptColumns(
         childSpec->setConstantValue(nullptr);
         auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
         if (outputTypeIdx.has_value()) {
-          // We know the fieldName exists in the file, make the type at that
-          // position match what we expect in the output.
-          columnTypes[fileTypeIdx.value()] =
-              readerOutputType_->childAt(*outputTypeIdx);
+          auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
+          auto& columnType = columnTypes[*fileTypeIdx];
+          if (childSpec->isFlatMapAsStruct()) {
+            // Flat map column read as struct.  Leave the schema type as MAP.
+            VELOX_CHECK(outputType->isRow() && columnType->isMap());
+          } else {
+            // We know the fieldName exists in the file, make the type at that
+            // position match what we expect in the output.
+            columnType = outputType;
+          }
         }
       }
     }

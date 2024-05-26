@@ -148,6 +148,7 @@ class LazyVector : public BaseVector {
     loader_ = std::move(loader);
     allLoaded_ = false;
     containsLazyAndIsWrapped_ = false;
+    resetNulls();
   }
 
   inline bool isLoaded() const {
@@ -263,6 +264,10 @@ class LazyVector : public BaseVector {
       SelectivityVector& baseRows);
 
   void validate(const VectorValidateOptions& options) const override;
+
+  VectorPtr copyPreserveEncodings() const override {
+    VELOX_UNSUPPORTED("copyPreserveEncodings not defined for LazyVector");
+  }
 
  private:
   static void ensureLoadedRowsImpl(

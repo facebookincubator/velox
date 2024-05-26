@@ -57,3 +57,14 @@ target_link_libraries(
   velox_expression_test_utility
   velox_aggregation_fuzzer_base
   velox_temp_path)
+
+add_library(velox_row_number_fuzzer RowNumberFuzzer.cpp)
+
+target_link_libraries(
+  velox_row_number_fuzzer velox_fuzzer_util velox_type velox_vector_fuzzer
+  velox_exec_test_lib velox_expression_test_utility)
+
+add_library(velox_join_fuzzer JoinFuzzer.cpp)
+
+target_link_libraries(velox_join_fuzzer velox_type velox_vector_fuzzer
+                      velox_exec_test_lib velox_expression_test_utility)

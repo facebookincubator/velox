@@ -41,8 +41,10 @@
  */
 
 #include "velox/type/TimestampConversion.h"
+#include <folly/Expected.h>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::util {
 
@@ -147,6 +149,13 @@ inline bool validDate(int64_t daysSinceEpoch) {
       daysSinceEpoch <= std::numeric_limits<int32_t>::max();
 }
 
+// Skip leading spaces.
+inline void skipSpaces(const char* buf, size_t len, size_t& pos) {
+  while (pos < len && characterIsSpace(buf[pos])) {
+    pos++;
+  }
+}
+
 bool tryParseDateString(
     const char* buf,
     size_t len,
@@ -163,11 +172,7 @@ bool tryParseDateString(
   int32_t year = 0;
   bool yearneg = false;
   int sep;
-
-  // Skip leading spaces.
-  while (pos < len && characterIsSpace(buf[pos])) {
-    pos++;
-  }
+  skipSpaces(buf, len, pos);
 
   if (pos >= len) {
     return false;
@@ -311,10 +316,8 @@ bool tryParseDateString(
 
   // In strict mode, check remaining string for non-space characters.
   if (mode == ParseMode::kStrict || mode == ParseMode::kNonStandardNoTimeCast) {
-    // Skip trailing spaces.
-    while (pos < len && characterIsSpace(buf[pos])) {
-      pos++;
-    }
+    skipSpaces(buf, len, pos);
+
     // Check position. if end was not reached, non-space chars remaining.
     if (pos < len) {
       return false;
@@ -344,11 +347,7 @@ bool tryParseTimeString(
   if (len == 0) {
     return false;
   }
-
-  // Skip leading spaces.
-  while (pos < len && characterIsSpace(buf[pos])) {
-    pos++;
-  }
+  skipSpaces(buf, len, pos);
 
   if (pos >= len) {
     return false;
@@ -415,10 +414,7 @@ bool tryParseTimeString(
 
   // In strict mode, check remaining string for non-space characters.
   if (strict) {
-    // Skip trailing spaces.
-    while (pos < len && characterIsSpace(buf[pos])) {
-      pos++;
-    }
+    skipSpaces(buf, len, pos);
 
     // Check position. If end was not reached, non-space chars remaining.
     if (pos < len) {
@@ -426,6 +422,43 @@ bool tryParseTimeString(
     }
   }
   result = fromTime(hour, min, sec, micros);
+  return true;
+}
+
+// String format is "YYYY-MM-DD hh:mm:ss.microseconds" (seconds and microseconds
+// are optional). ISO 8601
+bool tryParseTimestampString(
+    const char* buf,
+    size_t len,
+    size_t& pos,
+    Timestamp& result) {
+  int64_t daysSinceEpoch = 0;
+  int64_t microsSinceMidnight = 0;
+
+  if (!tryParseDateString(
+          buf, len, pos, daysSinceEpoch, ParseMode::kNonStrict)) {
+    return false;
+  }
+
+  if (pos == len) {
+    // No time: only a date.
+    result = fromDatetime(daysSinceEpoch, 0);
+    return true;
+  }
+
+  // Try to parse a time field.
+  if (buf[pos] == ' ' || buf[pos] == 'T') {
+    pos++;
+  }
+
+  size_t timePos = 0;
+  if (!tryParseTimeString(
+          buf + pos, len - pos, timePos, microsSinceMidnight, false)) {
+    return false;
+  }
+
+  pos += timePos;
+  result = fromDatetime(daysSinceEpoch, microsSinceMidnight);
   return true;
 }
 
@@ -596,34 +629,39 @@ int64_t fromDateString(const char* str, size_t len) {
   return daysSinceEpoch;
 }
 
-int32_t castFromDateString(const char* str, size_t len, ParseMode mode) {
+Expected<int32_t>
+castFromDateString(const char* str, size_t len, ParseMode mode) {
   int64_t daysSinceEpoch;
   size_t pos = 0;
 
   if (!tryParseDateString(str, len, pos, daysSinceEpoch, mode)) {
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    }
+
     switch (mode) {
       case ParseMode::kStandardCast:
-        VELOX_USER_FAIL(
+        return folly::makeUnexpected(Status::UserError(
             "Unable to parse date value: \"{}\". "
             "Valid date string pattern is (YYYY-MM-DD), "
             "and can be prefixed with [+-]",
-            std::string(str, len));
+            std::string(str, len)));
       case ParseMode::kNonStandardCast:
-        VELOX_USER_FAIL(
+        return folly::makeUnexpected(Status::UserError(
             "Unable to parse date value: \"{}\". "
             "Valid date string patterns include "
             "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
             "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
             "and any pattern prefixed with [+-]",
-            std::string(str, len));
+            std::string(str, len)));
       case ParseMode::kNonStandardNoTimeCast:
-        VELOX_USER_FAIL(
+        return folly::makeUnexpected(Status::UserError(
             "Unable to parse date value: \"{}\". "
             "Valid date string patterns include "
             "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
             "[y]y*-[m]m*-[d]d* *), "
             "and any pattern prefixed with [+-]",
-            std::string(str, len));
+            std::string(str, len)));
       default:
         VELOX_UNREACHABLE();
     }
@@ -691,8 +729,11 @@ Timestamp fromDatetime(int64_t daysSinceEpoch, int64_t microsSinceMidnight) {
 
 namespace {
 
-[[noreturn]] void parserError(const char* str, size_t len) {
-  VELOX_USER_FAIL(
+Status parserError(const char* str, size_t len) {
+  if (threadSkipErrorDetails()) {
+    return Status::UserError();
+  }
+  return Status::UserError(
       "Unable to parse timestamp value: \"{}\", "
       "expected format is (YYYY-MM-DD HH:MM:SS[.MS])",
       std::string(str, len));
@@ -700,57 +741,61 @@ namespace {
 
 } // namespace
 
-Timestamp fromTimestampString(const char* str, size_t len) {
+Expected<Timestamp> fromTimestampString(const char* str, size_t len) {
   size_t pos;
-  int64_t daysSinceEpoch;
-  int64_t microsSinceMidnight;
+  Timestamp resultTimestamp;
 
-  if (!tryParseDateString(
-          str, len, pos, daysSinceEpoch, ParseMode::kNonStrict)) {
-    parserError(str, len);
+  if (!tryParseTimestampString(str, len, pos, resultTimestamp)) {
+    return folly::makeUnexpected(parserError(str, len));
+  }
+  skipSpaces(str, len, pos);
+
+  // If not all input was consumed.
+  if (pos < len) {
+    return folly::makeUnexpected(parserError(str, len));
+  }
+  VELOX_CHECK_EQ(pos, len);
+  return resultTimestamp;
+}
+
+Expected<std::pair<Timestamp, int64_t>> fromTimestampWithTimezoneString(
+    const char* str,
+    size_t len) {
+  size_t pos;
+  Timestamp resultTimestamp;
+
+  if (!tryParseTimestampString(str, len, pos, resultTimestamp)) {
+    return folly::makeUnexpected(parserError(str, len));
   }
 
-  if (pos == len) {
-    // No time: only a date.
-    return fromDatetime(daysSinceEpoch, 0);
-  }
+  int64_t timezoneID = -1;
 
-  // Try to parse a time field.
-  if (str[pos] == ' ' || str[pos] == 'T') {
+  if (pos < len && characterIsSpace(str[pos])) {
     pos++;
   }
 
-  size_t timePos = 0;
-  if (!tryParseTimeString(
-          str + pos, len - pos, timePos, microsSinceMidnight, false)) {
-    parserError(str, len);
-  }
-
-  pos += timePos;
-  auto timestamp = fromDatetime(daysSinceEpoch, microsSinceMidnight);
-
+  // If there is anything left to parse, it must be a timezone definition.
   if (pos < len) {
-    // Skip a "Z" at the end (as per the ISO 8601 specs).
-    if (str[pos] == 'Z') {
-      pos++;
+    size_t timezonePos = pos;
+    while (timezonePos < len && !characterIsSpace(str[timezonePos])) {
+      timezonePos++;
     }
-    int hourOffset, minuteOffset;
-    if (tryParseUTCOffsetString(str, pos, len, hourOffset, minuteOffset)) {
-      int32_t secondOffset =
-          (hourOffset * kSecsPerHour) + (minuteOffset * kSecsPerMinute);
-      timestamp = Timestamp(
-          timestamp.getSeconds() - secondOffset, timestamp.getNanos());
+    std::string_view timezone(str + pos, timezonePos - pos);
+
+    if ((timezoneID = util::getTimeZoneID(timezone, false)) == -1) {
+      return folly::makeUnexpected(
+          Status::UserError("Unknown timezone value: \"{}\"", timezone));
     }
 
     // Skip any spaces at the end.
-    while (pos < len && characterIsSpace(str[pos])) {
-      pos++;
-    }
+    pos = timezonePos;
+    skipSpaces(str, len, pos);
+
     if (pos < len) {
-      parserError(str, len);
+      return folly::makeUnexpected(parserError(str, len));
     }
   }
-  return timestamp;
+  return std::make_pair(resultTimestamp, timezoneID);
 }
 
 } // namespace facebook::velox::util

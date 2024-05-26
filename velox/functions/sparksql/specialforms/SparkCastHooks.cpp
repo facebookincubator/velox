@@ -20,11 +20,13 @@
 
 namespace facebook::velox::functions::sparksql {
 
-Timestamp SparkCastHooks::castStringToTimestamp(const StringView& view) const {
+Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
+    const StringView& view) const {
   return util::fromTimestampString(view.data(), view.size());
 }
 
-int32_t SparkCastHooks::castStringToDate(const StringView& dateString) const {
+Expected<int32_t> SparkCastHooks::castStringToDate(
+    const StringView& dateString) const {
   // Allows all patterns supported by Spark:
   // `[+-]yyyy*`
   // `[+-]yyyy*-[m]m`
@@ -38,10 +40,6 @@ int32_t SparkCastHooks::castStringToDate(const StringView& dateString) const {
   //   "1970-01-01 (BC)"
   return util::castFromDateString(
       removeWhiteSpaces(dateString), util::ParseMode::kNonStandardCast);
-}
-
-bool SparkCastHooks::legacy() const {
-  return false;
 }
 
 StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
@@ -61,9 +59,5 @@ const TimestampToStringOptions& SparkCastHooks::timestampToStringOptions()
       .dateTimeSeparator = ' ',
   };
   return options;
-}
-
-bool SparkCastHooks::truncate() const {
-  return true;
 }
 } // namespace facebook::velox::functions::sparksql

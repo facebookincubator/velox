@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
@@ -103,6 +104,17 @@ TEST_F(JsonExtractScalarTest, simple) {
       jsonExtractScalar(
           R"([{"k1":[{"k2": ["v1", "v2"]}]}])", "$[0].k1[0].k2[1]"),
       "v2");
+
+  // Paths without leading '$'.
+  EXPECT_EQ(jsonExtractScalar(R"({"k1":"v1"})", "k1"), "v1");
+  EXPECT_EQ(jsonExtractScalar(R"({"k1":{"k2": 999}})", "k1.k2"), "999");
+
+  // Paths with redundant '.'s.
+  auto json = "[1, 2, [10, 20, [100, 200, 300]]]";
+  EXPECT_EQ(jsonExtractScalar(json, "$[2][2][2]"), "300");
+  EXPECT_EQ(jsonExtractScalar(json, "$.[2].[2].[2]"), "300");
+  EXPECT_EQ(jsonExtractScalar(json, "$[2].[2].[2]"), "300");
+  EXPECT_EQ(jsonExtractScalar(json, "$[2][2].[2]"), "300");
 }
 
 TEST_F(JsonExtractScalarTest, jsonType) {
@@ -164,13 +176,29 @@ TEST_F(JsonExtractScalarTest, utf8) {
 }
 
 TEST_F(JsonExtractScalarTest, invalidPath) {
-  EXPECT_THROW(jsonExtractScalar(R"([0,1,2])", ""), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"([0,1,2])", "$[]"), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"([0,1,2])", "$[-1]"), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"({"k1":"v1"})", "$k1"), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"({"k1":"v1"})", "$.k1."), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"({"k1":"v1"})", "$.k1]"), VeloxUserError);
-  EXPECT_THROW(jsonExtractScalar(R"({"k1":"v1)", "$.k1]"), VeloxUserError);
+  VELOX_ASSERT_THROW(jsonExtractScalar(R"([0,1,2])", ""), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"([0,1,2])", "$[]"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"([0,1,2])", "$[-1]"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":"v1"})", "$k1"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":"v1"})", "$.k1."), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":"v1"})", "$.k1]"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":"v1)", "$.k1]"), "Invalid JSON path");
+
+  // Paths without leading '$'.
+  VELOX_ASSERT_THROW(jsonExtractScalar(R"([1,2])", "[0]"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"([1,2])", ".[0]"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":"v1"})", ".k1"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtractScalar(R"({"k1":{"k2": 999}})", ".k1.k2"),
+      "Invalid JSON path");
 }
 
 // simdjson, like Presto java, returns the large number as-is as a string,

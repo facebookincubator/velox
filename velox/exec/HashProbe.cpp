@@ -478,6 +478,7 @@ void HashProbe::prepareInputIndicesBuffers(
   VELOX_DCHECK(spillEnabled());
   const auto maxIndicesBufferBytes = numInput * sizeof(vector_size_t);
   if (nonSpillInputIndicesBuffer_ == nullptr ||
+      !nonSpillInputIndicesBuffer_->isMutable() ||
       nonSpillInputIndicesBuffer_->size() < maxIndicesBufferBytes) {
     nonSpillInputIndicesBuffer_ = allocateIndices(numInput, pool());
     rawNonSpillInputIndicesBuffer_ =
@@ -1052,7 +1053,7 @@ bool HashProbe::maybeReadSpillOutput() {
   return true;
 }
 
-void HashProbe::fillFilterInput(vector_size_t size) {
+RowVectorPtr HashProbe::createFilterInput(vector_size_t size) {
   std::vector<VectorPtr> filterColumns(filterInputType_->size());
   for (auto projection : filterInputProjections_) {
     ensureLoadedIfNotAtEnd(projection.inputChannel);
@@ -1068,11 +1069,12 @@ void HashProbe::fillFilterInput(vector_size_t size) {
       filterInputType_->children(),
       filterColumns);
 
-  filterInput_ = std::make_shared<RowVector>(
+  return std::make_shared<RowVector>(
       pool(), filterInputType_, nullptr, size, std::move(filterColumns));
 }
 
 void HashProbe::prepareFilterRowsForNullAwareJoin(
+    RowVectorPtr& filterInput,
     vector_size_t numRows,
     bool filterPropagateNulls) {
   VELOX_CHECK_LE(numRows, kBatchSize);
@@ -1086,7 +1088,7 @@ void HashProbe::prepareFilterRowsForNullAwareJoin(
     auto* rawNullRows = nullFilterInputRows_.asMutableRange().bits();
     for (auto& projection : filterInputProjections_) {
       filterInputColumnDecodedVector_.decode(
-          *filterInput_->childAt(projection.outputChannel), filterInputRows_);
+          *filterInput->childAt(projection.outputChannel), filterInputRows_);
       if (filterInputColumnDecodedVector_.mayHaveNulls()) {
         SelectivityVector nullsInActiveRows(numRows);
         memcpy(
@@ -1285,13 +1287,14 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
     filterInputRows_.updateBounds();
   }
 
-  fillFilterInput(numRows);
+  RowVectorPtr filterInput = createFilterInput(numRows);
 
   if (nullAware_) {
-    prepareFilterRowsForNullAwareJoin(numRows, filterPropagateNulls);
+    prepareFilterRowsForNullAwareJoin(
+        filterInput, numRows, filterPropagateNulls);
   }
 
-  EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput_.get());
+  EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput.get());
   filter_->eval(0, 1, true, filterInputRows_, evalCtx, filterResult_);
 
   decodedFilterResult_.decode(*filterResult_[0], filterInputRows_);
@@ -1543,7 +1546,7 @@ void HashProbe::ensureOutputFits() {
   }
   LOG(WARNING) << "Failed to reserve " << succinctBytes(bytesToReserve)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", usage: " << succinctBytes(pool()->usedBytes())
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 
@@ -1574,9 +1577,9 @@ void HashProbe::reclaim(
         << "Can't reclaim from hash probe operator, state_["
         << ProbeOperatorState(state_) << "], nonReclaimableSection_["
         << nonReclaimableSection_ << "], " << pool()->name()
-        << ", usage: " << succinctBytes(pool()->currentBytes())
-        << ", node pool usage: "
-        << succinctBytes(pool()->parent()->currentBytes());
+        << ", usage: " << succinctBytes(pool()->usedBytes())
+        << ", node pool reservation: "
+        << succinctBytes(pool()->parent()->reservedBytes());
     return;
   }
 
@@ -1594,9 +1597,9 @@ void HashProbe::reclaim(
           << "Can't reclaim from hash probe operator, state_["
           << ProbeOperatorState(probeOp->state_) << "], nonReclaimableSection_["
           << probeOp->nonReclaimableSection_ << "], " << probeOp->pool()->name()
-          << ", usage: " << succinctBytes(pool()->currentBytes())
-          << ", node pool usage: "
-          << succinctBytes(pool()->parent()->currentBytes());
+          << ", usage: " << succinctBytes(pool()->usedBytes())
+          << ", node pool reservation: "
+          << succinctBytes(pool()->parent()->reservedBytes());
       return;
     }
     hasMoreProbeInput |= !probeOp->noMoreSpillInput_;
@@ -1645,7 +1648,7 @@ void HashProbe::spillOutput(const std::vector<HashProbe*>& operators) {
   for (auto* op : operators) {
     HashProbe* probeOp = static_cast<HashProbe*>(op);
     spillTasks.push_back(
-        std::make_shared<AsyncSource<SpillResult>>([probeOp]() {
+        memory::createAsyncMemoryReclaimTask<SpillResult>([probeOp]() {
           try {
             probeOp->spillOutput();
             return std::make_unique<SpillResult>(nullptr);
@@ -1668,7 +1671,7 @@ void HashProbe::spillOutput(const std::vector<HashProbe*>& operators) {
       // this runs.
       try {
         spillTask->move();
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
       }
     }
   });
@@ -1747,8 +1750,8 @@ SpillPartitionSet HashProbe::spillTable() {
     if (rowContainer->numRows() == 0) {
       continue;
     }
-    spillTasks.push_back(
-        std::make_shared<AsyncSource<SpillResult>>([this, rowContainer]() {
+    spillTasks.push_back(memory::createAsyncMemoryReclaimTask<SpillResult>(
+        [this, rowContainer]() {
           try {
             return std::make_unique<SpillResult>(spillTable(rowContainer));
           } catch (const std::exception& e) {
@@ -1770,7 +1773,7 @@ SpillPartitionSet HashProbe::spillTable() {
       // this runs.
       try {
         spillTask->move();
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
       }
     }
   });

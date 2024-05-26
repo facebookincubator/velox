@@ -128,9 +128,12 @@ inline int64_t fromDateString(const StringView& str) {
 /// ParseMode. Refer to ParseMode enum for further info.
 ///
 /// Throws VeloxUserError if the format or date is invalid.
-int32_t castFromDateString(const char* buf, size_t len, ParseMode mode);
+Expected<int32_t>
+castFromDateString(const char* buf, size_t len, ParseMode mode);
 
-inline int32_t castFromDateString(const StringView& str, ParseMode mode) {
+inline Expected<int32_t> castFromDateString(
+    const StringView& str,
+    ParseMode mode) {
   return castFromDateString(str.data(), str.size(), mode);
 }
 
@@ -156,12 +159,50 @@ inline int64_t fromTimeString(const StringView& str) {
 
 // Timestamp conversion
 
-/// Parses a full ISO 8601 timestamp string, following the format
-/// "YYYY-MM-DD HH:MM[:SS[.MS]] +00:00"
-Timestamp fromTimestampString(const char* buf, size_t len);
+/// Parses a full ISO 8601 timestamp string, following the format:
+///
+///  "YYYY-MM-DD HH:MM[:SS[.MS]]"
+///
+/// Seconds and milliseconds are optional.
+///
+/// This function does not accept any timezone information in the string (e.g.
+/// UTC, Z, or a timezone offsets). This is because the returned timestamp does
+/// not contain timezone information; therefore, it would either be required for
+/// this function to convert the parsed timestamp (but we don't know the
+/// original timezone), or ignore the timezone information, which would be
+/// incorecct.
+///
+/// For a timezone-aware version of this function, check
+/// `fromTimestampWithTimezoneString()` below.
+Expected<Timestamp> fromTimestampString(const char* buf, size_t len);
 
-inline Timestamp fromTimestampString(const StringView& str) {
+inline Expected<Timestamp> fromTimestampString(const StringView& str) {
   return fromTimestampString(str.data(), str.size());
+}
+
+/// Parses a full ISO 8601 timestamp string, following the format:
+///
+///  "YYYY-MM-DD HH:MM[:SS[.MS]] +00:00"
+///
+/// This is a timezone-aware version of the function above
+/// `fromTimestampString()` which returns both the parsed timestamp and the
+/// timezone ID. It is up to the client to do the expected conversion based on
+/// these two values.
+///
+/// The timezone information at the end of the string may contain a timezone
+/// name (as defined in velox/type/tz/*), such as "UTC" or
+/// "America/Los_Angeles", or a timezone offset, like "+06:00" or "-09:30". The
+/// white space between the hour definition and timestamp is optional.
+///
+/// -1 means no timezone information was found. Throws VeloxUserError in case of
+/// parsing errors.
+Expected<std::pair<Timestamp, int64_t>> fromTimestampWithTimezoneString(
+    const char* buf,
+    size_t len);
+
+inline Expected<std::pair<Timestamp, int64_t>> fromTimestampWithTimezoneString(
+    const StringView& str) {
+  return fromTimestampWithTimezoneString(str.data(), str.size());
 }
 
 Timestamp fromDatetime(int64_t daysSinceEpoch, int64_t microsSinceMidnight);

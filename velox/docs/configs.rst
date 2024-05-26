@@ -471,6 +471,16 @@ Each query can override the config by setting corresponding query session proper
      - 9
      - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
        Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).
+   * - hive.orc.writer.linear-stripe-size-heuristics
+     - orc_writer_linear_stripe_size_heuristics
+     - bool
+     - true
+     - Enables historical based stripe size estimation after compression.
+   * - hive.orc.writer.min-compression-size
+     - orc_writer_min_compression_size
+     - integer
+     - 1024
+     - Minimal number of items in an encoded stream.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -559,6 +569,14 @@ Each query can override the config by setting corresponding query session proper
      - string
      -
      - The GCS service account configuration as json string.
+   * - hive.gcs.max-retry-count
+     - integer
+     -
+     - The GCS maximum retry counter of transient errors.
+   * - hive.gcs.max-retry-time
+     - string
+     -
+     - The GCS maximum time allowed to retry transient errors.
 
 ``Azure Blob Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

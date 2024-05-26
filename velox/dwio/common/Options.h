@@ -45,7 +45,7 @@ enum class FileFormat {
   TEXT = 5,
   JSON = 6,
   PARQUET = 7,
-  ALPHA = 8,
+  NIMBLE = 8,
   ORC = 9,
 };
 
@@ -79,6 +79,7 @@ class SerDeOptions {
   inline static const std::string kFieldDelim{"field.delim"};
   inline static const std::string kCollectionDelim{"collection.delim"};
   inline static const std::string kMapKeyDelim{"mapkey.delim"};
+  inline static const std::string kEscapeChar{"escape.delim"};
 
   explicit SerDeOptions(
       uint8_t fieldDelim = '\1',
@@ -107,6 +108,11 @@ struct TableParameter {
       "serialization.null.format";
 };
 
+struct RowNumberColumnInfo {
+  column_index_t insertPosition;
+  std::string name;
+};
+
 /**
  * Options for creating a RowReader.
  */
@@ -129,7 +135,8 @@ class RowReaderOptions {
   // operations.
   std::shared_ptr<folly::Executor> decodingExecutor_;
   size_t decodingParallelismFactor_{0};
-  bool appendRowNumberColumn_ = false;
+  std::optional<RowNumberColumnInfo> rowNumberColumnInfo_ = std::nullopt;
+
   // Function to populate metrics related to feature projection stats
   // in Koski. This gets fired in FlatMapColumnReader.
   // This is a bit of a hack as there is (by design) no good way
@@ -141,8 +148,10 @@ class RowReaderOptions {
   // Function to track how much time we spend waiting on IO before reading rows
   // (in dwrf row reader). todo: encapsulate this and keySelectionCallBack_ in a
   // struct
-  std::function<void(uint64_t)> blockedOnIoCallback_;
-  std::function<void(uint64_t)> decodingTimeUsCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      blockedOnIoCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      decodingTimeCallback_;
   std::function<void(uint16_t)> stripeCountCallback_;
   bool eagerFirstStripeLoad = true;
   uint64_t skipRows_ = 0;
@@ -326,18 +335,13 @@ class RowReaderOptions {
     decodingParallelismFactor_ = factor;
   }
 
-  /*
-   * Set to true, if you want to add a new column to the results containing the
-   * row numbers.  These row numbers are relative to the beginning of file (0 as
-   * first row) and does not affected by filtering or deletion during the read
-   * (it always counts all rows in the file).
-   */
-  void setAppendRowNumberColumn(bool value) {
-    appendRowNumberColumn_ = value;
+  void setRowNumberColumnInfo(
+      std::optional<RowNumberColumnInfo> rowNumberColumnInfo) {
+    rowNumberColumnInfo_ = std::move(rowNumberColumnInfo);
   }
 
-  bool getAppendRowNumberColumn() const {
-    return appendRowNumberColumn_;
+  const std::optional<RowNumberColumnInfo>& getRowNumberColumnInfo() const {
+    return rowNumberColumnInfo_;
   }
 
   void setKeySelectionCallback(
@@ -354,20 +358,25 @@ class RowReaderOptions {
   }
 
   void setBlockedOnIoCallback(
-      std::function<void(int64_t)> blockedOnIoCallback) {
+      std::function<void(std::chrono::high_resolution_clock::duration)>
+          blockedOnIoCallback) {
     blockedOnIoCallback_ = std::move(blockedOnIoCallback);
   }
 
-  const std::function<void(int64_t)> getBlockedOnIoCallback() const {
+  const std::function<void(std::chrono::high_resolution_clock::duration)>
+  getBlockedOnIoCallback() const {
     return blockedOnIoCallback_;
   }
 
-  void setDecodingTimeUsCallback(std::function<void(int64_t)> decodingTimeUs) {
-    decodingTimeUsCallback_ = std::move(decodingTimeUs);
+  void setDecodingTimeCallback(
+      std::function<void(std::chrono::high_resolution_clock::duration)>
+          decodingTime) {
+    decodingTimeCallback_ = std::move(decodingTime);
   }
 
-  std::function<void(int64_t)> getDecodingTimeUsCallback() const {
-    return decodingTimeUsCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+  getDecodingTimeCallback() const {
+    return decodingTimeCallback_;
   }
 
   void setStripeCountCallback(
@@ -601,7 +610,9 @@ struct WriterOptions {
   const velox::common::SpillConfig* spillConfig{nullptr};
   tsan_atomic<bool>* nonReclaimableSection{nullptr};
   std::optional<velox::common::CompressionKind> compressionKind;
+  std::optional<uint64_t> orcMinCompressionSize{std::nullopt};
   std::optional<uint64_t> maxStripeSize{std::nullopt};
+  std::optional<bool> orcLinearStripeSizeHeuristics{std::nullopt};
   std::optional<uint64_t> maxDictionaryMemory{std::nullopt};
   std::map<std::string, std::string> serdeParameters;
   std::optional<uint8_t> parquetWriteTimestampUnit;

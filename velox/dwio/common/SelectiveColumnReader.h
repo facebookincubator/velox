@@ -294,9 +294,8 @@ class SelectiveColumnReader {
   template <typename T>
   inline void addNull() {
     VELOX_DCHECK_NE(valueSize_, kNoValueSize);
-    VELOX_DCHECK_LE(
-        rawResultNulls_ && rawValues_ && (numValues_ + 1) * valueSize_,
-        values_->capacity());
+    VELOX_DCHECK(rawResultNulls_ && rawValues_);
+    VELOX_DCHECK_LE((numValues_ + 1) * valueSize_, values_->capacity());
 
     anyNulls_ = true;
     bits::setNull(rawResultNulls_, numValues_);
@@ -380,7 +379,7 @@ class SelectiveColumnReader {
   // discard nulls. This is used at read prepare time. useFastPath()
   // in DecoderUtil.h is used at read time and is expected to produce
   // the same result.
-  virtual bool useBulkPath() const {
+  bool useBulkPath() const {
     auto filter = scanSpec_->filter();
     return hasBulkPath() && process::hasAvx2() &&
         (!filter ||
@@ -441,15 +440,26 @@ class SelectiveColumnReader {
     isFlatMapValue_ = value;
   }
 
- protected:
   // Filters 'rows' according to 'is_null'. Only applies to cases where
   // scanSpec_->readsNullsOnly() is true.
   template <typename T>
   void filterNulls(RowSet rows, bool isNull, bool extractValues);
 
+  // Temporary method for estimate in-memory row size (number of bits) of this
+  // column for Nimble.  Will be removed once column statistics are added for
+  // Nimble.
+  virtual std::optional<size_t> estimatedRowBitSize() const {
+    return std::nullopt;
+  }
+
+ protected:
   template <typename T>
   void
   prepareRead(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls);
+
+  virtual bool readsNullsOnly() const {
+    return scanSpec_->readsNullsOnly();
+  }
 
   void setOutputRows(RowSet rows) {
     outputRows_.resize(rows.size());
@@ -669,6 +679,8 @@ inline void SelectiveColumnReader::addValue(const folly::StringPiece value) {
   }
   addStringValue(value);
 }
+
+velox::common::AlwaysTrue& alwaysTrue();
 
 } // namespace facebook::velox::dwio::common
 

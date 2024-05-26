@@ -32,18 +32,37 @@ PrestoCastHooks::PrestoCastHooks(const core::QueryConfig& config)
   }
 }
 
-Timestamp PrestoCastHooks::castStringToTimestamp(const StringView& view) const {
-  return util::fromTimestampString(view.data(), view.size());
+Expected<Timestamp> PrestoCastHooks::castStringToTimestamp(
+    const StringView& view) const {
+  const auto conversionResult =
+      util::fromTimestampWithTimezoneString(view.data(), view.size());
+  if (conversionResult.hasError()) {
+    return folly::makeUnexpected(conversionResult.error());
+  }
+
+  auto result = conversionResult.value();
+
+  // If the parsed string has timezone information, convert the timestamp at
+  // GMT at that time. For example, "1970-01-01 00:00:00 -00:01" is 60 seconds
+  // at GMT.
+  if (result.second != -1) {
+    result.first.toGMT(result.second);
+
+  }
+  // If no timezone information is available in the input string, check if we
+  // should understand it as being at the session timezone, and if so, convert
+  // to GMT.
+  else if (options_.timeZone != nullptr) {
+    result.first.toGMT(*options_.timeZone);
+  }
+  return result.first;
 }
 
-int32_t PrestoCastHooks::castStringToDate(const StringView& dateString) const {
+Expected<int32_t> PrestoCastHooks::castStringToDate(
+    const StringView& dateString) const {
   // Cast from string to date allows only complete ISO 8601 formatted strings:
   // [+-](YYYY-MM-DD).
   return util::castFromDateString(dateString, util::ParseMode::kStandardCast);
-}
-
-bool PrestoCastHooks::legacy() const {
-  return legacyCast_;
 }
 
 StringView PrestoCastHooks::removeWhiteSpaces(const StringView& view) const {
@@ -53,9 +72,5 @@ StringView PrestoCastHooks::removeWhiteSpaces(const StringView& view) const {
 const TimestampToStringOptions& PrestoCastHooks::timestampToStringOptions()
     const {
   return options_;
-}
-
-bool PrestoCastHooks::truncate() const {
-  return false;
 }
 } // namespace facebook::velox::exec
