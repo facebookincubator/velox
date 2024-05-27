@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "velox/expression/fuzzer/FuzzerRunner.h"
+#include "velox/expression/fuzzer/SparkSpecialFormSignatureGenerator.h"
 #include "velox/functions/sparksql/Register.h"
 
 DEFINE_int64(
@@ -60,5 +61,10 @@ int main(int argc, char** argv) {
   std::unordered_map<std::string, std::string> queryConfigs = {
       {facebook::velox::core::QueryConfig::kSparkPartitionId, "123"}};
 
-  return FuzzerRunner::run(FLAGS_seed, skipFunctions, queryConfigs);
+  return FuzzerRunner::run(
+      FLAGS_seed,
+      skipFunctions,
+      queryConfigs,
+      std::make_shared<
+          facebook::velox::fuzzer::SparkSpecialFormSignatureGenerator>());
 }

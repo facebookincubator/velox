@@ -19,6 +19,7 @@
 #include <unordered_set>
 
 #include "velox/expression/fuzzer/FuzzerRunner.h"
+#include "velox/expression/fuzzer/SpecialFormSignatureGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 DEFINE_int64(
@@ -68,5 +69,10 @@ int main(int argc, char** argv) {
       "regexp_split",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return FuzzerRunner::run(initialSeed, skipFunctions, {{}});
+  return FuzzerRunner::run(
+      initialSeed,
+      skipFunctions,
+      {{}},
+      std::make_shared<
+          facebook::velox::fuzzer::SpecialFormSignatureGenerator>());
 }
