@@ -194,7 +194,7 @@ void Window::createWindowFunctions() {
   }
 }
 
-// Support 'rank' and
+// Support 'rank', 'dense_rank' and
 // 'row_number' functions and the agg window function with default frame.
 bool Window::supportRowsStreaming() {
   bool supportsStreaming = false;
@@ -210,8 +210,7 @@ bool Window::supportRowsStreaming() {
           (frame.startType ==
                core::WindowNode::BoundType::kUnboundedPreceding &&
            frame.endType == core::WindowNode::BoundType::kCurrentRow);
-      if (windowFunctionMetadata.supportsSlidingFrame ||
-          (!windowFunctionMetadata.supportsSlidingFrame && isDefaultFrame)) {
+      if (windowFunctionMetadata.supportsSlidingFrame || isDefaultFrame) {
         supportsStreaming = true;
       } else {
         supportsStreaming = false;

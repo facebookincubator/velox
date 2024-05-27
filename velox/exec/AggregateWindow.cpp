@@ -427,7 +427,7 @@ void registerAggregateWindowFunction(const std::string& name) {
               stringAllocator,
               config);
         },
-        {exec::Scope::kRows, false});
+        {exec::Scope::kRows, true});
   }
 }
 } // namespace facebook::velox::exec

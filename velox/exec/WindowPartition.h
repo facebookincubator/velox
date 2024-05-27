@@ -209,6 +209,12 @@ class WindowPartition {
   // of WindowPartition.
   folly::Range<char**> partition_;
 
+  // Indicates that the partial window partitioning process has been completed.
+  bool complete_ = false;
+
+  // Indicates partial window partition.
+  bool partial_ = false;
+
   // Mapping from window input column -> index in data_. This is required
   // because the WindowBuild reorders data_ to place partition and sort keys
   // before other columns in data_. But the Window Operator and Function code
@@ -229,11 +235,5 @@ class WindowPartition {
 
   // The partition offset of the first row in rows_.
   vector_size_t startRow_ = 0;
-
-  // Indicates that the partial window partitioning process has been completed.
-  bool complete_ = false;
-
-  // Indicates partial window partition.
-  bool partial_ = false;
 };
 } // namespace facebook::velox::exec
