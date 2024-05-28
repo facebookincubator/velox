@@ -69,7 +69,7 @@ option(
   "Build a minimal set of components, including DWIO (file format readers/writers).
    This will override other build options."
   OFF)
-option(VELOX_MONO_LIBRARY "Build a single library" ON)
+option(VELOX_MONO_LIBRARY "Build single unified library." OFF)
 
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
