@@ -119,7 +119,6 @@ function(velox_compile_definitions TARGET)
   endif()
 endfunction()
 
-
 function(velox_sources TARGET)
   if(VELOX_MONO_LIBRARY)
     target_sources(velox ${ARGN})
