@@ -266,7 +266,7 @@ template <typename T>
 struct Expm1Function {
   FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     // The std::expm1 is more accurate than the expression std::exp(num) - 1.0 if num is close to zero.
-    // Spark uses Java's StrictMath we need to keep it as below.
+    // This matches Spark's implementation that uses java.lang.StrictMath.expm1 as below.
     // Ref: https://docs.oracle.com/javase/8/docs/api/java/lang/StrictMath.html#expm1-double-.
     result = std::expm1(a);
   }
