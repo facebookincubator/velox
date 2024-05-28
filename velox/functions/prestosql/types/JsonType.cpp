@@ -76,15 +76,7 @@ void generateJsonTyped(
               util::Converter<TypeKind::VARCHAR>::tryCast(value).value());
         }
       } else {
-        if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
-          folly::toAppend<std::string, std::string>("\"", &result);
-        }
-
         folly::toAppend<std::string, T>(value, &result);
-
-        if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
-          folly::toAppend<std::string, std::string>("\"", &result);
-        }
       }
     } else if constexpr (std::is_same_v<T, Timestamp>) {
       result.append(std::to_string(value));
