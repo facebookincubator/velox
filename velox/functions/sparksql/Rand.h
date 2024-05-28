@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <random>
 #include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -42,8 +43,28 @@ struct RandFunction {
     result = folly::Random::randDouble01(generator_);
   }
 
- private:
+ protected:
   std::mt19937 generator_;
+};
+
+/*
+ * This is inheritaed from the rand as we should align them with the same random generator
+ * to save maintain effort.
+ */
+template <typename T>
+struct RandnFunction: RandFunction<T> {
+
+  FOLLY_ALWAYS_INLINE void call(double& result) {
+    result = standard_nd(folly::ThreadLocalPRNG());
+  };
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void callNullable(double& result, TInput /*seedInput*/) {
+    result = standard_nd(generator_);
+  };
+
+ private:
+  std::normal_distribution<double> standard_nd{0.0, 1.0};
 };
 
 } // namespace facebook::velox::functions::sparksql
