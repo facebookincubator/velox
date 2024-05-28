@@ -1289,6 +1289,22 @@ struct LevenshteinDistanceFunction {
  private:
   // This implementation only computes the distance if it's less than or equal
   // to the threshold value, setting result as -1 if it's greater.
+  // Threshold k allows us to reduce it to O(km) time by only computing a
+  // diagonal stripe of at most width 2k + 1 of the cost table.
+  // One example: suppose s is of length 5, t is of length 7,
+  // and our threshold is 1. In this case we're going to walk a stripe of
+  // length 3. The matrix would look like so:
+  //
+  // <pre>
+  //    0 1 2 3 4
+  // 0 |#|#| | | | --> lower boundary:0, upper:2;
+  // 1 |#|#|#| | | --> lower boundary:0, upper:3;
+  // 2 | |#|#|#| | --> lower boundary:1, upper:4;
+  // 3 | | |#|#|#| --> lower boundary:2, upper:5;
+  // 4 | | | |#|#| --> lower boundary:3, upper:5;
+  // 5 | | | | |#| --> lower boundary:4, upper:5;
+  // 6 | | | | | |
+  // </pre>
   template <typename TCodePoint>
   void doCall(
       out_type<int32_t>& result,
@@ -1307,6 +1323,13 @@ struct LevenshteinDistanceFunction {
           threshold);
       return;
     }
+    VELOX_USER_CHECK_LE(
+        leftCodePointsSize,
+        INT32_MAX,
+        "The inputs size exceeded max Levenshtein distance input size,"
+        " the code points size of left is {}, code points size of right is {}",
+        leftCodePointsSize,
+        rightCodePointsSize);
     if (leftCodePointsSize - rightCodePointsSize > threshold) {
       result = -1;
       return;
@@ -1319,7 +1342,7 @@ struct LevenshteinDistanceFunction {
     distances.reserve(rightCodePointsSize);
     // These fills ensure that the value above the rightmost entry of our
     // stripe will be ignored in following loop iterations.
-    int32_t boundary = std::min<int64_t>(rightCodePointsSize, threshold);
+    int32_t boundary = std::min<int32_t>(rightCodePointsSize, threshold);
     auto i = 0;
     for (; i < boundary; i++) {
       distances.push_back(i + 1);
@@ -1329,31 +1352,31 @@ struct LevenshteinDistanceFunction {
     }
 
     for (auto i = 0; i < leftCodePointsSize; i++) {
-      auto min = std::max<int32_t>(0, i - threshold);
+      auto lower = std::max<int32_t>(0, i - threshold);
       int32_t maxValueWithThreshold;
-      int32_t max = rightCodePointsSize;
+      int32_t upper = rightCodePointsSize;
       if (!__builtin_add_overflow(i + 1, threshold, &maxValueWithThreshold)) {
-        max = std::min<int64_t>(rightCodePointsSize, maxValueWithThreshold);
+        upper = std::min<int32_t>(rightCodePointsSize, maxValueWithThreshold);
       }
-      if (min > max) {
+      if (lower > upper) {
         result = -1;
         return;
       }
       int32_t leftUpDistance;
-      if (min == 0) {
-        leftUpDistance = distances[min];
+      if (lower == 0) {
+        leftUpDistance = distances[lower];
         if (leftCodePoints[i] == rightCodePoints[0]) {
           distances[0] = i;
         } else {
           distances[0] = std::min(i, distances[0]) + 1;
         }
-        min = 1;
+        lower = 1;
       } else {
-        leftUpDistance = distances[min - 1];
+        leftUpDistance = distances[lower - 1];
         // Ignore entry left of leftmost.
-        distances[min - 1] = INT32_MAX;
+        distances[lower - 1] = INT32_MAX;
       }
-      for (int j = min; j < max; j++) {
+      for (int j = lower; j < upper; j++) {
         auto leftUpDistanceNext = distances[j];
         if (leftCodePoints[i] == rightCodePoints[j]) {
           distances[j] = leftUpDistance;

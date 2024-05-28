@@ -204,58 +204,57 @@ TEST_F(StringTest, levenshtein) {
 }
 
 TEST_F(StringTest, levenshteinWithThreshold) {
-  const auto levenshteinWithThreshold =
-      [&](const std::optional<std::string>& left,
-          const std::optional<std::string>& right,
-          const std::optional<int32_t>& threshold) {
-        return evaluateOnce<int32_t>(
-            "levenshtein(c0, c1, c2)", left, right, threshold);
-      };
+  const auto levenshtein = [&](const std::optional<std::string>& left,
+                               const std::optional<std::string>& right,
+                               const std::optional<int32_t>& threshold) {
+    return evaluateOnce<int32_t>(
+        "levenshtein(c0, c1, c2)", left, right, threshold);
+  };
 
-  EXPECT_EQ(levenshteinWithThreshold("kitten", "sitting", 2), -1);
+  EXPECT_EQ(levenshtein("kitten", "sitting", 2), -1);
 
-  EXPECT_EQ(levenshteinWithThreshold("", "", 0), 0);
+  EXPECT_EQ(levenshtein("", "", 0), 0);
 
-  EXPECT_EQ(levenshteinWithThreshold("aaapppp", "", 8), 7);
-  EXPECT_EQ(levenshteinWithThreshold("aaapppp", "", 7), 7);
-  EXPECT_EQ(levenshteinWithThreshold("aaapppp", "", 6), -1);
+  EXPECT_EQ(levenshtein("aaapppp", "", 8), 7);
+  EXPECT_EQ(levenshtein("aaapppp", "", 7), 7);
+  EXPECT_EQ(levenshtein("aaapppp", "", 6), -1);
 
-  EXPECT_EQ(levenshteinWithThreshold("elephant", "hippo", 7), 7);
-  EXPECT_EQ(levenshteinWithThreshold("elephant", "hippo", 6), -1);
-  EXPECT_EQ(levenshteinWithThreshold("hippo", "elephant", 7), 7);
-  EXPECT_EQ(levenshteinWithThreshold("hippo", "elephant", 6), -1);
+  EXPECT_EQ(levenshtein("elephant", "hippo", 7), 7);
+  EXPECT_EQ(levenshtein("elephant", "hippo", 6), -1);
+  EXPECT_EQ(levenshtein("hippo", "elephant", 7), 7);
+  EXPECT_EQ(levenshtein("hippo", "elephant", 6), -1);
 
-  EXPECT_EQ(levenshteinWithThreshold("b", "a", 0), -1);
-  EXPECT_EQ(levenshteinWithThreshold("a", "b", 0), -1);
+  EXPECT_EQ(levenshtein("b", "a", 0), -1);
+  EXPECT_EQ(levenshtein("a", "b", 0), -1);
 
-  EXPECT_EQ(levenshteinWithThreshold("aa", "aa", 0), 0);
-  EXPECT_EQ(levenshteinWithThreshold("aa", "aa", 2), 0);
+  EXPECT_EQ(levenshtein("aa", "aa", 0), 0);
+  EXPECT_EQ(levenshtein("aa", "aa", 2), 0);
 
-  EXPECT_EQ(levenshteinWithThreshold("aaa", "bbb", 2), -1);
-  EXPECT_EQ(levenshteinWithThreshold("aaa", "bbb", 3), 3);
+  EXPECT_EQ(levenshtein("aaa", "bbb", 2), -1);
+  EXPECT_EQ(levenshtein("aaa", "bbb", 3), 3);
 
-  EXPECT_EQ(levenshteinWithThreshold("aaaaaa", "b", 10), 6);
+  EXPECT_EQ(levenshtein("aaaaaa", "b", 10), 6);
 
-  EXPECT_EQ(levenshteinWithThreshold("aaapppp", "b", 8), 7);
-  EXPECT_EQ(levenshteinWithThreshold("a", "bbb", 4), 3);
+  EXPECT_EQ(levenshtein("aaapppp", "b", 8), 7);
+  EXPECT_EQ(levenshtein("a", "bbb", 4), 3);
 
-  EXPECT_EQ(levenshteinWithThreshold("aaapppp", "b", 7), 7);
-  EXPECT_EQ(levenshteinWithThreshold("a", "bbb", 3), 3);
+  EXPECT_EQ(levenshtein("aaapppp", "b", 7), 7);
+  EXPECT_EQ(levenshtein("a", "bbb", 3), 3);
 
-  EXPECT_EQ(levenshteinWithThreshold("a", "bbb", 2), -1);
-  EXPECT_EQ(levenshteinWithThreshold("bbb", "a", 2), -1);
-  EXPECT_EQ(levenshteinWithThreshold("aaapppp", "b", 6), -1);
+  EXPECT_EQ(levenshtein("a", "bbb", 2), -1);
+  EXPECT_EQ(levenshtein("bbb", "a", 2), -1);
+  EXPECT_EQ(levenshtein("aaapppp", "b", 6), -1);
 
-  EXPECT_EQ(levenshteinWithThreshold("a", "bbb", 1), -1);
-  EXPECT_EQ(levenshteinWithThreshold("bbb", "a", 1), -1);
+  EXPECT_EQ(levenshtein("a", "bbb", 1), -1);
+  EXPECT_EQ(levenshtein("bbb", "a", 1), -1);
 
-  EXPECT_EQ(levenshteinWithThreshold("12345", "1234567", 1), -1);
-  EXPECT_EQ(levenshteinWithThreshold("1234567", "12345", 1), -1);
+  EXPECT_EQ(levenshtein("12345", "1234567", 1), -1);
+  EXPECT_EQ(levenshtein("1234567", "12345", 1), -1);
 
-  EXPECT_EQ(levenshteinWithThreshold("千世", "fog", 3), 3);
-  EXPECT_EQ(levenshteinWithThreshold("千世", "fog", 2), -1);
-  EXPECT_EQ(levenshteinWithThreshold("世界千世", "大a界b", 4), 4);
-  EXPECT_EQ(levenshteinWithThreshold("世界千世", "大a界b", 3), -1);
+  EXPECT_EQ(levenshtein("千世", "fog", 3), 3);
+  EXPECT_EQ(levenshtein("千世", "fog", 2), -1);
+  EXPECT_EQ(levenshtein("世界千世", "大a界b", 4), 4);
+  EXPECT_EQ(levenshtein("世界千世", "大a界b", 3), -1);
 }
 
 TEST_F(StringTest, endsWith) {
