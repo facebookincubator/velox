@@ -16,9 +16,9 @@
 
 velox_add_library(velox_s3fs RegisterS3FileSystem.cpp)
 if(VELOX_ENABLE_S3)
-  target_sources(velox_s3fs PRIVATE S3FileSystem.cpp S3Util.cpp)
+  velox_sources(velox_s3fs PRIVATE S3FileSystem.cpp S3Util.cpp)
 
-  target_include_directories(velox_s3fs PUBLIC ${AWSSDK_INCLUDE_DIRS})
+  velox_include_directories(velox_s3fs PUBLIC ${AWSSDK_INCLUDE_DIRS})
   velox_link_libraries(velox_s3fs velox_dwio_common Folly::folly
                        ${AWSSDK_LIBRARIES})
 

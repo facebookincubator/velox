@@ -118,3 +118,12 @@ function(velox_compile_definitions TARGET)
     target_compile_definitions(${TARGET} ${ARGN})
   endif()
 endfunction()
+
+
+function(velox_sources TARGET)
+  if(VELOX_MONO_LIBRARY)
+    target_sources(velox ${ARGN})
+  else()
+    target_sources(${TARGET} ${ARGN})
+  endif()
+endfunction()
