@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 
@@ -27,6 +28,7 @@ class S3FileSystemTest : public S3Test {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
+    filesystems::registerS3FileSystem();
   }
 
   void SetUp() override {
@@ -36,7 +38,7 @@ class S3FileSystemTest : public S3Test {
   }
 
   static void TearDownTestSuite() {
-    filesystems::finalizeS3();
+    filesystems::finalizeS3FileSystem();
   }
 };
 } // namespace
