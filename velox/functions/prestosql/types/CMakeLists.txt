@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 velox_add_library(velox_presto_types HyperLogLogType.cpp JsonType.cpp
-                               TimestampWithTimeZoneType.cpp)
+                  TimestampWithTimeZoneType.cpp)
 
 velox_link_libraries(velox_presto_types velox_memory velox_expression velox_functions_util
   velox_functions_json velox_functions_lib_date_time_formatter)

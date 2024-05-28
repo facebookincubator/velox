@@ -19,8 +19,8 @@ endif()
 velox_add_library(velox_dwio_dwrf_utils ProtoUtils.cpp BitIterator.h)
 
 if(NOT VELOX_MONO_LIBRARY)
-add_dependencies(velox_dwio_dwrf_utils velox_dwio_dwrf_proto)
+  add_dependencies(velox_dwio_dwrf_utils velox_dwio_dwrf_proto)
 endif()
 
 velox_link_libraries(velox_dwio_dwrf_utils velox_dwio_dwrf_proto velox_type
-                      velox_memory)
+                     velox_memory)

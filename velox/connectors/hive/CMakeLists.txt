@@ -18,7 +18,8 @@ velox_link_libraries(velox_hive_config velox_core velox_exception)
 add_subdirectory(iceberg)
 
 velox_add_library(
-  velox_hive_connector OBJECT
+  velox_hive_connector
+  OBJECT
   FileHandle.cpp
   HiveConfig.cpp
   HiveConnector.cpp

@@ -17,7 +17,5 @@ if(${VELOX_BUILD_TESTING})
 endif()
 
 velox_add_library(velox_common_compression Compression.cpp LzoDecompressor.cpp)
-velox_link_libraries(
-  velox_common_compression
-  PUBLIC Folly::folly
-  PRIVATE velox_exception)
+velox_link_libraries(velox_common_compression PUBLIC Folly::folly PRIVATE
+                     velox_exception)

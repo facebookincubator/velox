@@ -3,10 +3,8 @@ cmake_policy(SET CMP0063 NEW)
 
 project(dbgen CXX C)
 
-
 add_library(
-  dbgen 
-  STATIC
+  dbgen STATIC
   dbgen.cpp
   dbgen_gunk.cpp
   bm_utils.cpp

@@ -16,7 +16,7 @@ if(${VELOX_BUILD_TESTING})
 endif()
 
 velox_add_library(velox_window CumeDist.cpp FirstLastValue.cpp LeadLag.cpp
-                         WindowFunctionsRegistration.cpp)
+                  WindowFunctionsRegistration.cpp)
 
 velox_link_libraries(velox_window velox_buffer velox_exec
-                      velox_functions_window Folly::folly)
+                     velox_functions_window Folly::folly)

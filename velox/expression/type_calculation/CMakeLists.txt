@@ -25,17 +25,16 @@ flex_target(
 add_flex_bison_dependency(TypeCalculationScanner TypeCalculationParser)
 
 if(VELOX_MONO_LIBRARY)
-  add_custom_target(velox_type_calculation_gen_src
-    DEPENDS 
-      ${BISON_TypeCalculationParser_OUTPUTS}
-      ${FLEX_TypeCalculationScanner_OUTPUTS})
+  add_custom_target(
+    velox_type_calculation_gen_src
+    DEPENDS ${BISON_TypeCalculationParser_OUTPUTS}
+            ${FLEX_TypeCalculationScanner_OUTPUTS})
   add_dependencies(velox velox_type_calculation_gen_src)
 endif()
 
 include_directories(${PROJECT_BINARY_DIR})
 include_directories(${FLEX_INCLUDE_DIRS})
 velox_add_library(
-  velox_type_calculation
-  ${BISON_TypeCalculationParser_OUTPUTS} ${FLEX_TypeCalculationScanner_OUTPUTS}
-  Scanner.h TypeCalculation.h)
+  velox_type_calculation ${BISON_TypeCalculationParser_OUTPUTS}
+  ${FLEX_TypeCalculationScanner_OUTPUTS} Scanner.h TypeCalculation.h)
 velox_link_libraries(velox_type_calculation velox_common_base)

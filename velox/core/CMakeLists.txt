@@ -21,21 +21,29 @@ velox_link_libraries(
   PUBLIC velox_exception Folly::folly
   PRIVATE velox_type_tz)
 
-velox_add_library(velox_core Expressions.cpp PlanFragment.cpp PlanNode.cpp
-                       QueryConfig.cpp QueryCtx.cpp SimpleFunctionMetadata.cpp)
+velox_add_library(
+  velox_core
+  Expressions.cpp
+  PlanFragment.cpp
+  PlanNode.cpp
+  QueryConfig.cpp
+  QueryCtx.cpp
+  SimpleFunctionMetadata.cpp)
 
 velox_link_libraries(
   velox_core
-  PUBLIC velox_arrow_bridge
-         velox_caching
-         velox_config
-         velox_connector
-         velox_exception
-         velox_expression_functions
-         velox_memory
-         velox_type
-         velox_vector
-         Boost::headers
-         Folly::folly
-         fmt::fmt
-  PRIVATE velox_encode)
+  PUBLIC
+  velox_arrow_bridge
+  velox_caching
+  velox_config
+  velox_connector
+  velox_exception
+  velox_expression_functions
+  velox_memory
+  velox_type
+  velox_vector
+  Boost::headers
+  Folly::folly
+  fmt::fmt
+  PRIVATE
+  velox_encode)

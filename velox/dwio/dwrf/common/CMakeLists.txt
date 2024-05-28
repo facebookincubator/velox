@@ -29,7 +29,7 @@ velox_add_library(
   wrap/orc-proto-wrapper.cpp)
 
 if(NOT VELOX_MONO_LIBRARY)
-add_dependencies(velox_dwio_dwrf_common velox_dwio_dwrf_proto)
+  add_dependencies(velox_dwio_dwrf_common velox_dwio_dwrf_proto)
 endif()
 
 velox_link_libraries(

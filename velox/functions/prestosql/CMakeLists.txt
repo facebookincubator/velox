@@ -76,8 +76,8 @@ velox_link_libraries(
   stemmer::stemmer)
 
 if(NOT VELOX_MONO_LIBRARY)
-set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE
-                                                            high_memory_pool)
+  set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE
+                                                              high_memory_pool)
 endif()
 
 if(${VELOX_ENABLE_AGGREGATES})

@@ -17,4 +17,4 @@ endif()
 
 velox_add_library(velox_time CpuWallTimer.cpp Timer.cpp)
 velox_link_libraries(velox_time PUBLIC velox_process velox_test_util
-                                        Folly::folly fmt::fmt)
+                     Folly::folly fmt::fmt)

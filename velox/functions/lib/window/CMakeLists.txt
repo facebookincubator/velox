@@ -13,10 +13,10 @@
 # limitations under the License.
 
 velox_add_library(velox_functions_window NthValue.cpp Ntile.cpp Rank.cpp
-                                   RowNumber.cpp)
+                  RowNumber.cpp)
 
 velox_link_libraries(velox_functions_window velox_buffer velox_exec
-                      Folly::folly)
+                     Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

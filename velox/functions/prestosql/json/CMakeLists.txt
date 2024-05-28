@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 velox_add_library(velox_functions_json JsonExtractor.cpp JsonPathTokenizer.cpp
-                                 SIMDJsonExtractor.cpp SIMDJsonUtil.cpp)
+                  SIMDJsonExtractor.cpp SIMDJsonUtil.cpp)
 
 velox_link_libraries(velox_functions_json velox_exception Folly::folly
-                      simdjson::simdjson)
+                     simdjson::simdjson)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

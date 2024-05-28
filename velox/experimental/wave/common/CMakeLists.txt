@@ -16,7 +16,7 @@ velox_add_library(velox_wave_common GpuArena.cpp Buffer.cpp Cuda.cu Exception.cp
                               Type.cpp ResultStaging.cpp)
 
 velox_link_libraries(velox_wave_common velox_exception velox_common_base
-                      velox_type)
+                     velox_type)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

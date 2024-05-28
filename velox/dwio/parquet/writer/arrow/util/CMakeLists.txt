@@ -23,4 +23,4 @@ velox_add_library(
   Crc32.cpp)
 
 velox_link_libraries(velox_dwio_arrow_parquet_writer_util_lib arrow
-                      Snappy::snappy zstd::zstd ZLIB::ZLIB lz4::lz4)
+                     Snappy::snappy zstd::zstd ZLIB::ZLIB lz4::lz4)

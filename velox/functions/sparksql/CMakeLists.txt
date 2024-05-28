@@ -53,8 +53,8 @@ velox_link_libraries(
   Folly::folly)
 
 if(NOT VELOX_MONO_LIBRARY)
-set_property(TARGET velox_functions_spark PROPERTY JOB_POOL_COMPILE
-                                                   high_memory_pool)
+  set_property(TARGET velox_functions_spark PROPERTY JOB_POOL_COMPILE
+                                                     high_memory_pool)
 endif()
 
 add_subdirectory(window)

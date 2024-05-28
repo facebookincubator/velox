@@ -42,9 +42,9 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT VELOX_MONO_LIBRARY)
 endif()
 
 velox_link_libraries(velox_functions_prestosql velox_functions_prestosql_impl
-                      velox_is_null_functions simdjson::simdjson)
+                     velox_is_null_functions simdjson::simdjson)
 
 if(NOT VELOX_MONO_LIBRARY)
-set_property(TARGET velox_functions_prestosql PROPERTY JOB_POOL_COMPILE
-                                                       high_memory_pool)
+  set_property(TARGET velox_functions_prestosql PROPERTY JOB_POOL_COMPILE
+                                                         high_memory_pool)
 endif()

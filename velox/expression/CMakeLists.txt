@@ -16,9 +16,8 @@ velox_add_library(velox_type_signature OBJECT TypeSignature.cpp)
 
 velox_link_libraries(velox_type_signature velox_common_base)
 
-velox_add_library(
-  velox_expression_functions FunctionSignature.cpp SignatureBinder.cpp
-                             ReverseSignatureBinder.cpp)
+velox_add_library(velox_expression_functions FunctionSignature.cpp
+                  SignatureBinder.cpp ReverseSignatureBinder.cpp)
 
 velox_link_libraries(
   velox_expression_functions velox_common_base velox_type_calculation

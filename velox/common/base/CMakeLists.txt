@@ -12,10 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_exception Exceptions.cpp VeloxException.cpp Exceptions.h)
+velox_add_library(velox_exception Exceptions.cpp VeloxException.cpp
+                  Exceptions.h)
 velox_link_libraries(
-  velox_exception PUBLIC velox_flag_definitions velox_process Folly::folly
-                         fmt::fmt gflags::gflags glog::glog)
+  velox_exception
+  PUBLIC
+  velox_flag_definitions
+  velox_process
+  Folly::folly
+  fmt::fmt
+  gflags::gflags
+  glog::glog)
 
 velox_add_library(
   velox_common_base
@@ -34,8 +41,16 @@ velox_add_library(
 
 velox_link_libraries(
   velox_common_base
-  PUBLIC velox_exception Folly::folly fmt::fmt xsimd
-  PRIVATE velox_common_compression velox_process velox_test_util glog::glog)
+  PUBLIC
+  velox_exception
+  Folly::folly
+  fmt::fmt
+  xsimd
+  PRIVATE
+  velox_common_compression
+  velox_process
+  velox_test_util
+  glog::glog)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
@@ -57,7 +72,5 @@ velox_link_libraries(
   gflags::gflags)
 
 velox_add_library(velox_status Status.cpp)
-velox_link_libraries(
-  velox_status
-  PUBLIC fmt::fmt Folly::folly
-  PRIVATE glog::glog)
+velox_link_libraries(velox_status PUBLIC fmt::fmt Folly::folly PRIVATE
+                     glog::glog)
