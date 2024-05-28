@@ -58,10 +58,7 @@ void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
       buildNextInputOrPartition(true);
     }
 
-    // Wait for the peers to be ready in single partition; these peers are the
-    // rows that have identical values in the ORDER BY clause.
-    if (previousRow_ != nullptr && inputRows_.size() >= numRowsPerOutput_ &&
-        compareRowsWithKeys(previousRow_, newRow, sortKeyInfo_)) {
+    if (previousRow_ != nullptr && inputRows_.size() >= numRowsPerOutput_) {
       buildNextInputOrPartition(false);
     }
 
