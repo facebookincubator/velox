@@ -86,8 +86,8 @@ function(velox_add_library TARGET)
 endfunction()
 
 function(velox_link_libraries TARGET)
-  # TODO(assignUser): Handle scope keywords 
-  # (they currently are empty calls ala target_link_libraries(target PRIVATE))
+  # TODO(assignUser): Handle scope keywords (they currently are empty calls ala
+  # target_link_libraries(target PRIVATE))
   if(VELOX_MONO_LIBRARY)
     message(DEBUG "${TARGET}: ${ARGN}")
     foreach(_lib ${ARGN})

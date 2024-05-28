@@ -24,16 +24,18 @@ velox_add_library(
   StringIdMap.cpp)
 velox_link_libraries(
   velox_caching
-  PUBLIC velox_common_base
-         velox_exception
-         velox_file
-         velox_memory
-         velox_process
-         velox_time
-         Folly::folly
-         fmt::fmt
-         gflags::gflags
-  PRIVATE velox_time)
+  PUBLIC
+  velox_common_base
+  velox_exception
+  velox_file
+  velox_memory
+  velox_process
+  velox_time
+  Folly::folly
+  fmt::fmt
+  gflags::gflags
+  PRIVATE
+  velox_time)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
