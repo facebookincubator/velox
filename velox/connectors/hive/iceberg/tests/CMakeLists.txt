@@ -19,7 +19,7 @@ target_link_libraries(
   velox_exec
   velox_hive_connector
   Folly::folly
-  ${FOLLY_BENCHMARK}
+  Folly::follybenchmark
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_iceberg_reader_benchmark
@@ -32,7 +32,7 @@ target_link_libraries(
   velox_exec
   velox_hive_connector
   Folly::folly
-  ${FOLLY_BENCHMARK}
+  Folly::follybenchmark
   ${TEST_LINK_LIBS})
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
@@ -54,7 +54,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_exec
     velox_exec_test_lib
     Folly::folly
-    ${FOLLY_BENCHMARK}
+    Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main)
 
