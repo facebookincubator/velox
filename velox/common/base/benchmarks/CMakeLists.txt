@@ -15,5 +15,5 @@ add_executable(velox_common_base_benchmarks BitUtilBenchmark.cpp)
 
 target_link_libraries(
   velox_common_base_benchmarks
-  PUBLIC ${FOLLY_BENCHMARK}
+  PUBLIC Folly::follybenchmark
   PRIVATE velox_common_base Folly::folly)

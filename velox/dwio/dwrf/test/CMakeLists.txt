@@ -494,7 +494,7 @@ target_link_libraries(
 add_executable(velox_dwrf_int_encoder_benchmark IntEncoderBenchmark.cpp)
 target_link_libraries(
   velox_dwrf_int_encoder_benchmark velox_dwio_dwrf_common velox_memory
-  velox_dwio_common_exception Folly::folly ${FOLLY_BENCHMARK})
+  velox_dwio_common_exception Folly::folly Folly::follybenchmark)
 
 add_executable(velox_dwrf_float_column_writer_benchmark
                FloatColumnWriterBenchmark.cpp)
@@ -504,7 +504,7 @@ target_link_libraries(
   velox_dwio_common_exception
   velox_dwio_dwrf_writer
   Folly::folly
-  ${FOLLY_BENCHMARK}
+  Folly::follybenchmark
   fmt::fmt)
 
 add_executable(velox_dwio_cache_test CacheInputTest.cpp

@@ -14,7 +14,7 @@
 add_executable(velox_vector_hash_all_benchmark SimpleVectorHashAllBenchmark.cpp)
 
 target_link_libraries(velox_vector_hash_all_benchmark velox_vector Folly::folly
-                      ${FOLLY_BENCHMARK} fmt::fmt)
+                      Folly::follybenchmark fmt::fmt)
 # This is a workaround for the use of VectorTestUtils.h which include gtest.h
 target_link_libraries(velox_vector_hash_all_benchmark gtest)
 
@@ -22,13 +22,13 @@ add_executable(velox_vector_selectivity_vector_benchmark
                SelectivityVectorBenchmark.cpp)
 
 target_link_libraries(velox_vector_selectivity_vector_benchmark velox_vector
-                      Folly::folly ${FOLLY_BENCHMARK})
+                      Folly::folly Folly::follybenchmark)
 
 add_executable(copy_benchmark CopyBenchmark.cpp)
 
 target_link_libraries(copy_benchmark velox_vector_test_lib Folly::folly
-                      ${FOLLY_BENCHMARK})
+                      Folly::follybenchmark)
 
 add_executable(velox_vector_map_update_benchmark MapUpdateBenchmark.cpp)
 target_link_libraries(velox_vector_map_update_benchmark velox_vector_test_lib
-                      Folly::folly ${FOLLY_BENCHMARK} gflags::gflags glog::glog)
+                      Folly::folly Folly::follybenchmark gflags::gflags glog::glog)
