@@ -24,9 +24,58 @@ if(VELOX_ENABLE_ARROW)
   else()
     set(THRIFT_SOURCE "BUNDLED")
   endif()
+  if(DEFINED ENV{ARROW_EP_PATH})
+    message(
+      STATUS
+        "Arrow path is set: ${ARROW_EP_PATH}, trying to use existing arrow libraries."
+    )
+    set(ARROW_LIB_PATH $ENV{ARROW_EP_PATH}/install/lib/)
+    find_library(ARROW_LIB libarrow.a PATHS ${ARROW_LIB_PATH})
+    find_library(PARQUET_LIB libparquet.a PATHS ${ARROW_LIB_PATH})
+    find_library(ARROW_TESTING_LIB libarrow_testing.a PATHS ${ARROW_LIB_PATH})
+    if("${ARROW_LIB}" STREQUAL "ARROW_LIB-NOTFOUND"
+       OR "${PARQUET_LIB}" STREQUAL "PARQUET_LIB-NOTFOUND"
+       OR "${ARROW_TESTING_LIB}" STREQUAL "ARROW_TESTING_LIB-NOTFOUND")
+      message(FATAL_ERROR "Arrow libraries not found in ${ARROW_LIB_PATH}")
+    endif()
+
+    add_library(thrift STATIC IMPORTED GLOBAL)
+    if(NOT Thrift_FOUND)
+      set(THRIFT_ROOT $ENV{ARROW_EP_PATH}/src/arrow_ep-build/thrift_ep-install)
+      find_library(THRIFT_LIB thrift PATHS ${THRIFT_ROOT}/lib)
+      if("${THRIFT_LIB}" STREQUAL "THRIFT_LIB-NOTFOUND")
+        message(FATAL_ERROR "Thrift library not found in ${THRIFT_ROOT}/lib")
+      endif()
+      set(THRIFT_INCLUDE_DIR ${THRIFT_ROOT}/include)
+    endif()
+    set_property(TARGET thrift PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+                                        ${THRIFT_INCLUDE_DIR})
+    set_property(TARGET thrift PROPERTY IMPORTED_LOCATION ${THRIFT_LIB})
+
+    add_library(arrow STATIC IMPORTED GLOBAL)
+    add_library(parquet STATIC IMPORTED GLOBAL)
+    add_library(arrow_testing STATIC IMPORTED GLOBAL)
+
+    set_target_properties(
+      arrow arrow_testing parquet PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
+                                             $ENV{ARROW_EP_PATH}/install/include)
+    set_target_properties(arrow PROPERTIES IMPORTED_LOCATION ${ARROW_LIB})
+    set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
+    set_target_properties(parquet PROPERTIES IMPORTED_LOCATION ${PARQUET_LIB})
+    set_target_properties(arrow_testing PROPERTIES IMPORTED_LOCATION
+                                                   ${ARROW_TESTING_LIB})
+
+    message(
+      STATUS
+        "Using existing arrow libraries: ${ARROW_LIB}, ${PARQUET_LIB}, ${ARROW_TESTING_LIB}"
+    )
+    return()
+  endif()
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
   set(ARROW_CMAKE_ARGS
-      -DARROW_PARQUET=OFF
+      -DARROW_PARQUET=ON
+      -DARROW_FILESYSTEM=ON
+      -DARROW_PROTOBUF_USE_SHARED=OFF
       -DARROW_WITH_THRIFT=ON
       -DARROW_WITH_LZ4=ON
       -DARROW_WITH_SNAPPY=ON
@@ -69,6 +118,7 @@ if(VELOX_ENABLE_ARROW)
     arrow_ep
     PREFIX ${ARROW_PREFIX}
     URL ${VELOX_ARROW_SOURCE_URL}
+    PATCH_COMMAND patch -p1 < ${CMAKE_CURRENT_SOURCE_DIR}/modify_arrow.patch
     URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
     SOURCE_SUBDIR cpp
     CMAKE_ARGS ${ARROW_CMAKE_ARGS}
