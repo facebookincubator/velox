@@ -13,12 +13,8 @@
 # limitations under the License.
 
 set(BENCHMARK_DEPENDENCIES
-    velox_functions_test_lib
-    velox_exec
-    velox_exec_test_lib
-    gflags::gflags
-    Folly::folly
-    ${FOLLY_BENCHMARK})
+    velox_functions_test_lib velox_exec velox_exec_test_lib gflags::gflags
+    Folly::folly Folly::follybenchmark)
 
 add_executable(velox_benchmark_call_null_free_no_nulls
                CallNullFreeBenchmark.cpp)
