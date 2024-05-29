@@ -106,6 +106,10 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     // Keep the reference to the deleteFilePath, otherwise the corresponding
     // file will be deleted.
     std::vector<std::shared_ptr<TempFilePath>> deleteFilePaths;
+    // Use PARQUET instead of default DWRF if Parquet Writer Factory is present
+    if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
+      fileFormat_ = {dwio::common::FileFormat::PARQUET};
+    }
     for (const auto& dataFilePath : dataFilePaths) {
       std::mt19937 gen{0};
       int64_t numDeleteRowsBefore =
@@ -124,7 +128,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         IcebergDeleteFile deleteFile(
             FileContent::kPositionalDeletes,
             deleteFilePath->getPath(),
-            fileFomat_,
+            fileFormat_,
             deleteRows.size() + numDeleteRowsBefore + numDeleteRowsAfter,
             testing::internal::GetFileSize(std::fopen(path.c_str(), "r")));
         deleteFilePaths.emplace_back(deleteFilePath);
@@ -157,10 +161,15 @@ class HiveIcebergTest : public HiveConnectorTestBase {
                     ->openFileForRead(dataFilePath);
     const int64_t fileSize = file->size();
 
+    // Use PARQUET instead of default DWRF if Parquet Writer Factory is present
+    if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
+      fileFormat_ = {dwio::common::FileFormat::PARQUET};
+    }
+
     return std::make_shared<HiveIcebergSplit>(
         kHiveConnectorId,
         dataFilePath,
-        fileFomat_,
+        fileFormat_,
         0,
         fileSize,
         partitionKeys,
@@ -279,7 +288,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return PlanBuilder(pool_.get()).tableScan(rowType_).planNode();
   }
 
-  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
   std::shared_ptr<IcebergMetadataColumn> pathColumn_ =
       IcebergMetadataColumn::icebergDeleteFilePathColumn();
