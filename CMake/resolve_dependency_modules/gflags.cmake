@@ -27,30 +27,22 @@ FetchContent_Declare(
   gflags
   URL ${VELOX_GFLAGS_SOURCE_URL}
   URL_HASH ${VELOX_GFLAGS_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/gflags/gflags-config.patch)
+  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/gflags/gflags-config.patch
+                OVERRIDE_FIND_PACKAGE EXCLUDE_FROM_ALL SYSTEM)
 
-set(GFLAGS_BUILD_SHARED_LIBS ON)
-set(GFLAGS_BUILD_STATIC_LIBS OFF)
+# glog relies on the old `google` namespace
+set(GFLAGS_NAMESPACE "google;gflags")
+
+set(GFLAGS_BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
+set(GFLAGS_BUILD_STATIC_LIBS ${VELOX_BUILD_STATIC})
+
 set(GFLAGS_BUILD_gflags_LIB ON)
 set(GFLAGS_BUILD_gflags_nothreads_LIB ON)
 set(GFLAGS_IS_SUBPROJECT ON)
-# glog relies on the old `google` namespace
-set(GFLAGS_NAMESPACE "google;gflags")
-# unset(BUILD_SHARED_LIBS)
-FetchContent_MakeAvailable(gflags)
-# set(BUILD_SHARED_LIBS ON)
-add_library(gflags::gflags ALIAS gflags_shared)
-if(TARGET gflags::gflags)
-  get_target_property(AliasedTarget gflags::gflags ALIASED_TARGET)
-  message(FATAL_ERROR "gflags: ${AliasedTarget}")
-endif()
-# the flag has to be added to each target we build so adjust to settings choosen
-# above target_compile_options(gflags_shared PRIVATE -Wno-cast-function-type)
-# target_compile_options(gflags_nothreads_shared PRIVATE
-# -Wno-cast-function-type)
 
+# Workaround for https://github.com/gflags/gflags/issues/277
+unset(BUILD_SHARED_LIBS)
+FetchContent_MakeAvailable(gflags)
 # this causes find_package(gflags) to search in the build directory and prevents
-# the system gflags from being found
-set(gflags_DIR ${gflags_BINARY_DIR})
-set(gflags_LIBRARY gflags::gflags)
-set(gflags_INCLUDE_DIR ${gflags_BINARY_DIR}/include)
+# the system gflags from being found set(gflags_LIBRARY gflags::gflags)
+# set(gflags_INCLUDE_DIR ${gflags_BINARY_DIR}/include)
