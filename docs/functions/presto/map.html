@@ -93,7 +93,8 @@
 <dt class="sig sig-object py">
 <span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(K)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span></dt>
 <dd><blockquote>
-<div><p>Returns a map created using the given key/value arrays. Keys are not allowed to be null or to contain nulls.</p>
+<div><p>Returns a map created using the given key/value arrays. Keys are not allowed to be null or to contain nulls.
+For REAL and DOUBLE, NaNs (Not-a-Number) are considered equal.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">map</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span> <span class="o">-&gt;</span> <span class="mi">4</span><span class="p">}</span>
 </pre></div>
 </div>
@@ -238,6 +239,7 @@ For keys only presented in one map, NULL will be passed as the value for the mis
 <span class="sig-name descname"><span class="pre">subscript</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">V</span></span></span></dt>
 <dd><blockquote>
 <div><p>Returns value for given <code class="docutils literal notranslate"><span class="pre">key</span></code>. Return null if the key is not contained in the map.
+For REAL and DOUBLE, NaNs (Not-a-Number) are considered equal and can be used as keys.
 Corresponds to SQL subscript operator [].</p>
 <p>SELECT name_to_age_map[‘Bob’] AS bob_age;</p>
 </div></blockquote>
