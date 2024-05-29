@@ -499,46 +499,46 @@ TEST_F(MergeJoinTest, lazyVectors) {
 }
 
 TEST_F(MergeJoinTest, semiJoin) {
-  auto left =
-      makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 6})});
+  auto left = makeRowVector(
+      {"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 6, std::nullopt})});
 
-  auto right =
-      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 7})});
+  auto right = makeRowVector(
+      {"u0"},
+      {makeNullableFlatVector<int64_t>(
+          {1, 2, 2, 7, std::nullopt, std::nullopt})});
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
 
-  // Left Semi join.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({left})
-          .mergeJoin(
-              {"t0"},
-              {"u0"},
-              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
-              "t0 > 1",
-              {"t0"},
-              core::JoinType::kLeftSemiFilter)
-          .planNode();
-  AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .assertResults(
-          "SELECT t0 FROM t where t0 IN (SELECT u0 from u) and t0 > 1");
+  auto testSemiJoin = [&](const std::string& filter,
+                          const std::string& sql,
+                          const std::vector<std::string>& outputLayout,
+                          core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .mergeJoin(
+                {"t0"},
+                {"u0"},
+                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+                filter,
+                outputLayout,
+                joinType)
+            .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults(sql);
+  };
 
-  // Right Semi join.
-  plan = PlanBuilder(planNodeIdGenerator)
-             .values({left})
-             .mergeJoin(
-                 {"t0"},
-                 {"u0"},
-                 PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
-                 "u0 > 1",
-                 {"u0"},
-                 core::JoinType::kRightSemiFilter)
-             .planNode();
-  AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .assertResults(
-          "SELECT u0 FROM u where u0 IN (SELECT t0 from t) and u0 > 1");
+  testSemiJoin(
+      "t0 >1",
+      "SELECT t0 FROM t where t0 IN (SELECT u0 from u) and t0 > 1",
+      {"t0"},
+      core::JoinType::kLeftSemiFilter);
+  testSemiJoin(
+      "u0 > 1",
+      "SELECT u0 FROM u where u0 IN (SELECT t0 from t) and u0 > 1",
+      {"u0"},
+      core::JoinType::kRightSemiFilter);
 }
 
 TEST_F(MergeJoinTest, nullKeys) {

@@ -397,6 +397,10 @@ bool MergeJoin::addToOutput() {
         auto rightEnd =
             r == numRights - 1 ? rightMatch_->endIndex : right->size();
 
+        // TODO: Since semi joins only require determining if there is at least
+        // one match on the other side, we could explore specialized algorithms
+        // or data structures that short-circuit the join process once a match
+        // is found.
         if (isLeftSemiFilterJoin(joinType_) ||
             isRightSemiFilterJoin(joinType_)) {
           // LeftSemiFilter produce each row from the left at most once.
