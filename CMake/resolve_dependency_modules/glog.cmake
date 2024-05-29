@@ -27,8 +27,10 @@ FetchContent_Declare(
   glog
   URL ${VELOX_GLOG_SOURCE_URL}
   URL_HASH ${VELOX_GLOG_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/glog/glog-no-export.patch
-                && git apply ${CMAKE_CURRENT_LIST_DIR}/glog/glog-config.patch)
+  PATCH_COMMAND
+    git apply ${CMAKE_CURRENT_LIST_DIR}/glog/glog-no-export.patch && git apply
+    ${CMAKE_CURRENT_LIST_DIR}/glog/glog-config.patch OVERRIDE_FIND_PACKAGE
+    SYSTEM EXCLUDE_FROM_ALL)
 
 set(BUILD_SHARED_LIBS OFF)
 set(WITH_UNWIND OFF)

@@ -51,6 +51,7 @@ list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
 include(VeloxUtils)
+include(CMakeDependentOption)
 
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -70,6 +71,11 @@ option(
    This will override other build options."
   OFF)
 option(VELOX_MONO_LIBRARY "Build single unified library." OFF)
+option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
+# While it's possible to build both in one go we currently want to build either
+# static or shared.
+cmake_dependent_option(VELOX_BUILD_STATIC "Build Velox as static libraries." ON
+                       "NOT VELOX_BUILD_SHARED" OFF)
 
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
@@ -381,10 +387,14 @@ set(BOOST_INCLUDE_LIBRARIES
 set_source(Boost)
 resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 
-# Range-v3 will be enable when the codegen code actually lands keeping it here
-# for reference. find_package(range-v3)
+if(VELOX_BUILD_SHARED)
+  # We have to enforce the bundled build for now to make sure folly uses the
+  # shared gflags to avoid linking issues
+  set(gflags_SOURCE BUNDLED)
+else()
+  set_source(gflags)
+endif()
 
-set_source(gflags)
 resolve_dependency(gflags COMPONENTS ${VELOX_GFLAGS_TYPE})
 if(NOT TARGET gflags::gflags)
   # This is a bit convoluted, but we want to be able to use gflags::gflags as a
@@ -457,8 +467,13 @@ set_source(simdjson)
 resolve_dependency(simdjson 3.9.3)
 
 # Locate or build folly.
-add_compile_definitions(FOLLY_HAVE_INT128_T=1)
-set_source(folly)
+if(VELOX_BUILD_SHARED)
+  # We have to enforce the bundled build for now to avoid linking issues with
+  # gflags
+  set(folly_SOURCE BUNDLED)
+else()
+  set_source(folly)
+endif()
 resolve_dependency(folly)
 
 if(${VELOX_BUILD_TESTING})
@@ -594,4 +609,7 @@ if(VELOX_ENABLE_ARROW)
   resolve_dependency(Arrow)
 endif()
 
+if(VELOX_BUILD_SHARED)
+  set(BUILD_SHARED_LIBS ON)
+endif()
 add_subdirectory(velox)
