@@ -69,7 +69,7 @@ option(
   "Build a minimal set of components, including DWIO (file format readers/writers).
    This will override other build options."
   OFF)
-option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
+option(VELOX_BUILD_SHARED "Build Velox as shared libraries." ON)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
 cmake_dependent_option(VELOX_BUILD_STATIC "Build Velox as static libraries." ON
