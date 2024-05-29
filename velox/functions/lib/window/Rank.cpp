@@ -114,7 +114,7 @@ void registerRankInternal(
         name,
         std::move(signatures),
         std::move(windowFunctionFactory),
-        {exec::Scope::kRows, true});
+        {exec::Scope::kRows, false});
   } else {
     exec::registerWindowFunction(
         name, std::move(signatures), std::move(windowFunctionFactory));

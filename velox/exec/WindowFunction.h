@@ -46,7 +46,7 @@ enum class Scope {
 /// that can change as the query progresses.
 struct WindowFunctionMetadata {
   Scope scope;
-  bool supportsSlidingFrame;
+  bool onlySupportDefaultFrame;
 };
 
 class WindowFunction {
