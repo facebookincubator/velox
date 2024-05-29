@@ -31,6 +31,7 @@
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
 
@@ -71,6 +72,8 @@ class WriterFuzzer {
     opts.vectorSize = FLAGS_batch_size;
     opts.stringLength = 10;
     opts.nullRatio = FLAGS_null_ratio;
+    opts.timestampPrecision =
+        VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
     return opts;
   }
 
@@ -112,7 +115,10 @@ class WriterFuzzer {
       const std::string& outputDirectoryPath);
 
   // Executes velox query plan and returns the result.
-  RowVectorPtr execute(const core::PlanNodePtr& plan, int32_t maxDrivers = 2);
+  RowVectorPtr execute(
+      const core::PlanNodePtr& plan,
+      const int32_t maxDrivers = 2,
+      const std::vector<exec::Split>& splits = {});
 
   RowVectorPtr veloxToPrestoResult(const RowVectorPtr& result);
 
@@ -329,21 +335,36 @@ void WriterFuzzer::verifyWriter(
       assertEqualResults(expectedResult, plan->outputType(), {result}),
       "Velox and reference DB results don't match");
 
-  // 2. Verify directory layout.
+  // 2. Verifies directory layout.
   const auto referencedOutputDirectoryPath =
       getReferenceOutputDirectoryPath(partitionKeys.size());
   comparePartitions(outputDirectoryPath, referencedOutputDirectoryPath);
+
+  // 3. Verifies data itself.
+  auto splits = makeSplits(input, outputDirectoryPath, rootPool_);
+  auto readPlan =
+      PlanBuilder().tableScan(asRowType(input[0]->type())).planNode();
+  auto actual = execute(readPlan, maxDrivers, splits);
+  auto reference_data =
+      referenceQueryRunner_->execute("SELECT * FROM tmp_write");
+  VELOX_CHECK(
+      assertEqualResults(reference_data, {actual}),
+      "Velox and reference DB results don't match");
 
   LOG(INFO) << "Verified results against reference DB";
 }
 
 RowVectorPtr WriterFuzzer::execute(
     const core::PlanNodePtr& plan,
-    int32_t maxDrivers) {
+    const int32_t maxDrivers,
+    const std::vector<exec::Split>& splits) {
   LOG(INFO) << "Executing query plan: " << std::endl
             << plan->toString(true, true);
   fuzzer::ResultOrError resultOrError;
   AssertQueryBuilder builder(plan);
+  if (!splits.empty()) {
+    builder.splits(splits);
+  }
   return builder.maxDrivers(maxDrivers).copyResults(pool_.get());
 }
 
