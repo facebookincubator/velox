@@ -169,6 +169,16 @@ Overflow results return null. Corresponds to Spark’s operator <code class="doc
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="expm1">
+<span class="sig-name descname"><span class="pre">expm1</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#expm1" title="Link to this definition">¶</a></dt>
+<dd><p>Returns Euler’s number raised to the power of <code class="docutils literal notranslate"><span class="pre">x</span></code>, minus 1, which is <code class="docutils literal notranslate"><span class="pre">exp(x)</span> <span class="pre">-</span> <span class="pre">1</span></code> in math. This function expm1(x) is more accurate than <code class="docutils literal notranslate"><span class="pre">exp(x)</span> <span class="pre">-</span> <span class="pre">1</span></code>, when <code class="docutils literal notranslate"><span class="pre">x</span></code> is close to zero.
+If the argument is NaN, the result is NaN.
+If the argument is positive infinity, then the result is positive infinity.
+If the argument is negative infinity, then the result is -1.0.
+If the argument is zero, then the result is a zero with the same sign as the argument.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="floor">
 <span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#floor" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded down to the nearest integer.
@@ -426,6 +436,7 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#divide"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#exp"><code class="docutils literal notranslate"><span class="pre">exp()</span></code></a></li>
+<li><a class="reference internal" href="#expm1"><code class="docutils literal notranslate"><span class="pre">expm1()</span></code></a></li>
 <li><a class="reference internal" href="#floor"><code class="docutils literal notranslate"><span class="pre">floor()</span></code></a></li>
 <li><a class="reference internal" href="#hex"><code class="docutils literal notranslate"><span class="pre">hex()</span></code></a></li>
 <li><a class="reference internal" href="#hypot"><code class="docutils literal notranslate"><span class="pre">hypot()</span></code></a></li>
