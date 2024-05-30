@@ -60,9 +60,21 @@
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="asin">
+<span class="sig-name descname"><span class="pre">asin</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#asin" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the arc sine of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="asinh">
 <span class="sig-name descname"><span class="pre">asinh</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#asinh" title="Link to this definition">¶</a></dt>
 <dd><p>Returns inverse hyperbolic sine of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="atan">
+<span class="sig-name descname"><span class="pre">atan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#atan" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the arc tangent of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -117,6 +129,12 @@ Supported types are: BIGINT and DOUBLE.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="cos">
+<span class="sig-name descname"><span class="pre">cos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#cos" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the cosine of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="cosh">
 <span class="sig-name descname"><span class="pre">cosh</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#cosh" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the hyperbolic cosine of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
@@ -132,6 +150,12 @@ Supported types are: BIGINT and DOUBLE.</p>
 <dt class="sig sig-object spark" id="csc">
 <span class="sig-name descname"><span class="pre">csc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#csc" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the cosecant of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="degrees">
+<span class="sig-name descname"><span class="pre">degrees</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#degrees" title="Link to this definition">¶</a></dt>
+<dd><p>Converts angle x in radians to degrees.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -211,6 +235,13 @@ if the argument is a negative BIGINT, the result is a hex representation of the 
 <span class="sig-name descname"><span class="pre">isnan</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#isnan" title="Link to this definition">¶</a></dt>
 <dd><p>Returns true if x is Nan, or false otherwise. Returns false is x is NULL.
 Supported types are: REAL, DOUBLE.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="log1p">
+<span class="sig-name descname"><span class="pre">log1p</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#log1p" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the natural logarithm of the “given value <code class="docutils literal notranslate"><span class="pre">x</span></code> plus one”.
+Return NULL if x is less than or equal to -1.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -423,16 +454,20 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#abs"><code class="docutils literal notranslate"><span class="pre">abs()</span></code></a></li>
 <li><a class="reference internal" href="#acos"><code class="docutils literal notranslate"><span class="pre">acos()</span></code></a></li>
 <li><a class="reference internal" href="#acosh"><code class="docutils literal notranslate"><span class="pre">acosh()</span></code></a></li>
+<li><a class="reference internal" href="#asin"><code class="docutils literal notranslate"><span class="pre">asin()</span></code></a></li>
 <li><a class="reference internal" href="#asinh"><code class="docutils literal notranslate"><span class="pre">asinh()</span></code></a></li>
+<li><a class="reference internal" href="#atan"><code class="docutils literal notranslate"><span class="pre">atan()</span></code></a></li>
 <li><a class="reference internal" href="#atan2"><code class="docutils literal notranslate"><span class="pre">atan2()</span></code></a></li>
 <li><a class="reference internal" href="#atanh"><code class="docutils literal notranslate"><span class="pre">atanh()</span></code></a></li>
 <li><a class="reference internal" href="#add"><code class="docutils literal notranslate"><span class="pre">add()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">add()</span></code></a></li>
 <li><a class="reference internal" href="#bin"><code class="docutils literal notranslate"><span class="pre">bin()</span></code></a></li>
 <li><a class="reference internal" href="#ceil"><code class="docutils literal notranslate"><span class="pre">ceil()</span></code></a></li>
+<li><a class="reference internal" href="#cos"><code class="docutils literal notranslate"><span class="pre">cos()</span></code></a></li>
 <li><a class="reference internal" href="#cosh"><code class="docutils literal notranslate"><span class="pre">cosh()</span></code></a></li>
 <li><a class="reference internal" href="#cot"><code class="docutils literal notranslate"><span class="pre">cot()</span></code></a></li>
 <li><a class="reference internal" href="#csc"><code class="docutils literal notranslate"><span class="pre">csc()</span></code></a></li>
+<li><a class="reference internal" href="#degrees"><code class="docutils literal notranslate"><span class="pre">degrees()</span></code></a></li>
 <li><a class="reference internal" href="#divide"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#exp"><code class="docutils literal notranslate"><span class="pre">exp()</span></code></a></li>
@@ -441,6 +476,7 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#hex"><code class="docutils literal notranslate"><span class="pre">hex()</span></code></a></li>
 <li><a class="reference internal" href="#hypot"><code class="docutils literal notranslate"><span class="pre">hypot()</span></code></a></li>
 <li><a class="reference internal" href="#isnan"><code class="docutils literal notranslate"><span class="pre">isnan()</span></code></a></li>
+<li><a class="reference internal" href="#log1p"><code class="docutils literal notranslate"><span class="pre">log1p()</span></code></a></li>
 <li><a class="reference internal" href="#log2"><code class="docutils literal notranslate"><span class="pre">log2()</span></code></a></li>
 <li><a class="reference internal" href="#log10"><code class="docutils literal notranslate"><span class="pre">log10()</span></code></a></li>
 <li><a class="reference internal" href="#multiply"><code class="docutils literal notranslate"><span class="pre">multiply()</span></code></a></li>

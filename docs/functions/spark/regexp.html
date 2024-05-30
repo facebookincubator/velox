@@ -52,6 +52,30 @@ that contain <code class="docutils literal notranslate"><span class="pre">[,</sp
 difference of the character classes.</p>
 <p>See <a class="reference external" href="https://github.com/google/re2/wiki/Syntax">https://github.com/google/re2/wiki/Syntax</a> for more information.</p>
 <dl class="spark function">
+<dt class="sig sig-object spark" id="like">
+<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#like" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">escape</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span></dt>
+<dd><p>Evaluates if the <code class="docutils literal notranslate"><span class="pre">string</span></code> matches the <code class="docutils literal notranslate"><span class="pre">pattern</span></code>. Patterns can contain
+regular characters as well as wildcards. Wildcard characters can be escaped
+using the single character specified for the <code class="docutils literal notranslate"><span class="pre">escape</span></code> parameter. Only ASCII
+characters are supported for the <code class="docutils literal notranslate"><span class="pre">escape</span></code> parameter. Matching is case sensitive.</p>
+<p>Note: The wildcard ‘%’ represents 0, 1 or multiple characters and the
+wildcard ‘_’ represents exactly one character.</p>
+<p>Note: Each function instance allow for a maximum of 20 regular expressions to
+be compiled per thread of execution. Not all patterns require
+compilation of regular expressions. Patterns ‘hello’, ‘hello%’, ‘_hello__%’,
+‘%hello’, ‘%__hello_’, ‘%hello%’, where ‘hello’, ‘velox’
+contains only regular characters and ‘_’ wildcards are evaluated without
+using regular expressions. Only those patterns that require the compilation of
+regular expressions are counted towards the limit.</p>
+<blockquote>
+<div><p>SELECT like(‘abc’, ‘%b%’); – true
+SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="regexp_extract">
 <span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_extract" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the first substring matched by the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>
@@ -75,6 +99,26 @@ Patterns must be constant values.</p>
 </pre></div>
 </div>
 </div></blockquote>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="regexp_extract_all">
+<span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span><a class="headerlink" href="#regexp_extract_all" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the substring(s) matched by the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code>
+in <code class="docutils literal notranslate"><span class="pre">string</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">14</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span></dt>
+<dd><p>Finds all occurrences of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
+<code class="docutils literal notranslate"><span class="pre">string</span></code> and returns the capturing group number <code class="docutils literal notranslate"><span class="pre">group</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([a-z]+)&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="s1">&#39;m&#39;</span><span class="p">]</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="spark function">
@@ -149,7 +193,9 @@ Parameters:</p>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Regular Expression Functions</a><ul>
+<li><a class="reference internal" href="#like"><code class="docutils literal notranslate"><span class="pre">like()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_extract"><code class="docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_extract_all"><code class="docutils literal notranslate"><span class="pre">regexp_extract_all()</span></code></a></li>
 <li><a class="reference internal" href="#rlike"><code class="docutils literal notranslate"><span class="pre">rlike()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_replace"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
 </ul>

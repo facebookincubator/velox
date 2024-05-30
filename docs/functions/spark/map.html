@@ -59,6 +59,15 @@
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="map_entries">
+<span class="sig-name descname"><span class="pre">map_entries</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(row(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_entries" title="Link to this definition">¶</a></dt>
+<dd><p>Returns an array of all entries in the given map.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">map_entries</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;x&#39;</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">]));</span> <span class="o">--</span> <span class="p">[</span><span class="n">ROW</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;x&#39;</span><span class="p">),</span> <span class="n">ROW</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">)]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="map_filter">
 <span class="sig-name descname"><span class="pre">map_filter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">func)</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_filter" title="Link to this definition">¶</a></dt>
 <dd><p>Filters entries in a map using the function.</p>
@@ -75,6 +84,18 @@ If key size != value size will throw exception that key and value must have the 
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">map_from_arrays</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">),</span> <span class="n">array</span><span class="p">(</span><span class="s1">&#39;2&#39;</span><span class="p">,</span> <span class="s1">&#39;4&#39;</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="mf">1.0</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="mf">3.0</span> <span class="o">-&gt;</span> <span class="mi">4</span><span class="p">}</span>
 </pre></div>
 </div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="map_keys">
+<span class="sig-name descname"><span class="pre">map_keys</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(K</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_keys" title="Link to this definition">¶</a></dt>
+<dd><p>Returns all the keys in the map <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="map_values">
+<span class="sig-name descname"><span class="pre">map_values</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_values" title="Link to this definition">¶</a></dt>
+<dd><p>Returns all the values in the map <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -102,8 +123,11 @@ Otherwise, returns -1 for null input.</p>
 <li><a class="reference internal" href="#">Map Functions</a><ul>
 <li><a class="reference internal" href="#element_at"><code class="docutils literal notranslate"><span class="pre">element_at()</span></code></a></li>
 <li><a class="reference internal" href="#map"><code class="docutils literal notranslate"><span class="pre">map()</span></code></a></li>
+<li><a class="reference internal" href="#map_entries"><code class="docutils literal notranslate"><span class="pre">map_entries()</span></code></a></li>
 <li><a class="reference internal" href="#map_filter"><code class="docutils literal notranslate"><span class="pre">map_filter()</span></code></a></li>
 <li><a class="reference internal" href="#map_from_arrays"><code class="docutils literal notranslate"><span class="pre">map_from_arrays()</span></code></a></li>
+<li><a class="reference internal" href="#map_keys"><code class="docutils literal notranslate"><span class="pre">map_keys()</span></code></a></li>
+<li><a class="reference internal" href="#map_values"><code class="docutils literal notranslate"><span class="pre">map_values()</span></code></a></li>
 </ul>
 </li>
 </ul>

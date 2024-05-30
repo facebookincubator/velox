@@ -42,6 +42,12 @@
   <section id="binary-functions">
 <h1>Binary Functions<a class="headerlink" href="#binary-functions" title="Link to this heading">¶</a></h1>
 <dl class="spark function">
+<dt class="sig sig-object spark" id="crc32">
+<span class="sig-name descname"><span class="pre">crc32</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#crc32" title="Link to this definition">¶</a></dt>
+<dd><p>Computes the crc32 checksum of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="hash">
 <span class="sig-name descname"><span class="pre">hash</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hash" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the hash of one or more input values using seed value of 42. For
@@ -79,7 +85,7 @@ multiple arguments, their types can be different.</p>
 <dt class="sig sig-object spark" id="might_contain">
 <span class="sig-name descname"><span class="pre">might_contain</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">bloomFilter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#might_contain" title="Link to this definition">¶</a></dt>
 <dd><p>Returns TRUE if <code class="docutils literal notranslate"><span class="pre">bloomFilter</span></code> might contain <code class="docutils literal notranslate"><span class="pre">value</span></code>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">bloomFilter</span></code> is a VARBINARY computed using ::spark::function::<cite>bloom_filter_agg</cite> aggregate function.
+<p><code class="docutils literal notranslate"><span class="pre">bloomFilter</span></code> is a VARBINARY computed using ::spark:function::<cite>bloom_filter_agg</cite> aggregate function.
 <code class="docutils literal notranslate"><span class="pre">value</span></code> is a BIGINT.</p>
 </dd></dl>
 
@@ -114,6 +120,7 @@ Note: x can only be varbinary type.</p>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Binary Functions</a><ul>
+<li><a class="reference internal" href="#crc32"><code class="docutils literal notranslate"><span class="pre">crc32()</span></code></a></li>
 <li><a class="reference internal" href="#hash"><code class="docutils literal notranslate"><span class="pre">hash()</span></code></a></li>
 <li><a class="reference internal" href="#hash_with_seed"><code class="docutils literal notranslate"><span class="pre">hash_with_seed()</span></code></a></li>
 <li><a class="reference internal" href="#xxhash64"><code class="docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></li>
