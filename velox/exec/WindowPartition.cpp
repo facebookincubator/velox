@@ -56,6 +56,12 @@ void WindowPartition::addRows(const std::vector<char*>& rows) {
 void WindowPartition::clearOutputRows(vector_size_t numRows) {
   VELOX_CHECK(partial_, "Current WindowPartition shoule be partial.");
   if (!complete_ || (complete_ && rows_.size() > numRows)) {
+    // Store last row of partial partition.
+    previousGroupLastRow_ = BaseVector::create<FlatVector<StringView>>(
+        VARBINARY(), 1, data_->pool());
+    data_->extractSerializedRows(
+        folly::Range(rows_.data() + (numRows - 1), 1), previousGroupLastRow_);
+
     data_->eraseRows(folly::Range<char**>(rows_.data(), numRows));
     rows_.erase(rows_.begin(), rows_.begin() + numRows);
     partition_ = folly::Range(rows_.data(), rows_.size());
@@ -215,9 +221,9 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
         nextStart++;
       }
 
-      for (auto j = start; j < nextStart; j++) {
-        rawPeerStarts[j - startRow()] = peerStart;
-        rawPeerEnds[j - startRow()] = peerEnd;
+      for (auto j = 0; j < (nextStart - start); j++) {
+        rawPeerStarts[j] = peerStart;
+        rawPeerEnds[j] = peerEnd - 1;
       }
     }
   }
@@ -252,14 +258,14 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
     rawPeerEnds[j] = peerEnd - 1;
   }
 
-  // Store last row of partial partition.
-  if (partial_) {
-    previousGroupLastRow_ = BaseVector::create<FlatVector<StringView>>(
-        VARBINARY(), 1, data_->pool());
-    data_->extractSerializedRows(
-        folly::Range(rows_.data() + (peerEnd - 1 - startRow()), 1),
-        previousGroupLastRow_);
-  }
+  // // Store last row of partial partition.
+  // if (partial_) {
+  //   previousGroupLastRow_ = BaseVector::create<FlatVector<StringView>>(
+  //       VARBINARY(), 1, data_->pool());
+  //   data_->extractSerializedRows(
+  //       folly::Range(rows_.data() + (peerEnd - 1 - startRow()), 1),
+  //       previousGroupLastRow_);
+  // }
   return {peerStart, peerEnd};
 }
 
