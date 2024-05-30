@@ -63,4 +63,4 @@ Encoding Functions
 .. spark:function:: url_decode(value) -> varchar
 
     Unescapes the URL encoded ``value``.
-    This function is the inverse of :func:`url_encode`.
+    This function is the inverse of :spark:func:`url_encode`.
