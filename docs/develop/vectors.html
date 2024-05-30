@@ -180,10 +180,10 @@ std::shared_ptr using the FlatVectorPtr alias.</p>
 <span class="k">using</span><span class="w"> </span><span class="n">FlatVectorPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>The following diagram shows a flat vector of type INTEGER with 11 values. This
+<p>The following diagram shows a flat vector of type INTEGER with 12 values. This
 vector is represented as FlatVector&lt;int32_t&gt;. The <cite>values_</cite> buffer has space for
-at least 11 consecutive entries of 4 bytes each. Nulls buffer has space for at
-least 11 consecutive entries of 1 bit each.  Values in positions 2,7, 11 are
+at least 12 consecutive entries of 4 bytes each. Nulls buffer has space for at
+least 12 consecutive entries of 1 bit each.  Values in positions 2,7, 11 are
 null, e.g. bits 2, 7, 11 in <cite>nulls_</cite> buffer are 0. The rest of the bits in the
 <cite>nulls_</cite> buffer are 1. Entries 2, 7, 11 in <cite>values_</cite> buffer contain garbage.</p>
 <a class="reference internal image-reference" href="../_images/flat-vector.png"><img alt="../_images/flat-vector.png" class="align-center" src="../_images/flat-vector.png" style="width: 300px;" /></a>
@@ -207,9 +207,9 @@ optimizing comparison operations.</p>
 <p>Strings in the string buffers appear not necessarily in order and there can be
 gaps between individual strings. A single vector may use one or more string
 buffers.</p>
-<p>The following diagram shows a vector of type VARCHAR with 7 values. This vector
+<p>The following diagram shows a vector of type VARCHAR with 8 values. This vector
 is represented as FlatVector&lt;StringView&gt;. <cite>values_</cite> buffer has space for at least
-7 entries 16 bytes each. <cite>stringBuffers_</cite> array has one entry containing a
+8 entries 16 bytes each. <cite>stringBuffers_</cite> array has one entry containing a
 concatenation of non-inlined strings. Each entry in <cite>values_</cite> buffer uses 4 bytes
 to store the size of the string.</p>
 <a class="reference internal image-reference" href="../_images/string-vector.png"><img alt="../_images/string-vector.png" class="align-center" src="../_images/string-vector.png" style="width: 700px;" /></a>
@@ -290,9 +290,9 @@ duplicate strings.</p>
 <p>Multiple dictionary vectors can refer to the same base vector. We are saying
 that the dictionary vector wraps the base vector.</p>
 <p>Here is a dictionary of type INTEGER that represents a result of a filter: n % 2
-= 0. The base vector contains 11 entries. Only 5 of these entries passed the
-filter, hence, the size of the dictionary vector is 5. The indices buffer
-contains 5 entries referring to positions in the original vector that passed
+= 0. The base vector contains 12 entries. Only 6 of these entries passed the
+filter, hence, the size of the dictionary vector is 6. The indices buffer
+contains 6 entries referring to positions in the original vector that passed
 the filter.</p>
 <a class="reference internal image-reference" href="../_images/dictionary-subset2.png"><img alt="../_images/dictionary-subset2.png" class="align-center" src="../_images/dictionary-subset2.png" style="width: 500px;" /></a>
 <p>When filter or filter-like operation applies to multiple columns, the results
