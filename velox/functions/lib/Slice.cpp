@@ -48,10 +48,15 @@ namespace {
 /// After adjustment, for the output ArrayVector:
 /// rawOffsets vector [1, 4, 8]
 /// rawSizes vector   [2, 2, 2]
-/// @tparam Kind The type kind of start and length.
-template <TypeKind Kind>
 class SliceFunction : public exec::VectorFunction {
  public:
+  SliceFunction(TypeKind kind) : kind_(kind) {
+    VELOX_CHECK(
+        kind == TypeKind::BIGINT || kind == TypeKind::INTEGER,
+        "Unsupported parameter type {} to register slice function",
+        mapTypeKindToName(kind));
+  }
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -64,9 +69,9 @@ class SliceFunction : public exec::VectorFunction {
         "Function slice() requires first argument of type ARRAY");
     VELOX_USER_CHECK_EQ(
         args[1]->typeKind(),
-        Kind,
+        kind_,
         "Function slice() requires second argument of type {}",
-        velox::TypeTraits<Kind>::name);
+        mapTypeKindToName(kind_));
     VELOX_USER_CHECK_EQ(
         args[1]->typeKind(),
         args[2]->typeKind(),
@@ -80,12 +85,15 @@ class SliceFunction : public exec::VectorFunction {
       BaseVector::flattenVector(args[0]);
     }
 
-    VectorPtr localResult =
-        applyArray<int64_t>(rows, args, context, outputType);
+    VectorPtr localResult = kind_ == TypeKind::INTEGER
+        ? applyArray<int32_t>(rows, args, context, outputType)
+        : applyArray<int64_t>(rows, args, context, outputType);
     context.moveOrCopyResult(localResult, rows, result);
   }
 
  private:
+  /// kind The type kind of start and length.
+  TypeKind kind_;
   // Use template parameter rather than hard-coded TypeKind to specify array
   // data type.
   template <typename T>
@@ -205,14 +213,9 @@ class SliceFunction : public exec::VectorFunction {
 };
 } // namespace
 
-/// @tparam Kind The type kind for start and length argument.
-template <TypeKind Kind>
-void registerSliceFunction(const std::string& prefix) {
-  auto kindName = TypeTraits<Kind>::name;
-  VELOX_CHECK(
-      Kind == TypeKind::BIGINT || Kind == TypeKind::INTEGER,
-      "Unsupported parameter type {} to register slice function",
-      kindName);
+/// @param kind The type kind of start and length.
+void registerSliceFunction(const std::string& prefix, TypeKind kind) {
+  auto kindName = mapTypeKindToName(kind);
 
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures = {
       exec::FunctionSignatureBuilder()
@@ -223,15 +226,15 @@ void registerSliceFunction(const std::string& prefix) {
           .argumentType(kindName)
           .build()};
   exec::registerVectorFunction(
-      prefix + "slice", signatures, std::make_unique<SliceFunction<Kind>>());
+      prefix + "slice", signatures, std::make_unique<SliceFunction>(kind));
 }
 
 void registerBigIntSliceFunction(const std::string& prefix) {
-  registerSliceFunction<TypeKind::BIGINT>(prefix);
+  registerSliceFunction(prefix, TypeKind::BIGINT);
 }
 
 void registerIntegerSliceFunction(const std::string& prefix) {
-  registerSliceFunction<TypeKind::INTEGER>(prefix);
+  registerSliceFunction(prefix, TypeKind::INTEGER);
 }
 
 } // namespace facebook::velox::functions

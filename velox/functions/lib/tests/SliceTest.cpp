@@ -148,6 +148,13 @@ TEST_F(SliceTest, integerStartAndLength) {
   auto stringArrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
   auto expectedStringArrayVector = makeArrayVector<StringView>({{"b", "c"}});
   testSlice("slice(C0, 2, 2)", {stringArrayVector}, expectedStringArrayVector);
+
+  // Out of bound start index.
+  expectedStringArrayVector = makeArrayVector<StringView>({{}});
+  testSlice("slice(C0, 5, 2)", {stringArrayVector}, expectedStringArrayVector);
+  // Out of bound length.
+  expectedStringArrayVector = makeArrayVector<StringView>({{"b", "c", "d"}});
+  testSlice("slice(C0, 2, 5)", {stringArrayVector}, expectedStringArrayVector);
   options_.parseIntegerAsBigint = true;
 }
 
