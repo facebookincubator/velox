@@ -744,15 +744,6 @@ TEST_F(CastExprTest, timestampToDate) {
 }
 
 TEST_F(CastExprTest, timestampInvalid) {
-  testInvalidCast<int8_t>(
-      "timestamp", {12}, "Conversion to Timestamp is not supported");
-  testInvalidCast<int16_t>(
-      "timestamp", {1234}, "Conversion to Timestamp is not supported");
-  testInvalidCast<int32_t>(
-      "timestamp", {1234}, "Conversion to Timestamp is not supported");
-  testInvalidCast<int64_t>(
-      "timestamp", {1234}, "Conversion to Timestamp is not supported");
-
   testInvalidCast<float>(
       "timestamp", {12.99}, "Conversion to Timestamp is not supported");
   testInvalidCast<double>(
@@ -1184,32 +1175,6 @@ TEST_F(CastExprTest, mapCast) {
         kVectorSize, sizeAt, keyAt, valueAt, nullEvery(3), nullEvery(7));
 
     testCast(inputWithNullValues, expectedMap);
-  }
-
-  // Nulls in result keys are not allowed.
-  {
-    VELOX_ASSERT_THROW(
-        testCast(
-            inputMap,
-            makeMapVector<Timestamp, int64_t>(
-                kVectorSize,
-                sizeAt,
-                [](auto /*row*/) { return Timestamp(); },
-                valueAt,
-                nullEvery(3),
-                nullEvery(7)),
-            false),
-        "Cannot cast BIGINT '0' to TIMESTAMP. Conversion to Timestamp is not supported");
-
-    testCast(
-        inputMap,
-        makeMapVector<Timestamp, int64_t>(
-            kVectorSize,
-            sizeAt,
-            [](auto /*row*/) { return Timestamp(); },
-            valueAt,
-            [](auto row) { return row % 3 == 0 || row % 5 != 0; }),
-        true);
   }
 
   // Make sure that the output of map cast has valid(copyable) data even for

@@ -156,6 +156,13 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       VectorPtr& result);
 
+  template <typename IntType>
+  void castIntegerToTimestamp(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      VectorPtr castResult);
+
   template <typename Func>
   void applyToSelectedNoThrowLocal(
       EvalCtx& context,
@@ -189,11 +196,19 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const TypePtr& fromType);
 
+
+  VectorPtr castIntToTimestamp(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType);
+
   VectorPtr castFromIntervalDayTime(
       const SelectivityVector& rows,
       const BaseVector& input,
       exec::EvalCtx& context,
       const TypePtr& toType);
+
 
   template <typename TInput, typename TOutput>
   void applyDecimalCastKernel(

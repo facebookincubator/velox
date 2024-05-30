@@ -271,6 +271,37 @@ VectorPtr CastExpr::castToDate(
   }
 }
 
+VectorPtr CastExpr::castIntToTimestamp(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType) {
+  VectorPtr castResult;
+  context.ensureWritable(rows, TIMESTAMP(), castResult);
+  switch (fromType->kind()) {
+    case TypeKind::TINYINT:
+      castIntegerToTimestamp<int8_t>(
+          rows, input, context, castResult);
+      break;
+    case TypeKind::SMALLINT:
+      castIntegerToTimestamp<int16_t>(
+          rows, input, context, castResult);
+      break;
+    case TypeKind::INTEGER:
+      castIntegerToTimestamp<int32_t>(
+          rows, input, context, castResult);
+      break;
+    case TypeKind::BIGINT:
+      castIntegerToTimestamp<int64_t>(
+          rows, input, context, castResult);
+      break;
+    default:
+      VELOX_UNREACHABLE(
+          "Cast from {} to Timestamp is not supported", fromType->kind());
+  }
+  return castResult;
+} 
+
 VectorPtr CastExpr::castFromIntervalDayTime(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -311,7 +342,6 @@ VectorPtr CastExpr::castFromIntervalDayTime(
           "Cast from {} to {} is not supported",
           INTERVAL_DAY_TIME()->toString(),
           toType->toString());
-  }
 }
 
 namespace {
@@ -755,6 +785,11 @@ void CastExpr::applyPeeled(
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {
     result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
+  } else if (
+      (fromType->isTinyint() || fromType->isSmallint() ||
+       fromType->isInteger() || fromType->isBigint()) &&
+      toType->isTimestamp()) {
+    result = castIntToTimestamp(rows, input, context, fromType);
   } else if (fromType->isDecimal()) {
     switch (toType->kind()) {
       case TypeKind::VARCHAR:

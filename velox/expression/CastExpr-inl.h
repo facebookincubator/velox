@@ -285,6 +285,32 @@ void CastExpr::castTimestampToDate(
   });
 }
 
+template <typename IntType>
+void CastExpr::castIntegerToTimestamp(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    VectorPtr castResult) {
+  (*castResult).clearNulls(rows);
+  auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
+  const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+  const auto sessionTzName = queryConfig.sessionTimezone();
+  const auto* timeZone =
+      (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty())
+      ? date::locate_zone(sessionTzName)
+      : nullptr;
+  applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+    auto timestamp = Timestamp::fromMillis(
+        (int64_t)(input.as<SimpleVector<IntType>>()->valueAt(row)) *
+
+        kMillisInSecond);
+    if (timeZone) {
+      timestamp.toGMT(*timeZone);
+    }
+    resultFlatVector->set(row, timestamp);
+  });
+}
+
 template <typename Func>
 void CastExpr::applyToSelectedNoThrowLocal(
     EvalCtx& context,
