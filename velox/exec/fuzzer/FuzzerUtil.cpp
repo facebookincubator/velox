@@ -53,6 +53,11 @@ std::vector<exec::Split> makeSplits(
 }
 
 exec::Split makeSplit(const std::string& filePath) {
-  return exec::Split{std::make_shared<connector::hive::HiveConnectorSplit>(
-      kHiveConnectorId, filePath, dwio::common::FileFormat::DWRF)};
+  return exec::Split{makeConnectorSplit(filePath)};
+}
+
+std::shared_ptr<connector::ConnectorSplit> makeConnectorSplit(
+    const std::string& filePath) {
+  return std::make_shared<connector::hive::HiveConnectorSplit>(
+      kHiveConnectorId, filePath, dwio::common::FileFormat::DWRF);
 }

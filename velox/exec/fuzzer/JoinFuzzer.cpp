@@ -17,11 +17,11 @@
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -108,10 +108,6 @@ class JoinFuzzer {
   }
 
   static inline const std::string kHiveConnectorId = "test-hive";
-
-  // Makes a connector split from a file path on storage.
-  static std::shared_ptr<connector::ConnectorSplit> makeSplit(
-      const std::string& filePath);
 
   void seed(size_t seed) {
     currentSeed_ = seed;
@@ -1040,13 +1036,6 @@ void writeToFile(
   writer.close();
 }
 
-// static
-std::shared_ptr<connector::ConnectorSplit> JoinFuzzer::makeSplit(
-    const std::string& filePath) {
-  return std::make_shared<connector::hive::HiveConnectorSplit>(
-      kHiveConnectorId, filePath, dwio::common::FileFormat::DWRF);
-}
-
 bool isTableScanSupported(const TypePtr& type) {
   if (type->kind() == TypeKind::ROW && type->size() == 0) {
     return false;
@@ -1296,14 +1285,14 @@ void JoinFuzzer::addPlansWithTableScan(
   for (auto i = 0; i < probeInput.size(); ++i) {
     const std::string filePath = fmt::format("{}/probe{}", tableDir, i);
     writeToFile(filePath, probeInput[i], writerPool_.get());
-    probeScanSplits.push_back(makeSplit(filePath));
+    probeScanSplits.push_back(makeConnectorSplit(filePath));
   }
 
   std::vector<std::shared_ptr<connector::ConnectorSplit>> buildScanSplits;
   for (auto i = 0; i < buildInput.size(); ++i) {
     const std::string filePath = fmt::format("{}/build{}", tableDir, i);
     writeToFile(filePath, buildInput[i], writerPool_.get());
-    buildScanSplits.push_back(makeSplit(filePath));
+    buildScanSplits.push_back(makeConnectorSplit(filePath));
   }
 
   auto probeType = asRowType(probeInput[0]->type());
@@ -1416,7 +1405,8 @@ std::vector<exec::Split> JoinFuzzer::generateSplitsWithGroup(
           isProbe ? "probe" : "build",
           i);
       writeToFile(filePath, inputVectorsByGroup[groupId][i], writerPool_.get());
-      splitsWithGroup.push_back(exec::Split{makeSplit(filePath), groupId});
+      splitsWithGroup.push_back(
+          exec::Split{makeConnectorSplit(filePath), groupId});
     }
     splitsWithGroup.push_back(exec::Split{nullptr, groupId});
   }

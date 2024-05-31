@@ -19,9 +19,9 @@
 #include <utility>
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -93,10 +93,6 @@ class RowNumberFuzzer {
   }
 
   static inline const std::string kHiveConnectorId = "test-hive";
-
-  // Makes a connector split from a file path on storage.
-  static std::shared_ptr<connector::ConnectorSplit> makeSplit(
-      const std::string& filePath);
 
   void seed(size_t seed) {
     currentSeed_ = seed;
@@ -201,13 +197,6 @@ void writeToFile(
   dwrf::Writer writer(std::move(sink), options);
   writer.write(vector);
   writer.close();
-}
-
-// static
-std::shared_ptr<connector::ConnectorSplit> RowNumberFuzzer::makeSplit(
-    const std::string& filePath) {
-  return std::make_shared<connector::hive::HiveConnectorSplit>(
-      kHiveConnectorId, filePath, dwio::common::FileFormat::DWRF);
 }
 
 template <typename T>
@@ -445,7 +434,7 @@ void RowNumberFuzzer::addPlansWithTableScan(
   for (auto i = 0; i < input.size(); ++i) {
     const std::string filePath = fmt::format("{}/row_number/{}", tableDir, i);
     writeToFile(filePath, input[i], writerPool_.get());
-    inputSplits.push_back(makeSplit(filePath));
+    inputSplits.push_back(makeConnectorSplit(filePath));
   }
 
   altPlans.push_back(makePlanWithTableScan(

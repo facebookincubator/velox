@@ -23,4 +23,9 @@ std::vector<facebook::velox::exec::Split> makeSplits(
     const std::string& path,
     const std::shared_ptr<facebook::velox::memory::MemoryPool>& pool);
 
+/// Makes a exec::split from a file path.
 facebook::velox::exec::Split makeSplit(const std::string& filePath);
+
+// Makes a connector split from a file path on storage.
+std::shared_ptr<facebook::velox::connector::ConnectorSplit> makeConnectorSplit(
+    const std::string& filePath);
