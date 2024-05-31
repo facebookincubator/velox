@@ -539,13 +539,14 @@ TEST_F(SIMDJsonExtractorTest, invalidJson) {
   // Object key is invalid.
   std::string json = "{\"foo: \"bar\"}";
   EXPECT_NE(simdJsonExtract(json, "$.foo", consumer), simdjson::SUCCESS);
-  // Object value is invalid.
+
+  // Object value is incomplete, but extract now supports incomplete json.
   json = "{\"foo\": \"bar}";
-  EXPECT_NE(simdJsonExtract(json, "$.foo", consumer), simdjson::SUCCESS);
-  // Value in array is invalid.
-  // Inner object is invalid.
+  EXPECT_EQ(simdJsonExtract(json, "$.foo", consumer), simdjson::SUCCESS);
+  // Value in array is invalid (inner object is invalid), but extract now
+  // supports incomplete json.
   json = "{\"foo\": [\"bar\", \"baz]}";
-  EXPECT_NE(simdJsonExtract(json, "$.foo[0]", consumer), simdjson::SUCCESS);
+  EXPECT_EQ(simdJsonExtract(json, "$.foo[0]", consumer), simdjson::SUCCESS);
 }
 
 } // namespace

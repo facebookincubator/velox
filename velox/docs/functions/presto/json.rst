@@ -133,6 +133,9 @@ JSON Functions
         SELECT json_extract(json, '$.store.book');
 
     Current implementation supports limited subset of JSONPath syntax.
+    JSON string can be incomplete, meaning if the JSON is valid up to and
+    including the found element(s) the correct value is returned even if
+    the rest of the JSON is invalid: ``json_extract('{"a": 123, "b', '$.a')``.
 
     .. _JSONPath: http://goessner.net/articles/JsonPath/
 
@@ -145,6 +148,11 @@ JSON Functions
 
         SELECT json_extract_scalar('[1, 2, 3]', '$[2]');
         SELECT json_extract_scalar(json, '$.store.book[0].author');
+
+    Current implementation supports limited subset of JSONPath syntax.
+    JSON string can be incomplete, meaning if the JSON is valid up to and
+    including the found element(s) the correct value is returned even if
+    the rest of the JSON is invalid: ``json_extract('{"a": 123, "b', '$.a')``.
 
     .. _JSONPath: http://goessner.net/articles/JsonPath/
 

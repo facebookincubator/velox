@@ -571,6 +571,19 @@ TEST_F(JsonFunctionsTest, invalidPath) {
   VELOX_ASSERT_THROW(jsonSize(R"({"k1":"v1)", "$.k1]"), "Invalid JSON path");
 }
 
+TEST_F(JsonFunctionsTest, jsonExtractIncomplete) {
+  auto run = [&](std::optional<std::string> json,
+                 const std::string& func,
+                 const std::string& path) {
+    return evaluateOnce<std::string>(
+        fmt::format("{}(c0, c1)", func),
+        makeRowVector(
+            {makeJsonVector(json), makeFlatVector<std::string>({path})}));
+  };
+  EXPECT_EQ("123", run("{\"a\": 123, \"b", "json_extract", "$.a"));
+  EXPECT_EQ("123", run("{\"a\": 123, \"b", "json_extract_scalar", "$.a"));
+}
+
 TEST_F(JsonFunctionsTest, jsonExtract) {
   auto jsonExtract = [&](std::optional<std::string> json,
                          const std::string& path) {
