@@ -30,8 +30,8 @@
 namespace facebook::velox {
 
 struct FileProperties {
-  int64_t fileSize{-1};
-  int64_t modificationTime{-1};
+  std::optional<int64_t> fileSize;
+  std::optional<int64_t> modificationTime;
 };
 
 } // namespace facebook::velox

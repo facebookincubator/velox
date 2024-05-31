@@ -26,7 +26,7 @@ HiveIcebergSplit::HiveIcebergSplit(
     dwio::common::FileFormat _fileFormat,
     uint64_t _start,
     uint64_t _length,
-    FileProperties _properties,
+    std::optional<FileProperties> _properties,
     const std::unordered_map<std::string, std::optional<std::string>>&
         _partitionKeys,
     std::optional<int32_t> _tableBucketNumber,
@@ -57,7 +57,7 @@ HiveIcebergSplit::HiveIcebergSplit(
     dwio::common::FileFormat _fileFormat,
     uint64_t _start,
     uint64_t _length,
-    FileProperties _properties,
+    std::optional<FileProperties> _properties,
     const std::unordered_map<std::string, std::optional<std::string>>&
         _partitionKeys,
     std::optional<int32_t> _tableBucketNumber,

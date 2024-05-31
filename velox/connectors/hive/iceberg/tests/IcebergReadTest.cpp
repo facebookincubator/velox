@@ -163,7 +163,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         fileFomat_,
         0,
         fileSize,
-        FileProperties(),
+        std::nullopt,
         partitionKeys,
         std::nullopt,
         customSplitInfo,

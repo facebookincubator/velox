@@ -52,9 +52,7 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
     fileHandle = std::make_unique<FileHandle>();
     filesystems::FileOptions options;
     if (properties) {
-      options.fileSize = properties->fileSize == -1
-          ? std::nullopt
-          : std::optional<int64_t>{properties->fileSize};
+      options.fileSize = properties->fileSize;
     }
     fileHandle->file = filesystems::getFileSystem(filename, properties_)
                            ->openFileForRead(filename, options);
