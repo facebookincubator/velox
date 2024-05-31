@@ -206,12 +206,12 @@ TEST_F(AbfsFileSystemTest, fileHandleWithProperties) {
         azuriteServer->connectionStr()}});
   FileHandleFactory factory(
       std::make_unique<
-          SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(1),
+          SimpleLRUCache<std::string, FileHandle>>(1),
       std::make_unique<FileHandleGenerator>(hiveConfig));
   FileProperties properties = {
     15 + kOneMB,
     1
-  } auto fileHandle = factory.generate(fullFilePath, &properties).second;
+  } auto fileHandle = factory.generate(fullFilePath, &properties);
   readData(fileHandle->file.get());
 }
 
@@ -221,9 +221,9 @@ TEST_F(AbfsFileSystemTest, fileHandleWithoutProperties) {
         azuriteServer->connectionStr()}});
   FileHandleFactory factory(
       std::make_unique<
-          SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(1),
+          SimpleLRUCache<std::string, FileHandle>>(1),
       std::make_unique<FileHandleGenerator>(hiveConfig));
-  auto fileHandle = factory.generate(fullFilePath).second;
+  auto fileHandle = factory.generate(fullFilePath);
   readData(fileHandle->file.get());
 }
 
