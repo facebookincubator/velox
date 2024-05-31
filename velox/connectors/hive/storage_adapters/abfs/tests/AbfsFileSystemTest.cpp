@@ -207,10 +207,8 @@ TEST_F(AbfsFileSystemTest, fileHandleWithProperties) {
   FileHandleFactory factory(
       std::make_unique<SimpleLRUCache<std::string, FileHandle>>(1),
       std::make_unique<FileHandleGenerator>(hiveConfig));
-  FileProperties properties = {
-    15 + kOneMB,
-    1
-  } auto fileHandle = factory.generate(fullFilePath, &properties);
+  FileProperties properties = {15 + kOneMB, 1};
+  auto fileHandle = factory.generate(fullFilePath, &properties);
   readData(fileHandle->file.get());
 }
 
