@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <cppcodec/base32_rfc4648.hpp>
 #include <folly/hash/Checksum.h>
 #define XXH_INLINE_ALL
 #include <xxhash.h>
@@ -323,6 +324,48 @@ struct ToBase64UrlFunction {
       const arg_type<Varbinary>& input) {
     result.resize(encoding::Base64::calculateEncodedSize(input.size()));
     encoding::Base64::encodeUrl(input.data(), input.size(), result.data());
+  }
+};
+
+template <typename T>
+struct ToBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varbinary>& input) {
+    // Encode using cppcodec
+    std::string encoded = cppcodec::base32_rfc4648::encode(
+        reinterpret_cast<const uint8_t*>(input.data()), input.size());
+
+    result.resize(encoded.size());
+    std::copy(encoded.begin(), encoded.end(), result.data());
+  }
+};
+
+template <typename T>
+struct FromBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varchar>& input) {
+    try {
+      std::string inputStr = std::string(input.data(), input.size());
+      if (inputStr.find('=') == std::string::npos) {
+        // Calculate the number of padding characters needed
+        size_t padding = (8 - (inputStr.size() % 8)) % 8;
+        inputStr.append(padding, '=');
+      }
+      // Decode using cppcodec with padding
+      std::vector<uint8_t> decoded =
+          cppcodec::base32_rfc4648::decode<std::vector<uint8_t>>(inputStr);
+
+      result.resize(decoded.size());
+      std::copy(decoded.begin(), decoded.end(), result.data());
+    } catch (const cppcodec::parse_error& e) {
+      VELOX_USER_FAIL(e.what());
+    }
   }
 };
 
