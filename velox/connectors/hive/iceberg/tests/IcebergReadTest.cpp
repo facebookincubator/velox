@@ -106,7 +106,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     // Keep the reference to the deleteFilePath, otherwise the corresponding
     // file will be deleted.
     std::vector<std::shared_ptr<TempFilePath>> deleteFilePaths;
-    // Use PARQUET instead of default DWRF if Parquet Writer Factory is present
+    // If Parquet Writer Factory is present, then use the PARQUET file format
+    // instead of the default DWRF file format.
     if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
       fileFormat_ = {dwio::common::FileFormat::PARQUET};
     }
@@ -161,7 +162,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
                     ->openFileForRead(dataFilePath);
     const int64_t fileSize = file->size();
 
-    // Use PARQUET instead of default DWRF if Parquet Writer Factory is present
+    // If Parquet Writer Factory is present, then use the PARQUET file format
+    // instead of the default DWRF file format.
     if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
       fileFormat_ = {dwio::common::FileFormat::PARQUET};
     }
