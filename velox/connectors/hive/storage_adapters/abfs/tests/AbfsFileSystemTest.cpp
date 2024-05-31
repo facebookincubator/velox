@@ -205,8 +205,7 @@ TEST_F(AbfsFileSystemTest, fileHandleWithProperties) {
       {{"fs.azure.account.key.test.dfs.core.windows.net",
         azuriteServer->connectionStr()}});
   FileHandleFactory factory(
-      std::make_unique<
-          SimpleLRUCache<std::string, FileHandle>>(1),
+      std::make_unique<SimpleLRUCache<std::string, FileHandle>>(1),
       std::make_unique<FileHandleGenerator>(hiveConfig));
   FileProperties properties = {
     15 + kOneMB,
@@ -220,8 +219,7 @@ TEST_F(AbfsFileSystemTest, fileHandleWithoutProperties) {
       {{"fs.azure.account.key.test.dfs.core.windows.net",
         azuriteServer->connectionStr()}});
   FileHandleFactory factory(
-      std::make_unique<
-          SimpleLRUCache<std::string, FileHandle>>(1),
+      std::make_unique<SimpleLRUCache<std::string, FileHandle>>(1),
       std::make_unique<FileHandleGenerator>(hiveConfig));
   auto fileHandle = factory.generate(fullFilePath);
   readData(fileHandle->file.get());
