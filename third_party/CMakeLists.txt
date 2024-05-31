@@ -57,8 +57,9 @@ if(VELOX_ENABLE_ARROW)
     add_library(arrow_testing STATIC IMPORTED GLOBAL)
 
     set_target_properties(
-      arrow arrow_testing parquet PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
-                                             $ENV{ARROW_EP_PATH}/install/include)
+      arrow arrow_testing parquet
+      PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
+                 $ENV{ARROW_EP_PATH}/install/include)
     set_target_properties(arrow PROPERTIES IMPORTED_LOCATION ${ARROW_LIB})
     set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
     set_target_properties(parquet PROPERTIES IMPORTED_LOCATION ${PARQUET_LIB})
