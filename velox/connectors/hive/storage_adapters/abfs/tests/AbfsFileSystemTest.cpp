@@ -208,19 +208,11 @@ TEST_F(AbfsFileSystemTest, fileHandleWithProperties) {
       std::make_unique<SimpleLRUCache<std::string, FileHandle>>(1),
       std::make_unique<FileHandleGenerator>(hiveConfig));
   FileProperties properties = {15 + kOneMB, 1};
-  auto fileHandle = factory.generate(fullFilePath, &properties);
-  readData(fileHandle->file.get());
-}
+  auto fileHandleProperties = factory.generate(fullFilePath, &properties);
+  readData(fileHandleProperties->file.get());
 
-TEST_F(AbfsFileSystemTest, fileHandleWithoutProperties) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
-      {{"fs.azure.account.key.test.dfs.core.windows.net",
-        azuriteServer->connectionStr()}});
-  FileHandleFactory factory(
-      std::make_unique<SimpleLRUCache<std::string, FileHandle>>(1),
-      std::make_unique<FileHandleGenerator>(hiveConfig));
-  auto fileHandle = factory.generate(fullFilePath);
-  readData(fileHandle->file.get());
+  auto fileHandleWithoutProperties = factory.generate(fullFilePath);
+  readData(fileHandleWithoutProperties->file.get());
 }
 
 TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {
