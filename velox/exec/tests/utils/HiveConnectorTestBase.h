@@ -284,6 +284,7 @@ class HiveConnectorSplitBuilder {
         fileFormat_,
         start_,
         length_,
+        properties_,
         partitionKeys_,
         tableBucketNumber_,
         customSplitInfo,
@@ -298,6 +299,7 @@ class HiveConnectorSplitBuilder {
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   uint64_t start_{0};
   uint64_t length_{std::numeric_limits<uint64_t>::max()};
+  facebook::velox::FileProperties properties_;
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
   std::optional<int32_t> tableBucketNumber_;
   std::unordered_map<std::string, std::string> customSplitInfo_ = {};

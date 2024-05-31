@@ -74,6 +74,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
         fileFormat,
         0UL,
         std::numeric_limits<uint64_t>::max(),
+        facebook::velox::FileProperties(),
         partitionKeys,
         std::nullopt,
         customSplitInfo,

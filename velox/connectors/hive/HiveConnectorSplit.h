@@ -18,6 +18,7 @@
 #include <optional>
 #include <unordered_map>
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/FileProperties.h"
 #include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::hive {
@@ -27,6 +28,7 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   dwio::common::FileFormat fileFormat;
   const uint64_t start;
   const uint64_t length;
+  std::optional<FileProperties> properties;
 
   /// Mapping from partition keys to values. Values are specified as strings
   /// formatted the same way as CAST(x as VARCHAR). Null values are specified as
@@ -49,6 +51,7 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       dwio::common::FileFormat _fileFormat,
       uint64_t _start = 0,
       uint64_t _length = std::numeric_limits<uint64_t>::max(),
+      std::optional<FileProperties> _properties = std::nullopt,
       const std::unordered_map<std::string, std::optional<std::string>>&
           _partitionKeys = {},
       std::optional<int32_t> _tableBucketNumber = std::nullopt,
@@ -62,6 +65,7 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
         fileFormat(_fileFormat),
         start(_start),
         length(_length),
+        properties(_properties),
         partitionKeys(_partitionKeys),
         tableBucketNumber(_tableBucketNumber),
         customSplitInfo(_customSplitInfo),
