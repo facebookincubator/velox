@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>MemoryArbitration Fuzzer &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">MemoryArbitration Fuzzer</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="memoryarbitration-fuzzer">
+<h1>MemoryArbitration Fuzzer<a class="headerlink" href="#memoryarbitration-fuzzer" title="Link to this heading">¶</a></h1>
+<p>The MemoryArbitrationFuzzer is a test tool designed to automatically generate and execute multiple query plans
+in parallel with tight total memory budget. It aims to stress the memory arbitration processing, and validate there is
+no crash or hanging in a concurrent query execution mode. The query either succeeds or failed with expected errors.
+It works as follows:</p>
+<ol class="arabic simple">
+<li><p>Data Generation: It starts by generating a random set of input data, also known as a vector. This data can
+have a variety of encodings and data layouts to ensure thorough testing.</p></li>
+<li><p>Plan Generation: Generate multiple plans with different query shapes. Currently, it supports HashJoin and
+HashAggregation plans.</p></li>
+<li><p>Query Execution: Create multiple threads, each thread randomly picks a plan with spill enabled or not, and repeatedly
+running this process until ${iteration_duration_sec} seconds. The query thread expects query to succeed or fail with
+query OOM or abort errors, otherwise it throws.</p></li>
+<li><p>Iteration: This process is repeated multiple times to ensure reliability and robustness.</p></li>
+</ol>
+<section id="how-to-run">
+<h2>How to run<a class="headerlink" href="#how-to-run" title="Link to this heading">¶</a></h2>
+<p>Use velox_memory_arbitration_fuzzer_test binary to run this fuzzer:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">velox</span><span class="o">/</span><span class="n">exec</span><span class="o">/</span><span class="n">tests</span><span class="o">/</span><span class="n">velox_memory_arbitration_fuzzer_test</span> <span class="o">--</span><span class="n">seed</span> <span class="mi">123</span> <span class="o">--</span><span class="n">duration_sec</span> <span class="mi">60</span>
+</pre></div>
+</div>
+<p>By default, the fuzzer will go through 10 iterations. Use –steps
+or –duration-sec flag to run fuzzer for longer. Use –seed to
+reproduce fuzzer failures.</p>
+<p>Here is a full list of supported command line arguments.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">–-steps</span></code>: How many iterations to run. Each iteration generates and
+evaluates one expression or aggregation. Default is 10.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-duration_sec</span></code>: For how long to run in seconds. If both <code class="docutils literal notranslate"><span class="pre">-–steps</span></code>
+and <code class="docutils literal notranslate"><span class="pre">-–duration_sec</span></code> are specified, –duration_sec takes precedence.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-seed</span></code>: The seed to generate random expressions and input vectors with.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-v</span></code>: Verbose logging (from <a class="reference external" href="https://github.com/google/glog#setting-flags">Google Logging Library</a>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-batch_size</span></code>: The size of input vectors to generate. Default is 100.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--num_batches</span></code>: The number of input vectors of size <cite>–batch_size</cite> to
+generate. Default is 5.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--iteration_duration_sec</span></code>: For how long it should run (in seconds) per iteration.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--arbitrator_capacity</span></code>: Arbitrator capacity in bytes.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--allocator_capacity</span></code>: Allocator capacity in bytes.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--num_threads</span></code>: Number of threads running queries in parallel per iteration.</p></li>
+</ul>
+<p>If running from CLion IDE, add <code class="docutils literal notranslate"><span class="pre">--logtostderr=1</span></code> to see the full output.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">MemoryArbitration Fuzzer</a><ul>
+<li><a class="reference internal" href="#how-to-run">How to run</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/develop/testing/memory-arbitration-fuzzer.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">MemoryArbitration Fuzzer</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
+    </div>
+  </body>
+</html>
