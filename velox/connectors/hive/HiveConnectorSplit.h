@@ -28,7 +28,6 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   dwio::common::FileFormat fileFormat;
   const uint64_t start;
   const uint64_t length;
-  std::optional<FileProperties> properties;
 
   /// Mapping from partition keys to values. Values are specified as strings
   /// formatted the same way as CAST(x as VARCHAR). Null values are specified as
@@ -44,6 +43,10 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   /// These represent columns like $file_size, $file_modified_time that are
   /// associated with the HiveSplit.
   std::unordered_map<std::string, std::string> infoColumns;
+
+  /// These represent file properties like file size that are used while opening
+  /// the file handle
+  std::optional<FileProperties> properties;
 
   HiveConnectorSplit(
       const std::string& connectorId,
