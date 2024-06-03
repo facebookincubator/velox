@@ -154,6 +154,19 @@ positive values become Infinity, negative values become -Infinity.:</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="map_remove_null_values">
+<span class="sig-name descname"><span class="pre">map_remove_null_values</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_remove_null_values" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a map by removing all the keys in input map with null values. If input
+is null, output is null. If input map is empty, output map is empty.</p>
+<blockquote>
+<div><p>SELECT map_remove_null_values(MAP(ARRAY[‘ab’, ‘bc’, ‘cd’], ARRAY[null, null, null])); – {}
+SELECT map_remove_null_values(MAP(ARRAY[], ARRAY[])); – {}
+SELECT map_remove_null_values(MAP(ARRAY[1, 2, 3], ARRAY[3, 4, NULL])); – {1=3, 2=4}
+SELECT map_remove_null_values(NULL); – NULL</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="map_subset">
 <span class="sig-name descname"><span class="pre">map_subset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(k))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_subset" title="Link to this definition">¶</a></dt>
 <dd><p>Constructs a map from those entries of <code class="docutils literal notranslate"><span class="pre">map</span></code> for which the key is in the array given:</p>
@@ -295,6 +308,7 @@ Corresponds to SQL subscript operator [].</p>
 <li><a class="reference internal" href="#map_filter"><code class="docutils literal notranslate"><span class="pre">map_filter()</span></code></a></li>
 <li><a class="reference internal" href="#map_from_entries"><code class="docutils literal notranslate"><span class="pre">map_from_entries()</span></code></a></li>
 <li><a class="reference internal" href="#map_normalize"><code class="docutils literal notranslate"><span class="pre">map_normalize()</span></code></a></li>
+<li><a class="reference internal" href="#map_remove_null_values"><code class="docutils literal notranslate"><span class="pre">map_remove_null_values()</span></code></a></li>
 <li><a class="reference internal" href="#map_subset"><code class="docutils literal notranslate"><span class="pre">map_subset()</span></code></a></li>
 <li><a class="reference internal" href="#map_top_n"><code class="docutils literal notranslate"><span class="pre">map_top_n()</span></code></a></li>
 <li><a class="reference internal" href="#map_keys"><code class="docutils literal notranslate"><span class="pre">map_keys()</span></code></a></li>
