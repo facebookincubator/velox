@@ -262,6 +262,7 @@ bool CompanionFunctionsRegistrar::registerPartialFunction(
              [name](
                  core::AggregationNode::Step step,
                  const std::vector<TypePtr>& argTypes,
+                 const std::vector<VectorPtr>& constantInputs,
                  const TypePtr& resultType,
                  const core::QueryConfig& config)
                  -> std::unique_ptr<Aggregate> {
@@ -269,7 +270,8 @@ bool CompanionFunctionsRegistrar::registerPartialFunction(
                  if (!exec::isRawInput(step)) {
                    step = core::AggregationNode::Step::kIntermediate;
                  }
-                 auto fn = func->factory(step, argTypes, resultType, config);
+                 auto fn = func->factory(
+                     step, argTypes, constantInputs, resultType, config);
                  VELOX_CHECK_NOT_NULL(fn);
                  return std::make_unique<
                      AggregateCompanionAdapter::PartialFunction>(
@@ -301,6 +303,7 @@ bool CompanionFunctionsRegistrar::registerMergeFunction(
              [name](
                  core::AggregationNode::Step /*step*/,
                  const std::vector<TypePtr>& argTypes,
+                 const std::vector<VectorPtr>& constantInputs,
                  const TypePtr& resultType,
                  const core::QueryConfig& config)
                  -> std::unique_ptr<Aggregate> {
@@ -308,6 +311,7 @@ bool CompanionFunctionsRegistrar::registerMergeFunction(
                  auto fn = func->factory(
                      core::AggregationNode::Step::kIntermediate,
                      argTypes,
+                     constantInputs,
                      resultType,
                      config);
                  VELOX_CHECK_NOT_NULL(fn);
@@ -349,6 +353,7 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunctionWithSuffix(
             [name, mergeExtractFunctionName](
                 core::AggregationNode::Step /*step*/,
                 const std::vector<TypePtr>& argTypes,
+                const std::vector<VectorPtr>& constantInputs,
                 const TypePtr& resultType,
                 const core::QueryConfig& config) -> std::unique_ptr<Aggregate> {
               const auto& [originalResultType, _] =
@@ -364,6 +369,7 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunctionWithSuffix(
                 auto fn = func->factory(
                     core::AggregationNode::Step::kFinal,
                     argTypes,
+                    constantInputs,
                     originalResultType,
                     config);
                 VELOX_CHECK_NOT_NULL(fn);
@@ -406,6 +412,7 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunction(
              [name, mergeExtractFunctionName](
                  core::AggregationNode::Step /*step*/,
                  const std::vector<TypePtr>& argTypes,
+                 const std::vector<VectorPtr>& constantInputs,
                  const TypePtr& resultType,
                  const core::QueryConfig& config)
                  -> std::unique_ptr<Aggregate> {
@@ -422,6 +429,7 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunction(
                  auto fn = func->factory(
                      core::AggregationNode::Step::kFinal,
                      argTypes,
+                     constantInputs,
                      originalResultType,
                      config);
                  VELOX_CHECK_NOT_NULL(fn);
@@ -473,9 +481,15 @@ bool CompanionFunctionsRegistrar::registerExtractFunctionWithSuffix(
             "Signatures whose result types are not resolvable given intermediate types should have been excluded.");
       }
 
+      std::vector<VectorPtr> constantInputs{argTypes.size(), nullptr};
+
       if (auto func = getAggregateFunctionEntry(originalName)) {
         auto fn = func->factory(
-            core::AggregationNode::Step::kFinal, argTypes, resultType, config);
+            core::AggregationNode::Step::kFinal,
+            argTypes,
+            constantInputs,
+            resultType,
+            config);
         VELOX_CHECK_NOT_NULL(fn);
         return std::make_shared<AggregateCompanionAdapter::ExtractFunction>(
             std::move(fn));
@@ -532,9 +546,15 @@ bool CompanionFunctionsRegistrar::registerExtractFunction(
           "Signatures whose result types are not resolvable given intermediate types should have been excluded.");
     }
 
+    std::vector<VectorPtr> constantInputs{argTypes.size(), nullptr};
+
     if (auto func = getAggregateFunctionEntry(originalName)) {
       auto fn = func->factory(
-          core::AggregationNode::Step::kFinal, argTypes, resultType, config);
+          core::AggregationNode::Step::kFinal,
+          argTypes,
+          constantInputs,
+          resultType,
+          config);
       VELOX_CHECK_NOT_NULL(fn);
       return std::make_shared<AggregateCompanionAdapter::ExtractFunction>(
           std::move(fn));

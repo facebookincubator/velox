@@ -119,6 +119,7 @@ exec::AggregateRegistrationResult registerSimpleAverageAggregate(
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
+          const std::vector<VectorPtr>& constantInputs,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {

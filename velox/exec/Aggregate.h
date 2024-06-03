@@ -302,6 +302,7 @@ class Aggregate {
       const std::string& name,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& argTypes,
+      const std::vector<VectorPtr>& constantInputs,
       const TypePtr& resultType,
       const core::QueryConfig& config);
 
@@ -469,6 +470,7 @@ class Aggregate {
 using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
+    const std::vector<VectorPtr>& constantInputs,
     const TypePtr& resultType,
     const core::QueryConfig& config)>;
 
