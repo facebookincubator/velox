@@ -568,5 +568,8 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
+# Add the path to cppcodec headers
+include_directories(${CMAKE_SOURCE_DIR}/third_party/cppcodec)
+
 add_subdirectory(third_party)
 add_subdirectory(velox)

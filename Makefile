@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-.PHONY: all cmake build clean debug release unit
+.PHONY: all cmake build clean debug release unit update_submodules
 
 BUILD_BASE_DIR=_build
 BUILD_DIR=release
@@ -88,7 +88,12 @@ all: release			#: Build the release version
 clean:					#: Delete all build artifacts
 	rm -rf $(BUILD_BASE_DIR)
 
-cmake:					#: Use CMake to create a Makefile build system
+# Define the target for updating and syncing submodules
+update_submodules:
+	@git submodule update --init --recursive
+	@git submodule sync --recursive
+
+cmake: update_submodules	#: Use CMake to create a Makefile build system
 	mkdir -p $(BUILD_BASE_DIR)/$(BUILD_DIR) && \
 	cmake  -B \
 		"$(BUILD_BASE_DIR)/$(BUILD_DIR)" \
@@ -96,54 +101,54 @@ cmake:					#: Use CMake to create a Makefile build system
 		$(GENERATOR) \
 		${EXTRA_CMAKE_FLAGS}
 
-cmake-gpu:
+cmake-gpu: update_submodules
 	$(MAKE) EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON" cmake
 
-build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
+build: update_submodules	#: Build the software based in BUILD_DIR and BUILD_TYPE variables
 	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS)
 
-debug:					#: Build with debugging symbols
+debug: update_submodules	#: Build with debugging symbols
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
 	$(MAKE) build BUILD_DIR=debug -j ${NUM_THREADS}
 
-release:				#: Build the release version
+release: update_submodules	#: Build the release version
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=Release && \
 	$(MAKE) build BUILD_DIR=release
 
-minimal_debug:			#: Minimal build with debugging symbols
+minimal_debug: update_submodules	#: Minimal build with debugging symbols
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON"
 	$(MAKE) build BUILD_DIR=debug
 
 min_debug: minimal_debug
 
-minimal:				 #: Minimal build
+minimal: update_submodules	#: Minimal build
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON"
 	$(MAKE) build BUILD_DIR=release
 
-gpu:						 #: Build with GPU support
+gpu: update_submodules	#: Build with GPU support
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON"
 	$(MAKE) build BUILD_DIR=release
 
-gpu_debug:			 #: Build with debugging symbols and GPU support
+gpu_debug: update_submodules	#: Build with debugging symbols and GPU support
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON"
 	$(MAKE) build BUILD_DIR=debug
 
-dwio:						#: Minimal build with dwio enabled.
+dwio: update_submodules	#: Minimal build with dwio enabled.
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
 																										    							  -DVELOX_BUILD_MINIMAL_WITH_DWIO=ON"
 	$(MAKE) build BUILD_DIR=release
 
-dwio_debug:			#: Minimal build with dwio debugging symbols.
+dwio_debug: update_submodules	#: Minimal build with dwio debugging symbols.
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
 																																	  -DVELOX_BUILD_MINIMAL_WITH_DWIO=ON"
 	$(MAKE) build BUILD_DIR=debug
 
-benchmarks-basic-build:
+benchmarks-basic-build: update_submodules
 	$(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
                                             -DVELOX_BUILD_TESTING=OFF \
                                             -DVELOX_ENABLE_BENCHMARKS_BASIC=ON"
 
-benchmarks-build:
+benchmarks-build: update_submodules
 	$(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
                                             -DVELOX_BUILD_TESTING=OFF \
                                             -DVELOX_ENABLE_BENCHMARKS=ON"
@@ -181,7 +186,7 @@ header-fix:				#: Fix license header issues in the current branch
 header-check:			#: Check for license header issues on the main branch
 	scripts/check.py header main
 
-circleci-container:			#: Build the linux container for CircleCi
+circleci-container:		#: Build the linux container for CircleCi
 	$(MAKE) linux-container CONTAINER_NAME=circleci
 
 check-container:
