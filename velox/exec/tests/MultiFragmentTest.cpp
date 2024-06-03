@@ -585,25 +585,11 @@ TEST_F(MultiFragmentTest, partitionedOutputWithLargeInput) {
   // This test exercises splitting up the input both from the edges and the
   // middle as it ends up splitting it into at least 3.
   setupSources(1, 30'000);
-  // Single Partition
-  {
-    auto leafTaskId = makeTaskId("leaf", 0);
-    auto leafPlan =
-        PlanBuilder()
-            .values(vectors_)
-            .partitionedOutput({}, 1, {"c0", "c1", "c2", "c3", "c4"})
-            .planNode();
-    auto leafTask = makeTask(leafTaskId, leafPlan, 0, nullptr, 4 << 20);
-    leafTask->start(1);
-    auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
 
-    auto task =
-        assertQuery(op, {leafTaskId}, "SELECT c0, c1, c2, c3, c4 FROM tmp");
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
-        << leafTask->taskId() << "state: " << leafTask->state();
-    auto taskStats = toPlanStats(leafTask->taskStats());
-    ASSERT_GT(taskStats.at("1").outputVectors, 2);
-  }
+  // Set preferredOutputBatchBytes to be really small so that Exchange processes
+  // one page at a time.
+  configSettings_[core::QueryConfig::kPreferredOutputBatchBytes] =
+      fmt::format("{}", 1);
 
   // Multiple partitions but round-robin.
   {
@@ -638,8 +624,14 @@ TEST_F(MultiFragmentTest, partitionedOutputWithLargeInput) {
 
     auto op = PlanBuilder().exchange(intermediatePlan->outputType()).planNode();
 
-    auto task = assertQuery(
-        op, intermediateTaskIds, "SELECT c0, c1, c2, c3, c4 FROM tmp");
+    std::vector<exec::Split> splits;
+    for (auto& taskId : intermediateTaskIds) {
+      splits.push_back(remoteSplit(taskId));
+    }
+    auto task = AssertQueryBuilder(op, duckDbQueryRunner_)
+                    .splits(splits)
+                    .configs(configSettings_)
+                    .assertResults("SELECT c0, c1, c2, c3, c4 FROM tmp");
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
         << "state: " << leafTask->state();
     auto taskStats = toPlanStats(leafTask->taskStats());
@@ -1514,6 +1506,7 @@ DEBUG_ONLY_TEST_F(
   readyToTerminate.store(true);
   blockTerminate.notifyAll();
   ASSERT_TRUE(waitForTaskFailure(rootTask.get(), 1'000'000'000));
+  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 1'000'000'000));
 }
 
 TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
@@ -1739,6 +1732,9 @@ class DataFetcher {
             bufferManager_->deleteResults(taskId_, destination_);
             promise_.setValue();
           } else {
+            // Wait for some more data to build up so we don't get more packets
+            // than necessary.
+            std::this_thread::sleep_for(std::chrono::seconds(1));
             doFetch(nextSequence);
           }
         });
@@ -1783,24 +1779,30 @@ class DataFetcher {
 /// of individual pages. PartitionedOutput operator is expected to limit page
 /// sizes to no more than 1MB give and take 30%.
 TEST_F(MultiFragmentTest, maxBytes) {
-  std::string s(25, 'x');
+  std::string s(100, 'x');
   // Keep the row count under 7000 to avoid hitting the row limit in the
   // operator instead.
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(5'000, [](auto row) { return row; }),
-      makeFlatVector<int64_t>(5'000, [](auto row) { return row; }),
-      makeConstant(StringView(s), 5'000),
-  });
+  auto data = makeRowVector(
+      {"a", "b", "c"},
+      {
+          makeFlatVector<int64_t>(5'000, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(5'000, [](auto row) { return row; }),
+          makeConstant(StringView(s), 5'000),
+      });
 
   core::PlanNodeId outputNodeId;
   auto plan = PlanBuilder()
                   .values({data}, false, 100)
-                  .partitionedOutput({}, 1)
+                  .partitionedOutput({"a"}, 2)
                   .capturePlanNodeId(outputNodeId)
                   .planNode();
 
+  configSettings_[core::QueryConfig::kMaxOutputBufferSize] =
+      fmt::format("{}", 64UL << 20);
+
   int32_t testIteration = 0;
-  DataFetcher::Stats prevStats;
+  DataFetcher::Stats prevStatsDest0;
+  DataFetcher::Stats prevStatsDest1;
 
   auto test = [&](int64_t maxBytes) {
     const auto taskId = fmt::format("test.{}", testIteration++);
@@ -1808,32 +1810,43 @@ TEST_F(MultiFragmentTest, maxBytes) {
     SCOPED_TRACE(taskId);
     auto task = makeTask(taskId, plan, 0);
     task->start(1);
-    task->updateOutputBuffers(1, true);
+    task->updateOutputBuffers(2, true);
 
     // Allow for data to accumulate.
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
-    DataFetcher fetcher(taskId, 0, maxBytes);
-    fetcher.fetch().wait();
+    DataFetcher fetcherDest0(taskId, 0, maxBytes);
+    DataFetcher fetcherDest1(taskId, 1, maxBytes);
+    auto futureDest0 = fetcherDest0.fetch();
+    auto futureDest1 = fetcherDest1.fetch();
+    futureDest0.wait();
+    futureDest1.wait();
 
     ASSERT_TRUE(waitForTaskCompletion(task.get()));
 
-    auto stats = fetcher.stats();
+    auto statsDest0 = fetcherDest0.stats();
+    auto statsDest1 = fetcherDest1.stats();
     if (testIteration > 1) {
-      ASSERT_EQ(prevStats.numPages, stats.numPages);
-      ASSERT_EQ(prevStats.totalBytes, stats.totalBytes);
-      ASSERT_GT(prevStats.numPackets, stats.numPackets);
+      ASSERT_EQ(prevStatsDest0.numPages, statsDest0.numPages);
+      ASSERT_EQ(prevStatsDest0.totalBytes, statsDest0.totalBytes);
+      ASSERT_GT(prevStatsDest0.numPackets, statsDest0.numPackets);
+      ASSERT_EQ(prevStatsDest1.numPages, statsDest1.numPages);
+      ASSERT_EQ(prevStatsDest1.totalBytes, statsDest1.totalBytes);
+      ASSERT_GT(prevStatsDest1.numPackets, statsDest1.numPackets);
     }
 
-    ASSERT_LT(stats.averagePacketBytes(), maxBytes * 1.5);
+    ASSERT_LT(statsDest0.averagePacketBytes(), maxBytes * 1.5);
+    ASSERT_LT(statsDest1.averagePacketBytes(), maxBytes * 1.5);
 
     auto taskStats = toPlanStats(task->taskStats());
     const auto& outputStats = taskStats.at(outputNodeId);
 
-    ASSERT_EQ(outputStats.outputBytes, stats.totalBytes);
+    ASSERT_EQ(
+        outputStats.outputBytes, statsDest0.totalBytes + statsDest1.totalBytes);
     ASSERT_EQ(outputStats.inputRows, 100 * data->size());
     ASSERT_EQ(outputStats.outputRows, 100 * data->size());
-    prevStats = stats;
+    prevStatsDest0 = statsDest0;
+    prevStatsDest1 = statsDest1;
   };
 
   static const int64_t kMB = 1 << 20;
@@ -1842,7 +1855,6 @@ TEST_F(MultiFragmentTest, maxBytes) {
   test(5 * kMB);
   test(10 * kMB);
   test(20 * kMB);
-  test(32 * kMB);
 }
 
 // Verifies that ExchangeClient stats are populated even if task fails.
@@ -2021,8 +2033,9 @@ TEST_F(MultiFragmentTest, compression) {
         common::CompressionKind::CompressionKind_NONE);
   });
 
-  constexpr int32_t kNumRepeats = 1'000'000;
-  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  constexpr int32_t kNumRepeats = 100;
+  const auto data = makeRowVector(
+      {makeFlatVector<int64_t>(30'000, [](auto row) { return row % 3; })});
 
   const auto producerPlan = test::PlanBuilder()
                                 .values({data}, false, kNumRepeats)
@@ -2035,12 +2048,20 @@ TEST_F(MultiFragmentTest, compression) {
                         .planNode();
 
   const auto expected =
-      makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{6000000})});
+      makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{3000000})});
 
   const auto test = [&](const std::string& producerTaskId,
                         float minCompressionRatio,
                         bool expectSkipCompression) {
-    PartitionedOutput::testingSetMinCompressionRatio(minCompressionRatio);
+    const float originalMinCompressionRatio =
+        bufferManager_->minCompressionRatio();
+
+    bufferManager_->testingSetMinCompressionRatio(minCompressionRatio);
+    auto guard = folly::makeGuard([&]() {
+      bufferManager_->testingSetMinCompressionRatio(
+          originalMinCompressionRatio);
+    });
+
     auto producerTask = makeTask(producerTaskId, producerPlan);
     producerTask->start(1);
 
@@ -2055,7 +2076,7 @@ TEST_F(MultiFragmentTest, compression) {
 
     auto producerTaskStats = exec::toPlanStats(producerTask->taskStats());
     const auto& producerStats = producerTaskStats.at("1");
-    // The data is extremely compressible, 1, 2, 3 repeated 1000000 times.
+    // The data is extremely compressible, 0, 1, 2 repeated 1000000 times.
     if (!expectSkipCompression) {
       EXPECT_LT(
           producerStats.customStats.at("compressedBytes").sum,

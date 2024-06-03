@@ -133,6 +133,12 @@ class BatchVectorSerializer {
 
   /// Serializes all rows in a vector.
   void serialize(const RowVectorPtr& vector, OutputStream* stream);
+
+  /// Returns serializer-dependent counters, e.g. about compression, data
+  /// distribution, encoding etc.
+  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() {
+    return {};
+  }
 };
 
 class VectorSerde {

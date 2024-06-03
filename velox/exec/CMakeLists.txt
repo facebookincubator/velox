@@ -77,6 +77,7 @@ add_library(
   TableWriteMerge.cpp
   TableWriter.cpp
   Task.cpp
+  TaskOutput.cpp
   TopN.cpp
   TopNRowNumber.cpp
   Unnest.cpp
