@@ -78,8 +78,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
         std::nullopt,
         customSplitInfo,
         nullptr,
-        serdeParameters,
-        std::nullopt);
+        serdeParameters);
   };
 
   auto performConfigure = [&]() {
