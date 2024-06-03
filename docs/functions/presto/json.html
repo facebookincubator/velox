@@ -154,6 +154,32 @@ Returns NULL if <code class="docutils literal notranslate"><span class="pre">jso
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="json_array_get">
+<span class="sig-name descname"><span class="pre">json_array_get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json_array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">json</span></span></span><a class="headerlink" href="#json_array_get" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the element at the specified index into the <code class="docutils literal notranslate"><span class="pre">json_array</span></code>.
+The index is zero-based:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_array_get</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="n">JSON</span> <span class="s1">&#39;1&#39;</span>
+<span class="n">SELECT</span> <span class="n">json_array_get</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">JSON</span> <span class="s1">&#39;2&#39;</span>
+</pre></div>
+</div>
+<p>This function also supports negative indexes for fetching element indexed
+from the end of an array:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_array_get</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">JSON</span> <span class="s1">&#39;3&#39;</span>
+<span class="n">SELECT</span> <span class="n">json_array_get</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="n">JSON</span> <span class="s1">&#39;2&#39;</span>
+</pre></div>
+</div>
+<p>If the element at the specified index doesn’t exist, the function returns null:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_array_get</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">,</span> <span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">json_array_get</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+<p>If <code class="docutils literal notranslate"><span class="pre">json_array</span></code> is not an array, the function returns null:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_array_get</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: 10, &quot;b&quot;: 11}&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="json_array_length">
 <span class="sig-name descname"><span class="pre">json_array_length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#json_array_length" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the array length of <code class="docutils literal notranslate"><span class="pre">json</span></code> (a string containing a JSON
@@ -253,6 +279,7 @@ VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
 <li><a class="reference internal" href="#id1">JSON Functions</a><ul>
 <li><a class="reference internal" href="#is_json_scalar"><code class="docutils literal notranslate"><span class="pre">is_json_scalar()</span></code></a></li>
 <li><a class="reference internal" href="#json_array_contains"><code class="docutils literal notranslate"><span class="pre">json_array_contains()</span></code></a></li>
+<li><a class="reference internal" href="#json_array_get"><code class="docutils literal notranslate"><span class="pre">json_array_get()</span></code></a></li>
 <li><a class="reference internal" href="#json_array_length"><code class="docutils literal notranslate"><span class="pre">json_array_length()</span></code></a></li>
 <li><a class="reference internal" href="#json_extract"><code class="docutils literal notranslate"><span class="pre">json_extract()</span></code></a></li>
 <li><a class="reference internal" href="#json_extract_scalar"><code class="docutils literal notranslate"><span class="pre">json_extract_scalar()</span></code></a></li>
