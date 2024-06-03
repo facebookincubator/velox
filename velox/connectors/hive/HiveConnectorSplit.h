@@ -45,7 +45,7 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   std::unordered_map<std::string, std::string> infoColumns;
 
   /// These represent file properties like file size that are used while opening
-  /// the file handle
+  /// the file handle.
   std::optional<FileProperties> properties;
 
   HiveConnectorSplit(
