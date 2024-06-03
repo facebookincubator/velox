@@ -146,7 +146,7 @@ same. Presto chooses to cap p at 38 and allow runtime errors.</p>
 <p>Let’s say <cite>a</cite> is of type decimal(p1, s1) with unscaled value <cite>A</cite> and <cite>b</cite> is of
 type decimal(p2, s2) with unscaled value B.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">a</span> <span class="o">=</span> <span class="n">A</span> <span class="o">/</span> <span class="mi">10</span><span class="o">^</span><span class="n">s1</span>
-<span class="n">a</span> <span class="o">=</span> <span class="n">B</span> <span class="o">/</span> <span class="mi">10</span><span class="o">^</span><span class="n">s2</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">B</span> <span class="o">/</span> <span class="mi">10</span><span class="o">^</span><span class="n">s2</span>
 </pre></div>
 </div>
 <p>The result type precision and scale are:</p>
@@ -175,6 +175,52 @@ the decimal point. Hence, in the following SQL 1.2 has scale 1 and 0.01 has
 scale 2. One may argue that user’s intention is to work with accuracy of 2
 digits after the decimal point, hence, max(s1, s2).</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="mf">1.2</span> <span class="o">/</span> <span class="mf">0.01</span>
+</pre></div>
+</div>
+</section>
+<section id="modulus">
+<h2>Modulus<a class="headerlink" href="#modulus" title="Link to this heading">¶</a></h2>
+<p>For the modulus operation <code class="code docutils literal notranslate"><span class="pre">a</span> <span class="pre">%</span> <span class="pre">b</span></code>, when a and b are integers, the result
+<cite>r</cite> is less than <cite>b</cite> and less than or equal to <cite>a</cite>. Hence the number of digits
+needed to represent <cite>r</cite> is no more than the minimum of the number of digits
+needed to represent <cite>a</cite> or <cite>b</cite>. We can extend this to decimal inputs <cite>a</cite> and
+<cite>b</cite> by computing the modulus of their unscaled values. However, we should
+first make sure that <cite>a</cite> and <cite>b</cite> have the same scale. This can be achieved by
+scaling up the input with lesser scale by the difference in the inputs’ scales,
+so both <cite>a</cite> and <cite>b</cite> have scale s. Once <cite>a</cite> and <cite>b</cite> have the same scale, we
+compute the modulus of their unscaled values, A and B. <cite>r</cite> has s digits after
+the decimal point, and since <cite>r</cite> does not need any more digits than the
+minimum number of digits needed to represent <cite>a</cite> or <cite>b</cite>, the result precision
+needs to be increased by the smaller of the differences in the precision and
+scale of either inputs. Hence the result type precision and scale are:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+<span class="n">p</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">p2</span> <span class="o">-</span> <span class="n">s2</span><span class="p">,</span> <span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span><span class="p">)</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>To compute R, we first rescale A and B to ‘s’:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">A</span> <span class="o">=</span> <span class="n">a</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="n">s1</span>
+<span class="n">B</span> <span class="o">=</span> <span class="n">b</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="n">s2</span>
+
+<span class="n">A</span><span class="s1">&#39; = a * 10^s</span>
+<span class="sa">B</span><span class="s1">&#39; = b * 10^s</span>
+</pre></div>
+</div>
+<p>Then we compute modulus of the rescaled values:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">R</span> <span class="o">=</span> <span class="n">A</span><span class="s1">&#39; % B&#39;</span> <span class="o">=</span> <span class="n">r</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="n">s</span>
+</pre></div>
+</div>
+<p>For example, say <cite>a</cite> = 12.3 and <cite>b</cite> = 1.21, <cite>r</cite> = <code class="code docutils literal notranslate"><span class="pre">a</span> <span class="pre">%</span> <span class="pre">b</span></code> is calculated
+as follows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="n">p</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="n">s</span> <span class="o">=</span> <span class="mi">3</span>
+
+<span class="n">A</span> <span class="o">=</span> <span class="mf">12.3</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="mi">1</span> <span class="o">=</span> <span class="mi">123</span>
+<span class="n">B</span> <span class="o">=</span> <span class="mf">1.21</span> <span class="o">*</span> <span class="mi">10</span><span class="o">^</span><span class="mi">2</span> <span class="o">=</span> <span class="mi">121</span>
+
+<span class="n">A</span><span class="s1">&#39; = 12.3 * 10^2 = 1230</span>
+<span class="sa">B</span><span class="s1">&#39; = 1.21 * 10^2 = 121</span>
+
+<span class="n">R</span> <span class="o">=</span> <span class="mi">1230</span> <span class="o">%</span> <span class="mi">121</span> <span class="o">=</span> <span class="mi">20</span> <span class="o">=</span> <span class="mf">0.20</span> <span class="o">*</span> <span class="mi">100</span>
 </pre></div>
 </div>
 </section>
@@ -224,6 +270,19 @@ precision and scale of the result are calculated as follows:</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">modulus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the remainder from division of x by y (r = x % y).</p>
+<p>x and y are decimal values with possibly different precisions and scales. The
+precision and scale of the result are calculated as follows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">p2</span> <span class="o">-</span> <span class="n">s2</span><span class="p">,</span> <span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span><span class="p">)</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+<span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Throws if y is zero.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="multiply">
 <span class="sig-name descname"><span class="pre">multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s1)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y:</span> <span class="pre">decimal(p2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s2))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#multiply" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the result of multiplying x by y (r = x * y).</p>
@@ -267,8 +326,8 @@ The precision is calculated as:</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">d:</span> <span class="pre">integer)</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(rp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">round</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">d:</span> <span class="pre">integer)</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(rp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
 <dd><p>Returns ‘x’ rounded to ‘d’ decimal places. The scale of the result is
 the same as the scale of the input. The precision is calculated as:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="n">p</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
@@ -304,16 +363,18 @@ the scale of the input.</p>
 <li><a class="reference internal" href="#addition-and-subtraction">Addition and Subtraction</a></li>
 <li><a class="reference internal" href="#multiplication">Multiplication</a></li>
 <li><a class="reference internal" href="#division">Division</a></li>
+<li><a class="reference internal" href="#modulus">Modulus</a></li>
 <li><a class="reference internal" href="#decimal-functions">Decimal Functions</a><ul>
 <li><a class="reference internal" href="#abs"><code class="docutils literal notranslate"><span class="pre">abs()</span></code></a></li>
 <li><a class="reference internal" href="#divide"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#floor"><code class="docutils literal notranslate"><span class="pre">floor()</span></code></a></li>
 <li><a class="reference internal" href="#minus"><code class="docutils literal notranslate"><span class="pre">minus()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">modulus()</span></code></a></li>
 <li><a class="reference internal" href="#multiply"><code class="docutils literal notranslate"><span class="pre">multiply()</span></code></a></li>
 <li><a class="reference internal" href="#negate"><code class="docutils literal notranslate"><span class="pre">negate()</span></code></a></li>
 <li><a class="reference internal" href="#plus"><code class="docutils literal notranslate"><span class="pre">plus()</span></code></a></li>
 <li><a class="reference internal" href="#round"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
-<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
 </ul>
 </li>
 </ul>
