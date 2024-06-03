@@ -432,6 +432,15 @@ The shape and scale parameters must be positive real numbers. The value must be 
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="inverse_normal_cdf">
+<span class="sig-name descname"><span class="pre">inverse_normal_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mean</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sd</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#inverse_normal_cdf" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the inverse of the Normal cdf with given mean and standard
+deviation (sd) for the cumulative probability (p): P(N &lt; n). The mean must be
+a real value and the standard deviation must be a real and positive value (both of type DOUBLE).
+The probability p must lie on the interval (0, 1).</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="laplace_cdf">
 <span class="sig-name descname"><span class="pre">laplace_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mean</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#laplace_cdf" title="Link to this definition">¶</a></dt>
 <dd><p>Compute the Laplace cdf with given mean and scale parameters: P(N &lt; value; mean, scale).
@@ -563,6 +572,7 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#chi_squared_cdf"><code class="docutils literal notranslate"><span class="pre">chi_squared_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#f_cdf"><code class="docutils literal notranslate"><span class="pre">f_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#gamma_cdf"><code class="docutils literal notranslate"><span class="pre">gamma_cdf()</span></code></a></li>
+<li><a class="reference internal" href="#inverse_normal_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_normal_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#laplace_cdf"><code class="docutils literal notranslate"><span class="pre">laplace_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#normal_cdf"><code class="docutils literal notranslate"><span class="pre">normal_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#poisson_cdf"><code class="docutils literal notranslate"><span class="pre">poisson_cdf()</span></code></a></li>
