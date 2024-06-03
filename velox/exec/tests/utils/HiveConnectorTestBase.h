@@ -284,14 +284,14 @@ class HiveConnectorSplitBuilder {
         fileFormat_,
         start_,
         length_,
-        std::nullopt,
         partitionKeys_,
         tableBucketNumber_,
         customSplitInfo,
         extraFileInfo,
         serdeParameters,
         splitWeight_,
-        infoColumns_);
+        infoColumns_,
+        std::nullopt);
   }
 
  private:

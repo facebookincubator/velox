@@ -26,27 +26,27 @@ HiveIcebergSplit::HiveIcebergSplit(
     dwio::common::FileFormat _fileFormat,
     uint64_t _start,
     uint64_t _length,
-    std::optional<FileProperties> _properties,
     const std::unordered_map<std::string, std::optional<std::string>>&
         _partitionKeys,
     std::optional<int32_t> _tableBucketNumber,
     const std::unordered_map<std::string, std::string>& _customSplitInfo,
     const std::shared_ptr<std::string>& _extraFileInfo,
-    const std::unordered_map<std::string, std::string>& _infoColumns)
+    const std::unordered_map<std::string, std::string>& _infoColumns,
+    std::optional<FileProperties> _properties)
     : HiveConnectorSplit(
           _connectorId,
           _filePath,
           _fileFormat,
           _start,
           _length,
-          _properties,
           _partitionKeys,
           _tableBucketNumber,
           _customSplitInfo,
           _extraFileInfo,
           {},
           0,
-          _infoColumns) {
+          _infoColumns,
+          _properties) {
   // TODO: Deserialize _extraFileInfo to get deleteFiles;
 }
 
@@ -57,27 +57,27 @@ HiveIcebergSplit::HiveIcebergSplit(
     dwio::common::FileFormat _fileFormat,
     uint64_t _start,
     uint64_t _length,
-    std::optional<FileProperties> _properties,
     const std::unordered_map<std::string, std::optional<std::string>>&
         _partitionKeys,
     std::optional<int32_t> _tableBucketNumber,
     const std::unordered_map<std::string, std::string>& _customSplitInfo,
     const std::shared_ptr<std::string>& _extraFileInfo,
     std::vector<IcebergDeleteFile> _deletes,
-    const std::unordered_map<std::string, std::string>& _infoColumns)
+    const std::unordered_map<std::string, std::string>& _infoColumns,
+    std::optional<FileProperties> _properties)
     : HiveConnectorSplit(
           _connectorId,
           _filePath,
           _fileFormat,
           _start,
           _length,
-          _properties,
           _partitionKeys,
           _tableBucketNumber,
           _customSplitInfo,
           _extraFileInfo,
           {},
           0,
-          _infoColumns),
+          _infoColumns,
+          _properties),
       deleteFiles(_deletes) {}
 } // namespace facebook::velox::connector::hive::iceberg

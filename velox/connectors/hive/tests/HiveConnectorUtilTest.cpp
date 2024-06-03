@@ -74,12 +74,12 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
         fileFormat,
         0UL,
         std::numeric_limits<uint64_t>::max(),
-        std::nullopt,
         partitionKeys,
         std::nullopt,
         customSplitInfo,
         nullptr,
-        serdeParameters);
+        serdeParameters,
+        std::nullopt);
   };
 
   auto performConfigure = [&]() {

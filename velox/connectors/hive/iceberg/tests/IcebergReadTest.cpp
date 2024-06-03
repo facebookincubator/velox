@@ -163,12 +163,12 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         fileFomat_,
         0,
         fileSize,
-        std::nullopt,
         partitionKeys,
         std::nullopt,
         customSplitInfo,
         nullptr,
-        deleteFiles);
+        deleteFiles,
+        std::nullopt);
   }
 
   std::vector<RowVectorPtr> makeVectors(int32_t count, int32_t rowsPerVector) {

@@ -32,13 +32,13 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       dwio::common::FileFormat _fileFormat,
       uint64_t _start = 0,
       uint64_t _length = std::numeric_limits<uint64_t>::max(),
-      std::optional<FileProperties> fileProperties = std::nullopt,
       const std::unordered_map<std::string, std::optional<std::string>>&
           _partitionKeys = {},
       std::optional<int32_t> _tableBucketNumber = std::nullopt,
       const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
       const std::shared_ptr<std::string>& _extraFileInfo = {},
-      const std::unordered_map<std::string, std::string>& _infoColumns = {});
+      const std::unordered_map<std::string, std::string>& _infoColumns = {},
+      std::optional<FileProperties> fileProperties = std::nullopt);
 
   // For tests only
   HiveIcebergSplit(
@@ -47,14 +47,14 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       dwio::common::FileFormat _fileFormat,
       uint64_t _start = 0,
       uint64_t _length = std::numeric_limits<uint64_t>::max(),
-      std::optional<FileProperties> fileProperties = std::nullopt,
       const std::unordered_map<std::string, std::optional<std::string>>&
           _partitionKeys = {},
       std::optional<int32_t> _tableBucketNumber = std::nullopt,
       const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
       const std::shared_ptr<std::string>& _extraFileInfo = {},
       std::vector<IcebergDeleteFile> deletes = {},
-      const std::unordered_map<std::string, std::string>& _infoColumns = {});
+      const std::unordered_map<std::string, std::string>& _infoColumns = {},
+      std::optional<FileProperties> fileProperties = std::nullopt);
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
