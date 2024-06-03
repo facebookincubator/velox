@@ -26,12 +26,29 @@ inline constexpr int64_t kSecondsInDay = 86'400;
 inline constexpr int64_t kDaysInWeek = 7;
 extern const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames;
 
+/// Format timezone to make it compatible with date::locate_zone.
+/// For example, converts "GMT+8" to "Etc/GMT-8".
+/// Here is the list of IANA timezone names:
+/// https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+FOLLY_ALWAYS_INLINE std::string formatTimezone(const std::string& timezone) {
+  if (timezone.find("GMT") == 0 && timezone.size() > 4) {
+    if (timezone[3] == '+') {
+      return "Etc/GMT-" + timezone.substr(4);
+    }
+    if (timezone[3] == '-') {
+      return "Etc/GMT+" + timezone.substr(4);
+    }
+  }
+  return timezone;
+}
+
 FOLLY_ALWAYS_INLINE const date::time_zone* getTimeZoneFromConfig(
     const core::QueryConfig& config) {
   if (config.adjustTimestampToTimezone()) {
     auto sessionTzName = config.sessionTimezone();
     if (!sessionTzName.empty()) {
-      return date::locate_zone(sessionTzName);
+      // locate_zone throws runtime_error if the timezone couldn't be found.
+      return date::locate_zone(formatTimezone(sessionTzName));
     }
   }
   return nullptr;

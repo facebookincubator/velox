@@ -16,6 +16,7 @@
 
 #include "velox/expression/PrestoCastHooks.h"
 #include "velox/external/date/tz.h"
+#include "velox/functions/lib/TimeUtils.h"
 #include "velox/type/TimestampConversion.h"
 
 namespace facebook::velox::exec {
@@ -25,10 +26,7 @@ PrestoCastHooks::PrestoCastHooks(const core::QueryConfig& config)
   if (!legacyCast_) {
     options_.zeroPaddingYear = true;
     options_.dateTimeSeparator = ' ';
-    const auto sessionTzName = config.sessionTimezone();
-    if (config.adjustTimestampToTimezone() && !sessionTzName.empty()) {
-      options_.timeZone = date::locate_zone(sessionTzName);
-    }
+    options_.timeZone = functions::getTimeZoneFromConfig(config);
   }
 }
 
