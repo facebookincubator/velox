@@ -35,7 +35,7 @@ function install_aws_deps {
   # We need this specific version of Minio for testing.
   if [[ "$OSTYPE" == linux-gnu* ]]; then
     wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio-20220526054841.0.0.x86_64.rpm
-    rpm -i minio-20220526054841.0.0.x86_64.rpm
+    rpm -i --replacepkgs minio-20220526054841.0.0.x86_64.rpm
     rm minio-20220526054841.0.0.x86_64.rpm
   fi
   # minio will have to approved under the Privacy & Security on MacOS on first use.
