@@ -488,3 +488,45 @@ TEST_F(NestedLoopJoinTest, allTypes) {
       "SELECT t0, u0 FROM t {0} JOIN u ON t.t0 {1} u0 AND t1 {1} u1 AND t2 {1} u2 AND t3 {1} u3 AND t4 {1} u4 AND t5 {1} u5 AND t6 {1} u6");
   runSingleAndMultiDriverTest(probeVectors, buildVectors);
 }
+
+TEST_F(NestedLoopJoinTest, testCrossProduct) {
+  RowTypePtr probeType = ROW({{"t0", BIGINT()}});
+  RowTypePtr buildType = ROW({{"u0", BIGINT()}});
+
+  auto probeBatch = makeRowVector({"t0"}, {makeFlatVector<int64_t>({1,2,3,4,5})});
+  auto buildBatch = makeRowVector({"u0"}, {makeFlatVector<int64_t>({1,2})});
+
+  /*
+   * Probe  Build
+   *  1      1    : Batch1
+   *  2      2
+   *  3     ---
+   *  4      1    : Batch2
+   *  5      2
+  */
+  auto probeVectors = std::vector<RowVectorPtr>{probeBatch};
+  auto buildVectors = std::vector<RowVectorPtr>{buildBatch, buildBatch, buildBatch}; // 2 batches
+
+  setProbeType(probeType);
+  setBuildType(buildType);
+  setQueryStr("select t0, u0 from t,u"); // cross product.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto planNode =
+            PlanBuilder(planNodeIdGenerator)
+                .values(probeVectors)
+                .nestedLoopJoin(
+                    PlanBuilder(planNodeIdGenerator)
+                        .values(buildVectors)
+                        .localPartition({buildKeyName_})
+                        .planNode(),
+                        "",
+                    outputLayout_,
+                    facebook::velox::core::JoinType::kFull)
+                .planNode();
+  auto expected = makeRowVector({makeFlatVector<int64_t>(
+                                     {1,1,1,1,1,1,2,2,2,2,2,2,3,3,3,3,3,3,
+                                      4,4,4,4,4,4,5,5,5,5,5,5}),
+                                 makeFlatVector<int64_t>({1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,2,
+                                                          1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,2})});
+  assertQuery(planNode, expected);
+}

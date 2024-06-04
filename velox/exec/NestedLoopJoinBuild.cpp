@@ -105,6 +105,10 @@ void NestedLoopJoinBuild::noMoreInput() {
     }
   }
 
+  while (dataVectors_.size() > 1) {
+    dataVectors_[0]->append(dataVectors_[dataVectors_.size()-1].get());
+    dataVectors_.pop_back();
+  }
   operatorCtx_->task()
       ->getNestedLoopJoinBridge(
           operatorCtx_->driverCtx()->splitGroupId, planNodeId())

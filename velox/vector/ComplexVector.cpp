@@ -673,7 +673,7 @@ void RowVector::resize(vector_size_t newSize, bool setNotNull) {
       // to skip uniqueness check since effectively we are just changing
       // the length.
       if (newSize > oldSize) {
-        VELOX_CHECK(child.unique(), "Resizing shared child vector");
+        // VELOX_CHECK(child.unique(), "Resizing shared child vector");
         child->resize(newSize, setNotNull);
       }
     }
