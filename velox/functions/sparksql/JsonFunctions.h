@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/SIMDJsonFunctions.h"
+#include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -50,11 +50,15 @@ struct GetJsonObjectFunction {
       result.append(json);
       return true;
     }
-    ParserContext ctx(json.data(), json.size());
-    ctx.parseDocument();
+    simdjson::ondemand::document jsonDoc;
+    simdjson::padded_string paddedJson(json.data(), json.size());
+    if (simdjsonParse(paddedJson).get(jsonDoc)) {
+      return false;
+    }
+
     auto rawResult = jsonPath_.has_value()
-        ? ctx.jsonDoc.at_path(jsonPath_.value().data())
-        : ctx.jsonDoc.at_path(removeSingleQuotes(jsonPath));
+        ? jsonDoc.at_path(jsonPath_.value().data())
+        : jsonDoc.at_path(removeSingleQuotes(jsonPath));
     if (rawResult.error()) {
       return false;
     }
@@ -64,7 +68,7 @@ struct GetJsonObjectFunction {
     }
 
     const char* currentPos;
-    ctx.jsonDoc.current_location().get(currentPos);
+    jsonDoc.current_location().get(currentPos);
     return isValidEndingCharacter(currentPos);
   }
 
