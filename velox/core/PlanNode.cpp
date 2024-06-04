@@ -1308,12 +1308,34 @@ WindowNode::WindowNode(
     std::vector<Function> windowFunctions,
     bool inputsSorted,
     PlanNodePtr source)
+    : WindowNode(
+          id,
+          partitionKeys,
+          sortingKeys,
+          sortingOrders,
+          windowColumnNames,
+          windowFunctions,
+          inputsSorted,
+          false,
+          source) {}
+
+WindowNode::WindowNode(
+    PlanNodeId id,
+    std::vector<FieldAccessTypedExprPtr> partitionKeys,
+    std::vector<FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<SortOrder> sortingOrders,
+    std::vector<std::string> windowColumnNames,
+    std::vector<Function> windowFunctions,
+    bool inputsSorted,
+    bool useHashBuild,
+    PlanNodePtr source)
     : PlanNode(std::move(id)),
       partitionKeys_(std::move(partitionKeys)),
       sortingKeys_(std::move(sortingKeys)),
       sortingOrders_(std::move(sortingOrders)),
       windowFunctions_(std::move(windowFunctions)),
       inputsSorted_(inputsSorted),
+      useHashBuild_(useHashBuild),
       sources_{std::move(source)},
       outputType_(getWindowOutputType(
           sources_[0]->outputType(),

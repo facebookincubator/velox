@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include "velox/exec/HashWindowBuild.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/StreamingWindowBuild.h"
@@ -44,8 +45,17 @@ Window::Window(
     windowBuild_ = std::make_unique<StreamingWindowBuild>(
         windowNode, pool(), spillConfig, &nonReclaimableSection_);
   } else {
-    windowBuild_ = std::make_unique<SortWindowBuild>(
-        windowNode, pool(), spillConfig, &nonReclaimableSection_, &spillStats_);
+    if (windowNode->useHashBuild()) {
+      windowBuild_ = std::make_unique<HashWindowBuild>(
+          windowNode, pool(), spillConfig, &nonReclaimableSection_);
+    } else {
+      windowBuild_ = std::make_unique<SortWindowBuild>(
+          windowNode,
+          pool(),
+          spillConfig,
+          &nonReclaimableSection_,
+          &spillStats_);
+    }
   }
 }
 
