@@ -49,6 +49,7 @@ enum class FileFormat {
   PARQUET = 7,
   NIMBLE = 8,
   ORC = 9,
+  PAGEFILE = 10,
 };
 
 FileFormat toFileFormat(std::string_view s);

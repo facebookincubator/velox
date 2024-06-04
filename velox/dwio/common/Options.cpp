@@ -37,6 +37,8 @@ FileFormat toFileFormat(std::string_view s) {
     return FileFormat::NIMBLE;
   } else if (s == "orc") {
     return FileFormat::ORC;
+  } else if (s == "pagefile") {
+    return FileFormat::PAGEFILE;
   }
   return FileFormat::UNKNOWN;
 }
@@ -61,6 +63,8 @@ std::string_view toString(FileFormat fmt) {
       return "nimble";
     case FileFormat::ORC:
       return "orc";
+    case FileFormat::PAGEFILE:
+      return "pagefile";
     default:
       return "unknown";
   }
