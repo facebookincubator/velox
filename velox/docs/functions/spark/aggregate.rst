@@ -58,6 +58,11 @@ General Aggregate Functions
     Returns an array created from the input ``x`` elements. Ignores null
     inputs, and returns an empty array when all inputs are null.
 
+.. spark:function:: collect_set(x) -> array<[same as x]>
+
+    Returns an array consisting of all unique values from the input ``x`` elements. 
+    Null values are excluded, and returns an empty array when all inputs are null.
+
 .. spark:function:: first(x) -> x
 
     Returns the first value of `x`.
