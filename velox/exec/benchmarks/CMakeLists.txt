@@ -95,3 +95,13 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_vector_test_lib
   ${FOLLY_BENCHMARK})
+
+add_executable(velox_orderby_benchmark OrderByBenchmark.cpp)
+
+target_link_libraries(
+  velox_orderby_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  ${FOLLY_BENCHMARK})
