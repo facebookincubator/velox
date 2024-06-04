@@ -209,8 +209,7 @@ void RowReader::readWithRowNumber(
     flatRowNum = rowNumVector->asUnchecked<FlatVector<int64_t>>();
   }
   auto* rawRowNum = flatRowNum->mutableRawValues();
-  if ((numChildren == 0 || numChildren == numConstChildren) &&
-      !hasDeletion(mutation)) {
+  if (numChildren == numConstChildren && !hasDeletion(mutation)) {
     VELOX_DCHECK_EQ(rowsToRead, result->size());
     std::iota(rawRowNum, rawRowNum + rowsToRead, previousRow);
   } else {
