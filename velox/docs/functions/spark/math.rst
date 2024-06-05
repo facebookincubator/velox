@@ -66,6 +66,26 @@ Mathematical Functions
     Returns ``x`` rounded up to the nearest integer.  
     Supported types are: BIGINT and DOUBLE.
 
+.. function:: check_add(x, y) -> [same as x]
+
+    Returns the result of adding x to y. The types of x and y must be the same and integral types.
+    Overflow results in an error.
+
+.. function:: check_divide(x, y) -> [same as x]
+
+    Returns the results of dividing x by y. The types of x and y must be the same and integral types.
+    Division by zero results in an error.
+
+.. function:: check_multiply(x, y) -> [same as x]
+
+    Returns the result of multiplying x by y. The types of x and y must be the same and integral types.
+    Overflow results in an error.
+
+.. function:: check_subtract(x, y) -> [same as x]
+
+    Returns the result of subtracting y from x. The types of x and y must be the same and integral types.
+    Overflow results in an error.
+
 .. spark:function:: cos(x) -> double
 
     Returns the cosine of ``x``.

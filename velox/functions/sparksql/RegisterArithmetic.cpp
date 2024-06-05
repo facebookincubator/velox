@@ -110,6 +110,13 @@ void registerArithmeticFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
+
+  // Register checked arithmetic functions for Spark arithmetic exprs with try
+  // eval mode.
+  registerBinaryIntegral<CheckedPlusFunction>({prefix + "check_add"});
+  registerBinaryIntegral<CheckedMinusFunction>({prefix + "check_subtract"});
+  registerBinaryIntegral<CheckedMultiplyFunction>({prefix + "check_multiply"});
+  registerBinaryIntegral<CheckedDivideFunction>({prefix + "check_divide"});
 }
 
 } // namespace facebook::velox::functions::sparksql
