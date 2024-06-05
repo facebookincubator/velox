@@ -62,6 +62,7 @@ General Aggregate Functions
 
     Returns an array consisting of all unique values from the input ``x`` elements. 
     Null values are excluded, and returns an empty array when all inputs are null.
+
     Example::
 
         SELECT collect_set(i)
