@@ -852,15 +852,14 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
   dwrfOptions.nonReclaimableSection = options.nonReclaimableSection;
 
   if (options.flushPolicyFactory) {
-    if (auto flushPolicy = options.flushPolicyFactory()) {
-      if (auto dwrfFlushPolicy =
-              std::dynamic_pointer_cast<DWRFFlushPolicy>(flushPolicy)) {
-        dwrfOptions.flushPolicyFactory =
-            [dwrfFlushPolicy]() -> std::shared_ptr<DWRFFlushPolicy> {
-          return dwrfFlushPolicy;
-        };
-      }
-    }
+    auto dwrfFlushPolicy = std::dynamic_pointer_cast<DWRFFlushPolicy>(
+        options.flushPolicyFactory());
+    VELOX_CHECK_NOT_NULL(
+        dwrfFlushPolicy, "Please set the correct dwrf flush policy");
+    dwrfOptions.flushPolicyFactory =
+        [dwrfFlushPolicy]() -> std::shared_ptr<DWRFFlushPolicy> {
+      return dwrfFlushPolicy;
+    };
   }
 
   return dwrfOptions;

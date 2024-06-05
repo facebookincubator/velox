@@ -212,58 +212,6 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     connectorQueryCtx_ = std::move(connectorQueryCtx);
   }
 
-  template <typename ReaderType, dwio::common::FileFormat format>
-  void testFlushPolicy() {
-    const auto outputDirectory = TempDirectoryPath::create();
-    auto flushPolicyFactory = []() {
-      if constexpr (format == dwio::common::FileFormat::PARQUET) {
-#ifdef VELOX_ENABLE_PARQUET
-        return std::make_shared<facebook::velox::parquet::DefaultFlushPolicy>(
-            1234, 0);
-#endif
-      }
-
-      if constexpr (format == dwio::common::FileFormat::DWRF) {
-        return std::make_shared<facebook::velox::dwrf::DefaultFlushPolicy>(
-            1234, 0);
-      }
-    };
-    auto dataSink = createDataSink(
-        rowType_,
-        outputDirectory->getPath(),
-        format,
-        {},
-        nullptr,
-        flushPolicyFactory);
-
-    const int numBatches = 10;
-    const auto vectors = createVectors(500, numBatches);
-    for (const auto& vector : vectors) {
-      dataSink->appendData(vector);
-    }
-    dataSink->close();
-
-    dwio::common::ReaderOptions readerOpts{pool_.get()};
-    const std::vector<std::string> filePaths =
-        listFiles(outputDirectory->getPath());
-    auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
-        std::make_shared<LocalReadFile>(filePaths[0]),
-        readerOpts.getMemoryPool());
-
-    if constexpr (format == dwio::common::FileFormat::PARQUET) {
-      auto reader =
-          std::make_unique<ReaderType>(std::move(bufferedInput), readerOpts);
-      auto fileMeta = reader->fileMetaData();
-      EXPECT_EQ(fileMeta.numRowGroups(), 10);
-      EXPECT_EQ(fileMeta.rowGroup(0).numRows(), 500);
-    } else {
-      auto reader =
-          std::make_unique<ReaderType>(readerOpts, std::move(bufferedInput));
-      EXPECT_EQ(reader->getNumberOfStripes(), 10);
-      EXPECT_EQ(reader->getRowsPerStripe()[0], 500);
-    }
-  }
-
   const std::shared_ptr<memory::MemoryPool> pool_ =
       memory::memoryManager()->addLeafPool();
 
@@ -1036,15 +984,74 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
   VELOX_ASSERT_THROW(dataSink->close(), "inject failure");
 }
 
-TEST_F(HiveDataSinkTest, flushPolicy) {
+TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
 #ifdef VELOX_ENABLE_PARQUET
-  testFlushPolicy<
-      facebook::velox::parquet::ParquetReader,
-      dwio::common::FileFormat::PARQUET>();
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto flushPolicyFactory = []() {
+    return std::make_shared<facebook::velox::parquet::DefaultFlushPolicy>(
+        1234, 0);
+  };
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      {},
+      nullptr,
+      flushPolicyFactory);
+
+  const int numBatches = 10;
+  const auto vectors = createVectors(500, numBatches);
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+  dataSink->close();
+
+  dwio::common::ReaderOptions readerOpts{pool_.get()};
+  const std::vector<std::string> filePaths =
+      listFiles(outputDirectory->getPath());
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePaths[0]),
+      readerOpts.getMemoryPool());
+
+  auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
+      std::move(bufferedInput), readerOpts);
+  auto fileMeta = reader->fileMetaData();
+  EXPECT_EQ(fileMeta.numRowGroups(), 10);
+  EXPECT_EQ(fileMeta.rowGroup(0).numRows(), 500);
 #endif
-  testFlushPolicy<
-      facebook::velox::dwrf::DwrfReader,
-      dwio::common::FileFormat::DWRF>();
+}
+
+TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto flushPolicyFactory = []() {
+    return std::make_shared<facebook::velox::dwrf::DefaultFlushPolicy>(1234, 0);
+  };
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {},
+      nullptr,
+      flushPolicyFactory);
+
+  const int numBatches = 10;
+  const auto vectors = createVectors(500, numBatches);
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+  dataSink->close();
+
+  dwio::common::ReaderOptions readerOpts{pool_.get()};
+  const std::vector<std::string> filePaths =
+      listFiles(outputDirectory->getPath());
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePaths[0]),
+      readerOpts.getMemoryPool());
+
+  auto reader = std::make_unique<facebook::velox::dwrf::DwrfReader>(
+      readerOpts, std::move(bufferedInput));
+  EXPECT_EQ(reader->getNumberOfStripes(), 10);
+  EXPECT_EQ(reader->getRowsPerStripe()[0], 500);
 }
 
 } // namespace
