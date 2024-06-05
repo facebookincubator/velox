@@ -91,7 +91,8 @@ void SortBuffer::addInput(const VectorPtr& input) {
   for (int row = 0; row < input->size(); ++row) {
     char* newRow = data_->newRow();
     for (auto i = 0; i < columnMap_.size(); ++i) {
-      data_->store(decodedInputs_[i].first, row, newRow, decodedInputs_[i].second);
+      data_->store(
+          decodedInputs_[i].first, row, newRow, decodedInputs_[i].second);
     }
   }
   numInputRows_ += allRows.size();
