@@ -309,6 +309,22 @@ char* RowContainer::newRow() {
   return initializeRow(row, false /* reuse */);
 }
 
+char* RowContainer::newRows(int32_t numRows) {
+  VELOX_DCHECK(mutable_, "Can't add row into an immutable row container");
+  numRows_ += numRows;
+  auto rowSize = fixedRowSize_ + normalizedKeySize_;
+  char* rows = rows_.allocateFixed(rowSize * numRows, alignment_);
+  int i = 0;
+  for (char* start = rows + normalizedKeySize_; i < numRows;
+       start = start + rowSize, ++i) {
+    initializeRow(start, false /* reuse */);
+  }
+  if (normalizedKeySize_) {
+    numRowsWithNormalizedKey_ += numRows;
+  }
+  return rows;
+}
+
 char* RowContainer::initializeRow(char* row, bool reuse) {
   if (reuse) {
     auto rows = folly::Range<char**>(&row, 1);

@@ -88,12 +88,13 @@ void SortBuffer::addInput(const VectorPtr& input) {
     decodedInputs_[columnProjection.outputChannel].first.decode(
         *inputRow->childAt(columnProjection.outputChannel), allRows);
   }
+  char* newRows = data_->newRows(input->size());
   for (int row = 0; row < input->size(); ++row) {
-    char* newRow = data_->newRow();
     for (auto i = 0; i < columnMap_.size(); ++i) {
       data_->store(
-          decodedInputs_[i].first, row, newRow, decodedInputs_[i].second);
+          decodedInputs_[i].first, row, newRows, decodedInputs_[i].second);
     }
+    newRows += data_->fixedRowSize() + data_->normalizedKeySize();
   }
   numInputRows_ += allRows.size();
 }

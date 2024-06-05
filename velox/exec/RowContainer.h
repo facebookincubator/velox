@@ -245,6 +245,9 @@ class RowContainer {
   /// Allocates a new row and initializes possible aggregates to null.
   char* newRow();
 
+  /// Allocate numRows row and initializes possible aggregates to null.
+  char* newRows(int32_t numRows);
+
   uint32_t rowSize(const char* row) const {
     return fixedRowSize_ +
         (rowSizeOffset_
@@ -265,6 +268,10 @@ class RowContainer {
   /// The row size excluding any out-of-line stored variable length values.
   int32_t fixedRowSize() const {
     return fixedRowSize_;
+  }
+
+  int32_t normalizedKeySize() const {
+    return normalizedKeySize_;
   }
 
   /// Adds 'rows' to the free rows list and frees any associated variable length
