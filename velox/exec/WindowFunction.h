@@ -41,12 +41,11 @@ enum class Scope {
   kRows,
 };
 
-/// A sliding window frame is a dynamic set of rows that moves relative to the
-/// current row being processed, allowing for calculations over a range of rows
-/// that can change as the query progresses.
+/// isAggregateWindow indicates whether the window function is AggregateWindow
+/// function.
 struct WindowFunctionMetadata {
   Scope scope;
-  bool onlySupportDefaultFrame;
+  bool isAggregateWindow;
 };
 
 class WindowFunction {

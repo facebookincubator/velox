@@ -42,7 +42,8 @@ Window::Window(
   auto* spillConfig =
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   if (windowNode->inputsSorted()) {
-    if (supportRowsStreaming()) {
+    if (driverCtx->queryConfig().rowsStreamingWindowEnabled() ||
+        supportRowsStreaming()) {
       windowBuild_ = std::make_unique<RowsStreamingWindowBuild>(
           windowNode_, pool(), spillConfig, &nonReclaimableSection_);
     } else {
@@ -210,7 +211,7 @@ bool Window::supportRowsStreaming() {
           (frame.startType ==
                core::WindowNode::BoundType::kUnboundedPreceding &&
            frame.endType == core::WindowNode::BoundType::kCurrentRow);
-      if (!windowFunctionMetadata.onlySupportDefaultFrame || isDefaultFrame) {
+      if (!windowFunctionMetadata.isAggregateWindow || isDefaultFrame) {
         supportsStreaming = true;
       } else {
         supportsStreaming = false;

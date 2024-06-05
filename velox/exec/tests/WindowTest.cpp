@@ -99,6 +99,7 @@ TEST_F(WindowTest, rankWithEqualValue) {
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
       .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .config(core::QueryConfig::kRowsStreamingWindowEnabled, "true")
       .assertResults(
           "SELECT *, rank() over (order by c1 rows unbounded preceding) FROM tmp");
 }
@@ -130,6 +131,7 @@ TEST_F(WindowTest, rowStreamingWindowBuild) {
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kRowsStreamingWindowEnabled, "true")
       .assertResults(
           "SELECT *, rank() over (partition by c0, c2 order by c1, c3), dense_rank() over (partition by c0, c2 order by c1, c3), row_number() over (partition by c0, c2 order by c1, c3), sum(c4) over (partition by c0, c2 order by c1, c3) FROM tmp");
 }
