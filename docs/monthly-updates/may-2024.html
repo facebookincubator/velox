@@ -59,6 +59,7 @@
 <li><p>Fix Nested Loop join with empty build and extra filter. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9892">#9892</a></p></li>
 <li><p>Fix crash when copying complex vectors. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9725">#9725</a></p></li>
 <li><p>Fix reuse of LazyVectors in TableScan to avoid crashes in downstream operators. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9811">#9811</a></p></li>
+<li><p>Add support for including metadata identifying the operator that generated an error in error messages to ease troubleshooting. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9695">#9695</a></p></li>
 </ul>
 </section>
 <section id="presto-functions">
@@ -72,6 +73,11 @@
 <li><p>Fix <a class="reference internal" href="../functions/presto/map.html#map_top_n" title="map_top_n"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_top_n()</span></code></a> function to break ties by comparing keys.</p></li>
 <li><p>Fix CAST(IntervalDayTime AS Varchar) for negative intervals. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9871">#9871</a></p></li>
 <li><p>Fix <a class="reference internal" href="../functions/presto/binary.html#from_base64" title="from_base64"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_base64()</span></code></a> for inputs without padding. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/8647">#8647</a></p></li>
+<li><p>Fix handling of equality and total ordering of NaN (Not-a-Number) floating point
+values in <a class="reference internal" href="../functions/presto/array.html#array_min" title="array_min"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_min()</span></code></a>, <a class="reference internal" href="../functions/presto/array.html#array_sort" title="array_sort"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sort()</span></code></a>, <a class="reference internal" href="../functions/presto/array.html#array_distinct" title="array_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_distinct()</span></code></a>,
+<a class="reference internal" href="../functions/presto/array.html#array_except" title="array_except"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_except()</span></code></a>, <a class="reference internal" href="../functions/presto/array.html#array_intersect" title="array_intersect"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_intersect()</span></code></a>, <code class="xref py py-func docutils literal notranslate"><span class="pre">array_union()</span></code>,
+<a class="reference internal" href="../functions/presto/array.html#array_position" title="array_position"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_position()</span></code></a>, <a class="reference internal" href="../functions/presto/array.html#array_remove" title="array_remove"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_remove()</span></code></a>, <a class="reference internal" href="../functions/presto/array.html#arrays_overlap" title="arrays_overlap"><code class="xref py py-func docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a>, <a class="reference internal" href="../functions/presto/array.html#contains" title="contains"><code class="xref py py-func docutils literal notranslate"><span class="pre">contains()</span></code></a>,
+map subscript and <a class="reference internal" href="../functions/presto/aggregate.html#multimap_agg" title="multimap_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">multimap_agg()</span></code></a>.</p></li>
 </ul>
 </section>
 <section id="spark-functions">
@@ -99,6 +105,7 @@
 <li><p>Add support for Nested Loop joins to Join Fuzzer.</p></li>
 <li><p>Add support for testing different sorting flags to Window Fuzzer.</p></li>
 <li><p>Add custom argument type generators for Presto decimal functions. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9715">#9715</a></p></li>
+<li><p>Add support for logical input types in the evaluateOnce() unit test helper method. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/9708">#9708</a></p></li>
 <li><p>Re-enable testing of merge joins in Join Fuzzer.</p></li>
 </ul>
 </section>
