@@ -205,8 +205,7 @@ class OrderByBenchmark {
         rowWithName({VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}),
     };
     std::vector<int> numKeys = {1, 2, 3, 4};
-    benchmark(
-        "no-payloads", "varchar", batchSizes, rowTypes, numKeys, 10);
+    benchmark("no-payloads", "varchar", batchSizes, rowTypes, numKeys, 10);
   }
 
  private:
