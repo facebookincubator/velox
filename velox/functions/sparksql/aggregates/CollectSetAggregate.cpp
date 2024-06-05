@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/lib/aggregates/SetAggregateBase.h"
+#include "velox/functions/lib/aggregates/SetBaseAggregate.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
 void registerCollectSetAggAggregate(
@@ -44,7 +44,7 @@ void registerCollectSetAggAggregate(
         const TypePtr& inputType =
             isRawInput ? argTypes[0] : argTypes[0]->childAt(0);
         const TypeKind typeKind = inputType->kind();
-
+        // Null inputs are excluded by setting 'ignoreNulls' as true.
         switch (typeKind) {
           case TypeKind::BOOLEAN:
             return std::make_unique<SetAggAggregate<bool, true>>(resultType);
@@ -77,6 +77,8 @@ void registerCollectSetAggAggregate(
           case TypeKind::ARRAY:
             [[fallthrough]];
           case TypeKind::ROW:
+            // Nested nulls are allowed by setting 'throwOnNestedNulls' as
+            // false.
             return std::make_unique<SetAggAggregate<ComplexType, true>>(
                 resultType, false);
           default:

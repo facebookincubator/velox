@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/lib/aggregates/SetAggregateBase.h"
+#include "velox/functions/lib/aggregates/SetBaseAggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
