@@ -168,6 +168,9 @@ int32_t SubstraitParser::parseReferenceSegment(
         kStructField: {
       return refSegment.struct_field().field();
     }
+    case ::substrait::Expression::ReferenceSegment::ReferenceTypeCase::kListElement: {
+      return refSegment.list_element().offset();
+    }
     default:
       VELOX_NYI(
           "Substrait conversion not supported for ReferenceSegment '{}'",
