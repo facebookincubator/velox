@@ -14,3 +14,4 @@ Velox Documentation
     bindings/python/README_generated_pyvelox
     develop
     programming-guide
+    Build metrics <https://facebookincubator.github.io/velox/bm-report/>
