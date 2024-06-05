@@ -94,6 +94,8 @@ class SortBuffer {
   // buffer stores the sort columns first in 'data_'.
   std::vector<IdentityProjection> columnMap_;
 
+  std::vector<std::pair<DecodedVector, column_index_t>> decodedInputs_;
+
   // Indicates no more input. Once it is set, addInput() can't be called on this
   // sort buffer object.
   bool noMoreInput_ = false;

@@ -47,9 +47,11 @@ SortBuffer::SortBuffer(
   sortedSpillColumnNames.reserve(input->size());
   sortedSpillColumnTypes.reserve(input->size());
   std::unordered_set<column_index_t> sortedChannelSet;
+  decodedInputs_.resize(input_->size());
   // Sorted key columns.
   for (column_index_t i = 0; i < sortColumnIndices.size(); ++i) {
     columnMap_.emplace_back(IdentityProjection(i, sortColumnIndices.at(i)));
+    decodedInputs_[sortColumnIndices.at(i)].second = i;
     sortedColumnTypes.emplace_back(input_->childAt(sortColumnIndices.at(i)));
     sortedSpillColumnTypes.emplace_back(
         input_->childAt(sortColumnIndices.at(i)));
@@ -63,6 +65,7 @@ SortBuffer::SortBuffer(
     if (sortedChannelSet.count(i) != 0) {
       continue;
     }
+    decodedInputs_[i].second = nonSortedIndex;
     columnMap_.emplace_back(nonSortedIndex++, i);
     nonSortedColumnTypes.emplace_back(input_->childAt(i));
     sortedSpillColumnTypes.emplace_back(input_->childAt(i));
@@ -80,16 +83,15 @@ void SortBuffer::addInput(const VectorPtr& input) {
   ensureInputFits(input);
 
   SelectivityVector allRows(input->size());
-  std::vector<char*> rows(input->size());
-  for (int row = 0; row < input->size(); ++row) {
-    rows[row] = data_->newRow();
-  }
   auto* inputRow = input->as<RowVector>();
   for (const auto& columnProjection : columnMap_) {
-    DecodedVector decoded(
+    decodedInputs_[columnProjection.outputChannel].first.decode(
         *inputRow->childAt(columnProjection.outputChannel), allRows);
-    for (int i = 0; i < input->size(); ++i) {
-      data_->store(decoded, i, rows[i], columnProjection.inputChannel);
+  }
+  for (int row = 0; row < input->size(); ++row) {
+    char* newRow = data_->newRow();
+    for (auto i = 0; i < columnMap_.size(); ++i) {
+      data_->store(decodedInputs_[i].first, row, newRow, decodedInputs_[i].second);
     }
   }
   numInputRows_ += allRows.size();
