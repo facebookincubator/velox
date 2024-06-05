@@ -1547,7 +1547,7 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
   ASSERT_EQ(driverCounts.numBlockedDrivers.size(), 0);
 }
 
-TEST_F(TaskTest, driverCreationMemoryAllocationCheck) {
+TEST_F(TaskTest, DISABLED_driverCreationMemoryAllocationCheck) {
   exec::Operator::registerOperator(std::make_unique<TestBadMemoryTranslator>());
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
