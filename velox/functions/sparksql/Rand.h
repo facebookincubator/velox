@@ -53,18 +53,22 @@ struct RandFunction {
  */
 template <typename T>
 struct RandnFunction: RandFunction<T> {
+public:
+  using RandFunction<T>::generator_;
 
+  template<typename RNG>
+  static double randnDouble01(RNG&& rng) {
+    return std::normal_distribution<double>(0.0, 1.0)(rng);
+  };
+ 
   FOLLY_ALWAYS_INLINE void call(double& result) {
-    result = standard_nd(folly::ThreadLocalPRNG());
+    result = randnDouble01(folly::ThreadLocalPRNG());
   };
 
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void callNullable(double& result, TInput /*seedInput*/) {
-    result = standard_nd(generator_);
+    result = randnDouble01(generator_);
   };
-
- private:
-  std::normal_distribution<double> standard_nd{0.0, 1.0};
 };
 
 } // namespace facebook::velox::functions::sparksql
