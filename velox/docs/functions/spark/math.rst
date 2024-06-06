@@ -191,6 +191,13 @@ Mathematical Functions
 
         SELECT rand(); -- 0.9629742951434543
 
+.. spark:function:: randn() -> double
+
+    Returns a random value with standard normal distributed values in [0, 1). ::
+
+        SELECT rand(); -- 0.9629742951434543
+
+
 .. spark:function:: rand(seed) -> double
 
     Returns a random value with uniformly distributed values in [0, 1) using a seed formed

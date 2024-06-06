@@ -39,6 +39,7 @@ add_executable(
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
   RandTest.cpp
+  RandnTest.cpp
   RegexFunctionsTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp
