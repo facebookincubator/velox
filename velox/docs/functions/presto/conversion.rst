@@ -428,6 +428,8 @@ Valid examples
 
   SELECT cast('1.' as real); -- 1.0
   SELECT cast('1' as real); -- 1.0
+  SELECT cast('0x1.2p3' as real); -- 9.0
+  SELECT cast('01234' as real); -- 1234.0
   SELECT cast('1.7E308' as real); -- Infinity
   SELECT cast('Infinity' as real); -- Infinity (case sensitive)
   SELECT cast('-Infinity' as real); -- -Infinity (case sensitive)

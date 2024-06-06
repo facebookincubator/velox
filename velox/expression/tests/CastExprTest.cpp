@@ -1053,6 +1053,9 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<std::string, float>("real", {"  NaN  "}, {kNan});
     testCast<std::string, float>("real", {"  -NaN  "}, {kNan});
     testCast<std::string, float>("real", {"  +NaN  "}, {kNan});
+    testCast<std::string, float>("real", {" 0x1.2p3 "}, {9.0});
+    testCast<std::string, float>("real", {" 0x10.1p0 "}, {16.0625});
+    testCast<std::string, float>("real", {"01234"}, {1234});
   }
 
   // To boolean.

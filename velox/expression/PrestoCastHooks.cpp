@@ -79,7 +79,8 @@ template <typename T>
 Expected<T> doCastToFloatingPoint(const StringView& data) {
   static const T kNan = std::numeric_limits<T>::quiet_NaN();
   static StringToDoubleConverter stringToDoubleConverter{
-      StringToDoubleConverter::ALLOW_TRAILING_SPACES,
+      StringToDoubleConverter::ALLOW_TRAILING_SPACES |
+          StringToDoubleConverter::ALLOW_HEX_FLOATS,
       /*empty_string_value*/ kNan,
       /*junk_string_value*/ kNan,
       "Infinity",
