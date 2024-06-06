@@ -17,6 +17,7 @@
 #include "velox/common/base/RawVector.h"
 
 #include <gtest/gtest.h>
+#include "velox/common/base/SelectivityInfo.h"
 
 using namespace facebook::velox;
 
@@ -109,4 +110,146 @@ TEST(RawVectorTest, toStdVector) {
     EXPECT_EQ(data[i], converted[i]);
     ;
   }
+}
+
+struct State {
+  const int32_t* data;
+  int32_t* result;
+  int32_t key;
+  int32_t lo;
+  int32_t hi;
+  int32_t guess;
+  bool done{false};
+
+  State() = default;
+
+  State(const raw_vector<int32_t>& vec, int32_t key, int32_t* result)
+      : data(vec.data()),
+        result(result),
+        key(key),
+        lo(0),
+        hi(vec.size()),
+        done(false) {}
+
+  void lookup() {
+    guess = (lo + hi) / 2;
+    __builtin_prefetch(data + guess);
+  }
+
+  bool decide() {
+    if (done) {
+      return false;
+    }
+    auto localGuess = guess;
+    int32_t value = data[guess];
+    for (;;) {
+      if (value < key) {
+        lo = localGuess + 1;
+      } else if (value > key) {
+        hi = localGuess;
+      } else {
+        *result = localGuess;
+        done = true;
+        return true;
+      }
+      auto dist = hi - lo;
+      if (dist > 16) {
+        guess = (lo + hi) / 2;
+        __builtin_prefetch(data + guess);
+        return false;
+      }
+      if (!dist) {
+        *result = lo;
+        done = true;
+        return true;
+      }
+      localGuess = (lo + hi) / 2;
+      value = data[localGuess];
+    }
+  }
+};
+
+template <int32_t stride>
+void searchTest(
+    const std::vector<raw_vector<int32_t>>& vectors,
+    const std::vector<int32_t>& indices,
+    const std::vector<int32_t>& keys,
+    std::vector<int32_t>& positions) {
+  SelectivityInfo info;
+  {
+    SelectivityTimer t(info, indices.size());
+    if (stride == 1) {
+      for (auto iv = 0; iv < indices.size(); ++iv) {
+        auto nth = indices[iv];
+        auto& vec = vectors[nth];
+        auto target = keys[iv];
+        auto data = vec.data();
+        int lo = 0, hi = vec.size();
+        while (lo < hi) {
+          int guess = (lo + hi) / 2;
+          if (data[guess] < target) {
+            lo = guess + 1;
+          } else if (data[guess] == target) {
+            positions[iv] = guess;
+            goto found;
+          } else {
+            hi = guess;
+          }
+        }
+        positions[iv] = lo;
+      found:;
+      }
+    } else {
+      std::vector<State> states(stride);
+      for (auto start = 0; start < indices.size(); start += stride) {
+        for (auto i = 0; i < stride; ++i) {
+          states[i] = State(
+              vectors[indices[i + start]],
+              keys[i + start],
+              &positions[i + start]);
+        }
+        auto todo = stride;
+        while (todo) {
+          for (auto i = 0; i < stride; ++i) {
+            states[i].lookup();
+          }
+          for (auto i = 0; i < stride; ++i) {
+            todo -= states[i].decide();
+          }
+        }
+      }
+    }
+  }
+  std::cout << "stride=" << stride << " clks/vector=" << info.timeToDropValue()
+            << std::endl;
+}
+
+TEST(RawVectorTest, binarySearch) {
+  constexpr int32_t kNumVectors = 1 << 20;
+  constexpr int32_t kSize = 200;
+  std::vector<raw_vector<int32_t>> vectors(kNumVectors);
+  std::vector<int32_t> keys;
+  keys.reserve(kNumVectors);
+  std::vector<int32_t> positions(kNumVectors);
+  std::vector<int32_t> indices;
+  indices.reserve(kNumVectors);
+  int32_t index = 0;
+  int32_t delta = 1;
+  std::unordered_set<int32_t> distincts;
+  for (auto& vector : vectors) {
+    keys.push_back(keys.size() * 100 % (kSize * 100));
+    indices.push_back(index);
+    distincts.insert(index);
+    index = (index + delta) & (kNumVectors - 1);
+    ++delta;
+    vector.resize(kSize);
+    for (auto i = 0; i < kSize; ++i) {
+      vector[i] = i * 100;
+    }
+  }
+  EXPECT_EQ(distincts.size(), kNumVectors);
+  searchTest<1>(vectors, indices, keys, positions);
+  searchTest<8>(vectors, indices, keys, positions);
+  searchTest<16>(vectors, indices, keys, positions);
+  searchTest<64>(vectors, indices, keys, positions);
 }
