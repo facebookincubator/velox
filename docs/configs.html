@@ -659,6 +659,15 @@ Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).</
 <td><p>1024</p></td>
 <td><p>Minimal number of items in an encoded stream.</p></td>
 </tr>
+<tr class="row-even"><td><p>cache.no_retention</p></td>
+<td><p>cache.no_retention</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, evict out a query scanned data out of in-memory cache right after the access,
+and also skip staging to the ssd cache. This helps to prevent the cache space pollution
+from the one-time table scan by large batch query when mixed running with interactive
+query which has high data locality.</p></td>
+</tr>
 </tbody>
 </table>
 <section id="amazon-s3-configuration">
