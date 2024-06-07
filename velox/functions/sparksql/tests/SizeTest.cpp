@@ -105,9 +105,6 @@ TEST_F(SizeTest, passedLegacySizeOfNull) {
   auto arrayVector =
       makeArrayVector<int64_t>(numRows, sizeAt, valueAt, nullEvery(1));
   testSizePassedLegacyNull(arrayVector, numRows);
-  auto mapVector = makeMapVector<int64_t, int64_t>(
-      numRows, sizeAt, valueAt, valueAt, nullEvery(1));
-  testSizePassedLegacyNull(mapVector, numRows);
 }
 
 } // namespace facebook::velox::functions::sparksql::test

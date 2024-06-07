@@ -79,7 +79,6 @@ void registerSize(const std::string& prefix) {
   registerFunction<Size, int32_t, Map<Any, Any>>({prefix});
   // Register with legacySizeOfNull.
   registerFunction<Size, int32_t, Array<Any>, bool>({prefix});
-  registerFunction<Size, int32_t, Map<Any, Any>, bool>({prefix});
 }
 
 } // namespace facebook::velox::functions::sparksql
