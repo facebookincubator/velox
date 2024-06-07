@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/functions/sparksql/RegisterArithmetic.h"
-#include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/sparksql/Arithmetic.h"
@@ -113,10 +112,10 @@ void registerArithmeticFunctions(const std::string& prefix) {
 
   // Register checked arithmetic functions for Spark arithmetic exprs with try
   // eval mode.
-  registerBinaryIntegral<CheckedPlusFunction>({prefix + "check_add"});
-  registerBinaryIntegral<CheckedMinusFunction>({prefix + "check_subtract"});
-  registerBinaryIntegral<CheckedMultiplyFunction>({prefix + "check_multiply"});
-  registerBinaryIntegral<CheckedDivideFunction>({prefix + "check_divide"});
+  registerBinaryNumeric<CheckedAddFunction>({prefix + "check_add"});
+  registerBinaryNumeric<CheckedSubtractFunction>({prefix + "check_subtract"});
+  registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "check_multiply"});
+  registerBinaryNumeric<CheckedDivideFunction>({prefix + "check_divide"});
 }
 
 } // namespace facebook::velox::functions::sparksql

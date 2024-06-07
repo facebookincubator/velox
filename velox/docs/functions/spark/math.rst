@@ -41,7 +41,7 @@ Mathematical Functions
 .. spark:function:: add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to sparks's operator ``+``.
+    Corresponds to sparks's operator ``+``.
 
 .. spark:function:: add(x, y) -> decimal
 
@@ -68,23 +68,23 @@ Mathematical Functions
 
 .. function:: check_add(x, y) -> [same as x]
 
-    Returns the result of adding x to y. The types of x and y must be the same and integral types.
-    Overflow results in an error.
+    Returns the result of adding x to y. The types of x and y must be the same.
+    For integral types, overflow results in an error. Corresponds to sparks's operator ``+`` with ``failOnError`` as true.
 
 .. function:: check_divide(x, y) -> [same as x]
 
-    Returns the results of dividing x by y. The types of x and y must be the same and integral types.
-    Division by zero results in an error.
+    Returns the results of dividing x by y. The types of x and y must be the same.
+    Division by zero results in an error. Corresponds to sparks's operator ``/`` with ``failOnError`` as true.
 
 .. function:: check_multiply(x, y) -> [same as x]
 
-    Returns the result of multiplying x by y. The types of x and y must be the same and integral types.
-    Overflow results in an error.
+    Returns the result of multiplying x by y. The types of x and y must be the same.
+    For integral types, overflow results in an error. Corresponds to sparks's operator ``*`` with ``failOnError`` as true.
 
 .. function:: check_subtract(x, y) -> [same as x]
 
-    Returns the result of subtracting y from x. The types of x and y must be the same and integral types.
-    Overflow results in an error.
+    Returns the result of subtracting y from x. The types of x and y must be the same.
+    For integral types, overflow results in an error. Corresponds to sparks's operator ``-`` with ``failOnError`` as true.
 
 .. spark:function:: cos(x) -> double
 
@@ -183,7 +183,7 @@ Mathematical Functions
 .. spark:function:: multiply(x, y) -> [same as x]
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``*``.
+    Corresponds to Spark's operator ``*``.
 
 .. spark:function:: multiply(x, y) -> [decimal]
 
@@ -267,7 +267,7 @@ Mathematical Functions
 .. spark:function:: subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``-``.
+    Corresponds to Spark's operator ``-``.
 
 .. spark:function:: subtract(x, y) -> decimal
 
