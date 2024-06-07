@@ -22,6 +22,7 @@
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/security/Identity.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -253,6 +254,7 @@ class ConnectorQueryCtx {
       memory::MemoryPool* operatorPool,
       memory::MemoryPool* connectorPool,
       const Config* sessionProperties,
+      const common::Identity* identity,
       const common::SpillConfig* spillConfig,
       std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
       cache::AsyncDataCache* cache,
@@ -263,6 +265,7 @@ class ConnectorQueryCtx {
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
         sessionProperties_(sessionProperties),
+        identity_(identity),
         spillConfig_(spillConfig),
         expressionEvaluator_(std::move(expressionEvaluator)),
         cache_(cache),
@@ -289,6 +292,10 @@ class ConnectorQueryCtx {
 
   const Config* sessionProperties() const {
     return sessionProperties_;
+  }
+
+  const common::Identity* identity() const {
+    return identity_;
   }
 
   const common::SpillConfig* spillConfig() const {
@@ -331,6 +338,7 @@ class ConnectorQueryCtx {
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
   const Config* const sessionProperties_;
+  const common::Identity* identity_;
   const common::SpillConfig* const spillConfig_;
   std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
   cache::AsyncDataCache* cache_;
