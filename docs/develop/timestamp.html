@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Timestamp and Timezone Management &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Testing Tools" href="testing.html" />
+    <link rel="prev" title="CompactRow" href="serde/compactrow.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="testing.html" title="Testing Tools"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="serde/compactrow.html" title="CompactRow"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Timestamp and Timezone Management</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="timestamp-and-timezone-management">
+<h1>Timestamp and Timezone Management<a class="headerlink" href="#timestamp-and-timezone-management" title="Link to this heading">¶</a></h1>
+<section id="concepts">
+<h2>Concepts<a class="headerlink" href="#concepts" title="Link to this heading">¶</a></h2>
+<p>Following ANSI SQL semantics, TIMESTAMP is a data type that represents a
+reading of a wall clock and a calendar, e.g, <code class="docutils literal notranslate"><span class="pre">2024-04-09</span> <span class="pre">18:25:00</span></code>. Note that
+a TIMESTAMP does not represent an absolute point in time, as the exact same
+wall clock time may be read in different instants in time depending on where
+one is situated on Earth. For example, <code class="docutils literal notranslate"><span class="pre">2024-04-09</span> <span class="pre">18:25:00</span></code> in California
+and in China were perceived at different absolute points in time, about 15
+hours apart.</p>
+<p>To represent absolute points in time, SQL defines a TIMESTAMP WITH TIMEZONE
+type, which conceptually represents a pair of a wall time and calendar read
+(say, <code class="docutils literal notranslate"><span class="pre">2024-04-09</span> <span class="pre">18:25:00</span></code>), and a timezone (<code class="docutils literal notranslate"><span class="pre">PDT</span></code>, or
+<code class="docutils literal notranslate"><span class="pre">America/Los_Angeles</span></code>). With these two values, one can unambiguously
+represent an absolute instant in time.</p>
+<p>Naturally, a TIMESTAMP WITH TIMEZONE can be cast into a TIMESTAMP by just
+ignoring the timezone and keeping the timestamp wall time, and a TIMESTAMP can
+be cast into a TIMESTAMP WITH TIMEZONE by associating a timezone to it. The
+timezone can either be explicitly specified by the users, or implicitly taken
+from the user system or session information.</p>
+</section>
+<section id="physical-representation">
+<h2>Physical Representation<a class="headerlink" href="#physical-representation" title="Link to this heading">¶</a></h2>
+<p>Representing timestamps in memory as a string or a set of values for year,
+month, day, hour, and so on, is inefficient. Therefore, timestamps are usually
+stored in a columnar layout as a 64 bit integer representing the number of
+seconds elapsed since <code class="docutils literal notranslate"><span class="pre">1970-01-01</span> <span class="pre">00:00:00</span></code>. Negative values represent time
+prior to that.</p>
+<p>However, note that the physical representation of the timestamp is orthogonal
+to its logical meaning. For example, the timestamp represented by the <code class="docutils literal notranslate"><span class="pre">0</span></code>
+integer was perceived at different absolute points in time depending on the
+observer’s timezone, and does not necessarily imply that it was observed in the
+UTC timezone. When a timestamp represents the number of seconds in UTC
+specifically (at that exact absolute instant in time), it may be called a <em>unix
+epoch</em> or <em>unix time</em>.</p>
+</section>
+<section id="velox-classes-and-apis">
+<h2>Velox Classes and APIs<a class="headerlink" href="#velox-classes-and-apis" title="Link to this heading">¶</a></h2>
+<p>Velox provides a few classes and APIs to allow developers to store, process,
+and convert timestamps across timezones:</p>
+<p><strong>Timestamp:</strong> In Velox, timestamps are represented by the <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/type/Timestamp.h">Timestamp</a>
+class. The Timestamp class stores two 64 bit integers, one containing the
+number of seconds from <code class="docutils literal notranslate"><span class="pre">1970-01-01</span> <span class="pre">00:00:00</span></code>, and one containing the
+nanoseconds offset in that particular second, in order to provide nanosecond
+precision. A few more observations:</p>
+<ul class="simple">
+<li><p>While “seconds” can be negative to represent time before <code class="docutils literal notranslate"><span class="pre">1970-01-01</span>
+<span class="pre">00:00:00</span></code>, “nanoseconds” are always positive.</p></li>
+<li><p>Although Velox supports nanoseconds precision, engines like Presto and Spark
+may only need milliseconds or microsecond precision.</p></li>
+<li><p>The Timestamp class only offers a physical representation of timestamps, but
+does not carry logical information about its timezone. In other words, it
+cannot, by itself, represent an absolute point in time.</p></li>
+</ul>
+<p><strong>Timezone IDs:</strong> To physically represent timezones, Velox provides the
+<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/type/tz/TimeZoneMap.h">TimezoneMap.h</a>
+API. This API provides a 1:1 mapping from each available timezone to a
+monotonically increasing integer (a timezone ID), such that this integer can be
+used to efficiently represent timezones, preventing the use of inefficient
+timezone string names like <code class="docutils literal notranslate"><span class="pre">America/Los_Angeles</span></code>. Considering there are about
+2k valid timezone definitions, 12 bits are enough to represent timezone IDs.</p>
+<p>Timezone IDs in Velox are based on the id map used by Presto and are
+<a class="reference external" href="https://github.com/prestodb/presto/blob/master/presto-common/src/main/resources/com/facebook/presto/common/type/zone-index.properties">available here</a>.
+They are automatically generated using <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/type/tz/gen_timezone_database.py">this script</a>.
+While timezone IDs are an implementation detail and ideally should not leak
+outside of Velox execution, they are exposed if data containing
+TimestampWithTimezones are serialized, for example.</p>
+<p><strong>TimestampWithTimezone:</strong> To represent an absolute point in time, Velox provides
+<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/functions/prestosql/types/TimestampWithTimeZoneType.h">TimestampWithTimezone</a>.
+This abstraction implements the TIMESTAMP WITH TIMEZONE SQL semantic discussed
+above, and is based on Presto’s implementation - therefore only supporting
+millisecond-precision.</p>
+<p>TimestampWithTimezone physically packs two integers in a single 64 word, using
+12 bits for timezone ID, and 52 bits for a millisecond-precision timestamp.</p>
+<p>Note that to accelerate timestamp conversion functions, the timestamps stored
+in a TimestampWithTimezone are <strong>always relative to UTC</strong> - they are unix epochs.
+This means that converting a TimestampWithTimezone across timezones is
+efficiently done by just overwriting the 12 bits, and that comparisons can be
+done by just comparing the 52 bits relative to timestamp (ignoring the timezone
+ID).</p>
+<p>However, unpacking/converting a TimestampWithTimezone into an absolute time
+definition requires a
+<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/functions/prestosql/DateTimeFunctions.h#L74-L84">timezone conversion</a>.</p>
+</section>
+<section id="conversions-across-timezones">
+<h2>Conversions Across Timezones<a class="headerlink" href="#conversions-across-timezones" title="Link to this heading">¶</a></h2>
+<p>A common operation required when processing timestamps and timezone is finding
+the wall clock and calendar read in a specific timezone given an absolute point
+in time described by a wall clock and calendar read in a different timezone.
+For example, at the exact point in time when UTC hits <code class="docutils literal notranslate"><span class="pre">1970-01-01</span> <span class="pre">00:00:00</span></code>,
+what was the wall clock read in China?</p>
+<p>Timezone conversions are tricky since they are non-linear and depend on
+daylight savings time schedules and other local regulations, and these change
+over time. To enable such conversions, <a class="reference external" href="https://www.iana.org/time-zones">IANA</a>
+periodically publishes a global source of authority database for timezone
+conversions, which is periodically pushed to systems using packages like tzdata
+for Linux.</p>
+<p>In Velox, Timezone conversions are done using std::chrono. Starting in C++20,
+std::chrono <a class="reference external" href="https://en.cppreference.com/w/cpp/chrono/time_zone">supports conversion of timestamp across timezones</a>.
+To support older versions of the C++ standard, in Velox we vendor an
+implementation of this API at <a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/external/date">velox/external/date/</a>.
+This class handles timezone conversions by leveraging APIs provided by the
+operating system, based on the tzdata database installed locally. If systems
+happen to have inconsistent or older versions of the tzdata database, Velox’s
+conversions may produce inconsistent results.</p>
+<p>On Linux, you can check the tzdata installed in your system by:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>rpm<span class="w"> </span>-qa<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>tzdata
+tzdata-2024a-1.fc38.noarch
+</pre></div>
+</div>
+<p>Timezone conversions are done using special methods in the Timestamp class:
+<code class="docutils literal notranslate"><span class="pre">Timestamp::toGMT()</span></code> and <code class="docutils literal notranslate"><span class="pre">Timestamp::toTimezone()</span></code>. They can take either a
+timezone ID or a date::time_zone pointer. Providing a date::time_zone is
+generally more efficient, but std::chrono does not handle time zone offsets
+such as <code class="docutils literal notranslate"><span class="pre">+09:00</span></code>.  Timezone offsets are only supported in the API version
+that takes a timezone ID.</p>
+</section>
+<section id="casts">
+<h2>Casts<a class="headerlink" href="#casts" title="Link to this heading">¶</a></h2>
+<p>This section describes examples of timestamp casts following ANSI SQL
+semantics, using <a class="reference external" href="https://prestodb.io/docs/current/functions/datetime.html">Presto as a reference implementation</a>,
+using <code class="docutils literal notranslate"><span class="pre">set</span> <span class="pre">session</span> <span class="pre">legacy_timestamp</span> <span class="pre">=</span> <span class="pre">false;</span></code> (see the section below for
+details).</p>
+<p>Timestamp literals are created based on whether time zone information is found
+on the string on not:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">typeof</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">timestamp</span>
+<span class="n">SELECT</span> <span class="n">typeof</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00 UTC&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">timestamp</span> <span class="k">with</span> <span class="n">time</span> <span class="n">zone</span>
+</pre></div>
+</div>
+<p>Converting a TimestampWithTimezone into a Timestamp works by dropping the
+timezone information and returning only the timestamp portion:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00 UTC&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00 America/New_York&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span>
+</pre></div>
+</div>
+<p>To convert a Timestamp into a TimestampWithTimezone, one needs to specify a
+timezone. In Presto, the session timezone is used by default:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">current_timezone</span><span class="p">();</span> <span class="o">--</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span> <span class="k">with</span> <span class="n">time</span> <span class="n">zone</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span>
+</pre></div>
+</div>
+<p>Conversion across TimestampWithTimezone can be done using the AT TIME ZONE
+construct.</p>
+<p>The semantic of this operation is: at the absolute point in time described by
+the source TimestampWithTimezone (<code class="docutils literal notranslate"><span class="pre">1970-01-01</span> <span class="pre">00:00:00</span> <span class="pre">UTC</span></code>), what would be
+the clock/calendar read at the target timezone (Los Angeles)?</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00 UTC&#39;</span> <span class="n">AT</span> <span class="n">TIME</span> <span class="n">ZONE</span> <span class="s1">&#39;America/Los_Angeles&#39;</span><span class="p">;</span> <span class="o">--</span> <span class="mi">1969</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">31</span> <span class="mi">16</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span>
+<span class="n">SELECT</span> <span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00 UTC&#39;</span> <span class="n">AT</span> <span class="n">TIME</span> <span class="n">ZONE</span> <span class="s1">&#39;UTC&#39;</span><span class="p">;</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">UTC</span>
+</pre></div>
+</div>
+<p>Strings can be converted into Timestamp and TimestampWithTimezone:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00 America/Los_Angeles&#39;</span> <span class="k">as</span> <span class="n">timestamp</span> <span class="k">with</span> <span class="n">time</span> <span class="n">zone</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span>
+</pre></div>
+</div>
+<p>One can also convert a TimestampWithTimezone into a unix epoch/time. The
+semantic of this operation is: at the absolute point in time described by the
+timestamp with timezone taken as a parameter, what was the unix epoch? Remember
+that unix epoch is the number of seconds since <code class="docutils literal notranslate"><span class="pre">1970-01-01</span> <span class="pre">00:00:00</span></code> in UTC:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">to_unixtime</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00 UTC&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mf">0.0</span>
+<span class="n">SELECT</span> <span class="n">to_unixtime</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00 America/Los_Angeles&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mf">28800.0</span>
+</pre></div>
+</div>
+<p>The opposite conversion can be achieved using <code class="docutils literal notranslate"><span class="pre">from_unixtime()</span></code>. The function
+may take an optional second parameter to specify the timezone, having the same
+semantic as AT TIME ZONE described above:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">from_unixtime</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span>
+<span class="n">SELECT</span> <span class="n">from_unixtime</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;UTC&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">UTC</span>
+<span class="n">SELECT</span> <span class="n">from_unixtime</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;America/Los_Angeles&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1969</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">31</span> <span class="mi">16</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span>
+</pre></div>
+</div>
+</section>
+<section id="presto-cast-legacy-behavior">
+<h2>Presto Cast Legacy Behavior<a class="headerlink" href="#presto-cast-legacy-behavior" title="Link to this heading">¶</a></h2>
+<p>For historical reasons, Presto used to interpret a TIMESTAMP as an absolute
+point in time at the user’s time zone, instead of a timezone-less wall clock
+reading as the ANSII SQL defines it. More information
+<a class="reference external" href="https://github.com/prestodb/presto/issues/7122">can be found here</a>.</p>
+<p>Although this has been fixed in newer versions, a <code class="docutils literal notranslate"><span class="pre">legacy_timestamp</span></code> session
+flag was added  to preserve backwards compatibility. When this flag is set,
+timestamps have a different semantic:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SET</span> <span class="n">SESSION</span> <span class="n">legacy_timestamp</span> <span class="o">=</span> <span class="n">true</span><span class="p">;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1970-01-01 00:00:00 UTC&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1969</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">31</span> <span class="mi">16</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00 UTC&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1969</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">31</span> <span class="mi">16</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span>
+</pre></div>
+</div>
+<p>To support the two timestamp semantics, the
+<code class="docutils literal notranslate"><span class="pre">core::QueryConfig::kAdjustTimestampToTimezone</span></code> query flag was added to Velox.
+When this flag is set, Velox will convert the timestamp into the user’s session
+time zone to follow the expected semantic, although non-ANSI SQL compliant.</p>
+</section>
+<section id="other-resources">
+<h2>Other Resources<a class="headerlink" href="#other-resources" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/prestodb/presto/issues/7122">https://github.com/prestodb/presto/issues/7122</a></p></li>
+<li><p><a class="reference external" href="https://github.com/a0x8o/presto/blob/master/presto-docs/src/main/sphinx/language/timestamp.rst">https://github.com/a0x8o/presto/blob/master/presto-docs/src/main/sphinx/language/timestamp.rst</a></p></li>
+<li><p><a class="reference external" href="https://github.com/facebookincubator/velox/issues/8037">https://github.com/facebookincubator/velox/issues/8037</a></p></li>
+</ul>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Timestamp and Timezone Management</a><ul>
+<li><a class="reference internal" href="#concepts">Concepts</a></li>
+<li><a class="reference internal" href="#physical-representation">Physical Representation</a></li>
+<li><a class="reference internal" href="#velox-classes-and-apis">Velox Classes and APIs</a></li>
+<li><a class="reference internal" href="#conversions-across-timezones">Conversions Across Timezones</a></li>
+<li><a class="reference internal" href="#casts">Casts</a></li>
+<li><a class="reference internal" href="#presto-cast-legacy-behavior">Presto Cast Legacy Behavior</a></li>
+<li><a class="reference internal" href="#other-resources">Other Resources</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="serde/compactrow.html"
+                          title="previous chapter">CompactRow</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="testing.html"
+                          title="next chapter">Testing Tools</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/timestamp.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="testing.html" title="Testing Tools"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="serde/compactrow.html" title="CompactRow"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Timestamp and Timezone Management</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
+    </div>
+  </body>
+</html>
