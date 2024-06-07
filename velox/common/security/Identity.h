@@ -23,8 +23,8 @@ namespace facebook::velox::common {
 
 /// Used to store user name and credentials.
 struct Identity {
-  std::string userName_;
-  std::unordered_map<std::string, std::string> credentials_;
+  std::string user;
+  std::unordered_map<std::string, std::string> credentials;
 };
 
 } // namespace facebook::velox::common
