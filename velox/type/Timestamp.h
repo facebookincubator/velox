@@ -30,12 +30,14 @@ namespace date {
 class time_zone;
 }
 
+enum class TimestampPrecision : int8_t {
+  kMilliseconds = 3, // 10^3 milliseconds are equal to one second.
+  kMicroseconds = 6, // 10^6 microseconds are equal to one second.
+  kNanoseconds = 9, // 10^9 nanoseconds are equal to one second.
+};
+
 struct TimestampToStringOptions {
-  enum class Precision : int8_t {
-    kMilliseconds = 3, // 10^3 milliseconds are equal to one second.
-    kMicroseconds = 6, // 10^6 microseconds are equal to one second.
-    kNanoseconds = 9, // 10^9 nanoseconds are equal to one second.
-  };
+  using Precision = TimestampPrecision;
 
   Precision precision = Precision::kNanoseconds;
 
@@ -187,7 +189,7 @@ struct Timestamp {
   /// Due to the limit of std::chrono, throws if timestamp is outside of
   /// [-32767-01-01, 32767-12-31] range.
   /// If allowOverflow is true, integer overflow is allowed in converting
-  /// timestmap to milliseconds.
+  /// timestamp to milliseconds.
   std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
   toTimePoint(bool allowOverflow = false) const;
 
@@ -216,6 +218,21 @@ struct Timestamp {
   }
 
   static Timestamp fromMicros(int64_t micros) {
+    if (micros >= 0 || micros % 1'000'000 == 0) {
+      return Timestamp(micros / 1'000'000, (micros % 1'000'000) * 1'000);
+    }
+    auto second = micros / 1'000'000 - 1;
+    auto nano = ((micros - second * 1'000'000) % 1'000'000) * 1'000;
+    return Timestamp(second, nano);
+  }
+
+  static Timestamp fromMicrosNoError(int64_t micros)
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+  {
     if (micros >= 0 || micros % 1'000'000 == 0) {
       return Timestamp(micros / 1'000'000, (micros % 1'000'000) * 1'000);
     }
@@ -296,12 +313,14 @@ struct Timestamp {
   // Same as above, but accepts PrestoDB time zone ID.
   void toGMT(int16_t tzID);
 
-  // Assuming the timestamp represents a GMT time, converts it to the time at
-  // the same moment at zone.
-  // Example: Timestamp ts{0, 0};
-  // ts.Timezone("America/Los_Angeles");
-  // ts.toString() returns December 31, 1969 16:00:00
-  void toTimezone(const date::time_zone& zone);
+  /// Assuming the timestamp represents a GMT time, converts it to the time at
+  /// the same moment at zone.
+  /// @param allowOverflow If true, integer overflow is allowed when converting
+  /// timestamp to TimePoint. Otherwise, user exception is thrown for overflow.
+  /// Example: Timestamp ts{0, 0};
+  /// ts.Timezone("America/Los_Angeles");
+  /// ts.toString() returns December 31, 1969 16:00:00
+  void toTimezone(const date::time_zone& zone, bool allowOverflow = false);
 
   // Same as above, but accepts PrestoDB time zone ID.
   void toTimezone(int16_t tzID);
@@ -394,6 +413,11 @@ struct Timestamp {
     obj["seconds"] = seconds_;
     obj["nanos"] = nanos_;
     return obj;
+  }
+
+  // Pretty printer for gtest.
+  friend void PrintTo(const Timestamp& timestamp, std::ostream* os) {
+    *os << "sec: " << timestamp.seconds_ << ", ns: " << timestamp.nanos_;
   }
 
  private:

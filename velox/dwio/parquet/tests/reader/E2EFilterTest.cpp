@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/tests/E2EFilterTestBase.h"
+#include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -59,7 +60,7 @@ class E2EFilterTest : public E2EFilterTestBase, public test::VectorTestBase {
       bool forRowGroupSkip = false) override {
     auto sink = std::make_unique<MemorySink>(
         200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
-    sinkPtr_ = sink.get();
+    auto* sinkPtr = sink.get();
     options_.memoryPool = E2EFilterTestBase::rootPool_.get();
     int32_t flushCounter = 0;
     options_.flushPolicyFactory = [&]() {
@@ -78,6 +79,7 @@ class E2EFilterTest : public E2EFilterTestBase, public test::VectorTestBase {
     }
     writer_->flush();
     writer_->close();
+    sinkData_ = std::string_view(sinkPtr->data(), sinkPtr->size());
   }
 
   std::unique_ptr<dwio::common::Reader> makeReader(
@@ -98,8 +100,8 @@ TEST_F(E2EFilterTest, writerMagic) {
   batches.push_back(std::static_pointer_cast<RowVector>(
       test::BatchMaker::createBatch(rowType_, 20000, *leafPool_, nullptr, 0)));
   writeToMemory(rowType_, batches, false);
-  auto data = sinkPtr_->data();
-  auto size = sinkPtr_->size();
+  auto data = sinkData_.data();
+  auto size = sinkData_.size();
   EXPECT_EQ("PAR1", std::string(data, 4));
   EXPECT_EQ("PAR1", std::string(data + size - 4, 4));
 }
@@ -587,9 +589,8 @@ TEST_F(E2EFilterTest, largeMetadata) {
   readerOpts.setFooterEstimatedSize(1024);
   readerOpts.setFilePreloadThreshold(1024 * 8);
   dwio::common::RowReaderOptions rowReaderOpts;
-  std::string_view data(sinkPtr_->data(), sinkPtr_->size());
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
   EXPECT_EQ(1000, reader->numberOfRows());
 }
@@ -622,14 +623,34 @@ TEST_F(E2EFilterTest, combineRowGroup) {
         test::BatchMaker::createBatch(rowType_, 1, *leafPool_, nullptr, 0)));
   }
   writeToMemory(rowType_, batches, false);
-  std::string_view data(sinkPtr_->data(), sinkPtr_->size());
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
   auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
   EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 1);
   EXPECT_EQ(parquetReader.numberOfRows(), 5);
+}
+
+TEST_F(E2EFilterTest, writeDecimalAsInteger) {
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
+       makeFlatVector<int64_t>({1, 2}, DECIMAL(10, 2)),
+       makeFlatVector<int64_t>({1, 2}, DECIMAL(19, 2))});
+  writeToMemory(rowVector->type(), {rowVector}, false);
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+  auto reader = makeReader(readerOpts, std::move(input));
+  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
+
+  auto types = parquetReader.typeWithId()->getChildren();
+  auto c0 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[0]);
+  EXPECT_EQ(c0->parquetType_.value(), thrift::Type::type::INT32);
+  auto c1 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[1]);
+  EXPECT_EQ(c1->parquetType_.value(), thrift::Type::type::INT64);
+  auto c2 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[2]);
+  EXPECT_EQ(c2->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
 }
 
 TEST_F(E2EFilterTest, configurableWriteSchema) {
@@ -642,10 +663,9 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
     }
 
     writeToMemory(newType, batches, false);
-    std::string_view data(sinkPtr_->data(), sinkPtr_->size());
     dwio::common::ReaderOptions readerOpts{leafPool_.get()};
     auto input = std::make_unique<BufferedInput>(
-        std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
+        std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
     auto reader = makeReader(readerOpts, std::move(input));
     auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
 

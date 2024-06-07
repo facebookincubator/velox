@@ -272,6 +272,55 @@ getFunctionNamesAndArgs(const std::vector<std::string>& aggregates) {
   }
   return std::make_pair(functionNames, aggregateArgs);
 }
+
+// Given a list of aggregation expressions, e.g., {"avg(c0)",
+// "\"$internal$count_distinct\"(c1)"}, fetch the function names from
+// AggregationNode of builder.planNode().
+std::vector<std::string> getFunctionNames(
+    std::function<void(exec::test::PlanBuilder&)> makeSource,
+    const std::vector<std::string>& aggregates,
+    memory::MemoryPool* pool) {
+  std::vector<std::string> functionNames;
+
+  PlanBuilder builder(pool);
+  makeSource(builder);
+
+  builder.singleAggregation({}, aggregates);
+  auto& aggregationNode =
+      static_cast<const core::AggregationNode&>(*builder.planNode());
+
+  for (const auto& aggregate : aggregationNode.aggregates()) {
+    const auto& aggregateExpr = aggregate.call;
+    const auto& name = aggregateExpr->name();
+
+    functionNames.push_back(name);
+  }
+
+  return functionNames;
+}
+
+// Given a list of aggregation expressions, check if any of aggregate functions
+// are order sensitive with metadata.
+bool hasOrderSensitive(
+    std::function<void(exec::test::PlanBuilder&)> makeSource,
+    const std::vector<std::string>& aggregates,
+    memory::MemoryPool* pool) {
+  auto functionNames = getFunctionNames(makeSource, aggregates, pool);
+  return std::any_of(
+      functionNames.begin(), functionNames.end(), [](const auto& functionName) {
+        auto* entry = exec::getAggregateFunctionEntry(functionName);
+        const auto& metadata = entry->metadata;
+        return metadata.orderSensitive;
+      });
+}
+// Same as above, but allows to specify input data instead of a function.
+bool hasOrderSensitive(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<std::string>& aggregates,
+    memory::MemoryPool* pool) {
+  return hasOrderSensitive(
+      [&](PlanBuilder& builder) { builder.values(data); }, aggregates, pool);
+}
 } // namespace
 
 void AggregationTestBase::testAggregationsWithCompanion(
@@ -372,7 +421,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     assertResults(queryBuilder);
   }
 
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  if (!groupingKeys.empty() && !hasOrderSensitive(data, aggregates, pool())) {
     SCOPED_TRACE("Run partial + final with spilling");
     PlanBuilder builder(pool());
     builder.values(dataWithExtraGroupingKey);
@@ -381,6 +430,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
+    core::PlanNodeId finalNodeId;
     builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeysWithPartialKey, paritialAggregates)
         .capturePlanNodeId(partialNodeId)
@@ -390,6 +440,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeys)
         .finalAggregation()
+        .capturePlanNodeId(finalNodeId)
         .project(extractExpressions);
 
     if (!postAggregationProjections.empty()) {
@@ -402,25 +453,29 @@ void AggregationTestBase::testAggregationsWithCompanion(
     queryBuilder.configs(config)
         .config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kAggregationSpillEnabled, true)
-        .spillDirectory(spillDirectory->path)
+        .spillDirectory(spillDirectory->getPath())
         .maxDrivers(4);
 
     exec::TestScopedSpillInjection scopedSpillInjection(100);
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto inputRows =
+    const auto partialInputRows =
         toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    if (inputRows > 1) {
+    const auto finalInputRows =
+        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
-          << "inputRows: " << inputRows
+          << "partial inputRows: " << partialInputRows
+          << " final inputRows: " << finalInputRows
           << " spilledRows: " << spilledRows(*task)
           << " spilledInputBytes: " << spilledInputBytes(*task)
           << " spilledFiles: " << spilledFiles(*task)
           << " injectedSpills: " << exec::injectedSpillCount();
     } else {
       EXPECT_EQ(0, spilledBytes(*task))
-          << "inputRows: " << inputRows
+          << "partial inputRows: " << partialInputRows
+          << " final inputRows: " << finalInputRows
           << " spilledRows: " << spilledRows(*task)
           << " spilledInputBytes: " << spilledInputBytes(*task)
           << " spilledFiles: " << spilledFiles(*task)
@@ -598,7 +653,6 @@ bool isTableScanSupported(const TypePtr& type) {
 
   return true;
 }
-
 } // namespace
 
 void AggregationTestBase::testReadFromFiles(
@@ -627,9 +681,10 @@ void AggregationTestBase::testReadFromFiles(
   auto writerPool = rootPool_->addAggregateChild("AggregationTestBase.writer");
 
   // Splits and writes the input vectors into two files, to some extent,
-  // involves shuffling of the inputs. So only split input if allowInputShuffle_
-  // is true. Otherwise, only write into a single file.
-  if (allowInputShuffle_ && input->size() >= 2) {
+  // involves shuffling of the inputs. So only split input if aggregate
+  // is non-orderSensitive. Otherwise, only write into a single file.
+  if (!hasOrderSensitive(makeSource, aggregates, pool()) &&
+      input->size() >= 2) {
     auto size1 = input->size() / 2;
     auto size2 = input->size() - size1;
     auto input1 = input->slice(0, size1);
@@ -641,10 +696,10 @@ void AggregationTestBase::testReadFromFiles(
 
   for (auto& vector : inputs) {
     auto file = exec::test::TempFilePath::create();
-    writeToFile(file->path, vector, writerPool.get());
+    writeToFile(file->getPath(), vector, writerPool.get());
     files.push_back(file);
     splits.emplace_back(std::make_shared<connector::hive::HiveConnectorSplit>(
-        kHiveConnectorId, file->path, dwio::common::FileFormat::DWRF));
+        kHiveConnectorId, file->getPath(), dwio::common::FileFormat::DWRF));
   }
   // No need to test streaming as the streaming test generates its own inputs,
   // so it would be the same as the original test.
@@ -660,7 +715,7 @@ void AggregationTestBase::testReadFromFiles(
   }
 
   for (const auto& file : files) {
-    remove(file->path.c_str());
+    remove(file->getPath().c_str());
   }
 }
 
@@ -808,7 +863,8 @@ void AggregationTestBase::testAggregationsImpl(
     assertResults(queryBuilder);
   }
 
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  if (!groupingKeys.empty() &&
+      !hasOrderSensitive(makeSource, aggregates, pool())) {
     SCOPED_TRACE("Run partial + final with spilling");
     PlanBuilder builder(pool());
     makeSource(builder);
@@ -816,11 +872,13 @@ void AggregationTestBase::testAggregationsImpl(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
+    core::PlanNodeId finalNodeId;
     builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeys, aggregates)
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeys)
-        .finalAggregation();
+        .finalAggregation()
+        .capturePlanNodeId(finalNodeId);
 
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -828,35 +886,40 @@ void AggregationTestBase::testAggregationsImpl(
 
     auto spillDirectory = exec::test::TempDirectoryPath::create();
 
-    ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+    ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
     const auto peakSpillMemoryUsage =
         memory::spillMemoryPool()->stats().peakBytes;
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
     queryBuilder.configs(config)
         .config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kAggregationSpillEnabled, true)
-        .spillDirectory(spillDirectory->path)
+        .spillDirectory(spillDirectory->getPath())
         .maxDrivers(4);
 
     exec::TestScopedSpillInjection scopedSpillInjection(100);
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    auto inputRows = toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    if (inputRows > 1) {
+    const auto partialInputRows =
+        toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
+    const auto finalInputRows =
+        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
-          << "inputRows: " << inputRows
+          << "partial inputRows: " << partialInputRows
+          << " final inputRows: " << finalInputRows
           << " spilledRows: " << spilledRows(*task)
           << " spilledInputBytes: " << spilledInputBytes(*task)
           << " spilledFiles: " << spilledFiles(*task)
           << " injectedSpills: " << exec::injectedSpillCount();
-      ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+      ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
       ASSERT_GT(memory::spillMemoryPool()->stats().peakBytes, 0);
       ASSERT_GE(
           memory::spillMemoryPool()->stats().peakBytes, peakSpillMemoryUsage);
     } else {
       EXPECT_EQ(0, spilledBytes(*task))
-          << "inputRows: " << inputRows
+          << "partial inputRows: " << partialInputRows
+          << " final inputRows: " << finalInputRows
           << " spilledRows: " << spilledRows(*task)
           << " spilledInputBytes: " << spilledInputBytes(*task)
           << " spilledFiles: " << spilledFiles(*task)
@@ -913,9 +976,8 @@ void AggregationTestBase::testAggregationsImpl(
     assertResults(queryBuilder);
   }
 
-  // TODO: turn on this after spilling for VarianceAggregationTest pass.
-#if 0
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  if (!groupingKeys.empty() &&
+      !hasOrderSensitive(makeSource, aggregates, pool())) {
     SCOPED_TRACE("Run single with spilling");
     PlanBuilder builder(pool());
     makeSource(builder);
@@ -932,21 +994,24 @@ void AggregationTestBase::testAggregationsImpl(
     queryBuilder.configs(config)
         .config(core::QueryConfig::kSpillEnabled, "true")
         .config(core::QueryConfig::kAggregationSpillEnabled, "true")
-        .spillDirectory(spillDirectory->path);
+        .spillDirectory(spillDirectory->getPath());
 
-    TestScopedSpillInjection scopedSpillInjection(100);
+    exec::TestScopedSpillInjection scopedSpillInjection(100);
     auto task = assertResults(queryBuilder);
-
-    // Expect > 0 spilled bytes unless there was no input.
-    auto inputRows =
-        toPlanStats(task->taskStats()).at(aggregationNodeId).inputRows;
-    if (inputRows > 1) {
-      EXPECT_LT(0, spilledBytes(*task));
+    if (exec::injectedSpillCount() > 0) {
+      EXPECT_LT(0, spilledBytes(*task))
+          << " spilledRows: " << spilledRows(*task)
+          << " spilledInputBytes: " << spilledInputBytes(*task)
+          << " spilledFiles: " << spilledFiles(*task)
+          << " injectedSpills: " << exec::injectedSpillCount();
     } else {
-      EXPECT_EQ(0, spilledBytes(*task));
+      EXPECT_EQ(0, spilledBytes(*task))
+          << " spilledRows: " << spilledRows(*task)
+          << " spilledInputBytes: " << spilledInputBytes(*task)
+          << " spilledFiles: " << spilledFiles(*task)
+          << " injectedSpills: " << exec::injectedSpillCount();
     }
   }
-#endif
 
   {
     SCOPED_TRACE("Run partial + intermediate + final");
@@ -1103,7 +1168,8 @@ void AggregationTestBase::testAggregations(
     testIncrementalAggregation(makeSource, aggregates, config);
   }
 
-  if (allowInputShuffle_ && !groupingKeys.empty()) {
+  if (!hasOrderSensitive(makeSource, aggregates, pool()) &&
+      !groupingKeys.empty()) {
     testStreamingAggregationsImpl(
         makeSource,
         groupingKeys,
@@ -1230,8 +1296,8 @@ void AggregationTestBase::testIncrementalAggregation(
     auto queryCtxConfig = config;
     auto func = createAggregateFunction(
         functionName, aggregate.rawInputTypes, allocator, config);
-    auto queryCtx = std::make_shared<core::QueryCtx>(
-        nullptr, core::QueryConfig{queryCtxConfig});
+    auto queryCtx =
+        core::QueryCtx::create(nullptr, core::QueryConfig{queryCtxConfig});
 
     std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
     if (!lambdas.empty()) {

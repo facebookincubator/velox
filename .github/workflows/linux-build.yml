@@ -16,6 +16,8 @@ name: Linux Build
 
 on:
   push:
+    branches:
+      - "main"
     paths:
       - "velox/**"
       - "!velox/docs/**"
@@ -47,7 +49,9 @@ concurrency:
 jobs:
   adapters:
     name: Linux release with adapters
-    runs-on: 8-core
+    # prevent errors when forks ff their main branch
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    runs-on: 8-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
@@ -57,6 +61,7 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
+      CUDA_VERSION: "11.8"
     steps:
       - uses: actions/checkout@v4
 
@@ -86,7 +91,6 @@ jobs:
             "-DVELOX_ENABLE_S3=ON"
             "-DVELOX_ENABLE_GCS=ON"
             "-DVELOX_ENABLE_ABFS=ON"
-            "-DVELOX_ENABLE_SUBSTRAIT=ON"
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
           )
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
@@ -109,7 +113,9 @@ jobs:
           ctest -j 8 --output-on-failure --no-tests=error
 
   ubuntu-debug:
-    runs-on: 8-core
+    runs-on: 8-core-ubuntu
+    # prevent errors when forks ff their main branch
+    if: ${{ github.repository == 'facebookincubator/velox' }}
     name: "Ubuntu debug with resolve_dependency"
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache"

@@ -25,7 +25,9 @@ add_executable(
   ExecutorBarrierTest.cpp
   OnDemandUnitLoaderTests.cpp
   LocalFileSinkTest.cpp
+  MemorySinkTest.cpp
   LoggedExceptionTest.cpp
+  MeasureTimeTests.cpp
   ParallelForTest.cpp
   RangeTests.cpp
   ReadFileInputStreamTests.cpp
@@ -33,7 +35,9 @@ add_executable(
   RetryTests.cpp
   TestBufferedInput.cpp
   TypeTests.cpp
-  WriterTest.cpp)
+  UnitLoaderToolsTests.cpp
+  WriterTest.cpp
+  OptionsTests.cpp)
 add_test(velox_dwio_common_test velox_dwio_common_test)
 target_link_libraries(
   velox_dwio_common_test
@@ -49,7 +53,8 @@ target_link_libraries(
   gtest_main
   gmock
   glog::glog
-  fmt::fmt)
+  fmt::fmt
+  protobuf::libprotobuf)
 
 add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
 
@@ -61,22 +66,6 @@ add_executable(velox_dwio_common_int_decoder_benchmark IntDecoderBenchmark.cpp)
 target_link_libraries(
   velox_dwio_common_int_decoder_benchmark velox_dwio_common_exception
   velox_exception velox_dwio_dwrf_common Folly::folly ${FOLLY_BENCHMARK})
-
-add_library(velox_e2e_filter_test_base E2EFilterTestBase.cpp)
-
-target_link_libraries(
-  velox_e2e_filter_test_base
-  velox_functions_prestosql
-  velox_parse_parser
-  velox_vector_test_lib
-  velox_link_libs
-  Folly::folly
-  fmt::fmt
-  lz4::lz4
-  lzo2::lzo2
-  zstd::zstd
-  ZLIB::ZLIB
-  ${TEST_LINK_LIBS})
 
 if(VELOX_ENABLE_ARROW AND VELOX_ENABLE_BENCHMARKS)
   add_subdirectory(Lemire/FastPFor)

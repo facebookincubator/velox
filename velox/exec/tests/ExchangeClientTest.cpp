@@ -20,6 +20,7 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -35,14 +36,19 @@ class ExchangeClientTest : public testing::Test,
   }
 
   void SetUp() override {
+    test::testingStartLocalExchangeSource();
     executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(16);
     exec::ExchangeSource::factories().clear();
     exec::ExchangeSource::registerFactory(test::createLocalExchangeSource);
     if (!isRegisteredVectorSerde()) {
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
-
     bufferManager_ = OutputBufferManager::getInstance().lock();
+  }
+
+  void TearDown() override {
+    exec::test::waitForAllTasksToBeDeleted();
+    test::testingShutdownLocalExchangeSource();
   }
 
   std::unique_ptr<SerializedPage> toSerializedPage(const RowVectorPtr& vector) {
@@ -60,11 +66,15 @@ class ExchangeClientTest : public testing::Test,
   std::shared_ptr<Task> makeTask(
       const std::string& taskId,
       const core::PlanNodePtr& planNode) {
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(queryCtx->queryId()));
     return Task::create(
-        taskId, core::PlanFragment{planNode}, 0, std::move(queryCtx));
+        taskId,
+        core::PlanFragment{planNode},
+        0,
+        std::move(queryCtx),
+        Task::ExecutionMode::kParallel);
   }
 
   int32_t enqueue(
@@ -416,7 +426,52 @@ TEST_F(ExchangeClientTest, sourceTimeout) {
   EXPECT_TRUE(atEnd);
 
   client->close();
-  test::testingShutdownLocalExchangeSource();
+}
+
+TEST_F(ExchangeClientTest, callNextAfterClose) {
+  constexpr int32_t kNumSources = 3;
+  common::testutil::TestValue::enable();
+  auto client =
+      std::make_shared<ExchangeClient>("test", 17, 1 << 20, pool(), executor());
+
+  bool atEnd;
+  ContinueFuture future;
+  auto pages = client->next(1, &atEnd, &future);
+  ASSERT_EQ(0, pages.size());
+  ASSERT_FALSE(atEnd);
+
+  for (auto i = 0; i < kNumSources; ++i) {
+    client->addRemoteTaskId(fmt::format("local://{}", i));
+  }
+  client->noMoreRemoteTasks();
+
+  // Fetch a page. No page is found. All sources are fetching.
+  pages = client->next(1, &atEnd, &future);
+  EXPECT_TRUE(pages.empty());
+
+  const auto& queue = client->queue();
+  for (auto i = 0; i < 10; ++i) {
+    enqueue(*queue, makePage(1'000 + i));
+  }
+
+  // Fetch multiple pages. Each page is slightly larger than 1K bytes, hence,
+  // only 4 pages fit.
+  pages = client->next(5'000, &atEnd, &future);
+  EXPECT_EQ(4, pages.size());
+  EXPECT_FALSE(atEnd);
+
+  // Close the client and try calling next again.
+  client->close();
+
+  // Here we should have no pages returned, be at end (we are closed) and the
+  // future should be invalid (not based on a valid promise).
+  ContinueFuture futureFinal{ContinueFuture::makeEmpty()};
+  pages = client->next(10'000, &atEnd, &futureFinal);
+  EXPECT_EQ(0, pages.size());
+  EXPECT_TRUE(atEnd);
+  EXPECT_FALSE(futureFinal.valid());
+
+  client->close();
 }
 
 } // namespace

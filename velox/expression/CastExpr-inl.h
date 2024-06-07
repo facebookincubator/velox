@@ -258,33 +258,6 @@ Status toDecimalValue(
 }
 } // namespace detail
 
-template <bool adjustForTimeZone>
-void CastExpr::castTimestampToDate(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    VectorPtr& result,
-    const date::time_zone* timeZone) {
-  auto* resultFlatVector = result->as<FlatVector<int32_t>>();
-  static const int32_t kSecsPerDay{86'400};
-  auto inputVector = input.as<SimpleVector<Timestamp>>();
-  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    auto input = inputVector->valueAt(row);
-    if constexpr (adjustForTimeZone) {
-      input.toTimezone(*timeZone);
-    }
-    auto seconds = input.getSeconds();
-    if (seconds >= 0 || seconds % kSecsPerDay == 0) {
-      resultFlatVector->set(row, seconds / kSecsPerDay);
-    } else {
-      // For division with negatives, minus 1 to compensate the discarded
-      // fractional part. e.g. -1/86'400 yields 0, yet it should be
-      // considered as -1 day.
-      resultFlatVector->set(row, seconds / kSecsPerDay - 1);
-    }
-  });
-}
-
 template <typename Func>
 void CastExpr::applyToSelectedNoThrowLocal(
     EvalCtx& context,
@@ -329,12 +302,19 @@ void CastExpr::applyCastKernel(
     EvalCtx& context,
     const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
     FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
+  bool wrapException = true;
   auto setError = [&](const std::string& details) {
     if (setNullInResultAtError()) {
       result->setNull(row, true);
     } else {
-      context.setVeloxExceptionError(
-          row, makeBadCastException(result->type(), *input, row, details));
+      wrapException = false;
+      if (context.captureErrorDetails()) {
+        const auto errorDetails =
+            makeErrorMessage(*input, row, result->type(), details);
+        context.setStatus(row, Status::UserError("{}", errorDetails));
+      } else {
+        context.setStatus(row, Status::UserError());
+      }
     }
   };
 
@@ -354,12 +334,24 @@ void CastExpr::applyCastKernel(
         }
       }
       if constexpr (ToKind == TypeKind::TIMESTAMP) {
-        result->set(row, hooks_->castStringToTimestamp(inputRowValue));
+        const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
+        if (castResult.hasError()) {
+          setError(castResult.error().message());
+        } else {
+          result->set(row, castResult.value());
+        }
         return;
       }
     }
 
-    auto output = util::Converter<ToKind, void, TPolicy>::cast(inputRowValue);
+    const auto castResult =
+        util::Converter<ToKind, void, TPolicy>::tryCast(inputRowValue);
+    if (castResult.hasError()) {
+      setError(castResult.error().message());
+      return;
+    }
+
+    const auto output = castResult.value();
 
     if constexpr (
         ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY) {
@@ -372,7 +364,7 @@ void CastExpr::applyCastKernel(
     }
 
   } catch (const VeloxException& ue) {
-    if (!ue.isUserError()) {
+    if (!ue.isUserError() || !wrapException) {
       throw;
     }
     setError(ue.message());
@@ -525,8 +517,11 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    auto output = util::Converter<ToKind, void, util::DefaultCastPolicy>::cast(
-        simpleInput->valueAt(row));
+    const auto output =
+        util::Converter<ToKind>::tryCast(simpleInput->valueAt(row))
+            .thenOrThrow(folly::identity, [&](const Status& status) {
+              VELOX_USER_FAIL("{}", status.message());
+            });
     resultBuffer[row] = output / scaleFactor;
   });
   return result;
@@ -725,34 +720,6 @@ void CastExpr::applyCastPrimitives(
         applyCastKernel<ToKind, FromKind, util::TruncateLegacyCastPolicy>(
             row, context, inputSimpleVector, resultFlatVector);
       });
-    }
-  }
-
-  // If we're converting to a TIMESTAMP, check if we need to adjust the
-  // current GMT timezone to the user provided session timezone.
-  if constexpr (ToKind == TypeKind::TIMESTAMP) {
-    const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
-    // If user explicitly asked us to adjust the timezone.
-    if (queryConfig.adjustTimestampToTimezone()) {
-      auto sessionTzName = queryConfig.sessionTimezone();
-      if (!sessionTzName.empty()) {
-        // When context.throwOnError is false, some rows will be marked as
-        // 'failed'. These rows should not be processed further. 'remainingRows'
-        // will contain a subset of 'rows' that have passed all the checks (e.g.
-        // keys are not nulls and number of keys and values is the same).
-        exec::LocalSelectivityVector remainingRows(context, rows);
-        context.deselectErrors(*remainingRows);
-
-        // locate_zone throws runtime_error if the timezone couldn't be found
-        // (so we're safe to dereference the pointer).
-        auto* timeZone = date::locate_zone(sessionTzName);
-        auto rawTimestamps = resultFlatVector->mutableRawValues();
-
-        applyToSelectedNoThrowLocal(
-            context, *remainingRows, result, [&](int row) {
-              rawTimestamps[row].toGMT(*timeZone);
-            });
-      }
     }
   }
 }

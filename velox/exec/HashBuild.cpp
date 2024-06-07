@@ -399,7 +399,6 @@ void HashBuild::addInput(RowVectorPtr input) {
     }
   }
   auto rows = table_->rows();
-  auto nextOffset = rows->nextOffset();
   FlatVector<bool>* spillProbedFlagVector{nullptr};
   if (isInputFromSpill() && needProbedFlagSpill_) {
     spillProbedFlagVector =
@@ -408,9 +407,6 @@ void HashBuild::addInput(RowVectorPtr input) {
 
   activeRows_.applyToSelected([&](auto rowIndex) {
     char* newRow = rows->newRow();
-    if (nextOffset) {
-      *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
-    }
     // Store the columns for each row in sequence. At probe time
     // strings of the row will probably be in consecutive places, so
     // reading one will prime the cache for the next.
@@ -450,11 +446,11 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
       rows->stringAllocator().retainedSize() - outOfLineFreeBytes;
   const auto outOfLineBytesPerRow =
       std::max<uint64_t>(1, numRows == 0 ? 0 : outOfLineBytes / numRows);
-  const auto currentUsage = pool()->currentBytes();
+  const auto currentUsage = pool()->usedBytes();
 
   if (numRows != 0) {
     // Test-only spill path.
-    if (testingTriggerSpill()) {
+    if (testingTriggerSpill(pool()->name())) {
       Operator::ReclaimableSectionGuard guard(this);
       memory::testingRunArbitration(pool());
       return;
@@ -503,7 +499,7 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
       LOG(WARNING) << "Failed to reserve "
                    << succinctBytes(targetIncrementBytes) << " for memory pool "
                    << pool()->name()
-                   << ", usage: " << succinctBytes(pool()->currentBytes())
+                   << ", usage: " << succinctBytes(pool()->usedBytes())
                    << ", reservation: "
                    << succinctBytes(pool()->reservedBytes());
     }
@@ -727,6 +723,10 @@ bool HashBuild::finishHashBuild() {
       spiller->finishSpill(spillPartitions);
     }
   }
+  bool allowDuplicateRows = table_->rows()->nextOffset() != 0;
+  if (allowDuplicateRows) {
+    ensureNextRowVectorFits(numRows, otherBuilds);
+  }
 
   if (spiller_ != nullptr) {
     spiller_->finishSpill(spillPartitions);
@@ -761,30 +761,36 @@ bool HashBuild::finishHashBuild() {
   // Release the unused memory reservation since we have finished the merged
   // table build.
   pool()->release();
+  if (allowDuplicateRows) {
+    for (auto* build : otherBuilds) {
+      build->pool()->release();
+    }
+  }
   return true;
 }
 
 void HashBuild::ensureTableFits(uint64_t numRows) {
   // NOTE: we don't need memory reservation if all the partitions have been
   // spilled as nothing need to be built.
-  if (!spillEnabled() || spiller_ == nullptr || spiller_->isAllSpilled()) {
+  if (!spillEnabled() || spiller_ == nullptr || spiller_->isAllSpilled() ||
+      numRows == 0) {
     return;
   }
 
   // Test-only spill path.
-  if (testingTriggerSpill()) {
+  if (testingTriggerSpill(pool()->name())) {
     Operator::ReclaimableSectionGuard guard(this);
     memory::testingRunArbitration(pool());
     return;
   }
-
-  TestValue::adjust("facebook::velox::exec::HashBuild::ensureTableFits", this);
 
   // NOTE: reserve a bit more memory to consider the extra memory used for
   // parallel table build operation.
   const uint64_t bytesToReserve = table_->estimateHashTableSize(numRows) * 1.1;
   {
     Operator::ReclaimableSectionGuard guard(this);
+    TestValue::adjust(
+        "facebook::velox::exec::HashBuild::ensureTableFits", this);
     if (pool()->maybeReserve(bytesToReserve)) {
       return;
     }
@@ -792,8 +798,44 @@ void HashBuild::ensureTableFits(uint64_t numRows) {
 
   LOG(WARNING) << "Failed to reserve " << succinctBytes(bytesToReserve)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", usage: " << succinctBytes(pool()->usedBytes())
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
+}
+
+void HashBuild::ensureNextRowVectorFits(
+    uint64_t numRows,
+    const std::vector<HashBuild*>& otherBuilds) {
+  if (!spillEnabled()) {
+    return;
+  }
+
+  TestValue::adjust(
+      "facebook::velox::exec::HashBuild::ensureNextRowVectorFits", this);
+
+  // The memory allocation for next-row-vectors may stuck in
+  // 'SharedArbitrator::growCapacity' when memory arbitrating is also
+  // triggered. Reserve memory for next-row-vectors to prevent this issue.
+  auto bytesToReserve = numRows * (sizeof(char*) + sizeof(NextRowVector));
+  {
+    Operator::ReclaimableSectionGuard guard(this);
+    if (!pool()->maybeReserve(bytesToReserve)) {
+      LOG(WARNING) << "Failed to reserve " << succinctBytes(bytesToReserve)
+                   << " for memory pool " << pool()->name()
+                   << ", usage: " << succinctBytes(pool()->usedBytes())
+                   << ", reservation: "
+                   << succinctBytes(pool()->reservedBytes());
+    }
+  }
+  for (auto* build : otherBuilds) {
+    Operator::ReclaimableSectionGuard guard(build);
+    if (!build->pool()->maybeReserve(bytesToReserve)) {
+      LOG(WARNING) << "Failed to reserve " << succinctBytes(bytesToReserve)
+                   << " for memory pool " << build->pool()->name()
+                   << ", usage: " << succinctBytes(build->pool()->usedBytes())
+                   << ", reservation: "
+                   << succinctBytes(build->pool()->reservedBytes());
+    }
+  }
 }
 
 void HashBuild::postHashBuildProcess() {
@@ -1036,7 +1078,7 @@ void HashBuild::reclaim(
                 ? "cleared"
                 : (spiller_->finalized() ? "finalized" : "non-finalized"))
         << "] " << pool()->name()
-        << ", usage: " << succinctBytes(pool()->currentBytes());
+        << ", usage: " << succinctBytes(pool()->usedBytes());
     return;
   }
 
@@ -1056,7 +1098,7 @@ void HashBuild::reclaim(
           << "Can't reclaim from hash build operator, state_["
           << stateName(buildOp->state_) << "], nonReclaimableSection_["
           << buildOp->nonReclaimableSection_ << "], " << buildOp->pool()->name()
-          << ", usage: " << succinctBytes(buildOp->pool()->currentBytes());
+          << ", usage: " << succinctBytes(buildOp->pool()->usedBytes());
       return;
     }
   }
@@ -1072,7 +1114,7 @@ void HashBuild::reclaim(
   for (auto* op : operators) {
     HashBuild* buildOp = static_cast<HashBuild*>(op);
     spillTasks.push_back(
-        std::make_shared<AsyncSource<SpillResult>>([buildOp]() {
+        memory::createAsyncMemoryReclaimTask<SpillResult>([buildOp]() {
           try {
             buildOp->spiller_->spill();
             buildOp->table_->clear();

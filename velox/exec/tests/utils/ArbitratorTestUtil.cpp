@@ -25,17 +25,15 @@ using namespace facebook::velox::memory;
 namespace facebook::velox::exec::test {
 
 std::shared_ptr<core::QueryCtx> newQueryCtx(
-    const std::unique_ptr<MemoryManager>& memoryManager,
-    const std::shared_ptr<folly::Executor>& executor,
+    MemoryManager* memoryManager,
+    folly::Executor* executor,
     int64_t memoryCapacity,
     std::unique_ptr<MemoryReclaimer>&& reclaimer) {
   std::unordered_map<std::string, std::shared_ptr<Config>> configs;
-  std::shared_ptr<MemoryPool> pool = memoryManager->addRootPool(
-      "",
-      memoryCapacity,
-      reclaimer != nullptr ? std::move(reclaimer) : MemoryReclaimer::create());
-  auto queryCtx = std::make_shared<core::QueryCtx>(
-      executor.get(),
+  std::shared_ptr<MemoryPool> pool =
+      memoryManager->addRootPool("", memoryCapacity);
+  auto queryCtx = core::QueryCtx::create(
+      executor,
       core::QueryConfig({}),
       configs,
       cache::AsyncDataCache::getInstance(),
@@ -50,12 +48,15 @@ std::unique_ptr<memory::MemoryManager> createMemoryManager(
     uint64_t maxReclaimWaitMs) {
   memory::MemoryManagerOptions options;
   options.arbitratorCapacity = arbitratorCapacity;
+  options.arbitratorReservedCapacity = 0;
   // Avoid allocation failure in unit tests.
   options.allocatorCapacity = arbitratorCapacity * 2;
   options.arbitratorKind = "SHARED";
   options.memoryPoolInitCapacity = memoryPoolInitCapacity;
   options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
+  options.memoryPoolReservedCapacity = 0;
   options.memoryReclaimWaitMs = maxReclaimWaitMs;
+  options.globalArbitrationEnabled = true;
   options.checkUsageLeak = true;
   options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
   return std::make_unique<memory::MemoryManager>(options);
@@ -94,7 +95,7 @@ QueryTestResult runHashJoinTask(
   if (enableSpilling) {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data = AssertQueryBuilder(plan)
-                      .spillDirectory(spillDirectory->path)
+                      .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, true)
                       .config(core::QueryConfig::kJoinSpillEnabled, true)
                       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
@@ -137,7 +138,7 @@ QueryTestResult runAggregateTask(
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data =
         AssertQueryBuilder(plan)
-            .spillDirectory(spillDirectory->path)
+            .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, "true")
             .config(core::QueryConfig::kAggregationSpillEnabled, "true")
             .queryCtx(queryCtx)
@@ -179,7 +180,7 @@ QueryTestResult runOrderByTask(
   if (enableSpilling) {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data = AssertQueryBuilder(plan)
-                      .spillDirectory(spillDirectory->path)
+                      .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, "true")
                       .config(core::QueryConfig::kOrderBySpillEnabled, "true")
                       .queryCtx(queryCtx)
@@ -221,7 +222,7 @@ QueryTestResult runRowNumberTask(
   if (enableSpilling) {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data = AssertQueryBuilder(plan)
-                      .spillDirectory(spillDirectory->path)
+                      .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, "true")
                       .config(core::QueryConfig::kRowNumberSpillEnabled, "true")
                       .queryCtx(queryCtx)
@@ -264,7 +265,7 @@ QueryTestResult runTopNTask(
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data =
         AssertQueryBuilder(plan)
-            .spillDirectory(spillDirectory->path)
+            .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, "true")
             .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
             .queryCtx(queryCtx)
@@ -306,12 +307,12 @@ QueryTestResult runWriteTask(
     const RowVectorPtr& expectedResult) {
   QueryTestResult result;
   const auto outputDirectory = TempDirectoryPath::create();
-  auto plan = writePlan(vectors, outputDirectory->path, result.planNodeId);
+  auto plan = writePlan(vectors, outputDirectory->getPath(), result.planNodeId);
   if (enableSpilling) {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data =
         AssertQueryBuilder(plan)
-            .spillDirectory(spillDirectory->path)
+            .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, "true")
             .config(core::QueryConfig::kAggregationSpillEnabled, "false")
             .config(core::QueryConfig::kWriterSpillEnabled, "true")

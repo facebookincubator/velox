@@ -72,13 +72,33 @@ struct MemoryStats {
   static MemoryStats memStatsFromPool(const memory::MemoryPool* pool) {
     const auto poolStats = pool->stats();
     MemoryStats memStats;
-    memStats.userMemoryReservation = poolStats.currentBytes;
+    memStats.userMemoryReservation = poolStats.usedBytes;
     memStats.systemMemoryReservation = 0;
     memStats.peakUserMemoryReservation = poolStats.peakBytes;
     memStats.peakSystemMemoryReservation = 0;
     memStats.peakTotalMemoryReservation = poolStats.peakBytes;
     memStats.numMemoryAllocations = poolStats.numAllocs;
     return memStats;
+  }
+};
+
+/// Records the dynamic filter stats of an operator.
+struct DynamicFilterStats {
+  /// The set of plan node ids that produce the dynamic filter added to an
+  /// operator. If it is empty, then there is no dynamic filter added.
+  std::unordered_set<core::PlanNodeId> producerNodeIds;
+
+  void clear() {
+    producerNodeIds.clear();
+  }
+
+  void add(const DynamicFilterStats& other) {
+    producerNodeIds.insert(
+        other.producerNodeIds.begin(), other.producerNodeIds.end());
+  }
+
+  bool empty() const {
+    return producerNodeIds.empty();
   }
 };
 
@@ -105,6 +125,9 @@ struct OperatorStats {
   /// Bytes of input in terms of retained size of input vectors.
   uint64_t inputBytes = 0;
   uint64_t inputPositions = 0;
+
+  /// Contains the dynamic filters stats if applied.
+  DynamicFilterStats dynamicFilterStats;
 
   /// Number of input batches / vectors. Allows to compute an average batch
   /// size.
@@ -161,7 +184,7 @@ struct OperatorStats {
 
   int numDrivers = 0;
 
-  OperatorStats() {}
+  OperatorStats() = default;
 
   OperatorStats(
       int32_t _operatorId,
@@ -257,24 +280,24 @@ class OperatorCtx {
   mutable std::unique_ptr<core::ExecCtx> execCtx_;
 };
 
-// Query operator
+/// Query operator
 class Operator : public BaseRuntimeStatWriter {
  public:
-  // Factory class for mapping a user-registered PlanNode into the corresponding
-  // Operator.
+  /// Factory class for mapping a user-registered PlanNode into the
+  /// corresponding Operator.
   class PlanNodeTranslator {
    public:
     virtual ~PlanNodeTranslator() = default;
 
-    // Translates plan node to operator. Returns nullptr if the plan node cannot
-    // be handled by this factory.
+    /// Translates plan node to operator. Returns nullptr if the plan node
+    /// cannot be handled by this factory.
     virtual std::unique_ptr<Operator>
     toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node) {
       return nullptr;
     }
 
-    // An overloaded method that should be called when the operator needs an
-    // ExchangeClient.
+    /// An overloaded method that should be called when the operator needs an
+    /// ExchangeClient.
     virtual std::unique_ptr<Operator> toOperator(
         DriverCtx* ctx,
         int32_t id,
@@ -283,22 +306,22 @@ class Operator : public BaseRuntimeStatWriter {
       return nullptr;
     }
 
-    // Translates plan node to join bridge. Returns nullptr if the plan node
-    // cannot be handled by this factory.
+    /// Translates plan node to join bridge. Returns nullptr if the plan node
+    /// cannot be handled by this factory.
     virtual std::unique_ptr<JoinBridge> toJoinBridge(
         const core::PlanNodePtr& /* node */) {
       return nullptr;
     }
 
-    // Translates plan node to operator supplier. Returns nullptr if the plan
-    // node cannot be handled by this factory.
+    /// Translates plan node to operator supplier. Returns nullptr if the plan
+    /// node cannot be handled by this factory.
     virtual OperatorSupplier toOperatorSupplier(
         const core::PlanNodePtr& /* node */) {
       return nullptr;
     }
 
-    // Returns max driver count for the plan node. Returns std::nullopt if the
-    // plan node cannot be handled by this factory.
+    /// Returns max driver count for the plan node. Returns std::nullopt if the
+    /// plan node cannot be handled by this factory.
     virtual std::optional<uint32_t> maxDrivers(
         const core::PlanNodePtr& /* node */) {
       return std::nullopt;
@@ -308,22 +331,22 @@ class Operator : public BaseRuntimeStatWriter {
   /// The name of the runtime spill stats collected and reported by operators
   /// that support spilling.
   /// The spill write stats.
-  static inline const std::string kSpillFillTime{"spillFillTime"};
-  static inline const std::string kSpillSortTime{"spillSortTime"};
+  static inline const std::string kSpillFillTime{"spillFillWallNanos"};
+  static inline const std::string kSpillSortTime{"spillSortWallNanos"};
   static inline const std::string kSpillSerializationTime{
-      "spillSerializationTime"};
-  static inline const std::string kSpillFlushTime{"spillFlushTime"};
+      "spillSerializationWallNanos"};
+  static inline const std::string kSpillFlushTime{"spillFlushWallNanos"};
   static inline const std::string kSpillWrites{"spillWrites"};
-  static inline const std::string kSpillWriteTime{"spillWriteTime"};
+  static inline const std::string kSpillWriteTime{"spillWriteWallNanos"};
   static inline const std::string kSpillRuns{"spillRuns"};
   static inline const std::string kExceededMaxSpillLevel{
       "exceededMaxSpillLevel"};
   /// The spill read stats.
   static inline const std::string kSpillReadBytes{"spillReadBytes"};
   static inline const std::string kSpillReads{"spillReads"};
-  static inline const std::string kSpillReadTimeUs{"spillReadTimeUs"};
-  static inline const std::string kSpillDeserializationTimeUs{
-      "spillDeserializationTimeUs"};
+  static inline const std::string kSpillReadTime{"spillReadWallNanos"};
+  static inline const std::string kSpillDeserializationTime{
+      "spillDeserializationWallNanos"};
 
   /// 'operatorId' is the initial index of the 'this' in the Driver's list of
   /// Operators. This is used as in index into OperatorStats arrays in the Task.
@@ -422,6 +445,7 @@ class Operator : public BaseRuntimeStatWriter {
   /// Adds a filter dynamically generated by a downstream operator. Called only
   /// if canAddFilter() returns true.
   virtual void addDynamicFilter(
+      const core::PlanNodeId& /*producer*/,
       column_index_t /*outputChannel*/,
       const std::shared_ptr<common::Filter>& /*filter*/) {
     VELOX_UNSUPPORTED(

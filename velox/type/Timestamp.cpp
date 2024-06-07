@@ -118,8 +118,8 @@ Timestamp::toTimePoint(bool allowOverflow) const {
   return tp;
 }
 
-void Timestamp::toTimezone(const date::time_zone& zone) {
-  auto tp = toTimePoint();
+void Timestamp::toTimezone(const date::time_zone& zone, bool allowOverflow) {
+  auto tp = toTimePoint(allowOverflow);
   auto epoch = zone.to_local(tp).time_since_epoch();
   // NOTE: Round down to get the seconds of the current time point.
   seconds_ = std::chrono::floor<std::chrono::seconds>(epoch).count();
@@ -239,7 +239,6 @@ StringView Timestamp::tmToStringView(
     uint64_t nanos,
     const TimestampToStringOptions& options,
     char* const startPosition) {
-  VELOX_DCHECK_GE(nanos, 0);
   VELOX_DCHECK_LT(nanos, 1'000'000'000);
 
   const auto appendDigits = [](const int value,

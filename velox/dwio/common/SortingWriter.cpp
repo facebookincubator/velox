@@ -89,7 +89,7 @@ uint64_t SortingWriter::reclaim(
   if (!isRunning()) {
     LOG(WARNING) << "Can't reclaim from a not running hive sort writer pool: "
                  << sortPool_->name() << ", state: " << state()
-                 << "used memory: " << succinctBytes(sortPool_->currentBytes())
+                 << "used memory: " << succinctBytes(sortPool_->usedBytes())
                  << ", reserved memory: "
                  << succinctBytes(sortPool_->reservedBytes());
     ++stats.numNonReclaimableAttempts;
@@ -97,15 +97,18 @@ uint64_t SortingWriter::reclaim(
   }
   VELOX_CHECK_NOT_NULL(sortBuffer_);
 
-  auto reclaimBytes = memory::MemoryReclaimer::run(
+  return memory::MemoryReclaimer::run(
       [&]() {
-        sortBuffer_->spill();
-        sortPool_->release();
-        return sortPool_->shrink(targetBytes);
+        int64_t reclaimedBytes{0};
+        {
+          memory::ScopedReclaimedBytesRecorder recorder(
+              sortPool_, &reclaimedBytes);
+          sortBuffer_->spill();
+          sortPool_->release();
+        }
+        return reclaimedBytes;
       },
       stats);
-
-  return reclaimBytes;
 }
 
 uint32_t SortingWriter::outputBatchRows() {
@@ -132,7 +135,7 @@ bool SortingWriter::MemoryReclaimer::reclaimableBytes(
   if (!writer_->canReclaim()) {
     return false;
   }
-  reclaimableBytes = pool.currentBytes();
+  reclaimableBytes = pool.usedBytes();
   return true;
 }
 

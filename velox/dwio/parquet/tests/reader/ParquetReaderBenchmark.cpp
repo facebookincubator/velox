@@ -98,8 +98,8 @@ std::unique_ptr<RowReader> ParquetReaderBenchmark::createReader(
     const RowTypePtr& rowType) {
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<LocalReadFile>(fileFolder_->path + "/" + fileName_),
-      readerOpts.getMemoryPool());
+      std::make_shared<LocalReadFile>(fileFolder_->getPath() + "/" + fileName_),
+      readerOpts.memoryPool());
 
   std::unique_ptr<Reader> reader =
       std::make_unique<ParquetReader>(std::move(input), readerOpts);

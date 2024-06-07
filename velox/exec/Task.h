@@ -37,6 +37,17 @@ using ConnectorSplitPreloadFunc =
 
 class Task : public std::enable_shared_from_this<Task> {
  public:
+  /// Threading mode the task is executed.
+  enum class ExecutionMode {
+    /// Mode that executes the query serially (single-threaded) on the calling
+    /// thread. Task is executed via the Task::next() API.
+    kSerial,
+    /// Mode that executes the query in parallel (multi-threaded) using provided
+    /// executor. Task is executed via the Task::start() API that starts up
+    /// multiple driver threads and manages their lifecycle.
+    kParallel,
+  };
+
   /// Creates a task to execute a plan fragment, but doesn't start execution
   /// until Task::start() method is called.
   /// @param taskId Unique task identifier.
@@ -48,8 +59,10 @@ class Task : public std::enable_shared_from_this<Task> {
   /// @param queryCtx Query context containing MemoryPool and MemoryAllocator
   /// instances to use for memory allocations during execution, executor to
   /// schedule operators on, and session properties.
+  /// @param mode Execution mode for this task. The task can be executed in
+  /// Serial and Parallel mode.
   /// @param consumer Optional factory function to get callbacks to pass the
-  /// results of the execution. In a multi-threaded execution, results from each
+  /// results of the execution. In a parallel execution mode, results from each
   /// thread are passed on to a separate consumer.
   /// @param onError Optional callback to receive an exception if task
   /// execution fails.
@@ -58,6 +71,7 @@ class Task : public std::enable_shared_from_this<Task> {
       core::PlanFragment planFragment,
       int destination,
       std::shared_ptr<core::QueryCtx> queryCtx,
+      ExecutionMode mode,
       Consumer consumer = nullptr,
       std::function<void(std::exception_ptr)> onError = nullptr);
 
@@ -66,8 +80,13 @@ class Task : public std::enable_shared_from_this<Task> {
       core::PlanFragment planFragment,
       int destination,
       std::shared_ptr<core::QueryCtx> queryCtx,
+      ExecutionMode mode,
       ConsumerSupplier consumerSupplier,
       std::function<void(std::exception_ptr)> onError = nullptr);
+
+  /// Convenience function for shortening a Presto taskId. To be used
+  /// in debugging messages and listings.
+  static std::string shortId(const std::string& id);
 
   ~Task();
 
@@ -101,9 +120,9 @@ class Task : public std::enable_shared_from_this<Task> {
     return destination_;
   }
 
-  // Convenience function for shortening a Presto taskId. To be used
-  // in debugging messages and listings.
-  static std::string shortId(const std::string& id);
+  /// Configured cpu slice time limit for drivers. 0 (meaning slicing/yield
+  /// disabled) when task is under serial mode.
+  uint64_t driverCpuTimeSliceLimitMs() const;
 
   /// Returns QueryCtx specified in the constructor.
   const std::shared_ptr<core::QueryCtx>& queryCtx() const {
@@ -247,9 +266,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns a future which is realized when the task is no longer in
   /// running state.
   /// If the task is not in running state at the time of call, the future is
-  /// immediately realized. The future is realized with an exception after
-  /// maxWaitMicros. A zero max wait means no timeout.
-  ContinueFuture taskCompletionFuture(uint64_t maxWaitMicros);
+  /// immediately realized.
+  ContinueFuture taskCompletionFuture();
 
   /// Returns task execution error or nullptr if no error occurred.
   std::exception_ptr error() const {
@@ -328,6 +346,10 @@ class Task : public std::enable_shared_from_this<Task> {
   uint32_t numFinishedDrivers() const {
     std::lock_guard<std::timed_mutex> taskLock(mutex_);
     return numFinishedDrivers_;
+  }
+
+  const std::vector<std::weak_ptr<Driver>>& testingDriversClosedByTask() const {
+    return driversClosedByTask_;
   }
 
   /// Internal public methods. These methods are intended to be used by internal
@@ -633,6 +655,11 @@ class Task : public std::enable_shared_from_this<Task> {
     return numDriversInPartitionedOutput_ > 0;
   }
 
+  void testingIncrementThreads() {
+    std::lock_guard l(mutex_);
+    ++numThreads_;
+  }
+
   /// Invoked to run provided 'callback' on each alive driver of the task.
   void testingVisitDrivers(const std::function<void(Driver*)>& callback);
 
@@ -647,8 +674,13 @@ class Task : public std::enable_shared_from_this<Task> {
       core::PlanFragment planFragment,
       int destination,
       std::shared_ptr<core::QueryCtx> queryCtx,
+      ExecutionMode mode,
       ConsumerSupplier consumerSupplier,
       std::function<void(std::exception_ptr)> onError = nullptr);
+
+  // Consistency check of the task execution to make sure the execution mode
+  // stays the same.
+  void checkExecutionMode(ExecutionMode mode);
 
   // Creates driver factories.
   void createDriverFactoriesLocked(uint32_t maxDrivers);
@@ -954,6 +986,10 @@ class Task : public std::enable_shared_from_this<Task> {
   const int destination_;
   const std::shared_ptr<core::QueryCtx> queryCtx_;
 
+  // The execution mode of the task. It is enforced that a task can only be
+  // executed in a single mode throughout its lifetime
+  const ExecutionMode mode_;
+
   // Root MemoryPool for this Task. All member variables that hold references
   // to pool_ must be defined after pool_, childPools_.
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -1002,6 +1038,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
   std::vector<std::shared_ptr<Driver>> drivers_;
+  /// When Drivers are closed by the Task, there is a chance that race and/or
+  /// bugs can cause such Drivers to be held forever, in turn holding a pointer
+  /// to the Task making it a zombie Tasks. This vector is used to keep track of
+  /// such drivers to assist debugging zombie Tasks.
+  std::vector<std::weak_ptr<Driver>> driversClosedByTask_;
   /// The total number of running drivers in all pipelines.
   /// This number changes over time as drivers finish their work and maybe new
   /// get created.
@@ -1110,6 +1151,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Indicates whether the spill directory has been created.
   std::atomic<bool> spillDirectoryCreated_{false};
+
+  // Stores unconsumed preloading splits to ensure they are closed promptly.
+  folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>
+      preloadingSplits_;
 };
 
 /// Listener invoked on task completion.
@@ -1136,4 +1181,19 @@ bool registerTaskListener(std::shared_ptr<TaskListener> listener);
 /// unregistered successfuly, false if listener was not found.
 bool unregisterTaskListener(const std::shared_ptr<TaskListener>& listener);
 
+std::string executionModeString(Task::ExecutionMode mode);
+
+std::ostream& operator<<(std::ostream& out, Task::ExecutionMode mode);
+
 } // namespace facebook::velox::exec
+
+template <>
+struct fmt::formatter<facebook::velox::exec::Task::ExecutionMode>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::exec::Task::ExecutionMode m,
+      format_context& ctx) {
+    return formatter<std::string>::format(
+        facebook::velox::exec::executionModeString(m), ctx);
+  }
+};

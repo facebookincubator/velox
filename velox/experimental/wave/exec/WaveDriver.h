@@ -57,6 +57,10 @@ class WaveDriver : public exec::SourceOperator {
     return *arena_;
   }
 
+  GpuArena& hostArena() const {
+    return *hostArena_;
+  }
+
   const std::vector<std::unique_ptr<AbstractOperand>>& operands() {
     return operands_;
   }
@@ -73,9 +77,11 @@ class WaveDriver : public exec::SourceOperator {
   std::string toString() const override;
 
   void addDynamicFilter(
+      const core::PlanNodeId& producer,
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override {
-    pipelines_[0].operators[0]->addDynamicFilter(outputChannel, filter);
+    pipelines_[0].operators[0]->addDynamicFilter(
+        producer, outputChannel, filter);
   }
 
   exec::OperatorCtx* operatorCtx() const {
@@ -99,8 +105,7 @@ class WaveDriver : public exec::SourceOperator {
   // and there is space in the arena.
   void startMore();
 
-  // Enqueus a prefetch from device to host for the buffers of output vectors.
-  void prefetchReturn(WaveStream& stream);
+  void updateStats();
 
   std::unique_ptr<GpuArena> arena_;
   std::unique_ptr<GpuArena> deviceArena_;
@@ -121,6 +126,10 @@ class WaveDriver : public exec::SourceOperator {
     // independently of each other.  This is bounded by device memory and the
     // speed at which the source can produce new batches.
     std::list<std::unique_ptr<WaveStream>> streams;
+    /// True if status copy to host is needed after the last kernel. True if
+    /// returns vectors to host or if can produce multiple batches of output for
+    /// one input.
+    bool needStatus{false};
   };
 
   std::vector<Pipeline> pipelines_;
@@ -135,6 +144,7 @@ class WaveDriver : public exec::SourceOperator {
   SubfieldMap subfields_;
   // Operands handed over by compilation.
   std::vector<std::unique_ptr<AbstractOperand>> operands_;
+  WaveStats waveStats_;
 };
 
 } // namespace facebook::velox::wave

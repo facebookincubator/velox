@@ -505,24 +505,24 @@ TEST_F(HashStringAllocatorTest, externalLeak) {
   constexpr int32_t kSize = HashStringAllocator ::kMaxAlloc * 10;
   auto root = memory::memoryManager()->addRootPool("HSALeakTestRoot");
   auto pool = root->addLeafChild("HSALeakLeaf");
-  auto initialBytes = pool->currentBytes();
+  auto initialBytes = pool->usedBytes();
   auto allocator = std::make_unique<HashStringAllocator>(pool.get());
 
   for (auto i = 0; i < 100; ++i) {
     allocator->allocate(kSize);
   }
-  EXPECT_LE(100 * kSize, pool->currentBytes());
+  EXPECT_LE(100 * kSize, pool->usedBytes());
 
   StlAllocator<char> stlAlloc(allocator.get());
   for (auto i = 0; i < 100; ++i) {
     stlAlloc.allocate(kSize);
   }
-  EXPECT_LE(200 * kSize, pool->currentBytes());
+  EXPECT_LE(200 * kSize, pool->usedBytes());
   allocator->clear();
-  EXPECT_GE(initialBytes + 1000, pool->currentBytes());
+  EXPECT_GE(initialBytes + 1000, pool->usedBytes());
 
   allocator.reset();
-  EXPECT_EQ(initialBytes, pool->currentBytes());
+  EXPECT_EQ(initialBytes, pool->usedBytes());
 }
 
 TEST_F(HashStringAllocatorTest, freeLists) {
@@ -668,6 +668,14 @@ TEST_F(HashStringAllocatorTest, storeStringFast) {
   ASSERT_NE(sv.data(), s.data());
   ASSERT_EQ(sv, StringView(s));
   allocator_->checkConsistency();
+}
+
+TEST_F(HashStringAllocatorTest, clear) {
+  allocator_->allocate(HashStringAllocator::kMinAlloc);
+  allocator_->allocate(HashStringAllocator::kMaxAlloc + 1);
+  EXPECT_GT(allocator_->retainedSize(), 0);
+  allocator_->clear();
+  EXPECT_EQ(allocator_->retainedSize(), 0);
 }
 
 } // namespace

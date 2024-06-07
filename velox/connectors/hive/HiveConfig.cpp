@@ -105,6 +105,21 @@ std::string HiveConfig::s3IAMRoleSessionName() const {
   return config_->get(kS3IamRoleSessionName, std::string("velox-session"));
 }
 
+std::optional<std::string> HiveConfig::s3ConnectTimeout() const {
+  return static_cast<std::optional<std::string>>(
+      config_->get<std::string>(kS3ConnectTimeout));
+}
+
+std::optional<std::string> HiveConfig::s3SocketTimeout() const {
+  return static_cast<std::optional<std::string>>(
+      config_->get<std::string>(kS3SocketTimeout));
+}
+
+std::optional<uint32_t> HiveConfig::s3MaxConnections() const {
+  return static_cast<std::optional<std::uint32_t>>(
+      config_->get<uint32_t>(kS3MaxConnections));
+}
+
 std::string HiveConfig::gcsEndpoint() const {
   return config_->get<std::string>(kGCSEndpoint, std::string(""));
 }
@@ -115,6 +130,15 @@ std::string HiveConfig::gcsScheme() const {
 
 std::string HiveConfig::gcsCredentials() const {
   return config_->get<std::string>(kGCSCredentials, std::string(""));
+}
+
+std::optional<int> HiveConfig::gcsMaxRetryCount() const {
+  return static_cast<std::optional<int>>(config_->get<int>(kGCSMaxRetryCount));
+}
+
+std::optional<std::string> HiveConfig::gcsMaxRetryTime() const {
+  return static_cast<std::optional<std::string>>(
+      config_->get<std::string>(kGCSMaxRetryTime));
 }
 
 bool HiveConfig::isOrcUseColumnNames(const Config* session) const {
@@ -176,6 +200,19 @@ uint64_t HiveConfig::orcWriterMaxDictionaryMemory(const Config* session) const {
       core::CapacityUnit::BYTE);
 }
 
+bool HiveConfig::orcWriterLinearStripeSizeHeuristics(
+    const Config* session) const {
+  return session->get<bool>(
+      kOrcWriterLinearStripeSizeHeuristicsSession,
+      config_->get<bool>(kOrcWriterLinearStripeSizeHeuristics, true));
+}
+
+uint64_t HiveConfig::orcWriterMinCompressionSize(const Config* session) const {
+  return session->get<uint64_t>(
+      kOrcWriterMinCompressionSizeSession,
+      config_->get<uint64_t>(kOrcWriterMinCompressionSize, 1024));
+}
+
 std::string HiveConfig::writeFileCreateConfig() const {
   return config_->get<std::string>(kWriteFileCreateConfig, "");
 }
@@ -215,6 +252,12 @@ uint8_t HiveConfig::parquetWriteTimestampUnit(const Config* session) const {
           unit == 9,
       "Invalid timestamp unit.");
   return unit;
+}
+
+bool HiveConfig::cacheNoRetention(const Config* session) const {
+  return session->get<bool>(
+      kCacheNoRetentionSession,
+      config_->get<bool>(kCacheNoRetention, /*defaultValue=*/false));
 }
 
 } // namespace facebook::velox::connector::hive

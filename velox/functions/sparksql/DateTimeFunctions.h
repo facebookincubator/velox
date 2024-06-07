@@ -99,6 +99,35 @@ struct WeekFunction : public InitSessionTimezone<T> {
 };
 
 template <typename T>
+struct YearOfWeekFunction : public InitSessionTimezone<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    const auto dateTime = getDateTime(date);
+
+    int isoWeekDay = dateTime.tm_wday == 0 ? 7 : dateTime.tm_wday;
+    // The last few days in December may belong to the next year if they are
+    // in the same week as the next January 1 and this January 1 is a Thursday
+    // or before.
+    if (UNLIKELY(
+            dateTime.tm_mon == 11 && dateTime.tm_mday >= 29 &&
+            dateTime.tm_mday - isoWeekDay >= 31 - 3)) {
+      result = 1900 + dateTime.tm_year + 1;
+      return;
+    }
+    // The first few days in January may belong to the last year if they are
+    // in the same week as January 1 and January 1 is a Friday or after.
+    if (UNLIKELY(
+            dateTime.tm_mon == 0 && dateTime.tm_mday <= 3 &&
+            isoWeekDay - (dateTime.tm_mday - 1) >= 5)) {
+      result = 1900 + dateTime.tm_year - 1;
+      return;
+    }
+    result = 1900 + dateTime.tm_year;
+  }
+};
+
+template <typename T>
 struct UnixDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -278,8 +307,8 @@ struct ToUtcTimestampFunction {
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* timezone) {
     if (timezone) {
-      timezone_ = date::locate_zone(
-          std::string_view((*timezone).data(), (*timezone).size()));
+      tzID_ = util::getTimeZoneID(
+          std::string_view((*timezone).data(), (*timezone).size()), false);
     }
   }
 
@@ -288,14 +317,17 @@ struct ToUtcTimestampFunction {
       const arg_type<Timestamp>& timestamp,
       const arg_type<Varchar>& timezone) {
     result = timestamp;
-    auto fromTimezone = timezone_
-        ? timezone_
-        : date::locate_zone(std::string_view(timezone.data(), timezone.size()));
-    result.toGMT(*fromTimezone);
+    auto fromTimezoneID = tzID_
+        ? tzID_.value()
+        : util::getTimeZoneID(
+              std::string_view(timezone.data(), timezone.size()), false);
+    VELOX_USER_CHECK_NE(
+        fromTimezoneID, -1, "Unknown time zone: '{}'", timezone);
+    result.toGMT(fromTimezoneID);
   }
 
  private:
-  const date::time_zone* timezone_{nullptr};
+  std::optional<int16_t> tzID_{std::nullopt};
 };
 
 template <typename T>
@@ -308,8 +340,8 @@ struct FromUtcTimestampFunction {
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* timezone) {
     if (timezone) {
-      timezone_ = date::locate_zone(
-          std::string_view((*timezone).data(), (*timezone).size()));
+      tzID_ = util::getTimeZoneID(
+          std::string_view((*timezone).data(), (*timezone).size()), false);
     }
   }
 
@@ -318,14 +350,16 @@ struct FromUtcTimestampFunction {
       const arg_type<Timestamp>& timestamp,
       const arg_type<Varchar>& timezone) {
     result = timestamp;
-    auto toTimezone = timezone_
-        ? timezone_
-        : date::locate_zone(std::string_view(timezone.data(), timezone.size()));
-    result.toTimezone(*toTimezone);
+    auto toTimezoneID = tzID_
+        ? tzID_.value()
+        : util::getTimeZoneID(
+              std::string_view(timezone.data(), timezone.size()), false);
+    VELOX_USER_CHECK_NE(toTimezoneID, -1, "Unknown time zone: '{}'", timezone);
+    result.toTimezone(toTimezoneID);
   }
 
  private:
-  const date::time_zone* timezone_{nullptr};
+  std::optional<int16_t> tzID_{std::nullopt};
 };
 
 /// Converts date string to Timestmap type.
@@ -731,4 +765,58 @@ struct MakeYMIntervalFunction {
     result = totalMonths;
   }
 };
+
+template <typename T>
+struct UnixSecondsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = timestamp.getSeconds();
+  }
+};
+
+template <typename T>
+struct TimestampToMicrosFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = timestamp.toMicros();
+  }
+};
+
+template <typename TExec>
+struct MicrosToTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result, const T& micros) {
+    result = Timestamp::fromMicrosNoError(micros);
+  }
+};
+
+template <typename T>
+struct TimestampToMillisFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = timestamp.toMillis();
+  }
+};
+
+template <typename TExec>
+struct MillisToTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result, const T& millis) {
+    result = Timestamp::fromMillisNoError(millis);
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

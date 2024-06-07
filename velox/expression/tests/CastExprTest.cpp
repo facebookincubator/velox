@@ -574,6 +574,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
 TEST_F(CastExprTest, stringToTimestamp) {
   std::vector<std::optional<std::string>> input{
       "1970-01-01",
+      "1970-01-01 00:00 America/Sao_Paulo",
       "2000-01-01",
       "1970-01-01 00:00:00",
       "2000-01-01 12:21:56",
@@ -582,6 +583,7 @@ TEST_F(CastExprTest, stringToTimestamp) {
   };
   std::vector<std::optional<Timestamp>> expected{
       Timestamp(0, 0),
+      Timestamp(10800, 0),
       Timestamp(946684800, 0),
       Timestamp(0, 0),
       Timestamp(946729316, 0),
@@ -589,6 +591,29 @@ TEST_F(CastExprTest, stringToTimestamp) {
       std::nullopt,
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
+
+  // Try with a different session timezone.
+  setTimezone("America/Los_Angeles");
+  input = {
+      "1970-01-01 00:00",
+      "1970-01-01 00:00 +00:00",
+      "1970-01-01 00:00 +01:00",
+      "1970-01-01 00:00 America/Sao_Paulo",
+      "2000-01-01 12:21:56Z",
+  };
+  expected = {
+      Timestamp(28800, 0),
+      Timestamp(0, 0),
+      Timestamp(-3600, 0),
+      Timestamp(10800, 0),
+      Timestamp(946729316, 0),
+  };
+  testCast<std::string, Timestamp>("timestamp", input, expected);
+
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<Timestamp, std::string>(
+          "cast(c0 as timestamp)", "1970-01-01T00:00")),
+      "Cannot cast VARCHAR '1970-01-01T00:00' to TIMESTAMP. Unable to parse timestamp value");
 }
 
 TEST_F(CastExprTest, timestampToString) {
@@ -690,7 +715,6 @@ TEST_F(CastExprTest, dateToTimestamp) {
 }
 
 TEST_F(CastExprTest, timestampToDate) {
-  setTimezone("");
   std::vector<std::optional<Timestamp>> inputTimestamps = {
       Timestamp(0, 0),
       Timestamp(946684800, 0),
@@ -746,6 +770,10 @@ TEST_F(CastExprTest, timestampInvalid) {
 }
 
 TEST_F(CastExprTest, timestampAdjustToTimezone) {
+  // Empty timezone is assumed to be GMT.
+  testCast<std::string, Timestamp>(
+      "timestamp", {"1970-01-01"}, {Timestamp(0, 0)});
+
   setTimezone("America/Los_Angeles");
 
   // Expect unix epochs to be converted to LA timezone (8h offset).
@@ -765,34 +793,23 @@ TEST_F(CastExprTest, timestampAdjustToTimezone) {
           Timestamp(946713600, 0),
           Timestamp(0, 0),
           Timestamp(946758116, 0),
-          Timestamp(-21600, 0),
+          Timestamp(-50400, 0),
           std::nullopt,
           Timestamp(957164400, 0),
       });
-
-  // Empty timezone is assumed to be GMT.
-  setTimezone("");
-  testCast<std::string, Timestamp>(
-      "timestamp", {"1970-01-01"}, {Timestamp(0, 0)});
 }
 
 TEST_F(CastExprTest, timestampAdjustToTimezoneInvalid) {
-  auto testFunc = [&]() {
-    testCast<std::string, Timestamp>(
-        "timestamp", {"1970-01-01"}, {Timestamp(1, 0)});
-  };
-
-  setTimezone("bla");
-  EXPECT_THROW(testFunc(), std::runtime_error);
+  VELOX_ASSERT_USER_THROW(setTimezone("bla"), "Unknown time zone: 'bla'");
 }
 
 TEST_F(CastExprTest, date) {
   testCast<std::string, int32_t>(
       "date",
       {"1970-01-01",
-       "2020-01-01",
-       "2135-11-09",
-       "1969-12-27",
+       " 2020-01-01",
+       "2135-11-09  ",
+       "   1969-12-27 ",
        "1812-04-15",
        "1920-01-02",
        "12345-12-18",
@@ -896,16 +913,6 @@ TEST_F(CastExprTest, invalidDate) {
       "date",
       {"2015-03-18 (BC)"},
       "Unable to parse date value: \"2015-03-18 (BC)\"",
-      VARCHAR());
-  testInvalidCast<std::string>(
-      "date",
-      {"1970-01-01 "},
-      "Unable to parse date value: \"1970-01-01 \"",
-      VARCHAR());
-  testInvalidCast<std::string>(
-      "date",
-      {" 1970-01-01 "},
-      "Unable to parse date value: \" 1970-01-01 \"",
       VARCHAR());
 }
 
@@ -1082,7 +1089,7 @@ TEST_F(CastExprTest, truncateVsRound) {
   testInvalidCast<int32_t>(
       "tinyint",
       {1111111, 1000, -100101},
-      "Cannot cast INTEGER '1111111' to TINYINT. Overflow during arithmetic conversion: (signed char) 1111111");
+      "Cannot cast INTEGER '1111111' to TINYINT. Overflow during arithmetic conversion:");
 }
 
 TEST_F(CastExprTest, nullInputs) {
@@ -1690,6 +1697,17 @@ TEST_F(CastExprTest, decimalToDecimal) {
               {DecimalUtil::kLongDecimalMin}, DECIMAL(38, 0)),
           makeNullableFlatVector<int128_t>({0}, DECIMAL(38, 1))),
       "Cannot cast DECIMAL '-99999999999999999999999999999999999999' to DECIMAL(38, 1)");
+}
+
+TEST_F(CastExprTest, integerToBinary) {
+  testInvalidCast<int8_t>(
+      "varbinary", {12}, "Cannot cast TINYINT to VARBINARY.");
+  testInvalidCast<int16_t>(
+      "varbinary", {12}, "Cannot cast SMALLINT to VARBINARY.");
+  testInvalidCast<int32_t>(
+      "varbinary", {12}, "Cannot cast INTEGER to VARBINARY.");
+  testInvalidCast<int64_t>(
+      "varbinary", {12}, "Cannot cast BIGINT to VARBINARY.");
 }
 
 TEST_F(CastExprTest, integerToDecimal) {
@@ -2385,8 +2403,8 @@ class TestingDictionaryToFewerRowsFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     const auto size = rows.size();
-    auto indices = makeIndices(
-        size, [](auto /*row*/) { return 0; }, context.pool());
+    auto indices =
+        makeIndices(size, [](auto /*row*/) { return 0; }, context.pool());
 
     result = BaseVector::wrapInDictionary(nullptr, indices, size, args[0]);
   }
@@ -2591,7 +2609,10 @@ TEST_F(CastExprTest, intervalDayTimeToVarchar) {
            kMillisInMinute,
            kMillisInSecond,
            5 * kMillisInDay + 14 * kMillisInHour + 20 * kMillisInMinute +
-               52 * kMillisInSecond + 88},
+               52 * kMillisInSecond + 88,
+           -(kMillisInDay + kMillisInHour + kMillisInMinute + kMillisInSecond +
+             88),
+           std::numeric_limits<int64_t>::min()},
           INTERVAL_DAY_TIME()),
   });
 
@@ -2602,9 +2623,11 @@ TEST_F(CastExprTest, intervalDayTimeToVarchar) {
       "0 00:01:00.000",
       "0 00:00:01.000",
       "5 14:20:52.088",
+      "-1 01:01:01.088",
+      "-106751991167 07:12:55.808",
   });
 
-  assertEqualVectors(result, expected);
+  assertEqualVectors(expected, result);
 
   // Reverse cast is not supported.
   VELOX_ASSERT_THROW(

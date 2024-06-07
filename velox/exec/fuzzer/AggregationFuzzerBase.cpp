@@ -25,7 +25,7 @@
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/SignatureBinder.h"
-#include "velox/expression/tests/utils/ArgumentTypeFuzzer.h"
+#include "velox/expression/fuzzer/ArgumentTypeFuzzer.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -198,7 +198,7 @@ AggregationFuzzerBase::pickSignature() {
     const auto& signatureTemplate =
         signatureTemplates_[idx - signatures_.size()];
     signature.name = signatureTemplate.name;
-    velox::test::ArgumentTypeFuzzer typeFuzzer(
+    velox::fuzzer::ArgumentTypeFuzzer typeFuzzer(
         *signatureTemplate.signature, rng_);
     VELOX_CHECK(typeFuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs));
     signature.args = typeFuzzer.argumentTypes();
@@ -333,12 +333,6 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
   return input;
 }
 
-// static
-exec::Split AggregationFuzzerBase::makeSplit(const std::string& filePath) {
-  return exec::Split{std::make_shared<connector::hive::HiveConnectorSplit>(
-      kHiveConnectorId, filePath, dwio::common::FileFormat::DWRF)};
-}
-
 AggregationFuzzerBase::PlanWithSplits AggregationFuzzerBase::deserialize(
     const folly::dynamic& obj) {
   auto plan = velox::ISerializable::deserialize<core::PlanNode>(
@@ -386,7 +380,7 @@ void AggregationFuzzerBase::printSignatureStats() {
   }
 }
 
-velox::test::ResultOrError AggregationFuzzerBase::execute(
+velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
     const core::PlanNodePtr& plan,
     const std::vector<exec::Split>& splits,
     bool injectSpill,
@@ -395,7 +389,7 @@ velox::test::ResultOrError AggregationFuzzerBase::execute(
   LOG(INFO) << "Executing query plan: " << std::endl
             << plan->toString(true, true);
 
-  velox::test::ResultOrError resultOrError;
+  velox::fuzzer::ResultOrError resultOrError;
   try {
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     AssertQueryBuilder builder(plan);
@@ -405,7 +399,7 @@ velox::test::ResultOrError AggregationFuzzerBase::execute(
     int32_t spillPct{0};
     if (injectSpill) {
       spillDirectory = exec::test::TempDirectoryPath::create();
-      builder.spillDirectory(spillDirectory->path)
+      builder.spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kAggregationSpillEnabled, "true")
           .config(core::QueryConfig::kMaxSpillRunRows, randInt(32, 1L << 30));
@@ -511,7 +505,7 @@ void AggregationFuzzerBase::testPlan(
     bool abandonPartial,
     bool customVerification,
     const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
-    const velox::test::ResultOrError& expected,
+    const velox::fuzzer::ResultOrError& expected,
     int32_t maxDrivers) {
   auto actual = execute(
       planWithSplits.plan,
@@ -523,10 +517,10 @@ void AggregationFuzzerBase::testPlan(
 }
 
 void AggregationFuzzerBase::compare(
-    const velox::test::ResultOrError& actual,
+    const velox::fuzzer::ResultOrError& actual,
     bool customVerification,
     const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
-    const velox::test::ResultOrError& expected) {
+    const velox::fuzzer::ResultOrError& expected) {
   // Compare results or exceptions (if any). Fail is anything is different.
   if (FLAGS_enable_oom_injection) {
     // If OOM injection is enabled and we've made it this far and the test
@@ -537,7 +531,8 @@ void AggregationFuzzerBase::compare(
   // Compare results or exceptions (if any). Fail if anything is different.
   if (expected.exceptionPtr || actual.exceptionPtr) {
     // Throws in case exceptions are not compatible.
-    velox::test::compareExceptions(expected.exceptionPtr, actual.exceptionPtr);
+    velox::fuzzer::compareExceptions(
+        expected.exceptionPtr, actual.exceptionPtr);
     return;
   }
 
@@ -592,43 +587,6 @@ void writeToFile(
   writer.close();
 }
 } // namespace
-
-// Sometimes we generate zero-column input of type ROW({}) or a column of type
-// UNKNOWN(). Such data cannot be written to a file and therefore cannot
-// be tested with TableScan.
-bool isTableScanSupported(const TypePtr& type) {
-  if (type->kind() == TypeKind::ROW && type->size() == 0) {
-    return false;
-  }
-  if (type->kind() == TypeKind::UNKNOWN) {
-    return false;
-  }
-  if (type->kind() == TypeKind::HUGEINT) {
-    return false;
-  }
-
-  for (auto i = 0; i < type->size(); ++i) {
-    if (!isTableScanSupported(type->childAt(i))) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-std::vector<exec::Split> AggregationFuzzerBase::makeSplits(
-    const std::vector<RowVectorPtr>& inputs,
-    const std::string& path) {
-  std::vector<exec::Split> splits;
-  auto writerPool = rootPool_->addAggregateChild("writer");
-  for (auto i = 0; i < inputs.size(); ++i) {
-    const std::string filePath = fmt::format("{}/{}", path, i);
-    writeToFile(filePath, inputs[i], writerPool.get());
-    splits.push_back(makeSplit(filePath));
-  }
-
-  return splits;
-}
 
 void AggregationFuzzerBase::Stats::updateReferenceQueryStats(
     AggregationFuzzerBase::ReferenceQueryErrorCode errorCode) {
@@ -787,7 +745,8 @@ void persistReproInfo(
 
 std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
     const std::string& prestoUrl,
-    const std::string& runnerName) {
+    const std::string& runnerName,
+    const uint32_t& reqTimeoutMs) {
   if (prestoUrl.empty()) {
     auto duckQueryRunner = std::make_unique<DuckQueryRunner>();
     duckQueryRunner->disableAggregateFunctions({
@@ -802,7 +761,10 @@ std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
     LOG(INFO) << "Using DuckDB as the reference DB.";
     return duckQueryRunner;
   } else {
-    return std::make_unique<PrestoQueryRunner>(prestoUrl, runnerName);
+    return std::make_unique<PrestoQueryRunner>(
+        prestoUrl,
+        runnerName,
+        static_cast<std::chrono::milliseconds>(reqTimeoutMs));
     LOG(INFO) << "Using Presto as the reference DB.";
   }
 }

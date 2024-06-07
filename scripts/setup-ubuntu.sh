@@ -40,6 +40,7 @@ FMT_VERSION=10.1.1
 BOOST_VERSION=boost-1.84.0
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
+BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 export CMAKE_BUILD_TYPE=Release
 SUDO="${SUDO:-"sudo --preserve-env"}"
 
@@ -51,12 +52,16 @@ function install_build_prerequisites {
   ${SUDO} apt install -y libunwind-dev
   ${SUDO} apt install -y \
     build-essential \
-    cmake \
+    python3-pip \
     ccache \
+    curl \
     ninja-build \
     checkinstall \
     git \
     wget
+
+    # Install to /usr/local to make it available to all users.
+    ${SUDO} pip3 install cmake==3.28.3
 }
 
 # Install packages required for build.
@@ -96,7 +101,7 @@ function install_fmt {
 function install_boost {
   github_checkout boostorg/boost "${BOOST_VERSION}" --recursive
   ./bootstrap.sh --prefix=/usr/local
-  ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi
+  ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
 }
 
 function install_folly {
@@ -125,7 +130,7 @@ function install_fbthrift {
 }
 
 function install_conda {
-  MINICONDA_PATH=/opt/miniconda-for-velox
+  MINICONDA_PATH="${HOME:-/opt}/miniconda-for-velox"
   if [ -e ${MINICONDA_PATH} ]; then
     echo "File or directory already exists: ${MINICONDA_PATH}"
     return
@@ -137,10 +142,31 @@ function install_conda {
   fi
 
   mkdir -p conda && cd conda
-  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh
+  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh -O Miniconda3-latest-Linux-$ARCH.sh
   bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 
+function install_duckdb {
+  if $BUILD_DUCKDB ; then
+    echo 'Building DuckDB'
+    wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/v0.8.1.tar.gz duckdb
+    (
+      cd duckdb
+      cmake_install -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
+    )
+  fi
+}
+
+function install_cuda {
+  # See https://developer.nvidia.com/cuda-downloads
+  if ! dpkg -l cuda-keyring 1>/dev/null; then
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    $SUDO dpkg -i cuda-keyring_1.1-1_all.deb
+    rm cuda-keyring_1.1-1_all.deb
+    $SUDO apt update
+  fi
+  $SUDO apt install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-dev-$(echo $1 | tr '.' '-')
+}
 
 function install_velox_deps {
   run_and_time install_velox_deps_from_apt
@@ -152,6 +178,7 @@ function install_velox_deps {
   run_and_time install_mvfst
   run_and_time install_fbthrift
   run_and_time install_conda
+  run_and_time install_duckdb
 }
 
 function install_apt_deps {

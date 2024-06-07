@@ -155,7 +155,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     -
+     - Y
      - Y
      -
      - Y
@@ -181,10 +181,10 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
-     -
      - Y
      - Y
      -
+     - Y
      -
      -
    * - date
@@ -197,7 +197,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - Y
-     -
+     - Y
      -
      -
      -
@@ -335,7 +335,7 @@ Valid examples
 Invalid examples
 
 ::
-  
+
   SELECT cast(214748364890 decimal(12, 2) as integer); -- Out of range
 
 Cast to Boolean
@@ -497,6 +497,7 @@ Valid examples
   SELECT cast(infinity() as varchar); -- 'Infinity'
   SELECT cast(true as varchar); -- 'true'
   SELECT cast(timestamp '1970-01-01 00:00:00' as varchar); -- '1970-01-01 00:00:00.000'
+  SELECT cast(timestamp '2024-06-01 11:37:15.123 America/New_York' as varchar); -- '2024-06-01 11:37:15.123 America/New_York'
   SELECT cast(cast(22.51 as DECIMAL(5, 3)) as varchar); -- '22.510'
   SELECT cast(cast(-22.51 as DECIMAL(4, 2)) as varchar); -- '-22.51'
   SELECT cast(cast(0.123 as DECIMAL(3, 3)) as varchar); -- '0.123'
@@ -614,23 +615,50 @@ From VARCHAR
 ^^^^^^^^^^^^
 
 Casting from a string to timestamp is allowed if the string represents a
-timestamp in the format `YYYY-MM-DD` followed by an optional `hh:mm:ssZZ`.
-Casting from invalid input values throws.
+timestamp in the format `YYYY-MM-DD` followed by an optional `hh:mm:ss.MS`.
+Seconds and milliseconds are optional. Casting from invalid input values throws.
 
-Valid examples
+Valid examples:
 
 ::
 
   SELECT cast('1970-01-01' as timestamp); -- 1970-01-01 00:00:00
-  SELECT cast('1970-01-01 00:00:00' as timestamp); -- 1970-01-01 00:00:00
+  SELECT cast('1970-01-01 00:00:00.123' as timestamp); -- 1970-01-01 00:00:00.123
   SELECT cast('1970-01-01 02:01' as timestamp); -- 1970-01-01 02:01:00
   SELECT cast('1970-01-01 00:00:00-02:00' as timestamp); -- 1970-01-01 02:00:00
 
-Invalid example
+Invalid example:
 
 ::
 
   SELECT cast('2012-Oct-23' as timestamp); -- Invalid argument
+
+Optionally, strings may also contain timezone information at the end. Timezone
+information may be offsets in the format `+01:00` or `-02:00`, for example, or
+timezone names, like `UTC`, `Z`, `America/Los_Angeles` and others,
+`as defined here <https://github.com/facebookincubator/velox/blob/main/velox/type/tz/TimeZoneDatabase.cpp>`_.
+
+For example, these strings contain valid timezone information:
+
+::
+
+  SELECT cast('1970-01-01 00:00:00 +09:00' as timestamp);
+  SELECT cast('1970-01-01 00:00:00 UTC' as timestamp);
+  SELECT cast('1970-01-01 00:00:00 America/Sao_Paulo' as timestamp);
+
+If timezone information is specified in the string, the returned timestamp
+is adjusted to the corresponding timezone. Otherwise, the timestamp is
+assumed to be in the client session timezone, and adjusted accordingly
+based on the value of `adjust_timestamp_to_session_timezone`, as described below.
+
+The space between the hour and timezone definition is optional.
+
+::
+
+  SELECT cast('1970-01-01 00:00 Z' as timestamp);
+  SELECT cast('1970-01-01 00:00Z' as timestamp);
+
+Are both valid.
 
 From DATE
 ^^^^^^^^^
@@ -700,6 +728,21 @@ Valid examples
   SELECT cast(timestamp '2012-03-09 10:00:00' as timestamp with time zone); -- 2012-03-09 10:00:00.000 America/Los_Angeles
   SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:00.000 America/Los_Angeles
 
+From DATE
+^^^^^^^^^
+
+The results depend on `session_timestamp`.
+
+Valid examples
+
+::
+
+    -- session_timezone = America/Los_Angeles
+    SELECT cast(date '2024-06-01' as timestamp with time zone); -- 2024-06-01 00:00:00.000 America/Los_Angeles
+
+    -- session_timezone = Asia/Shanghai
+    SELECT cast(date '2024-06-01' as timestamp with time zone); -- 2024-06-01 00:00:00.000 Asia/Shanghai
+
 Cast to Date
 ------------
 
@@ -739,6 +782,20 @@ Valid examples
 
   SELECT cast(timestamp '1970-01-01 00:00:00' as date); -- 1970-01-01
   SELECT cast(timestamp '1970-01-01 23:59:59' as date); -- 1970-01-01
+
+From TIMESTAMP WITH TIME ZONE
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Casting from TIMESTAMP WITH TIME ZONE to DATE is allowed. If present,
+the part of `hh:mm:ss` in the input is ignored.
+
+Session time zone does not affect the result.
+
+Valid examples
+
+::
+
+  SELECT CAST(timestamp '2024-06-01 01:38:00 America/New_York' as DATE); -- 2024-06-01
 
 Cast to Decimal
 ---------------

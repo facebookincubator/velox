@@ -23,10 +23,17 @@
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec;
+using namespace facebook::velox::exec::test;
 
-class OperatorUtilsTest
-    : public ::facebook::velox::exec::test::OperatorTestBase {
+class OperatorUtilsTest : public OperatorTestBase {
  protected:
+  void TearDown() override {
+    driverCtx_.reset();
+    driver_.reset();
+    task_.reset();
+    OperatorTestBase::TearDown();
+  }
+
   OperatorUtilsTest() {
     VectorMaker vectorMaker{pool_.get()};
     std::vector<RowVectorPtr> values = {vectorMaker.rowVector(
@@ -34,12 +41,14 @@ class OperatorUtilsTest
     core::PlanFragment planFragment;
     const core::PlanNodeId id{"0"};
     planFragment.planNode = std::make_shared<core::ValuesNode>(id, values);
+    executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(4);
 
     task_ = Task::create(
         "SpillOperatorGroupTest_task",
         std::move(planFragment),
         0,
-        std::make_shared<core::QueryCtx>());
+        core::QueryCtx::create(executor_.get()),
+        Task::ExecutionMode::kParallel);
     driver_ = Driver::testingCreate();
     driverCtx_ = std::make_unique<DriverCtx>(task_, 0, 0, 0, 0);
     driverCtx_->driver = driver_.get();
@@ -124,8 +133,7 @@ class OperatorUtilsTest
     }
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{
-      memory::memoryManager()->addLeafPool()};
+  std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<Task> task_;
   std::shared_ptr<Driver> driver_;
   std::unique_ptr<DriverCtx> driverCtx_;
@@ -455,4 +463,31 @@ TEST_F(OperatorUtilsTest, memStatsFromPool) {
   ASSERT_EQ(stats.peakUserMemoryReservation, 2L << 20);
   ASSERT_EQ(stats.peakSystemMemoryReservation, 0);
   ASSERT_EQ(stats.numMemoryAllocations, 1);
+}
+
+TEST_F(OperatorUtilsTest, dynamicFilterStats) {
+  DynamicFilterStats dynamicFilterStats;
+  ASSERT_TRUE(dynamicFilterStats.empty());
+  const std::string nodeId1{"node1"};
+  const std::string nodeId2{"node2"};
+  dynamicFilterStats.producerNodeIds.emplace(nodeId1);
+  ASSERT_FALSE(dynamicFilterStats.empty());
+  DynamicFilterStats dynamicFilterStatsToMerge;
+  dynamicFilterStatsToMerge.producerNodeIds.emplace(nodeId1);
+  ASSERT_FALSE(dynamicFilterStatsToMerge.empty());
+  dynamicFilterStats.add(dynamicFilterStatsToMerge);
+  ASSERT_EQ(dynamicFilterStats.producerNodeIds.size(), 1);
+  ASSERT_EQ(
+      dynamicFilterStats.producerNodeIds,
+      std::unordered_set<core::PlanNodeId>({nodeId1}));
+
+  dynamicFilterStatsToMerge.producerNodeIds.emplace(nodeId2);
+  dynamicFilterStats.add(dynamicFilterStatsToMerge);
+  ASSERT_EQ(dynamicFilterStats.producerNodeIds.size(), 2);
+  ASSERT_EQ(
+      dynamicFilterStats.producerNodeIds,
+      std::unordered_set<core::PlanNodeId>({nodeId1, nodeId2}));
+
+  dynamicFilterStats.clear();
+  ASSERT_TRUE(dynamicFilterStats.empty());
 }

@@ -19,11 +19,12 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Split.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/InputGenerator.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/exec/fuzzer/ResultVerifier.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/expression/tests/utils/FuzzerToolkit.h"
+#include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -47,8 +48,8 @@ DECLARE_bool(log_signature_stats);
 
 namespace facebook::velox::exec::test {
 
-using facebook::velox::test::CallableSignature;
-using facebook::velox::test::SignatureTemplate;
+using facebook::velox::fuzzer::CallableSignature;
+using facebook::velox::fuzzer::SignatureTemplate;
 
 constexpr const std::string_view kPlanNodeFileName = "plan_nodes";
 
@@ -108,8 +109,6 @@ class AggregationFuzzerBase {
   };
 
  protected:
-  static inline const std::string kHiveConnectorId = "test-hive";
-
   struct Stats {
     // Names of functions that were tested.
     std::unordered_set<std::string> functionNames;
@@ -152,12 +151,6 @@ class AggregationFuzzerBase {
 
   std::shared_ptr<InputGenerator> findInputGenerator(
       const CallableSignature& signature);
-
-  static exec::Split makeSplit(const std::string& filePath);
-
-  std::vector<exec::Split> makeSplits(
-      const std::vector<RowVectorPtr>& inputs,
-      const std::string& path);
 
   PlanWithSplits deserialize(const folly::dynamic& obj);
 
@@ -219,7 +212,7 @@ class AggregationFuzzerBase {
       const core::PlanNodePtr& plan,
       const std::vector<RowVectorPtr>& input);
 
-  velox::test::ResultOrError execute(
+  velox::fuzzer::ResultOrError execute(
       const core::PlanNodePtr& plan,
       const std::vector<exec::Split>& splits = {},
       bool injectSpill = false,
@@ -236,10 +229,10 @@ class AggregationFuzzerBase {
       const std::vector<RowVectorPtr>& input);
 
   void compare(
-      const velox::test::ResultOrError& actual,
+      const velox::fuzzer::ResultOrError& actual,
       bool customVerification,
       const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
-      const velox::test::ResultOrError& expected);
+      const velox::fuzzer::ResultOrError& expected);
 
   /// Returns false if the type or its children are unsupported.
   /// Currently returns false if type is Date,IntervalDayTime or Unknown.
@@ -258,7 +251,7 @@ class AggregationFuzzerBase {
       bool abandonPartial,
       bool customVerification,
       const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
-      const velox::test::ResultOrError& expected,
+      const velox::fuzzer::ResultOrError& expected,
       int32_t maxDrivers = 2);
 
   void printSignatureStats();
@@ -288,6 +281,8 @@ class AggregationFuzzerBase {
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
   std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
+  std::shared_ptr<memory::MemoryPool> writerPool_{
+      rootPool_->addAggregateChild("aggregationFuzzerWriter")};
   VectorFuzzer vectorFuzzer_;
 };
 
@@ -303,10 +298,6 @@ bool isDone(size_t i, T startTime) {
   }
   return i >= FLAGS_steps;
 }
-
-// Returns whether type is supported in TableScan. Empty Row type and Unknown
-// type are not supported.
-bool isTableScanSupported(const TypePtr& type);
 
 // Prints statistics about supported and unsupported function signatures.
 void printStats(const AggregationFuzzerBase::FunctionsStats& stats);
@@ -335,7 +326,8 @@ void persistReproInfo(
 // properly.
 std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
     const std::string& prestoUrl,
-    const std::string& runnerName);
+    const std::string& runnerName,
+    const uint32_t& reqTimeoutMs);
 
 // Returns the function name used in a WindowNode. The input `node` should be a
 // pointer to a WindowNode.

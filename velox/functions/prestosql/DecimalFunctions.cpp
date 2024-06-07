@@ -36,10 +36,8 @@ struct DecimalPlusFunction {
       B* /*b*/) {
     auto aType = inputTypes[0];
     auto bType = inputTypes[1];
-    auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
-    auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
-    auto rPrecision =
-        computeResultPrecision(aPrecision, aScale, bPrecision, bScale);
+    auto aScale = getDecimalPrecisionScale(*aType).second;
+    auto bScale = getDecimalPrecisionScale(*bType).second;
     aRescale_ = computeRescaleFactor(aScale, bScale);
     bRescale_ = computeRescaleFactor(bScale, aScale);
   }
@@ -65,17 +63,6 @@ struct DecimalPlusFunction {
   }
 
  private:
-  inline static uint8_t computeResultPrecision(
-      const uint8_t aPrecision,
-      const uint8_t aScale,
-      const uint8_t bPrecision,
-      const uint8_t bScale) {
-    return std::min(
-        38,
-        std::max(aPrecision - aScale, bPrecision - bScale) +
-            std::max(aScale, bScale) + 1);
-  }
-
   inline static uint8_t computeRescaleFactor(
       uint8_t fromScale,
       uint8_t toScale) {
@@ -98,10 +85,8 @@ struct DecimalMinusFunction {
       B* /*b*/) {
     const auto& aType = inputTypes[0];
     const auto& bType = inputTypes[1];
-    const auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
-    const auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
-    const auto rPrecision =
-        computeResultPrecision(aPrecision, aScale, bPrecision, bScale);
+    auto aScale = getDecimalPrecisionScale(*aType).second;
+    auto bScale = getDecimalPrecisionScale(*bType).second;
     aRescale_ = computeRescaleFactor(aScale, bScale);
     bRescale_ = computeRescaleFactor(bScale, aScale);
   }
@@ -127,17 +112,6 @@ struct DecimalMinusFunction {
   }
 
  private:
-  inline static uint8_t computeResultPrecision(
-      const uint8_t aPrecision,
-      const uint8_t aScale,
-      const uint8_t bPrecision,
-      const uint8_t bScale) {
-    return std::min(
-        38,
-        std::max(aPrecision - aScale, bPrecision - bScale) +
-            std::max(aScale, bScale) + 1);
-  }
-
   inline static uint8_t computeRescaleFactor(
       uint8_t fromScale,
       uint8_t toScale) {
@@ -171,11 +145,12 @@ struct DecimalDivideFunction {
       B* /*b*/) {
     auto aType = inputTypes[0];
     auto bType = inputTypes[1];
-    auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
-    auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
-    auto [rPrecision, rScale] =
-        computeResultPrecisionScale(aPrecision, aScale, bPrecision, bScale);
-    aRescale_ = computeRescaleFactor(aScale, bScale, rScale);
+    auto aScale = getDecimalPrecisionScale(*aType).second;
+    auto bScale = getDecimalPrecisionScale(*bType).second;
+    auto rScale = std::max(aScale, bScale);
+    aRescale_ = rScale - aScale + bScale;
+    VELOX_USER_CHECK_LE(
+        aRescale_, LongDecimalType::kMaxPrecision, "Decimal overflow");
   }
 
   template <typename R, typename A, typename B>
@@ -185,22 +160,57 @@ struct DecimalDivideFunction {
   }
 
  private:
-  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
-      const uint8_t aPrecision,
-      const uint8_t aScale,
-      const uint8_t /*bPrecision*/,
-      const uint8_t bScale) {
-    return {
-        std::min(38, aPrecision + bScale + std::max(0, bScale - aScale)),
-        std::max(aScale, bScale)};
-  }
-
-  inline static uint8_t
-  computeRescaleFactor(uint8_t fromScale, uint8_t toScale, uint8_t rScale) {
-    return rScale - fromScale + toScale;
-  }
-
   uint8_t aRescale_;
+};
+
+template <typename TExec>
+struct DecimalModulusFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* /*a*/,
+      B* /*b*/) {
+    const auto& aType = inputTypes[0];
+    const auto& bType = inputTypes[1];
+    auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
+    auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
+    aRescale_ = std::max(0, bScale - aScale);
+    bRescale_ = std::max(0, aScale - bScale);
+  }
+
+  template <typename R, typename A, typename B>
+  void call(R& out, const A& a, const B& b) {
+    VELOX_USER_CHECK_NE(b, 0, "Modulus by zero");
+    int remainderSign = 1;
+    R unsignedDividendRescaled(a);
+    if (a < 0) {
+      remainderSign *= -1;
+      unsignedDividendRescaled *= -1;
+    }
+    unsignedDividendRescaled = checkedMultiply<R>(
+        unsignedDividendRescaled,
+        R(DecimalUtil::kPowersOfTen[aRescale_]),
+        "Decimal");
+
+    R unsignedDivisorRescaled(b);
+    if (b < 0) {
+      unsignedDivisorRescaled *= -1;
+    }
+    unsignedDivisorRescaled = checkedMultiply<B>(
+        unsignedDivisorRescaled,
+        R(DecimalUtil::kPowersOfTen[bRescale_]),
+        "Decimal");
+
+    R remainder = unsignedDividendRescaled % unsignedDivisorRescaled;
+    out = remainder * remainderSign;
+  }
+
+ private:
+  uint8_t aRescale_;
+  uint8_t bRescale_;
 };
 
 template <typename TExec>
@@ -363,6 +373,7 @@ void registerDecimalMultiply(const std::string& prefix) {
           exec::ParameterType::kIntegerParameter),
       exec::SignatureVariable(
           S3::name(),
+          // Result type resolution fails if sum of input scales exceeds 38.
           fmt::format(
               "{a_scale} + {b_scale}",
               fmt::arg("a_scale", S1::name()),
@@ -408,6 +419,69 @@ void registerDecimalDivide(const std::string& prefix) {
       ShortDecimal<P3, S3>,
       LongDecimal<P1, S1>,
       ShortDecimal<P2, S2>>({prefix + "divide"}, constraints);
+}
+
+void registerDecimalModulus(const std::string& prefix) {
+  std::vector<exec::SignatureVariable> constraints = {
+      exec::SignatureVariable(
+          P3::name(),
+          fmt::format(
+              "min({b_precision} - {b_scale}, {a_precision} - {a_scale}) + max({a_scale}, {b_scale})",
+              fmt::arg("a_precision", P1::name()),
+              fmt::arg("a_scale", S1::name()),
+              fmt::arg("b_precision", P2::name()),
+              fmt::arg("b_scale", S2::name())),
+          exec::ParameterType::kIntegerParameter),
+      exec::SignatureVariable(
+          S3::name(),
+          fmt::format(
+              "max({a_scale}, {b_scale})",
+              fmt::arg("a_scale", S1::name()),
+              fmt::arg("b_scale", S2::name())),
+          exec::ParameterType::kIntegerParameter),
+  };
+
+  // (short, short) -> short
+  registerFunction<
+      DecimalModulusFunction,
+      ShortDecimal<P3, S3>,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints);
+
+  // (short, long) -> short
+  registerFunction<
+      DecimalModulusFunction,
+      ShortDecimal<P3, S3>,
+      ShortDecimal<P1, S1>,
+      LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
+
+  // (long, short) -> short
+  registerFunction<
+      DecimalModulusFunction,
+      ShortDecimal<P3, S3>,
+      LongDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints);
+
+  // (short, long) -> long
+  registerFunction<
+      DecimalModulusFunction,
+      LongDecimal<P3, S3>,
+      ShortDecimal<P1, S1>,
+      LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
+
+  // (long, short) -> long
+  registerFunction<
+      DecimalModulusFunction,
+      LongDecimal<P3, S3>,
+      LongDecimal<P1, S1>,
+      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints);
+
+  // (long, long) -> long
+  registerFunction<
+      DecimalModulusFunction,
+      LongDecimal<P3, S3>,
+      LongDecimal<P1, S1>,
+      LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
 }
 
 void registerDecimalFloor(const std::string& prefix) {

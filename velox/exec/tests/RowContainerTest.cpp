@@ -1690,6 +1690,45 @@ TEST_F(RowContainerTest, unknown) {
       }));
 }
 
+TEST_F(RowContainerTest, nans) {
+  const static auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  const static auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+  static const auto kNaNHash = folly::hasher<double>{}(kNaN);
+  std::vector<TypePtr> types = {DOUBLE()};
+  auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
+
+  auto data = makeRowVector({
+      makeFlatVector<double>({kNaN, kSNaN}),
+  });
+
+  auto size = data->size();
+  DecodedVector decoded(*data->childAt(0));
+  auto rows = store(*rowContainer, decoded, size);
+
+  // Verify that the hashes are equal.
+  std::vector<uint64_t> hashes(size, 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), false /*mix*/, hashes.data());
+  for (auto hash : hashes) {
+    ASSERT_EQ(kNaNHash, hash);
+  }
+
+  // Fill in hashes with sequential numbers: 0, 1, 2,..
+  std::iota(hashes.begin(), hashes.end(), 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), true /*mix*/, hashes.data());
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_EQ(bits::hashMix(i, kNaNHash), hashes[i]);
+  }
+
+  // Verify that they are considered equal.
+  for (size_t row = 0; row < size; ++row) {
+    ASSERT_TRUE(rowContainer->equals<false>(
+        rows[row], rowContainer->columnAt(0), decoded, row));
+  }
+  ASSERT_EQ(rowContainer->compare(rows[0], rows[1], 0, {}), 0);
+}
+
 TEST_F(RowContainerTest, toString) {
   std::vector<TypePtr> keyTypes = {BIGINT(), VARCHAR()};
   std::vector<TypePtr> dependentTypes = {TINYINT(), REAL(), ARRAY(BIGINT())};
@@ -1845,4 +1884,135 @@ DEBUG_ONLY_TEST_F(RowContainerTest, eraseAfterOomStoringString) {
   // allocated in the container's string allocator, this will fail
   // attempting to free a string the allocator doesn't own.
   rowContainer->eraseRows(folly::Range<char**>(rows.data(), numRows));
+}
+
+TEST_F(RowContainerTest, nextRowVector) {
+  int32_t numRows = 100;
+  auto data = makeRowContainer({SMALLINT()}, {SMALLINT()});
+  EXPECT_EQ(data->nextOffset(), 11);
+  std::unordered_set<char*> rowSet;
+  std::vector<char*> rows;
+
+  auto dataClear = [&]() {
+    data->clear();
+    EXPECT_EQ(0, data->numRows());
+    auto free = data->freeSpace();
+    EXPECT_EQ(0, free.first);
+    EXPECT_EQ(0, free.second);
+    rows.clear();
+    rowSet.clear();
+  };
+
+  auto validateNextRowVector = [&]() {
+    for (int i = 0; i < rows.size(); i++) {
+      auto vector = data->getNextRowVector(rows[i]);
+      if (vector) {
+        auto iter = std::find(vector->begin(), vector->end(), rows[i]);
+        EXPECT_NE(iter, vector->end());
+        EXPECT_TRUE(vector->size() <= 2 && vector->size() > 0);
+        for (auto next : *vector) {
+          EXPECT_EQ(data->getNextRowVector(next), vector);
+          EXPECT_TRUE(std::find(rows.begin(), rows.end(), next) != rows.end());
+        }
+      }
+    }
+  };
+
+  auto nextRowVectorAppendValidation = [&]() {
+    for (int i = 0; i < numRows; ++i) {
+      rows.push_back(data->newRow());
+      rowSet.insert(rows.back());
+      EXPECT_EQ(data->getNextRowVector(rows.back()), nullptr);
+    }
+    EXPECT_EQ(numRows, data->numRows());
+    std::vector<char*> rowsFromContainer(numRows);
+    RowContainerIterator iter;
+    EXPECT_EQ(
+        data->listRows(&iter, numRows, rowsFromContainer.data()), numRows);
+    EXPECT_EQ(0, data->listRows(&iter, numRows, rows.data()));
+    EXPECT_EQ(rows, rowsFromContainer);
+
+    for (int i = 0; i + 2 <= numRows; i += 2) {
+      data->appendNextRow(rows[i], rows[i + 1]);
+    }
+    validateNextRowVector();
+  };
+
+  auto nextRowVectorEraseValidation = [&](const std::vector<int>& eraseRows) {
+    dataClear();
+    nextRowVectorAppendValidation();
+    std::vector<char*> erasingRows;
+    for (auto index : eraseRows) {
+      erasingRows.emplace_back(rows[index]);
+    }
+    for (auto row : erasingRows) {
+      rows.erase(std::remove(rows.begin(), rows.end(), row), rows.end());
+    }
+    data->eraseRows(
+        folly::Range<char**>(erasingRows.data(), erasingRows.size()));
+    validateNextRowVector();
+    data->checkConsistency();
+  };
+
+  nextRowVectorAppendValidation();
+  nextRowVectorEraseValidation({0, 1});
+  nextRowVectorEraseValidation({34, 35, 98, 99});
+  nextRowVectorEraseValidation({2, 3, 22, 23, 88, 89, 58, 59});
+  std::vector<int> eraseRows(numRows);
+  std::iota(eraseRows.begin(), eraseRows.end(), 0);
+  nextRowVectorEraseValidation(eraseRows);
+
+  VELOX_ASSERT_THROW(
+      nextRowVectorEraseValidation({1}),
+      "All rows with the same keys must be present in 'rows'");
+
+  dataClear();
+}
+
+TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
+  constexpr int32_t kNumRows = 100;
+  constexpr int32_t kColumnIndex = 0;
+
+  // wrap dictionary vector
+  std::vector<int128_t> rawData;
+  for (auto i = 0; i < kNumRows; ++i) {
+    rawData.push_back(HugeInt::build(i, i));
+  }
+  auto hugeIntVector = makeFlatVector<int128_t>(rawData);
+
+  auto isNullAt = [](vector_size_t i) { return i % 10 == 0; };
+
+  BufferPtr dictNulls = allocateNulls(kNumRows, pool());
+  auto rawDictNulls = dictNulls->asMutable<uint64_t>();
+  for (auto i = 0; i < kNumRows; ++i) {
+    bits::setNull(rawDictNulls, i, isNullAt(i));
+  }
+
+  BufferPtr dictIndices =
+      AlignedBuffer::allocate<vector_size_t>(kNumRows, pool());
+  auto rawDictIndices = dictIndices->asMutable<vector_size_t>();
+  for (auto i = 0; i < kNumRows; ++i) {
+    if (!isNullAt(i)) {
+      rawDictIndices[i] = i;
+    }
+    // indices of null indexes contain garbage values
+  }
+
+  auto source = BaseVector::wrapInDictionary(
+      dictNulls, dictIndices, kNumRows, hugeIntVector);
+
+  std::vector<TypePtr> keys;
+  auto data = makeRowContainer({HUGEINT()}, {}, false);
+  std::vector<char*> rows(kNumRows);
+  for (auto i = 0; i < kNumRows; ++i) {
+    rows[i] = data->newRow();
+  }
+  SelectivityVector allRows(kNumRows);
+  DecodedVector decoded(*source, allRows);
+  for (auto i = 0; i < kNumRows; ++i) {
+    data->store(decoded, i, rows[i], kColumnIndex);
+  }
+  auto extracted = BaseVector::copy(*source);
+  data->extractColumn(rows.data(), kNumRows, kColumnIndex, extracted);
+  assertEqualVectors(source, extracted);
 }

@@ -54,7 +54,7 @@ class ReduceAggBenchmark : public HiveConnectorTestBase {
     }
 
     filePath_ = TempFilePath::create();
-    writeToFile(filePath_->path, vectors);
+    writeToFile((filePath_->getPath()), vectors);
   }
 
   ~ReduceAggBenchmark() override {
@@ -189,9 +189,11 @@ class ReduceAggBenchmark : public HiveConnectorTestBase {
         "t",
         std::move(plan),
         0,
-        std::make_shared<core::QueryCtx>(executor_.get()));
+        core::QueryCtx::create(executor_.get()),
+        exec::Task::ExecutionMode::kParallel);
 
-    task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath_->path)));
+    task->addSplit(
+        "0", exec::Split(makeHiveConnectorSplit(filePath_->getPath())));
     task->noMoreSplits("0");
     return task;
   }

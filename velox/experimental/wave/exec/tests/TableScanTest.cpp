@@ -34,6 +34,9 @@ using namespace facebook::velox::exec::test;
 class TableScanTest : public virtual HiveConnectorTestBase {
  protected:
   void SetUp() override {
+    if (int device; cudaGetDevice(&device) != cudaSuccess) {
+      GTEST_SKIP() << "No CUDA detected, skipping all tests";
+    }
     HiveConnectorTestBase::SetUp();
     wave::registerWave();
     wave::WaveHiveDataSource::registerConnector();
@@ -49,14 +52,17 @@ class TableScanTest : public virtual HiveConnectorTestBase {
 
   void TearDown() override {
     wave::test::Table::dropAll();
+    HiveConnectorTestBase::TearDown();
   }
 
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,
       int32_t numVectors,
-      int32_t rowsPerVector) {
+      int32_t rowsPerVector,
+      float nullRatio = 0) {
     std::vector<RowVectorPtr> vectors;
     options_.vectorSize = rowsPerVector;
+    options_.nullRatio = nullRatio;
     fuzzer_->setOptions(options_);
 
     for (int32_t i = 0; i < numVectors; ++i) {
@@ -64,6 +70,24 @@ class TableScanTest : public virtual HiveConnectorTestBase {
       vectors.push_back(vector);
     }
     return vectors;
+  }
+
+  void makeRange(
+      RowVectorPtr row,
+      int64_t mod = std::numeric_limits<int64_t>::max(),
+      bool notNull = true) {
+    for (auto i = 0; i < row->type()->size(); ++i) {
+      auto child = row->childAt(i);
+      if (auto ints = child->as<FlatVector<int64_t>>()) {
+        for (auto i = 0; i < child->size(); ++i) {
+          if (!notNull && ints->isNullAt(i)) {
+            continue;
+          }
+          ints->set(i, ints->valueAt(i) % mod);
+        }
+      }
+      child->clearNulls(0, row->size());
+    }
   }
 
   wave::test::SplitVector makeTable(
@@ -141,10 +165,52 @@ TEST_F(TableScanTest, basic) {
   auto plan = tableScanNode(type);
   auto task = assertQuery(plan, splits, "SELECT * FROM tmp");
 
-  // A quick sanity check for memory usage reporting. Check that peak total
-  // memory usage for the project node is > 0.
   auto planStats = toPlanStats(task->taskStats());
   auto scanNodeId = plan->id();
   auto it = planStats.find(scanNodeId);
   ASSERT_TRUE(it != planStats.end());
+}
+
+TEST_F(TableScanTest, filter) {
+  auto type =
+      ROW({"c0", "c1", "c2", "c3"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
+  auto vectors = makeVectors(type, 1, 1'500);
+  for (auto& vector : vectors) {
+    makeRange(vector, 1000000000);
+  }
+  auto splits = makeTable("test", vectors);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(type)
+                  .filter("c0 < 500000000")
+                  .project({"c0", "c1 + 100000000 as c1", "c2", "c3"})
+                  .filter("c1 < 500000000")
+                  .project({"c0", "c1", "c2 + 1", "c3", "c3 + 2"})
+                  .planNode();
+  auto task = assertQuery(
+      plan,
+      splits,
+      "SELECT c0, c1 + 100000000, c2 + 1, c3, c3 + 2 FROM tmp where c0 < 500000000 and c1 + 100000000 < 500000000");
+}
+
+TEST_F(TableScanTest, filterInScan) {
+  auto type =
+      ROW({"c0", "c1", "c2", "c3"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
+  auto vectors = makeVectors(type, 10, 2'000);
+  for (auto& vector : vectors) {
+    makeRange(vector, 1000000000);
+  }
+  auto splits = makeTable("test", vectors);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(type, {"c0 < 500000000", "c1 < 400000000"})
+                  .project({"c0", "c1 + 100000000 as c1", "c2", "c3"})
+                  .project({"c0", "c1", "c2 + 1", "c3", "c3 + 2"})
+                  .planNode();
+  auto task = assertQuery(
+      plan,
+      splits,
+      "SELECT c0, c1 + 100000000, c2 + 1, c3, c3 + 2 FROM tmp where c0 < 500000000 and c1 + 100000000 < 500000000");
 }

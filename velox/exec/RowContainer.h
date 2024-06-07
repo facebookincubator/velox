@@ -25,6 +25,8 @@
 
 namespace facebook::velox::exec {
 
+using NextRowVector = std::vector<char*, StlAllocator<char*>>;
+
 class Aggregate;
 
 class Accumulator {
@@ -637,6 +639,15 @@ class RowContainer {
     return nextOffset_;
   }
 
+  // Create a next-row-vector if it doesn't exist. Append the row address to
+  // the next-row-vector, and store the address of the next-row-vector in the
+  // nextOffset_ slot for all duplicate rows.
+  void appendNextRow(char* current, char* nextRow);
+
+  NextRowVector*& getNextRowVector(char* row) const {
+    return *reinterpret_cast<NextRowVector**>(row + nextOffset_);
+  }
+
   /// Hashes the values of 'columnIndex' for 'rows'.  If 'mix' is true, mixes
   /// the hash with the existing value in 'result'.
   void hash(
@@ -668,6 +679,9 @@ class RowContainer {
 
   /// Resets the state to be as after construction. Frees memory for payload.
   void clear();
+
+  /// Frees memory for next row vectors.
+  void clearNextRowVectors();
 
   int32_t compareRows(
       const char* left,
@@ -819,7 +833,8 @@ class RowContainer {
     // Resize the result vector before all copies.
     result->resize(numRows + resultOffset);
 
-    if (Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
+    if constexpr (
+        Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
       extractComplexType<useRowNumbers>(
           rows, rowNumbers, numRows, column, resultOffset, result);
@@ -1033,11 +1048,12 @@ class RowContainer {
     if (indexIsNull) {
       return flags.nullsFirst ? 1 : -1;
     }
-    if (Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
+    if constexpr (
+        Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
       return compareComplexType(row, column.offset(), decoded, index, flags);
     }
-    if (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+    if constexpr (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
       auto result = compareStringAsc(
           valueAt<StringView>(row, column.offset()), decoded, index);
       return flags.ascending ? result : result * -1;
@@ -1070,12 +1086,13 @@ class RowContainer {
 
     auto leftOffset = leftColumn.offset();
     auto rightOffset = rightColumn.offset();
-    if (Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
+    if constexpr (
+        Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
       return compareComplexType(
           left, right, type, leftOffset, rightOffset, flags);
     }
-    if (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+    if constexpr (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
       auto leftValue = valueAt<StringView>(left, leftOffset);
       auto rightValue = valueAt<StringView>(right, rightOffset);
       auto result = compareStringAsc(leftValue, rightValue);
@@ -1215,6 +1232,11 @@ class RowContainer {
   // Free any aggregates associated with the 'rows'.
   void freeAggregates(folly::Range<char**> rows);
 
+  // Free next row vectors associated with the 'rows'.
+  void freeNextRowVectors(folly::Range<char**> rows, bool clear);
+
+  void freeRowsExtraMemory(folly::Range<char**> rows, bool clear);
+
   const bool checkFree_ = false;
 
   const std::vector<TypePtr> keyTypes_;
@@ -1234,6 +1256,7 @@ class RowContainer {
   std::vector<TypePtr> types_;
   std::vector<TypeKind> typeKinds_;
   int32_t nextOffset_ = 0;
+  bool hasDuplicateRows_{false};
   // Bit position of null bit  in the row. 0 if no null flag. Order is keys,
   // accumulators, dependent.
   std::vector<int32_t> nullOffsets_;
@@ -1360,10 +1383,12 @@ inline void RowContainer::storeWithNulls<TypeKind::HUGEINT>(
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask) {
-  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
   if (decoded.isNullAt(index)) {
     row[nullByte] |= nullMask;
+    memset(row + offset, 0, sizeof(int128_t));
+    return;
   }
+  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
 }
 
 template <>

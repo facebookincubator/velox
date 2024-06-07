@@ -44,6 +44,45 @@ constexpr const int32_t kMaxYear{292278994};
 constexpr const int32_t kYearInterval{400};
 constexpr const int32_t kDaysPerYearInterval{146097};
 
+/// Enum to dictate parsing modes for date strings.
+enum class ParseMode {
+  // For date string conversion, align with DuckDB's implementation.
+  kStrict,
+
+  // For timestamp string conversion, align with DuckDB's implementation.
+  kNonStrict,
+
+  // Accepts complete ISO 8601 format, i.e. [+-](YYYY-MM-DD). Allows leading and
+  // trailing spaces.
+  // Aligned with Presto casting conventions.
+  // TODO Rename to kPrestoCast.
+  kStandardCast,
+
+  // Like kStandardCast but permits years less than four digits, missing
+  // day/month, and allows trailing 'T' or spaces.
+  // Aligned with Spark SQL casting conventions.
+  //
+  // Supported formats:
+  // `[+-][Y]Y*`
+  // `[+-][Y]Y*-[M]M`
+  // `[+-][Y]Y*-[M]M*-[D]D`
+  // `[+-][Y]Y*-[M]M*-[D]D *`
+  // `[+-][Y]Y*-[M]M*-[D]DT*`
+  //
+  // TODO Rename to kSparkCast.
+  kNonStandardCast,
+
+  // ISO-8601 format. No leading or trailing spaces allowed.
+  //
+  // Supported formats:
+  // `[+-][Y]Y*`
+  // `[+-][Y]Y*-[M]M`
+  // `[+-][Y]Y*-[M]M*-[D]D`
+  //
+  // TODO Rename to kIso8601.
+  kNonStandardNoTimeCast
+};
+
 // Returns true if leap year, false otherwise
 bool isLeapYear(int32_t year);
 
@@ -91,22 +130,17 @@ inline int64_t fromDateString(const StringView& str) {
   return fromDateString(str.data(), str.size());
 }
 
-/// Cast string to date.
-/// When isIso8601 = true, only support "[+-]YYYY-MM-DD" format (ISO 8601).
-/// When isIso8601 = false, supported date formats include:
-///
-/// `[+-]YYYY*`
-/// `[+-]YYYY*-[M]M`
-/// `[+-]YYYY*-[M]M-[D]D`
-/// `[+-]YYYY*-[M]M-[D]D `
-/// `[+-]YYYY*-[M]M-[D]D *`
-/// `[+-]YYYY*-[M]M-[D]DT*`
+/// Cast string to date. Supported date formats vary, depending on input
+/// ParseMode. Refer to ParseMode enum for further info.
 ///
 /// Throws VeloxUserError if the format or date is invalid.
-int32_t castFromDateString(const char* buf, size_t len, bool isIso8601);
+Expected<int32_t>
+castFromDateString(const char* buf, size_t len, ParseMode mode);
 
-inline int32_t castFromDateString(const StringView& str, bool isIso8601) {
-  return castFromDateString(str.data(), str.size(), isIso8601);
+inline Expected<int32_t> castFromDateString(
+    const StringView& str,
+    ParseMode mode) {
+  return castFromDateString(str.data(), str.size(), mode);
 }
 
 // Extracts the day of the week from the number of days since epoch
@@ -119,8 +153,10 @@ int32_t extractISODayOfTheWeek(int32_t daysSinceEpoch);
 int64_t
 fromTime(int32_t hour, int32_t minute, int32_t second, int32_t microseconds);
 
+// TODO These are used only in tests. Move them to test-only location.
+
 /// Parses the input string and returns the number of cumulative microseconds,
-/// following the "HH:MM:SS[.MS]" format (ISO 8601).
+/// following the "HH:MM[:SS[.MS]]" format (ISO 8601).
 //
 /// Throws VeloxUserError if the format or time is invalid.
 int64_t fromTimeString(const char* buf, size_t len);
@@ -131,14 +167,89 @@ inline int64_t fromTimeString(const StringView& str) {
 
 // Timestamp conversion
 
-/// Parses a full ISO 8601 timestamp string, following the format
-/// "YYYY-MM-DD HH:MM:SS[.MS] +00:00"
-Timestamp fromTimestampString(const char* buf, size_t len);
+enum class TimestampParseMode {
+  /// Accepted syntax:
+  // clang-format off
+  ///   datetime          = time | date-opt-time
+  ///   time              = 'T' time-element [offset]
+  ///   date-opt-time     = date-element ['T' [time-element] [offset]]
+  ///   date-element      = yyyy ['-' MM ['-' dd]]
+  ///   time-element      = HH [minute-element] | [fraction]
+  ///   minute-element    = ':' mm [second-element] | [fraction]
+  ///   second-element    = ':' ss [fraction]
+  ///   fraction          = ('.' | ',') digit+
+  ///   offset            = 'Z' | (('+' | '-') HH [':' mm [':' ss [('.' | ',') SSS]]])
+  // clang-format on
+  kIso8601,
 
-inline Timestamp fromTimestampString(const StringView& str) {
-  return fromTimestampString(str.data(), str.size());
+  /// Accepted syntax:
+  // clang-format off
+  ///   date-opt-time     = date-element [' ' [time-element] [[' '] [offset]]]
+  ///   date-element      = yyyy ['-' MM ['-' dd]]
+  ///   time-element      = HH [minute-element] | [fraction]
+  ///   minute-element    = ':' mm [second-element] | [fraction]
+  ///   second-element    = ':' ss [fraction]
+  ///   fraction          = '.' digit+
+  ///   offset            = 'Z' | ZZZ
+  // clang-format on
+  // Allows leading and trailing spaces.
+  kPrestoCast,
+
+  /// A Spark-compatible timestamp string. A mix of the above. Accepts T and
+  /// space as separator between date and time. Allows leading and trailing
+  /// spaces.
+  kSparkCast,
+};
+
+/// Parses a timestamp string using specified TimestampParseMode.
+///
+/// This function does not accept any timezone information in the string (e.g.
+/// UTC, Z, or a timezone offsets). This is because the returned timestamp does
+/// not contain timezone information; therefore, it would either be required for
+/// this function to convert the parsed timestamp (but we don't know the
+/// original timezone), or ignore the timezone information, which would be
+/// incorecct.
+///
+/// For a timezone-aware version of this function, check
+/// `fromTimestampWithTimezoneString()` below.
+Expected<Timestamp>
+fromTimestampString(const char* buf, size_t len, TimestampParseMode parseMode);
+
+inline Expected<Timestamp> fromTimestampString(
+    const StringView& str,
+    TimestampParseMode parseMode) {
+  return fromTimestampString(str.data(), str.size(), parseMode);
+}
+
+/// Parses a timestamp string using specified TimestampParseMode.
+///
+/// This is a timezone-aware version of the function above
+/// `fromTimestampString()` which returns both the parsed timestamp and the
+/// timezone ID. It is up to the client to do the expected conversion based on
+/// these two values.
+///
+/// The timezone information at the end of the string may contain a timezone
+/// name (as defined in velox/type/tz/*), such as "UTC" or
+/// "America/Los_Angeles", or a timezone offset, like "+06:00" or "-09:30". The
+/// white space between the hour definition and timestamp is optional.
+///
+/// -1 means no timezone information was found. Throws VeloxUserError in case of
+/// parsing errors.
+Expected<std::pair<Timestamp, int16_t>> fromTimestampWithTimezoneString(
+    const char* buf,
+    size_t len,
+    TimestampParseMode parseMode);
+
+inline Expected<std::pair<Timestamp, int16_t>> fromTimestampWithTimezoneString(
+    const StringView& str,
+    TimestampParseMode parseMode) {
+  return fromTimestampWithTimezoneString(str.data(), str.size(), parseMode);
 }
 
 Timestamp fromDatetime(int64_t daysSinceEpoch, int64_t microsSinceMidnight);
+
+/// Returns the number of days since epoch for a given timestamp and optional
+/// time zone.
+int32_t toDate(const Timestamp& timestamp, const date::time_zone* timeZone_);
 
 } // namespace facebook::velox::util

@@ -152,7 +152,7 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_UNSUPPORTED("growContiguous unsupported");
   }
 
-  int64_t currentBytes() const override {
+  int64_t usedBytes() const override {
     return localMemoryUsage_;
   }
 
@@ -167,7 +167,6 @@ class MockMemoryPool : public velox::memory::MemoryPool {
   }
 
   MOCK_CONST_METHOD0(peakBytes, int64_t());
-  // MOCK_CONST_METHOD0(getMaxBytes, int64_t());
 
   MOCK_METHOD1(updateSubtreeMemoryUsage, int64_t(int64_t));
 
@@ -207,7 +206,7 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
   }
 
-  uint64_t grow(uint64_t /*unused*/) noexcept override {
+  bool grow(uint64_t /*unused*/, uint64_t /*unused*/) noexcept override {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
   }
 
@@ -321,7 +320,7 @@ struct SimulatedFlush {
     auto& generalPool = dynamic_cast<MockMemoryPool&>(
         context.getMemoryPool(MemoryUsageCategory::GENERAL));
     dictPool.setLocalMemoryUsage(dictMemoryUsage);
-    ASSERT_EQ(outputStreamMemoryUsage, outputPool.currentBytes());
+    ASSERT_EQ(outputStreamMemoryUsage, outputPool.usedBytes());
     outputPool.updateLocalMemoryUsage(flushOverhead);
     generalPool.setLocalMemoryUsage(generalMemoryUsage);
 
@@ -418,13 +417,12 @@ class WriterFlushTestHelper {
       if (writer->shouldFlush(context, write.numRows)) {
         ASSERT_EQ(
             0,
-            context.getMemoryPool(MemoryUsageCategory::DICTIONARY)
-                .currentBytes());
+            context.getMemoryPool(MemoryUsageCategory::DICTIONARY).usedBytes());
         auto outputStreamMemoryUsage =
             context.getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM)
-                .currentBytes();
+                .usedBytes();
         auto generalMemoryUsage =
-            context.getMemoryPool(MemoryUsageCategory::GENERAL).currentBytes();
+            context.getMemoryPool(MemoryUsageCategory::GENERAL).usedBytes();
 
         uint64_t flushOverhead =
             folly::Random::rand32(0, context.stripeRawSize(), gen);

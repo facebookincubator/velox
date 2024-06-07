@@ -18,7 +18,7 @@
 #include <optional>
 #include "velox/type/Type.h"
 
-namespace facebook::velox::functions {
+namespace facebook::velox::functions::detail {
 
 std::optional<StringView> matchAuthorityAndPath(
     StringView authorityAndPath,
@@ -48,10 +48,10 @@ std::optional<StringView> matchAuthorityAndPath(
   }
 
   if (authorityMatch[subGroup].matched) {
-    return submatch(authorityMatch, subGroup);
+    return detail::submatch(authorityMatch, subGroup);
   }
 
   return std::nullopt;
 }
 
-} // namespace facebook::velox::functions
+} // namespace facebook::velox::functions::detail

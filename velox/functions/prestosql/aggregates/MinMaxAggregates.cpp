@@ -22,6 +22,7 @@
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/Compare.h"
+#include "velox/type/FloatingPointUtil.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -55,24 +56,7 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       VectorPtr& result) const override {
-    const auto& input = args[0];
-    if (rows.isAllSelected()) {
-      result = input;
-      return;
-    }
-
-    auto* pool = BaseAggregate::allocator_->pool();
-
-    result = BaseVector::create(input->type(), rows.size(), pool);
-
-    // Set result to NULL for rows that are masked out.
-    {
-      BufferPtr nulls = allocateNulls(rows.size(), pool, bits::kNull);
-      rows.clearNulls(nulls);
-      result->setNulls(nulls);
-    }
-
-    result->copy(input.get(), rows, nullptr);
+    this->singleInputAsIntermediate(rows, args, result);
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -136,15 +120,7 @@ class MaxAggregate : public MinMaxAggregate<T> {
       return;
     }
     BaseAggregate::template updateGroups<true, T>(
-        groups,
-        rows,
-        args[0],
-        [](T& result, T value) {
-          if (result < value) {
-            result = value;
-          }
-        },
-        mayPushdown);
+        groups, rows, args[0], updateGroup, mayPushdown);
   }
 
   void addIntermediateResults(
@@ -164,11 +140,7 @@ class MaxAggregate : public MinMaxAggregate<T> {
         group,
         rows,
         args[0],
-        [](T& result, T value) {
-          if (result < value) {
-            result = value;
-          }
-        },
+        updateGroup,
         [](T& result, T value, int /* unused */) { result = value; },
         mayPushdown,
         kInitialValue_);
@@ -192,12 +164,33 @@ class MaxAggregate : public MinMaxAggregate<T> {
     }
   }
 
+  static inline void updateGroup(T& result, T value) {
+    if constexpr (std::is_floating_point_v<T>) {
+      if (util::floating_point::NaNAwareLessThan<T>{}(result, value)) {
+        result = value;
+      }
+    } else {
+      if (result < value) {
+        result = value;
+      }
+    }
+  }
+
  private:
   static const T kInitialValue_;
 };
 
 template <typename T>
 const T MaxAggregate<T>::kInitialValue_ = MinMaxTrait<T>::lowest();
+
+// Negative INF is the smallest value of floating point type.
+template <>
+const float MaxAggregate<float>::kInitialValue_ =
+    -1 * MinMaxTrait<float>::infinity();
+
+template <>
+const double MaxAggregate<double>::kInitialValue_ =
+    -1 * MinMaxTrait<double>::infinity();
 
 template <typename T>
 class MinAggregate : public MinMaxAggregate<T> {
@@ -222,15 +215,7 @@ class MinAggregate : public MinMaxAggregate<T> {
       return;
     }
     BaseAggregate::template updateGroups<true, T>(
-        groups,
-        rows,
-        args[0],
-        [](T& result, T value) {
-          if (result > value) {
-            result = value;
-          }
-        },
-        mayPushdown);
+        groups, rows, args[0], updateGroup, mayPushdown);
   }
 
   void addIntermediateResults(
@@ -250,7 +235,7 @@ class MinAggregate : public MinMaxAggregate<T> {
         group,
         rows,
         args[0],
-        [](T& result, T value) { result = result < value ? result : value; },
+        updateGroup,
         [](T& result, T value, int /* unused */) { result = value; },
         mayPushdown,
         kInitialValue_);
@@ -265,6 +250,18 @@ class MinAggregate : public MinMaxAggregate<T> {
   }
 
  protected:
+  static inline void updateGroup(T& result, T value) {
+    if constexpr (std::is_floating_point_v<T>) {
+      if (util::floating_point::NaNAwareGreaterThan<T>{}(result, value)) {
+        result = value;
+      }
+    } else {
+      if (result > value) {
+        result = value;
+      }
+    }
+  }
+
   void initializeNewGroupsInternal(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
@@ -280,6 +277,15 @@ class MinAggregate : public MinMaxAggregate<T> {
 
 template <typename T>
 const T MinAggregate<T>::kInitialValue_ = MinMaxTrait<T>::max();
+
+// In velox, NaN is considered larger than infinity for floating point types.
+template <>
+const float MinAggregate<float>::kInitialValue_ =
+    MinMaxTrait<float>::quiet_NaN();
+
+template <>
+const double MinAggregate<double>::kInitialValue_ =
+    MinMaxTrait<double>::quiet_NaN();
 
 class NonNumericMinMaxAggregateBase : public exec::Aggregate {
  public:
@@ -549,10 +555,14 @@ std::pair<vector_size_t*, vector_size_t*> rawOffsetAndSizes(
 template <typename T, typename Compare>
 struct MinMaxNAccumulator {
   int64_t n{0};
-  std::vector<T, StlAllocator<T>> heapValues;
+  using Allocator = std::conditional_t<
+      std::is_same_v<int128_t, T>,
+      AlignedStlAllocator<T, sizeof(int128_t)>,
+      StlAllocator<T>>;
+  std::vector<T, Allocator> heapValues;
 
   explicit MinMaxNAccumulator(HashStringAllocator* allocator)
-      : heapValues{StlAllocator<T>(allocator)} {}
+      : heapValues{Allocator(allocator)} {}
 
   int64_t getN() const {
     return n;
@@ -891,17 +901,35 @@ class MinMaxNAggregateBase : public exec::Aggregate {
 };
 
 template <typename T>
-class MinNAggregate : public MinMaxNAggregateBase<T, std::less<T>> {
+struct LessThanComparator : public std::less<T> {};
+template <>
+struct LessThanComparator<float>
+    : public util::floating_point::NaNAwareLessThan<float> {};
+template <>
+struct LessThanComparator<double>
+    : public util::floating_point::NaNAwareLessThan<double> {};
+
+template <typename T>
+struct GreaterThanComparator : public std::greater<T> {};
+template <>
+struct GreaterThanComparator<float>
+    : public util::floating_point::NaNAwareGreaterThan<float> {};
+template <>
+struct GreaterThanComparator<double>
+    : public util::floating_point::NaNAwareGreaterThan<double> {};
+
+template <typename T>
+class MinNAggregate : public MinMaxNAggregateBase<T, LessThanComparator<T>> {
  public:
   explicit MinNAggregate(const TypePtr& resultType)
-      : MinMaxNAggregateBase<T, std::less<T>>(resultType) {}
+      : MinMaxNAggregateBase<T, LessThanComparator<T>>(resultType) {}
 };
 
 template <typename T>
-class MaxNAggregate : public MinMaxNAggregateBase<T, std::greater<T>> {
+class MaxNAggregate : public MinMaxNAggregateBase<T, GreaterThanComparator<T>> {
  public:
   explicit MaxNAggregate(const TypePtr& resultType)
-      : MinMaxNAggregateBase<T, std::greater<T>>(resultType) {}
+      : MinMaxNAggregateBase<T, GreaterThanComparator<T>>(resultType) {}
 };
 
 template <
@@ -932,6 +960,18 @@ exec::AggregateRegistrationResult registerMinMax(
             .argumentType("bigint")
             .build());
   }
+
+  // decimal(p,s), bigint -> row(array(decimal(p,s)), bigint) ->
+  // array(decimal(p,s))
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .argumentType("bigint")
+          .intermediateType("row(bigint, array(DECIMAL(a_precision, a_scale)))")
+          .returnType("array(DECIMAL(a_precision, a_scale))")
+          .build());
 
   return exec::registerAggregateFunction(
       name,
@@ -969,10 +1009,12 @@ exec::AggregateRegistrationResult registerMinMax(
             case TypeKind::TIMESTAMP:
               return std::make_unique<TNumericN<Timestamp>>(resultType);
             case TypeKind::HUGEINT:
-              return std::make_unique<TNumericN<int128_t>>(resultType);
+              if (inputType->isLongDecimal()) {
+                return std::make_unique<TNumericN<int128_t>>(resultType);
+              }
+              [[fallthrough]];
             default:
-              VELOX_CHECK(
-                  false,
+              VELOX_UNREACHABLE(
                   "Unknown input type for {} aggregation {}",
                   name,
                   inputType->kindName());
@@ -1010,8 +1052,7 @@ exec::AggregateRegistrationResult registerMinMax(
               return std::make_unique<TNonNumeric>(
                   inputType, throwOnNestedNulls);
             default:
-              VELOX_CHECK(
-                  false,
+              VELOX_UNREACHABLE(
                   "Unknown input type for {} aggregation {}",
                   name,
                   inputType->kindName());

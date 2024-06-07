@@ -194,12 +194,12 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
   const int64_t flatInputBytes = input->estimateFlatSize();
 
   // Test-only spill path.
-  if (numRows > 0 && testingTriggerSpill()) {
+  if (numRows > 0 && testingTriggerSpill(pool_->name())) {
     spill();
     return;
   }
 
-  const auto currentMemoryUsage = pool_->currentBytes();
+  const auto currentMemoryUsage = pool_->usedBytes();
   const auto minReservationBytes =
       currentMemoryUsage * spillConfig_->minSpillableReservationPct / 100;
   const auto availableReservationBytes = pool_->availableReservation();
@@ -233,7 +233,7 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
   }
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", usage: " << succinctBytes(pool()->usedBytes())
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 
@@ -381,8 +381,11 @@ void SortBuffer::getOutputWithSpill() {
 
 void SortBuffer::finishSpill() {
   VELOX_CHECK_NULL(spillMerger_);
-  auto spillPartition = spiller_->finishSpill();
-  spillMerger_ = spillPartition.createOrderedReader(pool(), spillStats_);
+  SpillPartitionSet spillPartitionSet;
+  spiller_->finishSpill(spillPartitionSet);
+  VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
+  spillMerger_ = spillPartitionSet.begin()->second->createOrderedReader(
+      pool(), spillStats_);
 }
 
 } // namespace facebook::velox::exec

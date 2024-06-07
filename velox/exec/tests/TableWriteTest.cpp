@@ -53,6 +53,7 @@ enum class TestMode {
   kUnpartitioned,
   kPartitioned,
   kBucketed,
+  kOnlyBucketed,
 };
 
 std::string testModeString(TestMode mode) {
@@ -63,7 +64,10 @@ std::string testModeString(TestMode mode) {
       return "PARTITIONED";
     case TestMode::kBucketed:
       return "BUCKETED";
+    case TestMode::kOnlyBucketed:
+      return "BUCKETED (NOT PARTITIONED)";
   }
+  VELOX_UNREACHABLE();
 }
 
 static std::shared_ptr<core::AggregationNode> generateAggregationNode(
@@ -220,12 +224,14 @@ class TableWriteTest : public HiveConnectorTestBase {
         ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
             {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()});
     setDataTypes(rowType);
-    if (testMode_ != TestMode::kUnpartitioned) {
+    if (testMode_ == TestMode::kPartitioned ||
+        testMode_ == TestMode::kBucketed) {
       const std::vector<std::string> partitionBy = {"c0", "c1"};
       setPartitionBy(partitionBy);
       numPartitionKeyValues_ = {4, 4};
     }
-    if (testMode_ == TestMode::kBucketed) {
+    if (testMode_ == TestMode::kBucketed ||
+        testMode_ == TestMode::kOnlyBucketed) {
       std::vector<std::string> bucketedBy = {"c3", "c5"};
       std::vector<TypePtr> bucketedTypes = {REAL(), VARCHAR()};
       std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
@@ -235,7 +241,12 @@ class TableWriteTest : public HiveConnectorTestBase {
             "c4", core::SortOrder{true, true})};
         // The sortColumnIndices_ should represent the indices after removing
         // the partition keys.
-        sortColumnIndices_ = {2};
+        if (testMode_ == TestMode::kBucketed) {
+          sortColumnIndices_ = {2};
+        } else {
+          sortColumnIndices_ = {4};
+        }
+
         sortedFlags_ = {{true, true}};
       }
       bucketProperty_ = std::make_shared<HiveBucketProperty>(
@@ -247,10 +258,6 @@ class TableWriteTest : public HiveConnectorTestBase {
     HiveConnectorTestBase::SetUp();
   }
 
-  void TearDown() override {
-    HiveConnectorTestBase::TearDown();
-  }
-
   std::shared_ptr<Task> assertQueryWithWriterConfigs(
       const core::PlanNodePtr& plan,
       std::vector<std::shared_ptr<TempFilePath>> filePaths,
@@ -258,7 +265,8 @@ class TableWriteTest : public HiveConnectorTestBase {
       bool spillEnabled = false) {
     std::vector<Split> splits;
     for (const auto& filePath : filePaths) {
-      splits.push_back(exec::Split(makeHiveConnectorSplit(filePath->path)));
+      splits.push_back(
+          exec::Split(makeHiveConnectorSplit(filePath->getPath())));
     }
     if (!spillEnabled) {
       return AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -277,7 +285,7 @@ class TableWriteTest : public HiveConnectorTestBase {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     TestScopedSpillInjection scopedSpillInjection(100);
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .spillDirectory(spillDirectory->path)
+        .spillDirectory(spillDirectory->getPath())
         .maxDrivers(
             2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
         .config(
@@ -315,7 +323,7 @@ class TableWriteTest : public HiveConnectorTestBase {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     TestScopedSpillInjection scopedSpillInjection(100);
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .spillDirectory(spillDirectory->path)
+        .spillDirectory(spillDirectory->getPath())
         .maxDrivers(
             2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
         .config(
@@ -348,7 +356,7 @@ class TableWriteTest : public HiveConnectorTestBase {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     TestScopedSpillInjection scopedSpillInjection(100);
     return AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .spillDirectory(spillDirectory->path)
+        .spillDirectory(spillDirectory->getPath())
         .maxDrivers(
             2 * std::max(kNumTableWriterCount, kNumPartitionedTableWriterCount))
         .config(
@@ -406,7 +414,7 @@ class TableWriteTest : public HiveConnectorTestBase {
   std::vector<std::shared_ptr<connector::ConnectorSplit>>
   makeHiveConnectorSplits(
       const std::shared_ptr<TempDirectoryPath>& directoryPath) {
-    return makeHiveConnectorSplits(directoryPath->path);
+    return makeHiveConnectorSplits(directoryPath->getPath());
   }
 
   std::vector<std::shared_ptr<connector::ConnectorSplit>>
@@ -451,12 +459,13 @@ class TableWriteTest : public HiveConnectorTestBase {
       int32_t rowsPerVector) {
     auto rowVectors =
         HiveConnectorTestBase::makeVectors(rowType_, numVectors, rowsPerVector);
-    if (testMode_ == TestMode::kUnpartitioned) {
+    if (testMode_ == TestMode::kUnpartitioned ||
+        testMode_ == TestMode::kOnlyBucketed) {
       return rowVectors;
     }
     // In case of partitioned table write test case, we ensure the number of
     // unique partition key values are capped.
-    for (auto& rowVecotr : rowVectors) {
+    for (auto& rowVector : rowVectors) {
       auto c0PartitionVector =
           makeFlatVector<int64_t>(rowsPerVector, [&](auto /*unused*/) {
             return folly::Random().rand32() % numPartitionKeyValues_[0];
@@ -465,8 +474,8 @@ class TableWriteTest : public HiveConnectorTestBase {
           makeFlatVector<int32_t>(rowsPerVector, [&](auto /*unused*/) {
             return folly::Random().rand32() % numPartitionKeyValues_[1];
           });
-      rowVecotr->childAt(0) = c0PartitionVector;
-      rowVecotr->childAt(1) = c1PartitionVector;
+      rowVector->childAt(0) = c0PartitionVector;
+      rowVector->childAt(1) = c1PartitionVector;
     }
     return rowVectors;
   }
@@ -676,28 +685,6 @@ class TableWriteTest : public HiveConnectorTestBase {
     }
   }
 
-  RowVectorPtr makePartitionsVector(
-      RowVectorPtr input,
-      const std::vector<column_index_t>& partitionChannels) {
-    std::vector<VectorPtr> partitions;
-    std::vector<std::string> partitonKeyNames;
-    std::vector<TypePtr> partitionKeyTypes;
-
-    RowTypePtr inputType = asRowType(input->type());
-    for (column_index_t channel : partitionChannels) {
-      partitions.push_back(input->childAt(channel));
-      partitonKeyNames.push_back(inputType->nameOf(channel));
-      partitionKeyTypes.push_back(inputType->childAt(channel));
-    }
-
-    return std::make_shared<RowVector>(
-        pool(),
-        ROW(std::move(partitonKeyNames), std::move(partitionKeyTypes)),
-        nullptr,
-        input->size(),
-        partitions);
-  }
-
   // Parameter partitionName is string formatted in the Hive style
   // key1=value1/key2=value2/... Parameter partitionTypes are types of partition
   // keys in the same order as in partitionName.The return value is a SQL
@@ -781,12 +768,8 @@ class TableWriteTest : public HiveConnectorTestBase {
     verifyUnbucketedFilePath(filePath, filePath.parent_path().string());
   }
 
-  // Verifies if a bucketed file path (directory and file name) is encoded
-  // properly.
-  void verifyBucketedFilePath(
-      const std::filesystem::path& filePath,
-      const std::string& targetDir) {
-    verifyPartitionedDirPath(filePath, targetDir);
+  // Verifies if the bucket file name is encoded properly.
+  void verifyBucketedFileName(const std::filesystem::path& filePath) {
     if (commitStrategy_ == CommitStrategy::kNoCommit) {
       if (fileFormat_ == FileFormat::PARQUET) {
         ASSERT_TRUE(RE2::FullMatch(
@@ -811,6 +794,15 @@ class TableWriteTest : public HiveConnectorTestBase {
             << filePath.filename().string();
       }
     }
+  }
+
+  // Verifies if a bucketed file path (directory and file name) is encoded
+  // properly.
+  void verifyBucketedFilePath(
+      const std::filesystem::path& filePath,
+      const std::string& targetDir) {
+    verifyPartitionedDirPath(filePath, targetDir);
+    verifyBucketedFileName(filePath);
   }
 
   // Verifies if the given partitioned table directory (names) are encoded
@@ -967,7 +959,18 @@ class TableWriteTest : public HiveConnectorTestBase {
       ASSERT_LE(filePaths.size(), numTableWriterCount_);
       verifyUnbucketedFilePath(filePaths[0], targetDir);
       return;
+    } else if (testMode_ == TestMode::kOnlyBucketed) {
+      ASSERT_EQ(dirPaths.size(), 0);
+      for (const auto& filePath : filePaths) {
+        ASSERT_EQ(filePath.parent_path().string(), targetDir);
+        verifyBucketedFileName(filePath);
+        if (verifyBucketedData) {
+          verifyBucketedFileData(filePath, bucketCheckFileType);
+        }
+      }
+      return;
     }
+    // Validation for both partitioned with and without buckets.
     ASSERT_EQ(numPartitionKeyValues_.size(), 2);
     const auto totalPartitions =
         numPartitionKeyValues_[0] * numPartitionKeyValues_[1];
@@ -1055,18 +1058,18 @@ TEST_F(BasicTableWriteTest, roundTrip) {
   });
 
   auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->path, data);
+  writeToFile(sourceFilePath->getPath(), data);
 
   auto targetDirectoryPath = TempDirectoryPath::create();
 
   auto rowType = asRowType(data->type());
   auto plan = PlanBuilder()
                   .tableScan(rowType)
-                  .tableWrite(targetDirectoryPath->path)
+                  .tableWrite(targetDirectoryPath->getPath())
                   .planNode();
 
   auto results = AssertQueryBuilder(plan)
-                     .split(makeHiveConnectorSplit(sourceFilePath->path))
+                     .split(makeHiveConnectorSplit(sourceFilePath->getPath()))
                      .copyResults(pool());
   ASSERT_EQ(2, results->size());
 
@@ -1096,7 +1099,7 @@ TEST_F(BasicTableWriteTest, roundTrip) {
 
   auto copy = AssertQueryBuilder(plan)
                   .split(makeHiveConnectorSplit(fmt::format(
-                      "{}/{}", targetDirectoryPath->path, writeFileName)))
+                      "{}/{}", targetDirectoryPath->getPath(), writeFileName)))
                   .copyResults(pool());
   assertEqualResults({data}, {copy});
 }
@@ -1228,80 +1231,84 @@ class BucketedTableOnlyWriteTest
     if (hasWriterFactory(FileFormat::PARQUET)) {
       fileFormats.push_back(FileFormat::PARQUET);
     }
+    const std::vector<TestMode> bucketModes = {
+        TestMode::kBucketed, TestMode::kOnlyBucketed};
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            true,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            true,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            true,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            true,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
+        for (auto bucketMode : bucketModes) {
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              true,
+              multiDrivers,
+              CompressionKind_ZSTD}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              true,
+              multiDrivers,
+              CompressionKind_ZSTD}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              true,
+              multiDrivers,
+              CompressionKind_ZSTD}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              true,
+              multiDrivers,
+              CompressionKind_ZSTD}
+                                   .value);
+        }
       }
     }
     return testParams;
@@ -1319,26 +1326,30 @@ class BucketSortOnlyTableWriterTest
     const std::vector<bool> multiDriverOptions = {false, true};
     // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
     std::vector<FileFormat> fileFormats = {FileFormat::DWRF};
+    const std::vector<TestMode> bucketModes = {
+        TestMode::kBucketed, TestMode::kOnlyBucketed};
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            true,
-            multiDrivers,
-            facebook::velox::common::CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            true,
-            multiDrivers,
-            facebook::velox::common::CompressionKind_NONE}
-                                 .value);
+        for (auto bucketMode : bucketModes) {
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              true,
+              multiDrivers,
+              facebook::velox::common::CompressionKind_ZSTD}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              bucketMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              true,
+              multiDrivers,
+              facebook::velox::common::CompressionKind_NONE}
+                                   .value);
+        }
       }
     }
     return testParams;
@@ -1470,6 +1481,42 @@ class AllTableWriterTest : public TableWriteTest,
             multiDrivers,
             CompressionKind_ZSTD}
                                  .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kOnlyBucketed,
+            CommitStrategy::kNoCommit,
+            HiveBucketProperty::Kind::kHiveCompatible,
+            false,
+            multiDrivers,
+            CompressionKind_ZSTD}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kOnlyBucketed,
+            CommitStrategy::kTaskCommit,
+            HiveBucketProperty::Kind::kHiveCompatible,
+            false,
+            multiDrivers,
+            CompressionKind_ZSTD}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kOnlyBucketed,
+            CommitStrategy::kNoCommit,
+            HiveBucketProperty::Kind::kPrestoNative,
+            false,
+            multiDrivers,
+            CompressionKind_ZSTD}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kOnlyBucketed,
+            CommitStrategy::kTaskCommit,
+            HiveBucketProperty::Kind::kPrestoNative,
+            false,
+            multiDrivers,
+            CompressionKind_ZSTD}
+                                 .value);
       }
     }
     return testParams;
@@ -1481,7 +1528,7 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
   auto filePaths = makeFilePaths(5);
   auto vectors = makeVectors(filePaths.size(), 500);
   for (int i = 0; i < filePaths.size(); i++) {
-    writeToFile(filePaths[i]->path, vectors[i]);
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
   }
 
   createDuckDbTable(vectors);
@@ -1501,7 +1548,7 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
   auto plan = createInsertPlan(
       project,
       outputType,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionedBy_,
       bucketProperty_,
       compressionKind_,
@@ -1521,13 +1568,13 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
         PlanBuilder().tableScan(newOutputType).planNode(),
         makeHiveConnectorSplits(outputDirectory),
         "SELECT c3, c5, c2 + c3, substr(c5, 1, 1) FROM tmp WHERE c2 <> 0");
-    verifyTableWriterOutput(outputDirectory->path, newOutputType, false);
+    verifyTableWriterOutput(outputDirectory->getPath(), newOutputType, false);
   } else {
     assertQuery(
         PlanBuilder().tableScan(outputType).planNode(),
         makeHiveConnectorSplits(outputDirectory),
         "SELECT c0, c1, c3, c5, c2 + c3, substr(c5, 1, 1) FROM tmp WHERE c2 <> 0");
-    verifyTableWriterOutput(outputDirectory->path, outputType, false);
+    verifyTableWriterOutput(outputDirectory->getPath(), outputType, false);
   }
 }
 
@@ -1535,18 +1582,19 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
   auto filePaths = makeFilePaths(5);
   auto vectors = makeVectors(filePaths.size(), 500);
   for (int i = 0; i < filePaths.size(); ++i) {
-    writeToFile(filePaths[i]->path, vectors[i]);
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
   }
 
   createDuckDbTable(vectors);
 
   auto outputDirectory = TempDirectoryPath::create();
 
-  if (testMode_ != TestMode::kUnpartitioned) {
+  if (testMode_ == TestMode::kPartitioned || testMode_ == TestMode::kBucketed) {
     const std::vector<std::string> partitionBy = {"x", "y"};
     setPartitionBy(partitionBy);
   }
-  if (testMode_ == TestMode::kBucketed) {
+  if (testMode_ == TestMode::kBucketed ||
+      testMode_ == TestMode::kOnlyBucketed) {
     setBucketProperty(
         bucketProperty_->kind(),
         bucketProperty_->bucketCount(),
@@ -1567,7 +1615,7 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
       PlanBuilder().tableScan(rowType_),
       inputRowType,
       tableSchema_,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionedBy_,
       bucketProperty_,
       compressionKind_,
@@ -1584,14 +1632,14 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
         makeHiveConnectorSplits(outputDirectory),
         "SELECT c2, c5, c4, c3 FROM tmp");
 
-    verifyTableWriterOutput(outputDirectory->path, newOutputType, false);
+    verifyTableWriterOutput(outputDirectory->getPath(), newOutputType, false);
   } else {
     HiveConnectorTestBase::assertQuery(
         PlanBuilder().tableScan(tableSchema_).planNode(),
         makeHiveConnectorSplits(outputDirectory),
         "SELECT c2, c5, c4, c1, c0, c3 FROM tmp");
 
-    verifyTableWriterOutput(outputDirectory->path, tableSchema_, false);
+    verifyTableWriterOutput(outputDirectory->getPath(), tableSchema_, false);
   }
 }
 
@@ -1600,7 +1648,7 @@ TEST_P(AllTableWriterTest, directReadWrite) {
   auto filePaths = makeFilePaths(5);
   auto vectors = makeVectors(filePaths.size(), 200);
   for (int i = 0; i < filePaths.size(); i++) {
-    writeToFile(filePaths[i]->path, vectors[i]);
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
   }
 
   createDuckDbTable(vectors);
@@ -1609,7 +1657,7 @@ TEST_P(AllTableWriterTest, directReadWrite) {
   auto plan = createInsertPlan(
       PlanBuilder().tableScan(rowType_),
       rowType_,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionedBy_,
       bucketProperty_,
       compressionKind_,
@@ -1630,14 +1678,14 @@ TEST_P(AllTableWriterTest, directReadWrite) {
         makeHiveConnectorSplits(outputDirectory),
         "SELECT c2, c3, c4, c5 FROM tmp");
     rowType_ = newOutputType;
-    verifyTableWriterOutput(outputDirectory->path, rowType_);
+    verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
   } else {
     assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
         makeHiveConnectorSplits(outputDirectory),
         "SELECT * FROM tmp");
 
-    verifyTableWriterOutput(outputDirectory->path, rowType_);
+    verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
   }
 }
 
@@ -1654,7 +1702,7 @@ TEST_P(AllTableWriterTest, constantVectors) {
   auto op = createInsertPlan(
       PlanBuilder().values({vector}),
       rowType_,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionedBy_,
       bucketProperty_,
       compressionKind_,
@@ -1671,14 +1719,14 @@ TEST_P(AllTableWriterTest, constantVectors) {
         makeHiveConnectorSplits(outputDirectory),
         "SELECT c2, c3, c4, c5 FROM tmp");
     rowType_ = newOutputType;
-    verifyTableWriterOutput(outputDirectory->path, rowType_);
+    verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
   } else {
     assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
         makeHiveConnectorSplits(outputDirectory),
         "SELECT * FROM tmp");
 
-    verifyTableWriterOutput(outputDirectory->path, rowType_);
+    verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
   }
 }
 
@@ -1688,7 +1736,7 @@ TEST_P(AllTableWriterTest, emptyInput) {
   auto op = createInsertPlan(
       PlanBuilder().values({vector}),
       rowType_,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionedBy_,
       bucketProperty_,
       compressionKind_,
@@ -1713,7 +1761,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
     auto plan = createInsertPlan(
         PlanBuilder().values(vectors),
         rowType_,
-        outputDirectory->path,
+        outputDirectory->getPath(),
         partitionedBy_,
         bucketProperty_,
         compressionKind_,
@@ -1732,14 +1780,14 @@ TEST_P(AllTableWriterTest, commitStrategies) {
           "SELECT c2, c3, c4, c5 FROM tmp");
       auto originalRowType = rowType_;
       rowType_ = newOutputType;
-      verifyTableWriterOutput(outputDirectory->path, rowType_);
+      verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
       rowType_ = originalRowType;
     } else {
       assertQuery(
           PlanBuilder().tableScan(rowType_).planNode(),
           makeHiveConnectorSplits(outputDirectory),
           "SELECT * FROM tmp");
-      verifyTableWriterOutput(outputDirectory->path, rowType_);
+      verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
     }
   }
   // Test kNoCommit commit strategy writing to non-temporary files.
@@ -1750,7 +1798,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
     auto plan = createInsertPlan(
         PlanBuilder().values(vectors),
         rowType_,
-        outputDirectory->path,
+        outputDirectory->getPath(),
         partitionedBy_,
         bucketProperty_,
         compressionKind_,
@@ -1768,13 +1816,13 @@ TEST_P(AllTableWriterTest, commitStrategies) {
           makeHiveConnectorSplits(outputDirectory),
           "SELECT c2, c3, c4, c5 FROM tmp");
       rowType_ = newOutputType;
-      verifyTableWriterOutput(outputDirectory->path, rowType_);
+      verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
     } else {
       assertQuery(
           PlanBuilder().tableScan(rowType_).planNode(),
           makeHiveConnectorSplits(outputDirectory),
           "SELECT * FROM tmp");
-      verifyTableWriterOutput(outputDirectory->path, rowType_);
+      verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
     }
   }
 }
@@ -1837,14 +1885,14 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
 
   auto inputFilePaths = makeFilePaths(numBatches);
   for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->path, vectors[i]);
+    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
   }
 
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
       PlanBuilder().tableScan(rowType),
       rowType,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionKeys,
       bucketProperty_,
       compressionKind_,
@@ -1855,7 +1903,7 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
   auto task = assertQuery(plan, inputFilePaths, "SELECT count(*) FROM tmp");
 
   std::set<std::string> actualPartitionDirectories =
-      getLeafSubdirectories(outputDirectory->path);
+      getLeafSubdirectories(outputDirectory->getPath());
 
   std::set<std::string> expectedPartitionDirectories;
   const std::vector<std::string> expectedCharsAfterEscape = {
@@ -1879,7 +1927,7 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
     auto partitionName = fmt::format(
         "p0={}/p1=str_{}{}", i, i, expectedCharsAfterEscape.at(i % 15));
     expectedPartitionDirectories.emplace(
-        fs::path(outputDirectory->path) / partitionName);
+        fs::path(outputDirectory->getPath()) / partitionName);
   }
   EXPECT_EQ(actualPartitionDirectories, expectedPartitionDirectories);
 }
@@ -1923,14 +1971,14 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
 
   auto inputFilePaths = makeFilePaths(numBatches);
   for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->path, vectors[i]);
+    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
   }
 
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
       PlanBuilder().tableScan(rowType),
       rowType,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionKeys,
       bucketProperty_,
       compressionKind_,
@@ -1942,7 +1990,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
 
   // Verify that there is one partition directory for each partition.
   std::set<std::string> actualPartitionDirectories =
-      getLeafSubdirectories(outputDirectory->path);
+      getLeafSubdirectories(outputDirectory->getPath());
 
   std::set<std::string> expectedPartitionDirectories;
   std::set<std::string> partitionNames;
@@ -1950,7 +1998,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
     auto partitionName = fmt::format("p0={}/p1=str_{}", i, i);
     partitionNames.emplace(partitionName);
     expectedPartitionDirectories.emplace(
-        fs::path(outputDirectory->path) / partitionName);
+        fs::path(outputDirectory->getPath()) / partitionName);
   }
   EXPECT_EQ(actualPartitionDirectories, expectedPartitionDirectories);
 
@@ -2003,7 +2051,7 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
 
   auto inputFilePaths = makeFilePaths(numBatches);
   for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->path, vectors[i]);
+    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
   }
 
   auto outputDirectory = TempDirectoryPath::create();
@@ -2011,7 +2059,7 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
   auto plan = createInsertPlan(
       PlanBuilder().tableScan(rowType),
       rowType,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionKeys,
       bucketProperty_,
       compressionKind_,
@@ -2023,13 +2071,13 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
       plan, inputFilePaths, "SELECT count(*) FROM tmp");
 
   std::set<std::string> partitionDirectories =
-      getLeafSubdirectories(outputDirectory->path);
+      getLeafSubdirectories(outputDirectory->getPath());
 
   // Verify only a single partition directory is created.
   ASSERT_EQ(partitionDirectories.size(), 1);
   EXPECT_EQ(
       *partitionDirectories.begin(),
-      fs::path(outputDirectory->path) / "p0=365");
+      fs::path(outputDirectory->getPath()) / "p0=365");
 
   // Verify all data is written to the single partition directory.
   auto newOutputType = getNonPartitionsColumns(partitionKeys, rowType);
@@ -2071,7 +2119,7 @@ TEST_P(PartitionedWithoutBucketTableWriterTest, fromSinglePartitionToMultiple) {
   auto plan = createInsertPlan(
       PlanBuilder().values(vectors),
       rowType,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionKeys,
       nullptr,
       compressionKind_,
@@ -2127,7 +2175,7 @@ TEST_P(PartitionedTableWriterTest, maxPartitions) {
   auto plan = createInsertPlan(
       PlanBuilder().values({vector}),
       rowType,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionKeys,
       bucketProperty_,
       compressionKind_,
@@ -2163,7 +2211,7 @@ TEST_P(AllTableWriterTest, writeNoFile) {
   auto plan = createInsertPlan(
       PlanBuilder().tableScan(rowType_).filter("false"),
       rowType_,
-      outputDirectory->path);
+      outputDirectory->getPath());
 
   auto execute = [&](const std::shared_ptr<const core::PlanNode>& plan,
                      std::shared_ptr<core::QueryCtx> queryCtx) {
@@ -2173,8 +2221,8 @@ TEST_P(AllTableWriterTest, writeNoFile) {
     readCursor(params, [&](Task* task) { task->noMoreSplits("0"); });
   };
 
-  execute(plan, std::make_shared<core::QueryCtx>(executor_.get()));
-  ASSERT_TRUE(fs::is_empty(outputDirectory->path));
+  execute(plan, core::QueryCtx::create(executor_.get()));
+  ASSERT_TRUE(fs::is_empty(outputDirectory->getPath()));
 }
 
 TEST_P(UnpartitionedTableWriterTest, differentCompression) {
@@ -2196,7 +2244,7 @@ TEST_P(UnpartitionedTableWriterTest, differentCompression) {
           createInsertPlan(
               PlanBuilder().values(input),
               rowType_,
-              outputDirectory->path,
+              outputDirectory->getPath(),
               {},
               nullptr,
               compressionKind,
@@ -2208,7 +2256,7 @@ TEST_P(UnpartitionedTableWriterTest, differentCompression) {
     auto plan = createInsertPlan(
         PlanBuilder().values(input),
         rowType_,
-        outputDirectory->path,
+        outputDirectory->getPath(),
         {},
         nullptr,
         compressionKind,
@@ -2288,7 +2336,7 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
     auto plan = createInsertPlan(
         PlanBuilder().values(vectors),
         rowType,
-        outputDirectory->path,
+        outputDirectory->getPath(),
         {},
         nullptr,
         compressionKind_,
@@ -2348,7 +2396,7 @@ TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
     auto plan = createInsertPlan(
         PlanBuilder().values(input),
         rowType_,
-        outputDirectory->path,
+        outputDirectory->getPath(),
         {},
         nullptr,
         CompressionKind_NONE,
@@ -2402,7 +2450,7 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
     auto plan = createInsertPlan(
         PlanBuilder().values({input}),
         rowType_,
-        outputDirectory->path,
+        outputDirectory->getPath(),
         partitionedBy_,
         bucketProperty_,
         compressionKind_,
@@ -2431,14 +2479,14 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
             "SELECT c2, c3, c4, c5 FROM tmp");
         auto originalRowType = rowType_;
         rowType_ = newOutputType;
-        verifyTableWriterOutput(outputDirectory->path, rowType_);
+        verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
         rowType_ = originalRowType;
       } else {
         assertQuery(
             PlanBuilder().tableScan(rowType_).planNode(),
             makeHiveConnectorSplits(outputDirectory),
             "SELECT * FROM tmp");
-        verifyTableWriterOutput(outputDirectory->path, rowType_);
+        verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
       }
     }
   }
@@ -2461,7 +2509,7 @@ TEST_P(BucketedTableOnlyWriteTest, mismatchedBucketTypes) {
   auto plan = createInsertPlan(
       PlanBuilder().values({input}),
       rowType_,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionedBy_,
       bucketProperty_,
       compressionKind_,
@@ -2489,7 +2537,7 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
   auto plan = createInsertPlan(
       PlanBuilder().values({input}),
       rowType_,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionedBy_,
       bucketProperty_,
       compressionKind_,
@@ -2527,8 +2575,8 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
       ASSERT_FALSE(fragmentVector->isNullAt(i));
       folly::dynamic obj = folly::parseJson(fragmentVector->valueAt(i));
       if (testMode_ == TestMode::kUnpartitioned) {
-        ASSERT_EQ(obj["targetPath"], outputDirectory->path);
-        ASSERT_EQ(obj["writePath"], outputDirectory->path);
+        ASSERT_EQ(obj["targetPath"], outputDirectory->getPath());
+        ASSERT_EQ(obj["writePath"], outputDirectory->getPath());
       } else {
         std::string partitionDirRe;
         for (const auto& partitionBy : partitionedBy_) {
@@ -2536,11 +2584,11 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
         }
         ASSERT_TRUE(RE2::FullMatch(
             obj["targetPath"].asString(),
-            fmt::format("{}{}", outputDirectory->path, partitionDirRe)))
+            fmt::format("{}{}", outputDirectory->getPath(), partitionDirRe)))
             << obj["targetPath"].asString();
         ASSERT_TRUE(RE2::FullMatch(
             obj["writePath"].asString(),
-            fmt::format("{}{}", outputDirectory->path, partitionDirRe)))
+            fmt::format("{}{}", outputDirectory->getPath(), partitionDirRe)))
             << obj["writePath"].asString();
       }
       numRows += obj["rowCount"].asInt();
@@ -2586,7 +2634,7 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
     ASSERT_GT(writeFiles.size(), 0);
     ASSERT_LE(writeFiles.size(), numTableWriterCount_);
   }
-  auto diskFiles = listAllFiles(outputDirectory->path);
+  auto diskFiles = listAllFiles(outputDirectory->getPath());
   std::sort(diskFiles.begin(), diskFiles.end());
   std::sort(writeFiles.begin(), writeFiles.end());
   ASSERT_EQ(diskFiles, writeFiles)
@@ -2763,7 +2811,7 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
                               rowType_->children(),
                               partitionedBy_,
                               nullptr,
-                              makeLocationHandle(outputDirectory->path))),
+                              makeLocationHandle(outputDirectory->getPath()))),
                       false,
                       CommitStrategy::kNoCommit))
                   .planNode();
@@ -2852,7 +2900,7 @@ TEST_P(AllTableWriterTest, columnStats) {
                               rowType_->children(),
                               partitionedBy_,
                               bucketProperty_,
-                              makeLocationHandle(outputDirectory->path))),
+                              makeLocationHandle(outputDirectory->getPath()))),
                       false,
                       commitStrategy_))
                   .planNode();
@@ -2951,7 +2999,7 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
               rowType_->children(),
               partitionedBy_,
               bucketProperty_,
-              makeLocationHandle(outputDirectory->path))),
+              makeLocationHandle(outputDirectory->getPath()))),
       false,
       commitStrategy_));
 
@@ -3043,7 +3091,7 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
 
   auto inputFilePaths = makeFilePaths(numBatches);
   for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->path, vectors[i]);
+    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
   }
 
   auto outputDirectory = TempDirectoryPath::create();
@@ -3051,7 +3099,7 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
   auto plan = createInsertPlan(
       PlanBuilder().tableScan(rowType),
       rowType,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionKeys,
       bucketProperty_,
       compressionKind_,
@@ -3135,7 +3183,7 @@ DEBUG_ONLY_TEST_P(
   auto op = createInsertPlan(
       PlanBuilder().values(vectors),
       rowType_,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionedBy_,
       bucketProperty_,
       compressionKind_,
@@ -3184,7 +3232,7 @@ DEBUG_ONLY_TEST_P(UnpartitionedTableWriterTest, dataSinkAbortError) {
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = PlanBuilder()
                   .values({vector})
-                  .tableWrite(outputDirectory->path, fileFormat_)
+                  .tableWrite(outputDirectory->getPath(), fileFormat_)
                   .planNode();
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()), "inject writer error");
@@ -3202,7 +3250,7 @@ TEST_P(BucketSortOnlyTableWriterTest, sortWriterSpill) {
   auto op = createInsertPlan(
       PlanBuilder().values(vectors),
       rowType_,
-      outputDirectory->path,
+      outputDirectory->getPath(),
       partitionedBy_,
       bucketProperty_,
       compressionKind_,
@@ -3215,9 +3263,9 @@ TEST_P(BucketSortOnlyTableWriterTest, sortWriterSpill) {
       assertQueryWithWriterConfigs(op, fmt::format("SELECT {}", 5 * 500), true);
   if (partitionedBy_.size() > 0) {
     rowType_ = getNonPartitionsColumns(partitionedBy_, rowType_);
-    verifyTableWriterOutput(outputDirectory->path, rowType_);
+    verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
   } else {
-    verifyTableWriterOutput(outputDirectory->path, rowType_);
+    verifyTableWriterOutput(outputDirectory->getPath(), rowType_);
   }
 
   const auto updatedSpillStats = globalSpillStats();
@@ -3297,7 +3345,7 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
     auto plan = createInsertPlan(
         PlanBuilder().values({vectors}),
         rowType,
-        outputDirectory->path,
+        outputDirectory->getPath(),
         partitionKeys,
         bucketProperty_,
         compressionKind_,
@@ -3399,7 +3447,8 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
       SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
       auto memoryManager = createMemoryManager();
       auto arbitrator = memoryManager->arbitrator();
-      auto queryCtx = newQueryCtx(memoryManager, executor_, kMemoryCapacity);
+      auto queryCtx =
+          newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
       ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
 
       std::atomic<int> numInputs{0};
@@ -3435,7 +3484,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
       auto writerPlan =
           PlanBuilder()
               .values(vectors)
-              .tableWrite(outputDirectory->path)
+              .tableWrite(outputDirectory->getPath())
               .capturePlanNodeId(tableWriteNodeId)
               .project({TableWriteTraits::rowCountColumnName()})
               .singleAggregation(
@@ -3448,7 +3497,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
             AssertQueryBuilder(duckDbQueryRunner_)
                 .queryCtx(queryCtx)
                 .maxDrivers(1)
-                .spillDirectory(spillDirectory->path)
+                .spillDirectory(spillDirectory->getPath())
                 .config(core::QueryConfig::kSpillEnabled, writerSpillEnabled)
                 .config(
                     core::QueryConfig::kWriterSpillEnabled, writerSpillEnabled)
@@ -3510,7 +3559,8 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
       SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
       auto memoryManager = createMemoryManager();
       auto arbitrator = memoryManager->arbitrator();
-      auto queryCtx = newQueryCtx(memoryManager, executor_, kMemoryCapacity);
+      auto queryCtx =
+          newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
       ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
 
       const auto spillStats = common::globalSpillStats();
@@ -3546,7 +3596,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
       auto writerPlan =
           PlanBuilder()
               .values(vectors)
-              .tableWrite(outputDirectory->path, {"c0"}, 4, {"c1"}, {"c2"})
+              .tableWrite(outputDirectory->getPath(), {"c0"}, 4, {"c1"}, {"c2"})
               .project({TableWriteTraits::rowCountColumnName()})
               .singleAggregation(
                   {},
@@ -3557,7 +3607,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
       AssertQueryBuilder(duckDbQueryRunner_)
           .queryCtx(queryCtx)
           .maxDrivers(1)
-          .spillDirectory(spillDirectory->path)
+          .spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, writerSpillEnabled)
           .config(core::QueryConfig::kWriterSpillEnabled, writerSpillEnabled)
           // Set 0 file writer flush threshold to always trigger flush in test.
@@ -3587,91 +3637,82 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
   options.vectorSize = batchSize;
   options.stringVariableLength = false;
   options.stringLength = 1'000;
-  VectorFuzzer fuzzer(options, pool());
   const int numBatches = 20;
-  std::vector<RowVectorPtr> vectors;
-  int numRows{0};
-  for (int i = 0; i < numBatches; ++i) {
-    numRows += batchSize;
-    vectors.push_back(fuzzer.fuzzRow(rowType_));
-  }
+  const int numRows = numBatches * batchSize;
+  std::vector<RowVectorPtr> vectors =
+      createVectors(numBatches, rowType_, options);
   createDuckDbTable(vectors);
 
   const std::vector<uint64_t> writerFlushThresholds{0, 1UL << 30};
   for (uint64_t writerFlushThreshold : writerFlushThresholds) {
-    {
-      SCOPED_TRACE(fmt::format(
-          "writerFlushThreshold: {}", succinctBytes(writerFlushThreshold)));
+    SCOPED_TRACE(fmt::format(
+        "writerFlushThreshold: {}", succinctBytes(writerFlushThreshold)));
 
-      auto memoryManager = createMemoryManager();
-      auto arbitrator = memoryManager->arbitrator();
-      auto numAddedPools = 0;
-      {
-        auto queryCtx = newQueryCtx(memoryManager, executor_, kMemoryCapacity);
-        ++numAddedPools;
-        ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
+    auto memoryManager = createMemoryManager();
+    auto arbitrator = memoryManager->arbitrator();
+    auto queryCtx =
+        newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
+    ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
 
-        std::atomic<int> numInputs{0};
-        SCOPED_TESTVALUE_SET(
-            "facebook::velox::exec::Driver::runInternal::addInput",
-            std::function<void(Operator*)>(([&](Operator* op) {
-              if (op->operatorType() != "TableWrite") {
-                return;
-              }
-              if (++numInputs != numBatches) {
-                return;
-              }
+    std::atomic<int> numInputs{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::addInput",
+        std::function<void(Operator*)>(([&](Operator* op) {
+          if (op->operatorType() != "TableWrite") {
+            return;
+          }
+          if (++numInputs != numBatches) {
+            return;
+          }
 
-              const auto fakeAllocationSize =
-                  arbitrator->stats().maxCapacityBytes -
-                  op->pool()->parent()->reservedBytes();
-              if (writerFlushThreshold == 0) {
-                auto* buffer = op->pool()->allocate(fakeAllocationSize);
-                op->pool()->free(buffer, fakeAllocationSize);
-              } else {
-                // The injected memory allocation fail if we set very high
-                // memory flush threshold.
-                VELOX_ASSERT_THROW(
-                    op->pool()->allocate(fakeAllocationSize),
-                    "Exceeded memory pool");
-              }
-            })));
+          const auto fakeAllocationSize = arbitrator->stats().maxCapacityBytes -
+              op->pool()->parent()->reservedBytes();
+          if (writerFlushThreshold == 0) {
+            auto* buffer = op->pool()->allocate(fakeAllocationSize);
+            op->pool()->free(buffer, fakeAllocationSize);
+          } else {
+            // The injected memory allocation fail if we set very high
+            // memory flush threshold.
+            VELOX_ASSERT_THROW(
+                op->pool()->allocate(fakeAllocationSize),
+                "Exceeded memory pool");
+          }
+        })));
 
-        auto spillDirectory = exec::test::TempDirectoryPath::create();
-        auto outputDirectory = TempDirectoryPath::create();
-        auto writerPlan =
-            PlanBuilder()
-                .values(vectors)
-                .tableWrite(outputDirectory->path)
-                .project({TableWriteTraits::rowCountColumnName()})
-                .singleAggregation(
-                    {},
-                    {fmt::format(
-                        "sum({})", TableWriteTraits::rowCountColumnName())})
-                .planNode();
+    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto outputDirectory = TempDirectoryPath::create();
+    auto writerPlan =
+        PlanBuilder()
+            .values(vectors)
+            .tableWrite(outputDirectory->getPath())
+            .project({TableWriteTraits::rowCountColumnName()})
+            .singleAggregation(
+                {},
+                {fmt::format(
+                    "sum({})", TableWriteTraits::rowCountColumnName())})
+            .planNode();
 
-        AssertQueryBuilder(duckDbQueryRunner_)
-            .queryCtx(queryCtx)
-            .maxDrivers(1)
-            .spillDirectory(spillDirectory->path)
-            .config(core::QueryConfig::kSpillEnabled, true)
-            .config(core::QueryConfig::kWriterSpillEnabled, true)
-            .config(
-                core::QueryConfig::kWriterFlushThresholdBytes,
-                writerFlushThreshold)
-            .plan(std::move(writerPlan))
-            .assertResults(fmt::format("SELECT {}", numRows));
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .queryCtx(queryCtx)
+        .maxDrivers(1)
+        .spillDirectory(spillDirectory->getPath())
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kWriterSpillEnabled, true)
+        .config(
+            core::QueryConfig::kWriterFlushThresholdBytes, writerFlushThreshold)
+        .plan(std::move(writerPlan))
+        .assertResults(fmt::format("SELECT {}", numRows));
 
-        ASSERT_EQ(
-            arbitrator->stats().numFailures, writerFlushThreshold == 0 ? 0 : 1);
-        ASSERT_EQ(
-            arbitrator->stats().numNonReclaimableAttempts,
-            writerFlushThreshold == 0 ? 0 : 1);
-        waitForAllTasksToBeDeleted(3'000'000);
-      }
-      ASSERT_EQ(arbitrator->stats().numReserves, numAddedPools);
-      ASSERT_EQ(arbitrator->stats().numReleases, numAddedPools);
-    }
+    ASSERT_EQ(
+
+        arbitrator->stats().numFailures, writerFlushThreshold == 0 ? 0 : 1);
+    // We don't trigger reclaim on a writer if it doesn't meet the writer flush
+    // threshold.
+    ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 0);
+    waitForAllTasksToBeDeleted(3'000'000);
+    queryCtx.reset();
+    ASSERT_EQ(arbitrator->stats().numReserves, 1);
+    ASSERT_EQ(arbitrator->stats().numReleases, 1);
   }
 }
 
@@ -3696,7 +3737,8 @@ DEBUG_ONLY_TEST_F(
 
   auto memoryManager = createMemoryManager();
   auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx = newQueryCtx(memoryManager, executor_, kMemoryCapacity);
+  auto queryCtx =
+      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
   ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
 
   std::atomic<bool> injectFakeAllocationOnce{true};
@@ -3718,7 +3760,7 @@ DEBUG_ONLY_TEST_F(
   auto writerPlan =
       PlanBuilder()
           .values(vectors)
-          .tableWrite(outputDirectory->path)
+          .tableWrite(outputDirectory->getPath())
           .project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},
@@ -3729,7 +3771,7 @@ DEBUG_ONLY_TEST_F(
   AssertQueryBuilder(duckDbQueryRunner_)
       .queryCtx(queryCtx)
       .maxDrivers(1)
-      .spillDirectory(spillDirectory->path)
+      .spillDirectory(spillDirectory->getPath())
       .config(core::QueryConfig::kSpillEnabled, true)
       .config(core::QueryConfig::kWriterSpillEnabled, true)
       // Set file writer flush threshold of zero to always trigger flush in
@@ -3774,7 +3816,8 @@ DEBUG_ONLY_TEST_F(
   createDuckDbTable(vectors);
   auto memoryManager = createMemoryManager();
   auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx = newQueryCtx(memoryManager, executor_, kMemoryCapacity);
+  auto queryCtx =
+      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
   ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
 
   std::atomic<bool> writerNoMoreInput{false};
@@ -3810,7 +3853,7 @@ DEBUG_ONLY_TEST_F(
   auto writerPlan =
       PlanBuilder()
           .values(vectors)
-          .tableWrite(outputDirectory->path)
+          .tableWrite(outputDirectory->getPath())
           .project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},
@@ -3821,7 +3864,7 @@ DEBUG_ONLY_TEST_F(
   AssertQueryBuilder(duckDbQueryRunner_)
       .queryCtx(queryCtx)
       .maxDrivers(1)
-      .spillDirectory(spillDirectory->path)
+      .spillDirectory(spillDirectory->getPath())
       .config(core::QueryConfig::kSpillEnabled, true)
       .config(core::QueryConfig::kWriterSpillEnabled, true)
       // Set 0 file writer flush threshold to always trigger flush in test.
@@ -3870,7 +3913,8 @@ DEBUG_ONLY_TEST_F(
 
   auto memoryManager = createMemoryManager();
   auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx = newQueryCtx(memoryManager, executor_, kMemoryCapacity);
+  auto queryCtx =
+      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
   ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
 
   std::atomic<bool> injectFakeAllocationOnce{true};
@@ -3898,7 +3942,7 @@ DEBUG_ONLY_TEST_F(
   auto writerPlan =
       PlanBuilder()
           .values(vectors)
-          .tableWrite(outputDirectory->path, {"c0"}, 4, {"c1"}, {"c2"})
+          .tableWrite(outputDirectory->getPath(), {"c0"}, 4, {"c1"}, {"c2"})
           .project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},
@@ -3910,7 +3954,7 @@ DEBUG_ONLY_TEST_F(
   AssertQueryBuilder(duckDbQueryRunner_)
       .queryCtx(queryCtx)
       .maxDrivers(1)
-      .spillDirectory(spillDirectory->path)
+      .spillDirectory(spillDirectory->getPath())
       .config(core::QueryConfig::kSpillEnabled, "true")
       .config(core::QueryConfig::kWriterSpillEnabled, "true")
       // Set file writer flush threshold of zero to always trigger flush in
@@ -3947,9 +3991,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
   VectorFuzzer fuzzer(options, pool());
   const int numBatches = 20;
   std::vector<RowVectorPtr> vectors;
-  int numRows{0};
   for (int i = 0; i < numBatches; ++i) {
-    numRows += batchSize;
     vectors.push_back(fuzzer.fuzzRow(rowType_));
   }
 
@@ -3958,7 +4000,8 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
   auto memoryManager =
       createMemoryManager(memoryCapacity, kMemoryPoolInitCapacity);
   auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx = newQueryCtx(memoryManager, executor_, memoryCapacity);
+  auto queryCtx =
+      newQueryCtx(memoryManager.get(), executor_.get(), memoryCapacity);
   ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
   std::atomic<bool> injectWriterErrorOnce{true};
   SCOPED_TESTVALUE_SET(
@@ -3981,13 +4024,13 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
   const auto outputDirectory = TempDirectoryPath::create();
   auto writerPlan = PlanBuilder()
                         .values(vectors)
-                        .tableWrite(outputDirectory->path)
+                        .tableWrite(outputDirectory->getPath())
                         .planNode();
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(duckDbQueryRunner_)
           .queryCtx(queryCtx)
           .maxDrivers(1)
-          .spillDirectory(spillDirectory->path)
+          .spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kWriterSpillEnabled, true)
           // Set 0 file writer flush threshold to always reclaim memory from
@@ -4028,9 +4071,9 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
   auto arbitrator = memoryManager->arbitrator();
 
   std::shared_ptr<core::QueryCtx> queryCtx =
-      newQueryCtx(memoryManager, executor_, memoryCapacity / 8);
+      newQueryCtx(memoryManager.get(), executor_.get(), memoryCapacity / 8);
   std::shared_ptr<core::QueryCtx> fakeQueryCtx =
-      newQueryCtx(memoryManager, executor_, memoryCapacity);
+      newQueryCtx(memoryManager.get(), executor_.get(), memoryCapacity);
   auto fakePool = fakeQueryCtx->pool()->addLeafChild(
       "fakePool", true, FakeMemoryReclaimer::create());
   TestAllocation injectedFakeAllocation{
@@ -4070,13 +4113,13 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
   const auto outputDirectory = TempDirectoryPath::create();
   auto writerPlan = PlanBuilder()
                         .values(vectors)
-                        .tableWrite(outputDirectory->path)
+                        .tableWrite(outputDirectory->getPath())
                         .planNode();
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(duckDbQueryRunner_)
           .queryCtx(queryCtx)
           .maxDrivers(1)
-          .spillDirectory(spillDirectory->path)
+          .spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kWriterSpillEnabled, true)
           // Set 0 file writer flush threshold to always trigger flush in test.
@@ -4093,7 +4136,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
               "1GB")
           .plan(std::move(writerPlan))
           .copyResults(pool()),
-      "Unexpected memory growth after memory reclaim");
+      "");
 
   waitForAllTasksToBeDeleted();
 }
@@ -4113,8 +4156,10 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
 
   auto memoryManager = createMemoryManager();
   auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx = newQueryCtx(memoryManager, executor_, kMemoryCapacity);
-  auto fakeQueryCtx = newQueryCtx(memoryManager, executor_, kMemoryCapacity);
+  auto queryCtx =
+      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
+  auto fakeQueryCtx =
+      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
   auto fakePool = fakeQueryCtx->pool()->addLeafChild(
       "fakePool", true, FakeMemoryReclaimer::create());
 
@@ -4160,7 +4205,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
   auto writerPlan =
       PlanBuilder()
           .values(vectors)
-          .tableWrite(outputDirectory->path)
+          .tableWrite(outputDirectory->getPath())
           .singleAggregation(
               {},
               {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
@@ -4169,7 +4214,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
   AssertQueryBuilder(duckDbQueryRunner_)
       .queryCtx(queryCtx)
       .maxDrivers(1)
-      .spillDirectory(spillDirectory->path)
+      .spillDirectory(spillDirectory->getPath())
       .config(core::QueryConfig::kSpillEnabled, true)
       .config(core::QueryConfig::kWriterSpillEnabled, true)
       // Set 0 file writer flush threshold to always trigger flush in test.
@@ -4198,10 +4243,8 @@ DEBUG_ONLY_TEST_F(
       createVectors(rowType_, memoryCapacity / 8, fuzzerOpts_);
   const auto expectedResult =
       runWriteTask(vectors, nullptr, 1, pool(), kHiveConnectorId, false).data;
-
-  auto memoryManager = createMemoryManager(memoryCapacity);
-  auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx = newQueryCtx(memoryManager, executor_, kMemoryCapacity);
+  auto queryCtx =
+      newQueryCtx(memory::memoryManager(), executor_.get(), memoryCapacity);
 
   std::atomic_bool writerCloseWaitFlag{true};
   folly::EventCount writerCloseWait;
@@ -4229,13 +4272,7 @@ DEBUG_ONLY_TEST_F(
 
   writerCloseWait.await([&]() { return !writerCloseWaitFlag.load(); });
 
-  // Creates a fake pool to trigger memory arbitration.
-  auto fakePool = queryCtx->pool()->addLeafChild(
-      "fakePool", true, FakeMemoryReclaimer::create());
-  ASSERT_TRUE(memoryManager->testingGrowPool(
-      fakePool.get(),
-      arbitrator->stats().freeCapacityBytes +
-          queryCtx->pool()->capacity() / 2));
+  memory::testingRunArbitration();
 
   queryThread.join();
   waitForAllTasksToBeDeleted();

@@ -57,6 +57,7 @@ add_executable(
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
   OutputBufferManagerTest.cpp
+  PartitionedOutputTest.cpp
   PlanNodeSerdeTest.cpp
   PlanNodeToStringTest.cpp
   PrefixSortTest.cpp
@@ -82,7 +83,8 @@ add_executable(
   ValuesTest.cpp
   VectorHasherTest.cpp
   WindowFunctionRegistryTest.cpp
-  WindowTest.cpp)
+  WindowTest.cpp
+  WriterFuzzerUtilTest.cpp)
 
 add_executable(
   velox_exec_infra_test
@@ -131,6 +133,7 @@ target_link_libraries(
   velox_type
   velox_vector
   velox_vector_fuzzer
+  velox_writer_fuzzer
   velox_window
   Boost::atomic
   Boost::context
@@ -200,15 +203,23 @@ target_link_libraries(
   velox_tpch_connector
   velox_memory)
 
+# RowNumber Fuzzer.
+add_executable(velox_row_number_fuzzer_test RowNumberFuzzerTest.cpp)
+
+target_link_libraries(velox_row_number_fuzzer_test velox_row_number_fuzzer
+                      gtest gtest_main)
+
 # Join Fuzzer.
-add_library(velox_join_fuzzer JoinFuzzer.cpp)
-
-target_link_libraries(velox_join_fuzzer velox_type velox_vector_fuzzer
-                      velox_exec_test_lib velox_expression_test_utility)
-
 add_executable(velox_join_fuzzer_test JoinFuzzerTest.cpp)
 
 target_link_libraries(velox_join_fuzzer_test velox_join_fuzzer gtest gtest_main)
+
+# Arbitration Fuzzer.
+add_executable(velox_memory_arbitration_fuzzer_test
+               MemoryArbitrationFuzzerTest.cpp)
+
+target_link_libraries(velox_memory_arbitration_fuzzer_test
+                      velox_memory_arbitration_fuzzer gtest gtest_main)
 
 add_executable(velox_exchange_fuzzer_test ExchangeFuzzer.cpp)
 

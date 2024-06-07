@@ -26,6 +26,19 @@ on:
       - "scripts/setup-helper-functions.sh"
       - ".github/workflows/scheduled.yml"
 
+  push:
+    branches:
+      - "main"
+    paths:
+      - "velox/**"
+      - "!velox/docs/**"
+      - "CMakeLists.txt"
+      - "CMake/**"
+      - "third_party/**"
+      - "scripts/setup-ubuntu.sh"
+      - "scripts/setup-helper-functions.sh"
+      - ".github/workflows/scheduled.yml"
+
   schedule:
     - cron: '0 3 * * *'
 
@@ -58,19 +71,21 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
   # Run for 15 minute on PRs
-  DURATION: "${{ inputs.duration || ( github.event_name == 'pull_request' && 900 || 1800 )}}"
+  DURATION: "${{ inputs.duration || ( github.event_name != 'schedule' && 900 || 1800 )}}"
   # minimize artifact duration for PRs, keep them a bit longer for nightly runs
   RETENTION: "${{ github.event_name == 'pull_request' && 1 || 3 }}"
 
 jobs:
   compile:
     name: Build
-    runs-on: 16-core
+    # prevent errors when forks ff their main branch
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    runs-on: 16-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos8
     timeout-minutes: 120
     env:
@@ -87,15 +102,32 @@ jobs:
       presto_error: ${{ steps.sig-check.outputs.presto_error }}
       spark_bias: ${{ steps.sig-check.outputs.spark_functions }}
       spark_error: ${{ steps.sig-check.outputs.spark_error }}
+      presto_aggregate_bias: ${{ steps.sig-check.outputs.presto_aggregate_functions }}
+      presto_aggregate_error: ${{ steps.sig-check.outputs.presto_aggregate_error }}
 
     steps:
+
+      - name: Get latest commit from main
+        if: ${{ github.event_name != 'schedule' }}
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        id: get-head
+        run: |
+          if [ '${{ github.event_name == 'push' }}' == "true" ]; then
+            # get the parent commit of the current one to get the relevant function signatures
+            head_main=$(gh api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
+          else
+            head_main=$(gh api -H "Accept: application/vnd.github.sha" /repos/facebookincubator/velox/commits/heads/main)
+          fi
+          echo "head_main=$head_main" >> $GITHUB_OUTPUT
 
       - name: Get Function Signature Stash
         uses: assignUser/stash/restore@v1
         id: get-sig
         with:
           path: /tmp/signatures
-          key: function-signatures
+          key: function-signatures-${{ steps.get-head.outputs.head_main || github.sha }}
 
       - name: Restore ccache
         uses: assignUser/stash/restore@v1
@@ -118,15 +150,14 @@ jobs:
           mkdir -p /tmp/signatures
 
       - name: Checkout Main
-        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         uses: actions/checkout@v4
         with:
-          # hardcode ref without broken pr
-          ref: 'main'
+          ref: ${{ steps.get-head.outputs.head_main || 'main' }}
           path: velox_main
 
       - name: Build PyVelox
-        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
           python3 -m venv .venv
@@ -135,20 +166,21 @@ jobs:
           make python-build
 
       - name: Create Baseline Signatures
-        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
           source .venv/bin/activate
           python3 -m pip install deepdiff
           python3 scripts/signature.py export --spark /tmp/signatures/spark_signatures_main.json
           python3 scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
+          python3 scripts/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_main.json
 
       - name: Save Function Signature Stash
-        if: ${{ steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name == 'pull_request' && steps.get-sig.outputs.stash-hit != 'true' }}
         uses: assignUser/stash/save@v1
         with:
           path: /tmp/signatures
-          key: function-signatures
+          key: function-signatures-${{ steps.get-head.outputs.head_main }}
 
       - name: Checkout Contender
         uses: actions/checkout@v4
@@ -172,12 +204,16 @@ jobs:
         run: ccache -s
 
       - name: Save ccache
+        # see https://github.com/actions/upload-artifact/issues/543
+        continue-on-error: true
+        if: ${{ github.event_name != 'schedule' }}
         uses: assignUser/stash/save@v1
         with:
           path: "${{ env.CCACHE_DIR }}"
           key: ccache-fuzzer-centos
 
       - name: Build PyVelox
+        if: ${{ github.event_name != 'schedule' }}
         env:
           VELOX_BUILD_DIR: "_build/debug"
         run: |
@@ -186,31 +222,56 @@ jobs:
           python3 -m pip install -e .
 
       - name: Create and test new function signatures
+        if: ${{ github.event_name != 'schedule' }}
         id: sig-check
         run: |
           source .venv/bin/activate
           python3 -m pip install deepdiff
           python3 scripts/signature.py gh_bias_check presto spark
+          python3 scripts/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_contender.json
+          python3 scripts/signature.py bias_aggregates  /tmp/signatures/presto_aggregate_signatures_main.json \
+           /tmp/signatures/presto_aggregate_signatures_contender.json /tmp/signatures/presto_aggregate_bias_functions \
+           /tmp/signatures/presto_aggregate_errors
 
       - name: Upload Signature Artifacts
+        if: ${{ github.event_name != 'schedule' }}
         uses: actions/upload-artifact@v4
         with:
           name: signatures
           path: /tmp/signatures
           retention-days: "${{ env.RETENTION }}"
 
+      - name: Prepare signatures
+        working-directory: /tmp/signatures
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          # Remove irrelevant artifacts
+          rm -f *_bias_functions
+          rm -f *_signatures_main.json
+          # Rename signature files as 'main' files
+          for f in *_signatures_contender.json; do
+            mv "$f" "${f/_contender.json/_main.json}"
+          done
+
+      - name: Save Function Signature Stash
+        if: ${{ github.event_name == 'push' }}
+        uses: assignUser/stash/save@v1
+        with:
+          path: /tmp/signatures
+          key: function-signatures-${{ github.sha }}
+
       - name: Upload presto fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: presto
-          path: velox/_build/debug/velox/expression/tests/velox_expression_fuzzer_test
+          path: velox/_build/debug/velox/expression/fuzzer/velox_expression_fuzzer_test
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload spark expression fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: spark_expression_fuzzer
-          path: velox/_build/debug/velox/expression/tests/spark_expression_fuzzer_test
+          path: velox/_build/debug/velox/expression/fuzzer/spark_expression_fuzzer_test
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload spark aggregation fuzzer
@@ -241,6 +302,20 @@ jobs:
           path: velox/_build/debug//velox/exec/tests/velox_exchange_fuzzer_test
           retention-days: "${{ env.RETENTION }}"
 
+      - name: Upload window fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: window
+          path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
+          retention-days: "${{ env.RETENTION }}"
+
+      - name: Upload row number fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: row_number
+          path: velox/_build/debug//velox/exec/tests/velox_row_number_fuzzer_test
+          retention-days: "${{ env.RETENTION }}"
+
   presto-fuzzer-run:
     name: Presto Fuzzer
     if: ${{ needs.compile.outputs.presto_bias  != 'true' }}
@@ -267,7 +342,7 @@ jobs:
           # Run for 30 minutes instead of 15, when files relevant to presto are touched
           pr_duration: "${{ steps.changes.outputs.presto == 'true' && 1800 || 900 }}"
           # Run for 60 minutes if its a scheduled run
-          other_duration: "${{ inputs.duration || 3600 }}"
+          other_duration: "${{ inputs.duration || (github.event_name == 'push' && 1800 || 3600) }}"
           is_pr: "${{ github.event_name == 'pull_request' }}"
         run: |
 
@@ -483,41 +558,6 @@ jobs:
           path: |
             /tmp/spark_fuzzer_repro
 
-  aggregate-fuzzer-run:
-    name: Aggregate Fuzzer
-    runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:centos8
-    needs: compile
-    timeout-minutes: 120
-    steps:
-
-      - name: Download aggregation fuzzer
-        uses: actions/download-artifact@v4
-        with:
-          name: aggregation
-
-      - name: Run Aggregate Fuzzer
-        run: |
-          mkdir -p /tmp/aggregate_fuzzer_repro/
-            rm -rfv /tmp/aggregate_fuzzer_repro/*
-            chmod -R 777 /tmp/aggregate_fuzzer_repro
-            chmod +x velox_aggregation_fuzzer_test
-            ./velox_aggregation_fuzzer_test \
-                --seed ${RANDOM} \
-                --duration_sec $DURATION \
-                --logtostderr=1 \
-                --minloglevel=1 \
-                --repro_persist_path=/tmp/aggregate_fuzzer_repro \
-            && echo -e "\n\nAggregation fuzzer run finished successfully."
-
-      - name: Archive aggregate production artifacts
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: aggregate-fuzzer-failure-artifacts
-          path: |
-            /tmp/aggregate_fuzzer_repro
-
   join-fuzzer-run:
     name: Join Fuzzer
     runs-on: ubuntu-latest
@@ -542,7 +582,7 @@ jobs:
                 --duration_sec $DURATION \
                 --logtostderr=1 \
                 --minloglevel=1 \
-            && echo -e "\n\nAggregation fuzzer run finished successfully."
+            && echo -e "\n\nJoin fuzzer run finished successfully."
 
       - name: Archive aggregate production artifacts
         if: ${{ !cancelled() }}
@@ -588,13 +628,36 @@ jobs:
             path: |
               /tmp/exchange_fuzzer_repro
 
+  row-number-fuzzer-run:
+    name: RowNumber Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos8
+    needs: compile
+    timeout-minutes: 120
+    steps:
+
+      - name: Download row number fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: row_number
+
+      - name: Run RowNumber Fuzzer
+        run: |
+          cat /proc/sys/vm/max_map_count
+          chmod +x velox_row_number_fuzzer_test
+          ./velox_row_number_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec ${{ env.DURATION }} \
+                --logtostderr=1 \
+                --minloglevel=1 \
+            && echo -e "\n\Row number fuzzer run finished successfully."
+
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
     needs: compile
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
-    if: ${{ github.event_name != 'pull_request' }}
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       LINUX_DISTRO: "centos"
@@ -621,7 +684,7 @@ jobs:
       - name: "Run Aggregate Fuzzer"
         run: |
           cd  velox
-          cp ./scripts/etc/hive.properties $PRESTO_HOME/etc/catalog
+          cp ./scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
           $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
@@ -651,8 +714,84 @@ jobs:
             /tmp/aggregate_fuzzer_repro
             /tmp/server.log
 
+
+  presto-bias-java-aggregation-fuzzer-run:
+    name: Biased Aggregation Fuzzer with Presto as source of truth
+    needs: compile
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    timeout-minutes: 120
+    if: ${{ needs.compile.outputs.presto_aggregate_bias  == 'true' }}
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/.ccache/"
+      LINUX_DISTRO: "centos"
+    steps:
+
+      - name: Download aggregation fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: aggregation
+
+      - name: "Checkout Repo"
+        uses: actions/checkout@v4
+        with:
+          path: velox
+          submodules: 'recursive'
+          ref: "${{ inputs.ref }}"
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory /__w/velox/velox/velox
+
+      - name: Download Signatures
+        uses: actions/download-artifact@v4
+        with:
+          name: signatures
+          path: /tmp/signatures
+
+      - name: "Run Bias Aggregate Fuzzer"
+        run: |
+          cd  velox
+          cp ./scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
+          ls -lR $PRESTO_HOME/etc
+          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          # Sleep for 60 seconds to allow Presto server to start.
+          sleep 60
+          /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
+          cd -
+          mkdir -p /tmp/aggregate_fuzzer_repro/
+          rm -rfv /tmp/aggregate_fuzzer_repro/*
+          chmod -R 777 /tmp/aggregate_fuzzer_repro
+          chmod +x velox_aggregation_fuzzer_test
+          echo "signatures folder"
+          ls /tmp/signatures/
+          echo "Biased functions:"
+          cat /tmp/signatures/presto_aggregate_bias_functions
+          echo "Running Fuzzer for $DURATION"
+          ./velox_aggregation_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec $DURATION \
+                --logtostderr=1 \
+                --minloglevel=1 \
+                --repro_persist_path=/tmp/aggregate_fuzzer_repro \
+                --enable_sorted_aggregations=true \
+                --only=$(cat /tmp/signatures/presto_aggregate_bias_functions) \
+                --presto_url=http://127.0.0.1:8080 \
+          && echo -e "\n\nAggregation fuzzer run finished successfully."
+
+      - name: Archive bias aggregate production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: presto-bias-sot-aggregate-fuzzer-failure-artifacts
+          path: |
+            /tmp/aggregate_fuzzer_repro
+            /tmp/server.log
+
   surface-signature-errors:
     name: Signature Changes
+    if: ${{ github.event_name != 'schedule' }}
     needs: compile
     runs-on: ubuntu-latest
     steps:
@@ -668,3 +807,70 @@ jobs:
           cat /tmp/signatures/presto_errors
           exit 1
 
+      - name: Surface Aggregate function signature errors
+        if: ${{ needs.compile.outputs.presto_aggregate_error == 'true' }}
+        run: |
+          cat /tmp/signatures/presto_aggregate_errors
+          exit 1
+
+  presto-java-window-fuzzer-run:
+    name: Window Fuzzer with Presto as source of truth
+    needs: compile
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    timeout-minutes: 120
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/.ccache/"
+      LINUX_DISTRO: "centos"
+    steps:
+
+      - name: Download window fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: window
+
+      - name: "Checkout Repo"
+        uses: actions/checkout@v4
+        with:
+          path: velox
+          submodules: 'recursive'
+          ref: "${{ inputs.ref }}"
+
+      - name: Fix git permissions
+          # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory /__w/velox/velox/velox
+
+
+      - name: "Run Window Fuzzer"
+        run: |
+          cd  velox
+          cp ./scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
+          ls -lR $PRESTO_HOME/etc
+          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          # Sleep for 60 seconds to allow Presto server to start.
+          sleep 60
+          /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
+          cd -
+          mkdir -p /tmp/window_fuzzer_repro/
+          rm -rfv /tmp/window_fuzzer_repro/*
+          chmod -R 777 /tmp/window_fuzzer_repro
+          chmod +x velox_window_fuzzer_test
+          ./velox_window_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec $DURATION \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --repro_persist_path=/tmp/window_fuzzer_repro \
+                --enable_window_reference_verification \
+                --presto_url=http://127.0.0.1:8080 \
+          && echo -e "\n\nWindow fuzzer run finished successfully."
+
+      - name: Archive window production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: presto-sot-window-fuzzer-failure-artifacts
+          path: |
+            /tmp/window_fuzzer_repro
+            /tmp/server.log

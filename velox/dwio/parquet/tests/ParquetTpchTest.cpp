@@ -68,7 +68,7 @@ class ParquetTpchTest : public testing::Test {
     connector::registerConnector(tpchConnector);
 
     saveTpchTablesAsParquet();
-    tpchBuilder_->initialize(tempDirectory_->path);
+    tpchBuilder_->initialize(tempDirectory_->getPath());
   }
 
   static void TearDownTestSuite() {
@@ -86,7 +86,7 @@ class ParquetTpchTest : public testing::Test {
     for (const auto& table : tpch::tables) {
       auto tableName = toTableName(table);
       auto tableDirectory =
-          fmt::format("{}/{}", tempDirectory_->path, tableName);
+          fmt::format("{}/{}", tempDirectory_->getPath(), tableName);
       auto tableSchema = tpch::getTableSchema(table);
       auto columnNames = tableSchema->names();
       auto plan = PlanBuilder()
@@ -193,6 +193,11 @@ TEST_F(ParquetTpchTest, Q9) {
 TEST_F(ParquetTpchTest, Q10) {
   std::vector<uint32_t> sortingKeys{2};
   assertQuery(10, std::move(sortingKeys));
+}
+
+TEST_F(ParquetTpchTest, Q11) {
+  std::vector<uint32_t> sortingKeys{1};
+  assertQuery(11, std::move(sortingKeys));
 }
 
 TEST_F(ParquetTpchTest, Q12) {

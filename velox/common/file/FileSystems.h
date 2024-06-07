@@ -43,6 +43,8 @@ struct FileOptions {
 
   std::unordered_map<std::string, std::string> values;
   memory::MemoryPool* pool{nullptr};
+  /// If specified then can be trusted to be the file size.
+  std::optional<int64_t> fileSize;
 };
 
 /// An abstract FileSystem
@@ -54,6 +56,12 @@ class FileSystem {
 
   /// Returns the name of the File System
   virtual std::string name() const = 0;
+
+  /// Returns the file path without the fs scheme prefix such as "local:" prefix
+  /// for local file system.
+  virtual std::string_view extractPath(std::string_view path) {
+    VELOX_NYI();
+  }
 
   /// Returns a ReadFile handle for a given file path
   virtual std::unique_ptr<ReadFile> openFileForRead(

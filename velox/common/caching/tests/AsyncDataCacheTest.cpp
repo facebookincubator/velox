@@ -50,7 +50,7 @@ struct Request {
   SsdPin ssdPin;
 };
 
-class AsyncDataCacheTest : public testing::Test {
+class AsyncDataCacheTest : public ::testing::TestWithParam<bool> {
  public:
   // Deterministically fills 'allocation' based on 'sequence'
   static void initializeContents(int64_t sequence, memory::Allocation& alloc) {
@@ -77,19 +77,25 @@ class AsyncDataCacheTest : public testing::Test {
   }
 
   void TearDown() override {
-    if (executor_) {
-      executor_->join();
-    }
     if (cache_) {
-      auto ssdCache = cache_->ssdCache();
+      cache_->shutdown();
+      auto* ssdCache = cache_->ssdCache();
       if (ssdCache) {
         ssdCache->testingDeleteFiles();
       }
-      cache_->shutdown();
     }
+    if (executor_) {
+      executor_->join();
+    }
+    filenames_.clear();
+    CacheTTLController::testingClear();
+    fileIds().testingReset();
   }
 
-  void initializeCache(uint64_t maxBytes, int64_t ssdBytes = 0) {
+  void initializeCache(
+      uint64_t maxBytes,
+      int64_t ssdBytes = 0,
+      uint64_t checkpointIntervalBytes = 0) {
     if (cache_ != nullptr) {
       cache_->shutdown();
     }
@@ -105,17 +111,23 @@ class AsyncDataCacheTest : public testing::Test {
       if (tempDirectory_ == nullptr) {
         tempDirectory_ = exec::test::TempDirectoryPath::create();
       }
-      ssdCache = std::make_unique<SsdCache>(
-          fmt::format("{}/cache", tempDirectory_->path),
+      SsdCache::Config config(
+          fmt::format("{}/cache", tempDirectory_->getPath()),
           ssdBytes,
           4,
           executor(),
-          ssdBytes / 20);
+          checkpointIntervalBytes > 0 ? checkpointIntervalBytes : ssdBytes / 20,
+          false,
+          GetParam(),
+          GetParam());
+      ssdCache = std::make_unique<SsdCache>(config);
     }
 
     memory::MemoryManagerOptions options;
     options.useMmapAllocator = true;
     options.allocatorCapacity = maxBytes;
+    options.arbitratorCapacity = maxBytes;
+    options.arbitratorReservedCapacity = 0;
     options.trackDefaultUsage = true;
     manager_ = std::make_unique<memory::MemoryManager>(options);
     allocator_ = static_cast<memory::MmapAllocator*>(manager_->allocator());
@@ -575,7 +587,7 @@ void AsyncDataCacheTest::loadLoop(
   }
 }
 
-TEST_F(AsyncDataCacheTest, pin) {
+TEST_P(AsyncDataCacheTest, pin) {
   constexpr int64_t kSize = 25000;
   initializeCache(1 << 20);
   auto& exec = folly::QueuedImmediateExecutor::instance();
@@ -635,14 +647,14 @@ TEST_F(AsyncDataCacheTest, pin) {
   EXPECT_EQ(0, stats.numShared);
   EXPECT_EQ(0, stats.numExclusive);
 
-  cache_->clear();
+  cache_->testingClear();
   stats = cache_->refreshStats();
   EXPECT_EQ(0, stats.largeSize);
   EXPECT_EQ(0, stats.numEntries);
   EXPECT_EQ(0, cache_->incrementPrefetchPages(0));
 }
 
-TEST_F(AsyncDataCacheTest, replace) {
+TEST_P(AsyncDataCacheTest, replace) {
   constexpr int64_t kMaxBytes = 64 << 20;
   FLAGS_velox_exception_user_stacktrace_enabled = false;
   initializeCache(kMaxBytes);
@@ -660,7 +672,7 @@ TEST_F(AsyncDataCacheTest, replace) {
       cache_->incrementCachedPages(0));
 }
 
-TEST_F(AsyncDataCacheTest, evictAccounting) {
+TEST_P(AsyncDataCacheTest, evictAccounting) {
   constexpr int64_t kMaxBytes = 64 << 20;
   FLAGS_velox_exception_user_stacktrace_enabled = false;
   initializeCache(kMaxBytes);
@@ -673,16 +685,16 @@ TEST_F(AsyncDataCacheTest, evictAccounting) {
   memory::ContiguousAllocation large;
   pool->allocateNonContiguous(1200, allocation);
   pool->allocateContiguous(1200, large);
-  EXPECT_EQ(memory::AllocationTraits::pageBytes(2400), pool->currentBytes());
+  EXPECT_EQ(memory::AllocationTraits::pageBytes(2400), pool->usedBytes());
   loadLoop(0, kMaxBytes * 1.1);
   pool->allocateNonContiguous(2400, allocation);
   pool->allocateContiguous(2400, large);
-  EXPECT_EQ(memory::AllocationTraits::pageBytes(4800), pool->currentBytes());
+  EXPECT_EQ(memory::AllocationTraits::pageBytes(4800), pool->usedBytes());
   auto stats = cache_->refreshStats();
   EXPECT_LT(0, stats.numEvict);
 }
 
-TEST_F(AsyncDataCacheTest, largeEvict) {
+TEST_P(AsyncDataCacheTest, largeEvict) {
   constexpr int64_t kMaxBytes = 256 << 20;
   constexpr int32_t kNumThreads = 24;
   FLAGS_velox_exception_user_stacktrace_enabled = false;
@@ -703,7 +715,7 @@ TEST_F(AsyncDataCacheTest, largeEvict) {
   LOG(INFO) << "Reties after failed evict: " << numLargeRetries_;
 }
 
-TEST_F(AsyncDataCacheTest, outOfCapacity) {
+TEST_P(AsyncDataCacheTest, outOfCapacity) {
   const int64_t kMaxBytes = 64
       << 20; // 64MB as MmapAllocator's min size is 64MB
   const int32_t kSize = 16 << 10;
@@ -754,7 +766,7 @@ void corruptFile(const std::string& path) {
 }
 } // namespace
 
-TEST_F(AsyncDataCacheTest, DISABLED_ssd) {
+TEST_P(AsyncDataCacheTest, DISABLED_ssd) {
 #ifdef TSAN_BUILD
   // NOTE: scale down the test data set to prevent tsan tester from running out
   // of memory.
@@ -814,9 +826,9 @@ TEST_F(AsyncDataCacheTest, DISABLED_ssd) {
   ASSERT_EQ(ramStats.numShared, 0);
   ASSERT_EQ(ramStats.numExclusive, 0);
 
-  cache_->ssdCache()->clear();
+  cache_->ssdCache()->testingClear();
   // We cut the tail off one of the cache shards.
-  corruptFile(fmt::format("{}/cache0.cpt", tempDirectory_->path));
+  corruptFile(fmt::format("{}/cache0.cpt", tempDirectory_->getPath()));
   // We open the cache from checkpoint. Reading checks the data integrity, here
   // we check that more data was read than written.
   initializeCache(kRamBytes, kSsdBytes);
@@ -829,17 +841,18 @@ TEST_F(AsyncDataCacheTest, DISABLED_ssd) {
   ASSERT_EQ(ssdStatsFromCP.readCheckpointErrors, 1);
 }
 
-TEST_F(AsyncDataCacheTest, invalidSsdPath) {
+TEST_P(AsyncDataCacheTest, invalidSsdPath) {
   auto testPath = "hdfs:/test/prefix_";
   uint64_t ssdBytes = 256UL << 20;
+  SsdCache::Config config(testPath, ssdBytes, 4, executor(), ssdBytes / 20);
   VELOX_ASSERT_THROW(
-      SsdCache(testPath, ssdBytes, 4, executor(), ssdBytes / 20),
+      SsdCache(config),
       fmt::format(
           "Ssd path '{}' does not start with '/' that points to local file system.",
           testPath));
 }
 
-TEST_F(AsyncDataCacheTest, cacheStats) {
+TEST_P(AsyncDataCacheTest, cacheStats) {
   CacheStats stats;
   stats.tinySize = 234;
   stats.largeSize = 1024;
@@ -894,7 +907,7 @@ TEST_F(AsyncDataCacheTest, cacheStats) {
       "[size 128: 0(0MB) allocated 0 mapped]\n"
       "[size 256: 0(0MB) allocated 0 mapped]\n"
       "]\n"
-      "SSD: Ssd cache IO: Write 0MB read 0MB Size 0GB Occupied 0GB0K entries.\n"
+      "SSD: Ssd cache IO: Write 0B read 0B Size 512.00MB Occupied 0B 0K entries.\n"
       "GroupStats: <dummy FileGroupStats>";
   ASSERT_EQ(cache_->toString(), expectedDetailedCacheOutput);
   ASSERT_EQ(cache_->toString(true), expectedDetailedCacheOutput);
@@ -910,7 +923,7 @@ TEST_F(AsyncDataCacheTest, cacheStats) {
   ASSERT_EQ(cache_->toString(false), expectedShortCacheOutput);
 }
 
-TEST_F(AsyncDataCacheTest, shrinkCache) {
+TEST_P(AsyncDataCacheTest, shrinkCache) {
   constexpr uint64_t kRamBytes = 128UL << 20;
   constexpr uint64_t kSsdBytes = 512UL << 20;
   constexpr int kTinyDataSize = AsyncDataCacheEntry::kTinyDataSize - 1;
@@ -1049,7 +1062,62 @@ TEST_F(AsyncDataCacheTest, shrinkCache) {
   }
 }
 
-DEBUG_ONLY_TEST_F(AsyncDataCacheTest, shrinkWithSsdWrite) {
+TEST_P(AsyncDataCacheTest, shutdown) {
+  constexpr uint64_t kRamBytes = 16 << 20;
+  constexpr uint64_t kSsdBytes = 64UL << 20;
+
+  for (const auto asyncShutdown : {false, true}) {
+    SCOPED_TRACE(fmt::format("asyncShutdown {}", asyncShutdown));
+    // Initialize cache with a big checkpointIntervalBytes, giving eviction log
+    // chance to survive.
+    initializeCache(kRamBytes, kSsdBytes, kSsdBytes * 10);
+    ASSERT_EQ(cache_->ssdCache()->stats().openCheckpointErrors, 4);
+
+    // Write large amount of data, making sure eviction is triggered and the log
+    // file is not zero.
+    loadLoop(0, 16 * kSsdBytes);
+    ASSERT_GT(cache_->ssdCache()->stats().regionsEvicted, 0);
+    ASSERT_GT(cache_->ssdCache()->testingTotalLogEvictionFilesSize(), 0);
+
+    // Shutdown cache.
+    if (!asyncShutdown) {
+      waitForSsdWriteToFinish(cache_->ssdCache());
+    }
+    const auto bytesWrittenBeforeShutdown =
+        cache_->ssdCache()->stats().bytesWritten;
+    cache_->ssdCache()->shutdown();
+    const auto bytesWrittenAfterShutdown =
+        cache_->ssdCache()->stats().bytesWritten;
+
+    if (asyncShutdown) {
+      // The written bytes before shutdown is not larger than before shutdown.
+      ASSERT_LE(bytesWrittenBeforeShutdown, bytesWrittenAfterShutdown);
+    } else {
+      // No new data has been written after shutdown.
+      ASSERT_EQ(bytesWrittenBeforeShutdown, bytesWrittenAfterShutdown);
+    }
+    // Eviction log files have been truncated.
+    ASSERT_EQ(cache_->ssdCache()->testingTotalLogEvictionFilesSize(), 0);
+
+    // Shutdown again making sure no issue is triggered.
+    cache_->ssdCache()->shutdown();
+
+    // New cache write attempt is blocked and triggers exception.
+    VELOX_ASSERT_THROW(
+        cache_->ssdCache()->startWrite(),
+        "Unexpected write after SSD cache has been shutdown");
+
+    // Re-initialize cache.
+    cache_->ssdCache()->testingClear();
+    initializeCache(kRamBytes, kSsdBytes, kSsdBytes * 10);
+    // Checkpoint files are intact and readable.
+    ASSERT_EQ(cache_->ssdCache()->stats().openCheckpointErrors, 0);
+    ASSERT_EQ(cache_->ssdCache()->stats().readCheckpointErrors, 0);
+    cache_->ssdCache()->testingDeleteCheckpoints();
+  }
+}
+
+DEBUG_ONLY_TEST_P(AsyncDataCacheTest, shrinkWithSsdWrite) {
   constexpr uint64_t kRamBytes = 128UL << 20;
   constexpr uint64_t kSsdBytes = 512UL << 20;
   constexpr int kDataSize = 4096;
@@ -1114,7 +1182,7 @@ DEBUG_ONLY_TEST_F(AsyncDataCacheTest, shrinkWithSsdWrite) {
   ASSERT_EQ(stats.numEmptyEntries, numEntries);
 }
 
-DEBUG_ONLY_TEST_F(AsyncDataCacheTest, ttl) {
+DEBUG_ONLY_TEST_P(AsyncDataCacheTest, ttl) {
   constexpr uint64_t kRamBytes = 32 << 20;
   constexpr uint64_t kSsdBytes = 128UL << 20;
 
@@ -1148,4 +1216,68 @@ DEBUG_ONLY_TEST_F(AsyncDataCacheTest, ttl) {
   EXPECT_EQ(statsTtl.ssdStats->entriesAgedOut, statsT1.ssdStats->entriesCached);
 }
 
+TEST_P(AsyncDataCacheTest, makeEvictable) {
+  constexpr uint64_t kRamBytes = 128UL << 20;
+  constexpr uint64_t kSsdBytes = 512UL << 20;
+  constexpr int kDataSize = 4096;
+  for (const bool evictable : {false, true}) {
+    SCOPED_TRACE(fmt::format("evictable: {}", evictable));
+    initializeCache(kRamBytes, kSsdBytes);
+    const int numEntries{10};
+    std::vector<CachePin> cachePins;
+    uint64_t offset = 0;
+    for (int i = 0; i < numEntries; ++i) {
+      cachePins.push_back(newEntry(offset, kDataSize));
+      offset += kDataSize;
+    }
+    for (auto& pin : cachePins) {
+      pin.entry()->setExclusiveToShared(!evictable);
+    }
+    if (evictable) {
+      std::vector<RawFileCacheKey> keys;
+      keys.reserve(cachePins.size());
+      for (const auto& pin : cachePins) {
+        keys.push_back(RawFileCacheKey{
+            pin.checkedEntry()->key().fileNum.id(),
+            pin.checkedEntry()->key().offset});
+      }
+      cachePins.clear();
+      for (const auto& key : keys) {
+        cache_->makeEvictable(key);
+      }
+    }
+    const auto cacheEntries = cache_->testingCacheEntries();
+    for (const auto& cacheEntry : cacheEntries) {
+      ASSERT_EQ(cacheEntry->ssdSaveable(), !evictable);
+      ASSERT_EQ(cacheEntry->testingAccessStats().numUses, 0);
+      if (evictable) {
+        ASSERT_EQ(cacheEntry->testingAccessStats().lastUse, 0);
+      } else {
+        ASSERT_NE(cacheEntry->testingAccessStats().lastUse, 0);
+      }
+    }
+    auto* ssdCache = cache_->ssdCache();
+    if (ssdCache == nullptr) {
+      continue;
+    }
+    ssdCache->testingWaitForWriteToFinish();
+    if (evictable) {
+      ASSERT_EQ(ssdCache->stats().entriesCached, 0);
+    } else {
+      if (cache_->testingSsdSavable() == 0) {
+        ASSERT_GT(ssdCache->stats().entriesCached, 0);
+      } else {
+        // Ssd write only gets triggered after a certain ssd space usage
+        // threshold.
+        ASSERT_GE(ssdCache->stats().entriesCached, 0);
+      }
+    }
+  }
+}
+
 // TODO: add concurrent fuzzer test.
+
+INSTANTIATE_TEST_SUITE_P(
+    AsyncDataCacheTest,
+    AsyncDataCacheTest,
+    ::testing::Values(false, true));

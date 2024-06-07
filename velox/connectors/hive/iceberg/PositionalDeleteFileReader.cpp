@@ -30,8 +30,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const std::shared_ptr<HiveConfig> hiveConfig,
-    std::shared_ptr<io::IoStatistics> ioStats,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<io::IoStatistics>& ioStats,
     dwio::common::RuntimeStatistics& runtimeStats,
     uint64_t splitOffset,
     const std::string& connectorId)
@@ -39,7 +39,6 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       baseFilePath_(baseFilePath),
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
-      connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       ioStats_(ioStats),
       pool_(connectorQueryCtx->memoryPool()),
@@ -89,21 +88,21 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   configureReaderOptions(
       deleteReaderOpts,
       hiveConfig_,
-      connectorQueryCtx_->sessionProperties(),
+      connectorQueryCtx->sessionProperties(),
       deleteFileSchema,
       deleteSplit_);
 
-  auto deleteFileHandle =
-      fileHandleFactory_->generate(deleteFile_.filePath).second;
+  auto deleteFileHandleCachePtr =
+      fileHandleFactory_->generate(deleteFile_.filePath);
   auto deleteFileInput = createBufferedInput(
-      *deleteFileHandle,
+      *deleteFileHandleCachePtr,
       deleteReaderOpts,
-      connectorQueryCtx_,
+      connectorQueryCtx,
       ioStats_,
       executor_);
 
   auto deleteReader =
-      dwio::common::getReaderFactory(deleteReaderOpts.getFileFormat())
+      dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
   // Check if the whole delete file split can be skipped. This could happen when

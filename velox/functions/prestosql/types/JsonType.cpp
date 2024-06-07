@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/type/DecimalUtil.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -30,6 +31,7 @@
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/Type.h"
@@ -53,6 +55,9 @@ void generateJsonTyped(
     // Figure out how to produce uppercase digits.
     folly::json::serialization_opts opts;
     opts.encode_non_ascii = true;
+    // Replace invalid UTF-8 bytes with U+FFFD.
+    opts.skip_invalid_utf8 = true;
+
     folly::json::escapeString(value, result, opts);
   } else if constexpr (std::is_same_v<T, UnknownValue>) {
     VELOX_FAIL(
@@ -63,7 +68,14 @@ void generateJsonTyped(
     } else if constexpr (
         std::is_same_v<T, double> || std::is_same_v<T, float>) {
       if constexpr (!legacyCast) {
-        result.append(util::Converter<TypeKind::VARCHAR>::cast(value));
+        if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
+          result.append(fmt::format(
+              "\"{}\"",
+              util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
+        } else {
+          result.append(
+              util::Converter<TypeKind::VARCHAR>::tryCast(value).value());
+        }
       } else {
         folly::toAppend<std::string, T>(value, &result);
       }
@@ -71,6 +83,8 @@ void generateJsonTyped(
       result.append(std::to_string(value));
     } else if (type->isDate()) {
       result.append(DATE()->toString(value));
+    } else if (type->isDecimal()) {
+      result.append(DecimalUtil::toString(value, type));
     } else {
       folly::toAppend<std::string, T>(value, &result);
     }
@@ -214,7 +228,7 @@ struct AsJson {
       : decoded_(context) {
     VELOX_CHECK(rows.hasSelections());
 
-    ErrorVectorPtr oldErrors;
+    exec::EvalErrorsPtr oldErrors;
     context.swapErrors(oldErrors);
     if (isJsonType(input->type())) {
       json_ = input;
@@ -309,7 +323,7 @@ struct AsJson {
       exec::EvalCtx& context,
       const SelectivityVector& rows,
       const BufferPtr& elementToTopLevelRows,
-      ErrorVectorPtr& oldErrors) {
+      exec::EvalErrorsPtr& oldErrors) {
     if (context.errors()) {
       if (elementToTopLevelRows) {
         context.addElementErrorsToTopLevel(
@@ -643,6 +657,7 @@ struct CastFromJsonTypedImpl {
     static simdjson::error_code apply(Input, exec::GenericWriter&) {
       VELOX_NYI(
           "Casting from JSON to {} is not supported.", TypeTraits<kind>::name);
+      return simdjson::error_code::UNEXPECTED_ERROR; // Make compiler happy.
     }
   };
 
@@ -698,6 +713,9 @@ struct CastFromJsonTypedImpl {
             case simdjson::ondemand::number_type::unsigned_integer:
               w = num.get_uint64() != 0;
               break;
+            case simdjson::ondemand::number_type::big_integer:
+              VELOX_UNREACHABLE(); // value.get_number() would have failed
+                                   // already.
           }
           break;
         }
@@ -825,6 +843,25 @@ struct CastFromJsonTypedImpl {
     }
   };
 
+  static folly::F14FastMap<std::string, int32_t> makeFieldIndicesMap(
+      const RowType& rowType,
+      bool allFieldsAreAscii) {
+    folly::F14FastMap<std::string, int32_t> fieldIndices;
+    const auto size = rowType.size();
+    for (auto i = 0; i < size; ++i) {
+      std::string key = rowType.nameOf(i);
+      if (allFieldsAreAscii) {
+        folly::toLowerAscii(key);
+      } else {
+        boost::algorithm::to_lower(key);
+      }
+
+      fieldIndices[key] = i;
+    }
+
+    return fieldIndices;
+  }
+
   template <typename Dummy>
   struct KindDispatcher<TypeKind::ROW, Dummy> {
     static simdjson::error_code apply(
@@ -855,30 +892,53 @@ struct CastFromJsonTypedImpl {
         }
       } else {
         SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
-        folly::F14FastMap<std::string, simdjson::ondemand::value> lowerCaseKeys(
-            object.count_fields());
+
+        // TODO Populate this mapping once, not per-row.
+        // Mapping from lower-case field names of the target RowType to their
+        // indices.
+        bool allFieldsAreAscii = true;
+        const auto size = rowType.size();
+        for (auto i = 0; i < size; ++i) {
+          const auto& name = rowType.nameOf(i);
+          allFieldsAreAscii &=
+              functions::stringCore::isAscii(name.data(), name.size());
+        }
+
+        auto fieldIndices = makeFieldIndicesMap(rowType, allFieldsAreAscii);
+
         std::string key;
         for (auto fieldResult : object) {
           SIMDJSON_ASSIGN_OR_RAISE(auto field, fieldResult);
           if (!field.value().is_null()) {
             SIMDJSON_ASSIGN_OR_RAISE(key, field.unescaped_key(true));
-            boost::algorithm::to_lower(key);
-            lowerCaseKeys[key] = field.value();
+
+            // boost::algorithm::to_lower is very slow. Use much faster
+            // folly::toLowerAscii if possible.
+            if (allFieldsAreAscii) {
+              folly::toLowerAscii(key);
+            } else {
+              boost::algorithm::to_lower(key);
+            }
+
+            auto it = fieldIndices.find(key);
+            if (it != fieldIndices.end()) {
+              const auto index = it->second;
+
+              VELOX_USER_CHECK_GE(index, 0, "Duplicate field: {}", key);
+              it->second = -1;
+
+              SIMDJSON_TRY(VELOX_DYNAMIC_TYPE_DISPATCH(
+                  CastFromJsonTypedImpl<simdjson::ondemand::value>::apply,
+                  rowType.childAt(index)->kind(),
+                  field.value(),
+                  writerTyped.get_writer_at(index)));
+            }
           }
         }
-        for (column_index_t numFields = rowType.size(), i = 0; i < numFields;
-             ++i) {
-          key = rowType.nameOf(i);
-          boost::algorithm::to_lower(key);
-          auto it = lowerCaseKeys.find(key);
-          if (it == lowerCaseKeys.end()) {
-            writerTyped.set_null_at(i);
-          } else {
-            SIMDJSON_TRY(VELOX_DYNAMIC_TYPE_DISPATCH(
-                CastFromJsonTypedImpl<simdjson::ondemand::value>::apply,
-                rowType.childAt(i)->kind(),
-                it->second,
-                writerTyped.get_writer_at(i)));
+
+        for (const auto& [key, index] : fieldIndices) {
+          if (index >= 0) {
+            writerTyped.set_null_at(index);
           }
         }
       }
@@ -918,11 +978,15 @@ struct CastFromJsonTypedImpl {
             return convertIfInRange<T>(num.get_int64(), writer);
           case simdjson::ondemand::number_type::unsigned_integer:
             return simdjson::NUMBER_OUT_OF_RANGE;
+          case simdjson::ondemand::number_type::big_integer:
+            VELOX_UNREACHABLE(); // value.get_number() would have failed
+                                 // already.
         }
         break;
       }
       case simdjson::ondemand::json_type::boolean: {
-        writer.castTo<T>() = value.get_bool();
+        SIMDJSON_ASSIGN_OR_RAISE(auto b, value.get_bool());
+        writer.castTo<T>() = b;
         break;
       }
       case simdjson::ondemand::json_type::string: {
@@ -947,7 +1011,8 @@ struct CastFromJsonTypedImpl {
         return convertIfInRange<T>(num, writer);
       }
       case simdjson::ondemand::json_type::boolean: {
-        writer.castTo<T>() = value.get_bool();
+        SIMDJSON_ASSIGN_OR_RAISE(auto b, value.get_bool());
+        writer.castTo<T>() = b;
         break;
       }
       case simdjson::ondemand::json_type::string: {
@@ -1037,7 +1102,7 @@ class JsonCastOperator : public exec::CastOperator {
       maxSize = std::max(maxSize, input.size());
     });
     paddedInput_.resize(maxSize + simdjson::SIMDJSON_PADDING);
-    rows.applyToSelected([&](auto row) {
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
       writer.setOffset(row);
       if (inputVector->isNullAt(row)) {
         writer.commitNull();

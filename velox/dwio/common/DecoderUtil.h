@@ -385,20 +385,39 @@ bool nonNullRowsFromSparse(
     RowSet rows,
     raw_vector<int32_t>& innerRows,
     raw_vector<int32_t>& outerRows,
-    uint64_t* resultNulls,
+    uint8_t* resultNulls,
     int32_t& tailSkip);
+
+template <bool isFilter, bool outputNulls>
+bool nonNullRowsFromSparse(
+    const uint64_t* nulls,
+    RowSet rows,
+    raw_vector<int32_t>& innerRows,
+    raw_vector<int32_t>& outerRows,
+    uint64_t* resultNulls,
+    int32_t& tailSkip) {
+  auto* resultNullBytes = reinterpret_cast<uint8_t*>(resultNulls);
+  return nonNullRowsFromSparse<isFilter, outputNulls>(
+      nulls, rows, innerRows, outerRows, resultNullBytes, tailSkip);
+}
 
 // See SelectiveColumnReader::useBulkPath.
 template <typename Visitor, bool hasNulls>
 bool useFastPath(Visitor& visitor) {
-  return (!std::is_same_v<typename Visitor::DataType, int128_t>)&&process::
-             hasAvx2() &&
-      Visitor::FilterType::deterministic && Visitor::kHasBulkPath &&
+  return (!std::is_same_v<typename Visitor::DataType, int128_t>) &&
+      process::hasAvx2() && Visitor::FilterType::deterministic &&
+      Visitor::kHasBulkPath &&
       (std::
            is_same_v<typename Visitor::FilterType, velox::common::AlwaysTrue> ||
        !hasNulls || !visitor.allowNulls()) &&
       (std::is_same_v<typename Visitor::HookType, NoHook> || !hasNulls ||
        Visitor::HookType::kSkipNulls);
+}
+
+template <typename Visitor>
+bool useFastPath(Visitor& visitor, bool hasNulls) {
+  return hasNulls ? useFastPath<Visitor, true>(visitor)
+                  : useFastPath<Visitor, false>(visitor);
 }
 
 // Scatters 'numValues' elements of 'data' starting at data[sourceBegin] to

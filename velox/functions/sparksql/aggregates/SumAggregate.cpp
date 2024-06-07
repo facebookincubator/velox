@@ -49,7 +49,7 @@ exec::AggregateRegistrationResult registerSum(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
-          .returnType("real")
+          .returnType("double")
           .intermediateType("double")
           .argumentType("real")
           .build(),
@@ -148,8 +148,7 @@ exec::AggregateRegistrationResult registerSum(
           }
             [[fallthrough]];
           default:
-            VELOX_CHECK(
-                false,
+            VELOX_UNREACHABLE(
                 "Unknown input type for {} aggregation {}",
                 name,
                 inputType->kindName());

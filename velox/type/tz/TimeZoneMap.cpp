@@ -117,7 +117,7 @@ std::string getTimeZoneName(int64_t timeZoneID) {
   return it->second;
 }
 
-int64_t getTimeZoneID(std::string_view timeZone, bool failOnError) {
+int16_t getTimeZoneID(std::string_view timeZone, bool failOnError) {
   static folly::F14FastMap<std::string, int64_t> nameToIdMap =
       makeReverseMap(getTimeZoneDB());
   std::string timeZoneLowered;
@@ -135,7 +135,7 @@ int64_t getTimeZoneID(std::string_view timeZone, bool failOnError) {
     return it->second;
   }
   if (failOnError) {
-    VELOX_FAIL("Unknown time zone: '{}'", timeZone);
+    VELOX_USER_FAIL("Unknown time zone: '{}'", timeZone);
   }
   return -1;
 }

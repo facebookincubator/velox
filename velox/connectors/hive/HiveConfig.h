@@ -44,8 +44,9 @@ class HiveConfig {
 
   /// Maximum number of (bucketed) partitions per a single table writer
   /// instance.
-  // TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
-  // right now this is only used for testing.
+  ///
+  /// TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
+  /// right now this is only used for testing.
   static constexpr const char* kMaxPartitionsPerWriters =
       "max-partitions-per-writers";
   static constexpr const char* kMaxPartitionsPerWritersSession =
@@ -88,6 +89,15 @@ class HiveConfig {
   static constexpr const char* kS3IamRoleSessionName =
       "hive.s3.iam-role-session-name";
 
+  /// Socket connect timeout.
+  static constexpr const char* kS3ConnectTimeout = "hive.s3.connect-timeout";
+
+  /// Socket read timeout.
+  static constexpr const char* kS3SocketTimeout = "hive.s3.socket-timeout";
+
+  /// Maximum concurrent TCP connections for a single http client.
+  static constexpr const char* kS3MaxConnections = "hive.s3.max-connections";
+
   /// The GCS storage endpoint server.
   static constexpr const char* kGCSEndpoint = "hive.gcs.endpoint";
 
@@ -96,6 +106,12 @@ class HiveConfig {
 
   /// The GCS service account configuration as json string
   static constexpr const char* kGCSCredentials = "hive.gcs.credentials";
+
+  /// The GCS maximum retry counter of transient errors.
+  static constexpr const char* kGCSMaxRetryCount = "hive.gcs.max-retry-count";
+
+  /// The GCS maximum time allowed to retry transient errors.
+  static constexpr const char* kGCSMaxRetryTime = "hive.gcs.max-retry-time";
 
   /// Maps table field names to file field names using names, not indices.
   // TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
@@ -157,6 +173,18 @@ class HiveConfig {
   static constexpr const char* kOrcWriterMaxDictionaryMemorySession =
       "orc_optimized_writer_max_dictionary_memory";
 
+  /// Enables historical based stripe size estimation after compression.
+  static constexpr const char* kOrcWriterLinearStripeSizeHeuristics =
+      "hive.orc.writer.linear-stripe-size-heuristics";
+  static constexpr const char* kOrcWriterLinearStripeSizeHeuristicsSession =
+      "orc_writer_linear_stripe_size_heuristics";
+
+  /// Minimal number of items in an encoded stream.
+  static constexpr const char* kOrcWriterMinCompressionSize =
+      "hive.orc.writer.min-compression-size";
+  static constexpr const char* kOrcWriterMinCompressionSizeSession =
+      "orc_writer_min_compression_size";
+
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
   /// The form should be defined by the underlying file system.
@@ -184,6 +212,9 @@ class HiveConfig {
   static constexpr const char* kParquetWriteTimestampUnitSession =
       "hive.parquet.writer.timestamp_unit";
 
+  static constexpr const char* kCacheNoRetention = "cache.no_retention";
+  static constexpr const char* kCacheNoRetentionSession = "cache.no_retention";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* session) const;
 
@@ -209,11 +240,21 @@ class HiveConfig {
 
   std::string s3IAMRoleSessionName() const;
 
+  std::optional<std::string> s3ConnectTimeout() const;
+
+  std::optional<std::string> s3SocketTimeout() const;
+
+  std::optional<uint32_t> s3MaxConnections() const;
+
   std::string gcsEndpoint() const;
 
   std::string gcsScheme() const;
 
   std::string gcsCredentials() const;
+
+  std::optional<int> gcsMaxRetryCount() const;
+
+  std::optional<std::string> gcsMaxRetryTime() const;
 
   bool isOrcUseColumnNames(const Config* session) const;
 
@@ -241,6 +282,10 @@ class HiveConfig {
 
   uint64_t orcWriterMaxDictionaryMemory(const Config* session) const;
 
+  bool orcWriterLinearStripeSizeHeuristics(const Config* session) const;
+
+  uint64_t orcWriterMinCompressionSize(const Config* session) const;
+
   std::string writeFileCreateConfig() const;
 
   uint32_t sortWriterMaxOutputRows(const Config* session) const;
@@ -256,6 +301,13 @@ class HiveConfig {
   /// Returns the timestamp unit used when writing timestamps into Parquet
   /// through Arrow bridge. 0: second, 3: milli, 6: micro, 9: nano.
   uint8_t parquetWriteTimestampUnit(const Config* session) const;
+
+  /// Returns true to evict out a query scanned data out of in-memory cache
+  /// right after the access, and also skip staging to the ssd cache. This helps
+  /// to prevent the cache space pollution from the one-time table scan by large
+  /// batch query when mixed running with interactive query which has high data
+  /// locality.
+  bool cacheNoRetention(const Config* session) const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
     VELOX_CHECK_NOT_NULL(

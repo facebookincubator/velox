@@ -165,6 +165,18 @@ struct StringWithId {
   int32_t id;
 };
 
+std::unique_ptr<Column>
+encodeBits(uint64_t* bits, int32_t numBits, memory::MemoryPool* pool) {
+  auto column = std::make_unique<Column>();
+  column->encoding = kFlat;
+  column->kind = TypeKind::BOOLEAN;
+  column->numValues = numBits;
+  column->values = AlignedBuffer::allocate<bool>(numBits, pool);
+  memcpy(column->values->asMutable<char>(), bits, bits::nbytes(numBits));
+  column->bitWidth = 1;
+  return column;
+}
+
 template <typename T>
 std::unique_ptr<Column>
 directInts(std::vector<T>& ints, T min, T max, memory::MemoryPool* pool) {
@@ -178,6 +190,9 @@ template <typename T>
 std::unique_ptr<Column> Encoder<T>::toColumn() {
   auto column = std::make_unique<Column>();
   column->kind = kind_;
+  if (!nulls_.empty()) {
+    column->nulls = encodeBits(nulls_.data(), count_, pool_);
+  }
   if (distincts_.size() <= 1) {
     VELOX_NYI("constant not supported");
   }
@@ -250,10 +265,8 @@ StringView StringSet::add(StringView data) {
 
 std::unique_ptr<Column> StringSet::toColumn() {
   auto buffer = AlignedBuffer::allocate<char>(totalSize_, pool_);
-  int64_t fill = 0;
   for (auto& piece : buffers_) {
     memcpy(buffer->asMutable<char>(), piece->as<char>(), piece->size());
-    fill += piece->size();
   }
   auto column = std::make_unique<Column>();
   column->kind = TypeKind::VARCHAR;
@@ -291,12 +304,26 @@ void Encoder<StringView>::add(StringView data) {
 }
 
 template <typename T>
+void Encoder<T>::addNull() {
+  ++count_;
+  auto n = bits::nwords(count_);
+  if (nulls_.size() < n) {
+    nulls_.resize(n, bits::kNotNull64);
+    bits::setBit(nulls_.data(), count_ - 1, bits::kNull);
+  }
+}
+
+template <typename T>
 void Encoder<T>::append(const VectorPtr& data) {
   auto size = data->size();
   SelectivityVector allRows(size);
   DecodedVector decoded(*data, allRows, true);
   for (auto i = 0; i < size; ++i) {
-    add(decoded.valueAt<T>(i));
+    if (decoded.isNullAt(i)) {
+      addNull();
+    } else {
+      add(decoded.valueAt<T>(i));
+    }
   }
 }
 

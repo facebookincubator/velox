@@ -27,6 +27,27 @@ void FunctionBaseTest::SetUpTestCase() {
 }
 
 // static
+std::vector<const exec::FunctionSignature*> FunctionBaseTest::getSignatures(
+    const std::string& functionName,
+    const std::string& returnType) {
+  const auto allSignatures = getFunctionSignatures();
+
+  std::vector<const exec::FunctionSignature*> signatures;
+  for (const auto& signature : allSignatures.at(functionName)) {
+    const auto& typeName = signature->returnType().baseName();
+    if (exec::sanitizeName(typeName) == exec::sanitizeName(returnType)) {
+      signatures.push_back(signature);
+    }
+  }
+  VELOX_CHECK(
+      !signatures.empty(),
+      "No signature found for function {} with return type {}.",
+      functionName,
+      returnType);
+  return signatures;
+}
+
+// static
 std::unordered_set<std::string> FunctionBaseTest::getSignatureStrings(
     const std::string& functionName) {
   auto allSignatures = getFunctionSignatures();
@@ -125,16 +146,13 @@ void FunctionBaseTest::testEncodings(
   testDictionary(size, [&](auto row) { return size - 1 - row; });
 
   // Repeat each row twice: 0, 0, 1, 1,... Add some nulls.
-  testDictionary(
-      size * 2, [](auto row) { return row / 2; }, nullEvery(3));
+  testDictionary(size * 2, [](auto row) { return row / 2; }, nullEvery(3));
 
   // Select even rows: 0, 2, 4,... Add some nulls.
-  testDictionary(
-      size / 2, [](auto row) { return row * 2; }, nullEvery(3));
+  testDictionary(size / 2, [](auto row) { return row * 2; }, nullEvery(3));
 
   // Go over all rows in reverse: N, N-1, N-2,...0. Add some nulls.
-  testDictionary(
-      size, [&](auto row) { return size - 1 - row; }, nullEvery(3));
+  testDictionary(size, [&](auto row) { return size - 1 - row; }, nullEvery(3));
 
   // Generate constant vectors and verify the results.
   for (auto i = 0; i < size; ++i) {

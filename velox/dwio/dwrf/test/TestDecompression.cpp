@@ -20,6 +20,7 @@
 #include <folly/compression/Zlib.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
@@ -120,7 +121,7 @@ TEST_F(DecompressionTest, testArrayBackup) {
   SeekableArrayInputStream stream(bytes.data(), bytes.size(), 20);
   const void* ptr;
   int32_t len;
-  ASSERT_THROW(stream.BackUp(10), exception::LoggedException);
+  VELOX_ASSERT_THROW(stream.BackUp(10), "(10 vs. 0) Can't backup that much!");
   EXPECT_EQ(true, stream.Next(&ptr, &len));
   EXPECT_EQ(bytes.data(), static_cast<const char*>(ptr));
   EXPECT_EQ(20, len);
@@ -141,7 +142,7 @@ TEST_F(DecompressionTest, testArrayBackup) {
   EXPECT_EQ(10, len);
   EXPECT_EQ(true, !stream.Next(&ptr, &len));
   EXPECT_EQ(0, len);
-  ASSERT_THROW(stream.BackUp(30), exception::LoggedException);
+  VELOX_ASSERT_THROW(stream.BackUp(30), "(30 vs. 20) Can't backup that much!");
   EXPECT_EQ(200, stream.ByteCount());
 }
 
@@ -201,7 +202,7 @@ TEST_F(DecompressionTest, testFileBackup) {
   auto stream = createSeekableFileInputStream();
   const void* ptr;
   int32_t len;
-  ASSERT_THROW(stream.BackUp(10), exception::LoggedException);
+  VELOX_ASSERT_THROW(stream.BackUp(10), "(10 vs. 0) can't backup that far");
   EXPECT_EQ(true, stream.Next(&ptr, &len));
   EXPECT_EQ(20, len);
   checkBytes(static_cast<const char*>(ptr), len, 0);
@@ -222,7 +223,7 @@ TEST_F(DecompressionTest, testFileBackup) {
   }
   EXPECT_EQ(true, !stream.Next(&ptr, &len));
   EXPECT_EQ(0, len);
-  ASSERT_THROW(stream.BackUp(30), exception::LoggedException);
+  VELOX_ASSERT_THROW(stream.BackUp(30), "(30 vs. 20) can't backup that far");
   EXPECT_EQ(200, stream.ByteCount());
 }
 
@@ -289,7 +290,8 @@ TEST_F(DecompressionTest, testFileSeek) {
   {
     std::vector<uint64_t> offsets(1, 201);
     PositionProvider posn(offsets);
-    EXPECT_THROW(stream.seekToPosition(posn), exception::LoggedException);
+    VELOX_ASSERT_THROW(
+        stream.seekToPosition(posn), "(201 vs. 200) seek too far");
   }
 }
 
@@ -1155,8 +1157,6 @@ TEST_F(TestSeek, uncompressedLarge) {
     return 0;
   };
   // Start and size of last Next as offsets to content (no headers).
-  int32_t lastReadStart = 0;
-  int32_t lastReadSize = 0;
 
   for (auto& pair : ranges) {
     uint64_t target = pair.first;
@@ -1170,8 +1170,6 @@ TEST_F(TestSeek, uncompressedLarge) {
       EXPECT_EQ(result, addressForOffset(target + readSize));
       EXPECT_EQ(
           size, readSizeForAddress(reinterpret_cast<const char*>(result)));
-      lastReadStart = target + readSize;
-      lastReadSize = size;
       readSize += size;
     } while (readSize < targetSize);
   }

@@ -23,6 +23,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
@@ -64,17 +65,7 @@ void OperatorTestBase::SetUpTestCase() {
   FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
   FLAGS_velox_memory_leak_check_enabled = true;
   memory::SharedArbitrator::registerFactory();
-  MemoryManagerOptions options;
-  options.allocatorCapacity = 8L << 30;
-  options.arbitratorCapacity = 6L << 30;
-  options.memoryPoolInitCapacity = 512 << 20;
-  options.arbitratorKind = "SHARED";
-  options.checkUsageLeak = true;
-  options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
-  memory::MemoryManager::testingSetInstance(options);
-  asyncDataCache_ =
-      cache::AsyncDataCache::create(memory::memoryManager()->allocator());
-  cache::AsyncDataCache::setInstance(asyncDataCache_.get());
+  resetMemory();
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   TestValue::enable();
@@ -86,15 +77,55 @@ void OperatorTestBase::TearDownTestCase() {
   memory::SharedArbitrator::unregisterFactory();
 }
 
+void OperatorTestBase::setupMemory(
+    int64_t allocatorCapacity,
+    int64_t arbitratorCapacity,
+    int64_t arbitratorReservedCapacity,
+    int64_t memoryPoolInitCapacity,
+    int64_t memoryPoolReservedCapacity) {
+  if (asyncDataCache_ != nullptr) {
+    asyncDataCache_->testingClear();
+    asyncDataCache_.reset();
+  }
+  MemoryManagerOptions options;
+  options.allocatorCapacity = allocatorCapacity;
+  options.arbitratorCapacity = arbitratorCapacity;
+  options.arbitratorReservedCapacity = arbitratorReservedCapacity;
+  options.memoryPoolInitCapacity = memoryPoolInitCapacity;
+  options.memoryPoolReservedCapacity = memoryPoolReservedCapacity;
+  options.arbitratorKind = "SHARED";
+  options.checkUsageLeak = true;
+  options.globalArbitrationEnabled = true;
+  options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
+  memory::MemoryManager::testingSetInstance(options);
+  asyncDataCache_ =
+      cache::AsyncDataCache::create(memory::memoryManager()->allocator());
+  cache::AsyncDataCache::setInstance(asyncDataCache_.get());
+}
+
+void OperatorTestBase::resetMemory() {
+  OperatorTestBase::setupMemory(8L << 30, 6L << 30, 0, 512 << 20, 0);
+}
+
 void OperatorTestBase::SetUp() {
   if (!isRegisteredVectorSerde()) {
     this->registerVectorSerde();
   }
   driverExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(3);
   ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
+  testingStartLocalExchangeSource();
 }
 
-void OperatorTestBase::TearDown() {}
+void OperatorTestBase::TearDown() {
+  waitForAllTasksToBeDeleted();
+  // There might be lingering exchange source on executor even after all tasks
+  // are deleted. This can cause memory leak because exchange source holds
+  // reference to memory pool. We need to make sure they are properly cleaned.
+  testingShutdownLocalExchangeSource();
+  pool_.reset();
+  rootPool_.reset();
+  resetMemory();
+}
 
 std::shared_ptr<Task> OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,

@@ -33,6 +33,7 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
@@ -56,9 +57,11 @@ class ExprTest : public testing::Test, public VectorTestBase {
 
   core::TypedExprPtr parseExpression(
       const std::string& text,
-      const RowTypePtr& rowType) {
+      const RowTypePtr& rowType,
+      const VectorPtr& complexConstants = nullptr) {
     auto untyped = parse::parseExpr(text, options_);
-    return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
+    return core::Expressions::inferTypes(
+        untyped, rowType, execCtx_->pool(), complexConstants);
   }
 
   core::TypedExprPtr parseExpression(
@@ -93,9 +96,27 @@ class ExprTest : public testing::Test, public VectorTestBase {
   template <typename T = exec::ExprSet>
   std::unique_ptr<T> compileExpression(
       const std::string& expr,
-      const RowTypePtr& rowType) {
-    auto parsedExpression = parseExpression(expr, rowType);
+      const RowTypePtr& rowType,
+      const VectorPtr& complexConstants = nullptr) {
+    auto parsedExpression = parseExpression(expr, rowType, complexConstants);
     return compileExpression<T>(parsedExpression);
+  }
+
+  std::unique_ptr<exec::ExprSet> compileNoConstantFolding(
+      const std::string& sql,
+      const RowTypePtr& rowType,
+      const VectorPtr& complexConstants = nullptr) {
+    auto expression = parseExpression(sql, rowType, complexConstants);
+    return compileNoConstantFolding(expression);
+  }
+
+  std::unique_ptr<exec::ExprSet> compileNoConstantFolding(
+      const core::TypedExprPtr& expression) {
+    std::vector<core::TypedExprPtr> expressions = {expression};
+    return std::make_unique<exec::ExprSet>(
+        std::move(expressions),
+        execCtx_.get(),
+        false /*enableConstantFolding*/);
   }
 
   std::unique_ptr<exec::ExprSet> compileMultiple(
@@ -246,7 +267,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
     VELOX_CHECK(startPos != std::string::npos);
     startPos += strlen(key);
     auto endPos = context.find(".", startPos);
-    VELOX_CHECK(endPos != std::string::npos);
+    VELOX_CHECK(endPos != std::string::npos, context);
     return context.substr(startPos, endPos - startPos);
   }
 
@@ -277,15 +298,16 @@ class ExprTest : public testing::Test, public VectorTestBase {
   }
 
   void verifyDataAndSqlPaths(const VeloxException& e, const VectorPtr& data) {
-    auto inputPath = extractInputPath(e.topLevelContext());
+    auto inputPath = extractInputPath(e.additionalContext());
     auto copy = restoreVector(inputPath);
     assertEqualVectors(data, copy);
 
-    auto sqlPath = extractSqlPath(e.topLevelContext());
+    auto sqlPath = extractSqlPath(e.additionalContext());
     auto sql = readSqlFromFile(sqlPath);
     ASSERT_NO_THROW(compileExpression(sql, asRowType(data->type())));
 
-    auto allSqlsPath = extractAllExprSqlPath(e.topLevelContext());
+    LOG(ERROR) << e.additionalContext();
+    auto allSqlsPath = extractAllExprSqlPath(e.additionalContext());
     auto allSqls = readSqlFromFile(allSqlsPath);
     ASSERT_NO_THROW(compileMultipleExprs(allSqls, asRowType(data->type())));
   }
@@ -313,20 +335,22 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return sql;
   }
 
-  void assertError(
+  std::exception_ptr assertError(
       const std::string& expression,
       const VectorPtr& input,
       const std::string& context,
-      const std::string& topLevelContext,
+      const std::string& additionalContext,
       const std::string& message) {
     try {
       evaluate(expression, makeRowVector({input}));
-      ASSERT_TRUE(false) << "Expected an error";
+      EXPECT_TRUE(false) << "Expected an error";
     } catch (VeloxException& e) {
-      ASSERT_EQ(message, e.message());
-      ASSERT_EQ(context, trimInputPath(e.context()));
-      ASSERT_EQ(topLevelContext, trimInputPath(e.topLevelContext()));
+      EXPECT_EQ(context, trimInputPath(e.context()));
+      EXPECT_EQ(additionalContext, trimInputPath(e.additionalContext()));
+      EXPECT_EQ(message, e.message());
+      return e.wrappedException();
     }
+    return nullptr;
   }
 
   void assertErrorSimplified(
@@ -348,14 +372,14 @@ class ExprTest : public testing::Test, public VectorTestBase {
       const std::string& expression,
       const VectorPtr& input,
       const std::string& context,
-      const std::string& topLevelContext,
+      const std::string& additionalContext,
       const std::string& message) {
     try {
       evaluate(expression, makeRowVector({input}));
       EXPECT_TRUE(false) << "Expected an error";
     } catch (VeloxException& e) {
       EXPECT_EQ(context, trimInputPath(e.context()));
-      EXPECT_EQ(topLevelContext, trimInputPath(e.topLevelContext()));
+      EXPECT_EQ(additionalContext, trimInputPath(e.additionalContext()));
       EXPECT_EQ(message, e.message());
       return e.wrappedException();
     }
@@ -377,7 +401,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return exprSet.exprs().front()->propagatesNulls();
   }
 
-  std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
+  std::shared_ptr<core::QueryCtx> queryCtx_{velox::core::QueryCtx::create()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
   parse::ParseOptions options_;
@@ -390,7 +414,7 @@ class ParameterizedExprTest : public ExprTest,
     std::unordered_map<std::string, std::string> configData(
         {{core::QueryConfig::kEnableExpressionEvaluationCache,
           GetParam() ? "true" : "false"}});
-    queryCtx_ = std::make_shared<core::QueryCtx>(
+    queryCtx_ = velox::core::QueryCtx::create(
         nullptr, core::QueryConfig(std::move(configData)));
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
   }
@@ -770,8 +794,8 @@ TEST_P(ParameterizedExprTest, dictionaryAndConstantOverLazy) {
   auto row = makeRowVector({lazyVector});
   auto result = evaluate("plus5(c0)", row);
 
-  auto expected = makeFlatVector<int32_t>(
-      size, [](auto row) { return row + 5; }, isNullAt);
+  auto expected =
+      makeFlatVector<int32_t>(size, [](auto row) { return row + 5; }, isNullAt);
   assertEqualVectors(expected, result);
 
   // Wrap LazyVector in a dictionary (select only even rows).
@@ -1164,8 +1188,8 @@ TEST_P(ParameterizedExprTest, lazyVectors) {
 
   auto result = evaluate("c0 + coalesce(c0, 1)", row);
 
-  auto expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row * 2; }, nullptr);
+  auto expected =
+      makeFlatVector<int64_t>(size, [](auto row) { return row * 2; }, nullptr);
   assertEqualVectors(expected, result);
 
   // Make LazyVector with nulls
@@ -1175,8 +1199,8 @@ TEST_P(ParameterizedExprTest, lazyVectors) {
 
   result = evaluate("c0 + coalesce(c0, 1)", row);
 
-  expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row * 2; }, isNullAt);
+  expected =
+      makeFlatVector<int64_t>(size, [](auto row) { return row * 2; }, isNullAt);
   assertEqualVectors(expected, result);
 }
 
@@ -2389,7 +2413,9 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
     ASSERT_EQ("always_throws(c0)", e.context());
-    ASSERT_EQ("plus(always_throws(c0), c1)", e.topLevelContext());
+    ASSERT_EQ(
+        "Top-level Expression: plus(always_throws(c0), c1)",
+        e.additionalContext());
   }
 
   try {
@@ -2398,8 +2424,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
-        e.topLevelContext());
+        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        e.additionalContext());
   }
 
   try {
@@ -2408,14 +2434,14 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((c1) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
-        e.topLevelContext());
+        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
+        e.additionalContext());
   }
 
   // Enable saving vector and expression SQL for system errors only.
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   FLAGS_velox_save_input_on_expression_system_failure_path =
-      tempDirectory->path;
+      tempDirectory->getPath();
 
   try {
     evaluate("runtime_error(c0) + c1", data);
@@ -2423,7 +2449,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   } catch (const VeloxException& e) {
     ASSERT_EQ("runtime_error(c0)", e.context());
     ASSERT_EQ(
-        "plus(runtime_error(c0), c1)", trimInputPath(e.topLevelContext()));
+        "Top-level Expression: plus(runtime_error(c0), c1)",
+        trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
 
@@ -2433,8 +2460,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
-        e.topLevelContext())
+        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        e.additionalContext())
         << e.errorSource();
   }
 
@@ -2444,12 +2471,13 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
-        e.topLevelContext());
+        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        e.additionalContext());
   }
 
   // Enable saving vector and expression SQL for all errors.
-  FLAGS_velox_save_input_on_expression_any_failure_path = tempDirectory->path;
+  FLAGS_velox_save_input_on_expression_any_failure_path =
+      tempDirectory->getPath();
   FLAGS_velox_save_input_on_expression_system_failure_path = "";
 
   try {
@@ -2458,7 +2486,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   } catch (const VeloxException& e) {
     ASSERT_EQ("always_throws(c0)", e.context());
     ASSERT_EQ(
-        "plus(always_throws(c0), c1)", trimInputPath(e.topLevelContext()));
+        "Top-level Expression: plus(always_throws(c0), c1)",
+        trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
 
@@ -2468,8 +2497,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
-        trimInputPath(e.topLevelContext()));
+        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
 
@@ -2479,8 +2508,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((c1) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
-        trimInputPath(e.topLevelContext()));
+        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
+        trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
 
@@ -2490,8 +2519,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((c1) as BIGINT), 0:BIGINT)", e.context());
     ASSERT_EQ(
-        "plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
-        trimInputPath(e.topLevelContext()));
+        "Top-level Expression: plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
+        trimInputPath(e.additionalContext()));
     verifyDataAndSqlPaths(e, data);
   }
 }
@@ -2514,19 +2543,19 @@ TEST_P(ParameterizedExprTest, stdExceptionContext) {
   registerFunction<AlwaysThrowsStdExceptionFunction, int64_t, int64_t>(
       {"throw_invalid_argument"});
 
-  auto wrappedEx = assertWrappedException(
+  auto wrappedEx = assertError(
       "throw_invalid_argument(c0) + 5",
       data,
       "throw_invalid_argument(c0)",
-      "plus(throw_invalid_argument(c0), 5:BIGINT)",
+      "Top-level Expression: plus(throw_invalid_argument(c0), 5:BIGINT)",
       "This is a test");
   ASSERT_THROW(std::rethrow_exception(wrappedEx), std::invalid_argument);
 
-  wrappedEx = assertWrappedException(
+  wrappedEx = assertError(
       "throw_invalid_argument(c0 + 5)",
       data,
-      "throw_invalid_argument(plus(c0, 5:BIGINT))",
-      "Same as context.",
+      "Top-level Expression: throw_invalid_argument(plus(c0, 5:BIGINT))",
+      "",
       "This is a test");
   ASSERT_THROW(std::rethrow_exception(wrappedEx), std::invalid_argument);
 }
@@ -2631,7 +2660,7 @@ TEST_P(ParameterizedExprTest, constantToSql) {
 
   ASSERT_EQ(
       toSql(Timestamp(123'456, 123'000)),
-      "'1970-01-02T10:17:36.000123000'::TIMESTAMP");
+      "'1970-01-02 10:17:36.000123000'::TIMESTAMP");
   ASSERT_EQ(toSql(variant::null(TypeKind::TIMESTAMP)), "NULL::TIMESTAMP");
 
   ASSERT_EQ(
@@ -2712,6 +2741,39 @@ TEST_P(ParameterizedExprTest, constantToSql) {
           10,
           pool())),
       "NULL::STRUCT(a BOOLEAN, b STRUCT(c DOUBLE, d VARCHAR))");
+}
+
+TEST_P(ParameterizedExprTest, constantJsonToSql) {
+  core::TypedExprPtr expression = std::make_shared<const core::CallTypedExpr>(
+      VARCHAR(),
+      std::vector<core::TypedExprPtr>{makeConstantExpr("[1, 2, 3]", JSON())},
+      "json_format");
+
+  auto exprSet = compileNoConstantFolding(expression);
+
+  std::vector<VectorPtr> complexConstants;
+  auto sql = exprSet->expr(0)->toSql(&complexConstants);
+
+  auto copy =
+      compileNoConstantFolding(sql, ROW({}), makeRowVector(complexConstants));
+  ASSERT_EQ(
+      exprSet->toString(false /*compact*/), copy->toString(false /*compact*/))
+      << sql;
+}
+
+TEST_P(ParameterizedExprTest, lambdaToSql) {
+  auto exprSet = compileNoConstantFolding(
+      "transform(array[1, 2, 3], x -> (x + cardinality(array[10, 20, 30])))",
+      ROW({}));
+
+  std::vector<VectorPtr> complexConstants;
+  auto sql = exprSet->expr(0)->toSql(&complexConstants);
+
+  auto copy =
+      compileNoConstantFolding(sql, ROW({}), makeRowVector(complexConstants));
+  ASSERT_EQ(
+      exprSet->toString(false /*compact*/), copy->toString(false /*compact*/))
+      << sql;
 }
 
 TEST_P(ParameterizedExprTest, toSql) {
@@ -2892,15 +2954,15 @@ TEST_P(ParameterizedExprTest, castExceptionContext) {
   assertError(
       "cast(c0 as bigint)",
       makeFlatVector<std::string>({"1a"}),
-      "cast((c0) as BIGINT)",
-      "Same as context.",
-      "Cannot cast VARCHAR '1a' to BIGINT. Non-whitespace character found after end of conversion: \"a\"");
+      "Top-level Expression: cast((c0) as BIGINT)",
+      "",
+      "Cannot cast VARCHAR '1a' to BIGINT. Non-whitespace character found after end of conversion: \"\"");
 
   assertError(
       "cast(c0 as timestamp)",
       makeFlatVector(std::vector<int8_t>{1}),
-      "cast((c0) as TIMESTAMP)",
-      "Same as context.",
+      "Top-level Expression: cast((c0) as TIMESTAMP)",
+      "",
       "Cannot cast TINYINT '1' to TIMESTAMP. Conversion to Timestamp is not supported");
 }
 
@@ -2909,7 +2971,7 @@ TEST_P(ParameterizedExprTest, switchExceptionContext) {
       "case c0 when 7 then c0 / 0 else 0 end",
       makeFlatVector(std::vector<int64_t>{7}),
       "divide(c0, 0:BIGINT)",
-      "switch(eq(c0, 7:BIGINT), divide(c0, 0:BIGINT), 0:BIGINT)",
+      "Top-level Expression: switch(eq(c0, 7:BIGINT), divide(c0, 0:BIGINT), 0:BIGINT)",
       "division by zero");
 }
 
@@ -2920,7 +2982,7 @@ TEST_P(ParameterizedExprTest, conjunctExceptionContext) {
       "if (c0 % 409 < 300 and c0 / 0 < 30, 1, 2)",
       data,
       "divide(c0, 0:BIGINT)",
-      "switch(and(lt(mod(c0, 409:BIGINT), 300:BIGINT), lt(divide(c0, 0:BIGINT), 30:BIGINT)), 1:BIGINT, 2:BIGINT)",
+      "Top-level Expression: switch(and(lt(mod(c0, 409:BIGINT), 300:BIGINT), lt(divide(c0, 0:BIGINT), 30:BIGINT)), 1:BIGINT, 2:BIGINT)",
       "division by zero");
 }
 
@@ -2932,7 +2994,7 @@ TEST_P(ParameterizedExprTest, lambdaExceptionContext) {
       "filter(c0, x -> (x / 0 > 1))",
       array,
       "divide(x, 0:BIGINT)",
-      "filter(c0, (x) -> gt(divide(x, 0:BIGINT), 1:BIGINT))",
+      "Top-level Expression: filter(c0, (x) -> gt(divide(x, 0:BIGINT), 1:BIGINT))",
       "division by zero");
 }
 
@@ -3474,7 +3536,7 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
       "always_throws_vector_function(c0) AND true",
       makeFlatVector<int32_t>({1, 2, 3}),
       "always_throws_vector_function(c0)",
-      "and(always_throws_vector_function(c0), true:BOOLEAN)",
+      "Top-level Expression: and(always_throws_vector_function(c0), true:BOOLEAN)",
       TestingAlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
@@ -3486,7 +3548,7 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
       "no_op(c0) AND true",
       makeFlatVector<int32_t>({1, 2, 3}),
       "no_op(c0)",
-      "and(no_op(c0), true:BOOLEAN)",
+      "Top-level Expression: and(no_op(c0), true:BOOLEAN)",
       "Function neither returned results nor threw exception.");
 }
 
@@ -3616,8 +3678,8 @@ TEST_P(ParameterizedExprTest, stdExceptionInVectorFunction) {
   assertError(
       "always_throws_vector_function(c0)",
       makeFlatVector<int32_t>({1, 2, 3}),
-      "always_throws_vector_function(c0)",
-      "Same as context.",
+      "Top-level Expression: always_throws_vector_function(c0)",
+      "",
       TestingAlwaysThrowsVectorFunction::kStdErrorMessage);
 
   assertErrorSimplified(
@@ -3757,6 +3819,72 @@ TEST_P(ParameterizedExprTest, cseUnderTryWithIf) {
           std::nullopt,
       }),
       result);
+}
+
+// Test AND/OR expressions with multiple conjucts generating errors in different
+// rows. With and without TRY.
+TEST_P(ParameterizedExprTest, failingConjuncts) {
+  auto input = makeRowVector({
+      makeFlatVector<std::string>({"10", "foo", "11"}),
+      makeFlatVector<std::string>({"bar", "10", "11"}),
+      makeFlatVector<int64_t>({1, 2, 3}),
+  });
+
+  // cast(c0 as bigint) throws on 1st row.
+  // cast(c1 as bigint) throws on 2nd row.
+  // c2 > 0 doesn't throw and returns true for all rows.
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "cast(c0 as bigint) > 0 AND cast(c1 as bigint) > 0 AND c2 > 0",
+          input),
+      "Cannot cast VARCHAR 'bar' to BIGINT.");
+
+  auto result = evaluate(
+      "try(cast(c0 as bigint) > 0 AND cast(c1 as bigint) > 0 AND c2 > 0)",
+      input);
+
+  auto expected =
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, true});
+  assertEqualVectors(expected, result);
+
+  // c2 <> 1 returns false for 1st row and masks errors from other conjuncts.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "cast(c0 as bigint) > 0 AND cast(c1 as bigint) > 0 AND c2 <> 1",
+          input),
+      "Cannot cast VARCHAR 'foo' to BIGINT.");
+
+  result = evaluate(
+      "try(cast(c0 as bigint) > 0 AND cast(c1 as bigint) > 0 AND c2 <> 1)",
+      input);
+  expected = makeNullableFlatVector<bool>({false, std::nullopt, true});
+  assertEqualVectors(expected, result);
+
+  // OR succeeds because c2 > 0 returns 'true' for all rows and masks errors
+  // from other conjuncts.
+
+  result = evaluate(
+      "cast(c0 as bigint) < 0 OR cast(c1 as bigint) < 0 OR c2 > 0", input);
+  expected = makeFlatVector<bool>({true, true, true});
+  assertEqualVectors(expected, result);
+
+  result = evaluate(
+      "try(cast(c0 as bigint) < 0 OR cast(c1 as bigint) < 0 OR c2 > 0)", input);
+  assertEqualVectors(expected, result);
+
+  // c2 <> 1 returns 'false' for 1st row and fails to mask errors from other
+  // conjuncts.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "cast(c0 as bigint) < 0 OR cast(c1 as bigint) < 0 OR c2 <> 1", input),
+      "Cannot cast VARCHAR 'bar' to BIGINT.");
+
+  result = evaluate(
+      "try(cast(c0 as bigint) < 0 OR cast(c1 as bigint) < 0 OR c2 <> 1)",
+      input);
+  expected = makeNullableFlatVector<bool>({std::nullopt, true, true});
+  assertEqualVectors(expected, result);
 }
 
 TEST_P(ParameterizedExprTest, conjunctUnderTry) {
@@ -4173,7 +4301,7 @@ TEST_F(ExprTest, commonSubExpressionWithPeeling) {
       // Set max_shared_subexpr_results_cached low so the
       // second result isn't cached, so expr1 is only evaluated once, but expr2
       // is evaluated twice.
-      auto queryCtx = std::make_shared<core::QueryCtx>(
+      auto queryCtx = velox::core::QueryCtx::create(
           nullptr,
           core::QueryConfig(std::unordered_map<std::string, std::string>{
               {core::QueryConfig::kMaxSharedSubexprResultsCached, "1"}}));

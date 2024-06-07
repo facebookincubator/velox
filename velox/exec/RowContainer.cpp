@@ -20,9 +20,12 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Operator.h"
+#include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::exec {
 namespace {
+static constexpr int32_t kNextRowVectorSize = sizeof(NextRowVector);
+
 template <TypeKind Kind>
 static int32_t kindSize() {
   return sizeof(typename KindToFlatVector<Kind>::HashRowType);
@@ -311,6 +314,7 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
     auto rows = folly::Range<char**>(&row, 1);
     freeVariableWidthFields(rows);
     freeAggregates(rows);
+    VELOX_CHECK_EQ(nextOffset_, 0);
   } else if (rowSizeOffset_ != 0) {
     // zero out string views so that clear() will not hit uninited data. The
     // fastest way is to set the whole row to 0.
@@ -325,14 +329,15 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
   if (rowSizeOffset_) {
     variableRowSize(row) = 0;
   }
+  if (nextOffset_) {
+    getNextRowVector(row) = nullptr;
+  }
   bits::clearBit(row, freeFlagOffset_);
   return row;
 }
 
 void RowContainer::eraseRows(folly::Range<char**> rows) {
-  freeVariableWidthFields(rows);
-  freeAggregates(rows);
-  numRows_ -= rows.size();
+  freeRowsExtraMemory(rows, false);
   for (auto* row : rows) {
     VELOX_CHECK(!bits::isBitSet(row, freeFlagOffset_), "Double free of row");
     bits::setBit(row, freeFlagOffset_);
@@ -385,6 +390,19 @@ int32_t RowContainer::findRows(folly::Range<char**> rows, char** result) {
   return numRows;
 }
 
+void RowContainer::appendNextRow(char* current, char* nextRow) {
+  NextRowVector*& nextRowArrayPtr = getNextRowVector(current);
+  if (!nextRowArrayPtr) {
+    nextRowArrayPtr =
+        new (stringAllocator_->allocate(kNextRowVectorSize)->begin())
+            NextRowVector(StlAllocator<char*>(stringAllocator_.get()));
+    hasDuplicateRows_ = true;
+    nextRowArrayPtr->emplace_back(current);
+  }
+  nextRowArrayPtr->emplace_back(nextRow);
+  getNextRowVector(nextRow) = nextRowArrayPtr;
+}
+
 void RowContainer::freeVariableWidthFields(folly::Range<char**> rows) {
   for (auto i = 0; i < types_.size(); ++i) {
     switch (typeKinds_[i]) {
@@ -435,6 +453,56 @@ void RowContainer::freeAggregates(folly::Range<char**> rows) {
   for (auto& accumulator : accumulators_) {
     accumulator.destroy(rows);
   }
+}
+
+void RowContainer::freeNextRowVectors(folly::Range<char**> rows, bool clear) {
+  if (!nextOffset_ || !hasDuplicateRows_) {
+    return;
+  }
+
+  if (clear) {
+    for (auto row : rows) {
+      auto vector = getNextRowVector(row);
+      if (vector) {
+        // Clear all rows, we can clear the nextOffset_ slots and delete the
+        // next-row-vector.
+        for (auto& next : *vector) {
+          getNextRowVector(next) = nullptr;
+        }
+        // Because of 'parallelJoinBuild', the memory for the next row vector
+        // may not be allocated from the RowContainer to which the row belongs,
+        // hence we need to release memory through the vector's allocator.
+        auto allocator = vector->get_allocator().allocator();
+        std::destroy_at(vector);
+        allocator->free(HashStringAllocator::headerOf(vector));
+      }
+    }
+    return;
+  }
+
+  for (auto row : rows) {
+    auto vector = getNextRowVector(row);
+    if (vector) {
+      // If 'clear' is false, the caller must ensure that all rows with same
+      // keys appear in the 'rows'.
+      for (auto& next : *vector) {
+        VELOX_CHECK(
+            std::find(rows.begin(), rows.end(), next) != rows.end(),
+            "All rows with the same keys must be present in 'rows'");
+        getNextRowVector(next) = nullptr;
+      }
+      auto allocator = vector->get_allocator().allocator();
+      std::destroy_at(vector);
+      allocator->free(HashStringAllocator::headerOf(vector));
+    }
+  }
+}
+
+void RowContainer::freeRowsExtraMemory(folly::Range<char**> rows, bool clear) {
+  freeVariableWidthFields(rows);
+  freeAggregates(rows);
+  freeNextRowVectors(rows, clear);
+  numRows_ -= rows.size();
 }
 
 void RowContainer::store(
@@ -705,14 +773,7 @@ void RowContainer::storeComplexType(
 
   valueAt<std::string_view>(row, offset) = std::string_view(
       reinterpret_cast<char*>(position.position), stream.size());
-
-  // TODO Fix ByteOutputStream::size() API. @oerling is looking into that.
-  // Fix the 'size' of the std::string_view.
-  // stream.size() is the capacity
-  // stream.size() - stream.remainingSize() is the size of the data + size of
-  // 'next' links (8 bytes per link).
-  auto readStream = prepareRead(row, offset);
-  const auto size = readStream.size();
+  const auto size = stream.size();
   valueAt<std::string_view>(row, offset) =
       std::string_view(reinterpret_cast<char*>(position.position), size);
 }
@@ -790,15 +851,17 @@ void RowContainer::hashTyped(
                       : BaseVector::kNullHash;
     } else {
       uint64_t hash;
-      if (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+      if constexpr (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
         hash =
             folly::hasher<StringView>()(HashStringAllocator::contiguousString(
                 valueAt<StringView>(row, offset), storage));
-      } else if (
+      } else if constexpr (
           Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
           Kind == TypeKind::MAP) {
         auto in = prepareRead(row, offset);
         hash = ContainerRowSerde::hash(in, type);
+      } else if constexpr (std::is_floating_point_v<T>) {
+        hash = util::floating_point::NaNAwareHash<T>()(valueAt<T>(row, offset));
       } else {
         hash = folly::hasher<T>()(valueAt<T>(row, offset));
       }
@@ -834,12 +897,13 @@ void RowContainer::hash(
 
 void RowContainer::clear() {
   const bool sharedStringAllocator = !stringAllocator_.unique();
-  if (checkFree_ || sharedStringAllocator || usesExternalMemory_) {
+  if (checkFree_ || sharedStringAllocator || usesExternalMemory_ ||
+      hasDuplicateRows_) {
     constexpr int32_t kBatch = 1000;
     std::vector<char*> rows(kBatch);
     RowContainerIterator iter;
     while (auto numRows = listRows(&iter, kBatch, rows.data())) {
-      eraseRows(folly::Range<char**>(rows.data(), numRows));
+      freeRowsExtraMemory(folly::Range<char**>(rows.data(), numRows), true);
     }
   }
   rows_.clear();
@@ -854,6 +918,18 @@ void RowContainer::clear() {
   normalizedKeySize_ = originalNormalizedKeySize_;
   numFreeRows_ = 0;
   firstFreeRow_ = nullptr;
+}
+
+void RowContainer::clearNextRowVectors() {
+  if (hasDuplicateRows_) {
+    constexpr int32_t kBatch = 1000;
+    std::vector<char*> rows(kBatch);
+    RowContainerIterator iter;
+    while (auto numRows = listRows(&iter, kBatch, rows.data())) {
+      freeNextRowVectors(folly::Range<char**>(rows.data(), numRows), true);
+    }
+    hasDuplicateRows_ = false;
+  }
 }
 
 void RowContainer::setProbedFlag(char** rows, int32_t numRows) {

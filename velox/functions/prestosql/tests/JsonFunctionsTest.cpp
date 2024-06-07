@@ -272,7 +272,7 @@ TEST_F(JsonFunctionsTest, jsonParse) {
     jsonParse(R"({"k1":})");
     FAIL() << "Error expected";
   } catch (const VeloxUserError& e) {
-    ASSERT_EQ(e.context(), "json_parse(c0)");
+    ASSERT_EQ(e.context(), "Top-level Expression: json_parse(c0)");
   }
 }
 
@@ -358,6 +358,39 @@ TEST_F(JsonFunctionsTest, jsonArrayLength) {
   EXPECT_EQ(jsonArrayLength(R"({"k1":[0,1,2], "k2":"v1"})"), std::nullopt);
 }
 
+TEST_F(JsonFunctionsTest, jsonArrayGet) {
+  auto arrayGet = [&](const std::string& json, int64_t index) {
+    auto r1 = evaluateOnce<std::string, std::string, int64_t>(
+        "json_array_get(c0, c1)", {JSON(), BIGINT()}, {json}, {index});
+    auto r2 = evaluateOnce<std::string, std::string, int64_t>(
+        "json_array_get(c0, c1)", {json}, {index});
+
+    EXPECT_EQ(r1, r2);
+    return r1;
+  };
+
+  EXPECT_FALSE(arrayGet("{}", 1).has_value());
+  EXPECT_FALSE(arrayGet("[]", 1).has_value());
+
+  EXPECT_EQ(arrayGet("[1, 2, 3]", 0), "1");
+  EXPECT_EQ(arrayGet("[1, 2, 3]", 1), "2");
+  EXPECT_EQ(arrayGet("[1, 2, 3]", 2), "3");
+  EXPECT_FALSE(arrayGet("[1, 2, 3]", 3).has_value());
+
+  EXPECT_EQ(arrayGet("[1, 2, 3]", -1), "3");
+  EXPECT_EQ(arrayGet("[1, 2, 3]", -2), "2");
+  EXPECT_EQ(arrayGet("[1, 2, 3]", -3), "1");
+  EXPECT_FALSE(arrayGet("[1, 2, 3]", -4).has_value());
+
+  EXPECT_EQ(arrayGet("[[1, 2], [3, 4], []]", 0), "[1, 2]");
+  EXPECT_EQ(arrayGet("[[1, 2], [3, 4], []]", 2), "[]");
+
+  EXPECT_EQ(arrayGet("[{\"foo\": 123}, {\"foo\": 456}]", 1), "{\"foo\": 456}");
+
+  EXPECT_FALSE(arrayGet("[1, 2, ...", 1).has_value());
+  EXPECT_FALSE(arrayGet("not json", 1).has_value());
+}
+
 TEST_F(JsonFunctionsTest, jsonArrayContainsBool) {
   EXPECT_EQ(jsonArrayContains<bool>(R"([])", true), false);
   EXPECT_EQ(jsonArrayContains<bool>(R"([1, 2, 3])", false), false);
@@ -410,11 +443,15 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsBigint) {
   EXPECT_EQ(
       jsonArrayContains<int64_t>(R"("thefoxjumpedoverthefence")", 1),
       std::nullopt);
+
   EXPECT_EQ(jsonArrayContains<int64_t>(R"("")", 1), std::nullopt);
   EXPECT_EQ(jsonArrayContains<int64_t>(R"(true)", 1), std::nullopt);
   EXPECT_EQ(
       jsonArrayContains<int64_t>(R"({"k1":[0,1,2], "k2":"v1"})", 1),
       std::nullopt);
+
+  EXPECT_EQ(jsonArrayContains<int64_t>(R"([1, 2, 3,...)", 2), std::nullopt);
+  EXPECT_EQ(jsonArrayContains<int64_t>(R"([1, 2, 3,...)", 5), std::nullopt);
 
   EXPECT_EQ(jsonArrayContains<int64_t>(R"([1, 2, 3])", 1), true);
   EXPECT_EQ(jsonArrayContains<int64_t>(R"([1, 2, 3])", 4), false);
@@ -460,6 +497,13 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsDouble) {
   EXPECT_EQ(
       jsonArrayContains<double>(R"({"k1":[0,1,2], "k2":"v1"})", 2.3),
       std::nullopt);
+
+  static const double kNan = std::numeric_limits<double>::quiet_NaN();
+  static const double kInf = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(jsonArrayContains<double>(R"([1.1, 2.2, 3.3])", kNan), false);
+  EXPECT_EQ(jsonArrayContains<double>(R"([1.1, 2.2, 3.3])", kInf), false);
+  EXPECT_EQ(jsonArrayContains<double>(R"([1.1, 2.2, 3.3...)", kNan), false);
+  EXPECT_EQ(jsonArrayContains<double>(R"([1.1, 2.2, 3.3...)", kInf), false);
 
   EXPECT_EQ(jsonArrayContains<double>(R"([1.2, 2.3, 3.4])", 2.3), true);
   EXPECT_EQ(jsonArrayContains<double>(R"([1.2, 2.3, 3.4])", 2.4), false);
@@ -564,7 +608,7 @@ TEST_F(JsonFunctionsTest, jsonSize) {
 TEST_F(JsonFunctionsTest, invalidPath) {
   VELOX_ASSERT_THROW(jsonSize(R"([0,1,2])", ""), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonSize(R"([0,1,2])", "$[]"), "Invalid JSON path");
-  VELOX_ASSERT_THROW(jsonSize(R"([0,1,2])", "$[-1]"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(jsonSize(R"([0,1,2])", "$-1"), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonSize(R"({"k1":"v1"})", "$k1"), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonSize(R"({"k1":"v1"})", "$.k1."), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonSize(R"({"k1":"v1"})", "$.k1]"), "Invalid JSON path");
@@ -581,18 +625,26 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   };
 
   EXPECT_EQ(
-      "{\"x\": {\"a\" : 1, \"b\" : 2} }",
-      jsonExtract("{\"x\": {\"a\" : 1, \"b\" : 2} }", "$"));
+      R"({"x": {"a" : 1, "b" : 2} })",
+      jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$"));
   EXPECT_EQ(
-      "{\"a\" : 1, \"b\" : 2}",
-      jsonExtract("{\"x\": {\"a\" : 1, \"b\" : 2} }", "$.x"));
-  EXPECT_EQ("1", jsonExtract("{\"x\": {\"a\" : 1, \"b\" : 2} }", "$.x.a"));
+      R"({"a" : 1, "b" : 2})",
+      jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$.x"));
+  EXPECT_EQ("1", jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$.x.a"));
   EXPECT_EQ(
-      std::nullopt, jsonExtract("{\"x\": {\"a\" : 1, \"b\" : 2} }", "$.x.c"));
+      std::nullopt, jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$.x.c"));
+  EXPECT_EQ("3", jsonExtract(R"({"x": {"a" : 1, "b" : [2, 3]} })", "$.x.b[1]"));
   EXPECT_EQ(
-      "3", jsonExtract("{\"x\": {\"a\" : 1, \"b\" : [2, 3]} }", "$.x.b[1]"));
-  EXPECT_EQ("2", jsonExtract("[1,2,3]", "$[1]"));
-  EXPECT_EQ("null", jsonExtract("[1,null,3]", "$[1]"));
+      "1", jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", R"($['x']["a"])"));
+
+  EXPECT_EQ("2", jsonExtract("[1, 2, 3]", "$[1]"));
+  EXPECT_EQ("null", jsonExtract("[1, null, 3]", "$[1]"));
+  EXPECT_EQ(std::nullopt, jsonExtract("[1, 2, 3]", "$[10]"));
+
+  EXPECT_EQ("3", jsonExtract("[1, 2, 3]", "$[-1]"));
+  EXPECT_EQ("null", jsonExtract("[1, null, 3]", "$[-2]"));
+  EXPECT_EQ(std::nullopt, jsonExtract("[1, 2, 3]", "$[-10]"));
+
   EXPECT_EQ(std::nullopt, jsonExtract("INVALID_JSON", "$"));
   VELOX_ASSERT_THROW(jsonExtract("{\"\":\"\"}", ""), "Invalid JSON path");
 
@@ -600,6 +652,30 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
       "[\"0-553-21311-3\",\"0-395-19395-8\"]",
       jsonExtract(kJson, "$.store.book[*].isbn"));
   EXPECT_EQ("\"Evelyn Waugh\"", jsonExtract(kJson, "$.store.book[1].author"));
+
+  // Paths without leading '$'.
+  auto json = R"({"x": {"a": 1, "b": [10, 11, 12]} })";
+  EXPECT_EQ(R"({"a": 1, "b": [10, 11, 12]})", jsonExtract(json, "x"));
+  EXPECT_EQ("1", jsonExtract(json, "x.a"));
+  EXPECT_EQ("[10, 11, 12]", jsonExtract(json, "x.b"));
+  EXPECT_EQ("12", jsonExtract(json, "x.b[2]"));
+  EXPECT_EQ(std::nullopt, jsonExtract(json, "x.c"));
+  EXPECT_EQ(std::nullopt, jsonExtract(json, "x.b[20]"));
+
+  // Paths with redundant '.'s.
+  json = R"([[[{"a": 1, "b": [1, 2, 3]}]]])";
+  EXPECT_EQ("1", jsonExtract(json, "$.[0][0][0].a"));
+  EXPECT_EQ("[1, 2, 3]", jsonExtract(json, "$.[0].[0].[0].b"));
+  EXPECT_EQ("[1, 2, 3]", jsonExtract(json, "$[0][0].[0].b"));
+  EXPECT_EQ("3", jsonExtract(json, "$[0][0][0].b.[2]"));
+  EXPECT_EQ("3", jsonExtract(json, "$.[0].[0][0].b.[2]"));
+
+  // Definite vs. non-definite paths.
+  EXPECT_EQ("[123]", jsonExtract(R"({"a": [{"b": 123}]})", "$.a[*].b"));
+  EXPECT_EQ("123", jsonExtract(R"({"a": [{"b": 123}]})", "$.a[0].b"));
+
+  EXPECT_EQ("[]", jsonExtract(R"({"a": [{"b": 123}]})", "$.a[*].c"));
+  EXPECT_EQ(std::nullopt, jsonExtract(R"({"a": [{"b": 123}]})", "$.a[0].c"));
 
   // TODO The following paths are supported by Presto via Jayway, but do not
   // work in Velox yet. Figure out how to add support for these.
