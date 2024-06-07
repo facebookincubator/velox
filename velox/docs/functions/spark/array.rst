@@ -101,12 +101,6 @@ Array Functions
         SELECT array_repeat(100, 0); -- []
         SELECT array_repeat(100, -1); -- []
 
-.. spark:function:: array_size(array(E)) -> integer
-
-        Returns the size of the array. ::
-
-            SELECT array_size(array(1, 2, 3)); -- 3
-
 .. spark:function:: array_sort(array(E)) -> array(E)
 
     Returns an array which has the sorted order of the input array(E). The elements of array(E) must
@@ -197,6 +191,12 @@ Array Functions
 
     Returns the size of the array. Returns null for null input
     if :doc:`spark.legacy_size_of_null <../../configs>` is set to false.
+    Otherwise, returns -1 for null input.
+
+.. spark:function:: size(array(E), legacyOfNull) -> bigint
+
+    Returns the size of the array. Returns null for null input if `legacyOfNull`
+    is set to false, which is the behavior of Spark's `array_size` function.
     Otherwise, returns -1 for null input.
 
 .. spark:function:: sort_array(array(E)) -> array(E)
