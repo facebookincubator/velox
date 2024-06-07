@@ -120,9 +120,15 @@ Timestamp::toTimePoint(bool allowOverflow) const {
 
 void Timestamp::toTimezone(const date::time_zone& zone, bool allowOverflow) {
   auto tp = toTimePoint(allowOverflow);
-  auto epoch = zone.to_local(tp).time_since_epoch();
-  // NOTE: Round down to get the seconds of the current time point.
-  seconds_ = std::chrono::floor<std::chrono::seconds>(epoch).count();
+
+  try {
+    auto epoch = zone.to_local(tp).time_since_epoch();
+
+    // NOTE: Round down to get the seconds of the current time point.
+    seconds_ = std::chrono::floor<std::chrono::seconds>(epoch).count();
+  } catch (const std::runtime_error& e) {
+    VELOX_USER_FAIL(e.what());
+  }
 }
 
 void Timestamp::toTimezone(int16_t tzID) {

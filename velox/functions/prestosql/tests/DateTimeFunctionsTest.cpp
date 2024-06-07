@@ -3818,6 +3818,12 @@ TEST_F(DateTimeFunctionsTest, castDateForDateFunction) {
       -18297,
       castDateTest(Timestamp(
           -18297 * kSecondsInDay + kSecondsInDay - 1, kNanosInSecond - 1)));
+
+  // Trying to convert a very large timestamp should fail as velox/external/date
+  // can't convert past year 2037. Note that the correct result here should be
+  // 376358 ('3000-06-08'), and not 376357 ('3000-06-07').
+  VELOX_ASSERT_THROW(
+      castDateTest(Timestamp(32517359891, 0)), "Unable to convert timezone");
 }
 
 TEST_F(DateTimeFunctionsTest, currentDateWithTimezone) {
