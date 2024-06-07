@@ -60,6 +60,8 @@ enum class StatType {
   RATE,
   /// Tracks the count of inserted values.
   COUNT,
+  /// Tracks the histogram of inserted values.
+  HISTOGRAM,
 };
 
 /// This is the base stats reporter interface that should be extended by
