@@ -16,56 +16,9 @@
 
 #include "velox/functions/remote/server/RemoteFunctionService.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/expression/Expr.h"
 #include "velox/functions/remote/if/GetSerde.h"
-#include "velox/type/fbhive/HiveTypeParser.h"
-#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::functions {
-namespace {
-
-std::string getFunctionName(
-    const std::string& prefix,
-    const std::string& functionName) {
-  return prefix.empty() ? functionName
-                        : fmt::format("{}.{}", prefix, functionName);
-}
-
-TypePtr deserializeType(const std::string& input) {
-  // Use hive type parser/serializer.
-  return type::fbhive::HiveTypeParser().parse(input);
-}
-
-RowTypePtr deserializeArgTypes(const std::vector<std::string>& argTypes) {
-  const size_t argCount = argTypes.size();
-
-  std::vector<TypePtr> argumentTypes;
-  std::vector<std::string> typeNames;
-  argumentTypes.reserve(argCount);
-  typeNames.reserve(argCount);
-
-  for (size_t i = 0; i < argCount; ++i) {
-    argumentTypes.emplace_back(deserializeType(argTypes[i]));
-    typeNames.emplace_back(fmt::format("c{}", i));
-  }
-  return ROW(std::move(typeNames), std::move(argumentTypes));
-}
-
-} // namespace
-
-std::vector<core::TypedExprPtr> getExpressions(
-    const RowTypePtr& inputType,
-    const TypePtr& returnType,
-    const std::string& functionName) {
-  std::vector<core::TypedExprPtr> inputs;
-  for (size_t i = 0; i < inputType->size(); ++i) {
-    inputs.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-        inputType->childAt(i), inputType->nameOf(i)));
-  }
-
-  return {std::make_shared<core::CallTypedExpr>(
-      returnType, std::move(inputs), functionName)};
-}
 
 void RemoteFunctionServiceHandler::handleErrors(
     apache::thrift::field_ref<remote::RemoteFunctionPage&> result,
@@ -112,50 +65,25 @@ void RemoteFunctionServiceHandler::invokeFunction(
   const auto& functionHandle = request->get_remoteFunctionHandle();
   const auto& inputs = request->get_inputs();
 
-  // Deserialize types and data.
-  auto inputType = deserializeArgTypes(functionHandle.get_argumentTypes());
-  auto outputType = deserializeType(functionHandle.get_returnType());
-
   auto serdeFormat = inputs.get_pageFormat();
   auto serde = getSerde(serdeFormat);
 
-  auto inputVector =
-      IOBufToRowVector(inputs.get_payload(), inputType, *pool_, serde.get());
-
-  // Execute the expression.
-  const vector_size_t numRows = inputVector->size();
-  SelectivityVector rows{numRows};
-
-  // Expression boilerplate.
-  auto queryCtx = core::QueryCtx::create();
-  core::ExecCtx execCtx{pool_.get(), queryCtx.get()};
-  exec::ExprSet exprSet{
-      getExpressions(
-          inputType,
-          outputType,
-          getFunctionName(functionPrefix_, functionHandle.get_name())),
-      &execCtx};
-
-  exec::EvalCtx evalCtx(&execCtx, &exprSet, inputVector.get());
-  if (!request->get_throwOnError()) {
-    *evalCtx.mutableThrowOnError() = false;
-  }
-
-  std::vector<VectorPtr> expressionResult;
-  exprSet.eval(rows, evalCtx, expressionResult);
-
-  // Create output vector.
-  auto outputRowVector = std::make_shared<RowVector>(
-      pool_.get(), ROW({outputType}), BufferPtr(), numRows, expressionResult);
+  auto outputRowVector = invokeFunctionInternal(
+      inputs.get_payload(),
+      functionHandle.get_argumentTypes(),
+      functionHandle.get_returnType(),
+      functionHandle.get_name(),
+      request->get_throwOnError(),
+      serde.get());
 
   auto result = response.result_ref();
   result->rowCount_ref() = outputRowVector->size();
   result->pageFormat_ref() = serdeFormat;
-  result->payload_ref() =
-      rowVectorToIOBuf(outputRowVector, rows.end(), *pool_, serde.get());
+  result->payload_ref() = rowVectorToIOBuf(
+      outputRowVector, outputRowVector->size(), *pool_, serde.get());
 
-  auto evalErrors = evalCtx.errors();
-  if (evalErrors != nullptr && evalErrors->hasError()) {
+  auto evalErrors = getEvalErrors_();
+  if (evalErrors && evalErrors->hasError()) {
     handleErrors(result, evalErrors, serde);
   }
 }

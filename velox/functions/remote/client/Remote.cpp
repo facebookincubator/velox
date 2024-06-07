@@ -16,12 +16,19 @@
 
 #include "velox/functions/remote/client/Remote.h"
 
+#include <fmt/format.h>
 #include <folly/io/async/EventBase.h>
+#include <sstream>
+#include <string>
+
+#include "velox/common/memory/ByteStream.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/remote/client/RestClient.h"
 #include "velox/functions/remote/client/ThriftClient.h"
 #include "velox/functions/remote/if/GetSerde.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionServiceAsyncClient.h"
+#include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/fbhive/HiveTypeSerializer.h"
 #include "velox/vector/VectorStream.h"
 
@@ -29,7 +36,6 @@ namespace facebook::velox::functions {
 namespace {
 
 std::string serializeType(const TypePtr& type) {
-  // Use hive type serializer.
   return type::fbhive::HiveTypeSerializer::serialize(type);
 }
 
@@ -40,10 +46,11 @@ class RemoteFunction : public exec::VectorFunction {
       const std::vector<exec::VectorFunctionArg>& inputArgs,
       const RemoteVectorFunctionMetadata& metadata)
       : functionName_(functionName),
-        location_(metadata.location),
-        thriftClient_(getThriftClient(location_, &eventBase_)),
+        metadata_(metadata),
         serdeFormat_(metadata.serdeFormat),
         serde_(getSerde(serdeFormat_)) {
+    boost::apply_visitor(*this, metadata_.location);
+
     std::vector<TypePtr> types;
     types.reserve(inputArgs.size());
     serializedInputTypes_.reserve(inputArgs.size());
@@ -55,6 +62,14 @@ class RemoteFunction : public exec::VectorFunction {
     remoteInputType_ = ROW(std::move(types));
   }
 
+  void operator()(const folly::SocketAddress& address) {
+    thriftClient_ = getThriftClient(address, &eventBase_);
+  }
+
+  void operator()(const std::string& url) {
+    restClient_ = getRestClient();
+  }
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -62,7 +77,11 @@ class RemoteFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     try {
-      applyRemote(rows, args, outputType, context, result);
+      if ((metadata_.location.type() == typeid(folly::SocketAddress))) {
+        applyThriftRemote(rows, args, outputType, context, result);
+      } else if (metadata_.location.type() == typeid(std::string)) {
+        applyRestRemote(rows, args, outputType, context, result);
+      }
     } catch (const VeloxRuntimeError&) {
       throw;
     } catch (const std::exception&) {
@@ -71,7 +90,41 @@ class RemoteFunction : public exec::VectorFunction {
   }
 
  private:
-  void applyRemote(
+  void applyRestRemote(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
+    try {
+      serializer::presto::PrestoVectorSerde serde;
+      auto remoteRowVector = std::make_shared<RowVector>(
+          context.pool(),
+          remoteInputType_,
+          BufferPtr{},
+          rows.end(),
+          std::move(args));
+
+      std::unique_ptr<folly::IOBuf> requestBody =
+          std::make_unique<folly::IOBuf>(rowVectorToIOBuf(
+              remoteRowVector, rows.end(), *context.pool(), &serde));
+
+      std::unique_ptr<folly::IOBuf> responseBody = restClient_->invokeFunction(
+          boost::get<std::string>(metadata_.location), std::move(requestBody));
+
+      auto outputRowVector = IOBufToRowVector(
+          *responseBody, ROW({outputType}), *context.pool(), &serde);
+
+      result = outputRowVector->childAt(0);
+    } catch (const std::exception& e) {
+      VELOX_FAIL(
+          "Error while executing remote function '{}': {}",
+          functionName_,
+          e.what());
+    }
+  }
+
+  void applyThriftRemote(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
@@ -109,7 +162,7 @@ class RemoteFunction : public exec::VectorFunction {
       VELOX_FAIL(
           "Error while executing remote function '{}' at '{}': {}",
           functionName_,
-          location_.describe(),
+          boost::get<folly::SocketAddress>(metadata_.location).describe(),
           e.what());
     }
 
@@ -142,10 +195,13 @@ class RemoteFunction : public exec::VectorFunction {
   }
 
   const std::string functionName_;
-  folly::SocketAddress location_;
-
+  const RemoteVectorFunctionMetadata metadata_;
   folly::EventBase eventBase_;
-  std::unique_ptr<RemoteFunctionClient> thriftClient_;
+
+  // Depending on the location, one of these is initialized by the visitor.
+  std::unique_ptr<RemoteFunctionClient> thriftClient_{nullptr};
+  std::unique_ptr<HttpClient> restClient_{nullptr};
+
   remote::PageFormat serdeFormat_;
   std::unique_ptr<VectorSerde> serde_;
 
@@ -159,7 +215,7 @@ std::shared_ptr<exec::VectorFunction> createRemoteFunction(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/,
     const RemoteVectorFunctionMetadata& metadata) {
-  return std::make_unique<RemoteFunction>(name, inputArgs, metadata);
+  return std::make_shared<RemoteFunction>(name, inputArgs, metadata);
 }
 
 } // namespace
@@ -169,7 +225,7 @@ void registerRemoteFunction(
     std::vector<exec::FunctionSignaturePtr> signatures,
     const RemoteVectorFunctionMetadata& metadata,
     bool overwrite) {
-  exec::registerStatefulVectorFunction(
+  registerStatefulVectorFunction(
       name,
       signatures,
       std::bind(
