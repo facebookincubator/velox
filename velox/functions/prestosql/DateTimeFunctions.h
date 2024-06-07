@@ -926,8 +926,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
         result = adjustEpoch(getSeconds(timestamp, timeZone_), 60 * 60);
         break;
       case DateTimeUnit::kDay:
-        result =
-            adjustEpoch(getSeconds(timestamp, timeZone_), 24 * 60 * 60);
+        result = adjustEpoch(getSeconds(timestamp, timeZone_), 24 * 60 * 60);
         break;
       default:
         auto dateTime = getDateTime(timestamp, timeZone_);
