@@ -12,6 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if(NOT DEFINED PROXYGEN_LIBRARIES)
+  find_package(Sodium REQUIRED)
+
+  find_library(PROXYGEN proxygen)
+  find_library(PROXYGEN_HTTP_SERVER proxygenhttpserver)
+  find_library(FIZZ fizz)
+  find_library(WANGLE wangle)
+
+  if(NOT PROXYGEN
+     OR NOT PROXYGEN_HTTP_SERVER
+     OR NOT FIZZ
+     OR NOT WANGLE)
+    message(
+      FATAL_ERROR
+        "One or more proxygen libraries were not found. Please ensure proxygen, proxygenhttpserver, fizz, and wangle are installed."
+    )
+  endif()
+
+  set(PROXYGEN_LIBRARIES ${PROXYGEN_HTTP_SERVER} ${PROXYGEN} ${WANGLE} ${FIZZ})
+endif()
+
 add_subdirectory(if)
 add_subdirectory(client)
 add_subdirectory(server)

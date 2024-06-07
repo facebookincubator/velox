@@ -24,3 +24,19 @@ add_executable(velox_functions_remote_server_main RemoteFunctionServiceMain.cpp)
 target_link_libraries(
   velox_functions_remote_server_main velox_functions_remote_server
   velox_functions_prestosql)
+
+add_library(velox_functions_remote_server_rest RemoteFunctionRestService.cpp)
+target_link_libraries(
+  velox_functions_remote_server_rest
+  ${PROXYGEN_LIBRARIES}
+  velox_functions_remote_get_serde
+  velox_type_fbhive
+  velox_memory
+  velox_functions_prestosql)
+
+add_executable(velox_functions_remote_server_rest_main
+               RemoteFunctionServiceRestMain.cpp)
+
+target_link_libraries(
+  velox_functions_remote_server_rest_main velox_functions_remote_server_rest
+  velox_functions_prestosql)

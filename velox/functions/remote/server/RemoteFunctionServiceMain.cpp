@@ -18,6 +18,7 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
+#include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/remote/server/RemoteFunctionService.h"
 
@@ -36,7 +37,7 @@ DEFINE_string(
 
 DEFINE_string(
     function_prefix,
-    "json.test_schema.",
+    "remote.schema.",
     "Prefix to be added to the functions being registered");
 
 using namespace ::facebook::velox;
@@ -46,11 +47,14 @@ int main(int argc, char* argv[]) {
   folly::Init init{&argc, &argv, false};
   FLAGS_logtostderr = true;
 
+  memory::initializeMemoryManager({});
+
   // Always registers all Presto functions and make them available under a
   // certain prefix/namespace.
   LOG(INFO) << "Registering Presto functions";
   functions::prestosql::registerAllScalarFunctions(FLAGS_function_prefix);
 
+  std::remove(FLAGS_uds_path.c_str());
   folly::SocketAddress location{
       folly::SocketAddress::makeFromPath(FLAGS_uds_path)};
 

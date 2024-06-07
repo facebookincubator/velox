@@ -27,3 +27,20 @@ target_link_libraries(
   GTest::gmock
   GTest::gtest
   GTest::gtest_main)
+
+add_executable(velox_functions_remote_client_rest_test
+               RemoteFunctionRestTest.cpp)
+
+add_test(velox_functions_remote_client_rest_test
+         velox_functions_remote_client_rest_test)
+
+target_link_libraries(
+  velox_functions_remote_client_rest_test
+  velox_functions_remote_server_rest
+  velox_functions_remote
+  velox_function_registry
+  velox_functions_test_lib
+  velox_exec_test_lib
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main)

@@ -113,7 +113,7 @@ option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
-option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
+option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" ON)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
@@ -485,6 +485,12 @@ if(${VELOX_BUILD_TESTING})
 
   set_source(gRPC)
   resolve_dependency(gRPC)
+endif()
+
+if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+  find_package(fizz CONFIG REQUIRED)
+  find_package(wangle CONFIG REQUIRED)
+  find_package(proxygen CONFIG REQUIRED)
 endif()
 
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
