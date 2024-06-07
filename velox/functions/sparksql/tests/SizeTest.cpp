@@ -40,9 +40,17 @@ class SizeTest : public SparkFunctionBaseTest {
     }
   }
 
-  void testSizeLegacyNull(VectorPtr vector, vector_size_t numRows) {
+  void testSizeConfiguredLegacyNull(VectorPtr vector, vector_size_t numRows) {
     auto result =
         evaluate<SimpleVector<int32_t>>("size(c0)", makeRowVector({vector}));
+    for (vector_size_t i = 0; i < numRows; ++i) {
+      EXPECT_EQ(result->isNullAt(i), vector->isNullAt(i)) << "at " << i;
+    }
+  }
+
+  void testSizePassedLegacyNull(VectorPtr vector, vector_size_t numRows) {
+    auto result = evaluate<SimpleVector<int32_t>>(
+        "size(c0, false)", makeRowVector({vector}));
     for (vector_size_t i = 0; i < numRows; ++i) {
       EXPECT_EQ(result->isNullAt(i), vector->isNullAt(i)) << "at " << i;
     }
@@ -75,16 +83,31 @@ TEST_F(SizeTest, sizetest) {
   testSize(mapVector, numRows);
 }
 
-// Ensure that out if set to -1 if SparkLegacySizeOfNull is specified.
-TEST_F(SizeTest, legacySizeOfNull) {
+// Ensure that out is set to null for null input if configured
+// SparkLegacySizeOfNull is false.
+TEST_F(SizeTest, configuredLegacySizeOfNull) {
   vector_size_t numRows = 100;
   setConfig(core::QueryConfig::kSparkLegacySizeOfNull, false);
   auto arrayVector =
       makeArrayVector<int64_t>(numRows, sizeAt, valueAt, nullEvery(1));
-  testSizeLegacyNull(arrayVector, numRows);
+  testSizeConfiguredLegacyNull(arrayVector, numRows);
   auto mapVector = makeMapVector<int64_t, int64_t>(
       numRows, sizeAt, valueAt, valueAt, nullEvery(1));
-  testSizeLegacyNull(mapVector, numRows);
+  testSizeConfiguredLegacyNull(mapVector, numRows);
+}
+
+// Ensure that out is set to null for null input if passed legacySizeOfNull is
+// false, regardless of the configuration.
+TEST_F(SizeTest, passedLegacySizeOfNull) {
+  vector_size_t numRows = 100;
+  // Dismiss the configuration.
+  setConfig(core::QueryConfig::kSparkLegacySizeOfNull, true);
+  auto arrayVector =
+      makeArrayVector<int64_t>(numRows, sizeAt, valueAt, nullEvery(1));
+  testSizePassedLegacyNull(arrayVector, numRows);
+  auto mapVector = makeMapVector<int64_t, int64_t>(
+      numRows, sizeAt, valueAt, valueAt, nullEvery(1));
+  testSizePassedLegacyNull(mapVector, numRows);
 }
 
 } // namespace facebook::velox::functions::sparksql::test

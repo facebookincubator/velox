@@ -36,6 +36,18 @@ struct Size {
   }
 
   template <typename TInput>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*input*/,
+      const bool* legacySizeOfNull) {
+    VELOX_USER_CHECK_NE(
+        legacySizeOfNull, nullptr, "Constant legacySizeOfNull is expected.");
+    // Respects the passed legacySizeOfNull.
+    legacySizeOfNull_ = *legacySizeOfNull;
+  }
+
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE bool callNullable(int32_t& out, const TInput* input) {
     if (input == nullptr) {
       if (legacySizeOfNull_) {
@@ -49,6 +61,14 @@ struct Size {
     return true;
   }
 
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool callNullable(
+      int32_t& out,
+      const TInput* input,
+      const bool* /*legacySizeOfNull*/) {
+    return callNullable(out, input);
+  }
+
  private:
   bool legacySizeOfNull_;
 };
@@ -57,6 +77,9 @@ struct Size {
 void registerSize(const std::string& prefix) {
   registerFunction<Size, int32_t, Array<Any>>({prefix});
   registerFunction<Size, int32_t, Map<Any, Any>>({prefix});
+  // Register with legacySizeOfNull.
+  registerFunction<Size, int32_t, Array<Any>, bool>({prefix});
+  registerFunction<Size, int32_t, Map<Any, Any>, bool>({prefix});
 }
 
 } // namespace facebook::velox::functions::sparksql
