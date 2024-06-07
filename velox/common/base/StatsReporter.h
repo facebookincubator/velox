@@ -64,6 +64,23 @@ enum class StatType {
   HISTOGRAM,
 };
 
+inline std::string statTypeString(StatType stat) {
+  switch (stat) {
+    case StatType::AVG:
+      return "Avg";
+    case StatType::SUM:
+      return "Sum";
+    case StatType::RATE:
+      return "Rate";
+    case StatType::COUNT:
+      return "Count";
+    case StatType::HISTOGRAM:
+      return "Histogram";
+    default:
+      return fmt::format("UNKNOWN: {}", static_cast<int>(stat));
+  }
+}
+
 /// This is the base stats reporter interface that should be extended by
 /// different implementations.
 class BaseStatsReporter {
