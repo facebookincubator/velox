@@ -33,8 +33,9 @@ struct Size {
       const core::QueryConfig& /*config*/,
       const TInput* /*input*/,
       const bool* legacySizeOfNull) {
-    VELOX_USER_CHECK_NE(
-        legacySizeOfNull, nullptr, "Constant legacySizeOfNull is expected.");
+    if (legacySizeOfNull == nullptr) {
+      VELOX_USER_FAIL("Constant legacySizeOfNull is expected.");
+    }
     legacySizeOfNull_ = *legacySizeOfNull;
   }
 
