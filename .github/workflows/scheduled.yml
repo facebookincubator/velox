@@ -137,7 +137,9 @@ jobs:
         with:
           path: "${{ env.CCACHE_DIR }}"
           key: ccache-fuzzer-centos
-      - run: ls "${{ env.CCACHE_DIR }}"
+      - working-directory: ${{ github.workspace }}
+        run: ls "${{ env.CCACHE_DIR }}"
+
       - name: Fix git permissions
         working-directory: ${{ github.workspace }}
           # Usually actions/checkout does this but as we run in a container
