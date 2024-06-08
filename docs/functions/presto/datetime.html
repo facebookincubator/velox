@@ -230,7 +230,14 @@ using <code class="docutils literal notranslate"><span class="pre">string</span>
 <dl class="py function">
 <dt class="sig sig-object py" id="to_iso8601">
 <span class="sig-name descname"><span class="pre">to_iso8601</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#to_iso8601" title="Link to this definition">¶</a></dt>
-<dd><p>Formats <code class="docutils literal notranslate"><span class="pre">x</span></code> as an ISO 8601 string. Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are: DATE.</p>
+<dd><p>Formats <code class="docutils literal notranslate"><span class="pre">x</span></code> as an ISO 8601 string. Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are:
+DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE.</p>
+<p>Example results:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">to_iso8601</span><span class="p">(</span><span class="n">current_date</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2024</span><span class="o">-</span><span class="mi">06</span><span class="o">-</span><span class="mi">06</span>
+<span class="n">SELECT</span> <span class="n">to_iso8601</span><span class="p">(</span><span class="n">now</span><span class="p">());</span> <span class="o">--</span> <span class="mi">2024</span><span class="o">-</span><span class="mi">06</span><span class="o">-</span><span class="mi">06</span><span class="n">T20</span><span class="p">:</span><span class="mi">25</span><span class="p">:</span><span class="mf">46.726</span><span class="o">-</span><span class="mi">07</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">to_iso8601</span><span class="p">(</span><span class="n">now</span><span class="p">()</span> <span class="o">+</span> <span class="n">interval</span> <span class="s1">&#39;6&#39;</span> <span class="n">month</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2024</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">06</span><span class="n">T20</span><span class="p">:</span><span class="mi">27</span><span class="p">:</span><span class="mf">11.992</span><span class="o">-</span><span class="mi">08</span><span class="p">:</span><span class="mi">00</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py function">
@@ -488,6 +495,12 @@ specified using the format <code class="docutils literal notranslate"><span clas
 also accepts <code class="docutils literal notranslate"><span class="pre">UTC</span></code>,  <code class="docutils literal notranslate"><span class="pre">UCT</span></code>, <code class="docutils literal notranslate"><span class="pre">GMT</span></code>, and <code class="docutils literal notranslate"><span class="pre">GMT0</span></code> as valid representations
 of GMT.</p>
 <dl class="py function">
+<dt class="sig sig-object py" id="format_datetime">
+<span class="sig-name descname"><span class="pre">format_datetime</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#format_datetime" title="Link to this definition">¶</a></dt>
+<dd><p>Formats <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> as a string using <code class="docutils literal notranslate"><span class="pre">format</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="parse_datetime">
 <span class="sig-name descname"><span class="pre">parse_datetime</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span><a class="headerlink" href="#parse_datetime" title="Link to this definition">¶</a></dt>
 <dd><p>Parses string into a timestamp with time zone using <code class="docutils literal notranslate"><span class="pre">format</span></code>.</p>
@@ -719,6 +732,7 @@ list of supported timezones follow the definition <a class="reference external" 
 </ul>
 </li>
 <li><a class="reference internal" href="#java-date-functions">Java Date Functions</a><ul>
+<li><a class="reference internal" href="#format_datetime"><code class="docutils literal notranslate"><span class="pre">format_datetime()</span></code></a></li>
 <li><a class="reference internal" href="#parse_datetime"><code class="docutils literal notranslate"><span class="pre">parse_datetime()</span></code></a></li>
 </ul>
 </li>
