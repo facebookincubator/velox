@@ -582,7 +582,6 @@ jobs:
       - name: Run Join Fuzzer
         run: |
           mkdir -p /tmp/join_fuzzer_repro/logs/
-          rm -rfv /tmp/join_fuzzer_repro/*
           chmod -R 777 /tmp/join_fuzzer_repro
           chmod +x velox_join_fuzzer_test
           ./velox_join_fuzzer_test \
@@ -619,7 +618,6 @@ jobs:
         run: |
           cat /proc/sys/vm/max_map_count
           mkdir -p /tmp/exchange_fuzzer_repro/logs/
-          rm -rfv /tmp/exchange_fuzzer_repro/*
           chmod -R 777 /tmp/exchange_fuzzer_repro
           chmod +x velox_exchange_fuzzer_test
           ./velox_exchange_fuzzer_test \
@@ -656,7 +654,6 @@ jobs:
         run: |
           cat /proc/sys/vm/max_map_count
           mkdir -p /tmp/row_fuzzer_repro/logs/
-          rm -rfv /tmp/row_fuzzer_repro/*
           chmod -R 777 /tmp/exchange_fuzzer_repro
           chmod +x velox_row_number_fuzzer_test
           ./velox_row_number_fuzzer_test \
@@ -715,7 +712,6 @@ jobs:
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
           cd -
           mkdir -p /tmp/aggregate_fuzzer_repro/logs/
-          rm -rfv /tmp/aggregate_fuzzer_repro/*
           chmod -R 777 /tmp/aggregate_fuzzer_repro
           chmod +x velox_aggregation_fuzzer_test
           ./velox_aggregation_fuzzer_test \
@@ -785,7 +781,6 @@ jobs:
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
           cd -
           mkdir -p /tmp/aggregate_fuzzer_repro/logs/
-          rm -rfv /tmp/aggregate_fuzzer_repro/*
           chmod -R 777 /tmp/aggregate_fuzzer_repro
           chmod +x velox_aggregation_fuzzer_test
           echo "signatures folder"
@@ -878,7 +873,6 @@ jobs:
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
           cd -
           mkdir -p /tmp/window_fuzzer_repro/logs/
-          rm -rfv /tmp/window_fuzzer_repro/*
           chmod -R 777 /tmp/window_fuzzer_repro
           chmod +x velox_window_fuzzer_test
           ./velox_window_fuzzer_test \
