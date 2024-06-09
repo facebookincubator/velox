@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <cmath>
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
@@ -111,7 +112,44 @@ struct HllAccumulator {
 
 template <typename T>
 inline uint64_t hashOne(T value) {
-  return XXH64(&value, sizeof(T), 0);
+  if constexpr (std::is_integral_v<T> && sizeof(T) < sizeof(int64_t)) {
+    int64_t v = value;
+    return XXH64(&v, sizeof(v), 0);
+  } else {
+    return XXH64(&value, sizeof(T), 0);
+  }
+}
+
+template <>
+inline uint64_t hashOne<float>(float value) {
+  uint64_t v;
+  // All NaN values are collapsed to a single "canonical" NaN value. Follows
+  // https://github.com/prestodb/presto/blob/8e34250ac1e0a2f6fb5d08a2842a7d3b5cd95db3/presto-main/src/main/java/com/facebook/presto/type/RealOperators.java#L180-L183
+  if UNLIKELY (std::isnan(value)) {
+    v = 0x7fc00000;
+  } else {
+    if UNLIKELY (value == -0.0f) {
+      value = 0.0f;
+    }
+    v = *(uint32_t*)(&value);
+  }
+  return XXH64(&v, sizeof(v), 0);
+}
+
+template <>
+inline uint64_t hashOne<double>(double value) {
+  uint64_t v;
+  // All NaN values are collapsed to a single "canonical" NaN value. Follows
+  // https://github.com/prestodb/presto/blob/8e34250ac1e0a2f6fb5d08a2842a7d3b5cd95db3/presto-main/src/main/java/com/facebook/presto/type/DoubleOperators.java#L370-L373
+  if UNLIKELY (std::isnan(value)) {
+    v = 0x7ff8000000000000L;
+  } else {
+    if UNLIKELY (value == -0.0) {
+      value = 0.0;
+    }
+    v = *(uint64_t*)(&value);
+  }
+  return XXH64(&v, sizeof(v), 0);
 }
 
 // Use timestamp.toMillis() to compute hash value.
