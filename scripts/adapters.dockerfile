@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # Build the test and build container for presto_cpp
-ARG image=docker.io/majetideepak4/velox:centos9
+ARG image=ghcr.io/facebookincubator/velox-dev:centos9
 FROM $image
 ARG cpu_target=avx
 ENV CPU_TARGET=$cpu_target

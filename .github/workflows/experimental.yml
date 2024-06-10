@@ -106,7 +106,7 @@ jobs:
 
   presto-java-aggregation-fuzzer-run:
     runs-on: 8-core-ubuntu
-    container: docker.io/majetideepak4/velox:presto-java
+    container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
       CCACHE_DIR: "/__w/velox/velox/.ccache/"
