@@ -108,7 +108,20 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     MemoryPool* const requestPool;
     MemoryPool* const requestRoot;
     const std::vector<std::shared_ptr<MemoryPool>>& candidatePools;
+
+    // The original requested target grow bytes from the requester pool.
     const uint64_t requestBytes;
+
+    // The adjusted grow bytes based on 'requestBytes'. This 'targetBytes' is a
+    // best effort target, and hence will not be guaranteed. The adjustment is
+    // based on 'SharedArbitrator::fastExponentialGrowthCapacityLimit_'
+    // 'SharedArbitrator::slowCapacityGrowPct_' and
+    // 'MemoryArbitrator::memoryPoolTransferCapacity_'.
+    //
+    // TODO: deprecate 'MemoryArbitrator::memoryPoolTransferCapacity_' once
+    // exponential growth works well in production.
+    const std::optional<uint64_t> targetBytes;
+
     // The start time of this arbitration operation.
     const std::chrono::steady_clock::time_point startTime;
 
@@ -126,17 +139,24 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
     ArbitrationOperation(
         uint64_t requestBytes,
+        std::optional<uint64_t> targetBytes,
         const std::vector<std::shared_ptr<MemoryPool>>& candidatePools)
-        : ArbitrationOperation(nullptr, requestBytes, candidatePools) {}
+        : ArbitrationOperation(
+              nullptr,
+              requestBytes,
+              targetBytes,
+              candidatePools) {}
 
     ArbitrationOperation(
         MemoryPool* _requestor,
         uint64_t _requestBytes,
+        std::optional<uint64_t> _targetBytes,
         const std::vector<std::shared_ptr<MemoryPool>>& _candidatePools)
         : requestPool(_requestor),
           requestRoot(_requestor == nullptr ? nullptr : _requestor->root()),
           candidatePools(_candidatePools),
           requestBytes(_requestBytes),
+          targetBytes(_targetBytes),
           startTime(std::chrono::steady_clock::now()) {}
 
     uint64_t waitTimeUs() const {
@@ -205,10 +225,10 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // Invoked to run local arbitration on the request memory pool. It first
   // ensures the memory growth is within both memory pool and arbitrator
   // capacity limits. This step might reclaim the used memory from the request
-  // memory pool itself. Then it tries to allocate free capacity from the
-  // arbitrator. At last, it tries to reclaim free memory from the other queries
-  // before it falls back to the global arbitration. The local arbitration run
-  // is protected by shared lock of 'arbitrationLock_' which can run in parallel
+  // memory pool itself. Then it tries to obtain free capacity from the
+  // arbitrator. At last, it tries to reclaim free memory from itself before it
+  // falls back to the global arbitration. The local arbitration run is
+  // protected by shared lock of 'arbitrationLock_' which can run in parallel
   // for different query pools. The free memory reclamation is protected by
   // arbitrator 'mutex_' which is an in-memory fast operation. The function
   // returns false on failure. Otherwise, it needs to further check if
@@ -224,7 +244,9 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // on success, false on failure.
   bool runGlobalArbitration(ArbitrationOperation* op);
 
-  // Gets the mim/max memory capacity growth targets for 'op'.
+  // Gets the mim/max memory capacity growth targets for 'op'. The min and max
+  // targets are calculated based on memoryPoolReservedCapacity_ requirements
+  // and the pool's max capacity.
   void getGrowTargets(
       ArbitrationOperation* op,
       uint64_t& maxGrowTarget,
@@ -347,12 +369,40 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // the reserved capacity as specified by 'memoryPoolReservedCapacity_'.
   int64_t minGrowCapacity(const MemoryPool& pool) const;
 
+  // The capacity growth target is set to have a coarser granularity. It can
+  // help to reduce the number of future grow calls, and hence reducing the
+  // number of unnecessary memory arbitration requests.
+  uint64_t getCapacityGrowthTarget(
+      const MemoryPool& pool,
+      uint64_t requestBytes) const;
+
   // Returns true if 'pool' is under memory arbitration.
   bool isUnderArbitration(MemoryPool* pool) const;
   bool isUnderArbitrationLocked(MemoryPool* pool) const;
 
   void updateArbitrationRequestStats();
   void updateArbitrationFailureStats();
+
+  // When growing capacity, the growth bytes will be adjusted in the
+  // following way:
+  //  - If 2 * current capacity is less than or equal to
+  //    'fastExponentialGrowthCapacityLimit', grow through fast path by at
+  //    least doubling the current capacity, when conditions allow (see below
+  //    NOTE section).
+  //  - If 2 * current capacity is greater than
+  //    'fastExponentialGrowthCapacityLimit', grow through slow path by growing
+  //    capacity by at least 'slowCapacityGrowPct' * current capacity if
+  //    allowed (see below NOTE section).
+  //
+  // NOTE: If original requested growth bytes is larger than the adjusted
+  // growth bytes or adjusted growth bytes reaches max capacity limit, the
+  // adjusted growth bytes will not be respected.
+  //
+  // NOTE: Capacity growth adjust is only enabled if both
+  // 'fastExponentialGrowthCapacityLimit' and 'slowCapacityGrowPct' are set,
+  // otherwise it is disabled.
+  const uint64_t fastExponentialGrowthCapacityLimit_;
+  const double slowCapacityGrowPct_;
 
   // Lock used to protect the arbitrator state.
   mutable std::mutex mutex_;

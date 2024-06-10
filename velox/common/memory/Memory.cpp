@@ -71,6 +71,9 @@ std::unique_ptr<MemoryArbitrator> createArbitrator(
        .reservedCapacity = options.arbitratorReservedCapacity,
        .memoryPoolReservedCapacity = options.memoryPoolReservedCapacity,
        .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
+       .fastExponentialGrowthCapacityLimit =
+           options.fastExponentialGrowthCapacityLimit,
+       .slowCapacityGrowPct = options.slowCapacityGrowPct,
        .memoryReclaimWaitMs = options.memoryReclaimWaitMs,
        .globalArbitrationEnabled = options.globalArbitrationEnabled,
        .arbitrationStateCheckCb = options.arbitrationStateCheckCb,
