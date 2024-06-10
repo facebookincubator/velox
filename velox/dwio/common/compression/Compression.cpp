@@ -307,9 +307,9 @@ uint64_t LzoAndLz4DecompressorCommon::decompress(
 
       DWIO_ENSURE_EQ(
           decompressedSize,
-          remainingOutputSize,
-          "{} decompression failed, decompressedSize is not equal to remainingOutputSize, "
-          "decompressedSize: {}, remainingOutputSize: {}",
+          decompressedBlockSize,
+          "{} decompression failed, decompressedSize is not equal to decompressedBlockSize, "
+          "decompressedSize: {}, decompressedBlockSize: {}",
           kind_,
           decompressedSize,
           remainingOutputSize);
