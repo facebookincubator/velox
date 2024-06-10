@@ -137,10 +137,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     }
 
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::kSessionTimezone,
-            sessionTimezone)
+        .config(core::QueryConfig::kSessionTimezone, sessionTimezone)
         .splits(splits)
         .assertResults(sql);
   }

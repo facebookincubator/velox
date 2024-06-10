@@ -289,8 +289,4 @@ bool HiveConfig::cacheNoRetention(const Config* session) const {
       config_->get<bool>(kCacheNoRetention, /*defaultValue=*/false));
 }
 
-std::string HiveConfig::sessionTimezone(const Config* session) const {
-  return session->get<std::string>(kSessionTimezone, "");
-}
-
 } // namespace facebook::velox::connector::hive

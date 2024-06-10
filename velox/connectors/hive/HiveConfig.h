@@ -228,10 +228,6 @@ class HiveConfig {
   static constexpr const char* kCacheNoRetention = "cache.no_retention";
   static constexpr const char* kCacheNoRetentionSession = "cache.no_retention";
 
-  /// Session timezone used for reading Timestamp. Stores a string with the
-  /// actual timezone name, e.g: "America/Los_Angeles".
-  static constexpr const char* kSessionTimezone = "session_timezone";
-
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* session) const;
 
@@ -331,8 +327,6 @@ class HiveConfig {
   /// batch query when mixed running with interactive query which has high data
   /// locality.
   bool cacheNoRetention(const Config* session) const;
-
-  std::string sessionTimezone(const Config* session) const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
     VELOX_CHECK_NOT_NULL(

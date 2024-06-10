@@ -261,6 +261,7 @@ class ConnectorQueryCtx {
       const std::string& taskId,
       const std::string& planNodeId,
       int driverId,
+      const std::string& sessionTimezone,
       folly::CancellationToken cancellationToken = {})
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
@@ -273,6 +274,7 @@ class ConnectorQueryCtx {
         taskId_(taskId),
         driverId_(driverId),
         planNodeId_(planNodeId),
+        sessionTimezone_(sessionTimezone),
         cancellationToken_(std::move(cancellationToken)) {
     VELOX_CHECK_NOT_NULL(sessionProperties);
   }
@@ -330,6 +332,10 @@ class ConnectorQueryCtx {
     return planNodeId_;
   }
 
+  const std::string& sessionTimezone() const {
+    return sessionTimezone_;
+  }
+
   /// Returns the cancellation token associated with this task.
   const folly::CancellationToken& cancellationToken() const {
     return cancellationToken_;
@@ -347,6 +353,7 @@ class ConnectorQueryCtx {
   const std::string taskId_;
   const int driverId_;
   const std::string planNodeId_;
+  const std::string sessionTimezone_;
   const folly::CancellationToken cancellationToken_;
 };
 
