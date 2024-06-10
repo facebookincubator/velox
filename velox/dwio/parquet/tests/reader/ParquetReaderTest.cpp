@@ -1215,3 +1215,24 @@ TEST_F(ParquetReaderTest, testLzoDataPage) {
           .str(),
       "31232");
 }
+
+TEST_F(ParquetReaderTest, testEmptyDataPage) {
+  const std::string sample(getExampleFilePath("snappy.parquet"));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 30001ULL);
+
+  auto outputRowType = ROW({"test"}, {REAL()});
+  EXPECT_EQ(*(reader->typeWithId()->type()), *outputRowType);
+
+  auto rowReaderOpts = getReaderOpts(outputRowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto expected = makeRowVector({makeFlatVector<float>(
+      30001, [](auto /*row*/) { return 1; }, nullEvery(1))});
+
+  assertReadWithReaderAndExpected(
+      outputRowType, *rowReader, expected, *leafPool_);
+}
