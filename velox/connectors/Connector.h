@@ -332,6 +332,9 @@ class ConnectorQueryCtx {
     return planNodeId_;
   }
 
+  /// Session timezone used for reading Timestamp. Stores a string with the
+  /// actual timezone name. If the session timezone is not set in the
+  /// QueryConfig, it will return an empty string.
   const std::string& sessionTimezone() const {
     return sessionTimezone_;
   }
