@@ -254,7 +254,7 @@ class ConnectorQueryCtx {
       memory::MemoryPool* operatorPool,
       memory::MemoryPool* connectorPool,
       const Config* sessionProperties,
-      const common::Identity* identity,
+      const security::Identity* identity,
       const common::SpillConfig* spillConfig,
       std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
       cache::AsyncDataCache* cache,
@@ -294,7 +294,7 @@ class ConnectorQueryCtx {
     return sessionProperties_;
   }
 
-  const common::Identity* identity() const {
+  const security::Identity* identity() const {
     return identity_;
   }
 
@@ -338,7 +338,7 @@ class ConnectorQueryCtx {
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
   const Config* const sessionProperties_;
-  const common::Identity* identity_;
+  const security::Identity* identity_;
   const common::SpillConfig* const spillConfig_;
   std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
   cache::AsyncDataCache* cache_;

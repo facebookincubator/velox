@@ -45,7 +45,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       QueryConfig&& queryConfig = QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<Config>>
           connectorConfigs = {},
-      common::Identity&& identity = {},
+      security::Identity&& identity = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       folly::Executor* spillExecutor = nullptr,
@@ -74,7 +74,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return queryConfig_;
   }
 
-  const common::Identity* identity() const {
+  const security::Identity* identity() const {
     return &identity_;
   }
 
@@ -143,7 +143,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       QueryConfig&& queryConfig = QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<Config>>
           connectorConfigs = {},
-      common::Identity&& identity = {},
+      security::Identity&& identity = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       folly::Executor* spillExecutor = nullptr,
@@ -210,7 +210,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   std::unordered_map<std::string, std::shared_ptr<Config>>
       connectorSessionProperties_;
-  common::Identity identity_;
+  security::Identity identity_;
   std::shared_ptr<memory::MemoryPool> pool_;
   QueryConfig queryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};

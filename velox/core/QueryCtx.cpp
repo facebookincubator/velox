@@ -23,7 +23,7 @@ namespace facebook::velox::core {
     folly::Executor* executor,
     QueryConfig&& queryConfig,
     std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs,
-    common::Identity&& identity,
+    security::Identity&& identity,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
@@ -46,7 +46,7 @@ QueryCtx::QueryCtx(
     QueryConfig&& queryConfig,
     std::unordered_map<std::string, std::shared_ptr<Config>>
         connectorSessionProperties,
-    common::Identity&& identity,
+    security::Identity&& identity,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,

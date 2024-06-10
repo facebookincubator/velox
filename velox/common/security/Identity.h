@@ -19,7 +19,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace facebook::velox::common {
+namespace facebook::velox::security {
 
 /// Used to store user name and credentials.
 struct Identity {
@@ -27,4 +27,4 @@ struct Identity {
   std::unordered_map<std::string, std::string> credentials;
 };
 
-} // namespace facebook::velox::common
+} // namespace facebook::velox::security
