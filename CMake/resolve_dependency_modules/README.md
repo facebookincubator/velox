@@ -26,12 +26,12 @@ by Velox. See details on bundling below.
 | boost             | 1.77.0          | Yes      |
 | flex              | 2.5.13          | No       |
 | bison             | 3.0.4           | No       |
-| cmake             | 3.14            | No       |
+| cmake             | 3.28            | No       |
 | double-conversion | 3.1.5           | No       |
 | xsimd             | 10.0.0          | Yes      |
 | re2               | 2021-04-01      | Yes      |
 | fmt               | 10.1.1          | Yes      |
-| simdjson          | 3.8.0           | Yes      |
+| simdjson          | 3.9.3           | Yes      |
 | folly             | v2024.04.01.00  | Yes      |
 | fizz              | v2024.04.01.00  | No       |
 | wangle            | v2024.04.01.00  | No       |

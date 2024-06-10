@@ -39,7 +39,8 @@ Map Functions
 .. function:: map(array(K), array(V)) -> map(K,V)
    :noindex:
 
-    Returns a map created using the given key/value arrays. Keys are not allowed to be null or to contain nulls. ::
+    Returns a map created using the given key/value arrays. Keys are not allowed to be null or to contain nulls.
+    For REAL and DOUBLE, NaNs (Not-a-Number) are considered equal. ::
 
         SELECT map(ARRAY[1,3], ARRAY[2,4]); -- {1 -> 2, 3 -> 4}
 
@@ -83,10 +84,20 @@ Map Functions
         SELECT map_normalize(map(array['a', 'b', 'c', 'd'], array[1, null, 4, 5])); -- {a=0.1, b=null, c=0.4, d=0.5}
         SELECT map_normalize(map(array['a', 'b', 'c'], array[1, 0, -1])); -- {a=Infinity, b=NaN, c=-Infinity}
 
+.. function:: map_remove_null_values(map(K,V)) -> map(K,V)
+
+    Returns a map by removing all the keys in input map with null values. If input
+    is null, output is null. If input map is empty, output map is empty.
+
+        SELECT map_remove_null_values(MAP(ARRAY['ab', 'bc', 'cd'], ARRAY[null, null, null])); -- {}
+        SELECT map_remove_null_values(MAP(ARRAY[], ARRAY[])); -- {}
+        SELECT map_remove_null_values(MAP(ARRAY[1, 2, 3], ARRAY[3, 4, NULL])); -- {1=3, 2=4}
+        SELECT map_remove_null_values(NULL); -- NULL
 
 .. function:: map_subset(map(K,V), array(k)) -> map(K,V)
 
-    Constructs a map from those entries of ``map`` for which the key is in the array given::
+    Constructs a map from those entries of ``map`` for which the key is in the array given
+    For keys containing REAL and DOUBLE, NANs (Not-a-Number) are considered equal. ::
 
         SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[10]); -- {}
         SELECT map_subset(MAP(ARRAY[1,2], ARRAY['a','b']), ARRAY[1]); -- {1->'a'}
@@ -96,7 +107,8 @@ Map Functions
 
 .. function:: map_top_n(map(K,V), n) -> map(K, V)
 
-    Truncates map items. Keeps only the top N elements by value.
+    Truncates map items. Keeps only the top N elements by value. Keys are used to break ties with the max key being chosen. Both keys and values should be orderable.
+
     ``n`` must be a non-negative BIGINT value.::
 
         SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[2, 3, 1]), 2) --- {'b' -> 3, 'a' -> 2}
@@ -147,6 +159,7 @@ Map Functions
    :noindex:
 
     Returns value for given ``key``. Return null if the key is not contained in the map.
+    For REAL and DOUBLE, NaNs (Not-a-Number) are considered equal and can be used as keys.
     Corresponds to SQL subscript operator [].
 
     SELECT name_to_age_map['Bob'] AS bob_age;

@@ -235,7 +235,9 @@ TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
   {
     // Invalid strings.
     testInvalidCast<std::string>(
-        "tinyint", {"1234567"}, "Value is too large for type");
+        "tinyint",
+        {"1234567"},
+        "Cannot cast VARCHAR '1234567' to TINYINT. TINYINT overflow: 123 * 10");
     testInvalidCast<std::string>(
         "tinyint", {"1a"}, "Encountered a non-digit character");
     testInvalidCast<std::string>("tinyint", {""}, "Empty string");
@@ -451,6 +453,27 @@ TEST_F(SparkCastExprTest, overflow) {
   testCast(
       makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
       makeNullableFlatVector<int64_t>({2147483648}));
+
+  testInvalidCast<std::string>(
+      "tinyint",
+      {"166"},
+      "Cannot cast VARCHAR '166' to TINYINT. TINYINT overflow: 16 * 10");
+  testInvalidCast<std::string>(
+      "smallint",
+      {"52769"},
+      "Cannot cast VARCHAR '52769' to SMALLINT. SMALLINT overflow: 5276 * 10");
+  testInvalidCast<std::string>(
+      "integer",
+      {"17515055537"},
+      "Cannot cast VARCHAR '17515055537' to INTEGER. INTEGER overflow: 1751505553 * 10");
+  testInvalidCast<std::string>(
+      "integer",
+      {"-17515055537"},
+      "Cannot cast VARCHAR '-17515055537' to INTEGER. INTEGER overflow: -1751505553 * 10");
+  testInvalidCast<std::string>(
+      "bigint",
+      {"9663372036854775809"},
+      "Cannot cast VARCHAR '9663372036854775809' to BIGINT. BIGINT overflow: 966337203685477580 * 10");
 }
 
 TEST_F(SparkCastExprTest, timestampToString) {
@@ -533,5 +556,78 @@ TEST_F(SparkCastExprTest, fromString) {
            -30000},
           DECIMAL(12, 2)));
 }
+
+TEST_F(SparkCastExprTest, tinyintToBinary) {
+  testCast<int8_t, std::string>(
+      TINYINT(),
+      VARBINARY(),
+      {18,
+       -26,
+       0,
+       110,
+       std::numeric_limits<int8_t>::max(),
+       std::numeric_limits<int8_t>::min()},
+      {std::string("\x12", 1),
+       std::string("\xE6", 1),
+       std::string("\0", 1),
+       std::string("\x6E", 1),
+       std::string("\x7F", 1),
+       std::string("\x80", 1)});
+}
+
+TEST_F(SparkCastExprTest, smallintToBinary) {
+  testCast<int16_t, std::string>(
+      SMALLINT(),
+      VARBINARY(),
+      {180,
+       -199,
+       0,
+       12300,
+       std::numeric_limits<int16_t>::max(),
+       std::numeric_limits<int16_t>::min()},
+      {std::string("\0\xB4", 2),
+       std::string("\xFF\x39", 2),
+       std::string("\0\0", 2),
+       std::string("\x30\x0C", 2),
+       std::string("\x7F\xFF", 2),
+       std::string("\x80\00", 2)});
+}
+
+TEST_F(SparkCastExprTest, integerToBinary) {
+  testCast<int32_t, std::string>(
+      INTEGER(),
+      VARBINARY(),
+      {18,
+       -26,
+       0,
+       180000,
+       std::numeric_limits<int32_t>::max(),
+       std::numeric_limits<int32_t>::min()},
+      {std::string("\0\0\0\x12", 4),
+       std::string("\xFF\xFF\xFF\xE6", 4),
+       std::string("\0\0\0\0", 4),
+       std::string("\0\x02\xBF\x20", 4),
+       std::string("\x7F\xFF\xFF\xFF", 4),
+       std::string("\x80\0\0\0", 4)});
+}
+
+TEST_F(SparkCastExprTest, bigintToBinary) {
+  testCast<int64_t, std::string>(
+      BIGINT(),
+      VARBINARY(),
+      {123456,
+       -256789,
+       0,
+       180000,
+       std::numeric_limits<int64_t>::max(),
+       std::numeric_limits<int64_t>::min()},
+      {std::string("\0\0\0\0\0\x01\xE2\x40", 8),
+       std::string("\xFF\xFF\xFF\xFF\xFF\xFC\x14\xEB", 8),
+       std::string("\0\0\0\0\0\0\0\0", 8),
+       std::string("\0\0\0\0\0\x02\xBF\x20", 8),
+       std::string("\x7F\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8),
+       std::string("\x80\x00\x00\x00\x00\x00\x00\x00", 8)});
+}
+
 } // namespace
 } // namespace facebook::velox::test

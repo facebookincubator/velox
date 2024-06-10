@@ -101,12 +101,10 @@ TEST_F(ByteStreamTest, inputStream) {
   uint8_t* const kFakeBuffer = reinterpret_cast<uint8_t*>(this);
   std::vector<ByteRange> byteRanges;
   size_t totalBytes{0};
-  size_t lastRangeEnd;
   for (int32_t i = 0; i < 32; ++i) {
     byteRanges.push_back(ByteRange{kFakeBuffer, 4096 + i, 0});
     totalBytes += 4096 + i;
   }
-  lastRangeEnd = byteRanges.back().size;
   ByteInputStream byteStream(std::move(byteRanges));
   ASSERT_EQ(byteStream.size(), totalBytes);
 }
@@ -348,13 +346,13 @@ TEST_F(ByteStreamTest, appendWindow) {
     {
       AppendWindow<uint64_t> window(stream, scratch);
       auto ptr = window.get(numWords);
-      bytes = arena->pool()->currentBytes();
+      bytes = arena->pool()->usedBytes();
       memcpy(ptr, words.data() + offset, numWords * sizeof(words[0]));
       offset += numWords;
       ++counter;
     }
     // We check that there is no allocation at exit of AppendWindow block.k
-    EXPECT_EQ(arena->pool()->currentBytes(), bytes);
+    EXPECT_EQ(arena->pool()->usedBytes(), bytes);
   }
   std::stringstream stringStream;
   OStreamOutputStream out(&stringStream);

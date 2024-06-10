@@ -72,9 +72,9 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
       "2.00MB, memory manager cap is 8.00GB, requestor "
       "'op.2.0.0.Aggregation' with current usage 3.70MB"};
   std::vector<std::string> expectedDetailedTexts = {
-      "node.1 usage 1.00MB reserved 1.00MB peak 1.00MB",
+      "node.1 usage 12.00KB reserved 1.00MB peak 1.00MB",
       "op.1.0.0.FilterProject usage 12.00KB reserved 1.00MB peak 12.00KB",
-      "node.2 usage 4.00MB reserved 4.00MB peak 4.00MB",
+      "node.2 usage 3.70MB reserved 4.00MB peak 4.00MB",
       "op.2.0.0.Aggregation usage 3.70MB reserved 4.00MB peak 3.70MB",
       "Top 2 leaf memory pool usages:"};
 
@@ -95,7 +95,7 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
                   .singleAggregation({"c0"}, {"sum(p1)"})
                   .orderBy({"c0"}, false)
                   .planNode();
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
       queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
   CursorParameters params;
@@ -153,7 +153,7 @@ TEST_P(MemoryCapExceededTest, multipleDrivers) {
                   .values(data, true)
                   .singleAggregation({"c0"}, {"sum(c1)"})
                   .planNode();
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
       queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
 
@@ -229,7 +229,7 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
                     .singleAggregation({"c0"}, {"sum(p1)"})
                     .orderBy({"c0"}, false)
                     .planNode();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         manager.addRootPool(queryCtx->queryId(), kMaxBytes));
     CursorParameters params;

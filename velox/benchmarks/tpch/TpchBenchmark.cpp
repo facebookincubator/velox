@@ -233,12 +233,13 @@ class TpchBenchmark {
         constexpr int32_t kNumSsdShards = 16;
         cacheExecutor_ =
             std::make_unique<folly::IOThreadPoolExecutor>(kNumSsdShards);
-        ssdCache = std::make_unique<cache::SsdCache>(
+        const cache::SsdCache::Config config(
             FLAGS_ssd_path,
             static_cast<uint64_t>(FLAGS_ssd_cache_gb) << 30,
             kNumSsdShards,
             cacheExecutor_.get(),
             static_cast<uint64_t>(FLAGS_ssd_checkpoint_interval_gb) << 30);
+        ssdCache = std::make_unique<cache::SsdCache>(config);
       }
 
       cache_ = cache::AsyncDataCache::create(
@@ -401,14 +402,14 @@ class TpchBenchmark {
 #endif
 
         if (cache_) {
-          cache_->clear();
+          cache_->testingClear();
         }
       }
       if (FLAGS_clear_ssd_cache) {
         if (cache_) {
           auto ssdCache = cache_->ssdCache();
           if (ssdCache) {
-            ssdCache->clear();
+            ssdCache->testingClear();
           }
         }
       }
@@ -493,6 +494,11 @@ BENCHMARK(q1) {
   benchmark.run(planContext);
 }
 
+BENCHMARK(q2) {
+  const auto planContext = queryBuilder->getQueryPlan(2);
+  benchmark.run(planContext);
+}
+
 BENCHMARK(q3) {
   const auto planContext = queryBuilder->getQueryPlan(3);
   benchmark.run(planContext);
@@ -525,6 +531,11 @@ BENCHMARK(q9) {
 
 BENCHMARK(q10) {
   const auto planContext = queryBuilder->getQueryPlan(10);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q11) {
+  const auto planContext = queryBuilder->getQueryPlan(11);
   benchmark.run(planContext);
 }
 

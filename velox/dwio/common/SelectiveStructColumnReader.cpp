@@ -53,18 +53,50 @@ uint64_t SelectiveStructColumnReaderBase::skip(uint64_t numValues) {
   return numValues;
 }
 
+void SelectiveStructColumnReaderBase::fillOutputRowsFromMutation(
+    vector_size_t size) {
+  if (mutation_->deletedRows) {
+    bits::forEachUnsetBit(mutation_->deletedRows, 0, size, [&](auto i) {
+      if (!mutation_->randomSkip || mutation_->randomSkip->testOne()) {
+        addOutputRow(i);
+      }
+    });
+  } else {
+    VELOX_CHECK(mutation_->randomSkip);
+    vector_size_t i = 0;
+    while (i < size) {
+      auto skip = mutation_->randomSkip->nextSkip();
+      auto remaining = size - i;
+      if (skip >= remaining) {
+        mutation_->randomSkip->consume(remaining);
+        break;
+      }
+      i += skip;
+      addOutputRow(i++);
+      mutation_->randomSkip->consume(skip + 1);
+    }
+  }
+}
+
 void SelectiveStructColumnReaderBase::next(
     uint64_t numValues,
     VectorPtr& result,
     const Mutation* mutation) {
   process::TraceContext trace("SelectiveStructColumnReaderBase::next");
+  mutation_ = mutation;
+  hasDeletion_ = common::hasDeletion(mutation);
   if (children_.empty()) {
-    if (mutation) {
-      if (mutation->deletedRows) {
-        numValues -= bits::countBits(mutation->deletedRows, 0, numValues);
-      }
-      if (mutation->randomSkip) {
-        numValues *= mutation->randomSkip->sampleRate();
+    if (hasDeletion_) {
+      if (fillMutatedOutputRows_) {
+        fillOutputRowsFromMutation(numValues);
+        numValues = outputRows_.size();
+      } else {
+        if (mutation->deletedRows) {
+          numValues -= bits::countBits(mutation->deletedRows, 0, numValues);
+        }
+        if (mutation->randomSkip) {
+          numValues *= mutation->randomSkip->sampleRate();
+        }
       }
     }
 
@@ -91,8 +123,6 @@ void SelectiveStructColumnReaderBase::next(
   if (numValues > oldSize) {
     std::iota(&rows_[oldSize], &rows_[rows_.size()], oldSize);
   }
-  mutation_ = mutation;
-  hasMutation_ = mutation && (mutation->deletedRows || mutation->randomSkip);
   read(readOffset_, rows_, nullptr);
   getValues(outputRows(), &result);
 }
@@ -104,33 +134,13 @@ void SelectiveStructColumnReaderBase::read(
   numReads_ = scanSpec_->newRead();
   prepareRead<char>(offset, rows, incomingNulls);
   RowSet activeRows = rows;
-  if (hasMutation_) {
+  if (hasDeletion_) {
     // We handle the mutation after prepareRead so that output rows and format
     // specific initializations (e.g. RepDef in Parquet) are done properly.
     VELOX_DCHECK(!nullsInReadRange_, "Only top level can have mutation");
     VELOX_DCHECK_EQ(
         rows.back(), rows.size() - 1, "Top level should have a dense row set");
-    if (mutation_->deletedRows) {
-      bits::forEachUnsetBit(
-          mutation_->deletedRows, 0, rows.back() + 1, [&](auto i) {
-            if (!mutation_->randomSkip || mutation_->randomSkip->testOne()) {
-              addOutputRow(i);
-            }
-          });
-    } else {
-      VELOX_CHECK(mutation_->randomSkip);
-      vector_size_t i = 0;
-      while (i <= rows.back()) {
-        auto skip = mutation_->randomSkip->nextSkip();
-        if (skip > rows.back() - i) {
-          mutation_->randomSkip->consume(rows.back() - i + 1);
-          break;
-        }
-        i += skip;
-        addOutputRow(i++);
-        mutation_->randomSkip->consume(skip + 1);
-      }
-    }
+    fillOutputRowsFromMutation(rows.size());
     if (outputRows_.empty()) {
       readOffset_ = offset + rows.back() + 1;
       return;
@@ -410,5 +420,25 @@ void SelectiveStructColumnReaderBase::getValues(
   }
   resultRow->updateContainsLazyNotLoaded();
 }
+
+namespace detail {
+
+#if XSIMD_WITH_AVX2
+
+xsimd::batch<int32_t> bitsToInt32s[256];
+
+__attribute__((constructor)) void initBitsToInt32s() {
+  for (int i = 0; i < 256; ++i) {
+    int32_t data[8];
+    for (int j = 0; j < 8; ++j) {
+      data[j] = bits::isBitSet(&i, j);
+    }
+    bitsToInt32s[i] = xsimd::load_unaligned(data);
+  }
+}
+
+#endif
+
+} // namespace detail
 
 } // namespace facebook::velox::dwio::common

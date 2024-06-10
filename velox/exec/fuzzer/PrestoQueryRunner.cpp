@@ -21,6 +21,8 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/Expressions.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -34,16 +36,6 @@ using namespace facebook::velox;
 namespace facebook::velox::exec::test {
 
 namespace {
-
-template <typename T>
-T extractSingleValue(const std::vector<RowVectorPtr>& data) {
-  VELOX_CHECK_EQ(1, data.size());
-  VELOX_CHECK_EQ(1, data[0]->childrenSize());
-
-  auto simpleVector = data[0]->childAt(0)->as<SimpleVector<T>>();
-  VELOX_CHECK(!simpleVector->isNullAt(0));
-  return simpleVector->valueAt(0);
-}
 
 void writeToFile(
     const std::string& path,
@@ -159,19 +151,29 @@ PrestoQueryRunner::PrestoQueryRunner(
 
 std::optional<std::string> PrestoQueryRunner::toSql(
     const core::PlanNodePtr& plan) {
-  if (auto projectNode =
+  if (const auto projectNode =
           std::dynamic_pointer_cast<const core::ProjectNode>(plan)) {
     return toSql(projectNode);
   }
 
-  if (auto windowNode =
+  if (const auto windowNode =
           std::dynamic_pointer_cast<const core::WindowNode>(plan)) {
     return toSql(windowNode);
   }
 
-  if (auto aggregationNode =
+  if (const auto aggregationNode =
           std::dynamic_pointer_cast<const core::AggregationNode>(plan)) {
     return toSql(aggregationNode);
+  }
+
+  if (const auto rowNumberNode =
+          std::dynamic_pointer_cast<const core::RowNumberNode>(plan)) {
+    return toSql(rowNumberNode);
+  }
+
+  if (auto tableWriteNode =
+          std::dynamic_pointer_cast<const core::TableWriteNode>(plan)) {
+    return toSql(tableWriteNode);
   }
 
   VELOX_NYI();
@@ -500,6 +502,83 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   return sql.str();
 }
 
+std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const core::RowNumberNode>& rowNumberNode) {
+  if (!isSupportedDwrfType(rowNumberNode->sources()[0]->outputType())) {
+    return std::nullopt;
+  }
+
+  std::stringstream sql;
+  sql << "SELECT ";
+
+  const auto& inputType = rowNumberNode->sources()[0]->outputType();
+  for (auto i = 0; i < inputType->size(); ++i) {
+    appendComma(i, sql);
+    sql << inputType->nameOf(i);
+  }
+
+  sql << ", row_number() OVER (";
+
+  const auto& partitionKeys = rowNumberNode->partitionKeys();
+  if (!partitionKeys.empty()) {
+    sql << "partition by ";
+    for (auto i = 0; i < partitionKeys.size(); ++i) {
+      appendComma(i, sql);
+      sql << partitionKeys[i]->name();
+    }
+  }
+
+  sql << ") as row_number FROM tmp";
+
+  return sql.str();
+}
+
+std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const core::TableWriteNode>& tableWriteNode) {
+  auto insertTableHandle =
+      std::dynamic_pointer_cast<connector::hive::HiveInsertTableHandle>(
+          tableWriteNode->insertTableHandle()->connectorInsertTableHandle());
+
+  // Returns a CTAS sql with specified table properties from TableWriteNode,
+  // example sql:
+  // CREATE TABLE tmp_write WITH (PARTITIONED_BY = ARRAY['p0'], BUCKETED_COUNT =
+  // 20, BUCKETED_BY = ARRAY['b0', 'b1']) AS SELECT * FROM tmp
+  std::stringstream sql;
+  sql << "CREATE TABLE tmp_write";
+  std::vector<std::string> partitionKeys;
+  for (auto i = 0; i < tableWriteNode->columnNames().size(); ++i) {
+    if (insertTableHandle->inputColumns()[i]->isPartitionKey()) {
+      partitionKeys.push_back(insertTableHandle->inputColumns()[i]->name());
+    }
+  }
+
+  if (insertTableHandle->isPartitioned()) {
+    sql << " WITH (PARTITIONED_BY = ARRAY[";
+    for (int i = 0; i < partitionKeys.size(); ++i) {
+      appendComma(i, sql);
+      sql << "'" << partitionKeys[i] << "'";
+    }
+    sql << "]";
+
+    if (insertTableHandle->bucketProperty() != nullptr) {
+      const auto bucketCount =
+          insertTableHandle->bucketProperty()->bucketCount();
+      const auto bucketColumns =
+          insertTableHandle->bucketProperty()->bucketedBy();
+      sql << ", BUCKET_COUNT = " << bucketCount << ", BUCKETED_BY = ARRAY[";
+      for (int i = 0; i < bucketColumns.size(); ++i) {
+        appendComma(i, sql);
+        sql << "'" << bucketColumns[i] << "'";
+      }
+      sql << "]";
+    }
+    sql << ")";
+  }
+
+  sql << " AS SELECT * FROM tmp";
+  return sql.str();
+}
+
 std::multiset<std::vector<variant>> PrestoQueryRunner::execute(
     const std::string& sql,
     const std::vector<RowVectorPtr>& input,
@@ -572,15 +651,14 @@ std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
 }
 
 std::vector<RowVectorPtr> PrestoQueryRunner::execute(const std::string& sql) {
+  LOG(INFO) << "Execute presto sql: " << sql;
   auto response = ServerResponse(startQuery(sql));
   response.throwIfFailed();
 
-  vector_size_t numResults = 0;
   std::vector<RowVectorPtr> queryResults;
   for (;;) {
     for (auto& result : response.queryResults(pool_.get())) {
       queryResults.push_back(result);
-      numResults += result->size();
     }
 
     if (response.queryCompleted()) {

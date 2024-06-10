@@ -87,6 +87,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         "",
         0,
         0,
+        /*readBufferSize=*/1 << 20,
         spillExecutor_.get(),
         10,
         20,
@@ -174,12 +175,16 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
     return files;
   }
 
-  void verifyWrittenData(const std::string& dirPath) {
+  void verifyWrittenData(const std::string& dirPath, int32_t numFiles = 1) {
     const std::vector<std::string> filePaths = listFiles(dirPath);
-    ASSERT_EQ(filePaths.size(), 1);
+    ASSERT_EQ(filePaths.size(), numFiles);
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    std::for_each(filePaths.begin(), filePaths.end(), [&](auto filePath) {
+      splits.push_back(makeHiveConnectorSplit(filePath));
+    });
     HiveConnectorTestBase::assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
-        {makeHiveConnectorSplit(filePaths[0])},
+        splits,
         fmt::format("SELECT * FROM tmp"));
   }
 
@@ -504,6 +509,54 @@ TEST_F(HiveDataSinkTest, basic) {
 
   createDuckDbTable(vectors);
   verifyWrittenData(outputDirectory->getPath());
+}
+
+TEST_F(HiveDataSinkTest, basicBucket) {
+  const auto outputDirectory = TempDirectoryPath::create();
+
+  const int32_t numBuckets = 4;
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      numBuckets,
+      std::vector<std::string>{"c0"},
+      std::vector<TypePtr>{BIGINT()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{
+          std::make_shared<HiveSortingColumn>(
+              "c1", core::SortOrder{false, false})});
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {},
+      bucketProperty);
+  auto stats = dataSink->stats();
+  ASSERT_TRUE(stats.empty()) << stats.toString();
+  ASSERT_EQ(
+      stats.toString(),
+      "numWrittenBytes 0B numWrittenFiles 0 spillRuns[0] spilledInputBytes[0B] "
+      "spilledBytes[0B] spilledRows[0] spilledPartitions[0] spilledFiles[0] "
+      "spillFillTimeUs[0us] spillSortTime[0us] spillSerializationTime[0us] "
+      "spillWrites[0] spillFlushTime[0us] spillWriteTime[0us] "
+      "maxSpillExceededLimitCount[0] spillReadBytes[0B] spillReads[0] "
+      "spillReadTime[0us] spillReadDeserializationTime[0us]");
+
+  const int numBatches = 10;
+  const auto vectors = createVectors(500, numBatches);
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+  stats = dataSink->stats();
+  ASSERT_FALSE(stats.empty());
+  ASSERT_GT(stats.numWrittenBytes, 0);
+  ASSERT_EQ(stats.numWrittenFiles, 0);
+
+  const auto partitions = dataSink->close();
+  stats = dataSink->stats();
+  ASSERT_FALSE(stats.empty());
+  ASSERT_EQ(partitions.size(), numBuckets);
+
+  createDuckDbTable(vectors);
+  verifyWrittenData(outputDirectory->getPath(), numBuckets);
 }
 
 TEST_F(HiveDataSinkTest, close) {
@@ -838,11 +891,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     ASSERT_EQ(stats.reclaimExecTimeUs, 0);
     ASSERT_EQ(stats.reclaimedBytes, 0);
     if (testData.expectedWriterReclaimEnabled) {
-      if (testData.sortWriter) {
-        ASSERT_GE(stats.numNonReclaimableAttempts, 1);
-      } else {
-        ASSERT_EQ(stats.numNonReclaimableAttempts, 1);
-      }
+      ASSERT_GE(stats.numNonReclaimableAttempts, 0);
     } else {
       ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
     }

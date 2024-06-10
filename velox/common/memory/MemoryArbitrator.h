@@ -18,6 +18,7 @@
 
 #include <vector>
 
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SuccinctPrinter.h"
@@ -74,6 +75,10 @@ class MemoryArbitrator {
     /// for a hanging query task to pause. If it is zero, then there is no
     /// timeout.
     uint64_t memoryReclaimWaitMs{0};
+
+    /// If true, it allows memory arbitrator to reclaim used memory cross query
+    /// memory pools.
+    bool globalArbitrationEnabled{false};
 
     /// Provided by the query system to validate the state after a memory pool
     /// enters arbitration if not null. For instance, Prestissimo provides
@@ -253,16 +258,25 @@ class MemoryArbitrator {
         memoryPoolReservedCapacity_(config.memoryPoolReservedCapacity),
         memoryPoolTransferCapacity_(config.memoryPoolTransferCapacity),
         memoryReclaimWaitMs_(config.memoryReclaimWaitMs),
+        globalArbitrationEnabled_(config.globalArbitrationEnabled),
         arbitrationStateCheckCb_(config.arbitrationStateCheckCb),
         checkUsageLeak_(config.checkUsageLeak) {
     VELOX_CHECK_LE(reservedCapacity_, capacity_);
   }
+
+  /// Helper utilities used by the memory arbitrator implementations to call
+  /// protected methods of memory pool.
+  static bool
+  growPool(MemoryPool* pool, uint64_t growBytes, uint64_t reservationBytes);
+
+  static uint64_t shrinkPool(MemoryPool* pool, uint64_t targetBytes);
 
   const uint64_t capacity_;
   const uint64_t reservedCapacity_;
   const uint64_t memoryPoolReservedCapacity_;
   const uint64_t memoryPoolTransferCapacity_;
   const uint64_t memoryReclaimWaitMs_;
+  const bool globalArbitrationEnabled_;
   const MemoryArbitrationStateCheckCB arbitrationStateCheckCb_;
   const bool checkUsageLeak_;
 };
@@ -317,13 +331,15 @@ class MemoryReclaimer {
 
     bool operator==(const Stats& other) const;
     bool operator!=(const Stats& other) const;
+    Stats& operator+=(const Stats& other);
   };
 
   virtual ~MemoryReclaimer() = default;
 
   static std::unique_ptr<MemoryReclaimer> create();
 
-  static uint64_t run(const std::function<uint64_t()>& func, Stats& stats);
+  /// Invoked memory reclaim function from 'pool' and record execution 'stats'.
+  static uint64_t run(const std::function<int64_t()>& func, Stats& stats);
 
   /// Invoked by the memory arbitrator before entering the memory arbitration
   /// processing. The default implementation does nothing but user can override
@@ -377,6 +393,20 @@ class MemoryReclaimer {
 
  protected:
   MemoryReclaimer() = default;
+};
+
+/// Helper class used to measure the memory bytes reclaimed from a memory pool
+/// by a memory reclaim function.
+class ScopedReclaimedBytesRecorder {
+ public:
+  ScopedReclaimedBytesRecorder(MemoryPool* pool, int64_t* reclaimedBytes);
+
+  ~ScopedReclaimedBytesRecorder();
+
+ private:
+  MemoryPool* const pool_;
+  int64_t* const reclaimedBytes_;
+  const int64_t reservedBytesBeforeReclaim_;
 };
 
 /// The object is used to set/clear non-reclaimable section of an operation in
@@ -445,6 +475,23 @@ MemoryArbitrationContext* memoryArbitrationContext();
 
 /// Returns true if the running thread is under memory arbitration or not.
 bool underMemoryArbitration();
+
+/// Creates an async memory reclaim task with memory arbitration context set.
+/// This is to avoid recursive memory arbitration during memory reclaim.
+///
+/// NOTE: this must be called under memory arbitration.
+template <typename Item>
+std::shared_ptr<AsyncSource<Item>> createAsyncMemoryReclaimTask(
+    std::function<std::unique_ptr<Item>()> task) {
+  auto* arbitrationCtx = memory::memoryArbitrationContext();
+  VELOX_CHECK_NOT_NULL(arbitrationCtx);
+  return std::make_shared<AsyncSource<Item>>(
+      [asyncTask = std::move(task), arbitrationCtx]() -> std::unique_ptr<Item> {
+        VELOX_CHECK_NOT_NULL(arbitrationCtx);
+        memory::ScopedMemoryArbitrationContext ctx(arbitrationCtx->requestor);
+        return asyncTask();
+      });
+}
 
 /// The function triggers memory arbitration by shrinking memory pools from
 /// 'manager' by invoking shrinkPools API. If 'manager' is not set, then it

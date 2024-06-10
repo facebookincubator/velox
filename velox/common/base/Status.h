@@ -20,6 +20,7 @@
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <folly/Expected.h>
 #include <folly/Likely.h>
 #include <string>
 #include <utility>
@@ -155,6 +156,8 @@ class [[nodiscard]] Status {
     }
   }
 
+  explicit Status(StatusCode code);
+
   Status(StatusCode code, std::string msg);
 
   // Copy the specified status.
@@ -191,7 +194,7 @@ class [[nodiscard]] Status {
   //   auto st1 = Status::UserError("my error"):
   //   auto st2 = Status::TypeError("my other error"):
 
-  /// Return an error status for out-of-memory conditions.
+  /// Return an error status for user errors.
   template <typename... Args>
   static Status UserError(Args&&... args) {
     return Status::fromArgs(
@@ -219,6 +222,7 @@ class [[nodiscard]] Status {
     return Status::fromArgs(StatusCode::kKeyError, std::forward<Args>(args)...);
   }
 
+  /// Return an error status when something already exists (e.g. a file).
   template <typename... Args>
   static Status AlreadyExists(Args&&... args) {
     return Status::fromArgs(
@@ -368,6 +372,10 @@ class [[nodiscard]] Status {
     return Status(code, fmt::vformat(fmt, fmt::make_format_args(args...)));
   }
 
+  static Status fromArgs(StatusCode code) {
+    return Status(code);
+  }
+
   void deleteState() {
     delete state_;
     state_ = nullptr;
@@ -489,6 +497,24 @@ inline Status genericToStatus(Status&& st) {
 }
 
 } // namespace internal
+
+/// Holds a result or an error. Designed to be used by APIs that do not throw.
+///
+/// Here is an example of a modulo operation that doesn't throw, but indicates
+/// failure using Status.
+///
+/// Expected<int> modulo(int a, int b) {
+///   if (b == 0) {
+///     return folly::makeUnexpected(Status::UserError("division by zero"));
+///   }
+///
+///   return a % b;
+/// }
+///
+/// Status should not be OK.
+template <typename T>
+using Expected = folly::Expected<T, Status>;
+
 } // namespace facebook::velox
 
 template <>

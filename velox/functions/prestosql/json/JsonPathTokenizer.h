@@ -30,13 +30,17 @@ namespace facebook::velox::functions {
 ///   . or [] - child operator
 ///   * - wildcard (all objects/elements regardless their names)
 ///
-/// Supports quoted keys.
+/// Supports single- and double-quoted keys.
 ///
 /// Notably, doesn't support deep scan, e.g. $..author.
 ///
 /// The leading '$.' is optional. Paths '$.foo.bar' and 'foo.bar' are
 /// equivalent. This is not part of JSONPath syntax, but this is the behavior of
 /// Jayway implementation used by Presto.
+///
+/// The leading '$' is optional in paths like '$[0]' or '$["foo"]'. Paths '[0]'
+/// and '$[0]' are equivalent.  This is not part of JSONPath syntax, but this is
+/// the behavior of Jayway implementation used by Presto.
 ///
 /// It is allowed to use dot-notation redundantly, e.g. non-standard path
 /// '$.[0].foo' is allowed and is equivalent to '$[0].foo'. Similarly, paths
@@ -49,6 +53,9 @@ namespace facebook::velox::functions {
 ///   "store.book[0].author"
 ///   "store.book.[0].author"
 ///   "$[0].foo.bar"
+///   "$[-1]"
+///   "[0][1]"
+///   "$['store'][book][1]"
 class JsonPathTokenizer {
  public:
   /// Resets the tokenizer to a new path. This method must be called and return
@@ -72,7 +79,7 @@ class JsonPathTokenizer {
 
   std::optional<std::string> matchUnquotedSubscriptKey();
 
-  std::optional<std::string> matchQuotedSubscriptKey();
+  std::optional<std::string> matchQuotedSubscriptKey(char quote);
 
   // The index of the next character to process. This is at least one for
   // standard paths that start with '$'. This can be zero if 'reset' was called

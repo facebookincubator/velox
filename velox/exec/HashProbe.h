@@ -73,6 +73,13 @@ class HashProbe : public Operator {
   }
 
  private:
+  // Indicates if the join type includes misses from the left side in the
+  // output.
+  static bool joinIncludesMissesFromLeft(core::JoinType joinType) {
+    return isLeftJoin(joinType) || isFullJoin(joinType) ||
+        isAntiJoin(joinType) || isLeftSemiProjectJoin(joinType);
+  }
+
   void setState(ProbeOperatorState state);
   void checkStateTransition(ProbeOperatorState state);
 
@@ -128,14 +135,17 @@ class HashProbe : public Operator {
         decodedFilterResult_.valueAt<bool>(row);
   }
 
-  // Populate filter input columns.
-  void fillFilterInput(vector_size_t size);
+  // Create a temporary input vector to be passed to the filter. This ensures it
+  // gets destroyed in case its wrapping an unloaded vector which eventually
+  // needs to be wrapped in fillOutput().
+  RowVectorPtr createFilterInput(vector_size_t size);
 
   // Prepare filter row selectivity for null-aware join. 'numRows'
   // specifies the number of rows in 'filterInputRows_' to process. If
   // 'filterPropagateNulls' is true, the probe input row which has null in any
   // probe filter column can't pass the filter.
   void prepareFilterRowsForNullAwareJoin(
+      RowVectorPtr& filterInput,
       vector_size_t numRows,
       bool filterPropagateNulls);
 
@@ -154,6 +164,8 @@ class HashProbe : public Operator {
       std::function<int32_t(char**, int32_t)> iterator);
 
   void ensureLoadedIfNotAtEnd(column_index_t channel);
+
+  void ensureLoaded(column_index_t channel);
 
   // Indicates if the operator has more probe inputs from either the upstream
   // operator or the spill input reader.
@@ -372,7 +384,7 @@ class HashProbe : public Operator {
   // side. Used by right semi project join.
   bool probeSideHasNullKeys_{false};
 
-  // Rows in 'filterInput_' to apply 'filter_' to.
+  // Rows in the filter columns to apply 'filter_' to.
   SelectivityVector filterInputRows_;
 
   // Join filter.
@@ -384,16 +396,14 @@ class HashProbe : public Operator {
   // Type of the RowVector for filter inputs.
   RowTypePtr filterInputType_;
 
+  // The input channels that are projected to the output.
+  std::unordered_set<column_index_t> projectedInputColumns_;
+
   // Maps input channels to channels in 'filterInputType_'.
   std::vector<IdentityProjection> filterInputProjections_;
 
   // Maps from column index in hash table to channel in 'filterInputType_'.
   std::vector<IdentityProjection> filterTableProjections_;
-
-  // Temporary projection from probe and build for evaluating
-  // 'filter_'. This can always be reused since this does not escape
-  // this operator.
-  RowVectorPtr filterInput_;
 
   // The following six fields are used in null-aware anti join filter
   // processing.
@@ -627,7 +637,7 @@ class HashProbe : public Operator {
   SelectivityVector activeRows_;
 
   // True if passingInputRows is up to date.
-  bool passingInputRowsInitialized_;
+  bool passingInputRowsInitialized_ = false;
 
   // Set of input rows for which there is at least one join hit. All
   // set if right side optional. Used when loading lazy vectors for

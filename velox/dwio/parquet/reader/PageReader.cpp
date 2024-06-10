@@ -261,12 +261,11 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
     return;
   }
 
-  uint32_t defineLength = maxDefine_ > 0
-      ? pageHeader.data_page_header_v2.definition_levels_byte_length
-      : 0;
-  uint32_t repeatLength = maxRepeat_ > 0
-      ? pageHeader.data_page_header_v2.repetition_levels_byte_length
-      : 0;
+  uint32_t defineLength =
+      pageHeader.data_page_header_v2.definition_levels_byte_length;
+  uint32_t repeatLength =
+      pageHeader.data_page_header_v2.repetition_levels_byte_length;
+
   auto bytes = pageHeader.compressed_page_size;
   pageData_ = readBytes(bytes, pageBuffer_);
 
@@ -619,12 +618,18 @@ void PageReader::makeDecoder() {
               pageData_, pageData_ + encodedDataSize_);
           break;
         case thrift::Type::FIXED_LEN_BYTE_ARRAY:
-          directDecoder_ = std::make_unique<dwio::common::DirectDecoder<true>>(
-              std::make_unique<dwio::common::SeekableArrayInputStream>(
-                  pageData_, encodedDataSize_),
-              false,
-              type_->typeLength_,
-              true);
+          if (type_->type()->isVarbinary()) {
+            stringDecoder_ = std::make_unique<StringDecoder>(
+                pageData_, pageData_ + encodedDataSize_, type_->typeLength_);
+          } else {
+            directDecoder_ =
+                std::make_unique<dwio::common::DirectDecoder<true>>(
+                    std::make_unique<dwio::common::SeekableArrayInputStream>(
+                        pageData_, encodedDataSize_),
+                    false,
+                    type_->typeLength_,
+                    true);
+          }
           break;
         default: {
           directDecoder_ = std::make_unique<dwio::common::DirectDecoder<true>>(

@@ -52,6 +52,15 @@ These stats are reported by all operators.
      - The number of times a request for more memory hit the query memory
        limit and initiated a local arbitration attempt where memory is
        reclaimed from the requestor itself.
+   * - localArbitrationQueueWallNanos
+     -
+     - The time of an operator waiting in local arbitration queue.
+   * - localArbitrationLockWaitWallNanos
+     -
+     - The time of an operator waiting to acquire the local arbitration lock.
+   * - globalArbitrationLockWaitWallNanos
+     -
+     - The time of an operator waiting to acquire the global arbitration lock.
 
 HashBuild, HashAggregation
 --------------------------
@@ -107,25 +116,25 @@ These stats are reported by operators that support spilling.
    * - Stats
      - Unit
      - Description
-   * - spillFillTime
-     - microseconds
+   * - spillFillWallNanos
+     - nanos
      - The time spent on filling rows for spilling.
-   * - spillSortTime
-     - microseconds
+   * - spillSortWallNanos
+     - nanos
      - The time spent on sorting rows for spilling.
-   * - spillSerializationTime
-     - microseconds
+   * - spillSerializationWallNanos
+     - nanos
      - The time spent on serializing rows for spilling.
-   * - spillFlushTime
-     - microseconds
+   * - spillFlushWallNanos
+     - nanos
      - The time spent on copy out serialized rows for disk write. If compression
        is enabled, this includes the compression time.
    * - spillWrites
      -
      - The number of spill writer flushes, equivalent to number of write calls to
        underlying filesystem.
-   * - spillWriteTime
-     - microseconds
+   * - spillWriteWallNanos
+     - nanos
      - The time spent on writing spilled rows to disk.
    * - spillRuns
      -
@@ -139,9 +148,9 @@ These stats are reported by operators that support spilling.
    * - spillReads
      -
      - The number of spill reader reads, equivalent to the number of read calls to the underlying filesystem.
-   * - spillReadTimeUs
-     - microseconds
+   * - spillReadWallNanos
+     - nanos
      - The time spent on read data from spilled files.
-   * - spillDeserializationTimeUs
-     - microseconds
+   * - spillDeserializationWallNanos
+     - nanos
      - The time spent on deserializing rows read from spilled files.

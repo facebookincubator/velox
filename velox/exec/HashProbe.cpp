@@ -161,6 +161,7 @@ void HashProbe::initialize() {
     auto name = probeType_->nameOf(i);
     auto outIndex = outputType_->getChildIdxIfExists(name);
     if (outIndex.has_value()) {
+      projectedInputColumns_.insert(i);
       identityProjections_.emplace_back(i, outIndex.value());
       if (outIndex.value() == i) {
         ++numIdentityProjections;
@@ -277,7 +278,8 @@ void HashProbe::maybeSetupSpillInputReader(
   VELOX_CHECK(iter != spillPartitionSet_.end());
   auto partition = std::move(iter->second);
   VELOX_CHECK_EQ(partition->id(), restoredPartitionId.value());
-  spillInputReader_ = partition->createUnorderedReader(pool(), &spillStats_);
+  spillInputReader_ = partition->createUnorderedReader(
+      spillConfig_->readBufferSize, pool(), &spillStats_);
   spillPartitionSet_.erase(iter);
 }
 
@@ -478,6 +480,7 @@ void HashProbe::prepareInputIndicesBuffers(
   VELOX_DCHECK(spillEnabled());
   const auto maxIndicesBufferBytes = numInput * sizeof(vector_size_t);
   if (nonSpillInputIndicesBuffer_ == nullptr ||
+      !nonSpillInputIndicesBuffer_->isMutable() ||
       nonSpillInputIndicesBuffer_->size() < maxIndicesBufferBytes) {
     nonSpillInputIndicesBuffer_ = allocateIndices(numInput, pool());
     rawNonSpillInputIndicesBuffer_ =
@@ -565,6 +568,9 @@ void HashProbe::addInput(RowVectorPtr input) {
   }
   input_ = std::move(input);
 
+  // Reset passingInputRowsInitialized_ as input_ as changed.
+  passingInputRowsInitialized_ = false;
+
   const auto numInput = input_->size();
 
   if (numInput > 0) {
@@ -599,9 +605,7 @@ void HashProbe::addInput(RowVectorPtr input) {
     }
     // Build side is empty. This state is valid only for anti, left and full
     // joins.
-    VELOX_CHECK(
-        isAntiJoin(joinType_) || isLeftJoin(joinType_) ||
-        isFullJoin(joinType_) || isLeftSemiProjectJoin(joinType_));
+    VELOX_CHECK(joinIncludesMissesFromLeft(joinType_));
     if (isLeftSemiProjectJoin(joinType_) ||
         (isAntiJoin(joinType_) && filter_)) {
       // For anti join with filter and semi project join we need to decode the
@@ -631,9 +635,7 @@ void HashProbe::addInput(RowVectorPtr input) {
 
   table_->prepareForJoinProbe(*lookup_.get(), input_, activeRows_, false);
 
-  passingInputRowsInitialized_ = false;
-  if (isLeftJoin(joinType_) || isFullJoin(joinType_) || isAntiJoin(joinType_) ||
-      isLeftSemiProjectJoin(joinType_)) {
+  if (joinIncludesMissesFromLeft(joinType_)) {
     // Make sure to allocate an entry in 'hits' for every input row to allow for
     // including rows without a match in the output. Also, make sure to
     // initialize all 'hits' to nullptr as HashTable::joinProbe will only
@@ -994,8 +996,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
     } else {
       numOut = table_->listJoinResults(
           results_,
-          isLeftJoin(joinType_) || isFullJoin(joinType_) ||
-              isAntiJoin(joinType_) || isLeftSemiProjectJoin(joinType_),
+          joinIncludesMissesFromLeft(joinType_),
           mapping,
           folly::Range(outputTableRows_.data(), outputTableRows_.size()));
     }
@@ -1052,10 +1053,22 @@ bool HashProbe::maybeReadSpillOutput() {
   return true;
 }
 
-void HashProbe::fillFilterInput(vector_size_t size) {
+RowVectorPtr HashProbe::createFilterInput(vector_size_t size) {
   std::vector<VectorPtr> filterColumns(filterInputType_->size());
   for (auto projection : filterInputProjections_) {
-    ensureLoadedIfNotAtEnd(projection.inputChannel);
+    if (projectedInputColumns_.find(projection.inputChannel) !=
+        projectedInputColumns_.end()) {
+      // If the column is projected to the output, ensure it's loaded if it's
+      // lazy in case the filter only loads an incomplete subset of the rows
+      // that will be output.
+      ensureLoaded(projection.inputChannel);
+    } else {
+      // If the column isn't projected to the output, the Vector will only be
+      // reused if we've broken the input batch into multiple output batches,
+      // i.e. if results_ is not at the end of the iterator.
+      ensureLoadedIfNotAtEnd(projection.inputChannel);
+    }
+
     filterColumns[projection.outputChannel] = wrapChild(
         size, outputRowMapping_, input_->childAt(projection.inputChannel));
   }
@@ -1068,11 +1081,12 @@ void HashProbe::fillFilterInput(vector_size_t size) {
       filterInputType_->children(),
       filterColumns);
 
-  filterInput_ = std::make_shared<RowVector>(
+  return std::make_shared<RowVector>(
       pool(), filterInputType_, nullptr, size, std::move(filterColumns));
 }
 
 void HashProbe::prepareFilterRowsForNullAwareJoin(
+    RowVectorPtr& filterInput,
     vector_size_t numRows,
     bool filterPropagateNulls) {
   VELOX_CHECK_LE(numRows, kBatchSize);
@@ -1086,7 +1100,7 @@ void HashProbe::prepareFilterRowsForNullAwareJoin(
     auto* rawNullRows = nullFilterInputRows_.asMutableRange().bits();
     for (auto& projection : filterInputProjections_) {
       filterInputColumnDecodedVector_.decode(
-          *filterInput_->childAt(projection.outputChannel), filterInputRows_);
+          *filterInput->childAt(projection.outputChannel), filterInputRows_);
       if (filterInputColumnDecodedVector_.mayHaveNulls()) {
         SelectivityVector nullsInActiveRows(numRows);
         memcpy(
@@ -1285,13 +1299,14 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
     filterInputRows_.updateBounds();
   }
 
-  fillFilterInput(numRows);
+  RowVectorPtr filterInput = createFilterInput(numRows);
 
   if (nullAware_) {
-    prepareFilterRowsForNullAwareJoin(numRows, filterPropagateNulls);
+    prepareFilterRowsForNullAwareJoin(
+        filterInput, numRows, filterPropagateNulls);
   }
 
-  EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput_.get());
+  EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput.get());
   filter_->eval(0, 1, true, filterInputRows_, evalCtx, filterResult_);
 
   decodedFilterResult_.decode(*filterResult_[0], filterInputRows_);
@@ -1414,18 +1429,24 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
 }
 
 void HashProbe::ensureLoadedIfNotAtEnd(column_index_t channel) {
-  if ((!filter_ &&
-       (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
-        isAntiJoin(joinType_))) ||
-      results_.atEnd()) {
+  if (results_.atEnd()) {
+    return;
+  }
+
+  ensureLoaded(channel);
+}
+
+void HashProbe::ensureLoaded(column_index_t channel) {
+  if (!filter_ &&
+      (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
+       isAntiJoin(joinType_))) {
     return;
   }
 
   if (!passingInputRowsInitialized_) {
     passingInputRowsInitialized_ = true;
     passingInputRows_.resize(input_->size());
-    if (isLeftJoin(joinType_) || isFullJoin(joinType_) ||
-        isLeftSemiProjectJoin(joinType_)) {
+    if (joinIncludesMissesFromLeft(joinType_)) {
       passingInputRows_.setAll();
     } else {
       passingInputRows_.clearAll();
@@ -1436,8 +1457,9 @@ void HashProbe::ensureLoadedIfNotAtEnd(column_index_t channel) {
           passingInputRows_.setValid(i, true);
         }
       }
+
+      passingInputRows_.updateBounds();
     }
-    passingInputRows_.updateBounds();
   }
 
   LazyVector::ensureLoadedRows(input_->childAt(channel), passingInputRows_);
@@ -1543,7 +1565,7 @@ void HashProbe::ensureOutputFits() {
   }
   LOG(WARNING) << "Failed to reserve " << succinctBytes(bytesToReserve)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", usage: " << succinctBytes(pool()->usedBytes())
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 
@@ -1574,9 +1596,9 @@ void HashProbe::reclaim(
         << "Can't reclaim from hash probe operator, state_["
         << ProbeOperatorState(state_) << "], nonReclaimableSection_["
         << nonReclaimableSection_ << "], " << pool()->name()
-        << ", usage: " << succinctBytes(pool()->currentBytes())
-        << ", node pool usage: "
-        << succinctBytes(pool()->parent()->currentBytes());
+        << ", usage: " << succinctBytes(pool()->usedBytes())
+        << ", node pool reservation: "
+        << succinctBytes(pool()->parent()->reservedBytes());
     return;
   }
 
@@ -1594,9 +1616,9 @@ void HashProbe::reclaim(
           << "Can't reclaim from hash probe operator, state_["
           << ProbeOperatorState(probeOp->state_) << "], nonReclaimableSection_["
           << probeOp->nonReclaimableSection_ << "], " << probeOp->pool()->name()
-          << ", usage: " << succinctBytes(pool()->currentBytes())
-          << ", node pool usage: "
-          << succinctBytes(pool()->parent()->currentBytes());
+          << ", usage: " << succinctBytes(pool()->usedBytes())
+          << ", node pool reservation: "
+          << succinctBytes(pool()->parent()->reservedBytes());
       return;
     }
     hasMoreProbeInput |= !probeOp->noMoreSpillInput_;
@@ -1645,7 +1667,7 @@ void HashProbe::spillOutput(const std::vector<HashProbe*>& operators) {
   for (auto* op : operators) {
     HashProbe* probeOp = static_cast<HashProbe*>(op);
     spillTasks.push_back(
-        std::make_shared<AsyncSource<SpillResult>>([probeOp]() {
+        memory::createAsyncMemoryReclaimTask<SpillResult>([probeOp]() {
           try {
             probeOp->spillOutput();
             return std::make_unique<SpillResult>(nullptr);
@@ -1668,7 +1690,7 @@ void HashProbe::spillOutput(const std::vector<HashProbe*>& operators) {
       // this runs.
       try {
         spillTask->move();
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
       }
     }
   });
@@ -1727,7 +1749,7 @@ void HashProbe::spillOutput() {
     return;
   }
   spillOutputReader_ = outputSpillSet.begin()->second->createUnorderedReader(
-      pool(), &spillStats_);
+      spillConfig_->readBufferSize, pool(), &spillStats_);
 }
 
 SpillPartitionSet HashProbe::spillTable() {
@@ -1747,8 +1769,8 @@ SpillPartitionSet HashProbe::spillTable() {
     if (rowContainer->numRows() == 0) {
       continue;
     }
-    spillTasks.push_back(
-        std::make_shared<AsyncSource<SpillResult>>([this, rowContainer]() {
+    spillTasks.push_back(memory::createAsyncMemoryReclaimTask<SpillResult>(
+        [this, rowContainer]() {
           try {
             return std::make_unique<SpillResult>(spillTable(rowContainer));
           } catch (const std::exception& e) {
@@ -1770,7 +1792,7 @@ SpillPartitionSet HashProbe::spillTable() {
       // this runs.
       try {
         spillTask->move();
-      } catch (const std::exception& e) {
+      } catch (const std::exception&) {
       }
     }
   });

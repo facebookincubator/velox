@@ -83,7 +83,8 @@ add_executable(
   ValuesTest.cpp
   VectorHasherTest.cpp
   WindowFunctionRegistryTest.cpp
-  WindowTest.cpp)
+  WindowTest.cpp
+  WriterFuzzerUtilTest.cpp)
 
 add_executable(
   velox_exec_infra_test
@@ -121,6 +122,7 @@ target_link_libraries(
   velox_dwio_parquet_writer
   velox_exec
   velox_exec_test_lib
+  velox_file_test_utils
   velox_functions_json
   velox_functions_lib
   velox_functions_prestosql
@@ -132,6 +134,7 @@ target_link_libraries(
   velox_type
   velox_vector
   velox_vector_fuzzer
+  velox_writer_fuzzer
   velox_window
   Boost::atomic
   Boost::context
@@ -201,15 +204,23 @@ target_link_libraries(
   velox_tpch_connector
   velox_memory)
 
+# RowNumber Fuzzer.
+add_executable(velox_row_number_fuzzer_test RowNumberFuzzerTest.cpp)
+
+target_link_libraries(velox_row_number_fuzzer_test velox_row_number_fuzzer
+                      gtest gtest_main)
+
 # Join Fuzzer.
-add_library(velox_join_fuzzer JoinFuzzer.cpp)
-
-target_link_libraries(velox_join_fuzzer velox_type velox_vector_fuzzer
-                      velox_exec_test_lib velox_expression_test_utility)
-
 add_executable(velox_join_fuzzer_test JoinFuzzerTest.cpp)
 
 target_link_libraries(velox_join_fuzzer_test velox_join_fuzzer gtest gtest_main)
+
+# Arbitration Fuzzer.
+add_executable(velox_memory_arbitration_fuzzer_test
+               MemoryArbitrationFuzzerTest.cpp)
+
+target_link_libraries(velox_memory_arbitration_fuzzer_test
+                      velox_memory_arbitration_fuzzer gtest gtest_main)
 
 add_executable(velox_exchange_fuzzer_test ExchangeFuzzer.cpp)
 

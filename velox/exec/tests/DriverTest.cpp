@@ -16,6 +16,7 @@
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
 #include <velox/exec/Driver.h>
+#include <memory>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
@@ -26,6 +27,7 @@
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/Udf.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -265,7 +267,7 @@ class DriverTest : public OperatorTestBase {
         "t0",
         plan,
         0,
-        std::make_shared<core::QueryCtx>(driverExecutor_.get()),
+        core::QueryCtx::create(driverExecutor_.get()),
         Task::ExecutionMode::kParallel,
         [](RowVectorPtr /*unused*/, ContinueFuture* /*unused*/) {
           return exec::BlockingReason::kNotBlocked;
@@ -578,7 +580,7 @@ TEST_F(DriverTest, pause) {
   // Make sure CPU usage tracking is enabled.
   std::unordered_map<std::string, std::string> queryConfig{
       {core::QueryConfig::kOperatorTrackCpuUsage, "true"}};
-  params.queryCtx = std::make_shared<core::QueryCtx>(
+  params.queryCtx = core::QueryCtx::create(
       executor_.get(), core::QueryConfig(std::move(queryConfig)));
   int32_t numRead = 0;
   readResults(params, ResultOperation::kPause, 370'000'000, &numRead);
@@ -801,7 +803,7 @@ TEST_F(DriverTest, pauserNode) {
   std::vector<CursorParameters> params(kNumTasks);
   int32_t hits{0};
   for (int32_t i = 0; i < kNumTasks; ++i) {
-    params[i].queryCtx = std::make_shared<core::QueryCtx>(executor.get());
+    params[i].queryCtx = core::QueryCtx::create(executor.get());
     params[i].planNode = makeValuesFilterProject(
         rowType_,
         "m1 % 10 > 0",
@@ -1472,8 +1474,19 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
         makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})}));
   }
 
-  for (const auto& hasCpuTimeSliceLimit : {false, true}) {
-    SCOPED_TRACE(fmt::format("hasCpuSliceLimit: {}", hasCpuTimeSliceLimit));
+  struct TestParam {
+    bool hasCpuTimeSliceLimit;
+    Task::ExecutionMode executionMode;
+  };
+  std::vector<TestParam> testParams{
+      {true, Task::ExecutionMode::kParallel},
+      {false, Task::ExecutionMode::kParallel},
+      {true, Task::ExecutionMode::kSerial},
+      {false, Task::ExecutionMode::kSerial}};
+
+  for (const auto& testParam : testParams) {
+    SCOPED_TRACE(
+        fmt::format("hasCpuSliceLimit: {}", testParam.hasCpuTimeSliceLimit));
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Values::getOutput",
         std::function<void(const exec::Values*)>([&](const exec::Values*
@@ -1483,7 +1496,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
           ASSERT_NE(
               values->testingOperatorCtx()->driver()->state().startExecTimeMs,
               0);
-          if (hasCpuTimeSliceLimit) {
+          if (testParam.hasCpuTimeSliceLimit) {
             std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
             ASSERT_GT(
                 values->testingOperatorCtx()->driver()->state().execTimeMs(),
@@ -1494,28 +1507,81 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
     auto fragment =
         PlanBuilder(planNodeIdGenerator).values(batches).planFragment();
     std::unordered_map<std::string, std::string> queryConfig;
-    if (hasCpuTimeSliceLimit) {
+    if (testParam.hasCpuTimeSliceLimit) {
       queryConfig.emplace(core::QueryConfig::kDriverCpuTimeSliceLimitMs, "500");
     }
     const uint64_t oldYieldCount = Driver::yieldCount();
-    auto task = Task::create(
-        "t0",
-        fragment,
-        0,
-        std::make_shared<core::QueryCtx>(
-            driverExecutor_.get(), std::move(queryConfig)),
-        Task::ExecutionMode::kParallel,
-        [](RowVectorPtr /*unused*/, ContinueFuture* /*unused*/) {
-          return exec::BlockingReason::kNotBlocked;
-        });
-    task->start(1, 1);
+
+    std::shared_ptr<Task> task;
+    if (testParam.executionMode == Task::ExecutionMode::kParallel) {
+      task = Task::create(
+          "t0",
+          fragment,
+          0,
+          core::QueryCtx::create(
+              driverExecutor_.get(), core::QueryConfig{std::move(queryConfig)}),
+          testParam.executionMode,
+          [](RowVectorPtr /*unused*/, ContinueFuture* /*unused*/) {
+            return exec::BlockingReason::kNotBlocked;
+          });
+      task->start(1, 1);
+    } else {
+      task = Task::create(
+          "t0",
+          fragment,
+          0,
+          core::QueryCtx::create(
+              driverExecutor_.get(), core::QueryConfig{std::move(queryConfig)}),
+          testParam.executionMode);
+      while (task->next() != nullptr) {
+      }
+    }
+
     ASSERT_TRUE(waitForTaskCompletion(task.get(), 600'000'000));
-    if (hasCpuTimeSliceLimit) {
+    if (testParam.hasCpuTimeSliceLimit &&
+        testParam.executionMode == Task::ExecutionMode::kParallel) {
       // NOTE: there is one additional yield for the empty output.
       ASSERT_GE(Driver::yieldCount(), oldYieldCount + numBatches + 1);
     } else {
       ASSERT_EQ(Driver::yieldCount(), oldYieldCount);
     }
+  }
+}
+
+namespace {
+
+template <typename T>
+struct ThrowRuntimeExceptionFunction {
+  template <typename TResult, typename TInput>
+  void call(TResult& out, const TInput& in) {
+    VELOX_CHECK(false, "Throwing exception");
+  }
+};
+} // namespace
+
+TEST_F(DriverTest, additionalContextInRuntimeException) {
+  // Ensures that exceptions thrown during execution of an operator contain the
+  // expected context. This is done by executing a plan using project filter
+  // that uses expressions which setup hierarchical contexts. Finally, we verify
+  // that all essential context are present.
+  auto vector = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})});
+  registerFunction<ThrowRuntimeExceptionFunction, int64_t, int64_t>(
+      {"throwException"});
+  auto op = PlanBuilder(std::make_shared<core::PlanNodeIdGenerator>(13))
+                .values({vector})
+                .project({"c0 + throwException(c0)"})
+                .planNode();
+  try {
+    assertQuery(op, vector);
+  } catch (VeloxException& e) {
+    ASSERT_EQ(e.context(), "throwexception(c0)");
+    auto additionalContext = e.additionalContext();
+    // Remove the string following `TaskId` from the additional context since
+    // its indeterministic.
+    ASSERT_EQ(
+        additionalContext,
+        "Top-level Expression: plus(c0, throwexception(c0)) Operator: "
+        "FilterProject[14] 1");
   }
 }
 
@@ -1537,8 +1603,8 @@ TEST_F(OpCallStatusTest, basic) {
       "t19",
       fragment,
       0,
-      std::make_shared<core::QueryCtx>(
-          driverExecutor_.get(), std::move(queryConfig)),
+      core::QueryCtx::create(
+          driverExecutor_.get(), core::QueryConfig{std::move(queryConfig)}),
       Task::ExecutionMode::kParallel,
       [](RowVectorPtr /*unused*/, ContinueFuture* /*unused*/) {
         return exec::BlockingReason::kNotBlocked;

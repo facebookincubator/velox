@@ -25,6 +25,31 @@
 namespace facebook::velox::util {
 namespace {
 
+Timestamp parseTimestamp(
+    const StringView& timestamp,
+    TimestampParseMode parseMode = TimestampParseMode::kPrestoCast) {
+  return fromTimestampString(timestamp, parseMode)
+      .thenOrThrow(folly::identity, [&](const Status& status) {
+        VELOX_USER_FAIL("{}", status.message());
+      });
+}
+
+int32_t parseDate(const StringView& str, ParseMode mode) {
+  return fromDateString(str.data(), str.size(), mode)
+      .thenOrThrow(folly::identity, [&](const Status& status) {
+        VELOX_USER_FAIL("{}", status.message());
+      });
+}
+
+std::pair<Timestamp, int16_t> parseTimestampWithTimezone(
+    const StringView& str,
+    TimestampParseMode parseMode = TimestampParseMode::kPrestoCast) {
+  return fromTimestampWithTimezoneString(str.data(), str.size(), parseMode)
+      .thenOrThrow(folly::identity, [&](const Status& status) {
+        VELOX_USER_FAIL("{}", status.message());
+      });
+}
+
 TEST(DateTimeUtilTest, fromDate) {
   auto testDaysSinceEpochFromDate =
       [](int32_t year, int32_t month, int32_t day) {
@@ -80,106 +105,45 @@ TEST(DateTimeUtilTest, fromDateInvalid) {
 }
 
 TEST(DateTimeUtilTest, fromDateString) {
-  EXPECT_EQ(10957, fromDateString("2000-01-01"));
-  EXPECT_EQ(0, fromDateString("1970-01-01"));
-  EXPECT_EQ(1, fromDateString("1970-01-02"));
+  for (ParseMode mode : {ParseMode::kPrestoCast, ParseMode::kSparkCast}) {
+    EXPECT_EQ(0, parseDate("1970-01-01", mode));
+    EXPECT_EQ(3789742, parseDate("12345-12-18", mode));
 
-  // Single character
-  EXPECT_EQ(1, fromDateString("1970-1-2"));
+    EXPECT_EQ(1, parseDate("1970-1-2", mode));
+    EXPECT_EQ(1, parseDate("1970-01-2", mode));
+    EXPECT_EQ(1, parseDate("1970-1-02", mode));
 
-  // Old and negative years.
-  EXPECT_EQ(-719528, fromDateString("0-1-1"));
-  EXPECT_EQ(-719162, fromDateString("1-1-1"));
-  EXPECT_EQ(-719893, fromDateString("-1-1-1"));
-  EXPECT_EQ(-720258, fromDateString("-2-1-1"));
+    EXPECT_EQ(1, parseDate("+1970-01-02", mode));
+    EXPECT_EQ(-719893, parseDate("-1-1-1", mode));
 
-  // 1BC is equal 0-1-1.
-  EXPECT_EQ(-719528, fromDateString("1-1-1 (BC)"));
-  EXPECT_EQ(-719893, fromDateString("2-1-1 (BC)"));
-
-  // Leading zeros and spaces.
-  EXPECT_EQ(-719162, fromDateString("00001-1-1"));
-  EXPECT_EQ(-719162, fromDateString(" 1-1-1"));
-  EXPECT_EQ(-719162, fromDateString("     1-1-1"));
-  EXPECT_EQ(-719162, fromDateString("\t1-1-1"));
-  EXPECT_EQ(-719162, fromDateString("  \t    \n 00001-1-1  \n"));
-
-  // Different separators.
-  EXPECT_EQ(-719162, fromDateString("1/1/1"));
-  EXPECT_EQ(-719162, fromDateString("1 1 1"));
-  EXPECT_EQ(-719162, fromDateString("1\\1\\1"));
-
-  // Other string types.
-  EXPECT_EQ(0, fromDateString(StringView("1970-01-01")));
-}
-
-TEST(DateTimeUtilTest, fromDateStrInvalid) {
-  EXPECT_THROW(fromDateString(""), VeloxUserError);
-  EXPECT_THROW(fromDateString("     "), VeloxUserError);
-  EXPECT_THROW(fromDateString("2000"), VeloxUserError);
-
-  // Different separators.
-  EXPECT_THROW(fromDateString("2000/01-01"), VeloxUserError);
-  EXPECT_THROW(fromDateString("2000 01-01"), VeloxUserError);
-
-  // Trailing characters.
-  EXPECT_THROW(fromDateString("2000-01-01   asdf"), VeloxUserError);
-  EXPECT_THROW(fromDateString("2000-01-01 0"), VeloxUserError);
-
-  // Too large of a year.
-  EXPECT_THROW(fromDateString("1000000"), VeloxUserError);
-  EXPECT_THROW(fromDateString("-1000000"), VeloxUserError);
-}
-
-TEST(DateTimeUtilTest, castFromDateString) {
-  for (ParseMode mode :
-       {ParseMode::kStandardCast, ParseMode::kNonStandardCast}) {
-    EXPECT_EQ(0, castFromDateString("1970-01-01", mode));
-    EXPECT_EQ(3789742, castFromDateString("12345-12-18", mode));
-
-    EXPECT_EQ(1, castFromDateString("1970-1-2", mode));
-    EXPECT_EQ(1, castFromDateString("1970-01-2", mode));
-    EXPECT_EQ(1, castFromDateString("1970-1-02", mode));
-
-    EXPECT_EQ(1, castFromDateString("+1970-01-02", mode));
-    EXPECT_EQ(-719893, castFromDateString("-1-1-1", mode));
-
-    EXPECT_EQ(0, castFromDateString(" 1970-01-01", mode));
+    EXPECT_EQ(0, parseDate(" 1970-01-01", mode));
+    EXPECT_EQ(0, parseDate("1970-01-01 ", mode));
+    EXPECT_EQ(0, parseDate(" 1970-01-01 ", mode));
   }
 
-  EXPECT_EQ(3789391, castFromDateString("12345", ParseMode::kNonStandardCast));
-  EXPECT_EQ(16436, castFromDateString("2015", ParseMode::kNonStandardCast));
-  EXPECT_EQ(16495, castFromDateString("2015-03", ParseMode::kNonStandardCast));
-  EXPECT_EQ(
-      16512, castFromDateString("2015-03-18T", ParseMode::kNonStandardCast));
-  EXPECT_EQ(
-      16512,
-      castFromDateString("2015-03-18T123123", ParseMode::kNonStandardCast));
-  EXPECT_EQ(
-      16512,
-      castFromDateString("2015-03-18 123142", ParseMode::kNonStandardCast));
-  EXPECT_EQ(
-      16512,
-      castFromDateString("2015-03-18 (BC)", ParseMode::kNonStandardCast));
-
-  EXPECT_EQ(0, castFromDateString("1970-01-01 ", ParseMode::kNonStandardCast));
-  EXPECT_EQ(0, castFromDateString(" 1970-01-01 ", ParseMode::kNonStandardCast));
+  EXPECT_EQ(3789391, parseDate("12345", ParseMode::kSparkCast));
+  EXPECT_EQ(16436, parseDate("2015", ParseMode::kSparkCast));
+  EXPECT_EQ(16495, parseDate("2015-03", ParseMode::kSparkCast));
+  EXPECT_EQ(16512, parseDate("2015-03-18T", ParseMode::kSparkCast));
+  EXPECT_EQ(16512, parseDate("2015-03-18T123123", ParseMode::kSparkCast));
+  EXPECT_EQ(16512, parseDate("2015-03-18 123142", ParseMode::kSparkCast));
+  EXPECT_EQ(16512, parseDate("2015-03-18 (BC)", ParseMode::kSparkCast));
 }
 
-TEST(DateTimeUtilTest, castFromDateStringInvalid) {
+TEST(DateTimeUtilTest, fromDateStringInvalid) {
   auto testCastFromDateStringInvalid = [&](const StringView& str,
                                            ParseMode mode) {
-    if (mode == ParseMode::kStandardCast) {
+    if (mode == ParseMode::kPrestoCast) {
       VELOX_ASSERT_THROW(
-          castFromDateString(str, mode),
+          parseDate(str, mode),
           fmt::format(
               "Unable to parse date value: \"{}\". "
               "Valid date string pattern is (YYYY-MM-DD), "
               "and can be prefixed with [+-]",
               std::string(str.data(), str.size())));
-    } else if (mode == ParseMode::kNonStandardCast) {
+    } else if (mode == ParseMode::kSparkCast) {
       VELOX_ASSERT_THROW(
-          castFromDateString(str, mode),
+          parseDate(str, mode),
           fmt::format(
               "Unable to parse date value: \"{}\". "
               "Valid date string patterns include "
@@ -187,9 +151,9 @@ TEST(DateTimeUtilTest, castFromDateStringInvalid) {
               "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
               "and any pattern prefixed with [+-]",
               std::string(str.data(), str.size())));
-    } else if (mode == ParseMode::kNonStandardNoTimeCast) {
+    } else if (mode == ParseMode::kIso8601) {
       VELOX_ASSERT_THROW(
-          castFromDateString(str, mode),
+          parseDate(str, mode),
           fmt::format(
               "Unable to parse date value: \"{}\". "
               "Valid date string patterns include "
@@ -200,8 +164,7 @@ TEST(DateTimeUtilTest, castFromDateStringInvalid) {
     }
   };
 
-  for (ParseMode mode :
-       {ParseMode::kStandardCast, ParseMode::kNonStandardCast}) {
+  for (ParseMode mode : {ParseMode::kPrestoCast, ParseMode::kSparkCast}) {
     testCastFromDateStringInvalid("2012-Oct-23", mode);
     testCastFromDateStringInvalid("2012-Oct-23", mode);
     testCastFromDateStringInvalid("2015-03-18X", mode);
@@ -221,72 +184,25 @@ TEST(DateTimeUtilTest, castFromDateStringInvalid) {
   testCastFromDateStringInvalid("1970-01-01 ", ParseMode::kStrict);
   testCastFromDateStringInvalid(" 1970-01-01 ", ParseMode::kStrict);
 
-  testCastFromDateStringInvalid(
-      "1970-01-01T01:00:47", ParseMode::kNonStandardNoTimeCast);
-  testCastFromDateStringInvalid(
-      "1970-01-01T01:00:47.000", ParseMode::kNonStandardNoTimeCast);
-}
-
-TEST(DateTimeUtilTest, fromTimeString) {
-  EXPECT_EQ(0, fromTimeString("00:00:00"));
-  EXPECT_EQ(0, fromTimeString("00:00:00.00"));
-  EXPECT_EQ(1, fromTimeString("00:00:00.000001"));
-  EXPECT_EQ(10, fromTimeString("00:00:00.00001"));
-  EXPECT_EQ(100, fromTimeString("00:00:00.0001"));
-  EXPECT_EQ(1000, fromTimeString("00:00:00.001"));
-  EXPECT_EQ(10000, fromTimeString("00:00:00.01"));
-  EXPECT_EQ(100000, fromTimeString("00:00:00.1"));
-  EXPECT_EQ(1'000'000, fromTimeString("00:00:01"));
-  EXPECT_EQ(60'000'000, fromTimeString("00:01:00"));
-  EXPECT_EQ(3'600'000'000, fromTimeString("01:00:00"));
-
-  // 1 day minus 1 second.
-  EXPECT_EQ(86'399'000'000, fromTimeString("23:59:59"));
-
-  // Single digit.
-  EXPECT_EQ(0, fromTimeString("0:0:0.0"));
-  EXPECT_EQ(3'661'000'000, fromTimeString("1:1:1"));
-
-  // Leading and trailing spaces.
-  EXPECT_EQ(0, fromTimeString("   \t \n 00:00:00.00  \t"));
-}
-
-TEST(DateTimeUtilTest, fromTimeStrInvalid) {
-  const std::string errorMsg = "Unable to parse time value: ";
-  VELOX_ASSERT_THROW(fromTimeString(""), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:00:"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:00:00."), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:00-00"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00/00:00"), errorMsg);
-
-  // Invalid hour, minutes and seconds.
-  VELOX_ASSERT_THROW(fromTimeString("24:00:00"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:61:00"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:00:61"), errorMsg);
-
-  // Trailing characters.
-  VELOX_ASSERT_THROW(fromTimeString("00:00:00   12"), errorMsg);
+  testCastFromDateStringInvalid("1970-01-01T01:00:47", ParseMode::kIso8601);
+  testCastFromDateStringInvalid("1970-01-01T01:00:47.000", ParseMode::kIso8601);
 }
 
 // bash command to verify:
 // $ date -d "2000-01-01 12:21:56Z" +%s
 // ('Z' at the end means UTC).
 TEST(DateTimeUtilTest, fromTimestampString) {
-  EXPECT_EQ(Timestamp(0, 0), fromTimestampString("1970-01-01"));
-  EXPECT_EQ(Timestamp(946684800, 0), fromTimestampString("2000-01-01"));
+  EXPECT_EQ(Timestamp(0, 0), parseTimestamp("1970-01-01"));
+  EXPECT_EQ(Timestamp(946684800, 0), parseTimestamp("2000-01-01"));
 
-  EXPECT_EQ(Timestamp(0, 0), fromTimestampString("1970-01-01 00:00"));
-  EXPECT_EQ(Timestamp(0, 0), fromTimestampString("1970-01-01 00:00:00"));
-  EXPECT_EQ(Timestamp(0, 0), fromTimestampString("1970-01-01 00:00:00    "));
+  EXPECT_EQ(Timestamp(0, 0), parseTimestamp("1970-01-01 00:00"));
+  EXPECT_EQ(Timestamp(0, 0), parseTimestamp("1970-01-01 00:00:00"));
+  EXPECT_EQ(Timestamp(0, 0), parseTimestamp("1970-01-01 00:00:00    "));
 
+  EXPECT_EQ(Timestamp(946729316, 0), parseTimestamp("2000-01-01 12:21:56"));
   EXPECT_EQ(
-      Timestamp(946729316, 0), fromTimestampString("2000-01-01 12:21:56"));
-  EXPECT_EQ(
-      Timestamp(946729316, 0), fromTimestampString("2000-01-01T12:21:56"));
-  EXPECT_EQ(
-      Timestamp(946729316, 0), fromTimestampString("2000-01-01T 12:21:56"));
+      Timestamp(946729316, 0),
+      parseTimestamp("2000-01-01T12:21:56", TimestampParseMode::kIso8601));
 }
 
 TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
@@ -295,66 +211,65 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
   const std::string_view timezoneError = "Unknown timezone value: ";
 
   // Needs at least a date.
-  VELOX_ASSERT_THROW(fromTimestampString(""), parserError);
-  VELOX_ASSERT_THROW(fromTimestampString("00:00:00"), parserError);
+  VELOX_ASSERT_THROW(parseTimestamp(""), parserError);
+  VELOX_ASSERT_THROW(parseTimestamp("00:00:00"), parserError);
 
   // Integer overflow during timestamp parsing.
   VELOX_ASSERT_THROW(
-      fromTimestampString("2773581570-01-01 00:00:00-asd"), overflowError);
+      parseTimestamp("2773581570-01-01 00:00:00-asd"), overflowError);
   VELOX_ASSERT_THROW(
-      fromTimestampString("-2147483648-01-01 00:00:00-asd"), overflowError);
+      parseTimestamp("-2147483648-01-01 00:00:00-asd"), overflowError);
 
   // Unexpected timezone definition.
+  VELOX_ASSERT_THROW(parseTimestamp("1970-01-01 00:00:00     a"), parserError);
+  VELOX_ASSERT_THROW(parseTimestamp("1970-01-01 00:00:00Z"), parserError);
+  VELOX_ASSERT_THROW(parseTimestamp("1970-01-01 00:00:00Z"), parserError);
+  VELOX_ASSERT_THROW(parseTimestamp("1970-01-01 00:00:00 UTC"), parserError);
   VELOX_ASSERT_THROW(
-      fromTimestampString("1970-01-01 00:00:00     a"), parserError);
-  VELOX_ASSERT_THROW(fromTimestampString("1970-01-01 00:00:00Z"), parserError);
-  VELOX_ASSERT_THROW(fromTimestampString("1970-01-01 00:00:00Z"), parserError);
+      parseTimestamp("1970-01-01 00:00:00 America/Los_Angeles"), parserError);
+
+  // Cannot have spaces after T.
   VELOX_ASSERT_THROW(
-      fromTimestampString("1970-01-01 00:00:00 UTC"), parserError);
-  VELOX_ASSERT_THROW(
-      fromTimestampString("1970-01-01 00:00:00 America/Los_Angeles"),
+      parseTimestamp("2000-01-01T 12:21:56", TimestampParseMode::kIso8601),
       parserError);
 
   // Parse timestamp with (broken) timezones.
   VELOX_ASSERT_THROW(
-      fromTimestampWithTimezoneString("1970-01-01 00:00:00-asd"),
-      timezoneError);
+      parseTimestampWithTimezone("1970-01-01 00:00:00-asd"), timezoneError);
   VELOX_ASSERT_THROW(
-      fromTimestampWithTimezoneString("1970-01-01 00:00:00Z UTC"), parserError);
+      parseTimestampWithTimezone("1970-01-01 00:00:00Z UTC"), parserError);
   VELOX_ASSERT_THROW(
-      fromTimestampWithTimezoneString("1970-01-01 00:00:00+00:00:00"),
+      parseTimestampWithTimezone("1970-01-01 00:00:00+00:00:00"),
       timezoneError);
 
   // Can't have multiple spaces.
   VELOX_ASSERT_THROW(
-      fromTimestampWithTimezoneString("1970-01-01 00:00:00  UTC"),
-      timezoneError);
+      parseTimestampWithTimezone("1970-01-01 00:00:00  UTC"), timezoneError);
 }
 
 TEST(DateTimeUtilTest, fromTimestampWithTimezoneString) {
   // -1 means no timezone information.
-  auto expected = std::make_pair<Timestamp, int64_t>(Timestamp(0, 0), -1);
-  EXPECT_EQ(fromTimestampWithTimezoneString("1970-01-01 00:00:00"), expected);
+  auto expected = std::make_pair<Timestamp, int16_t>(Timestamp(0, 0), -1);
+  EXPECT_EQ(parseTimestampWithTimezone("1970-01-01 00:00:00"), expected);
 
   // Test timezone offsets.
   EXPECT_EQ(
-      fromTimestampWithTimezoneString("1970-01-01 00:00:00 -02:00"),
+      parseTimestampWithTimezone("1970-01-01 00:00:00 -02:00"),
       std::make_pair(Timestamp(0, 0), util::getTimeZoneID("-02:00")));
   EXPECT_EQ(
-      fromTimestampWithTimezoneString("1970-01-01 00:00:00+13:36"),
+      parseTimestampWithTimezone("1970-01-01 00:00:00+13:36"),
       std::make_pair(Timestamp(0, 0), util::getTimeZoneID("+13:36")));
 
   EXPECT_EQ(
-      fromTimestampWithTimezoneString("1970-01-01 00:00:00Z"),
+      parseTimestampWithTimezone("1970-01-01 00:00:00Z"),
       std::make_pair(Timestamp(0, 0), util::getTimeZoneID("UTC")));
 
   EXPECT_EQ(
-      fromTimestampWithTimezoneString("1970-01-01 00:01:00 UTC"),
+      parseTimestampWithTimezone("1970-01-01 00:01:00 UTC"),
       std::make_pair(Timestamp(60, 0), util::getTimeZoneID("UTC")));
 
   EXPECT_EQ(
-      fromTimestampWithTimezoneString(
-          "1970-01-01 00:00:01 America/Los_Angeles"),
+      parseTimestampWithTimezone("1970-01-01 00:00:01 America/Los_Angeles"),
       std::make_pair(
           Timestamp(1, 0), util::getTimeZoneID("America/Los_Angeles")));
 }
@@ -363,50 +278,50 @@ TEST(DateTimeUtilTest, toGMT) {
   auto* laZone = date::locate_zone("America/Los_Angeles");
 
   // The GMT time when LA gets to "1970-01-01 00:00:00" (8h ahead).
-  auto ts = fromTimestampString("1970-01-01 00:00:00");
+  auto ts = parseTimestamp("1970-01-01 00:00:00");
   ts.toGMT(*laZone);
-  EXPECT_EQ(ts, fromTimestampString("1970-01-01 08:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("1970-01-01 08:00:00"));
 
   // Set on a random date/time and try some variations.
-  ts = fromTimestampString("2020-04-23 04:23:37");
+  ts = parseTimestamp("2020-04-23 04:23:37");
 
   // To LA:
   auto tsCopy = ts;
   tsCopy.toGMT(*laZone);
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 11:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 11:23:37"));
 
   // To Sao Paulo:
   tsCopy = ts;
   tsCopy.toGMT(*date::locate_zone("America/Sao_Paulo"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 07:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 07:23:37"));
 
   // Moscow:
   tsCopy = ts;
   tsCopy.toGMT(*date::locate_zone("Europe/Moscow"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 01:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 01:23:37"));
 
   // Probe LA's daylight savings boundary (starts at 2021-13-14 02:00am).
   // Before it starts, 8h offset:
-  ts = fromTimestampString("2021-03-14 00:00:00");
+  ts = parseTimestamp("2021-03-14 00:00:00");
   ts.toGMT(*laZone);
-  EXPECT_EQ(ts, fromTimestampString("2021-03-14 08:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("2021-03-14 08:00:00"));
 
   // After it starts, 7h offset:
-  ts = fromTimestampString("2021-03-14 08:00:00");
+  ts = parseTimestamp("2021-03-14 08:00:00");
   ts.toGMT(*laZone);
-  EXPECT_EQ(ts, fromTimestampString("2021-03-14 15:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("2021-03-14 15:00:00"));
 
   // Ambiguous time 2019-11-03 01:00:00.
   // It could be 2019-11-03 01:00:00 PDT == 2019-11-03 08:00:00 UTC
   // or 2019-11-03 01:00:00 PST == 2019-11-03 09:00:00 UTC.
-  ts = fromTimestampString("2019-11-03 01:00:00");
+  ts = parseTimestamp("2019-11-03 01:00:00");
   ts.toGMT(*laZone);
-  EXPECT_EQ(ts, fromTimestampString("2019-11-03 08:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("2019-11-03 08:00:00"));
 
   // Nonexistent time 2019-03-10 02:00:00.
   // It is in a gap between 2019-03-10 02:00:00 PST and 2019-03-10 03:00:00 PDT
   // which are both equivalent to 2019-03-10 10:00:00 UTC.
-  ts = fromTimestampString("2019-03-10 02:00:00");
+  ts = parseTimestamp("2019-03-10 02:00:00");
   EXPECT_THROW(ts.toGMT(*laZone), VeloxUserError);
 }
 
@@ -414,152 +329,152 @@ TEST(DateTimeUtilTest, toTimezone) {
   auto* laZone = date::locate_zone("America/Los_Angeles");
 
   // The LA time when GMT gets to "1970-01-01 00:00:00" (8h behind).
-  auto ts = fromTimestampString("1970-01-01 00:00:00");
+  auto ts = parseTimestamp("1970-01-01 00:00:00");
   ts.toTimezone(*laZone);
-  EXPECT_EQ(ts, fromTimestampString("1969-12-31 16:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("1969-12-31 16:00:00"));
 
   // Set on a random date/time and try some variations.
-  ts = fromTimestampString("2020-04-23 04:23:37");
+  ts = parseTimestamp("2020-04-23 04:23:37");
 
   // To LA:
   auto tsCopy = ts;
   tsCopy.toTimezone(*laZone);
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-22 21:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-22 21:23:37"));
 
   // To Sao Paulo:
   tsCopy = ts;
   tsCopy.toTimezone(*date::locate_zone("America/Sao_Paulo"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 01:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 01:23:37"));
 
   // Moscow:
   tsCopy = ts;
   tsCopy.toTimezone(*date::locate_zone("Europe/Moscow"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 07:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 07:23:37"));
 
   // Probe LA's daylight savings boundary (starts at 2021-13-14 02:00am).
   // Before it starts, 8h offset:
-  ts = fromTimestampString("2021-03-14 00:00:00");
+  ts = parseTimestamp("2021-03-14 00:00:00");
   ts.toTimezone(*laZone);
-  EXPECT_EQ(ts, fromTimestampString("2021-03-13 16:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("2021-03-13 16:00:00"));
 
   // After it starts, 7h offset:
-  ts = fromTimestampString("2021-03-15 00:00:00");
+  ts = parseTimestamp("2021-03-15 00:00:00");
   ts.toTimezone(*laZone);
-  EXPECT_EQ(ts, fromTimestampString("2021-03-14 17:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("2021-03-14 17:00:00"));
 }
 
 TEST(DateTimeUtilTest, toGMTFromID) {
   // The GMT time when LA gets to "1970-01-01 00:00:00" (8h ahead).
-  auto ts = fromTimestampString("1970-01-01 00:00:00");
+  auto ts = parseTimestamp("1970-01-01 00:00:00");
   ts.toGMT(util::getTimeZoneID("America/Los_Angeles"));
-  EXPECT_EQ(ts, fromTimestampString("1970-01-01 08:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("1970-01-01 08:00:00"));
 
   // Set on a random date/time and try some variations.
-  ts = fromTimestampString("2020-04-23 04:23:37");
+  ts = parseTimestamp("2020-04-23 04:23:37");
 
   // To LA:
   auto tsCopy = ts;
   tsCopy.toGMT(util::getTimeZoneID("America/Los_Angeles"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 11:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 11:23:37"));
 
   // To Sao Paulo:
   tsCopy = ts;
   tsCopy.toGMT(util::getTimeZoneID("America/Sao_Paulo"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 07:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 07:23:37"));
 
   // Moscow:
   tsCopy = ts;
   tsCopy.toGMT(util::getTimeZoneID("Europe/Moscow"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 01:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 01:23:37"));
 
   // Numerical time zones: +HH:MM and -HH:MM
   tsCopy = ts;
   tsCopy.toGMT(util::getTimeZoneID("+14:00"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-22 14:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-22 14:23:37"));
 
   tsCopy = ts;
   tsCopy.toGMT(util::getTimeZoneID("-14:00"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 18:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 18:23:37"));
 
   tsCopy = ts;
   tsCopy.toGMT(0); // "+00:00" is not in the time zone id map
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 04:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 04:23:37"));
 
   tsCopy = ts;
   tsCopy.toGMT(util::getTimeZoneID("-00:01"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 04:24:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 04:24:37"));
 
   tsCopy = ts;
   tsCopy.toGMT(util::getTimeZoneID("+00:01"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 04:22:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 04:22:37"));
 
   // Probe LA's daylight savings boundary (starts at 2021-13-14 02:00am).
   // Before it starts, 8h offset:
-  ts = fromTimestampString("2021-03-14 00:00:00");
+  ts = parseTimestamp("2021-03-14 00:00:00");
   ts.toGMT(util::getTimeZoneID("America/Los_Angeles"));
-  EXPECT_EQ(ts, fromTimestampString("2021-03-14 08:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("2021-03-14 08:00:00"));
 
   // After it starts, 7h offset:
-  ts = fromTimestampString("2021-03-15 00:00:00");
+  ts = parseTimestamp("2021-03-15 00:00:00");
   ts.toGMT(util::getTimeZoneID("America/Los_Angeles"));
-  EXPECT_EQ(ts, fromTimestampString("2021-03-15 07:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("2021-03-15 07:00:00"));
 }
 
 TEST(DateTimeUtilTest, toTimezoneFromID) {
   // The LA time when GMT gets to "1970-01-01 00:00:00" (8h behind).
-  auto ts = fromTimestampString("1970-01-01 00:00:00");
+  auto ts = parseTimestamp("1970-01-01 00:00:00");
   ts.toTimezone(util::getTimeZoneID("America/Los_Angeles"));
-  EXPECT_EQ(ts, fromTimestampString("1969-12-31 16:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("1969-12-31 16:00:00"));
 
   // Set on a random date/time and try some variations.
-  ts = fromTimestampString("2020-04-23 04:23:37");
+  ts = parseTimestamp("2020-04-23 04:23:37");
 
   // To LA:
   auto tsCopy = ts;
   tsCopy.toTimezone(util::getTimeZoneID("America/Los_Angeles"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-22 21:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-22 21:23:37"));
 
   // To Sao Paulo:
   tsCopy = ts;
   tsCopy.toTimezone(util::getTimeZoneID("America/Sao_Paulo"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 01:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 01:23:37"));
 
   // Moscow:
   tsCopy = ts;
   tsCopy.toTimezone(util::getTimeZoneID("Europe/Moscow"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 07:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 07:23:37"));
 
   // Numerical time zones: +HH:MM and -HH:MM
   tsCopy = ts;
   tsCopy.toTimezone(util::getTimeZoneID("+14:00"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 18:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 18:23:37"));
 
   tsCopy = ts;
   tsCopy.toTimezone(util::getTimeZoneID("-14:00"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-22 14:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-22 14:23:37"));
 
   tsCopy = ts;
   tsCopy.toTimezone(0); // "+00:00" is not in the time zone id map
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 04:23:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 04:23:37"));
 
   tsCopy = ts;
   tsCopy.toTimezone(util::getTimeZoneID("-00:01"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 04:22:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 04:22:37"));
 
   tsCopy = ts;
   tsCopy.toTimezone(util::getTimeZoneID("+00:01"));
-  EXPECT_EQ(tsCopy, fromTimestampString("2020-04-23 04:24:37"));
+  EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 04:24:37"));
 
   // Probe LA's daylight savings boundary (starts at 2021-13-14 02:00am).
   // Before it starts, 8h offset:
-  ts = fromTimestampString("2021-03-14 00:00:00");
+  ts = parseTimestamp("2021-03-14 00:00:00");
   ts.toTimezone(util::getTimeZoneID("America/Los_Angeles"));
-  EXPECT_EQ(ts, fromTimestampString("2021-03-13 16:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("2021-03-13 16:00:00"));
 
   // After it starts, 7h offset:
-  ts = fromTimestampString("2021-03-15 00:00:00");
+  ts = parseTimestamp("2021-03-15 00:00:00");
   ts.toTimezone(util::getTimeZoneID("America/Los_Angeles"));
-  EXPECT_EQ(ts, fromTimestampString("2021-03-14 17:00:00"));
+  EXPECT_EQ(ts, parseTimestamp("2021-03-14 17:00:00"));
 }
 
 } // namespace

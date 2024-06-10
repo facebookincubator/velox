@@ -155,7 +155,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     -
+     - Y
      - Y
      -
      - Y
@@ -181,10 +181,10 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
-     -
      - Y
      - Y
      -
+     - Y
      -
      -
    * - date
@@ -197,7 +197,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - Y
-     -
+     - Y
      -
      -
      -
@@ -335,7 +335,7 @@ Valid examples
 Invalid examples
 
 ::
-  
+
   SELECT cast(214748364890 decimal(12, 2) as integer); -- Out of range
 
 Cast to Boolean
@@ -429,9 +429,9 @@ Valid examples
   SELECT cast('1.' as real); -- 1.0
   SELECT cast('1' as real); -- 1.0
   SELECT cast('1.7E308' as real); -- Infinity
-  SELECT cast('Infinity' as real); -- Infinity (case insensitive)
-  SELECT cast('-Infinity' as real); -- -Infinity (case insensitive)
-  SELECT cast('NaN' as real); -- NaN (case insensitive)
+  SELECT cast('Infinity' as real); -- Infinity (case sensitive)
+  SELECT cast('-Infinity' as real); -- -Infinity (case sensitive)
+  SELECT cast('NaN' as real); -- NaN (case sensitive)
 
 Invalid examples
 
@@ -439,21 +439,13 @@ Invalid examples
 
   SELECT cast('1.2a' as real); -- Invalid argument
   SELECT cast('1.2.3' as real); -- Invalid argument
-
-There are a few corner cases where Velox behaves differently from Presto.
-Presto throws INVALID_CAST_ARGUMENT on these queries, while Velox allows these
-conversions. We keep the Velox behaivor by intention because it is more
-consistent with other supported cases of cast.
-
-::
-
-  SELECT cast('infinity' as real); -- Infinity
-  SELECT cast('-infinity' as real); -- -Infinity
-  SELECT cast('inf' as real); -- Infinity
-  SELECT cast('InfiNiTy' as real); -- Infinity
-  SELECT cast('INFINITY' as real); -- Infinity
-  SELECT cast('nAn' as real); -- NaN
-  SELECT cast('nan' as real); -- NaN
+  SELECT cast('infinity' as real); -- Invalid argument
+  SELECT cast('-infinity' as real); -- -Invalid argument
+  SELECT cast('inf' as real); -- Invalid argument
+  SELECT cast('InfiNiTy' as real); -- Invalid argument
+  SELECT cast('INFINITY' as real); -- Invalid argument
+  SELECT cast('nAn' as real); -- Invalid argument
+  SELECT cast('nan' as real); -- Invalid argument
 
 Below cases are supported in Presto, but throw in Velox.
 
@@ -497,6 +489,7 @@ Valid examples
   SELECT cast(infinity() as varchar); -- 'Infinity'
   SELECT cast(true as varchar); -- 'true'
   SELECT cast(timestamp '1970-01-01 00:00:00' as varchar); -- '1970-01-01 00:00:00.000'
+  SELECT cast(timestamp '2024-06-01 11:37:15.123 America/New_York' as varchar); -- '2024-06-01 11:37:15.123 America/New_York'
   SELECT cast(cast(22.51 as DECIMAL(5, 3)) as varchar); -- '22.510'
   SELECT cast(cast(-22.51 as DECIMAL(4, 2)) as varchar); -- '-22.51'
   SELECT cast(cast(0.123 as DECIMAL(3, 3)) as varchar); -- '0.123'
@@ -614,7 +607,7 @@ From VARCHAR
 ^^^^^^^^^^^^
 
 Casting from a string to timestamp is allowed if the string represents a
-timestamp in the format `YYYY-MM-DD` followed by an optional `hh:mm:ss.MS`. 
+timestamp in the format `YYYY-MM-DD` followed by an optional `hh:mm:ss.MS`.
 Seconds and milliseconds are optional. Casting from invalid input values throws.
 
 Valid examples:
@@ -727,6 +720,21 @@ Valid examples
   SELECT cast(timestamp '2012-03-09 10:00:00' as timestamp with time zone); -- 2012-03-09 10:00:00.000 America/Los_Angeles
   SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:00.000 America/Los_Angeles
 
+From DATE
+^^^^^^^^^
+
+The results depend on `session_timestamp`.
+
+Valid examples
+
+::
+
+    -- session_timezone = America/Los_Angeles
+    SELECT cast(date '2024-06-01' as timestamp with time zone); -- 2024-06-01 00:00:00.000 America/Los_Angeles
+
+    -- session_timezone = Asia/Shanghai
+    SELECT cast(date '2024-06-01' as timestamp with time zone); -- 2024-06-01 00:00:00.000 Asia/Shanghai
+
 Cast to Date
 ------------
 
@@ -766,6 +774,20 @@ Valid examples
 
   SELECT cast(timestamp '1970-01-01 00:00:00' as date); -- 1970-01-01
   SELECT cast(timestamp '1970-01-01 23:59:59' as date); -- 1970-01-01
+
+From TIMESTAMP WITH TIME ZONE
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Casting from TIMESTAMP WITH TIME ZONE to DATE is allowed. If present,
+the part of `hh:mm:ss` in the input is ignored.
+
+Session time zone does not affect the result.
+
+Valid examples
+
+::
+
+  SELECT CAST(timestamp '2024-06-01 01:38:00 America/New_York' as DATE); -- 2024-06-01
 
 Cast to Decimal
 ---------------

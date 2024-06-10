@@ -29,6 +29,7 @@
 
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/type/FloatingPointUtil.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/TypeAliases.h"
@@ -89,15 +90,15 @@ struct AsciiInfo {
   folly::Synchronized<SelectivityVector> asciiComputedRows_;
 };
 
-// This class abstracts over various Columnar Storage Formats such that Velox
-// can select the most appropriate one on a per field / per block basis.
-// The goal is to use the most appropriate type to optimize for:
-//   - Lazy deserialization if desired.
-//   - serialization / rehydration cost, ideally we use a smart view into the
-//     data without fully rehydrating.
-//   - serialized bytes
-//   - cpu cost of filtering
-//   - optimize aggregation of sequential values
+/// This class abstracts over various Columnar Storage Formats such that Velox
+/// can select the most appropriate one on a per field / per block basis.
+/// The goal is to use the most appropriate type to optimize for:
+///   - Lazy deserialization if desired.
+///   - serialization / rehydration cost, ideally we use a smart view into the
+///     data without fully rehydrating.
+///   - serialized bytes
+///   - cpu cost of filtering
+///   - optimize aggregation of sequential values
 template <typename T>
 class SimpleVector : public BaseVector {
  public:
@@ -171,8 +172,14 @@ class SimpleVector : public BaseVector {
    * @return the hash of the value at the given index in this vector
    */
   uint64_t hashValueAt(vector_size_t index) const override {
-    return isNullAt(index) ? BaseVector::kNullHash
-                           : folly::hasher<T>{}(valueAt(index));
+    if constexpr (std::is_floating_point_v<T>) {
+      return isNullAt(index)
+          ? BaseVector::kNullHash
+          : util::floating_point::NaNAwareHash<T>{}(valueAt(index));
+    } else {
+      return isNullAt(index) ? BaseVector::kNullHash
+                             : folly::hasher<T>{}(valueAt(index));
+    }
   }
 
   std::optional<bool> isSorted() const {

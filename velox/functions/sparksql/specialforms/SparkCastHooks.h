@@ -24,14 +24,25 @@ namespace facebook::velox::functions::sparksql {
 class SparkCastHooks : public exec::CastHooks {
  public:
   // TODO: Spark hook allows more string patterns than Presto.
-  Timestamp castStringToTimestamp(const StringView& view) const override;
+  Expected<Timestamp> castStringToTimestamp(
+      const StringView& view) const override;
 
   /// 1) Removes all leading and trailing UTF8 white-spaces before cast. 2) Uses
   /// non-standard cast mode to cast from string to date.
-  int32_t castStringToDate(const StringView& dateString) const override;
+  Expected<int32_t> castStringToDate(
+      const StringView& dateString) const override;
 
-  // Returns false.
-  bool legacy() const override;
+  // Allows casting 'NaN', 'Infinity', '-Infinity', 'Inf', '-Inf', and these
+  // strings with different letter cases to real.
+  Expected<float> castStringToReal(const StringView& data) const override;
+
+  // Allows casting 'NaN', 'Infinity', '-Infinity', 'Inf', '-Inf', and these
+  // strings with different letter cases to double.
+  Expected<double> castStringToDouble(const StringView& data) const override;
+
+  bool legacy() const override {
+    return false;
+  }
 
   /// When casting from string to integral, floating-point, decimal, date, and
   /// timestamp types, Spark hook trims all leading and trailing UTF8
@@ -43,7 +54,8 @@ class SparkCastHooks : public exec::CastHooks {
   /// positive sign at first if the year exceeds 9999.
   const TimestampToStringOptions& timestampToStringOptions() const override;
 
-  // Returns true.
-  bool truncate() const override;
+  bool truncate() const override {
+    return true;
+  }
 };
 } // namespace facebook::velox::functions::sparksql

@@ -177,6 +177,10 @@ struct MemoryManagerOptions {
   /// zero, then there is no timeout. The default is 5 mins.
   uint64_t memoryReclaimWaitMs{300'000};
 
+  /// If true, it allows memory arbitrator to reclaim used memory cross query
+  /// memory pools.
+  bool globalArbitrationEnabled{false};
+
   /// Provided by the query system to validate the state after a memory pool
   /// enters arbitration if not null. For instance, Prestissimo provides
   /// callback to check if a memory arbitration request is issued from a driver
@@ -279,7 +283,7 @@ class MemoryManager {
   /// Returns the memory manger's internal default root memory pool for testing
   /// purpose.
   MemoryPool& testingDefaultRoot() const {
-    return *defaultRoot_;
+    return *sysRoot_;
   }
 
   /// Returns the process wide leaf memory pool used for disk spilling.
@@ -318,10 +322,9 @@ class MemoryManager {
   // Callback invoked by the root memory pool to request memory capacity growth.
   const MemoryPoolImpl::GrowCapacityCallback poolGrowCb_;
 
-  const std::shared_ptr<MemoryPool> defaultRoot_;
+  const std::shared_ptr<MemoryPool> sysRoot_;
   const std::shared_ptr<MemoryPool> spillPool_;
-
-  std::vector<std::shared_ptr<MemoryPool>> sharedLeafPools_;
+  const std::vector<std::shared_ptr<MemoryPool>> sharedLeafPools_;
 
   mutable folly::SharedMutex mutex_;
   // All user root pools allocated from 'this'.

@@ -16,15 +16,10 @@
 
 #include "velox/dwio/common/InputStream.h"
 
-#include <fcntl.h>
 #include <folly/container/F14Map.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <cerrno>
 #include <cstdint>
-#include <cstring>
 #include <functional>
 #include <istream>
 #include <numeric>
@@ -77,28 +72,27 @@ void ReadFileInputStream::read(
     uint64_t length,
     uint64_t offset,
     MetricsLog::MetricsType purpose) {
-  if (!buf) {
-    throw std::invalid_argument("Buffer is null");
-  }
+  VELOX_CHECK_NOT_NULL(buf);
   logRead(offset, length, purpose);
-  auto readStartMicros = getCurrentTimeMicro();
-  std::string_view data_read = readFile_->pread(offset, length, buf);
+  uint64_t readTimeUs{0};
+  std::string_view readData;
+  {
+    MicrosecondTimer timer(&readTimeUs);
+    readData = readFile_->pread(offset, length, buf);
+  }
   if (stats_) {
     stats_->incRawBytesRead(length);
-    stats_->incTotalScanTime((getCurrentTimeMicro() - readStartMicros) * 1000);
+    stats_->incTotalScanTime(readTimeUs * 1'000);
   }
 
-  DWIO_ENSURE_EQ(
-      data_read.size(),
+  VELOX_CHECK_EQ(
+      readData.size(),
       length,
-      "Should read exactly as requested. File name: ",
+      "Should read exactly as requested. File name: {}, offset: {}, length: {}, read: {}",
       getName(),
-      ", offset: ",
       offset,
-      ", length: ",
       length,
-      ", read: ",
-      data_read.size());
+      readData.size());
 }
 
 void ReadFileInputStream::read(
@@ -107,17 +101,14 @@ void ReadFileInputStream::read(
     LogType logType) {
   const int64_t bufferSize = totalBufferSize(buffers);
   logRead(offset, bufferSize, logType);
-  auto size = readFile_->preadv(offset, buffers);
-  DWIO_ENSURE_EQ(
+  const auto size = readFile_->preadv(offset, buffers);
+  VELOX_CHECK_EQ(
       size,
       bufferSize,
-      "Should read exactly as requested. File name: ",
+      "Should read exactly as requested. File name: {}, offset: {}, length: {}, read: {}",
       getName(),
-      ", offset: ",
       offset,
-      ", length: ",
       bufferSize,
-      ", read: ",
       size);
 }
 
@@ -138,7 +129,7 @@ void ReadFileInputStream::vread(
     folly::Range<const velox::common::Region*> regions,
     folly::Range<folly::IOBuf*> iobufs,
     const LogType purpose) {
-  DWIO_ENSURE_GT(regions.size(), 0, "regions to read can't be empty");
+  VELOX_CHECK_GT(regions.size(), 0, "regions to read can't be empty");
   const size_t length = std::accumulate(
       regions.cbegin(),
       regions.cend(),

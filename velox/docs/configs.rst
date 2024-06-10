@@ -295,6 +295,11 @@ Spilling
      - 4MB
      - The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
        If set to zero, buffering is disabled.
+   * - spill_read_buffer_size
+     - integer
+     - 1MB
+     - The buffer size in bytes to read from one spilled file. If the underlying filesystem supports async
+       read, we do read-ahead with double buffering, which doubles the buffer used to read from each spill file.
    * - min_spill_run_size
      - integer
      - 256MB
@@ -471,6 +476,24 @@ Each query can override the config by setting corresponding query session proper
      - 9
      - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
        Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).
+   * - hive.orc.writer.linear-stripe-size-heuristics
+     - orc_writer_linear_stripe_size_heuristics
+     - bool
+     - true
+     - Enables historical based stripe size estimation after compression.
+   * - hive.orc.writer.min-compression-size
+     - orc_writer_min_compression_size
+     - integer
+     - 1024
+     - Minimal number of items in an encoded stream.
+   * - cache.no_retention
+     - cache.no_retention
+     - bool
+     - false
+     - If true, evict out a query scanned data out of in-memory cache right after the access,
+       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
+       from the one-time table scan by large batch query when mixed running with interactive
+       query which has high data locality.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -559,6 +582,14 @@ Each query can override the config by setting corresponding query session proper
      - string
      -
      - The GCS service account configuration as json string.
+   * - hive.gcs.max-retry-count
+     - integer
+     -
+     - The GCS maximum retry counter of transient errors.
+   * - hive.gcs.max-retry-time
+     - string
+     -
+     - The GCS maximum time allowed to retry transient errors.
 
 ``Azure Blob Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

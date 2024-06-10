@@ -123,22 +123,31 @@ TEST_F(ParquetReaderTest, parseUnannotatedList) {
   EXPECT_EQ(
       std::static_pointer_cast<const ParquetTypeWithId>(col0)->name_, "self");
 
-  EXPECT_EQ(col0->size(), 3ULL);
-  EXPECT_EQ(col0->childAt(0)->type()->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(col0->size(), 1ULL);
+  EXPECT_EQ(col0->childAt(0)->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(
       std::static_pointer_cast<const ParquetTypeWithId>(col0->childAt(0))
           ->name_,
+      "dummy");
+
+  EXPECT_EQ(col0->childAt(0)->childAt(0)->type()->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(
+          col0->childAt(0)->childAt(0))
+          ->name_,
       "a");
 
-  EXPECT_EQ(col0->childAt(1)->type()->kind(), TypeKind::BOOLEAN);
+  EXPECT_EQ(col0->childAt(0)->childAt(1)->type()->kind(), TypeKind::BOOLEAN);
   EXPECT_EQ(
-      std::static_pointer_cast<const ParquetTypeWithId>(col0->childAt(1))
+      std::static_pointer_cast<const ParquetTypeWithId>(
+          col0->childAt(0)->childAt(1))
           ->name_,
       "b");
 
-  EXPECT_EQ(col0->childAt(2)->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(col0->childAt(0)->childAt(2)->type()->kind(), TypeKind::VARCHAR);
   EXPECT_EQ(
-      std::static_pointer_cast<const ParquetTypeWithId>(col0->childAt(2))
+      std::static_pointer_cast<const ParquetTypeWithId>(
+          col0->childAt(0)->childAt(2))
           ->name_,
       "c");
 }
@@ -159,7 +168,6 @@ TEST_F(ParquetReaderTest, parseUnannotatedMap) {
 
   facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
-  auto numRows = reader->numberOfRows();
 
   auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
@@ -180,6 +188,60 @@ TEST_F(ParquetReaderTest, parseUnannotatedMap) {
       std::static_pointer_cast<const ParquetTypeWithId>(col0->childAt(1))
           ->name_,
       "value");
+}
+
+TEST_F(ParquetReaderTest, parseLegacyListWithMultipleChildren) {
+  // listmultiplechildren.parquet has the following the schema
+  // message hive_schema {
+  //  optional group test (LIST) {
+  //    repeated group array {
+  //      optional int64 a;
+  //      optional boolean b;
+  //      optional binary c (STRING);
+  //    }
+  //  }
+  // }
+  // Namely, node 'array' has >1 child
+  const std::string filename("listmultiplechildren.parquet");
+  const std::string sample(getExampleFilePath(filename));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type()->kind(), TypeKind::ARRAY);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(col0)->name_, "test");
+
+  EXPECT_EQ(col0->size(), 1ULL);
+  EXPECT_EQ(col0->childAt(0)->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(col0->childAt(0))
+          ->name_,
+      "dummy");
+
+  EXPECT_EQ(col0->childAt(0)->childAt(0)->type()->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(
+          col0->childAt(0)->childAt(0))
+          ->name_,
+      "a");
+
+  EXPECT_EQ(col0->childAt(0)->childAt(1)->type()->kind(), TypeKind::BOOLEAN);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(
+          col0->childAt(0)->childAt(1))
+          ->name_,
+      "b");
+
+  EXPECT_EQ(col0->childAt(0)->childAt(2)->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(
+          col0->childAt(0)->childAt(2))
+          ->name_,
+      "c");
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange1) {
@@ -730,6 +792,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
 
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b <= 10.0".
   filters.insert({"b", exec::lessThanOrEqualDouble(10.0)});
@@ -739,6 +802,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b between 10.0 and 14.0".
   filters.insert({"b", exec::betweenDouble(10.0, 14.0)});
@@ -748,6 +812,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b > 14.0".
   filters.insert({"b", exec::greaterThanDouble(14.0)});
@@ -757,6 +822,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 
   // Test "b >= 14.0".
   filters.insert({"b", exec::greaterThanOrEqualDouble(14.0)});
@@ -766,6 +832,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
   });
   assertReadWithFilters(
       "sample.parquet", sampleSchema(), std::move(filters), expected);
+  filters.clear();
 }
 
 TEST_F(ParquetReaderTest, varcharFilters) {
@@ -784,6 +851,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
 
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name <= 'CANADA'".
   filters.insert({"name", exec::lessThanOrEqual("CANADA")});
@@ -794,6 +862,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name > UNITED KINGDOM".
   filters.insert({"name", exec::greaterThan("UNITED KINGDOM")});
@@ -804,6 +873,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name >= 'UNITED KINGDOM'".
   filters.insert({"name", exec::greaterThanOrEqual("UNITED KINGDOM")});
@@ -815,6 +885,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name = 'CANADA'".
   filters.insert({"name", exec::equal("CANADA")});
@@ -825,6 +896,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name IN ('CANADA', 'UNITED KINGDOM')".
   filters.insert({"name", exec::in({std::string("CANADA"), "UNITED KINGDOM"})});
@@ -835,6 +907,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 
   // Test "name IN ('UNITED STATES', 'CANADA', 'INDIA', 'RUSSIA')".
   filters.insert(
@@ -848,6 +921,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
   });
   assertReadWithFilters(
       "nation.parquet", rowType, std::move(filters), expected);
+  filters.clear();
 }
 
 TEST_F(ParquetReaderTest, readDifferentEncodingsWithFilter) {
@@ -1053,4 +1127,57 @@ TEST_F(ParquetReaderTest, testEnumType) {
       makeRowVector({makeFlatVector<StringView>({"FOO", "BAR", "FOO"})});
 
   assertReadWithReaderAndExpected(fileSchema, *rowReader, expected, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
+  const std::string filename("varbinary_flba.parquet");
+  const std::string sample(getExampleFilePath(filename));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 8ULL);
+  auto flbaCol =
+      std::static_pointer_cast<const ParquetTypeWithId>(type->childAt(6));
+  EXPECT_EQ(flbaCol->name_, "flba_field");
+  EXPECT_EQ(flbaCol->parquetType_, thrift::Type::FIXED_LEN_BYTE_ARRAY);
+
+  auto selectedType = ROW({"flba_field"}, {VARBINARY()});
+  auto rowReaderOpts = getReaderOpts(selectedType);
+  rowReaderOpts.setScanSpec(makeScanSpec(selectedType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto expected = std::string(1024, '*');
+  VectorPtr result = BaseVector::create(selectedType, 0, &(*leafPool_));
+  rowReader->next(1, result);
+  EXPECT_EQ(
+      expected,
+      result->as<RowVector>()->childAt(0)->asFlatVector<StringView>()->valueAt(
+          0));
+}
+
+TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
+  // enum_type.parquet contains 1 column (ENUM) with 3 rows.
+  const std::string sample(getExampleFilePath("v2_page.parquet"));
+
+  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 5ULL);
+
+  auto rowType = reader->typeWithId();
+  EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(rowType->size(), 1ULL);
+
+  EXPECT_EQ(rowType->childAt(0)->type()->kind(), TypeKind::BIGINT);
+
+  auto outputRowType = ROW({"regionkey"}, {BIGINT()});
+  auto rowReaderOpts = getReaderOpts(outputRowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
+
+  assertReadWithReaderAndExpected(
+      outputRowType, *rowReader, expected, *leafPool_);
 }

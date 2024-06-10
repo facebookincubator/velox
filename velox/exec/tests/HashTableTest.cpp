@@ -154,11 +154,11 @@ class HashTableTest : public testing::TestWithParam<bool>,
 
     const uint64_t estimatedTableSize =
         topTable_->estimateHashTableSize(numRows);
-    const uint64_t usedMemoryBytes = topTable_->rows()->pool()->currentBytes();
+    const uint64_t usedMemoryBytes = topTable_->rows()->pool()->usedBytes();
     topTable_->prepareJoinTable(std::move(otherTables), executor_.get());
     ASSERT_GE(
         estimatedTableSize,
-        topTable_->rows()->pool()->currentBytes() - usedMemoryBytes);
+        topTable_->rows()->pool()->usedBytes() - usedMemoryBytes);
     ASSERT_EQ(topTable_->hashMode(), mode);
     ASSERT_EQ(topTable_->allRows().size(), numWays);
     uint64_t rowCount{0};
@@ -174,13 +174,13 @@ class HashTableTest : public testing::TestWithParam<bool>,
     testEraseEveryN(4);
     testProbe();
     testGroupBySpill(size, buildType, numKeys);
-    const auto memoryUsage = pool()->currentBytes();
+    const auto memoryUsage = pool()->usedBytes();
     topTable_->clear(true);
     for (const auto* rowContainer : topTable_->allRows()) {
       ASSERT_EQ(rowContainer->numRows(), 0);
     }
     ASSERT_EQ(topTable_->numDistinct(), 0);
-    ASSERT_LT(pool()->currentBytes(), memoryUsage);
+    ASSERT_LT(pool()->usedBytes(), memoryUsage);
   }
 
   // Inserts and deletes rows in a HashTable, similarly to a group by
@@ -452,16 +452,12 @@ class HashTableTest : public testing::TestWithParam<bool>,
     const auto mode = topTable_->hashMode();
     SelectivityInfo hashTime;
     SelectivityInfo probeTime;
-    int32_t numHashed = 0;
-    int32_t numProbed = 0;
-    int32_t numHit = 0;
     auto& hashers = topTable_->hashers();
     VectorHasher::ScratchMemory scratchMemory;
     for (auto batchIndex = 0; batchIndex < batches_.size(); ++batchIndex) {
       const auto& batch = batches_[batchIndex];
       lookup->reset(batch->size());
       rows.setAll();
-      numHashed += batch->size();
       {
         SelectivityTimer timer(hashTime, 0);
         for (auto i = 0; i < hashers.size(); ++i) {
@@ -496,13 +492,11 @@ class HashTableTest : public testing::TestWithParam<bool>,
         }
       } else {
         {
-          numProbed += lookup->rows.size();
           SelectivityTimer timer(probeTime, 0);
           topTable_->joinProbe(*lookup);
         }
         for (auto i = 0; i < lookup->rows.size(); ++i) {
           const auto key = lookup->rows[i];
-          numHit += lookup->hits[key] != nullptr;
           ASSERT_EQ(rowOfKey_[startOffset + key], lookup->hits[key]);
         }
       }

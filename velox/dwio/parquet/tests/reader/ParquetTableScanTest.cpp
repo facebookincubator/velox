@@ -28,6 +28,7 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
+using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::parquet;
 
@@ -56,19 +57,36 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     assertQuery(plan, splits_, sql);
   }
 
+  void assertSelectWithAssignments(
+      std::vector<std::string>&& outputColumnNames,
+      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>&
+          assignments,
+      const std::string& sql) {
+    auto rowType = getRowType(std::move(outputColumnNames));
+    auto plan = PlanBuilder()
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+    assertQuery(plan, splits_, sql);
+  }
+
   void assertSelectWithFilter(
       std::vector<std::string>&& outputColumnNames,
       const std::vector<std::string>& subfieldFilters,
       const std::string& remainingFilter,
-      const std::string& sql) {
+      const std::string& sql,
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<connector::ColumnHandle>>& assignments = {}) {
     auto rowType = getRowType(std::move(outputColumnNames));
     parse::ParseOptions options;
     options.parseDecimalAsDouble = false;
 
-    auto plan = PlanBuilder(pool_.get())
-                    .setParseOptions(options)
-                    .tableScan(rowType, subfieldFilters, remainingFilter)
-                    .planNode();
+    auto plan =
+        PlanBuilder(pool_.get())
+            .setParseOptions(options)
+            .tableScan(
+                rowType, subfieldFilters, remainingFilter, nullptr, assignments)
+            .planNode();
 
     assertQuery(plan, splits_, sql);
   }
@@ -104,9 +122,16 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     assertQuery(plan, splits_, sql);
   }
 
-  void
-  loadData(const std::string& filePath, RowTypePtr rowType, RowVectorPtr data) {
-    splits_ = {makeSplit(filePath)};
+  void loadData(
+      const std::string& filePath,
+      RowTypePtr rowType,
+      RowVectorPtr data,
+      const std::optional<
+          std::unordered_map<std::string, std::optional<std::string>>>&
+          partitionKeys = std::nullopt,
+      const std::optional<std::unordered_map<std::string, std::string>>&
+          infoColumns = std::nullopt) {
+    splits_ = {makeSplit(filePath, partitionKeys, infoColumns)};
     rowType_ = rowType;
     createDuckDbTable({data});
   }
@@ -117,8 +142,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     dwio::common::ReaderOptions readerOpts{pool.get()};
     auto reader = std::make_unique<ParquetReader>(
         std::make_unique<facebook::velox::dwio::common::BufferedInput>(
-            std::make_shared<LocalReadFile>(filePath),
-            readerOpts.getMemoryPool()),
+            std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),
         readerOpts);
     rowType_ = reader->rowType();
     createDuckDbTable({data});
@@ -130,9 +154,18 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   }
 
   std::shared_ptr<connector::hive::HiveConnectorSplit> makeSplit(
-      const std::string& filePath) {
+      const std::string& filePath,
+      const std::optional<
+          std::unordered_map<std::string, std::optional<std::string>>>&
+          partitionKeys = std::nullopt,
+      const std::optional<std::unordered_map<std::string, std::string>>&
+          infoColumns = std::nullopt) {
     return makeHiveConnectorSplits(
-        filePath, 1, dwio::common::FileFormat::PARQUET)[0];
+        filePath,
+        1,
+        dwio::common::FileFormat::PARQUET,
+        partitionKeys,
+        infoColumns)[0];
   }
 
  private:
@@ -438,7 +471,7 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency());
   std::shared_ptr<core::QueryCtx> queryCtx =
-      std::make_shared<core::QueryCtx>(executor.get());
+      core::QueryCtx::create(executor.get());
   std::unordered_map<std::string, std::string> session = {
       {std::string(
            connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession),
@@ -467,6 +500,135 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
   ASSERT_TRUE(waitForTaskCompletion(result.first->task().get()));
   assertEqualResults(
       result.second, {makeRowVector({"a"}, {makeFlatVector<int64_t>({0, 1})})});
+}
+
+TEST_F(ParquetTableScanTest, rowIndex) {
+  static const char* kPath = "file_path";
+  // case 1: file not have `_tmp_metadata_row_index`, scan generate it for user.
+  auto filePath = getExampleFilePath("sample.parquet");
+  loadData(
+      filePath,
+      ROW({"a", "b", "_tmp_metadata_row_index", kPath},
+          {BIGINT(), DOUBLE(), BIGINT(), VARCHAR()}),
+      makeRowVector(
+          {"a", "b", "_tmp_metadata_row_index", kPath},
+          {
+              makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<double>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<int64_t>(20, [](auto row) { return row; }),
+              makeFlatVector<std::string>(
+                  20, [filePath](auto row) { return filePath; }),
+          }),
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{{kPath, filePath}});
+  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+      assignments;
+  assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
+      "a",
+      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT());
+  assignments["b"] = std::make_shared<connector::hive::HiveColumnHandle>(
+      "b",
+      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      DOUBLE(),
+      DOUBLE());
+  assignments[kPath] = synthesizedColumn(kPath, VARCHAR());
+  assignments["_tmp_metadata_row_index"] =
+      std::make_shared<connector::hive::HiveColumnHandle>(
+          "_tmp_metadata_row_index",
+          connector::hive::HiveColumnHandle::ColumnType::kRowIndex,
+          BIGINT(),
+          BIGINT());
+
+  assertSelect({"a"}, "SELECT a FROM tmp");
+  assertSelectWithAssignments(
+      {"a", "_tmp_metadata_row_index"},
+      assignments,
+      "SELECT a, _tmp_metadata_row_index FROM tmp");
+  assertSelectWithAssignments(
+      {"_tmp_metadata_row_index", "a"},
+      assignments,
+      "SELECT _tmp_metadata_row_index, a FROM tmp");
+  assertSelectWithAssignments(
+      {"_tmp_metadata_row_index"},
+      assignments,
+      "SELECT _tmp_metadata_row_index FROM tmp");
+  assertSelectWithAssignments(
+      {kPath, "_tmp_metadata_row_index"},
+      assignments,
+      fmt::format("SELECT {}, _tmp_metadata_row_index FROM tmp", kPath));
+
+  // case 2: file has `_tmp_metadata_row_index` column, then use user data
+  // insteads of generating it.
+  loadData(
+      getExampleFilePath("sample_with_rowindex.parquet"),
+      ROW({"a", "b", "_tmp_metadata_row_index"},
+          {BIGINT(), DOUBLE(), BIGINT()}),
+      makeRowVector(
+          {"a", "b", "_tmp_metadata_row_index"},
+          {
+              makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<double>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+          }));
+
+  assertSelect({"a"}, "SELECT a FROM tmp");
+  assertSelect(
+      {"a", "_tmp_metadata_row_index"},
+      "SELECT a, _tmp_metadata_row_index FROM tmp");
+}
+
+// The file icebergNullIcebergPartition.parquet was copied from a null
+// partition in an Iceberg table created with the below DDL using Spark:
+//
+// CREATE TABLE iceberg_tmp_parquet_partitioned
+//    ( c0 bigint, c1 bigint )
+// USING iceberg
+// PARTITIONED BY (c1)
+// TBLPROPERTIES ('write.format.default' = 'parquet', 'format-version' = 2,
+// 'write.delete.mode' = 'merge-on-read') LOCATION
+// 's3a://presto-workload/tmp/iceberg_tmp_parquet_partitioned';
+//
+// INSERT INTO iceberg_tmp_parquet_partitioned
+// VALUES (1, 1), (2, null),(3, null);
+TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
+  loadData(
+      getExampleFilePath("icebergNullIcebergPartition.parquet"),
+      ROW({"c0", "c1"}, {BIGINT(), BIGINT()}),
+      makeRowVector(
+          {"c0", "c1"},
+          {
+              makeFlatVector<int64_t>(std::vector<int64_t>{2, 3}),
+              makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+          }),
+      std::unordered_map<std::string, std::optional<std::string>>{
+          {"c1", std::nullopt}});
+
+  auto c0 = makeColumnHandle(
+      "c0", BIGINT(), BIGINT(), {}, HiveColumnHandle::ColumnType::kRegular);
+  auto c1 = makeColumnHandle(
+      "c1",
+      BIGINT(),
+      BIGINT(),
+      {},
+      HiveColumnHandle::ColumnType::kPartitionKey);
+
+  assertSelectWithFilter(
+      {"c0", "c1"},
+      {"c1 IS NOT NULL"},
+      "",
+      "SELECT c0, c1 FROM tmp WHERE c1 IS NOT NULL",
+      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>{
+          {"c0", c0}, {"c1", c1}});
+
+  assertSelectWithFilter(
+      {"c0", "c1"},
+      {"c1 IS NULL"},
+      "",
+      "SELECT c0, c1 FROM tmp WHERE c1 IS NULL",
+      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>{
+          {"c0", c0}, {"c1", c1}});
 }
 
 int main(int argc, char** argv) {

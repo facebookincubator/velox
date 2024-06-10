@@ -937,9 +937,14 @@ void toTypeSql(const TypePtr& type, std::ostream& out) {
 }
 
 std::string IntervalDayTimeType::valueToString(int64_t value) const {
-  static const char* kIntervalFormat = "%d %02d:%02d:%02d.%03d";
+  static const char* kIntervalFormat = "%s%lld %02d:%02d:%02d.%03d";
 
-  int64_t remainMillis = value;
+  int128_t remainMillis = value;
+  std::string sign{};
+  if (remainMillis < 0) {
+    sign = "-";
+    remainMillis = -remainMillis;
+  }
   const int64_t days = remainMillis / kMillisInDay;
   remainMillis -= days * kMillisInDay;
   const int64_t hours = remainMillis / kMillisInHour;
@@ -953,6 +958,7 @@ std::string IntervalDayTimeType::valueToString(int64_t value) const {
       buf,
       sizeof(buf),
       kIntervalFormat,
+      sign.c_str(),
       days,
       hours,
       minutes,
@@ -1000,11 +1006,14 @@ std::string DateType::toIso8601(int32_t days) {
 }
 
 int32_t DateType::toDays(folly::StringPiece in) const {
-  return util::fromDateString(in.data(), in.size());
+  return toDays(in.data(), in.size());
 }
 
 int32_t DateType::toDays(const char* in, size_t len) const {
-  return util::fromDateString(in, len);
+  return util::fromDateString(in, len, util::ParseMode::kPrestoCast)
+      .thenOrThrow(folly::identity, [&](const Status& status) {
+        VELOX_USER_FAIL("{}", status.message());
+      });
 }
 
 namespace {

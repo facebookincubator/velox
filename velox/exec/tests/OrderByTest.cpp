@@ -196,7 +196,7 @@ class OrderByTest : public OperatorTestBase {
     {
       SCOPED_TRACE("run with spilling");
       auto spillDirectory = exec::test::TempDirectoryPath::create();
-      auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+      auto queryCtx = core::QueryCtx::create(executor_.get());
       TestScopedSpillInjection scopedSpillInjection(100);
       queryCtx->testingOverrideConfigUnsafe({
           {core::QueryConfig::kSpillEnabled, "true"},
@@ -210,14 +210,14 @@ class OrderByTest : public OperatorTestBase {
       auto inputRows = toPlanStats(task->taskStats()).at(orderById).inputRows;
       const uint64_t peakSpillMemoryUsage =
           memory::spillMemoryPool()->stats().peakBytes;
-      ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+      ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
       if (inputRows > 0) {
         EXPECT_LT(0, spilledStats(*task).spilledInputBytes);
         EXPECT_LT(0, spilledStats(*task).spilledBytes);
         EXPECT_EQ(1, spilledStats(*task).spilledPartitions);
         EXPECT_LT(0, spilledStats(*task).spilledFiles);
         EXPECT_EQ(inputRows, spilledStats(*task).spilledRows);
-        ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+        ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
         if (memory::spillMemoryPool()->trackUsage()) {
           ASSERT_GT(memory::spillMemoryPool()->stats().peakBytes, 0);
           ASSERT_GE(
@@ -230,16 +230,6 @@ class OrderByTest : public OperatorTestBase {
       }
       OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
     }
-  }
-
-  static void reclaimAndRestoreCapacity(
-      const Operator* op,
-      uint64_t targetBytes,
-      memory::MemoryReclaimer::Stats& reclaimerStats) {
-    const auto oldCapacity = op->pool()->capacity();
-    op->pool()->reclaim(targetBytes, 0, reclaimerStats);
-    dynamic_cast<memory::MemoryPoolImpl*>(op->pool())
-        ->testingSetCapacity(oldCapacity);
   }
 
   std::vector<RowVectorPtr> makeVectors(
@@ -474,7 +464,7 @@ TEST_F(OrderByTest, outputBatchRows) {
                     .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
                     .capturePlanNodeId(orderById)
                     .planNode();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideConfigUnsafe(
         {{core::QueryConfig::kPreferredOutputBatchBytes,
           std::to_string(testData.preferredOutBatchBytes)},
@@ -567,7 +557,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
     SCOPED_TRACE(testData.debugString());
 
     auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
         queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
@@ -661,14 +651,14 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
     }
 
     if (testData.expectedReclaimable) {
-      reclaimAndRestoreCapacity(
-          op,
+      op->pool()->reclaim(
           folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
+          0,
           reclaimerStats_);
       ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
       ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
       reclaimerStats_.reset();
-      ASSERT_EQ(op->pool()->currentBytes(), 0);
+      ASSERT_EQ(op->pool()->usedBytes(), 0);
     } else {
       VELOX_ASSERT_THROW(
           op->reclaim(
@@ -706,7 +696,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringReserve) {
   }
 
   auto spillDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
       queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   auto expectedResult =
@@ -784,14 +774,14 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringReserve) {
   ASSERT_TRUE(reclaimable);
   ASSERT_GT(reclaimableBytes, 0);
 
-  reclaimAndRestoreCapacity(
-      op,
+  op->pool()->reclaim(
       folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
+      0,
       reclaimerStats_);
   ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
   ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
   reclaimerStats_.reset();
-  ASSERT_EQ(op->pool()->currentBytes(), 0);
+  ASSERT_EQ(op->pool()->usedBytes(), 0);
 
   driverWait.notify();
   Task::resume(task);
@@ -819,7 +809,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringAllocation) {
   for (const auto enableSpilling : enableSpillings) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
@@ -939,7 +929,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
   VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
-  const int32_t numBatches = 10;
+  const int32_t numBatches = 200;
   std::vector<RowVectorPtr> batches;
   for (int32_t i = 0; i < numBatches; ++i) {
     batches.push_back(fuzzer.fuzzRow(rowType));
@@ -949,7 +939,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
   for (const auto enableSpilling : enableSpillings) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
         queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
@@ -1032,8 +1022,9 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
     if (enableSpilling) {
       ASSERT_GT(reclaimableBytes, 0);
       reclaimerStats_.reset();
-      reclaimAndRestoreCapacity(op, reclaimableBytes, reclaimerStats_);
-      ASSERT_EQ(reclaimerStats_.reclaimedBytes, reclaimableBytes);
+      op->pool()->reclaim(reclaimableBytes, 0, reclaimerStats_);
+      ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
+      ASSERT_LE(reclaimerStats_.reclaimedBytes, reclaimableBytes);
       ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
     } else {
       ASSERT_EQ(reclaimableBytes, 0);
@@ -1092,7 +1083,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
           if (!injectOnce.exchange(false)) {
             return;
           }
-          ASSERT_GT(op->pool()->currentBytes(), 0);
+          ASSERT_GT(op->pool()->usedBytes(), 0);
           auto* driver = op->testingOperatorCtx()->driver();
           ASSERT_EQ(
               driver->task()->enterSuspended(driver->state()),
@@ -1101,7 +1092,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
                                            : abortPool(op->pool());
           // We can't directly reclaim memory from this hash build operator as
           // its driver thread is running and in suspension state.
-          ASSERT_GT(op->pool()->root()->currentBytes(), 0);
+          ASSERT_GT(op->pool()->root()->usedBytes(), 0);
           ASSERT_EQ(
               driver->task()->leaveSuspended(driver->state()),
               StopReason::kAlreadyTerminated);
@@ -1167,7 +1158,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
                                            : abortPool(op->pool());
           // We can't directly reclaim memory from this hash build operator as
           // its driver thread is running and in suspension state.
-          ASSERT_GT(op->pool()->root()->currentBytes(), 0);
+          ASSERT_GT(op->pool()->root()->usedBytes(), 0);
           ASSERT_EQ(
               driver->task()->leaveSuspended(driver->state()),
               StopReason::kAlreadyTerminated);
@@ -1257,7 +1248,7 @@ TEST_F(OrderByTest, maxSpillBytes) {
           .capturePlanNodeId(orderNodeId)
           .planNode();
   auto spillDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  auto queryCtx = core::QueryCtx::create(executor_.get());
 
   struct {
     int32_t maxSpilledBytes;

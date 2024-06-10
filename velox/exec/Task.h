@@ -84,23 +84,9 @@ class Task : public std::enable_shared_from_this<Task> {
       ConsumerSupplier consumerSupplier,
       std::function<void(std::exception_ptr)> onError = nullptr);
 
-  /// TODO: Delete following two overloads once all callers are migrated to the
-  /// above ones
-  static std::shared_ptr<Task> create(
-      const std::string& taskId,
-      core::PlanFragment planFragment,
-      int destination,
-      std::shared_ptr<core::QueryCtx> queryCtx,
-      Consumer consumer = nullptr,
-      std::function<void(std::exception_ptr)> onError = nullptr);
-
-  static std::shared_ptr<Task> create(
-      const std::string& taskId,
-      core::PlanFragment planFragment,
-      int destination,
-      std::shared_ptr<core::QueryCtx> queryCtx,
-      ConsumerSupplier consumerSupplier,
-      std::function<void(std::exception_ptr)> onError = nullptr);
+  /// Convenience function for shortening a Presto taskId. To be used
+  /// in debugging messages and listings.
+  static std::string shortId(const std::string& id);
 
   ~Task();
 
@@ -134,9 +120,9 @@ class Task : public std::enable_shared_from_this<Task> {
     return destination_;
   }
 
-  // Convenience function for shortening a Presto taskId. To be used
-  // in debugging messages and listings.
-  static std::string shortId(const std::string& id);
+  /// Configured cpu slice time limit for drivers. 0 (meaning slicing/yield
+  /// disabled) when task is under serial mode.
+  uint64_t driverCpuTimeSliceLimitMs() const;
 
   /// Returns QueryCtx specified in the constructor.
   const std::shared_ptr<core::QueryCtx>& queryCtx() const {
@@ -360,6 +346,10 @@ class Task : public std::enable_shared_from_this<Task> {
   uint32_t numFinishedDrivers() const {
     std::lock_guard<std::timed_mutex> taskLock(mutex_);
     return numFinishedDrivers_;
+  }
+
+  const std::vector<std::weak_ptr<Driver>>& testingDriversClosedByTask() const {
+    return driversClosedByTask_;
   }
 
   /// Internal public methods. These methods are intended to be used by internal
@@ -1048,6 +1038,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
   std::vector<std::shared_ptr<Driver>> drivers_;
+  /// When Drivers are closed by the Task, there is a chance that race and/or
+  /// bugs can cause such Drivers to be held forever, in turn holding a pointer
+  /// to the Task making it a zombie Tasks. This vector is used to keep track of
+  /// such drivers to assist debugging zombie Tasks.
+  std::vector<std::weak_ptr<Driver>> driversClosedByTask_;
   /// The total number of running drivers in all pipelines.
   /// This number changes over time as drivers finish their work and maybe new
   /// get created.

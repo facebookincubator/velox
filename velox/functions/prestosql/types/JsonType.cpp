@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/type/DecimalUtil.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -67,7 +68,14 @@ void generateJsonTyped(
     } else if constexpr (
         std::is_same_v<T, double> || std::is_same_v<T, float>) {
       if constexpr (!legacyCast) {
-        result.append(util::Converter<TypeKind::VARCHAR>::cast(value));
+        if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
+          result.append(fmt::format(
+              "\"{}\"",
+              util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
+        } else {
+          result.append(
+              util::Converter<TypeKind::VARCHAR>::tryCast(value).value());
+        }
       } else {
         folly::toAppend<std::string, T>(value, &result);
       }
@@ -75,6 +83,8 @@ void generateJsonTyped(
       result.append(std::to_string(value));
     } else if (type->isDate()) {
       result.append(DATE()->toString(value));
+    } else if (type->isDecimal()) {
+      result.append(DecimalUtil::toString(value, type));
     } else {
       folly::toAppend<std::string, T>(value, &result);
     }
@@ -218,7 +228,7 @@ struct AsJson {
       : decoded_(context) {
     VELOX_CHECK(rows.hasSelections());
 
-    ErrorVectorPtr oldErrors;
+    exec::EvalErrorsPtr oldErrors;
     context.swapErrors(oldErrors);
     if (isJsonType(input->type())) {
       json_ = input;
@@ -313,7 +323,7 @@ struct AsJson {
       exec::EvalCtx& context,
       const SelectivityVector& rows,
       const BufferPtr& elementToTopLevelRows,
-      ErrorVectorPtr& oldErrors) {
+      exec::EvalErrorsPtr& oldErrors) {
     if (context.errors()) {
       if (elementToTopLevelRows) {
         context.addElementErrorsToTopLevel(

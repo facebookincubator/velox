@@ -30,11 +30,9 @@ std::shared_ptr<core::QueryCtx> newQueryCtx(
     int64_t memoryCapacity,
     std::unique_ptr<MemoryReclaimer>&& reclaimer) {
   std::unordered_map<std::string, std::shared_ptr<Config>> configs;
-  std::shared_ptr<MemoryPool> pool = memoryManager->addRootPool(
-      "",
-      memoryCapacity,
-      reclaimer != nullptr ? std::move(reclaimer) : MemoryReclaimer::create());
-  auto queryCtx = std::make_shared<core::QueryCtx>(
+  std::shared_ptr<MemoryPool> pool =
+      memoryManager->addRootPool("", memoryCapacity);
+  auto queryCtx = core::QueryCtx::create(
       executor,
       core::QueryConfig({}),
       configs,
@@ -58,6 +56,7 @@ std::unique_ptr<memory::MemoryManager> createMemoryManager(
   options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
   options.memoryPoolReservedCapacity = 0;
   options.memoryReclaimWaitMs = maxReclaimWaitMs;
+  options.globalArbitrationEnabled = true;
   options.checkUsageLeak = true;
   options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
   return std::make_unique<memory::MemoryManager>(options);

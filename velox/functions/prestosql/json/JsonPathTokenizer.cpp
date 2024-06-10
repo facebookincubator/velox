@@ -23,7 +23,8 @@ const char ROOT = '$';
 const char DOT = '.';
 const char COLON = ':';
 const char DASH = '-';
-const char QUOTE = '"';
+const char DOUBLE_QUOTE = '"';
+const char SINGLE_QUOTE = '\'';
 const char STAR = '*';
 const char BACK_SLASH = '\\';
 const char UNDER_SCORE = '_';
@@ -31,7 +32,7 @@ const char OPEN_BRACKET = '[';
 const char CLOSE_BRACKET = ']';
 
 bool isUnquotedBracketKeyFormat(char c) {
-  return c == UNDER_SCORE || c == STAR || std::isalnum(c);
+  return c == UNDER_SCORE || c == STAR || c == DASH || std::isalnum(c);
 }
 
 bool isDotKeyFormat(char c) {
@@ -60,11 +61,11 @@ bool JsonPathTokenizer::reset(std::string_view path) {
   // '$..foo' which uses deep scan operator (..). This changes the meaning of
   // the path in unexpected way.
   //
-  // Here, we allow paths like 'foo', 'foo.bar' and similar. We do not allow
-  // paths like '.foo' or '[0]'.
+  // Here, we allow paths like 'foo', 'foo.bar', [0] and similar. We do not
+  // allow paths like '.foo'.
 
   index_ = 0;
-  if (path[0] == DOT || path[0] == OPEN_BRACKET) {
+  if (path[0] == DOT) {
     path_ = {};
     return false;
   }
@@ -78,13 +79,14 @@ bool JsonPathTokenizer::hasNext() const {
 }
 
 std::optional<std::string> JsonPathTokenizer::getNext() {
-  if (index_ == 0) {
-    // We are parsing first token in a path that doesn't start with '$'. In
-    // this case, we assume the path starts with '$.'.
+  if (index_ == 0 && path_[0] != OPEN_BRACKET) {
+    // We are parsing first token in a path that doesn't start with '$' and
+    // doesn't start with '['. In this case, we assume the path starts with
+    // '$.'.
     return matchDotKey();
   }
 
-  if (match(DOT)) {
+  if (index_ > 0 && match(DOT)) {
     if (hasNext() && path_[index_] != OPEN_BRACKET) {
       return matchDotKey();
     }
@@ -93,8 +95,10 @@ std::optional<std::string> JsonPathTokenizer::getNext() {
   }
 
   if (match(OPEN_BRACKET)) {
-    auto token =
-        match(QUOTE) ? matchQuotedSubscriptKey() : matchUnquotedSubscriptKey();
+    auto token = match(DOUBLE_QUOTE)
+        ? matchQuotedSubscriptKey(DOUBLE_QUOTE)
+        : (match(SINGLE_QUOTE) ? matchQuotedSubscriptKey(SINGLE_QUOTE)
+                               : matchUnquotedSubscriptKey());
     if (!token || !match(CLOSE_BRACKET)) {
       return std::nullopt;
     }
@@ -137,12 +141,13 @@ std::optional<std::string> JsonPathTokenizer::matchUnquotedSubscriptKey() {
 // Reference Presto logic in
 // src/test/java/io/prestosql/operator/scalar/TestJsonExtract.java and
 // src/main/java/io/prestosql/operator/scalar/JsonExtract.java
-std::optional<std::string> JsonPathTokenizer::matchQuotedSubscriptKey() {
+std::optional<std::string> JsonPathTokenizer::matchQuotedSubscriptKey(
+    char quote) {
   bool escaped = false;
   std::string token;
-  while (hasNext() && (escaped || path_[index_] != QUOTE)) {
+  while (hasNext() && (escaped || path_[index_] != quote)) {
     if (escaped) {
-      if (path_[index_] != QUOTE && path_[index_] != BACK_SLASH) {
+      if (path_[index_] != quote && path_[index_] != BACK_SLASH) {
         return std::nullopt;
       }
       escaped = false;
@@ -150,7 +155,7 @@ std::optional<std::string> JsonPathTokenizer::matchQuotedSubscriptKey() {
     } else {
       if (path_[index_] == BACK_SLASH) {
         escaped = true;
-      } else if (path_[index_] == QUOTE) {
+      } else if (path_[index_] == quote) {
         return std::nullopt;
       } else {
         token.append(1, path_[index_]);
@@ -158,7 +163,7 @@ std::optional<std::string> JsonPathTokenizer::matchQuotedSubscriptKey() {
     }
     index_++;
   }
-  if (escaped || token.empty() || !match(QUOTE)) {
+  if (escaped || token.empty() || !match(quote)) {
     return std::nullopt;
   }
   return token;

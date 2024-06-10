@@ -90,6 +90,16 @@ void SelectiveColumnReader::seekTo(vector_size_t offset, bool readsNullsOnly) {
   }
 }
 
+void SelectiveColumnReader::initReturnReaderNulls(RowSet rows) {
+  if (useBulkPath() && !scanSpec_->hasFilter()) {
+    anyNulls_ = nullsInReadRange_ != nullptr;
+    bool isDense = rows.back() == rows.size() - 1;
+    returnReaderNulls_ = anyNulls_ && isDense;
+  } else {
+    returnReaderNulls_ = false;
+  }
+}
+
 void SelectiveColumnReader::prepareNulls(
     RowSet rows,
     bool hasNulls,
@@ -98,32 +108,23 @@ void SelectiveColumnReader::prepareNulls(
     anyNulls_ = false;
     return;
   }
-  auto numRows = rows.size() + extraRows;
-  if (useBulkPath()) {
-    bool isDense = rows.back() == rows.size() - 1;
-    if (!scanSpec_->hasFilter()) {
-      anyNulls_ = nullsInReadRange_ != nullptr;
-      returnReaderNulls_ = anyNulls_ && isDense;
-      // No need for null flags if fast path
-      if (returnReaderNulls_) {
-        return;
-      }
-    }
-  }
-  returnReaderNulls_ = false;
-  if (resultNulls_ && resultNulls_->unique() &&
-      resultNulls_->capacity() >= bits::nbytes(numRows) + simd::kPadding) {
-    // Clear whole capacity because future uses could hit
-    // uncleared data between capacity() and 'numBytes'.
-    simd::memset(rawResultNulls_, bits::kNotNullByte, resultNulls_->capacity());
-    anyNulls_ = false;
+  initReturnReaderNulls(rows);
+  if (returnReaderNulls_) {
+    // No need for null flags if fast path.
     return;
   }
-
+  auto numRows = rows.size() + extraRows;
+  if (resultNulls_ && resultNulls_->unique() &&
+      resultNulls_->capacity() >= bits::nbytes(numRows) + simd::kPadding) {
+    resultNulls_->setSize(bits::nbytes(numRows));
+  } else {
+    resultNulls_ = AlignedBuffer::allocate<bool>(
+        numRows + (simd::kPadding * 8), &memoryPool_);
+    rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
+  }
   anyNulls_ = false;
-  resultNulls_ = AlignedBuffer::allocate<bool>(
-      numRows + (simd::kPadding * 8), &memoryPool_);
-  rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
+  // Clear whole capacity because future uses could hit uncleared data between
+  // capacity() and 'numBytes'.
   simd::memset(rawResultNulls_, bits::kNotNullByte, resultNulls_->capacity());
 }
 

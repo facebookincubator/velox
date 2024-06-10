@@ -26,14 +26,16 @@ uint64_t* rowsWithError(
     const SelectivityVector& rows,
     const SelectivityVector& activeRows,
     EvalCtx& context,
-    ErrorVectorPtr& previousErrors,
+    EvalErrorsPtr& previousErrors,
     LocalSelectivityVector& errorRowsHolder) {
-  auto errors = context.errors();
-  if (!errors) {
+  const auto* errorsPtr = context.errorsPtr();
+  if (!errorsPtr || !*errorsPtr) {
     // No new errors. Put the old errors back.
     context.swapErrors(previousErrors);
     return nullptr;
   }
+
+  const auto& errors = *errorsPtr;
   uint64_t* errorMask = nullptr;
   SelectivityVector* errorRows = errorRowsHolder.get();
   if (!errorRows) {
@@ -46,18 +48,14 @@ uint64_t* rowsWithError(
   bits::andBits(
       errorMask,
       activeRows.asRange().bits(),
-      errors->rawNulls(),
+      errors->errorFlags(),
       rows.begin(),
       std::min(errors->size(), rows.end()));
   if (previousErrors) {
     // Add the new errors to the previous ones and free the new errors.
     bits::forEachSetBit(
-        errors->rawNulls(), rows.begin(), errors->size(), [&](int32_t row) {
-          context.addError(
-              row,
-              *std::static_pointer_cast<std::exception_ptr>(
-                  errors->valueAt(row)),
-              previousErrors);
+        errors->errorFlags(), rows.begin(), errors->size(), [&](int32_t row) {
+          context.addError(row, errors, previousErrors);
         });
     context.swapErrors(previousErrors);
     previousErrors = nullptr;
@@ -79,16 +77,14 @@ void finalizeErrors(
   auto size =
       std::min(std::min(rows.size(), activeRows.size()), errors->size());
   for (auto i = 0; i < size; ++i) {
-    if (errors->isNullAt(i)) {
+    if (!errors->hasErrorAt(i)) {
       continue;
     }
     if (rows.isValid(i) && !activeRows.isValid(i)) {
-      errors->setNull(i, true);
+      errors->clearError(i);
     }
-    if (throwOnError && !errors->isNullAt(i)) {
-      auto exceptionPtr =
-          std::static_pointer_cast<std::exception_ptr>(errors->valueAt(i));
-      std::rethrow_exception(*exceptionPtr);
+    if (throwOnError) {
+      errors->throwIfErrorAt(i);
     }
   }
 }
@@ -130,7 +126,7 @@ void ConjunctExpr::evalSpecialForm(
   for (int32_t i = 0; i < inputs_.size(); ++i) {
     VectorPtr inputResult;
     VectorRecycler inputResultRecycler(inputResult, context.vectorPool());
-    ErrorVectorPtr errors;
+    EvalErrorsPtr errors;
     if (handleErrors) {
       context.swapErrors(errors);
     }

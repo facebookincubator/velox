@@ -12,10 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_fuzzer_util DuckQueryRunner.cpp PrestoQueryRunner.cpp)
+add_library(velox_fuzzer_util DuckQueryRunner.cpp PrestoQueryRunner.cpp
+                              FuzzerUtil.cpp)
 
-target_link_libraries(velox_fuzzer_util velox_core velox_exec_test_lib cpr::cpr
-                      velox_type_parser Folly::folly)
+target_link_libraries(
+  velox_fuzzer_util
+  velox_core
+  velox_exec_test_lib
+  cpr::cpr
+  velox_type_parser
+  Folly::folly
+  velox_hive_connector
+  velox_dwio_dwrf_reader
+  velox_dwio_dwrf_writer
+  velox_dwio_catalog_fbhive)
 
 add_library(velox_aggregation_fuzzer_base AggregationFuzzerBase.cpp)
 
@@ -57,3 +67,39 @@ target_link_libraries(
   velox_expression_test_utility
   velox_aggregation_fuzzer_base
   velox_temp_path)
+
+add_library(velox_row_number_fuzzer RowNumberFuzzer.cpp)
+
+target_link_libraries(
+  velox_row_number_fuzzer velox_fuzzer_util velox_type velox_vector_fuzzer
+  velox_exec_test_lib velox_expression_test_utility)
+
+add_library(velox_join_fuzzer JoinFuzzer.cpp)
+
+target_link_libraries(
+  velox_join_fuzzer velox_type velox_vector_fuzzer velox_fuzzer_util
+  velox_exec_test_lib velox_expression_test_utility)
+
+add_library(velox_writer_fuzzer WriterFuzzer.cpp)
+
+target_link_libraries(
+  velox_writer_fuzzer
+  velox_fuzzer_util
+  velox_type
+  velox_vector_fuzzer
+  velox_exec_test_lib
+  velox_expression_test_utility
+  velox_temp_path
+  velox_vector_test_lib)
+
+add_library(velox_memory_arbitration_fuzzer MemoryArbitrationFuzzer.cpp)
+
+target_link_libraries(
+  velox_memory_arbitration_fuzzer
+  velox_fuzzer_util
+  velox_type
+  velox_vector_fuzzer
+  velox_exec_test_lib
+  velox_expression_test_utility
+  velox_functions_prestosql
+  velox_aggregates)

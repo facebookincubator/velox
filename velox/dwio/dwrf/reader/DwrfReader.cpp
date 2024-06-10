@@ -166,6 +166,8 @@ void DwrfUnit::ensureDecoders() {
         flatMapContext,
         true); // isRoot
     selectiveColumnReader_->setIsTopLevel();
+    selectiveColumnReader_->setFillMutatedOutputRows(
+        options_.getRowNumberColumnInfo().has_value());
   } else {
     columnReader_ = ColumnReader::build( // enqueue streams
         requestedType,
@@ -308,7 +310,7 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         std::make_shared<dwio::common::OnDemandUnitLoaderFactory>(
             options_.getBlockedOnIoCallback());
   }
-  return unitLoaderFactory->create(std::move(loadUnits));
+  return unitLoaderFactory->create(std::move(loadUnits), 0);
 }
 
 uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
@@ -316,6 +318,7 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   if (isEmptyFile()) {
     return 0;
   }
+  nextRowNumber_.reset();
 
   // If we are reading only a portion of the file
   // (bounded by firstStripe_ and stripeCeiling_),
@@ -356,6 +359,9 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   currentStripe_ = seekToStripe;
   currentRowInStripe_ = rowNumber - firstRowOfStripe_[currentStripe_];
   previousRow_ = rowNumber;
+
+  const auto loadUnitIdx = currentStripe_ - firstStripe_;
+  unitLoader_->onSeek(loadUnitIdx, currentRowInStripe_);
 
   if (currentStripe_ != previousStripe) {
     // Different stripe. Let's load the new stripe.
@@ -497,11 +503,17 @@ void DwrfRowReader::readNext(
     }
     return;
   }
-  if (!options_.getAppendRowNumberColumn()) {
+  if (!options_.getRowNumberColumnInfo().has_value()) {
     getSelectiveColumnReader()->next(rowsToRead, result, mutation);
     return;
   }
-  readWithRowNumber(rowsToRead, mutation, result);
+  readWithRowNumber(
+      getSelectiveColumnReader(),
+      options_,
+      previousRow_,
+      rowsToRead,
+      mutation,
+      result);
 }
 
 uint64_t DwrfRowReader::skip(uint64_t numValues) {
@@ -512,77 +524,10 @@ uint64_t DwrfRowReader::skip(uint64_t numValues) {
   }
 }
 
-void DwrfRowReader::readWithRowNumber(
-    uint64_t rowsToRead,
-    const dwio::common::Mutation* mutation,
-    VectorPtr& result) {
-  auto* rowVector = result->asUnchecked<RowVector>();
-  column_index_t numChildren = 0;
-  for (auto& column : options_.getScanSpec()->children()) {
-    if (column->projectOut()) {
-      ++numChildren;
-    }
-  }
-  VectorPtr rowNumVector;
-  if (rowVector->childrenSize() != numChildren) {
-    VELOX_CHECK_EQ(rowVector->childrenSize(), numChildren + 1);
-    rowNumVector = rowVector->childAt(numChildren);
-    auto& rowType = rowVector->type()->asRow();
-    auto names = rowType.names();
-    auto types = rowType.children();
-    auto children = rowVector->children();
-    VELOX_DCHECK(!names.empty() && !types.empty() && !children.empty());
-    names.pop_back();
-    types.pop_back();
-    children.pop_back();
-    result = std::make_shared<RowVector>(
-        rowVector->pool(),
-        ROW(std::move(names), std::move(types)),
-        rowVector->nulls(),
-        rowVector->size(),
-        std::move(children));
-  }
-  getSelectiveColumnReader()->next(rowsToRead, result, mutation);
-  FlatVector<int64_t>* flatRowNum = nullptr;
-  if (rowNumVector && BaseVector::isVectorWritable(rowNumVector)) {
-    flatRowNum = rowNumVector->asFlatVector<int64_t>();
-  }
-  if (flatRowNum) {
-    flatRowNum->clearAllNulls();
-    flatRowNum->resize(result->size());
-  } else {
-    rowNumVector = std::make_shared<FlatVector<int64_t>>(
-        result->pool(),
-        BIGINT(),
-        nullptr,
-        result->size(),
-        AlignedBuffer::allocate<int64_t>(result->size(), result->pool()),
-        std::vector<BufferPtr>());
-    flatRowNum = rowNumVector->asUnchecked<FlatVector<int64_t>>();
-  }
-  auto rowOffsets = getSelectiveColumnReader()->outputRows();
-  VELOX_DCHECK_EQ(rowOffsets.size(), result->size());
-  auto* rawRowNum = flatRowNum->mutableRawValues();
-  for (int i = 0; i < rowOffsets.size(); ++i) {
-    rawRowNum[i] = previousRow_ + rowOffsets[i];
-  }
-  rowVector = result->asUnchecked<RowVector>();
-  auto& rowType = rowVector->type()->asRow();
-  auto names = rowType.names();
-  auto types = rowType.children();
-  auto children = rowVector->children();
-  names.emplace_back();
-  types.push_back(BIGINT());
-  children.push_back(rowNumVector);
-  result = std::make_shared<RowVector>(
-      rowVector->pool(),
-      ROW(std::move(names), std::move(types)),
-      rowVector->nulls(),
-      rowVector->size(),
-      std::move(children));
-}
-
 int64_t DwrfRowReader::nextRowNumber() {
+  if (nextRowNumber_.has_value()) {
+    return *nextRowNumber_;
+  }
   auto strideSize = getReader().getFooter().rowIndexStride();
   while (currentStripe_ < stripeCeiling_) {
     if (currentRowInStripe_ == 0) {
@@ -601,20 +546,21 @@ int64_t DwrfRowReader::nextRowNumber() {
     }
     checkSkipStrides(strideSize);
     if (currentRowInStripe_ < rowsInCurrentStripe_) {
-      return firstRowOfStripe_[currentStripe_] + currentRowInStripe_;
+      nextRowNumber_ = firstRowOfStripe_[currentStripe_] + currentRowInStripe_;
+      return *nextRowNumber_;
     }
   advanceToNextStripe:
     ++currentStripe_;
     currentRowInStripe_ = 0;
     currentUnit_ = nullptr;
   }
-  atEnd_ = true;
+  nextRowNumber_ = kAtEnd;
   return kAtEnd;
 }
 
 int64_t DwrfRowReader::nextReadSize(uint64_t size) {
   VELOX_DCHECK_GT(size, 0);
-  if (atEnd_) {
+  if (nextRowNumber() == kAtEnd) {
     return kAtEnd;
   }
   auto rowsToRead = std::min(size, rowsInCurrentStripe_ - currentRowInStripe_);
@@ -643,6 +589,7 @@ uint64_t DwrfRowReader::next(
     return 0;
   }
   auto rowsToRead = nextReadSize(size);
+  nextRowNumber_.reset();
   previousRow_ = nextRow;
   // Record strideIndex for use by the columnReader_ which may delay actual
   // reading of the data.
@@ -797,14 +744,14 @@ DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(
-          options.getMemoryPool(),
+          options.memoryPool(),
           std::move(input),
-          options.getDecrypterFactory(),
-          options.getFooterEstimatedSize(),
-          options.getFilePreloadThreshold(),
-          options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
-                                                     : FileFormat::DWRF,
-          options.isFileColumnNamesReadAsLowerCase(),
+          options.decrypterFactory(),
+          options.footerEstimatedSize(),
+          options.filePreloadThreshold(),
+          options.fileFormat() == FileFormat::ORC ? FileFormat::ORC
+                                                  : FileFormat::DWRF,
+          options.fileColumnNamesReadAsLowerCase(),
           options.randomSkip())),
       options_(options) {
   // If we are not using column names to map table columns to file columns,
@@ -813,8 +760,8 @@ DwrfReader::DwrfReader(
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
-  if ((not options_.isUseColumnNamesForColumnMapping()) and
-      (options_.getFileSchema() != nullptr)) {
+  if ((!options_.useColumnNamesForColumnMapping()) &&
+      (options_.fileSchema() != nullptr)) {
     updateColumnNamesFromTableSchema();
   }
 }
@@ -844,21 +791,29 @@ TypePtr updateColumnNames(const TypePtr& fileType, const TypePtr& tableType) {
   auto fileRowType = std::dynamic_pointer_cast<const T>(fileType);
   auto tableRowType = std::dynamic_pointer_cast<const T>(tableType);
 
-  std::vector<std::string> newFileFieldNames{fileRowType->names()};
-  std::vector<TypePtr> newFileFieldTypes{fileRowType->children()};
+  std::vector<std::string> newFileFieldNames;
+  newFileFieldNames.reserve(fileRowType->size());
+  std::vector<TypePtr> newFileFieldTypes;
+  newFileFieldTypes.reserve(fileRowType->size());
 
   for (auto childIdx = 0; childIdx < tableRowType->size(); ++childIdx) {
     if (childIdx >= fileRowType->size()) {
       break;
     }
 
-    newFileFieldTypes[childIdx] = updateColumnNames(
+    newFileFieldTypes.push_back(updateColumnNames(
         fileRowType->childAt(childIdx),
         tableRowType->childAt(childIdx),
         fileRowType->nameOf(childIdx),
-        tableRowType->nameOf(childIdx));
+        tableRowType->nameOf(childIdx)));
 
-    newFileFieldNames[childIdx] = tableRowType->nameOf(childIdx);
+    newFileFieldNames.push_back(tableRowType->nameOf(childIdx));
+  }
+
+  for (auto childIdx = tableRowType->size(); childIdx < fileRowType->size();
+       ++childIdx) {
+    newFileFieldTypes.push_back(fileRowType->childAt(childIdx));
+    newFileFieldNames.push_back(fileRowType->nameOf(childIdx));
   }
 
   return std::make_shared<const T>(
@@ -883,9 +838,6 @@ TypePtr updateColumnNames(
     return fileType;
   }
 
-  std::vector<std::string> fileFieldNames{fileType->size()};
-  std::vector<TypePtr> fileFieldTypes{fileType->size()};
-
   if (fileType->isRow()) {
     return updateColumnNames<RowType>(fileType, tableType);
   }
@@ -906,11 +858,10 @@ TypePtr updateColumnNames(
 } // namespace
 
 void DwrfReader::updateColumnNamesFromTableSchema() {
-  const auto& tableSchema = options_.getFileSchema();
+  const auto& tableSchema = options_.fileSchema();
   const auto& fileSchema = readerBase_->getSchema();
-  auto newSchema = std::dynamic_pointer_cast<const RowType>(
-      updateColumnNames(fileSchema, tableSchema, "", ""));
-  readerBase_->setSchema(newSchema);
+  readerBase_->setSchema(std::dynamic_pointer_cast<const RowType>(
+      updateColumnNames(fileSchema, tableSchema, "", "")));
 }
 
 std::unique_ptr<StripeInformation> DwrfReader::getStripe(

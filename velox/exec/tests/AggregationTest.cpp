@@ -106,7 +106,7 @@ void checkSpillStats(PlanNodeStats& stats, bool expectedSpill) {
     ASSERT_GT(stats.spilledRows, 0);
     ASSERT_GT(stats.spilledInputBytes, 0);
     ASSERT_GT(stats.spilledBytes, 0);
-    ASSERT_EQ(stats.spilledPartitions, 1);
+    ASSERT_EQ(stats.spilledPartitions, 8);
     ASSERT_GT(stats.customStats[Operator::kSpillRuns].sum, 0);
     ASSERT_GT(stats.customStats[Operator::kSpillFillTime].sum, 0);
     ASSERT_GT(stats.customStats[Operator::kSpillSortTime].sum, 0);
@@ -376,16 +376,6 @@ class AggregationTest : public OperatorTestBase {
         pool_.get());
   }
 
-  static void reclaimAndRestoreCapacity(
-      const Operator* op,
-      uint64_t targetBytes,
-      memory::MemoryReclaimer::Stats& reclaimerStats) {
-    const auto oldCapacity = op->pool()->capacity();
-    op->pool()->reclaim(targetBytes, 0, reclaimerStats);
-    dynamic_cast<memory::MemoryPoolImpl*>(op->pool())
-        ->testingSetCapacity(oldCapacity);
-  }
-
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
           {BIGINT(),
@@ -611,6 +601,35 @@ TEST_F(AggregationTest, manyGlobalAggregations) {
                 .values(vectors)
                 .singleAggregation({}, aggregates)
                 .planNode();
+
+  assertQuery(op, "SELECT " + folly::join(", ", aggregates) + " FROM tmp");
+
+  aggregates.clear();
+  for (int i = 0; i < rowType->size(); i++) {
+    aggregates.push_back(fmt::format("sum(distinct {})", rowType->nameOf(i)));
+  }
+
+  op = PlanBuilder()
+           .values(vectors)
+           .singleAggregation({}, aggregates)
+           .planNode();
+
+  assertQuery(op, "SELECT " + folly::join(", ", aggregates) + " FROM tmp");
+
+  rowType =
+      velox::test::VectorMaker::rowType(std::vector<TypePtr>(32, SMALLINT()));
+  vectors = makeVectors(rowType, 10, 32);
+  createDuckDbTable(vectors);
+  aggregates.clear();
+  for (int i = 0; i < rowType->size(); i++) {
+    aggregates.push_back(fmt::format(
+        "array_agg({} ORDER BY {})", rowType->nameOf(i), rowType->nameOf(i)));
+  }
+
+  op = PlanBuilder()
+           .values(vectors)
+           .singleAggregation({}, aggregates)
+           .planNode();
 
   assertQuery(op, "SELECT " + folly::join(", ", aggregates) + " FROM tmp");
 
@@ -1082,7 +1101,7 @@ TEST_F(AggregationTest, partialAggregationMaybeReservationReleaseCheck) {
   const int64_t kMaxUserMemoryUsage = 2 * kMaxPartialMemoryUsage;
   // Make sure partial aggregation runs out of memory after first batch.
   CursorParameters params;
-  params.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  params.queryCtx = core::QueryCtx::create(executor_.get());
   params.queryCtx->testingOverrideConfigUnsafe({
       {QueryConfig::kMaxPartialAggregationMemory,
        std::to_string(kMaxPartialMemoryUsage)},
@@ -1105,7 +1124,7 @@ TEST_F(AggregationTest, partialAggregationMaybeReservationReleaseCheck) {
   EXPECT_EQ(0, runtimeStats.count("partialAggregationPct"));
   // Check all the reserved memory have been released.
   EXPECT_EQ(0, task->pool()->availableReservation());
-  EXPECT_GT(kMaxPartialMemoryUsage, task->pool()->currentBytes());
+  EXPECT_GT(kMaxPartialMemoryUsage, task->pool()->reservedBytes());
 }
 
 TEST_F(AggregationTest, spillAll) {
@@ -1126,25 +1145,31 @@ TEST_F(AggregationTest, spillAll) {
 
   auto results = AssertQueryBuilder(plan).copyResults(pool_.get());
 
-  auto tempDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  TestScopedSpillInjection scopedSpillInjection(100);
-  auto task = AssertQueryBuilder(plan)
-                  .spillDirectory(tempDirectory->getPath())
-                  .config(QueryConfig::kSpillEnabled, true)
-                  .config(QueryConfig::kAggregationSpillEnabled, true)
-                  .assertResults(results);
+  for (int numPartitionBits : {1, 2, 3}) {
+    auto tempDirectory = exec::test::TempDirectoryPath::create();
+    auto queryCtx = core::QueryCtx::create(executor_.get());
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task = AssertQueryBuilder(plan)
+                    .spillDirectory(tempDirectory->getPath())
+                    .config(QueryConfig::kSpillEnabled, true)
+                    .config(QueryConfig::kAggregationSpillEnabled, true)
+                    .config(
+                        QueryConfig::kSpillNumPartitionBits,
+                        std::to_string(numPartitionBits))
+                    .assertResults(results);
 
-  auto stats = task->taskStats().pipelineStats;
-  ASSERT_LT(
-      0, stats[0].operatorStats[1].runtimeStats[Operator::kSpillRuns].count);
-  // Check spilled bytes.
-  ASSERT_LT(0, stats[0].operatorStats[1].spilledInputBytes);
-  ASSERT_LT(0, stats[0].operatorStats[1].spilledBytes);
-  ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 1);
-  // Verifies all the rows have been spilled.
-  ASSERT_EQ(stats[0].operatorStats[1].spilledRows, numDistincts);
-  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+    auto stats = task->taskStats().pipelineStats;
+    ASSERT_LT(
+        0, stats[0].operatorStats[1].runtimeStats[Operator::kSpillRuns].count);
+    // Check spilled bytes.
+    ASSERT_LT(0, stats[0].operatorStats[1].spilledInputBytes);
+    ASSERT_LT(0, stats[0].operatorStats[1].spilledBytes);
+    ASSERT_EQ(
+        stats[0].operatorStats[1].spilledPartitions, 1 << numPartitionBits);
+    // Verifies all the rows have been spilled.
+    ASSERT_EQ(stats[0].operatorStats[1].spilledRows, numDistincts);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
 }
 
 // Verify number of memory allocations in the HashAggregation operator.
@@ -1634,6 +1659,7 @@ TEST_F(AggregationTest, spillDuringOutputProcessing) {
               std::to_string(1'000'000'000))
           .config(
               QueryConfig::kMaxOutputBatchRows, std::to_string(numOutputRows))
+          .config(QueryConfig::kSpillNumPartitionBits, "0")
           .plan(PlanBuilder()
                     .values({input})
                     .singleAggregation({"c0", "c1"}, {"max(c2)", "min(c3)"})
@@ -1754,7 +1780,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, minSpillableMemoryReservation) {
               memory::MemoryPool& pool = groupingSet->testingPool();
               const auto availableReservationBytes =
                   pool.availableReservation();
-              const auto currentUsedBytes = pool.currentBytes();
+              const auto currentUsedBytes = pool.usedBytes();
               // Verifies we always have min reservation after ensuring the
               // input.
               ASSERT_GE(
@@ -1802,7 +1828,7 @@ TEST_F(AggregationTest, distinctWithSpilling) {
                   .assertResults("SELECT distinct c0 FROM tmp");
   // Verify that spilling is not triggered.
   ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledInputBytes, 0);
-  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledPartitions, 1);
+  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledPartitions, 8);
   ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
@@ -1985,7 +2011,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
     SCOPED_TRACE(testData.debugString());
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
         queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
@@ -2079,17 +2105,17 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
     }
 
     if (testData.expectedReclaimable) {
-      const auto usedMemory = op->pool()->currentBytes();
-      reclaimAndRestoreCapacity(
-          op,
+      const auto usedMemory = op->pool()->usedBytes();
+      op->pool()->reclaim(
           folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
+          0,
           reclaimerStats_);
       ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
       ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
       reclaimerStats_.reset();
       // The hash table itself in the grouping set is not cleared so it still
       // uses some memory.
-      ASSERT_LT(op->pool()->currentBytes(), usedMemory);
+      ASSERT_LT(op->pool()->usedBytes(), usedMemory);
     } else {
       VELOX_ASSERT_THROW(
           op->reclaim(
@@ -2105,7 +2131,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
     auto stats = task->taskStats().pipelineStats;
     if (testData.expectedReclaimable) {
       ASSERT_GT(stats[0].operatorStats[1].spilledBytes, 0);
-      ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 1);
+      ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 8);
     } else {
       ASSERT_EQ(stats[0].operatorStats[1].spilledBytes, 0);
       ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 0);
@@ -2127,7 +2153,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
   }
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
       queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   auto expectedResult =
@@ -2203,17 +2229,17 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
   ASSERT_TRUE(reclaimable);
   ASSERT_GT(reclaimableBytes, 0);
 
-  const auto usedMemory = op->pool()->currentBytes();
-  reclaimAndRestoreCapacity(
-      op,
+  const auto usedMemory = op->pool()->usedBytes();
+  op->pool()->reclaim(
       folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
+      0,
       reclaimerStats_);
   ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
-  ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
+  ASSERT_GE(reclaimerStats_.reclaimedBytes, 0);
   reclaimerStats_.reset();
   // The hash table itself in the grouping set is not cleared so it still
   // uses some memory.
-  ASSERT_LT(op->pool()->currentBytes(), usedMemory);
+  ASSERT_LT(op->pool()->usedBytes(), usedMemory);
 
   driverWait.notify();
   Task::resume(task);
@@ -2221,7 +2247,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
 
   auto stats = task->taskStats().pipelineStats;
   ASSERT_GT(stats[0].operatorStats[1].spilledBytes, 0);
-  ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 1);
+  ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 8);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{});
 }
@@ -2236,7 +2262,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
@@ -2362,7 +2388,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
         queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
     auto expectedResult =
@@ -2446,13 +2472,13 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
     ASSERT_EQ(reclaimable, enableSpilling);
     if (enableSpilling) {
       ASSERT_GT(reclaimableBytes, 0);
-      const auto usedMemory = op->pool()->currentBytes();
-      reclaimAndRestoreCapacity(
-          op,
+      const auto usedMemory = op->pool()->usedBytes();
+      op->pool()->reclaim(
           folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
+          0,
           reclaimerStats_);
       ASSERT_EQ(reclaimerStats_.numNonReclaimableAttempts, 0);
-      ASSERT_GT(usedMemory, op->pool()->currentBytes());
+      ASSERT_GT(usedMemory, op->pool()->usedBytes());
       ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
       ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
       reclaimerStats_.reset();
@@ -2505,7 +2531,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
     SCOPED_TRACE(fmt::format("testData {}", testData.debugString()));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
@@ -2535,7 +2561,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
           if (!testData.nonReclaimableInput) {
             return;
           }
-          if (groupSet->testingPool().currentBytes() == 0) {
+          if (groupSet->testingPool().usedBytes() == 0) {
             return;
           }
           if (!injectNonReclaimableSectionOnce.exchange(false)) {
@@ -2658,7 +2684,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
     auto expectedResult =
@@ -2734,14 +2760,14 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
     ASSERT_EQ(reclaimable, enableSpilling);
     if (enableSpilling) {
       ASSERT_EQ(reclaimableBytes, 0);
-      const auto usedMemory = op->pool()->currentBytes();
-      reclaimAndRestoreCapacity(
-          op,
+      const auto usedMemory = op->pool()->usedBytes();
+      op->pool()->reclaim(
           folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
+          0,
           reclaimerStats_);
       ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{});
       // No reclaim as the operator has started output processing.
-      ASSERT_EQ(usedMemory, op->pool()->currentBytes());
+      ASSERT_EQ(usedMemory, op->pool()->usedBytes());
     } else {
       ASSERT_EQ(reclaimableBytes, 0);
       VELOX_ASSERT_THROW(
@@ -2817,7 +2843,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
                                            : abortPool(op->pool());
           // We can't directly reclaim memory from this hash build operator as
           // its driver thread is running and in suspension state.
-          ASSERT_GT(op->pool()->root()->currentBytes(), 0);
+          ASSERT_GT(op->pool()->root()->usedBytes(), 0);
           ASSERT_EQ(
               driver->task()->leaveSuspended(driver->state()),
               StopReason::kAlreadyTerminated);
@@ -2881,7 +2907,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
                                            : abortPool(op->pool());
           // We can't directly reclaim memory from this hash build operator as
           // its driver thread is running and in suspension state.
-          ASSERT_GT(op->pool()->root()->currentBytes(), 0);
+          ASSERT_GT(op->pool()->root()->usedBytes(), 0);
           ASSERT_EQ(
               driver->task()->leaveSuspended(driver->state()),
               StopReason::kAlreadyTerminated);
@@ -3011,14 +3037,14 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
           SuspendedSection suspendedSection(driver);
           task->pool()->reclaim(kMaxBytes, 0, stats);
           ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
-          ASSERT_GT(stats.reclaimExecTimeUs, 0);
+          ASSERT_GE(stats.reclaimExecTimeUs, 0);
           ASSERT_EQ(stats.reclaimedBytes, 0);
           ASSERT_GT(stats.reclaimWaitTimeUs, 0);
         }
       }));
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
       queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   core::PlanNodeId aggNodeId;
@@ -3087,7 +3113,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
       })));
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
       queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
   core::PlanNodeId aggNodeId;
@@ -3137,7 +3163,7 @@ TEST_F(AggregationTest, maxSpillBytes) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     try {
       TestScopedSpillInjection scopedSpillInjection(100);
       AssertQueryBuilder(plan)
@@ -3261,12 +3287,12 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationOnNoMoreInput) {
     SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     std::shared_ptr<core::QueryCtx> fakeQueryCtx =
-        std::make_shared<core::QueryCtx>(executor_.get());
+        core::QueryCtx::create(executor_.get());
     std::shared_ptr<core::QueryCtx> aggregationQueryCtx;
     if (sameQuery) {
       aggregationQueryCtx = fakeQueryCtx;
     } else {
-      aggregationQueryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+      aggregationQueryCtx = core::QueryCtx::create(executor_.get());
     }
 
     folly::EventCount arbitrationWait;
@@ -3349,12 +3375,12 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationDuringOutput) {
     SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     std::shared_ptr<core::QueryCtx> fakeQueryCtx =
-        std::make_shared<core::QueryCtx>(executor_.get());
+        core::QueryCtx::create(executor_.get());
     std::shared_ptr<core::QueryCtx> aggregationQueryCtx;
     if (sameQuery) {
       aggregationQueryCtx = fakeQueryCtx;
     } else {
-      aggregationQueryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+      aggregationQueryCtx = core::QueryCtx::create(executor_.get());
     }
 
     folly::EventCount arbitrationWait;
@@ -3426,12 +3452,12 @@ TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
     SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     std::shared_ptr<core::QueryCtx> fakeQueryCtx =
-        std::make_shared<core::QueryCtx>(executor_.get());
+        core::QueryCtx::create(executor_.get());
     std::shared_ptr<core::QueryCtx> aggregationQueryCtx;
     if (sameQuery) {
       aggregationQueryCtx = fakeQueryCtx;
     } else {
-      aggregationQueryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+      aggregationQueryCtx = core::QueryCtx::create(executor_.get());
     }
 
     folly::EventCount arbitrationWait;

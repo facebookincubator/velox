@@ -41,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ["16-core"]
+        runner: ["16-core-ubuntu"]
         type: ["debug", "release"]
     defaults:
       run:
@@ -100,6 +100,8 @@ jobs:
           python3 -m pip install -r scripts/benchmark-requirements.txt
 
       - name: "Upload Metrics"
+        # This disables the upload and report generation on fork PRs but allows it for forks from within the main repo.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'facebookincubator/velox' }}
         env:
           CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
           CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-${{ matrix.runner }}"
@@ -116,3 +118,55 @@ jobs:
             --pr_number "${{ github.event.number }}" \
             --sha "${{ inputs.ref || github.sha }}" \
             "/tmp/metrics"
+
+  upload-report:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'facebookincubator/velox' }}
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    name: Generate and Upload Build Metric Report
+    needs: metrics
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Git User
+        run: |
+          git config --global user.email "velox@users.noreply.github.com"
+          git config --global user.name "velox"
+
+      - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build Environment
+        run: |
+          cd scripts/bm-report
+          nix-build
+
+      - name: Build Documentation
+        env:
+          CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
+          CONBENCH_EMAIL: "${{ secrets.CONBENCH_EMAIL }}"
+          CONBENCH_PASSWORD: "${{ secrets.CONBENCH_PASSWORD }}"
+        run: |
+          cd scripts/bm-report
+          nix-shell --run "quarto render report.qmd"
+
+      - name: Push Report
+        # The report only uses conbench data from 'main'
+        # so any data generated in a PR won't be included
+        if: ${{ github.event_name != 'pull_request' && github.repository == 'facebookincubator/velox'}}
+        run: |
+          git checkout gh-pages
+          mkdir -p docs/bm-report
+          cp -R scripts/bm-report/report.html docs/bm-report/index.html
+          git add docs
+
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]
+          then
+            git commit -m "Update build metrics"
+            git push
+          fi

@@ -52,13 +52,16 @@ function install_build_prerequisites {
   ${SUDO} apt install -y libunwind-dev
   ${SUDO} apt install -y \
     build-essential \
-    cmake \
+    python3-pip \
     ccache \
     curl \
     ninja-build \
     checkinstall \
     git \
     wget
+
+    # Install to /usr/local to make it available to all users.
+    ${SUDO} pip3 install cmake==3.28.3
 }
 
 # Install packages required for build.
@@ -127,7 +130,7 @@ function install_fbthrift {
 }
 
 function install_conda {
-  MINICONDA_PATH=/opt/miniconda-for-velox
+  MINICONDA_PATH="${HOME:-/opt}/miniconda-for-velox"
   if [ -e ${MINICONDA_PATH} ]; then
     echo "File or directory already exists: ${MINICONDA_PATH}"
     return
@@ -139,7 +142,7 @@ function install_conda {
   fi
 
   mkdir -p conda && cd conda
-  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh
+  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$ARCH.sh -O Miniconda3-latest-Linux-$ARCH.sh
   bash Miniconda3-latest-Linux-$ARCH.sh -b -p $MINICONDA_PATH
 }
 

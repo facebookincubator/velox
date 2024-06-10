@@ -140,6 +140,12 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
       return DATE();
     case LogicalTypeId::TIMESTAMP:
       return TIMESTAMP();
+    case LogicalTypeId::TIMESTAMP_TZ: {
+      if (auto customType = getCustomType("TIMESTAMP WITH TIME ZONE")) {
+        return customType;
+      }
+      [[fallthrough]];
+    }
     case LogicalTypeId::INTERVAL:
       return INTERVAL_DAY_TIME();
     case LogicalTypeId::BLOB:
@@ -174,6 +180,12 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
             fileColumnNamesReadAsLowerCase));
       }
       return ROW(std::move(names), std::move(types));
+    }
+    case LogicalTypeId::UUID: {
+      if (auto customType = getCustomType("UUID")) {
+        return customType;
+      }
+      [[fallthrough]];
     }
     case LogicalTypeId::USER: {
       const auto name = ::duckdb::UserType::GetTypeName(type);

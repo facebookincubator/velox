@@ -20,11 +20,14 @@
 
 namespace facebook::velox::functions::sparksql {
 
-Timestamp SparkCastHooks::castStringToTimestamp(const StringView& view) const {
-  return util::fromTimestampString(view.data(), view.size());
+Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
+    const StringView& view) const {
+  return util::fromTimestampString(
+      view.data(), view.size(), util::TimestampParseMode::kSparkCast);
 }
 
-int32_t SparkCastHooks::castStringToDate(const StringView& dateString) const {
+Expected<int32_t> SparkCastHooks::castStringToDate(
+    const StringView& dateString) const {
   // Allows all patterns supported by Spark:
   // `[+-]yyyy*`
   // `[+-]yyyy*-[m]m`
@@ -36,12 +39,17 @@ int32_t SparkCastHooks::castStringToDate(const StringView& dateString) const {
   // sequence of characters, e.g:
   //   "1970-01-01 123"
   //   "1970-01-01 (BC)"
-  return util::castFromDateString(
-      removeWhiteSpaces(dateString), util::ParseMode::kNonStandardCast);
+  return util::fromDateString(
+      removeWhiteSpaces(dateString), util::ParseMode::kSparkCast);
 }
 
-bool SparkCastHooks::legacy() const {
-  return false;
+Expected<float> SparkCastHooks::castStringToReal(const StringView& data) const {
+  return util::Converter<TypeKind::REAL>::tryCast(data);
+}
+
+Expected<double> SparkCastHooks::castStringToDouble(
+    const StringView& data) const {
+  return util::Converter<TypeKind::DOUBLE>::tryCast(data);
 }
 
 StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
@@ -61,9 +69,5 @@ const TimestampToStringOptions& SparkCastHooks::timestampToStringOptions()
       .dateTimeSeparator = ' ',
   };
   return options;
-}
-
-bool SparkCastHooks::truncate() const {
-  return true;
 }
 } // namespace facebook::velox::functions::sparksql

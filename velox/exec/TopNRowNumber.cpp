@@ -286,8 +286,11 @@ void TopNRowNumber::noMoreInput() {
     spill();
 
     VELOX_CHECK_NULL(merge_);
-    auto spillPartition = spiller_->finishSpill();
-    merge_ = spillPartition.createOrderedReader(pool(), &spillStats_);
+    SpillPartitionSet spillPartitionSet;
+    spiller_->finishSpill(spillPartitionSet);
+    VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
+    merge_ = spillPartitionSet.begin()->second->createOrderedReader(
+        spillConfig_->readBufferSize, pool(), &spillStats_);
   } else {
     outputRows_.resize(outputBatchSize_);
   }
@@ -649,8 +652,7 @@ void TopNRowNumber::reclaim(
     // TODO Add support for spilling after noMoreInput().
     LOG(WARNING)
         << "Can't reclaim from topNRowNumber operator which has started producing output: "
-        << pool()->name()
-        << ", usage: " << succinctBytes(pool()->currentBytes())
+        << pool()->name() << ", usage: " << succinctBytes(pool()->usedBytes())
         << ", reservation: " << succinctBytes(pool()->reservedBytes());
     return;
   }
@@ -684,7 +686,7 @@ void TopNRowNumber::ensureInputFits(const RowVectorPtr& input) {
       data_->stringAllocator().retainedSize() - outOfLineFreeBytes;
   const auto outOfLineBytesPerRow = outOfLineBytes / data_->numRows();
 
-  const auto currentUsage = pool()->currentBytes();
+  const auto currentUsage = pool()->usedBytes();
   const auto minReservationBytes =
       currentUsage * spillConfig_->minSpillableReservationPct / 100;
   const auto availableReservationBytes = pool()->availableReservation();
@@ -719,7 +721,7 @@ void TopNRowNumber::ensureInputFits(const RowVectorPtr& input) {
 
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->currentBytes())
+               << ", usage: " << succinctBytes(pool()->usedBytes())
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 

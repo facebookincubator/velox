@@ -311,10 +311,10 @@ TEST_F(JsonCastTest, fromDoubleAndReal) {
        "12345.0"_sv,
        "1.0E7"_sv,
        "1.2345678901234567E8"_sv,
-       "NaN"_sv,
-       "NaN"_sv,
-       "Infinity"_sv,
-       "-Infinity"_sv,
+       "\"NaN\""_sv,
+       "\"NaN\""_sv,
+       "\"Infinity\""_sv,
+       "\"-Infinity\""_sv,
        std::nullopt});
   testCastToJson<float>(
       REAL(),
@@ -343,10 +343,10 @@ TEST_F(JsonCastTest, fromDoubleAndReal) {
        "12345.0"_sv,
        "1.0E7"_sv,
        "1.2345678E8"_sv,
-       "NaN"_sv,
-       "NaN"_sv,
-       "Infinity"_sv,
-       "-Infinity"_sv,
+       "\"NaN\""_sv,
+       "\"NaN\""_sv,
+       "\"Infinity\""_sv,
+       "\"-Infinity\""_sv,
        std::nullopt});
 
   testCastToJson<double>(
@@ -364,6 +364,35 @@ TEST_F(JsonCastTest, fromDate) {
       DATE(),
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+}
+
+TEST_F(JsonCastTest, fromDecimal) {
+  testCastToJson<int64_t>(
+      DECIMAL(9, 2),
+      {123456789, -333333333, 0, 5, -9, std::nullopt},
+      {"1234567.89"_sv,
+       "-3333333.33"_sv,
+       "0.00"_sv,
+       "0.05"_sv,
+       "-0.09"_sv,
+       std::nullopt});
+  // Cannot cast long DECIMAL to JSON currently
+  VELOX_ASSERT_THROW(
+      testCastToJson<int128_t>(
+          DECIMAL(38, 5),
+          {DecimalUtil::kLongDecimalMin,
+           0,
+           DecimalUtil::kLongDecimalMax,
+           HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull),
+           HugeInt::build(0xffff, 0xffffffffffffffff),
+           std::nullopt},
+          {"-999999999999999999999999999999999.99999",
+           "0.00000",
+           "999999999999999999999999999999999.99999",
+           "-0.00001",
+           "12089258196146291747.06175",
+           std::nullopt}),
+      "Cannot cast DECIMAL(38, 5) to JSON");
 }
 
 TEST_F(JsonCastTest, fromTimestamp) {

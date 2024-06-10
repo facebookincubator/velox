@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <exception>
 #include <functional>
+#include <memory>
 
 #include "velox/common/base/Portability.h"
 #include "velox/core/QueryCtx.h"
@@ -31,6 +33,187 @@ class LocalDecodedVector;
 class LocalSelectivityVector;
 struct ContextSaver;
 class PeeledEncoding;
+
+/// Tracks per-row errors that occurred during expression evaluation.
+/// Used when EvalCtx::throwOnError() is false.
+class EvalErrors {
+ public:
+  EvalErrors(memory::MemoryPool* pool, vector_size_t size)
+      : pool_{pool}, size_{size} {
+    VELOX_CHECK_NOT_NULL(pool);
+    VELOX_CHECK_GT(size, 0);
+    errorFlags_ = AlignedBuffer::allocate<bool>(size, pool, false);
+    rawErrorFlags_ = errorFlags_->asMutable<uint64_t>();
+  }
+
+  vector_size_t size() const {
+    return size_;
+  }
+
+  /// Similar to std::vector::reserve. Allocates internal buffers to fit at
+  /// least 'size' rows. No-op if 'size()' is already at or exceeding requested.
+  void ensureCapacity(vector_size_t size) {
+    if (size_ >= size) {
+      return;
+    }
+
+    AlignedBuffer::reallocate<bool>(&errorFlags_, size, false);
+    rawErrorFlags_ = errorFlags_->asMutable<uint64_t>();
+    if (exceptions_ != nullptr) {
+      AlignedBuffer::reallocate<TError>(&exceptions_, size, TError());
+    }
+
+    size_ = size;
+  }
+
+  /// Returns true if at least one row has an error.
+  bool hasError() const {
+    const auto firstErrorRow = bits::findFirstBit(rawErrorFlags_, 0, size_);
+    return firstErrorRow >= 0;
+  }
+
+  /// Returns true if 'index' has an error.
+  bool hasErrorAt(vector_size_t index) const {
+    return index < size_ && bits::isBitSet(rawErrorFlags_, index);
+  }
+
+  /// Throws if 'index' has an error. The caller must ensure that error details
+  /// are available.
+  void throwIfErrorAt(vector_size_t index) const {
+    auto error = errorAt(index);
+    if (error.has_value()) {
+      VELOX_CHECK_NOT_NULL(error.value());
+      std::rethrow_exception(*error.value());
+    }
+  }
+
+  /// Finds first row in 'rows' that has an error and throws that error. The
+  /// caller must ensure that error details are available.
+  void throwFirstError(const SelectivityVector& rows) const {
+    rows.testSelected([&](vector_size_t row) {
+      if (row < size_) {
+        throwIfErrorAt(row);
+        return true;
+      }
+      return false;
+    });
+  }
+
+  /// Returns std::nullopt if 'index' doesn't have an error.
+  /// Returns nullptr if 'index' has an error, but error details are not
+  /// available. Returns std::exception_ptr if 'index' has an error and error
+  /// details are available.
+  std::optional<std::shared_ptr<std::exception_ptr>> errorAt(
+      vector_size_t index) const {
+    if (!hasErrorAt(index)) {
+      return std::nullopt;
+    }
+
+    if (exceptions_ == nullptr) {
+      return {nullptr};
+    }
+
+    return exceptions_->as<TError>()[index];
+  }
+
+  /// Bitmask with bits set for rows with errors. Only first 'size()' bits are
+  /// valid.
+  const uint64_t* errorFlags() const {
+    return rawErrorFlags_;
+  }
+
+  /// Returns the number of rows with errors.
+  vector_size_t countErrors() const {
+    return bits::countBits(rawErrorFlags_, 0, size_);
+  }
+
+  /// Marks 'index' as having an error. Doesn't specify error details.
+  void setError(vector_size_t index) {
+    ensureCapacity(index + 1);
+    bits::setBit(rawErrorFlags_, index);
+  }
+
+  /// Clears error at 'index'.
+  void clearError(vector_size_t index) {
+    if (index < size_) {
+      bits::clearBit(rawErrorFlags_, index);
+    }
+  }
+
+  /// Marks 'index' as having an error and sets the exception_ptr. No-op if
+  /// 'index' is already marked as having an error.
+  void setError(vector_size_t index, const std::exception_ptr& exceptionPtr) {
+    ensureCapacity(index + 1);
+    if (!bits::isBitSet(rawErrorFlags_, index)) {
+      bits::setBit(rawErrorFlags_, index);
+
+      if (exceptions_ == nullptr) {
+        exceptions_ = AlignedBuffer::allocate<TError>(size_, pool_, TError());
+      }
+      exceptions_->asMutable<TError>()[index] =
+          std::make_shared<std::exception_ptr>(exceptionPtr);
+    }
+  }
+
+  /// Copies an error from 'from' at index 'fromIndex' to this at index
+  /// 'toIndex'. No-op if 'from' at index 'fromIndex' doesn't have an error or
+  /// this already has an error at 'toIndex'.
+  void copyError(
+      const EvalErrors& from,
+      vector_size_t fromIndex,
+      vector_size_t toIndex) {
+    if (from.hasErrorAt(fromIndex)) {
+      ensureCapacity(toIndex + 1);
+      if (!bits::isBitSet(rawErrorFlags_, toIndex)) {
+        bits::setBit(rawErrorFlags_, toIndex);
+
+        if (from.exceptions_ != nullptr) {
+          if (exceptions_ == nullptr) {
+            exceptions_ =
+                AlignedBuffer::allocate<TError>(size_, pool_, TError());
+          }
+
+          exceptions_->asMutable<TError>()[toIndex] =
+              from.exceptions_->as<TError>()[fromIndex];
+        }
+      }
+    }
+  }
+
+  /// Copies errors from 'from' at 'rows' to corresponding rows in this. Doesn't
+  /// overwrite existing errors.
+  void copyErrors(const SelectivityVector& rows, const EvalErrors& from) {
+    const auto fromSize = from.size();
+    ensureCapacity(std::min(fromSize, rows.end()));
+    rows.testSelected([&](auto row) {
+      if (row < fromSize) {
+        copyError(from, row, row);
+        return true;
+      }
+      return false;
+    });
+  }
+
+  /// Copies all errors from 'from' to corresponding rows in this. Doesn't
+  /// overwrite existing errors.
+  void copyErrors(const EvalErrors& from) {
+    ensureCapacity(from.size());
+    bits::forEachSetBit(from.errorFlags(), 0, from.size(), [&](auto row) {
+      copyError(from, row, row);
+    });
+  }
+
+ private:
+  using TError = std::shared_ptr<std::exception_ptr>;
+
+  memory::MemoryPool* pool_;
+  vector_size_t size_;
+  BufferPtr errorFlags_;
+  uint64_t* rawErrorFlags_;
+  BufferPtr exceptions_{nullptr};
+};
+
+using EvalErrorsPtr = std::shared_ptr<EvalErrors>;
 
 // Context for holding the base row vector, error state and various
 // flags for Expr interpreter.
@@ -78,12 +261,15 @@ class EvalCtx {
 
   void restore(ContextSaver& saver);
 
+  // @param status Must indicate an error. Cannot be "ok".
+  void setStatus(vector_size_t index, const Status& status);
+
   // If exceptionPtr is known to be a VeloxException use setVeloxExceptionError
   // instead.
   void setError(vector_size_t index, const std::exception_ptr& exceptionPtr);
 
-  // Similar to setError but more performant, should be used when the user knows
-  // for sure that exception_ptr is a velox exception.
+  // Similar to setError but more performant. Should be used when the caller
+  // knows for sure that exception_ptr is a VeloxException.
   void setVeloxExceptionError(
       vector_size_t index,
       const std::exception_ptr& exceptionPtr);
@@ -118,7 +304,7 @@ class EvalCtx {
   void addError(
       vector_size_t index,
       const std::exception_ptr& exceptionPtr,
-      ErrorVectorPtr& errorsPtr) const;
+      EvalErrorsPtr& errorsPtr) const;
 
   /// Copy std::exception_ptr in fromErrors at rows to the corresponding rows in
   /// toErrors. If there are existing exceptions in toErrors, these exceptions
@@ -126,15 +312,21 @@ class EvalCtx {
   /// ignored.
   void addErrors(
       const SelectivityVector& rows,
-      const ErrorVectorPtr& fromErrors,
-      ErrorVectorPtr& toErrors) const;
+      const EvalErrorsPtr& fromErrors,
+      EvalErrorsPtr& toErrors) const;
+
+  /// Like above, but for a single row.
+  void addError(
+      vector_size_t row,
+      const EvalErrorsPtr& fromErrors,
+      EvalErrorsPtr& toErrors) const;
 
   // Given a mapping from element rows to top-level rows, add element-level
   // errors in errors_ to topLevelErrors.
   void addElementErrorsToTopLevel(
       const SelectivityVector& elementRows,
       const BufferPtr& elementToTopLevelRows,
-      ErrorVectorPtr& topLevelErrors);
+      EvalErrorsPtr& topLevelErrors);
 
   // Given a mapping from element rows to top-level rows, set errors in
   // the elements as nulls in the top level row.
@@ -143,58 +335,57 @@ class EvalCtx {
       const BufferPtr& elementToTopLevelRows,
       VectorPtr& result);
 
-  void deselectErrors(SelectivityVector& rows) const {
-    if (!errors_) {
-      return;
-    }
-    // A non-null in errors resets the row. AND with the errors null mask.
-    rows.deselectNonNulls(
-        errors_->rawNulls(),
-        rows.begin(),
-        std::min(errors_->size(), rows.end()));
-  }
+  void deselectErrors(SelectivityVector& rows) const;
 
-  // Returns the vector of errors or nullptr if no errors. This is
-  // intentionally a raw pointer to signify that the caller may not
-  // retain references to this.
-  ErrorVector* errors() const {
+  /// Returns the vector of errors or nullptr if no errors. This is
+  /// intentionally a raw pointer to signify that the caller may not
+  /// retain references to this.
+  ///
+  /// When 'captureErrorDetails' is false, only null flags are being set, the
+  /// values are null std::shared_ptr and should not be used.
+  EvalErrors* errors() const {
     return errors_.get();
   }
 
-  ErrorVectorPtr* errorsPtr() {
+  EvalErrorsPtr* errorsPtr() {
     return &errors_;
   }
 
-  void swapErrors(ErrorVectorPtr& other) {
+  /// Make sure the error vector is addressable up to index `size`-1. Initialize
+  /// all
+  /// new elements to null.
+  void ensureErrorsVectorSize(vector_size_t size) {
+    ensureErrorsVectorSize(errors_, size);
+  }
+
+  void swapErrors(EvalErrorsPtr& other) {
     std::swap(errors_, other);
   }
 
   /// Adds errors in 'this' to 'other'. Clears errors from 'this'.
-  void moveAppendErrors(ErrorVectorPtr& other) {
-    if (!errors_) {
-      return;
-    }
+  void moveAppendErrors(EvalErrorsPtr& other);
 
-    if (!other) {
-      std::swap(errors_, other);
-      return;
-    }
-
-    ensureErrorsVectorSize(other, errors_->size());
-    bits::forEachBit(
-        errors_->rawNulls(), 0, errors_->size(), bits::kNotNull, [&](auto row) {
-          other->set(row, errors_->valueAt(row));
-        });
-
-    errors_.reset();
-  }
-
+  /// Boolean indicating whether exceptions that occur during expression
+  /// evaluation should be thrown directly or saved for later processing.
   bool throwOnError() const {
     return throwOnError_;
   }
 
   bool* mutableThrowOnError() {
     return &throwOnError_;
+  }
+
+  /// Boolean indicating whether to capture details when storing exceptions for
+  /// later processing (throwOnError_ == true).
+  ///
+  /// Conjunct expressions (AND, OR) require capturing error details, while TRY
+  /// and TRY_CAST expressions do not.
+  bool captureErrorDetails() const {
+    return captureErrorDetails_;
+  }
+
+  bool* mutableCaptureErrorDetails() {
+    return &captureErrorDetails_;
   }
 
   bool nullsPruned() const {
@@ -311,9 +502,6 @@ class EvalCtx {
         rows, type, execCtx_->pool(), result, execCtx_->vectorPool());
   }
 
-  /// Make sure the vector is addressable up to index `size`-1. Initialize all
-  /// new elements to null.
-  void ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size) const;
   PeeledEncoding* getPeeledEncoding() {
     return peeledEncoding_.get();
   }
@@ -331,6 +519,21 @@ class EvalCtx {
   }
 
  private:
+  void ensureErrorsVectorSize(EvalErrorsPtr& errors, vector_size_t size) const;
+
+  // Updates 'errorPtr' to clear null at 'index' to indicate an error has
+  // occured without specifying error details.
+  void addError(vector_size_t index, EvalErrorsPtr& errorsPtr) const;
+
+  // Copy error from 'from' at index 'fromIndex' to 'to' at index 'toIndex'.
+  // No-op if 'from' doesn't have an error at 'fromIndex' or if 'to' already has
+  // an error at 'toIndex'.
+  void copyError(
+      const EvalErrors& from,
+      vector_size_t fromIndex,
+      EvalErrorsPtr& to,
+      vector_size_t toIndex) const;
+
   core::ExecCtx* const execCtx_;
   ExprSet* const exprSet_;
   const RowVector* row_;
@@ -352,6 +555,8 @@ class EvalCtx {
   bool nullsPruned_{false};
   bool throwOnError_{true};
 
+  bool captureErrorDetails_{true};
+
   // True if the current set of rows will not grow, e.g. not under and IF or OR.
   bool isFinalSelection_{true};
 
@@ -359,10 +564,10 @@ class EvalCtx {
   // OR. Used to determine the set of rows for loading lazy vectors.
   const SelectivityVector* finalSelection_;
 
-  // Stores exception found during expression evaluation. Exceptions are stored
-  // in a opaque flat vector, which will translate to a
-  // std::shared_ptr<std::exception_ptr>.
-  ErrorVectorPtr errors_;
+  // Stores exceptions encountered during expression evaluation.
+  // If 'captureErrorDetails()' is false, stores flags indicating which rows had
+  // errors without storing actual exceptions.
+  EvalErrorsPtr errors_;
 };
 
 /// Utility wrapper struct that is used to temporarily reset the value of the
@@ -378,7 +583,7 @@ struct ContextSaver {
   // The selection of the context being saved.
   const SelectivityVector* rows;
   const SelectivityVector* finalSelection;
-  ErrorVectorPtr errors;
+  EvalErrorsPtr errors;
 };
 
 /// Restores the context when the body executes successfully.

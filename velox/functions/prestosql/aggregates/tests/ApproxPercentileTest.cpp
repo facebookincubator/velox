@@ -87,7 +87,6 @@ class ApproxPercentileTest : public AggregationTestBase {
   void SetUp() override {
     AggregationTestBase::SetUp();
     random::setSeed(0);
-    allowInputShuffle();
   }
 
   template <typename T>
@@ -346,7 +345,7 @@ TEST_F(ApproxPercentileTest, largeWeightsGroupBy) {
 TEST_F(ApproxPercentileTest, partialFull) {
   // Make sure partial aggregation runs out of memory after first batch.
   CursorParameters params;
-  params.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+  params.queryCtx = velox::core::QueryCtx::create(executor_.get());
   params.queryCtx->testingOverrideConfigUnsafe({
       {core::QueryConfig::kMaxPartialAggregationMemory, "300000"},
   });

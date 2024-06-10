@@ -62,7 +62,7 @@ class ParquetWriterTest : public ParquetTestBase {
     std::string_view data(sink.data(), sink.size());
     return std::make_unique<facebook::velox::parquet::ParquetReader>(
         std::make_unique<dwio::common::BufferedInput>(
-            std::make_shared<InMemoryReadFile>(data), opts.getMemoryPool()),
+            std::make_shared<InMemoryReadFile>(data), opts.memoryPool()),
         opts);
   };
 
@@ -190,7 +190,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromHiveConfig) {
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency());
   std::shared_ptr<core::QueryCtx> queryCtx =
-      std::make_shared<core::QueryCtx>(executor.get());
+      core::QueryCtx::create(executor.get());
   std::unordered_map<std::string, std::string> session = {
       {std::string(
            connector::hive::HiveConfig::kParquetWriteTimestampUnitSession),

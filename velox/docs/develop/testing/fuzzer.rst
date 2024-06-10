@@ -141,6 +141,8 @@ tested:
     Total aggregations verified against DuckDB: 2537 (44.63%)
     Total failed aggregations: 1061 (18.67%)
 
+.. _window-fuzzer:
+
 Window Fuzzer
 -------------
 
@@ -284,7 +286,7 @@ When Fuzzer test fails, a seed number and the evaluated expression are
 printed to the log. An example is given below. Developers can use ``--seed``
 with this seed number to rerun the exact same expression with the same inputs,
 and use a debugger to investigate the issue. For the example below, the command
-to reproduce the error would be ``velox/expression/tests/velox_expression_fuzzer_test --seed 1188545576``.
+to reproduce the error would be ``velox/expression/fuzzer/velox_expression_fuzzer_test --seed 1188545576``.
 
 ::
 

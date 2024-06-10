@@ -82,12 +82,17 @@ PlanBuilder& PlanBuilder::tableScan(
     const RowTypePtr& outputType,
     const std::vector<std::string>& subfieldFilters,
     const std::string& remainingFilter,
-    const RowTypePtr& dataColumns) {
+    const RowTypePtr& dataColumns,
+    const std::unordered_map<
+        std::string,
+        std::shared_ptr<connector::ColumnHandle>>& assignments) {
   return TableScanBuilder(*this)
       .outputType(outputType)
+      .assignments(assignments)
       .subfieldFilters(subfieldFilters)
       .remainingFilter(remainingFilter)
       .dataColumns(dataColumns)
+      .assignments(assignments)
       .endTableScan();
 }
 
@@ -97,7 +102,10 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::unordered_map<std::string, std::string>& columnAliases,
     const std::vector<std::string>& subfieldFilters,
     const std::string& remainingFilter,
-    const RowTypePtr& dataColumns) {
+    const RowTypePtr& dataColumns,
+    const std::unordered_map<
+        std::string,
+        std::shared_ptr<connector::ColumnHandle>>& assignments) {
   return TableScanBuilder(*this)
       .tableName(tableName)
       .outputType(outputType)
@@ -105,6 +113,7 @@ PlanBuilder& PlanBuilder::tableScan(
       .subfieldFilters(subfieldFilters)
       .remainingFilter(remainingFilter)
       .dataColumns(dataColumns)
+      .assignments(assignments)
       .endTableScan();
 }
 
@@ -135,6 +144,7 @@ PlanBuilder& PlanBuilder::tpchTableScan(
 }
 
 core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
+  VELOX_CHECK_NOT_NULL(outputType_, "outputType must be specified");
   std::unordered_map<std::string, core::TypedExprPtr> typedMapping;
   bool hasAssignments = !(assignments_.empty());
   for (uint32_t i = 0; i < outputType_->size(); ++i) {
@@ -165,8 +175,8 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
   SubfieldFilters filters;
   filters.reserve(subfieldFilters_.size());
-  core::QueryCtx queryCtx;
-  exec::SimpleExpressionEvaluator evaluator(&queryCtx, planBuilder_.pool_);
+  auto queryCtx = core::QueryCtx::create();
+  exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), planBuilder_.pool_);
   for (const auto& filter : subfieldFilters_) {
     auto filterExpr =
         parseExpr(filter, parseType, planBuilder_.options_, planBuilder_.pool_);

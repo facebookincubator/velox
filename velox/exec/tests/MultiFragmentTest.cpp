@@ -47,10 +47,6 @@ class MultiFragmentTest : public HiveConnectorTestBase {
   }
 
   void TearDown() override {
-    // There might be lingering exchange source on executor even after all tasks
-    // are deleted. This can cause memory leak because exchange source holds
-    // reference to memory pool. We need to make sure they are properly cleaned.
-    testingShutdownLocalExchangeSource();
     vectors_.clear();
     HiveConnectorTestBase::TearDown();
   }
@@ -76,7 +72,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       Consumer consumer = nullptr,
       int64_t maxMemory = memory::kMaxMemory) {
     auto configCopy = configSettings_;
-    auto queryCtx = std::make_shared<core::QueryCtx>(
+    auto queryCtx = core::QueryCtx::create(
         executor_.get(), core::QueryConfig(std::move(configCopy)));
     queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
         queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
@@ -1586,7 +1582,9 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   task.reset();
 }
 
-TEST_F(MultiFragmentTest, taskTerminateWithProblematicRemainingRemoteSplits) {
+DEBUG_ONLY_TEST_F(
+    MultiFragmentTest,
+    taskTerminateWithProblematicRemainingRemoteSplits) {
   // Start the task with 2 drivers.
   auto probeData =
       makeRowVector({"p_c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
@@ -1609,30 +1607,50 @@ TEST_F(MultiFragmentTest, taskTerminateWithProblematicRemainingRemoteSplits) {
   auto task = makeTask(taskId, plan, 0);
   task->start(2);
 
-  // Wait for all drivers to be blocked, so that the promises will be made.
-  bool allDriversBlocked = false;
-  while (!allDriversBlocked) {
-    allDriversBlocked = true;
-    task->testingVisitDrivers([&](Driver* driver) {
-      if (driver->isOnThread() ||
-          (driver->blockingReason() != BlockingReason::kWaitForSplit &&
-           driver->blockingReason() != BlockingReason::kWaitForProducer &&
-           driver->blockingReason() != BlockingReason::kWaitForJoinBuild)) {
-        allDriversBlocked = false;
-      }
-    });
-  }
+  std::atomic<bool> driverRunWaitFlag{true};
+  folly::EventCount driverRunWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal",
+      std::function<void(const Driver*)>([&](const Driver* /* unused */) {
+        // Block on driver run so that added bad split is not immediately
+        // consumed. It gets unblocked when task termination state is set.
+        driverRunWait.await([&]() { return !(driverRunWaitFlag.load()); });
+      }));
 
-  // Add one bad remote split and trigger Task::terminate.
-  task->addSplit(exchangeNodeId, remoteSplit(makeBadTaskId("leaf", 0)));
+  std::atomic<bool> taskSetErrorWaitFlag{true};
+  folly::EventCount taskSetErrorWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::setError",
+      std::function<void(const Task*)>([&](const Task* /* unused */) {
+        taskSetErrorWait.await(
+            [&]() { return !(taskSetErrorWaitFlag.load()); });
+      }));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::terminate",
+      std::function<void(const Task*)>([&](const Task* /* unused */) {
+        driverRunWaitFlag = false;
+        driverRunWait.notifyAll();
+      }));
+
+  std::thread failThread([&]() {
+    try {
+      VELOX_FAIL("Test terminate task");
+    } catch (const VeloxException& e) {
+      task->setError(std::current_exception());
+    }
+  });
 
   // Add one more bad split, making sure `remainingRemoteSplits` is not empty
   // and processing it would cause an exception.
-  task->addSplit(exchangeNodeId, remoteSplit(makeBadTaskId("leaf", 1)));
+  task->addSplit(exchangeNodeId, remoteSplit(makeBadTaskId("leaf", 0)));
+  taskSetErrorWaitFlag = false;
+  taskSetErrorWait.notifyAll();
 
   // Wait for the task to fail, and make sure the task has been deleted instead
   // of hanging as a zombie task.
   ASSERT_TRUE(waitForTaskFailure(task.get(), 3'000'000)) << task->taskId();
+  failThread.join();
 }
 
 DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
@@ -1849,17 +1867,22 @@ TEST_F(MultiFragmentTest, maxBytes) {
   test(32 * kMB);
 }
 
-/// Verify that ExchangeClient stats are populated even if task fails.
+// Verifies that ExchangeClient stats are populated even if task fails.
 DEBUG_ONLY_TEST_F(MultiFragmentTest, exchangeStatsOnFailure) {
-  // Trigger a failure after fetching first 10 pages.
+  // Triggers a failure after fetching first 10 pages.
+  std::atomic_uint64_t expectedReceivedPages{0};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::test::LocalExchangeSource",
-      std::function<void(void* data)>([&](void* data) {
-        int32_t numPages = *static_cast<int32_t*>(data);
-        if (numPages > 10) {
-          VELOX_FAIL("Forced failure after {} pages", numPages);
-        }
-      }));
+      std::function<void(exec::ExchangeSource * data)>(
+          [&](exec::ExchangeSource* source) {
+            auto* queue = source->testingQueue();
+            const auto receivedPages = queue->receivedPages();
+            if (receivedPages > 10) {
+              expectedReceivedPages = receivedPages;
+
+              VELOX_FAIL("Forced failure after {} pages", receivedPages);
+            }
+          }));
 
   std::string s(25, 'x');
   auto data = makeRowVector({
@@ -1890,7 +1913,10 @@ DEBUG_ONLY_TEST_F(MultiFragmentTest, exchangeStatsOnFailure) {
       << "Got: [" << task->errorMessage() << "]";
 
   auto stats = toPlanStats(task->taskStats());
-  EXPECT_EQ(10, stats.at("0").customStats.at("numReceivedPages").sum);
+
+  EXPECT_EQ(
+      expectedReceivedPages,
+      stats.at("0").customStats.at("numReceivedPages").sum);
 
   ASSERT_TRUE(waitForTaskCompletion(producerTask.get(), 3'000'000));
 }

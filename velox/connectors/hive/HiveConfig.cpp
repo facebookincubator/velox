@@ -132,6 +132,15 @@ std::string HiveConfig::gcsCredentials() const {
   return config_->get<std::string>(kGCSCredentials, std::string(""));
 }
 
+std::optional<int> HiveConfig::gcsMaxRetryCount() const {
+  return static_cast<std::optional<int>>(config_->get<int>(kGCSMaxRetryCount));
+}
+
+std::optional<std::string> HiveConfig::gcsMaxRetryTime() const {
+  return static_cast<std::optional<std::string>>(
+      config_->get<std::string>(kGCSMaxRetryTime));
+}
+
 bool HiveConfig::isOrcUseColumnNames(const Config* session) const {
   return session->get<bool>(
       kOrcUseColumnNamesSession, config_->get<bool>(kOrcUseColumnNames, false));
@@ -191,6 +200,19 @@ uint64_t HiveConfig::orcWriterMaxDictionaryMemory(const Config* session) const {
       core::CapacityUnit::BYTE);
 }
 
+bool HiveConfig::orcWriterLinearStripeSizeHeuristics(
+    const Config* session) const {
+  return session->get<bool>(
+      kOrcWriterLinearStripeSizeHeuristicsSession,
+      config_->get<bool>(kOrcWriterLinearStripeSizeHeuristics, true));
+}
+
+uint64_t HiveConfig::orcWriterMinCompressionSize(const Config* session) const {
+  return session->get<uint64_t>(
+      kOrcWriterMinCompressionSizeSession,
+      config_->get<uint64_t>(kOrcWriterMinCompressionSize, 1024));
+}
+
 std::string HiveConfig::writeFileCreateConfig() const {
   return config_->get<std::string>(kWriteFileCreateConfig, "");
 }
@@ -230,6 +252,12 @@ uint8_t HiveConfig::parquetWriteTimestampUnit(const Config* session) const {
           unit == 9,
       "Invalid timestamp unit.");
   return unit;
+}
+
+bool HiveConfig::cacheNoRetention(const Config* session) const {
+  return session->get<bool>(
+      kCacheNoRetentionSession,
+      config_->get<bool>(kCacheNoRetention, /*defaultValue=*/false));
 }
 
 } // namespace facebook::velox::connector::hive

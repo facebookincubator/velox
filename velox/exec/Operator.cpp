@@ -140,10 +140,9 @@ std::unique_ptr<JoinBridge> Operator::joinBridgeFromPlanNode(
 void Operator::initialize() {
   VELOX_CHECK(!initialized_);
   VELOX_CHECK_EQ(
-      pool()->currentBytes(),
+      pool()->usedBytes(),
       0,
-      "Unexpected memory usage {} from pool {} before operator init",
-      succinctBytes(pool()->currentBytes()),
+      "Unexpected memory usage from pool {} before operator init",
       pool()->name());
   initialized_ = true;
   maybeSetReclaimer();
@@ -366,7 +365,9 @@ void Operator::recordSpillStats() {
   if (lockedSpillStats->spillReadBytes != 0) {
     lockedStats->addRuntimeStat(
         kSpillReadBytes,
-        RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReadBytes)});
+        RuntimeCounter{
+            static_cast<int64_t>(lockedSpillStats->spillReadBytes),
+            RuntimeCounter::Unit::kBytes});
   }
 
   if (lockedSpillStats->spillReads != 0) {
@@ -377,30 +378,27 @@ void Operator::recordSpillStats() {
 
   if (lockedSpillStats->spillReadTimeUs != 0) {
     lockedStats->addRuntimeStat(
-        kSpillReadTimeUs,
+        kSpillReadTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillReadTimeUs)});
+            static_cast<int64_t>(lockedSpillStats->spillReadTimeUs) *
+                Timestamp::kNanosecondsInMicrosecond,
+            RuntimeCounter::Unit::kNanos});
   }
 
   if (lockedSpillStats->spillDeserializationTimeUs != 0) {
     lockedStats->addRuntimeStat(
-        kSpillDeserializationTimeUs,
-        RuntimeCounter{static_cast<int64_t>(
-            lockedSpillStats->spillDeserializationTimeUs)});
+        kSpillDeserializationTime,
+        RuntimeCounter{
+            static_cast<int64_t>(lockedSpillStats->spillDeserializationTimeUs) *
+                Timestamp::kNanosecondsInMicrosecond,
+            RuntimeCounter::Unit::kNanos});
   }
   lockedSpillStats->reset();
 }
 
 std::string Operator::toString() const {
   std::stringstream out;
-  if (auto task = operatorCtx_->task()) {
-    auto driverCtx = operatorCtx_->driverCtx();
-    out << operatorType() << "(" << operatorId() << ")<" << task->taskId()
-        << ":" << driverCtx->pipelineId << "." << driverCtx->driverId << " "
-        << this;
-  } else {
-    out << "<Terminated, no task>";
-  }
+  out << operatorType() << "[" << planNodeId() << "] " << operatorId();
   return out.str();
 }
 
@@ -504,6 +502,8 @@ void OperatorStats::add(const OperatorStats& other) {
   spilledFiles += other.spilledFiles;
 
   numNullKeys += other.numNullKeys;
+
+  dynamicFilterStats.add(other.dynamicFilterStats);
 }
 
 void OperatorStats::clear() {
@@ -537,6 +537,8 @@ void OperatorStats::clear() {
   spilledRows = 0;
   spilledPartitions = 0;
   spilledFiles = 0;
+
+  dynamicFilterStats.clear();
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
@@ -638,21 +640,23 @@ uint64_t Operator::MemoryReclaimer::reclaim(
     RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
     LOG(WARNING) << "Can't reclaim from memory pool " << pool->name()
                  << " which is under non-reclaimable section, memory usage: "
-                 << succinctBytes(pool->currentBytes())
+                 << succinctBytes(pool->usedBytes())
                  << ", reservation: " << succinctBytes(pool->reservedBytes());
     return 0;
   }
 
   RuntimeStatWriterScopeGuard opStatsGuard(op_);
 
-  auto reclaimBytes = memory::MemoryReclaimer::run(
+  return memory::MemoryReclaimer::run(
       [&]() {
-        op_->reclaim(targetBytes, stats);
-        return pool->shrink(targetBytes);
+        int64_t reclaimedBytes{0};
+        {
+          memory::ScopedReclaimedBytesRecorder recoder(pool, &reclaimedBytes);
+          op_->reclaim(targetBytes, stats);
+        }
+        return reclaimedBytes;
       },
       stats);
-
-  return reclaimBytes;
 }
 
 void Operator::MemoryReclaimer::abort(

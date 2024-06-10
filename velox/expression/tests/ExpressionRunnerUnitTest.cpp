@@ -15,12 +15,12 @@
  */
 
 #include <gtest/gtest.h>
-#include "FuzzerRunner.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/SignatureBinder.h"
-#include "velox/expression/tests/ExpressionFuzzer.h"
+#include "velox/expression/fuzzer/ExpressionFuzzer.h"
+#include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/tests/ExpressionRunner.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/vector/VectorSaver.h"
@@ -41,8 +41,8 @@ class ExpressionRunnerUnitTest : public testing::Test, public VectorTestBase {
 
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
-  core::QueryCtx queryCtx_{};
-  core::ExecCtx execCtx_{pool_.get(), &queryCtx_};
+  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
+  core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
 };
 
 TEST_F(ExpressionRunnerUnitTest, run) {

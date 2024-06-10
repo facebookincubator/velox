@@ -92,17 +92,17 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       deleteFileSchema,
       deleteSplit_);
 
-  auto deleteFileHandle =
-      fileHandleFactory_->generate(deleteFile_.filePath).second;
+  auto deleteFileHandleCachePtr =
+      fileHandleFactory_->generate(deleteFile_.filePath);
   auto deleteFileInput = createBufferedInput(
-      *deleteFileHandle,
+      *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
       ioStats_,
       executor_);
 
   auto deleteReader =
-      dwio::common::getReaderFactory(deleteReaderOpts.getFileFormat())
+      dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
   // Check if the whole delete file split can be skipped. This could happen when

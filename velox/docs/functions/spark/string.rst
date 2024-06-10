@@ -158,6 +158,10 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT replace('ABCabc', 'abc', ''); -- ABC
         SELECT replace('ABCabc', 'abc', 'DEF'); -- ABCDEF
 
+.. spark:function:: reverse(string) -> varchar
+
+    Returns input string with characters in reverse order.
+
 .. spark:function:: rpad(string, len, pad) -> string
     
     Returns ``string``, right-padded with ``pad`` to a length of ``len``. 
@@ -183,6 +187,13 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     ``trimCharacters`` can be empty and may contain duplicate characters. ::
 
         SELECT rtrim('kr', 'spark'); -- "spa"
+
+.. spark:function:: soundex(string) -> string
+
+    Returns `Soundex code <https://en.wikipedia.org/wiki/Soundex>`_ of the string. If first character of ``string`` is not
+    a letter, ``string`` is returned. ::
+
+        SELECT soundex('Miller'); -- "M460"
 
 .. spark:function:: split(string, delimiter) -> array(string)
 
