@@ -665,7 +665,13 @@ Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).</
 <td><p>1024</p></td>
 <td><p>Minimal number of items in an encoded stream.</p></td>
 </tr>
-<tr class="row-even"><td><p>cache.no_retention</p></td>
+<tr class="row-even"><td><p>hive.orc.writer.compression-level</p></td>
+<td><p>orc_optimized_writer_compression_level</p></td>
+<td><p>tinyint</p></td>
+<td><p>3 for ZSTD and 4 for ZLIB</p></td>
+<td><p>The compression level to use with ZLIB and ZSTD.</p></td>
+</tr>
+<tr class="row-odd"><td><p>cache.no_retention</p></td>
 <td><p>cache.no_retention</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
