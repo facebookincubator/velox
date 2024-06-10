@@ -1540,6 +1540,76 @@ TEST_P(AsyncDataCacheTest, checkpoint) {
   ASSERT_EQ(stats.ssdStats->checkpointsWritten, kNumSsdShards);
 }
 
+DEBUG_ONLY_TEST_P(AsyncDataCacheTest, evictAndUnmap) {
+  constexpr uint64_t kRamBytes = 256UL << 20;
+  constexpr auto kDataSize = 4096;
+  // There will be 4 cache shards and each shard should have enough
+  // evictable pages to satisfy the contiguous allocation on the
+  // second try.
+  constexpr auto kNumOldestEntries = 6000;
+  constexpr auto kTotalNumCacheEntries = 63000;
+  initializeCache(kRamBytes, 0);
+  std::vector<CachePin> cachePins;
+  uint64_t offset = 0;
+  for (int i = 0; i < kTotalNumCacheEntries; ++i) {
+    cachePins.push_back(newEntry(offset, kDataSize));
+    offset += kDataSize;
+    // Make sure that the lowest entries become evictable by aging out.
+    if (i == kNumOldestEntries) {
+      sleep(30);
+    }
+  }
+
+  memory::ContiguousAllocation allocation;
+  constexpr auto kNumContiguousPages = 1400;
+  EXPECT_TRUE(
+      allocator_->allocateContiguous(kNumContiguousPages, nullptr, allocation));
+
+  EXPECT_EQ(kTotalNumCacheEntries, cache_->incrementCachedPages(0));
+  EXPECT_EQ(
+      kNumContiguousPages + kTotalNumCacheEntries, allocator_->numMapped());
+
+  // Make the entries evictable.
+  for (auto& pin : cachePins) {
+    pin.entry()->setExclusiveToShared();
+  }
+  cachePins.clear();
+
+  allocator_->testingSetFailureInjection(
+      MemoryAllocator::InjectedFailure::kMmap);
+
+  constexpr auto kNumPagesToAllocate = 960;
+  memory::ContiguousAllocation testAllocation;
+  // 960+ pages from the first cache shard are evicted (only 960 are unmapped).
+  EXPECT_TRUE(allocator_->allocateContiguous(
+      kNumPagesToAllocate, nullptr, testAllocation));
+
+  auto stats = cache_->refreshStats();
+  auto numEvicted = stats.numEvict;
+  ASSERT_GT(numEvicted, kNumPagesToAllocate);
+  // The unmapped pages are moved from the size class mapped to externally
+  // mapped.
+  EXPECT_EQ(
+      kNumContiguousPages + kTotalNumCacheEntries, allocator_->numMapped());
+
+  // Second part, double the contiguous allocation.
+  // 960+ pages from the second cache shard are evicted.
+  testAllocation.set(
+      testAllocation.data(), testAllocation.size(), 2 * testAllocation.size());
+  allocator_->testingSetFailureInjection(
+      MemoryAllocator::InjectedFailure::kMmap);
+  EXPECT_TRUE(
+      allocator_->growContiguous(kNumPagesToAllocate, testAllocation, nullptr));
+
+  stats = cache_->refreshStats();
+  ASSERT_GT(stats.numEvict, 2 * kNumPagesToAllocate);
+  EXPECT_EQ(
+      kNumContiguousPages + kTotalNumCacheEntries, allocator_->numMapped());
+
+  allocator_->freeContiguous(allocation);
+  allocator_->freeContiguous(testAllocation);
+}
+
 // TODO: add concurrent fuzzer test.
 
 INSTANTIATE_TEST_SUITE_P(
