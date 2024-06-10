@@ -121,11 +121,11 @@ minimal:				 #: Minimal build
 	$(MAKE) build BUILD_DIR=release
 
 gpu:						 #: Build with GPU support
-	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON"
+	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON -DVELOX_ENABLE_CUDF=ON"
 	$(MAKE) build BUILD_DIR=release
 
 gpu_debug:			 #: Build with debugging symbols and GPU support
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON"
+	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON -DVELOX_ENABLE_CUDF=ON"
 	$(MAKE) build BUILD_DIR=debug
 
 dwio:						#: Minimal build with dwio enabled.
