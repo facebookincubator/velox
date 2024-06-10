@@ -453,7 +453,7 @@ class Operator : public BaseRuntimeStatWriter {
         toString());
   }
 
-  /// Returns a list of identify projections, e.g. columns that are projected
+  /// Returns a list of identity projections, e.g. columns that are projected
   /// as-is possibly after applying a filter.
   const std::vector<IdentityProjection>& identityProjections() const {
     return identityProjections_;
