@@ -36,8 +36,10 @@ function install_aws_deps {
   if [[ "$OSTYPE" == linux-gnu* ]]; then
     wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio-20220526054841.0.0.x86_64.rpm
     if yum list installed minio >/dev/null 2>&1;then
-      if  prompt "Do you want to replace minio package with compatible version minio-20220526054841.0.0.x86_64.rpm?"; then
-        rpm -i --replacepkgs minio-20220526054841.0.0.x86_64.rpm 
+      if  prompt "Do you want to replace the installed Minio with version minio-20220526054841.0.0.x86_64.rpm needed for S3 tests?"; then
+        rpm -i --replacepkgs minio-20220526054841.0.0.x86_64.rpm
+      else
+        echo "Minio version minio-20220526054841.0.0.x86_64.rpm needed for S3 tests is not installed." 
       fi
     else
       rpm -i minio-20220526054841.0.0.x86_64.rpm
