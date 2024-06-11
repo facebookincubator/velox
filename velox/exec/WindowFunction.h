@@ -41,7 +41,7 @@ enum class Scope {
   kRows,
 };
 
-/// isAggregateWindow indicates whether the window function is AggregateWindow
+/// Indicates whether the function is for an aggregate used as a window
 /// function.
 struct WindowFunctionMetadata {
   Scope scope;

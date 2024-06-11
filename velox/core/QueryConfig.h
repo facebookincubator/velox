@@ -216,7 +216,8 @@ class QueryConfig {
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
 
-  /// RowsStreamingWindow flag, only used in tests.
+  /// RowsStreamingWindow flag, only used to test RowsStreamingWindowBuild in
+  /// window test.
   static constexpr const char* kRowsStreamingWindowEnabled =
       "rows_streaming_window_enabled";
 

@@ -26,16 +26,16 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection) {}
 
 void RowsStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
-  if (windowPartitions_.size() <= inputCurrentPartition_) {
+  if (windowPartitions_.size() <= inputPartition_) {
     windowPartitions_.push_back(std::make_shared<WindowPartition>(
         data_.get(), inversedInputChannels_, sortKeyInfo_));
   }
 
-  windowPartitions_[inputCurrentPartition_]->addRows(inputRows_);
+  windowPartitions_[inputPartition_]->addRows(inputRows_);
 
   if (isFinished) {
-    windowPartitions_[inputCurrentPartition_]->setComplete();
-    inputCurrentPartition_++;
+    windowPartitions_[inputPartition_]->setComplete();
+    inputPartition_++;
   }
 
   inputRows_.clear();
@@ -72,16 +72,16 @@ void RowsStreamingWindowBuild::noMoreInput() {
 }
 
 std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
-  if (outputCurrentPartition_ > 0) {
-    windowPartitions_[outputCurrentPartition_].reset();
+  if (outputPartition_ > 0) {
+    windowPartitions_[outputPartition_].reset();
   }
 
-  return windowPartitions_[++outputCurrentPartition_];
+  return windowPartitions_[++outputPartition_];
 }
 
 bool RowsStreamingWindowBuild::hasNextPartition() {
   return windowPartitions_.size() > 0 &&
-      outputCurrentPartition_ <= int(windowPartitions_.size() - 2);
+      outputPartition_ <= int(windowPartitions_.size() - 2);
 }
 
 } // namespace facebook::velox::exec

@@ -55,7 +55,7 @@ class RowsStreamingWindowBuild : public WindowBuild {
     // No partitions are available or the currentPartition is the last available
     // one, so can consume input rows.
     return windowPartitions_.size() == 0 ||
-        outputCurrentPartition_ == windowPartitions_.size() - 1;
+        outputPartition_ == windowPartitions_.size() - 1;
   }
 
  private:
@@ -68,10 +68,10 @@ class RowsStreamingWindowBuild : public WindowBuild {
   char* previousRow_ = nullptr;
 
   // Current partition being output. Used to return the WidnowPartitions.
-  vector_size_t outputCurrentPartition_ = -1;
+  vector_size_t outputPartition_ = -1;
 
   // Current partition when adding input. Used to construct WindowPartitions.
-  vector_size_t inputCurrentPartition_ = 0;
+  vector_size_t inputPartition_ = 0;
 
   // Holds all the WindowPartitions.
   std::vector<std::shared_ptr<WindowPartition>> windowPartitions_;

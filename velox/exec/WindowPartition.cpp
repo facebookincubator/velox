@@ -54,7 +54,7 @@ void WindowPartition::addRows(const std::vector<char*>& rows) {
 }
 
 void WindowPartition::clearOutputRows(vector_size_t numRows) {
-  VELOX_CHECK(partial_, "Current WindowPartition shoule be partial.");
+  VELOX_CHECK(partial_, "Current WindowPartition should be partial.");
   if (!complete_ || (complete_ && rows_.size() > numRows)) {
     // Store last row of partial partition.
     previousGroupLastRow_ = BaseVector::create<FlatVector<StringView>>(
@@ -170,6 +170,23 @@ bool WindowPartition::compareRowsWithSortKeys(
   return false;
 }
 
+vector_size_t WindowPartition::findPeerGroupEndIndex(
+    vector_size_t currentStart,
+    vector_size_t lastPartitionRow,
+    std::function<bool(const char*, const char*, RowContainer*)> peerCompare) {
+  auto peerEnd = currentStart;
+  while (peerEnd <= lastPartitionRow) {
+    if (peerCompare(
+            partition_[currentStart - startRow()],
+            partition_[peerEnd - startRow()],
+            data_)) {
+      break;
+    }
+    peerEnd++;
+  }
+  return peerEnd;
+}
+
 std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
     vector_size_t start,
     vector_size_t end,
@@ -202,29 +219,20 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
 
     auto firstRow = rowContainer->newRow();
     rowContainer->storeSerializedRow(*serialized, 0, firstRow);
-    auto secondRow = rowContainer->newRow();
-    rowContainer->storeSerializedRow(*previousGroupLastRow_, 0, secondRow);
+    auto lastRow = rowContainer->newRow();
+    rowContainer->storeSerializedRow(*previousGroupLastRow_, 0, lastRow);
 
-    auto peerGroup = peerCompare(secondRow, firstRow, rowContainer.get());
+    auto peerGroup = peerCompare(lastRow, firstRow, rowContainer.get());
 
     if (!peerGroup) {
-      peerEnd++;
-      nextStart = start + 1;
-      while (nextStart <= lastPartitionRow) {
-        if (peerCompare(
-                partition_[start - startRow()],
-                partition_[nextStart - startRow()],
-                data_)) {
-          break;
-        }
-        peerEnd++;
-        nextStart++;
-      }
+      peerEnd = findPeerGroupEndIndex(start, lastPartitionRow, peerCompare);
 
-      for (auto j = 0; j < (nextStart - start); j++) {
+      for (auto j = 0; j < (peerEnd - start); j++) {
         rawPeerStarts[j] = peerStart;
         rawPeerEnds[j] = peerEnd - 1;
       }
+
+      nextStart = peerEnd;
     }
   }
 
@@ -242,30 +250,13 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
       // Compute peerStart and peerEnd rows for the first row of the partition
       // or when past the previous peerGroup.
       peerStart = i;
-      peerEnd = i;
-      while (peerEnd <= lastPartitionRow) {
-        if (peerCompare(
-                partition_[peerStart - startRow()],
-                partition_[peerEnd - startRow()],
-                data_)) {
-          break;
-        }
-        peerEnd++;
-      }
+      peerEnd = findPeerGroupEndIndex(peerStart, lastPartitionRow, peerCompare);
     }
 
     rawPeerStarts[j] = peerStart;
     rawPeerEnds[j] = peerEnd - 1;
   }
 
-  // // Store last row of partial partition.
-  // if (partial_) {
-  //   previousGroupLastRow_ = BaseVector::create<FlatVector<StringView>>(
-  //       VARBINARY(), 1, data_->pool());
-  //   data_->extractSerializedRows(
-  //       folly::Range(rows_.data() + (peerEnd - 1 - startRow()), 1),
-  //       previousGroupLastRow_);
-  // }
   return {peerStart, peerEnd};
 }
 

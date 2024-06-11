@@ -619,7 +619,7 @@ vector_size_t Window::callApplyLoop(
     // For a partial window partition, currentPartition_->numRows() returns the
     // number of remaining rows in the current partition that have not been
     // processed.
-    if (!currentPartition_->isComplete() || rowsForCurrentPartition < 0) {
+    if (currentPartition_->isPartial()) {
       rowsForCurrentPartition = totalRows;
     }
 
@@ -647,7 +647,6 @@ vector_size_t Window::callApplyLoop(
         // now. So break until the next getOutput call.
         break;
       }
-
     } else {
       // Current partition can fit only partially in the output buffer.
       // Call apply for the rows that can fit in the buffer and break from

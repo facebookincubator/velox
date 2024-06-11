@@ -48,14 +48,18 @@ class WindowPartition {
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo);
 
+  /// The WindowPartition is used for partial partition when the input data will
+  /// be a subset of the entire partition.
   WindowPartition(
       RowContainer* data,
       const std::vector<column_index_t>& inputMapping,
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo);
 
+  /// Adds remaining input rows when building the partial WindowPartition.
   void addRows(const std::vector<char*>& rows);
 
+  /// Clear the processed rows fow partial WindowPartition.
   void clearOutputRows(vector_size_t numRows);
 
   /// Returns the number of rows in the current WindowPartition.
@@ -167,6 +171,11 @@ class WindowPartition {
       const char* rhs,
       RowContainer* data) const;
 
+  vector_size_t findPeerGroupEndIndex(
+      vector_size_t currentStart,
+      vector_size_t lastRow,
+      std::function<bool(const char*, const char*, RowContainer*)> peerCompare);
+
   // Searches for 'currentRow[frameColumn]' in 'orderByColumn' of rows between
   // 'start' and 'end' in the partition. 'firstMatch' specifies if first or last
   // row is matched.
@@ -199,11 +208,11 @@ class WindowPartition {
       const vector_size_t* rawPeerBounds,
       vector_size_t* rawFrameBounds) const;
 
- protected:
   // The RowContainer associated with the partition.
   // It is owned by the WindowBuild that creates the partition.
   RowContainer* data_;
 
+  // Holds input rows within the partial partition.
   std::vector<char*> rows_;
 
   // folly::Range is for the partition rows iterator provided by the
@@ -239,6 +248,7 @@ class WindowPartition {
   // The partition offset of the first row in rows_.
   vector_size_t startRow_ = 0;
 
+  // Holds the last row in previous peer group.
   std::shared_ptr<FlatVector<StringView>> previousGroupLastRow_ = nullptr;
 };
 } // namespace facebook::velox::exec
