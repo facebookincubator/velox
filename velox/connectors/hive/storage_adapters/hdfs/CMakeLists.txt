@@ -17,8 +17,12 @@
 velox_add_library(velox_hdfs RegisterHdfsFileSystem.cpp)
 
 if(VELOX_ENABLE_HDFS)
-  velox_sources(velox_hdfs PRIVATE HdfsFileSystem.cpp HdfsReadFile.cpp
-                HdfsWriteFile.cpp)
+  velox_sources(
+    velox_hdfs
+    PRIVATE
+    HdfsFileSystem.cpp
+    HdfsReadFile.cpp
+    HdfsWriteFile.cpp)
   velox_link_libraries(velox_hdfs Folly::folly ${LIBHDFS3} xsimd)
 
   if(${VELOX_BUILD_TESTING})

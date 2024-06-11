@@ -30,8 +30,13 @@ velox_add_library(
   VectorSaver.cpp
   VectorStream.cpp)
 
-velox_link_libraries(velox_vector velox_encode velox_memory velox_time
-                     velox_type velox_buffer)
+velox_link_libraries(
+  velox_vector
+  velox_encode
+  velox_memory
+  velox_time
+  velox_type
+  velox_buffer)
 
 add_subdirectory(arrow)
 add_subdirectory(fuzzer)

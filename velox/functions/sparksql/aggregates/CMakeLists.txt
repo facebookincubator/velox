@@ -24,8 +24,13 @@ velox_add_library(
   RegrReplacementAggregate.cpp
   SumAggregate.cpp)
 
-velox_link_libraries(velox_functions_spark_aggregates fmt::fmt velox_exec
-                     velox_expression_functions velox_aggregates velox_vector)
+velox_link_libraries(
+  velox_functions_spark_aggregates
+  fmt::fmt
+  velox_exec
+  velox_expression_functions
+  velox_aggregates
+  velox_vector)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

@@ -13,8 +13,11 @@
 # limitations under the License.
 
 velox_add_library(
-  velox_functions_aggregates AverageAggregateBase.cpp
-  CentralMomentsAggregatesBase.cpp SingleValueAccumulator.cpp ValueList.cpp
+  velox_functions_aggregates
+  AverageAggregateBase.cpp
+  CentralMomentsAggregatesBase.cpp
+  SingleValueAccumulator.cpp
+  ValueList.cpp
   ValueSet.cpp)
 
 velox_link_libraries(velox_functions_aggregates velox_exec

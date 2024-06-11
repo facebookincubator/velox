@@ -49,6 +49,7 @@ velox_link_libraries(
           velox_gcs
           velox_abfs)
 
+
 velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 
 velox_link_libraries(velox_hive_partition_function velox_core velox_exec)

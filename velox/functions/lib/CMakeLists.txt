@@ -21,8 +21,8 @@ velox_add_library(velox_functions_util LambdaFunctionUtil.cpp
 
 velox_link_libraries(velox_functions_util velox_vector velox_common_base)
 
-velox_add_library(velox_functions_lib_date_time_formatter
-            DateTimeFormatter.cpp DateTimeFormatterBuilder.cpp)
+velox_add_library(velox_functions_lib_date_time_formatter DateTimeFormatter.cpp
+                  DateTimeFormatterBuilder.cpp)
 
 velox_link_libraries(velox_functions_lib_date_time_formatter velox_type_tz)
 
@@ -39,8 +39,12 @@ velox_add_library(
   SubscriptUtil.cpp
   TimeUtils.cpp)
 
-velox_link_libraries(velox_functions_lib velox_functions_util velox_vector
-                     re2::re2 Folly::folly)
+velox_link_libraries(
+  velox_functions_lib
+  velox_functions_util
+  velox_vector
+  re2::re2
+  Folly::folly)
 
 add_subdirectory(aggregates)
 add_subdirectory(string)

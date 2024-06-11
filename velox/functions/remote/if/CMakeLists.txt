@@ -21,5 +21,6 @@ target_compile_options(velox_remote_function_thrift
                        PRIVATE -Wno-deprecated-declarations)
 
 velox_add_library(velox_functions_remote_get_serde GetSerde.cpp)
-velox_link_libraries(velox_functions_remote_get_serde PUBLIC
-                     velox_remote_function_thrift velox_presto_serializer)
+velox_link_libraries(
+  velox_functions_remote_get_serde PUBLIC velox_remote_function_thrift
+                                          velox_presto_serializer)

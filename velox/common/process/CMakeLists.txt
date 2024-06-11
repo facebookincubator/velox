@@ -23,14 +23,8 @@ velox_add_library(
 
 velox_link_libraries(
   velox_process
-  PUBLIC
-  velox_file
-  velox_flag_definitions
-  Folly::folly
-  PRIVATE
-  fmt::fmt
-  gflags::gflags
-  glog::glog)
+  PUBLIC velox_file velox_flag_definitions Folly::folly
+  PRIVATE fmt::fmt gflags::gflags glog::glog)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
