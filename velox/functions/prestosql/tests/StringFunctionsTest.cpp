@@ -1947,3 +1947,7 @@ TEST_F(StringFunctionsTest, hammingDistance) {
       hammingDistance("\xFF\x82\xFF", "\xF0\x82"),
       "The input strings to hamming_distance function must have the same length");
 }
+
+TEST_F(StringFunctionsTest, badTest) {
+  VELOX_FAIL("Bad Test! Do not merge!");
+}
