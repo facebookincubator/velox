@@ -15,6 +15,8 @@
  */
 
 #include "velox/connectors/Connector.h"
+#include "velox/common/base/tests/GTestUtils.h"
+
 #include <gtest/gtest.h>
 
 namespace facebook::velox::connector {
@@ -65,6 +67,9 @@ class TestConnectorFactory : public connector::ConnectorFactory {
 
 TEST_F(ConnectorTest, getAllConnectors) {
   registerConnectorFactory(std::make_shared<TestConnectorFactory>());
+  VELOX_ASSERT_THROW(
+      registerConnectorFactory(std::make_shared<TestConnectorFactory>()),
+      "ConnectorFactory with name 'test-factory' is already registered");
   EXPECT_TRUE(hasConnectorFactory(TestConnectorFactory::kConnectorFactoryName));
   const int32_t numConnectors = 10;
   for (int32_t i = 0; i < numConnectors; i++) {
