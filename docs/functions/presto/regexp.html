@@ -149,6 +149,16 @@ backslash (<code class="docutils literal notranslate"><span class="pre">\$</span
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="regexp_split">
+<span class="sig-name descname"><span class="pre">regexp_split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span><a class="headerlink" href="#regexp_split" title="Link to this definition">¶</a></dt>
+<dd><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> using the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> and returns an
+array. Trailing empty strings are preserved:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_split</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\s*[a-z]+\s*&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 
 
@@ -167,6 +177,7 @@ backslash (<code class="docutils literal notranslate"><span class="pre">\$</span
 <li><a class="reference internal" href="#regexp_extract_all"><code class="docutils literal notranslate"><span class="pre">regexp_extract_all()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_like"><code class="docutils literal notranslate"><span class="pre">regexp_like()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_replace"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
+<li><a class="reference internal" href="#regexp_split"><code class="docutils literal notranslate"><span class="pre">regexp_split()</span></code></a></li>
 </ul>
 </li>
 </ul>
