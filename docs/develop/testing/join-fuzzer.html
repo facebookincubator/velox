@@ -53,7 +53,7 @@ empty dataset or a 10% sample (with replacement) of the probe-side keys
 combined with randomly generated payload. When generating the join plan node,
 fuzzer shuffles join keys and output columns and randomly drops some columns
 from the output.</p>
-<p>The fuzzer runs the query plan and compares the results with DuckDB.</p>
+<p>The fuzzer runs the query plan and compares the results with the reference (DuckDB or Presto) as the expected result.</p>
 <p>The fuzzer then generates a set of different but logically equivalent plans,
 runs them and verifies that results are the same. Each plan runs twice: with
 and without spilling.</p>
@@ -95,6 +95,8 @@ and <code class="docutils literal notranslate"><span class="pre">-–duration_se
 <li><p><code class="docutils literal notranslate"><span class="pre">--num_batches</span></code>: The number of input vectors of size <cite>–batch_size</cite> to
 generate. Default is 5.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--enable_spill</span></code>: Whether to test with spilling or not. Default is true.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--arbitrator_capacity</span></code>: Arbitrator capacity in bytes. Default is 6L &lt;&lt; 30.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--allocator_capacity</span></code>: Allocator capacity in bytes. Default is 8L &lt;&lt; 30.</p></li>
 </ul>
 <p>If running from CLion IDE, add <code class="docutils literal notranslate"><span class="pre">--logtostderr=1</span></code> to see the full output.</p>
 </section>
