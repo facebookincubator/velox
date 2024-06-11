@@ -39,6 +39,7 @@ jobs:
           - { name: "Code Format",
               command: "format-fix",
               message: "Found format issues",
+              reqs: "regex cmake-format pyyaml black" 
             }
     steps:
       - uses: actions/checkout@v4
