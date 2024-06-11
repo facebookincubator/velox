@@ -19,6 +19,11 @@
 
 namespace facebook::velox::exec::test {
 
+class QueryRunnerContext {
+ public:
+  std::unordered_map<core::PlanNodeId, std::vector<std::string>> windowFrames_;
+};
+
 /// Query runner that uses reference database, i.e. DuckDB, Presto, Spark.
 class ReferenceQueryRunner {
  public:
@@ -72,6 +77,7 @@ class ReferenceQueryRunner {
   virtual std::vector<velox::RowVectorPtr> execute(const std::string& sql) {
     VELOX_UNSUPPORTED();
   }
-};
 
+  std::shared_ptr<QueryRunnerContext> queryRunnerContext_;
+};
 } // namespace facebook::velox::exec::test

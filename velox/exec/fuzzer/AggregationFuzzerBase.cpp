@@ -803,11 +803,14 @@ std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
     LOG(INFO) << "Using DuckDB as the reference DB.";
     return duckQueryRunner;
   } else {
-    return std::make_unique<PrestoQueryRunner>(
+    auto prestoQueryRunner = std::make_unique<PrestoQueryRunner>(
         prestoUrl,
         runnerName,
         static_cast<std::chrono::milliseconds>(reqTimeoutMs));
+    prestoQueryRunner->queryRunnerContext_ =
+        std::make_shared<QueryRunnerContext>();
     LOG(INFO) << "Using Presto as the reference DB.";
+    return prestoQueryRunner;
   }
 }
 
