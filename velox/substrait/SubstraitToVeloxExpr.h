@@ -26,6 +26,8 @@ namespace facebook::velox::substrait {
 /// expressions.
 class SubstraitVeloxExprConverter {
  public:
+  virtual ~SubstraitVeloxExprConverter() = default;
+  
   /// subParser: A Substrait parser used to convert Substrait representations
   /// into recognizable representations. functionMap: A pre-constructed map
   /// storing the relations between the function id and the function name.
@@ -54,7 +56,7 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression::Literal& substraitLit);
 
   /// Convert Substrait Expression into Velox Expression.
-  core::TypedExprPtr toVeloxExpr(
+  virtual core::TypedExprPtr toVeloxExpr(
       const ::substrait::Expression& substraitExpr,
       const RowTypePtr& inputType);
 
