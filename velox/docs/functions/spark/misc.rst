@@ -31,3 +31,7 @@ Miscellaneous Functions
     ``seed`` must be constant. ::
 
         SELECT uuid(0);    -- "8c7f0aac-97c4-4a2f-b716-a675d821ccc0"
+
+
+.. spark:function:: raise_error(str) -> void
+    Throws an runtime exception with ``str``.
