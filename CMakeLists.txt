@@ -96,9 +96,9 @@ option(VELOX_ENABLE_TPCH_CONNECTOR "Build TPC-H connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
-option(VELOX_ENABLE_EXAMPLES
-       "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
-       OFF)
+option(
+  VELOX_ENABLE_EXAMPLES
+  "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically." OFF)
 option(VELOX_ENABLE_SUBSTRAIT "Build Substrait-to-Velox converter." OFF)
 option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
