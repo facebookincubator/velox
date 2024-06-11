@@ -287,7 +287,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   std::unordered_map<std::string, std::string> config;
   std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs =
       {};
-  auto queryCtx = std::make_shared<core::QueryCtx>(
+  auto queryCtx = core::QueryCtx::create(
       executor_.get(),
       core::QueryConfig(std::move(config)),
       connectorConfigs,
