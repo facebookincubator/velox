@@ -151,14 +151,28 @@ class PrefixEncoderTest : public testing::Test,
     encode(descNullsLastEncoder_);
     ASSERT_GT(compare(encodedNull, encodedMax), 0);
 
-    // For float / double`s NaN.
-    if (TypeLimits<T>::isFloat) {
+    // For float`s NaN.
+    if constexpr (std::is_same_v<T, float>) {
       std::optional<T> nan = TypeLimits<T>::nan();
       char encodedNaN[sizeof(T) + 1];
 
       ascNullsFirstEncoder_.encode(nan, encodedNaN);
       ascNullsFirstEncoder_.encode(max, encodedMax);
       ASSERT_GT(compare(encodedNaN, encodedMax), 0);
+
+      ascNullsFirstEncoder_.encode(nan, encodedNaN);
+      ascNullsFirstEncoder_.encode(nullValue, encodedNull);
+      ASSERT_LT(compare(encodedNull, encodedNaN), 0);
+    }
+
+    // For double`s NaN.
+    if constexpr (std::is_same_v<T, double>) {
+      std::optional<T> nan = TypeLimits<T>::nan();
+      char encodedNaN[sizeof(T) + 1];
+
+      ascNullsFirstEncoder_.encode(nan, encodedNaN);
+      ascNullsFirstEncoder_.encode(max, encodedMax);
+      ASSERT_LT(compare(encodedNaN, encodedMax), 0);
 
       ascNullsFirstEncoder_.encode(nan, encodedNaN);
       ascNullsFirstEncoder_.encode(nullValue, encodedNull);

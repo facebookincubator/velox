@@ -155,13 +155,13 @@ static FOLLY_ALWAYS_INLINE uint64_t encodeDouble(double value) {
   if (value == 0) {
     return 1ull << 63;
   }
-  // Nan is max value.
+  // Nan is collapsed to a single "canonical" value.
   if (std::isnan(value)) {
-    return std::numeric_limits<uint64_t>::max();
+    return 0x7ff8000000000000L;
   }
-  // Infinity is the second max value.
+  // Infinity is the max value.
   if (value > std::numeric_limits<double>::max()) {
-    return std::numeric_limits<uint64_t>::max() - 1;
+    return std::numeric_limits<uint64_t>::max();
   }
   // -Infinity is the smallest value.
   if (value < -std::numeric_limits<double>::max()) {
@@ -178,7 +178,8 @@ static FOLLY_ALWAYS_INLINE uint64_t encodeDouble(double value) {
   return encoded;
 }
 
-// Logic is as same as double.
+/// Logic is as same as double except NaN. NaN is a single "canonical" value in
+/// double which is more than max uint32_t, so use max uint32 as NaN.
 static FOLLY_ALWAYS_INLINE uint32_t encodeFloat(float value) {
   if (value == 0) {
     return 1u << 31;
