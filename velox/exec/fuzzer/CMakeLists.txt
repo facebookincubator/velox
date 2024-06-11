@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_fuzzer_util DuckQueryRunner.cpp PrestoQueryRunner.cpp)
+add_library(velox_fuzzer_util DuckQueryRunner.cpp PrestoQueryRunner.cpp
+                              FuzzerUtil.cpp)
 
 target_link_libraries(
   velox_fuzzer_util
@@ -76,13 +77,13 @@ target_link_libraries(
 
 add_library(velox_join_fuzzer JoinFuzzer.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   velox_join_fuzzer velox_type velox_vector_fuzzer velox_fuzzer_util
   velox_exec_test_lib velox_expression_test_utility)
 
-velox_add_library(velox_writer_fuzzer WriterFuzzer.cpp)
+add_library(velox_writer_fuzzer WriterFuzzer.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   velox_writer_fuzzer
   velox_fuzzer_util
   velox_type
@@ -92,9 +93,9 @@ velox_link_libraries(
   velox_temp_path
   velox_vector_test_lib)
 
-velox_add_library(velox_memory_arbitration_fuzzer MemoryArbitrationFuzzer.cpp)
+add_library(velox_memory_arbitration_fuzzer MemoryArbitrationFuzzer.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   velox_memory_arbitration_fuzzer
   velox_fuzzer_util
   velox_type
