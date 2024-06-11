@@ -33,7 +33,7 @@ endfunction()
 
 # This is extremely hackish but presents an easy path to installation.
 function(velox_add_library TARGET)
-  set(options OBJECT STATIC SHARED)
+  set(options OBJECT STATIC SHARED INTERFACE)
   set(oneValueArgs)
   set(multiValueArgs)
   cmake_parse_arguments(VELOX "${options}" "${oneValueArgs}"
@@ -47,11 +47,14 @@ function(velox_add_library TARGET)
     set(library_type STATIC)
   elseif(VELOX_SHARED)
     set(library_type SHARED)
+  elseif(VELOX_INTERFACE)
+    set(library_type INTERFACE)
   endif()
 
   list(REMOVE_ITEM ARGN OBJECT)
   list(REMOVE_ITEM ARGN STATIC)
   list(REMOVE_ITEM ARGN SHARED)
+  list(REMOVE_ITEM ARGN INTERFACE)
   # Propagate to the underlying add_library and then install the target.
   if(VELOX_MONO_LIBRARY)
     if(TARGET velox)
