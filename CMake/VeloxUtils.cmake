@@ -13,14 +13,6 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-function(velox_add_dependencies TARGET)
-  if(VELOX_MONO_LIBRARY AND "${TARGET}" MATCHES "^velox_*")
-    # No need to add dependencies when building a single library.
-  else()
-    add_dependencies(${TARGET} ${ARGN})
-  endif()
-endfunction()
-
 # TODO use file sets
 function(velox_install_library_headers)
   # Find any headers and install them relative to the source tree in include.
