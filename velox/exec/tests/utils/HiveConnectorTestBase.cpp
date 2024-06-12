@@ -16,10 +16,8 @@
 
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
-#include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 namespace facebook::velox::exec::test {
@@ -61,46 +59,40 @@ void HiveConnectorTestBase::resetHiveConnector(
 
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
-    RowVectorPtr vector) {
-  writeToFile(filePath, std::vector{vector});
+    RowVectorPtr vector,
+    dwio::common::FileFormat fileFormat) {
+  writeToFile(filePath, std::vector{vector}, {}, fileFormat);
 }
 
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
-    std::shared_ptr<dwrf::Config> config,
-    const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
-        flushPolicyFactory) {
-  writeToFile(
-      filePath,
-      vectors,
-      std::move(config),
-      vectors[0]->type(),
-      flushPolicyFactory);
+    dwio::common::WriterOptions options,
+    dwio::common::FileFormat fileFormat) {
+  writeToFile(filePath, vectors, options, vectors[0]->type(), fileFormat);
 }
 
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
-    std::shared_ptr<dwrf::Config> config,
+    dwio::common::WriterOptions options,
     const TypePtr& schema,
-    const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
-        flushPolicyFactory) {
-  velox::dwrf::WriterOptions options;
-  options.config = config;
-  options.schema = schema;
+    dwio::common::FileFormat fileFormat) {
   auto localWriteFile = std::make_unique<LocalWriteFile>(filePath, true, false);
   auto sink = std::make_unique<dwio::common::WriteFileSink>(
       std::move(localWriteFile), filePath);
   auto childPool = rootPool_->addAggregateChild("HiveConnectorTestBase.Writer");
   options.memoryPool = childPool.get();
-  options.flushPolicyFactory = flushPolicyFactory;
-
-  facebook::velox::dwrf::Writer writer{std::move(sink), options};
+  options.schema = schema;
+  std::shared_ptr<dwio::common::WriterOptions> optionsPtr =
+      std::make_shared<dwio::common::WriterOptions>(options);
+  std::unique_ptr<dwio::common::Writer> writer =
+      dwio::common::getWriterFactory(fileFormat)
+          ->createWriter(std::move(sink), optionsPtr);
   for (size_t i = 0; i < vectors.size(); ++i) {
-    writer.write(vectors[i]);
+    writer->write(vectors[i]);
   }
-  writer.close();
+  writer->close();
 }
 
 std::vector<RowVectorPtr> HiveConnectorTestBase::makeVectors(

@@ -843,13 +843,45 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
         Config::ZSTD_COMPRESSION_LEVEL.configKey(),
         std::to_string(options.zstdCompressionLevel.value()));
   }
+  if (options.flattenMap.has_value()) {
+    configs.emplace(
+        Config::FLATTEN_MAP.configKey(),
+        std::to_string(options.flattenMap.value()));
+  }
 
   dwrf::WriterOptions dwrfOptions;
-  dwrfOptions.config = Config::fromMap(configs);
+  auto writerConfig = Config::fromMap(configs);
   dwrfOptions.schema = options.schema;
   dwrfOptions.memoryPool = options.memoryPool;
   dwrfOptions.spillConfig = options.spillConfig;
   dwrfOptions.nonReclaimableSection = options.nonReclaimableSection;
+
+  if (options.mapFlatCols.has_value()) {
+    writerConfig->set<const std::vector<uint32_t>>(
+        dwrf::Config::MAP_FLAT_COLS, options.mapFlatCols.value());
+  }
+  if (options.mapFlatColsStructKeys.has_value()) {
+    writerConfig->set<const std::vector<std::vector<std::string>>>(
+        dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS,
+        options.mapFlatColsStructKeys.value());
+  }
+
+  dwrfOptions.config = writerConfig;
+
+  // Dynamically cast from FlushPolicy to DWRFFlushPolicy.
+  if (options.flushPolicyFactory.has_value()) {
+    std::function<std::unique_ptr<dwio::common::FlushPolicy>()>
+        commonFlushPolicyFactory = options.flushPolicyFactory.value();
+    std::function<std::unique_ptr<DWRFFlushPolicy>()> dwrfFlushPolicyFactory =
+        [commonFlushPolicyFactory]() -> std::unique_ptr<DWRFFlushPolicy> {
+      std::unique_ptr<dwio::common::FlushPolicy> commonFlushPolicy =
+          commonFlushPolicyFactory();
+      return std::unique_ptr<DWRFFlushPolicy>(
+          dynamic_cast<DWRFFlushPolicy*>(commonFlushPolicy.release()));
+    };
+    dwrfOptions.flushPolicyFactory = dwrfFlushPolicyFactory;
+  }
+
   return dwrfOptions;
 }
 

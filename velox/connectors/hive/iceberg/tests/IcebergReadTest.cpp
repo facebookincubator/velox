@@ -19,6 +19,7 @@
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -170,66 +171,76 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           std::multimap<std::string, std::vector<int64_t>>>&
           deleteFilesForBaseDatafiles,
       int32_t numPrefetchSplits = 0) {
-    // Keep the reference to the deleteFilePath, otherwise the corresponding
-    // file will be deleted.
-    std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths =
-        writeDataFiles(rowGroupSizesForFiles);
-    std::unordered_map<
-        std::string,
-        std::pair<int64_t, std::shared_ptr<TempFilePath>>>
-        deleteFilePaths = writePositionDeleteFiles(
-            deleteFilesForBaseDatafiles, dataFilePaths);
-
-    std::vector<std::shared_ptr<ConnectorSplit>> splits;
-
-    for (const auto& dataFile : dataFilePaths) {
-      std::string baseFileName = dataFile.first;
-      std::string baseFilePath = dataFile.second->getPath();
-
-      std::vector<IcebergDeleteFile> deleteFiles;
-
-      for (auto const& deleteFile : deleteFilesForBaseDatafiles) {
-        std::string deleteFileName = deleteFile.first;
-        std::multimap<std::string, std::vector<int64_t>> deleteFileContent =
-            deleteFile.second;
-
-        if (deleteFileContent.count(baseFileName) != 0) {
-          // If this delete file contains rows for the target base file, then
-          // add it to the split
-          auto deleteFilePath =
-              deleteFilePaths[deleteFileName].second->getPath();
-          IcebergDeleteFile deleteFile(
-              FileContent::kPositionalDeletes,
-              deleteFilePath,
-              fileFomat_,
-              deleteFilePaths[deleteFileName].first,
-              testing::internal::GetFileSize(
-                  std::fopen(deleteFilePath.c_str(), "r")));
-          deleteFiles.push_back(deleteFile);
-        }
-      }
-
-      splits.emplace_back(makeIcebergSplit(baseFilePath, deleteFiles));
+    std::vector<dwio::common::FileFormat> fileFormats = {
+        dwio::common::FileFormat::DWRF};
+    if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
+      fileFormats.push_back(dwio::common::FileFormat::PARQUET);
     }
 
-    std::string duckdbSql =
-        getDuckDBQuery(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
-    auto plan = tableScanNode();
-    auto task = HiveConnectorTestBase::assertQuery(
-        plan, splits, duckdbSql, numPrefetchSplits);
+    for (dwio::common::FileFormat fileFormat : fileFormats) {
+      // Keep the reference to the deleteFilePath, otherwise the corresponding
+      // file will be deleted.
+      std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths =
+          writeDataFiles(rowGroupSizesForFiles, fileFormat);
+      std::unordered_map<
+          std::string,
+          std::pair<int64_t, std::shared_ptr<TempFilePath>>>
+          deleteFilePaths = writePositionDeleteFiles(
+              deleteFilesForBaseDatafiles, dataFilePaths, fileFormat);
 
-    auto planStats = toPlanStats(task->taskStats());
-    auto scanNodeId = plan->id();
-    auto it = planStats.find(scanNodeId);
-    ASSERT_TRUE(it != planStats.end());
-    ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+      std::vector<std::shared_ptr<ConnectorSplit>> splits;
+
+      for (const auto& dataFile : dataFilePaths) {
+        std::string baseFileName = dataFile.first;
+        std::string baseFilePath = dataFile.second->getPath();
+
+        std::vector<IcebergDeleteFile> deleteFiles;
+
+        for (auto const& deleteFile : deleteFilesForBaseDatafiles) {
+          std::string deleteFileName = deleteFile.first;
+          std::multimap<std::string, std::vector<int64_t>> deleteFileContent =
+              deleteFile.second;
+
+          if (deleteFileContent.count(baseFileName) != 0) {
+            // If this delete file contains rows for the target base file, then
+            // add it to the split
+            auto deleteFilePath =
+                deleteFilePaths[deleteFileName].second->getPath();
+            IcebergDeleteFile deleteFile(
+                FileContent::kPositionalDeletes,
+                deleteFilePath,
+                fileFormat,
+                deleteFilePaths[deleteFileName].first,
+                testing::internal::GetFileSize(
+                    std::fopen(deleteFilePath.c_str(), "r")));
+            deleteFiles.push_back(deleteFile);
+          }
+        }
+
+        splits.emplace_back(
+            makeIcebergSplit(baseFilePath, deleteFiles, fileFormat));
+      }
+
+      std::string duckdbSql =
+          getDuckDBQuery(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+      auto plan = tableScanNode();
+      auto task = HiveConnectorTestBase::assertQuery(
+          plan, splits, duckdbSql, numPrefetchSplits);
+
+      auto planStats = toPlanStats(task->taskStats());
+      auto scanNodeId = plan->id();
+      auto it = planStats.find(scanNodeId);
+      ASSERT_TRUE(it != planStats.end());
+      ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+    }
   }
 
   const static int rowCount = 20000;
 
  private:
   std::map<std::string, std::shared_ptr<TempFilePath>> writeDataFiles(
-      std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles) {
+      std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles,
+      dwio::common::FileFormat fileFormat) {
     std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths;
 
     std::vector<RowVectorPtr> dataVectorsJoined;
@@ -243,11 +254,13 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       // files. This is to make constructing DuckDB queries easier
       std::vector<RowVectorPtr> dataVectors =
           makeVectors(dataFile.second, startingValue);
+      dwio::common::WriterOptions options;
+      options.flushPolicyFactory = flushPolicyFactory_;
       writeToFile(
           dataFilePaths[dataFile.first]->getPath(),
           dataVectors,
-          config_,
-          flushPolicyFactory_);
+          options,
+          fileFormat);
 
       for (int i = 0; i < dataVectors.size(); i++) {
         dataVectorsJoined.push_back(dataVectors[i]);
@@ -271,7 +284,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
               std::vector<int64_t>>>&
           deleteFilesForBaseDatafiles, // <base file name, delete position
                                        // vector for all RowGroups>
-      std::map<std::string, std::shared_ptr<TempFilePath>> baseFilePaths) {
+      std::map<std::string, std::shared_ptr<TempFilePath>> baseFilePaths,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF) {
     std::unordered_map<
         std::string,
         std::pair<int64_t, std::shared_ptr<TempFilePath>>>
@@ -303,12 +317,10 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         deleteFileVectors.push_back(deleteFileVector);
         totalPositionsInDeleteFile += positionsInRowGroup.size();
       }
-
+      dwio::common::WriterOptions options;
+      options.flushPolicyFactory = flushPolicyFactory_;
       writeToFile(
-          deleteFilePath->getPath(),
-          deleteFileVectors,
-          config_,
-          flushPolicyFactory_);
+          deleteFilePath->getPath(), deleteFileVectors, options, fileFormat);
 
       deleteFilePaths[deleteFileName] =
           std::make_pair(totalPositionsInDeleteFile, deleteFilePath);
@@ -337,7 +349,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
   std::shared_ptr<ConnectorSplit> makeIcebergSplit(
       const std::string& dataFilePath,
-      const std::vector<IcebergDeleteFile>& deleteFiles = {}) {
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF) {
     std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
     std::unordered_map<std::string, std::string> customSplitInfo;
     customSplitInfo["table_format"] = "hive-iceberg";
@@ -349,7 +362,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return std::make_shared<HiveIcebergSplit>(
         kHiveConnectorId,
         dataFilePath,
-        fileFomat_,
+        fileFormat,
         0,
         fileSize,
         partitionKeys,
@@ -476,7 +489,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return PlanBuilder(pool_.get()).tableScan(rowType_).planNode();
   }
 
-  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
   std::shared_ptr<dwrf::Config> config_;
   std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()> flushPolicyFactory_;
 

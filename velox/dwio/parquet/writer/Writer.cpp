@@ -388,6 +388,20 @@ void Writer::abort() {
   arrowContext_.reset();
 }
 
+parquet::WriterOptions getParquetOptions(
+    const dwio::common::WriterOptions& options) {
+  parquet::WriterOptions parquetOptions;
+  parquetOptions.memoryPool = options.memoryPool;
+  if (options.compressionKind.has_value()) {
+    parquetOptions.compressionKind = options.compressionKind.value();
+  }
+  if (options.parquetWriteTimestampUnit.has_value()) {
+    parquetOptions.parquetWriteTimestampUnit =
+        options.parquetWriteTimestampUnit.value();
+  }
+  return parquetOptions;
+}
+
 void Writer::setMemoryReclaimers() {
   VELOX_CHECK(
       !pool_->isLeaf(),
@@ -442,9 +456,13 @@ std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(
     const std::shared_ptr<dwio::common::WriterOptions>& options) {
   auto parquetOptions =
       std::dynamic_pointer_cast<parquet::WriterOptions>(options);
-  VELOX_CHECK_NOT_NULL(
-      parquetOptions,
-      "Parquet writer factory expected a Parquet WriterOptions object.");
+
+  if (parquetOptions == nullptr) {
+    auto parquetOptionsFromCommon = getParquetOptions(*options);
+    return std::make_unique<Writer>(
+        std::move(sink), parquetOptionsFromCommon, asRowType(options->schema));
+  }
+
   return std::make_unique<Writer>(
       std::move(sink), *parquetOptions, asRowType(options->schema));
 }
