@@ -94,7 +94,8 @@ void MergeJoin::initialize() {
     }
   }
 
-  // Anti join need to track the left side rows that have no match on the right.
+  // Anti join needs to track the left side rows that have no match on the
+  // right.
   if (joinNode_->isAntiJoin() && !filter_) {
     leftJoinTracker_ = LeftJoinTracker(outputBatchSize_, pool());
   }
@@ -327,7 +328,8 @@ void MergeJoin::addOutputRow(
     }
   }
 
-  // Anti join need to track the left side rows that have no match on the right.
+  // Anti join needs to track the left side rows that have no match on the
+  // right.
   if (isAntiJoin(joinType_) && !filter_ && leftJoinTracker_) {
     // Record left-side row with a match on the right-side.
     leftJoinTracker_->addMatch(left, leftIndex, outputSize_);
@@ -576,35 +578,33 @@ RowVectorPtr MergeJoin::getOutput() {
 
         // No rows survived the filter. Get more rows.
         continue;
-      } else {
-        if (isAntiJoin(joinType_)) {
-          auto numRows = output->size();
-          const auto& filterRows = leftJoinTracker_->matchingRows(numRows);
-          auto numPassed = 0;
+      } else if (isAntiJoin(joinType_)) {
+        auto numRows = output->size();
+        const auto& filterRows = leftJoinTracker_->matchingRows(numRows);
+        auto numPassed = 0;
 
-          BufferPtr indices = allocateIndices(numRows, pool());
-          auto rawIndices = indices->asMutable<vector_size_t>();
-          for (auto i = 0; i < numRows; i++) {
-            if (!filterRows.isValid(i)) {
-              rawIndices[numPassed++] = i;
-            }
+        BufferPtr indices = allocateIndices(numRows, pool());
+        auto rawIndices = indices->asMutable<vector_size_t>();
+        for (auto i = 0; i < numRows; i++) {
+          if (!filterRows.isValid(i)) {
+            rawIndices[numPassed++] = i;
           }
+        }
 
-          if (numPassed == 0) {
-            // No rows passed.
-            return nullptr;
-          }
+        if (numPassed == 0) {
+          // No rows passed.
+          return nullptr;
+        }
 
-          if (numPassed == numRows) {
-            // All rows passed.
-            return output;
-          }
-
-          // Some, but not all rows passed.
-          return wrap(numPassed, indices, output);
-        } else {
+        if (numPassed == numRows) {
+          // All rows passed.
           return output;
         }
+
+        // Some, but not all rows passed.
+        return wrap(numPassed, indices, output);
+      } else {
+        return output;
       }
     }
 

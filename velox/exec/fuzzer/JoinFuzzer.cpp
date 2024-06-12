@@ -858,8 +858,7 @@ void JoinFuzzer::makeAlternativePlans(
               joinNode->isNullAware())
           .planNode()});
 
-  // Use OrderBy + MergeJoin (if join type is inner, left, left semi, right semi
-  // and anti).
+  // Use OrderBy + MergeJoin
   if (joinNode->isInnerJoin() || joinNode->isLeftJoin() ||
       joinNode->isLeftSemiFilterJoin() || joinNode->isRightSemiFilterJoin() ||
       joinNode->isAntiJoin()) {
