@@ -22,7 +22,6 @@ add_library(
   BitUtil.cpp
   Counters.cpp
   Fs.cpp
-  PeriodicStatsReporter.cpp
   RandomUtil.cpp
   RawVector.cpp
   RuntimeMetrics.cpp
@@ -36,6 +35,12 @@ target_link_libraries(
   velox_common_base
   PUBLIC velox_exception Folly::folly fmt::fmt xsimd
   PRIVATE velox_common_compression velox_process velox_test_util glog::glog)
+
+add_library(velox_common_stats_reporter PeriodicStatsReporter.cpp)
+target_link_libraries(
+  velox_common_stats_reporter
+  PUBLIC velox_caching velox_memory Folly::folly
+  PRIVATE velox_common_base)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

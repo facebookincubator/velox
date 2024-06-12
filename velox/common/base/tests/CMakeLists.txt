@@ -40,6 +40,7 @@ target_link_libraries(
   velox_base_test
   PRIVATE velox_caching
           velox_common_base
+          velox_common_stats_reporter
           velox_memory
           velox_time
           velox_status
@@ -72,5 +73,11 @@ target_link_libraries(
 
 add_executable(velox_memcpy_meter Memcpy.cpp)
 target_link_libraries(
-  velox_memcpy_meter PRIVATE velox_common_base velox_cache velox_exception velox_time velox_memory
-                             Folly::folly gflags::gflags)
+  velox_memcpy_meter
+  PRIVATE velox_common_base
+          velox_caching
+          velox_exception
+          velox_time
+          velox_memory
+          Folly::folly
+          gflags::gflags)
