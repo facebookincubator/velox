@@ -29,7 +29,7 @@ enum class CapacityUnit {
 
 double toBytesPerCapacityUnit(CapacityUnit unit);
 
-CapacityUnit valueOfCapacityUnit(const std::string& unitStr);
+CapacityUnit valueOfCapacityUnit(std::string& unitStr);
 
 /// Convert capacity string with unit to the capacity number in the specified
 /// units
