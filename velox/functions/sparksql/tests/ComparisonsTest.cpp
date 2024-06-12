@@ -73,7 +73,20 @@ class ComparisonsTest : public SparkFunctionBaseTest {
     auto actual = evaluate<SimpleVector<bool>>(
         fmt::format("{}(c0, c1)", functionName), makeRowVector(input));
     facebook::velox::test::assertEqualVectors(expectedResult, actual);
-  };
+  }
+
+  void runAndCompare(
+      const std::string& functionName,
+      const std::vector<VectorPtr>& input,
+      const std::optional<bool>& expectedResult) {
+    auto result = evaluate<SimpleVector<bool>>(
+        fmt::format("{}(c0, c1)", functionName), makeRowVector(input));
+    if (!expectedResult.has_value()) {
+      ASSERT_TRUE(result->isNullAt(0));
+    } else {
+      ASSERT_EQ(expectedResult.value(), result->valueAt(0));
+    }
+  }
 };
 
 TEST_F(ComparisonsTest, equaltonullsafe) {
@@ -110,6 +123,88 @@ TEST_F(ComparisonsTest, equalto) {
   EXPECT_EQ(equalto<float>(-kInfF, 1.0), false);
   EXPECT_EQ(equalto<float>(kInfF, -kInfF), false);
   EXPECT_EQ(equalto<double>(kInf, kNaN), false);
+}
+
+TEST_F(ComparisonsTest, equalToAndEqualNullSafeForArray) {
+  auto test = [&](const std::string& array1,
+                  const std::string& array2,
+                  std::optional<bool> expectedEqResult,
+                  std::optional<bool> expectedEqNullSafeResult) {
+    auto vector1 = makeArrayVectorFromJson<double>({array1});
+    auto vector2 = makeArrayVectorFromJson<double>({array2});
+    runAndCompare("equalto", {vector1, vector2}, expectedEqResult);
+    runAndCompare(
+        "equalnullsafe", {vector1, vector2}, expectedEqNullSafeResult);
+  };
+
+  test("null", "null", std::nullopt, true);
+  test("null", "[1.0]", std::nullopt, false);
+  test("[1.0]", "null", std::nullopt, false);
+
+  test("[]", "[]", true, true);
+
+  test("[1.0, 2.0, 3.0]", "[1.0, 2.0, 3.0]", true, true);
+  test("[1.0, 2.0, 3.0]", "[1.0, 2.0, 4.0]", false, false);
+
+  test("[1.0, null]", "[6.0, 2.0]", false, false);
+
+  test("[1.0, null]", "[1.0, 2.0]", false, false);
+
+  test("[1.0, NaN]", "[1.0, NaN]", true, true);
+
+  // Different size arrays.
+  test("[]", "[null, null]", false, false);
+  test("[1.0, 2.0]", "[1.0, 2.0, null]", false, false);
+  test("[null, null]", "[null, null, null]", false, false);
+
+  test("[null, null]", "[null, null]", true, true);
+}
+
+TEST_F(ComparisonsTest, equalToAndEqualNullSafeForRow) {
+  auto constructRowVector = [&](const std::optional<int64_t>& row,
+                                const bool rowIsNull = false) {
+    if (rowIsNull) {
+      return makeRowVector(
+          {makeNullableFlatVector<int64_t>({row})}, nullEvery(1));
+    } else {
+      return makeRowVector({makeNullableFlatVector<int64_t>({row})});
+    }
+  };
+  auto test = [&](const RowVectorPtr& vector1,
+                  const RowVectorPtr& vector2,
+                  std::optional<bool> expectedEqResult,
+                  std::optional<bool> expectedEqNullSafeResult) {
+    runAndCompare("equalto", {vector1, vector2}, expectedEqResult);
+    runAndCompare(
+        "equalnullsafe", {vector1, vector2}, expectedEqNullSafeResult);
+  };
+
+  test(
+      constructRowVector(std::nullopt, true),
+      constructRowVector(std::nullopt, true),
+      std::nullopt,
+      true);
+  test(
+      constructRowVector(std::nullopt, true),
+      constructRowVector(1, false),
+      std::nullopt,
+      false);
+  test(
+      constructRowVector(1, false),
+      constructRowVector(std::nullopt, true),
+      std::nullopt,
+      false);
+
+  test(
+      constructRowVector(std::nullopt),
+      constructRowVector(std::nullopt),
+      true,
+      true);
+  test(constructRowVector(std::nullopt), constructRowVector(1), false, false);
+  test(constructRowVector(1), constructRowVector(std::nullopt), false, false);
+
+  test(constructRowVector(1), constructRowVector(2), false, false);
+  test(constructRowVector(1), constructRowVector(1), true, true);
 }
 
 TEST_F(ComparisonsTest, between) {
@@ -409,8 +504,6 @@ TEST_F(ComparisonsTest, dateTypes) {
 
 TEST_F(ComparisonsTest, notSupportedTypes) {
   const auto candidataFuncs = {
-      "equalnullsafe",
-      "equalto",
       "lessthan",
       "lessthanorequal",
       "greaterthan",
