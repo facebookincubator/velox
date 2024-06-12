@@ -13,6 +13,10 @@ Miscellaneous Functions
     The function relies on partition IDs, which are provided by the framework
     via the configuration 'spark.partition_id'.
 
+.. spark:function:: raise_error(str) -> void
+
+    Throws an runtime exception with ``str``.
+
 .. spark:function:: spark_partition_id() -> integer
 
     Returns the current partition id.
@@ -31,7 +35,3 @@ Miscellaneous Functions
     ``seed`` must be constant. ::
 
         SELECT uuid(0);    -- "8c7f0aac-97c4-4a2f-b716-a675d821ccc0"
-
-
-.. spark:function:: raise_error(str) -> void
-    Throws an runtime exception with ``str``.

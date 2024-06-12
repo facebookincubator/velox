@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <iostream>
 #include "velox/functions/Macros.h"
 namespace facebook::velox::functions::sparksql {
 
@@ -23,7 +22,7 @@ template <typename T>
 struct RaiseErrorFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       UnknownValue& result,
       const arg_type<Varchar>& input) {
     throw std::runtime_error(input);

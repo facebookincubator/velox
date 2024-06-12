@@ -25,16 +25,11 @@ class RaiseErrorTest : public SparkFunctionBaseTest {
   void raiseError(const std::optional<std::string>& errMsg) {
     evaluateOnce<UnknownValue>("raise_error(c0)", errMsg);
   }
-  void testRaiseError(
-      const std::optional<std::string>& errMsg,
-      std::string expectedMsg) {
-    VELOX_ASSERT_THROW(raiseError(errMsg), expectedMsg);
-  }
 };
 
 TEST_F(RaiseErrorTest, basic) {
-  testRaiseError("", "");
-  testRaiseError("0 > 1 is not true", "0 > 1 is not true");
+  VELOX_ASSERT_THROW(raiseError(""), "");
+  VELOX_ASSERT_THROW(raiseError("0 > 1 is not true"), "0 > 1 is not true");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
