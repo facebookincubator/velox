@@ -77,7 +77,7 @@ class TableScan : public SourceOperator {
   DriverCtx* const driverCtx_;
   memory::MemoryPool* const connectorPool_;
   ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
-  BlockingReason blockingReason_ = BlockingReason::kNotBlocked;
+  BlockingReason blockingReason_{BlockingReason::kNotBlocked};
   int64_t currentSplitWeight_{0};
   bool needNewSplit_ = true;
   std::shared_ptr<connector::Connector> connector_;
