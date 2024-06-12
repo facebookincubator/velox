@@ -32,7 +32,7 @@ FetchContent_Declare(
     ${CMAKE_CURRENT_LIST_DIR}/glog/glog-config.patch OVERRIDE_FIND_PACKAGE
     SYSTEM EXCLUDE_FROM_ALL)
 
-set(BUILD_SHARED_LIBS OFF)
+set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 set(WITH_UNWIND OFF)
 set(gflags_NAMESPACE google)
 set(BUILD_TESTING OFF)
@@ -41,9 +41,6 @@ unset(BUILD_TESTING)
 unset(BUILD_SHARED_LIBS)
 add_dependencies(glog gflags::gflags)
 
-list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/glog)
-set(glog_INCLUDE_DIR ${glog_BINARY_DIR})
-set(glog_LIBRARY ${glog_BINARY_DIR}/libglog$<$<CONFIG:Debug>:d>.a)
 
 # These headers are missing from the include dir but adding the src dir causes
 # issues with folly so we just copy it to the include dir
