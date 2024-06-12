@@ -23,7 +23,7 @@
 namespace facebook::velox::dwrf {
 enum class FlushDecision {
   SKIP,
-  EVALUATE_DICTIONARY,
+  CHECK_DICTIONARY,
   FLUSH_DICTIONARY,
   ABANDON_DICTIONARY,
 };
@@ -76,11 +76,13 @@ class DefaultFlushPolicy : public DWRFFlushPolicy {
   void onClose() override {}
 
  private:
-  uint64_t getDictionaryAssessmentIncrement() const;
+  void setNextDictionaryCheckThreshold(uint64_t stripeSizeEstimate = 0);
 
   const uint64_t stripeSizeThreshold_;
   const uint64_t dictionarySizeThreshold_;
-  uint64_t dictionaryAssessmentThreshold_;
+  const uint64_t dictionaryCheckIncrement_;
+  uint64_t stripeIndex_{0};
+  uint64_t dictionaryCheckThreshold_{0};
 };
 
 class RowsPerStripeFlushPolicy : public DWRFFlushPolicy {
