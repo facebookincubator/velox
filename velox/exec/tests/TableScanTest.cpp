@@ -33,6 +33,8 @@
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -3549,6 +3551,9 @@ TEST_F(TableScanTest, randomSample) {
   auto writeConfig = std::make_shared<dwrf::Config>();
   writeConfig->set<uint64_t>(
       dwrf::Config::STRIPE_SIZE, rows->size() * sizeof(double));
+  std::shared_ptr<dwrf::WriterOptions> dwrfWriterOptions =
+      std::make_shared<dwrf::WriterOptions>();
+  dwrfWriterOptions->config = writeConfig;
   int numTotalRows = 0;
   for (int i = 0; i < 10; ++i) {
     auto file = TempFilePath::create();
@@ -3557,10 +3562,10 @@ TEST_F(TableScanTest, randomSample) {
       for (int j = 0; j < 100; ++j) {
         vectors.push_back(rows);
       }
-      writeToFile(file->getPath(), vectors, writeConfig);
+      writeToFile(file->getPath(), vectors, dwrfWriterOptions);
       numTotalRows += rows->size() * vectors.size();
     } else {
-      writeToFile(file->getPath(), {rows}, writeConfig);
+      writeToFile(file->getPath(), {rows}, dwrfWriterOptions);
       numTotalRows += rows->size();
     }
     files.push_back(file);
@@ -4810,9 +4815,12 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
   config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
   config->set<const std::vector<std::vector<std::string>>>(
       dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS, {keys});
+  std::shared_ptr<dwrf::WriterOptions> dwrfWriterOptions =
+      std::make_shared<dwrf::WriterOptions>();
+  dwrfWriterOptions->config = config;
   auto file = TempFilePath::create();
   auto writeSchema = ROW({"c0"}, {MAP(INTEGER(), BIGINT())});
-  writeToFile(file->getPath(), {vector}, config, writeSchema);
+  writeToFile(file->getPath(), {vector}, dwrfWriterOptions, writeSchema);
   auto readSchema = asRowType(vector->type());
   auto plan =
       PlanBuilder().tableScan(readSchema, {}, "", writeSchema).planNode();
