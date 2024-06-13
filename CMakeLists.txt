@@ -328,8 +328,7 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-array-bounds \
          -Wno-maybe-uninitialized \
          -Wno-unused-result \
-         -Wno-format-overflow \
-         -Wno-strict-aliasing")
+         -Wno-format-overflow")
   endif()
 
   set(KNOWN_WARNINGS
