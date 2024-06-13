@@ -26,20 +26,7 @@
 #include "CudfHashJoin.hpp"
 #include <nvtx3/nvtx3.hpp>
 
-using namespace facebook::velox;
-using namespace facebook::velox::test;
-using namespace facebook::velox::exec;
-using namespace facebook::velox::exec::test;
-
-// few utility functions
-std::vector<std::string> concat(
-    const std::vector<std::string>& a,
-    const std::vector<std::string>& b) {
-  std::vector<std::string> result;
-  result.insert(result.end(), a.begin(), a.end());
-  result.insert(result.end(), b.begin(), b.end());
-  return result;
-}
+namespace facebook::velox::cudf_velox {
 
 // Custom hash join operator which uses libcudf
 // need to define a new PlanNode, JoinBridge, Operators (Build, Probe), and a PlanNodeTranslator
@@ -66,7 +53,7 @@ private:
     std::vector<core::PlanNodePtr> sources_;
 };
 
-class CudfHashJoinBridge : public JoinBridge {
+class CudfHashJoinBridge : public exec::JoinBridge {
     public:
     using HashType = std::pair<std::unique_ptr<cudf::table>, std::shared_ptr<cudf::hash_join>>;
     // using HashType = int;
@@ -95,14 +82,14 @@ private:
   std::optional<HashType> hashObject_;
 };
 
-class CudfHashJoinBuild : public Operator {
+class CudfHashJoinBuild : public exec::Operator {
 public:
   CudfHashJoinBuild(
     int32_t operatorId,
-    DriverCtx* driverCtx,
+    exec::DriverCtx* driverCtx,
     std::shared_ptr<const CudfHashJoinNode> joinNode)
     // TODO check outputType should be set or not?
-    : Operator(driverCtx,  nullptr, // joinNode->sources(),
+    : exec::Operator(driverCtx,  nullptr, // joinNode->sources(),
     operatorId, joinNode->id(), "CudfHashJoinBuild") {}
 
     void addInput(RowVectorPtr input) override {
@@ -124,7 +111,7 @@ public:
         Operator::noMoreInput();
         // TODO
         std::vector<ContinuePromise> promises;
-        std::vector<std::shared_ptr<Driver>> peers;
+        std::vector<std::shared_ptr<exec::Driver>> peers;
         // Only last driver collects all answers
         if (!operatorCtx_->task()->allPeersFinished(
             planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
@@ -161,12 +148,12 @@ public:
         cudf_HashJoinBridge->setHashTable(std::make_optional(std::make_pair(std::move(tbl), std::move(hashObject))));
     }
 
-    BlockingReason isBlocked(ContinueFuture* future) override {
+    exec::BlockingReason isBlocked(ContinueFuture* future) override {
         if (!future_.valid()) {
-        return BlockingReason::kNotBlocked;
+        return exec::BlockingReason::kNotBlocked;
         }
         *future = std::move(future_);
-        return BlockingReason::kWaitForJoinBuild;
+        return exec::BlockingReason::kWaitForJoinBuild;
     }
 
     bool isFinished() override {
@@ -178,14 +165,14 @@ private:
     ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
 
-class CudfHashJoinProbe : public Operator {
+class CudfHashJoinProbe : public exec::Operator {
     public:
     using HashType = CudfHashJoinBridge::HashType;
     CudfHashJoinProbe(
         int32_t operatorId,
-        DriverCtx* driverCtx,
+        exec::DriverCtx* driverCtx,
         std::shared_ptr<const CudfHashJoinNode> joinNode)
-        : Operator(driverCtx, nullptr, // joinNode->sources(),
+        : exec::Operator(driverCtx, nullptr, // joinNode->sources(),
         operatorId, joinNode->id(), "CudfHashJoinProbe") {}
 
     bool needsInput() const override {
@@ -247,9 +234,9 @@ class CudfHashJoinProbe : public Operator {
         return output;
     }
 
-    BlockingReason isBlocked(ContinueFuture* future) override {
+    exec::BlockingReason isBlocked(ContinueFuture* future) override {
         if (hashObject_.has_value()) {
-        return BlockingReason::kNotBlocked;
+        return exec::BlockingReason::kNotBlocked;
         }
 
         auto joinBridge = operatorCtx_->task()->getCustomJoinBridge(
@@ -258,12 +245,12 @@ class CudfHashJoinProbe : public Operator {
                         ->HashOrFuture(future);
 
         if (!hashObject.has_value()) {
-        return BlockingReason::kWaitForJoinBuild;
+        return exec::BlockingReason::kWaitForJoinBuild;
         }
         hashObject_ = std::move(hashObject);
         // remainingLimit_ = hashObject.value();
 
-        return BlockingReason::kNotBlocked;
+        return exec::BlockingReason::kNotBlocked;
     }
 
     bool isFinished() override {
@@ -275,16 +262,16 @@ class CudfHashJoinProbe : public Operator {
     bool finished_{false};
 };
 
-class CudfHashJoinBridgeTranslator : public Operator::PlanNodeTranslator {
-  std::unique_ptr<Operator>
-  toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node) {
+class CudfHashJoinBridgeTranslator : public exec::Operator::PlanNodeTranslator {
+  std::unique_ptr<exec::Operator>
+  toOperator(exec::DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node) {
     if (auto joinNode = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
       return std::make_unique<CudfHashJoinProbe>(id, ctx, joinNode);
     }
     return nullptr;
   }
 
-  std::unique_ptr<JoinBridge> toJoinBridge(const core::PlanNodePtr& node) {
+  std::unique_ptr<exec::JoinBridge> toJoinBridge(const core::PlanNodePtr& node) {
     if (auto joinNode = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
       auto joinBridge = std::make_unique<CudfHashJoinBridge>();
       return joinBridge;
@@ -292,15 +279,27 @@ class CudfHashJoinBridgeTranslator : public Operator::PlanNodeTranslator {
     return nullptr;
   }
 
-  OperatorSupplier toOperatorSupplier(const core::PlanNodePtr& node) {
+  exec::OperatorSupplier toOperatorSupplier(const core::PlanNodePtr& node) {
     if (auto joinNode = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
-      return [joinNode](int32_t operatorId, DriverCtx* ctx) {
+      return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
         return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, joinNode);
       };
     }
     return nullptr;
   }
 };
+
+/*
+
+// few utility functions
+std::vector<std::string> concat(
+    const std::vector<std::string>& a,
+    const std::vector<std::string>& b) {
+  std::vector<std::string> result;
+  result.insert(result.end(), a.begin(), a.end());
+  result.insert(result.end(), b.begin(), b.end());
+  return result;
+}
 
 // CudfHashJoinDemo class methods implementation
 CudfHashJoinDemo::CudfHashJoinDemo() {
@@ -379,7 +378,8 @@ CudfHashJoinDemo::result_type CudfHashJoinDemo::testCudfHashJoin(
         PlanBuilder(planNodeIdGenerator)
             .values({leftBatch}, true)
             .addNode([&leftNode, &rightNode](
-                         std::string id, core::PlanNodePtr /* input */) {
+                         std::string id, core::PlanNodePtr // input
+                        ) {
               return std::make_shared<CudfHashJoinNode>(
                   id, std::move(leftNode), std::move(rightNode));
             })
@@ -408,3 +408,6 @@ bool CudfHashJoinDemo::CompareResults(
     auto result    = testCudfHashJoin (numThreads, leftBatch, rightBatch, referenceQuery);
     return assertEqualResults(result.second, reference.second);
   }
+*/
+
+} // namespace facebook::velox::cudf_velox
