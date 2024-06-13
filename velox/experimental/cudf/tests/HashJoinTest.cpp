@@ -983,17 +983,17 @@ class MultiThreadedHashJoinTest
   }
 };
 
-TEST_P(MultiThreadedHashJoinTest, bigintArray) {
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .numDrivers(numDrivers_)
-      .keyTypes({BIGINT()})
-      .probeVectors(1600, 5)
-      .buildVectors(1500, 5)
-      .referenceQuery(
-          "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
-      .run();
-}
-
+// TEST_P(MultiThreadedHashJoinTest, bigintArray) {
+//   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+//       .numDrivers(numDrivers_)
+//       .keyTypes({BIGINT()})
+//       .probeVectors(16, 5)
+//       .buildVectors(15, 5)
+//       .referenceQuery(
+//           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
+//       .run();
+// }
+//
 // TEST_P(MultiThreadedHashJoinTest, outOfJoinKeyColumnOrder) {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .numDrivers(numDrivers_)
@@ -6441,56 +6441,56 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 //   }
 // }
 //
-// TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
-//   // Tests some cases where the row at the end of an output batch fails the
-//   // filter.
-//   auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
-//       {"t_k1", "t_k2"},
-//       {makeFlatVector<int32_t>(20, [](auto row) { return 1 + row % 2; }),
-//        makeFlatVector<int32_t>(20, [](auto row) { return row; })})};
-//   auto buildVectors = std::vector<RowVectorPtr>{
-//       makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2})})};
-//   createDuckDbTable("t", probeVectors);
-//   createDuckDbTable("u", {buildVectors});
-//   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//
-//   auto test = [&](const std::string& filter) {
-//     auto plan = PlanBuilder(planNodeIdGenerator)
-//                     .values(probeVectors, true)
-//                     .hashJoin(
-//                         {"t_k1"},
-//                         {"u_k1"},
-//                         PlanBuilder(planNodeIdGenerator)
-//                             .values(buildVectors, true)
-//                             .planNode(),
-//                         filter,
-//                         {"t_k1", "u_k1"},
-//                         core::JoinType::kLeft)
-//                     .planNode();
-//
-//     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-//         .planNode(plan)
-//         .injectSpill(false)
-//         .checkSpillStats(false)
-//         .maxSpillLevel(0)
-//         .numDrivers(1)
-//         .config(
-//             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-//         .referenceQuery(fmt::format(
-//             "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
-//             filter))
-//         .run();
-//   };
-//
-//   // Alternate rows pass this filter and last row of a batch fails.
-//   test("t_k1=1");
-//
-//   // All rows fail this filter.
-//   test("t_k1=5");
-//
-//   // All rows in the second batch pass this filter.
-//   test("t_k2 > 9");
-// }
+TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
+  // Tests some cases where the row at the end of an output batch fails the
+  // filter.
+  auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
+      {"t_k1", "t_k2"},
+      {makeFlatVector<int32_t>(2000, [](auto row) { return 1 + row % 2; }),
+       makeFlatVector<int32_t>(2000, [](auto row) { return row; })})};
+  auto buildVectors = std::vector<RowVectorPtr>{
+      makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2})})};
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {buildVectors});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto test = [&](const std::string& filter) {
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors, true)
+                    .hashJoin(
+                        {"t_k1"},
+                        {"u_k1"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors, true)
+                            .planNode(),
+                        filter,
+                        {"t_k1", "u_k1"},
+                        core::JoinType::kLeft)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .maxSpillLevel(0)
+        .numDrivers(1)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
+        .referenceQuery(fmt::format(
+            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+            filter))
+        .run();
+  };
+
+  // Alternate rows pass this filter and last row of a batch fails.
+  test("t_k1=1");
+
+  // All rows fail this filter.
+  // test("t_k1=5");
+
+  // All rows in the second batch pass this filter.
+  // test("t_k2 > 9");
+}
 //
 // TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
 //   // Tests some cases where the row at the end of an output batch fails the

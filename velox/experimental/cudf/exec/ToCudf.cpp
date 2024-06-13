@@ -36,7 +36,6 @@ bool CompileState::compile() {
   }
   return false;
 
-  /*
   int32_t first = 0;
   int32_t operatorIndex = 0;
   int32_t nodeIndex = 0;
@@ -44,6 +43,7 @@ bool CompileState::compile() {
   // Make sure operator states are initialized.  We will need to inspect some of
   // them during the transformation.
   driver_.initializeOperators();
+  /*
   for (; operatorIndex < operators.size(); ++operatorIndex) {
     if (!addOperator(operators[operatorIndex], nodeIndex, outputType)) {
       break;
