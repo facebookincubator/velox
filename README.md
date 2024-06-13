@@ -106,18 +106,9 @@ $ M4=/usr/bin/gm4 make
 
 You can also produce intel binaries on an M1, use `CPU_TARGET="sse"` for the above.
 
-### Setting up on aarch64 Linux (Ubuntu 20.04 or later)
+### Setting up on aarch64 or x86_64 Linux (Ubuntu 20.04 or later)
 
-On an aarch64 based machine, you can build like so:
-
-```shell
-$ CPU_TARGET="aarch64" ./scripts/setup-ubuntu.sh
-$ CPU_TARGET="aarch64" make
-```
-
-### Setting up on x86_64 Linux (Ubuntu 20.04 or later)
-
-Once you have checked out Velox, you can setup and build like so:
+On both x86_64 or aarch64 based machine, you can build like so:
 
 ```shell
 $ ./scripts/setup-ubuntu.sh
