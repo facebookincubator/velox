@@ -41,6 +41,9 @@ class AllocationPool {
   // only be power of 2.
   char* allocateFixed(uint64_t bytes, int32_t alignment = 1);
 
+  // Frees the indexth range.
+  void freeRangeAt(int32_t index);
+
   // Starts a new run for variable length allocation. The actual size
   // is at least one machine page. Throws std::bad_alloc if no space.
   void newRun(int64_t preferredSize);

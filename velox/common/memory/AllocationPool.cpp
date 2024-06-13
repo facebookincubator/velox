@@ -76,6 +76,22 @@ char* AllocationPool::allocateFixed(uint64_t bytes, int32_t alignment) {
   return result;
 }
 
+void AllocationPool::freeRangeAt(int32_t index) {
+  VELOX_CHECK_LT(index, numRanges() - 1);
+  if (index >= allocations_.size()) {
+    auto alloc = std::move(largeAllocations_[index - allocations_.size()]);
+    largeAllocations_.erase(
+        largeAllocations_.begin() + index - allocations_.size());
+    usedBytes_ -= alloc.size();
+    pool_->freeContiguous(alloc);
+    return;
+  }
+  auto alloc = std::move(allocations_[index]);
+  allocations_.erase(allocations_.begin() + index);
+  usedBytes_ -= alloc.runAt(0).numBytes();
+  pool_->freeNonContiguous(alloc);
+}
+
 void AllocationPool::maybeGrowLastAllocation(uint64_t bytesRequested) {
   const auto updateOffset = currentOffset_ + bytesRequested;
   if (updateOffset > endOfReservedRun()) {
