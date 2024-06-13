@@ -592,6 +592,38 @@ TEST_F(MergeJoinTest, semiJoin) {
       core::JoinType::kRightSemiFilter);
 }
 
+TEST_F(MergeJoinTest, rightJoin) {
+  auto left = makeRowVector(
+      {"t0"},
+      {makeNullableFlatVector<int64_t>(
+          {1, 2, std::nullopt, 5, 6, std::nullopt})});
+
+  auto right = makeRowVector(
+      {"u0"},
+      {makeNullableFlatVector<int64_t>(
+          {1, 5, 6, 8, std::nullopt, std::nullopt})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Right join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "t0 > 2",
+              {"t0", "u0"},
+              core::JoinType::kRight)
+          .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT * FROM t RIGHT JOIN u ON t.t0 = u.u0 AND t.t0 > 2");
+}
+
 TEST_F(MergeJoinTest, nullKeys) {
   auto left = makeRowVector(
       {"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 5, std::nullopt})});
