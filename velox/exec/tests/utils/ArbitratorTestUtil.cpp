@@ -36,6 +36,7 @@ std::shared_ptr<core::QueryCtx> newQueryCtx(
       executor,
       core::QueryConfig({}),
       configs,
+      {},
       cache::AsyncDataCache::getInstance(),
       std::move(pool));
   return queryCtx;

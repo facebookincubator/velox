@@ -155,6 +155,7 @@ class TaskCursorBase : public TaskCursor {
           executor_.get(),
           core::QueryConfig({}),
           std::unordered_map<std::string, std::shared_ptr<Config>>{},
+          {},
           cache::AsyncDataCache::getInstance(),
           nullptr,
           nullptr,
