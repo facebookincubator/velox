@@ -150,6 +150,19 @@ backslash (<code class="docutils literal notranslate"><span class="pre">\$</span
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">regexp_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dd><p>Replaces every instance of the substring matched by the regular expression
+<code class="docutils literal notranslate"><span class="pre">pattern</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code> using <code class="docutils literal notranslate"><span class="pre">function</span></code>. The lambda expression
+<code class="docutils literal notranslate"><span class="pre">function</span></code> is invoked for each match with the capturing groups passed as an
+array. Capturing group numbers start at 1; there is no group for the entire match
+(if you need this, surround the entire expression with parenthesis).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;new york&#39;</span><span class="p">,</span> <span class="s1">&#39;(\w)(\w*)&#39;</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">upper</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">||</span> <span class="n">lower</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="mi">2</span><span class="p">]));</span> <span class="o">--</span><span class="s1">&#39;New York&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="regexp_split">
 <span class="sig-name descname"><span class="pre">regexp_split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array(varchar):</span></span></span><a class="headerlink" href="#regexp_split" title="Link to this definition">¶</a></dt>
 <dd><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> using the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> and returns an
@@ -177,6 +190,7 @@ array. Trailing empty strings are preserved:</p>
 <li><a class="reference internal" href="#regexp_extract_all"><code class="docutils literal notranslate"><span class="pre">regexp_extract_all()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_like"><code class="docutils literal notranslate"><span class="pre">regexp_like()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_replace"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a></li>
 <li><a class="reference internal" href="#regexp_split"><code class="docutils literal notranslate"><span class="pre">regexp_split()</span></code></a></li>
 </ul>
 </li>
