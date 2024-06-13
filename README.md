@@ -106,16 +106,17 @@ $ M4=/usr/bin/gm4 make
 
 You can also produce intel binaries on an M1, use `CPU_TARGET="sse"` for the above.
 
-### Setting up on aarch64 or x86_64 Linux (Ubuntu 20.04 or later)
+### Setting up on Ubuntu (20.04 or later)
 
-On both x86_64 or aarch64 based machine, you can build like so:
+The supported architectures are x86_64 (avx, sse), and AArch64 (apple-m1+crc, neoverse-n1).
+You can build like so:
 
 ```shell
 $ ./scripts/setup-ubuntu.sh
 $ make
 ```
 
-### Setting up on x86_64 Linux (Centos 9 Stream) with adapters
+### Setting up on Centos 9 Stream with adapters
 
 Velox adapters include file-systems such as AWS S3, Google Cloud Storage,
 and Azure Blob File System. These adapters require installation of additional
