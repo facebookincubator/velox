@@ -20,6 +20,9 @@
 
 #include <string>
 
+namespace facebook::velox::cudf_velox {
+
+/*
 class CudfHashJoinDemo : public facebook::velox::test::VectorTestBase {
  public:
   using vector_size_t = facebook::velox::vector_size_t;
@@ -56,3 +59,7 @@ class CudfHashJoinDemo : public facebook::velox::test::VectorTestBase {
       const std::vector<RowVectorPtr>& rightBatch, // build input
       const std::string& referenceQuery);
 };
+
+*/
+
+} // namespace facebook::velox::cudf_velox

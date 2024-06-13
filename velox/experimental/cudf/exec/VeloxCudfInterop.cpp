@@ -39,7 +39,7 @@
 
 #include "VeloxCudfInterop.hpp"
 
-using namespace facebook::velox;
+namespace facebook::velox::cudf_velox {
 
 // Velox type to CUDF type
 /*
@@ -234,3 +234,5 @@ RowVectorPtr to_velox_column(const cudf::table_view& table, memory::MemoryPool* 
     auto vcol = test::VectorMaker{pool}.rowVector(std::move(names), std::move(children));
     return vcol;
 }
+
+} // namespace facebook::velox::cudf_velox
