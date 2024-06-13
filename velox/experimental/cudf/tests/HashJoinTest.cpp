@@ -972,17 +972,17 @@ class HashJoinTest : public HiveConnectorTestBase {
   friend class HashJoinBuilder;
 };
 
-class MultiThreadedHashJoinTest
-    : public HashJoinTest,
-      public testing::WithParamInterface<TestParam> {
- public:
-  MultiThreadedHashJoinTest() : HashJoinTest(GetParam()) {}
-
-  static std::vector<TestParam> getTestParams() {
-    return std::vector<TestParam>({TestParam{1}, TestParam{3}});
-  }
-};
-
+// class MultiThreadedHashJoinTest
+//     : public HashJoinTest,
+//       public testing::WithParamInterface<TestParam> {
+//  public:
+//   MultiThreadedHashJoinTest() : HashJoinTest(GetParam()) {}
+//
+//   static std::vector<TestParam> getTestParams() {
+//     return std::vector<TestParam>({TestParam{1}, TestParam{3}});
+//   }
+// };
+//
 // TEST_P(MultiThreadedHashJoinTest, bigintArray) {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .numDrivers(numDrivers_)
@@ -3936,10 +3936,10 @@ class MultiThreadedHashJoinTest
 //       .run();
 // }
 //
-VELOX_INSTANTIATE_TEST_SUITE_P(
-    HashJoinTest,
-    MultiThreadedHashJoinTest,
-    testing::ValuesIn(MultiThreadedHashJoinTest::getTestParams()));
+// VELOX_INSTANTIATE_TEST_SUITE_P(
+//     HashJoinTest,
+//     MultiThreadedHashJoinTest,
+//     testing::ValuesIn(MultiThreadedHashJoinTest::getTestParams()));
 //
 // // TODO: try to parallelize the following test cases if possible.
 // TEST_F(HashJoinTest, memory) {
