@@ -556,7 +556,9 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
 <dl class="py function">
 <dt class="sig sig-object py" id="hour">
 <span class="sig-name descname"><span class="pre">hour</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#hour" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the hour of the day from <code class="docutils literal notranslate"><span class="pre">x</span></code>. The value ranges from 0 to 23.</p>
+<dd><p>Returns the hour of the day from <code class="docutils literal notranslate"><span class="pre">x</span></code>. The value ranges from 0 to 23.
+Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are: DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE,
+INTERVAL DAY TO SECOND¶.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -568,19 +570,22 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
 <dl class="py function">
 <dt class="sig sig-object py" id="millisecond">
 <span class="sig-name descname"><span class="pre">millisecond</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">int64</span></span></span><a class="headerlink" href="#millisecond" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the millisecond of the second from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<dd><p>Returns the millisecond of the second from <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are:
+DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="minute">
 <span class="sig-name descname"><span class="pre">minute</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#minute" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the minute of the hour from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<dd><p>Returns the minute of the hour from <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are:
+DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="month">
 <span class="sig-name descname"><span class="pre">month</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#month" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the month of the year from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<dd><p>Returns the month of the year from <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are:
+DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL YEAR TO MONTH.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -592,7 +597,8 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
 <dl class="py function">
 <dt class="sig sig-object py" id="second">
 <span class="sig-name descname"><span class="pre">second</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#second" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the second of the minute from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<dd><p>Returns the second of the minute from <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are:
+DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -622,7 +628,8 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
 <dl class="py function">
 <dt class="sig sig-object py" id="year">
 <span class="sig-name descname"><span class="pre">year</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#year" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the year from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<dd><p>Returns the year from <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are:
+DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL YEAR TO MONTH.</p>
 </dd></dl>
 
 <dl class="py function">
