@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, NVIDIA CORPORATION.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@
 #include <thrust/execution_policy.h>
 #include <nvtx3/nvtx3.hpp>
 
-#include "VeloxCudfInterop.hpp"
+#include "VeloxCudfInterop.h"
 
 namespace facebook::velox::cudf_velox {
 

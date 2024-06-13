@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/exec/Operator.h" // Compilation fails in Driver.h if Operator.h isn't included first!
 #include "velox/exec/Driver.h"
@@ -99,6 +100,8 @@ bool cudfDriverAdapter(
 }
 
 void registerCudf() {
+  std::cout << "Registering CudfHashJoinBridgeTranslator" << std::endl;
+  exec::Operator::registerOperator(std::make_unique<CudfHashJoinBridgeTranslator>());
   std::cout << "Registering cudfDriverAdapter" << std::endl;
   exec::DriverAdapter cudfAdapter{"cuDF", {}, cudfDriverAdapter};
   exec::DriverFactory::registerAdapter(cudfAdapter);
