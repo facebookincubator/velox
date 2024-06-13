@@ -14,7 +14,9 @@
 
 add_library(
   velox_cudf_exec
-  ToCudf.cpp)
+  CudfHashJoin.cpp
+  ToCudf.cpp
+  VeloxCudfInterop.cpp)
 
 set_target_properties(velox_cudf_exec PROPERTIES CUDA_ARCHITECTURES native)
 
