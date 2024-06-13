@@ -61,6 +61,21 @@ static inline const std::string_view kRow{"ROW"};
 static inline const std::string_view kRLE{"RLE"};
 static inline const std::string_view kDictionary{"DICTIONARY"};
 
+struct CompressionStats {
+  // Number of times compression was not attempted.
+  int32_t numCompressionSkipped{0};
+
+  // uncompressed size for which compression was attempted.
+  int64_t compressionInputBytes{0};
+
+  // Compressed bytes.
+  int64_t compressedBytes{0};
+
+  // Bytes for which compression was not attempted because of past
+  // non-performance.
+  int64_t compressionSkippedBytes{0};
+};
+
 int64_t computeChecksum(
     PrestoOutputStreamListener* listener,
     int codecMarker,
@@ -3631,13 +3646,28 @@ FlushSizes flushCompressed(
   return {uncompressedSize, compressedSize};
 }
 
-FlushSizes flushStreams(
+void flushStreams(
     const std::vector<std::unique_ptr<VectorStream>>& streams,
-    int32_t numRows,
+    const int32_t numRows,
     const StreamArena& arena,
+    // non-const only because it's compress function is non-const and will be
+    // invoked by flushCompressed.
     folly::io::Codec& codec,
-    float minCompressionRatio,
+    // If compression is enabled and the compression ratio for a batch exceeds
+    // this value, compression will be temporarily disabled.
+    const float minCompressionRatio,
+    // If this is 0 and compression is enabled, if the compression ratio exceeds
+    // minCompressionRatio this will be used to indicate the number of batches
+    // to skip compression on.  If this is greater than 0, compression will be
+    // disabled for the current batch and this value will be decremented.
+    int32_t& numCompressionsToSkip,
+    // If compression is enabled, this will be updated with values suitable for
+    // exporting.
+    CompressionStats& stats,
+    // The stream the output is written to.
     OutputStream* out) {
+  constexpr int32_t kMaxCompressionAttemptsToSkip = 30;
+
   auto listener = dynamic_cast<PrestoOutputStreamListener*>(out->listener());
   // Reset CRC computation
   if (listener) {
@@ -3645,12 +3675,41 @@ FlushSizes flushStreams(
   }
 
   if (!needCompression(codec)) {
-    const auto size = flushUncompressed(streams, numRows, out, listener);
-    return {size, size};
+    flushUncompressed(streams, numRows, out, listener);
   } else {
-    return flushCompressed(
-        streams, arena, codec, numRows, minCompressionRatio, out, listener);
+    if (numCompressionsToSkip > 0) {
+      const auto noCompressionCodec = common::compressionKindToCodec(
+          common::CompressionKind::CompressionKind_NONE);
+      const auto size = flushUncompressed(streams, numRows, out, listener);
+      stats.compressionSkippedBytes += size;
+      --numCompressionsToSkip;
+      ++stats.numCompressionSkipped;
+    } else {
+      const auto [size, compressedSize] = flushCompressed(
+          streams, arena, codec, numRows, minCompressionRatio, out, listener);
+      stats.compressionInputBytes += size;
+      stats.compressedBytes += compressedSize;
+      if (compressedSize > size * minCompressionRatio) {
+        numCompressionsToSkip = std::min<int64_t>(
+            kMaxCompressionAttemptsToSkip, 1 + stats.numCompressionSkipped);
+      }
+    }
   }
+}
+
+std::unordered_map<std::string, RuntimeCounter> runtimeStats(
+    const CompressionStats& stats) {
+  std::unordered_map<std::string, RuntimeCounter> map;
+  map.insert(
+      {{"compressedBytes",
+        RuntimeCounter(stats.compressedBytes, RuntimeCounter::Unit::kBytes)},
+       {"compressionInputBytes",
+        RuntimeCounter(
+            stats.compressionInputBytes, RuntimeCounter::Unit::kBytes)},
+       {"compressionSkippedBytes",
+        RuntimeCounter(
+            stats.compressionSkippedBytes, RuntimeCounter::Unit::kBytes)}});
+  return map;
 }
 
 template <TypeKind Kind>
@@ -3771,7 +3830,14 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
     }
 
     flushStreams(
-        streams, numRows, arena, *codec_, opts_.minCompressionRatio, stream);
+        streams,
+        numRows,
+        arena,
+        *codec_,
+        opts_.minCompressionRatio,
+        numCompressionsToSkip_,
+        stats_,
+        stream);
   }
 
   void estimateSerializedSize(
@@ -3780,6 +3846,10 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
       vector_size_t** sizes,
       Scratch& scratch) override {
     estimateSerializedSizeImpl(vector, ranges, sizes, scratch);
+  }
+
+  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
+    return ::facebook::velox::serializer::presto::runtimeStats(stats_);
   }
 
  private:
@@ -3914,7 +3984,11 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
 
   memory::MemoryPool* pool_;
   const std::unique_ptr<folly::io::Codec> codec_;
-  SerdeOpts opts_;
+  const SerdeOpts opts_;
+
+  // Count of forthcoming compressions to skip.
+  int32_t numCompressionsToSkip_{0};
+  CompressionStats stats_;
 };
 
 class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
@@ -3981,54 +4055,19 @@ class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
   // numRows(4) | codec(1) | uncompressedSize(4) | compressedSize(4) |
   // checksum(8) | data
   void flush(OutputStream* out) override {
-    constexpr int32_t kMaxCompressionAttemptsToSkip = 30;
-    if (!needCompression(*codec_)) {
-      flushStreams(
-          streams_,
-          numRows_,
-          *streamArena_,
-          *codec_,
-          opts_.minCompressionRatio,
-          out);
-    } else {
-      if (numCompressionToSkip_ > 0) {
-        const auto noCompressionCodec = common::compressionKindToCodec(
-            common::CompressionKind::CompressionKind_NONE);
-        auto [size, ignore] = flushStreams(
-            streams_, numRows_, *streamArena_, *noCompressionCodec, 1, out);
-        stats_.compressionSkippedBytes += size;
-        --numCompressionToSkip_;
-        ++stats_.numCompressionSkipped;
-      } else {
-        auto [size, compressedSize] = flushStreams(
-            streams_,
-            numRows_,
-            *streamArena_,
-            *codec_,
-            opts_.minCompressionRatio,
-            out);
-        stats_.compressionInputBytes += size;
-        stats_.compressedBytes += compressedSize;
-        if (compressedSize > size * opts_.minCompressionRatio) {
-          numCompressionToSkip_ = std::min<int64_t>(
-              kMaxCompressionAttemptsToSkip, 1 + stats_.numCompressionSkipped);
-        }
-      }
-    }
+    flushStreams(
+        streams_,
+        numRows_,
+        *streamArena_,
+        *codec_,
+        opts_.minCompressionRatio,
+        numCompressionToSkip_,
+        stats_,
+        out);
   }
 
   std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
-    std::unordered_map<std::string, RuntimeCounter> map;
-    map.insert(
-        {{"compressedBytes",
-          RuntimeCounter(stats_.compressedBytes, RuntimeCounter::Unit::kBytes)},
-         {"compressionInputBytes",
-          RuntimeCounter(
-              stats_.compressionInputBytes, RuntimeCounter::Unit::kBytes)},
-         {"compressionSkippedBytes",
-          RuntimeCounter(
-              stats_.compressionSkippedBytes, RuntimeCounter::Unit::kBytes)}});
-    return map;
+    return ::facebook::velox::serializer::presto::runtimeStats(stats_);
   }
 
   void clear() override {
@@ -4039,21 +4078,6 @@ class PrestoIterativeVectorSerializer : public IterativeVectorSerializer {
   }
 
  private:
-  struct CompressionStats {
-    // Number of times compression was not attempted.
-    int32_t numCompressionSkipped{0};
-
-    // uncompressed size for which compression was attempted.
-    int64_t compressionInputBytes{0};
-
-    // Compressed bytes.
-    int64_t compressedBytes{0};
-
-    // Bytes for which compression was not attempted because of past
-    // non-performance.
-    int64_t compressionSkippedBytes{0};
-  };
-
   const SerdeOpts opts_;
   StreamArena* const streamArena_;
   const std::unique_ptr<folly::io::Codec> codec_;

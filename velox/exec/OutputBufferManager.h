@@ -143,12 +143,24 @@ class OutputBufferManager {
     return compressionKind_;
   }
 
+  void testingSetMinCompressionRatio(const float minCompressionRatio) {
+    *const_cast<float*>(&minCompressionRatio_) = minCompressionRatio;
+  }
+
+  float minCompressionRatio() const {
+    return minCompressionRatio_;
+  }
+
  private:
   // Retrieves the set of buffers for a query.
   // Throws an exception if buffer doesn't exist.
   std::shared_ptr<OutputBuffer> getBuffer(const std::string& taskId);
 
   const common::CompressionKind compressionKind_;
+
+  // If compression is enabled, this is the minimum compression that
+  // must be achieved before starting to skip compression. Used for testing.
+  const float minCompressionRatio_ = 0.8;
 
   folly::Synchronized<
       std::unordered_map<std::string, std::shared_ptr<OutputBuffer>>,

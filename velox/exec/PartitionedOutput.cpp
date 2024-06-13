@@ -57,7 +57,8 @@ BlockingReason Destination::advance(
     serializer::presto::PrestoVectorSerde::PrestoOptions options;
     options.compressionKind =
         OutputBufferManager::getInstance().lock()->compressionKind();
-    options.minCompressionRatio = PartitionedOutput::minCompressionRatio();
+    options.minCompressionRatio =
+        OutputBufferManager::getInstance().lock()->minCompressionRatio();
     current_->createStreamTree(rowType, rowsInCurrent_, &options);
   }
   current_->append(

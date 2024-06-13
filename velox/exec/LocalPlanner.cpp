@@ -40,6 +40,7 @@
 #include "velox/exec/TableWriteMerge.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/TaskOutput.h"
 #include "velox/exec/TopN.h"
 #include "velox/exec/TopNRowNumber.h"
 #include "velox/exec/Unnest.h"
@@ -480,8 +481,13 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
                 planNode)) {
-      operators.push_back(std::make_unique<PartitionedOutput>(
-          id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
+      if (partitionedOutputNode->numPartitions() == 1) {
+        operators.push_back(
+            std::make_unique<TaskOutput>(id, ctx.get(), partitionedOutputNode));
+      } else {
+        operators.push_back(std::make_unique<PartitionedOutput>(
+            id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
+      }
     } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
