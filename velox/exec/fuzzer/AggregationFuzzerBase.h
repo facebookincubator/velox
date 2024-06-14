@@ -109,6 +109,14 @@ class AggregationFuzzerBase {
   };
 
  protected:
+  struct SortingKeyAndOrder {
+    const std::string key_;
+    const core::SortOrder sortOrder_;
+
+    SortingKeyAndOrder(std::string key, core::SortOrder sortOrder)
+        : key_(std::move(key)), sortOrder_(std::move(sortOrder)) {}
+  };
+
   struct Stats {
     // Names of functions that were tested.
     std::unordered_set<std::string> functionNames;
@@ -206,6 +214,7 @@ class AggregationFuzzerBase {
       std::vector<std::string> names,
       std::vector<TypePtr> types,
       const std::vector<std::string>& partitionKeys,
+      const std::vector<SortingKeyAndOrder> sortingKeysAndOrders,
       const CallableSignature& signature);
 
   std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>

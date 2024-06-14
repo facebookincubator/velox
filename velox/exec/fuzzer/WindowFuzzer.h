@@ -76,14 +76,6 @@ class WindowFuzzer : public AggregationFuzzerBase {
   void go(const std::string& planPath);
 
  private:
-  struct SortingKeyAndOrder {
-    const std::string key_;
-    const core::SortOrder sortOrder_;
-
-    SortingKeyAndOrder(std::string key, core::SortOrder sortOrder)
-        : key_(std::move(key)), sortOrder_(std::move(sortOrder)) {}
-  };
-
   void addWindowFunctionSignatures(const WindowFunctionMap& signatureMap);
 
   // Return a randomly generated frame clause string together with a boolean
