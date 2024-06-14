@@ -246,6 +246,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<FromIso8601Timestamp, TimestampWithTimezone, Varchar>(
       {prefix + "from_iso8601_timestamp"});
   registerFunction<CurrentDateFunction, Date>({prefix + "current_date"});
+  registerFunction<CurrentTimeFunction, TimeWithTimezone>(
+      {prefix + "current_time"});
 
   registerFunction<ToISO8601Function, Varchar, Date>({prefix + "to_iso8601"});
   registerFunction<ToISO8601Function, Varchar, Timestamp>(
@@ -266,6 +268,7 @@ void registerSimpleFunctions(const std::string& prefix) {
 
 void registerDateTimeFunctions(const std::string& prefix) {
   registerTimestampWithTimeZoneType();
+  registerTimeWithTimeZoneType();
 
   registerSimpleFunctions(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_from_unixtime, prefix + "from_unixtime");

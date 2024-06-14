@@ -18,6 +18,7 @@
 
 #include "velox/functions/prestosql/aggregates/PrestoHasher.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneUtil.h"
 #include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 

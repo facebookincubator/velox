@@ -219,6 +219,7 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
+  registry.Register("TimeMillisType", TimeMillisType::deserialize);
 }
 
 std::string ArrayType::toString() const {
@@ -1023,6 +1024,38 @@ int32_t DateType::toDays(const char* in, size_t len) const {
       .thenOrThrow(folly::identity, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
+}
+
+std::string TimeMillisType::valueToString(
+    int64_t millis,
+    const date::time_zone* zone) {
+  int64_t millisOfDay = velox::TimeUtil::getMillisOfDay(millis);
+  if (zone != nullptr) {
+    millisOfDay = velox::TimeUtil::toTimezone(millisOfDay, *zone);
+  }
+  VELOX_DCHECK_GE(millisOfDay, 0);
+
+  auto seconds = millisOfDay / velox::TimeUtil::kMillisecondsInSecond;
+  auto milliseconds = millisOfDay % velox::TimeUtil::kMillisecondsInSecond;
+
+  std::tm tm;
+  VELOX_USER_CHECK(
+      Timestamp::epochToCalendarUtc(seconds, tm),
+      "Can't convert seconds to time: {}",
+      seconds);
+
+  TimestampToStringOptions options;
+  options.mode = TimestampToStringOptions::Mode::kTimeOnly;
+  options.precision = TimestampToStringOptions::Precision::kMilliseconds;
+  std::string result;
+  result.resize(getMaxStringLength(options));
+  const auto view = Timestamp::tmToStringView(
+      tm,
+      milliseconds * Timestamp::kNanosecondsInMillisecond,
+      options,
+      result.data());
+  result.resize(view.size());
+  return result;
 }
 
 namespace {

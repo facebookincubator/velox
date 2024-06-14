@@ -444,6 +444,7 @@ bool isSupportedSignature(
       useTypeName(signature, "short_decimal") ||
       useTypeName(signature, "decimal") ||
       useTypeName(signature, "timestamp with time zone") ||
+      useTypeName(signature, "time with time zone") ||
       useTypeName(signature, "interval day to second") ||
       (enableComplexType && useTypeName(signature, "unknown")));
 }
