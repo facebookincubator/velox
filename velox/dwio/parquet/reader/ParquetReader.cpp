@@ -812,6 +812,11 @@ class ParquetRowReader::Impl {
       if (rowGroupInRange && !isExcluded && !isEmpty) {
         rowGroupIds_.push_back(i);
         firstRowOfRowGroup_.push_back(rowNumber);
+        if (!startRowPosition_.has_value()) {
+          startRowPosition_ = rowNumber;
+        }
+
+        endRowPosition_ = rowNumber + rowGroups_[i].num_rows;
       }
       rowNumber += rowGroups_[i].num_rows;
     }
@@ -823,6 +828,14 @@ class ParquetRowReader::Impl {
       return kAtEnd;
     }
     return firstRowOfRowGroup_[nextRowGroupIdsIdx_ - 1] + currentRowInGroup_;
+  }
+
+  std::optional<uint64_t> startRowPosition() const {
+    return startRowPosition_;
+  }
+
+  std::optional<uint64_t> endRowPosition() const {
+    return endRowPosition_;
   }
 
   int64_t nextReadSize(uint64_t size) {
@@ -911,6 +924,9 @@ class ParquetRowReader::Impl {
   uint64_t rowsInCurrentRowGroup_;
   uint64_t currentRowInGroup_;
 
+  std::optional<uint64_t> startRowPosition_;
+  std::optional<uint64_t> endRowPosition_;
+
   std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
 
   std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
@@ -930,6 +946,14 @@ void ParquetRowReader::filterRowGroups() {
 
 int64_t ParquetRowReader::nextRowNumber() {
   return impl_->nextRowNumber();
+}
+
+std::optional<uint64_t> ParquetRowReader::startRowPosition() const {
+  return impl_->startRowPosition();
+}
+
+std::optional<uint64_t> ParquetRowReader::endRowPosition() const {
+  return impl_->endRowPosition();
 }
 
 int64_t ParquetRowReader::nextReadSize(uint64_t size) {

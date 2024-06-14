@@ -45,7 +45,9 @@ class PositionalDeleteFileReader {
       const std::shared_ptr<io::IoStatistics>& ioStats,
       dwio::common::RuntimeStatistics& runtimeStats,
       uint64_t splitOffset,
-      const std::string& connectorId);
+      const std::string& connectorId,
+      std::optional<uint64_t> startRowPosition = std::nullopt,
+      std::optional<uint64_t> endRowPosition = std::nullopt);
 
   void readDeletePositions(
       uint64_t baseReadOffset,
