@@ -504,6 +504,46 @@ the <code class="docutils literal notranslate"><span class="pre">word</span></co
 <section id="unicode-functions">
 <h2>Unicode Functions<a class="headerlink" href="#unicode-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
+<dt class="sig sig-object py" id="normalize">
+<span class="sig-name descname"><span class="pre">normalize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#normalize" title="Link to this definition">¶</a></dt>
+<dd><p>Transforms <code class="docutils literal notranslate"><span class="pre">string</span></code> with NFC normalization form.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">normalize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">form</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
+<dd><p>Reference: <a class="reference external" href="https://unicode.org/reports/tr15/#Norm_Forms">https://unicode.org/reports/tr15/#Norm_Forms</a>
+Transforms <code class="docutils literal notranslate"><span class="pre">string</span></code> with the specified normalization form.
+<code class="docutils literal notranslate"><span class="pre">form</span></code> must be be one of the following keywords:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Form</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">NFD</span></code></p></td>
+<td><p>Canonical Decomposition</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">NFC</span></code></p></td>
+<td><p>Canonical Decomposition, followed by Canonical Composition</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">NFKD</span></code></p></td>
+<td><p>Compatibility Decomposition</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">NFKC</span></code></p></td>
+<td><p>Compatibility Decomposition, followed by Canonical Composition</p></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This SQL-standard function has special syntax and requires
+specifying <code class="docutils literal notranslate"><span class="pre">form</span></code> as a keyword, not as a string.</p>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="to_utf8">
 <span class="sig-name descname"><span class="pre">to_utf8</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#to_utf8" title="Link to this definition">¶</a></dt>
 <dd><p>Encodes <code class="docutils literal notranslate"><span class="pre">string</span></code> into a UTF-8 varbinary representation.</p>
@@ -549,6 +589,8 @@ the <code class="docutils literal notranslate"><span class="pre">word</span></co
 <li><a class="reference internal" href="#word_stem"><code class="docutils literal notranslate"><span class="pre">word_stem()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">word_stem()</span></code></a></li>
 <li><a class="reference internal" href="#unicode-functions">Unicode Functions</a><ul>
+<li><a class="reference internal" href="#normalize"><code class="docutils literal notranslate"><span class="pre">normalize()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">normalize()</span></code></a></li>
 <li><a class="reference internal" href="#to_utf8"><code class="docutils literal notranslate"><span class="pre">to_utf8()</span></code></a></li>
 </ul>
 </li>
