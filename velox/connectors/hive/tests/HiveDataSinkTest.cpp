@@ -479,36 +479,47 @@ TEST_F(HiveDataSinkTest, hiveBucketProperty) {
 }
 
 TEST_F(HiveDataSinkTest, basic) {
-  const auto outputDirectory = TempDirectoryPath::create();
-  auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
-  auto stats = dataSink->stats();
-  ASSERT_TRUE(stats.empty()) << stats.toString();
-  ASSERT_EQ(
-      stats.toString(),
-      "numWrittenBytes 0B numWrittenFiles 0 spillRuns[0] spilledInputBytes[0B] "
-      "spilledBytes[0B] spilledRows[0] spilledPartitions[0] spilledFiles[0] "
-      "spillFillTimeUs[0us] spillSortTime[0us] spillSerializationTime[0us] "
-      "spillWrites[0] spillFlushTime[0us] spillWriteTime[0us] "
-      "maxSpillExceededLimitCount[0] spillReadBytes[0B] spillReads[0] "
-      "spillReadTime[0us] spillReadDeserializationTime[0us]");
-
-  const int numBatches = 10;
-  const auto vectors = createVectors(500, numBatches);
-  for (const auto& vector : vectors) {
-    dataSink->appendData(vector);
+  std::vector<dwio::common::FileFormat> fileFormats = {
+      dwio::common::FileFormat::DWRF};
+  if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
+    fileFormats.push_back(dwio::common::FileFormat::PARQUET);
   }
-  stats = dataSink->stats();
-  ASSERT_FALSE(stats.empty());
-  ASSERT_GT(stats.numWrittenBytes, 0);
-  ASSERT_EQ(stats.numWrittenFiles, 0);
 
-  const auto partitions = dataSink->close();
-  stats = dataSink->stats();
-  ASSERT_FALSE(stats.empty());
-  ASSERT_EQ(partitions.size(), 1);
+  for (dwio::common::FileFormat fileFormat : fileFormats) {
+    SCOPED_TRACE(fmt::format(
+        "Using file format: {}", dwio::common::toString(fileFormat)));
+    const auto outputDirectory = TempDirectoryPath::create();
+    auto dataSink =
+        createDataSink(rowType_, outputDirectory->getPath(), fileFormat);
+    auto stats = dataSink->stats();
+    ASSERT_TRUE(stats.empty()) << stats.toString();
+    ASSERT_EQ(
+        stats.toString(),
+        "numWrittenBytes 0B numWrittenFiles 0 spillRuns[0] spilledInputBytes[0B] "
+        "spilledBytes[0B] spilledRows[0] spilledPartitions[0] spilledFiles[0] "
+        "spillFillTimeUs[0us] spillSortTime[0us] spillSerializationTime[0us] "
+        "spillWrites[0] spillFlushTime[0us] spillWriteTime[0us] "
+        "maxSpillExceededLimitCount[0] spillReadBytes[0B] spillReads[0] "
+        "spillReadTime[0us] spillReadDeserializationTime[0us]");
 
-  createDuckDbTable(vectors);
-  verifyWrittenData(outputDirectory->getPath());
+    const int numBatches = 10;
+    const auto vectors = createVectors(500, numBatches);
+    for (const auto& vector : vectors) {
+      dataSink->appendData(vector);
+    }
+    stats = dataSink->stats();
+    ASSERT_FALSE(stats.empty());
+    ASSERT_GT(stats.numWrittenBytes, 0);
+    ASSERT_EQ(stats.numWrittenFiles, 0);
+
+    const auto partitions = dataSink->close();
+    stats = dataSink->stats();
+    ASSERT_FALSE(stats.empty());
+    ASSERT_EQ(partitions.size(), 1);
+
+    createDuckDbTable(vectors);
+    verifyWrittenData(outputDirectory->getPath());
+  }
 }
 
 TEST_F(HiveDataSinkTest, basicBucket) {
@@ -560,64 +571,92 @@ TEST_F(HiveDataSinkTest, basicBucket) {
 }
 
 TEST_F(HiveDataSinkTest, close) {
-  for (bool empty : {true, false}) {
-    SCOPED_TRACE(fmt::format("Data sink is empty: {}", empty));
-    const auto outputDirectory = TempDirectoryPath::create();
-    auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
+  std::vector<dwio::common::FileFormat> fileFormats = {
+      dwio::common::FileFormat::DWRF};
+  if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
+    fileFormats.push_back(dwio::common::FileFormat::PARQUET);
+  }
 
-    auto vectors = createVectors(500, 1);
+  for (dwio::common::FileFormat fileFormat : fileFormats) {
+    SCOPED_TRACE(fmt::format(
+        "Using file format: {}", dwio::common::toString(fileFormat)));
+    for (bool empty : {true, false}) {
+      SCOPED_TRACE(fmt::format("Data sink is empty: {}", empty));
+      const auto outputDirectory = TempDirectoryPath::create();
+      auto dataSink =
+          createDataSink(rowType_, outputDirectory->getPath(), fileFormat);
 
-    if (!empty) {
-      dataSink->appendData(vectors[0]);
-      ASSERT_GT(dataSink->stats().numWrittenBytes, 0);
-    } else {
-      ASSERT_EQ(dataSink->stats().numWrittenBytes, 0);
-    }
-    const auto partitions = dataSink->close();
-    // Can't append after close.
-    VELOX_ASSERT_THROW(
-        dataSink->appendData(vectors.back()), "Hive data sink is not running");
-    VELOX_ASSERT_THROW(dataSink->close(), "Hive data sink is not running");
-    VELOX_ASSERT_THROW(dataSink->abort(), "Hive data sink is not running");
+      auto vectors = createVectors(500, 1);
 
-    const auto stats = dataSink->stats();
-    if (!empty) {
-      ASSERT_EQ(partitions.size(), 1);
-      ASSERT_GT(stats.numWrittenBytes, 0);
-      createDuckDbTable(vectors);
-      verifyWrittenData(outputDirectory->getPath());
-    } else {
-      ASSERT_TRUE(partitions.empty());
-      ASSERT_EQ(stats.numWrittenBytes, 0);
+      if (!empty) {
+        dataSink->appendData(vectors[0]);
+        ASSERT_GT(dataSink->stats().numWrittenBytes, 0);
+      } else {
+        ASSERT_EQ(dataSink->stats().numWrittenBytes, 0);
+      }
+      const auto partitions = dataSink->close();
+      // Can't append after close.
+      VELOX_ASSERT_THROW(
+          dataSink->appendData(vectors.back()),
+          "Hive data sink is not running");
+      VELOX_ASSERT_THROW(dataSink->close(), "Hive data sink is not running");
+      VELOX_ASSERT_THROW(dataSink->abort(), "Hive data sink is not running");
+
+      const auto stats = dataSink->stats();
+      if (!empty) {
+        ASSERT_EQ(partitions.size(), 1);
+        ASSERT_GT(stats.numWrittenBytes, 0);
+        createDuckDbTable(vectors);
+        verifyWrittenData(outputDirectory->getPath());
+      } else {
+        ASSERT_TRUE(partitions.empty());
+        ASSERT_EQ(stats.numWrittenBytes, 0);
+      }
     }
   }
 }
 
 TEST_F(HiveDataSinkTest, abort) {
-  for (bool empty : {true, false}) {
-    SCOPED_TRACE(fmt::format("Data sink is empty: {}", empty));
-    const auto outputDirectory = TempDirectoryPath::create();
-    auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
+  std::vector<dwio::common::FileFormat> fileFormats = {
+      dwio::common::FileFormat::DWRF};
+  if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
+    fileFormats.push_back(dwio::common::FileFormat::PARQUET);
+  }
 
-    auto vectors = createVectors(1, 1);
-    int initialBytes = 0;
-    if (!empty) {
-      dataSink->appendData(vectors.back());
-      initialBytes = dataSink->stats().numWrittenBytes;
-      ASSERT_GT(initialBytes, 0);
-    } else {
-      initialBytes = dataSink->stats().numWrittenBytes;
-      ASSERT_EQ(initialBytes, 0);
+  for (dwio::common::FileFormat fileFormat : fileFormats) {
+    SCOPED_TRACE(fmt::format(
+        "Using file format: {}", dwio::common::toString(fileFormat)));
+    for (bool empty : {true, false}) {
+      SCOPED_TRACE(fmt::format("Data sink is empty: {}", empty));
+      const auto outputDirectory = TempDirectoryPath::create();
+      auto fileFormat = dwio::common::FileFormat::DWRF;
+      if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
+        fileFormat = dwio::common::FileFormat::PARQUET;
+      }
+      auto dataSink =
+          createDataSink(rowType_, outputDirectory->getPath(), fileFormat);
+
+      auto vectors = createVectors(1, 1);
+      int initialBytes = 0;
+      if (!empty) {
+        dataSink->appendData(vectors.back());
+        initialBytes = dataSink->stats().numWrittenBytes;
+        ASSERT_GT(initialBytes, 0);
+      } else {
+        initialBytes = dataSink->stats().numWrittenBytes;
+        ASSERT_EQ(initialBytes, 0);
+      }
+      dataSink->abort();
+      const auto stats = dataSink->stats();
+      ASSERT_TRUE(stats.empty());
+      // Can't close after abort.
+      VELOX_ASSERT_THROW(dataSink->close(), "Hive data sink is not running");
+      VELOX_ASSERT_THROW(dataSink->abort(), "Hive data sink is not running");
+      // Can't append after abort.
+      VELOX_ASSERT_THROW(
+          dataSink->appendData(vectors.back()),
+          "Hive data sink is not running");
     }
-    dataSink->abort();
-    const auto stats = dataSink->stats();
-    ASSERT_TRUE(stats.empty());
-    // Can't close after abort.
-    VELOX_ASSERT_THROW(dataSink->close(), "Hive data sink is not running");
-    VELOX_ASSERT_THROW(dataSink->abort(), "Hive data sink is not running");
-    // Can't append after abort.
-    VELOX_ASSERT_THROW(
-        dataSink->appendData(vectors.back()), "Hive data sink is not running");
   }
 }
 
@@ -625,7 +664,7 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
   const int numBatches = 200;
   auto vectors = createVectors(500, 200);
 
-  struct {
+  struct TestSetting {
     dwio::common::FileFormat format;
     bool sortWriter;
     bool writerSpillEnabled;
@@ -643,28 +682,36 @@ TEST_F(HiveDataSinkTest, memoryReclaim) {
           expectedWriterReclaimEnabled,
           expectedWriterReclaimed);
     }
-  } testSettings[] = {
-      //    {dwio::common::FileFormat::DWRF, true, true, 1 << 30, true, true},
+  };
+
+  TestSetting testSettingsDwrf[] = {
+      // {dwio::common::FileFormat::DWRF, true, true, 1 << 30, true, true},
       {dwio::common::FileFormat::DWRF, true, true, 1, true, true},
       {dwio::common::FileFormat::DWRF, true, false, 1 << 30, false, false},
       {dwio::common::FileFormat::DWRF, true, false, 1, false, false},
       {dwio::common::FileFormat::DWRF, false, true, 1 << 30, true, false},
       {dwio::common::FileFormat::DWRF, false, true, 1, true, true},
       {dwio::common::FileFormat::DWRF, false, false, 1 << 30, false, false},
-      {dwio::common::FileFormat::DWRF, false, false, 1, false, false},
-  // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
-#if 0
-      {dwio::common::FileFormat::PARQUET, true, true, 1 << 30, false, false},
+      {dwio::common::FileFormat::DWRF, false, false, 1, false, false}};
+  TestSetting testSettingsParquet[] = {
+      // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
+      // Above issue was resolved thanks to @czentgr's PR:
+      // https://github.com/facebookincubator/velox/pull/7025 Uncommenting code
+      // below to enable PARQUET format testing
+      // {dwio::common::FileFormat::PARQUET, true, true, 1 << 30, false, false},
       {dwio::common::FileFormat::PARQUET, true, true, 1, false, false},
       {dwio::common::FileFormat::PARQUET, true, false, 1 << 30, false, false},
       {dwio::common::FileFormat::PARQUET, true, false, 1, false, false},
       {dwio::common::FileFormat::PARQUET, false, true, 1 << 30, false, false},
       {dwio::common::FileFormat::PARQUET, false, true, 1, false, false},
       {dwio::common::FileFormat::PARQUET, false, false, 1 << 30, false, false},
-      {dwio::common::FileFormat::PARQUET, false, false, 1, false, false}
-#endif
-  };
-  for (const auto& testData : testSettings) {
+      {dwio::common::FileFormat::PARQUET, false, false, 1, false, false}};
+
+  bool hasParquetWriterFactory =
+      hasWriterFactory(dwio::common::FileFormat::PARQUET);
+
+  for (const auto& testData :
+       hasParquetWriterFactory ? testSettingsParquet : testSettingsDwrf) {
     SCOPED_TRACE(testData.debugString());
     setupMemoryPools();
 
@@ -765,7 +812,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
   const int numBatches = 10;
   const auto vectors = createVectors(500, 10);
 
-  struct {
+  struct TestSetting {
     dwio::common::FileFormat format;
     bool sortWriter;
     bool writerSpillEnabled;
@@ -781,7 +828,9 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
           close,
           expectedWriterReclaimEnabled);
     }
-  } testSettings[] = {
+  };
+
+  TestSetting testSettingsDwrf[] = {
       {dwio::common::FileFormat::DWRF, true, true, true, true},
       {dwio::common::FileFormat::DWRF, true, false, true, false},
       {dwio::common::FileFormat::DWRF, true, true, false, true},
@@ -789,11 +838,23 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
       {dwio::common::FileFormat::DWRF, false, true, true, true},
       {dwio::common::FileFormat::DWRF, false, false, true, false},
       {dwio::common::FileFormat::DWRF, false, true, false, true},
-      {dwio::common::FileFormat::DWRF, false, false, false, false}
-      // Add parquet file format after fix
-      // https://github.com/facebookincubator/velox/issues/5560
+      {dwio::common::FileFormat::DWRF, false, false, false, false},
   };
-  for (const auto& testData : testSettings) {
+  TestSetting testSettingsParquet[] = {
+      {dwio::common::FileFormat::PARQUET, true, true, true, true},
+      {dwio::common::FileFormat::PARQUET, true, false, true, false},
+      {dwio::common::FileFormat::PARQUET, true, true, false, true},
+      {dwio::common::FileFormat::PARQUET, true, false, false, false},
+      {dwio::common::FileFormat::PARQUET, false, true, true, true},
+      {dwio::common::FileFormat::PARQUET, false, false, true, false},
+      {dwio::common::FileFormat::PARQUET, false, true, false, true},
+      {dwio::common::FileFormat::PARQUET, false, false, false, false}};
+
+  bool hasParquetWriterFactory =
+      hasWriterFactory(dwio::common::FileFormat::PARQUET);
+
+  for (const auto& testData :
+       hasParquetWriterFactory ? testSettingsParquet : testSettingsDwrf) {
     SCOPED_TRACE(testData.debugString());
 
     std::unordered_map<std::string, std::string> connectorConfig;
@@ -930,10 +991,17 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
       0);
   setConnectorQueryContext(std::move(connectorQueryCtx));
 
+  auto testValueSetString = "facebook::velox::dwrf::Writer::write";
+  auto fileFormat = dwio::common::FileFormat::DWRF;
+  if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
+    fileFormat = dwio::common::FileFormat::PARQUET;
+    testValueSetString = "facebook::velox::parquet::Writer::write";
+  }
+
   auto dataSink = createDataSink(
       rowType_,
       outputDirectory->getPath(),
-      dwio::common::FileFormat::DWRF,
+      fileFormat,
       partitionBy,
       bucketProperty);
   for (auto& vector : vectors) {
@@ -941,7 +1009,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
   }
 
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::dwrf::Writer::write",
+      testValueSetString,
       std::function<void(memory::MemoryPool*)>(
           [&](memory::MemoryPool* pool) { VELOX_FAIL("inject failure"); }));
 

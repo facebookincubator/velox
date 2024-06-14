@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 
@@ -125,8 +126,16 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
       "targetDirectory",
       std::optional("writeDirectory"),
       LocationHandle::TableType::kNew);
+  auto fileFormat = dwio::common::FileFormat::DWRF;
+  if (hasWriterFactory(dwio::common::FileFormat::PARQUET)) {
+    fileFormat = dwio::common::FileFormat::PARQUET;
+  }
   auto hiveInsertTableHandle =
       exec::test::HiveConnectorTestBase::makeHiveInsertTableHandle(
-          tableColumnNames, tableColumnTypes, {"loc"}, locationHandle);
+          tableColumnNames,
+          tableColumnTypes,
+          {"loc"},
+          locationHandle,
+          fileFormat);
   testSerde(*hiveInsertTableHandle);
 }

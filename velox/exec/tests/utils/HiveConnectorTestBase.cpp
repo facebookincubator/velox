@@ -80,6 +80,8 @@ void HiveConnectorTestBase::writeToFile(
     std::shared_ptr<dwrf::Config> config,
     const TypePtr& schema) {
   velox::dwrf::WriterOptions options;
+  // WIP: Need to edit this function to support writing in Parquet, currently
+  // only writing for DWRF
   options.config = config;
   options.schema = schema;
   auto localWriteFile = std::make_unique<LocalWriteFile>(filePath, true, false);

@@ -52,6 +52,9 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   // Dynamic parameters.
   dwio::common::ReaderOptions readerOptions(pool_.get());
   FileFormat fileFormat{FileFormat::DWRF};
+  if (hasWriterFactory(FileFormat::PARQUET)) {
+    fileFormat = {FileFormat::PARQUET};
+  }
   std::unordered_map<std::string, std::string> tableParameters;
   std::unordered_map<std::string, std::string> serdeParameters;
   SerDeOptions expectedSerDe;
