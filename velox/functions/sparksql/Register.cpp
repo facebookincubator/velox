@@ -104,6 +104,9 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_entries, prefix + "map_entries");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, prefix + "map_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, prefix + "map_values");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_transform_keys, prefix + "transform_keys");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_transform_values, prefix + "transform_values");
 
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
