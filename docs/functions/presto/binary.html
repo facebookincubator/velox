@@ -141,9 +141,31 @@ Throws a user error if input size is shorter / longer than 64 bits.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">lpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padbinary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span></dt>
+<dd><p>Left pads <code class="docutils literal notranslate"><span class="pre">binary</span></code> to <code class="docutils literal notranslate"><span class="pre">size</span></code> bytes with <code class="docutils literal notranslate"><span class="pre">padbinary</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">size</span></code> is less than the length of <code class="docutils literal notranslate"><span class="pre">binary</span></code>, the result is
+truncated to <code class="docutils literal notranslate"><span class="pre">size</span></code> characters. <code class="docutils literal notranslate"><span class="pre">size</span></code> must not be negative
+and <code class="docutils literal notranslate"><span class="pre">padbinary</span></code> must be non-empty. <code class="docutils literal notranslate"><span class="pre">size</span></code> has a maximum value of 1 MiB.
+In the case of <code class="docutils literal notranslate"><span class="pre">size</span></code> being smaller than the length of <code class="docutils literal notranslate"><span class="pre">binary</span></code>,
+<code class="docutils literal notranslate"><span class="pre">binary</span></code> will be truncated from the right to fit the <code class="docutils literal notranslate"><span class="pre">size</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="md5">
 <span class="sig-name descname"><span class="pre">md5</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#md5" title="Link to this definition">¶</a></dt>
 <dd><p>Computes the md5 hash of <code class="docutils literal notranslate"><span class="pre">binary</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">rpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">binary</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padbinary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span></dt>
+<dd><p>Right pads <code class="docutils literal notranslate"><span class="pre">binary</span></code> to <code class="docutils literal notranslate"><span class="pre">size</span></code> bytes with <code class="docutils literal notranslate"><span class="pre">padbinary</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">size</span></code> is less than the length of <code class="docutils literal notranslate"><span class="pre">binary</span></code>, the result is
+truncated to <code class="docutils literal notranslate"><span class="pre">size</span></code> characters. <code class="docutils literal notranslate"><span class="pre">size</span></code> must not be negative
+and <code class="docutils literal notranslate"><span class="pre">padbinary</span></code> must be non-empty. <code class="docutils literal notranslate"><span class="pre">size</span></code> has a maximum value of 1 MiB.
+In the case of <code class="docutils literal notranslate"><span class="pre">size</span></code> being smaller than the length of <code class="docutils literal notranslate"><span class="pre">binary</span></code>,
+<code class="docutils literal notranslate"><span class="pre">binary</span></code> will be truncated from the right to fit the <code class="docutils literal notranslate"><span class="pre">size</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
