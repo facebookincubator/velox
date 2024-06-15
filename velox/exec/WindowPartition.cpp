@@ -228,9 +228,13 @@ vector_size_t WindowPartition::linearSearchFrameValue(
 
     // The bound value was found. Return if firstMatch required.
     // If the last match is required, then we need to find the first row that
-    // crosses the bound and return the prior row.
+    // crosses the bound and return the prior row. However, if last match is
+    // required when we are at the last row in our search space and the bound
+    // value is found, return the last row.
     if (compareResult == 0) {
       if (firstMatch) {
+        return i;
+      } else if (i == end - 1) {
         return i;
       }
     }

@@ -181,5 +181,22 @@ TEST_F(WindowTest, duplicateOrOverlappingKeys) {
       "Sorting keys must be unique and not overlap with partitioning keys. Found duplicate key: b");
 }
 
+TEST_F(WindowTest, kRangeFrame) {
+  auto p0 = makeNullableFlatVector<int32_t>({1, 1, 1, 2, 2});
+  auto s0 = makeNullableFlatVector<int32_t>({1, 2, 3, 4, 5});
+  auto input = makeRowVector({"p0", "s0", "k"}, {p0, s0, s0});
+
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .window(
+              {"sum(p0) over (partition by p0 order by s0 range between unbounded preceding and k preceding)"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {p0, s0, s0, makeNullableFlatVector<int64_t>({1, 2, 3, 2, 4})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 } // namespace
 } // namespace facebook::velox::exec
