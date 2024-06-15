@@ -761,7 +761,10 @@ class ParquetRowReader::Impl {
       return; // TODO
     }
     ParquetParams params(
-        pool_, columnReaderStats_, readerBase_->fileMetaData(), readerBase->sessionTimezone());
+        pool_,
+        columnReaderStats_,
+        readerBase_->fileMetaData(),
+        readerBase->sessionTimezone());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(
