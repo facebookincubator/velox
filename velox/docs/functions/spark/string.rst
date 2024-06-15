@@ -141,6 +141,12 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
+.. spark:function:: string_repeat(str, n) -> varchar
+
+    Returns the string which repeats the given string value ``n`` times. ::
+
+        SSELECT string_repeat('123', 2); -- 123123
+
 .. spark:function:: replace(input, replaced) -> varchar
 
     Removes all instances of ``replaced`` from ``input``.

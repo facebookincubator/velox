@@ -1182,6 +1182,33 @@ struct FindInSetFunction {
 };
 
 template <typename T>
+struct RepeatFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t times) {
+    if (times <= 0) {
+      result.resize(0);
+      return;
+    }
+    auto inputSize = input.size();
+    if (inputSize == 0) {
+      result.resize(0);
+      return;
+    }
+    int32_t newSize = velox::checkedMultiply<int32_t>(inputSize, times);
+    result.resize(newSize);
+    for (auto i = 0; i < times; ++i) {
+      std::memcpy(result.data() + i * inputSize, input.data(), inputSize);
+    }
+  }
+};
+
+template <typename T>
 struct SoundexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

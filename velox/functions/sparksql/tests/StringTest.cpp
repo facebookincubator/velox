@@ -448,6 +448,17 @@ TEST_F(StringTest, overlayVarbinary) {
   EXPECT_EQ(overlay("Spark SQL", "##", -10, 4), "##rk SQL");
 }
 
+TEST_F(StringTest, repeat) {
+  const auto stringRepeat = [&](const std::optional<std::string>& str,
+                                const std::optional<int32_t>& times) {
+    return evaluateOnce<std::string>("string_repeat(c0, c1)", str, times);
+  };
+
+  EXPECT_EQ(stringRepeat("hh", 2), "hhhh");
+  EXPECT_EQ(stringRepeat("abab", 0), "");
+  EXPECT_EQ(stringRepeat("123\u6570", 2), "123\u6570123\u6570");
+}
+
 TEST_F(StringTest, replace) {
   const auto replace = [&](const std::optional<std::string>& str,
                            const std::optional<std::string>& replaced) {
