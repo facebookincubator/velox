@@ -263,15 +263,18 @@ For integral types, overflow results in an error.</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="truncate">
-<span class="sig-name descname"><span class="pre">truncate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#truncate" title="Link to this definition">¶</a></dt>
-<dd><p>Returns x rounded to integer by dropping digits after decimal point.</p>
+<span class="sig-name descname"><span class="pre">truncate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#truncate" title="Link to this definition">¶</a></dt>
+<dd><p>Returns x rounded to integer by dropping digits after decimal point.
+Supported types of <code class="docutils literal notranslate"><span class="pre">x</span></code> are: REAL and DOUBLE.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">truncate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span></dt>
+<span class="sig-name descname"><span class="pre">truncate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
 <dd><blockquote>
-<div><p>Returns x truncated to n decimal places. n can be negative to truncate n digits left of the decimal point.</p>
+<div><p>Returns x truncated to n decimal places. n can be negative to truncate n digits left of the decimal point.
+Supported types of <code class="docutils literal notranslate"><span class="pre">x</span></code> are: REAL and DOUBLE.
+<code class="docutils literal notranslate"><span class="pre">n</span></code> is an INTEGER.</p>
 </div></blockquote>
 </dd></dl>
 
