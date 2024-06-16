@@ -86,7 +86,8 @@ void registerComparisonFunctions(const std::string& prefix) {
       TimestampWithTimezone>({prefix + "gte"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gte, prefix + "gte");
 
-  registerBinaryScalar<DistinctFromFunction, bool>({prefix + "distinct_from"});
+  registerFunction<DistinctFromFunction, bool, Generic<T1>, Generic<T1>>(
+      {prefix + "distinct_from"});
 
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>(
       {prefix + "between"});
@@ -118,6 +119,24 @@ void registerComparisonFunctions(const std::string& prefix) {
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>>({prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "between"});
+  registerFunction<
+      BetweenFunctionTimestampWithTimezone,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "between"});
 }
 
 } // namespace facebook::velox::functions
