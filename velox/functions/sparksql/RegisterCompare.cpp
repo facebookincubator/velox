@@ -23,7 +23,7 @@ namespace facebook::velox::functions::sparksql {
 void registerCompareFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "equalto", comparisonSignatures(), makeEqualTo);
-  registerFunction<EqFunction, bool, Generic<T1>, Generic<T1>>(
+  registerFunction<EqualToFunction, bool, Generic<T1>, Generic<T1>>(
       {prefix + "equalto"});
   exec::registerStatefulVectorFunction(
       prefix + "lessthan", comparisonSignatures(), makeLessThan);
@@ -41,7 +41,7 @@ void registerCompareFunctions(const std::string& prefix) {
       comparisonSignatures(),
       makeEqualToNullSafe,
       exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
-  registerFunction<EqNullSafeFunction, bool, Generic<T1>, Generic<T1>>(
+  registerFunction<EqualNullSafeFunction, bool, Generic<T1>, Generic<T1>>(
       {prefix + "equalnullsafe"});
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>(
       {prefix + "between"});

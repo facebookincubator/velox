@@ -174,7 +174,7 @@ std::shared_ptr<exec::VectorFunction> makeEqualToNullSafe(
     const core::QueryConfig& config);
 
 template <typename T>
-struct EqFunction {
+struct EqualToFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
   // For arbitrary nested complex types.
   FOLLY_ALWAYS_INLINE void call(
@@ -190,7 +190,7 @@ struct EqFunction {
 };
 
 template <typename T>
-struct EqNullSafeFunction {
+struct EqualNullSafeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
   // For arbitrary nested complex types.
   FOLLY_ALWAYS_INLINE void callNullable(

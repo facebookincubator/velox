@@ -17,11 +17,15 @@ Comparison Functions
     Note that NaN in Spark is handled differently from standard floating point semantics.
     It is considered larger than any other numeric values. This rule is applied for functions
     "equalnullsafe", "equalto", "greaterthan", "greaterthanorequal", "lessthan", "lessthanorequal".
+    Nested nulls are allowed within input values if x is complex type. Nested 
+    nulls are treated as values.
 
 .. spark:function:: equalto(x, y) -> boolean
 
     Returns true if x is equal to y. Supports all types. The
     types of x and y must be the same. Corresponds to Spark's operators ``=`` and ``==``.
+    Nested nulls are allowed within input values if x is complex type. Nested 
+    nulls are treated as values.
 
 .. spark:function:: greaterthan(x, y) -> boolean
 
