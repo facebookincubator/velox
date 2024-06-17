@@ -294,7 +294,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
       nullptr);
 
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .plan(std::move(plan))
+                  .plan(plan)
                   .splits(makeHiveConnectorSplits({filePath}))
                   .queryCtx(queryCtx)
                   .assertResults("SELECT * FROM tmp");
