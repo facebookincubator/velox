@@ -42,7 +42,11 @@ struct RemainderFunction {
     if (UNLIKELY(n == 1 || n == -1)) {
       result = 0;
     } else if constexpr (std::is_same_v<TInput, float> || std::is_same_v<TInput, double>) {
-      result = std::fmod(a, n);
+      if (std::isnan(a) || std::isnan(n) || std::isinf(a) || std::isinf(n)) {
+        result = std::numeric_limits<TInput>::quiet_NaN();
+      } else {
+        result = std::fmod(a, n);
+      }
     } else {
       result = a % n;
     }
