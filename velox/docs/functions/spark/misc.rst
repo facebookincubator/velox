@@ -13,9 +13,9 @@ Miscellaneous Functions
     The function relies on partition IDs, which are provided by the framework
     via the configuration 'spark.partition_id'.
 
-.. spark:function:: raise_error(str) -> void
+.. spark:function:: raise_error(str)
 
-    Throws an runtime exception with ``str``.
+    Throws a runtime exception with the specified message ``str``.
 
 .. spark:function:: spark_partition_id() -> integer
 

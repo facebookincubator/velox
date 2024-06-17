@@ -30,6 +30,7 @@ class RaiseErrorTest : public SparkFunctionBaseTest {
 TEST_F(RaiseErrorTest, basic) {
   VELOX_ASSERT_THROW(raiseError(""), "");
   VELOX_ASSERT_THROW(raiseError("0 > 1 is not true"), "0 > 1 is not true");
+  VELOX_ASSERT_THROW(raiseError(std::nullopt), "");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
