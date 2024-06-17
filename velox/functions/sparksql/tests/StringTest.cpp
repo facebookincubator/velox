@@ -243,6 +243,8 @@ TEST_F(StringTest, levenshtein) {
   levenshteinTest(std::string(100000, 'l'), "hello", 99997, 99998, -1);
   levenshteinTest(std::string(1000001, 'h'), "", 1000000, 1000001, -1);
   levenshteinTest("", std::string(1000001, 'h'), 1000000, 1000001, -1);
+
+  levenshteinTest("kitten", "sitting", -1, 3, -1);
 }
 
 TEST_F(StringTest, endsWith) {
