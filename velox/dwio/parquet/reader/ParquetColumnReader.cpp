@@ -37,7 +37,8 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec) {
+    common::ScanSpec& scanSpec,
+    memory::MemoryPool& pool) {
   auto colName = scanSpec.fieldName();
 
   switch (fileType->type()->kind()) {
@@ -58,7 +59,7 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
 
     case TypeKind::ROW:
       return std::make_unique<StructColumnReader>(
-          requestedType, fileType, params, scanSpec);
+          requestedType, fileType, params, scanSpec, pool);
 
     case TypeKind::VARBINARY:
     case TypeKind::VARCHAR:
@@ -66,11 +67,11 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
 
     case TypeKind::ARRAY:
       return std::make_unique<ListColumnReader>(
-          requestedType, fileType, params, scanSpec);
+          requestedType, fileType, params, scanSpec, pool);
 
     case TypeKind::MAP:
       return std::make_unique<MapColumnReader>(
-          requestedType, fileType, params, scanSpec);
+          requestedType, fileType, params, scanSpec, pool);
 
     case TypeKind::BOOLEAN:
       return std::make_unique<BooleanColumnReader>(

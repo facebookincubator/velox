@@ -341,12 +341,23 @@ std::vector<TypePtr> SplitReader::adaptColumns(
         childSpec->columnType() == common::ScanSpec::ColumnType::kRegular) {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       if (!fileTypeIdx.has_value()) {
-        // Column is missing. Most likely due to schema evolution.
-        VELOX_CHECK(tableSchema, "Unable to resolve column '{}'", fieldName);
-        childSpec->setConstantValue(BaseVector::createNullConstant(
-            tableSchema->findChild(fieldName),
-            1,
-            connectorQueryCtx_->memoryPool()));
+        // If field name exists in the user-specified output type, set the
+        // column as null constant. Related PR:
+        // https://github.com/facebookincubator/velox/pull/6427.
+        auto outputTypeIdx = readerOutputType_->getChildIdxIfExists(fieldName);
+        if (outputTypeIdx.has_value()) {
+          childSpec->setConstantValue(BaseVector::createNullConstant(
+              readerOutputType_->childAt(outputTypeIdx.value()),
+              1,
+              connectorQueryCtx_->memoryPool()));
+        } else {
+          // Column is missing. Most likely due to schema evolution.
+          VELOX_CHECK(tableSchema);
+          childSpec->setConstantValue(BaseVector::createNullConstant(
+              tableSchema->findChild(fieldName),
+              1,
+              connectorQueryCtx_->memoryPool()));
+        }
       } else {
         // Column no longer missing, reset constant value set on the spec.
         childSpec->setConstantValue(nullptr);
