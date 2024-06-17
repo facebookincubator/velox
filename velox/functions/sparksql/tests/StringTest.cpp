@@ -457,6 +457,8 @@ TEST_F(StringTest, repeat) {
 
   EXPECT_EQ(stringRepeat("hh", 2), "hhhh");
   EXPECT_EQ(stringRepeat("abab", 0), "");
+  EXPECT_EQ(stringRepeat("abab", -1), "");
+  EXPECT_EQ(stringRepeat("", 2), "");
   EXPECT_EQ(stringRepeat("123\u6570", 2), "123\u6570123\u6570");
   VELOX_ASSERT_USER_THROW(
       stringRepeat("hh", 10001), "Repeat times is too big.");
