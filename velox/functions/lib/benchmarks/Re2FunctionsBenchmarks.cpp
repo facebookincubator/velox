@@ -19,6 +19,7 @@
 #include <folly/init/Init.h>
 #include <string>
 
+#include "velox/functions/lib/HyperscanFunctions.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -47,6 +48,14 @@ int regexMatch(int n, int blockSize, const char* functionName) {
 BENCHMARK_NAMED_PARAM_MULTI(regexMatch, bs1k, 1 << 10, "re2_match");
 BENCHMARK_NAMED_PARAM_MULTI(regexMatch, bs10k, 10 << 10, "re2_match");
 BENCHMARK_NAMED_PARAM_MULTI(regexMatch, bs100k, 100 << 10, "re2_match");
+
+BENCHMARK_NAMED_PARAM_MULTI(regexMatch, bs1k_hyperscan, 1 << 10, "hs_match");
+BENCHMARK_NAMED_PARAM_MULTI(regexMatch, bs10k_hyperscan, 10 << 10, "hs_match");
+BENCHMARK_NAMED_PARAM_MULTI(
+    regexMatch,
+    bs100k_hyperscan,
+    100 << 10,
+    "hs_match");
 
 int regexSearch(int n, int blockSize, const char* functionName) {
   return regexMatch(n, blockSize, functionName);
@@ -94,6 +103,8 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
 void registerRe2Functions() {
   exec::registerStatefulVectorFunction(
       "re2_match", re2MatchSignatures(), makeRe2Match);
+  exec::registerStatefulVectorFunction(
+      "hs_match", re2MatchSignatures(), makeHyperscanMatch);
   exec::registerStatefulVectorFunction(
       "re2_search", re2SearchSignatures(), makeRe2Search);
   exec::registerStatefulVectorFunction(

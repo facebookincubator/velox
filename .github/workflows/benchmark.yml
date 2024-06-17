@@ -90,7 +90,7 @@ jobs:
 
       - name: "Install dependencies"
         if: ${{ github.event_name == 'pull_request' }}
-        run: source velox/scripts/setup-ubuntu.sh && install_apt_deps && install_duckdb
+        run: source velox/scripts/setup-ubuntu.sh && install_apt_deps && install_duckdb && install_boost
 
       - name: Build Baseline Benchmarks
         if: ${{ github.event_name == 'pull_request' }}
@@ -117,7 +117,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "Install dependencies"
-        run: source velox/scripts/setup-ubuntu.sh && install_apt_deps
+        run: source velox/scripts/setup-ubuntu.sh && install_apt_deps && install_boost
 
       - name: Build Contender Benchmarks
         working-directory: velox

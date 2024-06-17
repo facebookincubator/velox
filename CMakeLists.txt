@@ -447,6 +447,9 @@ endif()
 set_source(re2)
 resolve_dependency(re2)
 
+set_source(hyperscan)
+resolve_dependency(hyperscan 5.4.2)
+
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   set_source(pybind11)
   resolve_dependency(pybind11 2.10.0)
