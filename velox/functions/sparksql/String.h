@@ -1191,6 +1191,7 @@ struct RepeatFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
       int32_t times) {
+    VELOX_USER_CHECK_LE(times, 10000, "Repeat times is too big.");
     if (times <= 0) {
       result.resize(0);
       return;
