@@ -167,7 +167,6 @@ void SelectiveStructColumnReaderBase::read(
   }
 
   auto& childSpecs = scanSpec_->children();
-  VELOX_CHECK(!childSpecs.empty());
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     auto& childSpec = childSpecs[i];
     VELOX_TRACE_HISTORY_PUSH("read %s", childSpec->fieldName().c_str());
@@ -253,7 +252,7 @@ bool SelectiveStructColumnReaderBase::isChildConstant(
        fileType_->type()->kind() !=
            TypeKind::MAP && // If this is the case it means this is a flat map,
                             // so it can't have "missing" fields.
-       childSpec.channel() >= fileType_->size());
+       !fileType_->containsChild(childSpec.fieldName()));
 }
 
 namespace {
@@ -337,7 +336,6 @@ void setNullField(
 void SelectiveStructColumnReaderBase::getValues(
     RowSet rows,
     VectorPtr* result) {
-  VELOX_CHECK(!scanSpec_->children().empty());
   VELOX_CHECK_NOT_NULL(
       *result, "SelectiveStructColumnReaderBase expects a non-null result");
   VELOX_CHECK(

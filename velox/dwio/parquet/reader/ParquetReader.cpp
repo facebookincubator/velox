@@ -24,6 +24,24 @@
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
 namespace facebook::velox::parquet {
+namespace {
+
+TypePtr adjustNameAsLowerCase(const TypePtr& type) {
+  if (auto rowTypePtr = asRowType(type)) {
+    std::vector<std::string> names;
+    names.reserve(rowTypePtr->names().size());
+    std::vector<TypePtr> types = rowTypePtr->children();
+    for (const auto& name : rowTypePtr->names()) {
+      std::string childName = name;
+      folly::toLowerAscii(childName);
+      names.emplace_back(childName);
+    }
+    return TypeFactory<TypeKind::ROW>::create(
+        std::move(names), std::move(types));
+  }
+  return type;
+}
+} // namespace
 
 /// Metadata and options for reading Parquet.
 class ReaderBase {
@@ -768,10 +786,13 @@ class ParquetRowReader::Impl {
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(
-        requestedType_,
+        readerBase_->isFileColumnNamesReadAsLowerCase()
+            ? adjustNameAsLowerCase(requestedType_)
+            : requestedType_,
         readerBase_->schemaWithId(), // Id is schema id
         params,
-        *options_.getScanSpec());
+        *options_.getScanSpec(),
+        pool_);
     columnReader_->setFillMutatedOutputRows(
         options_.getRowNumberColumnInfo().has_value());
 
