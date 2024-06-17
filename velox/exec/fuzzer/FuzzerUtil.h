@@ -15,6 +15,8 @@
  */
 
 #include "velox/exec/Split.h"
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec::test {
 const std::string kHiveConnectorId = "test-hive";
@@ -71,4 +73,24 @@ bool containsUnsupportedTypes(const TypePtr& type);
 
 // Invoked to set up memory system with arbitration.
 void setupMemory(int64_t allocatorCapacity, int64_t arbitratorCapacity);
+
+enum ReferenceQueryErrorCode {
+  kSuccess,
+  kReferenceQueryFail,
+  kReferenceQueryUnsupported
+};
+
+std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
+computeReferenceResults(
+    const core::PlanNodePtr& plan,
+    const std::vector<RowVectorPtr>& input,
+    ReferenceQueryRunner* referenceQueryRunner);
+
+// Will throw if referenceQueryRunner doesn't support
+// returning results as a vector.
+std::pair<std::optional<std::vector<RowVectorPtr>>, ReferenceQueryErrorCode>
+computeReferenceResultsAsVector(
+    const core::PlanNodePtr& plan,
+    const std::vector<RowVectorPtr>& input,
+    ReferenceQueryRunner* referenceQueryRunner);
 } // namespace facebook::velox::exec::test

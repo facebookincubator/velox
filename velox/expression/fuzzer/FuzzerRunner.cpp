@@ -204,8 +204,9 @@ ExpressionFuzzerVerifier::Options getExpressionFuzzerVerifierOptions(
 int FuzzerRunner::run(
     size_t seed,
     const std::unordered_set<std::string>& skipFunctions,
-    const std::unordered_map<std::string, std::string>& queryConfigs) {
-  runFromGtest(seed, skipFunctions, queryConfigs);
+    const std::unordered_map<std::string, std::string>& queryConfigs,
+    std::shared_ptr<test::ReferenceQueryRunner> referenceQueryRunner) {
+  runFromGtest(seed, skipFunctions, queryConfigs, referenceQueryRunner);
   return RUN_ALL_TESTS();
 }
 
@@ -213,13 +214,15 @@ int FuzzerRunner::run(
 void FuzzerRunner::runFromGtest(
     size_t seed,
     const std::unordered_set<std::string>& skipFunctions,
-    const std::unordered_map<std::string, std::string>& queryConfigs) {
-  memory::MemoryManager::testingSetInstance({});
+    const std::unordered_map<std::string, std::string>& queryConfigs,
+    std::shared_ptr<test::ReferenceQueryRunner> referenceQueryRunner) {
+  // memory::MemoryManager::testingSetInstance({});
   auto signatures = facebook::velox::getFunctionSignatures();
   ExpressionFuzzerVerifier(
       signatures,
       seed,
-      getExpressionFuzzerVerifierOptions(skipFunctions, queryConfigs))
+      getExpressionFuzzerVerifierOptions(skipFunctions, queryConfigs),
+      referenceQueryRunner)
       .go();
 }
 } // namespace facebook::velox::fuzzer

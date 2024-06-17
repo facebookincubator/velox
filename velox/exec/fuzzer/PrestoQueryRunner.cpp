@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/ITypedExpr.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -208,6 +209,11 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     return toSql(joinNode);
   }
 
+  if (const auto valuesNode =
+          std::dynamic_pointer_cast<const core::ValuesNode>(plan)) {
+    return toSql(valuesNode);
+  }
+
   VELOX_NYI();
 }
 
@@ -249,6 +255,66 @@ std::string toTypeSql(const TypePtr& type) {
 }
 
 std::string toCallSql(const core::CallTypedExprPtr& call);
+std::string toCastSql(const core::CastTypedExprPtr& cast);
+std::string toConcatSql(const core::ConcatTypedExprPtr& concat);
+
+std::string escape(const std::string& input) {
+  std::string result;
+  result.reserve(input.size());
+  for (auto i = 0; i < input.size(); ++i) {
+    if (input[i] == '\'') {
+      result.push_back('\'');
+    }
+    result.push_back(input[i]);
+  }
+  return result;
+}
+
+std::string typedExprToSql(const core::TypedExprPtr& expr) {
+  if (auto field =
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr)) {
+    return field->name();
+  } else if (
+      auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
+    return toCallSql(call);
+  } else if (
+      auto cast = std::dynamic_pointer_cast<const core::CastTypedExpr>(expr)) {
+    return toCastSql(cast);
+  } else if (
+      auto concat =
+          std::dynamic_pointer_cast<const core::ConcatTypedExpr>(expr)) {
+    return toConcatSql(concat);
+  } else if (
+      auto lambda =
+          std::dynamic_pointer_cast<const core::LambdaTypedExpr>(expr)) {
+    const auto& signature = lambda->signature();
+    const auto& body =
+        std::dynamic_pointer_cast<const core::CallTypedExpr>(lambda->body());
+    VELOX_CHECK_NOT_NULL(body);
+
+    std::stringstream sql;
+    sql << "(";
+    for (auto j = 0; j < signature->size(); ++j) {
+      appendComma(j, sql);
+      sql << signature->nameOf(j);
+    }
+    sql << ") -> " << toCallSql(body);
+    return sql.str();
+  } else if (
+      auto constantArg =
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr)) {
+    std::stringstream sql;
+    if (!constantArg->hasValueVector()) {
+      sql << constantArg->toString();
+    } else if (constantArg->type()->isVarchar()) {
+      sql << "'" << escape(constantArg->valueVector()->toString(0)) << "'";
+    } else {
+      VELOX_NYI();
+    }
+    return sql.str();
+  }
+  VELOX_NYI();
+}
 
 void toCallInputsSql(
     const std::vector<core::TypedExprPtr>& inputs,
@@ -257,7 +323,7 @@ void toCallInputsSql(
     appendComma(i, sql);
 
     const auto& input = inputs.at(i);
-    if (auto field =
+    /*if (auto field =
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
                 input)) {
       sql << field->name();
@@ -280,9 +346,20 @@ void toCallInputsSql(
       }
 
       sql << ") -> " << toCallSql(body);
+    } else if (
+        auto constantArg =
+            std::dynamic_pointer_cast<const core::ConstantTypedExpr>(input)) {
+      if (!constantArg->hasValueVector()) {
+        sql << constantArg->toString();
+      } else if (constantArg->type()->isVarchar()) {
+        sql << "'" << escape(constantArg->valueVector()->toString(0)) << "'";
+      } else {
+        VELOX_NYI();
+      }
     } else {
       VELOX_NYI();
-    }
+    }*/
+    sql << typedExprToSql(input);
   }
 }
 
@@ -290,6 +367,23 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
   std::stringstream sql;
   sql << call->name() << "(";
   toCallInputsSql(call->inputs(), sql);
+  sql << ")";
+  return sql.str();
+}
+
+std::string toCastSql(const core::CastTypedExprPtr& cast) {
+  std::stringstream sql;
+  sql << "cast(";
+  toCallInputsSql(cast->inputs(), sql);
+  sql << " as " << toTypeSql(cast->type());
+  sql << ")";
+  return sql.str();
+}
+
+std::string toConcatSql(const core::ConcatTypedExprPtr& concat) {
+  std::stringstream sql;
+  sql << "concat(";
+  toCallInputsSql(concat->inputs(), sql);
   sql << ")";
   return sql.str();
 }
@@ -352,6 +446,14 @@ bool isSupportedDwrfType(const TypePtr& type) {
 } // namespace
 
 std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const core::ValuesNode>& valuesNode) {
+  if (!isSupportedDwrfType(valuesNode->outputType())) {
+    return std::nullopt;
+  }
+  return "tmp";
+}
+
+std::optional<std::string> PrestoQueryRunner::toSql(
     const std::shared_ptr<const core::AggregationNode>& aggregationNode) {
   // Assume plan is Aggregation over Values.
   VELOX_CHECK(aggregationNode->step() == core::AggregationNode::Step::kSingle);
@@ -399,10 +501,44 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   return sql.str();
 }
 
+bool containsComplexConstantRecursive(const core::TypedExprPtr& expression) {
+  if (auto constant = std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+          expression)) {
+    return !constant->type()->isPrimitiveType();
+  }
+
+  if (auto lambda =
+          std::dynamic_pointer_cast<const core::LambdaTypedExpr>(expression)) {
+    if (containsComplexConstantRecursive(lambda->body())) {
+      return true;
+    }
+  }
+  for (const auto& input : expression->inputs()) {
+    if (containsComplexConstantRecursive(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool containsComplexConstant(
+    const std::vector<core::TypedExprPtr>& expressions) {
+  for (const auto& expression : expressions) {
+    if (containsComplexConstantRecursive(expression)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::optional<std::string> PrestoQueryRunner::toSql(
     const std::shared_ptr<const core::ProjectNode>& projectNode) {
   auto sourceSql = toSql(projectNode->sources()[0]);
   if (!sourceSql.has_value()) {
+    return std::nullopt;
+  }
+
+  if (containsComplexConstant(projectNode->projections())) {
     return std::nullopt;
   }
 
@@ -412,7 +548,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   for (auto i = 0; i < projectNode->names().size(); ++i) {
     appendComma(i, sql);
     auto projection = projectNode->projections()[i];
-    if (auto field =
+    /*if (auto field =
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
                 projection)) {
       sql << field->name();
@@ -420,11 +556,18 @@ std::optional<std::string> PrestoQueryRunner::toSql(
         auto call =
             std::dynamic_pointer_cast<const core::CallTypedExpr>(projection)) {
       sql << toCallSql(call);
+    } else if (
+        auto cast =
+            std::dynamic_pointer_cast<const core::CastTypedExpr>(projection)) {
+      sql << toCastSql(cast);
+    } else if (
+        auto concat = std::dynamic_pointer_cast<const core::ConcatTypedExpr>(
+            projection)) {
+      sql << toConcatSql(concat);
     } else {
       VELOX_NYI();
-    }
-
-    sql << " as " << projectNode->names()[i];
+    }*/
+    sql << typedExprToSql(projection) << " as " << projectNode->names()[i];
   }
 
   sql << " FROM (" << sourceSql.value() << ")";
