@@ -298,8 +298,7 @@ uint64_t LzoAndLz4DecompressorCommon::decompress(
 
       // Decompress this block.
       remainingOutputSize = uncompressedSize - decompressedTotalSize;
-      uint64_t decompressedSize = -1;
-      decompressedSize = decompressInternal(
+      uint64_t decompressedSize = decompressInternal(
           inputPtr,
           static_cast<int32_t>(compressedBlockSize),
           outPtr,
