@@ -130,7 +130,7 @@ class HashStringAllocator : public StreamArena {
     /// Returns the Header of the block that is physically next to this block or
     /// null if this is the last block of the arena.
     Header* next() {
-      auto* next = reinterpret_cast<Header*>(end());
+      auto* next = castToHeader(end());
       return next->data_ == kArenaEnd ? nullptr : next;
     }
 
@@ -219,9 +219,18 @@ class HashStringAllocator : public StreamArena {
 
   /// Returns the header immediately below 'data'.
   static Header* headerOf(const void* data) {
+    return castToHeader(data) - 1;
+  }
+
+  /// Returns the header below 'data'.
+  static Header* castToHeader(const void* data) {
     return reinterpret_cast<Header*>(
-               const_cast<char*>(reinterpret_cast<const char*>(data))) -
-        1;
+        const_cast<char*>(reinterpret_cast<const char*>(data)));
+  }
+
+  /// Returns the byte size of block pointed by 'header'.
+  inline size_t blockBytes(const Header* header) const {
+    return header->size() + kHeaderSize;
   }
 
   /// Returns ByteInputStream over the data in the range of 'header' and
@@ -306,8 +315,8 @@ class HashStringAllocator : public StreamArena {
   /// the pointer because in the worst case we would have one allocation that
   /// chains many small free blocks together via kContinued.
   uint64_t freeSpace() const {
-    int64_t minFree = state_.freeBytes() -
-        state_.numFree() * (sizeof(Header) + sizeof(void*));
+    const int64_t minFree = state_.freeBytes() -
+        state_.numFree() * (kHeaderSize + Header::kContinuedPtrSize);
     VELOX_CHECK_GE(minFree, 0, "Guaranteed free space cannot be negative");
     return minFree;
   }
@@ -358,6 +367,7 @@ class HashStringAllocator : public StreamArena {
   static constexpr int32_t kUnitSize = 16 * memory::AllocationTraits::kPageSize;
   static constexpr int32_t kMinContiguous = 48;
   static constexpr int32_t kNumFreeLists = kMaxAlloc - kMinAlloc + 2;
+  static constexpr uint32_t kHeaderSize = sizeof(Header);
 
   void newRange(
       int32_t bytes,
