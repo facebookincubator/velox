@@ -36,19 +36,23 @@ struct RemainderFunction {
     if (UNLIKELY(n == 0)) {
       return false;
     }
-    // std::numeric_limits<int64_t>::min() % -1 could crash the program since
-    // abs(std::numeric_limits<int64_t>::min()) can not be represented in
-    // int64_t.
-    if (UNLIKELY(n == 1 || n == -1)) {
-      result = 0;
-    } else if constexpr (std::is_same_v<TInput, float> || std::is_same_v<TInput, double>) {
-      if (std::isnan(a) || std::isnan(n) || std::isinf(a) || std::isinf(n)) {
+    if constexpr (std::is_floating_point_v<TInput>) {
+      if (std::isnan(a) || std::isnan(n) || std::isinf(a)) {
         result = std::numeric_limits<TInput>::quiet_NaN();
+      } else if (std::isinf(n)) {
+        result = a;
       } else {
         result = std::fmod(a, n);
       }
     } else {
-      result = a % n;
+      // std::numeric_limits<int64_t>::min() % -1 could crash the program since
+      // abs(std::numeric_limits<int64_t>::min()) can not be represented in
+      // int64_t.
+      if (n == 1 || n == -1) {
+        result = 0;
+      } else {
+        result = a % n;
+      }
     }
     return true;
   }

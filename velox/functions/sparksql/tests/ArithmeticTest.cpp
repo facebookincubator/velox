@@ -134,15 +134,16 @@ TEST_F(RemainderTest, int64) {
 }
 
 TEST_F(RemainderTest, double) {
-  EXPECT_DOUBLE_EQ(0.0, remainder<double>(0.3, 0.3).value());
-  EXPECT_DOUBLE_EQ(0.2, remainder<double>(0.5, 0.3).value());
-  EXPECT_DOUBLE_EQ(-1.1, remainder<double>(-1.1, 2).value());
-  EXPECT_EQ(std::nullopt, remainder<double>(2.14159, 0.0));
-  EXPECT_DOUBLE_EQ(0.1, remainder<double>(0.7, -0.3).value());
+  EXPECT_DOUBLE_EQ(0.0f, remainder<double>(2.0, 1.0).value());
+  EXPECT_DOUBLE_EQ(1.0f, remainder<double>(5.0, 2.0).value());
+  EXPECT_DOUBLE_EQ(-1.0f, remainder<double>(-5.0, 2.0).value());
+  EXPECT_DOUBLE_EQ(0.5f, remainder<double>(1.5, 1.0).value());
+  EXPECT_DOUBLE_EQ(0.0f, remainder<double>(0.0, 1.0).value());
+  EXPECT_DOUBLE_EQ(2.0f, remainder<double>(2.0, std::numeric_limits<double>::infinity()).value());
 
+  EXPECT_EQ(std::nullopt, remainder<double>(2.0, 0.0));
   EXPECT_TRUE(std::isnan(remainder<double>(std::numeric_limits<double>::quiet_NaN(), 1.0).value()));
-  EXPECT_TRUE(std::isnan(remainder<double>(std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()).value()));
-
+  EXPECT_TRUE(std::isnan(remainder<double>(1.0, std::numeric_limits<double>::quiet_NaN()).value()));
   EXPECT_TRUE(std::isnan(remainder<double>(std::numeric_limits<double>::infinity(), 1.0).value()));
   EXPECT_TRUE(std::isnan(remainder<double>(-std::numeric_limits<double>::infinity(), 1.0).value()));
   EXPECT_TRUE(std::isnan(remainder<double>(std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()).value()));
@@ -154,10 +155,11 @@ TEST_F(RemainderTest, float) {
   EXPECT_FLOAT_EQ(-1.1, remainder<float>(-1.1, 2).value());
   EXPECT_EQ(std::nullopt, remainder<float>(2.14159, 0.0));
   EXPECT_FLOAT_EQ(0.1, remainder<float>(0.7, -0.3).value());
+  EXPECT_FLOAT_EQ(2.0f, remainder<float>(2.0f, std::numeric_limits<float>::infinity()).value());
 
+  EXPECT_EQ(std::nullopt, remainder<float>(2.0, 0.0));
   EXPECT_TRUE(std::isnan(remainder<float>(std::numeric_limits<float>::quiet_NaN(), 1.0).value()));
-  EXPECT_TRUE(std::isnan(remainder<float>(std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()).value()));
-
+  EXPECT_TRUE(std::isnan(remainder<float>(1.0, std::numeric_limits<float>::quiet_NaN()).value()));
   EXPECT_TRUE(std::isnan(remainder<float>(std::numeric_limits<float>::infinity(), 1.0).value()));
   EXPECT_TRUE(std::isnan(remainder<float>(-std::numeric_limits<float>::infinity(), 1.0).value()));
   EXPECT_TRUE(std::isnan(remainder<float>(std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity()).value()));
