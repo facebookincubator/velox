@@ -51,10 +51,7 @@ class MatchConstantPattern final : public exec::VectorFunction {
   }
 
   /**
-   * This is the function that will be called for each match that occurs. @a ctx
-   * is to allow you to have some application-specific state that you will get
-   * access to for each match. In our simple example we're just going to use it
-   * to pass in the pattern that was being searched for so we can print it out.
+   * Callback function for matching case.
    */
   static int eventHandler(
       unsigned int id,

@@ -34,19 +34,7 @@ set(CMAKE_CXX_STANDARD_BACKUP ${CMAKE_CXX_STANDARD})
 # C++ 17 is not supported.
 set(CMAKE_CXX_STANDARD 11)
 set(BUILD_EXAMPLES FALSE)
-#set(BUILD_AVX512 ON)
+set(BUILD_AVX512 ON)
 FetchContent_MakeAvailable(hyperscan)
 set(CMAKE_CXX_STANDARD ${CMAKE_CXX_STANDARD_BACKUP})
-# if(ICU_SOURCE)
-#   # empty var will cause a syntax error
-#   if(${ICU_SOURCE} STREQUAL "BUNDLED")
-#     # build re2 after icu so the files are available
-#     add_dependencies(re2 ICU ICU::uc)
-#   endif()
-# endif()
-
-# set(re2_LIBRARIES ${re2_BINARY_DIR}/libre2.a)
-# set(re2_INCLUDE_DIRS ${re2_SOURCE_DIR})
-
-# set(RE2_ROOT ${re2_BINARY_DIR})
-# set(re2_ROOT ${re2_BINARY_DIR})
+# TODO: Build and install colm, ragel before hyperscan.
