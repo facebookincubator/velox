@@ -305,12 +305,12 @@ uint64_t LzoAndLz4DecompressorCommon::decompress(
           outPtr,
           static_cast<int32_t>(remainingOutputSize));
 
-      DWIO_ENSURE_EQ(
+      DWIO_ENSURE_LE(
           decompressedSize,
-          decompressedBlockSize,
-          "{} decompression failed, decompressedSize is not equal to decompressedBlockSize, "
-          "decompressedSize: {}, decompressedBlockSize: {}",
-          kind_,
+          remainingOutputSize,
+          "{} decompression failed, decompressedSize is not less than or equal to remainingOutputSize, "
+          "decompressedSize: {}, remainingOutputSize: {}",
+          ::facebook::velox::common::compressionKindToString(kind_),
           decompressedSize,
           remainingOutputSize);
 
