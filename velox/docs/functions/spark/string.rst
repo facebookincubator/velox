@@ -149,10 +149,6 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT repeat('123', 2); -- 123123
 
-.. spark:function:: string_repeat(str, n) -> varchar
-
-    This is an alias for ``repeat(str, n)``.
-
 .. spark:function:: replace(input, replaced) -> varchar
 
     Removes all instances of ``replaced`` from ``input``.
@@ -231,6 +227,10 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT startswith('js SQL', 'js'); -- true
         SELECT startswith('js SQL', 'SQL'); -- false
         SELECT startswith('js SQL', null); -- NULL
+
+.. spark:function:: string_repeat(str, n) -> varchar
+
+    This is an alias for ``repeat(str, n)``.
 
 .. spark:function:: str_to_map(string, entryDelimiter, keyValueDelimiter) -> map(string, string)
 
