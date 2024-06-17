@@ -144,8 +144,8 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 .. spark:function:: repeat(str, n) -> varchar
 
     Returns the string which repeats the given string value ``n`` times. 
-    ``n`` must be less or equal than 10000.
-    If ``n`` is less or equal than 0, empry string is returned. ::
+    ``n`` must be less than or equal to 10000.
+    If ``n`` is less than or equal to 0, empry string is returned. ::
 
         SELECT repeat('123', 2); -- 123123
 
