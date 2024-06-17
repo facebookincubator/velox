@@ -22,17 +22,14 @@ template <typename T>
 struct RaiseErrorFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      UnknownValue& result,
-      const arg_type<Varchar>& input) {
-    throw std::runtime_error(input);
-  }
-
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void callNullable(
       UnknownValue& result,
-      const TInput* /*input*/) {
-    throw std::runtime_error("");
+      const TInput* input) {
+    if (input) {
+      VELOX_FAIL(*input);
+    }
+    VELOX_FAIL("");
   }
 };
 } // namespace facebook::velox::functions::sparksql
