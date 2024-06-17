@@ -187,7 +187,7 @@ Array Functions
         SELECT shuffle(array(0, 0, 0), 0); -- [0, 0, 0]
         SELECT shuffle(array(1, NULL, 1, NULL, 2), 0); -- [2, 1, NULL, NULL, 1]
 
-.. spark:function:: size(array(E), legacySizeOfNull) -> int
+.. spark:function:: size(array(E), legacySizeOfNull) -> integer
 
     Returns the size of the array. Returns null for null input if `legacySizeOfNull`
     is set to false. Otherwise, returns -1 for null input.

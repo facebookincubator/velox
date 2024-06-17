@@ -62,9 +62,8 @@ struct Size {
       if (legacySizeOfNull_) {
         out = -1;
         return true;
-      } else {
-        return false;
       }
+      return false;
     }
     out = input->size();
     return true;

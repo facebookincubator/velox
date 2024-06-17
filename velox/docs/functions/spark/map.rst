@@ -56,7 +56,7 @@ Map Functions
                             MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]),
                             (k, v1, v2) -> k || CAST(v1/v2 AS VARCHAR));
 
-.. spark:function:: size(map(K,V), legacySizeOfNull) -> int
+.. spark:function:: size(map(K,V), legacySizeOfNull) -> integer
    :noindex:
 
     Returns the size of the input map. Returns null for null input if ``legacySizeOfNull``
