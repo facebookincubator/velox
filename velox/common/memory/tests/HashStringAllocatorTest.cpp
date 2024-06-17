@@ -99,6 +99,35 @@ class HashStringAllocatorTest : public testing::Test {
   folly::Random::DefaultGenerator rng_;
 };
 
+TEST_F(HashStringAllocatorTest, multipleFree) {
+  ASSERT_NO_THROW(allocator_->toString());
+
+  auto h1 = allocate(123);
+  ASSERT_EQ(h1->toString(), "size: 123");
+
+  allocator_->free(h1);
+  // Running free() multiple times on the same memory block should result in an
+  // error.
+  VELOX_ASSERT_THROW(allocator_->free(h1), "");
+}
+
+TEST_F(HashStringAllocatorTest, multipleFree2) {
+  ASSERT_NO_THROW(allocator_->toString());
+
+  auto h1 = allocate(123);
+  auto h2 = allocate(456);
+  auto h3 = allocate(789);
+
+  ASSERT_EQ(h1->toString(), "size: 123");
+  ASSERT_EQ(h2->toString(), "size: 456");
+  ASSERT_EQ(h3->toString(), "size: 789");
+
+  allocator_->free(h3);
+  allocator_->free(h2);
+  VELOX_ASSERT_THROW(allocator_->free(h3), "");
+  allocator_->free(h1);
+}
+
 TEST_F(HashStringAllocatorTest, headerToString) {
   ASSERT_NO_THROW(allocator_->toString());
 

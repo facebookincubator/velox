@@ -443,6 +443,7 @@ void HashStringAllocator::free(Header* header) {
           removeFromFreeList(next);
           headerToFree->setSize(
               headerToFree->size() + next->size() + sizeof(Header));
+          next->setFree();
           next = reinterpret_cast<Header*>(headerToFree->end());
           VELOX_CHECK(next->isArenaEnd() || !next->isFree());
         }
