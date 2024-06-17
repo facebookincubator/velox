@@ -67,12 +67,6 @@ class WindowPartition {
     return partition_.size();
   }
 
-  // Returns the starting offset of the current partial window partition within
-  // the full partition.
-  vector_size_t startRow() const {
-    return startRow_;
-  }
-
   bool isComplete() const {
     return complete_;
   }
@@ -208,6 +202,12 @@ class WindowPartition {
       const vector_size_t* rawPeerBounds,
       vector_size_t* rawFrameBounds) const;
 
+  // Returns the starting offset of the current partial window partition within
+  // the full partition.
+  vector_size_t startRow() const {
+    return startRow_;
+  }
+
   // The RowContainer associated with the partition.
   // It is owned by the WindowBuild that creates the partition.
   RowContainer* data_;
@@ -247,8 +247,5 @@ class WindowPartition {
 
   // The partition offset of the first row in rows_.
   vector_size_t startRow_ = 0;
-
-  // Holds the last row in previous peer group.
-  std::shared_ptr<FlatVector<StringView>> previousGroupLastRow_ = nullptr;
 };
 } // namespace facebook::velox::exec

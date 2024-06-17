@@ -56,14 +56,8 @@ void WindowPartition::addRows(const std::vector<char*>& rows) {
 void WindowPartition::clearOutputRows(vector_size_t numRows) {
   VELOX_CHECK(partial_, "Current WindowPartition should be partial.");
   if (!complete_ || (complete_ && rows_.size() > numRows)) {
-    // Store last row of partial partition.
-    previousGroupLastRow_ = BaseVector::create<FlatVector<StringView>>(
-        VARBINARY(), 1, data_->pool());
-    data_->extractSerializedRows(
-        folly::Range(rows_.data() + (numRows - 1), 1), previousGroupLastRow_);
-
-    data_->eraseRows(folly::Range<char**>(rows_.data(), numRows));
-    rows_.erase(rows_.begin(), rows_.begin() + numRows);
+    data_->eraseRows(folly::Range<char**>(rows_.data(), numRows - 1));
+    rows_.erase(rows_.begin(), rows_.begin() + numRows - 1);
     partition_ = folly::Range(rows_.data(), rows_.size());
     startRow_ += numRows;
   }
@@ -206,28 +200,22 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
   auto peerEnd = prevPeerEnd;
 
   auto nextStart = start;
-  if (partial_ && previousGroupLastRow_) {
-    // rowContainer is used to compare whether the current first row is in same
-    // peer with the last row of previous batch.
-    auto rowContainer =
-        std::make_unique<RowContainer>(data_->keyTypes(), data_->pool());
-    auto serialized = BaseVector::create<FlatVector<StringView>>(
-        VARBINARY(), 1, data_->pool());
-    data_->extractSerializedRows(
-        folly::Range(rows_.data() + (start - startRow()), 1), serialized);
-    rowContainer->clear();
 
-    auto firstRow = rowContainer->newRow();
-    rowContainer->storeSerializedRow(*serialized, 0, firstRow);
-    auto lastRow = rowContainer->newRow();
-    rowContainer->storeSerializedRow(*previousGroupLastRow_, 0, lastRow);
+  if (partial_ && start > 0) {
+    auto peerGroup = peerCompare(partition_[0], partition_[1], data_);
 
-    auto peerGroup = peerCompare(lastRow, firstRow, rowContainer.get());
+    // The first row is the last row in previous batch. So Delete it after
+    // compare.
+    data_->eraseRows(folly::Range<char**>(rows_.data(), 1));
+    rows_.erase(rows_.begin(), rows_.begin() + 1);
+    partition_ = folly::Range(rows_.data(), rows_.size());
+    --lastPartitionRow;
 
     if (!peerGroup) {
       peerEnd = findPeerGroupEndIndex(start, lastPartitionRow, peerCompare);
 
-      for (auto j = 0; j < (peerEnd - start); j++) {
+      auto numElements = std::min(peerEnd - start, end);
+      for (auto j = 0; j < numElements; j++) {
         rawPeerStarts[j] = peerStart;
         rawPeerEnds[j] = peerEnd - 1;
       }

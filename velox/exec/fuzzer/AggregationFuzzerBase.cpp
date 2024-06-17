@@ -423,6 +423,7 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
     const std::vector<exec::Split>& splits,
     bool injectSpill,
     bool abandonPartial,
+    bool supportRowsStreaming,
     int32_t maxDrivers) {
   LOG(INFO) << "Executing query plan: " << std::endl
             << plan->toString(true, true);
@@ -450,6 +451,10 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
           .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
           .config(core::QueryConfig::kMaxPartialAggregationMemory, "0")
           .config(core::QueryConfig::kMaxExtendedPartialAggregationMemory, "0");
+    }
+
+    if (supportRowsStreaming) {
+      builder.config(core::QueryConfig::kRowsStreamingWindowEnabled, "true");
     }
 
     if (!splits.empty()) {
@@ -491,6 +496,7 @@ void AggregationFuzzerBase::testPlan(
     bool injectSpill,
     bool abandonPartial,
     bool customVerification,
+    bool supportRowsStreaming,
     const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
     const velox::fuzzer::ResultOrError& expected,
     int32_t maxDrivers) {
@@ -499,6 +505,7 @@ void AggregationFuzzerBase::testPlan(
       planWithSplits.splits,
       injectSpill,
       abandonPartial,
+      supportRowsStreaming,
       maxDrivers);
   compare(actual, customVerification, customVerifiers, expected);
 }
