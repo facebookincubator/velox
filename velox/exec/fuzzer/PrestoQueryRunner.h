@@ -130,6 +130,9 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
       const std::string& sql,
       const std::string& sessionProperty = "");
 
+  std::optional<std::string> toSql(
+      const std::shared_ptr<const core::ValuesNode>& valuesNode);
+
   std::string fetchNext(const std::string& nextUri);
 
   // Creates an empty table with given data type and table name. The function

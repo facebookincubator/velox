@@ -82,7 +82,8 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
     size_t initialSeed,
     const ExpressionFuzzerVerifier::Options& options,
     const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
-        argGenerators)
+        argGenerators,
+    std::shared_ptr<test::ReferenceQueryRunner> referenceQueryRunner)
     : options_(options),
       queryCtx_(core::QueryCtx::create(
           nullptr,
@@ -92,7 +93,8 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
           &execCtx_,
           {options_.disableConstantFolding,
            options_.reproPersistPath,
-           options_.persistAndRunOnce}),
+           options_.persistAndRunOnce},
+          referenceQueryRunner),
       vectorFuzzer_(std::make_shared<VectorFuzzer>(
           options_.vectorFuzzerOptions,
           execCtx_.pool())),
@@ -101,7 +103,8 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
           initialSeed,
           vectorFuzzer_,
           options.expressionFuzzerOptions,
-          argGenerators) {
+          argGenerators),
+      referenceQueryRunner_{referenceQueryRunner} {
   seed(initialSeed);
 
   // Init stats and register listener.
@@ -256,7 +259,7 @@ void ExpressionFuzzerVerifier::retryWithTry(
   } catch (const std::exception&) {
     if (options_.findMinimalSubexpression) {
       test::computeMinimumSubExpression(
-          {&execCtx_, {false, ""}},
+          {&execCtx_, {false, ""}, referenceQueryRunner_},
           *vectorFuzzer_,
           plans,
           rowVector,
@@ -287,7 +290,7 @@ void ExpressionFuzzerVerifier::retryWithTry(
     } catch (const std::exception&) {
       if (options_.findMinimalSubexpression) {
         test::computeMinimumSubExpression(
-            {&execCtx_, {false, ""}},
+            {&execCtx_, {false, ""}, referenceQueryRunner_},
             *vectorFuzzer_,
             plans,
             noErrorRowVector,
@@ -345,7 +348,7 @@ void ExpressionFuzzerVerifier::go() {
     } catch (const std::exception&) {
       if (options_.findMinimalSubexpression) {
         test::computeMinimumSubExpression(
-            {&execCtx_, {false, ""}},
+            {&execCtx_, {false, ""}, referenceQueryRunner_},
             *vectorFuzzer_,
             plans,
             rowVector,

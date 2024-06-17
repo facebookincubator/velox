@@ -212,7 +212,7 @@ class AggregationFuzzerBase {
       bool injectSpill = false,
       bool abandonPartial = false,
       int32_t maxDrivers = 2);
-
+  
   void compare(
       const velox::fuzzer::ResultOrError& actual,
       bool customVerification,

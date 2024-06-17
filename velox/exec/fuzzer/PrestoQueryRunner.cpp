@@ -25,6 +25,7 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/ITypedExpr.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/ToSQLUtil.h"
@@ -193,39 +194,15 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     return toSql(joinNode);
   }
 
+  if (const auto valuesNode =
+          std::dynamic_pointer_cast<const core::ValuesNode>(plan)) {
+    return toSql(valuesNode);
+  }
+
   VELOX_NYI();
 }
 
 namespace {
-
-std::string toTypeSql(const TypePtr& type) {
-  switch (type->kind()) {
-    case TypeKind::ARRAY:
-      return fmt::format("array({})", toTypeSql(type->childAt(0)));
-    case TypeKind::MAP:
-      return fmt::format(
-          "map({}, {})",
-          toTypeSql(type->childAt(0)),
-          toTypeSql(type->childAt(1)));
-    case TypeKind::ROW: {
-      const auto& rowType = type->asRow();
-      std::stringstream sql;
-      sql << "row(";
-      for (auto i = 0; i < type->size(); ++i) {
-        appendComma(i, sql);
-        sql << rowType.nameOf(i) << " ";
-        sql << toTypeSql(type->childAt(i));
-      }
-      sql << ")";
-      return sql.str();
-    }
-    default:
-      if (type->isPrimitiveType()) {
-        return type->toString();
-      }
-      VELOX_UNSUPPORTED("Type is not supported: {}", type->toString());
-  }
-}
 
 std::string toWindowCallSql(
     const core::CallTypedExprPtr& call,
@@ -270,6 +247,14 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       TIMESTAMP(),
   };
   return kScalarTypes;
+}
+
+std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const core::ValuesNode>& valuesNode) {
+  if (!isSupportedDwrfType(valuesNode->outputType())) {
+    return std::nullopt;
+  }
+  return "tmp";
 }
 
 std::optional<std::string> PrestoQueryRunner::toSql(
@@ -320,10 +305,44 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   return sql.str();
 }
 
+bool containsComplexConstantRecursive(const core::TypedExprPtr& expression) {
+  if (auto constant = std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+          expression)) {
+    return !constant->type()->isPrimitiveType();
+  }
+
+  if (auto lambda =
+          std::dynamic_pointer_cast<const core::LambdaTypedExpr>(expression)) {
+    if (containsComplexConstantRecursive(lambda->body())) {
+      return true;
+    }
+  }
+  for (const auto& input : expression->inputs()) {
+    if (containsComplexConstantRecursive(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool containsComplexConstant(
+    const std::vector<core::TypedExprPtr>& expressions) {
+  for (const auto& expression : expressions) {
+    if (containsComplexConstantRecursive(expression)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::optional<std::string> PrestoQueryRunner::toSql(
     const std::shared_ptr<const core::ProjectNode>& projectNode) {
   auto sourceSql = toSql(projectNode->sources()[0]);
   if (!sourceSql.has_value()) {
+    return std::nullopt;
+  }
+
+  if (containsComplexConstant(projectNode->projections())) {
     return std::nullopt;
   }
 
@@ -333,7 +352,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   for (auto i = 0; i < projectNode->names().size(); ++i) {
     appendComma(i, sql);
     auto projection = projectNode->projections()[i];
-    if (auto field =
+    /*if (auto field =
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
                 projection)) {
       sql << field->name();
@@ -341,11 +360,18 @@ std::optional<std::string> PrestoQueryRunner::toSql(
         auto call =
             std::dynamic_pointer_cast<const core::CallTypedExpr>(projection)) {
       sql << toCallSql(call);
+    } else if (
+        auto cast =
+            std::dynamic_pointer_cast<const core::CastTypedExpr>(projection)) {
+      sql << toCastSql(cast);
+    } else if (
+        auto concat = std::dynamic_pointer_cast<const core::ConcatTypedExpr>(
+            projection)) {
+      sql << toConcatSql(concat);
     } else {
       VELOX_NYI();
-    }
-
-    sql << " as " << projectNode->names()[i];
+    }*/
+    sql << typedExprToSql(projection) << " as " << projectNode->names()[i];
   }
 
   sql << " FROM (" << sourceSql.value() << ")";

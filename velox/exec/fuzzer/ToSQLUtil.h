@@ -23,6 +23,8 @@ namespace facebook::velox::exec::test {
 /// than 0.
 void appendComma(int32_t i, std::stringstream& sql);
 
+std::string toTypeSql(const TypePtr& type);
+
 // Converts input expressions into SQL string and appends to a given
 // stringstream.
 void toCallInputsSql(
@@ -38,5 +40,7 @@ std::string toAggregateCallSql(
     const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys,
     const std::vector<core::SortOrder>& sortingOrders,
     bool distinct);
+
+std::string typedExprToSql(const core::TypedExprPtr& expr);
 
 } // namespace facebook::velox::exec::test
