@@ -48,9 +48,9 @@ Map Functions
     if :doc:`spark.legacy_size_of_null <../../configs>` is set to false.
     Otherwise, returns -1 for null input.
 
-.. function:: transform_keys(map(K1,V), function(K1,V,K2)) -> map(K2,V)
+.. spark:function:: transform_keys(map(K1,V), function(K1,V,K2)) -> map(K2,V)
 
-    Returns a map that applies ``function`` to each entry of ``map`` and transforms the keys::
+    Returns a map that applies ``function`` to each entry of ``map`` and transforms the keys.::
 
         SELECT transform_keys(MAP(ARRAY[], ARRAY[]), (k, v) -> k + 1); -- {}
         SELECT transform_keys(MAP(ARRAY [1, 2, 3], ARRAY ['a', 'b', 'c']), (k, v) -> k + 1); -- {2 -> a, 3 -> b, 4 -> c}
@@ -59,9 +59,9 @@ Map Functions
         SELECT transform_keys(MAP(ARRAY [1, 2], ARRAY [1.0, 1.4]), -- {one -> 1.0, two -> 1.4}
                               (k, v) -> MAP(ARRAY[1, 2], ARRAY['one', 'two'])[k]);
 
-.. function:: transform_values(map(K,V1), function(K,V1,V2)) -> map(K,V2)
+.. spark:function:: transform_values(map(K,V1), function(K,V1,V2)) -> map(K,V2)
 
-    Returns a map that applies ``function`` to each entry of ``map`` and transforms the values::
+    Returns a map that applies ``function`` to each entry of ``map`` and transforms the values.::
 
         SELECT transform_values(MAP(ARRAY[], ARRAY[]), (k, v) -> v + 1); -- {}
         SELECT transform_values(MAP(ARRAY [1, 2, 3], ARRAY [10, 20, 30]), (k, v) -> v + k); -- {1 -> 11, 2 -> 22, 3 -> 33}
