@@ -126,7 +126,7 @@ namespace {
 
 std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     const parquet::WriterOptions& options,
-    const std::shared_ptr<DefaultFlushPolicy>& flushPolicy) {
+    const std::unique_ptr<DefaultFlushPolicy>& flushPolicy) {
   auto builder = WriterProperties::Builder();
   WriterProperties::Builder* properties = &builder;
   if (!options.enableDictionary) {
@@ -234,7 +234,7 @@ Writer::Writer(
   if (options.flushPolicyFactory) {
     flushPolicy_ = options.flushPolicyFactory();
   } else {
-    flushPolicy_ = std::make_shared<DefaultFlushPolicy>();
+    flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
   options_.timestampUnit =
       options.parquetWriteTimestampUnit.value_or(TimestampUnit::kNano);

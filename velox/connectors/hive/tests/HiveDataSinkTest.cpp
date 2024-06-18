@@ -25,9 +25,9 @@
 #include "velox/core/Config.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/reader/ParquetReader.h"
@@ -145,7 +145,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       const std::vector<std::string>& partitionedBy = {},
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
           bucketProperty = nullptr,
-      const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
+      const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>&
           flushPolicyFactory = nullptr) {
     return makeHiveInsertTableHandle(
         outputRowType->names(),
@@ -168,7 +168,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       const std::vector<std::string>& partitionedBy = {},
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
           bucketProperty = nullptr,
-      const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
+      const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>&
           flushPolicyFactory = nullptr) {
     return std::make_shared<HiveDataSink>(
         rowType,
@@ -663,14 +663,14 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, memoryReclaim) {
           expectedWriterReclaimed);
     }
   } testSettings[] = {
-      {dwio::common::FileFormat::DWRF, true, true, 1 << 30, true, true},
-      {dwio::common::FileFormat::DWRF, true, true, 1, true, true},
-      {dwio::common::FileFormat::DWRF, true, false, 1 << 30, false, false},
-      {dwio::common::FileFormat::DWRF, true, false, 1, false, false},
-      {dwio::common::FileFormat::DWRF, false, true, 1 << 30, true, false},
-      {dwio::common::FileFormat::DWRF, false, true, 1, true, true},
-      {dwio::common::FileFormat::DWRF, false, false, 1 << 30, false, false},
-      {dwio::common::FileFormat::DWRF, false, false, 1, false, false},
+    {dwio::common::FileFormat::DWRF, true, true, 1 << 30, true, true},
+    {dwio::common::FileFormat::DWRF, true, true, 1, true, true},
+    {dwio::common::FileFormat::DWRF, true, false, 1 << 30, false, false},
+    {dwio::common::FileFormat::DWRF, true, false, 1, false, false},
+    {dwio::common::FileFormat::DWRF, false, true, 1 << 30, true, false},
+    {dwio::common::FileFormat::DWRF, false, true, 1, true, true},
+    {dwio::common::FileFormat::DWRF, false, false, 1 << 30, false, false},
+    {dwio::common::FileFormat::DWRF, false, false, 1, false, false},
   // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
 #if 0
       {dwio::common::FileFormat::PARQUET, true, true, 1 << 30, false, false},
@@ -988,7 +988,7 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
 #ifdef VELOX_ENABLE_PARQUET
   const auto outputDirectory = TempDirectoryPath::create();
   auto flushPolicyFactory = []() {
-    return std::make_shared<facebook::velox::parquet::DefaultFlushPolicy>(
+    return std::make_unique<facebook::velox::parquet::DefaultFlushPolicy>(
         1234, 0);
   };
   auto dataSink = createDataSink(
@@ -1010,8 +1010,7 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   const std::vector<std::string> filePaths =
       listFiles(outputDirectory->getPath());
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
-      std::make_shared<LocalReadFile>(filePaths[0]),
-      readerOpts.getMemoryPool());
+      std::make_shared<LocalReadFile>(filePaths[0]), readerOpts.memoryPool());
 
   auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
       std::move(bufferedInput), readerOpts);
@@ -1024,7 +1023,7 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
 TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
   const auto outputDirectory = TempDirectoryPath::create();
   auto flushPolicyFactory = []() {
-    return std::make_shared<facebook::velox::dwrf::DefaultFlushPolicy>(1234, 0);
+    return std::make_unique<facebook::velox::dwrf::DefaultFlushPolicy>(1234, 0);
   };
   auto dataSink = createDataSink(
       rowType_,
@@ -1045,8 +1044,7 @@ TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
   const std::vector<std::string> filePaths =
       listFiles(outputDirectory->getPath());
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
-      std::make_shared<LocalReadFile>(filePaths[0]),
-      readerOpts.getMemoryPool());
+      std::make_shared<LocalReadFile>(filePaths[0]), readerOpts.memoryPool());
 
   auto reader = std::make_unique<facebook::velox::dwrf::DwrfReader>(
       readerOpts, std::move(bufferedInput));

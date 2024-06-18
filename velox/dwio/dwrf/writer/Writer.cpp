@@ -85,7 +85,7 @@ Writer::Writer(
 
   context.buildPhysicalSizeAggregators(*schema_);
   if (options.flushPolicyFactory == nullptr) {
-    flushPolicy_ = std::make_shared<DefaultFlushPolicy>(
+    flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
         context.stripeSizeFlushThreshold(),
         context.dictionarySizeFlushThreshold());
   } else {
@@ -852,12 +852,16 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
   dwrfOptions.nonReclaimableSection = options.nonReclaimableSection;
 
   if (options.flushPolicyFactory) {
-    auto dwrfFlushPolicy = std::dynamic_pointer_cast<DWRFFlushPolicy>(
-        options.flushPolicyFactory());
-    VELOX_CHECK_NOT_NULL(
-        dwrfFlushPolicy, "Please set the correct dwrf flush policy");
-    dwrfOptions.flushPolicyFactory =
-        [dwrfFlushPolicy]() -> std::shared_ptr<DWRFFlushPolicy> {
+    dwrfOptions.flushPolicyFactory = [options]() {
+      std::unique_ptr<dwio::common::FlushPolicy> flushPolicy =
+          options.flushPolicyFactory();
+      std::unique_ptr<DWRFFlushPolicy> dwrfFlushPolicy(
+          dynamic_cast<DWRFFlushPolicy*>(flushPolicy.release()));
+
+      if (!dwrfFlushPolicy) {
+        throw std::runtime_error(
+            "FlushPolicyFactory did not produce a DWRFFlushPolicy instance.");
+      }
       return dwrfFlushPolicy;
     };
   }

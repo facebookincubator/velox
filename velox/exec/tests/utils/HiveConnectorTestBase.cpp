@@ -266,7 +266,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
-    const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
+    const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>&
         flushPolicyFactory) {
   return makeHiveInsertTableHandle(
       tableColumnNames,
@@ -289,7 +289,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
-    const std::function<std::shared_ptr<dwio::common::FlushPolicy>()>&
+    const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>&
         flushPolicyFactory) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
