@@ -367,7 +367,7 @@ Valid examples
 From VARCHAR
 ^^^^^^^^^^^^
 
-There is a set of strings allowed to be casted to boolean. These strings are `t, f, 1, 0, true, false` and their upper case equivalents.
+The strings `t, f, 1, 0, true, false` and their upper case equivalents are allowed to be casted to boolean.
 Casting from other strings to boolean throws.
 
 Valid examples

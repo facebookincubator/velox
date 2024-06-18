@@ -267,19 +267,26 @@ TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
   // To boolean.
   {
     testInvalidCast<std::string>(
-        "boolean", {"1.7E308"}, "Cannot cast VARCHAR '1.7E308' to BOOLEAN");
+        "boolean",
+        {"1.7E308"},
+        "Non-whitespace character found after end of conversion");
     testInvalidCast<std::string>(
-        "boolean", {"nan"}, "Cannot cast VARCHAR 'nan' to BOOLEAN");
+        "boolean",
+        {"nan"},
+        "Non-whitespace character found after end of conversion");
     testInvalidCast<std::string>(
-        "boolean", {"infinity"}, "Cannot cast VARCHAR 'infinity' to BOOLEAN");
+        "boolean", {"infinity"}, "Invalid value for bool");
     testInvalidCast<std::string>(
-        "boolean", {"12"}, "Cannot cast VARCHAR '12' to BOOLEAN");
+        "boolean", {"12"}, "Integer overflow when parsing bool");
+    testInvalidCast<std::string>("boolean", {"-1"}, "Invalid value for bool");
     testInvalidCast<std::string>(
-        "boolean", {"-1"}, "Cannot cast VARCHAR '-1' to BOOLEAN");
+        "boolean",
+        {"tr"},
+        "Non-whitespace character found after end of conversion");
     testInvalidCast<std::string>(
-        "boolean", {"tr"}, "Cannot cast VARCHAR 'tr' to BOOLEAN");
-    testInvalidCast<std::string>(
-        "boolean", {"tru"}, "Cannot cast VARCHAR 'tru' to BOOLEAN");
+        "boolean",
+        {"tru"},
+        "Non-whitespace character found after end of conversion");
   }
 }
 
