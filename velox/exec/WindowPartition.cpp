@@ -202,6 +202,7 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
   auto nextStart = start;
 
   if (partial_ && start > 0) {
+    lastPartitionRow = end - 1;
     auto peerGroup = peerCompare(partition_[0], partition_[1], data_);
 
     // The first row is the last row in previous batch. So Delete it after
@@ -209,13 +210,11 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
     data_->eraseRows(folly::Range<char**>(rows_.data(), 1));
     rows_.erase(rows_.begin(), rows_.begin() + 1);
     partition_ = folly::Range(rows_.data(), rows_.size());
-    --lastPartitionRow;
 
     if (!peerGroup) {
       peerEnd = findPeerGroupEndIndex(start, lastPartitionRow, peerCompare);
 
-      auto numElements = std::min(peerEnd - start, end);
-      for (auto j = 0; j < numElements; j++) {
+      for (auto j = 0; j < (peerEnd - start); j++) {
         rawPeerStarts[j] = peerStart;
         rawPeerEnds[j] = peerEnd - 1;
       }

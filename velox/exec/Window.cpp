@@ -620,7 +620,7 @@ std::pair<vector_size_t, vector_size_t> Window::callApplyLoop(
   // passed this value to clearOutputRows to clear the real row count.
   auto processedRowCount = -1;
   while (numOutputRowsLeft > 0) {
-    auto totalRows = currentPartition_->numRows();
+    auto totalRows = currentPartition_->numRowsForProcessing();
     auto rowsForCurrentPartition = totalRows - partitionOffset_;
 
     // For a partial window partition, currentPartition_->numRows() returns the
@@ -628,11 +628,6 @@ std::pair<vector_size_t, vector_size_t> Window::callApplyLoop(
     // processed.
     if (currentPartition_->isPartial()) {
       rowsForCurrentPartition = totalRows;
-
-      // Delete the last row number in previous batch.
-      if (partitionOffset_ > 0) {
-        --rowsForCurrentPartition;
-      }
     }
 
     if (rowsForCurrentPartition <= numOutputRowsLeft) {
@@ -696,9 +691,7 @@ RowVectorPtr Window::getOutput() {
     }
   }
 
-  if (!currentPartition_->isComplete() &&
-      (currentPartition_->numRows() == 0 ||
-       currentPartition_->numRows() == 1)) {
+  if (!currentPartition_->isComplete() && (currentPartition_->numRows() <= 1)) {
     // The numRows may be 1, because we keep the last row in previous batch to
     // compare with the first row in next batch to determine whether they are in
     // same peer group.

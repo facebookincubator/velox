@@ -67,6 +67,14 @@ class WindowPartition {
     return partition_.size();
   }
 
+  /// Returns the number of rows that will be processed.
+  vector_size_t numRowsForProcessing() const {
+    if (startRow_ > 0) {
+      return partition_.size() - 1;
+    }
+    return partition_.size();
+  }
+
   bool isComplete() const {
     return complete_;
   }
