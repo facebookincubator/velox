@@ -10,22 +10,28 @@ Comparison Functions
 
 .. spark:function:: equalnullsafe(x, y) -> boolean
 
-    Returns true if x is equal to y. Supports all types. The
-    types of x and y must be the same. Unlike :spark:func:`equalto` returns true if both inputs
+    Returns true if ``x`` is equal to ``y``. Supports all types. The
+    types of ``x`` and ``y`` must be the same. Unlike :spark:func:`equalto` returns true if both inputs
     are NULL and false if one of the inputs is NULL.
     Corresponds to Spark's operator ``<=>``.
     Note that NaN in Spark is handled differently from standard floating point semantics.
     It is considered larger than any other numeric values. This rule is applied for functions
     "equalnullsafe", "equalto", "greaterthan", "greaterthanorequal", "lessthan", "lessthanorequal".
-    Nested nulls are allowed within input values if x is complex type. Nested 
-    nulls are treated as values.
+    Nested nulls are allowed within input values if ``x`` is complex type. Nested 
+    nulls are treated as values during comparsion. ::
+        SELECT equalnullsafe(null, null); -- true
+        SELECT equalnullsafe(null, ARRAY[1]); -- false
+        SELECT equalnullsafe(ARRAY[1, null], ARRAY[1, null]); -- true
 
 .. spark:function:: equalto(x, y) -> boolean
 
     Returns true if x is equal to y. Supports all types. The
     types of x and y must be the same. Corresponds to Spark's operators ``=`` and ``==``.
     Nested nulls are allowed within input values if x is complex type. Nested 
-    nulls are treated as values.
+    nulls are treated as values during comparsion. ::
+        SELECT equalto(null, null); -- null
+        SELECT equalto(null, ARRAY[1]); -- null
+        SELECT equalto(ARRAY[1, null], ARRAY[1, null]); -- true
 
 .. spark:function:: greaterthan(x, y) -> boolean
 
