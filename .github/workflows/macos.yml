@@ -67,7 +67,7 @@ jobs:
             range-v3 simdjson snappy thrift xz xsimd zstd
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
-          brew unlink protobuf
+          brew unlink protobuf || echo "protobuf not installed"
           brew link --force protobuf@21
 
       - name: Cache ccache
