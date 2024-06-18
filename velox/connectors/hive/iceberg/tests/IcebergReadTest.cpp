@@ -55,7 +55,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         std::multimap<std::string, std::vector<int64_t>>>
         deleteFilesForBaseDatafiles = {
             {"delete_file_1", {{"data_file_1", deletePositionsVec}}}};
-    false;
+
     assertPositionalDeletes(
         rowGroupSizesForFiles, deleteFilesForBaseDatafiles, 0);
   }
@@ -167,7 +167,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       const std::map<std::string, std::vector<int64_t>>& rowGroupSizesForFiles,
       const std::unordered_map<
           std::string,
-          std::multimap<std::string, std::vector<int64_t>>>
+          std::multimap<std::string, std::vector<int64_t>>>&
           deleteFilesForBaseDatafiles,
       int32_t numPrefetchSplits = 0) {
     // Keep the reference to the deleteFilePath, otherwise the corresponding
@@ -226,7 +226,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
   const static int rowCount = 20000;
-    
+
  private:
   std::map<std::string, std::shared_ptr<TempFilePath>> writeDataFiles(
       std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles) {
@@ -268,7 +268,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           std::string, // delete file name
           std::multimap<
               std::string,
-              std::vector<int64_t>>>
+              std::vector<int64_t>>>&
           deleteFilesForBaseDatafiles, // <base file name, delete position
                                        // vector for all RowGroups>
       std::map<std::string, std::shared_ptr<TempFilePath>> baseFilePaths) {
@@ -363,7 +363,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       const std::map<std::string, std::vector<int64_t>>& rowGroupSizesForFiles,
       const std::unordered_map<
           std::string,
-          std::multimap<std::string, std::vector<int64_t>>>
+          std::multimap<std::string, std::vector<int64_t>>>&
           deleteFilesForBaseDatafiles) {
     int64_t totalNumRowsInAllBaseFiles = 0;
     std::map<std::string, int64_t> baseFileSizes;
@@ -372,7 +372,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       baseFileSizes[rowGroupSizesInFile.first] += std::accumulate(
           rowGroupSizesInFile.second.begin(),
           rowGroupSizesInFile.second.end(),
-          0);
+          0LL);
       totalNumRowsInAllBaseFiles += baseFileSizes[rowGroupSizesInFile.first];
     }
 
@@ -562,6 +562,87 @@ TEST_F(HiveIcebergTest, singleBaseFileMultiplePositionalDeleteFiles) {
        makeRandomIncreasingValues(5000, 15000)});
 
   assertSingleBaseFileMultipleDeleteFiles({{}, {}});
+}
+
+/// This test creates 2 base data files, and 1 or 2 delete files, with unaligned
+/// RowGroup boundaries
+TEST_F(HiveIcebergTest, multipleBaseFileMultiplePositionalDeleteFiles) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles;
+  std::unordered_map<
+      std::string,
+      std::multimap<std::string, std::vector<int64_t>>>
+      deleteFilesForBaseDatafiles;
+
+  // Create two data files, each with two RowGroups
+  rowGroupSizesForFiles["data_file_1"] = {100, 85};
+  rowGroupSizesForFiles["data_file_2"] = {99, 1};
+
+  // Delete 3 rows from the first RowGroup in data_file_1
+  deleteFilesForBaseDatafiles["delete_file_1"] = {{"data_file_1", {0, 1, 99}}};
+  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+
+  // Delete 3 rows from the second RowGroup in data_file_1
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", {100, 101, 184}}};
+  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+
+  // Delete random rows from the both RowGroups in data_file_1
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", makeRandomIncreasingValues(0, 185)}};
+  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+
+  // Delete all rows in data_file_1
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", makeContinuousIncreasingValues(0, 185)}};
+  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+  //
+  // Delete non-existent rows from data_file_1
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", makeRandomIncreasingValues(186, 300)}};
+  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+
+  // Delete several rows from both RowGroups in both data files
+  deleteFilesForBaseDatafiles.clear();
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", {0, 100, 102, 184}}, {"data_file_2", {1, 98, 99}}};
+  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+
+  // The delete file delete_file_1 contains 3 RowGroups itself, with the first 3
+  // deleting some repeating rows in data_file_1, and the last 2 RowGroups
+  // deleting some  repeating rows in data_file_2
+  deleteFilesForBaseDatafiles.clear();
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", {0, 1, 2, 3}},
+      {"data_file_1", {1, 2, 3, 4}},
+      {"data_file_1", makeRandomIncreasingValues(0, 185)},
+      {"data_file_2", {1, 3, 5, 7}},
+      {"data_file_2", makeRandomIncreasingValues(0, 100)}};
+  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+
+  // delete_file_2 contains non-overlapping delete rows for each data files in
+  // each RowGroup
+  deleteFilesForBaseDatafiles.clear();
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", {0, 1, 2, 3}}, {"data_file_2", {1, 3, 5, 7}}};
+  deleteFilesForBaseDatafiles["delete_file_2"] = {
+      {"data_file_1", {1, 2, 3, 4}},
+      {"data_file_1", {98, 99, 100, 101, 184}},
+      {"data_file_2", {3, 5, 7, 9}},
+      {"data_file_2", {98, 99, 100}}};
+  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+
+  // Two delete files each containing overlapping delete rows for both data
+  // files
+  deleteFilesForBaseDatafiles.clear();
+  deleteFilesForBaseDatafiles["delete_file_1"] = {
+      {"data_file_1", makeRandomIncreasingValues(0, 185)},
+      {"data_file_2", makeRandomIncreasingValues(0, 100)}};
+  deleteFilesForBaseDatafiles["delete_file_2"] = {
+      {"data_file_1", makeRandomIncreasingValues(10, 120)},
+      {"data_file_2", makeRandomIncreasingValues(50, 100)}};
+  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
 }
 
 TEST_F(HiveIcebergTest, positionalDeletesMultipleSplits) {
