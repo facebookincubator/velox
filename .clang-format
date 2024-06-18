@@ -72,7 +72,6 @@ IndentPPDirectives: None
 IndentExternBlock: AfterExternBlock
 IndentWidth: 2
 IndentWrappedFunctionNames: false
-InsertNewlineAtEOF: true
 InsertTrailingCommas: None
 JavaScriptQuotes: Leave
 JavaScriptWrapImports: true
