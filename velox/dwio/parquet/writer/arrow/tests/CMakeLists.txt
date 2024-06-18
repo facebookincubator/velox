@@ -50,5 +50,6 @@ add_library(
   TestUtil.cpp
   XxHasher.cpp)
 
-target_link_libraries(velox_dwio_arrow_parquet_writer_test_lib arrow
-                      velox_dwio_arrow_parquet_writer_lib gtest)
+target_link_libraries(
+  velox_dwio_arrow_parquet_writer_test_lib arrow
+  velox_dwio_arrow_parquet_writer_lib gtest)
