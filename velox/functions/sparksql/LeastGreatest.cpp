@@ -161,6 +161,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> leastSignatures() {
                               .integerVariable("s")
                               .returnType("decimal(p,s)")
                               .argumentType("decimal(p,s)")
+                              .argumentType("decimal(p,s)")
                               .variableArity()
                               .build());
   return signatures;
