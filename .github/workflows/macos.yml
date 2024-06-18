@@ -67,7 +67,8 @@ jobs:
             range-v3 simdjson snappy thrift xz xsimd zstd
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix protobuf@21)/lib/cmake/protobuf" >> $GITHUB_ENV
+          brew unlink protobuf
+          brew link --force protobuf@21
 
       - name: Cache ccache
         uses: actions/cache@v4
