@@ -31,7 +31,8 @@ class MatchConstantPattern final : public exec::VectorFunction {
     hs_compile_error_t* compile_err;
     if (hs_compile(
             pattern.data(),
-            HS_FLAG_DOTALL,
+            // Using single match flag, which can greatly improve performance.
+            HS_FLAG_SINGLEMATCH | HS_FLAG_DOTALL,
             HS_MODE_BLOCK,
             NULL,
             &database_,
