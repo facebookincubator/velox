@@ -149,13 +149,13 @@ Mathematical Functions
 
 .. spark:function:: log(base, expr) -> double
 
-    Returns the logarithm of ``expr`` with ``base``..
-    Return NULL if either ``expr`` or ``base`` is less than or equal to 0.
+    Returns the logarithm of ``expr`` with ``base``.
+    Returns NULL if either ``expr`` or ``base`` is less than or equal to 0.
 
 .. spark:function:: log1p(x) -> double
 
     Returns the natural logarithm of the “given value ``x`` plus one”.
-    Return NULL if x is less than or equal to -1.
+    Returns NULL if x is less than or equal to -1.
 
 .. spark:function:: log2(x) -> double
 

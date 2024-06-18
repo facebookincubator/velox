@@ -591,6 +591,7 @@ TEST_F(LogNTest, log) {
   EXPECT_EQ(log(1.0, 0.0), std::nullopt);
   EXPECT_EQ(log(-1.0, 1.0), std::nullopt);
   EXPECT_EQ(log(1.0, -1.0), std::nullopt);
+  EXPECT_EQ(log(1.0, 3.0), kInf);
 }
 
 } // namespace
