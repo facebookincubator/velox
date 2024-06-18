@@ -147,23 +147,11 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
-  std::optional<T> checkAdd(std::optional<T> a, std::optional<T> b) {
-    return evaluateOnce<T>("check_add(c0, c1)", a, b);
-  }
-
-  template <typename T>
-  std::optional<T> checkSubstract(std::optional<T> a, std::optional<T> b) {
-    return evaluateOnce<T>("check_subtract(c0, c1)", a, b);
-  }
-
-  template <typename T>
-  std::optional<T> checkMultiply(std::optional<T> a, std::optional<T> b) {
-    return evaluateOnce<T>("check_multiply(c0, c1)", a, b);
-  }
-
-  template <typename T>
-  std::optional<T> checkDivide(std::optional<T> a, std::optional<T> b) {
-    return evaluateOnce<T>("check_divide(c0, c1)", a, b);
+  std::optional<T> checkArithmetic(
+      const std::string& func,
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>(fmt::format("{}(c0, c1)", func), a, b);
   }
 
   template <typename T>
@@ -607,8 +595,8 @@ TEST_F(ArithmeticTest, checkAdd) {
       INT64_MAX,
       1,
       "[ARITHMETIC_OVERFLOW] overflow: 9223372036854775807 + 1");
-  EXPECT_EQ(checkAdd<float>(kInf, 1), kInf);
-  EXPECT_EQ(checkAdd<double>(kInfDouble, 1), kInfDouble);
+  EXPECT_EQ(checkArithmetic<float>(func, kInf, 1), kInf);
+  EXPECT_EQ(checkArithmetic<double>(func, kInfDouble, 1), kInfDouble);
 }
 
 TEST_F(ArithmeticTest, checkSubstract) {
@@ -624,8 +612,8 @@ TEST_F(ArithmeticTest, checkSubstract) {
       INT64_MIN,
       1,
       "[ARITHMETIC_OVERFLOW] overflow: -9223372036854775808 - 1");
-  EXPECT_EQ(checkSubstract<float>(kInf, 1), kInf);
-  EXPECT_EQ(checkSubstract<double>(kInfDouble, 1), kInfDouble);
+  EXPECT_EQ(checkArithmetic<float>(func, kInf, 1), kInf);
+  EXPECT_EQ(checkArithmetic<double>(func, kInfDouble, 1), kInfDouble);
 }
 
 TEST_F(ArithmeticTest, checkMultiply) {
@@ -641,8 +629,8 @@ TEST_F(ArithmeticTest, checkMultiply) {
       INT64_MAX,
       2,
       "[ARITHMETIC_OVERFLOW] overflow: 9223372036854775807 * 2");
-  EXPECT_EQ(checkMultiply<float>(kInf, 1), kInf);
-  EXPECT_EQ(checkMultiply<double>(kInfDouble, 1), kInfDouble);
+  EXPECT_EQ(checkArithmetic<float>(func, kInf, 1), kInf);
+  EXPECT_EQ(checkArithmetic<double>(func, kInfDouble, 1), kInfDouble);
 }
 
 TEST_F(ArithmeticTest, checkDivide) {
@@ -659,8 +647,8 @@ TEST_F(ArithmeticTest, checkDivide) {
       INT64_MIN,
       -1,
       "[ARITHMETIC_OVERFLOW] overflow: -9223372036854775808 / -1");
-  EXPECT_EQ(checkDivide<float>(kInf, 1), kInf);
-  EXPECT_EQ(checkDivide<double>(kInfDouble, 1), kInfDouble);
+  EXPECT_EQ(checkArithmetic<float>(func, kInf, 1), kInf);
+  EXPECT_EQ(checkArithmetic<double>(func, kInfDouble, 1), kInfDouble);
 }
 
 class LogNTest : public SparkFunctionBaseTest {
