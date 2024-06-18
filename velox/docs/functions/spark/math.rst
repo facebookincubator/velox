@@ -147,6 +147,11 @@ Mathematical Functions
     Returns true if x is Nan, or false otherwise. Returns false is x is NULL.
     Supported types are: REAL, DOUBLE.
 
+.. spark:function:: log(base, expr) -> double
+
+    Returns the logarithm of ``expr`` with ``base``..
+    Return NULL if either ``expr`` or ``base`` is less than or equal to 0.
+
 .. spark:function:: log1p(x) -> double
 
     Returns the natural logarithm of the “given value ``x`` plus one”.

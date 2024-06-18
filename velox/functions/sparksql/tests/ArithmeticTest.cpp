@@ -582,5 +582,16 @@ TEST_F(LogNTest, log10) {
   EXPECT_EQ(log10(kInf), kInf);
 }
 
+TEST_F(LogNTest, log) {
+  const auto log = [&](std::optional<double> a, std::optional<double> b) {
+    return evaluateOnce<double>("log(c0, c1)", a, b);
+  };
+  EXPECT_EQ(log(10, 100), 2.0);
+  EXPECT_EQ(log(0.0, 1.0), std::nullopt);
+  EXPECT_EQ(log(1.0, 0.0), std::nullopt);
+  EXPECT_EQ(log(-1.0, 1.0), std::nullopt);
+  EXPECT_EQ(log(1.0, -1.0), std::nullopt);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
