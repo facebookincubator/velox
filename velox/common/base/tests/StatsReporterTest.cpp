@@ -107,7 +107,7 @@ class TestReporter : public BaseStatsReporter {
     counterMap[key.str()] = std::max(counterMap[key.str()], value);
   }
 
-  std::string fetchMetrics() const override {
+  std::string fetchMetrics() override {
     std::stringstream ss;
     ss << "[";
     auto sep = "";

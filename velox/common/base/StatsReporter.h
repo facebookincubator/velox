@@ -135,8 +135,8 @@ class BaseStatsReporter {
   virtual void addHistogramMetricValue(folly::StringPiece key, size_t value)
       const = 0;
 
-  /// Return the metrics in a serialized string format.
-  virtual std::string fetchMetrics() const = 0;
+  /// Return the aggregated metrics in a serialized string format.
+  virtual std::string fetchMetrics() = 0;
 
   static bool registered;
 };
@@ -183,7 +183,7 @@ class DummyStatsReporter : public BaseStatsReporter {
   void addHistogramMetricValue(folly::StringPiece /* key */, size_t /* value */)
       const override {}
 
-  std::string fetchMetrics() const override {
+  std::string fetchMetrics() override {
     return "";
   }
 };
