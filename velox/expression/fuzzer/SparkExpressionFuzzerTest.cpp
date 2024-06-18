@@ -54,7 +54,8 @@ int main(int argc, char** argv) {
       "chr",
       "replace",
       "might_contain",
-      "unix_timestamp"};
+      "unix_timestamp",
+      "raise_error"};
 
   // Required by spark_partition_id function.
   std::unordered_map<std::string, std::string> queryConfigs = {
