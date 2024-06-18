@@ -141,9 +141,9 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
-.. spark:function:: repeat(str, n) -> varchar
+.. spark:function:: repeat(string, n) -> varchar
 
-    Returns the string which repeats the given string value ``n`` times. 
+    Returns the string which repeats ``string`` ``n`` times. 
     ``n`` must be less than or equal to 10000.
     If ``n`` is less than or equal to 0, empry string is returned. ::
 

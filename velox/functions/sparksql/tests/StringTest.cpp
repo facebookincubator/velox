@@ -461,7 +461,10 @@ TEST_F(StringTest, repeat) {
   EXPECT_EQ(stringRepeat("", 2), "");
   EXPECT_EQ(stringRepeat("123\u6570", 2), "123\u6570123\u6570");
   VELOX_ASSERT_USER_THROW(
-      stringRepeat("hh", 10001), "Repeat times is too big.");
+      stringRepeat("hh", 10001), "Repeat times is too large.");
+  VELOX_ASSERT_USER_THROW(
+      stringRepeat(std::string(214749, 'l'), 10000),
+      "integer overflow: 214749 * 10000");
 }
 
 TEST_F(StringTest, replace) {
