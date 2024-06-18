@@ -14,96 +14,350 @@
  * limitations under the License.
  */
 
-#include <optional>
+#include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/expression/Expr.h"
+#include "velox/functions/Udf.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/parse/Expressions.h"
+
+using namespace facebook::velox;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::functions::test;
+using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
-
-using namespace facebook::velox::test;
 namespace {
 
 class SplitTest : public SparkFunctionBaseTest {
  protected:
-  void testSplitCharacter(
-      const std::vector<std::optional<std::string>>& input,
-      std::optional<char> pattern,
-      const std::vector<std::optional<std::vector<std::string>>>& output);
+  /// Method runs the given split function, f.e. split(C0, C1), where C0 is the
+  /// input column and the C1 is delimiter column.
+  /// Encoding arguments control what kind of vectors we should create for the
+  /// function arguments.
+  /// limit should be set to the corresponding limit, if query contains limit
+  /// argument (C2).
+  VectorPtr run(
+      const std::vector<std::string>& input,
+      const std::string& delim,
+      const char* query,
+      std::optional<int32_t> limit = std::nullopt,
+      VectorEncoding::Simple encodingStrings = VectorEncoding::Simple::FLAT,
+      VectorEncoding::Simple encodingDelims = VectorEncoding::Simple::CONSTANT,
+      VectorEncoding::Simple encodingLimit = VectorEncoding::Simple::CONSTANT) {
+    VectorPtr strings, delims, limits;
+    const vector_size_t numRows = input.size();
+
+    // Functors to create flat vectors, used as is and for lazy vector.
+    auto funcCreateFlatStrings = [&](RowSet /*rows*/) {
+      return makeFlatVector<StringView>(
+          numRows, [&](vector_size_t row) { return StringView{input[row]}; });
+    };
+
+    auto funcCreateFlatDelims = [&](RowSet /*rows*/) {
+      return makeFlatVector<StringView>(
+          numRows, [&](vector_size_t row) { return StringView{delim}; });
+    };
+
+    auto funcCreateFlatLimits = [&](RowSet /*rows*/) {
+      return makeFlatVector<int32_t>(
+          numRows, [&](vector_size_t row) { return limit.value(); });
+    };
+
+    auto funcReverseIndices = [&](vector_size_t row) {
+      return numRows - 1 - row;
+    };
+
+    // Generate strings vector
+    if (isFlat(encodingStrings)) {
+      strings = funcCreateFlatStrings({});
+    } else if (isConstant(encodingStrings)) {
+      strings =
+          BaseVector::wrapInConstant(numRows, 0, funcCreateFlatStrings({}));
+    } else if (isLazy(encodingStrings)) {
+      strings = std::make_shared<LazyVector>(
+          execCtx_.pool(),
+          CppToType<StringView>::create(),
+          numRows,
+          std::make_unique<SimpleVectorLoader>(funcCreateFlatStrings));
+    } else if (isDictionary(encodingStrings)) {
+      strings = wrapInDictionary(
+          makeIndices(numRows, funcReverseIndices),
+          numRows,
+          funcCreateFlatStrings({}));
+    }
+
+    // Generate delimiters vector
+    if (isFlat(encodingDelims)) {
+      delims = funcCreateFlatDelims({});
+    } else if (isConstant(encodingDelims)) {
+      delims = makeConstant(delim.c_str(), numRows);
+    } else if (isLazy(encodingDelims)) {
+      delims = std::make_shared<LazyVector>(
+          execCtx_.pool(),
+          CppToType<StringView>::create(),
+          numRows,
+          std::make_unique<SimpleVectorLoader>(funcCreateFlatDelims));
+    } else if (isDictionary(encodingDelims)) {
+      delims = wrapInDictionary(
+          makeIndices(numRows, funcReverseIndices),
+          numRows,
+          funcCreateFlatDelims({}));
+    }
+
+    // Generate limits vector
+    if (limit.has_value()) {
+      if (isFlat(encodingLimit)) {
+        limits = funcCreateFlatLimits({});
+      } else if (isConstant(encodingLimit)) {
+        limits = makeConstant(limit, numRows);
+      } else if (isLazy(encodingLimit)) {
+        limits = std::make_shared<LazyVector>(
+            execCtx_.pool(),
+            CppToType<int32_t>::create(),
+            numRows,
+            std::make_unique<SimpleVectorLoader>(funcCreateFlatLimits));
+      } else if (isDictionary(encodingLimit)) {
+        limits = wrapInDictionary(
+            makeIndices(numRows, funcReverseIndices),
+            numRows,
+            funcCreateFlatLimits({}));
+      }
+    }
+
+    VectorPtr result = (!limit.has_value())
+        ? evaluate<BaseVector>(query, makeRowVector({strings, delims}))
+        : evaluate<BaseVector>(query, makeRowVector({strings, delims, limits}));
+
+    return VectorMaker::flatten(result);
+  }
+
+  /// For expected result vectors, for some combinations of input encodings, we
+  /// need to massage the expected vector.
+  /// Const we wrap in const, dictionary we wrap in dictionary and the reast
+  /// leave 'as is'. In the end we flatten.
+  VectorPtr prepare(
+      const std::vector<std::vector<std::string>>& arrays,
+      VectorEncoding::Simple stringEncoding) {
+    auto arrayVector = toArrayVector(arrays);
+
+    // Constant: we will have all rows as the 1st one.
+    if (isConstant(stringEncoding)) {
+      auto constVector =
+          BaseVector::wrapInConstant(arrayVector->size(), 0, arrayVector);
+      return VectorMaker::flatten(constVector);
+    }
+
+    // Dictionary: we will have reversed rows, because we use reverse index
+    // functor to generate indices when wrapping in dictionary.
+    if (isDictionary(stringEncoding)) {
+      auto funcReverseIndices = [&](vector_size_t row) {
+        return arrayVector->size() - 1 - row;
+      };
+
+      auto dictVector = wrapInDictionary(
+          makeIndices(arrayVector->size(), funcReverseIndices),
+          arrayVector->size(),
+          arrayVector);
+      return VectorMaker::flatten(dictVector);
+    }
+
+    // Non-const string. Unchanged.
+    return arrayVector;
+  }
+
+  // Creates array vector (we use it to create expected result).
+  VectorPtr toArrayVector(const std::vector<std::vector<std::string>>& data) {
+    auto fSizeAt = [&](vector_size_t row) { return data[row].size(); };
+    auto fValueAt = [&](vector_size_t row, vector_size_t idx) {
+      return StringView{data[row][idx]};
+    };
+
+    return makeArrayVector<StringView>(data.size(), fSizeAt, fValueAt);
+  }
 };
 
-void SplitTest::testSplitCharacter(
-    const std::vector<std::optional<std::string>>& input,
-    std::optional<char> pattern,
-    const std::vector<std::optional<std::vector<std::string>>>& output) {
-  auto valueAt = [&input](vector_size_t row) {
-    return input[row] ? StringView(*input[row]) : StringView();
+/**
+ * Test split vector function on vectors with different encodings.
+ */
+TEST_F(SplitTest, split) {
+  std::vector<std::string> inputStrings;
+  std::string delim;
+  std::vector<std::vector<std::string>> actualArrays;
+  VectorPtr actual;
+  std::vector<std::vector<std::string>> expectedArrays;
+  std::vector<std::vector<std::string>> expectedArrays3;
+  std::vector<std::vector<std::string>> expectedArrays1;
+
+  // We want to check these encodings for the vectors.
+  std::vector<VectorEncoding::Simple> encodings{
+      VectorEncoding::Simple::CONSTANT,
+      VectorEncoding::Simple::FLAT,
+      VectorEncoding::Simple::LAZY,
+      VectorEncoding::Simple::DICTIONARY,
   };
 
-  // Creating vectors for input strings
-  auto nullAt = [&input](vector_size_t row) { return !input[row].has_value(); };
-
-  auto result = [&] {
-    auto inputString =
-        makeFlatVector<StringView>(input.size(), valueAt, nullAt);
-    auto rowVector = makeRowVector({inputString});
-
-    // Evaluating the function for each input and seed
-    std::string patternString =
-        pattern.has_value() ? std::string(", '") + pattern.value() + "'" : "";
-    std::string expressionString =
-        std::string("split(c0") + patternString + ")";
-    return evaluate<ArrayVector>(expressionString, rowVector);
-  }();
-
-  // Creating vectors for output string vectors
-  auto sizeAtOutput = [&output](vector_size_t row) {
-    return output[row] ? output[row]->size() : 0;
+  // Ascii, flat strings, flat delimiter, no limit.
+  delim = ",";
+  inputStrings = std::vector<std::string>{
+      {"I,he,she,they"}, // Simple
+      {"one,,,four,"}, // Empty strings
+      {""}, // The whole string is empty
   };
-  auto valueAtOutput = [&output](vector_size_t row, vector_size_t idx) {
-    return output[row] ? StringView(output[row]->at(idx)) : StringView("");
+  // Base expected data.
+  expectedArrays = std::vector<std::vector<std::string>>{
+      {"I", "he", "she", "they"},
+      {"one", "", "", "four", ""},
+      {""},
   };
-  auto nullAtOutput = [&output](vector_size_t row) {
-    return !output[row].has_value();
+  expectedArrays3 = std::vector<std::vector<std::string>>{
+      {"I", "he", "she,they"},
+      {"one", "", ",four,"},
+      {""},
   };
-  auto expectedResult = makeArrayVector<StringView>(
-      output.size(), sizeAtOutput, valueAtOutput, nullAtOutput);
+  expectedArrays1 = std::vector<std::vector<std::string>>{
+      {inputStrings[0]},
+      {inputStrings[1]},
+      {inputStrings[2]},
+  };
 
-  // Checking the results
-  assertEqualVectors(expectedResult, result);
+  // Mix and match encodings.
+  for (const auto& sEn : encodings) {
+    for (const auto& dEn : encodings) {
+      for (const auto& lEn : encodings) {
+        // Cover 'no limit', 'limit <= 0', 'high limit',
+        // 'small limit', 'limit = 1'.
+        actual = run(
+            inputStrings, delim, "split(C0, C1)", std::nullopt, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", -1, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", 10, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", 3, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays3, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", 1, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
+      }
+    }
+  }
+
+  // Check the empty delimiter special case.
+  delim = "";
+  auto expected = makeArrayVector<StringView>({
+      {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y"},
+      {"o", "n", "e", ",", ",", ",", "f", "o", "u", "r", ","},
+      {""},
+  });
+  assertEqualVectors(expected, run(inputStrings, delim, "split(C0, C1)"));
+
+  // Non-ascii, flat strings, flat delimiter, no limit.
+  delim = "లేదా";
+  inputStrings = std::vector<std::string>{
+      {"синяя сливаలేదా赤いトマトలేదా黃苹果లేదాbrown pear"}, // Simple
+      {"зелёное небоలేదాలేదాలేదా緑の空లేదా"}, // Empty strings
+      {""}, // The whole string is empty
+  };
+  // Base expected data.
+  expectedArrays = std::vector<std::vector<std::string>>{
+      {"синяя слива", "赤いトマト", "黃苹果", "brown pear"},
+      {"зелёное небо", "", "", "緑の空", ""},
+      {""},
+  };
+  expectedArrays3 = std::vector<std::vector<std::string>>{
+      {"синяя слива", "赤いトマト", "黃苹果లేదాbrown pear"},
+      {"зелёное небо", "", "లేదా緑の空లేదా"},
+      {""},
+  };
+  expectedArrays1 = std::vector<std::vector<std::string>>{
+      {inputStrings[0]},
+      {inputStrings[1]},
+      {inputStrings[2]},
+  };
+  // Mix and match encodings.
+  for (const auto& sEn : encodings) {
+    for (const auto& dEn : encodings) {
+      for (const auto& lEn : encodings) {
+        // Cover 'limit <= 0', 'high limit', 'small limit', 'limit 1'.
+        actual = run(inputStrings, delim, "split(C0, C1)", -1, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", 10, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", 3, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays3, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", 1, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
+      }
+    }
+  }
 }
 
-TEST_F(SplitTest, reallocationAndCornerCases) {
-  testSplitCharacter(
-      {"boo:and:foo", "abcfd", "abcfd:", "", ":ab::cfd::::"},
-      ':',
-      {{{"boo", "and", "foo"}},
-       {{"abcfd"}},
-       {{"abcfd", ""}},
-       {{""}},
-       {{"", "ab", "", "cfd", "", "", "", ""}}});
-}
+TEST_F(SplitTest, splitWithRegex) {
+  std::vector<std::string> inputStrings;
+  std::string delim;
+  std::vector<std::vector<std::string>> actualArrays;
+  VectorPtr actual;
+  std::vector<std::vector<std::string>> expectedArrays;
+  std::vector<std::vector<std::string>> expectedArrays3;
+  std::vector<std::vector<std::string>> expectedArrays1;
+  std::vector<VectorEncoding::Simple> encodings{
+      VectorEncoding::Simple::CONSTANT,
+      VectorEncoding::Simple::FLAT,
+      VectorEncoding::Simple::LAZY,
+      VectorEncoding::Simple::DICTIONARY,
+  };
+  delim = "\\s*[a-z]+\\s*";
+  inputStrings = std::vector<std::string>{
+      "1a 2b 14m",
+      "1a 2b 14",
+      "",
+      "a123b",
+  };
+  expectedArrays = std::vector<std::vector<std::string>>{
+      {"1", "2", "14", ""},
+      {"1", "2", "14"},
+      {""},
+      {"", "123", ""},
+  };
+  expectedArrays3 = std::vector<std::vector<std::string>>{
+      {"1", "2", "14m"},
+      {"1", "2", "14"},
+      {""},
+      {"", "123", ""},
+  };
+  expectedArrays1 = std::vector<std::vector<std::string>>{
+      {"1a 2b 14m"},
+      {"1a 2b 14"},
+      {""},
+      {"a123b"},
+  };
 
-TEST_F(SplitTest, nulls) {
-  testSplitCharacter(
-      {std::nullopt, "abcfd", "abcfd:", std::nullopt, ":ab::cfd::::"},
-      ':',
-      {{std::nullopt},
-       {{"abcfd"}},
-       {{"abcfd", ""}},
-       {{std::nullopt}},
-       {{"", "ab", "", "cfd", "", "", "", ""}}});
+  for (const auto& sEn : encodings) {
+    for (const auto& dEn : encodings) {
+      for (const auto& lEn : encodings) {
+        // Cover 'limit <= 0', 'high limit', 'small limit', 'limit 1'.
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", -1, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", 10, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", 3, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays3, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", 1, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
+      }
+    }
+  }
 }
-
-TEST_F(SplitTest, defaultArguments) {
-  testSplitCharacter(
-      {"boo:and:foo", "abcfd"}, ':', {{{"boo", "and", "foo"}}, {{"abcfd"}}});
-}
-
-TEST_F(SplitTest, longStrings) {
-  testSplitCharacter(
-      {"abcdefghijklkmnopqrstuvwxyz"},
-      ',',
-      {{{"abcdefghijklkmnopqrstuvwxyz"}}});
-}
-
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

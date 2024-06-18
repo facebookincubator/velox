@@ -197,7 +197,8 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: split(string, delimiter) -> array(string)
 
-    Splits ``string`` on ``delimiter`` and returns an array. ::
+    Splits ``string`` on ``delimiter`` and returns an array.
+    The delimiter is any string matching regex, supported by re2. ::
 
         SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
         SELECT split('one', ''); -- ["o", "n", "e", ""]
@@ -206,7 +207,8 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 .. spark:function:: split(string, delimiter, limit) -> array(string)
    :noindex:
 
-    Splits ``string`` on ``delimiter`` and returns an array of size at most ``limit``. ::
+    Splits ``string`` on ``delimiter`` and returns an array of size at most ``limit``.
+    The delimiter is any string matching regex, supported by re2. ::
 
         SELECT split('oneAtwoBthreeC', '[ABC]', -1); -- ["one","two","three",""]
         SELECT split('oneAtwoBthreeC', '[ABC]', 0); -- ["one", "two", "three", ""]
