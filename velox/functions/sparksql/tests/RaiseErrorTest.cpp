@@ -22,8 +22,8 @@ namespace {
 
 class RaiseErrorTest : public SparkFunctionBaseTest {
  protected:
-  void raiseError(const std::optional<std::string>& errMsg) {
-    evaluateOnce<UnknownValue>("raise_error(c0)", errMsg);
+  void raiseError(const std::optional<std::string>& message) {
+    evaluateOnce<UnknownValue>("raise_error(c0)", message);
   }
 };
 
