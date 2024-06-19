@@ -110,8 +110,6 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
 
-  // Register checked arithmetic functions for Spark arithmetic exprs with try
-  // eval mode.
   registerBinaryNumeric<CheckedAddFunction>({prefix + "check_add"});
   registerBinaryNumeric<CheckedSubtractFunction>({prefix + "check_subtract"});
   registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "check_multiply"});

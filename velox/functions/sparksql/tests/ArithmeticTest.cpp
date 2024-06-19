@@ -155,7 +155,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
-  void assertErrorForCheckFunc(
+  void assertErrorForCheckArithmetic(
       const std::string& func,
       const std::optional<T> a,
       const std::optional<T> b,
@@ -584,13 +584,13 @@ TEST_F(ArithmeticTest, widthBucket) {
 
 TEST_F(ArithmeticTest, checkAdd) {
   std::string func = "check_add";
-  assertErrorForCheckFunc<int8_t>(
+  assertErrorForCheckArithmetic<int8_t>(
       func, INT8_MAX, 1, "[ARITHMETIC_OVERFLOW] overflow: 127 + 1");
-  assertErrorForCheckFunc<int16_t>(
+  assertErrorForCheckArithmetic<int16_t>(
       func, INT16_MAX, 1, "[ARITHMETIC_OVERFLOW] overflow: 32767 + 1");
-  assertErrorForCheckFunc<int32_t>(
+  assertErrorForCheckArithmetic<int32_t>(
       func, INT32_MAX, 1, "[ARITHMETIC_OVERFLOW] overflow: 2147483647 + 1");
-  assertErrorForCheckFunc<int64_t>(
+  assertErrorForCheckArithmetic<int64_t>(
       func,
       INT64_MAX,
       1,
@@ -601,13 +601,13 @@ TEST_F(ArithmeticTest, checkAdd) {
 
 TEST_F(ArithmeticTest, checkSubstract) {
   std::string func = "check_subtract";
-  assertErrorForCheckFunc<int8_t>(
+  assertErrorForCheckArithmetic<int8_t>(
       func, INT8_MIN, 1, "[ARITHMETIC_OVERFLOW] overflow: -128 - 1");
-  assertErrorForCheckFunc<int16_t>(
+  assertErrorForCheckArithmetic<int16_t>(
       func, INT16_MIN, 1, "[ARITHMETIC_OVERFLOW] overflow: -32768 - 1");
-  assertErrorForCheckFunc<int32_t>(
+  assertErrorForCheckArithmetic<int32_t>(
       func, INT32_MIN, 1, "[ARITHMETIC_OVERFLOW] overflow: -2147483648 - 1");
-  assertErrorForCheckFunc<int64_t>(
+  assertErrorForCheckArithmetic<int64_t>(
       func,
       INT64_MIN,
       1,
@@ -618,13 +618,13 @@ TEST_F(ArithmeticTest, checkSubstract) {
 
 TEST_F(ArithmeticTest, checkMultiply) {
   std::string func = "check_multiply";
-  assertErrorForCheckFunc<int8_t>(
+  assertErrorForCheckArithmetic<int8_t>(
       func, INT8_MAX, 2, "[ARITHMETIC_OVERFLOW] overflow: 127 * 2");
-  assertErrorForCheckFunc<int16_t>(
+  assertErrorForCheckArithmetic<int16_t>(
       func, INT16_MAX, 2, "[ARITHMETIC_OVERFLOW] overflow: 32767 * 2");
-  assertErrorForCheckFunc<int32_t>(
+  assertErrorForCheckArithmetic<int32_t>(
       func, INT32_MAX, 2, "[ARITHMETIC_OVERFLOW] overflow: 2147483647 * 2");
-  assertErrorForCheckFunc<int64_t>(
+  assertErrorForCheckArithmetic<int64_t>(
       func,
       INT64_MAX,
       2,
@@ -635,14 +635,14 @@ TEST_F(ArithmeticTest, checkMultiply) {
 
 TEST_F(ArithmeticTest, checkDivide) {
   std::string func = "check_divide";
-  assertErrorForCheckFunc<int32_t>(func, 1, 0, "division by zero");
-  assertErrorForCheckFunc<int8_t>(
+  assertErrorForCheckArithmetic<int32_t>(func, 1, 0, "division by zero");
+  assertErrorForCheckArithmetic<int8_t>(
       func, INT8_MIN, -1, "[ARITHMETIC_OVERFLOW] overflow: -128 / -1");
-  assertErrorForCheckFunc<int16_t>(
+  assertErrorForCheckArithmetic<int16_t>(
       func, INT16_MIN, -1, "[ARITHMETIC_OVERFLOW] overflow: -32768 / -1");
-  assertErrorForCheckFunc<int32_t>(
+  assertErrorForCheckArithmetic<int32_t>(
       func, INT32_MIN, -1, "[ARITHMETIC_OVERFLOW] overflow: -2147483648 / -1");
-  assertErrorForCheckFunc<int64_t>(
+  assertErrorForCheckArithmetic<int64_t>(
       func,
       INT64_MIN,
       -1,
