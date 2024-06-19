@@ -53,25 +53,16 @@ CudfHashJoinNode::CudfHashJoinNode(
         std::move(right),
         std::move(outputType))
     {
+        std::cout << "CudfHashJoinNode constructor" << std::endl;
         // TODO: Check for supported inputs with VELOX_USER_CHECK
     }
-
-const RowTypePtr& CudfHashJoinNode::outputType() const {
-    // TODO similar to PlanBuilder::hashJoin()
-    return sources_.front()->outputType();
-}
-
-const std::vector<core::PlanNodePtr>& CudfHashJoinNode::sources() const {
-    return sources_;
-}
 
 std::string_view CudfHashJoinNode::name() const {
     return "CudfHashJoin";
 }
 
-void CudfHashJoinNode::addDetails(std::stringstream& /* stream */) const {}
-
 void CudfHashJoinBridge::setHashTable(std::optional<CudfHashJoinBridge::hash_type> hashObject) {
+    std::cout << "Calling CudfHashJoinBridge::setHashTable" << std::endl;
     std::vector<ContinuePromise> promises;
     {
         std::lock_guard<std::mutex> l(mutex_);
@@ -82,13 +73,17 @@ void CudfHashJoinBridge::setHashTable(std::optional<CudfHashJoinBridge::hash_typ
     notify(std::move(promises));
 }
 
-std::optional<CudfHashJoinBridge::hash_type> CudfHashJoinBridge::HashOrFuture(ContinueFuture* future) {
+std::optional<CudfHashJoinBridge::hash_type> CudfHashJoinBridge::hashOrFuture(ContinueFuture* future) {
+    std::cout << "Calling CudfHashJoinBridge::hashOrFuture" << std::endl;
     std::lock_guard<std::mutex> l(mutex_);
     if (hashObject_.has_value()) {
         return std::move(hashObject_);
     }
-    promises_.emplace_back("CudfHashJoinBridge::HashOrFuture");
+    std::cout << "Calling CudfHashJoinBridge::hashOrFuture constructing promise" << std::endl;
+    promises_.emplace_back("CudfHashJoinBridge::hashOrFuture");
+    std::cout << "Calling CudfHashJoinBridge::hashOrFuture getSemiFuture" << std::endl;
     *future = promises_.back().getSemiFuture();
+    std::cout << "Calling CudfHashJoinBridge::hashOrFuture returning nullopt" << std::endl;
     return std::nullopt;
 }
 
@@ -98,9 +93,12 @@ CudfHashJoinBuild::CudfHashJoinBuild(
     std::shared_ptr<const CudfHashJoinNode> joinNode)
     // TODO check outputType should be set or not?
     : exec::Operator(driverCtx,  nullptr, // joinNode->sources(),
-    operatorId, joinNode->id(), "CudfHashJoinBuild") {}
+    operatorId, joinNode->id(), "CudfHashJoinBuild") {
+        std::cout << "CudfHashJoinBuild constructor" << std::endl;
+    }
 
 void CudfHashJoinBuild::addInput(RowVectorPtr input) {
+    std::cout << "Calling CudfHashJoinBuild::addInput" << std::endl;
     // Queue inputs, process all at once.
     // TODO distribute work equally.
     auto inputSize = input->size();
@@ -110,14 +108,17 @@ void CudfHashJoinBuild::addInput(RowVectorPtr input) {
 }
 
 bool CudfHashJoinBuild::needsInput() const {
+    std::cout << "Calling CudfHashJoinBuild::needsInput" << std::endl;
     return !noMoreInput_;
 }
 
 RowVectorPtr CudfHashJoinBuild::getOutput() {
+    std::cout << "Calling CudfHashJoinBuild::getOutput" << std::endl;
     return nullptr;
 }
 
 void CudfHashJoinBuild::noMoreInput() {
+    std::cout << "Calling CudfHashJoinBuild::noMoreInput" << std::endl;
     NVTX3_FUNC_RANGE();
     Operator::noMoreInput();
     // TODO
@@ -138,6 +139,8 @@ void CudfHashJoinBuild::noMoreInput() {
     }
     // TODO build hash table
     auto tbl = to_cudf_table(inputs_[0]); // TODO how to process multiple inputs?
+    std::cout << "Build table number of columns: " << tbl->num_columns() << std::endl;
+    std::cout << "Build table number of rows: " << tbl->num_rows() << std::endl;
     // copy host to device table,
     // CudfHashJoinBridge::hash_type hashObject = 1;
     // TODO create hash table in device.
@@ -160,14 +163,17 @@ void CudfHashJoinBuild::noMoreInput() {
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
+    std::cout << "Calling CudfHashJoinBuild::isBlocked" << std::endl;
     if (!future_.valid()) {
-    return exec::BlockingReason::kNotBlocked;
+        std::cout << "CudfHashJoinBuild future is not valid" << std::endl;
+        return exec::BlockingReason::kNotBlocked;
     }
     *future = std::move(future_);
     return exec::BlockingReason::kWaitForJoinBuild;
 }
 
 bool CudfHashJoinBuild::isFinished() {
+    std::cout << "Calling CudfHashJoinBuild::isFinished" << std::endl;
     return !future_.valid() && noMoreInput_;
 }
 
@@ -176,16 +182,21 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const CudfHashJoinNode> joinNode)
     : exec::Operator(driverCtx, nullptr, // joinNode->sources(),
-    operatorId, joinNode->id(), "CudfHashJoinProbe") {}
+    operatorId, joinNode->id(), "CudfHashJoinProbe") {
+        std::cout << "CudfHashJoinProbe constructor" << std::endl;
+    }
 
 bool CudfHashJoinProbe::needsInput() const {
+    std::cout << "Calling CudfHashJoinProbe::needsInput" << std::endl;
     return !finished_ && input_ == nullptr;
 }
 void CudfHashJoinProbe::addInput(RowVectorPtr input) {
+    std::cout << "Calling CudfHashJoinProbe::addInput" << std::endl;
     input_ = std::move(input);
 }
 
 RowVectorPtr CudfHashJoinProbe::getOutput() {
+    std::cout << "Calling CudfHashJoinProbe::getOutput" << std::endl;
     NVTX3_FUNC_RANGE();
     if (!input_) {
         return nullptr;
@@ -197,6 +208,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     // std::cout<<"here\n\n";
     // TODO convert input to cudf table
     auto tbl = to_cudf_table(input_);
+    std::cout << "Probe table number of columns: " << tbl->num_columns() << std::endl;
+    std::cout << "Probe table number of rows: " << tbl->num_rows() << std::endl;
     // TODO pass the input pool !!!
     RowVectorPtr output;
     // RowVectorPtr output;
@@ -238,6 +251,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
 }
 
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
+    std::cout << "Calling CudfHashJoinProbe::isBlocked" << std::endl;
     if (hashObject_.has_value()) {
     return exec::BlockingReason::kNotBlocked;
     }
@@ -245,18 +259,19 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
     auto joinBridge = operatorCtx_->task()->getCustomJoinBridge(
         operatorCtx_->driverCtx()->splitGroupId, planNodeId());
     auto hashObject = std::dynamic_pointer_cast<CudfHashJoinBridge>(joinBridge)
-                    ->HashOrFuture(future);
+                    ->hashOrFuture(future);
 
     if (!hashObject.has_value()) {
-    return exec::BlockingReason::kWaitForJoinBuild;
+        std::cout << "CudfHashJoinProbe is blocked, waiting for join build" << std::endl;
+        return exec::BlockingReason::kWaitForJoinBuild;
     }
     hashObject_ = std::move(hashObject);
-    // remainingLimit_ = hashObject.value();
 
     return exec::BlockingReason::kNotBlocked;
 }
 
 bool CudfHashJoinProbe::isFinished() {
+    std::cout << "Calling CudfHashJoinProbe::isFinished" << std::endl;
     return finished_ || (noMoreInput_ && input_ == nullptr);
 }
 

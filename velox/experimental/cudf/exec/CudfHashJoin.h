@@ -46,15 +46,7 @@ public:
         core::PlanNodePtr right,
         RowTypePtr outputType);
 
-    const RowTypePtr& outputType() const override;
-
-    const std::vector<core::PlanNodePtr>& sources() const override;
-
     std::string_view name() const override;
-
-private:
-    void addDetails(std::stringstream& /* stream */) const override;
-    std::vector<core::PlanNodePtr> sources_;
 };
 
 class CudfHashJoinBridge : public exec::JoinBridge {
@@ -63,7 +55,7 @@ public:
 
     void setHashTable(std::optional<hash_type> hashObject);
 
-    std::optional<hash_type> HashOrFuture(ContinueFuture* future);
+    std::optional<hash_type> hashOrFuture(ContinueFuture* future);
 
 private:
     std::optional<hash_type> hashObject_;
