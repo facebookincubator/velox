@@ -60,4 +60,8 @@ Map Functions
    :noindex:
 
     Returns the size of the input map. Returns null for null input if ``legacySizeOfNull``
-    is set to false. Otherwise, returns -1 for null input.
+    is set to false. Otherwise, returns -1 for null input. ::
+
+        SELECT size(map(array(1, 2), array(3, 4)), true); -- 2
+        SELECT size(NULL, true); -- -1
+        SELECT size(NULL, false); -- NULL

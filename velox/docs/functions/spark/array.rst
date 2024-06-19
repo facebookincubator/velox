@@ -190,7 +190,11 @@ Array Functions
 .. spark:function:: size(array(E), legacySizeOfNull) -> integer
 
     Returns the size of the array. Returns null for null input if `legacySizeOfNull`
-    is set to false. Otherwise, returns -1 for null input.
+    is set to false. Otherwise, returns -1 for null input. ::
+
+        SELECT size(array(1, 2, 3), true); -- 3
+        SELECT size(NULL, true); -- -1
+        SELECT size(NULL, false); -- NULL
 
 .. spark:function:: sort_array(array(E)) -> array(E)
 

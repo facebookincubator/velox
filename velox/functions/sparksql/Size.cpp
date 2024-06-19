@@ -40,20 +40,6 @@ struct Size {
   }
 
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool callNullable(int32_t& out, const TInput* input) {
-    if (input == nullptr) {
-      if (legacySizeOfNull_) {
-        out = -1;
-        return true;
-      } else {
-        return false;
-      }
-    }
-    out = input->size();
-    return true;
-  }
-
-  template <typename TInput>
   FOLLY_ALWAYS_INLINE bool callNullable(
       int32_t& out,
       const TInput* input,
@@ -70,6 +56,7 @@ struct Size {
   }
 
  private:
+  // If true, returns -1 for null input. Otherwise, returns null.
   bool legacySizeOfNull_;
 };
 } // namespace
