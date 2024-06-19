@@ -591,16 +591,19 @@ TEST_F(LogNTest, log) {
     return std::isnan(res.value());
   };
   EXPECT_EQ(log(10, 100), 2.0);
+
   EXPECT_EQ(log(0.0, 1.0), std::nullopt);
   EXPECT_EQ(log(1.0, 0.0), std::nullopt);
   EXPECT_EQ(log(-1.0, 1.0), std::nullopt);
   EXPECT_EQ(log(1.0, -1.0), std::nullopt);
+
   EXPECT_EQ(log(1.0, 3.0), kInf);
-  EXPECT_EQ(log(1.0, 3.0), kInf);
-  EXPECT_EQ(log(1.0, 3.0), kInf);
+
   EXPECT_TRUE(isNan(log(kNan, kNan)));
   EXPECT_TRUE(isNan(log(kInf, kNan)));
   EXPECT_TRUE(isNan(log(kNan, kInf)));
+  EXPECT_TRUE(isNan(log(kInf, kInf)));
+
   EXPECT_EQ(log(kInf, -kInf), std::nullopt);
   EXPECT_EQ(log(-kInf, kInf), std::nullopt);
 }
