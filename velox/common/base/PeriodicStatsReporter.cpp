@@ -189,31 +189,9 @@ void PeriodicStatsReporter::reportCacheStats() {
         kMetricSsdCacheWrittenEntries, deltaSsdStats.entriesWritten);
     REPORT_IF_NOT_ZERO(kMetricSsdCacheWrittenBytes, deltaSsdStats.bytesWritten);
     REPORT_IF_NOT_ZERO(
-        kMetricSsdCacheOpenSsdErrors, deltaSsdStats.openFileErrors);
-    REPORT_IF_NOT_ZERO(
-        kMetricSsdCacheOpenCheckpointErrors,
-        deltaSsdStats.openCheckpointErrors);
-    REPORT_IF_NOT_ZERO(
-        kMetricSsdCacheOpenLogErrors, deltaSsdStats.openLogErrors);
-    REPORT_IF_NOT_ZERO(
-        kMetricSsdCacheDeleteCheckpointErrors,
-        deltaSsdStats.deleteCheckpointErrors);
-    REPORT_IF_NOT_ZERO(
-        kMetricSsdCacheGrowFileErrors, deltaSsdStats.growFileErrors);
-    REPORT_IF_NOT_ZERO(
-        kMetricSsdCacheWriteSsdErrors, deltaSsdStats.writeSsdErrors);
-    REPORT_IF_NOT_ZERO(
         kMetricSsdCacheWriteSsdDropped, deltaSsdStats.writeSsdDropped);
     REPORT_IF_NOT_ZERO(
-        kMetricSsdCacheWriteCheckpointErrors,
-        deltaSsdStats.writeCheckpointErrors);
-    REPORT_IF_NOT_ZERO(
-        kMetricSsdCacheReadSsdErrors, deltaSsdStats.readSsdErrors);
-    REPORT_IF_NOT_ZERO(
         kMetricSsdCacheReadCorruptions, deltaSsdStats.readSsdCorruptions);
-    REPORT_IF_NOT_ZERO(
-        kMetricSsdCacheReadCheckpointErrors,
-        deltaSsdStats.readCheckpointErrors);
     REPORT_IF_NOT_ZERO(
         kMetricSsdCacheCheckpointsRead, deltaSsdStats.checkpointsRead);
     REPORT_IF_NOT_ZERO(

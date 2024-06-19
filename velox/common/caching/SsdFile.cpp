@@ -19,7 +19,9 @@
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
 #include "velox/common/base/AsyncSource.h"
+#include "velox/common/base/Counters.h"
 #include "velox/common/base/Crc.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
@@ -144,6 +146,7 @@ SsdFile::SsdFile(const Config& config)
 #endif // linux
   fd_ = open(fileName_.c_str(), O_CREAT | O_RDWR | oDirect, S_IRUSR | S_IWUSR);
   if (fd_ < 0) {
+    RECORD_METRIC_VALUE(kMetricSsdCacheOpenSsdErrors)
     ++stats_.openFileErrors;
   }
   // TODO: add fault tolerant handling for open file errors.
@@ -233,6 +236,7 @@ CoalesceIoStats SsdFile::load(
     const auto runSize = ssdPins[i].run().size();
     auto* entry = pins[i].checkedEntry();
     if (FOLLY_UNLIKELY(runSize < entry->size())) {
+      RECORD_METRIC_VALUE(kMetricSsdCacheReadSsdErrors)
       ++stats_.readSsdErrors;
       VELOX_FAIL(
           "IOERR: SSD cache cache entry {} short than requested range {}",
@@ -333,6 +337,7 @@ bool SsdFile::growOrEvictLocked() {
       return true;
     }
 
+    RECORD_METRIC_VALUE(kMetricSsdCacheGrowFileErrors)
     ++stats_.growFileErrors;
     VELOX_SSD_CACHE_LOG(ERROR)
         << "Failed to grow cache file " << fileName_ << " to " << newSize;
@@ -478,6 +483,7 @@ bool SsdFile::write(
       << ", size: " << iovecs.size() << ", offset: " << offset
       << ", error code: " << errno
       << ", error string: " << folly::errnoStr(errno);
+  RECORD_METRIC_VALUE(kMetricSsdCacheWriteSsdErrors)
   ++stats_.writeSsdErrors;
   return false;
 }
@@ -689,6 +695,7 @@ void SsdFile::deleteCheckpoint(bool keepLog) {
   const auto checkpointPath = getCheckpointFilePath();
   const auto checkpointRc = ::unlink(checkpointPath.c_str());
   if ((logRc != 0) || (checkpointRc != 0)) {
+    RECORD_METRIC_VALUE(kMetricSsdCacheDeleteCheckpointErrors)
     ++stats_.deleteCheckpointErrors;
     VELOX_SSD_CACHE_LOG(ERROR)
         << "Error in deleting log and checkpoint. log: " << logRc
@@ -808,6 +815,7 @@ void SsdFile::checkpoint(bool force) {
     state.write(asChar(&endMarker), sizeof(endMarker));
 
     if (state.bad()) {
+      RECORD_METRIC_VALUE(kMetricSsdCacheWriteCheckpointErrors)
       ++stats_.writeCheckpointErrors;
       checkRc(-1, "Write of checkpoint file");
     } else {
@@ -852,6 +860,7 @@ void SsdFile::initializeCheckpoint() {
   std::ifstream state(getCheckpointFilePath());
   if (!state.is_open()) {
     hasCheckpoint = false;
+    RECORD_METRIC_VALUE(kMetricSsdCacheOpenCheckpointErrors)
     ++stats_.openCheckpointErrors;
     VELOX_SSD_CACHE_LOG(WARNING) << fmt::format(
         "Starting shard {} without checkpoint, with checksum write {}, read verification {}.",
@@ -865,6 +874,7 @@ void SsdFile::initializeCheckpoint() {
     disableCow(evictLogFd_);
   }
   if (evictLogFd_ < 0) {
+    RECORD_METRIC_VALUE(kMetricSsdCacheOpenLogErrors)
     ++stats_.openLogErrors;
     // Failure to open the log at startup is a process terminating error.
     VELOX_FAIL(
@@ -880,6 +890,7 @@ void SsdFile::initializeCheckpoint() {
       readCheckpoint(state);
     }
   } catch (const std::exception& e) {
+    RECORD_METRIC_VALUE(kMetricSsdCacheReadCheckpointErrors)
     ++stats_.readCheckpointErrors;
     try {
       VELOX_SSD_CACHE_LOG(ERROR) << "Error recovering from checkpoint "
