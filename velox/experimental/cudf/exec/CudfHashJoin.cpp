@@ -15,9 +15,13 @@
  */
 
 // For custom hash join operator
+#include "velox/core/PlanNode.h"
+#include "velox/core/Expressions.h"
+#include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/Operator.h"
+#include "velox/exec/Task.h"
+#include "velox/vector/ComplexVector.h"
 
 #include <cudf/join.hpp>
 #include <cudf/copying.hpp>
@@ -31,9 +35,26 @@ namespace facebook::velox::cudf_velox {
 
 CudfHashJoinNode::CudfHashJoinNode(
     const core::PlanNodeId& id,
+    core::JoinType joinType,
+    bool nullAware,
+    const std::vector<core::FieldAccessTypedExprPtr>& leftKeys,
+    const std::vector<core::FieldAccessTypedExprPtr>& rightKeys,
+    core::TypedExprPtr filter,
     core::PlanNodePtr left,
-    core::PlanNodePtr right)
-    : PlanNode(id), sources_{std::move(left), std::move(right)} {}
+    core::PlanNodePtr right,
+    RowTypePtr outputType)
+    : AbstractJoinNode(
+        id,
+        joinType,
+        leftKeys,
+        rightKeys,
+        std::move(filter),
+        std::move(left),
+        std::move(right),
+        std::move(outputType))
+    {
+        // TODO: Check for supported inputs with VELOX_USER_CHECK
+    }
 
 const RowTypePtr& CudfHashJoinNode::outputType() const {
     // TODO similar to PlanBuilder::hashJoin()

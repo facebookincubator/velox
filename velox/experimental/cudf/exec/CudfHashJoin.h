@@ -16,9 +16,12 @@
 
 #pragma once
 
-#include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/core/PlanNode.h"
+#include "velox/core/Expressions.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/JoinBridge.h"
+#include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <cudf/join.hpp>
 #include <cudf/table/table.hpp>
@@ -28,14 +31,20 @@
 namespace facebook::velox::cudf_velox {
 
 // Custom hash join operator which uses libcudf
-// need to define a new PlanNode, JoinBridge, Operators (Build, Probe), and a PlanNodeTranslator
-// and Register the PlanNodeTranslator
-class CudfHashJoinNode : public core::PlanNode {
+// Need to define a new PlanNode, JoinBridge, Operators (Build, Probe), and a PlanNodeTranslator
+// and register the PlanNodeTranslator
+class CudfHashJoinNode : public core::AbstractJoinNode {
 public:
     CudfHashJoinNode(
         const core::PlanNodeId& id,
+        core::JoinType joinType,
+        bool nullAware,
+        const std::vector<core::FieldAccessTypedExprPtr>& leftKeys,
+        const std::vector<core::FieldAccessTypedExprPtr>& rightKeys,
+        core::TypedExprPtr filter,
         core::PlanNodePtr left,
-        core::PlanNodePtr right);
+        core::PlanNodePtr right,
+        RowTypePtr outputType);
 
     const RowTypePtr& outputType() const override;
 

@@ -29,16 +29,18 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
+#include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::cudf_velox::test;
 
 using facebook::velox::test::BatchMaker;
 
@@ -242,6 +244,13 @@ class HashJoinBuilder {
   HashJoinBuilder& planNode(core::PlanNodePtr planNode) {
     VELOX_CHECK_NULL(planNode_);
     planNode_ = planNode;
+    auto hash_node_ptr = core::PlanNode::findFirstNode(
+        planNode.get(), [](const core::PlanNode* node) {
+            return dynamic_cast<const core::HashJoinNode*>(node) != nullptr;
+        });
+    if (hash_node_ptr != nullptr) {
+      std::cout << "Found a HashJoinNode" << std::endl;
+    }
     return *this;
   }
 
@@ -479,9 +488,10 @@ class HashJoinBuilder {
       SCOPED_TRACE(fmt::format(
           "{} numDrivers: {}", testData.debugString(), numDrivers_));
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-      std::shared_ptr<const core::HashJoinNode> joinNode;
+      std::shared_ptr<const cudf_velox::CudfHashJoinNode> joinNode;
+      // std::shared_ptr<const core::HashJoinNode> joinNode;
       auto planNode =
-          PlanBuilder(planNodeIdGenerator, &pool_)
+          CudfPlanBuilder(planNodeIdGenerator, &pool_)
               .values(
                   testData.probeParallelize ? probeVectors_ : allProbeVectors_,
                   testData.probeParallelize)
@@ -490,7 +500,7 @@ class HashJoinBuilder {
               .hashJoin(
                   probeKeys_,
                   buildKeys_,
-                  PlanBuilder(planNodeIdGenerator)
+                  CudfPlanBuilder(planNodeIdGenerator)
                       .values(
                           testData.buildParallelize ? buildVectors_
                                                     : allBuildVectors_,
@@ -502,7 +512,8 @@ class HashJoinBuilder {
                   joinOutputLayout_,
                   joinType_,
                   nullAware_)
-              .capturePlanNode<core::HashJoinNode>(joinNode)
+              .capturePlanNode<cudf_velox::CudfHashJoinNode>(joinNode)
+              // .capturePlanNode<core::HashJoinNode>(joinNode)
               .optionalProject(outputProjections_)
               .planNode();
 
@@ -845,13 +856,13 @@ class HashJoinTest : public HiveConnectorTestBase {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
+    auto op = CudfPlanBuilder(planNodeIdGenerator)
                   .tableScan(asRowType(probeVectors[0]->type()))
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"c0"},
                       {"c0"},
-                      PlanBuilder(planNodeIdGenerator)
+                      CudfPlanBuilder(planNodeIdGenerator)
                           .tableScan(asRowType(buildVectors[0]->type()))
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
@@ -947,8 +958,10 @@ class HashJoinTest : public HiveConnectorTestBase {
   }
 
   static core::PlanNodePtr flipJoinSides(const core::PlanNodePtr& plan) {
+    // auto joinNode = std::dynamic_pointer_cast<const cudf_velox::CudfHashJoinNode>(plan);
     auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
     VELOX_CHECK_NOT_NULL(joinNode);
+    // return std::make_shared<cudf_velox::CudfHashJoinNode>(
     return std::make_shared<core::HashJoinNode>(
         joinNode->id(),
         flipJoinType(joinNode->joinType()),
@@ -1769,13 +1782,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   core::PlanNodeId probeScanId;
 //   core::PlanNodeId buildScanId;
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .tableScan(asRowType(probeVectors[0]->type()))
 //                   .capturePlanNodeId(probeScanId)
 //                   .hashJoin(
 //                       {"t0"},
 //                       {"u0"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .tableScan(asRowType(buildVectors[0]->type()))
 //                           .capturePlanNodeId(buildScanId)
 //                           .planNode(),
@@ -1807,13 +1820,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   // With extra filter.
 //   planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   plan = PlanBuilder(planNodeIdGenerator)
+//   plan = CudfPlanBuilder(planNodeIdGenerator)
 //              .tableScan(asRowType(probeVectors[0]->type()))
 //              .capturePlanNodeId(probeScanId)
 //              .hashJoin(
 //                  {"t0"},
 //                  {"u0"},
-//                  PlanBuilder(planNodeIdGenerator)
+//                  CudfPlanBuilder(planNodeIdGenerator)
 //                      .tableScan(asRowType(buildVectors[0]->type()))
 //                      .capturePlanNodeId(buildScanId)
 //                      .planNode(),
@@ -3264,13 +3277,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   core::PlanNodeId probeScanId;
 //   core::PlanNodeId buildScanId;
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .tableScan(asRowType(probe->type()))
 //                   .capturePlanNodeId(probeScanId)
 //                   .hashJoin(
 //                       {"t0"},
 //                       {"u0"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .tableScan(asRowType(build->type()))
 //                           .capturePlanNodeId(buildScanId)
 //                           .planNode(),
@@ -3324,13 +3337,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                         const std::vector<std::string>& outputLayout,
 //                         core::JoinType joinType,
 //                         const std::string& query) {
-//     auto plan = PlanBuilder(planNodeIdGenerator)
+//     auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                     .values(leftVectors)
 //                     .project(leftProject)
 //                     .hashJoin(
 //                         leftKeys,
 //                         rightKeys,
-//                         PlanBuilder(planNodeIdGenerator)
+//                         CudfPlanBuilder(planNodeIdGenerator)
 //                             .values(rightVectors)
 //                             .project(rightProject)
 //                             .planNode(),
@@ -3400,13 +3413,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   createDuckDbTable("u", buildVectors);
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(probeVectors)
 //                   .project({"c0 AS t0", "c1 AS t1"})
 //                   .hashJoin(
 //                       {"t0"},
 //                       {"u0"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values(buildVectors)
 //                           .project({"c0 AS u0", "c1 AS u1"})
 //                           .planNode(),
@@ -3429,13 +3442,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   // With extra filter.
 //   planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   plan = PlanBuilder(planNodeIdGenerator)
+//   plan = CudfPlanBuilder(planNodeIdGenerator)
 //              .values(probeVectors)
 //              .project({"c0 AS t0", "c1 AS t1"})
 //              .hashJoin(
 //                  {"t0"},
 //                  {"u0"},
-//                  PlanBuilder(planNodeIdGenerator)
+//                  CudfPlanBuilder(planNodeIdGenerator)
 //                      .values(buildVectors)
 //                      .project({"c0 AS u0", "c1 AS u1"})
 //                      .planNode(),
@@ -3458,13 +3471,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   // Empty build side.
 //   planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   plan = PlanBuilder(planNodeIdGenerator)
+//   plan = CudfPlanBuilder(planNodeIdGenerator)
 //              .values(probeVectors)
 //              .project({"c0 AS t0", "c1 AS t1"})
 //              .hashJoin(
 //                  {"t0"},
 //                  {"u0"},
-//                  PlanBuilder(planNodeIdGenerator)
+//                  CudfPlanBuilder(planNodeIdGenerator)
 //                      .values(buildVectors)
 //                      .project({"c0 AS u0", "c1 AS u1"})
 //                      .filter("u0 < 0")
@@ -3527,13 +3540,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                       const std::string& probeFilter = "",
 //                       const std::string& buildFilter = "") {
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//     return PlanBuilder(planNodeIdGenerator)
+//     return CudfPlanBuilder(planNodeIdGenerator)
 //         .values(probeVectors)
 //         .optionalFilter(probeFilter)
 //         .hashJoin(
 //             {"t0"},
 //             {"u0"},
-//             PlanBuilder(planNodeIdGenerator)
+//             CudfPlanBuilder(planNodeIdGenerator)
 //                 .values(buildVectors)
 //                 .optionalFilter(buildFilter)
 //                 .planNode(),
@@ -3720,12 +3733,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   auto makePlan = [&](bool nullAware, const std::string& filter) {
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//     return PlanBuilder(planNodeIdGenerator)
+//     return CudfPlanBuilder(planNodeIdGenerator)
 //         .values(probeVectors)
 //         .hashJoin(
 //             {"t0"},
 //             {"u0"},
-//             PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+//             CudfPlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
 //             filter,
 //             {"t0", "t1", "match"},
 //             core::JoinType::kLeftSemiProject,
@@ -3770,12 +3783,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //   VELOX_ASSERT_THROW(
-//       PlanBuilder(planNodeIdGenerator)
+//       CudfPlanBuilder(planNodeIdGenerator)
 //           .values({probe})
 //           .hashJoin(
 //               {"t0"},
 //               {"u0"},
-//               PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+//               CudfPlanBuilder(planNodeIdGenerator).values({build}).planNode(),
 //               "t1 > u1",
 //               {"u0", "u1", "match"},
 //               core::JoinType::kRightSemiProject,
@@ -3792,12 +3805,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   // Null-aware left semi project join.
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //   VELOX_ASSERT_THROW(
-//       PlanBuilder(planNodeIdGenerator)
+//       CudfPlanBuilder(planNodeIdGenerator)
 //           .values({probe})
 //           .hashJoin(
 //               {"t0", "t1"},
 //               {"u0", "u1"},
-//               PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+//               CudfPlanBuilder(planNodeIdGenerator).values({build}).planNode(),
 //               "",
 //               {"t0", "t1", "match"},
 //               core::JoinType::kLeftSemiProject,
@@ -3806,12 +3819,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   // Null-aware right semi project join.
 //   VELOX_ASSERT_THROW(
-//       PlanBuilder(planNodeIdGenerator)
+//       CudfPlanBuilder(planNodeIdGenerator)
 //           .values({probe})
 //           .hashJoin(
 //               {"t0", "t1"},
 //               {"u0", "u1"},
-//               PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+//               CudfPlanBuilder(planNodeIdGenerator).values({build}).planNode(),
 //               "",
 //               {"u0", "u1", "match"},
 //               core::JoinType::kRightSemiProject,
@@ -3820,12 +3833,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   // Null-aware anti join.
 //   VELOX_ASSERT_THROW(
-//       PlanBuilder(planNodeIdGenerator)
+//       CudfPlanBuilder(planNodeIdGenerator)
 //           .values({probe})
 //           .hashJoin(
 //               {"t0", "t1"},
 //               {"u0", "u1"},
-//               PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+//               CudfPlanBuilder(planNodeIdGenerator).values({build}).planNode(),
 //               "",
 //               {"t0", "t1"},
 //               core::JoinType::kAnti,
@@ -3866,13 +3879,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   core::PlanNodeId probeScanId;
 //   core::PlanNodeId buildScanId;
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .tableScan(asRowType(probeVectors[0]->type()))
 //                   .capturePlanNodeId(probeScanId)
 //                   .hashJoin(
 //                       {"t0"},
 //                       {"u0"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .tableScan(asRowType(buildVectors[0]->type()))
 //                           .capturePlanNodeId(buildScanId)
 //                           .planNode(),
@@ -3904,13 +3917,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   // With extra filter.
 //   planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   plan = PlanBuilder(planNodeIdGenerator)
+//   plan = CudfPlanBuilder(planNodeIdGenerator)
 //              .tableScan(asRowType(probeVectors[0]->type()))
 //              .capturePlanNodeId(probeScanId)
 //              .hashJoin(
 //                  {"t0"},
 //                  {"u0"},
-//                  PlanBuilder(planNodeIdGenerator)
+//                  CudfPlanBuilder(planNodeIdGenerator)
 //                      .tableScan(asRowType(buildVectors[0]->type()))
 //                      .capturePlanNodeId(buildScanId)
 //                      .planNode(),
@@ -3962,12 +3975,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //   CursorParameters params;
-//   params.planNode = PlanBuilder(planNodeIdGenerator)
+//   params.planNode = CudfPlanBuilder(planNodeIdGenerator)
 //                         .values(probeVectors, true)
 //                         .hashJoin(
 //                             {"t_k1"},
 //                             {"u_k1"},
-//                             PlanBuilder(planNodeIdGenerator)
+//                             CudfPlanBuilder(planNodeIdGenerator)
 //                                 .values(buildVectors, true)
 //                                 .planNode(),
 //                             "",
@@ -4041,13 +4054,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId buildScanId;
-//     auto op = PlanBuilder(planNodeIdGenerator)
+//     auto op = CudfPlanBuilder(planNodeIdGenerator)
 //                   .tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
 //                   .capturePlanNodeId(probeScanId)
 //                   .hashJoin(
 //                       {"c0"},
 //                       {"c0"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .tableScan(ROW({"c0"}, {INTEGER()}))
 //                           .capturePlanNodeId(buildScanId)
 //                           .planNode(),
@@ -4067,7 +4080,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId buildScanId;
-//     auto op = PlanBuilder(planNodeIdGenerator)
+//     auto op = CudfPlanBuilder(planNodeIdGenerator)
 //                   .tableScan(
 //                       ROW({"c0", "c1", "c2", "c3"},
 //                           {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
@@ -4076,7 +4089,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                   .hashJoin(
 //                       {"c0"},
 //                       {"bc0"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
 //                           .capturePlanNodeId(buildScanId)
 //                           .project({"c0 as bc0", "c1 as bc1"})
@@ -4236,11 +4249,11 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //
-//   auto buildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   auto buildSide = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                        .values(buildVectors)
 //                        .project({"c0 AS u_c0", "c1 AS u_c1"})
 //                        .planNode();
-//   auto keyOnlyBuildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   auto keyOnlyBuildSide = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                               .values(keyOnlyBuildVectors)
 //                               .project({"c0 AS u_c0"})
 //                               .planNode();
@@ -4250,7 +4263,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     // Inner join.
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId joinId;
-//     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                   .tableScan(probeType)
 //                   .capturePlanNodeId(probeScanId)
 //                   .hashJoin(
@@ -4292,7 +4305,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     }
 //
 //     // Left semi join.
-//     op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //              .tableScan(probeType)
 //              .capturePlanNodeId(probeScanId)
 //              .hashJoin(
@@ -4336,7 +4349,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     }
 //
 //     // Right semi join.
-//     op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //              .tableScan(probeType)
 //              .capturePlanNodeId(probeScanId)
 //              .hashJoin(
@@ -4390,7 +4403,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId joinId;
-//     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                   .startTableScan()
 //                   .outputType(scanOutputType)
 //                   .assignments(assignments)
@@ -4433,7 +4446,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   {
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId joinId;
-//     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                   .tableScan(probeType, {"c0 < 500::INTEGER"})
 //                   .capturePlanNodeId(probeScanId)
 //                   .hashJoin({"c0"}, {"u_c0"}, buildSide, "", {"c1", "u_c1"})
@@ -4474,7 +4487,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId joinId;
 //     auto op =
-//         PlanBuilder(planNodeIdGenerator, pool_.get())
+//         CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //             .tableScan(probeType)
 //             .capturePlanNodeId(probeScanId)
 //             .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0", "c1"})
@@ -4516,7 +4529,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   {
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId joinId;
-//     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                   .tableScan(probeType)
 //                   .capturePlanNodeId(probeScanId)
 //                   .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0"})
@@ -4556,7 +4569,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   {
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId joinId;
-//     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                   .tableScan(probeType, {"c0 < 500::INTEGER"})
 //                   .capturePlanNodeId(probeScanId)
 //                   .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c1"})
@@ -4598,7 +4611,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId joinId;
 //     auto op =
-//         PlanBuilder(planNodeIdGenerator, pool_.get())
+//         CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //             .tableScan(probeType, {"c0 < 200::INTEGER"})
 //             .capturePlanNodeId(probeScanId)
 //             .hashJoin(
@@ -4637,7 +4650,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     }
 //
 //     // Left semi join.
-//     op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //              .tableScan(probeType, {"c0 < 200::INTEGER"})
 //              .capturePlanNodeId(probeScanId)
 //              .hashJoin(
@@ -4681,7 +4694,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     }
 //
 //     // Right semi join.
-//     op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //              .tableScan(probeType, {"c0 < 200::INTEGER"})
 //              .capturePlanNodeId(probeScanId)
 //              .hashJoin(
@@ -4728,7 +4741,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   // Disable filter push-down by using values in place of scan.
 //   {
 //     core::PlanNodeId joinId;
-//     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                   .values(probeVectors)
 //                   .hashJoin({"c0"}, {"u_c0"}, buildSide, "", {"c1"})
 //                   .capturePlanNodeId(joinId)
@@ -4752,7 +4765,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   {
 //     core::PlanNodeId probeScanId;
 //     core::PlanNodeId joinId;
-//     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                   .tableScan(probeType)
 //                   .capturePlanNodeId(probeScanId)
 //                   .project({"cast(c0 + 1 as integer) AS t_key", "c1"})
@@ -4825,11 +4838,11 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //
-//   auto buildSide1 = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   auto buildSide1 = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                         .values(buildVectors)
 //                         .project({"c0 AS u_c0", "c1 AS u_c1"})
 //                         .planNode();
-//   auto buildSide2 = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   auto buildSide2 = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                         .values(buildVectors)
 //                         .project({"c0 AS u_c0", "c1 AS u_c1"})
 //                         .planNode();
@@ -4837,7 +4850,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   core::PlanNodeId probeScanId;
 //   core::PlanNodeId joinId1;
 //   core::PlanNodeId joinId2;
-//   auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                 .tableScan(probeType)
 //                 .capturePlanNodeId(probeScanId)
 //                 .hashJoin(
@@ -4954,11 +4967,11 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //
-//   auto buildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   auto buildSide = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                        .values(buildVectors)
 //                        .project({"c0 AS u_c0", "c1 AS u_c1"})
 //                        .planNode();
-//   auto keyOnlyBuildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   auto keyOnlyBuildSide = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                               .values(keyOnlyBuildVectors)
 //                               .project({"c0 AS u_c0"})
 //                               .planNode();
@@ -4967,7 +4980,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   {
 //     // Inner join.
 //     core::PlanNodeId probeScanId;
-//     auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                   .tableScan(probeType, {"c2 > 0"})
 //                   .capturePlanNodeId(probeScanId)
 //                   .hashJoin(
@@ -5008,7 +5021,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     }
 //
 //     // Left semi join.
-//     op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //              .tableScan(probeType, {"c2 > 0"})
 //              .capturePlanNodeId(probeScanId)
 //              .hashJoin(
@@ -5051,7 +5064,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     }
 //
 //     // Right semi join.
-//     op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//     op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //              .tableScan(probeType, {"c2 > 0"})
 //              .capturePlanNodeId(probeScanId)
 //              .hashJoin(
@@ -5142,7 +5155,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   core::PlanNodeId joinNodeId;
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //   auto op =
-//       PlanBuilder(planNodeIdGenerator)
+//       CudfPlanBuilder(planNodeIdGenerator)
 //           .startTableScan()
 //           .outputType(outputType)
 //           .assignments(assignments)
@@ -5151,7 +5164,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .hashJoin(
 //               {"p1"},
 //               {"b0"},
-//               PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+//               CudfPlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
 //               "",
 //               {"p0"},
 //               core::JoinType::kInner)
@@ -5201,12 +5214,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   core::PlanNodeId joinNodeId;
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(probeVectors)
 //                   .hashJoin(
 //                       {"c0"},
 //                       {"u_c0"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values({buildVectors})
 //                           .planNode(),
 //                       "",
@@ -5260,12 +5273,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   // Plan hash inner join with a filter.
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values({probeVectors})
 //                   .hashJoin(
 //                       {"c0"},
 //                       {"u_c0"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values({buildVectors})
 //                           .planNode(),
 //                       "c1 < u_c1",
@@ -5349,12 +5362,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //   CursorParameters params;
-//   params.planNode = PlanBuilder(planNodeIdGenerator)
+//   params.planNode = CudfPlanBuilder(planNodeIdGenerator)
 //                         .values(probeVectors, true)
 //                         .hashJoin(
 //                             {"t_k1"},
 //                             {"u_k1"},
-//                             PlanBuilder(planNodeIdGenerator)
+//                             CudfPlanBuilder(planNodeIdGenerator)
 //                                 .values(buildVectors, true)
 //                                 .planNode(),
 //                             "",
@@ -5410,7 +5423,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   core::PlanNodeId probeScanId;
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //   auto op =
-//       PlanBuilder(planNodeIdGenerator)
+//       CudfPlanBuilder(planNodeIdGenerator)
 //           .startTableScan()
 //           .outputType(outputType)
 //           .assignments(assignments)
@@ -5419,7 +5432,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .hashJoin(
 //               {"n1_1"},
 //               {"c0"},
-//               PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+//               CudfPlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
 //               "",
 //               {"c0"},
 //               core::JoinType::kInner)
@@ -5477,12 +5490,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //     core::PlanNodeId probeScanId;
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//     auto plan = PlanBuilder(planNodeIdGenerator)
+//     auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                     .values(probeVectors, false)
 //                     .hashJoin(
 //                         {"t_k1"},
 //                         {"u_k1"},
-//                         PlanBuilder(planNodeIdGenerator)
+//                         CudfPlanBuilder(planNodeIdGenerator)
 //                             .values(buildVectors, false)
 //                             .planNode(),
 //                         "",
@@ -5626,12 +5639,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       "", kMaxBytes, memory::MemoryReclaimer::create());
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(probeVectors, false)
 //                   .hashJoin(
 //                       {"t_k1"},
 //                       {"u_k1"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values(buildVectors, false)
 //                           .planNode(),
 //                       "",
@@ -5759,12 +5772,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //     core::PlanNodeId probeScanId;
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//     auto plan = PlanBuilder(planNodeIdGenerator)
+//     auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                     .values(probeVectors, false)
 //                     .hashJoin(
 //                         {"t_k1"},
 //                         {"u_k1"},
-//                         PlanBuilder(planNodeIdGenerator)
+//                         CudfPlanBuilder(planNodeIdGenerator)
 //                             .values(buildVectors, false)
 //                             .planNode(),
 //                         "",
@@ -5890,12 +5903,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //     core::PlanNodeId probeScanId;
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//     auto plan = PlanBuilder(planNodeIdGenerator)
+//     auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                     .values(probeVectors, false)
 //                     .hashJoin(
 //                         {"t_k1"},
 //                         {"u_k1"},
-//                         PlanBuilder(planNodeIdGenerator)
+//                         CudfPlanBuilder(planNodeIdGenerator)
 //                             .values(buildVectors, false)
 //                             .planNode(),
 //                         "",
@@ -6020,12 +6033,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //
 //   core::PlanNodeId probeScanId;
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(probeVectors, false)
 //                   .hashJoin(
 //                       {"t_k1"},
 //                       {"u_k1"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values(buildVectors, false)
 //                           .planNode(),
 //                       "",
@@ -6161,12 +6174,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     SCOPED_TRACE(testData.debugString());
 //
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//     auto plan = PlanBuilder(planNodeIdGenerator)
+//     auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                     .values(probeVectors, true)
 //                     .hashJoin(
 //                         {"t_k1"},
 //                         {"u_k1"},
-//                         PlanBuilder(planNodeIdGenerator)
+//                         CudfPlanBuilder(planNodeIdGenerator)
 //                             .values(buildVectors, true)
 //                             .planNode(),
 //                         "",
@@ -6237,12 +6250,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     SCOPED_TRACE(testData.debugString());
 //
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//     auto plan = PlanBuilder(planNodeIdGenerator)
+//     auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                     .values(probeVectors, true)
 //                     .hashJoin(
 //                         {"t_k1"},
 //                         {"u_k1"},
-//                         PlanBuilder(planNodeIdGenerator)
+//                         CudfPlanBuilder(planNodeIdGenerator)
 //                             .values(buildVectors, true)
 //                             .planNode(),
 //                         "",
@@ -6314,12 +6327,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     SCOPED_TRACE(testData.debugString());
 //
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//     auto plan = PlanBuilder(planNodeIdGenerator)
+//     auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                     .values(probeVectors, true)
 //                     .hashJoin(
 //                         {"t_k1"},
 //                         {"u_k1"},
-//                         PlanBuilder(planNodeIdGenerator)
+//                         CudfPlanBuilder(planNodeIdGenerator)
 //                             .values(buildVectors, true)
 //                             .planNode(),
 //                         "",
@@ -6392,12 +6405,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     SCOPED_TRACE(testData.debugString());
 //
 //     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//     auto plan = PlanBuilder(planNodeIdGenerator)
+//     auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                     .values(probeVectors, true)
 //                     .hashJoin(
 //                         {"t_k1"},
 //                         {"u_k1"},
-//                         PlanBuilder(planNodeIdGenerator)
+//                         CudfPlanBuilder(planNodeIdGenerator)
 //                             .values(buildVectors, true)
 //                             .planNode(),
 //                         "",
@@ -6455,12 +6468,17 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
   auto test = [&](const std::string& filter) {
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values(probeVectors, true)
+    // TODO: We have to insert a static_cast because fluent/builder patterns do
+    // not play well with subclasses. Otherwise we have to implement a lot of
+    // boilerplate code to re-implement every method from the base PlanBuilder
+    // and cast to the derived class type. We need a derived class
+    // CudfPlanBuilder& at the point that we call the hashJoin.
+    auto plan = static_cast<CudfPlanBuilder&>(CudfPlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors, true))
                     .hashJoin(
                         {"t_k1"},
                         {"u_k1"},
-                        PlanBuilder(planNodeIdGenerator)
+                        CudfPlanBuilder(planNodeIdGenerator)
                             .values(buildVectors, true)
                             .planNode(),
                         filter,
@@ -6506,12 +6524,12 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //
 //   auto test = [&](const std::string& filter) {
-//     auto plan = PlanBuilder(planNodeIdGenerator)
+//     auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                     .values(probeVectors, true)
 //                     .hashJoin(
 //                         {"t_k1"},
 //                         {"u_k1"},
-//                         PlanBuilder(planNodeIdGenerator)
+//                         CudfPlanBuilder(planNodeIdGenerator)
 //                             .values(buildVectors, true)
 //                             .planNode(),
 //                         filter,
@@ -6560,12 +6578,12 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //
 //   core::PlanNodeId probeScanId;
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(probeVectors, false)
 //                   .hashJoin(
 //                       {"t_k1"},
 //                       {"u_k1"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values(buildVectors, false)
 //                           .planNode(),
 //                       "",
@@ -6618,12 +6636,12 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //
 //   core::PlanNodeId probeScanId;
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(probeVectors, false)
 //                   .hashJoin(
 //                       {"t_k1"},
 //                       {"u_k1"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values(buildVectors, false)
 //                           .planNode(),
 //                       "",
@@ -6685,13 +6703,13 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //   const auto buildVectors = createVectors(rowType, 1024, 10 << 20);
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(probeVectors, true)
 //                   .project({"c0", "c1", "c2"})
 //                   .hashJoin(
 //                       {"c0"},
 //                       {"u1"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values(buildVectors, true)
 //                           .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
 //                           .planNode(),
@@ -6742,12 +6760,12 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //   const auto buildVectors = createVectors(rowType, 1024, 10 << 20);
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(probeVectors, true)
 //                   .hashJoin(
 //                       {"c0"},
 //                       {"u1"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values(buildVectors, true)
 //                           .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
 //                           .planNode(),
@@ -6949,12 +6967,12 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //
 //   core::PlanNodeId probeScanId;
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(probeVectors, false)
 //                   .hashJoin(
 //                       {"t_k1"},
 //                       {"u_k1"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values(buildVectors, false)
 //                           .planNode(),
 //                       "",
@@ -7023,13 +7041,13 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       // Set multiple hash build drivers to trigger parallel build.
 //       .maxDrivers(4)
 //       .queryCtx(joinQueryCtx)
-//       .plan(PlanBuilder(planNodeIdGenerator)
+//       .plan(CudfPlanBuilder(planNodeIdGenerator)
 //                 .values(vectors, true)
 //                 .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
 //                 .hashJoin(
 //                     {"t0", "t1"},
 //                     {"u1", "u0"},
-//                     PlanBuilder(planNodeIdGenerator)
+//                     CudfPlanBuilder(planNodeIdGenerator)
 //                         .values(vectors, true)
 //                         .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
 //                         .planNode(),
@@ -7117,13 +7135,13 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //   const auto spillDirectory = exec::test::TempDirectoryPath::create();
-//   auto plan = PlanBuilder(planNodeIdGenerator)
+//   auto plan = CudfPlanBuilder(planNodeIdGenerator)
 //                   .values(vectors)
 //                   .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
 //                   .hashJoin(
 //                       {"t0"},
 //                       {"u0"},
-//                       PlanBuilder(planNodeIdGenerator)
+//                       CudfPlanBuilder(planNodeIdGenerator)
 //                           .values(vectors)
 //                           .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
 //                           .planNode(),
@@ -7741,11 +7759,11 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //
-//   auto buildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   auto buildSide = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                        .values(buildVectors)
 //                        .project({"c0 AS u_c0", "c1 AS u_c1"})
 //                        .planNode();
-//   auto keyOnlyBuildSide = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   auto keyOnlyBuildSide = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                               .values(keyOnlyBuildVectors)
 //                               .project({"c0 AS u_c0"})
 //                               .planNode();
@@ -7753,7 +7771,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //   // Left semi join.
 //   core::PlanNodeId probeScanId;
 //   core::PlanNodeId joinNodeId;
-//   const auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+//   const auto op = CudfPlanBuilder(planNodeIdGenerator, pool_.get())
 //                       .tableScan(probeType)
 //                       .capturePlanNodeId(probeScanId)
 //                       .hashJoin(

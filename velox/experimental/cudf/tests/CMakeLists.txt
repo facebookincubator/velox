@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#add_executable(velox_gpu_hash_table_test HashTableTest.cu)
-#target_link_libraries(velox_gpu_hash_table_test Folly::folly gflags::gflags)
-#set_target_properties(velox_gpu_hash_table_test PROPERTIES CUDA_ARCHITECTURES
-#                                                           native)
+add_subdirectory(utils)
 
 add_executable(
   velox_cudf_hash_test
@@ -33,6 +30,7 @@ target_link_libraries(
   velox_cudf_hash_test
   velox_aggregates
   velox_cudf_exec
+  velox_cudf_test_lib
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
