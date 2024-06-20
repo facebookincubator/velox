@@ -45,8 +45,7 @@ if(DEFINED ENV{CONDA_PREFIX})
   endif()
 endif()
 
-list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
-     "${PROJECT_SOURCE_DIR}/CMake/third-party")
+list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake")
 
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
@@ -569,7 +568,7 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
 endif()
 
 if(VELOX_ENABLE_ARROW)
-  set_source(arrow)
-  resolve_dependency(arrow)
+  set_source(Arrow)
+  resolve_dependency(Arrow)
 endif()
 add_subdirectory(velox)
