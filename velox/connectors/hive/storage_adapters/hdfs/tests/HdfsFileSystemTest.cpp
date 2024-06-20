@@ -16,7 +16,6 @@
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
 #include <boost/format.hpp>
 #include <gmock/gmock-matchers.h>
-#include <hdfs/hdfs.h>
 #include <atomic>
 #include <random>
 #include "HdfsMiniCluster.h"
@@ -126,9 +125,11 @@ void checkReadErrorMessages(
   }
 }
 
-void verifyFailures(hdfsFS hdfs) {
-  HdfsReadFile readFile(hdfs, destinationPath);
-  HdfsReadFile readFile2(hdfs, destinationPath);
+void verifyFailures(
+    filesystems::arrow::io::internal::LibHdfsShim* driver,
+    hdfsFS hdfs) {
+  HdfsReadFile readFile(driver, hdfs, destinationPath);
+  HdfsReadFile readFile2(driver, hdfs, destinationPath);
   auto startPoint = 10 + kOneMB;
   auto size = 15 + kOneMB;
   auto endpoint = 10 + 2 * kOneMB;
@@ -169,11 +170,20 @@ void verifyFailures(hdfsFS hdfs) {
 }
 
 TEST_F(HdfsFileSystemTest, read) {
-  struct hdfsBuilder* builder = hdfsNewBuilder();
-  hdfsBuilderSetNameNode(builder, localhost.c_str());
-  hdfsBuilderSetNameNodePort(builder, 7878);
-  auto hdfs = hdfsBuilderConnect(builder);
-  HdfsReadFile readFile(hdfs, destinationPath);
+  filesystems::arrow::io::internal::LibHdfsShim* driver;
+  auto status = ConnectLibHdfs(&driver);
+  if (!status.ok()) {
+    LOG(ERROR) << "ConnectLibHdfs failed ";
+  }
+
+  // connect to HDFS with the builder object
+  hdfsBuilder* builder = driver->NewBuilder();
+  driver->BuilderSetNameNode(builder, localhost.c_str());
+  driver->BuilderSetNameNodePort(builder, 7878);
+  driver->BuilderSetForceNewInstance(builder);
+
+  auto hdfs = driver->BuilderConnect(builder);
+  HdfsReadFile readFile(driver, hdfs, destinationPath);
   readData(&readFile);
 }
 
@@ -268,11 +278,21 @@ TEST_F(HdfsFileSystemTest, missingPort) {
 
 TEST_F(HdfsFileSystemTest, missingFileViaReadFile) {
   try {
-    struct hdfsBuilder* builder = hdfsNewBuilder();
-    hdfsBuilderSetNameNode(builder, localhost.c_str());
-    hdfsBuilderSetNameNodePort(builder, std::stoi(hdfsPort));
-    auto hdfs = hdfsBuilderConnect(builder);
-    HdfsReadFile readFile(hdfs, "/path/that/does/not/exist");
+    filesystems::arrow::io::internal::LibHdfsShim* driver;
+    auto status = ConnectLibHdfs(&driver);
+    if (!status.ok()) {
+      LOG(ERROR) << "ConnectLibHdfs failed ";
+    }
+
+    // connect to HDFS with the builder object
+    hdfsBuilder* builder = driver->NewBuilder();
+    driver->BuilderSetNameNode(builder, localhost.c_str());
+    driver->BuilderSetNameNodePort(builder, stoi(hdfsPort));
+    driver->BuilderSetForceNewInstance(builder);
+
+    auto hdfs = driver->BuilderConnect(builder);
+
+    HdfsReadFile readFile(driver, hdfs, "/path/that/does/not/exist");
     FAIL() << "expected VeloxException";
   } catch (VeloxException const& error) {
     EXPECT_THAT(
@@ -324,11 +344,22 @@ TEST_F(HdfsFileSystemTest, removeNotSupported) {
 
 TEST_F(HdfsFileSystemTest, multipleThreadsWithReadFile) {
   startThreads = false;
-  struct hdfsBuilder* builder = hdfsNewBuilder();
-  hdfsBuilderSetNameNode(builder, localhost.c_str());
-  hdfsBuilderSetNameNodePort(builder, 7878);
-  auto hdfs = hdfsBuilderConnect(builder);
-  HdfsReadFile readFile(hdfs, destinationPath);
+
+  filesystems::arrow::io::internal::LibHdfsShim* driver;
+  auto status = ConnectLibHdfs(&driver);
+  if (!status.ok()) {
+    LOG(ERROR) << "ConnectLibHdfs failed ";
+  }
+
+  // connect to HDFS with the builder object
+  hdfsBuilder* builder = driver->NewBuilder();
+  driver->BuilderSetNameNode(builder, localhost.c_str());
+  driver->BuilderSetNameNodePort(builder, 7878);
+  driver->BuilderSetForceNewInstance(builder);
+
+  auto hdfs = driver->BuilderConnect(builder);
+
+  HdfsReadFile readFile(driver, hdfs, destinationPath);
   std::vector<std::thread> threads;
   std::mt19937 generator(std::random_device{}());
   std::vector<int> sleepTimesInMicroseconds = {0, 500, 50000};
@@ -438,9 +469,18 @@ TEST_F(HdfsFileSystemTest, writeWithParentDirNotExist) {
 }
 
 TEST_F(HdfsFileSystemTest, readFailures) {
-  struct hdfsBuilder* builder = hdfsNewBuilder();
-  hdfsBuilderSetNameNode(builder, localhost.c_str());
-  hdfsBuilderSetNameNodePort(builder, stoi(hdfsPort));
-  auto hdfs = hdfsBuilderConnect(builder);
-  verifyFailures(hdfs);
+  filesystems::arrow::io::internal::LibHdfsShim* driver;
+  auto status = ConnectLibHdfs(&driver);
+  if (!status.ok()) {
+    LOG(ERROR) << "ConnectLibHdfs failed ";
+  }
+
+  // connect to HDFS with the builder object
+  hdfsBuilder* builder = driver->NewBuilder();
+  driver->BuilderSetNameNode(builder, localhost.c_str());
+  driver->BuilderSetNameNodePort(builder, stoi(hdfsPort));
+  driver->BuilderSetForceNewInstance(builder);
+
+  auto hdfs = driver->BuilderConnect(builder);
+  verifyFailures(driver, hdfs);
 }
