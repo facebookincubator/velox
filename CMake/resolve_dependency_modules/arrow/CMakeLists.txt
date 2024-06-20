@@ -71,22 +71,22 @@ if(VELOX_ENABLE_ARROW)
   #   return()
   # endif()
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
-  # set(ARROW_CMAKE_ARGS
-  #     -DARROW_PARQUET=OFF
-  #     -DARROW_WITH_THRIFT=ON
-  #     -DARROW_WITH_LZ4=ON
-  #     -DARROW_WITH_SNAPPY=ON
-  #     -DARROW_WITH_ZLIB=ON
-  #     -DARROW_WITH_ZSTD=ON
-  #     -DARROW_JEMALLOC=OFF
-  #     -DARROW_SIMD_LEVEL=NONE
-  #     -DARROW_RUNTIME_SIMD_LEVEL=NONE
-  #     -DARROW_WITH_UTF8PROC=OFF
-  #     -DARROW_TESTING=ON
-  #     -DCMAKE_INSTALL_PREFIX=${ARROW_PREFIX}/install
-  #     -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-  #     -DARROW_BUILD_STATIC=ON
-  #     -DThrift_SOURCE=${THRIFT_SOURCE})
+  set(ARROW_CMAKE_ARGS
+      -DARROW_PARQUET=OFF
+      -DARROW_WITH_THRIFT=ON
+      -DARROW_WITH_LZ4=ON
+      -DARROW_WITH_SNAPPY=ON
+      -DARROW_WITH_ZLIB=ON
+      -DARROW_WITH_ZSTD=ON
+      -DARROW_JEMALLOC=OFF
+      -DARROW_SIMD_LEVEL=NONE
+      -DARROW_RUNTIME_SIMD_LEVEL=NONE
+      -DARROW_WITH_UTF8PROC=OFF
+      -DARROW_TESTING=ON
+      -DCMAKE_INSTALL_PREFIX=${ARROW_PREFIX}/install
+      -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+      -DARROW_BUILD_STATIC=ON
+      -DThrift_SOURCE=${THRIFT_SOURCE})
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
   add_library(thrift STATIC IMPORTED GLOBAL)
@@ -111,53 +111,54 @@ if(VELOX_ENABLE_ARROW)
 
   resolve_dependency_url(ARROW)
 
-  set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
+  # set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
 
-  FetchContent_Declare(
-  arrow
-  URL ${VELOX_ARROW_SOURCE_URL}
-  URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
-  )
+  # FetchContent_Declare(
+  # arrow
+  # URL ${VELOX_ARROW_SOURCE_URL}
+  # URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
+  # SOURCE_SUBDIR  cpp
+  # )
 
-  set(ARROW_PARQUET OFF)
-  set(ARROW_WITH_THRIFT ON)
-  set(ARROW_WITH_LZ4 ON)
-  set(ARROW_WITH_SNAPPY ON)
-  set(ARROW_WITH_ZLIB ON)
-  set(ARROW_WITH_ZSTD ON)
-  set(ARROW_JEMALLOC OFF)
-  set(ARROW_SIMD_LEVEL NONE)
-  set(ARROW_RUNTIME_SIMD_LEVEL NONE)
-  set(ARROW_WITH_UTF8PROC OFF)
-  set(ARROW_TESTING ON)
-  set(CMAKE_INSTALL_PREFIX ${ARROW_PREFIX}/install)
-  set(CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE})
-  set(ARROW_BUILD_STATIC ON)
-  set(Thrift_SOURCE ${THRIFT_SOURCE})
+  # set(ARROW_PARQUET OFF)
+  # set(ARROW_WITH_THRIFT ON)
+  # set(ARROW_WITH_LZ4 ON)
+  # set(ARROW_WITH_SNAPPY ON)
+  # set(ARROW_WITH_ZLIB ON)
+  # set(ARROW_WITH_ZSTD ON)
+  # set(ARROW_JEMALLOC OFF)
+  # set(ARROW_SIMD_LEVEL NONE)
+  # set(ARROW_RUNTIME_SIMD_LEVEL NONE)
+  # set(ARROW_WITH_UTF8PROC OFF)
+  # set(ARROW_TESTING ON)
+  # set(CMAKE_INSTALL_PREFIX ${ARROW_PREFIX}/install)
+  # set(CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE})
+  # set(ARROW_BUILD_STATIC ON)
+  # set(Thrift_SOURCE ${THRIFT_SOURCE})
 
   # FetchContent_MakeAvailable(arrow)
-  FetchContent_GetProperties(arrow)
-  if(NOT arrow_POPULATED)
-    FetchContent_Populate(arrow)
-    add_subdirectory(${arrow_SOURCE_DIR}/cpp)
-  endif()
+  #FetchContent_GetProperties(arrow)
+  #if(NOT arrow_POPULATED)
+  #  FetchContent_Populate(arrow)
+  #  add_subdirectory(${arrow_SOURCE_DIR}/cpp)
+  #endif()
 
-  # ExternalProject_Add(
-  #   arrow_ep
-  #   PREFIX ${ARROW_PREFIX}
-  #   URL ${VELOX_ARROW_SOURCE_URL}
-  #   URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
-  #   SOURCE_SUBDIR cpp
-  #   CMAKE_ARGS ${ARROW_CMAKE_ARGS}
-  #   BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a ${ARROW_LIBDIR}/libparquet.a
-  #                    ${ARROW_LIBDIR}/libarrow_testing.a ${THRIFT_LIB})
+  ExternalProject_Add(
+    arrow_ep
+    PREFIX ${ARROW_PREFIX}
+    URL ${VELOX_ARROW_SOURCE_URL}
+    URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
+    SOURCE_SUBDIR cpp
+    CMAKE_ARGS ${ARROW_CMAKE_ARGS}
+    BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a ${ARROW_LIBDIR}/libparquet.a
+                     ${ARROW_LIBDIR}/libarrow_testing.a ${THRIFT_LIB})
 
-  #add_library(arrow STATIC IMPORTED GLOBAL)
-  #add_library(arrow_testing STATIC IMPORTED GLOBAL)
-  #add_library(parquet STATIC IMPORTED GLOBAL)
-  # add_dependencies(arrow arrow_ep)
-  # add_dependencies(arrow_testing arrow)
-  # add_dependencies(parquet arrow)
+  add_library(arrow STATIC IMPORTED GLOBAL)
+  add_library(arrow_testing STATIC IMPORTED GLOBAL)
+  add_library(parquet STATIC IMPORTED GLOBAL)
+  add_dependencies(arrow arrow_ep)
+  add_dependencies(arrow_testing arrow)
+  add_dependencies(parquet arrow)
   file(MAKE_DIRECTORY ${ARROW_PREFIX}/install/include)
   set_target_properties(
     arrow arrow_testing parquet PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
