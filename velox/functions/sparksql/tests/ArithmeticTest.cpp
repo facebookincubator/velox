@@ -91,11 +91,6 @@ class RemainderTest : public SparkFunctionBaseTest {
   std::optional<T> remainder(std::optional<T> a, std::optional<T> n) {
     return evaluateOnce<T>("remainder(c0, c1)", a, n);
   };
-
-  template <typename T>
-  T remainder_value(std::optional<T> a, std::optional<T> b) {
-    return remainder<T>(a, b).value();
-  }
 };
 
 TEST_F(RemainderTest, int8) {
@@ -141,36 +136,44 @@ TEST_F(RemainderTest, int64) {
 TEST_F(RemainderTest, double) {
   constexpr double kInf = std::numeric_limits<double>::infinity();
   constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
-  EXPECT_DOUBLE_EQ(0.0, remainder_value<double>(2.0, 1.0));
-  EXPECT_DOUBLE_EQ(1.0, remainder_value<double>(5.0, 2.0));
-  EXPECT_DOUBLE_EQ(-1.0, remainder_value<double>(-5.0, 2.0));
-  EXPECT_DOUBLE_EQ(0.5, remainder_value<double>(1.5, 1.0));
-  EXPECT_DOUBLE_EQ(0.0, remainder_value<double>(0.0, 1.0));
-  EXPECT_DOUBLE_EQ(2.0, remainder_value<double>(2.0, kInf));
+  const auto remainderDouble = [&](std::optional<double> a, std::optional<double> b) {
+    return remainder(a, b).value();
+  }
 
-  EXPECT_TRUE(std::isnan(remainder_value<double>(kNan, 1.0)));
-  EXPECT_TRUE(std::isnan(remainder_value<double>(1.0, kNan)));
-  EXPECT_TRUE(std::isnan(remainder_value<double>(kInf, 1.0)));
-  EXPECT_TRUE(std::isnan(remainder_value<double>(-kInf, 1.0)));
-  EXPECT_TRUE(std::isnan(remainder_value<double>(kInf, kInf)));
+  EXPECT_DOUBLE_EQ(0.0, remainderDouble(2.0, 1.0));
+  EXPECT_DOUBLE_EQ(1.0, remainderDouble(5.0, 2.0));
+  EXPECT_DOUBLE_EQ(-1.0, remainderDouble(-5.0, 2.0));
+  EXPECT_DOUBLE_EQ(0.5, remainderDouble(1.5, 1.0));
+  EXPECT_DOUBLE_EQ(0.0, remainderDouble(0.0, 1.0));
+  EXPECT_DOUBLE_EQ(2.0, remainderDouble(2.0, kInf));
+
+  EXPECT_TRUE(std::isnan(remainderDouble(kNan, 1.0)));
+  EXPECT_TRUE(std::isnan(remainderDouble(1.0, kNan)));
+  EXPECT_TRUE(std::isnan(remainderDouble(kInf, 1.0)));
+  EXPECT_TRUE(std::isnan(remainderDouble(-kInf, 1.0)));
+  EXPECT_TRUE(std::isnan(remainderDouble(kInf, kInf)));
 }
 
 TEST_F(RemainderTest, float) {
   constexpr double kInf = std::numeric_limits<float>::infinity();
   constexpr double kNan = std::numeric_limits<float>::quiet_NaN();
-  EXPECT_FLOAT_EQ(0.0f, remainder_value<float>(2.0f, 1.0f));
-  EXPECT_FLOAT_EQ(1.0f, remainder_value<float>(5.0f, 2.0f));
-  EXPECT_FLOAT_EQ(-1.0f, remainder_value<float>(-5.0f, 2.0f));
-  EXPECT_FLOAT_EQ(0.5f, remainder_value<float>(1.5f, 1.0f));
-  EXPECT_FLOAT_EQ(0.0f, remainder_value<float>(0.0f, 1.0f));
-  EXPECT_FLOAT_EQ(2.0f, remainder_value<float>(2.0f, kInf));
+  const auto remainderFloat = [&](std::optional<float> a, std::optional<float> b) {
+    return remainder(a, b).value();
+  }
 
-  EXPECT_EQ(std::nullopt, remainder<float>(2.0, 0.0));
-  EXPECT_TRUE(std::isnan(remainder_value<float>(kNan, 1.0f)));
-  EXPECT_TRUE(std::isnan(remainder_value<float>(1.0f, kNan)));
-  EXPECT_TRUE(std::isnan(remainder_value<float>(kInf, 1.0f)));
-  EXPECT_TRUE(std::isnan(remainder_value<float>(-kInf, 1.0f)));
-  EXPECT_TRUE(std::isnan(remainder_value<float>(kInf, kInf)));
+  EXPECT_FLOAT_EQ(0.0f, remainderFloat(2.0f, 1.0f));
+  EXPECT_FLOAT_EQ(1.0f, remainderFloat(5.0f, 2.0f));
+  EXPECT_FLOAT_EQ(-1.0f, remainderFloat(-5.0f, 2.0f));
+  EXPECT_FLOAT_EQ(0.5f, remainderFloat(1.5f, 1.0f));
+  EXPECT_FLOAT_EQ(0.0f, remainderFloat(0.0f, 1.0f));
+  EXPECT_FLOAT_EQ(2.0f, remainderFloat(2.0f, kInf));
+
+  EXPECT_EQ(std::nullopt, remainderFloat(2.0, 0.0));
+  EXPECT_TRUE(std::isnan(remainderFloat(kNan, 1.0f)));
+  EXPECT_TRUE(std::isnan(remainderFloat(1.0f, kNan)));
+  EXPECT_TRUE(std::isnan(remainderFloat(kInf, 1.0f)));
+  EXPECT_TRUE(std::isnan(remainderFloat(-kInf, 1.0f)));
+  EXPECT_TRUE(std::isnan(remainderFloat(kInf, kInf)));
 }
 
 class ArithmeticTest : public SparkFunctionBaseTest {
