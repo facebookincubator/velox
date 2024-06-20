@@ -18,20 +18,10 @@
 
 namespace facebook::velox::exec::test {
 
-std::string toCallSql(const core::CallTypedExprPtr& call);
-std::string toCastSql(const core::CastTypedExprPtr& cast);
-std::string toConcatSql(const core::ConcatTypedExprPtr& concat);
-
-std::string escape(const std::string& input) {
-  std::string result;
-  result.reserve(input.size());
-  for (auto i = 0; i < input.size(); ++i) {
-    if (input[i] == '\'') {
-      result.push_back('\'');
-    }
-    result.push_back(input[i]);
+void appendComma(int32_t i, std::stringstream& sql) {
+  if (i > 0) {
+    sql << ", ";
   }
-  return result;
 }
 
 std::string toTypeSql(const TypePtr& type) {
@@ -63,7 +53,25 @@ std::string toTypeSql(const TypePtr& type) {
   }
 }
 
-std::string typedExprToSql(const core::TypedExprPtr& expr) {
+std::string toCallSql(const core::CallTypedExprPtr& call);
+std::string toCastSql(const core::CastTypedExprPtr& cast);
+std::string toConcatSql(const core::ConcatTypedExprPtr& concat);
+std::string toConstantSql(const core::ConstantTypedExprPtr& constant);
+
+
+std::string escape(const std::string& input) {
+  std::string result;
+  result.reserve(input.size());
+  for (auto i = 0; i < input.size(); ++i) {
+    if (input[i] == '\'') {
+      result.push_back('\'');
+    }
+    result.push_back(input[i]);
+  }
+  return result;
+}
+
+/*std::optional<std::string> typedExprToSql(const core::TypedExprPtr& expr) {
   if (auto field =
           std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(expr)) {
     return field->name();
@@ -101,13 +109,15 @@ std::string typedExprToSql(const core::TypedExprPtr& expr) {
       sql << constantArg->toString();
     } else if (constantArg->type()->isVarchar()) {
       sql << "'" << escape(constantArg->valueVector()->toString(0)) << "'";
+    } else if (constantArg->type()->isPrimitiveType()) {
+      sql << constantArg->valueVector()->toString(0);
     } else {
       VELOX_NYI();
     }
     return sql.str();
   }
   VELOX_NYI();
-}
+}*/
 
 void toCallInputsSql(
     const std::vector<core::TypedExprPtr>& inputs,
@@ -116,7 +126,7 @@ void toCallInputsSql(
     appendComma(i, sql);
 
     const auto& input = inputs.at(i);
-    /*if (auto field =
+    if (auto field =
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
                 input)) {
       sql << field->name();
@@ -128,9 +138,9 @@ void toCallInputsSql(
         auto lambda =
             std::dynamic_pointer_cast<const core::LambdaTypedExpr>(input)) {
       const auto& signature = lambda->signature();
-      const auto& body =
+      /*const auto& body =
           std::dynamic_pointer_cast<const core::CallTypedExpr>(lambda->body());
-      VELOX_CHECK_NOT_NULL(body);
+      VELOX_CHECK_NOT_NULL(body);*/
 
       sql << "(";
       for (auto j = 0; j < signature->size(); ++j) {
@@ -138,21 +148,17 @@ void toCallInputsSql(
         sql << signature->nameOf(j);
       }
 
-      sql << ") -> " << toCallSql(body);
+      sql << ") -> ";
+      toCallInputsSql({lambda->body()}, sql);
     } else if (
         auto constantArg =
             std::dynamic_pointer_cast<const core::ConstantTypedExpr>(input)) {
-      if (!constantArg->hasValueVector()) {
-        sql << constantArg->toString();
-      } else if (constantArg->type()->isVarchar()) {
-        sql << "'" << escape(constantArg->valueVector()->toString(0)) << "'";
-      } else {
-        VELOX_NYI();
-      }
+      sql << toConstantSql(constantArg);
+    } else if (auto castArg = std::dynamic_pointer_cast<const core::CastTypedExpr>(input)) {
+      sql << toCastSql(castArg);
     } else {
       VELOX_NYI();
-    }*/
-    sql << typedExprToSql(input);
+    }
   }
 }
 
@@ -160,6 +166,9 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
   std::stringstream sql;
   sql << call->name() << "(";
   toCallInputsSql(call->inputs(), sql);
+  if (call->name() == "cast") {
+    sql << " as " << toTypeSql(call->type());
+  }
   sql << ")";
   return sql.str();
 }
@@ -178,6 +187,20 @@ std::string toConcatSql(const core::ConcatTypedExprPtr& concat) {
   sql << "concat(";
   toCallInputsSql(concat->inputs(), sql);
   sql << ")";
+  return sql.str();
+}
+
+std::string toConstantSql(const core::ConstantTypedExprPtr& constant) {
+  std::stringstream sql;
+  if (constant->toString() == "null") {
+    sql << fmt::format("cast(null as {})", toTypeSql(constant->type()));
+  } else if (constant->type()->isVarchar()) {
+    sql << "'" << escape(constant->valueVector()->toString(0)) << "'";
+  } else if (constant->type()->isPrimitiveType() || !constant->hasValueVector()) {
+    sql << constant->toString();
+  } else {
+    VELOX_NYI("complex-typed constants not supported yet.");
+  }
   return sql.str();
 }
 

@@ -205,30 +205,28 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
         // Throws in case output is different.
         VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());
         VELOX_CHECK(referenceEvalResult.has_value());
-        VELOX_CHECK_EQ(referenceEvalResult->size(), plans.size());
-        for (int i = 0; i < plans.size(); ++i) {
+        // VELOX_CHECK_EQ(referenceEvalResult->size(), plans.size());
+        //for (int i = 0; i < plans.size(); ++i) {
           /*fuzzer::compareVectors(
               commonEvalResult[i],
               (*referenceEvalResult)[i],
               "common path results ",
               "reference path results",
               rows);*/
-          std::vector<RowVectorPtr> commonEvalResultRow;
-          for (auto i = 0; i < commonEvalResult.size(); ++i) {
-            auto rowPtr =
-                std::dynamic_pointer_cast<RowVector>(commonEvalResult[i]);
-            VELOX_CHECK_NOT_NULL(rowPtr);
-            commonEvalResultRow.push_back(rowPtr);
-          }
+        std::vector<TypePtr> types;
+        for (auto i = 0; i < commonEvalResult.size(); ++i) {
+          types.push_back(commonEvalResult[i]->type());
+        }
+        auto commonEvalResultRow = std::make_shared<RowVector>(execCtx_->pool(), ROW(std::move(types)), nullptr, commonEvalResult[0]->size(), commonEvalResult);
 
           VELOX_CHECK(
               exec::test::assertEqualResults(
                   referenceEvalResult.value(),
                   projectionPlan->outputType(),
-                  commonEvalResultRow),
+                  {commonEvalResultRow}),
               "Velox and reference DB results don't match");
           LOG(INFO) << "Verified results against reference DB";
-        }
+        //}
       }
     } catch (...) {
       persistReproInfoIfNeeded(
@@ -248,9 +246,13 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
     exit(0);
   }
 
-  return {
-      VectorMaker(commonEvalResult[0]->pool()).rowVector(commonEvalResult),
-      nullptr};
+  if (exceptionCommon) {
+    return {nullptr, exceptionCommonPtr};
+  } else {
+    return {
+        VectorMaker(commonEvalResult[0]->pool()).rowVector(commonEvalResult),
+        nullptr};
+  }
 }
 
 void ExpressionVerifier::persistReproInfoIfNeeded(

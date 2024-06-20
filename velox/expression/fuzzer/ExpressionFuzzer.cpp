@@ -451,6 +451,7 @@ bool isSupportedSignature(
       useTypeName(signature, "interval day to second") ||
       (!enableDecimalType && useTypeName(signature, "decimal")) ||
       (!enableComplexType && useComplexType) ||
+      useTypeName(signature, "hugeint") ||
       (enableComplexType && useTypeName(signature, "unknown")));
 }
 
@@ -827,7 +828,7 @@ core::TypedExprPtr ExpressionFuzzer::generateArg(const TypePtr& arg) {
     argClass = rand32(0, 1);
   }
 
-  if (argClass == kArgConstant) {
+  if (argClass == kArgConstant && arg->isPrimitiveType()) {
     return generateArgConstant(arg);
   }
   // argClass == kArgColumn

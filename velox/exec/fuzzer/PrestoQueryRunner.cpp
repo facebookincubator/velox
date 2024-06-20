@@ -32,6 +32,7 @@
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/parser/TypeParser.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 
 #include <utility>
 
@@ -155,6 +156,7 @@ PrestoQueryRunner::PrestoQueryRunner(
       timeout_(timeout) {
   eventBaseThread_.start("PrestoQueryRunner");
   pool_ = aggregatePool()->addLeafChild("leaf");
+  dwrf::registerDwrfWriterFactory();
 }
 
 std::optional<std::string> PrestoQueryRunner::toSql(
@@ -352,7 +354,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   for (auto i = 0; i < projectNode->names().size(); ++i) {
     appendComma(i, sql);
     auto projection = projectNode->projections()[i];
-    /*if (auto field =
+    if (auto field =
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
                 projection)) {
       sql << field->name();
@@ -368,10 +370,13 @@ std::optional<std::string> PrestoQueryRunner::toSql(
         auto concat = std::dynamic_pointer_cast<const core::ConcatTypedExpr>(
             projection)) {
       sql << toConcatSql(concat);
-    } else {
+    } else if (auto constant = std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                   projection)) {
+      sql << toConstantSql(constant);
+    }
+    else {
       VELOX_NYI();
-    }*/
-    sql << typedExprToSql(projection) << " as " << projectNode->names()[i];
+    }
   }
 
   sql << " FROM (" << sourceSql.value() << ")";

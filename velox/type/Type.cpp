@@ -1098,11 +1098,14 @@ class RowParametricType {
 
     std::vector<TypePtr> argumentTypes;
     argumentTypes.reserve(parameters.size());
-    for (const auto& parameter : parameters) {
-      argumentTypes.push_back(parameter.type);
+    std::vector<std::string> fieldNames;
+    fieldNames.reserve(parameters.size());
+    for (auto i = 0; i < parameters.size(); ++i) {
+      argumentTypes.push_back(parameters[i].type);
+      fieldNames.push_back(fmt::format("c{}", i));
     }
 
-    return ROW(std::move(argumentTypes));
+    return ROW(std::move(fieldNames), std::move(argumentTypes));
   }
 };
 
