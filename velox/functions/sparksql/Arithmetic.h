@@ -46,7 +46,7 @@ struct RemainderFunction {
 
  private:
   template <typename TInput>
-  inline void handle_floating_point(TInput& result, const TInput& a, const TInput& n) {
+  void handle_floating_point(TInput& result, const TInput& a, const TInput& n) {
     if (std::isnan(a) || std::isnan(n) || std::isinf(a)) {
       result = std::numeric_limits<TInput>::quiet_NaN();
     } else if (std::isinf(n)) {
@@ -57,8 +57,11 @@ struct RemainderFunction {
   }
 
   template <typename TInput>
-  inline void handle_integral(TInput& result, const TInput& a, const TInput& n) {
-    if (n == 1 || n == -1) {
+  void handle_integral(TInput& result, const TInput& a, const TInput& n) {
+    // std::numeric_limits<int64_t>::min() % -1 could crash the program since
+    // abs(std::numeric_limits<int64_t>::min()) can not be represented in
+    // int64_t.
+    if (UNLIKELY(n == 1 || n == -1)) {
       result = 0;
     } else {
       result = a % n;
