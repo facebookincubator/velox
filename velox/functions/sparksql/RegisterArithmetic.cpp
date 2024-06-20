@@ -35,7 +35,8 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerBinaryNumeric<PlusFunction>({prefix + "add"});
   registerBinaryNumeric<MinusFunction>({prefix + "subtract"});
   registerBinaryNumeric<MultiplyFunction>({prefix + "multiply"});
-  registerFunction<DivideFunction, double, double, double>({prefix + "divide"});
+  registerFunction<DoubleDivideFunction, double, double, double>({prefix + "divide"});
+  registerFunction<LongDivideFunction, long, long, long>({prefix + "divide"});
   registerBinaryIntegral<RemainderFunction>({prefix + "remainder"});
   registerUnaryNumeric<UnaryMinusFunction>({prefix + "unaryminus"});
   // Math functions.
