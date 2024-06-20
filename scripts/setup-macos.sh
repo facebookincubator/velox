@@ -36,7 +36,7 @@ NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 MACOS_VELOX_DEPS="flex bison protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl libsodium"
 MACOS_BUILD_DEPS="ninja cmake ccache"
-FB_OS_VERSION="v2024.04.01.00"
+FB_OS_VERSION="v2024.05.20.00"
 
 function update_brew {
   DEFAULT_BREW_PATH=/usr/local/bin/brew
@@ -122,7 +122,7 @@ function install_ranges_v3 {
 }
 
 function install_re2 {
-  github_checkout google/re2 2021-04-01
+  github_checkout google/re2 2022-02-01
   cmake_install -DRE2_BUILD_TESTING=OFF
 }
 

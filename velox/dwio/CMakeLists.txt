@@ -32,4 +32,5 @@ target_link_libraries(
 add_subdirectory(common)
 add_subdirectory(catalog)
 add_subdirectory(dwrf)
+add_subdirectory(orc)
 add_subdirectory(parquet)

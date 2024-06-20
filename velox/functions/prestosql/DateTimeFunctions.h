@@ -1118,7 +1118,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
         Timestamp::fromMillis(Timestamp::calendarUtcToEpoch(dateTime) * 1000);
     timestamp.toGMT(unpackZoneKeyId(timestampWithTimezone));
 
-    result = pack(timestamp.toMillis(), unpackZoneKeyId(timestampWithTimezone));
+    result = pack(timestamp, unpackZoneKeyId(timestampWithTimezone));
   }
 
  private:
@@ -1207,9 +1207,8 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Varchar>& unitString,
       const int64_t value,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-    const auto unit = unit_.has_value()
-        ? unit_.value()
-        : fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value();
+    const auto unit = unit_.value_or(
+        fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value());
 
     if (value != (int32_t)value) {
       VELOX_UNSUPPORTED("integer overflow");
@@ -1443,7 +1442,7 @@ struct FromIso8601Timestamp {
       tzID = sessionTzID_;
     }
     ts.toGMT(tzID);
-    result = pack(ts.toMillis(), tzID);
+    result = pack(ts, tzID);
     return Status::OK();
   }
 
@@ -1486,8 +1485,8 @@ struct DateParseFunction {
     }
 
     auto dateTimeResult = format_->parse((std::string_view)(input));
-    if (!dateTimeResult.has_value()) {
-      return Status::UserError("Invalid date format: '{}'", input);
+    if (dateTimeResult.hasError()) {
+      return dateTimeResult.error();
     }
 
     // Since MySql format has no timezone specifier, simply check if session
@@ -1603,9 +1602,9 @@ struct ParseDateTimeFunction {
           std::string_view(format.data(), format.size()));
     }
     auto dateTimeResult =
-        format_->parse(std::string_view(input.data(), input.size()), false);
-    if (!dateTimeResult.has_value()) {
-      return Status::UserError("Invalid date format: '{}'", input);
+        format_->parse(std::string_view(input.data(), input.size()));
+    if (dateTimeResult.hasError()) {
+      return dateTimeResult.error();
     }
 
     // If timezone was not parsed, fallback to the session timezone. If there's
@@ -1614,7 +1613,7 @@ struct ParseDateTimeFunction {
         ? dateTimeResult->timezoneId
         : sessionTzID_.value_or(0);
     dateTimeResult->timestamp.toGMT(timezoneId);
-    result = pack(dateTimeResult->timestamp.toMillis(), timezoneId);
+    result = pack(dateTimeResult->timestamp, timezoneId);
     return Status::OK();
   }
 };
