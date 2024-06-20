@@ -18,6 +18,7 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/sparksql/Comparisons.h"
+#include "velox/functions/sparksql/SIMDComparisionUtil.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -37,28 +38,87 @@ class ComparisonFunction final : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    context.ensureWritable(rows, BOOLEAN(), result);
-    auto* flatResult = result->asUnchecked<FlatVector<bool>>();
     const Cmp cmp;
+    context.ensureWritable(rows, BOOLEAN(), result);
+    result->clearNulls(rows);
+    if constexpr (
+        kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+        kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+        kind == TypeKind::REAL || kind == TypeKind::DOUBLE ||
+        kind == TypeKind::TIMESTAMP || kind == TypeKind::VARCHAR ||
+        kind == TypeKind::VARBINARY || kind == TypeKind::HUGEINT) {
+      vector_size_t size = rows.end() - rows.begin();
+      if (size > 32) {
+        if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
+          const __restrict T* rawA =
+              args[0]->asUnchecked<FlatVector<T>>()->rawValues();
+          const __restrict T* rawB =
+              args[1]->asUnchecked<FlatVector<T>>()->rawValues();
+          applySimdComparison(
+              rows,
+              rawA,
+              rawB,
+              [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
+                return cmp(rawA[i], rawB[i]);
+              },
+              result,
+              *tempBuffer_);
+          return;
+        } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
+          const T constant =
+              args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
+          const __restrict T* rawA = nullptr;
+          const __restrict T* rawB =
+              args[1]->asUnchecked<FlatVector<T>>()->rawValues();
+          applySimdComparison(
+              rows,
+              rawA,
+              rawB,
+              [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
+                return cmp(constant, rawB[i]);
+              },
+              result,
+              *tempBuffer_);
+          return;
+        } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
+          const T constant =
+              args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
+          const __restrict T* rawA =
+              args[0]->asUnchecked<FlatVector<T>>()->rawValues();
+          const __restrict T* rawB = nullptr;
+          applySimdComparison(
+              rows,
+              rawA,
+              rawB,
+              [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
+                return cmp(rawA[i], constant);
+              },
+              result,
+              *tempBuffer_);
+          return;
+        }
+      }
+    }
+    auto* flatResult = result->asUnchecked<FlatVector<bool>>();
 
     if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
       // Fast path for (flat, flat).
-      auto rawA = args[0]->asUnchecked<FlatVector<T>>()->mutableRawValues();
-      auto rawB = args[1]->asUnchecked<FlatVector<T>>()->mutableRawValues();
+      const auto* rawA = args[0]->asUnchecked<FlatVector<T>>()->rawValues();
+      const auto* rawB = args[1]->asUnchecked<FlatVector<T>>()->rawValues();
       rows.applyToSelected(
           [&](vector_size_t i) { flatResult->set(i, cmp(rawA[i], rawB[i])); });
     } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
       // Fast path for (const, flat).
       auto constant = args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
-      auto rawValues =
-          args[1]->asUnchecked<FlatVector<T>>()->mutableRawValues();
+      const auto* rawValues =
+          args[1]->asUnchecked<FlatVector<T>>()->rawValues();
       rows.applyToSelected([&](vector_size_t i) {
         flatResult->set(i, cmp(constant, rawValues[i]));
       });
     } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
       // Fast path for (flat, const).
-      auto rawValues =
-          args[0]->asUnchecked<FlatVector<T>>()->mutableRawValues();
+      const auto* rawValues =
+          args[0]->asUnchecked<FlatVector<T>>()->rawValues();
       auto constant = args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
       rows.applyToSelected([&](vector_size_t i) {
         flatResult->set(i, cmp(rawValues[i], constant));
@@ -74,6 +134,10 @@ class ComparisonFunction final : public exec::VectorFunction {
       });
     }
   }
+
+ private:
+  const std::unique_ptr<std::vector<int8_t>> tempBuffer_ =
+      std::make_unique<std::vector<int8_t>>();
 };
 
 // ComparisonFunction instance for bool as it uses compact representation

@@ -17,6 +17,7 @@
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/sparksql/DecimalUtil.h"
+#include "velox/functions/sparksql/SIMDComparisionUtil.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -115,6 +116,60 @@ class DecimalCompareFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     prepareResults(rows, resultType, context, result);
+    vector_size_t size = rows.end() - rows.begin();
+    if (size > 32) {
+      if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
+        const __restrict A* rawA =
+            args[0]->asUnchecked<FlatVector<A>>()->template rawValues<A>();
+        const __restrict B* rawB =
+            args[1]->asUnchecked<FlatVector<B>>()->template rawValues<B>();
+        applySimdComparison(
+            rows,
+            rawA,
+            rawB,
+            [deltaScale = deltaScale_, need256 = need256_](
+                const A* __restrict rawA, const B* __restrict rawB, int i) {
+              return Operation::apply(rawA[i], rawB[i], deltaScale, need256);
+            },
+            result,
+            *tempBuffer_);
+        return;
+      } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
+        const int128_t constant =
+            args[0]->asUnchecked<ConstantVector<A>>()->valueAt(0);
+        const __restrict A* rawA = nullptr;
+        const __restrict B* rawB =
+            args[1]->asUnchecked<FlatVector<B>>()->template rawValues<B>();
+        applySimdComparison(
+            rows,
+            rawA,
+            rawB,
+            [deltaScale = deltaScale_, need256 = need256_, constant](
+                const A* __restrict rawA, const B* __restrict rawB, int i) {
+              return Operation::apply(constant, rawB[i], deltaScale, need256);
+            },
+            result,
+            *tempBuffer_);
+        return;
+      } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
+        const int128_t constant =
+            args[1]->asUnchecked<ConstantVector<B>>()->valueAt(0);
+        const __restrict A* rawA =
+            args[0]->asUnchecked<FlatVector<A>>()->template rawValues<A>();
+        const __restrict B* rawB = nullptr;
+        applySimdComparison(
+            rows,
+            rawA,
+            rawB,
+            [deltaScale = deltaScale_, need256 = need256_, constant](
+                const A* __restrict rawA, const B* __restrict rawB, int i) {
+              return Operation::apply(rawA[i], constant, deltaScale, need256);
+            },
+            result,
+            *tempBuffer_);
+        return;
+      }
+    }
 
     // Fast path when the first argument is a flat vector.
     if (args[0]->isFlatEncoding()) {
@@ -200,6 +255,8 @@ class DecimalCompareFunction : public exec::VectorFunction {
   const int8_t deltaScale_;
   // If 256 bits are needed after adjusting the scale.
   const bool need256_;
+  const std::unique_ptr<std::vector<int8_t>> tempBuffer_ =
+      std::make_unique<std::vector<int8_t>>();
 };
 
 template <typename Operation>
