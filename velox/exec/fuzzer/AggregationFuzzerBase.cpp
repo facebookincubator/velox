@@ -227,7 +227,16 @@ std::vector<std::string> AggregationFuzzerBase::generateKeys(
     keys.push_back(fmt::format("{}{}", prefix, i));
 
     // Pick random, possibly complex, type.
-    types.push_back(vectorFuzzer_.randType(kNonFloatingPointTypes, 2));
+    switch (fuzzerType_) {
+      case PrestoFuzzerTest:
+        types.push_back(vectorFuzzer_.randType(kNonFloatingPointTypes, 2));
+        break;
+      case SparkFuzzerTest:
+        // Spark does not support MAP as key.
+        types.push_back(
+            vectorFuzzer_.randOrderableType(kNonFloatingPointTypes, 2));
+        break;
+    }
     names.push_back(keys.back());
   }
   return keys;

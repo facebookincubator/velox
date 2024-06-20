@@ -21,6 +21,9 @@
 
 namespace facebook::velox::exec::test {
 
+// The type of aggregation fuzzer test.
+enum FuzzerType { PrestoFuzzerTest = 1, SparkFuzzerTest };
+
 struct AggregationFuzzerOptions {
   /// Comma-separated list of functions to test. By default, all functions
   /// are tested.
@@ -58,6 +61,11 @@ struct AggregationFuzzerOptions {
   /// Could be used to specify timezone or enable/disable settings that
   /// affect semantics of individual aggregate functions.
   std::unordered_map<std::string, std::string> queryConfigs;
+
+  std::unordered_map<std::string, std::string> hiveConfigs;
+
+  // The type of aggregation fuzzer test.
+  FuzzerType fuzzerType{FuzzerType::PrestoFuzzerTest};
 };
 
 } // namespace facebook::velox::exec::test

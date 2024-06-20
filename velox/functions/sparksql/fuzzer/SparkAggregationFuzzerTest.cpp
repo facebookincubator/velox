@@ -21,10 +21,10 @@
 
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
-#include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/functions/sparksql/fuzzer/SparkQueryRunner.h"
 
 DEFINE_int64(
     seed,
@@ -56,7 +56,11 @@ int main(int argc, char** argv) {
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable. Constant argument of bloom_filter_agg cause
   // fuzzer test fail.
-  std::unordered_set<std::string> skipFunctions = {"bloom_filter_agg"};
+  std::unordered_set<std::string> skipFunctions = {
+      "bloom_filter_agg",
+      "first_ignore_null",
+      "last_ignore_null",
+      "regr_replacement"};
 
   using facebook::velox::exec::test::TransformResultVerifier;
 
@@ -89,21 +93,10 @@ int main(int argc, char** argv) {
       };
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  auto duckQueryRunner =
-      std::make_unique<facebook::velox::exec::test::DuckQueryRunner>();
-  duckQueryRunner->disableAggregateFunctions({
-      // https://github.com/facebookincubator/velox/issues/7677
-      "max_by",
-      "min_by",
-      // The skewness functions of Velox and DuckDB use different
-      // algorithms.
-      // https://github.com/facebookincubator/velox/issues/4845
-      "skewness",
-      // Spark's kurtosis uses Pearson's formula for calculating the kurtosis
-      // coefficient. Meanwhile, DuckDB employs the sample kurtosis calculation
-      // formula. The results from the two methods are completely different.
-      "kurtosis",
-  });
+
+  auto sparkQueryRunner = std::make_unique<
+      facebook::velox::functions::sparksql::fuzzer::SparkQueryRunner>(
+      "localhost:15002", "fuzzer", "aggregate");
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
   using Options = facebook::velox::exec::test::AggregationFuzzerOptions;
@@ -112,5 +105,10 @@ int main(int argc, char** argv) {
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
   options.customVerificationFunctions = customVerificationFunctions;
-  return Runner::run(initialSeed, std::move(duckQueryRunner), options);
+  options.timestampPrecision =
+      facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;
+  options.hiveConfigs = {
+      {facebook::velox::connector::hive::HiveConfig::kReadTimestampUnit, "6"}};
+  options.fuzzerType = facebook::velox::exec::test::FuzzerType::SparkFuzzerTest;
+  return Runner::run(initialSeed, std::move(sparkQueryRunner), options);
 }

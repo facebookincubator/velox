@@ -61,6 +61,8 @@ class AggregationFuzzer : public AggregationFuzzerBase {
           customInputGenerators,
       VectorFuzzer::Options::TimestampPrecision timestampPrecision,
       const std::unordered_map<std::string, std::string>& queryConfigs,
+      const std::unordered_map<std::string, std::string>& hiveConfigs,
+      FuzzerType fuzzerType,
       std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner);
 
   void go();
@@ -211,6 +213,8 @@ void aggregateFuzzer(
         customInputGenerators,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::string>& hiveConfigs,
+    FuzzerType fuzzerType,
     const std::optional<std::string>& planPath,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner) {
   auto aggregationFuzzer = AggregationFuzzer(
@@ -220,6 +224,8 @@ void aggregateFuzzer(
       customInputGenerators,
       timestampPrecision,
       queryConfigs,
+      hiveConfigs,
+      fuzzerType,
       std::move(referenceQueryRunner));
   planPath.has_value() ? aggregationFuzzer.go(planPath.value())
                        : aggregationFuzzer.go();
@@ -236,6 +242,8 @@ AggregationFuzzer::AggregationFuzzer(
         customInputGenerators,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::string>& hiveConfigs,
+    FuzzerType fuzzerType,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
     : AggregationFuzzerBase{
           seed,
@@ -243,6 +251,8 @@ AggregationFuzzer::AggregationFuzzer(
           customInputGenerators,
           timestampPrecision,
           queryConfigs,
+          hiveConfigs,
+          fuzzerType,
           std::move(referenceQueryRunner)} {
   VELOX_CHECK(!signatureMap.empty(), "No function signatures available.");
 
@@ -304,13 +314,19 @@ bool canSortInputs(const CallableSignature& signature) {
 
 // Returns true if specified aggregate function can be applied to distinct
 // inputs.
-bool supportsDistinctInputs(const CallableSignature& signature) {
+bool supportsDistinctInputs(
+    const CallableSignature& signature,
+    FuzzerType fuzzerType) {
   if (signature.args.empty()) {
     return false;
   }
 
   const auto& arg = signature.args.at(0);
-  if (!arg->isComparable()) {
+  if (fuzzerType == FuzzerType::PrestoFuzzerTest && !arg->isComparable()) {
+    return false;
+  }
+  if (fuzzerType == FuzzerType::SparkFuzzerTest && !arg->isOrderable()) {
+    // Spark does not support distinct aggregation on MAP.
     return false;
   }
 
@@ -391,7 +407,8 @@ void AggregationFuzzer::go() {
         // x).
         const bool distinctInputs = !sortedInputs &&
             (signature.name.find("approx_") == std::string::npos) &&
-            supportsDistinctInputs(signature) && vectorFuzzer_.coinToss(0.2);
+            supportsDistinctInputs(signature, fuzzerType_) &&
+            vectorFuzzer_.coinToss(0.2);
 
         auto call = makeFunctionCall(
             signature.name, argNames, sortedInputs, distinctInputs);

@@ -19,6 +19,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Split.h"
+#include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/InputGenerator.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
@@ -63,20 +64,26 @@ class AggregationFuzzerBase {
           customInputGenerators,
       VectorFuzzer::Options::TimestampPrecision timestampPrecision,
       const std::unordered_map<std::string, std::string>& queryConfigs,
+      const std::unordered_map<std::string, std::string>& hiveConfigs,
+      FuzzerType fuzzerType,
       std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
       : customVerificationFunctions_{customVerificationFunctions},
         customInputGenerators_{customInputGenerators},
         queryConfigs_{queryConfigs},
+        fuzzerType_{fuzzerType},
         persistAndRunOnce_{FLAGS_persist_and_run_once},
         reproPersistPath_{FLAGS_repro_persist_path},
         referenceQueryRunner_{std::move(referenceQueryRunner)},
         vectorFuzzer_{getFuzzerOptions(timestampPrecision), pool_.get()} {
     filesystems::registerLocalFileSystem();
+    auto configs = hiveConfigs;
+    // Make sure not to run out of open file descriptors.
+    configs[connector::hive::HiveConfig::kNumCacheFileHandles] = "1000";
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                kHiveConnectorId, std::make_shared<core::MemConfig>());
+                kHiveConnectorId, std::make_shared<core::MemConfig>(configs));
     connector::registerConnector(hiveConnector);
 
     seed(initialSeed);
@@ -243,6 +250,9 @@ class AggregationFuzzerBase {
   const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>
       customInputGenerators_;
   const std::unordered_map<std::string, std::string> queryConfigs_;
+
+  // The type of aggregation fuzzer test. Could be Presto or Spark.
+  FuzzerType fuzzerType_;
   const bool persistAndRunOnce_;
   const std::string reproPersistPath_;
 
