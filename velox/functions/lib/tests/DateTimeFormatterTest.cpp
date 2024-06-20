@@ -59,9 +59,11 @@ class DateTimeFormatterTest : public testing::Test {
   };
 
   static Timestamp fromTimestampString(const StringView& timestamp) {
-    return util::fromTimestampString(timestamp).thenOrThrow(
-        folly::identity,
-        [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
+    return util::fromTimestampString(
+               timestamp, util::TimestampParseMode::kPrestoCast)
+        .thenOrThrow(folly::identity, [&](const Status& status) {
+          VELOX_USER_FAIL("{}", status.message());
+        });
   }
 
   void testTokenRange(
@@ -77,19 +79,27 @@ class DateTimeFormatterTest : public testing::Test {
     }
   }
 
+  DateTimeResult dateTimeResult(
+      Expected<DateTimeResult> dateTimeResultExpected) {
+    return dateTimeResultExpected.thenOrThrow(
+        folly::identity,
+        [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
+  }
+
   DateTimeResult parseJoda(
       const std::string_view& input,
       const std::string_view& format) {
-    return buildJodaDateTimeFormatter(format)->parse(input, true).value();
+    auto dateTimeResultExpected =
+        buildJodaDateTimeFormatter(format)->parse(input);
+    return dateTimeResult(dateTimeResultExpected);
   }
 
   Timestamp parseMysql(
       const std::string_view& input,
       const std::string_view& format) {
-    return buildMysqlDateTimeFormatter(format)
-        ->parse(input, true)
-        .value()
-        .timestamp;
+    auto dateTimeResultExpected =
+        buildMysqlDateTimeFormatter(format)->parse(input);
+    return dateTimeResult(dateTimeResultExpected).timestamp;
   }
 
   // Parses and returns the timezone converted back to string, to ease
@@ -97,8 +107,9 @@ class DateTimeFormatterTest : public testing::Test {
   std::string parseTZ(
       const std::string_view& input,
       const std::string_view& format) {
-    auto result =
-        buildJodaDateTimeFormatter(format)->parse(input, true).value();
+    auto dateTimeResultExpected =
+        buildJodaDateTimeFormatter(format)->parse(input);
+    auto result = dateTimeResult(dateTimeResultExpected);
     if (result.timezoneId == 0) {
       return "+00:00";
     }

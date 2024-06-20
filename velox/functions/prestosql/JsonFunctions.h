@@ -25,109 +25,94 @@
 
 namespace facebook::velox::functions {
 
-struct ParserContext {
- public:
-  explicit ParserContext() noexcept;
-  explicit ParserContext(const char* data, size_t length) noexcept
-      : padded_json(data, length) {}
-  void parseElement() {
-    jsonEle = domParser.parse(padded_json);
-  }
-  void parseDocument() {
-    jsonDoc = ondemandParser.iterate(padded_json);
-  }
-  simdjson::dom::element jsonEle;
-  simdjson::ondemand::document jsonDoc;
-
- private:
-  simdjson::padded_string padded_json;
-  simdjson::dom::parser domParser;
-  simdjson::ondemand::parser ondemandParser;
-};
-
 template <typename T>
-struct SIMDIsJsonScalarFunction {
+struct IsJsonScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(bool& result, const arg_type<Json>& json) {
-    ParserContext ctx(json.data(), json.size());
+  FOLLY_ALWAYS_INLINE Status call(bool& result, const arg_type<Json>& json) {
+    simdjson::ondemand::document jsonDoc;
 
-    ctx.parseDocument();
+    simdjson::padded_string paddedJson(json.data(), json.size());
+    if (auto errorCode = simdjsonParse(paddedJson).get(jsonDoc)) {
+      if (threadSkipErrorDetails()) {
+        return Status::UserError();
+      }
+      return Status::UserError(
+          "Failed to parse JSON: {}", simdjson::error_message(errorCode));
+    }
 
     result =
-        (ctx.jsonDoc.type() == simdjson::ondemand::json_type::number ||
-         ctx.jsonDoc.type() == simdjson::ondemand::json_type::string ||
-         ctx.jsonDoc.type() == simdjson::ondemand::json_type::boolean ||
-         ctx.jsonDoc.type() == simdjson::ondemand::json_type::null);
+        (jsonDoc.type() == simdjson::ondemand::json_type::number ||
+         jsonDoc.type() == simdjson::ondemand::json_type::string ||
+         jsonDoc.type() == simdjson::ondemand::json_type::boolean ||
+         jsonDoc.type() == simdjson::ondemand::json_type::null);
+
+    return Status::OK();
   }
 };
 
-template <typename T>
-struct SIMDJsonArrayContainsFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-  template <typename TInput>
+template <typename TExec>
+struct JsonArrayContainsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename T>
   FOLLY_ALWAYS_INLINE bool
-  call(bool& result, const arg_type<Json>& json, const TInput& value) {
-    ParserContext ctx(json.data(), json.size());
+  call(bool& result, const arg_type<Json>& json, const T& value) {
+    if constexpr (std::is_same_v<T, double>) {
+      if (!std::isfinite(value)) {
+        result = false;
+        return true;
+      }
+    }
+
+    simdjson::ondemand::document jsonDoc;
+
+    simdjson::padded_string paddedJson(json.data(), json.size());
+    if (simdjsonParse(paddedJson).get(jsonDoc)) {
+      return false;
+    }
+
+    if (jsonDoc.type() != simdjson::ondemand::json_type::array) {
+      return false;
+    }
+
     result = false;
-
-    try {
-      ctx.parseDocument();
-    } catch (const simdjson::simdjson_error&) {
-      return false;
-    }
-
-    if (ctx.jsonDoc.type() != simdjson::ondemand::json_type::array) {
-      return false;
-    }
-
-    for (auto&& v : ctx.jsonDoc) {
-      try {
-        if constexpr (std::is_same_v<TInput, bool>) {
-          if (v.type() == simdjson::ondemand::json_type::boolean &&
-              v.get_bool() == value) {
-            result = true;
-            break;
-          }
-        } else if constexpr (std::is_same_v<TInput, int64_t>) {
-          if (v.type() == simdjson::ondemand::json_type::number &&
-              v.get_number_type() ==
-                  simdjson::ondemand::number_type::signed_integer &&
-              v.get_int64() == value) {
-            result = true;
-            break;
-          }
-        } else if constexpr (std::is_same_v<TInput, double>) {
-          if (v.type() == simdjson::ondemand::json_type::number &&
-              v.get_number_type() ==
-                  simdjson::ondemand::number_type::floating_point_number &&
-              v.get_double() == value) {
-            result = true;
-            break;
-          }
-        } else {
-          if (v.type() == simdjson::ondemand::json_type::string) {
-            std::string_view rlt = v.get_string();
-            std::string str_value{value.getString()};
-            if (rlt.compare(str_value) == 0) {
-              result = true;
-              break;
-            }
-          }
+    for (auto&& v : jsonDoc) {
+      if (v.error()) {
+        return false;
+      }
+      if constexpr (std::is_same_v<T, bool>) {
+        bool boolValue;
+        if (v.type() == simdjson::ondemand::json_type::boolean &&
+            !v.get_bool().get(boolValue) && boolValue == value) {
+          result = true;
+          break;
         }
-      } catch (const simdjson::simdjson_error& e) {
-        // For bool/int64_t/double type, "get_bool()/get_int64()/get_double()"
-        // may throw an exception if the conversion of json value to the
-        // specified type failed, and the corresponding error code is
-        // "INCORRECT_TYPE" or "NUMBER_ERROR".
-        // If there are multiple json values in the json array, and some of them
-        // cannot be converted to the type of input `value`, it should not
-        // return null directly. It should continue to judge whether there is a
-        // json value that matches the input value, e.g.
-        // jsonArrayContains("[truet, false]", false) => true.
-        if (e.error() != simdjson::INCORRECT_TYPE &&
-            e.error() != simdjson::NUMBER_ERROR) {
-          return false;
+      } else if constexpr (std::is_same_v<T, int64_t>) {
+        int64_t intValue;
+        if (v.type() == simdjson::ondemand::json_type::number &&
+            v.get_number_type() ==
+                simdjson::ondemand::number_type::signed_integer &&
+            !v.get_int64().get(intValue) && intValue == value) {
+          result = true;
+          break;
+        }
+      } else if constexpr (std::is_same_v<T, double>) {
+        double doubleValue;
+        if (v.type() == simdjson::ondemand::json_type::number &&
+            v.get_number_type() ==
+                simdjson::ondemand::number_type::floating_point_number &&
+            !v.get_double().get(doubleValue) && doubleValue == value) {
+          result = true;
+          break;
+        }
+      } else {
+        std::string_view stringValue;
+        if (v.type() == simdjson::ondemand::json_type::string &&
+            !v.get_string().get(stringValue) &&
+            ((std::string_view)value).compare(stringValue) == 0) {
+          result = true;
+          break;
         }
       }
     }
@@ -137,28 +122,69 @@ struct SIMDJsonArrayContainsFunction {
 };
 
 template <typename T>
-struct SIMDJsonArrayLengthFunction {
+struct JsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& len, const arg_type<Json>& json) {
-    ParserContext ctx(json.data(), json.size());
+    simdjson::ondemand::document jsonDoc;
 
-    try {
-      ctx.parseDocument();
-    } catch (const simdjson::simdjson_error&) {
+    simdjson::padded_string paddedJson(json.data(), json.size());
+    if (simdjsonParse(paddedJson).get(jsonDoc)) {
       return false;
     }
 
-    if (ctx.jsonDoc.type() != simdjson::ondemand::json_type::array) {
+    if (jsonDoc.type() != simdjson::ondemand::json_type::array) {
       return false;
     }
 
-    try {
-      len = ctx.jsonDoc.count_elements();
-    } catch (const simdjson::simdjson_error&) {
+    size_t numElements;
+    if (jsonDoc.count_elements().get(numElements)) {
       return false;
     }
 
+    len = numElements;
+    return true;
+  }
+};
+
+template <typename TExec>
+struct JsonArrayGetFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE bool
+  call(out_type<Json>& result, const arg_type<Json>& jsonArray, int64_t index) {
+    simdjson::ondemand::document jsonDoc;
+
+    simdjson::padded_string paddedJson(jsonArray.data(), jsonArray.size());
+    if (simdjsonParse(paddedJson).get(jsonDoc)) {
+      return false;
+    }
+
+    if (jsonDoc.type() != simdjson::ondemand::json_type::array) {
+      return false;
+    }
+
+    size_t numElements;
+    if (jsonDoc.count_elements().get(numElements)) {
+      return false;
+    }
+
+    if (index >= 0) {
+      if (index >= numElements) {
+        return false;
+      }
+    } else if ((int64_t)numElements + index < 0) {
+      return false;
+    } else {
+      index += numElements;
+    }
+
+    std::string_view resultStr;
+    if (simdjson::to_json_string(jsonDoc.at(index)).get(resultStr)) {
+      return false;
+    }
+
+    result.copy_from(resultStr);
     return true;
   }
 };
@@ -168,7 +194,7 @@ struct SIMDJsonArrayLengthFunction {
 // to being encoded as JSON). The value referenced by json_path must be a scalar
 // (boolean, number or string)
 template <typename T>
-struct SIMDJsonExtractScalarFunction {
+struct JsonExtractScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -231,7 +257,7 @@ struct SIMDJsonExtractScalarFunction {
 };
 
 template <typename T>
-struct SIMDJsonExtractFunction {
+struct JsonExtractFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   bool call(
@@ -311,7 +337,7 @@ struct SIMDJsonExtractFunction {
 };
 
 template <typename T>
-struct SIMDJsonSizeFunction {
+struct JsonSizeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(

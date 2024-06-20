@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "folly/CancellationToken.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/SpillConfig.h"
@@ -259,7 +260,8 @@ class ConnectorQueryCtx {
       const std::string& queryId,
       const std::string& taskId,
       const std::string& planNodeId,
-      int driverId)
+      int driverId,
+      folly::CancellationToken cancellationToken = {})
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
         sessionProperties_(sessionProperties),
@@ -270,7 +272,8 @@ class ConnectorQueryCtx {
         queryId_(queryId),
         taskId_(taskId),
         driverId_(driverId),
-        planNodeId_(planNodeId) {
+        planNodeId_(planNodeId),
+        cancellationToken_(std::move(cancellationToken)) {
     VELOX_CHECK_NOT_NULL(sessionProperties);
   }
 
@@ -327,6 +330,11 @@ class ConnectorQueryCtx {
     return planNodeId_;
   }
 
+  /// Returns the cancellation token associated with this task.
+  const folly::CancellationToken& cancellationToken() const {
+    return cancellationToken_;
+  }
+
  private:
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
@@ -339,6 +347,7 @@ class ConnectorQueryCtx {
   const std::string taskId_;
   const int driverId_;
   const std::string planNodeId_;
+  const folly::CancellationToken cancellationToken_;
 };
 
 class Connector {
@@ -432,6 +441,15 @@ class ConnectorFactory {
 /// returns true. The return value makes it easy to use with
 /// FB_ANONYMOUS_VARIABLE.
 bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory);
+
+/// Returns true if a connector with the specified name has been registered,
+/// false otherwise.
+bool hasConnectorFactory(const std::string& connectorName);
+
+/// Unregister a connector factory by name.
+/// Returns true if a connector with the specified name has been unregistered,
+/// false otherwise.
+bool unregisterConnectorFactory(const std::string& connectorName);
 
 /// Returns a factory for creating connectors with the specified name. Throws if
 /// factory doesn't exist.

@@ -44,8 +44,9 @@ class HiveConfig {
 
   /// Maximum number of (bucketed) partitions per a single table writer
   /// instance.
-  // TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
-  // right now this is only used for testing.
+  ///
+  /// TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
+  /// right now this is only used for testing.
   static constexpr const char* kMaxPartitionsPerWriters =
       "max-partitions-per-writers";
   static constexpr const char* kMaxPartitionsPerWritersSession =
@@ -97,6 +98,12 @@ class HiveConfig {
   /// Maximum concurrent TCP connections for a single http client.
   static constexpr const char* kS3MaxConnections = "hive.s3.max-connections";
 
+  /// Maximum retry attempts for a single http client.
+  static constexpr const char* kS3MaxAttempts = "hive.s3.max-attempts";
+
+  /// Retry mode for a single http client.
+  static constexpr const char* kS3RetryMode = "hive.s3.retry-mode";
+
   /// The GCS storage endpoint server.
   static constexpr const char* kGCSEndpoint = "hive.gcs.endpoint";
 
@@ -141,7 +148,8 @@ class HiveConfig {
   /// The number of prefetch rowgroups
   static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
 
-  /// The total size in bytes for a direct coalesce request.
+  /// The total size in bytes for a direct coalesce request. Up to 8MB load
+  /// quantum size is supported when SSD cache is enabled.
   static constexpr const char* kLoadQuantum = "load-quantum";
 
   /// Maximum number of entries in the file handle cache.
@@ -184,6 +192,12 @@ class HiveConfig {
   static constexpr const char* kOrcWriterMinCompressionSizeSession =
       "orc_writer_min_compression_size";
 
+  /// The compression level to use with ZLIB and ZSTD.
+  static constexpr const char* kOrcWriterCompressionLevel =
+      "hive.orc.writer.compression-level";
+  static constexpr const char* kOrcWriterCompressionLevelSession =
+      "orc_optimized_writer_compression_level";
+
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
   /// The form should be defined by the underlying file system.
@@ -210,6 +224,9 @@ class HiveConfig {
       "hive.parquet.writer.timestamp-unit";
   static constexpr const char* kParquetWriteTimestampUnitSession =
       "hive.parquet.writer.timestamp_unit";
+
+  static constexpr const char* kCacheNoRetention = "cache.no_retention";
+  static constexpr const char* kCacheNoRetentionSession = "cache.no_retention";
 
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* session) const;
@@ -241,6 +258,10 @@ class HiveConfig {
   std::optional<std::string> s3SocketTimeout() const;
 
   std::optional<uint32_t> s3MaxConnections() const;
+
+  std::optional<int32_t> s3MaxAttempts() const;
+
+  std::optional<std::string> s3RetryMode() const;
 
   std::string gcsEndpoint() const;
 
@@ -282,6 +303,8 @@ class HiveConfig {
 
   uint64_t orcWriterMinCompressionSize(const Config* session) const;
 
+  std::optional<uint8_t> orcWriterCompressionLevel(const Config* session) const;
+
   std::string writeFileCreateConfig() const;
 
   uint32_t sortWriterMaxOutputRows(const Config* session) const;
@@ -297,6 +320,13 @@ class HiveConfig {
   /// Returns the timestamp unit used when writing timestamps into Parquet
   /// through Arrow bridge. 0: second, 3: milli, 6: micro, 9: nano.
   uint8_t parquetWriteTimestampUnit(const Config* session) const;
+
+  /// Returns true to evict out a query scanned data out of in-memory cache
+  /// right after the access, and also skip staging to the ssd cache. This helps
+  /// to prevent the cache space pollution from the one-time table scan by large
+  /// batch query when mixed running with interactive query which has high data
+  /// locality.
+  bool cacheNoRetention(const Config* session) const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
     VELOX_CHECK_NOT_NULL(

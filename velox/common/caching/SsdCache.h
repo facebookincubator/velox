@@ -94,16 +94,6 @@ class SsdCache {
   /// 'maxBytes' limit and stop working.
   SsdCache(const Config& config);
 
-  SsdCache(
-      std::string_view filePrefix,
-      uint64_t maxBytes,
-      int32_t numShards,
-      folly::Executor* executor,
-      uint64_t checkpointIntervalBytes = 0,
-      bool disableFileCow = false,
-      bool checksumEnabled = false,
-      bool checksumReadVerificationEnabled = false);
-
   /// Returns the shard corresponding to 'fileId'. 'fileId' is a file id from
   /// e.g. FileCacheKey.
   SsdFile& file(uint64_t fileId);
@@ -165,8 +155,11 @@ class SsdCache {
   /// Deletes checkpoint files. Used in testing.
   void testingDeleteCheckpoints();
 
-  /// Returns the total size of eviction log files. Used in testing.
+  /// Returns the total size of eviction log files. Used by test only.
   uint64_t testingTotalLogEvictionFilesSize();
+
+  /// Waits until the pending ssd cache writes finish. Used by test only.
+  void testingWaitForWriteToFinish();
 
  private:
   void checkNotShutdownLocked() {

@@ -20,6 +20,7 @@
 
 #include "velox/common/base/Doubles.h"
 #include "velox/external/date/date.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
 
@@ -106,6 +107,8 @@ addToDate(const int32_t input, const DateTimeUnit unit, const int32_t value) {
 
   if (unit == DateTimeUnit::kDay) {
     outDate = inDate + date::days(value);
+  } else if (unit == DateTimeUnit::kWeek) {
+    outDate = inDate + date::days(value * 7);
   } else {
     const date::year_month_day inCalDate(inDate);
     date::year_month_day outCalDate;
@@ -175,8 +178,15 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
       outTimestamp = inTimestamp + std::chrono::milliseconds(value);
       break;
     }
-    case DateTimeUnit::kWeek:
-      VELOX_UNSUPPORTED("Unsupported datetime unit: week")
+    case DateTimeUnit::kWeek: {
+      const int32_t inDate =
+          std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
+              .count();
+      const int32_t outDate = addToDate(inDate, DateTimeUnit::kDay, 7 * value);
+
+      outTimestamp = inTimestamp + date::days(outDate - inDate);
+      break;
+    }
     default:
       VELOX_UNREACHABLE("Unsupported datetime unit");
   }
@@ -187,6 +197,15 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
       milliTimestamp.getSeconds(),
       milliTimestamp.getNanos() +
           timestamp.getNanos() % kNanosecondsInMillisecond);
+}
+
+FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
+    int64_t timestampWithTimezone,
+    const DateTimeUnit unit,
+    const int32_t value) {
+  auto timestamp = unpackTimestampUtc(timestampWithTimezone);
+  auto finalTimeStamp = addToTimestamp(timestamp, unit, (int32_t)value);
+  return pack(finalTimeStamp, unpackZoneKeyId(timestampWithTimezone));
 }
 
 FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
@@ -241,8 +260,12 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
           std::chrono::duration_cast<date::days>(toTimepoint - fromTimepoint)
               .count();
     }
-    case DateTimeUnit::kWeek:
-      VELOX_UNSUPPORTED("Unsupported datetime unit: week")
+    case DateTimeUnit::kWeek: {
+      return sign *
+          std::chrono::duration_cast<date::days>(toTimepoint - fromTimepoint)
+              .count() /
+          7;
+    }
     default:
       break;
   }

@@ -41,7 +41,7 @@ defaults:
 jobs:
   benchmark:
     if: github.repository == 'facebookincubator/velox'
-    runs-on: 8-core
+    runs-on: 8-core-ubuntu
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
@@ -90,7 +90,7 @@ jobs:
 
       - name: "Install dependencies"
         if: ${{ github.event_name == 'pull_request' }}
-        run: source velox/scripts/setup-ubuntu.sh && install_apt_deps
+        run: source velox/scripts/setup-ubuntu.sh && install_apt_deps && install_duckdb
 
       - name: Build Baseline Benchmarks
         if: ${{ github.event_name == 'pull_request' }}

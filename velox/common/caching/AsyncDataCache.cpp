@@ -38,7 +38,7 @@ AsyncDataCacheEntry::~AsyncDataCacheEntry() {
   shard_->cache()->allocator()->freeNonContiguous(data_);
 }
 
-void AsyncDataCacheEntry::setExclusiveToShared() {
+void AsyncDataCacheEntry::setExclusiveToShared(bool ssdSavable) {
   VELOX_CHECK(isExclusive());
   numPins_ = 1;
   std::unique_ptr<folly::SharedPromise<bool>> promise;
@@ -54,14 +54,19 @@ void AsyncDataCacheEntry::setExclusiveToShared() {
 
   // The entry may now have other readers, It is safe to do read-only ops like
   // integrity and notifying SSD cache of another candidate.
+  //
+  // NOTE: this is only used by test for now.
   const auto& hook = shard_->cache()->verifyHook();
   if (hook != nullptr) {
     hook(*this);
   }
 
-  if ((ssdFile_ == nullptr) && (shard_->cache()->ssdCache() != nullptr)) {
-    auto* ssdCache = shard_->cache()->ssdCache();
-    assert(ssdCache); // for lint only.
+  if (!ssdSavable) {
+    return;
+  }
+
+  auto* ssdCache = shard_->cache()->ssdCache();
+  if ((ssdCache != nullptr) && (ssdFile_ == nullptr)) {
     if (ssdCache->groupStats().shouldSaveToSsd(groupId_, trackingId_)) {
       ssdSaveable_ = true;
       shard_->cache()->possibleSsdSave(size_);
@@ -161,28 +166,28 @@ CachePin CacheShard::findOrCreate(
     ++eventCounter_;
     auto it = entryMap_.find(key);
     if (it != entryMap_.end()) {
-      auto* found = it->second;
-      if (found->isExclusive()) {
+      auto* foundEntry = it->second;
+      if (foundEntry->isExclusive()) {
         ++numWaitExclusive_;
-        if (wait == nullptr) {
-          return CachePin();
+        if (wait != nullptr) {
+          *wait = foundEntry->getFuture();
         }
-        *wait = found->getFuture();
         return CachePin();
       }
-      if (found->size() >= size) {
-        found->touch();
+
+      if (foundEntry->size() >= size) {
+        foundEntry->touch();
         // The entry is in a readable state. Add a pin.
-        if (found->isPrefetch()) {
-          found->isFirstUse_ = true;
-          found->setPrefetch(false);
+        if (foundEntry->isPrefetch()) {
+          foundEntry->isFirstUse_ = true;
+          foundEntry->setPrefetch(false);
         } else {
           ++numHit_;
-          hitBytes_ += found->size();
+          hitBytes_ += foundEntry->size();
         }
-        ++found->numPins_;
+        ++foundEntry->numPins_;
         CachePin pin;
-        pin.setEntry(found);
+        pin.setEntry(foundEntry);
         return pin;
       }
 
@@ -191,11 +196,14 @@ CachePin CacheShard::findOrCreate(
       // This can happen if different load quanta apply to access via different
       // connectors. This is not an error but still worth logging.
       VELOX_CACHE_LOG_EVERY_MS(WARNING, 1'000)
-          << "Requested larger entry. Found size " << found->size()
+          << "Requested larger entry. Found size " << foundEntry->size()
           << " requested size " << size;
       // The old entry is superseded. Possible readers of the old entry still
       // retain a valid read pin.
-      found->key_.fileNum.clear();
+      RECORD_METRIC_VALUE(kMetricMemoryCacheNumStaleEntries);
+      ++numStales_;
+      foundEntry->key_.fileNum.clear();
+      entryMap_.erase(it);
     }
 
     auto newEntry = getFreeEntry();
@@ -218,6 +226,15 @@ CachePin CacheShard::findOrCreate(
     entryToInit->isFirstUse_ = true;
   }
   return initEntry(key, entryToInit);
+}
+
+void CacheShard::makeEvictable(RawFileCacheKey key) {
+  std::lock_guard<std::mutex> l(mutex_);
+  auto it = entryMap_.find(key);
+  if (it == entryMap_.end()) {
+    return;
+  }
+  it->second->makeEvictable();
 }
 
 bool CacheShard::exists(RawFileCacheKey key) const {
@@ -251,7 +268,9 @@ CoalescedLoad::~CoalescedLoad() {
   setEndState(State::kCancelled);
 }
 
-bool CoalescedLoad::loadOrFuture(folly::SemiFuture<bool>* wait) {
+bool CoalescedLoad::loadOrFuture(
+    folly::SemiFuture<bool>* wait,
+    bool ssdSavable) {
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (state_ == State::kCancelled || state_ == State::kLoaded) {
@@ -271,14 +290,15 @@ bool CoalescedLoad::loadOrFuture(folly::SemiFuture<bool>* wait) {
     VELOX_CHECK_EQ(State::kPlanned, state_);
     state_ = State::kLoading;
   }
+
   // Outside of 'mutex_'.
   try {
-    const auto pins = loadData(!wait);
+    const auto pins = loadData(/*prefetch=*/wait == nullptr);
     for (const auto& pin : pins) {
       auto* entry = pin.checkedEntry();
       VELOX_CHECK(entry->key().fileNum.hasValue());
       VELOX_CHECK(entry->isExclusive());
-      entry->setExclusiveToShared();
+      entry->setExclusiveToShared(ssdSavable);
     }
     setEndState(State::kLoaded);
   } catch (std::exception&) {
@@ -293,11 +313,14 @@ bool CoalescedLoad::loadOrFuture(folly::SemiFuture<bool>* wait) {
 }
 
 void CoalescedLoad::setEndState(State endState) {
-  std::lock_guard<std::mutex> l(mutex_);
-  state_ = endState;
-  if (promise_ != nullptr) {
-    promise_->setValue(true);
-    promise_.reset();
+  std::unique_ptr<folly::SharedPromise<bool>> promise;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    state_ = endState;
+    promise.swap(promise_);
+  }
+  if (promise != nullptr) {
+    promise->setValue(true);
   }
 }
 
@@ -311,14 +334,13 @@ std::unique_ptr<folly::SharedPromise<bool>> CacheShard::removeEntry(
 }
 
 void CacheShard::removeEntryLocked(AsyncDataCacheEntry* entry) {
-  if (!entry->key_.fileNum.hasValue()) {
-    return;
+  if (entry->key_.fileNum.hasValue()) {
+    const auto it = entryMap_.find(
+        RawFileCacheKey{entry->key_.fileNum.id(), entry->key_.offset});
+    VELOX_CHECK(it != entryMap_.end());
+    entryMap_.erase(it);
+    entry->key_.fileNum.clear();
   }
-  const auto it = entryMap_.find(
-      RawFileCacheKey{entry->key_.fileNum.id(), entry->key_.offset});
-  VELOX_CHECK(it != entryMap_.end());
-  entryMap_.erase(it);
-  entry->key_.fileNum.clear();
   entry->setSsdFile(nullptr, 0);
   if (entry->isPrefetch()) {
     entry->setPrefetch(false);
@@ -514,19 +536,21 @@ void CacheShard::updateStats(CacheStats& stats) {
   stats.numEvictChecks += numEvictChecks_;
   stats.numWaitExclusive += numWaitExclusive_;
   stats.numAgedOut += numAgedOut_;
+  stats.numStales += numStales_;
   stats.sumEvictScore += sumEvictScore_;
   stats.allocClocks += allocClocks_;
 }
 
 void CacheShard::appendSsdSaveable(std::vector<CachePin>& pins) {
   std::lock_guard<std::mutex> l(mutex_);
-  // Do not add more than 70% of entries to a write batch. If SSD save is slower
-  // than storage read, we must not have a situation where SSD save pins
-  // everything and stops reading.
-  const int32_t limit = (entries_.size() * 100) / 70;
+  // Do not add entries to a write batch more than maxWriteRatio_. If SSD save
+  // is slower than storage read, we must not have a situation where SSD save
+  // pins everything and stops reading.
+  const auto limit = static_cast<int32_t>(
+      static_cast<double>(entries_.size()) * maxWriteRatio_);
   VELOX_CHECK(cache_->ssdCache()->writeInProgress());
   for (auto& entry : entries_) {
-    if (entry && !entry->ssdFile_ && !entry->isExclusive() &&
+    if (entry && (entry->ssdFile_ == nullptr) && !entry->isExclusive() &&
         entry->ssdSaveable()) {
       CachePin pin;
       ++entry->numPins_;
@@ -598,6 +622,7 @@ CacheStats CacheStats::operator-(CacheStats& other) const {
   result.numEvictChecks = numEvictChecks - other.numEvictChecks;
   result.numWaitExclusive = numWaitExclusive - other.numWaitExclusive;
   result.numAgedOut = numAgedOut - other.numAgedOut;
+  result.numStales = numStales - other.numStales;
   result.allocClocks = allocClocks - other.allocClocks;
   result.sumEvictScore = sumEvictScore - other.sumEvictScore;
   if (ssdStats != nullptr && other.ssdStats != nullptr) {
@@ -610,19 +635,30 @@ CacheStats CacheStats::operator-(CacheStats& other) const {
 AsyncDataCache::AsyncDataCache(
     memory::MemoryAllocator* allocator,
     std::unique_ptr<SsdCache> ssdCache)
-    : allocator_(allocator), ssdCache_(std::move(ssdCache)), cachedPages_(0) {
+    : AsyncDataCache({}, allocator, std::move(ssdCache)){};
+
+AsyncDataCache::AsyncDataCache(
+    const Options& options,
+    memory::MemoryAllocator* allocator,
+    std::unique_ptr<SsdCache> ssdCache)
+    : opts_(options),
+      allocator_(allocator),
+      ssdCache_(std::move(ssdCache)),
+      cachedPages_(0) {
   for (auto i = 0; i < kNumShards; ++i) {
-    shards_.push_back(std::make_unique<CacheShard>(this));
+    shards_.push_back(std::make_unique<CacheShard>(this, opts_.maxWriteRatio));
   }
 }
 
-AsyncDataCache::~AsyncDataCache() {}
+AsyncDataCache::~AsyncDataCache() = default;
 
 // static
 std::shared_ptr<AsyncDataCache> AsyncDataCache::create(
     memory::MemoryAllocator* allocator,
-    std::unique_ptr<SsdCache> ssdCache) {
-  auto cache = std::make_shared<AsyncDataCache>(allocator, std::move(ssdCache));
+    std::unique_ptr<SsdCache> ssdCache,
+    const AsyncDataCache::Options& options) {
+  auto cache =
+      std::make_shared<AsyncDataCache>(options, allocator, std::move(ssdCache));
   allocator->registerCache(cache);
   return cache;
 }
@@ -644,11 +680,11 @@ AsyncDataCache** AsyncDataCache::getInstancePtr() {
 }
 
 void AsyncDataCache::shutdown() {
-  for (auto& shard : shards_) {
-    shard->shutdown();
-  }
   if (ssdCache_) {
     ssdCache_->shutdown();
+  }
+  for (auto& shard : shards_) {
+    shard->shutdown();
   }
 }
 
@@ -663,6 +699,11 @@ CachePin AsyncDataCache::findOrCreate(
     folly::SemiFuture<bool>* wait) {
   const int shard = std::hash<RawFileCacheKey>()(key) & (kShardMask);
   return shards_[shard]->findOrCreate(key, size, wait);
+}
+
+void AsyncDataCache::makeEvictable(RawFileCacheKey key) {
+  const int shard = std::hash<RawFileCacheKey>()(key) & (kShardMask);
+  return shards_[shard]->makeEvictable(key);
 }
 
 bool AsyncDataCache::exists(RawFileCacheKey key) const {
@@ -839,14 +880,17 @@ void AsyncDataCache::incrementNew(uint64_t size) {
 }
 
 void AsyncDataCache::possibleSsdSave(uint64_t bytes) {
-  constexpr int32_t kMinSavePages = 4096; // Save at least 16MB at a time.
   if (ssdCache_ == nullptr) {
     return;
   }
 
   ssdSaveable_ += bytes;
   if (memory::AllocationTraits::numPages(ssdSaveable_) >
-      std::max<int32_t>(kMinSavePages, cachedPages_ / 8)) {
+      std::max<int32_t>(
+          static_cast<int32_t>(
+              memory::AllocationTraits::numPages(opts_.minSsdSavableBytes)),
+          static_cast<int32_t>(
+              static_cast<double>(cachedPages_) * opts_.ssdSavableRatio))) {
     // Do not start a new save if another one is in progress.
     if (!ssdCache_->startWrite()) {
       return;
@@ -921,6 +965,18 @@ std::string AsyncDataCache::toString(bool details) const {
   return out.str();
 }
 
+std::vector<AsyncDataCacheEntry*> AsyncDataCache::testingCacheEntries() const {
+  std::vector<AsyncDataCacheEntry*> totalEntries;
+  for (const auto& shard : shards_) {
+    const auto shardEntries = shard->testingCacheEntries();
+    std::copy(
+        shardEntries.begin(),
+        shardEntries.end(),
+        std::back_inserter(totalEntries));
+  }
+  return totalEntries;
+}
+
 std::string CacheStats::toString() const {
   std::stringstream out;
   // Cache size stats.
@@ -941,6 +997,7 @@ std::string CacheStats::toString() const {
       << "Cache access miss: " << numNew << " hit: " << numHit
       << " hit bytes: " << succinctBytes(hitBytes) << " eviction: " << numEvict
       << " eviction checks: " << numEvictChecks << " aged out: " << numAgedOut
+      << " stales: " << numStales
       << "\n"
       // Cache prefetch stats.
       << "Prefetch entries: " << numPrefetch
@@ -998,6 +1055,16 @@ CoalesceIoStats readPins(
         ranges.push_back(folly::Range<char*>(nullptr, (char*)(uint64_t)size));
       },
       std::move(readFunc));
+}
+
+std::vector<AsyncDataCacheEntry*> CacheShard::testingCacheEntries() const {
+  std::vector<AsyncDataCacheEntry*> entries;
+  std::lock_guard<std::mutex> l(mutex_);
+  entries.reserve(entries_.size());
+  for (const auto& entry : entries_) {
+    entries.push_back(entry.get());
+  }
+  return entries;
 }
 
 } // namespace facebook::velox::cache

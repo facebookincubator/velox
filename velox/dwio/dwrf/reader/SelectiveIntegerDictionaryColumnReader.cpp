@@ -22,13 +22,13 @@ namespace facebook::velox::dwrf {
 using namespace dwio::common;
 
 SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
-    const std::shared_ptr<const TypeWithId>& requestedType,
+    const TypePtr& requestedType,
     std::shared_ptr<const TypeWithId> fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec,
     uint32_t numBytes)
     : SelectiveIntegerColumnReader(
-          requestedType->type(),
+          requestedType,
           params,
           scanSpec,
           std::move(fileType)) {
@@ -117,7 +117,7 @@ void SelectiveIntegerDictionaryColumnReader::ensureInitialized() {
 
   Timer timer;
   scanState_.dictionary.values = dictInit_();
-  if (scanSpec_->hasFilter()) {
+  if (DictionaryValues::hasFilter(scanSpec_->filter())) {
     // Make sure there is a cache even for an empty dictionary because of asan
     // failure when preparing a gather with all lanes masked out.
     scanState_.filterCache.resize(

@@ -60,7 +60,7 @@ class FooterStatisticsImpl : public dwio::common::Statistics {
 
 class ReaderBase {
  public:
-  // create reader base from buffered input
+  /// Creates reader base from buffered input.
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
@@ -72,14 +72,15 @@ class ReaderBase {
           dwio::common::ReaderOptions::kDefaultFilePreloadThreshold,
       dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
       bool fileColumnNamesReadAsLowerCase = false,
-      std::shared_ptr<random::RandomSkipTracker> randomSkip = nullptr);
+      std::shared_ptr<random::RandomSkipTracker> randomSkip = nullptr,
+      std::shared_ptr<velox::common::ScanSpec> scanSpec = nullptr);
 
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
       dwio::common::FileFormat fileFormat);
 
-  // create reader base from metadata
+  /// Creates reader base from metadata.
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
@@ -93,18 +94,18 @@ class ReaderBase {
         cache_{std::move(cache)},
         handler_{std::move(handler)},
         input_{std::move(input)},
+        fileLength_{0},
         schema_{
             std::dynamic_pointer_cast<const RowType>(convertType(*footer_))},
-        fileLength_{0},
         psLength_{0} {
-    DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
+    VELOX_CHECK_NOT_NULL(schema_, "invalid schema");
     if (!handler_) {
       handler_ = encryption::DecryptionHandler::create(*footer);
     }
   }
 
   // for testing
-  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool} {}
+  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool}, fileLength_{0} {}
 
   virtual ~ReaderBase() = default;
 
@@ -124,14 +125,18 @@ class ReaderBase {
     return schema_;
   }
 
-  void setSchema(const RowTypePtr& newSchema) {
-    schema_ = newSchema;
+  void setSchema(RowTypePtr newSchema) {
+    schema_ = std::move(newSchema);
   }
 
   const std::shared_ptr<const dwio::common::TypeWithId>& getSchemaWithId()
       const {
     if (!schemaWithId_) {
-      schemaWithId_ = dwio::common::TypeWithId::create(schema_);
+      if (scanSpec_) {
+        schemaWithId_ = dwio::common::TypeWithId::create(schema_, *scanSpec_);
+      } else {
+        schemaWithId_ = dwio::common::TypeWithId::create(schema_);
+      }
     }
     return schemaWithId_;
   }
@@ -255,12 +260,14 @@ class ReaderBase {
   const uint64_t filePreloadThreshold_{
       dwio::common::ReaderOptions::kDefaultFilePreloadThreshold};
 
-  std::unique_ptr<dwio::common::BufferedInput> input_;
+  const std::unique_ptr<dwio::common::BufferedInput> input_;
   const std::shared_ptr<random::RandomSkipTracker> randomSkip_;
+  const std::shared_ptr<velox::common::ScanSpec> scanSpec_;
+  const uint64_t fileLength_;
+
   RowTypePtr schema_;
   // Lazily populated
   mutable std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
-  uint64_t fileLength_;
   uint64_t psLength_;
 };
 

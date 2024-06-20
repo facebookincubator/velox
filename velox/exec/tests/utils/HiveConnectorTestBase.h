@@ -80,13 +80,15 @@ class HiveConnectorTestBase : public OperatorTestBase {
   makeHiveConnectorSplits(
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths);
 
-  static std::shared_ptr<connector::ConnectorSplit> makeHiveConnectorSplit(
+  static std::shared_ptr<connector::hive::HiveConnectorSplit>
+  makeHiveConnectorSplit(
       const std::string& filePath,
       uint64_t start = 0,
       uint64_t length = std::numeric_limits<uint64_t>::max(),
       int64_t splitWeight = 0);
 
-  static std::shared_ptr<connector::ConnectorSplit> makeHiveConnectorSplit(
+  static std::shared_ptr<connector::hive::HiveConnectorSplit>
+  makeHiveConnectorSplit(
       const std::string& filePath,
       int64_t fileSize,
       int64_t fileModifiedTime,
@@ -102,7 +104,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
       dwio::common::FileFormat format,
       const std::optional<
           std::unordered_map<std::string, std::optional<std::string>>>&
-          partitionKeys = {});
+          partitionKeys = {},
+      const std::optional<std::unordered_map<std::string, std::string>>&
+          infoColumns = {});
 
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
       common::test::SubfieldFilters subfieldFilters = {},
@@ -122,7 +126,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
   /// @param name Column name.
   /// @param type Column type.
   /// @param Required subfields of this column.
-  static std::shared_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
+  static std::unique_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
       const std::string& name,
       const TypePtr& type,
       const std::vector<std::string>& requiredSubfields);
@@ -131,7 +135,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
   /// @param type Column type.
   /// @param type Hive type.
   /// @param Required subfields of this column.
-  static std::shared_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
+  static std::unique_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
       const std::string& name,
       const TypePtr& dataType,
       const TypePtr& hiveType,
@@ -290,7 +294,8 @@ class HiveConnectorSplitBuilder {
         extraFileInfo,
         serdeParameters,
         splitWeight_,
-        infoColumns_);
+        infoColumns_,
+        std::nullopt);
   }
 
  private:

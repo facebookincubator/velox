@@ -344,6 +344,12 @@ Task::~Task() {
   CLEAR(pool_.reset());
   CLEAR(planFragment_ = core::PlanFragment());
   clearStage = "exiting ~Task()";
+
+  // Ful-fill the task deletion promises at the end.
+  auto taskDeletionPromises = std::move(taskDeletionPromises_);
+  for (auto& promise : taskDeletionPromises) {
+    promise.setValue();
+  }
 }
 
 uint64_t Task::timeSinceStartMsLocked() const {
@@ -607,7 +613,7 @@ RowVectorPtr Task::next(ContinueFuture* future) {
     createSplitGroupStateLocked(kUngroupedGroupId);
     std::vector<std::shared_ptr<Driver>> drivers =
         createDriversLocked(kUngroupedGroupId);
-    if (pool_->stats().currentBytes != 0) {
+    if (pool_->reservedBytes() != 0) {
       VELOX_FAIL(
           "Unexpected memory pool allocations during task[{}] driver initialization: {}",
           taskId_,
@@ -780,7 +786,7 @@ void Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
     // Create drivers.
     std::vector<std::shared_ptr<Driver>> drivers =
         createDriversLocked(kUngroupedGroupId);
-    if (pool_->stats().currentBytes != 0) {
+    if (pool_->reservedBytes() != 0) {
       VELOX_FAIL(
           "Unexpected memory pool allocations during task[{}] driver initialization: {}",
           taskId_,
@@ -1849,7 +1855,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     if (taskStats_.executionEndTimeMs == 0) {
       taskStats_.executionEndTimeMs = getCurrentTimeMs();
     }
-    if (not isRunningLocked()) {
+    if (!isRunningLocked()) {
       return makeFinishFutureLocked("Task::terminate");
     }
     state_ = terminalState;
@@ -1866,6 +1872,10 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       } catch (const std::exception&) {
         exception_ = std::current_exception();
       }
+    }
+    if (state_ != TaskState::kFinished) {
+      VELOX_CHECK(!cancellationSource_.isCancellationRequested());
+      cancellationSource_.requestCancellation();
     }
 
     LOG(INFO) << "Terminating task " << taskId() << " with state "
@@ -2232,6 +2242,14 @@ ContinueFuture Task::taskCompletionFuture() {
   auto [promise, future] = makeVeloxContinuePromiseContract(
       fmt::format("Task::taskCompletionFuture {}", taskId_));
   taskCompletionPromises_.emplace_back(std::move(promise));
+  return std::move(future);
+}
+
+ContinueFuture Task::taskDeletionFuture() {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  auto [promise, future] = makeVeloxContinuePromiseContract(
+      fmt::format("Task::taskDeletionFuture {}", taskId_));
+  taskDeletionPromises_.emplace_back(std::move(promise));
   return std::move(future);
 }
 

@@ -11,12 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# Build the test and build container for presto_cpp
-#
-FROM quay.io/centos/centos:stream8
 
-ADD scripts /velox/scripts/
-RUN /velox/scripts/setup-centos8.sh
+add_subdirectory(reader)
 
-WORKDIR /velox
-
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(test)
+endif()

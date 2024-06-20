@@ -32,9 +32,13 @@ class SparkCastHooks : public exec::CastHooks {
   Expected<int32_t> castStringToDate(
       const StringView& dateString) const override;
 
-  bool legacy() const override {
-    return false;
-  }
+  // Allows casting 'NaN', 'Infinity', '-Infinity', 'Inf', '-Inf', and these
+  // strings with different letter cases to real.
+  Expected<float> castStringToReal(const StringView& data) const override;
+
+  // Allows casting 'NaN', 'Infinity', '-Infinity', 'Inf', '-Inf', and these
+  // strings with different letter cases to double.
+  Expected<double> castStringToDouble(const StringView& data) const override;
 
   /// When casting from string to integral, floating-point, decimal, date, and
   /// timestamp types, Spark hook trims all leading and trailing UTF8
@@ -49,5 +53,7 @@ class SparkCastHooks : public exec::CastHooks {
   bool truncate() const override {
     return true;
   }
+
+  exec::PolicyType getPolicy() const override;
 };
 } // namespace facebook::velox::functions::sparksql

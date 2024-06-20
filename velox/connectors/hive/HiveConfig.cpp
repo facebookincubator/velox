@@ -120,6 +120,16 @@ std::optional<uint32_t> HiveConfig::s3MaxConnections() const {
       config_->get<uint32_t>(kS3MaxConnections));
 }
 
+std::optional<int32_t> HiveConfig::s3MaxAttempts() const {
+  return static_cast<std::optional<std::int32_t>>(
+      config_->get<int32_t>(kS3MaxAttempts));
+}
+
+std::optional<std::string> HiveConfig::s3RetryMode() const {
+  return static_cast<std::optional<std::string>>(
+      config_->get<std::string>(kS3RetryMode));
+}
+
 std::string HiveConfig::gcsEndpoint() const {
   return config_->get<std::string>(kGCSEndpoint, std::string(""));
 }
@@ -213,6 +223,25 @@ uint64_t HiveConfig::orcWriterMinCompressionSize(const Config* session) const {
       config_->get<uint64_t>(kOrcWriterMinCompressionSize, 1024));
 }
 
+std::optional<uint8_t> HiveConfig::orcWriterCompressionLevel(
+    const Config* session) const {
+  auto sessionProp = session->get<uint8_t>(kOrcWriterCompressionLevelSession);
+
+  if (sessionProp.has_value()) {
+    return sessionProp.value();
+  }
+
+  auto configProp = config_->get<uint8_t>(kOrcWriterCompressionLevel);
+
+  if (configProp.has_value()) {
+    return configProp.value();
+  }
+
+  // Presto has a single config controlling this value, but different defaults
+  // depending on the compression kind.
+  return std::nullopt;
+}
+
 std::string HiveConfig::writeFileCreateConfig() const {
   return config_->get<std::string>(kWriteFileCreateConfig, "");
 }
@@ -252,6 +281,12 @@ uint8_t HiveConfig::parquetWriteTimestampUnit(const Config* session) const {
           unit == 9,
       "Invalid timestamp unit.");
   return unit;
+}
+
+bool HiveConfig::cacheNoRetention(const Config* session) const {
+  return session->get<bool>(
+      kCacheNoRetentionSession,
+      config_->get<bool>(kCacheNoRetention, /*defaultValue=*/false));
 }
 
 } // namespace facebook::velox::connector::hive

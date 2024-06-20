@@ -31,12 +31,12 @@ DECLARE_bool(experimental_enable_legacy_cast);
 
 namespace facebook::velox::util {
 
-struct DefaultCastPolicy {
+struct PrestoCastPolicy {
   static constexpr bool truncate = false;
   static constexpr bool legacyCast = false;
 };
 
-struct TruncateCastPolicy {
+struct SparkCastPolicy {
   static constexpr bool truncate = true;
   static constexpr bool legacyCast = false;
 };
@@ -46,12 +46,7 @@ struct LegacyCastPolicy {
   static constexpr bool legacyCast = true;
 };
 
-struct TruncateLegacyCastPolicy {
-  static constexpr bool truncate = true;
-  static constexpr bool legacyCast = true;
-};
-
-template <TypeKind KIND, typename = void, typename TPolicy = DefaultCastPolicy>
+template <TypeKind KIND, typename = void, typename TPolicy = PrestoCastPolicy>
 struct Converter {
   using TTo = typename TypeTraits<KIND>::NativeType;
 
@@ -209,8 +204,8 @@ struct Converter<
     bool decimalPoint = false;
     if (v[0] == '-' || v[0] == '+') {
       if (len == 1) {
-        return folly::makeUnexpected(Status::UserError(fmt::format(
-            "Cannot cast an '{}' string to an integral value.", v[0])));
+        return folly::makeUnexpected(Status::UserError(
+            "Cannot cast an '{}' string to an integral value.", v[0]));
       }
       negative = v[0] == '-';
       index = 1;
@@ -600,15 +595,18 @@ struct Converter<TypeKind::TIMESTAMP, void, TPolicy> {
   }
 
   static Expected<Timestamp> tryCast(folly::StringPiece v) {
-    return fromTimestampString(v.data(), v.size());
+    return fromTimestampString(
+        v.data(), v.size(), TimestampParseMode::kPrestoCast);
   }
 
   static Expected<Timestamp> tryCast(const StringView& v) {
-    return fromTimestampString(v.data(), v.size());
+    return fromTimestampString(
+        v.data(), v.size(), TimestampParseMode::kPrestoCast);
   }
 
   static Expected<Timestamp> tryCast(const std::string& v) {
-    return fromTimestampString(v.data(), v.size());
+    return fromTimestampString(
+        v.data(), v.size(), TimestampParseMode::kPrestoCast);
   }
 };
 

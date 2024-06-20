@@ -55,6 +55,7 @@ class SortBufferTest : public OperatorTestBase {
         "0.0.0",
         0,
         0,
+        1 << 20,
         executor_.get(),
         5,
         10,
@@ -291,6 +292,7 @@ TEST_F(SortBufferTest, batchOutput) {
         "0.0.0",
         1000,
         0,
+        1 << 20,
         executor_.get(),
         5,
         10,
@@ -385,6 +387,7 @@ TEST_F(SortBufferTest, spill) {
         "0.0.0",
         1000,
         0,
+        1 << 20,
         executor_.get(),
         100,
         spillableReservationGrowthPct,
@@ -409,7 +412,7 @@ TEST_F(SortBufferTest, spill) {
     VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool.get());
     uint64_t totalNumInput = 0;
 
-    ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+    ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
     const auto peakSpillMemoryUsage =
         memory::spillMemoryPool()->stats().peakBytes;
 
@@ -437,7 +440,7 @@ TEST_F(SortBufferTest, spill) {
       // spill.
       ASSERT_EQ(spillStats.rlock()->spilledFiles, 3);
       sortBuffer.reset();
-      ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+      ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
       if (memory::spillMemoryPool()->trackUsage()) {
         ASSERT_GT(memory::spillMemoryPool()->stats().peakBytes, 0);
         ASSERT_GE(

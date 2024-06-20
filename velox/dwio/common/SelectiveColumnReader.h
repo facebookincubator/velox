@@ -19,7 +19,6 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/common/process/TraceHistory.h"
-#include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/FormatData.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/Mutation.h"
@@ -49,6 +48,17 @@ struct DictionaryValues {
     strings = nullptr;
     numValues = 0;
     sorted = false;
+  }
+
+  /// Whether the dictionary values have filter on it.
+  static bool hasFilter(const velox::common::Filter* filter) {
+    // Dictionary values cannot be null.  It's by design not possible in ORC and
+    // Parquet; in other formats even when it is possible in theory, it should
+    // not be used in a normal file because outside dictionary we only need 1
+    // bit to encode a null, but if we move it inside dictionary, we would need
+    // 1 integer to encode a null.  A sanity check can be added on encoding
+    // metadata for such formats.
+    return filter && filter->kind() != velox::common::FilterKind::kIsNotNull;
   }
 };
 
@@ -209,9 +219,13 @@ class SelectiveColumnReader {
 
   // Returns a pointer to output rows  with at least 'size' elements available.
   vector_size_t* mutableOutputRows(int32_t size) {
-    numOutConfirmed_ = outputRows_.size();
-    outputRows_.resize(numOutConfirmed_ + size);
-    return outputRows_.data() + numOutConfirmed_;
+    auto numOutConfirmed = outputRows_.size();
+    outputRows_.resize(numOutConfirmed + size);
+    return outputRows_.data() + numOutConfirmed;
+  }
+
+  void* rawValues() {
+    return rawValues_;
   }
 
   template <typename T>
@@ -616,9 +630,6 @@ class SelectiveColumnReader {
   // Rows passing the filter in readWithVisitor. Must stay
   // constant between consecutive calls to read().
   raw_vector<vector_size_t> outputRows_;
-  // Index of last set value in outputRows. Values between this and
-  // size() can be used as scratchpad inside read().
-  vector_size_t numOutConfirmed_;
   // The row number
   // corresponding to each element in 'values_'
   raw_vector<vector_size_t> valueRows_;

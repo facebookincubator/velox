@@ -20,11 +20,13 @@ target_link_libraries(
   velox_core
   velox_exec_test_lib
   cpr::cpr
+  Boost::regex
   velox_type_parser
   Folly::folly
   velox_hive_connector
   velox_dwio_dwrf_reader
-  velox_dwio_dwrf_writer)
+  velox_dwio_dwrf_writer
+  velox_dwio_catalog_fbhive)
 
 add_library(velox_aggregation_fuzzer_base AggregationFuzzerBase.cpp)
 

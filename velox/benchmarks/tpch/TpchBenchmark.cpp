@@ -263,6 +263,8 @@ class TpchBenchmark {
     configurationValues
         [connector::hive::HiveConfig::kMaxCoalescedDistanceBytes] =
             std::to_string(FLAGS_max_coalesced_distance_bytes);
+    configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
+        std::to_string(FLAGS_parquet_prefetch_rowgroups);
     auto properties =
         std::make_shared<const core::MemConfig>(configurationValues);
 
@@ -494,6 +496,11 @@ BENCHMARK(q1) {
   benchmark.run(planContext);
 }
 
+BENCHMARK(q2) {
+  const auto planContext = queryBuilder->getQueryPlan(2);
+  benchmark.run(planContext);
+}
+
 BENCHMARK(q3) {
   const auto planContext = queryBuilder->getQueryPlan(3);
   benchmark.run(planContext);
@@ -526,6 +533,11 @@ BENCHMARK(q9) {
 
 BENCHMARK(q10) {
   const auto planContext = queryBuilder->getQueryPlan(10);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q11) {
+  const auto planContext = queryBuilder->getQueryPlan(11);
   benchmark.run(planContext);
 }
 

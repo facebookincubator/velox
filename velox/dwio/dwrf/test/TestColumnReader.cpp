@@ -127,6 +127,7 @@ class ColumnReaderTestBase {
     ColumnSelector cs(rowType, nodes, true);
     auto options = RowReaderOptions();
     options.setReturnFlatVector(returnFlatVector());
+    options.setTimestampPrecision(TimestampPrecision::kNanoseconds);
 
     EXPECT_CALL(streams_, getColumnSelectorProxy())
         .WillRepeatedly(testing::Return(&cs));
@@ -144,7 +145,7 @@ class ColumnReaderTestBase {
       }
       makeFieldSpecs("", 0, rowType, scanSpec);
       selectiveColumnReader_ = SelectiveDwrfReader::build(
-          cs.getSchemaWithId(),
+          cs.getSchema(),
           fileTypeWithId,
           streams_,
           labels_,
@@ -1978,10 +1979,10 @@ TEST_P(TestColumnReader, testShortBlobError) {
     next(100, batch);
     batch->as<RowVector>()->childAt(0)->loadedVector();
     FAIL() << "Expected an error";
-  } catch (const exception::LoggedException& e) {
-    ASSERT_EQ("bad read in readFully", e.message());
   } catch (const VeloxRuntimeError& e) {
-    ASSERT_EQ("Reading past end", e.message());
+    ASSERT_TRUE(
+        "bad read in readFully" == e.message() ||
+        "Reading past end" == e.message());
   }
 }
 

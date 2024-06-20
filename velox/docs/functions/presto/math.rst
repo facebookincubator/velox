@@ -159,14 +159,17 @@ Mathematical Functions
 
     Returns the base-``radix`` representation of ``x``. ``radix`` must be between 2 and 36.
 
-.. function:: truncate(x) -> double
+.. function:: truncate(x) -> [same as x]
 
     Returns x rounded to integer by dropping digits after decimal point.
+    Supported types of ``x`` are: REAL and DOUBLE.
 
-.. function:: truncate(x, n) -> double
+.. function:: truncate(x, n) -> [same as x]
    :noindex:
 
     Returns x truncated to n decimal places. n can be negative to truncate n digits left of the decimal point.
+    Supported types of ``x`` are: REAL and DOUBLE.
+    ``n`` is an INTEGER.
 
 .. function:: width_bucket(x, bound1, bound2, n) -> bigint
 
@@ -285,6 +288,13 @@ Probability Functions: cdf
 
     Compute the Gamma cdf with given shape and scale parameters: P(N < value; shape, scale).
     The shape and scale parameters must be positive real numbers. The value must be a non-negative real number.
+
+.. function:: inverse_normal_cdf(mean, sd, p) -> double
+
+    Compute the inverse of the Normal cdf with given mean and standard
+    deviation (sd) for the cumulative probability (p): P(N < n). The mean must be
+    a real value and the standard deviation must be a real and positive value (both of type DOUBLE).
+    The probability p must lie on the interval (0, 1).
 
 .. function:: laplace_cdf(mean, scale, value) -> double
 

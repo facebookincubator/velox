@@ -69,7 +69,7 @@ class E2EWriterTest : public testing::Test {
     return std::make_unique<dwrf::DwrfReader>(
         opts,
         std::make_unique<BufferedInput>(
-            std::make_shared<InMemoryReadFile>(data), opts.getMemoryPool()));
+            std::make_shared<InMemoryReadFile>(data), opts.memoryPool()));
   }
 
   void testFlatMapConfig(
@@ -186,7 +186,8 @@ class E2EWriterTest : public testing::Test {
         dwrf::StripeStreamsImpl stripeStreams(
             std::make_shared<dwrf::StripeReadState>(
                 dwrfRowReader->readerBaseShared(), std::move(stripeMetadata)),
-            dwrfRowReader->getColumnSelector(),
+            &dwrfRowReader->getColumnSelector(),
+            nullptr,
             rowReaderOpts,
             currentStripeInfo.offset(),
             currentStripeInfo.numberOfRows(),
@@ -229,10 +230,10 @@ class E2EWriterTest : public testing::Test {
         }
       }
       auto stats = reader->getFooter().statistics(mapTypeId);
-      ASSERT_TRUE(stats.has_mapstatistics());
-      ASSERT_EQ(featureStreamSizes.size(), stats.mapstatistics().stats_size());
-      for (size_t i = 0; i != stats.mapstatistics().stats_size(); ++i) {
-        const auto& entry = stats.mapstatistics().stats(i);
+      ASSERT_TRUE(stats.hasMapStatistics());
+      ASSERT_EQ(featureStreamSizes.size(), stats.mapStatistics().stats_size());
+      for (size_t i = 0; i != stats.mapStatistics().stats_size(); ++i) {
+        const auto& entry = stats.mapStatistics().stats(i);
         ASSERT_TRUE(entry.stats().has_size());
         EXPECT_EQ(
             featureStreamSizes.at(dwrf::constructKey(entry.key())),
@@ -250,6 +251,7 @@ class E2EWriterTest : public testing::Test {
         [&]() -> const std::string& { return emptySpillFolder; },
         [&](uint64_t) {},
         "fakeSpillConfig",
+        0,
         0,
         0,
         nullptr,
@@ -416,7 +418,7 @@ TEST_F(E2EWriterTest, DisableLinearHeuristics) {
 
   // disable linear heuristics
   config->set(dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS, false);
-  dwrf::E2EWriterTestUtil::testWriter(*leafPool_, type, batches, 3, 3, config);
+  dwrf::E2EWriterTestUtil::testWriter(*leafPool_, type, batches, 2, 3, config);
 }
 
 // Beside writing larger files, this test also uses regular maps only.
@@ -2038,7 +2040,14 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimDuringInit) {
   }
 }
 
-TEST_F(E2EWriterTest, memoryReclaimThreshold) {
+DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimThreshold) {
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::dwrf::Writer::MemoryReclaimer::reclaimableBytes",
+      std::function<void(dwrf::Writer*)>([&](dwrf::Writer* writer) {
+        // Release before reclaim to make it not able to reclaim from reserved
+        // memory.
+        writer->getContext().releaseMemoryReservation();
+      }));
   const auto type = ROW(
       {{"int_val", INTEGER()},
        {"string_val", VARCHAR()},

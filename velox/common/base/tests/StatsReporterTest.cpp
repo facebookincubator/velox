@@ -312,10 +312,6 @@ class TestMemoryPool : public memory::MemoryPool {
     return 0;
   }
 
-  int64_t currentBytes() const override {
-    return 0;
-  }
-
   int64_t usedBytes() const override {
     return 0;
   }
@@ -325,6 +321,10 @@ class TestMemoryPool : public memory::MemoryPool {
   }
 
   int64_t availableReservation() const override {
+    return 0;
+  }
+
+  int64_t releasableReservation() const override {
     return 0;
   }
 

@@ -18,16 +18,11 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
-using namespace facebook::velox;
+namespace facebook::velox {
+namespace {
 
 class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
  public:
-  static Timestamp fromTimestampString(const StringView& timestamp) {
-    return util::fromTimestampString(timestamp).thenOrThrow(
-        folly::identity,
-        [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
-  }
-
   VectorPtr makeTimestampWithTimeZoneVector(
       vector_size_t size,
       const std::function<int64_t(int32_t row)>& timestampAt,
@@ -85,9 +80,9 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarchar) {
   // '2012-10-31 01:00:47' in Denver. Below, we use UTC representations of the
   // above local wall-clocks, to match the UTC timepoints held in the
   // TimestampWithTimezone type.
-  auto denverUTC = fromTimestampString("2012-10-31 07:00:47").toMillis();
-  auto viennaUTC = fromTimestampString("1994-05-06 13:49:00").toMillis();
-  auto chathamUTC = fromTimestampString("1979-02-23 18:48:31").toMillis();
+  auto denverUTC = parseTimestamp("2012-10-31 07:00:47").toMillis();
+  auto viennaUTC = parseTimestamp("1994-05-06 13:49:00").toMillis();
+  auto chathamUTC = parseTimestamp("1979-02-23 18:48:31").toMillis();
 
   auto timestamps = std::vector<int64_t>{
       0, denverUTC, denverUTC, viennaUTC, chathamUTC, chathamUTC};
@@ -109,12 +104,40 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarchar) {
   testCast(stringVector, expected);
 }
 
+TEST_F(TimestampWithTimeZoneCastTest, toVarchar) {
+  // 1970-01-01 06:11:37.123 UTC in 4 different time zones.
+  const int64_t utcMillis =
+      6 * kMillisInHour + 11 * kMillisInMinute + 37 * kMillisInSecond + 123;
+  auto input = makeFlatVector<int64_t>(
+      {
+          // -5 hours.
+          pack(utcMillis, util::getTimeZoneID("America/New_York")),
+          // -8 hours.
+          pack(utcMillis, util::getTimeZoneID("America/Los_Angeles")),
+          // +8 hours.
+          pack(utcMillis, util::getTimeZoneID("Asia/Shanghai")),
+          // +5:30 hours.
+          pack(utcMillis, util::getTimeZoneID("Asia/Calcutta")),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  auto expected = makeFlatVector<std::string>({
+      "1970-01-01 01:11:37.123 America/New_York",
+      "1969-12-31 22:11:37.123 America/Los_Angeles",
+      "1970-01-01 14:11:37.123 Asia/Shanghai",
+      "1970-01-01 11:41:37.123 Asia/Calcutta",
+  });
+
+  auto result = evaluate("cast(c0 as varchar)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+}
+
 TEST_F(TimestampWithTimeZoneCastTest, fromVarcharWithoutTimezone) {
   setQueryTimeZone("America/Denver");
 
   const auto stringVector =
       makeNullableFlatVector<StringView>({"2012-10-31 01:00:47"});
-  auto denverUTC = fromTimestampString("2012-10-31 07:00:47").toMillis();
+  auto denverUTC = parseTimestamp("2012-10-31 07:00:47").toMillis();
 
   auto timestamps = std::vector<int64_t>{denverUTC};
 
@@ -142,7 +165,7 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarcharInvalidInput) {
   const auto invalidStringVector4 = makeNullableFlatVector<StringView>(
       {"2012-10-31 35:00:47 America/Los_Angeles"});
 
-  auto millis = fromTimestampString("2012-10-31 07:00:47").toMillis();
+  auto millis = parseTimestamp("2012-10-31 07:00:47").toMillis();
   auto timestamps = std::vector<int64_t>{millis};
 
   auto timezones =
@@ -204,3 +227,70 @@ TEST_F(TimestampWithTimeZoneCastTest, toTimestamp) {
   // 1969-12-31 16:00:00.
   EXPECT_EQ(Timestamp(-28800, 0), result.value());
 }
+
+TEST_F(TimestampWithTimeZoneCastTest, toDate) {
+  auto input = makeFlatVector<int64_t>(
+      {
+          // 6AM UTC is 1AM EST (same day), 10PM PST (previous day), 2PM CST
+          // (same day).
+          pack(6 * kMillisInHour, util::getTimeZoneID("America/New_York")),
+          pack(6 * kMillisInHour, util::getTimeZoneID("America/Los_Angeles")),
+          pack(6 * kMillisInHour, util::getTimeZoneID("Asia/Shanghai")),
+          // 6PM UTC is 1PM EST (same day), 10AM PST (same day), 2AM CST (next
+          // day).
+          pack(18 * kMillisInHour, util::getTimeZoneID("America/New_York")),
+          pack(18 * kMillisInHour, util::getTimeZoneID("America/Los_Angeles")),
+          pack(18 * kMillisInHour, util::getTimeZoneID("Asia/Shanghai")),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+  auto expected = makeFlatVector<int32_t>({0, -1, 0, 0, 0, 1}, DATE());
+
+  auto result = evaluate("cast(c0 as date)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+
+  // Verify that session time zone doesn't affect the result.
+
+  for (auto tz : {"America/New_York", "America/Los_Angeles", "Asia/Shanghai"}) {
+    setQueryTimeZone(tz);
+    result = evaluate("cast(c0 as date)", makeRowVector({input}));
+    test::assertEqualVectors(expected, result);
+  }
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, fromDate) {
+  auto input = makeFlatVector<int32_t>({-1, 0, 1}, DATE());
+
+  setQueryTimeZone("America/New_York");
+
+  auto tzId = util::getTimeZoneID("America/New_York");
+  auto tzOffset = -5 * kMillisInHour;
+  auto expected = makeFlatVector<int64_t>(
+      {
+          pack(-kMillisInDay - tzOffset, tzId),
+          pack(-tzOffset, tzId),
+          pack(kMillisInDay - tzOffset, tzId),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+  auto result =
+      evaluate("cast(c0 as timestamp with time zone)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+
+  setQueryTimeZone("Asia/Shanghai");
+
+  tzId = util::getTimeZoneID("Asia/Shanghai");
+  tzOffset = 8 * kMillisInHour;
+  expected = makeFlatVector<int64_t>(
+      {
+          pack(-kMillisInDay - tzOffset, tzId),
+          pack(-tzOffset, tzId),
+          pack(kMillisInDay - tzOffset, tzId),
+      },
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  result =
+      evaluate("cast(c0 as timestamp with time zone)", makeRowVector({input}));
+  test::assertEqualVectors(expected, result);
+}
+
+} // namespace
+} // namespace facebook::velox

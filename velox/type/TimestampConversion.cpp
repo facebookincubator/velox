@@ -172,7 +172,9 @@ bool tryParseDateString(
   int32_t year = 0;
   bool yearneg = false;
   int sep;
-  skipSpaces(buf, len, pos);
+  if (mode != ParseMode::kIso8601) {
+    skipSpaces(buf, len, pos);
+  }
 
   if (pos >= len) {
     return false;
@@ -208,8 +210,7 @@ bool tryParseDateString(
   }
 
   // No month or day.
-  if ((mode == ParseMode::kNonStandardCast ||
-       mode == ParseMode::kNonStandardNoTimeCast) &&
+  if ((mode == ParseMode::kSparkCast || mode == ParseMode::kIso8601) &&
       pos == len) {
     if (!daysSinceEpochFromDate(year, 1, 1, daysSinceEpoch).ok()) {
       return false;
@@ -223,8 +224,8 @@ bool tryParseDateString(
 
   // Fetch the separator.
   sep = buf[pos++];
-  if (mode == ParseMode::kStandardCast || mode == ParseMode::kNonStandardCast ||
-      mode == ParseMode::kNonStandardNoTimeCast) {
+  if (mode == ParseMode::kPrestoCast || mode == ParseMode::kSparkCast ||
+      mode == ParseMode::kIso8601) {
     // Only '-' is valid for cast.
     if (sep != '-') {
       return false;
@@ -242,8 +243,7 @@ bool tryParseDateString(
   }
 
   // No day.
-  if ((mode == ParseMode::kNonStandardCast ||
-       mode == ParseMode::kNonStandardNoTimeCast) &&
+  if ((mode == ParseMode::kSparkCast || mode == ParseMode::kIso8601) &&
       pos == len) {
     if (!daysSinceEpochFromDate(year, month, 1, daysSinceEpoch).ok()) {
       return false;
@@ -268,9 +268,13 @@ bool tryParseDateString(
     return false;
   }
 
-  if (mode == ParseMode::kStandardCast) {
+  if (mode == ParseMode::kPrestoCast || mode == ParseMode::kIso8601) {
     if (!daysSinceEpochFromDate(year, month, day, daysSinceEpoch).ok()) {
       return false;
+    }
+
+    if (mode == ParseMode::kPrestoCast) {
+      skipSpaces(buf, len, pos);
     }
 
     if (pos == len) {
@@ -281,7 +285,7 @@ bool tryParseDateString(
 
   // In non-standard cast mode, an optional trailing 'T' or space followed
   // by any optional characters are valid patterns.
-  if (mode == ParseMode::kNonStandardCast) {
+  if (mode == ParseMode::kSparkCast) {
     if (!daysSinceEpochFromDate(year, month, day, daysSinceEpoch).ok()) {
       return false;
     }
@@ -315,7 +319,7 @@ bool tryParseDateString(
   }
 
   // In strict mode, check remaining string for non-space characters.
-  if (mode == ParseMode::kStrict || mode == ParseMode::kNonStandardNoTimeCast) {
+  if (mode == ParseMode::kStrict || mode == ParseMode::kIso8601) {
     skipSpaces(buf, len, pos);
 
     // Check position. if end was not reached, non-space chars remaining.
@@ -332,6 +336,30 @@ bool tryParseDateString(
   return daysSinceEpochFromDate(year, month, day, daysSinceEpoch).ok();
 }
 
+void parseTimeSeparator(
+    const char* buf,
+    size_t& pos,
+    TimestampParseMode parseMode) {
+  switch (parseMode) {
+    case TimestampParseMode::kIso8601:
+      if (buf[pos] == 'T') {
+        pos++;
+      }
+      break;
+    case TimestampParseMode::kPrestoCast:
+      if (buf[pos] == ' ') {
+        pos++;
+      }
+      break;
+    case TimestampParseMode::kLegacyCast:
+    case TimestampParseMode::kSparkCast:
+      if (buf[pos] == ' ' || buf[pos] == 'T') {
+        pos++;
+      }
+      break;
+  }
+}
+
 // String format is hh:mm:ss.microseconds (seconds and microseconds are
 // optional).
 // ISO 8601
@@ -340,14 +368,17 @@ bool tryParseTimeString(
     size_t len,
     size_t& pos,
     int64_t& result,
-    bool strict) {
+    TimestampParseMode parseMode) {
   int32_t hour = 0, min = 0, sec = 0, micros = 0;
   pos = 0;
 
   if (len == 0) {
     return false;
   }
-  skipSpaces(buf, len, pos);
+
+  if (parseMode != TimestampParseMode::kIso8601) {
+    skipSpaces(buf, len, pos);
+  }
 
   if (pos >= len) {
     return false;
@@ -366,6 +397,10 @@ bool tryParseTimeString(
   }
 
   if (pos >= len) {
+    if (parseMode == TimestampParseMode::kIso8601) {
+      result = fromTime(hour, 0, 0, 0);
+      return true;
+    }
     return false;
   }
 
@@ -395,8 +430,12 @@ bool tryParseTimeString(
     }
 
     // Try to read microseconds.
-    if (pos < len && buf[pos] == '.') {
-      ++pos;
+    if (pos < len) {
+      if (buf[pos] == '.') {
+        ++pos;
+      } else if (parseMode == TimestampParseMode::kIso8601 && buf[pos] == ',') {
+        ++pos;
+      }
 
       if (pos >= len) {
         return false;
@@ -412,15 +451,6 @@ bool tryParseTimeString(
     }
   }
 
-  // In strict mode, check remaining string for non-space characters.
-  if (strict) {
-    skipSpaces(buf, len, pos);
-
-    // Check position. If end was not reached, non-space chars remaining.
-    if (pos < len) {
-      return false;
-    }
-  }
   result = fromTime(hour, min, sec, micros);
   return true;
 }
@@ -431,12 +461,31 @@ bool tryParseTimestampString(
     const char* buf,
     size_t len,
     size_t& pos,
-    Timestamp& result) {
+    Timestamp& result,
+    TimestampParseMode parseMode) {
   int64_t daysSinceEpoch = 0;
   int64_t microsSinceMidnight = 0;
 
-  if (!tryParseDateString(
-          buf, len, pos, daysSinceEpoch, ParseMode::kNonStrict)) {
+  if (parseMode == TimestampParseMode::kIso8601) {
+    // Leading spaces are not allowed.
+    size_t startPos = pos;
+    skipSpaces(buf, len, pos);
+    if (pos > startPos) {
+      return false;
+    }
+  }
+
+  if (parseMode == TimestampParseMode::kIso8601 && pos < len &&
+      buf[pos] == 'T') {
+    // No date. Assume 1970-01-01.
+  } else if (!tryParseDateString(
+                 buf,
+                 len,
+                 pos,
+                 daysSinceEpoch,
+                 parseMode == TimestampParseMode::kIso8601
+                     ? ParseMode::kSparkCast
+                     : ParseMode::kNonStrict)) {
     return false;
   }
 
@@ -447,13 +496,11 @@ bool tryParseTimestampString(
   }
 
   // Try to parse a time field.
-  if (buf[pos] == ' ' || buf[pos] == 'T') {
-    pos++;
-  }
+  parseTimeSeparator(buf, pos, parseMode);
 
   size_t timePos = 0;
   if (!tryParseTimeString(
-          buf + pos, len - pos, timePos, microsSinceMidnight, false)) {
+          buf + pos, len - pos, timePos, microsSinceMidnight, parseMode)) {
     return false;
   }
 
@@ -617,20 +664,7 @@ daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear, int64_t& out) {
   return Status::OK();
 }
 
-int64_t fromDateString(const char* str, size_t len) {
-  int64_t daysSinceEpoch;
-  size_t pos = 0;
-
-  if (!tryParseDateString(str, len, pos, daysSinceEpoch, ParseMode::kStrict)) {
-    VELOX_USER_FAIL(
-        "Unable to parse date value: \"{}\", expected format is (YYYY-MM-DD)",
-        std::string(str, len));
-  }
-  return daysSinceEpoch;
-}
-
-Expected<int32_t>
-castFromDateString(const char* str, size_t len, ParseMode mode) {
+Expected<int32_t> fromDateString(const char* str, size_t len, ParseMode mode) {
   int64_t daysSinceEpoch;
   size_t pos = 0;
 
@@ -640,13 +674,13 @@ castFromDateString(const char* str, size_t len, ParseMode mode) {
     }
 
     switch (mode) {
-      case ParseMode::kStandardCast:
+      case ParseMode::kPrestoCast:
         return folly::makeUnexpected(Status::UserError(
             "Unable to parse date value: \"{}\". "
             "Valid date string pattern is (YYYY-MM-DD), "
             "and can be prefixed with [+-]",
             std::string(str, len)));
-      case ParseMode::kNonStandardCast:
+      case ParseMode::kSparkCast:
         return folly::makeUnexpected(Status::UserError(
             "Unable to parse date value: \"{}\". "
             "Valid date string patterns include "
@@ -654,7 +688,7 @@ castFromDateString(const char* str, size_t len, ParseMode mode) {
             "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
             "and any pattern prefixed with [+-]",
             std::string(str, len)));
-      case ParseMode::kNonStandardNoTimeCast:
+      case ParseMode::kIso8601:
         return folly::makeUnexpected(Status::UserError(
             "Unable to parse date value: \"{}\". "
             "Valid date string patterns include "
@@ -705,19 +739,6 @@ fromTime(int32_t hour, int32_t minute, int32_t second, int32_t microseconds) {
   return result;
 }
 
-int64_t fromTimeString(const char* str, size_t len) {
-  int64_t microsSinceMidnight;
-  size_t pos;
-
-  if (!tryParseTimeString(str, len, pos, microsSinceMidnight, true)) {
-    VELOX_USER_FAIL(
-        "Unable to parse time value: \"{}\", "
-        "expected format is (HH:MM:SS[.MS])",
-        std::string(str, len));
-  }
-  return microsSinceMidnight;
-}
-
 Timestamp fromDatetime(int64_t daysSinceEpoch, int64_t microsSinceMidnight) {
   int64_t secondsSinceEpoch =
       static_cast<int64_t>(daysSinceEpoch) * kSecsPerDay;
@@ -741,11 +762,12 @@ Status parserError(const char* str, size_t len) {
 
 } // namespace
 
-Expected<Timestamp> fromTimestampString(const char* str, size_t len) {
-  size_t pos;
+Expected<Timestamp>
+fromTimestampString(const char* str, size_t len, TimestampParseMode parseMode) {
+  size_t pos = 0;
   Timestamp resultTimestamp;
 
-  if (!tryParseTimestampString(str, len, pos, resultTimestamp)) {
+  if (!tryParseTimestampString(str, len, pos, resultTimestamp, parseMode)) {
     return folly::makeUnexpected(parserError(str, len));
   }
   skipSpaces(str, len, pos);
@@ -758,17 +780,18 @@ Expected<Timestamp> fromTimestampString(const char* str, size_t len) {
   return resultTimestamp;
 }
 
-Expected<std::pair<Timestamp, int64_t>> fromTimestampWithTimezoneString(
+Expected<std::pair<Timestamp, int16_t>> fromTimestampWithTimezoneString(
     const char* str,
-    size_t len) {
-  size_t pos;
+    size_t len,
+    TimestampParseMode parseMode) {
+  size_t pos = 0;
   Timestamp resultTimestamp;
 
-  if (!tryParseTimestampString(str, len, pos, resultTimestamp)) {
+  if (!tryParseTimestampString(str, len, pos, resultTimestamp, parseMode)) {
     return folly::makeUnexpected(parserError(str, len));
   }
 
-  int64_t timezoneID = -1;
+  int16_t timezoneID = -1;
 
   if (pos < len && characterIsSpace(str[pos])) {
     pos++;
@@ -776,10 +799,19 @@ Expected<std::pair<Timestamp, int64_t>> fromTimestampWithTimezoneString(
 
   // If there is anything left to parse, it must be a timezone definition.
   if (pos < len) {
+    if (parseMode == TimestampParseMode::kIso8601) {
+      // Only +HH:MM and -HH:MM are supported. Minutes, seconds, etc. in the
+      // offset are optional.
+      if (str[pos] != 'Z' && str[pos] != '+' && str[pos] != '-') {
+        return folly::makeUnexpected(parserError(str, len));
+      }
+    }
+
     size_t timezonePos = pos;
     while (timezonePos < len && !characterIsSpace(str[timezonePos])) {
       timezonePos++;
     }
+
     std::string_view timezone(str + pos, timezonePos - pos);
 
     if ((timezoneID = util::getTimeZoneID(timezone, false)) == -1) {
@@ -789,13 +821,37 @@ Expected<std::pair<Timestamp, int64_t>> fromTimestampWithTimezoneString(
 
     // Skip any spaces at the end.
     pos = timezonePos;
-    skipSpaces(str, len, pos);
+    if (parseMode != TimestampParseMode::kIso8601) {
+      skipSpaces(str, len, pos);
+    }
 
     if (pos < len) {
       return folly::makeUnexpected(parserError(str, len));
     }
   }
   return std::make_pair(resultTimestamp, timezoneID);
+}
+
+int32_t toDate(const Timestamp& timestamp, const date::time_zone* timeZone_) {
+  auto convertToDate = [](const Timestamp& t) -> int32_t {
+    static const int32_t kSecsPerDay{86'400};
+    auto seconds = t.getSeconds();
+    if (seconds >= 0 || seconds % kSecsPerDay == 0) {
+      return seconds / kSecsPerDay;
+    }
+    // For division with negatives, minus 1 to compensate the discarded
+    // fractional part. e.g. -1/86'400 yields 0, yet it should be considered
+    // as -1 day.
+    return seconds / kSecsPerDay - 1;
+  };
+
+  if (timeZone_ != nullptr) {
+    Timestamp copy = timestamp;
+    copy.toTimezone(*timeZone_);
+    return convertToDate(copy);
+  }
+
+  return convertToDate(timestamp);
 }
 
 } // namespace facebook::velox::util

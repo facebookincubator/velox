@@ -1108,6 +1108,7 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
         "VALUES (0)",
         duckDbQueryRunner_);
     ASSERT_TRUE(waitForTaskStateChange(task, TaskState::kFinished, 3'000'000));
+    ASSERT_FALSE(task->getCancellationToken().isCancellationRequested());
   }
   valuePromise.setValue();
   // Wait for Values driver to complete.
@@ -1278,6 +1279,7 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
     while (cursor->hasNext()) {
       cursor->moveNext();
     }
+    waitForTaskCompletion(task);
   }
 
   {
@@ -2093,5 +2095,101 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimFailure) {
           .assertResults(
               "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1"),
       spillTableError);
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, taskDeletionPromise) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2"}, {INTEGER(), DOUBLE(), INTEGER()});
+  const auto inputVectors = makeVectors(rowType, 128, 256);
+  createDuckDbTable(inputVectors);
+
+  std::atomic_bool terminateWaitFlag{true};
+  folly::EventCount terminateWait;
+  std::atomic<Task*> task{nullptr};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::terminate",
+      std::function<void(Task*)>(([&](Task* _task) {
+        task = _task;
+        terminateWait.await([&]() { return !terminateWaitFlag.load(); });
+      })));
+
+  std::thread queryThread([&]() {
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .maxDrivers(1)
+        .plan(PlanBuilder()
+                  .values(inputVectors)
+                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                  .planNode())
+        .assertResults("SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
+  });
+
+  while (task == nullptr) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  // The task deletion future is not ful-filled as the task is not deleted.
+  ASSERT_FALSE(task.load()
+                   ->taskDeletionFuture()
+                   .within(std::chrono::microseconds(1'000'000))
+                   .wait()
+                   .hasValue());
+  auto deleteFuture = task.load()->taskDeletionFuture();
+  terminateWaitFlag = false;
+  terminateWait.notifyAll();
+  // The task deletion future is ful-filled after the wait.
+  ASSERT_TRUE(deleteFuture.wait().hasValue());
+  queryThread.join();
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+  });
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto plan = PlanBuilder(planNodeIdGenerator)
+                        .values({data})
+                        .singleAggregation({"c0"}, {"sum(c1)"}, {})
+                        .planFragment();
+
+  std::atomic<bool> driverWaitFlag{true};
+  folly::EventCount driverWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::enter",
+      std::function<void(const velox::exec::ThreadState*)>(
+          ([&](const velox::exec::ThreadState* /*unused*/) {
+            driverWait.await([&]() { return !driverWaitFlag.load(); });
+          })));
+
+  auto task = Task::create(
+      "task",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel);
+  task->start(4, 1);
+  auto cancellationToken = task->getCancellationToken();
+  ASSERT_FALSE(cancellationToken.isCancellationRequested());
+
+  // Request pause.
+  auto pauseWait = task->requestPause();
+  // Fail the task.
+  task->requestAbort();
+  ASSERT_TRUE(cancellationToken.isCancellationRequested());
+
+  // Unblock drivers.
+  driverWaitFlag = false;
+  driverWait.notifyAll();
+  // Let driver threads run before resume.
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  // Wait for task pause to complete.
+  pauseWait.wait();
+
+  // Resume the task and expect all drivers to close.
+  Task::resume(task);
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(cancellationToken.isCancellationRequested());
+
+  task.reset();
+  waitForAllTasksToBeDeleted();
 }
 } // namespace facebook::velox::exec::test

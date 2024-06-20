@@ -25,22 +25,26 @@
 namespace facebook::velox::util {
 namespace {
 
-Timestamp parseTimestamp(const StringView& timestamp) {
-  return fromTimestampString(timestamp).thenOrThrow(
-      folly::identity,
-      [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
-}
-
-int32_t parseDate(const StringView& str, ParseMode mode) {
-  return castFromDateString(str.data(), str.size(), mode)
+Timestamp parseTimestamp(
+    const StringView& timestamp,
+    TimestampParseMode parseMode = TimestampParseMode::kPrestoCast) {
+  return fromTimestampString(timestamp, parseMode)
       .thenOrThrow(folly::identity, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
 }
 
-std::pair<Timestamp, int64_t> parseTimestampWithTimezone(
-    const StringView& str) {
-  return fromTimestampWithTimezoneString(str.data(), str.size())
+int32_t parseDate(const StringView& str, ParseMode mode) {
+  return fromDateString(str.data(), str.size(), mode)
+      .thenOrThrow(folly::identity, [&](const Status& status) {
+        VELOX_USER_FAIL("{}", status.message());
+      });
+}
+
+std::pair<Timestamp, int16_t> parseTimestampWithTimezone(
+    const StringView& str,
+    TimestampParseMode parseMode = TimestampParseMode::kPrestoCast) {
+  return fromTimestampWithTimezoneString(str.data(), str.size(), parseMode)
       .thenOrThrow(folly::identity, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
@@ -101,60 +105,7 @@ TEST(DateTimeUtilTest, fromDateInvalid) {
 }
 
 TEST(DateTimeUtilTest, fromDateString) {
-  EXPECT_EQ(10957, fromDateString("2000-01-01"));
-  EXPECT_EQ(0, fromDateString("1970-01-01"));
-  EXPECT_EQ(1, fromDateString("1970-01-02"));
-
-  // Single character
-  EXPECT_EQ(1, fromDateString("1970-1-2"));
-
-  // Old and negative years.
-  EXPECT_EQ(-719528, fromDateString("0-1-1"));
-  EXPECT_EQ(-719162, fromDateString("1-1-1"));
-  EXPECT_EQ(-719893, fromDateString("-1-1-1"));
-  EXPECT_EQ(-720258, fromDateString("-2-1-1"));
-
-  // 1BC is equal 0-1-1.
-  EXPECT_EQ(-719528, fromDateString("1-1-1 (BC)"));
-  EXPECT_EQ(-719893, fromDateString("2-1-1 (BC)"));
-
-  // Leading zeros and spaces.
-  EXPECT_EQ(-719162, fromDateString("00001-1-1"));
-  EXPECT_EQ(-719162, fromDateString(" 1-1-1"));
-  EXPECT_EQ(-719162, fromDateString("     1-1-1"));
-  EXPECT_EQ(-719162, fromDateString("\t1-1-1"));
-  EXPECT_EQ(-719162, fromDateString("  \t    \n 00001-1-1  \n"));
-
-  // Different separators.
-  EXPECT_EQ(-719162, fromDateString("1/1/1"));
-  EXPECT_EQ(-719162, fromDateString("1 1 1"));
-  EXPECT_EQ(-719162, fromDateString("1\\1\\1"));
-
-  // Other string types.
-  EXPECT_EQ(0, fromDateString(StringView("1970-01-01")));
-}
-
-TEST(DateTimeUtilTest, fromDateStrInvalid) {
-  EXPECT_THROW(fromDateString(""), VeloxUserError);
-  EXPECT_THROW(fromDateString("     "), VeloxUserError);
-  EXPECT_THROW(fromDateString("2000"), VeloxUserError);
-
-  // Different separators.
-  EXPECT_THROW(fromDateString("2000/01-01"), VeloxUserError);
-  EXPECT_THROW(fromDateString("2000 01-01"), VeloxUserError);
-
-  // Trailing characters.
-  EXPECT_THROW(fromDateString("2000-01-01   asdf"), VeloxUserError);
-  EXPECT_THROW(fromDateString("2000-01-01 0"), VeloxUserError);
-
-  // Too large of a year.
-  EXPECT_THROW(fromDateString("1000000"), VeloxUserError);
-  EXPECT_THROW(fromDateString("-1000000"), VeloxUserError);
-}
-
-TEST(DateTimeUtilTest, castFromDateString) {
-  for (ParseMode mode :
-       {ParseMode::kStandardCast, ParseMode::kNonStandardCast}) {
+  for (ParseMode mode : {ParseMode::kPrestoCast, ParseMode::kSparkCast}) {
     EXPECT_EQ(0, parseDate("1970-01-01", mode));
     EXPECT_EQ(3789742, parseDate("12345-12-18", mode));
 
@@ -166,24 +117,23 @@ TEST(DateTimeUtilTest, castFromDateString) {
     EXPECT_EQ(-719893, parseDate("-1-1-1", mode));
 
     EXPECT_EQ(0, parseDate(" 1970-01-01", mode));
+    EXPECT_EQ(0, parseDate("1970-01-01 ", mode));
+    EXPECT_EQ(0, parseDate(" 1970-01-01 ", mode));
   }
 
-  EXPECT_EQ(3789391, parseDate("12345", ParseMode::kNonStandardCast));
-  EXPECT_EQ(16436, parseDate("2015", ParseMode::kNonStandardCast));
-  EXPECT_EQ(16495, parseDate("2015-03", ParseMode::kNonStandardCast));
-  EXPECT_EQ(16512, parseDate("2015-03-18T", ParseMode::kNonStandardCast));
-  EXPECT_EQ(16512, parseDate("2015-03-18T123123", ParseMode::kNonStandardCast));
-  EXPECT_EQ(16512, parseDate("2015-03-18 123142", ParseMode::kNonStandardCast));
-  EXPECT_EQ(16512, parseDate("2015-03-18 (BC)", ParseMode::kNonStandardCast));
-
-  EXPECT_EQ(0, parseDate("1970-01-01 ", ParseMode::kNonStandardCast));
-  EXPECT_EQ(0, parseDate(" 1970-01-01 ", ParseMode::kNonStandardCast));
+  EXPECT_EQ(3789391, parseDate("12345", ParseMode::kSparkCast));
+  EXPECT_EQ(16436, parseDate("2015", ParseMode::kSparkCast));
+  EXPECT_EQ(16495, parseDate("2015-03", ParseMode::kSparkCast));
+  EXPECT_EQ(16512, parseDate("2015-03-18T", ParseMode::kSparkCast));
+  EXPECT_EQ(16512, parseDate("2015-03-18T123123", ParseMode::kSparkCast));
+  EXPECT_EQ(16512, parseDate("2015-03-18 123142", ParseMode::kSparkCast));
+  EXPECT_EQ(16512, parseDate("2015-03-18 (BC)", ParseMode::kSparkCast));
 }
 
-TEST(DateTimeUtilTest, castFromDateStringInvalid) {
+TEST(DateTimeUtilTest, fromDateStringInvalid) {
   auto testCastFromDateStringInvalid = [&](const StringView& str,
                                            ParseMode mode) {
-    if (mode == ParseMode::kStandardCast) {
+    if (mode == ParseMode::kPrestoCast) {
       VELOX_ASSERT_THROW(
           parseDate(str, mode),
           fmt::format(
@@ -191,7 +141,7 @@ TEST(DateTimeUtilTest, castFromDateStringInvalid) {
               "Valid date string pattern is (YYYY-MM-DD), "
               "and can be prefixed with [+-]",
               std::string(str.data(), str.size())));
-    } else if (mode == ParseMode::kNonStandardCast) {
+    } else if (mode == ParseMode::kSparkCast) {
       VELOX_ASSERT_THROW(
           parseDate(str, mode),
           fmt::format(
@@ -201,7 +151,7 @@ TEST(DateTimeUtilTest, castFromDateStringInvalid) {
               "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
               "and any pattern prefixed with [+-]",
               std::string(str.data(), str.size())));
-    } else if (mode == ParseMode::kNonStandardNoTimeCast) {
+    } else if (mode == ParseMode::kIso8601) {
       VELOX_ASSERT_THROW(
           parseDate(str, mode),
           fmt::format(
@@ -214,8 +164,7 @@ TEST(DateTimeUtilTest, castFromDateStringInvalid) {
     }
   };
 
-  for (ParseMode mode :
-       {ParseMode::kStandardCast, ParseMode::kNonStandardCast}) {
+  for (ParseMode mode : {ParseMode::kPrestoCast, ParseMode::kSparkCast}) {
     testCastFromDateStringInvalid("2012-Oct-23", mode);
     testCastFromDateStringInvalid("2012-Oct-23", mode);
     testCastFromDateStringInvalid("2015-03-18X", mode);
@@ -235,53 +184,8 @@ TEST(DateTimeUtilTest, castFromDateStringInvalid) {
   testCastFromDateStringInvalid("1970-01-01 ", ParseMode::kStrict);
   testCastFromDateStringInvalid(" 1970-01-01 ", ParseMode::kStrict);
 
-  testCastFromDateStringInvalid(
-      "1970-01-01T01:00:47", ParseMode::kNonStandardNoTimeCast);
-  testCastFromDateStringInvalid(
-      "1970-01-01T01:00:47.000", ParseMode::kNonStandardNoTimeCast);
-}
-
-TEST(DateTimeUtilTest, fromTimeString) {
-  EXPECT_EQ(0, fromTimeString("00:00:00"));
-  EXPECT_EQ(0, fromTimeString("00:00:00.00"));
-  EXPECT_EQ(1, fromTimeString("00:00:00.000001"));
-  EXPECT_EQ(10, fromTimeString("00:00:00.00001"));
-  EXPECT_EQ(100, fromTimeString("00:00:00.0001"));
-  EXPECT_EQ(1000, fromTimeString("00:00:00.001"));
-  EXPECT_EQ(10000, fromTimeString("00:00:00.01"));
-  EXPECT_EQ(100000, fromTimeString("00:00:00.1"));
-  EXPECT_EQ(1'000'000, fromTimeString("00:00:01"));
-  EXPECT_EQ(60'000'000, fromTimeString("00:01:00"));
-  EXPECT_EQ(3'600'000'000, fromTimeString("01:00:00"));
-
-  // 1 day minus 1 second.
-  EXPECT_EQ(86'399'000'000, fromTimeString("23:59:59"));
-
-  // Single digit.
-  EXPECT_EQ(0, fromTimeString("0:0:0.0"));
-  EXPECT_EQ(3'661'000'000, fromTimeString("1:1:1"));
-
-  // Leading and trailing spaces.
-  EXPECT_EQ(0, fromTimeString("   \t \n 00:00:00.00  \t"));
-}
-
-TEST(DateTimeUtilTest, fromTimeStrInvalid) {
-  const std::string errorMsg = "Unable to parse time value: ";
-  VELOX_ASSERT_THROW(fromTimeString(""), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:00:"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:00:00."), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:00-00"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00/00:00"), errorMsg);
-
-  // Invalid hour, minutes and seconds.
-  VELOX_ASSERT_THROW(fromTimeString("24:00:00"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:61:00"), errorMsg);
-  VELOX_ASSERT_THROW(fromTimeString("00:00:61"), errorMsg);
-
-  // Trailing characters.
-  VELOX_ASSERT_THROW(fromTimeString("00:00:00   12"), errorMsg);
+  testCastFromDateStringInvalid("1970-01-01T01:00:47", ParseMode::kIso8601);
+  testCastFromDateStringInvalid("1970-01-01T01:00:47.000", ParseMode::kIso8601);
 }
 
 // bash command to verify:
@@ -296,8 +200,9 @@ TEST(DateTimeUtilTest, fromTimestampString) {
   EXPECT_EQ(Timestamp(0, 0), parseTimestamp("1970-01-01 00:00:00    "));
 
   EXPECT_EQ(Timestamp(946729316, 0), parseTimestamp("2000-01-01 12:21:56"));
-  EXPECT_EQ(Timestamp(946729316, 0), parseTimestamp("2000-01-01T12:21:56"));
-  EXPECT_EQ(Timestamp(946729316, 0), parseTimestamp("2000-01-01T 12:21:56"));
+  EXPECT_EQ(
+      Timestamp(946729316, 0),
+      parseTimestamp("2000-01-01T12:21:56", TimestampParseMode::kIso8601));
 }
 
 TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
@@ -323,6 +228,11 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
   VELOX_ASSERT_THROW(
       parseTimestamp("1970-01-01 00:00:00 America/Los_Angeles"), parserError);
 
+  // Cannot have spaces after T.
+  VELOX_ASSERT_THROW(
+      parseTimestamp("2000-01-01T 12:21:56", TimestampParseMode::kIso8601),
+      parserError);
+
   // Parse timestamp with (broken) timezones.
   VELOX_ASSERT_THROW(
       parseTimestampWithTimezone("1970-01-01 00:00:00-asd"), timezoneError);
@@ -339,7 +249,7 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
 
 TEST(DateTimeUtilTest, fromTimestampWithTimezoneString) {
   // -1 means no timezone information.
-  auto expected = std::make_pair<Timestamp, int64_t>(Timestamp(0, 0), -1);
+  auto expected = std::make_pair<Timestamp, int16_t>(Timestamp(0, 0), -1);
   EXPECT_EQ(parseTimestampWithTimezone("1970-01-01 00:00:00"), expected);
 
   // Test timezone offsets.

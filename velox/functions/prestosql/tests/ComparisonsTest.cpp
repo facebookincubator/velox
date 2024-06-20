@@ -27,29 +27,11 @@ class ComparisonsTest : public functions::test::FunctionBaseTest {
   }
 
  protected:
-  template <typename T>
-  void testDistinctFrom(
-      const std::vector<std::optional<T>>& col1,
-      const std::vector<std::optional<T>>& col2,
-      const std::vector<bool>& expected) {
-    auto data = vectorMaker_.rowVector(
-        {vectorMaker_.flatVectorNullable<T>(col1),
-         vectorMaker_.flatVectorNullable<T>(col2)});
-
-    auto result = evaluate<SimpleVector<bool>>("c0 IS DISTINCT FROM c1", data);
-
-    ASSERT_EQ((size_t)result->size(), expected.size());
-    for (size_t i = 0; i < expected.size(); ++i) {
-      ASSERT_TRUE(!result->isNullAt(i));
-      ASSERT_EQ(expected[i], result->valueAt(i));
-    }
-  }
-
   void testBetweenExpr(
       const std::string& exprStr,
       const std::vector<VectorPtr>& input,
       const VectorPtr& expectedResult) {
-    auto actual = evaluate<SimpleVector<bool>>(exprStr, makeRowVector(input));
+    auto actual = evaluate(exprStr, makeRowVector(input));
     test::assertEqualVectors(expectedResult, actual);
   }
 };
@@ -89,10 +71,6 @@ TEST_F(ComparisonsTest, betweenVarchar) {
 }
 
 TEST_F(ComparisonsTest, betweenDate) {
-  auto parseDate = [](const std::string& dateStr) {
-    return DATE()->toDays(dateStr);
-  };
-
   std::vector<std::tuple<int32_t, bool>> testData = {
       {parseDate("2019-05-01"), false},
       {parseDate("2019-06-01"), true},
@@ -115,15 +93,10 @@ TEST_F(ComparisonsTest, betweenTimestamp) {
     auto expr =
         "c0 between cast(\'2019-02-28 10:00:00.500\' as timestamp) and"
         " cast(\'2019-02-28 10:00:00.600\' as timestamp)";
-    if (s.has_value()) {
-      const auto ts =
-          util::fromTimestampString((StringView)s.value())
-              .thenOrThrow(folly::identity, [&](const Status& status) {
-                VELOX_USER_FAIL("{}", status.message());
-              });
-      return evaluateOnce<bool>(expr, std::optional(ts));
+    if (!s.has_value()) {
+      return evaluateOnce<bool>(expr, std::optional<Timestamp>());
     }
-    return evaluateOnce<bool>(expr, std::optional<Timestamp>());
+    return evaluateOnce<bool>(expr, std::optional{parseTimestamp(s.value())});
   };
 
   EXPECT_EQ(std::nullopt, between(std::nullopt));
@@ -545,20 +518,51 @@ TEST_F(ComparisonsTest, eqRow) {
 }
 
 TEST_F(ComparisonsTest, distinctFrom) {
-  testDistinctFrom(
-      std::vector<std::optional<int64_t>>{3, 1, 1, std::nullopt, std::nullopt},
-      std::vector<std::optional<int64_t>>{3, 2, std::nullopt, 2, std::nullopt},
-      {false, true, true, true, false});
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({3, 1, 1, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<int64_t>({3, 2, std::nullopt, 2, std::nullopt}),
+  });
+
+  auto result = evaluate("c0 is distinct from c1", input);
+  auto expected = makeFlatVector<bool>({false, true, true, true, false});
+  test::assertEqualVectors(expected, result);
 
   const Timestamp ts1(998474645, 321000000);
   const Timestamp ts2(998423705, 321000000);
   const Timestamp ts3(400000000, 123000000);
-  testDistinctFrom(
-      std::vector<std::optional<Timestamp>>{
-          ts3, ts1, ts1, std::nullopt, std::nullopt},
-      std::vector<std::optional<Timestamp>>{
-          ts3, ts2, std::nullopt, ts2, std::nullopt},
-      {false, true, true, true, false});
+  input = makeRowVector({
+      makeNullableFlatVector<Timestamp>(
+          {ts3, ts1, ts1, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<Timestamp>(
+          {ts3, ts2, std::nullopt, ts2, std::nullopt}),
+  });
+
+  result = evaluate("c0 is distinct from c1", input);
+  expected = makeFlatVector<bool>({false, true, true, true, false});
+  test::assertEqualVectors(expected, result);
+
+  input = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3]",
+          "null",
+          "[]",
+          "[1, null]",
+          "[null, 2, 3]",
+          "null",
+      }),
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 4]",
+          "null",
+          "[]",
+          "[1, null]",
+          "[null, 2, 4]",
+          "[]",
+      }),
+  });
+
+  result = evaluate("c0 is distinct from c1", input);
+  expected = makeFlatVector<bool>({true, false, false, false, true, true});
+  test::assertEqualVectors(expected, result);
 }
 
 TEST_F(ComparisonsTest, eqNestedComplex) {

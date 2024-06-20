@@ -152,7 +152,7 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<RowVectorPtr>& input,
       const std::string& key1,
       const std::string& key2) {
-    auto rowType = input[0]->type()->asRow();
+    auto& rowType = input[0]->type()->asRow();
     auto keyIndices = {rowType.getChildIdx(key1), rowType.getChildIdx(key2)};
 
     std::vector<core::SortOrder> sortOrders = {
@@ -210,14 +210,14 @@ class OrderByTest : public OperatorTestBase {
       auto inputRows = toPlanStats(task->taskStats()).at(orderById).inputRows;
       const uint64_t peakSpillMemoryUsage =
           memory::spillMemoryPool()->stats().peakBytes;
-      ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+      ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
       if (inputRows > 0) {
         EXPECT_LT(0, spilledStats(*task).spilledInputBytes);
         EXPECT_LT(0, spilledStats(*task).spilledBytes);
         EXPECT_EQ(1, spilledStats(*task).spilledPartitions);
         EXPECT_LT(0, spilledStats(*task).spilledFiles);
         EXPECT_EQ(inputRows, spilledStats(*task).spilledRows);
-        ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+        ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
         if (memory::spillMemoryPool()->trackUsage()) {
           ASSERT_GT(memory::spillMemoryPool()->stats().peakBytes, 0);
           ASSERT_GE(

@@ -30,7 +30,6 @@
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/time/Timer.h"
 
-DECLARE_int32(velox_memory_pool_mb);
 DECLARE_bool(velox_time_allocations);
 
 namespace facebook::velox::memory {
@@ -400,6 +399,11 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// functions. The error message is scoped to the most recent call on the
   /// thread. The message is cleared after return.
   std::string getAndClearFailureMessage();
+
+  void getTracingHooks(
+      std::function<void()>& init,
+      std::function<std::string()>& report,
+      std::function<int64_t()> ioVolume = nullptr);
 
  protected:
   explicit MemoryAllocator() = default;

@@ -32,8 +32,21 @@ std::vector<Split> makeSplits(
     const std::string& path,
     const std::shared_ptr<memory::MemoryPool>& writerPool);
 
+/// Create splits with schema information from a directory.
+/// For example under directory /table1:
+/// /table1/p0=0/p1=0/00000_file1
+/// /table1/p0=0/p1=1/00000_file1
+/// It would return splits:
+/// split1 with partition keys (p0, 0), (p1, 0)
+/// split2 with partition keys (p0, 0), (p1, 1)
+std::vector<Split> makeSplits(const std::string& directory);
+
 /// Create a split from an exsiting file.
-Split makeSplit(const std::string& filePath);
+Split makeSplit(
+    const std::string& filePath,
+    const std::unordered_map<std::string, std::optional<std::string>>&
+        partitionKeys = {},
+    std::optional<int32_t> tableBucketNumber = std::nullopt);
 
 /// Create a connector split from an exsiting file.
 std::shared_ptr<connector::ConnectorSplit> makeConnectorSplit(
@@ -55,4 +68,7 @@ RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b);
 ///
 /// TODO Investigate mismatches reported when comparing Varbinary.
 bool containsUnsupportedTypes(const TypePtr& type);
+
+// Invoked to set up memory system with arbitration.
+void setupMemory(int64_t allocatorCapacity, int64_t arbitratorCapacity);
 } // namespace facebook::velox::exec::test

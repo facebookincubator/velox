@@ -258,33 +258,6 @@ Status toDecimalValue(
 }
 } // namespace detail
 
-template <bool adjustForTimeZone>
-void CastExpr::castTimestampToDate(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    VectorPtr& result,
-    const date::time_zone* timeZone) {
-  auto* resultFlatVector = result->as<FlatVector<int32_t>>();
-  static const int32_t kSecsPerDay{86'400};
-  auto inputVector = input.as<SimpleVector<Timestamp>>();
-  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    auto input = inputVector->valueAt(row);
-    if constexpr (adjustForTimeZone) {
-      input.toTimezone(*timeZone);
-    }
-    auto seconds = input.getSeconds();
-    if (seconds >= 0 || seconds % kSecsPerDay == 0) {
-      resultFlatVector->set(row, seconds / kSecsPerDay);
-    } else {
-      // For division with negatives, minus 1 to compensate the discarded
-      // fractional part. e.g. -1/86'400 yields 0, yet it should be
-      // considered as -1 day.
-      resultFlatVector->set(row, seconds / kSecsPerDay - 1);
-    }
-  });
-}
-
 template <typename Func>
 void CastExpr::applyToSelectedNoThrowLocal(
     EvalCtx& context,
@@ -330,7 +303,7 @@ void CastExpr::applyCastKernel(
     const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
     FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
   bool wrapException = true;
-  auto setError = [&](const std::string& details) {
+  auto setError = [&](const std::string& details) INLINE_LAMBDA {
     if (setNullInResultAtError()) {
       result->setNull(row, true);
     } else {
@@ -344,6 +317,18 @@ void CastExpr::applyCastKernel(
       }
     }
   };
+
+  // If castResult has an error, set the error in context. Otherwise, set the
+  // value in castResult directly to result. This lambda should be called only
+  // when ToKind is primitive and is not VARCHAR or VARBINARY.
+  auto setResultOrError = [&](const auto& castResult, vector_size_t row)
+                              INLINE_LAMBDA {
+                                if (castResult.hasError()) {
+                                  setError(castResult.error().message());
+                                } else {
+                                  result->set(row, castResult.value());
+                                }
+                              };
 
   try {
     auto inputRowValue = input->valueAt(row);
@@ -362,11 +347,17 @@ void CastExpr::applyCastKernel(
       }
       if constexpr (ToKind == TypeKind::TIMESTAMP) {
         const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
-        if (castResult.hasError()) {
-          setError(castResult.error().message());
-        } else {
-          result->set(row, castResult.value());
-        }
+        setResultOrError(castResult, row);
+        return;
+      }
+      if constexpr (ToKind == TypeKind::REAL) {
+        const auto castResult = hooks_->castStringToReal(inputRowValue);
+        setResultOrError(castResult, row);
+        return;
+      }
+      if constexpr (ToKind == TypeKind::DOUBLE) {
+        const auto castResult = hooks_->castStringToDouble(inputRowValue);
+        setResultOrError(castResult, row);
         return;
       }
     }
@@ -724,30 +715,28 @@ void CastExpr::applyCastPrimitives(
   auto* resultFlatVector = result->as<FlatVector<To>>();
   auto* inputSimpleVector = input.as<SimpleVector<From>>();
 
-  if (!hooks_->truncate()) {
-    if (!hooks_->legacy()) {
-      applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-        applyCastKernel<ToKind, FromKind, util::DefaultCastPolicy>(
-            row, context, inputSimpleVector, resultFlatVector);
-      });
-    } else {
+  switch (hooks_->getPolicy()) {
+    case LegacyCastPolicy:
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
         applyCastKernel<ToKind, FromKind, util::LegacyCastPolicy>(
             row, context, inputSimpleVector, resultFlatVector);
       });
-    }
-  } else {
-    if (!hooks_->legacy()) {
+      break;
+    case PrestoCastPolicy:
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-        applyCastKernel<ToKind, FromKind, util::TruncateCastPolicy>(
+        applyCastKernel<ToKind, FromKind, util::PrestoCastPolicy>(
             row, context, inputSimpleVector, resultFlatVector);
       });
-    } else {
+      break;
+    case SparkCastPolicy:
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-        applyCastKernel<ToKind, FromKind, util::TruncateLegacyCastPolicy>(
+        applyCastKernel<ToKind, FromKind, util::SparkCastPolicy>(
             row, context, inputSimpleVector, resultFlatVector);
       });
-    }
+      break;
+
+    default:
+      VELOX_NYI("Policy {} not yet implemented.", hooks_->getPolicy());
   }
 }
 
