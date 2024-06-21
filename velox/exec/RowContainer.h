@@ -1568,6 +1568,10 @@ class RowComparator {
       const std::vector<core::SortOrder>& sortingOrders,
       RowContainer* rowContainer);
 
+  RowComparator(
+      RowContainer* rowContainer,
+      std::vector<std::pair<column_index_t, core::SortOrder>> keyInfo);
+
   /// Returns true if lhs < rhs, false otherwise.
   bool operator()(const char* lhs, const char* rhs);
 
@@ -1578,8 +1582,9 @@ class RowComparator {
       const char* rhs);
 
  private:
-  std::vector<std::pair<column_index_t, core::SortOrder>> keyInfo_;
   RowContainer* rowContainer_;
+
+  std::vector<std::pair<column_index_t, core::SortOrder>> keyInfo_;
 };
 
 } // namespace facebook::velox::exec

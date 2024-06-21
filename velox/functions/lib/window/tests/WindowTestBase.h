@@ -19,7 +19,7 @@
 
 namespace facebook::velox::window::test {
 
-enum class WindowStyle { kSort, kStreaming, kRandom };
+enum class WindowStyle { kSort, kStreaming, kHash, kRandom };
 
 /// Exhaustive set of window function over clauses using a combination of four
 /// columns. Columns c0 and c1 have input data meant to test partitioning
@@ -142,7 +142,14 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& overClause,
       const std::string& frameClause);
 
-  /// Tests SQL queries for the window function and
+  // This function is used to test Window operator using HashTable based build.
+  QueryInfo buildHashWindowQuery(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& function,
+      const std::string& overClause,
+      const std::string& frameClause);
+
+  /// This function tests SQL queries for the window function and
   /// the specified overClauses and frameClauses with the input RowVectors.
   /// Note : 'function' should be a full window function invocation string
   /// including input parameters and open/close braces. e.g. rank(), ntile(5).

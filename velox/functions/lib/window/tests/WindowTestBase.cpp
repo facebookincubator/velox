@@ -49,6 +49,27 @@ WindowTestBase::QueryInfo WindowTestBase::buildWindowQuery(
   return {op, functionSql, querySql};
 }
 
+WindowTestBase::QueryInfo WindowTestBase::buildHashWindowQuery(
+    const std::vector<RowVectorPtr>& input,
+    const std::string& function,
+    const std::string& overClause,
+    const std::string& frameClause) {
+  std::string functionSql =
+      fmt::format("{} over ({} {})", function, overClause, frameClause);
+  auto op = PlanBuilder()
+                .setParseOptions(options_)
+                .values(input)
+                .hashWindow({functionSql})
+                .planNode();
+
+  auto rowType = asRowType(input[0]->type());
+  std::string columnsString = folly::join(", ", rowType->names());
+  std::string querySql =
+      fmt::format("SELECT {}, {} FROM tmp", columnsString, functionSql);
+
+  return {op, functionSql, querySql};
+}
+
 WindowTestBase::QueryInfo WindowTestBase::buildStreamingWindowQuery(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
@@ -156,7 +177,7 @@ void WindowTestBase::testWindowFunction(
   // Generate a random boolean to determine the window style
   std::random_device rd;
   std::mt19937 gen(rd());
-  std::uniform_int_distribution<int> dis(0, 1);
+  std::uniform_int_distribution<int> dis(0, 2);
 
   int n = 0;
   for (const auto& overClause : overClauses) {
@@ -170,6 +191,9 @@ void WindowTestBase::testWindowFunction(
       WindowTestBase::QueryInfo queryInfo;
       if (resolvedWindowStyle == static_cast<int>(WindowStyle::kSort)) {
         queryInfo = buildWindowQuery(input, function, overClause, frameClause);
+      } else if (resolvedWindowStyle == static_cast<int>(WindowStyle::kHash)) {
+        queryInfo =
+            buildHashWindowQuery(input, function, overClause, frameClause);
       } else {
         queryInfo =
             buildStreamingWindowQuery(input, function, overClause, frameClause);

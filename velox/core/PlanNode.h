@@ -2121,6 +2121,20 @@ class WindowNode : public PlanNode {
       bool inputsSorted,
       PlanNodePtr source);
 
+  /// @param windowColumnNames specifies the output column
+  /// names for each window function column. So
+  /// windowColumnNames.length() = windowFunctions.length().
+  WindowNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      std::vector<std::string> windowColumnNames,
+      std::vector<Function> windowFunctions,
+      bool inputsSorted,
+      bool useHashBuild,
+      PlanNodePtr source);
+
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
@@ -2163,6 +2177,10 @@ class WindowNode : public PlanNode {
     return inputsSorted_;
   }
 
+  bool useHashBuild() const {
+    return useHashBuild_;
+  }
+
   std::string_view name() const override {
     return "Window";
   }
@@ -2182,6 +2200,7 @@ class WindowNode : public PlanNode {
   const std::vector<Function> windowFunctions_;
 
   const bool inputsSorted_;
+  const bool useHashBuild_;
 
   const std::vector<PlanNodePtr> sources_;
 
