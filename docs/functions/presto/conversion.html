@@ -410,7 +410,8 @@ numbers are converted to <cite>true</cite> while zero is converted to <cite>fals
 </section>
 <section id="id2">
 <h3>From VARCHAR<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
-<p>There is a set of strings allowed to be casted to boolean. Casting from other strings to boolean throws.</p>
+<p>The strings <cite>t, f, 1, 0, true, false</cite> and their upper case equivalents are allowed to be casted to boolean.
+Casting from other strings to boolean throws.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;0&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
@@ -418,6 +419,8 @@ numbers are converted to <cite>true</cite> while zero is converted to <cite>fals
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;true&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;f&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;false&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;F&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;T&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>Invalid examples</p>
@@ -428,6 +431,7 @@ numbers are converted to <cite>true</cite> while zero is converted to <cite>fals
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tr&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tru&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;No&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 </pre></div>
 </div>
 </section>
