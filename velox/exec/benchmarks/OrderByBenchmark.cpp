@@ -26,103 +26,64 @@ using namespace facebook::velox::exec;
 
 namespace {
 
-class TestCase {
- public:
-  TestCase(
-      memory::MemoryPool* pool,
+struct TestCase {
+  explicit TestCase(
       const std::string& testName,
       size_t numRows,
       int numVectors,
       const RowTypePtr& rowType,
       int numKeys)
-      : testName_(testName) {
-    std::vector<RowVectorPtr> vectors;
-    for (auto i = 0; i < numVectors; ++i) {
-      vectors.emplace_back(fuzzRows(rowType, numRows, numKeys, pool));
-    }
-    plan_ = makeOrderByPlan(vectors, makeOrderByKeys(numKeys));
-  };
+      : testName{testName},
+        numRows{numRows},
+        numVectors{numVectors},
+        rowType{rowType},
+        numKeys{numKeys} {}
 
-  const std::string& testName() const {
-    return testName_;
-  }
-  core::PlanNodePtr plan_;
-
- private:
-  RowVectorPtr fuzzRows(
-      const RowTypePtr& rowType,
-      size_t numRows,
-      int numKeys,
-      memory::MemoryPool* pool) {
-    VectorFuzzer fuzzer({.vectorSize = numRows}, pool);
-    VectorFuzzer fuzzerWithNulls(
-        {.vectorSize = numRows, .nullRatio = 0.7}, pool);
-    std::vector<VectorPtr> children;
-
-    // Fuzz keys: for front keys (column 0 to numKeys -2) use high
-    // nullRatio to enforce all columns to be compared.
-    {
-      for (auto i = 0; i < numKeys - 1; ++i) {
-        children.push_back(fuzzerWithNulls.fuzz(rowType->childAt(i)));
-      }
-      children.push_back(fuzzer.fuzz(rowType->childAt(numKeys - 1)));
-    }
-    // Fuzz payload
-    {
-      for (auto i = numKeys; i < rowType->size(); ++i) {
-        children.push_back(fuzzer.fuzz(rowType->childAt(i)));
-      }
-    }
-    return std::make_shared<RowVector>(
-        pool, rowType, nullptr, numRows, std::move(children));
-  }
-
-  core::PlanNodePtr makeOrderByPlan(
-      const std::vector<RowVectorPtr>& vectors,
-      const std::vector<std::string>& keys) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId orderNodeId;
-    return test::PlanBuilder(planNodeIdGenerator)
-        .values(vectors)
-        .orderBy(keys, false)
-        .capturePlanNodeId(orderNodeId)
-        .planNode();
-  }
-
-  std::vector<std::string> makeOrderByKeys(int numKeys) {
-    std::vector<std::string> keys;
-    keys.reserve(numKeys);
-    for (auto i = 0; i < numKeys; i++) {
-      keys.emplace_back(fmt::format("c{} ASC NULLS LAST", i));
-    }
-    return keys;
-  }
-
-  const std::string testName_;
+  std::string testName;
+  size_t numRows;
+  int numVectors;
+  RowTypePtr rowType;
+  int numKeys;
 };
 
 class OrderByBenchmark {
  public:
-  void addBenchmark(
-      const std::string& testName,
-      size_t numRows,
-      const RowTypePtr& rowType,
-      int numVectors,
-      int numKeys) {
-    auto testCase = std::make_unique<TestCase>(
-        pool_.get(), testName, numRows, numVectors, rowType, numKeys);
-    {
-      folly::addBenchmark(
-          __FILE__,
-          "OrderBy_" + testCase->testName(),
-          [plan = &testCase->plan_, this]() {
-            run(*plan);
-            return 1;
-          });
-    }
-    testCases_.push_back(std::move(testCase));
+  void smallBigint() {
+    const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
+    bigint(true, 200, batchSizes);
   }
 
+  void smallBigintWithPayload() {
+    const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
+    bigint(false, 200, batchSizes);
+  }
+
+  void largeBigint() {
+    const std::vector<vector_size_t> batchSizes = {
+        1'000, 10'000, 100'000, 1'000'000};
+    bigint(true, 1, batchSizes);
+  }
+
+  void largeBigintWithPayloads() {
+    const std::vector<vector_size_t> batchSizes = {
+        1'000, 10'000, 100'000, 1'000'000};
+    bigint(false, 1, batchSizes);
+  }
+
+  void largeVarchar() {
+    const std::vector<vector_size_t> batchSizes = {
+        1'000, 10'000, 100'000, 1'000'000};
+    std::vector<RowTypePtr> rowTypes = {
+        rowWithName({VARCHAR()}),
+        rowWithName({VARCHAR(), VARCHAR()}),
+        rowWithName({VARCHAR(), VARCHAR(), VARCHAR()}),
+        rowWithName({VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}),
+    };
+    std::vector<int> numKeys = {1, 2, 3, 4};
+    benchmark("no-payloads", "varchar", batchSizes, rowTypes, numKeys, 1);
+  }
+
+ private:
   void benchmark(
       const std::string& prefix,
       const std::string& keyName,
@@ -137,6 +98,27 @@ class OrderByBenchmark {
         addBenchmark(name, batchSize, rowTypes[i], numVectors, numKeys[i]);
       }
     }
+  }
+
+  void addBenchmark(
+      const std::string& testName,
+      size_t numRows,
+      const RowTypePtr& rowType,
+      int numVectors,
+      int numKeys) {
+    auto testCase = std::make_unique<TestCase>(
+        testName, numRows, numVectors, rowType, numKeys);
+    {
+      folly::addBenchmark(
+          __FILE__,
+          "OrderBy_" + testCase->testName,
+          [test = testCase.get(), this]() {
+            auto plan = makeOrderByPlan(*test);
+            run(plan);
+            return 1;
+          });
+    }
+    testCases_.push_back(std::move(testCase));
   }
 
   std::vector<RowTypePtr> bigintRowTypes(bool noPayload) {
@@ -173,42 +155,65 @@ class OrderByBenchmark {
         numVectors);
   }
 
-  void smallBigint() {
-    const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
-    bigint(true, 200, batchSizes);
+  static RowVectorPtr fuzzRows(
+      const RowTypePtr& rowType,
+      size_t numRows,
+      int numKeys,
+      memory::MemoryPool* pool) {
+    VectorFuzzer fuzzer({.vectorSize = numRows}, pool);
+    VectorFuzzer fuzzerWithNulls(
+        {.vectorSize = numRows, .nullRatio = 0.7}, pool);
+    std::vector<VectorPtr> children;
+
+    // Fuzz keys: for front keys (column 0 to numKeys -2) use high
+    // nullRatio to enforce all columns to be compared.
+    {
+      for (auto i = 0; i < numKeys - 1; ++i) {
+        children.push_back(fuzzerWithNulls.fuzz(rowType->childAt(i)));
+      }
+      children.push_back(fuzzer.fuzz(rowType->childAt(numKeys - 1)));
+    }
+    // Fuzz payload
+    {
+      for (auto i = numKeys; i < rowType->size(); ++i) {
+        children.push_back(fuzzer.fuzz(rowType->childAt(i)));
+      }
+    }
+    return std::make_shared<RowVector>(
+        pool, rowType, nullptr, numRows, std::move(children));
   }
 
-  void smallBigintWithPayload() {
-    const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
-    bigint(false, 200, batchSizes);
+  core::PlanNodePtr makeOrderByPlan(TestCase& test) {
+    folly::BenchmarkSuspender suspender;
+    std::vector<RowVectorPtr> vectors;
+    for (auto i = 0; i < test.numVectors; ++i) {
+      vectors.emplace_back(
+          fuzzRows(test.rowType, test.numRows, test.numKeys, pool_.get()));
+    }
+    return makeOrderByPlan(vectors, makeOrderByKeys(test.numKeys));
   }
 
-  void largeBigint() {
-    const std::vector<vector_size_t> batchSizes = {
-        1'000, 10'000, 100'000, 1'000'000};
-    bigint(true, 10, batchSizes);
+  core::PlanNodePtr makeOrderByPlan(
+      const std::vector<RowVectorPtr>& vectors,
+      const std::vector<std::string>& keys) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId orderNodeId;
+    return test::PlanBuilder(planNodeIdGenerator)
+        .values(vectors)
+        .orderBy(keys, false)
+        .capturePlanNodeId(orderNodeId)
+        .planNode();
   }
 
-  void largeBigintWithPayloads() {
-    const std::vector<vector_size_t> batchSizes = {
-        1'000, 10'000, 100'000, 1'000'000};
-    bigint(false, 10, batchSizes);
+  std::vector<std::string> makeOrderByKeys(int numKeys) {
+    std::vector<std::string> keys;
+    keys.reserve(numKeys);
+    for (auto i = 0; i < numKeys; i++) {
+      keys.emplace_back(fmt::format("c{} ASC NULLS LAST", i));
+    }
+    return keys;
   }
 
-  void largeVarchar() {
-    const std::vector<vector_size_t> batchSizes = {
-        1'000, 10'000, 100'000, 1'000'000};
-    std::vector<RowTypePtr> rowTypes = {
-        rowWithName({VARCHAR()}),
-        rowWithName({VARCHAR(), VARCHAR()}),
-        rowWithName({VARCHAR(), VARCHAR(), VARCHAR()}),
-        rowWithName({VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}),
-    };
-    std::vector<int> numKeys = {1, 2, 3, 4};
-    benchmark("no-payloads", "varchar", batchSizes, rowTypes, numKeys, 10);
-  }
-
- private:
   int64_t run(core::PlanNodePtr plan) {
     auto start = getCurrentTimeMicro();
     auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool_.get());
