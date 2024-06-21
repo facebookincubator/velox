@@ -21,55 +21,6 @@ if(VELOX_ENABLE_ARROW)
     set(THRIFT_SOURCE "BUNDLED")
   endif()
 
-  #TODO: use findArrow.cmake.
-  # if(DEFINED ENV{ARROW_EP_PATH})
-  #   message(
-  #     STATUS
-  #       "Arrow path is set: ${ARROW_EP_PATH}, trying to use existing arrow libraries."
-  #   )
-  #   set(ARROW_LIB_PATH $ENV{ARROW_EP_PATH}/install/lib/)
-  #   find_library(ARROW_LIB libarrow.a PATHS ${ARROW_LIB_PATH})
-  #   find_library(PARQUET_LIB libparquet.a PATHS ${ARROW_LIB_PATH})
-  #   find_library(ARROW_TESTING_LIB libarrow_testing.a PATHS ${ARROW_LIB_PATH})
-  #   if("${ARROW_LIB}" STREQUAL "ARROW_LIB-NOTFOUND"
-  #      OR "${PARQUET_LIB}" STREQUAL "PARQUET_LIB-NOTFOUND"
-  #      OR "${ARROW_TESTING_LIB}" STREQUAL "ARROW_TESTING_LIB-NOTFOUND")
-  #     message(FATAL_ERROR "Arrow libraries not found in ${ARROW_LIB_PATH}")
-  #   endif()
-
-  #   add_library(thrift STATIC IMPORTED GLOBAL)
-  #   if(NOT Thrift_FOUND)
-  #     set(THRIFT_ROOT $ENV{ARROW_EP_PATH}/src/arrow_ep-build/thrift_ep-install)
-  #     find_library(THRIFT_LIB thrift PATHS ${THRIFT_ROOT}/lib)
-  #     if("${THRIFT_LIB}" STREQUAL "THRIFT_LIB-NOTFOUND")
-  #       message(FATAL_ERROR "Thrift library not found in ${THRIFT_ROOT}/lib")
-  #     endif()
-  #     set(THRIFT_INCLUDE_DIR ${THRIFT_ROOT}/include)
-  #   endif()
-  #   set_property(TARGET thrift PROPERTY INTERFACE_INCLUDE_DIRECTORIES
-  #                                       ${THRIFT_INCLUDE_DIR})
-  #   set_property(TARGET thrift PROPERTY IMPORTED_LOCATION ${THRIFT_LIB})
-
-  #   add_library(arrow STATIC IMPORTED GLOBAL)
-  #   add_library(parquet STATIC IMPORTED GLOBAL)
-  #   add_library(arrow_testing STATIC IMPORTED GLOBAL)
-
-  #   set_target_properties(
-  #     arrow arrow_testing parquet
-  #     PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
-  #                $ENV{ARROW_EP_PATH}/install/include)
-  #   set_target_properties(arrow PROPERTIES IMPORTED_LOCATION ${ARROW_LIB})
-  #   set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
-  #   set_target_properties(parquet PROPERTIES IMPORTED_LOCATION ${PARQUET_LIB})
-  #   set_target_properties(arrow_testing PROPERTIES IMPORTED_LOCATION
-  #                                                  ${ARROW_TESTING_LIB})
-
-  #   message(
-  #     STATUS
-  #       "Using existing arrow libraries: ${ARROW_LIB}, ${PARQUET_LIB}, ${ARROW_TESTING_LIB}"
-  #   )
-  #   return()
-  # endif()
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
   set(ARROW_CMAKE_ARGS
       -DARROW_PARQUET=OFF
@@ -110,38 +61,6 @@ if(VELOX_ENABLE_ARROW)
   )
 
   resolve_dependency_url(ARROW)
-
-  # set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
-
-  # FetchContent_Declare(
-  # arrow
-  # URL ${VELOX_ARROW_SOURCE_URL}
-  # URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
-  # SOURCE_SUBDIR  cpp
-  # )
-
-  # set(ARROW_PARQUET OFF)
-  # set(ARROW_WITH_THRIFT ON)
-  # set(ARROW_WITH_LZ4 ON)
-  # set(ARROW_WITH_SNAPPY ON)
-  # set(ARROW_WITH_ZLIB ON)
-  # set(ARROW_WITH_ZSTD ON)
-  # set(ARROW_JEMALLOC OFF)
-  # set(ARROW_SIMD_LEVEL NONE)
-  # set(ARROW_RUNTIME_SIMD_LEVEL NONE)
-  # set(ARROW_WITH_UTF8PROC OFF)
-  # set(ARROW_TESTING ON)
-  # set(CMAKE_INSTALL_PREFIX ${ARROW_PREFIX}/install)
-  # set(CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE})
-  # set(ARROW_BUILD_STATIC ON)
-  # set(Thrift_SOURCE ${THRIFT_SOURCE})
-
-  # FetchContent_MakeAvailable(arrow)
-  #FetchContent_GetProperties(arrow)
-  #if(NOT arrow_POPULATED)
-  #  FetchContent_Populate(arrow)
-  #  add_subdirectory(${arrow_SOURCE_DIR}/cpp)
-  #endif()
 
   ExternalProject_Add(
     arrow_ep
