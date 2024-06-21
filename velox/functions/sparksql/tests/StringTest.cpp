@@ -450,21 +450,24 @@ TEST_F(StringTest, overlayVarbinary) {
 }
 
 TEST_F(StringTest, repeat) {
-  const auto stringRepeat = [&](const std::optional<std::string>& str,
-                                const std::optional<int32_t>& times) {
-    return evaluateOnce<std::string>("repeat(c0, c1)", str, times);
-  };
+  for (const auto& func : {"repeat", "string_repeat"}) {
+    const auto stringRepeat = [&](const std::optional<std::string>& str,
+                                  const std::optional<int32_t>& times) {
+      return evaluateOnce<std::string>(
+          fmt::format("{}(c0, c1)", func), str, times);
+    };
 
-  EXPECT_EQ(stringRepeat("hh", 2), "hhhh");
-  EXPECT_EQ(stringRepeat("abab", 0), "");
-  EXPECT_EQ(stringRepeat("abab", -1), "");
-  EXPECT_EQ(stringRepeat("", 2), "");
-  EXPECT_EQ(stringRepeat("123\u6570", 2), "123\u6570123\u6570");
-  VELOX_ASSERT_USER_THROW(
-      stringRepeat("hh", 10001), "Repeat times is too large.");
-  VELOX_ASSERT_USER_THROW(
-      stringRepeat(std::string(214749, 'l'), 10000),
-      "integer overflow: 214749 * 10000");
+    EXPECT_EQ(stringRepeat("hh", 2), "hhhh");
+    EXPECT_EQ(stringRepeat("abab", 0), "");
+    EXPECT_EQ(stringRepeat("abab", -1), "");
+    EXPECT_EQ(stringRepeat("", 2), "");
+    EXPECT_EQ(stringRepeat("123\u6570", 2), "123\u6570123\u6570");
+    VELOX_ASSERT_USER_THROW(
+        stringRepeat("hh", 10001), "Repeat times is too large.");
+    VELOX_ASSERT_USER_THROW(
+        stringRepeat(std::string(214749, 'l'), 10000),
+        "integer overflow: 214749 * 10000");
+  }
 }
 
 TEST_F(StringTest, replace) {
