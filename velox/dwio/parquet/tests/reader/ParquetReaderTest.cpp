@@ -1043,7 +1043,11 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
     readerOptions.setPrefetchRowGroups(numPrefetch);
 
     auto reader = createReader(sample, readerOptions);
-    EXPECT_EQ(reader->fileMetaData().numRowGroups(), numRowGroups);
+    EXPECT_EQ(
+        dynamic_cast<ParquetReader*>(reader.get())
+            ->fileMetaData()
+            .numRowGroups(),
+        numRowGroups);
 
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.setScanSpec(makeScanSpec(rowType));

@@ -67,7 +67,7 @@ class ReaderFactory {
 /**
  * Register a reader factory. Only a single factory can be registered
  * for each file format. An attempt to register multiple factories for
- * a single file format would cause a filure.
+ * a single file format would cause a failure.
  * @return true
  */
 bool registerReaderFactory(std::shared_ptr<ReaderFactory> factory);
@@ -75,9 +75,16 @@ bool registerReaderFactory(std::shared_ptr<ReaderFactory> factory);
 /**
  * Unregister a reader factory for a specified file format.
  * @return true for unregistered factory and false for a
- * missing factory for the specfified format.
+ * missing factory for the specified format.
  */
 bool unregisterReaderFactory(FileFormat format);
+
+/**
+ * Checks if a reader factory for a specified file format is registered.
+ * @return true for registered factory and false for a
+ * missing factory for the specified format.
+ */
+bool hasReaderFactory(FileFormat format);
 
 /**
  * Get reader factory object for a specified file format. Results in
