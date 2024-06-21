@@ -1548,6 +1548,7 @@ TEST_F(SimpleFunctionTest, noThrow) {
       (evaluateOnce<int64_t, int64_t>("try(no_throw(c0))", 6)),
       "Input must not be 6");
 
+  // Error reported via Status by callNullable.
   VELOX_ASSERT_THROW(
       (evaluateOnce<int64_t, int64_t>("no_throw(c0)", std::nullopt)),
       "Input cannot be NULL");

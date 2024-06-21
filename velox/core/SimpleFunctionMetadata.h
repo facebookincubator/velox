@@ -709,13 +709,13 @@ class UDFHolder {
 
   static_assert(
       !(udf_has_call_return_bool && udf_has_call_return_void),
-      "Provided call() methods need to return either void OR bool OR status.");
+      "Provided call() methods need to return either void OR bool OR Status.");
   static_assert(
       !(udf_has_call_return_bool && udf_has_call_return_status),
-      "Provided call() methods need to return either void OR bool OR status.");
+      "Provided call() methods need to return either void OR bool OR Status.");
   static_assert(
       !(udf_has_call_return_void && udf_has_call_return_status),
-      "Provided call() methods need to return either void OR bool OR status.");
+      "Provided call() methods need to return either void OR bool OR Status.");
 
   // callNullable():
   static constexpr bool udf_has_callNullable_return_bool = util::has_method<
@@ -741,13 +741,13 @@ class UDFHolder {
       udf_has_callNullable_return_status;
   static_assert(
       !(udf_has_callNullable_return_bool && udf_has_callNullable_return_void),
-      "Provided callNullable() methods need to return either void OR bool OR status.");
+      "Provided callNullable() methods need to return either void OR bool OR Status.");
   static_assert(
       !(udf_has_callNullable_return_bool && udf_has_callNullable_return_status),
-      "Provided callNullable() methods need to return either void OR bool OR status.");
+      "Provided callNullable() methods need to return either void OR bool OR Status.");
   static_assert(
       !(udf_has_callNullable_return_void && udf_has_callNullable_return_status),
-      "Provided callNullable() methods need to return either void OR bool OR status.");
+      "Provided callNullable() methods need to return either void OR bool OR Status.");
 
   // callNullFree():
   static constexpr bool udf_has_callNullFree_return_bool = util::has_method<
