@@ -1508,6 +1508,13 @@ struct NoThrowFunction {
     out = in / 6;
     return Status::OK();
   }
+
+  Status callNullable(out_type<int64_t>& out, const arg_type<int64_t>* in) {
+    if (!in) {
+      return Status::UserError("Input cannot be NULL");
+    }
+    return Status::OK();
+  }
 };
 
 TEST_F(SimpleFunctionTest, noThrow) {
@@ -1540,6 +1547,12 @@ TEST_F(SimpleFunctionTest, noThrow) {
   VELOX_ASSERT_THROW(
       (evaluateOnce<int64_t, int64_t>("try(no_throw(c0))", 6)),
       "Input must not be 6");
+
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<int64_t, int64_t>("no_throw(c0)", std::nullopt)),
+      "Input cannot be NULL");
+  result = evaluateOnce<int64_t, int64_t>("try(no_throw(c0))", std::nullopt);
+  EXPECT_EQ(std::nullopt, result);
 }
 
 } // namespace

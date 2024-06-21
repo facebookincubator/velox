@@ -669,8 +669,8 @@ class UDFHolder {
   // Check which flavor of the call() method is provided by the UDF object. UDFs
   // are required to provide at least one of the following methods:
   //
-  // - bool|void call(...)
-  // - bool|void callNullable(...)
+  // - bool|void|Status call(...)
+  // - bool|void|Status callNullable(...)
   // - bool|void callNullFree(...)
   //
   // Each of these methods can return either bool or void. Returning void means
@@ -729,11 +729,24 @@ class UDFHolder {
       void,
       exec_return_type,
       const exec_arg_type<TArgs>*...>::value;
+  static constexpr bool udf_has_callNullable_return_status = util::has_method<
+      Fun,
+      callNullable_method_resolver,
+      Status,
+      exec_return_type,
+      const exec_arg_type<TArgs>*...>::value;
   static constexpr bool udf_has_callNullable =
-      udf_has_callNullable_return_bool | udf_has_callNullable_return_void;
+      udf_has_callNullable_return_bool | udf_has_callNullable_return_void |
+      udf_has_callNullable_return_status;
   static_assert(
       !(udf_has_callNullable_return_bool && udf_has_callNullable_return_void),
-      "Provided callNullable() methods need to return either void OR bool.");
+      "Provided callNullable() methods need to return either void OR bool OR status.");
+  static_assert(
+      !(udf_has_callNullable_return_bool && udf_has_callNullable_return_status),
+      "Provided callNullable() methods need to return either void OR bool OR status.");
+  static_assert(
+      !(udf_has_callNullable_return_void && udf_has_callNullable_return_status),
+      "Provided callNullable() methods need to return either void OR bool OR status.");
 
   // callNullFree():
   static constexpr bool udf_has_callNullFree_return_bool = util::has_method<
@@ -966,7 +979,11 @@ class UDFHolder {
       bool& notNull,
       const typename Exec::template resolver<TArgs>::in_type*... args) {
     static_assert(udf_has_callNullable);
-    if constexpr (udf_has_callNullable_return_bool) {
+
+    if constexpr (udf_has_callNullable_return_status) {
+      notNull = true;
+      return instance_.callNullable(out, args...);
+    } else if constexpr (udf_has_callNullable_return_bool) {
       notNull = instance_.callNullable(out, args...);
       return Status::OK();
     } else {
