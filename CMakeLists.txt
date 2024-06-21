@@ -45,7 +45,8 @@ if(DEFINED ENV{CONDA_PREFIX})
   endif()
 endif()
 
-list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake")
+list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
+     "${PROJECT_SOURCE_DIR}/CMake/third-party")
 
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
