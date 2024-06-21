@@ -1636,7 +1636,7 @@ DEBUG_ONLY_TEST_F(
   std::thread failThread([&]() {
     try {
       VELOX_FAIL("Test terminate task");
-    } catch (const VeloxException& e) {
+    } catch (const VeloxException&) {
       task->setError(std::current_exception());
     }
   });
@@ -1953,7 +1953,7 @@ TEST_F(MultiFragmentTest, earlyTaskFailure) {
     if (internalFailure) {
       try {
         VELOX_FAIL("memoryAbortTest");
-      } catch (const VeloxRuntimeError& e) {
+      } catch (const VeloxRuntimeError&) {
         finalSortTask->pool()->abort(std::current_exception());
       }
     } else {

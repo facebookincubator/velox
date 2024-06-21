@@ -134,7 +134,7 @@ class SliceFunction : public exec::VectorFunction {
             static_cast<vector_size_t>(decodedStart->valueAt<T>(0)));
         context.applyToSelectedNoThrow(
             rows, [&](auto row) { fillResultVectorFunc(row, adjustedStart); });
-      } catch (const std::exception& /*e*/) {
+      } catch (const std::exception&) {
         context.setErrors(rows, std::current_exception());
       }
     } else {
