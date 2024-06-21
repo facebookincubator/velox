@@ -18,7 +18,6 @@ find_library(ARROW_TESTING_LIB libarrow_testing.a)
 if("${ARROW_LIB}" STREQUAL "ARROW_LIB-NOTFOUND"
    # OR "${PARQUET_LIB}" STREQUAL "PARQUET_LIB-NOTFOUND"
    OR "${ARROW_TESTING_LIB}" STREQUAL "ARROW_TESTING_LIB-NOTFOUND")
-  message(STATUS "Arrow libraries not found")
   set(Arrow_FOUND false)
   return()
 endif()

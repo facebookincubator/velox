@@ -571,4 +571,5 @@ if(VELOX_ENABLE_ARROW)
   set_source(Arrow)
   resolve_dependency(Arrow)
 endif()
+
 add_subdirectory(velox)

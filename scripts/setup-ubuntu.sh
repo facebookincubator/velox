@@ -38,6 +38,7 @@ export COMPILER_FLAGS
 FB_OS_VERSION=v2024.05.20.00
 FMT_VERSION=10.1.1
 BOOST_VERSION=boost-1.84.0
+ARROW_VERSION=15.0.0
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
@@ -129,6 +130,27 @@ function install_fbthrift {
   cmake_install -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
+function install_arrow {
+  wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
+  cd arrow/cpp
+  cmake_install \
+    -DARROW_PARQUET=OFF \
+    -DARROW_WITH_THRIFT=ON \
+    -DARROW_WITH_LZ4=ON \
+    -DARROW_WITH_SNAPPY=ON \
+    -DARROW_WITH_ZLIB=ON \
+    -DARROW_WITH_ZSTD=ON \
+    -DARROW_JEMALLOC=OFF \
+    -DARROW_SIMD_LEVEL=NONE \
+    -DARROW_RUNTIME_SIMD_LEVEL=NONE \
+    -DARROW_WITH_UTF8PROC=OFF \
+    -DARROW_TESTING=ON \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DARROW_BUILD_STATIC=ON \
+    -DThrift_SOURCE=BUNDLED
+}
+
 function install_conda {
   MINICONDA_PATH="${HOME:-/opt}/miniconda-for-velox"
   if [ -e ${MINICONDA_PATH} ]; then
@@ -179,6 +201,7 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_conda
   run_and_time install_duckdb
+  run_and_time install_arrow
 }
 
 function install_apt_deps {
