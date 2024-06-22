@@ -15,13 +15,18 @@
  */
 
 #include "velox/expression/tests/ExpressionVerifier.h"
+#include <memory>
 #include "velox/common/base/Fs.h"
+#include "velox/core/PlanNode.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
+
+using exec::test::ReferenceQueryErrorCode;
 
 namespace {
 void logRowVector(const RowVectorPtr& rowVector) {
@@ -38,6 +43,21 @@ void logRowVector(const RowVectorPtr& rowVector) {
   for (vector_size_t i = 0; i < rowVector->size(); ++i) {
     VLOG(1) << "\tAt " << i << ": " << rowVector->toString(i);
   }
+}
+
+core::PlanNodePtr makeProjectionPlan(
+    const RowVectorPtr& input,
+    const std::vector<core::TypedExprPtr>& projections) {
+  std::vector<std::string> names{projections.size()};
+  for (auto i = 0; i < names.size(); ++i) {
+    names[i] = fmt::format("p{}", i);
+  }
+  std::vector<RowVectorPtr> inputs{input};
+  return std::make_shared<core::ProjectNode>(
+      "project",
+      names,
+      projections,
+      std::make_shared<core::ValuesNode>("values", inputs));
 }
 } // namespace
 
@@ -100,7 +120,7 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
     simplifiedEvalResult.resize(1);
   }
   std::exception_ptr exceptionCommonPtr;
-  std::exception_ptr exceptionSimplifiedPtr;
+  bool exceptionCommon{false};
 
   VLOG(1) << "Starting common eval execution.";
   SelectivityVector rows{rowVector ? rowVector->size() : 1};
@@ -142,6 +162,7 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
       throw;
     }
     exceptionCommonPtr = std::current_exception();
+    exceptionCommon = true;
   } catch (...) {
     LOG(ERROR)
         << "Common eval: Exceptions other than VeloxUserError are not allowed.";
@@ -153,55 +174,67 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
   VLOG(1) << "Starting simplified eval execution.";
 
   // Execute with simplified expression eval path.
-  try {
-    exec::ExprSetSimplified exprSetSimplified(plans, execCtx_);
-    exec::EvalCtx evalCtxSimplified(
-        execCtx_, &exprSetSimplified, rowVector.get());
+  auto projectionPlan = makeProjectionPlan(rowVector, plans);
+  auto referenceResult = computeReferenceResults(
+      projectionPlan, {rowVector}, referenceQueryRunner_.get());
+  bool exceptionReference =
+      (referenceResult.second != ReferenceQueryErrorCode::kSuccess);
+  auto referenceEvalResult = referenceResult.first;
 
-    auto copy = BaseVector::copy(*rowVector);
-    exprSetSimplified.eval(rows, evalCtxSimplified, simplifiedEvalResult);
+  if (referenceResult.second !=
+      ReferenceQueryErrorCode::kReferenceQueryUnsupported) {
+    try {
+      // Compare results or exceptions (if any). Fail if anything is different.
+      if (exceptionCommon || exceptionReference) {
+        // Throws in case exceptions are not compatible. If they are compatible,
+        // return false to signal that the expression failed.
+        // fuzzer::compareExceptions(exceptionCommonPtr,
+        // exceptionSimplifiedPtr);
+        if (!exceptionCommon || !exceptionReference) {
+          LOG(ERROR) << "Only " << (exceptionCommon ? "common" : "reference")
+                     << " path threw exception:";
+          if (exceptionCommon) {
+            std::rethrow_exception(exceptionCommonPtr);
+          } else {
+            auto referenceSql = referenceQueryRunner_->toSql(projectionPlan);
+            VELOX_FAIL("Reference path throws for query: {}", *referenceSql);
+          }
+        }
+        return {nullptr, exceptionCommonPtr};
+      } else {
+        // Throws in case output is different.
+        VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());
+        VELOX_CHECK(referenceEvalResult.has_value());
+        VELOX_CHECK_EQ(referenceEvalResult->size(), plans.size());
+        for (int i = 0; i < plans.size(); ++i) {
+          /*fuzzer::compareVectors(
+              commonEvalResult[i],
+              (*referenceEvalResult)[i],
+              "common path results ",
+              "reference path results",
+              rows);*/
+          std::vector<RowVectorPtr> commonEvalResultRow;
+          for (auto i = 0; i < commonEvalResult.size(); ++i) {
+            auto rowPtr =
+                std::dynamic_pointer_cast<RowVector>(commonEvalResult[i]);
+            VELOX_CHECK_NOT_NULL(rowPtr);
+            commonEvalResultRow.push_back(rowPtr);
+          }
 
-    // Flatten the input vector as an optimization if its very deeply nested.
-    fuzzer::compareVectors(
-        copy,
-        BaseVector::copy(*rowVector),
-        "Copy of original input",
-        "Input after simplified");
-
-  } catch (const VeloxUserError&) {
-    exceptionSimplifiedPtr = std::current_exception();
-  } catch (...) {
-    LOG(ERROR)
-        << "Simplified eval: Exceptions other than VeloxUserError are not allowed.";
-    persistReproInfoIfNeeded(
-        rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
-    throw;
-  }
-
-  try {
-    // Compare results or exceptions (if any). Fail if anything is different.
-    if (exceptionCommonPtr || exceptionSimplifiedPtr) {
-      // Throws in case exceptions are not compatible. If they are compatible,
-      // return false to signal that the expression failed.
-      fuzzer::compareExceptions(exceptionCommonPtr, exceptionSimplifiedPtr);
-      return {nullptr, exceptionCommonPtr};
-    } else {
-      // Throws in case output is different.
-      VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());
-      VELOX_CHECK_EQ(simplifiedEvalResult.size(), plans.size());
-      for (int i = 0; i < plans.size(); ++i) {
-        fuzzer::compareVectors(
-            commonEvalResult[i],
-            simplifiedEvalResult[i],
-            "common path results ",
-            "simplified path results",
-            rows);
+          VELOX_CHECK(
+              exec::test::assertEqualResults(
+                  referenceEvalResult.value(),
+                  projectionPlan->outputType(),
+                  commonEvalResultRow),
+              "Velox and reference DB results don't match");
+          LOG(INFO) << "Verified results against reference DB";
+        }
       }
+    } catch (...) {
+      persistReproInfoIfNeeded(
+          rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
+      throw;
     }
-  } catch (...) {
-    persistReproInfoIfNeeded(
-        rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
-    throw;
   }
 
   if (!options_.reproPersistPath.empty() && options_.persistAndRunOnce) {

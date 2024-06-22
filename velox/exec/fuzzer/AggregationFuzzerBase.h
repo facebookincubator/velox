@@ -102,12 +102,6 @@ class AggregationFuzzerBase {
     size_t numFailed{0};
   };
 
-  enum ReferenceQueryErrorCode {
-    kSuccess,
-    kReferenceQueryFail,
-    kReferenceQueryUnsupported
-  };
-
  protected:
   struct Stats {
     // Names of functions that were tested.
@@ -136,8 +130,7 @@ class AggregationFuzzerBase {
 
     void print(size_t numIterations) const;
 
-    void updateReferenceQueryStats(
-        AggregationFuzzerBase::ReferenceQueryErrorCode errorCode);
+    void updateReferenceQueryStats(ReferenceQueryErrorCode errorCode);
   };
 
   int32_t randInt(int32_t min, int32_t max);
@@ -208,10 +201,10 @@ class AggregationFuzzerBase {
       const std::vector<std::string>& partitionKeys,
       const CallableSignature& signature);
 
-  std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
+  /*std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
   computeReferenceResults(
       const core::PlanNodePtr& plan,
-      const std::vector<RowVectorPtr>& input);
+      const std::vector<RowVectorPtr>& input);*/
 
   velox::fuzzer::ResultOrError execute(
       const core::PlanNodePtr& plan,
@@ -220,14 +213,14 @@ class AggregationFuzzerBase {
       bool abandonPartial = false,
       int32_t maxDrivers = 2);
 
-  // Will throw if referenceQueryRunner doesn't support
+  /*// Will throw if referenceQueryRunner doesn't support
   // returning results as a vector.
   std::pair<
       std::optional<std::vector<RowVectorPtr>>,
-      AggregationFuzzerBase::ReferenceQueryErrorCode>
+      ReferenceQueryErrorCode>
   computeReferenceResultsAsVector(
       const core::PlanNodePtr& plan,
-      const std::vector<RowVectorPtr>& input);
+      const std::vector<RowVectorPtr>& input);*/
 
   void compare(
       const velox::fuzzer::ResultOrError& actual,

@@ -117,6 +117,9 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
   std::optional<std::string> toSql(
       const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode);
 
+  std::optional<std::string> toSql(
+      const std::shared_ptr<const core::ValuesNode>& valuesNode);
+
   std::string startQuery(const std::string& sql);
 
   std::string fetchNext(const std::string& nextUri);

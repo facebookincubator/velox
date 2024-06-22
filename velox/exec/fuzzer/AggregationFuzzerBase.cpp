@@ -468,7 +468,7 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
   return resultOrError;
 }
 
-std::pair<
+/*std::pair<
     std::optional<MaterializedRowMultiset>,
     AggregationFuzzerBase::ReferenceQueryErrorCode>
 AggregationFuzzerBase::computeReferenceResults(
@@ -517,7 +517,7 @@ AggregationFuzzerBase::computeReferenceResultsAsVector(
 
   return std::make_pair(
       std::nullopt, ReferenceQueryErrorCode::kReferenceQueryUnsupported);
-}
+}*/
 
 void AggregationFuzzerBase::testPlan(
     const PlanWithSplits& planWithSplits,
@@ -609,7 +609,7 @@ void writeToFile(
 } // namespace
 
 void AggregationFuzzerBase::Stats::updateReferenceQueryStats(
-    AggregationFuzzerBase::ReferenceQueryErrorCode errorCode) {
+    ReferenceQueryErrorCode errorCode) {
   if (errorCode == ReferenceQueryErrorCode::kReferenceQueryFail) {
     ++numReferenceQueryFailed;
   } else if (errorCode == ReferenceQueryErrorCode::kReferenceQueryUnsupported) {

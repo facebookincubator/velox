@@ -18,6 +18,7 @@
 
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
@@ -51,7 +52,8 @@ class ExpressionFuzzerVerifier {
   ExpressionFuzzerVerifier(
       const FunctionSignatureMap& signatureMap,
       size_t initialSeed,
-      const Options& options);
+      const Options& options,
+      std::shared_ptr<test::ReferenceQueryRunner> referenceQueryRunner);
 
   // This function starts the test that is performed by the
   // ExpressionFuzzerVerifier which is generating random expressions and
@@ -208,6 +210,8 @@ class ExpressionFuzzerVerifier {
 
   /// The expression fuzzer that is used to fuzz the expression in the test.
   ExpressionFuzzer expressionFuzzer_;
+
+  std::shared_ptr<test::ReferenceQueryRunner> referenceQueryRunner_;
 };
 
 } // namespace facebook::velox::fuzzer
