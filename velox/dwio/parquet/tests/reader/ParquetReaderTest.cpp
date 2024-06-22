@@ -1219,7 +1219,7 @@ TEST_F(ParquetReaderTest, testLzoDataPage) {
 TEST_F(ParquetReaderTest, testEmptyDataPage) {
   const std::string sample(getExampleFilePath("snappy.parquet"));
 
-  facebook::velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 30001ULL);
 
