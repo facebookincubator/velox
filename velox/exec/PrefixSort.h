@@ -42,17 +42,16 @@ FOLLY_ALWAYS_INLINE void stdSort(
 }; // namespace detail
 
 struct PrefixSortConfig {
-  PrefixSortConfig(uint32_t maxNormalizedKeySize, uint32_t threshold = 130)
+  PrefixSortConfig(int64_t maxNormalizedKeySize, int32_t threshold = 130)
       : maxNormalizedKeySize(maxNormalizedKeySize), threshold(threshold) {}
 
   /// Max number of bytes can store normalized keys in prefix-sort buffer per
   /// entry.
-  const uint32_t maxNormalizedKeySize;
+  const int64_t maxNormalizedKeySize;
 
-  /// PrefixSort will have performance regression when the dateset is too small.
-  /// The threshold is set to 100 according to the benchmark test results by
-  /// default.
-  const int64_t threshold;
+  /// PrefixSort will have performance regression when the dateset is too
+  /// small..
+  const int32_t threshold;
 };
 
 /// The layout of prefix-sort buffer, a prefix entry includes:

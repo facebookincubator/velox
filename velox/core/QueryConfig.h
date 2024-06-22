@@ -355,6 +355,15 @@ class QueryConfig {
   static constexpr const char* kDriverCpuTimeSliceLimitMs =
       "driver_cpu_time_slice_limit_ms";
 
+  /// The max bytes number of normalized keys for each row in the prefix-sort.
+  /// The default value is max int_64, and set to 0 to disable prefix-sort.
+  static constexpr const char* kPrefixSortNormalizedKeyMaxBytes =
+      "prefixsort_normalized_key_max_bytes";
+
+  /// The minimum number of rows that can trigger the prefix-sort. This is set
+  /// to '130' by default.
+  static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
+
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"), CapacityUnit::BYTE);
@@ -709,6 +718,23 @@ class QueryConfig {
 
   uint32_t driverCpuTimeSliceLimitMs() const {
     return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
+  }
+
+  static int64_t prefixSortNormalizedKeyMaxBytes(const velox::Config* config) {
+    return config->get<int64_t>(
+        kPrefixSortNormalizedKeyMaxBytes, std::numeric_limits<int64_t>::max());
+  }
+
+  int64_t prefixSortNormalizedKeyMaxBytes() const {
+    return prefixSortNormalizedKeyMaxBytes(config_.get());
+  }
+
+  static int32_t prefixSortMinRows(const velox::Config* config) {
+    return config->get<int32_t>(kPrefixSortMinRows, 130);
+  }
+
+  int32_t prefixSortMinRows() const {
+    return prefixSortMinRows(config_.get());
   }
 
   template <typename T>
