@@ -354,7 +354,7 @@ bool Writer::shouldFlush(const WriterContext& context, size_t nextWriteRows) {
     overBudget = overMemoryBudget(context, nextWriteRows);
     stripeProgressDecision =
         flushPolicy_->shouldFlush(getStripeProgress(context));
-  } else if (dictionaryFlushDecision == FlushDecision::EVALUATE_DICTIONARY) {
+  } else if (dictionaryFlushDecision == FlushDecision::CHECK_DICTIONARY) {
     writer_->tryAbandonDictionaries(/*force=*/false);
   }
 

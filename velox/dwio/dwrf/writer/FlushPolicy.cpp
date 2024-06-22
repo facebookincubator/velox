@@ -17,7 +17,7 @@
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 
 namespace {
-static constexpr size_t kNumDictioanryTestsPerStripe = 3UL;
+static constexpr size_t kNumDictionaryChecksPerStripe = 3UL;
 } // namespace
 
 namespace facebook::velox::dwrf {
@@ -27,10 +27,17 @@ DefaultFlushPolicy::DefaultFlushPolicy(
     uint64_t dictionarySizeThreshold)
     : stripeSizeThreshold_{stripeSizeThreshold},
       dictionarySizeThreshold_{dictionarySizeThreshold},
-      dictionaryAssessmentThreshold_{getDictionaryAssessmentIncrement()} {}
+      dictionaryCheckIncrement_{
+          stripeSizeThreshold_ / kNumDictionaryChecksPerStripe} {
+  VELOX_CHECK_GT(dictionaryCheckIncrement_, 0);
+  setNextDictionaryCheckThreshold();
+}
 
-uint64_t DefaultFlushPolicy::getDictionaryAssessmentIncrement() const {
-  return stripeSizeThreshold_ / kNumDictioanryTestsPerStripe;
+void DefaultFlushPolicy::setNextDictionaryCheckThreshold(
+    uint64_t stripeSizeEstimate) {
+  // Add 1 so we can round up to the next increment above the current estimate.
+  dictionaryCheckThreshold_ =
+      bits::roundUp(stripeSizeEstimate + 1, dictionaryCheckIncrement_);
 }
 
 FlushDecision DefaultFlushPolicy::shouldFlushDictionary(
@@ -45,13 +52,14 @@ FlushDecision DefaultFlushPolicy::shouldFlushDictionary(
   if (dictionaryMemoryUsage > dictionarySizeThreshold_) {
     return FlushDecision::FLUSH_DICTIONARY;
   }
-  if (stripeProgress.stripeSizeEstimate >= dictionaryAssessmentThreshold_) {
-    // In the current implementation, since we don't ever change encoding
-    // decision after the first stripe, we don't need to ever reset this
-    // threshold.
-    dictionaryAssessmentThreshold_ +=
-        stripeSizeThreshold_ / kNumDictioanryTestsPerStripe;
-    return FlushDecision::EVALUATE_DICTIONARY;
+  if (stripeIndex_ < stripeProgress.stripeIndex) {
+    // Reset dictionary check threshold for the new stripe.
+    setNextDictionaryCheckThreshold();
+    stripeIndex_ = stripeProgress.stripeIndex;
+  }
+  if (stripeProgress.stripeSizeEstimate >= dictionaryCheckThreshold_) {
+    setNextDictionaryCheckThreshold(stripeProgress.stripeSizeEstimate);
+    return FlushDecision::CHECK_DICTIONARY;
   }
   return FlushDecision::SKIP;
 }
