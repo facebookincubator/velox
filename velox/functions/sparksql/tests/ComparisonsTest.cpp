@@ -102,11 +102,8 @@ class ComparisonsTest : public SparkFunctionBaseTest {
       const std::string& functionName,
       const RowVectorPtr& vector1,
       const RowVectorPtr& vector2,
-      std::optional<bool> expectedResult) {
-    runAndCompare(
-        functionName,
-        {vector1, vector2},
-        makeNullableFlatVector<bool>({expectedResult}));
+      const VectorPtr& expectedResult) {
+    runAndCompare(functionName, {vector1, vector2}, expectedResult);
   }
 };
 
@@ -125,7 +122,7 @@ TEST_F(ComparisonsTest, equaltonullsafe) {
         funcName,
         constructRowVector(value1),
         constructRowVector(value2),
-        expectedResult);
+        makeNullableFlatVector<bool>({expectedResult}));
   };
 
   EXPECT_EQ(equaltonullsafe<int64_t>(1, 1), true);
@@ -168,17 +165,17 @@ TEST_F(ComparisonsTest, equaltonullsafe) {
       funcName,
       constructRowVector(std::nullopt, true),
       constructRowVector(std::nullopt, true),
-      true);
+      makeNullableFlatVector<bool>({true}));
   runAndCompareForRowInput(
       funcName,
       constructRowVector(std::nullopt, true),
       constructRowVector(1, false),
-      false);
+      makeNullableFlatVector<bool>({false}));
   runAndCompareForRowInput(
       funcName,
       constructRowVector(1, false),
       constructRowVector(std::nullopt, true),
-      false);
+      makeNullableFlatVector<bool>({false}));
 }
 
 TEST_F(ComparisonsTest, equalto) {
@@ -196,7 +193,7 @@ TEST_F(ComparisonsTest, equalto) {
         funcName,
         constructRowVector(value1),
         constructRowVector(value2),
-        expectedResult);
+        makeNullableFlatVector<bool>({expectedResult}));
   };
   EXPECT_EQ(equalto<Timestamp>(Timestamp(2, 2), Timestamp(2, 2)), true);
   EXPECT_EQ(equalto<StringView>("test"_sv, "test"_sv), true);
@@ -250,17 +247,17 @@ TEST_F(ComparisonsTest, equalto) {
       funcName,
       constructRowVector(std::nullopt, true),
       constructRowVector(std::nullopt, true),
-      std::nullopt);
+      makeNullableFlatVector<bool>({std::nullopt}));
   runAndCompareForRowInput(
       funcName,
       constructRowVector(std::nullopt, true),
       constructRowVector(1, false),
-      std::nullopt);
+      makeNullableFlatVector<bool>({std::nullopt}));
   runAndCompareForRowInput(
       funcName,
       constructRowVector(1, false),
       constructRowVector(std::nullopt, true),
-      std::nullopt);
+      makeNullableFlatVector<bool>({std::nullopt}));
 }
 
 TEST_F(ComparisonsTest, between) {
