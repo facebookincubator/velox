@@ -147,39 +147,31 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
-  std::optional<T> checkedArithmetic(
-      const std::string& func,
-      const std::optional<T> a,
-      const std::optional<T> b) {
-    return evaluateOnce<T>(fmt::format("{}(c0, c1)", func), a, b);
-  }
-
-  template <typename T>
   std::optional<T> checkedAdd(
       const std::optional<T> a,
       const std::optional<T> b) {
-    return checkedArithmetic<T>("checked_add", a, b);
+    return evaluateOnce<T>("checked_add(c0, c1)", a, b);
   }
 
   template <typename T>
   std::optional<T> checkedDivide(
       const std::optional<T> a,
       const std::optional<T> b) {
-    return checkedArithmetic<T>("checked_divide", a, b);
+    return evaluateOnce<T>("checked_divide(c0, c1)", a, b);
   }
 
   template <typename T>
   std::optional<T> checkedMultiply(
       const std::optional<T> a,
       const std::optional<T> b) {
-    return checkedArithmetic<T>("checked_multiply", a, b);
+    return evaluateOnce<T>("checked_multiply(c0, c1)", a, b);
   }
 
   template <typename T>
-  std::optional<T> checkedSubstract(
+  std::optional<T> checkedSubtract(
       const std::optional<T> a,
       const std::optional<T> b) {
-    return checkedArithmetic<T>("checked_subtract", a, b);
+    return evaluateOnce<T>("checked_subtract(c0, c1)", a, b);
   }
 
   template <typename T>
@@ -224,7 +216,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
-  void assertErrorForCheckedSubstract(
+  void assertErrorForcheckedSubtract(
       const std::optional<T> a,
       const std::optional<T> b,
       const std::string& errorMessage) {
@@ -654,17 +646,17 @@ TEST_F(ArithmeticTest, checkedAdd) {
   EXPECT_EQ(checkedAdd<double>(kInfDouble, 1), kInfDouble);
 }
 
-TEST_F(ArithmeticTest, checkedSubstract) {
-  assertErrorForCheckedSubstract<int8_t>(
+TEST_F(ArithmeticTest, checkedSubtract) {
+  assertErrorForcheckedSubtract<int8_t>(
       INT8_MIN, 1, "Arithmetic overflow: -128 - 1");
-  assertErrorForCheckedSubstract<int16_t>(
+  assertErrorForcheckedSubtract<int16_t>(
       INT16_MIN, 1, "Arithmetic overflow: -32768 - 1");
-  assertErrorForCheckedSubstract<int32_t>(
+  assertErrorForcheckedSubtract<int32_t>(
       INT32_MIN, 1, "Arithmetic overflow: -2147483648 - 1");
-  assertErrorForCheckedSubstract<int64_t>(
+  assertErrorForcheckedSubtract<int64_t>(
       INT64_MIN, 1, "Arithmetic overflow: -9223372036854775808 - 1");
-  EXPECT_EQ(checkedSubstract<float>(kInf, 1), kInf);
-  EXPECT_EQ(checkedSubstract<double>(kInfDouble, 1), kInfDouble);
+  EXPECT_EQ(checkedSubtract<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedSubtract<double>(kInfDouble, 1), kInfDouble);
 }
 
 TEST_F(ArithmeticTest, checkedMultiply) {
