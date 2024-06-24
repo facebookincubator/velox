@@ -1235,7 +1235,8 @@ struct SoundexFunction {
 };
 
 /// Implementation adopted from
-/// org.apache.commons.text.similarity.LevenshteinDistance.limitedCompare.
+/// org.apache.commons.text.similarity.LevenshteinDistance.limitedCompare and
+/// Velox Presto LevenshteinDistanceFunction.
 template <typename T>
 struct LevenshteinDistanceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -1288,12 +1289,14 @@ struct LevenshteinDistanceFunction {
 
  private:
   // This implementation only computes the distance if it's less than or equal
-  // to the threshold value, setting result as -1 if it's greater.
-  // Threshold k allows us to reduce it to O(km) time by only computing a
-  // diagonal stripe of at most width 2k + 1 of the cost table.
-  // One example: suppose s is of length 5, t is of length 7,
-  // and our threshold is 1. In this case we're going to walk a stripe of
-  // length 3. The matrix would look like so:
+  // to the threshold value, setting result as -1 if it's greater. Threshold k
+  // allows us to reduce the time complexity from
+  // O(leftCodePointsSize * rightCodePointsSize) to
+  // O(k * rightCodePointsSize) by only computing a diagonal stripe of at most
+  // width 2k + 1 of the cost table.
+  // One example: suppose s is of length 5, t is of length 7, and threshold is
+  // 1. In this case we're going to walk through a stripe of length 3. The
+  // matrix would look like so:
   //
   // <pre>
   //    0 1 2 3 4
@@ -1373,7 +1376,7 @@ struct LevenshteinDistanceFunction {
         lower = 1;
       } else {
         leftUpDistance = distances[lower - 1];
-        // Ignore entry left of leftmost.
+        // Set this as Max value to ignore entry left of leftmost.
         distances[lower - 1] = INT32_MAX;
       }
       for (int j = lower; j < upper; j++) {
