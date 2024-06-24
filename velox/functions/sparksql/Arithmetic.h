@@ -497,8 +497,7 @@ struct CheckedAddFunction {
         if (threadSkipErrorDetails()) {
           return Status::UserError();
         }
-        return Status::UserError(
-            "[ARITHMETIC_OVERFLOW] overflow: {} + {}", a, b);
+        return Status::UserError("Arithmetic overflow: {} + {}", a, b);
       }
       result = res;
     } else {
@@ -519,8 +518,7 @@ struct CheckedSubtractFunction {
         if (threadSkipErrorDetails()) {
           return Status::UserError();
         }
-        return Status::UserError(
-            "[ARITHMETIC_OVERFLOW] overflow: {} - {}", a, b);
+        return Status::UserError("Arithmetic overflow: {} - {}", a, b);
       }
     } else {
       result = a - b;
@@ -540,8 +538,7 @@ struct CheckedMultiplyFunction {
         if (threadSkipErrorDetails()) {
           return Status::UserError();
         }
-        return Status::UserError(
-            "[ARITHMETIC_OVERFLOW] overflow: {} * {}", a, b);
+        return Status::UserError("Arithmetic overflow: {} * {}", a, b);
       }
     } else {
       result = a * b;
@@ -566,8 +563,7 @@ struct CheckedDivideFunction {
         if (threadSkipErrorDetails()) {
           return Status::UserError();
         }
-        return Status::UserError(
-            "[ARITHMETIC_OVERFLOW] overflow: {} / {}", a, b);
+        return Status::UserError("Arithmetic overflow: {} / {}", a, b);
       }
     }
     result = a / b;

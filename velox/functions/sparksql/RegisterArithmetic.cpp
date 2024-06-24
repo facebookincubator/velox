@@ -110,10 +110,10 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
 
-  registerBinaryNumeric<CheckedAddFunction>({prefix + "check_add"});
-  registerBinaryNumeric<CheckedSubtractFunction>({prefix + "check_subtract"});
-  registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "check_multiply"});
-  registerBinaryNumeric<CheckedDivideFunction>({prefix + "check_divide"});
+  registerBinaryNumeric<CheckedAddFunction>({prefix + "checked_add"});
+  registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
+  registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "checked_multiply"});
+  registerBinaryNumeric<CheckedDivideFunction>({prefix + "checked_divide"});
 }
 
 } // namespace facebook::velox::functions::sparksql

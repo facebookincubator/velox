@@ -147,7 +147,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
-  std::optional<T> checkArithmetic(
+  std::optional<T> checkedArithmetic(
       const std::string& func,
       const std::optional<T> a,
       const std::optional<T> b) {
@@ -155,7 +155,35 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   }
 
   template <typename T>
-  void assertErrorForCheckArithmetic(
+  std::optional<T> checkedAdd(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return checkedArithmetic<T>("checked_add", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> checkedDivide(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return checkedArithmetic<T>("checked_divide", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> checkedMultiply(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return checkedArithmetic<T>("checked_multiply", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> checkedSubstract(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return checkedArithmetic<T>("checked_subtract", a, b);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedArithmetic(
       const std::string& func,
       const std::optional<T> a,
       const std::optional<T> b,
@@ -169,6 +197,38 @@ class ArithmeticTest : public SparkFunctionBaseTest {
       ASSERT_TRUE(
           std::string(e.what()).find(errorMessage) != std::string::npos);
     }
+  }
+
+  template <typename T>
+  void assertErrorForCheckedAdd(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_add", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedDivide(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_divide", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedMultiply(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_multiply", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedSubstract(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_subtract", a, b, errorMessage);
   }
 
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
@@ -582,73 +642,56 @@ TEST_F(ArithmeticTest, widthBucket) {
   EXPECT_EQ(widthBucket(-kInf, 0, 4, 3), 0);
 }
 
-TEST_F(ArithmeticTest, checkAdd) {
-  std::string func = "check_add";
-  assertErrorForCheckArithmetic<int8_t>(
-      func, INT8_MAX, 1, "[ARITHMETIC_OVERFLOW] overflow: 127 + 1");
-  assertErrorForCheckArithmetic<int16_t>(
-      func, INT16_MAX, 1, "[ARITHMETIC_OVERFLOW] overflow: 32767 + 1");
-  assertErrorForCheckArithmetic<int32_t>(
-      func, INT32_MAX, 1, "[ARITHMETIC_OVERFLOW] overflow: 2147483647 + 1");
-  assertErrorForCheckArithmetic<int64_t>(
-      func,
-      INT64_MAX,
-      1,
-      "[ARITHMETIC_OVERFLOW] overflow: 9223372036854775807 + 1");
-  EXPECT_EQ(checkArithmetic<float>(func, kInf, 1), kInf);
-  EXPECT_EQ(checkArithmetic<double>(func, kInfDouble, 1), kInfDouble);
+TEST_F(ArithmeticTest, checkedAdd) {
+  assertErrorForCheckedAdd<int8_t>(INT8_MAX, 1, "Arithmetic overflow: 127 + 1");
+  assertErrorForCheckedAdd<int16_t>(
+      INT16_MAX, 1, "Arithmetic overflow: 32767 + 1");
+  assertErrorForCheckedAdd<int32_t>(
+      INT32_MAX, 1, "Arithmetic overflow: 2147483647 + 1");
+  assertErrorForCheckedAdd<int64_t>(
+      INT64_MAX, 1, "Arithmetic overflow: 9223372036854775807 + 1");
+  EXPECT_EQ(checkedAdd<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedAdd<double>(kInfDouble, 1), kInfDouble);
 }
 
-TEST_F(ArithmeticTest, checkSubstract) {
-  std::string func = "check_subtract";
-  assertErrorForCheckArithmetic<int8_t>(
-      func, INT8_MIN, 1, "[ARITHMETIC_OVERFLOW] overflow: -128 - 1");
-  assertErrorForCheckArithmetic<int16_t>(
-      func, INT16_MIN, 1, "[ARITHMETIC_OVERFLOW] overflow: -32768 - 1");
-  assertErrorForCheckArithmetic<int32_t>(
-      func, INT32_MIN, 1, "[ARITHMETIC_OVERFLOW] overflow: -2147483648 - 1");
-  assertErrorForCheckArithmetic<int64_t>(
-      func,
-      INT64_MIN,
-      1,
-      "[ARITHMETIC_OVERFLOW] overflow: -9223372036854775808 - 1");
-  EXPECT_EQ(checkArithmetic<float>(func, kInf, 1), kInf);
-  EXPECT_EQ(checkArithmetic<double>(func, kInfDouble, 1), kInfDouble);
+TEST_F(ArithmeticTest, checkedSubstract) {
+  assertErrorForCheckedSubstract<int8_t>(
+      INT8_MIN, 1, "Arithmetic overflow: -128 - 1");
+  assertErrorForCheckedSubstract<int16_t>(
+      INT16_MIN, 1, "Arithmetic overflow: -32768 - 1");
+  assertErrorForCheckedSubstract<int32_t>(
+      INT32_MIN, 1, "Arithmetic overflow: -2147483648 - 1");
+  assertErrorForCheckedSubstract<int64_t>(
+      INT64_MIN, 1, "Arithmetic overflow: -9223372036854775808 - 1");
+  EXPECT_EQ(checkedSubstract<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedSubstract<double>(kInfDouble, 1), kInfDouble);
 }
 
-TEST_F(ArithmeticTest, checkMultiply) {
-  std::string func = "check_multiply";
-  assertErrorForCheckArithmetic<int8_t>(
-      func, INT8_MAX, 2, "[ARITHMETIC_OVERFLOW] overflow: 127 * 2");
-  assertErrorForCheckArithmetic<int16_t>(
-      func, INT16_MAX, 2, "[ARITHMETIC_OVERFLOW] overflow: 32767 * 2");
-  assertErrorForCheckArithmetic<int32_t>(
-      func, INT32_MAX, 2, "[ARITHMETIC_OVERFLOW] overflow: 2147483647 * 2");
-  assertErrorForCheckArithmetic<int64_t>(
-      func,
-      INT64_MAX,
-      2,
-      "[ARITHMETIC_OVERFLOW] overflow: 9223372036854775807 * 2");
-  EXPECT_EQ(checkArithmetic<float>(func, kInf, 1), kInf);
-  EXPECT_EQ(checkArithmetic<double>(func, kInfDouble, 1), kInfDouble);
+TEST_F(ArithmeticTest, checkedMultiply) {
+  assertErrorForCheckedMultiply<int8_t>(
+      INT8_MAX, 2, "Arithmetic overflow: 127 * 2");
+  assertErrorForCheckedMultiply<int16_t>(
+      INT16_MAX, 2, "Arithmetic overflow: 32767 * 2");
+  assertErrorForCheckedMultiply<int32_t>(
+      INT32_MAX, 2, "Arithmetic overflow: 2147483647 * 2");
+  assertErrorForCheckedMultiply<int64_t>(
+      INT64_MAX, 2, "Arithmetic overflow: 9223372036854775807 * 2");
+  EXPECT_EQ(checkedMultiply<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedMultiply<double>(kInfDouble, 1), kInfDouble);
 }
 
-TEST_F(ArithmeticTest, checkDivide) {
-  std::string func = "check_divide";
-  assertErrorForCheckArithmetic<int32_t>(func, 1, 0, "division by zero");
-  assertErrorForCheckArithmetic<int8_t>(
-      func, INT8_MIN, -1, "[ARITHMETIC_OVERFLOW] overflow: -128 / -1");
-  assertErrorForCheckArithmetic<int16_t>(
-      func, INT16_MIN, -1, "[ARITHMETIC_OVERFLOW] overflow: -32768 / -1");
-  assertErrorForCheckArithmetic<int32_t>(
-      func, INT32_MIN, -1, "[ARITHMETIC_OVERFLOW] overflow: -2147483648 / -1");
-  assertErrorForCheckArithmetic<int64_t>(
-      func,
-      INT64_MIN,
-      -1,
-      "[ARITHMETIC_OVERFLOW] overflow: -9223372036854775808 / -1");
-  EXPECT_EQ(checkArithmetic<float>(func, kInf, 1), kInf);
-  EXPECT_EQ(checkArithmetic<double>(func, kInfDouble, 1), kInfDouble);
+TEST_F(ArithmeticTest, checkedDivide) {
+  assertErrorForCheckedDivide<int32_t>(1, 0, "division by zero");
+  assertErrorForCheckedDivide<int8_t>(
+      INT8_MIN, -1, "Arithmetic overflow: -128 / -1");
+  assertErrorForCheckedDivide<int16_t>(
+      INT16_MIN, -1, "Arithmetic overflow: -32768 / -1");
+  assertErrorForCheckedDivide<int32_t>(
+      INT32_MIN, -1, "Arithmetic overflow: -2147483648 / -1");
+  assertErrorForCheckedDivide<int64_t>(
+      INT64_MIN, -1, "Arithmetic overflow: -9223372036854775808 / -1");
+  EXPECT_EQ(checkedDivide<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedDivide<double>(kInfDouble, 1), kInfDouble);
 }
 
 class LogNTest : public SparkFunctionBaseTest {
