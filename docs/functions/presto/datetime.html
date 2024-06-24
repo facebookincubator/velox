@@ -228,6 +228,14 @@ using <code class="docutils literal notranslate"><span class="pre">string</span>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">from_unixtime</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unixtime</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hours</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">minutes</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the UNIX timestamp <code class="docutils literal notranslate"><span class="pre">unixtime</span></code> as a timestamp with time zone
+using <code class="docutils literal notranslate"><span class="pre">hours</span></code> and <code class="docutils literal notranslate"><span class="pre">minutes</span></code> for the time zone offset.
+The offset must be in [-14:00, 14:00] range.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="to_iso8601">
 <span class="sig-name descname"><span class="pre">to_iso8601</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#to_iso8601" title="Link to this definition">¶</a></dt>
 <dd><p>Formats <code class="docutils literal notranslate"><span class="pre">x</span></code> as an ISO 8601 string. Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are:
@@ -369,19 +377,19 @@ The following table, based on the MySQL manual, describes the format specifiers:
 <td><p>Abbreviated month name (<code class="docutils literal notranslate"><span class="pre">Jan</span></code> … <code class="docutils literal notranslate"><span class="pre">Dec</span></code>)</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">%c</span></code></p></td>
-<td><p>Month, numeric (<code class="docutils literal notranslate"><span class="pre">1</span></code> … <code class="docutils literal notranslate"><span class="pre">12</span></code>) <a class="footnote-reference brackets" href="#id11" id="id1" role="doc-noteref"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></a></p></td>
+<td><p>Month, numeric (<code class="docutils literal notranslate"><span class="pre">1</span></code> … <code class="docutils literal notranslate"><span class="pre">12</span></code>) <a class="footnote-reference brackets" href="#id12" id="id2" role="doc-noteref"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></a></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">%D</span></code></p></td>
 <td><p>Day of the month with English suffix (<code class="docutils literal notranslate"><span class="pre">0th</span></code>, <code class="docutils literal notranslate"><span class="pre">1st</span></code>, <code class="docutils literal notranslate"><span class="pre">2nd</span></code>, <code class="docutils literal notranslate"><span class="pre">3rd</span></code>, …)</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">%d</span></code></p></td>
-<td><p>Day of the month, numeric (<code class="docutils literal notranslate"><span class="pre">01</span></code> … <code class="docutils literal notranslate"><span class="pre">31</span></code>) <a class="footnote-reference brackets" href="#id11" id="id2" role="doc-noteref"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></a></p></td>
+<td><p>Day of the month, numeric (<code class="docutils literal notranslate"><span class="pre">01</span></code> … <code class="docutils literal notranslate"><span class="pre">31</span></code>) <a class="footnote-reference brackets" href="#id12" id="id3" role="doc-noteref"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></a></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">%e</span></code></p></td>
-<td><p>Day of the month, numeric (<code class="docutils literal notranslate"><span class="pre">1</span></code> … <code class="docutils literal notranslate"><span class="pre">31</span></code>) <a class="footnote-reference brackets" href="#id11" id="id3" role="doc-noteref"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></a></p></td>
+<td><p>Day of the month, numeric (<code class="docutils literal notranslate"><span class="pre">1</span></code> … <code class="docutils literal notranslate"><span class="pre">31</span></code>) <a class="footnote-reference brackets" href="#id12" id="id4" role="doc-noteref"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></a></p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">%f</span></code></p></td>
-<td><p>Fraction of second (6 digits for printing: <code class="docutils literal notranslate"><span class="pre">000000</span></code> … <code class="docutils literal notranslate"><span class="pre">999000</span></code>; 1 - 9 digits for parsing: <code class="docutils literal notranslate"><span class="pre">0</span></code> … <code class="docutils literal notranslate"><span class="pre">999999999</span></code>) <a class="footnote-reference brackets" href="#id8" id="id4" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a></p></td>
+<td><p>Fraction of second (6 digits for printing: <code class="docutils literal notranslate"><span class="pre">000000</span></code> … <code class="docutils literal notranslate"><span class="pre">999000</span></code>; 1 - 9 digits for parsing: <code class="docutils literal notranslate"><span class="pre">0</span></code> … <code class="docutils literal notranslate"><span class="pre">999999999</span></code>) <a class="footnote-reference brackets" href="#id9" id="id5" role="doc-noteref"><span class="fn-bracket">[</span>1<span class="fn-bracket">]</span></a></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">%H</span></code></p></td>
 <td><p>Hour (<code class="docutils literal notranslate"><span class="pre">00</span></code> … <code class="docutils literal notranslate"><span class="pre">23</span></code>)</p></td>
@@ -408,7 +416,7 @@ The following table, based on the MySQL manual, describes the format specifiers:
 <td><p>Month name (<code class="docutils literal notranslate"><span class="pre">January</span></code> … <code class="docutils literal notranslate"><span class="pre">December</span></code>)</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">%m</span></code></p></td>
-<td><p>Month, numeric (<code class="docutils literal notranslate"><span class="pre">01</span></code> … <code class="docutils literal notranslate"><span class="pre">12</span></code>) <a class="footnote-reference brackets" href="#id11" id="id5" role="doc-noteref"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></a></p></td>
+<td><p>Month, numeric (<code class="docutils literal notranslate"><span class="pre">01</span></code> … <code class="docutils literal notranslate"><span class="pre">12</span></code>) <a class="footnote-reference brackets" href="#id12" id="id6" role="doc-noteref"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></a></p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">%p</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">AM</span></code> or <code class="docutils literal notranslate"><span class="pre">PM</span></code></p></td>
@@ -441,7 +449,7 @@ The following table, based on the MySQL manual, describes the format specifiers:
 <td><p>Weekday name (<code class="docutils literal notranslate"><span class="pre">Sunday</span></code> … <code class="docutils literal notranslate"><span class="pre">Saturday</span></code>)</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">%w</span></code></p></td>
-<td><p>Day of the week (<code class="docutils literal notranslate"><span class="pre">0</span></code> … <code class="docutils literal notranslate"><span class="pre">6</span></code>), where Sunday is the first day of the week <a class="footnote-reference brackets" href="#id10" id="id6" role="doc-noteref"><span class="fn-bracket">[</span>3<span class="fn-bracket">]</span></a></p></td>
+<td><p>Day of the week (<code class="docutils literal notranslate"><span class="pre">0</span></code> … <code class="docutils literal notranslate"><span class="pre">6</span></code>), where Sunday is the first day of the week <a class="footnote-reference brackets" href="#id11" id="id7" role="doc-noteref"><span class="fn-bracket">[</span>3<span class="fn-bracket">]</span></a></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">%X</span></code></p></td>
 <td><p>Year for the week where Sunday is the first day of the week, numeric, four digits; used with <code class="docutils literal notranslate"><span class="pre">%V</span></code></p></td>
@@ -453,7 +461,7 @@ The following table, based on the MySQL manual, describes the format specifiers:
 <td><p>Year, numeric, four digits</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">%y</span></code></p></td>
-<td><p>Year, numeric (two digits) <a class="footnote-reference brackets" href="#id9" id="id7" role="doc-noteref"><span class="fn-bracket">[</span>2<span class="fn-bracket">]</span></a></p></td>
+<td><p>Year, numeric (two digits) <a class="footnote-reference brackets" href="#id10" id="id8" role="doc-noteref"><span class="fn-bracket">[</span>2<span class="fn-bracket">]</span></a></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">%%</span></code></p></td>
 <td><p>A literal <code class="docutils literal notranslate"><span class="pre">%</span></code> character</p></td>
@@ -464,21 +472,21 @@ The following table, based on the MySQL manual, describes the format specifiers:
 </tbody>
 </table>
 <aside class="footnote-list brackets">
-<aside class="footnote brackets" id="id8" role="doc-footnote">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id4">1</a><span class="fn-bracket">]</span></span>
+<aside class="footnote brackets" id="id9" role="doc-footnote">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id5">1</a><span class="fn-bracket">]</span></span>
 <p>Timestamp is truncated to milliseconds.</p>
 </aside>
-<aside class="footnote brackets" id="id9" role="doc-footnote">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id7">2</a><span class="fn-bracket">]</span></span>
+<aside class="footnote brackets" id="id10" role="doc-footnote">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id8">2</a><span class="fn-bracket">]</span></span>
 <p>When parsing, two-digit year format assumes range <code class="docutils literal notranslate"><span class="pre">1970</span></code> … <code class="docutils literal notranslate"><span class="pre">2069</span></code>, so “70” will result in year <code class="docutils literal notranslate"><span class="pre">1970</span></code> but “69” will produce <code class="docutils literal notranslate"><span class="pre">2069</span></code>.</p>
 </aside>
-<aside class="footnote brackets" id="id10" role="doc-footnote">
-<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id6">3</a><span class="fn-bracket">]</span></span>
+<aside class="footnote brackets" id="id11" role="doc-footnote">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id7">3</a><span class="fn-bracket">]</span></span>
 <p>This specifier is not supported yet. Consider using <a class="reference internal" href="#day_of_week" title="day_of_week"><code class="xref py py-func docutils literal notranslate"><span class="pre">day_of_week()</span></code></a> (it uses <code class="docutils literal notranslate"><span class="pre">1-7</span></code> instead of <code class="docutils literal notranslate"><span class="pre">0-6</span></code>).</p>
 </aside>
-<aside class="footnote brackets" id="id11" role="doc-footnote">
+<aside class="footnote brackets" id="id12" role="doc-footnote">
 <span class="label"><span class="fn-bracket">[</span>4<span class="fn-bracket">]</span></span>
-<span class="backrefs">(<a role="doc-backlink" href="#id1">1</a>,<a role="doc-backlink" href="#id2">2</a>,<a role="doc-backlink" href="#id3">3</a>,<a role="doc-backlink" href="#id5">4</a>)</span>
+<span class="backrefs">(<a role="doc-backlink" href="#id2">1</a>,<a role="doc-backlink" href="#id3">2</a>,<a role="doc-backlink" href="#id4">3</a>,<a role="doc-backlink" href="#id6">4</a>)</span>
 <p>This specifier does not support <code class="docutils literal notranslate"><span class="pre">0</span></code> as a month or day.</p>
 </aside>
 </aside>
@@ -727,6 +735,7 @@ list of supported timezones follow the definition <a class="reference external" 
 <li><a class="reference internal" href="#from_iso8601_date"><code class="docutils literal notranslate"><span class="pre">from_iso8601_date()</span></code></a></li>
 <li><a class="reference internal" href="#from_iso8601_timestamp"><code class="docutils literal notranslate"><span class="pre">from_iso8601_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#from_unixtime"><code class="docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a></li>
 <li><a class="reference internal" href="#to_iso8601"><code class="docutils literal notranslate"><span class="pre">to_iso8601()</span></code></a></li>
 <li><a class="reference internal" href="#to_milliseconds"><code class="docutils literal notranslate"><span class="pre">to_milliseconds()</span></code></a></li>
 <li><a class="reference internal" href="#to_unixtime"><code class="docutils literal notranslate"><span class="pre">to_unixtime()</span></code></a></li>
