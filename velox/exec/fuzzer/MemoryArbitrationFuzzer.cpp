@@ -22,8 +22,6 @@
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -120,15 +118,35 @@ class MemoryArbitrationFuzzer {
   // Returns a list of randomly generated key types for join and aggregation.
   std::vector<TypePtr> generateKeyTypes(int32_t numKeys);
 
-  // Returns randomly generated probe input with up to 3 additional payload
-  // columns.
+  std::pair<std::vector<std::string>, std::vector<TypePtr>>
+  generatePartitionKeys();
+
+  // Returns randomly generated input with up to 3 additional payload columns.
+  std::vector<RowVectorPtr> generateInput(
+      const std::vector<std::string>& keyNames,
+      const std::vector<TypePtr>& keyTypes);
+
+  // Reuses the 'generateInput' method to return randomly generated
+  // probe input.
   std::vector<RowVectorPtr> generateProbeInput(
       const std::vector<std::string>& keyNames,
       const std::vector<TypePtr>& keyTypes);
 
-  // Reuses the 'generateProbeInput' method to return randomly generated
+  // Reuses the 'generateInput' method to return randomly generated
   // aggregation input.
   std::vector<RowVectorPtr> generateAggregateInput(
+      const std::vector<std::string>& keyNames,
+      const std::vector<TypePtr>& keyTypes);
+
+  // Reuses the 'generateInput' method to return randomly generated
+  // row number input.
+  std::vector<RowVectorPtr> generateRowNumberInput(
+      const std::vector<std::string>& keyNames,
+      const std::vector<TypePtr>& keyTypes);
+
+  // Reuses the 'generateInput' method to return randomly generated
+  // order by input.
+  std::vector<RowVectorPtr> generateOrderByInput(
       const std::vector<std::string>& keyNames,
       const std::vector<TypePtr>& keyTypes);
 
@@ -153,6 +171,10 @@ class MemoryArbitrationFuzzer {
 
   std::vector<PlanWithSplits> aggregatePlans(const std::string& tableDir);
 
+  std::vector<PlanWithSplits> rowNumberPlans(const std::string& tableDir);
+
+  std::vector<PlanWithSplits> orderByPlans(const std::string& tableDir);
+
   void verify();
 
   static VectorFuzzer::Options getFuzzerOptions() {
@@ -171,6 +193,8 @@ class MemoryArbitrationFuzzer {
       {core::QueryConfig::kJoinSpillEnabled, "true"},
       {core::QueryConfig::kSpillStartPartitionBit, "29"},
       {core::QueryConfig::kAggregationSpillEnabled, "true"},
+      {core::QueryConfig::kRowNumberSpillEnabled, "true"},
+      {core::QueryConfig::kOrderBySpillEnabled, "true"},
   };
 
   std::shared_ptr<memory::MemoryPool> rootPool_{
@@ -228,7 +252,19 @@ std::vector<TypePtr> MemoryArbitrationFuzzer::generateKeyTypes(
   return types;
 }
 
-std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateProbeInput(
+std::pair<std::vector<std::string>, std::vector<TypePtr>>
+MemoryArbitrationFuzzer::generatePartitionKeys() {
+  const auto numKeys = randInt(1, 3);
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  for (auto i = 0; i < numKeys; ++i) {
+    names.push_back(fmt::format("c{}", i));
+    types.push_back(vectorFuzzer_.randType(/*maxDepth=*/1));
+  }
+  return std::make_pair(names, types);
+}
+
+std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateInput(
     const std::vector<std::string>& keyNames,
     const std::vector<TypePtr>& keyTypes) {
   std::vector<std::string> names = keyNames;
@@ -263,6 +299,12 @@ std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateProbeInput(
     }
   }
   return input;
+}
+
+std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateProbeInput(
+    const std::vector<std::string>& keyNames,
+    const std::vector<TypePtr>& keyTypes) {
+  return generateInput(keyNames, keyTypes);
 }
 
 std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateBuildInput(
@@ -323,7 +365,19 @@ std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateBuildInput(
 std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateAggregateInput(
     const std::vector<std::string>& keyNames,
     const std::vector<TypePtr>& keyTypes) {
-  return generateProbeInput(keyNames, keyTypes);
+  return generateInput(keyNames, keyTypes);
+}
+
+std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateRowNumberInput(
+    const std::vector<std::string>& keyNames,
+    const std::vector<TypePtr>& keyTypes) {
+  return generateInput(keyNames, keyTypes);
+}
+
+std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateOrderByInput(
+    const std::vector<std::string>& keyNames,
+    const std::vector<TypePtr>& keyTypes) {
+  return generateInput(keyNames, keyTypes);
 }
 
 std::vector<MemoryArbitrationFuzzer::PlanWithSplits>
@@ -525,6 +579,78 @@ MemoryArbitrationFuzzer::aggregatePlans(const std::string& tableDir) {
   return plans;
 }
 
+std::vector<MemoryArbitrationFuzzer::PlanWithSplits>
+MemoryArbitrationFuzzer::rowNumberPlans(const std::string& tableDir) {
+  const auto [keyNames, keyTypes] = generatePartitionKeys();
+  const auto input = generateRowNumberInput(keyNames, keyTypes);
+
+  std::vector<PlanWithSplits> plans;
+
+  std::vector<std::string> projectFields = keyNames;
+  projectFields.emplace_back("row_number");
+  auto plan = PlanWithSplits{
+      PlanBuilder()
+          .values(input)
+          .rowNumber(keyNames)
+          .project(projectFields)
+          .planNode(),
+      {}};
+  plans.push_back(std::move(plan));
+
+  if (!isTableScanSupported(input[0]->type())) {
+    return plans;
+  }
+
+  const std::vector<Split> splits =
+      makeSplits(input, fmt::format("{}/row_number", tableDir), writerPool_);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId scanId;
+  plan = PlanWithSplits{
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(asRowType(input[0]->type()))
+          .capturePlanNodeId(scanId)
+          .rowNumber(keyNames)
+          .project(projectFields)
+          .planNode(),
+      {{scanId, splits}}};
+  plans.push_back(std::move(plan));
+
+  return plans;
+}
+
+std::vector<MemoryArbitrationFuzzer::PlanWithSplits>
+MemoryArbitrationFuzzer::orderByPlans(const std::string& tableDir) {
+  const auto [keyNames, keyTypes] = generatePartitionKeys();
+  const auto input = generateOrderByInput(keyNames, keyTypes);
+
+  std::vector<PlanWithSplits> plans;
+
+  auto plan = PlanWithSplits{
+      PlanBuilder().values(input).orderBy(keyNames, false).planNode(), {}};
+  plans.push_back(std::move(plan));
+
+  if (!isTableScanSupported(input[0]->type())) {
+    return plans;
+  }
+
+  const std::vector<Split> splits =
+      makeSplits(input, fmt::format("{}/order_by", tableDir), writerPool_);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId scanId;
+  plan = PlanWithSplits{
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(asRowType(input[0]->type()))
+          .capturePlanNodeId(scanId)
+          .orderBy(keyNames, false)
+          .planNode(),
+      {{scanId, splits}}};
+  plans.push_back(std::move(plan));
+
+  return plans;
+}
+
 void MemoryArbitrationFuzzer::verify() {
   const auto outputDirectory = TempDirectoryPath::create();
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
@@ -535,6 +661,12 @@ void MemoryArbitrationFuzzer::verify() {
     plans.push_back(plan);
   }
   for (const auto& plan : aggregatePlans(tableScanDir->getPath())) {
+    plans.push_back(plan);
+  }
+  for (const auto& plan : rowNumberPlans(tableScanDir->getPath())) {
+    plans.push_back(plan);
+  }
+  for (const auto& plan : orderByPlans(tableScanDir->getPath())) {
     plans.push_back(plan);
   }
 

@@ -31,12 +31,12 @@ DECLARE_bool(experimental_enable_legacy_cast);
 
 namespace facebook::velox::util {
 
-struct DefaultCastPolicy {
+struct PrestoCastPolicy {
   static constexpr bool truncate = false;
   static constexpr bool legacyCast = false;
 };
 
-struct TruncateCastPolicy {
+struct SparkCastPolicy {
   static constexpr bool truncate = true;
   static constexpr bool legacyCast = false;
 };
@@ -46,12 +46,7 @@ struct LegacyCastPolicy {
   static constexpr bool legacyCast = true;
 };
 
-struct TruncateLegacyCastPolicy {
-  static constexpr bool truncate = true;
-  static constexpr bool legacyCast = true;
-};
-
-template <TypeKind KIND, typename = void, typename TPolicy = DefaultCastPolicy>
+template <TypeKind KIND, typename = void, typename TPolicy = PrestoCastPolicy>
 struct Converter {
   using TTo = typename TypeTraits<KIND>::NativeType;
 
@@ -63,6 +58,12 @@ struct Converter {
     return folly::makeUnexpected(Status::UserError(kErrorMessage));
   }
 };
+
+/// Presto compatible cast of strings to boolean. There is a set of strings
+/// allowed to be casted to boolean. These strings are `t, f, 1, 0, true, false`
+/// and their upper case equivalents. Casting from other strings to boolean
+/// throws.
+Expected<bool> castToBoolean(const char* data, size_t len);
 
 namespace detail {
 
@@ -98,14 +99,26 @@ struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
   }
 
   static Expected<T> tryCast(folly::StringPiece v) {
+    if (std::is_same_v<TPolicy, PrestoCastPolicy>) {
+      return castToBoolean(v.data(), v.size());
+    }
+
     return detail::callFollyTo<T>(v);
   }
 
   static Expected<T> tryCast(const StringView& v) {
+    if (std::is_same_v<TPolicy, PrestoCastPolicy>) {
+      return castToBoolean(v.data(), v.size());
+    }
+
     return detail::callFollyTo<T>(folly::StringPiece(v));
   }
 
   static Expected<T> tryCast(const std::string& v) {
+    if (std::is_same_v<TPolicy, PrestoCastPolicy>) {
+      return castToBoolean(v.data(), v.length());
+    }
+
     return detail::callFollyTo<T>(v);
   }
 
@@ -209,8 +222,8 @@ struct Converter<
     bool decimalPoint = false;
     if (v[0] == '-' || v[0] == '+') {
       if (len == 1) {
-        return folly::makeUnexpected(Status::UserError(fmt::format(
-            "Cannot cast an '{}' string to an integral value.", v[0])));
+        return folly::makeUnexpected(Status::UserError(
+            "Cannot cast an '{}' string to an integral value.", v[0]));
       }
       negative = v[0] == '-';
       index = 1;
