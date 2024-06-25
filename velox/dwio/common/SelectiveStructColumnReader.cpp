@@ -44,6 +44,11 @@ uint64_t SelectiveStructColumnReaderBase::skip(uint64_t numValues) {
   // nullable structs, where inner structs may advance less because of
   // nulls above them still end up on the same row in terms of top
   // level rows.
+
+  // Setting the 'readOffset_' for the struct column reader.
+  setReadOffset(readOffset() + numValues);
+
+  // Setting the 'readOffset_' recursively for the children readers.
   for (auto& child : children_) {
     if (child) {
       child->skip(numNonNulls);
