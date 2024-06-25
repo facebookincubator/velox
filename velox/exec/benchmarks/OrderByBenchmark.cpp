@@ -17,9 +17,9 @@
 #include <folly/init/Init.h>
 
 #include "glog/logging.h"
+#include "OrderByBenchmarkUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -73,12 +73,7 @@ class OrderByBenchmark {
   void largeVarchar() {
     const std::vector<vector_size_t> batchSizes = {
         1'000, 10'000, 100'000, 1'000'000};
-    std::vector<RowTypePtr> rowTypes = {
-        rowWithName({VARCHAR()}),
-        rowWithName({VARCHAR(), VARCHAR()}),
-        rowWithName({VARCHAR(), VARCHAR(), VARCHAR()}),
-        rowWithName({VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}),
-    };
+    std::vector<RowTypePtr> rowTypes = OrderByBenchmarkUtil::largeVarcharRowTypes();
     std::vector<int> numKeys = {1, 2, 3, 4};
     benchmark("no-payloads", "varchar", batchSizes, rowTypes, numKeys, 1);
   }
@@ -121,30 +116,11 @@ class OrderByBenchmark {
     testCases_.push_back(std::move(testCase));
   }
 
-  std::vector<RowTypePtr> bigintRowTypes(bool noPayload) {
-    if (noPayload) {
-      return {
-          rowWithName({BIGINT()}),
-          rowWithName({BIGINT(), BIGINT()}),
-          rowWithName({BIGINT(), BIGINT(), BIGINT()}),
-          rowWithName({BIGINT(), BIGINT(), BIGINT(), BIGINT()}),
-      };
-    } else {
-      return {
-          rowWithName({BIGINT(), VARCHAR(), VARCHAR()}),
-          rowWithName({BIGINT(), BIGINT(), VARCHAR(), VARCHAR()}),
-          rowWithName({BIGINT(), BIGINT(), BIGINT(), VARCHAR(), VARCHAR()}),
-          rowWithName(
-              {BIGINT(), BIGINT(), BIGINT(), BIGINT(), VARCHAR(), VARCHAR()}),
-      };
-    }
-  }
-
   void bigint(
       bool noPayload,
       int numVectors,
       const std::vector<vector_size_t>& batchSizes) {
-    std::vector<RowTypePtr> rowTypes = bigintRowTypes(noPayload);
+    std::vector<RowTypePtr> rowTypes = OrderByBenchmarkUtil::bigintRowTypes(noPayload);
     std::vector<int> numKeys = {1, 2, 3, 4};
     benchmark(
         noPayload ? "no-payload" : "payload",
@@ -155,40 +131,12 @@ class OrderByBenchmark {
         numVectors);
   }
 
-  static RowVectorPtr fuzzRows(
-      const RowTypePtr& rowType,
-      size_t numRows,
-      int numKeys,
-      memory::MemoryPool* pool) {
-    VectorFuzzer fuzzer({.vectorSize = numRows}, pool);
-    VectorFuzzer fuzzerWithNulls(
-        {.vectorSize = numRows, .nullRatio = 0.7}, pool);
-    std::vector<VectorPtr> children;
-
-    // Fuzz keys: for front keys (column 0 to numKeys -2) use high
-    // nullRatio to enforce all columns to be compared.
-    {
-      for (auto i = 0; i < numKeys - 1; ++i) {
-        children.push_back(fuzzerWithNulls.fuzz(rowType->childAt(i)));
-      }
-      children.push_back(fuzzer.fuzz(rowType->childAt(numKeys - 1)));
-    }
-    // Fuzz payload
-    {
-      for (auto i = numKeys; i < rowType->size(); ++i) {
-        children.push_back(fuzzer.fuzz(rowType->childAt(i)));
-      }
-    }
-    return std::make_shared<RowVector>(
-        pool, rowType, nullptr, numRows, std::move(children));
-  }
-
   core::PlanNodePtr makeOrderByPlan(TestCase& test) {
     folly::BenchmarkSuspender suspender;
     std::vector<RowVectorPtr> vectors;
     for (auto i = 0; i < test.numVectors; ++i) {
       vectors.emplace_back(
-          fuzzRows(test.rowType, test.numRows, test.numKeys, pool_.get()));
+          OrderByBenchmarkUtil::fuzzRows(test.rowType, test.numRows, test.numKeys, pool_.get()));
     }
     return makeOrderByPlan(vectors, makeOrderByKeys(test.numKeys));
   }
@@ -221,17 +169,9 @@ class OrderByBenchmark {
     return elapsedMicros;
   }
 
-  std::shared_ptr<const RowType> rowWithName(std::vector<TypePtr>&& types) {
-    std::vector<std::string> names;
-    for (auto i = 0; i < types.size(); ++i) {
-      names.emplace_back(fmt::format("c{}", i));
-    }
-    return ROW(std::move(names), std::move(types));
-  }
-
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
-  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
+  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("OrderByBenchmark")};
   std::vector<std::unique_ptr<TestCase>> testCases_;
 };
 } // namespace
