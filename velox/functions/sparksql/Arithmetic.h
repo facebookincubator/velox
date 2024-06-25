@@ -30,23 +30,25 @@ namespace facebook::velox::functions::sparksql {
 
 template <typename T>
 struct RemainderFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool
-  call(TInput& result, const TInput a, const TInput n) {
+  template <typename TInput, typename = std::enable_if_t<!std::is_floating_point_v<TInput>>>
+  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a, const TInput n) {
     if (UNLIKELY(n == 0)) {
       return false;
     }
-    if constexpr (std::is_floating_point_v<TInput>) {
-      handleFloatingPoint(result, a, n);
+    // Handle integral case directly in the function
+    if (UNLIKELY(n == 1 || n == -1)) {
+      result = 0;
     } else {
-      handleIntegral(result, a, n);
+      result = a % n;
     }
     return true;
   }
 
- private:
-  template <typename TInput>
-  void handleFloatingPoint(TInput& result, const TInput a, const TInput n) {
+  template <typename TInput, typename = std::enable_if_t<std::is_floating_point_v<TInput>>>
+  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a, const TInput n) {
+    if (UNLIKELY(n == 0)) {
+      return false;
+    }
     // If either the dividend or the divisor is NaN, or if the dividend is
     // infinity, the result is set to NaN.
     if (UNLIKELY(std::isnan(a) || std::isnan(n) || std::isinf(a))) {
@@ -57,18 +59,6 @@ struct RemainderFunction {
       result = a;
     } else {
       result = std::fmod(a, n);
-    }
-  }
-
-  template <typename TInput>
-  void handleIntegral(TInput& result, const TInput a, const TInput n) {
-    // std::numeric_limits<int64_t>::min() % -1 could crash the program since
-    // abs(std::numeric_limits<int64_t>::min()) can not be represented in
-    // int64_t.
-    if (UNLIKELY(n == 1 || n == -1)) {
-      result = 0;
-    } else {
-      result = a % n;
     }
   }
 };

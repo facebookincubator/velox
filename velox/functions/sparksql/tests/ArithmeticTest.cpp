@@ -138,7 +138,7 @@ TEST_F(RemainderTest, double) {
   constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
   const auto remainderDouble = [&](std::optional<double> a, std::optional<double> b) {
     return remainder(a, b).value();
-  }
+  };
 
   EXPECT_DOUBLE_EQ(0.0, remainderDouble(2.0, 1.0));
   EXPECT_DOUBLE_EQ(1.0, remainderDouble(5.0, 2.0));
@@ -159,7 +159,7 @@ TEST_F(RemainderTest, float) {
   constexpr double kNan = std::numeric_limits<float>::quiet_NaN();
   const auto remainderFloat = [&](std::optional<float> a, std::optional<float> b) {
     return remainder(a, b).value();
-  }
+  };
 
   EXPECT_FLOAT_EQ(0.0f, remainderFloat(2.0f, 1.0f));
   EXPECT_FLOAT_EQ(1.0f, remainderFloat(5.0f, 2.0f));
