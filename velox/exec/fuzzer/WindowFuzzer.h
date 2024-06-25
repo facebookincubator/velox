@@ -86,9 +86,43 @@ class WindowFuzzer : public AggregationFuzzerBase {
 
   void addWindowFunctionSignatures(const WindowFunctionMap& signatureMap);
 
+  std::tuple<
+      core::WindowNode::WindowType,
+      core::WindowNode::BoundType,
+      core::WindowNode::BoundType>
+  frameWindowTypeAndBoundType();
+
+  template <TypeKind TKind>
+  void addOffsetColumnsToInput(
+      std::vector<RowVectorPtr>& input,
+      core::WindowNode::BoundType startBoundType,
+      core::WindowNode::BoundType endBoundType,
+      SortingKeyAndOrder& orderByKey);
+
+  // Add offset column to input data for k-range frames. Returns the value of K
+  // as a string.
+  template <typename T>
+  std::optional<std::string> addKRangeFrameColumnToInput(
+      std::vector<RowVectorPtr>& input,
+      core::WindowNode::BoundType frameBoundType,
+      std::string& columnName,
+      SortingKeyAndOrder& orderByKey);
+
+  template <typename T>
+  T genOffsetAtIdx(
+      T* offsetCol,
+      vector_size_t idx,
+      T offsetValue,
+      core::WindowNode::BoundType frameBoundType,
+      WindowFuzzer::SortingKeyAndOrder& orderByKey);
+
   // Return a randomly generated frame clause string together with a boolean
   // flag indicating whether it is a ROWS frame.
-  std::tuple<std::string, bool> generateFrameClause();
+  std::string generateFrameClause(
+      core::WindowNode::WindowType windowType,
+      core::WindowNode::BoundType startBoundType,
+      core::WindowNode::BoundType endBoundType,
+      bool isPrestoQuery = false);
 
   std::string generateOrderByClause(
       const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders);
@@ -101,7 +135,8 @@ class WindowFuzzer : public AggregationFuzzerBase {
   std::vector<SortingKeyAndOrder> generateSortingKeysAndOrders(
       const std::string& prefix,
       std::vector<std::string>& names,
-      std::vector<TypePtr>& types);
+      std::vector<TypePtr>& types,
+      const bool& isKRangeFrame = false);
 
   // Return 'true' if query plans failed.
   bool verifyWindow(
@@ -112,7 +147,8 @@ class WindowFuzzer : public AggregationFuzzerBase {
       const std::vector<RowVectorPtr>& input,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier,
-      bool enableWindowVerification);
+      bool enableWindowVerification,
+      std::optional<std::string> prestoFrameClause);
 
   void testAlternativePlans(
       const std::vector<std::string>& partitionKeys,
@@ -131,6 +167,11 @@ class WindowFuzzer : public AggregationFuzzerBase {
 
     void print(size_t numIterations) const;
   } stats_;
+
+  // Represents the value of frame bound for k-range frames to be used when
+  // running the query in Presto, when Presto is used as reference DB for
+  // verification.
+  std::vector<std::pair<std::string, std::string>> prestoFrames_;
 };
 
 /// Runs the window fuzzer.

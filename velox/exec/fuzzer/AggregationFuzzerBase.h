@@ -189,7 +189,8 @@ class AggregationFuzzerBase {
   std::vector<std::string> generateSortingKeys(
       const std::string& prefix,
       std::vector<std::string>& names,
-      std::vector<TypePtr>& types);
+      std::vector<TypePtr>& types,
+      const bool isKRangeFrame = false);
 
   std::pair<CallableSignature, SignatureStats&> pickSignature();
 
@@ -206,7 +207,8 @@ class AggregationFuzzerBase {
       std::vector<std::string> names,
       std::vector<TypePtr> types,
       const std::vector<std::string>& partitionKeys,
-      const CallableSignature& signature);
+      const CallableSignature& signature,
+      std::string orderByKey);
 
   std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
   computeReferenceResults(
