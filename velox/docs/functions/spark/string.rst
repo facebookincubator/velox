@@ -318,3 +318,27 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Returns string with all characters changed to uppercase. ::
 
         SELECT upper('SparkSql'); -- SPARKSQL
+
+.. spark:function:: mask(string, upperChar, lowerChar, digitChar, otherChar) -> string
+
+    Returns a masked version of the input `string`.
+    This can be useful for creating copies of tables with sensitive information removed.
+    ``string`` - string value to mask.
+    ``upperChar``: A single character STRING literal used to substitute upper case characters. The default is 'X'. If upperChar is NULL, upper case characters remain unmasked.
+    ``lowerChar``: A single character STRING literal used to substitute lower case characters. The default is 'x'. If lowerChar is NULL, lower case characters remain unmasked.
+    ``digitChar``: A single character STRING literal used to substitute digits. The default is 'n'. If digitChar is NULL, digits remain unmasked.
+    ``otherChar``: A single character STRING literal used to substitute any other character. The default is NULL, which leaves these characters unmasked. ::
+
+        SELECT mask('abcd-EFGH-8765-4321');  -- "xxxx-XXXX-nnnn-nnnn"
+        SELECT mask('abcd-EFGH-8765-4321', 'Q');  -- "xxxx-QQQQ-nnnn-nnnn"
+        SELECT mask('AbCD123-@$#');  -- "XxXXnnn-@$#"
+        SELECT mask('AbCD123-@$#', 'Q');  -- "QxQQnnn-@$#"
+        SELECT mask('AbCD123-@$#', 'Q', 'q');  -- "QqQQnnn-@$#"
+        SELECT mask('AbCD123-@$#', 'Q', 'q', 'd');  -- "QqQQddd-@$#"
+        SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', 'o');  -- "QqQQdddoooo"
+        SELECT mask('AbCD123-@$#', NULL, 'q', 'd', 'o'); -- "AqCDdddoooo"
+        SELECT mask('AbCD123-@$#', NULL, NULL, 'd', 'o'); -- "AbCDdddoooo"
+        SELECT mask('AbCD123-@$#', NULL, NULL, NULL, 'o'); -- "AbCD123oooo"
+        SELECT mask(NULL, NULL, NULL, NULL, 'o'); -- NULL
+        SELECT mask(NULL); -- NULL
+        SELECT mask('AbCD123-@$#', NULL, NULL, NULL, NULL); -- "AbCD123-@$#"
