@@ -265,6 +265,59 @@ class RowVectorHasher : public SparkVectorHasher<HashClass> {
   std::vector<std::shared_ptr<SparkVectorHasher<HashClass>>> hashers_;
 };
 
+template <typename HashClass, typename ReturnType, typename ArgType>
+void hashSimdTyped(
+    const SelectivityVector* rows,
+    std::vector<VectorPtr>& args,
+    FlatVector<ReturnType>& result) {
+  vector_size_t begin = rows->begin();
+  vector_size_t end = rows->end();
+  const __restrict ArgType* rawA =
+      args[0]->asUnchecked<FlatVector<ArgType>>()->rawValues();
+  auto* __restrict rawResult = result.template mutableRawValues<ReturnType>();
+  auto* __restrict rowsData = rows->allBits();
+  if (rows->isAllSelected()) {
+    for (auto i = begin; i < end; i++) {
+      rawResult[i] = hashOne<HashClass>(rawA[i], rawResult[i]);
+    }
+  } else {
+    for (auto i = begin; i < end; i++) {
+      if (bits::isBitSet(rowsData, i)) {
+        rawResult[i] = hashOne<HashClass>(rawA[i], rawResult[i]);
+      }
+    }
+  }
+}
+
+template <typename HashClass, typename ReturnType>
+void hashSimd(
+    const SelectivityVector* rows,
+    std::vector<VectorPtr>& args,
+    FlatVector<ReturnType>& result) {
+  switch (args[0]->typeKind()) {
+#define SCALAR_CASE(kind)                                            \
+  case TypeKind::kind:                                               \
+    hashSimdTyped<                                                   \
+        HashClass,                                                   \
+        ReturnType,                                                  \
+        TypeTraits<TypeKind::kind>::NativeType>(rows, args, result); \
+    break;
+    SCALAR_CASE(TINYINT)
+    SCALAR_CASE(SMALLINT)
+    SCALAR_CASE(INTEGER)
+    SCALAR_CASE(BIGINT)
+    SCALAR_CASE(HUGEINT)
+    SCALAR_CASE(REAL)
+    SCALAR_CASE(DOUBLE)
+    SCALAR_CASE(VARCHAR)
+    SCALAR_CASE(VARBINARY)
+    SCALAR_CASE(TIMESTAMP)
+#undef SCALAR_CASE
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 // ReturnType can be either int32_t or int64_t
 // HashClass contains the function like hashInt32
 template <
@@ -294,6 +347,21 @@ void applyWithType(
       selectedMinusNulls->deselectNulls(
           decoded->nulls(&rows), rows.begin(), rows.end());
       selected = selectedMinusNulls.get();
+    }
+
+    auto kind = args[0]->typeKind();
+    vector_size_t begin = selected->begin();
+    vector_size_t end = selected->end();
+    vector_size_t size = end - begin;
+    if ((kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+         kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+         kind == TypeKind::REAL || kind == TypeKind::DOUBLE ||
+         kind == TypeKind::TIMESTAMP || kind == TypeKind::VARCHAR ||
+         kind == TypeKind::VARBINARY || kind == TypeKind::HUGEINT) &&
+        args[0]->isFlatEncoding() && size > 32 &&
+        selected->countSelected() >= 0.75 * size) {
+      hashSimd<HashClass, ReturnType>(selected, args, result);
+      continue;
     }
 
     auto hasher = createVectorHasher<HashClass>(*decoded);
