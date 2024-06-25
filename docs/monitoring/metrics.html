@@ -513,6 +513,38 @@ due to SSD cache request size mismatch</p></td>
 </tbody>
 </table>
 </section>
+<section id="storage">
+<h2>Storage<a class="headerlink" href="#storage" title="Link to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40.0%" />
+<col style="width: 10.0%" />
+<col style="width: 50.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Metric Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>storage_throttled_duration_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The time distribution of storage IO throttled duration in range of [0, 30s]
+with 30 buckets. It is configured to report the capacity at P50, P90, P99,
+and P100 percentiles.</p></td>
+</tr>
+<tr class="row-odd"><td><p>storage_local_throttled_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of times that storage IOs get throttled in a storage directory.</p></td>
+</tr>
+<tr class="row-even"><td><p>storage_global_throttled_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of times that storage IOs get throttled in a storage cluster.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 <section id="spilling">
 <h2>Spilling<a class="headerlink" href="#spilling" title="Link to this heading">¶</a></h2>
 <table class="docutils align-default">
@@ -680,6 +712,7 @@ percentiles.</p></td>
 <li><a class="reference internal" href="#task-execution">Task Execution</a></li>
 <li><a class="reference internal" href="#memory-management">Memory Management</a></li>
 <li><a class="reference internal" href="#cache">Cache</a></li>
+<li><a class="reference internal" href="#storage">Storage</a></li>
 <li><a class="reference internal" href="#spilling">Spilling</a></li>
 <li><a class="reference internal" href="#exchange">Exchange</a></li>
 <li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
