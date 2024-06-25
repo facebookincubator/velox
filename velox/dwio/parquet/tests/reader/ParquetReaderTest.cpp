@@ -1209,8 +1209,8 @@ TEST_F(ParquetReaderTest, testLzoDataPage) {
       "31232");
 }
 
-TEST_F(ParquetReaderTest, testEmptyDataPage) {
-  const std::string sample(getExampleFilePath("snappy.parquet"));
+TEST_F(ParquetReaderTest, testEmptyV2DataPage) {
+  const std::string sample(getExampleFilePath("empty_v2datapage.parquet"));
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
