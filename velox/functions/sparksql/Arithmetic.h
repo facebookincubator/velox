@@ -30,12 +30,17 @@ namespace facebook::velox::functions::sparksql {
 
 template <typename T>
 struct RemainderFunction {
-  template <typename TInput, typename = std::enable_if_t<!std::is_floating_point_v<TInput>>>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a, const TInput n) {
+  template <
+      typename TInput,
+      typename std::enable_if_t<!std::is_floating_point_v<TInput>, int> = 0>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput a, const TInput n) {
     if (UNLIKELY(n == 0)) {
       return false;
     }
-    // Handle integral case directly in the function
+    // std::numeric_limits<int64_t>::min() % -1 could crash the program since
+    // abs(std::numeric_limits<int64_t>::min()) can not be represented in
+    // int64_t.
     if (UNLIKELY(n == 1 || n == -1)) {
       result = 0;
     } else {
@@ -44,8 +49,12 @@ struct RemainderFunction {
     return true;
   }
 
-  template <typename TInput, typename = std::enable_if_t<std::is_floating_point_v<TInput>>>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a, const TInput n) {
+  // Specialization for floating point types.
+  template <
+      typename TInput,
+      typename std::enable_if_t<std::is_floating_point_v<TInput>, int> = 0>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput a, const TInput n) {
     if (UNLIKELY(n == 0)) {
       return false;
     }
@@ -54,12 +63,13 @@ struct RemainderFunction {
     if (UNLIKELY(std::isnan(a) || std::isnan(n) || std::isinf(a))) {
       result = std::numeric_limits<TInput>::quiet_NaN();
     }
-    // If the divisor is infinity, the result is equal as the dividend.
+    // If the divisor is infinity, the result is equal to the dividend.
     else if (UNLIKELY(std::isinf(n))) {
       result = a;
     } else {
       result = std::fmod(a, n);
     }
+    return true;
   }
 };
 

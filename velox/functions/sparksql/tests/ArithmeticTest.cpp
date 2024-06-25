@@ -136,7 +136,8 @@ TEST_F(RemainderTest, int64) {
 TEST_F(RemainderTest, double) {
   constexpr double kInf = std::numeric_limits<double>::infinity();
   constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
-  const auto remainderDouble = [&](std::optional<double> a, std::optional<double> b) {
+  const auto remainderDouble = [&](std::optional<double> a,
+                                   std::optional<double> b) {
     return remainder(a, b).value();
   };
 
@@ -147,6 +148,7 @@ TEST_F(RemainderTest, double) {
   EXPECT_DOUBLE_EQ(0.0, remainderDouble(0.0, 1.0));
   EXPECT_DOUBLE_EQ(2.0, remainderDouble(2.0, kInf));
 
+  EXPECT_EQ(std::nullopt, remainder<double>(2.0, 0.0));
   EXPECT_TRUE(std::isnan(remainderDouble(kNan, 1.0)));
   EXPECT_TRUE(std::isnan(remainderDouble(1.0, kNan)));
   EXPECT_TRUE(std::isnan(remainderDouble(kInf, 1.0)));
@@ -155,9 +157,10 @@ TEST_F(RemainderTest, double) {
 }
 
 TEST_F(RemainderTest, float) {
-  constexpr double kInf = std::numeric_limits<float>::infinity();
-  constexpr double kNan = std::numeric_limits<float>::quiet_NaN();
-  const auto remainderFloat = [&](std::optional<float> a, std::optional<float> b) {
+  constexpr float kInf = std::numeric_limits<float>::infinity();
+  constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+  const auto remainderFloat = [&](std::optional<float> a,
+                                  std::optional<float> b) {
     return remainder(a, b).value();
   };
 
@@ -168,7 +171,7 @@ TEST_F(RemainderTest, float) {
   EXPECT_FLOAT_EQ(0.0f, remainderFloat(0.0f, 1.0f));
   EXPECT_FLOAT_EQ(2.0f, remainderFloat(2.0f, kInf));
 
-  EXPECT_EQ(std::nullopt, remainderFloat(2.0, 0.0));
+  EXPECT_EQ(std::nullopt, remainder<float>(2.0f, 0.0f));
   EXPECT_TRUE(std::isnan(remainderFloat(kNan, 1.0f)));
   EXPECT_TRUE(std::isnan(remainderFloat(1.0f, kNan)));
   EXPECT_TRUE(std::isnan(remainderFloat(kInf, 1.0f)));
