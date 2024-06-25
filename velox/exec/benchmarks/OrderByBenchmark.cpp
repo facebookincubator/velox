@@ -16,8 +16,8 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
-#include "glog/logging.h"
 #include "OrderByBenchmarkUtil.h"
+#include "glog/logging.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -73,7 +73,8 @@ class OrderByBenchmark {
   void largeVarchar() {
     const std::vector<vector_size_t> batchSizes = {
         1'000, 10'000, 100'000, 1'000'000};
-    std::vector<RowTypePtr> rowTypes = OrderByBenchmarkUtil::largeVarcharRowTypes();
+    std::vector<RowTypePtr> rowTypes =
+        OrderByBenchmarkUtil::largeVarcharRowTypes();
     std::vector<int> numKeys = {1, 2, 3, 4};
     benchmark("no-payloads", "varchar", batchSizes, rowTypes, numKeys, 1);
   }
@@ -120,7 +121,8 @@ class OrderByBenchmark {
       bool noPayload,
       int numVectors,
       const std::vector<vector_size_t>& batchSizes) {
-    std::vector<RowTypePtr> rowTypes = OrderByBenchmarkUtil::bigintRowTypes(noPayload);
+    std::vector<RowTypePtr> rowTypes =
+        OrderByBenchmarkUtil::bigintRowTypes(noPayload);
     std::vector<int> numKeys = {1, 2, 3, 4};
     benchmark(
         noPayload ? "no-payload" : "payload",
@@ -135,8 +137,8 @@ class OrderByBenchmark {
     folly::BenchmarkSuspender suspender;
     std::vector<RowVectorPtr> vectors;
     for (auto i = 0; i < test.numVectors; ++i) {
-      vectors.emplace_back(
-          OrderByBenchmarkUtil::fuzzRows(test.rowType, test.numRows, test.numKeys, pool_.get()));
+      vectors.emplace_back(OrderByBenchmarkUtil::fuzzRows(
+          test.rowType, test.numRows, test.numKeys, pool_.get()));
     }
     return makeOrderByPlan(vectors, makeOrderByKeys(test.numKeys));
   }
@@ -171,7 +173,8 @@ class OrderByBenchmark {
 
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
-  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("OrderByBenchmark")};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      rootPool_->addLeafChild("OrderByBenchmark")};
   std::vector<std::unique_ptr<TestCase>> testCases_;
 };
 } // namespace
