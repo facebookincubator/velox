@@ -15,14 +15,6 @@ Array Functions
 
         SELECT array(1, 2, 3); -- [1,2,3]
 
-.. spark::function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
-
-    Returns the merge of the given arrays, element-wise into a single array of rows.
-    The M-th element of the N-th argument will be the N-th field of the M-th output element.
-    If the arguments have an uneven length, missing values are filled with ``NULL`` ::
-
-        SELECT arrays_zip(ARRAY[1, 2], ARRAY['1b', null, '3b']); -- [ROW(1, '1b'), ROW(2, null), ROW(null, '3b')]
-
 .. spark:function:: array_contains(array(E), value) -> boolean
 
     Returns true if the array contains the value. ::
@@ -125,6 +117,14 @@ Array Functions
         SELECT array_sort(array(2, 1, NULL); -- [1, 2, NULL]
         SELECT array_sort(array(NULL, 1, NULL)); -- [1, NULL, NULL]
         SELECT array_sort(array(NULL, 2, 1)); -- [1, 2, NULL]
+
+.. spark::function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
+
+    Returns the merge of the given arrays, element-wise into a single array of rows.
+    The M-th element of the N-th argument will be the N-th field of the M-th output element.
+    If the arguments have an uneven length, missing values are filled with ``NULL`` ::
+
+        SELECT arrays_zip(ARRAY[1, 2], ARRAY['1b', null, '3b']); -- [ROW(1, '1b'), ROW(2, null), ROW(null, '3b')]
 
 .. spark:function:: concat(array(E), array(E1), ..., array(En)) -> array(E, E1, ..., En)
 
