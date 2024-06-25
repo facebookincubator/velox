@@ -10,7 +10,7 @@ Comparison Functions
 
 .. spark:function:: equalnullsafe(x, y) -> boolean
 
-    Returns true if ``x`` is equal to ``y``. Supports all types. The
+    Returns true if ``x`` is equal to ``y``. Supports all scalar and complex types. The
     types of ``x`` and ``y`` must be the same. Unlike :spark:func:`equalto` returns true if both inputs
     are NULL and false if one of the inputs is NULL. Nested nulls are compared as values.
     Corresponds to Spark's operator ``<=>``.
@@ -24,7 +24,7 @@ Comparison Functions
 
 .. spark:function:: equalto(x, y) -> boolean
 
-    Returns true if x is equal to y. Supports all types. The
+    Returns true if x is equal to y. Supports all scalar and complex types. The
     types of x and y must be the same. Corresponds to Spark's operators ``=`` and ``==``.
     Returns NULL for any NULL input, but nested nulls are compared as values. ::
     

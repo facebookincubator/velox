@@ -109,15 +109,15 @@ class ComparisonsTest : public SparkFunctionBaseTest {
 
 TEST_F(ComparisonsTest, equaltonullsafe) {
   const auto funcName = "equalnullsafe";
-  auto assertArrayInput = [&](const std::string& array1,
-                              const std::string& array2,
-                              std::optional<bool> expectedResult) {
+  auto testArrayInput = [&](const std::string& array1,
+                            const std::string& array2,
+                            std::optional<bool> expectedResult) {
     runAndCompareForArrayInput(funcName, array1, array2, expectedResult);
   };
 
-  auto assertRowInput = [&](const std::optional<int64_t>& value1,
-                            const std::optional<int64_t>& value2,
-                            std::optional<bool> expectedResult) {
+  auto testRowInput = [&](const std::optional<int64_t>& value1,
+                          const std::optional<int64_t>& value2,
+                          std::optional<bool> expectedResult) {
     runAndCompareForRowInput(
         funcName,
         constructRowVector(value1),
@@ -135,31 +135,31 @@ TEST_F(ComparisonsTest, equaltonullsafe) {
   EXPECT_EQ(equaltonullsafe<double>(kNaN, 1), false);
   EXPECT_EQ(equaltonullsafe<double>(kNaN, kNaN), true);
 
-  assertArrayInput("null", "null", true);
-  assertArrayInput("null", "[1.0]", false);
-  assertArrayInput("[1.0]", "null", false);
+  testArrayInput("null", "null", true);
+  testArrayInput("null", "[1.0]", false);
+  testArrayInput("[1.0]", "null", false);
 
-  assertArrayInput("[]", "[]", true);
+  testArrayInput("[]", "[]", true);
 
-  assertArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 3.0]", true);
-  assertArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 4.0]", false);
+  testArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 3.0]", true);
+  testArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 4.0]", false);
 
-  assertArrayInput("[1.0, null]", "[6.0, 2.0]", false);
-  assertArrayInput("[1.0, null]", "[1.0, 2.0]", false);
-  assertArrayInput("[1.0, NaN]", "[1.0, NaN]", true);
+  testArrayInput("[1.0, null]", "[6.0, 2.0]", false);
+  testArrayInput("[1.0, null]", "[1.0, 2.0]", false);
+  testArrayInput("[1.0, NaN]", "[1.0, NaN]", true);
 
-  assertArrayInput("[]", "[null, null]", false);
-  assertArrayInput("[1.0, 2.0]", "[1.0, 2.0, null]", false);
-  assertArrayInput("[null, null]", "[null, null, null]", false);
+  testArrayInput("[]", "[null, null]", false);
+  testArrayInput("[1.0, 2.0]", "[1.0, 2.0, null]", false);
+  testArrayInput("[null, null]", "[null, null, null]", false);
 
-  assertArrayInput("[null, null]", "[null, null]", true);
+  testArrayInput("[null, null]", "[null, null]", true);
 
-  assertRowInput(std::nullopt, std::nullopt, true);
-  assertRowInput(std::nullopt, 1, false);
-  assertRowInput(1, std::nullopt, false);
+  testRowInput(std::nullopt, std::nullopt, true);
+  testRowInput(std::nullopt, 1, false);
+  testRowInput(1, std::nullopt, false);
 
-  assertRowInput(1, 2, false);
-  assertRowInput(1, 1, true);
+  testRowInput(1, 2, false);
+  testRowInput(1, 1, true);
 
   runAndCompareForRowInput(
       funcName,
@@ -180,15 +180,15 @@ TEST_F(ComparisonsTest, equaltonullsafe) {
 
 TEST_F(ComparisonsTest, equalto) {
   const auto funcName = "equalto";
-  auto assertArrayInput = [&](const std::string& array1,
-                              const std::string& array2,
-                              std::optional<bool> expectedResult) {
+  auto testArrayInput = [&](const std::string& array1,
+                            const std::string& array2,
+                            std::optional<bool> expectedResult) {
     runAndCompareForArrayInput(funcName, array1, array2, expectedResult);
   };
 
-  auto assertRowInput = [&](const std::optional<int64_t>& value1,
-                            const std::optional<int64_t>& value2,
-                            std::optional<bool> expectedResult) {
+  auto testRowInput = [&](const std::optional<int64_t>& value1,
+                          const std::optional<int64_t>& value2,
+                          std::optional<bool> expectedResult) {
     runAndCompareForRowInput(
         funcName,
         constructRowVector(value1),
@@ -217,31 +217,31 @@ TEST_F(ComparisonsTest, equalto) {
   EXPECT_EQ(equalto<float>(kInfF, -kInfF), false);
   EXPECT_EQ(equalto<double>(kInf, kNaN), false);
 
-  assertArrayInput("null", "null", std::nullopt);
-  assertArrayInput("null", "[1.0]", std::nullopt);
-  assertArrayInput("[1.0]", "null", std::nullopt);
+  testArrayInput("null", "null", std::nullopt);
+  testArrayInput("null", "[1.0]", std::nullopt);
+  testArrayInput("[1.0]", "null", std::nullopt);
 
-  assertArrayInput("[]", "[]", true);
+  testArrayInput("[]", "[]", true);
 
-  assertArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 3.0]", true);
-  assertArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 4.0]", false);
+  testArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 3.0]", true);
+  testArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 4.0]", false);
 
-  assertArrayInput("[1.0, null]", "[6.0, 2.0]", false);
-  assertArrayInput("[1.0, null]", "[1.0, 2.0]", false);
-  assertArrayInput("[1.0, NaN]", "[1.0, NaN]", true);
+  testArrayInput("[1.0, null]", "[6.0, 2.0]", false);
+  testArrayInput("[1.0, null]", "[1.0, 2.0]", false);
+  testArrayInput("[1.0, NaN]", "[1.0, NaN]", true);
 
-  assertArrayInput("[]", "[null, null]", false);
-  assertArrayInput("[1.0, 2.0]", "[1.0, 2.0, null]", false);
-  assertArrayInput("[null, null]", "[null, null, null]", false);
+  testArrayInput("[]", "[null, null]", false);
+  testArrayInput("[1.0, 2.0]", "[1.0, 2.0, null]", false);
+  testArrayInput("[null, null]", "[null, null, null]", false);
 
-  assertArrayInput("[null, null]", "[null, null]", true);
+  testArrayInput("[null, null]", "[null, null]", true);
 
-  assertRowInput(std::nullopt, std::nullopt, true);
-  assertRowInput(std::nullopt, 1, false);
-  assertRowInput(1, std::nullopt, false);
+  testRowInput(std::nullopt, std::nullopt, true);
+  testRowInput(std::nullopt, 1, false);
+  testRowInput(1, std::nullopt, false);
 
-  assertRowInput(1, 2, false);
-  assertRowInput(1, 1, true);
+  testRowInput(1, 2, false);
+  testRowInput(1, 1, true);
 
   runAndCompareForRowInput(
       funcName,
