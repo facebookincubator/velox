@@ -45,19 +45,15 @@ struct RemainderFunction {
   }
 
  private:
-  /**
-     * Handles the floating-point remainder operation, addressing special cases.
-     *
-     * Cases handled:
-     * 1. If 'a' or 'n' is NaN, or if 'a' is infinity, the result is set to NaN.
-     * 2. If 'n' is infinity, the result is set to 'a'.
-     * 3. Otherwise, the result is the remainder of 'a' divided by 'n' using std::fmod.
-     */
   template <typename TInput>
   void handleFloatingPoint(TInput& result, const TInput a, const TInput n) {
+    // If either the dividend or the divisor is NaN, or if the dividend is
+    // infinity, the result is set to NaN.
     if (UNLIKELY(std::isnan(a) || std::isnan(n) || std::isinf(a))) {
       result = std::numeric_limits<TInput>::quiet_NaN();
-    } else if (UNLIKELY(std::isinf(n))) {
+    }
+    // If the divisor is infinity, the result is equal as the dividend.
+    else if (UNLIKELY(std::isinf(n))) {
       result = a;
     } else {
       result = std::fmod(a, n);
