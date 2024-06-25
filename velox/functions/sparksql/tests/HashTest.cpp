@@ -261,7 +261,11 @@ TEST_F(HashTest, simd) {
   runSIMDHashAndAssert<float>(1, -466301895, 77);
   runSIMDHashAndAssert<double>(1, -460888942, 1000, 32);
   runSIMDHashAndAssert<Timestamp>(
-      Timestamp::fromMicros(12345678), 1402875301, 1000, 100);
+      Timestamp::fromMicros(12345678), 1402875301, 1000);
+
+  runSIMDHashAndAssert<int64_t>(-1, -939490007, 1024, 1023);
+  runSIMDHashAndAssert<int64_t>(-1, -939490007, 1024, 512);
+  runSIMDHashAndAssert<int64_t>(-1, -939490007, 1024, 3);
 }
 
 } // namespace

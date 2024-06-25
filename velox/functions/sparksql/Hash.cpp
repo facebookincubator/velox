@@ -269,23 +269,21 @@ template <typename HashClass, typename ReturnType, typename ArgType>
 void hashSimdTyped(
     const SelectivityVector* rows,
     std::vector<VectorPtr>& args,
-    FlatVector<ReturnType>& result) {
-  vector_size_t begin = rows->begin();
-  vector_size_t end = rows->end();
-  const __restrict ArgType* rawA =
-      args[0]->asUnchecked<FlatVector<ArgType>>()->rawValues();
+    FlatVector<ReturnType>& result,
+    const int32_t hashIdx) {
+  const ArgType* __restrict rawA =
+      args[hashIdx]->asUnchecked<FlatVector<ArgType>>()->rawValues();
   auto* __restrict rawResult = result.template mutableRawValues<ReturnType>();
-  auto* __restrict rowsData = rows->allBits();
+  auto begin = rows->begin();
+  auto end = rows->end();
   if (rows->isAllSelected()) {
-    for (auto i = begin; i < end; i++) {
-      rawResult[i] = hashOne<HashClass>(rawA[i], rawResult[i]);
+    for (auto row = begin; row < end; ++row) {
+      rawResult[row] = hashOne<HashClass>(rawA[row], rawResult[row]);
     }
   } else {
-    for (auto i = begin; i < end; i++) {
-      if (bits::isBitSet(rowsData, i)) {
-        rawResult[i] = hashOne<HashClass>(rawA[i], rawResult[i]);
-      }
-    }
+    rows->applyToSelected([&](auto row) {
+      rawResult[row] = hashOne<HashClass>(rawA[row], rawResult[row]);
+    });
   }
 }
 
@@ -293,15 +291,15 @@ template <typename HashClass, typename ReturnType>
 void hashSimd(
     const SelectivityVector* rows,
     std::vector<VectorPtr>& args,
-    FlatVector<ReturnType>& result) {
-  switch (args[0]->typeKind()) {
-#define SCALAR_CASE(kind)                                            \
-  case TypeKind::kind:                                               \
-    hashSimdTyped<                                                   \
-        HashClass,                                                   \
-        ReturnType,                                                  \
-        TypeTraits<TypeKind::kind>::NativeType>(rows, args, result); \
-    break;
+    FlatVector<ReturnType>& result,
+    const int32_t hashIdx) {
+  switch (args[hashIdx]->typeKind()) {
+#define SCALAR_CASE(kind) \
+  case TypeKind::kind:    \
+    return hashSimdTyped< \
+        HashClass,        \
+        ReturnType,       \
+        TypeTraits<TypeKind::kind>::NativeType>(rows, args, result, hashIdx);
     SCALAR_CASE(TINYINT)
     SCALAR_CASE(SMALLINT)
     SCALAR_CASE(INTEGER)
@@ -349,18 +347,14 @@ void applyWithType(
       selected = selectedMinusNulls.get();
     }
 
-    auto kind = args[0]->typeKind();
-    vector_size_t begin = selected->begin();
-    vector_size_t end = selected->end();
-    vector_size_t size = end - begin;
+    auto kind = args[i]->typeKind();
     if ((kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
          kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
          kind == TypeKind::REAL || kind == TypeKind::DOUBLE ||
          kind == TypeKind::TIMESTAMP || kind == TypeKind::VARCHAR ||
          kind == TypeKind::VARBINARY || kind == TypeKind::HUGEINT) &&
-        args[0]->isFlatEncoding() && size > 32 &&
-        selected->countSelected() >= 0.75 * size) {
-      hashSimd<HashClass, ReturnType>(selected, args, result);
+        args[i]->isFlatEncoding()) {
+      hashSimd<HashClass, ReturnType>(selected, args, result, i);
       continue;
     }
 
