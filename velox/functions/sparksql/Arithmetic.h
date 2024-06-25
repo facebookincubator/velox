@@ -45,11 +45,19 @@ struct RemainderFunction {
   }
 
  private:
+  /**
+     * Handles the floating-point remainder operation, addressing special cases.
+     *
+     * Cases handled:
+     * 1. If 'a' or 'n' is NaN, or if 'a' is infinity, the result is set to NaN.
+     * 2. If 'n' is infinity, the result is set to 'a'.
+     * 3. Otherwise, the result is the remainder of 'a' divided by 'n' using std::fmod.
+     */
   template <typename TInput>
-  void handleFloatingPoint(TInput& result, const TInput& a, const TInput& n) {
-    if (std::isnan(a) || std::isnan(n) || std::isinf(a)) {
+  void handleFloatingPoint(TInput& result, const TInput a, const TInput n) {
+    if (UNLIKELY(std::isnan(a) || std::isnan(n) || std::isinf(a))) {
       result = std::numeric_limits<TInput>::quiet_NaN();
-    } else if (std::isinf(n)) {
+    } else if (UNLIKELY(std::isinf(n))) {
       result = a;
     } else {
       result = std::fmod(a, n);
@@ -57,7 +65,7 @@ struct RemainderFunction {
   }
 
   template <typename TInput>
-  void handleIntegral(TInput& result, const TInput& a, const TInput& n) {
+  void handleIntegral(TInput& result, const TInput a, const TInput n) {
     // std::numeric_limits<int64_t>::min() % -1 could crash the program since
     // abs(std::numeric_limits<int64_t>::min()) can not be represented in
     // int64_t.
