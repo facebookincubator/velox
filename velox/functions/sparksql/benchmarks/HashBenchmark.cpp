@@ -32,6 +32,15 @@ int main(int argc, char** argv) {
   ExpressionBenchmarkBuilder benchmarkBuilder;
 
   std::vector<TypePtr> inputTypes = {
+      TINYINT(),
+      SMALLINT(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      TIMESTAMP(),
+      VARCHAR(),
+      DECIMAL(18, 6),
+      DECIMAL(38, 6),
       ARRAY(MAP(INTEGER(), VARCHAR())),
       ROW({"f_map", "f_array"}, {MAP(INTEGER(), VARCHAR()), ARRAY(INTEGER())}),
   };
@@ -41,7 +50,7 @@ int main(int argc, char** argv) {
         .addBenchmarkSet(
             fmt::format("hash_{}", inputType->toString()),
             ROW({"c0"}, {inputType}))
-        .withFuzzerOptions({.vectorSize = 1000, .nullRatio = 0.1})
+        .withFuzzerOptions({.vectorSize = 1000, .nullRatio = 0})
         .addExpression("hash", "hash(c0)")
         .addExpression("xxhash64", "xxhash64(c0)")
         .withIterations(100);
