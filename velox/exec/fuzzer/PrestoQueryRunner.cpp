@@ -78,6 +78,28 @@ RowVectorPtr deserialize(
   return result;
 }
 
+RowVectorPtr makeNullRows(
+    const std::vector<velox::RowVectorPtr>& input,
+    const std::string& colName,
+    memory::MemoryPool* pool) {
+  // The query doesn't need to read any columns, but it needs to see a
+  // specific number of rows. Make new 'input' as single all-null BIGINT
+  // column with as many rows as original input. This way we'll be able to
+  // create a temporary test table with the necessary number of rows.
+  vector_size_t numInput = 0;
+  for (const auto& v : input) {
+    numInput += v->size();
+  }
+
+  auto column = BaseVector::createNullConstant(BIGINT(), numInput, pool);
+  return std::make_shared<RowVector>(
+      pool,
+      ROW({colName}, {BIGINT()}),
+      nullptr,
+      numInput,
+      std::vector<VectorPtr>{column});
+}
+
 class ServerResponse {
  public:
   explicit ServerResponse(const std::string& responseJson)
@@ -174,6 +196,16 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   if (auto tableWriteNode =
           std::dynamic_pointer_cast<const core::TableWriteNode>(plan)) {
     return toSql(tableWriteNode);
+  }
+
+  if (const auto joinNode =
+          std::dynamic_pointer_cast<const core::HashJoinNode>(plan)) {
+    return toSql(joinNode);
+  }
+
+  if (const auto joinNode =
+          std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(plan)) {
+    return toSql(joinNode);
   }
 
   VELOX_NYI();
@@ -541,8 +573,13 @@ std::optional<std::string> PrestoQueryRunner::toSql(
 
   // Returns a CTAS sql with specified table properties from TableWriteNode,
   // example sql:
-  // CREATE TABLE tmp_write WITH (PARTITIONED_BY = ARRAY['p0'], BUCKETED_COUNT =
-  // 20, BUCKETED_BY = ARRAY['b0', 'b1']) AS SELECT * FROM tmp
+  // CREATE TABLE tmp_write WITH (
+  // PARTITIONED_BY = ARRAY['p0'],
+  // BUCKETED_COUNT = 2, BUCKETED_BY = ARRAY['b0', 'b1'],
+  // SORTED_BY = ARRAY['s0 ASC', 's1 DESC'],
+  // FORMAT = 'ORC'
+  // )
+  // AS SELECT * FROM tmp
   std::stringstream sql;
   sql << "CREATE TABLE tmp_write";
   std::vector<std::string> partitionKeys;
@@ -551,31 +588,170 @@ std::optional<std::string> PrestoQueryRunner::toSql(
       partitionKeys.push_back(insertTableHandle->inputColumns()[i]->name());
     }
   }
+  sql << " WITH (";
 
   if (insertTableHandle->isPartitioned()) {
-    sql << " WITH (PARTITIONED_BY = ARRAY[";
+    sql << " PARTITIONED_BY = ARRAY[";
     for (int i = 0; i < partitionKeys.size(); ++i) {
       appendComma(i, sql);
       sql << "'" << partitionKeys[i] << "'";
     }
-    sql << "]";
+    sql << "], ";
 
     if (insertTableHandle->bucketProperty() != nullptr) {
       const auto bucketCount =
           insertTableHandle->bucketProperty()->bucketCount();
       const auto bucketColumns =
           insertTableHandle->bucketProperty()->bucketedBy();
-      sql << ", BUCKET_COUNT = " << bucketCount << ", BUCKETED_BY = ARRAY[";
+      sql << " BUCKET_COUNT = " << bucketCount << ", BUCKETED_BY = ARRAY[";
       for (int i = 0; i < bucketColumns.size(); ++i) {
         appendComma(i, sql);
         sql << "'" << bucketColumns[i] << "'";
       }
-      sql << "]";
+      sql << "], ";
+
+      const auto sortColumns = insertTableHandle->bucketProperty()->sortedBy();
+      if (!sortColumns.empty()) {
+        sql << " SORTED_BY = ARRAY[";
+        for (int i = 0; i < sortColumns.size(); ++i) {
+          appendComma(i, sql);
+          sql << "'" << sortColumns[i]->sortColumn() << " "
+              << (sortColumns[i]->sortOrder().isAscending() ? "ASC" : "DESC")
+              << "'";
+        }
+        sql << "], ";
+      }
     }
-    sql << ")";
   }
 
-  sql << " AS SELECT * FROM tmp";
+  sql << "FORMAT = 'ORC')  AS SELECT * FROM tmp";
+  return sql.str();
+}
+
+std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const core::HashJoinNode>& joinNode) {
+  if (!isSupportedDwrfType(joinNode->sources()[0]->outputType())) {
+    return std::nullopt;
+  }
+
+  if (!isSupportedDwrfType(joinNode->sources()[1]->outputType())) {
+    return std::nullopt;
+  }
+
+  const auto joinKeysToSql = [](auto keys) {
+    std::stringstream out;
+    for (auto i = 0; i < keys.size(); ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      out << keys[i]->name();
+    }
+    return out.str();
+  };
+
+  const auto equiClausesToSql = [](auto joinNode) {
+    std::stringstream out;
+    for (auto i = 0; i < joinNode->leftKeys().size(); ++i) {
+      if (i > 0) {
+        out << " AND ";
+      }
+      out << joinNode->leftKeys()[i]->name() << " = "
+          << joinNode->rightKeys()[i]->name();
+    }
+    return out.str();
+  };
+
+  const auto& outputNames = joinNode->outputType()->names();
+
+  std::stringstream sql;
+  if (joinNode->isLeftSemiProjectJoin()) {
+    sql << "SELECT "
+        << folly::join(", ", outputNames.begin(), --outputNames.end());
+  } else {
+    sql << "SELECT " << folly::join(", ", outputNames);
+  }
+
+  switch (joinNode->joinType()) {
+    case core::JoinType::kInner:
+      sql << " FROM t INNER JOIN u ON " << equiClausesToSql(joinNode);
+      break;
+    case core::JoinType::kLeft:
+      sql << " FROM t LEFT JOIN u ON " << equiClausesToSql(joinNode);
+      break;
+    case core::JoinType::kFull:
+      sql << " FROM t FULL OUTER JOIN u ON " << equiClausesToSql(joinNode);
+      break;
+    case core::JoinType::kLeftSemiFilter:
+      if (joinNode->leftKeys().size() > 1) {
+        return std::nullopt;
+      }
+      sql << " FROM t WHERE " << joinKeysToSql(joinNode->leftKeys())
+          << " IN (SELECT " << joinKeysToSql(joinNode->rightKeys())
+          << " FROM u)";
+      break;
+    case core::JoinType::kLeftSemiProject:
+      if (joinNode->isNullAware()) {
+        sql << ", " << joinKeysToSql(joinNode->leftKeys()) << " IN (SELECT "
+            << joinKeysToSql(joinNode->rightKeys()) << " FROM u) FROM t";
+      } else {
+        sql << ", EXISTS (SELECT * FROM u WHERE " << equiClausesToSql(joinNode)
+            << ") FROM t";
+      }
+      break;
+    case core::JoinType::kAnti:
+      if (joinNode->isNullAware()) {
+        sql << " FROM t WHERE " << joinKeysToSql(joinNode->leftKeys())
+            << " NOT IN (SELECT " << joinKeysToSql(joinNode->rightKeys())
+            << " FROM u)";
+      } else {
+        sql << " FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE "
+            << equiClausesToSql(joinNode) << ")";
+      }
+      break;
+    default:
+      VELOX_UNREACHABLE(
+          "Unknown join type: {}", static_cast<int>(joinNode->joinType()));
+  }
+
+  return sql.str();
+}
+
+std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode) {
+  const auto& joinKeysToSql = [](auto keys) {
+    std::stringstream out;
+    for (auto i = 0; i < keys.size(); ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      out << keys[i]->name();
+    }
+    return out.str();
+  };
+
+  const auto& outputNames = joinNode->outputType()->names();
+  std::stringstream sql;
+
+  // Nested loop join without filter.
+  VELOX_CHECK(
+      joinNode->joinCondition() == nullptr,
+      "This code path should be called only for nested loop join without filter");
+  const std::string joinCondition{"(1 = 1)"};
+  switch (joinNode->joinType()) {
+    case core::JoinType::kInner:
+      sql << " FROM t INNER JOIN u ON " << joinCondition;
+      break;
+    case core::JoinType::kLeft:
+      sql << " FROM t LEFT JOIN u ON " << joinCondition;
+      break;
+    case core::JoinType::kFull:
+      sql << " FROM t FULL OUTER JOIN u ON " << joinCondition;
+      break;
+    default:
+      VELOX_UNREACHABLE(
+          "Unknown join type: {}", static_cast<int>(joinNode->joinType()));
+  }
+
   return sql.str();
 }
 
@@ -586,34 +762,19 @@ std::multiset<std::vector<variant>> PrestoQueryRunner::execute(
   return exec::test::materialize(executeVector(sql, input, resultType));
 }
 
-std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
+std::multiset<std::vector<velox::variant>> PrestoQueryRunner::execute(
     const std::string& sql,
-    const std::vector<velox::RowVectorPtr>& input,
-    const velox::RowTypePtr& resultType) {
-  auto inputType = asRowType(input[0]->type());
-  if (inputType->size() == 0) {
-    // The query doesn't need to read any columns, but it needs to see a
-    // specific number of rows. Make new 'input' as single all-null BIGINT
-    // column with as many rows as original input. This way we'll be able to
-    // create a 'tmp' table will the necessary number of rows.
-    vector_size_t numInput = 0;
-    for (const auto& v : input) {
-      numInput += v->size();
-    }
+    const std::vector<RowVectorPtr>& probeInput,
+    const std::vector<RowVectorPtr>& buildInput,
+    const RowTypePtr& resultType) {
+  return exec::test::materialize(
+      executeVector(sql, probeInput, buildInput, resultType));
+}
 
-    auto column = BaseVector::createNullConstant(BIGINT(), numInput, pool());
-    auto rowVector = std::make_shared<RowVector>(
-        pool(),
-        ROW({"x"}, {BIGINT()}),
-        nullptr,
-        numInput,
-        std::vector<VectorPtr>{column});
-    return executeVector(sql, {rowVector}, resultType);
-  }
-
-  // Create tmp table in Presto using DWRF file format and add a single
-  // all-null row to it.
-
+std::string PrestoQueryRunner::createTable(
+    const std::string& name,
+    const TypePtr& type) {
+  auto inputType = asRowType(type);
   std::stringstream nullValues;
   for (auto i = 0; i < inputType->size(); ++i) {
     appendComma(i, nullValues);
@@ -621,21 +782,76 @@ std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
         "cast(null as {})", toTypeSql(inputType->childAt(i)));
   }
 
-  execute("DROP TABLE IF EXISTS tmp");
+  execute(fmt::format("DROP TABLE IF EXISTS {}", name));
 
   execute(fmt::format(
-      "CREATE TABLE tmp({}) WITH (format = 'DWRF') AS SELECT {}",
+      "CREATE TABLE {}({}) WITH (format = 'DWRF') AS SELECT {}",
+      name,
       folly::join(", ", inputType->names()),
       nullValues.str()));
 
   // Query Presto to find out table's location on disk.
-  auto results = execute("SELECT \"$path\" FROM tmp");
+  auto results = execute(fmt::format("SELECT \"$path\" FROM {}", name));
 
   auto filePath = extractSingleValue<StringView>(results);
   auto tableDirectoryPath = fs::path(filePath).parent_path();
 
   // Delete the all-null row.
-  execute("DELETE FROM tmp");
+  execute(fmt::format("DELETE FROM {}", name));
+
+  return tableDirectoryPath;
+}
+
+std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
+    const std::string& sql,
+    const std::vector<RowVectorPtr>& probeInput,
+    const std::vector<RowVectorPtr>& buildInput,
+    const velox::RowTypePtr& resultType) {
+  auto probeType = asRowType(probeInput[0]->type());
+  if (probeType->size() == 0) {
+    auto rowVector = makeNullRows(probeInput, "x", pool());
+    return executeVector(sql, {rowVector}, buildInput, resultType);
+  }
+
+  auto buildType = asRowType(buildInput[0]->type());
+  if (probeType->size() == 0) {
+    auto rowVector = makeNullRows(buildInput, "y", pool());
+    return executeVector(sql, probeInput, {rowVector}, resultType);
+  }
+
+  auto probeTableDirectoryPath = createTable("t", probeInput[0]->type());
+  auto buildTableDirectoryPath = createTable("u", buildInput[0]->type());
+
+  // Create a new file in table's directory with fuzzer-generated data.
+  auto probeFilePath = fs::path(probeTableDirectoryPath)
+                           .append("probe.dwrf")
+                           .string()
+                           .substr(strlen("file:"));
+
+  auto buildFilePath = fs::path(buildTableDirectoryPath)
+                           .append("build.dwrf")
+                           .string()
+                           .substr(strlen("file:"));
+
+  auto writerPool = rootPool()->addAggregateChild("writer");
+  writeToFile(probeFilePath, probeInput, writerPool.get());
+  writeToFile(buildFilePath, buildInput, writerPool.get());
+
+  // Run the query.
+  return execute(sql);
+}
+
+std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
+    const std::string& sql,
+    const std::vector<velox::RowVectorPtr>& input,
+    const velox::RowTypePtr& resultType) {
+  auto inputType = asRowType(input[0]->type());
+  if (inputType->size() == 0) {
+    auto rowVector = makeNullRows(input, "x", pool());
+    return executeVector(sql, {rowVector}, resultType);
+  }
+
+  auto tableDirectoryPath = createTable("tmp", input[0]->type());
 
   // Create a new file in table's directory with fuzzer-generated data.
   auto newFilePath = fs::path(tableDirectoryPath)
@@ -651,8 +867,14 @@ std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
 }
 
 std::vector<RowVectorPtr> PrestoQueryRunner::execute(const std::string& sql) {
+  return execute(sql, "");
+}
+
+std::vector<RowVectorPtr> PrestoQueryRunner::execute(
+    const std::string& sql,
+    const std::string& sessionProperty) {
   LOG(INFO) << "Execute presto sql: " << sql;
-  auto response = ServerResponse(startQuery(sql));
+  auto response = ServerResponse(startQuery(sql, sessionProperty));
   response.throwIfFailed();
 
   std::vector<RowVectorPtr> queryResults;
@@ -672,16 +894,18 @@ std::vector<RowVectorPtr> PrestoQueryRunner::execute(const std::string& sql) {
   return queryResults;
 }
 
-std::string PrestoQueryRunner::startQuery(const std::string& sql) {
+std::string PrestoQueryRunner::startQuery(
+    const std::string& sql,
+    const std::string& sessionProperty) {
   auto uri = fmt::format("{}/v1/statement?binaryResults=true", coordinatorUri_);
   cpr::Url url{uri};
   cpr::Body body{sql};
-  cpr::Header header({
-      {"X-Presto-User", user_},
-      {"X-Presto-Catalog", "hive"},
-      {"X-Presto-Schema", "tpch"},
-      {"Content-Type", "text/plain"},
-  });
+  cpr::Header header(
+      {{"X-Presto-User", user_},
+       {"X-Presto-Catalog", "hive"},
+       {"X-Presto-Schema", "tpch"},
+       {"Content-Type", "text/plain"},
+       {"X-Presto-Session", sessionProperty}});
   cpr::Timeout timeout{timeout_};
   cpr::Response response = cpr::Post(url, body, header, timeout);
   VELOX_CHECK_EQ(

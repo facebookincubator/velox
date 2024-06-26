@@ -200,7 +200,10 @@ CachePin CacheShard::findOrCreate(
           << " requested size " << size;
       // The old entry is superseded. Possible readers of the old entry still
       // retain a valid read pin.
+      RECORD_METRIC_VALUE(kMetricMemoryCacheNumStaleEntries);
+      ++numStales_;
       foundEntry->key_.fileNum.clear();
+      entryMap_.erase(it);
     }
 
     auto newEntry = getFreeEntry();
@@ -331,14 +334,13 @@ std::unique_ptr<folly::SharedPromise<bool>> CacheShard::removeEntry(
 }
 
 void CacheShard::removeEntryLocked(AsyncDataCacheEntry* entry) {
-  if (!entry->key_.fileNum.hasValue()) {
-    return;
+  if (entry->key_.fileNum.hasValue()) {
+    const auto it = entryMap_.find(
+        RawFileCacheKey{entry->key_.fileNum.id(), entry->key_.offset});
+    VELOX_CHECK(it != entryMap_.end());
+    entryMap_.erase(it);
+    entry->key_.fileNum.clear();
   }
-  const auto it = entryMap_.find(
-      RawFileCacheKey{entry->key_.fileNum.id(), entry->key_.offset});
-  VELOX_CHECK(it != entryMap_.end());
-  entryMap_.erase(it);
-  entry->key_.fileNum.clear();
   entry->setSsdFile(nullptr, 0);
   if (entry->isPrefetch()) {
     entry->setPrefetch(false);
@@ -534,16 +536,18 @@ void CacheShard::updateStats(CacheStats& stats) {
   stats.numEvictChecks += numEvictChecks_;
   stats.numWaitExclusive += numWaitExclusive_;
   stats.numAgedOut += numAgedOut_;
+  stats.numStales += numStales_;
   stats.sumEvictScore += sumEvictScore_;
   stats.allocClocks += allocClocks_;
 }
 
 void CacheShard::appendSsdSaveable(std::vector<CachePin>& pins) {
   std::lock_guard<std::mutex> l(mutex_);
-  // Do not add more than 70% of entries to a write batch. If SSD save is slower
-  // than storage read, we must not have a situation where SSD save pins
-  // everything and stops reading.
-  const int32_t limit = (entries_.size() * 100) / 70;
+  // Do not add entries to a write batch more than maxWriteRatio_. If SSD save
+  // is slower than storage read, we must not have a situation where SSD save
+  // pins everything and stops reading.
+  const auto limit = static_cast<int32_t>(
+      static_cast<double>(entries_.size()) * maxWriteRatio_);
   VELOX_CHECK(cache_->ssdCache()->writeInProgress());
   for (auto& entry : entries_) {
     if (entry && (entry->ssdFile_ == nullptr) && !entry->isExclusive() &&
@@ -618,6 +622,7 @@ CacheStats CacheStats::operator-(CacheStats& other) const {
   result.numEvictChecks = numEvictChecks - other.numEvictChecks;
   result.numWaitExclusive = numWaitExclusive - other.numWaitExclusive;
   result.numAgedOut = numAgedOut - other.numAgedOut;
+  result.numStales = numStales - other.numStales;
   result.allocClocks = allocClocks - other.allocClocks;
   result.sumEvictScore = sumEvictScore - other.sumEvictScore;
   if (ssdStats != nullptr && other.ssdStats != nullptr) {
@@ -630,19 +635,30 @@ CacheStats CacheStats::operator-(CacheStats& other) const {
 AsyncDataCache::AsyncDataCache(
     memory::MemoryAllocator* allocator,
     std::unique_ptr<SsdCache> ssdCache)
-    : allocator_(allocator), ssdCache_(std::move(ssdCache)), cachedPages_(0) {
+    : AsyncDataCache({}, allocator, std::move(ssdCache)){};
+
+AsyncDataCache::AsyncDataCache(
+    const Options& options,
+    memory::MemoryAllocator* allocator,
+    std::unique_ptr<SsdCache> ssdCache)
+    : opts_(options),
+      allocator_(allocator),
+      ssdCache_(std::move(ssdCache)),
+      cachedPages_(0) {
   for (auto i = 0; i < kNumShards; ++i) {
-    shards_.push_back(std::make_unique<CacheShard>(this));
+    shards_.push_back(std::make_unique<CacheShard>(this, opts_.maxWriteRatio));
   }
 }
 
-AsyncDataCache::~AsyncDataCache() {}
+AsyncDataCache::~AsyncDataCache() = default;
 
 // static
 std::shared_ptr<AsyncDataCache> AsyncDataCache::create(
     memory::MemoryAllocator* allocator,
-    std::unique_ptr<SsdCache> ssdCache) {
-  auto cache = std::make_shared<AsyncDataCache>(allocator, std::move(ssdCache));
+    std::unique_ptr<SsdCache> ssdCache,
+    const AsyncDataCache::Options& options) {
+  auto cache =
+      std::make_shared<AsyncDataCache>(options, allocator, std::move(ssdCache));
   allocator->registerCache(cache);
   return cache;
 }
@@ -664,11 +680,11 @@ AsyncDataCache** AsyncDataCache::getInstancePtr() {
 }
 
 void AsyncDataCache::shutdown() {
-  for (auto& shard : shards_) {
-    shard->shutdown();
-  }
   if (ssdCache_) {
     ssdCache_->shutdown();
+  }
+  for (auto& shard : shards_) {
+    shard->shutdown();
   }
 }
 
@@ -864,14 +880,17 @@ void AsyncDataCache::incrementNew(uint64_t size) {
 }
 
 void AsyncDataCache::possibleSsdSave(uint64_t bytes) {
-  constexpr int32_t kMinSavePages = 4096; // Save at least 16MB at a time.
   if (ssdCache_ == nullptr) {
     return;
   }
 
   ssdSaveable_ += bytes;
   if (memory::AllocationTraits::numPages(ssdSaveable_) >
-      std::max<int32_t>(kMinSavePages, cachedPages_ / 8)) {
+      std::max<int32_t>(
+          static_cast<int32_t>(
+              memory::AllocationTraits::numPages(opts_.minSsdSavableBytes)),
+          static_cast<int32_t>(
+              static_cast<double>(cachedPages_) * opts_.ssdSavableRatio))) {
     // Do not start a new save if another one is in progress.
     if (!ssdCache_->startWrite()) {
       return;
@@ -978,6 +997,7 @@ std::string CacheStats::toString() const {
       << "Cache access miss: " << numNew << " hit: " << numHit
       << " hit bytes: " << succinctBytes(hitBytes) << " eviction: " << numEvict
       << " eviction checks: " << numEvictChecks << " aged out: " << numAgedOut
+      << " stales: " << numStales
       << "\n"
       // Cache prefetch stats.
       << "Prefetch entries: " << numPrefetch

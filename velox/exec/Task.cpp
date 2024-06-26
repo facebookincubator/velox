@@ -295,7 +295,7 @@ Task::Task(
       queryCtx_(std::move(queryCtx)),
       mode_(mode),
       consumerSupplier_(std::move(consumerSupplier)),
-      onError_(onError),
+      onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
       bufferManager_(OutputBufferManager::getInstance()) {
   // NOTE: the executor must not be folly::InlineLikeExecutor for parallel
@@ -344,6 +344,12 @@ Task::~Task() {
   CLEAR(pool_.reset());
   CLEAR(planFragment_ = core::PlanFragment());
   clearStage = "exiting ~Task()";
+
+  // Ful-fill the task deletion promises at the end.
+  auto taskDeletionPromises = std::move(taskDeletionPromises_);
+  for (auto& promise : taskDeletionPromises) {
+    promise.setValue();
+  }
 }
 
 uint64_t Task::timeSinceStartMsLocked() const {
@@ -1849,7 +1855,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     if (taskStats_.executionEndTimeMs == 0) {
       taskStats_.executionEndTimeMs = getCurrentTimeMs();
     }
-    if (not isRunningLocked()) {
+    if (!isRunningLocked()) {
       return makeFinishFutureLocked("Task::terminate");
     }
     state_ = terminalState;
@@ -1866,6 +1872,10 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       } catch (const std::exception&) {
         exception_ = std::current_exception();
       }
+    }
+    if (state_ != TaskState::kFinished) {
+      VELOX_CHECK(!cancellationSource_.isCancellationRequested());
+      cancellationSource_.requestCancellation();
     }
 
     LOG(INFO) << "Terminating task " << taskId() << " with state "
@@ -2232,6 +2242,14 @@ ContinueFuture Task::taskCompletionFuture() {
   auto [promise, future] = makeVeloxContinuePromiseContract(
       fmt::format("Task::taskCompletionFuture {}", taskId_));
   taskCompletionPromises_.emplace_back(std::move(promise));
+  return std::move(future);
+}
+
+ContinueFuture Task::taskDeletionFuture() {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  auto [promise, future] = makeVeloxContinuePromiseContract(
+      fmt::format("Task::taskDeletionFuture {}", taskId_));
+  taskDeletionPromises_.emplace_back(std::move(promise));
   return std::move(future);
 }
 

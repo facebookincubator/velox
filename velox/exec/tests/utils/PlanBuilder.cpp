@@ -57,24 +57,18 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
     const RowTypePtr rowType,
     int32_t bucketCount,
     const std::vector<std::string>& bucketColumns,
-    const std::vector<std::string>& sortByColumns) {
+    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy) {
   std::vector<TypePtr> bucketTypes;
   bucketTypes.reserve(bucketColumns.size());
   for (const auto& bucketColumn : bucketColumns) {
     bucketTypes.push_back(rowType->childAt(rowType->getChildIdx(bucketColumn)));
-  }
-  std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
-  sortedBy.reserve(sortByColumns.size());
-  for (const auto& sortByColumn : sortByColumns) {
-    sortedBy.push_back(std::make_shared<const HiveSortingColumn>(
-        sortByColumn, core::SortOrder{false, false}));
   }
   return std::make_shared<HiveBucketProperty>(
       HiveBucketProperty::Kind::kHiveCompatible,
       bucketCount,
       bucketColumns,
       bucketTypes,
-      sortedBy);
+      sortBy);
 }
 } // namespace
 
@@ -385,10 +379,11 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& partitionBy,
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
-    const std::vector<std::string>& sortBy,
+    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
-    const std::string& connectorId) {
+    const std::string& connectorId,
+    const std::unordered_map<std::string, std::string>& serdeParameters) {
   VELOX_CHECK_NOT_NULL(planNode_, "TableWrite cannot be the source node");
   auto rowType = planNode_->outputType();
 
@@ -422,7 +417,8 @@ PlanBuilder& PlanBuilder::tableWrite(
       locationHandle,
       fileFormat,
       bucketProperty,
-      common::CompressionKind_NONE);
+      common::CompressionKind_NONE,
+      serdeParameters);
 
   auto insertHandle =
       std::make_shared<core::InsertTableHandle>(connectorId, hiveHandle);

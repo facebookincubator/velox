@@ -62,8 +62,8 @@ inline AccessTime accessTime() {
 }
 
 struct AccessStats {
-  AccessTime lastUse{0};
-  int32_t numUses{0};
+  tsan_atomic<AccessTime> lastUse{0};
+  tsan_atomic<int32_t> numUses{0};
 
   // Retention score. A higher number means less worth retaining. This
   // works well with a typical formula of time over use count going to
@@ -528,7 +528,10 @@ struct CacheStats {
   /// shared mode.
   int64_t numWaitExclusive{0};
   /// Total number of entries that are aged out and beyond TTL.
-  int64_t numAgedOut{};
+  int64_t numAgedOut{0};
+  /// Total number of entries that are stale because of cache request size
+  /// mismatch.
+  int64_t numStales{0};
   /// Cumulative clocks spent in allocating or freeing memory for backing cache
   /// entries.
   uint64_t allocClocks{0};
@@ -550,7 +553,8 @@ struct CacheStats {
 /// and other housekeeping.
 class CacheShard {
  public:
-  explicit CacheShard(AsyncDataCache* cache) : cache_(cache) {}
+  CacheShard(AsyncDataCache* cache, double maxWriteRatio)
+      : cache_(cache), maxWriteRatio_(maxWriteRatio) {}
 
   /// See AsyncDataCache::findOrCreate.
   CachePin findOrCreate(
@@ -640,6 +644,7 @@ class CacheShard {
   void tryAddFreeEntry(std::unique_ptr<AsyncDataCacheEntry>&& entry);
 
   AsyncDataCache* const cache_;
+  const double maxWriteRatio_;
 
   mutable std::mutex mutex_;
   folly::F14FastMap<RawFileCacheKey, AsyncDataCacheEntry*> entryMap_;
@@ -671,7 +676,9 @@ class CacheShard {
   // 'numEvict_' measured efficiency of eviction.
   uint64_t numEvictChecks_{0};
   // Cumulative count of entries aged out due to TTL.
-  uint64_t numAgedOut_{};
+  uint64_t numAgedOut_{0};
+  // Cumulative count of stale entries because of cache request size mismatch.
+  uint64_t numStales_{0};
   // Cumulative sum of evict scores. This divided by 'numEvict_' correlates to
   // time data stays in cache.
   uint64_t sumEvictScore_{0};
@@ -682,6 +689,39 @@ class CacheShard {
 
 class AsyncDataCache : public memory::Cache {
  public:
+  struct Options {
+    Options(
+        double _maxWriteRatio = 0.7,
+        double _ssdSavableRatio = 0.125,
+        int32_t _minSsdSavableBytes = 1 << 24)
+        : maxWriteRatio(_maxWriteRatio),
+          ssdSavableRatio(_ssdSavableRatio),
+          minSsdSavableBytes(_minSsdSavableBytes){};
+
+    /// The max ratio of the number of in-memory cache entries being written to
+    /// SSD cache over the total number of cache entries. This is to control SSD
+    /// cache write rate, and once the ratio exceeds this threshold, then we
+    /// stop writing to SSD cache.
+    double maxWriteRatio;
+
+    /// The min ratio of SSD savable (in-memory) cache space over the total
+    /// cache space. Once the ratio exceeds this limit, we start writing SSD
+    /// savable cache entries into SSD cache.
+    double ssdSavableRatio;
+
+    /// Min SSD savable (in-memory) cache space to start writing SSD savable
+    /// cache entries into SSD cache.
+    ///
+    /// NOTE: we only write to SSD cache when both above conditions satisfy. The
+    /// default is 16MB.
+    int32_t minSsdSavableBytes;
+  };
+
+  AsyncDataCache(
+      const Options& options,
+      memory::MemoryAllocator* allocator,
+      std::unique_ptr<SsdCache> ssdCache = nullptr);
+
   AsyncDataCache(
       memory::MemoryAllocator* allocator,
       std::unique_ptr<SsdCache> ssdCache = nullptr);
@@ -690,7 +730,8 @@ class AsyncDataCache : public memory::Cache {
 
   static std::shared_ptr<AsyncDataCache> create(
       memory::MemoryAllocator* allocator,
-      std::unique_ptr<SsdCache> ssdCache = nullptr);
+      std::unique_ptr<SsdCache> ssdCache = nullptr,
+      const AsyncDataCache::Options& = {});
 
   static AsyncDataCache* getInstance();
 
@@ -838,6 +879,7 @@ class AsyncDataCache : public memory::Cache {
   // Waits a pseudorandom delay times 'counter'.
   void backoff(int32_t counter);
 
+  const Options opts_;
   memory::MemoryAllocator* const allocator_;
   std::unique_ptr<SsdCache> ssdCache_;
   std::vector<std::unique_ptr<CacheShard>> shards_;

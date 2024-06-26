@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This script documents setting up a Centos8 host for Velox
+# This script documents setting up a Centos9 host for Velox
 # development.  Running it should make you ready to compile.
 #
 # Environment variables:
@@ -22,7 +22,7 @@
 #     Use "n" to never wipe directories.
 #
 # You can also run individual functions below by specifying them as arguments:
-# $ scripts/setup-centos8.sh install_googletest install_fmt
+# $ scripts/setup-centos9.sh install_googletest install_fmt
 #
 
 set -efx -o pipefail
@@ -37,8 +37,8 @@ export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
-export CC=/opt/rh/gcc-toolset-9/root/bin/gcc
-export CXX=/opt/rh/gcc-toolset-9/root/bin/g++
+export CC=/opt/rh/gcc-toolset-12/root/bin/gcc
+export CXX=/opt/rh/gcc-toolset-12/root/bin/g++
 
 function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
@@ -48,21 +48,22 @@ function dnf_install {
 function install_build_prerequisites {
   dnf update -y
   dnf_install epel-release dnf-plugins-core # For ccache, ninja
-  dnf config-manager --set-enabled powertools
+  dnf config-manager --set-enabled crb
   dnf update -y
-  dnf_install ninja-build curl ccache gcc-toolset-9 git wget which
-  dnf_install autoconf automake python39 python39-devel python39-pip libtool
-  pip3.9 install cmake==3.28.3
+  dnf_install ninja-build cmake ccache gcc-toolset-12 git wget which
+  dnf_install autoconf automake python3-devel pip libtool
+  pip install cmake==3.28.3
 }
 
 # Install dependencies from the package managers.
 function install_velox_deps_from_dnf {
   dnf_install libevent-devel \
     openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
-    libdwarf-devel curl-devel libicu-devel bison flex libsodium-devel
+    libdwarf-devel elfutils-libelf-devel curl-devel libicu-devel bison flex \
+    libsodium-devel zlib-devel
 
   # install sphinx for doc gen
-  pip3.9 install sphinx sphinx-tabs breathe sphinx_rtd_theme
+  pip install sphinx sphinx-tabs breathe sphinx_rtd_theme
 }
 
 function install_conda {
@@ -123,7 +124,7 @@ function install_fmt {
 }
 
 function install_protobuf {
-  wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protobuf-all-21.4.tar.gz protobuf
+  wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.8/protobuf-all-21.8.tar.gz protobuf
   (
     cd protobuf
     ./configure --prefix=/usr
@@ -133,7 +134,7 @@ function install_protobuf {
   )
 }
 
-FB_OS_VERSION="v2024.04.01.00"
+FB_OS_VERSION="v2024.05.20.00"
 
 function install_fizz {
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
@@ -188,8 +189,8 @@ function install_duckdb {
 
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
-  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
-  yum install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-devel-$(echo $1 | tr '.' '-')
+  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
+  dnf install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-devel-$(echo $1 | tr '.' '-')
 }
 
 function install_velox_deps {
@@ -214,8 +215,8 @@ function install_velox_deps {
 
 (
   if [[ $# -ne 0 ]]; then
-    # Activate gcc9; enable errors on unset variables afterwards.
-    source /opt/rh/gcc-toolset-9/enable || exit 1
+    # Activate gcc12; enable errors on unset variables afterwards.
+    source /opt/rh/gcc-toolset-12/enable || exit 1
     set -u
     for cmd in "$@"; do
       run_and_time "${cmd}"
@@ -228,8 +229,8 @@ function install_velox_deps {
     else
       echo "Skipping installation of build dependencies since INSTALL_PREREQUISITES is not set"
     fi
-    # Activate gcc9; enable errors on unset variables afterwards.
-    source /opt/rh/gcc-toolset-9/enable || exit 1
+    # Activate gcc12; enable errors on unset variables afterwards.
+    source /opt/rh/gcc-toolset-12/enable || exit 1
     set -u
     install_velox_deps
     echo "All dependencies for Velox installed!"

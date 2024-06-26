@@ -218,6 +218,9 @@ constexpr folly::StringPiece kMetricMemoryCacheNumAllocClocks{
 constexpr folly::StringPiece kMetricMemoryCacheNumAgedOutEntries{
     "velox.memory_cache_num_aged_out_entries"};
 
+constexpr folly::StringPiece kMetricMemoryCacheNumStaleEntries{
+    "velox.memory_cache_num_stale_entries"};
+
 constexpr folly::StringPiece kMetricSsdCacheCachedRegions{
     "velox.ssd_cache_cached_regions"};
 
@@ -278,6 +281,9 @@ constexpr folly::StringPiece kMetricSsdCacheReadSsdErrors{
 constexpr folly::StringPiece kMetricSsdCacheReadCheckpointErrors{
     "velox.ssd_cache_read_checkpoint_errors"};
 
+constexpr folly::StringPiece kMetricSsdCacheReadWithoutChecksum{
+    "velox.ssd_cache_read_without_checksum"};
+
 constexpr folly::StringPiece kMetricSsdCacheCheckpointsRead{
     "velox.ssd_cache_checkpoints_read"};
 
@@ -286,4 +292,25 @@ constexpr folly::StringPiece kMetricSsdCacheCheckpointsWritten{
 
 constexpr folly::StringPiece kMetricSsdCacheRegionsEvicted{
     "velox.ssd_cache_regions_evicted"};
+
+constexpr folly::StringPiece kMetricExchangeDataTimeMs{
+    "velox.exchange_data_time_ms"};
+
+constexpr folly::StringPiece kMetricExchangeDataSizeTimeMs{
+    "velox.exchange_data_size_time_ms"};
+
+constexpr folly::StringPiece kMetricExchangeDataBytes{
+    "velox.exchange_data_bytes"};
+
+constexpr folly::StringPiece kMetricExchangeDataSize{
+    "velox.exchange_data_size"};
+
+constexpr folly::StringPiece kMetricStorageThrottledDurationMs{
+    "velox.storage_throttled_duration_ms"};
+
+constexpr folly::StringPiece kMetricStorageLocalThrottled{
+    "velox.storage_local_throttled_count"};
+
+constexpr folly::StringPiece kMetricStorageGlobalThrottled{
+    "velox.storage_global_throttled_count"};
 } // namespace facebook::velox

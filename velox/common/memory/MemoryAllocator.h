@@ -30,7 +30,6 @@
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/time/Timer.h"
 
-DECLARE_int32(velox_memory_pool_mb);
 DECLARE_bool(velox_time_allocations);
 
 namespace facebook::velox::memory {
@@ -401,8 +400,17 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// thread. The message is cleared after return.
   std::string getAndClearFailureMessage();
 
+  void getTracingHooks(
+      std::function<void()>& init,
+      std::function<std::string()>& report,
+      std::function<int64_t()> ioVolume = nullptr);
+
  protected:
-  explicit MemoryAllocator() = default;
+  MemoryAllocator(MachinePageCount largestSizeClassPages = 256)
+      : sizeClassSizes_(makeSizeClassSizes(largestSizeClassPages)) {}
+
+  static std::vector<MachinePageCount> makeSizeClassSizes(
+      MachinePageCount largest);
 
   /// Represents a mix of blocks of different sizes for covering a single
   /// allocation.

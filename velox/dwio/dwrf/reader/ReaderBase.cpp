@@ -61,7 +61,8 @@ FooterStatisticsImpl::FooterStatisticsImpl(
         for (uint32_t statsIndex = 0; statsIndex < stats->statistics_size();
              ++statsIndex) {
           colStats_[node + statsIndex] = buildColumnStatisticsFromProto(
-              stats->statistics(statsIndex), statsContext);
+              ColumnStatisticsWrapper(&stats->statistics(statsIndex)),
+              statsContext);
         }
       }
     }
@@ -95,39 +96,41 @@ ReaderBase::ReaderBase(
     uint64_t filePreloadThreshold,
     FileFormat fileFormat,
     bool fileColumnNamesReadAsLowerCase,
-    std::shared_ptr<random::RandomSkipTracker> randomSkip)
+    std::shared_ptr<random::RandomSkipTracker> randomSkip,
+    std::shared_ptr<velox::common::ScanSpec> scanSpec)
     : pool_{pool},
       arena_(std::make_unique<google::protobuf::Arena>()),
       decryptorFactory_(decryptorFactory),
       footerEstimatedSize_(footerEstimatedSize),
       filePreloadThreshold_(filePreloadThreshold),
       input_(std::move(input)),
-      randomSkip_(std::move(randomSkip)) {
+      randomSkip_(std::move(randomSkip)),
+      scanSpec_(std::move(scanSpec)),
+      fileLength_(input_->getReadFile()->size()) {
   process::TraceContext trace("ReaderBase::ReaderBase");
-  // read last bytes into buffer to get PostScript
-  // If file is small, load the entire file.
   // TODO: make a config
-  fileLength_ = input_->getReadFile()->size();
   DWIO_ENSURE(fileLength_ > 0, "ORC file is empty");
+  VELOX_CHECK_GE(fileLength_, 4, "File size too small");
 
-  auto preloadFile = fileLength_ <= filePreloadThreshold_;
-  uint64_t readSize =
+  const auto preloadFile = fileLength_ <= filePreloadThreshold_;
+  const uint64_t readSize =
       preloadFile ? fileLength_ : std::min(fileLength_, footerEstimatedSize_);
-  DWIO_ENSURE_GE(readSize, 4, "File size too small");
-
-  input_->enqueue({fileLength_ - readSize, readSize, "footer"});
-  input_->load(preloadFile ? LogType::FILE : LogType::FOOTER);
+  if (input_->supportSyncLoad()) {
+    input_->enqueue({fileLength_ - readSize, readSize, "footer"});
+    input_->load(preloadFile ? LogType::FILE : LogType::FOOTER);
+  }
 
   // TODO: read footer from spectrum
   {
     const void* buf;
     int32_t ignored;
     auto lastByteStream = input_->read(fileLength_ - 1, 1, LogType::FOOTER);
-    DWIO_ENSURE(lastByteStream->Next(&buf, &ignored), "failed to read");
+    const bool ret = lastByteStream->Next(&buf, &ignored);
+    VELOX_CHECK(ret, "Failed to read");
     // Make sure 'lastByteStream' is live while dereferencing 'buf'.
     psLength_ = *static_cast<const char*>(buf) & 0xff;
   }
-  DWIO_ENSURE_LE(
+  VELOX_CHECK_LE(
       psLength_ + 4, // 1 byte for post script len, 3 byte "ORC" header.
       fileLength_,
       "Corrupted file, Post script size is invalid");
@@ -142,28 +145,28 @@ ReaderBase::ReaderBase(
     postScript_ = std::make_unique<PostScript>(std::move(postScript));
   }
 
-  uint64_t footerSize = postScript_->footerLength();
-  uint64_t cacheSize =
+  const uint64_t footerSize = postScript_->footerLength();
+  const uint64_t cacheSize =
       postScript_->hasCacheSize() ? postScript_->cacheSize() : 0;
-  uint64_t tailSize = 1 + psLength_ + footerSize + cacheSize;
+  const uint64_t tailSize = 1 + psLength_ + footerSize + cacheSize;
 
   // There are cases in warehouse, where RC/text files are stored
   // in ORC partition. This causes the Reader to SIGSEGV. The following
   // checks catches most of the corrupted files (but not all).
-  DWIO_ENSURE_LT(
+  VELOX_CHECK_LT(
       footerSize, fileLength_, "Corrupted file, footer size is invalid");
-  DWIO_ENSURE_LT(
+  VELOX_CHECK_LT(
       cacheSize, fileLength_, "Corrupted file, cache size is invalid");
-  DWIO_ENSURE_LE(tailSize, fileLength_, "Corrupted file, tail size is invalid");
+  VELOX_CHECK_LE(tailSize, fileLength_, "Corrupted file, tail size is invalid");
 
-  DWIO_ENSURE(
+  VELOX_CHECK(
       (format() == DwrfFormat::kDwrf)
           ? proto::CompressionKind_IsValid(postScript_->compression())
           : proto::orc::CompressionKind_IsValid(postScript_->compression()),
       "Corrupted File, invalid compression kind ",
       postScript_->compression());
 
-  if (tailSize > readSize) {
+  if (input_->supportSyncLoad() && (tailSize > readSize)) {
     input_->enqueue({fileLength_ - tailSize, tailSize, "footer"});
     input_->load(LogType::FOOTER);
   }
@@ -188,28 +191,29 @@ ReaderBase::ReaderBase(
 
   schema_ = std::dynamic_pointer_cast<const RowType>(
       convertType(*footer_, 0, fileColumnNamesReadAsLowerCase));
-  DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
+  VELOX_CHECK_NOT_NULL(schema_, "invalid schema");
 
   // load stripe index/footer cache
   if (cacheSize > 0) {
-    DWIO_ENSURE_EQ(format(), DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format(), DwrfFormat::kDwrf);
+    const uint64_t cacheOffset = fileLength_ - tailSize;
     if (input_->shouldPrefetchStripes()) {
       cache_ = std::make_unique<StripeMetadataCache>(
           postScript_->cacheMode(),
           *footer_,
-          input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER));
+          input_->read(cacheOffset, cacheSize, LogType::FOOTER));
       input_->load(LogType::FOOTER);
     } else {
       auto cacheBuffer =
           std::make_shared<dwio::common::DataBuffer<char>>(pool, cacheSize);
-      input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER)
+      input_->read(cacheOffset, cacheSize, LogType::FOOTER)
           ->readFully(cacheBuffer->data(), cacheSize);
       cache_ = std::make_unique<StripeMetadataCache>(
           postScript_->cacheMode(), *footer_, std::move(cacheBuffer));
     }
   }
   if (!cache_ && input_->shouldPrefetchStripes()) {
-    auto numStripes = getFooter().stripesSize();
+    const auto numStripes = getFooter().stripesSize();
     for (auto i = 0; i < numStripes; i++) {
       const auto stripe = getFooter().stripes(i);
       input_->enqueue(
@@ -217,7 +221,7 @@ ReaderBase::ReaderBase(
            stripe.footerLength(),
            "stripe_footer"});
     }
-    if (numStripes) {
+    if (numStripes > 0) {
       input_->load(LogType::FOOTER);
     }
   }
@@ -248,7 +252,7 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
       "column index out of range");
   StatsContext statsContext(getWriterVersion());
   if (!handler_->isEncrypted(index)) {
-    auto& stats = footer_->statistics(index);
+    auto stats = footer_->statistics(index);
     return buildColumnStatisticsFromProto(stats, statsContext);
   }
 
@@ -259,7 +263,7 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
 
   // if key is not loaded, return plaintext stats
   if (!decrypter.isKeyLoaded()) {
-    auto& stats = footer_->statistics(index);
+    auto stats = footer_->statistics(index);
     return buildColumnStatisticsFromProto(stats, statsContext);
   }
 
@@ -275,14 +279,14 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
   auto stats = readProtoFromString<proto::FileStatistics>(
       group.statistics(nodeIndex), &decrypter);
   return buildColumnStatisticsFromProto(
-      stats->statistics(index - root), statsContext);
+      ColumnStatisticsWrapper(&stats->statistics(index - root)), statsContext);
 }
 
 std::shared_ptr<const Type> ReaderBase::convertType(
     const FooterWrapper& footer,
     uint32_t index,
     bool fileColumnNamesReadAsLowerCase) {
-  DWIO_ENSURE_LT(
+  VELOX_CHECK_LT(
       index,
       folly::to<uint32_t>(footer.typesSize()),
       "Corrupted file, invalid types");
@@ -297,6 +301,11 @@ std::shared_ptr<const Type> ReaderBase::convertType(
     case TypeKind::INTEGER:
       return INTEGER();
     case TypeKind::BIGINT:
+      if (type.format() == DwrfFormat::kOrc &&
+          type.getOrcPtr()->kind() == proto::orc::Type_Kind_DECIMAL) {
+        return DECIMAL(
+            type.getOrcPtr()->precision(), type.getOrcPtr()->scale());
+      }
       return BIGINT();
     case TypeKind::HUGEINT:
       if (type.format() == DwrfFormat::kOrc &&

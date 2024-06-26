@@ -168,6 +168,11 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricMemoryCacheNumAgedOutEntries, facebook::velox::StatType::SUM);
 
+  // Number of AsyncDataCache entries that are stale because of cache request
+  // size mismatch.
+  DEFINE_METRIC(
+      kMetricMemoryCacheNumStaleEntries, facebook::velox::StatType::COUNT);
+
   /// ================== SsdCache Counters ==================
 
   // Number of regions currently cached by SSD.
@@ -235,6 +240,11 @@ void registerVeloxMetrics() {
   // Total number of errors while reading from SSD checkpoint files.
   DEFINE_METRIC(
       kMetricSsdCacheReadCheckpointErrors, facebook::velox::StatType::SUM);
+
+  // Total number of SSD cache reads without checksum verification due to
+  // mismatch in SSD cache request size.
+  DEFINE_METRIC(
+      kMetricSsdCacheReadWithoutChecksum, facebook::velox::StatType::SUM);
 
   // Total number of checkpoints read.
   DEFINE_METRIC(kMetricSsdCacheCheckpointsRead, facebook::velox::StatType::SUM);
@@ -457,5 +467,40 @@ void registerVeloxMetrics() {
 
   // The peak spilling memory usage in bytes.
   DEFINE_METRIC(kMetricSpillPeakMemoryBytes, facebook::velox::StatType::AVG);
+
+  // The data exchange time distribution in range of [0, 5s] with 50 buckets. It
+  // is configured to report the latency at P50, P90, P99, and P100 percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricExchangeDataTimeMs, 1'00, 0, 5'000, 50, 90, 99, 100);
+
+  // The data exchange size time distribution in range of [0, 5s] with 50
+  // buckets. It is configured to report the latency at P50, P90, P99, and P100
+  // percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricExchangeDataSizeTimeMs, 1'00, 0, 5'000, 50, 90, 99, 100);
+
+  // The exchange data size in bytes.
+  DEFINE_METRIC(kMetricExchangeDataBytes, facebook::velox::StatType::SUM);
+
+  // The distribution of exchange data size in range of [0, 128MB] with 128
+  // buckets. It is configured to report the capacity at P50, P90, P99, and P100
+  // percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricExchangeDataSize, 1L << 20, 0, 128L << 20, 50, 90, 99, 100);
+
+  /// ================== Storage Counters =================
+
+  // The time distribution of storage IO throttled duration in range of [0, 30s]
+  // with 30 buckets. It is configured to report the capacity at P50, P90, P99,
+  // and P100 percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricStorageThrottledDurationMs, 1'000, 0, 30'000, 50, 90, 99, 100);
+
+  // The number of times that storage IOs get throttled in a storage directory.
+  DEFINE_METRIC(kMetricStorageLocalThrottled, facebook::velox::StatType::COUNT);
+
+  // The number of times that storage IOs get throttled in a storage cluster.
+  DEFINE_METRIC(
+      kMetricStorageGlobalThrottled, facebook::velox::StatType::COUNT);
 }
 } // namespace facebook::velox

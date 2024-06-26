@@ -337,6 +337,8 @@ void AggregationFuzzer::go() {
       auto groupingKeys = generateKeys("g", names, types);
       auto input = generateInputData(names, types, std::nullopt);
 
+      logVectors(input);
+
       verifyAggregation(groupingKeys, {}, {}, input, false, {});
     } else {
       // Pick a random signature.
@@ -360,8 +362,10 @@ void AggregationFuzzer::go() {
 
         auto partitionKeys = generateKeys("p", argNames, argTypes);
         auto sortingKeys = generateSortingKeys("s", argNames, argTypes);
-        auto input =
-            generateInputDataWithRowNumber(argNames, argTypes, signature);
+        auto input = generateInputDataWithRowNumber(
+            argNames, argTypes, partitionKeys, signature);
+
+        logVectors(input);
 
         bool failed = verifyWindow(
             partitionKeys,
@@ -410,6 +414,9 @@ void AggregationFuzzer::go() {
         }
 
         auto input = generateInputData(argNames, argTypes, signature);
+
+        logVectors(input);
+
         std::shared_ptr<ResultVerifier> customVerifier;
         if (customVerification) {
           customVerifier = customVerificationFunctions_.at(signature.name);

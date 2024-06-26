@@ -43,6 +43,18 @@ class HiveConnectorUtilTest : public exec::test::HiveConnectorTestBase {
 
 TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   core::MemConfig sessionProperties;
+  auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
+      pool_.get(),
+      pool_.get(),
+      &sessionProperties,
+      nullptr,
+      nullptr,
+      nullptr,
+      "query.HiveConnectorUtilTest",
+      "task.HiveConnectorUtilTest",
+      "planNodeId.HiveConnectorUtilTest",
+      0,
+      "");
   auto hiveConfig =
       std::make_shared<hive::HiveConfig>(std::make_shared<core::MemConfig>());
   const std::unordered_map<std::string, std::optional<std::string>>
@@ -85,7 +97,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
     auto tableHandle = createTableHandle();
     auto split = createSplit();
     configureReaderOptions(
-        readerOptions, hiveConfig, &sessionProperties, tableHandle, split);
+        readerOptions, hiveConfig, connectorQueryCtx.get(), tableHandle, split);
   };
 
   auto clearDynamicParameters = [&](FileFormat newFileFormat) {
@@ -205,11 +217,6 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptions) {
   float_features->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(common::createBigintValues({1, 3}, false));
   float_features->setFlatMapFeatureSelection({"1", "3"});
-  RowReaderOptions options;
-  configureRowReaderOptions(options, {}, spec, nullptr, rowType, split);
-  auto& nodes = options.getSelector()->getProjection();
-  ASSERT_EQ(nodes.size(), 1);
-  ASSERT_EQ(nodes[0].expression, "[1,3]");
 }
 
 } // namespace facebook::velox::connector

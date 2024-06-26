@@ -19,7 +19,6 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
@@ -300,6 +299,7 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
 std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
     std::vector<std::string> names,
     std::vector<TypePtr> types,
+    const std::vector<std::string>& partitionKeys,
     const CallableSignature& signature) {
   names.push_back("row_number");
   types.push_back(BIGINT());
@@ -307,9 +307,16 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
   auto generator = findInputGenerator(signature);
 
   std::vector<RowVectorPtr> input;
-  auto size = vectorFuzzer_.getOptions().vectorSize;
+  vector_size_t size = vectorFuzzer_.getOptions().vectorSize;
   velox::test::VectorMaker vectorMaker{pool_.get()};
   int64_t rowNumber = 0;
+
+  std::unordered_set<std::string> partitionKeySet;
+  partitionKeySet.reserve(partitionKeys.size());
+  for (auto partitionKey : partitionKeys) {
+    partitionKeySet.insert(partitionKey);
+  }
+
   for (auto j = 0; j < FLAGS_num_batches; ++j) {
     std::vector<VectorPtr> children;
 
@@ -318,8 +325,21 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
           generator->generate(signature.args, vectorFuzzer_, rng_, pool_.get());
     }
 
+    // Number of partitions is randomly generated and is at least 1.
+    auto numPartitions = size ? randInt(1, size) : 1;
+    auto indices = vectorFuzzer_.fuzzIndices(size, numPartitions);
+    auto nulls = vectorFuzzer_.fuzzNulls(size);
     for (auto i = children.size(); i < types.size() - 1; ++i) {
-      children.push_back(vectorFuzzer_.fuzz(types[i], size));
+      if (partitionKeySet.find(names[i]) != partitionKeySet.end()) {
+        // The partition keys are built with a dictionary over a smaller set of
+        // values. This is done to introduce some repetition of key values for
+        // windowing.
+        auto baseVector = vectorFuzzer_.fuzz(types[i], numPartitions);
+        children.push_back(
+            BaseVector::wrapInDictionary(nulls, indices, size, baseVector));
+      } else {
+        children.push_back(vectorFuzzer_.fuzz(types[i], size));
+      }
     }
     children.push_back(vectorMaker.flatVector<int64_t>(
         size, [&](auto /*row*/) { return rowNumber++; }));
@@ -376,6 +396,19 @@ void AggregationFuzzerBase::printSignatureStats() {
                 << " out of " << stats.numRuns
                 << " times: " << signatureTemplate.name << "("
                 << signatureTemplate.signature->toString() << ")";
+    }
+  }
+}
+
+void AggregationFuzzerBase::logVectors(
+    const std::vector<RowVectorPtr>& vectors) {
+  if (!VLOG_IS_ON(1)) {
+    return;
+  }
+  for (auto i = 0; i < vectors.size(); ++i) {
+    VLOG(1) << "Input batch " << i << ":";
+    for (auto j = 0; j < vectors[i]->size(); ++j) {
+      VLOG(1) << "\tRow " << j << ": " << vectors[i]->toString(j);
     }
   }
 }

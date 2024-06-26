@@ -337,8 +337,7 @@ if("${ENABLE_ALL_WARNINGS}")
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
-       -Wno-deprecated-copy \
-       -Wno-missing-field-initializers \
+       -Wnon-virtual-dtor \
        ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")
 
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
@@ -443,7 +442,7 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO}
 
   # Locate or build protobuf.
   set_source(Protobuf)
-  resolve_dependency(Protobuf 3.21.4 EXACT)
+  resolve_dependency(Protobuf 3.21.7...<4)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 

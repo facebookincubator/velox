@@ -248,6 +248,8 @@ class ReCache {
  public:
   RE2* findOrCompile(const StringView& pattern);
 
+  Expected<RE2*> tryFindOrCompile(const StringView& pattern);
+
  private:
   folly::F14FastMap<std::string, std::unique_ptr<RE2>> cache_;
 };
@@ -357,6 +359,59 @@ struct Re2RegexpReplace {
   // Scratch memory to store result of replacement.
   std::string result_;
 };
+
+template <typename TExec>
+struct Re2RegexpSplit {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  void call(
+      out_type<Array<Varchar>>& out,
+      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& pattern) {
+    auto* re = cache_.findOrCompile(pattern);
+
+    const auto re2String = re2::StringPiece(string.data(), string.size());
+
+    size_t pos = 0;
+    const char* start = string.data();
+
+    re2::StringPiece subMatches[1];
+    while (re->Match(
+        re2String,
+        pos,
+        string.size(),
+        RE2::Anchor::UNANCHORED,
+        subMatches,
+        1)) {
+      const auto fullMatch = subMatches[0];
+      const auto offset = fullMatch.data() - start;
+      const auto size = fullMatch.size();
+
+      out.add_item().setNoCopy(StringView(string.data() + pos, offset - pos));
+
+      pos = offset + size;
+      if (UNLIKELY(size == 0)) {
+        ++pos;
+      }
+    }
+
+    out.add_item().setNoCopy(
+        StringView(string.data() + pos, string.size() - pos));
+  }
+
+ private:
+  detail::ReCache cache_;
+};
+
+std::shared_ptr<exec::VectorFunction> makeRegexpReplaceWithLambda(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+regexpReplaceWithLambdaSignatures();
 
 } // namespace facebook::velox::functions
 

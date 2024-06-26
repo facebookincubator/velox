@@ -29,15 +29,6 @@ namespace facebook::velox::exec::test {
 
 namespace {
 
-void logVectors(const std::vector<RowVectorPtr>& vectors) {
-  for (auto i = 0; i < vectors.size(); ++i) {
-    VLOG(1) << "Input batch " << i << ":";
-    for (auto j = 0; j < vectors[i]->size(); ++j) {
-      VLOG(1) << "\tRow " << j << ": " << vectors[i]->toString(j);
-    }
-  }
-}
-
 bool supportIgnoreNulls(const std::string& name) {
   // Below are all functions that support ignore nulls. Aggregation functions in
   // window operations do not support ignore nulls.
@@ -243,8 +234,8 @@ void WindowFuzzer::go() {
     }
     const auto partitionKeys = generateSortingKeys("p", argNames, argTypes);
     const auto [frameClause, isRowsFrame] = generateFrameClause();
-    const auto input =
-        generateInputDataWithRowNumber(argNames, argTypes, signature);
+    const auto input = generateInputDataWithRowNumber(
+        argNames, argTypes, partitionKeys, signature);
     // If the function is order-dependent or uses "rows" frame, sort all input
     // rows by row_number additionally.
     if (requireSortedInput || isRowsFrame) {
@@ -382,6 +373,12 @@ bool WindowFuzzer::verifyWindow(
       customVerifier->reset();
     }
   };
+
+  // There is a known issue where LocalPartition will send DictionaryVectors
+  // with the same underlying base Vector to multiple threads.  This triggers
+  // TSAN to report data races, particularly if that base Vector is from the
+  // TableScan and reused.  Ignore TSAN issues in these tests for now.
+  folly::annotate_ignore_thread_sanitizer_guard g(__FILE__, __LINE__);
 
   auto frame = getFrame(partitionKeys, sortingKeysAndOrders, frameClause);
   auto plan = PlanBuilder()

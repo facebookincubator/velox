@@ -19,6 +19,16 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox::functions {
+namespace {
+
+template <template <class> class T, typename TReturn>
+void registerNonSimdizableScalar(const std::vector<std::string>& aliases) {
+  registerFunction<T, TReturn, Varchar, Varchar>(aliases);
+  registerFunction<T, TReturn, Varbinary, Varbinary>(aliases);
+  registerFunction<T, TReturn, bool, bool>(aliases);
+  registerFunction<T, TReturn, Timestamp, Timestamp>(aliases);
+}
+} // namespace
 
 void registerComparisonFunctions(const std::string& prefix) {
   // Comparison functions also need TimestampWithTimezoneType,
@@ -76,7 +86,8 @@ void registerComparisonFunctions(const std::string& prefix) {
       TimestampWithTimezone>({prefix + "gte"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gte, prefix + "gte");
 
-  registerBinaryScalar<DistinctFromFunction, bool>({prefix + "distinct_from"});
+  registerFunction<DistinctFromFunction, bool, Generic<T1>, Generic<T1>>(
+      {prefix + "distinct_from"});
 
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>(
       {prefix + "between"});
@@ -108,6 +119,24 @@ void registerComparisonFunctions(const std::string& prefix) {
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>>({prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "between"});
+  registerFunction<
+      BetweenFunctionTimestampWithTimezone,
+      bool,
+      TimestampWithTimezone,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "between"});
 }
 
 } // namespace facebook::velox::functions

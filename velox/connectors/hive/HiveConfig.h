@@ -98,6 +98,12 @@ class HiveConfig {
   /// Maximum concurrent TCP connections for a single http client.
   static constexpr const char* kS3MaxConnections = "hive.s3.max-connections";
 
+  /// Maximum retry attempts for a single http client.
+  static constexpr const char* kS3MaxAttempts = "hive.s3.max-attempts";
+
+  /// Retry mode for a single http client.
+  static constexpr const char* kS3RetryMode = "hive.s3.retry-mode";
+
   /// The GCS storage endpoint server.
   static constexpr const char* kGCSEndpoint = "hive.gcs.endpoint";
 
@@ -142,7 +148,8 @@ class HiveConfig {
   /// The number of prefetch rowgroups
   static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
 
-  /// The total size in bytes for a direct coalesce request.
+  /// The total size in bytes for a direct coalesce request. Up to 8MB load
+  /// quantum size is supported when SSD cache is enabled.
   static constexpr const char* kLoadQuantum = "load-quantum";
 
   /// Maximum number of entries in the file handle cache.
@@ -184,6 +191,12 @@ class HiveConfig {
       "hive.orc.writer.min-compression-size";
   static constexpr const char* kOrcWriterMinCompressionSizeSession =
       "orc_writer_min_compression_size";
+
+  /// The compression level to use with ZLIB and ZSTD.
+  static constexpr const char* kOrcWriterCompressionLevel =
+      "hive.orc.writer.compression-level";
+  static constexpr const char* kOrcWriterCompressionLevelSession =
+      "orc_optimized_writer_compression_level";
 
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
@@ -246,6 +259,10 @@ class HiveConfig {
 
   std::optional<uint32_t> s3MaxConnections() const;
 
+  std::optional<int32_t> s3MaxAttempts() const;
+
+  std::optional<std::string> s3RetryMode() const;
+
   std::string gcsEndpoint() const;
 
   std::string gcsScheme() const;
@@ -285,6 +302,8 @@ class HiveConfig {
   bool orcWriterLinearStripeSizeHeuristics(const Config* session) const;
 
   uint64_t orcWriterMinCompressionSize(const Config* session) const;
+
+  std::optional<uint8_t> orcWriterCompressionLevel(const Config* session) const;
 
   std::string writeFileCreateConfig() const;
 

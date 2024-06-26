@@ -305,6 +305,10 @@ Cache
      - Sum
      - Number of AsyncDataCache entries that are aged out and evicted.
        given configured TTL.
+   * - memory_cache_num_stale_entries
+     - Count
+     - Number of AsyncDataCache entries that are stale because of cache request
+       size mismatch.
    * - ssd_cache_cached_regions
      - Avg
      - Number of regions currently cached by SSD.
@@ -346,6 +350,10 @@ Cache
    * - ssd_cache_delete_checkpoint_errors
      - Sum
      - Total number of errors while deleting SSD checkpoint files.
+   * - ssd_cache_read_without_checksum
+     - Sum
+     - Total number of SSD cache reads without checksum verification
+       due to SSD cache request size mismatch
    * - ssd_cache_grow_file_errors
      - Sum
      - Total number of errors while growing SSD cache files.
@@ -376,6 +384,28 @@ Cache
    * - ssd_cache_regions_evicted
      - Sum
      - Total number of cache regions evicted.
+
+Storage
+-------
+
+.. list-table::
+   :widths: 40 10 50
+   :header-rows: 1
+
+   * - Metric Name
+     - Type
+     - Description
+   * - storage_throttled_duration_ms
+     - Histogram
+     - The time distribution of storage IO throttled duration in range of [0, 30s]
+       with 30 buckets. It is configured to report the capacity at P50, P90, P99,
+       and P100 percentiles.
+   * - storage_local_throttled_count
+     - Count
+     - The number of times that storage IOs get throttled in a storage directory.
+   * - storage_global_throttled_count
+     - Count
+     - The number of times that storage IOs get throttled in a storage cluster.
 
 Spilling
 --------
@@ -442,6 +472,35 @@ Spilling
    * - spill_peak_memory_bytes
      - Avg
      - The peak spilling memory usage in bytes.
+
+Exchange
+--------
+
+.. list-table::
+   :widths: 40 10 50
+   :header-rows: 1
+
+   * - Metric Name
+     - Type
+     - Description
+   * - exchange_data_time_ms
+     - Histogram
+     - The distribution of data exchange latency in range of [0, 50s] with 50
+       buckets. It is configured to report latency at P50, P90, P99, and P100
+       percentiles.
+   * - exchange_data_size_time_ms
+     - Histogram
+     - The distribution of data exchange size latency in range of [0, 5s] with 50
+       buckets. It is configured to report latency at P50, P90, P99, and P100
+       percentiles.
+   * - exchange_data_bytes
+     - Sum
+     - The exchange data size in bytes.
+   * - exchange_data_size
+     - Histogram
+     - The distribution of exchange data size in range of [0, 128MB] with 128
+       buckets. It is configured to report the capacity at P50, P90, P99, and P100
+       percentiles.
 
 Hive Connector
 --------------

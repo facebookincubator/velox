@@ -34,7 +34,7 @@ namespace facebook::velox {
 class TestReporter : public BaseStatsReporter {
  public:
   mutable std::mutex m;
-  mutable std::unordered_map<std::string, size_t> counterMap;
+  mutable std::map<std::string, size_t> counterMap;
   mutable std::unordered_map<std::string, StatType> statTypeMap;
   mutable std::unordered_map<std::string, std::vector<int32_t>>
       histogramPercentilesMap;
@@ -106,6 +106,18 @@ class TestReporter : public BaseStatsReporter {
     std::lock_guard<std::mutex> l(m);
     counterMap[key.str()] = std::max(counterMap[key.str()], value);
   }
+
+  std::string fetchMetrics() override {
+    std::stringstream ss;
+    ss << "[";
+    auto sep = "";
+    for (const auto& [key, value] : counterMap) {
+      ss << sep << key << ":" << value;
+      sep = ",";
+    }
+    ss << "]";
+    return ss.str();
+  }
 };
 
 class StatsReporterTest : public testing::Test {
@@ -113,6 +125,7 @@ class StatsReporterTest : public testing::Test {
   void SetUp() override {
     reporter_ = std::dynamic_pointer_cast<TestReporter>(
         folly::Singleton<BaseStatsReporter>::try_get());
+    reporter_->clear();
   }
   void TearDown() override {
     reporter_->clear();
@@ -149,6 +162,9 @@ TEST_F(StatsReporterTest, trivialReporter) {
   EXPECT_EQ(2201, reporter_->counterMap["key2"]);
   EXPECT_EQ(1101, reporter_->counterMap["key3"]);
   EXPECT_EQ(100, reporter_->counterMap["key4"]);
+
+  EXPECT_EQ(
+      "[key1:36,key2:2201,key3:1101,key4:100]", reporter_->fetchMetrics());
 };
 
 class PeriodicStatsReporterTest : public StatsReporterTest {};
@@ -195,14 +211,17 @@ class TestStatsReportAsyncDataCache : public cache::AsyncDataCache {
       : cache::AsyncDataCache(nullptr, nullptr), stats_(stats) {}
 
   cache::CacheStats refreshStats() const override {
+    std::lock_guard<std::mutex> l(mutex_);
     return stats_;
   }
 
   void updateStats(cache::CacheStats stats) {
+    std::lock_guard<std::mutex> l(mutex_);
     stats_ = stats;
   }
 
  private:
+  mutable std::mutex mutex_;
   cache::CacheStats stats_;
 };
 
@@ -215,6 +234,7 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
   ~TestStatsReportMemoryArbitrator() override = default;
 
   void updateStats(memory::MemoryArbitrator::Stats stats) {
+    std::lock_guard<std::mutex> l(mutex_);
     stats_ = stats;
   }
 
@@ -248,6 +268,7 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
   }
 
   Stats stats() const override {
+    std::lock_guard<std::mutex> l(mutex_);
     return stats_;
   }
 
@@ -256,6 +277,7 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
   }
 
  private:
+  mutable std::mutex mutex_;
   memory::MemoryArbitrator::Stats stats_;
 };
 
@@ -321,6 +343,10 @@ class TestMemoryPool : public memory::MemoryPool {
   }
 
   int64_t availableReservation() const override {
+    return 0;
+  }
+
+  int64_t releasableReservation() const override {
     return 0;
   }
 
@@ -476,6 +502,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(counterMap.count(kMetricSsdCacheRegionsEvicted.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutEntries.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutRegions.str()), 0);
+    ASSERT_EQ(counterMap.count(kMetricSsdCacheReadWithoutChecksum.str()), 0);
     ASSERT_EQ(counterMap.size(), 22);
   }
 
@@ -502,6 +529,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
   newSsdStats->readSsdErrors = 10;
   newSsdStats->readSsdCorruptions = 10;
   newSsdStats->readCheckpointErrors = 10;
+  newSsdStats->readWithoutChecksumChecks = 10;
   cache.updateStats(
       {.numHit = 10,
        .hitBytes = 10,
@@ -553,7 +581,8 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(counterMap.count(kMetricSsdCacheRegionsEvicted.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutEntries.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutRegions.str()), 1);
-    ASSERT_EQ(counterMap.size(), 51);
+    ASSERT_EQ(counterMap.count(kMetricSsdCacheReadWithoutChecksum.str()), 1);
+    ASSERT_EQ(counterMap.size(), 52);
   }
 }
 

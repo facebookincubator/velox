@@ -188,8 +188,9 @@ class Writer : public dwio::common::Writer {
       MemoryUsageCategory memoryUsageCategory,
       double estimatedMemoryGrowthRatio);
 
-  // Releases the unused memory reservations after we flush a stripe.
-  void releaseMemory();
+  // Releases the unused memory reservations after we flush a stripe. Returns
+  // the total number of released bytes.
+  int64_t releaseMemory();
 
   // Create a new stripe. No-op if there is no data written.
   void flushInternal(bool close = false);
@@ -220,9 +221,5 @@ class DwrfWriterFactory : public dwio::common::WriterFactory {
       std::unique_ptr<dwio::common::FileSink> sink,
       const dwio::common::WriterOptions& options) override;
 };
-
-void registerDwrfWriterFactory();
-
-void unregisterDwrfWriterFactory();
 
 } // namespace facebook::velox::dwrf

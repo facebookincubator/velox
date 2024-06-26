@@ -185,7 +185,7 @@ def get_files(commit, path):
 
     if commit != "":
         status, stdout, stderr = util.run(
-            f"git diff --relative --name-only --diff-filter='ACM' {commit}"
+            f"git diff --relative --name-only --diff-filter='ACMR' {commit}"
         )
         filelist = stdout.splitlines()
     else:
@@ -204,6 +204,7 @@ def get_files(commit, path):
         and "build/fbcode_builder" not in file
         and "build/deps" not in file
         and "cmake-build-debug" not in file
+        and "NOTICE.txt" != file
     ]
 
 

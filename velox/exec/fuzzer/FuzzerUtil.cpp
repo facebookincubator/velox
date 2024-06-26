@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 #include "velox/exec/fuzzer/FuzzerUtil.h"
+#include <re2/re2.h>
 #include <filesystem>
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/catalog/fbhive/FileUtils.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 
 using namespace facebook::velox::dwio::catalog::fbhive;
@@ -35,6 +36,13 @@ std::pair<std::string, std::string> extractPartition(
   auto partitionValue = FileUtils::unescapePathName(
       directoryName.substr(directoryName.find(kPartitionDelimiter) + 1));
   return std::pair(partitionColumn, partitionValue);
+}
+
+std::optional<int32_t> getBucketNum(const std::string& fileName) {
+  if (RE2::FullMatch(fileName, "0[0-9]+_0_TaskCursorQuery_[0-9]+")) {
+    return std::optional(stoi(fileName.substr(0, fileName.find("+"))));
+  }
+  return std::nullopt;
 }
 
 void writeToFile(
@@ -77,8 +85,10 @@ void makeSplitsWithSchema(
       makeSplitsWithSchema(directoryName, partitionKeys, splits);
       partitionKeys.erase(partition.first);
     } else {
+      const auto bucketNum =
+          getBucketNum(entry.path().string().substr(directory.size() + 1));
       splits.emplace_back(
-          makeSplit(entry.path().string(), partitionKeys, std::nullopt));
+          makeSplit(entry.path().string(), partitionKeys, bucketNum));
     }
   }
 }
@@ -200,5 +210,18 @@ bool containsUnsupportedTypes(const TypePtr& type) {
   return containsTypeKind(type, TypeKind::TIMESTAMP) ||
       containsTypeKind(type, TypeKind::VARBINARY) ||
       containsType(type, INTERVAL_DAY_TIME());
+}
+
+void setupMemory(int64_t allocatorCapacity, int64_t arbitratorCapacity) {
+  FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
+  FLAGS_velox_memory_leak_check_enabled = true;
+  facebook::velox::memory::SharedArbitrator::registerFactory();
+  facebook::velox::memory::MemoryManagerOptions options;
+  options.allocatorCapacity = allocatorCapacity;
+  options.arbitratorCapacity = arbitratorCapacity;
+  options.arbitratorKind = "SHARED";
+  options.checkUsageLeak = true;
+  options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
+  facebook::velox::memory::MemoryManager::initialize(options);
 }
 } // namespace facebook::velox::exec::test

@@ -205,6 +205,7 @@ class AggregationFuzzerBase {
   std::vector<RowVectorPtr> generateInputDataWithRowNumber(
       std::vector<std::string> names,
       std::vector<TypePtr> types,
+      const std::vector<std::string>& partitionKeys,
       const CallableSignature& signature);
 
   std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
@@ -255,6 +256,8 @@ class AggregationFuzzerBase {
       int32_t maxDrivers = 2);
 
   void printSignatureStats();
+
+  void logVectors(const std::vector<RowVectorPtr>& vectors);
 
   const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>
       customVerificationFunctions_;

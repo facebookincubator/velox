@@ -11,15 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# Build the test and build container for presto_cpp
-#
-FROM quay.io/centos/centos:stream8
-ARG cpu_target
-ENV CPU_TARGET=$cpu_target
 
-COPY scripts/setup-helper-functions.sh /
-COPY scripts/setup-centos8.sh /
-COPY scripts/setup-adapters.sh /
-RUN mkdir build && ( cd build &&  bash /setup-centos8.sh ) && rm -rf build
-RUN mkdir build && ( cd build &&  source /opt/rh/gcc-toolset-9/enable && \
-    bash /setup-adapters.sh ) && rm -rf build
+add_library(velox_dwio_orc_reader OrcReader.cpp)
+
+target_link_libraries(velox_dwio_orc_reader velox_dwio_dwrf_reader)

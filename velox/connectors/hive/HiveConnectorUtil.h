@@ -63,14 +63,14 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
     const std::shared_ptr<const HiveConfig>& config,
-    const Config* sessionProperties,
+    const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit);
 
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const Config* sessionProperties,
+    const ConnectorQueryCtx* connectorQueryCtx,
     const RowTypePtr& fileSchema,
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::unordered_map<std::string, std::string>& tableParameters = {});
@@ -79,7 +79,7 @@ void configureRowReaderOptions(
     dwio::common::RowReaderOptions& rowReaderOptions,
     const std::unordered_map<std::string, std::string>& tableParameters,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
-    const std::shared_ptr<common::MetadataFilter>& metadataFilter,
+    std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit);
 
