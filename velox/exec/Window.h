@@ -134,7 +134,7 @@ class Window : public Operator {
   // consists of all the input columns followed by the results of the
   // window function.
   // @return The number of rows processed in the loop.
-  std::pair<vector_size_t, vector_size_t> callApplyLoop(
+  vector_size_t callApplyLoop(
       vector_size_t numOutputRows,
       const RowVectorPtr& result);
 

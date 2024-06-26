@@ -605,7 +605,7 @@ void Window::callApplyForPartitionRows(
   partitionOffset_ += numRows;
 }
 
-std::pair<vector_size_t, vector_size_t> Window::callApplyLoop(
+vector_size_t Window::callApplyLoop(
     vector_size_t numOutputRows,
     const RowVectorPtr& result) {
   // Compute outputs by traversing as many partitions as possible. This
@@ -635,6 +635,10 @@ std::pair<vector_size_t, vector_size_t> Window::callApplyLoop(
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
 
+      if (currentPartition_->isPartial()) {
+        currentPartition_->clearOutputRows(rowsForCurrentPartition);
+      }
+
       if (!currentPartition_->isComplete()) {
         // Still more data for the current partition would need to be processed.
         // So resume on the next getOutput call.
@@ -657,6 +661,9 @@ std::pair<vector_size_t, vector_size_t> Window::callApplyLoop(
           partitionOffset_ + numOutputRowsLeft,
           resultIndex,
           result);
+      if (currentPartition_->isPartial()) {
+        currentPartition_->clearOutputRows(numOutputRowsLeft);
+      }
       processedRowCount = numOutputRowsLeft;
       numOutputRowsLeft = 0;
       break;
@@ -664,7 +671,7 @@ std::pair<vector_size_t, vector_size_t> Window::callApplyLoop(
   }
 
   // Return the number of processed rows.
-  return {numOutputRows - numOutputRowsLeft, processedRowCount};
+  return numOutputRows - numOutputRowsLeft;
 }
 
 RowVectorPtr Window::getOutput() {
@@ -699,17 +706,9 @@ RowVectorPtr Window::getOutput() {
 
   // Compute the output values of window functions.
   auto numResultRows = callApplyLoop(numOutputRows, result);
-  if (currentPartition_ && currentPartition_->isPartial()) {
-    if (numResultRows.second == -1) {
-      currentPartition_->clearOutputRows(numResultRows.first);
-    } else {
-      currentPartition_->clearOutputRows(numResultRows.second);
-    }
-  }
 
-  return numResultRows.first < numOutputRows
-      ? std::dynamic_pointer_cast<RowVector>(
-            result->slice(0, numResultRows.first))
+  return numResultRows < numOutputRows
+      ? std::dynamic_pointer_cast<RowVector>(result->slice(0, numResultRows))
       : result;
 }
 
