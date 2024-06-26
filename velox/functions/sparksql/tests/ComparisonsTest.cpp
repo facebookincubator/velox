@@ -557,10 +557,7 @@ TEST_F(ComparisonsTest, dateTypes) {
 
 TEST_F(ComparisonsTest, notSupportedTypes) {
   const auto candidataFuncs = {
-      "lessthan",
-      "lessthanorequal",
-      "greaterthan",
-      "greaterthanorequal"};
+      "lessthan", "lessthanorequal", "greaterthan", "greaterthanorequal"};
   auto arrayData = makeArrayVectorFromJson<int64_t>({"[1, 2, 3]"});
   auto mapData = makeMapVectorFromJson<int64_t, int64_t>({"{1: 1}"});
   auto rowData = makeRowVector({arrayData});
