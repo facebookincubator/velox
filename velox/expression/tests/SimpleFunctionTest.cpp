@@ -1562,10 +1562,13 @@ TEST_F(SimpleFunctionTest, callNullableNoThrow) {
   VELOX_ASSERT_THROW(
       (evaluateOnce<int64_t, int64_t>("nullable_no_throw(c0)", std::nullopt)),
       "Input cannot be NULL");
-
   auto result = evaluateOnce<int64_t, int64_t>(
       "try(nullable_no_throw(c0))", std::nullopt);
   EXPECT_EQ(std::nullopt, result);
+
+  // No error.
+  result = evaluateOnce<int64_t, int64_t>("nullable_no_throw(c0)", 1);
+  EXPECT_EQ(2, result);
 }
 
 template <typename TExec>
@@ -1591,7 +1594,6 @@ TEST_F(SimpleFunctionTest, callNullFreeNoThrow) {
   VELOX_ASSERT_THROW(
       (evaluateOnce<int64_t, int64_t>("null_free_no_throw(c0)", 0)),
       "Input cannot be 0");
-
   auto result =
       evaluateOnce<int64_t, int64_t>("try(null_free_no_throw(c0))", 0);
   EXPECT_EQ(std::nullopt, result);
@@ -1599,9 +1601,12 @@ TEST_F(SimpleFunctionTest, callNullFreeNoThrow) {
   VELOX_ASSERT_THROW(
       (evaluateOnce<int64_t, int64_t>("null_free_no_throw(c0)", 4)),
       "Input cannot be even");
-
   result = evaluateOnce<int64_t, int64_t>("try(null_free_no_throw(c0))", 4);
   EXPECT_EQ(std::nullopt, result);
+
+  // No error.
+  result = evaluateOnce<int64_t, int64_t>("null_free_no_throw(c0)", 1);
+  EXPECT_EQ(2, result);
 }
 
 } // namespace
