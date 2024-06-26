@@ -50,6 +50,7 @@ list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
 
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
+include(CMakeDependentOption)
 
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -68,6 +69,11 @@ option(
   "Build a minimal set of components, including DWIO (file format readers/writers).
    This will override other build options."
   OFF)
+option(VELOX_BUILD_SHARED "Build Velox as shared libraries." ON)
+# While it's possible to build both in one go we currently want to build either
+# static or shared.
+cmake_dependent_option(VELOX_BUILD_STATIC "Build Velox as static libraries." ON
+                       "NOT VELOX_BUILD_SHARED" OFF)
 
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
@@ -209,10 +215,6 @@ if(${VELOX_FORCE_COLORED_OUTPUT})
   endif()
 endif()
 
-# At the moment we prefer static linking but by default cmake looks for shared
-# libs first. This will still fallback to shared libs when static ones are not
-# found
-list(INSERT CMAKE_FIND_LIBRARY_SUFFIXES 0 a)
 if(VELOX_ENABLE_S3)
   # Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
   if(AWSSDK_ROOT_DIR)
@@ -220,6 +222,15 @@ if(VELOX_ENABLE_S3)
   endif()
   find_package(AWSSDK REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
+endif()
+
+if(VELOX_ENABLE_GCS)
+  # Set GCS_ROOT_DIR if you have a custom install location of GCS SDK CPP.
+  if(GCSSDK_ROOT_DIR)
+    list(APPEND CMAKE_PREFIX_PATH ${GCSSDK_ROOT_DIR})
+  endif()
+  find_package(google_cloud_cpp_storage REQUIRED)
+  add_definitions(-DVELOX_ENABLE_GCS)
 endif()
 
 if(VELOX_ENABLE_ABFS)
@@ -374,10 +385,14 @@ set(BOOST_INCLUDE_LIBRARIES
 set_source(Boost)
 resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 
-# Range-v3 will be enable when the codegen code actually lands keeping it here
-# for reference. find_package(range-v3)
+if(VELOX_BUILD_SHARED)
+  # We have to enforce the bundled build for now to make sure folly uses the
+  # shared gflags to avoid linking issues
+  set(gflags_SOURCE BUNDLED)
+else()
+  set_source(gflags)
+endif()
 
-set_source(gflags)
 resolve_dependency(gflags COMPONENTS ${VELOX_GFLAGS_TYPE})
 if(NOT TARGET gflags::gflags)
   # This is a bit convoluted, but we want to be able to use gflags::gflags as a
@@ -450,8 +465,13 @@ set_source(simdjson)
 resolve_dependency(simdjson 3.9.3)
 
 # Locate or build folly.
-add_compile_definitions(FOLLY_HAVE_INT128_T=1)
-set_source(folly)
+if(VELOX_BUILD_SHARED)
+  # We have to enforce the bundled build for now to avoid linking issues with
+  # gflags
+  set(folly_SOURCE BUNDLED)
+else()
+  set_source(folly)
+endif()
 resolve_dependency(folly)
 
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
@@ -460,12 +480,6 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)
-endif()
-
-if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
-  set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
-else()
-  set(FOLLY_BENCHMARK Folly::follybenchmark)
 endif()
 
 if(VELOX_ENABLE_GCS)
@@ -569,4 +583,8 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
 endif()
 
 add_subdirectory(third_party)
+
+if(VELOX_BUILD_SHARED)
+  set(BUILD_SHARED_LIBS ON)
+endif()
 add_subdirectory(velox)
