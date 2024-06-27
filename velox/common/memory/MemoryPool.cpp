@@ -1061,7 +1061,7 @@ uint64_t MemoryPoolImpl::shrink(uint64_t targetBytes) {
   std::lock_guard<std::mutex> l(mutex_);
   // We don't expect to shrink a memory pool without capacity limit.
   VELOX_CHECK_NE(capacity_, kMaxMemory);
-  uint64_t freeBytes = std::max<uint64_t>(0, capacity_ - reservationBytes_);
+  uint64_t freeBytes = std::max<int64_t>(0, capacity_ - reservationBytes_);
   if (targetBytes != 0) {
     freeBytes = std::min(targetBytes, freeBytes);
   }
