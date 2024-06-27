@@ -41,7 +41,7 @@ Mathematical Functions
 .. spark:function:: add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to sparks's operator ``+``.
+    Corresponds to sparks's operator ``+``.
 
 .. spark:function:: add(x, y) -> decimal
 
@@ -65,6 +65,26 @@ Mathematical Functions
 
     Returns ``x`` rounded up to the nearest integer.  
     Supported types are: BIGINT and DOUBLE.
+
+.. function:: checked_add(x, y) -> [same as x]
+
+    Returns the result of adding x to y. The types of x and y must be the same.
+    For integral types, overflow results in an error. Corresponds to Spark's operator ``+`` with ``failOnError`` as true.
+
+.. function:: checked_divide(x, y) -> [same as x]
+
+    Returns the results of dividing x by y. The types of x and y must be the same.
+    Division by zero results in an error. Corresponds to Spark's operator ``/`` with ``failOnError`` as true.
+
+.. function:: checked_multiply(x, y) -> [same as x]
+
+    Returns the result of multiplying x by y. The types of x and y must be the same.
+    For integral types, overflow results in an error. Corresponds to Spark's operator ``*`` with ``failOnError`` as true.
+
+.. function:: checked_subtract(x, y) -> [same as x]
+
+    Returns the result of subtracting y from x. The types of x and y must be the same.
+    For integral types, overflow results in an error. Corresponds to Spark's operator ``-`` with ``failOnError`` as true.
 
 .. spark:function:: cos(x) -> double
 
@@ -147,10 +167,15 @@ Mathematical Functions
     Returns true if x is Nan, or false otherwise. Returns false is x is NULL.
     Supported types are: REAL, DOUBLE.
 
+.. spark:function:: log(base, expr) -> double
+
+    Returns the logarithm of ``expr`` with ``base``.
+    Returns NULL if either ``expr`` or ``base`` is less than or equal to 0.
+
 .. spark:function:: log1p(x) -> double
 
     Returns the natural logarithm of the “given value ``x`` plus one”.
-    Return NULL if x is less than or equal to -1.
+    Returns NULL if x is less than or equal to -1.
 
 .. spark:function:: log2(x) -> double
 
@@ -163,7 +188,7 @@ Mathematical Functions
 .. spark:function:: multiply(x, y) -> [same as x]
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``*``.
+    Corresponds to Spark's operator ``*``.
 
 .. spark:function:: multiply(x, y) -> [decimal]
 
@@ -247,7 +272,7 @@ Mathematical Functions
 .. spark:function:: subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``-``.
+    Corresponds to Spark's operator ``-``.
 
 .. spark:function:: subtract(x, y) -> decimal
 

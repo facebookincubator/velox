@@ -371,6 +371,11 @@ TEST(CachedFactoryTest, retrievedCached) {
   std::vector<int> keys(10);
   for (int i = 0; i < 10; ++i) {
     keys[i] = i;
+    if (i % 2 == 0) {
+      ASSERT_EQ(*factory.get(keys[i]), i * 2) << i;
+    } else {
+      ASSERT_EQ(factory.get(keys[i]).get(), nullptr);
+    }
   }
   std::vector<std::pair<int, CachedPtr<int, int>>> cached;
   std::vector<int> missing;
@@ -466,7 +471,6 @@ TEST(CachedFactoryTest, fuzzer) {
   const int numThreads = 32;
   const int testDurationMs = 5'000;
   const size_t expirationDurationMs = 1;
-  folly::Random::DefaultGenerator rng(23);
   for (const bool expireCache : {false, true}) {
     SCOPED_TRACE(fmt::format("expireCache: {}", expireCache));
     auto generator = std::make_unique<IdentityGenerator>();
@@ -478,7 +482,8 @@ TEST(CachedFactoryTest, fuzzer) {
     std::vector<std::thread> threads;
     threads.reserve(numThreads);
     for (int i = 0; i < numThreads; ++i) {
-      threads.emplace_back([&]() {
+      threads.emplace_back([&factory, i]() {
+        folly::Random::DefaultGenerator rng(23 + i);
         const auto startTimeMs = getCurrentTimeMs();
         while (startTimeMs + testDurationMs > getCurrentTimeMs()) {
           const auto key = folly::Random::rand32(rng) % 256;

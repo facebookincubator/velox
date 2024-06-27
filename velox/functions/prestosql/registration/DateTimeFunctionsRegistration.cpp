@@ -66,14 +66,30 @@ void registerTimestampMinusInterval(const std::string& name) {
       IntervalYearMonth>({name});
 }
 
+void registerFromUnixtime(const std::string& name) {
+  registerFunction<FromUnixtimeFunction, Timestamp, double>({name});
+  registerFunction<
+      FromUnixtimeFunction,
+      TimestampWithTimezone,
+      double,
+      Varchar>({name});
+  registerFunction<
+      FromUnixtimeFunction,
+      TimestampWithTimezone,
+      double,
+      int64_t,
+      int64_t>({name});
+}
+
 void registerSimpleFunctions(const std::string& prefix) {
   // Date time functions.
   registerFunction<ToUnixtimeFunction, double, Timestamp>(
       {prefix + "to_unixtime"});
   registerFunction<ToUnixtimeFunction, double, TimestampWithTimezone>(
       {prefix + "to_unixtime"});
-  registerFunction<FromUnixtimeFunction, Timestamp, double>(
-      {prefix + "from_unixtime"});
+
+  registerFromUnixtime(prefix + "from_unixtime");
+
   registerFunction<DateFunction, Date, Varchar>({prefix + "date"});
   registerFunction<DateFunction, Date, Timestamp>({prefix + "date"});
   registerFunction<DateFunction, Date, TimestampWithTimezone>(
@@ -135,6 +151,12 @@ void registerSimpleFunctions(const std::string& prefix) {
       IntervalDayTime,
       Timestamp,
       Timestamp>({prefix + "minus"});
+
+  registerFunction<
+      TimestampMinusFunction,
+      IntervalDayTime,
+      TimestampWithTimezone,
+      TimestampWithTimezone>({prefix + "minus"});
 
   registerFunction<DayFunction, int64_t, TimestampWithTimezone>(
       {prefix + "day", prefix + "day_of_month"});
@@ -268,6 +290,5 @@ void registerDateTimeFunctions(const std::string& prefix) {
   registerTimestampWithTimeZoneType();
 
   registerSimpleFunctions(prefix);
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_from_unixtime, prefix + "from_unixtime");
 }
 } // namespace facebook::velox::functions

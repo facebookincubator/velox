@@ -16,12 +16,15 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/vector/FlatVector.h"
 
 #include <thrift/protocol/TCompactProtocol.h> // @manual
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::parquet {
 
@@ -73,6 +76,8 @@ void PageReader::seekToPage(int64_t row) {
 }
 
 PageHeader PageReader::readPageHeader() {
+  TestValue::adjust(
+      "facebook::velox::parquet::PageReader::readPageHeader", this);
   if (bufferEnd_ == bufferStart_) {
     const void* buffer;
     int32_t size;
@@ -284,8 +289,9 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   }
   auto levelsSize = repeatLength + defineLength;
   pageData_ += levelsSize;
-  if (pageHeader.data_page_header_v2.__isset.is_compressed ||
-      pageHeader.data_page_header_v2.is_compressed) {
+  if (pageHeader.data_page_header_v2.__isset.is_compressed &&
+      pageHeader.data_page_header_v2.is_compressed &&
+      (pageHeader.compressed_page_size - levelsSize > 0)) {
     pageData_ = decompressData(
         pageData_,
         pageHeader.compressed_page_size - levelsSize,
