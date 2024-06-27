@@ -54,18 +54,28 @@ class Split final : public exec::VectorFunction {
       const auto* rawStrings = strings->data<StringView>();
       const auto delim = delims->valueAt<StringView>(0);
       rows.applyToSelected([&](vector_size_t row) {
-        applyInner(rawStrings[row], delim, limit, row, resultWriter);
+        if (delim.size() == 0) {
+          splitEmptyDelimer(rawStrings[row], limit, row, resultWriter);
+        } else {
+          splitInner(rawStrings[row], delim, limit, row, resultWriter);
+        }
       });
     } else {
       // The rest of the cases are handled through this general path and no
       // direct access.
       rows.applyToSelected([&](vector_size_t row) {
-        applyInner(
-            strings->valueAt<StringView>(row),
-            delims->valueAt<StringView>(row),
-            limit,
-            row,
-            resultWriter);
+        const auto delim = delims->valueAt<StringView>(row);
+        if (delim.size() == 0) {
+          splitEmptyDelimer(
+              strings->valueAt<StringView>(row), limit, row, resultWriter);
+        } else {
+          splitInner(
+              strings->valueAt<StringView>(row),
+              delim,
+              limit,
+              row,
+              resultWriter);
+        }
       });
     }
 
@@ -78,7 +88,40 @@ class Split final : public exec::VectorFunction {
         ->acquireSharedStringBuffers(strings->base());
   }
 
-  inline void applyInner(
+ private:
+  mutable functions::detail::ReCache cache_;
+
+  // When pattern is empty, split each character out. Since Spark 3.4, when
+  // delimiter is empty, the result does not include an empty tail string, e.g.
+  // split('abc', '') outputs ["a", "b", "c"] instead of ["a", "b", "c", ""].
+  // The result does not include remaining string when limit is smaller than the
+  // string size, e.g. split('abc', '', 2) outputs ["a", "b"] instead of ["a",
+  // "bc"].
+  void splitEmptyDelimer(
+      const StringView current,
+      int64_t limit,
+      vector_size_t row,
+      exec::VectorWriter<Array<Varchar>>& resultWriter) const {
+    resultWriter.setOffset(row);
+    auto& arrayWriter = resultWriter.current();
+    if (current.size() == 0) {
+      arrayWriter.add_item().setNoCopy(StringView());
+      resultWriter.commit();
+      return;
+    }
+
+    const char* const begin = current.begin();
+    const char* const end = current.end();
+    const char* pos = begin;
+    while (pos < end && pos < limit + begin) {
+      arrayWriter.add_item().setNoCopy(StringView(pos, 1));
+      pos += 1;
+    }
+    resultWriter.commit();
+  }
+
+  // Split with a non-empty pattern.
+  void splitInner(
       StringView input,
       const StringView delim,
       int64_t limit,
@@ -99,6 +142,7 @@ class Split final : public exec::VectorFunction {
     // adding them to the elements vector, until we reached the end of the
     // string or the limit.
     int32_t addedElements{0};
+    bool emptyDelim = delim.size() == 0 ? true : false;
     auto* re = cache_.findOrCompile(delim);
     const auto re2String = re2::StringPiece(input.data(), input.size());
     size_t pos = 0;
@@ -109,11 +153,6 @@ class Split final : public exec::VectorFunction {
       const auto fullMatch = subMatches[0];
       auto offset = fullMatch.data() - start;
       const auto size = fullMatch.size();
-
-      if (size == 0) {
-        // delimer is empty string
-        offset += 1;
-      }
 
       if (offset >= input.size()) {
         break;
@@ -135,9 +174,6 @@ class Split final : public exec::VectorFunction {
         StringView(input.data() + pos, input.size() - pos));
     resultWriter.commit();
   }
-
- private:
-  mutable functions::detail::ReCache cache_;
 };
 
 std::shared_ptr<exec::VectorFunction> createSplit(

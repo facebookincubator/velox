@@ -254,6 +254,13 @@ TEST_F(SplitTest, split) {
       {""},
   });
   assertEqualVectors(expected, run(inputStrings, delim, "split(C0, C1)"));
+  auto expected2 = makeArrayVector<StringView>({
+      {"I", ","},
+      {"o", "n"},
+      {""},
+  });
+  assertEqualVectors(
+      expected2, run(inputStrings, delim, "split(C0, C1, C2)", 2));
 
   // Non-ascii, flat strings, flat delimiter, no limit.
   delim = "లేదా";

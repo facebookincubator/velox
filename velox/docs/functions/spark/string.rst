@@ -195,14 +195,21 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT soundex('Miller'); -- "M460"
 
-.. spark:function:: split(string, delimiter) -> array(string)
-
-    Splits ``string`` on ``delimiter`` and returns an array.
-    The delimiter is any string matching regex, supported by re2. ::
+.. spark:function:: split(string, delimiter[, limit]) -> array(string)
+    Splits ``string`` around occurrences that match ``delimiter`` and returns an array 
+    with a length of at most ``limit``. ``delimiter`` is a string representing a regular 
+    expression. ``limit`` is an integer which controls the number of times the regex is 
+    applied. By default, ``limit`` is -1. When ``limit`` > 0, the resulting array's 
+    length will not be more than ``limit``, and the resulting array's last entry will 
+    contain all input beyond the last matched regex. When ``limit`` <= 0, ``regex`` will 
+    be applied as many times as possible, and the resulting array can be of any size. ::
 
         SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
+        SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
         SELECT split('one', ''); -- ["o", "n", "e", ""]
         SELECT split('one', '1'); -- ["one"]
+        SELECT split('abcd', ''); -- ["a", "b", "c", "d"]
+        SELECT split('abcd', '', 3); -- ["a", "b", "c"]
 
 .. spark:function:: split(string, delimiter, limit) -> array(string)
    :noindex:
