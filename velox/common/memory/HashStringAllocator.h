@@ -476,10 +476,10 @@ class HashStringAllocator : public StreamArena {
     // Sum of the size of blocks in 'free_', excluding headers.
     DECLARE_FIELD_WITH_INIT_VALUE(uint64_t, freeBytes, 0);
 
-    // Counter of allocated bytes. The difference of two point in time values
-    // tells how much memory has been consumed by activity between these points
-    // in time. Incremented by allocation and decremented by free. Used for
-    // tracking the row by row space usage in a RowContainer.
+    // Counter of cumulative allocated bytes. The difference of two point in
+    // time values tells how much memory has been consumed by activity between
+    // these points in time. Incremented by allocation and NOT decremented by
+    // free. Used for tracking the row by row space usage in a RowContainer.
     DECLARE_FIELD_WITH_INIT_VALUE(uint64_t, cumulativeBytes, 0);
 
     // Pointer to Header for the range being written. nullptr if a write is not
@@ -512,23 +512,22 @@ class HashStringAllocator : public StreamArena {
   State state_;
 };
 
-// Utility for keeping track of allocation between two points in
-// time. A counter on a row supplied at construction is incremented
-// by the change in allocation between construction and
-// destruction. This is a scoped guard to use around setting
-// variable length data in a RowContainer or similar.
+/// Utility for keeping track of allocation between two points in time. A
+/// counter on a row supplied at construction is incremented by the change in
+/// allocation between construction and destruction. This is a scoped guard to
+/// use around setting variable length data in a RowContainer or similar.
 template <typename T, typename TCounter = uint32_t>
 class RowSizeTracker {
  public:
-  //  Will update the counter at pointer cast to TCounter*
-  //  with the change in allocation during the lifetime of 'this'
+  /// Will update the counter at pointer cast to TCounter* with the change in
+  /// allocation during the lifetime of 'this'
   RowSizeTracker(T& counter, HashStringAllocator& allocator)
-      : allocator_(allocator),
-        size_(allocator_.cumulativeBytes()),
+      : allocator_(&allocator),
+        size_(allocator_->cumulativeBytes()),
         counter_(counter) {}
 
   ~RowSizeTracker() {
-    auto delta = allocator_.cumulativeBytes() - size_;
+    auto delta = allocator_->cumulativeBytes() - size_;
     if (delta) {
       saturatingIncrement(&counter_, delta);
     }
@@ -542,7 +541,7 @@ class RowSizeTracker {
         std::min<uint64_t>(value, std::numeric_limits<TCounter>::max());
   }
 
-  HashStringAllocator& allocator_;
+  HashStringAllocator* const allocator_;
   const uint64_t size_;
   T& counter_;
 };

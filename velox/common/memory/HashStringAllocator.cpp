@@ -83,6 +83,8 @@ std::string HashStringAllocator::Header::toString() {
 
 HashStringAllocator::~HashStringAllocator() {
   clear();
+  VELOX_CHECK_EQ(state_.cumulativeBytes(), 0);
+  VELOX_CHECK_EQ(state_.sizeFromPool(), 0);
 }
 
 void HashStringAllocator::clear() {
@@ -94,13 +96,13 @@ void HashStringAllocator::clear() {
     const auto size = pair.second;
     pool()->free(pair.first, size);
     state_.sizeFromPool() -= size;
-    state_.cumulativeBytes() -= size;
   }
   state_.allocationsFromPool().clear();
   for (auto i = 0; i < kNumFreeLists; ++i) {
     new (&state_.freeLists()[i]) CompactDoubleList();
   }
   state_.pool().clear();
+  state_.cumulativeBytes() = 0;
 }
 
 void* HashStringAllocator::allocateFromPool(size_t size) {
@@ -120,7 +122,6 @@ void HashStringAllocator::freeToPool(void* ptr, size_t size) {
       size, it->second, "Bad size in HashStringAllocator::freeToPool()");
   state_.allocationsFromPool().erase(it);
   state_.sizeFromPool() -= size;
-  state_.cumulativeBytes() -= size;
   pool()->free(ptr, size);
 }
 
@@ -440,7 +441,6 @@ void HashStringAllocator::free(Header* header) {
     } else {
       VELOX_CHECK(!headerToFree->isFree());
       state_.freeBytes() += headerToFree->size() + sizeof(Header);
-      state_.cumulativeBytes() -= headerToFree->size();
       Header* next = headerToFree->next();
       if (next != nullptr) {
         VELOX_CHECK(!next->isPreviousFree());
