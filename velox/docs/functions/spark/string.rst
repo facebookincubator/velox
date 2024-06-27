@@ -121,7 +121,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT ltrim('ps', 'spark'); -- "ark"
 
-.. spark:function:: mask(string, upperChar, lowerChar, digitChar, otherChar) -> string
+.. spark:function:: mask(string[, upperChar, lowerChar, digitChar, otherChar]) -> string
 
     Returns a masked version of the input ``string``.
     ``string``: string value to mask.

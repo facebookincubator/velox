@@ -24,13 +24,7 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 class MaskFunction final : public exec::VectorFunction {
-  static constexpr std::string_view maskedUpperCase{"X"};
-  static constexpr std::string_view maskedLowerCase{"x"};
-  static constexpr std::string_view maskedDigit{"n"};
-
  public:
-  MaskFunction() {}
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -179,6 +173,11 @@ class MaskFunction final : public exec::VectorFunction {
     }
     result.resize(inputSize);
   }
+
+ private:
+  static constexpr std::string_view maskedUpperCase{"X"};
+  static constexpr std::string_view maskedLowerCase{"x"};
+  static constexpr std::string_view maskedDigit{"n"};
 };
 
 std::shared_ptr<exec::VectorFunction> createMask(
