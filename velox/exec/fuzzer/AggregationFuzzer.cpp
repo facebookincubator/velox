@@ -914,6 +914,12 @@ bool AggregationFuzzer::verifySortedAggregation(
 // require corresponding changes here.
 void AggregationFuzzer::verifyAggregation(
     const std::vector<PlanWithSplits>& plans) {
+  // There is a known issue where LocalPartition will send DictionaryVectors
+  // with the same underlying base Vector to multiple threads.  This triggers
+  // TSAN to report data races, particularly if that base Vector is from the
+  // TableScan and reused.  Ignore TSAN issues in these tests for now.
+  folly::annotate_ignore_thread_sanitizer_guard g(__FILE__, __LINE__);
+
   VELOX_CHECK_GT(plans.size(), 0);
   const auto& plan = plans.front().plan;
 
