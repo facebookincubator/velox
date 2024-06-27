@@ -676,7 +676,9 @@ class UDFHolder {
   //
   // Each of these methods can return bool, void or Status. Returning void
   // means that the UDF is assumed never to return null values. Returning
-  // Status to hold success or error outcome of the function call.
+  // Status to hold success or error outcome of the function call, and it
+  // implies result is not null. If you need to return null as result, please
+  // use bool return type.
   //
   // Optionally, UDFs can also provide the following methods:
   //
