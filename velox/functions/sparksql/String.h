@@ -1191,13 +1191,18 @@ struct RepeatFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
       int32_t times) {
-    VELOX_USER_CHECK_LE(times, 10000, "Repeat times is too large.");
+    static constexpr size_t resultMaxSize = 1024 * 1024; // 1MB
     auto inputSize = input.size();
     if (inputSize == 0 || times <= 0) {
       result.resize(0);
       return;
     }
     int32_t newSize = velox::checkedMultiply<int32_t>(inputSize, times);
+    VELOX_USER_CHECK_LE(
+        newSize,
+        resultMaxSize,
+        "Result size must be less than or equal to {}",
+        resultMaxSize);
     result.resize(newSize);
     for (auto i = 0; i < times; ++i) {
       std::memcpy(result.data() + i * inputSize, input.data(), inputSize);

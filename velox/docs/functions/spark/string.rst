@@ -144,8 +144,8 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 .. spark:function:: repeat(string, n) -> varchar
 
     Returns the string which repeats ``string`` ``n`` times. 
-    ``n`` must be less than or equal to 10000.
-    If ``n`` is less than or equal to 0, empry string is returned. ::
+    Result size must be less than or equal to 1MB.
+    If ``n`` is less than or equal to 0, empty string is returned. ::
 
         SELECT repeat('123', 2); -- 123123
 
@@ -228,9 +228,9 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT startswith('js SQL', 'SQL'); -- false
         SELECT startswith('js SQL', null); -- NULL
 
-.. spark:function:: string_repeat(str, n) -> varchar
+.. spark:function:: string_repeat(string, n) -> varchar
 
-    This is an alias for ``repeat(str, n)``.
+    This is an alias for :spark:func:`repeat`.
 
 .. spark:function:: str_to_map(string, entryDelimiter, keyValueDelimiter) -> map(string, string)
 
