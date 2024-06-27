@@ -396,6 +396,27 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
         [&](auto row) { return timezonesVector[row]; });
     assertEqualVectors(expected, result);
   }
+
+  auto fromOffset = [&](double epoch, int64_t hours, int64_t minutes) {
+    auto result = evaluateOnce<int64_t>(
+        "from_unixtime(c0, c1, c2)",
+        std::optional(epoch),
+        std::optional(hours),
+        std::optional(minutes));
+
+    auto otherResult = evaluateOnce<int64_t>(
+        fmt::format("from_unixtime(c0, {}, {})", hours, minutes),
+        std::optional(epoch));
+
+    VELOX_CHECK_EQ(result.value(), otherResult.value());
+    return TimestampWithTimezone::unpack(result.value());
+  };
+
+  EXPECT_EQ(TimestampWithTimezone(123'450, "UTC"), fromOffset(123.45, 0, 0));
+  EXPECT_EQ(
+      TimestampWithTimezone(123'450, "+05:30"), fromOffset(123.45, 5, 30));
+  EXPECT_EQ(
+      TimestampWithTimezone(123'450, "-08:00"), fromOffset(123.45, -8, 0));
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtime) {
@@ -1124,6 +1145,46 @@ TEST_F(DateTimeFunctionsTest, minusTimestamp) {
   VELOX_ASSERT_THROW(
       minus(Timestamp::kMinSeconds, Timestamp::kMaxSeconds),
       "Could not convert Timestamp(-9223372036854776, 0) to milliseconds");
+}
+
+TEST_F(DateTimeFunctionsTest, minusTimestampWithTimezone) {
+  auto minus = [&](const std::string& a, const std::string& b) {
+    const auto sql =
+        "cast(c0 as timestamp with time zone) - cast(c1 as timestamp with time zone)";
+
+    auto result =
+        evaluateOnce<int64_t>(sql, std::optional(a), std::optional(b));
+    auto negativeResult =
+        evaluateOnce<int64_t>(sql, std::optional(b), std::optional(a));
+
+    // a - b == -(b - a)
+    VELOX_CHECK_EQ(result.value(), -negativeResult.value());
+    return result.value();
+  };
+
+  EXPECT_EQ(
+      0,
+      minus(
+          "2024-04-15 10:20:33 America/New_York",
+          "2024-04-15 10:20:33 America/New_York"));
+
+  EXPECT_EQ(
+      0,
+      minus(
+          "2024-04-15 13:20:33 America/New_York",
+          "2024-04-15 10:20:33 America/Los_Angeles"));
+
+  EXPECT_EQ(
+      -1 * kMillisInHour - 2 * kMillisInMinute - 3 * kMillisInSecond,
+      minus(
+          "2024-04-15 10:20:33 America/New_York",
+          "2024-04-15 11:22:36 America/New_York"));
+
+  EXPECT_EQ(
+      -1 * kMillisInHour - 2 * kMillisInMinute - 3 * kMillisInSecond,
+      minus(
+          "2024-04-15 07:20:33 America/Los_Angeles",
+          "2024-04-15 11:22:36 America/New_York"));
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfMonthTimestampWithTimezone) {
