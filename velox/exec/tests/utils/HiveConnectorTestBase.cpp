@@ -18,9 +18,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
-#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
@@ -178,7 +176,7 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
   return splits;
 }
 
-std::shared_ptr<connector::hive::HiveColumnHandle>
+std::unique_ptr<connector::hive::HiveColumnHandle>
 HiveConnectorTestBase::makeColumnHandle(
     const std::string& name,
     const TypePtr& type,
@@ -186,7 +184,7 @@ HiveConnectorTestBase::makeColumnHandle(
   return makeColumnHandle(name, type, type, requiredSubfields);
 }
 
-std::shared_ptr<connector::hive::HiveColumnHandle>
+std::unique_ptr<connector::hive::HiveColumnHandle>
 HiveConnectorTestBase::makeColumnHandle(
     const std::string& name,
     const TypePtr& dataType,
@@ -199,7 +197,7 @@ HiveConnectorTestBase::makeColumnHandle(
     subfields.emplace_back(path);
   }
 
-  return std::make_shared<connector::hive::HiveColumnHandle>(
+  return std::make_unique<connector::hive::HiveColumnHandle>(
       name, columnType, dataType, hiveType, std::move(subfields));
 }
 
@@ -218,7 +216,7 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
   return splits;
 }
 
-std::shared_ptr<connector::ConnectorSplit>
+std::shared_ptr<connector::hive::HiveConnectorSplit>
 HiveConnectorTestBase::makeHiveConnectorSplit(
     const std::string& filePath,
     uint64_t start,
@@ -231,7 +229,7 @@ HiveConnectorTestBase::makeHiveConnectorSplit(
       .build();
 }
 
-std::shared_ptr<connector::ConnectorSplit>
+std::shared_ptr<connector::hive::HiveConnectorSplit>
 HiveConnectorTestBase::makeHiveConnectorSplit(
     const std::string& filePath,
     int64_t fileSize,

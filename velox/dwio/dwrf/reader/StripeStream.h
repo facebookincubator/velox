@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/BitSet.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
@@ -217,34 +218,13 @@ struct StripeReadState {
  * StripeStream Implementation
  */
 class StripeStreamsImpl : public StripeStreamsBase {
- private:
-  std::shared_ptr<StripeReadState> readState_;
-  const dwio::common::ColumnSelector& selector_;
-  const dwio::common::RowReaderOptions& opts_;
-  const uint64_t stripeStart_;
-  const int64_t stripeNumberOfRows_;
-  const StrideIndexProvider& provider_;
-  const uint32_t stripeIndex_;
-  bool readPlanLoaded_;
-
-  void loadStreams();
-
-  // map of stream id -> stream information
-  folly::F14FastMap<
-      DwrfStreamIdentifier,
-      StreamInformationImpl,
-      dwio::common::StreamIdentifierHash>
-      streams_;
-  folly::F14FastMap<EncodingKey, uint32_t, EncodingKeyHash> encodings_;
-  folly::F14FastMap<EncodingKey, proto::ColumnEncoding, EncodingKeyHash>
-      decryptedEncodings_;
-
  public:
   static constexpr int64_t kUnknownStripeRows = -1;
 
   StripeStreamsImpl(
       std::shared_ptr<StripeReadState> readState,
-      const dwio::common::ColumnSelector& selector,
+      const dwio::common::ColumnSelector* selector,
+      std::shared_ptr<BitSet> projectedNodes,
       const dwio::common::RowReaderOptions& opts,
       uint64_t stripeStart,
       int64_t stripeNumberOfRows,
@@ -254,6 +234,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
         readState_(std::move(readState)),
         selector_{selector},
         opts_{opts},
+        projectedNodes_{std::move(projectedNodes)},
         stripeStart_{stripeStart},
         stripeNumberOfRows_{stripeNumberOfRows},
         provider_(provider),
@@ -269,7 +250,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
   }
 
   const dwio::common::ColumnSelector& getColumnSelector() const override {
-    return selector_;
+    return *selector_;
   }
 
   const dwio::common::RowReaderOptions& getRowReaderOptions() const override {
@@ -296,6 +277,10 @@ class StripeStreamsImpl : public StripeStreamsBase {
   std::unique_ptr<dwio::common::SeekableInputStream> getCompressedStream(
       const DwrfStreamIdentifier& si,
       std::string_view label) const;
+
+  uint64_t getStreamOffset(const DwrfStreamIdentifier& si) const {
+    return getStreamInfo(si).getOffset() + stripeStart_;
+  }
 
   uint64_t getStreamLength(const DwrfStreamIdentifier& si) const {
     return getStreamInfo(si).getLength();
@@ -336,7 +321,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
       const bool throwIfNotFound = true) const {
     auto index = streams_.find(si);
     if (index == streams_.end()) {
-      DWIO_ENSURE(!throwIfNotFound, "stream info not found: ", si.toString());
+      VELOX_CHECK(!throwIfNotFound, "stream info not found: ", si.toString());
       return StreamInformationImpl::getNotFound();
     }
 
@@ -353,6 +338,31 @@ class StripeStreamsImpl : public StripeStreamsBase {
         ? std::addressof(handler.getEncryptionProvider(nodeId))
         : nullptr;
   }
+
+  void loadStreams();
+
+  const std::shared_ptr<StripeReadState> readState_;
+  const dwio::common::ColumnSelector* const selector_;
+  const dwio::common::RowReaderOptions& opts_;
+  // When selector_ is null, this needs to be passed in constructor; otherwise
+  // leave it as null and it will be populated from selector_.
+  std::shared_ptr<BitSet> projectedNodes_;
+  const uint64_t stripeStart_;
+  const int64_t stripeNumberOfRows_;
+  const StrideIndexProvider& provider_;
+  const uint32_t stripeIndex_;
+
+  bool readPlanLoaded_;
+
+  // map of stream id -> stream information
+  folly::F14FastMap<
+      DwrfStreamIdentifier,
+      StreamInformationImpl,
+      dwio::common::StreamIdentifierHash>
+      streams_;
+  folly::F14FastMap<EncodingKey, uint32_t, EncodingKeyHash> encodings_;
+  folly::F14FastMap<EncodingKey, proto::ColumnEncoding, EncodingKeyHash>
+      decryptedEncodings_;
 };
 
 /**

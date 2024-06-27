@@ -27,7 +27,7 @@ std::unique_ptr<const StripeMetadata> StripeReaderBase::fetchStripe(
     uint32_t index,
     bool& preload) const {
   auto& fileFooter = reader_->getFooter();
-  DWIO_ENSURE_LT(index, fileFooter.stripesSize(), "invalid stripe index");
+  VELOX_CHECK_LT(index, fileFooter.stripesSize(), "invalid stripe index");
   auto stripe = fileFooter.stripes(index);
   auto& cache = reader_->getMetadataCache();
 
@@ -76,8 +76,14 @@ std::unique_ptr<const StripeMetadata> StripeReaderBase::fetchStripe(
 
   auto streamDebugInfo = fmt::format("Stripe {} Footer ", index);
 
-  auto stripeFooter = ProtoUtils::readProto<proto::StripeFooter>(
-      reader_->createDecompressedStream(std::move(stream), streamDebugInfo));
+  auto arena = std::make_shared<google::protobuf::Arena>();
+  auto* rawFooter =
+      google::protobuf::Arena::CreateMessage<proto::StripeFooter>(arena.get());
+  ProtoUtils::readProtoInto(
+      reader_->createDecompressedStream(std::move(stream), streamDebugInfo),
+      rawFooter);
+  std::shared_ptr<proto::StripeFooter> stripeFooter(
+      rawFooter, [arena = std::move(arena)](auto*) { arena->Reset(); });
 
   auto handler = std::make_unique<encryption::DecryptionHandler>(
       reader_->getDecryptionHandler());

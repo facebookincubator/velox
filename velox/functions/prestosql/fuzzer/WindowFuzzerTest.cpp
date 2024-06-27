@@ -25,6 +25,7 @@
 #include "velox/functions/prestosql/fuzzer/ApproxDistinctResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
@@ -67,6 +68,10 @@ getCustomInputGenerators() {
       {"approx_distinct", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_set", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
+      {"lead", std::make_shared<WindowOffsetInputGenerator>(1)},
+      {"lag", std::make_shared<WindowOffsetInputGenerator>(1)},
+      {"nth_value", std::make_shared<WindowOffsetInputGenerator>(1)},
+      {"ntile", std::make_shared<WindowOffsetInputGenerator>(0)},
   };
 }
 
@@ -94,6 +99,7 @@ int main(int argc, char** argv) {
   static const std::unordered_set<std::string> skipFunctions = {
       // Skip internal functions used only for result verifications.
       "$internal$count_distinct",
+      "$internal$array_agg",
       // https://github.com/facebookincubator/velox/issues/3493
       "stddev_pop",
       // Lambda functions are not supported yet.

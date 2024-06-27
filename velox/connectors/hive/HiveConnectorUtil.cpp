@@ -382,6 +382,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     auto& name = rowType->nameOf(i);
     auto& type = rowType->childAt(i);
     if (isRowIndexColumn(name, rowIndexColumn)) {
+      VELOX_CHECK(type->isBigint());
       continue;
     }
     auto it = outputSubfields.find(name);
@@ -423,6 +424,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
   }
 
   for (auto& pair : filters) {
+    const auto name = pair.first.toString();
     // SelectiveColumnReader doesn't support constant columns with filters,
     // hence, we can't have a filter for a $path or $bucket column.
     //
@@ -431,10 +433,10 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     // to be removed.
     // TODO Remove this check when Presto is fixed to not specify a filter
     // on $path and $bucket column.
-    if (auto name = pair.first.toString();
-        isSynthesizedColumn(name, infoColumns)) {
+    if (isSynthesizedColumn(name, infoColumns)) {
       continue;
     }
+    VELOX_CHECK(!isRowIndexColumn(name, rowIndexColumn));
     auto fieldSpec = spec->getOrCreateChild(pair.first);
     fieldSpec->addFilter(*pair.second);
   }
@@ -508,13 +510,13 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const Config* sessionProperties,
+    const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit) {
   configureReaderOptions(
       readerOptions,
       hiveConfig,
-      sessionProperties,
+      connectorQueryCtx,
       hiveTableHandle->dataColumns(),
       hiveSplit,
       hiveTableHandle->tableParameters());
@@ -523,10 +525,11 @@ void configureReaderOptions(
 void configureReaderOptions(
     dwio::common::ReaderOptions& readerOptions,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const Config* sessionProperties,
+    const ConnectorQueryCtx* connectorQueryCtx,
     const RowTypePtr& fileSchema,
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::unordered_map<std::string, std::string>& tableParameters) {
+  auto sessionProperties = connectorQueryCtx->sessionProperties();
   readerOptions.setLoadQuantum(hiveConfig->loadQuantum());
   readerOptions.setMaxCoalesceBytes(hiveConfig->maxCoalescedBytes());
   readerOptions.setMaxCoalesceDistance(hiveConfig->maxCoalescedDistanceBytes());
@@ -540,6 +543,11 @@ void configureReaderOptions(
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
   readerOptions.setNoCacheRetention(
       hiveConfig->cacheNoRetention(sessionProperties));
+  const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
+  if (!sessionTzName.empty()) {
+    const auto timezone = date::locate_zone(sessionTzName);
+    readerOptions.setSessionTimezone(timezone);
+  }
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
@@ -572,8 +580,7 @@ void configureRowReaderOptions(
   }
   rowReaderOptions.setScanSpec(scanSpec);
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
-  rowReaderOptions.select(
-      dwio::common::ColumnSelector::fromScanSpec(*scanSpec, rowType));
+  rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(hiveSplit->start, hiveSplit->length);
 }
 

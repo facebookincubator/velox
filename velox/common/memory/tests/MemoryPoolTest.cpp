@@ -524,6 +524,49 @@ TEST_P(MemoryPoolTest, grow) {
   leaf->free(buf, 1 * MB);
 }
 
+TEST_P(MemoryPoolTest, releasableMemory) {
+  struct TestParam {
+    int64_t usedBytes;
+    int64_t reservedBytes;
+  };
+  std::vector<TestParam> testParams{
+      {2345, 98760},
+      {1, 1024},
+      {4096, 4096},
+      {1 * MB, 16 * MB},
+      {6 * MB, 7 * MB},
+      {123 * MB, 200 * MB},
+      {100 * MB, 50 * MB}};
+  auto root = getMemoryManager()->addRootPool("releasableMemory", 4 * GB);
+  for (auto i = 0; i < testParams.size() - 1; i++) {
+    auto leaf0 = root->addLeafChild("leafPool-0");
+    leaf0->maybeReserve(testParams[i].reservedBytes);
+    void* buffer0 = leaf0->allocate(testParams[i].usedBytes);
+    const auto reservedBytes0 = leaf0->reservedBytes();
+    const auto releasableBytes0 = leaf0->releasableReservation();
+
+    auto leaf1 = root->addLeafChild("leafPool-1");
+    leaf1->maybeReserve(testParams[i + 1].reservedBytes);
+    void* buffer1 = leaf1->allocate(testParams[i + 1].usedBytes);
+    const auto reservedBytes1 = leaf1->reservedBytes();
+    const auto releasableBytes1 = leaf1->releasableReservation();
+
+    const auto releasableBytesRoot = root->releasableReservation();
+    const auto reservedBytesRoot = root->reservedBytes();
+    ASSERT_EQ(releasableBytesRoot, releasableBytes0 + releasableBytes1);
+
+    leaf0->release();
+    ASSERT_EQ(reservedBytes0 - leaf0->reservedBytes(), releasableBytes0);
+    ASSERT_EQ(reservedBytesRoot - root->reservedBytes(), releasableBytes0);
+    leaf1->release();
+    ASSERT_EQ(reservedBytes1 - leaf1->reservedBytes(), releasableBytes1);
+    ASSERT_EQ(reservedBytesRoot - root->reservedBytes(), releasableBytesRoot);
+
+    leaf0->free(buffer0, testParams[i].usedBytes);
+    leaf1->free(buffer1, testParams[i + 1].usedBytes);
+  }
+}
+
 TEST_P(MemoryPoolTest, ReallocTestSameSize) {
   auto manager = getMemoryManager();
   auto root = manager->addRootPool();
@@ -701,7 +744,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                     "0 write pins: 0 pinned shared: 0B pinned exclusive: 0B\n "
                     "num write wait: 0 empty entries: 0\nCache access miss: 0 "
                     "hit: 0 hit bytes: 0B eviction: 0 eviction checks: 0 "
-                    "aged out: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks 0\n"
+                    "aged out: 0 stales: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks 0\n"
                     "Allocated pages: 0 cached pages: 0\n",
                     isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
                 ex.message());
@@ -735,7 +778,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                     "read pins: 0 write pins: 0 pinned shared: 0B pinned "
                     "exclusive: 0B\n num write wait: 0 empty entries: 0\nCache "
                     "access miss: 0 hit: 0 hit bytes: 0B eviction: 0 eviction "
-                    "checks: 0 aged out: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks"
+                    "checks: 0 aged out: 0 stales: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks"
                     " 0\nAllocated pages: 0 cached pages: 0\n",
                     isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
                 ex.message());

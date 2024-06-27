@@ -33,6 +33,7 @@
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/UnitLoader.h"
 #include "velox/dwio/common/encryption/Encryption.h"
+#include "velox/external/date/tz.h"
 #include "velox/type/Timestamp.h"
 
 namespace facebook::velox::dwio::common {
@@ -114,6 +115,11 @@ struct RowNumberColumnInfo {
   std::string name;
 };
 
+class FormatSpecificOptions {
+ public:
+  virtual ~FormatSpecificOptions() = default;
+};
+
 /**
  * Options for creating a RowReader.
  */
@@ -126,6 +132,7 @@ class RowReaderOptions {
   bool returnFlatVector_ = false;
   ErrorTolerance errorTolerance_;
   std::shared_ptr<ColumnSelector> selector_;
+  RowTypePtr requestedType_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_ = nullptr;
   std::shared_ptr<velox::common::MetadataFilter> metadataFilter_;
   // Node id for map column to a list of keys to be projected as a struct.
@@ -160,6 +167,8 @@ class RowReaderOptions {
 
   TimestampPrecision timestampPrecision_ = TimestampPrecision::kMilliseconds;
 
+  std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
+
  public:
   RowReaderOptions() noexcept
       : dataStart(0),
@@ -177,6 +186,10 @@ class RowReaderOptions {
    */
   RowReaderOptions& select(const std::shared_ptr<ColumnSelector>& selector) {
     selector_ = selector;
+    if (selector) {
+      VELOX_CHECK_NULL(requestedType_);
+      requestedType_ = selector->getSchema();
+    }
     return *this;
   }
 
@@ -293,6 +306,15 @@ class RowReaderOptions {
    */
   const ErrorTolerance& getErrorTolerance() const {
     return errorTolerance_;
+  }
+
+  const RowTypePtr& requestedType() const {
+    return requestedType_;
+  }
+
+  void setRequestedType(RowTypePtr requestedType) {
+    VELOX_CHECK_NULL(selector_);
+    requestedType_ = std::move(requestedType);
   }
 
   const std::shared_ptr<velox::common::ScanSpec>& getScanSpec() const {
@@ -423,6 +445,15 @@ class RowReaderOptions {
   void setTimestampPrecision(TimestampPrecision precision) {
     timestampPrecision_ = precision;
   }
+
+  const std::shared_ptr<FormatSpecificOptions>& formatSpecificOptions() const {
+    return formatSpecificOptions_;
+  }
+
+  void setFormatSpecificOptions(
+      std::shared_ptr<FormatSpecificOptions> options) {
+    formatSpecificOptions_ = std::move(options);
+  }
 };
 
 /**
@@ -439,33 +470,6 @@ class ReaderOptions : public io::ReaderOptions {
         tailLocation_(std::numeric_limits<uint64_t>::max()),
         fileFormat_(FileFormat::UNKNOWN),
         fileSchema_(nullptr) {}
-
-  ReaderOptions& operator=(const ReaderOptions& other) {
-    io::ReaderOptions::operator=(other);
-    tailLocation_ = other.tailLocation_;
-    fileFormat_ = other.fileFormat_;
-    fileSchema_ = other.fileSchema_;
-    serDeOptions_ = other.serDeOptions_;
-    decrypterFactory_ = other.decrypterFactory_;
-    footerEstimatedSize_ = other.footerEstimatedSize_;
-    filePreloadThreshold_ = other.filePreloadThreshold_;
-    fileColumnNamesReadAsLowerCase_ = other.fileColumnNamesReadAsLowerCase_;
-    useColumnNamesForColumnMapping_ = other.useColumnNamesForColumnMapping_;
-    return *this;
-  }
-
-  ReaderOptions(const ReaderOptions& other)
-      : io::ReaderOptions(other),
-        tailLocation_(other.tailLocation_),
-        fileFormat_(other.fileFormat_),
-        fileSchema_(other.fileSchema_),
-        serDeOptions_(other.serDeOptions_),
-        decrypterFactory_(other.decrypterFactory_),
-        footerEstimatedSize_(other.footerEstimatedSize_),
-        filePreloadThreshold_(other.filePreloadThreshold_),
-        fileColumnNamesReadAsLowerCase_(other.fileColumnNamesReadAsLowerCase_),
-        useColumnNamesForColumnMapping_(other.useColumnNamesForColumnMapping_) {
-  }
 
   /// Sets the format of the file, such as "rc" or "dwrf". The default is
   /// "dwrf".
@@ -526,6 +530,11 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setSessionTimezone(const date::time_zone* sessionTimezone) {
+    sessionTimezone_ = sessionTimezone;
+    return *this;
+  }
+
   /// Gets the desired tail location.
   uint64_t tailLocation() const {
     return tailLocation_;
@@ -565,6 +574,10 @@ class ReaderOptions : public io::ReaderOptions {
     return ioExecutor_;
   }
 
+  const date::time_zone* getSessionTimezone() const {
+    return sessionTimezone_;
+  }
+
   bool fileColumnNamesReadAsLowerCase() const {
     return fileColumnNamesReadAsLowerCase_;
   }
@@ -589,6 +602,14 @@ class ReaderOptions : public io::ReaderOptions {
     noCacheRetention_ = noCacheRetention;
   }
 
+  const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
+    return scanSpec_;
+  }
+
+  void setScanSpec(std::shared_ptr<velox::common::ScanSpec> scanSpec) {
+    scanSpec_ = std::move(scanSpec);
+  }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
@@ -601,6 +622,8 @@ class ReaderOptions : public io::ReaderOptions {
   bool useColumnNamesForColumnMapping_{false};
   std::shared_ptr<folly::Executor> ioExecutor_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
+  std::shared_ptr<velox::common::ScanSpec> scanSpec_;
+  const date::time_zone* sessionTimezone_{nullptr};
 };
 
 struct WriterOptions {
