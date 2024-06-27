@@ -89,6 +89,26 @@ TEST_F(MapFilterTest, filter) {
       });
 }
 
+TEST_F(MapFilterTest, copyWhenFilteringRateIsHigh) {
+  auto data = makeRowVector({
+      makeMapVector<int64_t, int64_t>(
+          10,
+          [](auto) { return 20; },
+          [](auto i) { return i % 20; },
+          [](auto i) { return i % 20; }),
+  });
+  auto result = evaluate("map_filter(c0, (k, v) -> (k = 3))", data);
+  auto* mapResult = result->asUnchecked<MapVector>();
+  ASSERT_TRUE(mapResult->mapKeys()->isFlatEncoding());
+  ASSERT_TRUE(mapResult->mapValues()->isFlatEncoding());
+  auto expected = makeMapVector<int64_t, int64_t>(
+      10,
+      [](auto) { return 1; },
+      [](auto) { return 3; },
+      [](auto) { return 3; });
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(MapFilterTest, empty) {
   auto rowType =
       ROW({"long_val", "map_val"}, {BIGINT(), MAP(BIGINT(), INTEGER())});

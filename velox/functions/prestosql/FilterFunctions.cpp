@@ -25,6 +25,11 @@ namespace {
 
 class FilterFunctionBase : public exec::VectorFunction {
  protected:
+  // When the selected rows / input rows smaller than this threshold, we copy
+  // the result instead of wrapping them in dictionary, to prevent downstream
+  // operators (e.g. distinct) holding too much memory.
+  static constexpr double kCopyResultThreshold = 0.1;
+
   // Applies filter functions to elements of maps or arrays and returns the
   // number of elements that passed the filters. Stores the number of elements
   // in each array or map that passed the filter in resultSizes. Stores the
@@ -149,7 +154,15 @@ class ArrayFilterFunction : public FilterFunctionBase {
         std::move(resultOffsets),
         std::move(resultSizes),
         wrappedElements);
-    context.moveOrCopyResult(localResult, rows, result);
+
+    if (context.resultShouldBePreserved(result, rows) ||
+        numSelected < flatArray->elements()->size() * kCopyResultThreshold) {
+      BaseVector::ensureWritable(
+          rows, flatArray->type(), flatArray->pool(), result);
+      result->copy(localResult.get(), rows, nullptr);
+    } else {
+      result = localResult;
+    }
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -217,7 +230,15 @@ class MapFilterFunction : public FilterFunctionBase {
         std::move(resultSizes),
         wrappedKeys,
         wrappedValues);
-    context.moveOrCopyResult(localResult, rows, result);
+
+    if (context.resultShouldBePreserved(result, rows) ||
+        numSelected < flatMap->mapKeys()->size() * kCopyResultThreshold) {
+      BaseVector::ensureWritable(
+          rows, flatMap->type(), flatMap->pool(), result);
+      result->copy(localResult.get(), rows, nullptr);
+    } else {
+      result = localResult;
+    }
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

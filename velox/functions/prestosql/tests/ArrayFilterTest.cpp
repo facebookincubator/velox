@@ -77,6 +77,19 @@ TEST_F(ArrayFilterTest, filter) {
       });
 }
 
+TEST_F(ArrayFilterTest, copyWhenFilteringRateIsHigh) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>(
+          10, [](auto) { return 20; }, [](auto i) { return i % 20; }),
+  });
+  auto result = evaluate("filter(c0, x -> (x = 3))", data);
+  auto* arrayResult = result->asUnchecked<ArrayVector>();
+  ASSERT_TRUE(arrayResult->elements()->isFlatEncoding());
+  auto expected = makeArrayVector<int64_t>(
+      10, [](auto) { return 1; }, [](auto) { return 3; });
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(ArrayFilterTest, empty) {
   auto rowType = ROW({"long_val", "array_val"}, {BIGINT(), ARRAY(BIGINT())});
   auto data = std::static_pointer_cast<RowVector>(
