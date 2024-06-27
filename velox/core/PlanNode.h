@@ -1743,11 +1743,12 @@ class OrderByNode : public PlanNode {
         "Number of sorting keys and sorting orders in OrderBy must be the same");
     // Reject duplicate sorting keys.
     std::unordered_set<std::string> uniqueKeys;
-    for (const auto& sortKey: sortingKeys) {
+    for (const auto& sortKey : sortingKeys) {
       VELOX_USER_CHECK_NOT_NULL(sortKey, "Sorting key cannot be null");
       VELOX_USER_CHECK(
           uniqueKeys.insert(sortKey->name()).second,
-          "Duplicate sorting keys are not allowed: {}", sortKey->name());
+          "Duplicate sorting keys are not allowed: {}",
+          sortKey->name());
     }
   }
 

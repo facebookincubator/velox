@@ -107,6 +107,8 @@ TEST(TestPlanNode, duplicateSortKeys) {
   };
   auto sortingOrders =
       std::vector<SortOrder>{{true, true}, {false, false}, {true, true}};
-  VELOX_ASSERT_USER_THROW(std::make_shared<OrderByNode>(
-      "orderBy", sortingKeys, sortingOrders, false, nullptr), "Duplicate sorting keys are not allowed: c0");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<OrderByNode>(
+          "orderBy", sortingKeys, sortingOrders, false, nullptr),
+      "Duplicate sorting keys are not allowed: c0");
 }
