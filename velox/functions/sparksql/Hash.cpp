@@ -274,17 +274,9 @@ void hashSimdTyped(
   const ArgType* __restrict rawA =
       args[hashIdx]->asUnchecked<FlatVector<ArgType>>()->rawValues();
   auto* __restrict rawResult = result.template mutableRawValues<ReturnType>();
-  auto begin = rows->begin();
-  auto end = rows->end();
-  if (rows->isAllSelected()) {
-    for (auto row = begin; row < end; ++row) {
-      rawResult[row] = hashOne<HashClass>(rawA[row], rawResult[row]);
-    }
-  } else {
-    rows->applyToSelected([&](auto row) {
-      rawResult[row] = hashOne<HashClass>(rawA[row], rawResult[row]);
-    });
-  }
+  rows->applyToSelected([&](auto row) {
+    rawResult[row] = hashOne<HashClass>(rawA[row], rawResult[row]);
+  });
 }
 
 template <typename HashClass, typename ReturnType>
