@@ -858,16 +858,10 @@ void JoinFuzzer::makeAlternativePlans(
               joinNode->isNullAware())
           .planNode()});
 
-<<<<<<< HEAD
   // Use OrderBy + MergeJoin
   if (joinNode->isInnerJoin() || joinNode->isLeftJoin() ||
       joinNode->isLeftSemiFilterJoin() || joinNode->isRightSemiFilterJoin() ||
-      joinNode->isAntiJoin()) {
-=======
-  if (joinNode->isInnerJoin() || joinNode->isLeftJoin() ||
-      joinNode->isLeftSemiFilterJoin() || joinNode->isRightSemiFilterJoin() ||
-      joinNode->isRightJoin()) {
->>>>>>> Enable right join in smj
+      joinNode->isAntiJoin() || joinNode->isRightJoin()) {
     auto planWithSplits = makeMergeJoinPlan(
         joinType, probeKeys, buildKeys, probeInput, buildInput, outputColumns);
     plans.push_back(planWithSplits);

@@ -398,6 +398,7 @@ class MergeJoin : public Operator {
     bool currentRowPassed_{false};
   };
 
+  /// Used to record both left and right join.
   std::optional<JoinTracker> joinTracker_{std::nullopt};
 
   // Indices buffer used by the output dictionaries. All projection from the
