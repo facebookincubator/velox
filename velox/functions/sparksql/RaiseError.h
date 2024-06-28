@@ -27,7 +27,7 @@ struct RaiseErrorFunction {
     if (input) {
       return Status::UserError("{}", *input);
     }
-    return Status::UserError("{}", "");
+    return Status::UserError();
   }
 };
 } // namespace facebook::velox::functions::sparksql

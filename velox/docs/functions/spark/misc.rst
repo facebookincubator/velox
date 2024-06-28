@@ -16,6 +16,7 @@ Miscellaneous Functions
 .. spark:function:: raise_error(message)
 
     Throws a user error with the specified ``message``.
+    If ``message`` is NULL, throws a user error with empty message.
 
 .. spark:function:: spark_partition_id() -> integer
 
