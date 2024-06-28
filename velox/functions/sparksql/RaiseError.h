@@ -22,9 +22,8 @@ template <typename T>
 struct RaiseErrorFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE Status callNullable(
-      out_type<UnknownValue>& result,
-      const arg_type<Varchar>* input) {
+  FOLLY_ALWAYS_INLINE Status
+  callNullable(out_type<UnknownValue>& result, const arg_type<Varchar>* input) {
     if (input) {
       return Status::UserError("{}", *input);
     }
