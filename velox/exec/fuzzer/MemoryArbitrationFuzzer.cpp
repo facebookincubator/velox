@@ -202,10 +202,10 @@ class MemoryArbitrationFuzzer {
           "memoryArbitrationFuzzer",
           memory::kMaxMemory,
           memory::MemoryReclaimer::create())};
-  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild(
-      "memoryArbitrationFuzzerLeaf",
-      true,
-      exec::MemoryReclaimer::create())};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->testingDefaultRoot().addLeafChild(
+          "memoryArbitrationFuzzerLeaf",
+          true)};
   std::shared_ptr<memory::MemoryPool> writerPool_{rootPool_->addAggregateChild(
       "joinFuzzerWriter",
       exec::MemoryReclaimer::create())};
@@ -679,21 +679,23 @@ void MemoryArbitrationFuzzer::verify() {
   std::vector<std::thread> queryThreads;
   queryThreads.reserve(numThreads);
   for (int i = 0; i < numThreads; ++i) {
-    queryThreads.emplace_back([&, i]() {
+    auto seed = rng_();
+    queryThreads.emplace_back([&, i, seed]() {
+      FuzzerGenerator rng(seed);
       while (!stop) {
         try {
           const auto queryCtx = newQueryCtx(
               memory::memoryManager(),
               executor_.get(),
               FLAGS_arbitrator_capacity);
-          const auto plan = plans.at(randInt(0, plans.size() - 1));
+          const auto plan = plans.at(getRandomIndex(rng, plans.size() - 1));
           AssertQueryBuilder builder(plan.plan);
           builder.queryCtx(queryCtx);
           for (const auto& [planNodeId, nodeSplits] : plan.splits) {
             builder.splits(planNodeId, nodeSplits);
           }
 
-          if (vectorFuzzer_.coinToss(0.3)) {
+          if (coinToss(rng, 0.3)) {
             builder.queryCtx(queryCtx).copyResults(pool_.get());
           } else {
             auto res =
@@ -737,9 +739,15 @@ void MemoryArbitrationFuzzer::go() {
   const auto startTime = std::chrono::system_clock::now();
   size_t iteration = 0;
 
+  bool enableGlobalArbitration = true;
   while (!isDone(iteration, startTime)) {
     LOG(WARNING) << "==============================> Started iteration "
                  << iteration << " (seed: " << currentSeed_ << ")";
+
+    // Test enable/disable global arbitration.
+    dynamic_cast<memory::SharedArbitrator*>(
+        memory::memoryManager()->arbitrator())
+        ->testingSetGlobalArbitration(enableGlobalArbitration);
 
     verify();
 
@@ -749,6 +757,8 @@ void MemoryArbitrationFuzzer::go() {
 
     reSeed();
     ++iteration;
+    // Revert the flag.
+    enableGlobalArbitration = !enableGlobalArbitration;
   }
 }
 

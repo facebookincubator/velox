@@ -211,14 +211,17 @@ class TestStatsReportAsyncDataCache : public cache::AsyncDataCache {
       : cache::AsyncDataCache(nullptr, nullptr), stats_(stats) {}
 
   cache::CacheStats refreshStats() const override {
+    std::lock_guard<std::mutex> l(mutex_);
     return stats_;
   }
 
   void updateStats(cache::CacheStats stats) {
+    std::lock_guard<std::mutex> l(mutex_);
     stats_ = stats;
   }
 
  private:
+  mutable std::mutex mutex_;
   cache::CacheStats stats_;
 };
 
@@ -231,6 +234,7 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
   ~TestStatsReportMemoryArbitrator() override = default;
 
   void updateStats(memory::MemoryArbitrator::Stats stats) {
+    std::lock_guard<std::mutex> l(mutex_);
     stats_ = stats;
   }
 
@@ -264,6 +268,7 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
   }
 
   Stats stats() const override {
+    std::lock_guard<std::mutex> l(mutex_);
     return stats_;
   }
 
@@ -272,6 +277,7 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
   }
 
  private:
+  mutable std::mutex mutex_;
   memory::MemoryArbitrator::Stats stats_;
 };
 
@@ -496,6 +502,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(counterMap.count(kMetricSsdCacheRegionsEvicted.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutEntries.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutRegions.str()), 0);
+    ASSERT_EQ(counterMap.count(kMetricSsdCacheReadWithoutChecksum.str()), 0);
     ASSERT_EQ(counterMap.size(), 22);
   }
 
@@ -522,6 +529,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
   newSsdStats->readSsdErrors = 10;
   newSsdStats->readSsdCorruptions = 10;
   newSsdStats->readCheckpointErrors = 10;
+  newSsdStats->readWithoutChecksumChecks = 10;
   cache.updateStats(
       {.numHit = 10,
        .hitBytes = 10,
@@ -573,7 +581,8 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(counterMap.count(kMetricSsdCacheRegionsEvicted.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutEntries.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheAgedOutRegions.str()), 1);
-    ASSERT_EQ(counterMap.size(), 51);
+    ASSERT_EQ(counterMap.count(kMetricSsdCacheReadWithoutChecksum.str()), 1);
+    ASSERT_EQ(counterMap.size(), 52);
   }
 }
 

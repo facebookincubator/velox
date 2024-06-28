@@ -41,9 +41,27 @@ Map Functions
 
     Returns all the values in the map ``x``.
 
-.. spark:function:: size(map(K,V)) -> bigint
+.. spark:function:: map_zip_with(map(K,V1), map(K,V2), function(K,V1,V2,V3)) -> map(K,V3)
+
+    Merges the two given maps into a single map by applying ``function`` to the pair of values with the same key.
+    For keys only presented in one map, NULL will be passed as the value for the missing key. ::
+
+        SELECT map_zip_with(MAP(ARRAY[1, 2, 3], ARRAY['a', 'b', 'c']), -- {1 -> ad, 2 -> be, 3 -> cf}
+                            MAP(ARRAY[1, 2, 3], ARRAY['d', 'e', 'f']),
+                            (k, v1, v2) -> concat(v1, v2));
+        SELECT map_zip_with(MAP(ARRAY['k1', 'k2'], ARRAY[1, 2]), -- {k1 -> ROW(1, null), k2 -> ROW(2, 4), k3 -> ROW(null, 9)}
+                            MAP(ARRAY['k2', 'k3'], ARRAY[4, 9]),
+                            (k, v1, v2) -> (v1, v2));
+        SELECT map_zip_with(MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 8, 27]), -- {a -> a1, b -> b4, c -> c9}
+                            MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]),
+                            (k, v1, v2) -> k || CAST(v1/v2 AS VARCHAR));
+
+.. spark:function:: size(map(K,V), legacySizeOfNull) -> integer
    :noindex:
 
-    Returns the size of the input map. Returns null for null input
-    if :doc:`spark.legacy_size_of_null <../../configs>` is set to false.
-    Otherwise, returns -1 for null input.
+    Returns the size of the input map. Returns null for null input if ``legacySizeOfNull``
+    is set to false. Otherwise, returns -1 for null input. ::
+
+        SELECT size(map(array(1, 2), array(3, 4)), true); -- 2
+        SELECT size(NULL, true); -- -1
+        SELECT size(NULL, false); -- NULL
