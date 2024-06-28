@@ -125,10 +125,10 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
     Returns a masked version of the input ``string``.
     ``string``: string value to mask.
-    ``upperChar``: A single character STRING literal used to substitute upper case characters. The default is 'X'. If NULL, upper case characters remain unmasked.
-    ``lowerChar``: A single character STRING literal used to substitute lower case characters. The default is 'x'. If NULL, lower case characters remain unmasked.
-    ``digitChar``: A single character STRING literal used to substitute digits. The default is 'n'. If NULL, digits remain unmasked.
-    ``otherChar``: A single character STRING literal used to substitute any other character. The default is NULL, which leaves these characters unmasked. ::
+    ``upperChar``: A single character STRING used to substitute upper case characters. The default is 'X'. If NULL, upper case characters remain unmasked.
+    ``lowerChar``: A single character STRING used to substitute lower case characters. The default is 'x'. If NULL, lower case characters remain unmasked.
+    ``digitChar``: A single character STRING used to substitute digits. The default is 'n'. If NULL, digits remain unmasked.
+    ``otherChar``: A single character STRING used to substitute any other character. The default is NULL, which leaves these characters unmasked. ::
 
         SELECT mask('abcd-EFGH-8765-4321');  -- "xxxx-XXXX-nnnn-nnnn"
         SELECT mask('abcd-EFGH-8765-4321', 'Q');  -- "xxxx-QQQQ-nnnn-nnnn"

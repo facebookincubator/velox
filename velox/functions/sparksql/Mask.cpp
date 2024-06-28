@@ -23,6 +23,40 @@
 
 namespace facebook::velox::functions::sparksql {
 namespace {
+/**
+ * Masks the characters of the given string value with the provided specific
+ * characters respectively.
+ *
+ * mask(string) -> string
+ * replaces upper-case characters with 'X', lower-case characters with 'x',
+ * and numbers with 'n'.
+ *
+ * mask(string, upperChar) -> string
+ * replaces upper-case characters with provided `upperChar`, lower-case
+ * characters with 'x', and numbers with 'n'.
+ * Upper case characters remain unmasked if provided `upperChar` is NULL.
+ *
+ * mask(string, upperChar, lowerChar) -> string
+ * replaces upper-case characters with provided `upperChar`, lower-case
+ * characters with provided `lowerChar` and numbers with 'n'.
+ * Upper case characters or lower-case characters would remain unmasked if
+ * provided `upperChar` or `lowerChar` is NULL.
+ *
+ * mask(string, upperChar, lowerChar, digitChar) -> string
+ * replaces upper-case characters with provided `upperChar`, lower-case
+ * characters with provided `lowerChar` and numbers with provided `digitChar`.
+ * Upper case characters, lower-case characters and numbers would remain
+ * unmasked if provided `upperChar`, `lowerChar` or `digitChar` is NULL.
+ *
+ * mask(string, upperChar, lowerChar, digitChar, otherChar) -> string
+ * replaces upper-case characters with provided `upperChar`, lower-case
+ * characters with provided `lowerChar` and numbers with provided `digitChar`
+ * and all other characters with provided `otherChar`.
+ * Upper case characters remain unmasekd if provided `upperChar` is NULL.
+ * Lower case characters remain unmasekd if provided `lowerChar` is NULL.
+ * Numbers remain unmasekd if provided `digitChar` is NULL.
+ * All other characters remain unmasked if provided `otherChar` is NULL.
+ */
 class MaskFunction final : public exec::VectorFunction {
  public:
   void apply(
