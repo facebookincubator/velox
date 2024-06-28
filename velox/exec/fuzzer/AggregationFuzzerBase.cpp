@@ -19,7 +19,6 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
@@ -397,6 +396,19 @@ void AggregationFuzzerBase::printSignatureStats() {
                 << " out of " << stats.numRuns
                 << " times: " << signatureTemplate.name << "("
                 << signatureTemplate.signature->toString() << ")";
+    }
+  }
+}
+
+void AggregationFuzzerBase::logVectors(
+    const std::vector<RowVectorPtr>& vectors) {
+  if (!VLOG_IS_ON(1)) {
+    return;
+  }
+  for (auto i = 0; i < vectors.size(); ++i) {
+    VLOG(1) << "Input batch " << i << ":";
+    for (auto j = 0; j < vectors[i]->size(); ++j) {
+      VLOG(1) << "\tRow " << j << ": " << vectors[i]->toString(j);
     }
   }
 }

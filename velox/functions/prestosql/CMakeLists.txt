@@ -31,7 +31,6 @@ add_library(
   ElementAt.cpp
   FilterFunctions.cpp
   FindFirst.cpp
-  FromUnixTime.cpp
   FromUtf8.cpp
   InPredicate.cpp
   JsonFunctions.cpp
@@ -48,6 +47,7 @@ add_library(
   SimpleComparisonMatcher.cpp
   Slice.cpp
   Split.cpp
+  SplitToMap.cpp
   StringFunctions.cpp
   Subscript.cpp
   ToUtf8.cpp

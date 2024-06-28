@@ -13,22 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include <cmath>
-#include <type_traits>
-#include "velox/functions/Macros.h"
+namespace facebook::velox::dwrf {
 
-namespace facebook::velox::functions::sparksql {
+void registerDwrfWriterFactory();
 
-template <typename T>
-struct ArraySizeFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+void unregisterDwrfWriterFactory();
 
-  FOLLY_ALWAYS_INLINE void call(
-      int32_t& out,
-      const arg_type<velox::Array<Any>>& inputArray) {
-    out = inputArray.size();
-  }
-};
-} // namespace facebook::velox::functions::sparksql
+} // namespace facebook::velox::dwrf
