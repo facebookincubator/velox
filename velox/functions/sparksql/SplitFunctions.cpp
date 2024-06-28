@@ -42,17 +42,17 @@ class Split final : public exec::VectorFunction {
     exec::VectorWriter<Array<Varchar>> resultWriter;
     resultWriter.init(*result->as<ArrayVector>());
     int64_t limit = std::numeric_limits<int64_t>::max();
-    if (!noLimit) {
-      limit = limits->valueAt<int64_t>(0);
-      if (limit <= 0) {
-        limit = std::numeric_limits<int64_t>::max();
-      }
-    }
     // Optimization for the (flat, const, const) case.
     if (strings->isIdentityMapping() and delims->isConstantMapping() and
         (noLimit or limits->isConstantMapping())) {
       const auto* rawStrings = strings->data<StringView>();
       const auto delim = delims->valueAt<StringView>(0);
+      if (!noLimit) {
+        limit = limits->valueAt<int64_t>(0);
+        if (limit <= 0) {
+          limit = std::numeric_limits<int64_t>::max();
+        }
+      }
       rows.applyToSelected([&](vector_size_t row) {
         if (delim.size() == 0) {
           splitEmptyDelimer(rawStrings[row], limit, row, resultWriter);
@@ -65,6 +65,12 @@ class Split final : public exec::VectorFunction {
       // direct access.
       rows.applyToSelected([&](vector_size_t row) {
         const auto delim = delims->valueAt<StringView>(row);
+        if (!noLimit) {
+          limit = limits->valueAt<int64_t>(row);
+          if (limit <= 0) {
+            limit = std::numeric_limits<int64_t>::max();
+          }
+        }
         if (delim.size() == 0) {
           splitEmptyDelimer(
               strings->valueAt<StringView>(row), limit, row, resultWriter);
