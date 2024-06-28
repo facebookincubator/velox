@@ -16,7 +16,8 @@ add_subdirectory(utils)
 add_executable(
   aggregate_companion_functions_test
   AggregateCompanionAdapterTest.cpp AggregateCompanionSignaturesTest.cpp
-  DummyAggregateFunction.cpp)
+  DummyAggregateFunction.cpp
+)
 
 add_test(
   NAME aggregate_companion_functions_test

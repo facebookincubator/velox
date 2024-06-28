@@ -1084,7 +1084,7 @@ TEST_P(MultiThreadedHashJoinTest, normalizedKey) {
       .numDrivers(numDrivers_)
       .keyTypes({BIGINT(), VARCHAR()})
       .probeVectors(1600, 5)
-      .buildVectors(1500, 5)
+      .buildVectors(150000, 5)
       .referenceQuery(
           "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1 = u_k1")
       .run();

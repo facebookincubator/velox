@@ -643,19 +643,11 @@ int main(int argc, char** argv) {
   std::vector<HashTableBenchmarkRun> results;
 
   std::vector<HashTableBenchmarkParams> params = {
-      HashTableBenchmarkParams("Hit10K", 10000, 100),
-      HashTableBenchmarkParams("Miss10K", 10000, 5),
-
-      HashTableBenchmarkParams("HitVid10K", 10000, 100, 1000),
-      HashTableBenchmarkParams("MissVid10K", 10000, 5, 1000),
-
       HashTableBenchmarkParams("Hit4M", 4000000, 100),
       HashTableBenchmarkParams("Miss4M", 4000000, 5),
-
       HashTableBenchmarkParams("Hit32M", 32000000, 100),
-      HashTableBenchmarkParams("Miss32M", 32000000, 5),
+      HashTableBenchmarkParams("Miss32M", 32000000, 5) };
 
-      HashTableBenchmarkParams("Hit128M", 128000000, 100)};
   if (FLAGS_custom_size != 0) {
     params.push_back(HashTableBenchmarkParams(
         "Custom",

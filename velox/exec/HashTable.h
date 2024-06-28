@@ -23,6 +23,34 @@
 
 namespace facebook::velox::exec {
 
+class ProbeStateWithOpt;
+struct KeyAndPointer {
+  uint64_t key;
+  char* pointer;
+};
+
+class KeyAndPointers {
+ public:
+  char* pointerAt(int32_t slotIndex) {
+    return keys_[slotIndex].pointer;
+  }
+  void setPointer(int32_t slotIndex, void* pointer) {
+    keys_[slotIndex].pointer = (char*)pointer;
+  }
+
+  uint64_t keyAt(int32_t slotIndex) {
+    return keys_[slotIndex].key;
+  }
+
+  void setKey(int32_t slotIndex, uint64_t key) {
+    keys_[slotIndex].key = key;
+  }
+
+ private:
+  KeyAndPointer keys_[16];
+};
+
+
 using PartitionBoundIndexType = int64_t;
 /// Provides the partition info for parallel join table build use.
 struct TableInsertPartitionInfo {
@@ -396,6 +424,24 @@ class BaseHashTable {
       int32_t numNew,
       int8_t spillInputStartPartitionBit) = 0;
 
+  /// When enableOpt: slotSize should be split into slotSize & keyAndPointersSize
+  ///
+  static FOLLY_ALWAYS_INLINE size_t optTableEntrySize() {
+    // Each slot is 8 bytes.
+    return 17;
+  }
+
+  static FOLLY_ALWAYS_INLINE size_t optTableSlotSize() {
+    // Each slot is 8 bytes.
+    return 1;
+  }
+
+  static FOLLY_ALWAYS_INLINE size_t optTableKeyAndPointersSize() {
+    // Each slot is 8 bytes.
+    return 16;
+  }
+
+
   std::vector<std::unique_ptr<VectorHasher>> hashers_;
   std::unique_ptr<RowContainer> rows_;
 
@@ -588,7 +634,7 @@ class HashTable : public BaseHashTable {
       // If rehashed, the table adds size_ entries (i.e. doubles),
       // adding one pointer worth for each new position.  (16 tags, 16 6 byte
       // pointers, 16 bytes padding).
-      return capacity_ * tableSlotSize();
+      return capacity_ * (enableOpt() ? optTableEntrySize() : tableSlotSize());
     }
     return 0;
   }
@@ -600,7 +646,8 @@ class HashTable : public BaseHashTable {
     return bits::roundUp(
         std::max(
             maxByteSizeInArrayMode,
-            newHashTableEntries(numDistinct, 0) * tableSlotSize()),
+            newHashTableEntries(numDistinct, 0) *
+                (enableOpt() ? optTableEntrySize() : tableSlotSize())),
         memory::AllocationTraits::kPageSize);
   }
 
@@ -678,11 +725,15 @@ class HashTable : public BaseHashTable {
 
   static_assert(sizeof(Bucket) == 128);
   static constexpr uint64_t kBucketSize = sizeof(Bucket);
-
+  static constexpr uint64_t kOptBucketSize = 16;
   // Returns the bucket at byte offset 'offset' from 'table_'.
   Bucket* bucketAt(int64_t offset) const {
     VELOX_DCHECK_EQ(0, offset & (kBucketSize - 1));
     return reinterpret_cast<Bucket*>(reinterpret_cast<char*>(table_) + offset);
+  }
+
+  void setTag(int64_t offset, int64_t slotIndex, uint8_t tag) {
+      reinterpret_cast<uint8_t*>(table_)[offset + slotIndex] = tag;
   }
 
   // Returns the number of entries after which the table gets rehashed.
@@ -754,6 +805,11 @@ class HashTable : public BaseHashTable {
   // Allocates new tables for tags and payload pointers. The size must
   // a power of 2.
   void allocateTables(uint64_t size, int8_t spillInputStartPartitionBit);
+  void allocateTablesOpt(uint64_t size);
+
+  bool enableOpt() const {
+    return hashMode_ == BaseHashTable::HashMode::kNormalizedKey && isJoinBuild_;
+  }
 
   // 'initNormalizedKeys' is passed to 'rehash' --> 'rehash' --> 'insertBatch'.
   // If it's false and the table is in normalized keys mode,
@@ -848,6 +904,10 @@ class HashTable : public BaseHashTable {
   template <bool isJoin, bool isNormalizedKey = false>
   void fullProbe(HashLookup& lookup, ProbeState& state, bool extraCheck);
 
+  template <bool isJoin, bool isNormalizedKey = false>
+  void optFullProbe(HashLookup& lookup, ProbeStateWithOpt& state, bool extraCheck);
+
+
   // Shortcut path for group by with normalized keys.
   void groupNormalizedKeyProbe(HashLookup& lookup);
 
@@ -857,6 +917,7 @@ class HashTable : public BaseHashTable {
   // Shortcut for probe with normalized keys.
   void joinNormalizedKeyProbe(HashLookup& lookup);
 
+  void joinNormalizedKeyOptProbe(HashLookup& lookup);
   // Adds a row to a hash join table in kArray hash mode. Returns true
   // if a new entry was made and false if the row was added to an
   // existing set of rows with the same key.
@@ -875,6 +936,15 @@ class HashTable : public BaseHashTable {
   void buildFullProbe(
       RowContainer* rows,
       ProbeState& state,
+      uint64_t hash,
+      char* row,
+      bool extraCheck,
+      TableInsertPartitionInfo* partitionInfo);
+
+  template <bool isNormailizedKeyMode>
+  void buildOptFullProbe(
+      RowContainer* rows,
+      ProbeStateWithOpt& state,
       uint64_t hash,
       char* row,
       bool extraCheck,
@@ -911,17 +981,33 @@ class HashTable : public BaseHashTable {
   // Returns the byte offset of the next bucket from 'offset'. Wraps around at
   // the end of the table.
   int64_t nextBucketOffset(int64_t bucketOffset) const {
-    VELOX_DCHECK_EQ(0, bucketOffset & (kBucketSize - 1));
+    VELOX_DCHECK_EQ(0, bucketOffset & (realBucketSize_ - 1));
     VELOX_DCHECK_LT(bucketOffset, sizeMask_);
-    return sizeMask_ & (bucketOffset + kBucketSize);
+    return sizeMask_ & (bucketOffset + realBucketSize_);
   }
 
   int64_t numBuckets() const {
     return numBuckets_;
   }
 
+  void print_trace(void) const
+  {
+    size_t i, size;
+    void *array[1204];
+    size = backtrace(array, 1024);
+    char **strings = backtrace_symbols(array, size);
+    for (i = 0; i < size; i++)
+      printf("%d# %s\n",i, strings[i]);
+    free(strings);
+  }
+
   // Return the row pointer at 'slotIndex' of bucket at 'bucketOffset'.
   char* row(int64_t bucketOffset, int32_t slotIndex) const {
+    /*if(enableOpt()) {
+      print_trace();
+      std::cout << "get here xxxx" << std::endl;
+      return keyAndPointerAt(bucketOffset)->pointerAt(slotIndex);
+    }*/
     return bucketAt(bucketOffset)->pointerAt(slotIndex);
   }
 
@@ -963,6 +1049,18 @@ class HashTable : public BaseHashTable {
   // time and block driver threads.
   void checkHashBitsOverlap(int8_t spillInputStartPartitionBit);
 
+  void incrementFirstHits() const {
+    if (kTrackLoads) {
+      ++numHits_;
+      ++numFirstHits_;
+    }
+  }
+
+  KeyAndPointers* keyAndPointerAt(int64_t offset) const {
+    return reinterpret_cast<KeyAndPointers*>(
+        reinterpret_cast<char*>(keyAndPointers_) + offset * 16);
+  }
+
   // The min table size in row to trigger parallel join table build.
   const uint32_t minTableSizeForParallelJoinBuild_;
 
@@ -978,6 +1076,8 @@ class HashTable : public BaseHashTable {
   int32_t nextOffset_;
   char** table_ = nullptr;
   memory::ContiguousAllocation tableAllocation_;
+  char** keyAndPointers_ = nullptr;
+  memory::ContiguousAllocation keyAndPointersAllocation_;
 
   // Number of slots across all buckets.
   int64_t capacity_{0};
@@ -1012,6 +1112,7 @@ class HashTable : public BaseHashTable {
 
   // Number of times a match is found.
   mutable tsan_atomic<int64_t> numHits_{0};
+  mutable tsan_atomic<int64_t> numFirstHits_{0};
 
   // Bounds of independently buildable index ranges in the table. The
   // range of partition i starts at [i] and ends at [i +1]. Bounds are multiple
@@ -1030,7 +1131,11 @@ class HashTable : public BaseHashTable {
   // If true, avoids using VectorHasher value ranges with kArray hash mode.
   bool disableRangeArrayHash_{false};
 
+  uint64_t realBucketSize_ = kBucketSize;
+
   friend class ProbeState;
+  friend class ProbeStateWithOpt;
+
   friend test::HashTableTestHelper<ignoreNullKeys>;
 };
 
