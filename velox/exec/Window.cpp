@@ -205,7 +205,7 @@ bool Window::supportRowsStreaming() {
     auto windowFunctionMetadata =
         exec::getWindowFunctionMetadata(functionName).value();
 
-    if (windowFunctionMetadata.scope == Scope::kRows) {
+    if (windowFunctionMetadata.processedUnit == ProcessedUnit::kRows) {
       const auto& frame = windowNodeFunction.frame;
       bool isDefaultFrame =
           (frame.startType ==

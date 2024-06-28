@@ -31,20 +31,21 @@ struct WindowFunctionArg {
   std::optional<const column_index_t> index;
 };
 
-/// The scope for calculating the window function. kRows indicates that the
-/// calculation begins as soon as rows are available within a single partition,
-/// without waiting for all data in the partition to be ready. kPartition
-/// indicates that the calculation begins only when all rows in a partition are
-/// ready.
-enum class Scope {
+/// The ProcessedUnit for calculating the window function.
+enum class ProcessedUnit {
+  // Calculation may start only after all rows within a partitions are
+  // available.
   kPartition,
+  // Calculation may being as soon as rows are available within a single
+  // partition, without waiting for all data in the partition to be ready
   kRows,
 };
 
 /// Indicates whether the function is for an aggregate used as a window
-/// function.
+/// function. It also specifies whether the ProcessedUnit of Window function is
+/// by partition or by rows.
 struct WindowFunctionMetadata {
-  Scope scope;
+  ProcessedUnit processedUnit;
   bool isAggregateWindow;
 };
 
@@ -167,7 +168,7 @@ bool registerWindowFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
     WindowFunctionFactory factory,
-    WindowFunctionMetadata metadata = {Scope::kPartition, false});
+    WindowFunctionMetadata metadata = {ProcessedUnit::kPartition, false});
 
 /// Returns signatures of the window function with the specified name.
 /// Returns empty std::optional if function with that name is not found.
