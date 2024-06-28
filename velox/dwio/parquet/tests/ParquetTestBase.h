@@ -20,7 +20,7 @@
 #include <string>
 #include "velox/common/base/Fs.h"
 #include "velox/dwio/common/FileSink.h"
-#include "velox/dwio/common/Reader.h"
+#include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
@@ -35,6 +35,7 @@ class ParquetTestBase : public testing::Test, public test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
+    registerParquetReaderFactory();
   }
 
   void SetUp() override {
@@ -60,13 +61,15 @@ class ParquetTestBase : public testing::Test, public test::VectorTestBase {
     return ROW({"a", "b"}, {BIGINT(), BIGINT()});
   }
 
-  std::unique_ptr<facebook::velox::parquet::ParquetReader> createReader(
+  std::unique_ptr<dwio::common::Reader> createReader(
       const std::string& path,
       const dwio::common::ReaderOptions& opts) {
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(path), opts.memoryPool());
-    return std::make_unique<facebook::velox::parquet::ParquetReader>(
-        std::move(input), opts);
+    VELOX_CHECK(
+        dwio::common::hasReaderFactory(dwio::common::FileFormat::PARQUET));
+    return dwio::common::getReaderFactory(dwio::common::FileFormat::PARQUET)
+        ->createReader(std::move(input), opts);
   }
 
   dwio::common::RowReaderOptions getReaderOpts(
