@@ -1129,7 +1129,7 @@ each batch of input it computes and returns the results before accepting the
 next batch of input.</p>
 <p>This operator accumulates state: a hash table mapping partition keys to total
 number of rows seen in this partition so far. Returning the row numbers as
-a column in the output is optional. This operator doesn’t support spilling yet.</p>
+a column in the output is optional. This operator supports spilling.</p>
 <p>This operator is equivalent to a WindowNode followed by
 FilterNode(row_number &lt;= limit), but it uses less memory and CPU and makes
 results available before seeing all input.</p>
