@@ -60,6 +60,30 @@ class StringImplTest : public testing::Test {
         {"АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ",
          "абвгдежзийклмнопрстуфхцчшщъыьэюя"}};
   }
+
+  std::vector<std::tuple<std::string, std::string>>
+  getInitCapUnicodeTestData() {
+    return {
+        {"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"},
+        {"αβγδεζηθικλμνξοπρςστυφχψ", "Αβγδεζηθικλμνξοπρςστυφχψ"},
+        {"абвгдежзийклмнопрстуфхцчшщъыьэюя",
+         "Абвгдежзийклмнопрстуфхцчшщъыьэюя"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"", ""}};
+  }
+
+  std::vector<std::tuple<std::string, std::string>> getInitCapAsciiTestData() {
+    return {
+        {"abcdefg", "Abcdefg"},
+        {"ABCDEFG", "Abcdefg"},
+        {"a B c D e F g", "A B C D E F G"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"", ""}};
+  }
 };
 
 TEST_F(StringImplTest, upperAscii) {
@@ -119,6 +143,36 @@ TEST_F(StringImplTest, lowerUnicode) {
     lowerOutput.clear();
     lower</*ascii*/ false>(lowerOutput, input);
     ASSERT_EQ(lowerOutput, expectedLower);
+  }
+}
+
+TEST_F(StringImplTest, initCapUnicode) {
+  for (const auto& testCase : getInitCapUnicodeTestData()) {
+    auto input = StringView(std::get<0>(testCase));
+    auto& expectedInitCap = std::get<1>(testCase);
+
+    std::string initCapOutput;
+    initCap</*ascii*/ false>(initCapOutput, input);
+    ASSERT_EQ(initCapOutput, expectedInitCap);
+
+    initCapOutput.clear();
+    initCap</*ascii*/ false>(initCapOutput, input);
+    ASSERT_EQ(initCapOutput, expectedInitCap);
+  }
+}
+
+TEST_F(StringImplTest, initCapAscii) {
+  for (const auto& testCase : getInitCapAsciiTestData()) {
+    auto input = StringView(std::get<0>(testCase));
+    auto& expectedInitCap = std::get<1>(testCase);
+
+    std::string initCapOutput;
+    initCap</*ascii*/ true>(initCapOutput, input);
+    ASSERT_EQ(initCapOutput, expectedInitCap);
+
+    initCapOutput.clear();
+    initCap</*ascii*/ false>(initCapOutput, input);
+    ASSERT_EQ(initCapOutput, expectedInitCap);
   }
 }
 

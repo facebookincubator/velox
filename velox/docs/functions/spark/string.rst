@@ -75,6 +75,15 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT find_in_set(NULL, ',123'); -- NULL
         SELECT find_in_set("abc", NULL); -- NULL
 
+.. spark:function:: initcap(str) -> string
+
+    Translate the first letter of each word to upper case in the sentence. All other
+    characters will be made lowercase.
+
+        SELECT initcap('foo bar'); -- Foo Bar
+        SELECT initcap('FOO BAR'); -- Foo Bar
+        SELECT initcap(NULL); -- NULL
+
 .. spark:function:: instr(string, substring) -> integer
 
     Returns the starting position of the first instance of ``substring`` in

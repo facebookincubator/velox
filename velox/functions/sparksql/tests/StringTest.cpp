@@ -896,5 +896,31 @@ TEST_F(StringTest, trim) {
       trimWithTrimStr("\u6570", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
 }
+
+TEST_F(StringTest, initCap) {
+  const auto initCap = [&](const std::optional<std::string>& arg) {
+    return evaluateOnce<int32_t>("initCap(c0)", arg);
+  };
+  // Unicode only.
+  EXPECT_EQ(
+      initcap("àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"),
+      "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ");
+  EXPECT_EQ(initcap("αβγδεζηθικλμνξοπρςστυφχψ"), "Αβγδεζηθικλμνξοπρςστυφχψ");
+  // Mix of ascii and unicode.
+  EXPECT_EQ(initcap("αβγδεζ world"), "Αβγδεζ World");
+  EXPECT_EQ(initcap("αfoo wβ"), "Αfoo Wβ");
+  // Ascii only.
+  EXPECT_EQ(initcap("hello world"), "Hello World");
+  EXPECT_EQ(initcap("HELLO WORLD"), "Hello World");
+  EXPECT_EQ(initcap("1234"), "1234");
+  EXPECT_EQ(initcap("a b c d"), "A B C D");
+  EXPECT_EQ(initcap("abcd"), "Abcd");
+  // Numbers.
+  EXPECT_EQ(initcap("123"), "123");
+  EXPECT_EQ(initcap("1abc"), "1abc");
+  // Edge cases.
+  EXPECT_EQ(initcap(""), "");
+  EXPECT_EQ(initcap(std::nullopt), std::nullopt);
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
