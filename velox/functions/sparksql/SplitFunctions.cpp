@@ -95,8 +95,6 @@ class Split final : public exec::VectorFunction {
   }
 
  private:
-  mutable functions::detail::ReCache cache_;
-
   // When pattern is empty, split each character out. Since Spark 3.4, when
   // delimiter is empty, the result does not include an empty tail string, e.g.
   // split('abc', '') outputs ["a", "b", "c"] instead of ["a", "b", "c", ""].
@@ -180,6 +178,8 @@ class Split final : public exec::VectorFunction {
         StringView(input.data() + pos, input.size() - pos));
     resultWriter.commit();
   }
+
+  mutable functions::detail::ReCache cache_;
 };
 
 std::shared_ptr<exec::VectorFunction> createSplit(

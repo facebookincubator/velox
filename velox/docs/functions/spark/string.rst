@@ -206,7 +206,6 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
         SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
-        SELECT split('one', ''); -- ["o", "n", "e", ""]
         SELECT split('one', '1'); -- ["one"]
         SELECT split('abcd', ''); -- ["a", "b", "c", "d"]
         SELECT split('abcd', '', 3); -- ["a", "b", "c"]
