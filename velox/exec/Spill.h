@@ -347,6 +347,10 @@ class SpillState {
       folly::Synchronized<common::SpillStats>* stats,
       const std::string& fileCreateConfig = {});
 
+  bool needSort() const {
+    return numSortKeys_ != 0;
+  }
+
   /// Indicates if a given 'partition' has been spilled or not.
   bool isPartitionSpilled(uint32_t partition) const {
     VELOX_DCHECK_LT(partition, maxPartitions_);
