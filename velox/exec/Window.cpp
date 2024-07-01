@@ -603,6 +603,10 @@ void Window::callApplyForPartitionRows(
   vector_size_t numRows = endRow - startRow;
   numProcessedRows_ += numRows;
   partitionOffset_ += numRows;
+
+  if (currentPartition_->isPartial()) {
+    currentPartition_->clearOutputRows(numRows);
+  }
 }
 
 vector_size_t Window::callApplyLoop(
@@ -616,9 +620,6 @@ vector_size_t Window::callApplyLoop(
   // This function requires that the currentPartition_ is available for output.
   VELOX_DCHECK_NOT_NULL(currentPartition_);
 
-  // Used to record the processed row count in current partition. And then
-  // passed this value to clearOutputRows to clear the real row count.
-  auto processedRowCount = -1;
   while (numOutputRowsLeft > 0) {
     auto rowsForCurrentPartition = currentPartition_->isPartial()
         ? currentPartition_->numRowsForProcessing()
@@ -634,10 +635,6 @@ vector_size_t Window::callApplyLoop(
           result);
       resultIndex += rowsForCurrentPartition;
       numOutputRowsLeft -= rowsForCurrentPartition;
-
-      if (currentPartition_->isPartial()) {
-        currentPartition_->clearOutputRows(rowsForCurrentPartition);
-      }
 
       if (!currentPartition_->isComplete()) {
         // Still more data for the current partition would need to be processed.
@@ -661,10 +658,6 @@ vector_size_t Window::callApplyLoop(
           partitionOffset_ + numOutputRowsLeft,
           resultIndex,
           result);
-      if (currentPartition_->isPartial()) {
-        currentPartition_->clearOutputRows(numOutputRowsLeft);
-      }
-      processedRowCount = numOutputRowsLeft;
       numOutputRowsLeft = 0;
       break;
     }
