@@ -237,6 +237,24 @@ For integral types, overflow results in an error.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="secure_rand">
+<span class="sig-name descname"><span class="pre">secure_rand</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#secure_rand" title="Link to this definition">¶</a></dt>
+<dd><p>This is an alias for <a class="reference internal" href="#id0" title="secure_random"><code class="xref py py-func docutils literal notranslate"><span class="pre">secure_random()</span></code></a>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="secure_random">
+<span class="sig-name descname"><span class="pre">secure_random</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#secure_random" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a cryptographically secure random value in the range 0.0 &lt;= x &lt; 1.0.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">secure_random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lower</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">upper</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a cryptographically secure random value in the range lower &lt;= x &lt; upper, where lower &lt; upper.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="sign">
 <span class="sig-name descname"><span class="pre">sign</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#sign" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the signum function of <code class="docutils literal notranslate"><span class="pre">x</span></code>. For both integer and floating point arguments, it returns:
@@ -541,6 +559,9 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#rand"><code class="docutils literal notranslate"><span class="pre">rand()</span></code></a></li>
 <li><a class="reference internal" href="#random"><code class="docutils literal notranslate"><span class="pre">random()</span></code></a></li>
 <li><a class="reference internal" href="#round"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
+<li><a class="reference internal" href="#secure_rand"><code class="docutils literal notranslate"><span class="pre">secure_rand()</span></code></a></li>
+<li><a class="reference internal" href="#secure_random"><code class="docutils literal notranslate"><span class="pre">secure_random()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">secure_random()</span></code></a></li>
 <li><a class="reference internal" href="#sign"><code class="docutils literal notranslate"><span class="pre">sign()</span></code></a></li>
 <li><a class="reference internal" href="#sqrt"><code class="docutils literal notranslate"><span class="pre">sqrt()</span></code></a></li>
 <li><a class="reference internal" href="#to_base"><code class="docutils literal notranslate"><span class="pre">to_base()</span></code></a></li>
