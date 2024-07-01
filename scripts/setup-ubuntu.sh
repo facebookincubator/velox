@@ -101,12 +101,12 @@ function install_fmt {
 function install_boost {
   github_checkout boostorg/boost "${BOOST_VERSION}" --recursive
   ./bootstrap.sh --prefix=/usr/local
-  ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
+  ${SUDO} ./b2 "-j$(nproc)" -d0 install link=static threading=multi --without-python
 }
 
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON -DBOOST_LINK_STATIC=ON
 }
 
 function install_fizz {

@@ -103,7 +103,7 @@ function install_boost {
   (
    cd boost
    ./bootstrap.sh --prefix=/usr/local
-   ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
+   ./b2 "-j$(nproc)" -d0 install link=static threading=multi --without-python
   )
 }
 
@@ -148,7 +148,7 @@ function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
   (
     cd folly
-    cmake_install -DFOLLY_HAVE_INT128_T=ON
+    cmake_install -DFOLLY_HAVE_INT128_T=ON -DBOOST_LINK_STATIC=ON
   )
 }
 
