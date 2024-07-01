@@ -61,6 +61,7 @@ add_executable(
   GreatestLeastTest.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
+  IPAddressFunctionsTest.cpp
   InPredicateTest.cpp
   JsonCastTest.cpp
   JsonExtractScalarTest.cpp

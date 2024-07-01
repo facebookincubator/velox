@@ -216,7 +216,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "HYPERLOGLOG",
           "TIMESTAMP WITH TIME ZONE",
           "UUID",
-      }),
+          "IPADDRESS",
+          "IPPREFIX"}),
       names);
 
   ASSERT_TRUE(registerCustomType(
@@ -229,6 +230,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "HYPERLOGLOG",
           "TIMESTAMP WITH TIME ZONE",
           "UUID",
+          "IPADDRESS",
+          "IPPREFIX",
           "FANCY_INT",
       }),
       names);
