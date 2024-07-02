@@ -182,12 +182,12 @@ const T MaxAggregate<T>::kInitialValue_ = MinMaxTrait<T>::lowest();
 
 // Negative INF is the smallest value of floating point type.
 template <>
-const float MaxAggregate<float>::kInitialValue_ = -1 *
-    MinMaxTrait<float>::infinity();
+const float MaxAggregate<float>::kInitialValue_ =
+    -1 * MinMaxTrait<float>::infinity();
 
 template <>
-const double MaxAggregate<double>::kInitialValue_ = -1 *
-    MinMaxTrait<double>::infinity();
+const double MaxAggregate<double>::kInitialValue_ =
+    -1 * MinMaxTrait<double>::infinity();
 
 template <typename T>
 class MinAggregate : public MinMaxAggregate<T> {
