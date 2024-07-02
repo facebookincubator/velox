@@ -1241,7 +1241,7 @@ template <typename T>
 struct LevenshteinDistanceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  void call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<int32_t>& result,
       const arg_type<Varchar>& left,
       const arg_type<Varchar>& right,
@@ -1257,7 +1257,7 @@ struct LevenshteinDistanceFunction {
         threshold);
   }
 
-  void callAscii(
+  FOLLY_ALWAYS_INLINE void callAscii(
       out_type<int32_t>& result,
       const arg_type<Varchar>& left,
       const arg_type<Varchar>& right,
@@ -1273,14 +1273,14 @@ struct LevenshteinDistanceFunction {
         threshold);
   }
 
-  void call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<int32_t>& result,
       const arg_type<Varchar>& left,
       const arg_type<Varchar>& right) {
     call(result, left, right, INT32_MAX);
   }
 
-  void callAscii(
+  FOLLY_ALWAYS_INLINE void callAscii(
       out_type<int32_t>& result,
       const arg_type<Varchar>& left,
       const arg_type<Varchar>& right) {
