@@ -191,7 +191,7 @@ ARROW_VERSION=15.0.0
 
 function install_arrow {
   wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
-  cd arrow/cpp
+  pushd arrow/cpp
   cmake_install \
     -DARROW_PARQUET=OFF \
     -DARROW_WITH_THRIFT=ON \
@@ -208,6 +208,7 @@ function install_arrow {
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BUILD_STATIC=ON \
     -DThrift_SOURCE=BUNDLED
+  popd
 }
 
 function install_cuda {
