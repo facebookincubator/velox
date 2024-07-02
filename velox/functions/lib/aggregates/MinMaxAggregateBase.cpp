@@ -668,7 +668,7 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
               inputType, throwOnNestedNulls);
         }
       case TypeKind::UNKNOWN:
-          return std::make_unique<TNumeric<UnknownValue>>(resultType);
+        return std::make_unique<TNumeric<UnknownValue>>(resultType);
       default:
         VELOX_UNREACHABLE(
             "Unknown input type for {} aggregation {}",

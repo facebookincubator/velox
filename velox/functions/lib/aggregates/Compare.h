@@ -38,4 +38,4 @@ int32_t compareWithNullAsValue(
     const velox::functions::aggregate::SingleValueAccumulator* accumulator,
     const DecodedVector& decoded,
     vector_size_t index);
-} // facebook::velox::functions::aggregate
+} // namespace facebook::velox::functions::aggregate
