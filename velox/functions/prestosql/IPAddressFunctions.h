@@ -15,15 +15,11 @@
  */
 #pragma once
 
-#include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_generators.hpp>
-
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
-#include "velox/functions/prestosql/types/UuidType.h"
 
 #include <iostream>
 
