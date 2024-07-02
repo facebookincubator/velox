@@ -152,6 +152,8 @@ void WaveHiveDataSource::registerConnector() {
   registered = true;
   auto config = std::make_shared<const core::MemConfig>();
 
+  connector::registerConnectorFactory(
+      std::make_shared<connector::hive::HiveConnectorFactory>());
   // Create hive connector with config...
   auto hiveConnector =
       connector::getConnectorFactory(

@@ -19,6 +19,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
@@ -311,12 +312,15 @@ JoinFuzzer::JoinFuzzer(
   // Make sure not to run out of open file descriptors.
   const std::unordered_map<std::string, std::string> hiveConfig = {
       {connector::hive::HiveConfig::kNumCacheFileHandles, "1000"}};
+  connector::registerConnectorFactory(
+      std::make_shared<connector::hive::HiveConnectorFactory>());
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
           ->newConnector(
               kHiveConnectorId, std::make_shared<core::MemConfig>(hiveConfig));
   connector::registerConnector(hiveConnector);
+  dwrf::registerDwrfReaderFactory();
 
   seed(initialSeed);
 }
