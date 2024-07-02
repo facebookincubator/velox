@@ -38,11 +38,7 @@ static constexpr size_t kMaxBuffers{3};
 // carried by ArrowArray.private_data
 class VeloxToArrowBridgeHolder {
  public:
-  VeloxToArrowBridgeHolder() {
-    for (size_t i = 0; i < numBuffers_; ++i) {
-      buffers_[i] = nullptr;
-    }
-  }
+  VeloxToArrowBridgeHolder() = default;
 
   void resizeBuffers(size_t bufferCount) {
     if (bufferCount <= numBuffers_)
@@ -103,7 +99,7 @@ class VeloxToArrowBridgeHolder {
   size_t numBuffers_ = kMaxBuffers;
 
   // Holds the pointers to the arrow buffers.
-  std::vector<const void*> buffers_{numBuffers_};
+  std::vector<const void*> buffers_{numBuffers_, nullptr};
 
   // Holds ownership over the Buffers being referenced by the buffers vector
   // above.
@@ -553,6 +549,10 @@ VectorPtr createStringFlatVectorFromUtf8View(
     const ArrowArray& arrowArray,
     WrapInBufferViewFunc wrapInBufferView) {
   int num_buffers = arrowArray.n_buffers;
+  VELOX_USER_CHECK_GE(
+      num_buffers,
+      3,
+      "Expecting three or more buffers as input for string view types.");
 
   // The last C data buffer stores buffer sizes
   auto* bufferSizes = (uint64_t*)arrowArray.buffers[num_buffers - 1];
@@ -1890,11 +1890,6 @@ VectorPtr importFromArrowImpl(
   if (type->isVarchar() || type->isVarbinary()) {
     // Import StringView from Utf8View/BinaryView (Zero-copy)
     if (arrowSchema.format[0] == 'v') {
-      VELOX_USER_CHECK_GE(
-          arrowArray.n_buffers,
-          3,
-          "Expecting three or more buffers as input for string view types.");
-
       return createStringFlatVectorFromUtf8View(
           pool, type, nulls, arrowArray, wrapInBufferView);
     }
