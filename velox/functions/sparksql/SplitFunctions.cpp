@@ -23,9 +23,26 @@
 
 namespace facebook::velox::functions::sparksql {
 namespace {
+
+/**
+ * split(string, delimiter[, limit]) -> array(varchar)
+ *
+ * Splits string on delimiter and returns an array of size at most limit.
+ * delimiter is a string representing regular expression.
+ * limit is an integer which controls the number of times the regex is applied.
+ * By default, limit is -1.
+ *
+ * If delimiter is not empty, then when limit > 0, the last element in
+ * the array will contain the remainder of the string if such left, otherwise
+ * not.
+ *
+ * If limit <= 0, delimiter will be applied as many times as possible, and the
+ resulting array can be of any size.
+ */
 class Split final : public exec::VectorFunction {
  public:
   Split() {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -143,10 +160,9 @@ class Split final : public exec::VectorFunction {
     }
 
     // We walk through our input cutting off the pieces using the delimiter and
-    // adding them to the elements vector, until we reached the end of the
+    // add them to the elements vector, until we reach the end of the
     // string or the limit.
     int32_t addedElements{0};
-    bool emptyDelim = delim.size() == 0 ? true : false;
     auto* re = cache_.findOrCompile(delim);
     const auto re2String = re2::StringPiece(input.data(), input.size());
     size_t pos = 0;
@@ -156,15 +172,13 @@ class Split final : public exec::VectorFunction {
         re2String, pos, input.size(), RE2::Anchor::UNANCHORED, subMatches, 1)) {
       const auto fullMatch = subMatches[0];
       auto offset = fullMatch.data() - start;
-      const auto size = fullMatch.size();
-
       if (offset >= input.size()) {
         break;
       }
 
       arrayWriter.add_item().setNoCopy(
           StringView(input.data() + pos, offset - pos));
-      pos = offset + size;
+      pos = offset + fullMatch.size();
       ++addedElements;
       // If the next element should be the last, leave the loop.
       if (addedElements + 1 == limit) {
@@ -173,7 +187,7 @@ class Split final : public exec::VectorFunction {
     }
 
     // Add the rest of the string and we are done.
-    // Note, that the rest of the string can be empty - we still add it.
+    // Note that the rest of the string can be empty - we still add it.
     arrayWriter.add_item().setNoCopy(
         StringView(input.data() + pos, input.size() - pos));
     resultWriter.commit();
