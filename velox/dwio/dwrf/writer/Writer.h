@@ -51,6 +51,7 @@ struct WriterOptions {
       WriterContext& context,
       const velox::dwio::common::TypeWithId& type)>
       columnWriterFactory;
+  const date::time_zone* sessionTimezone{nullptr};
 };
 
 class Writer : public dwio::common::Writer {

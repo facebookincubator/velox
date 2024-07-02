@@ -711,6 +711,12 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   options.zstdCompressionLevel =
       compressionLevel.value_or(kDefaultZstdCompressionLevel);
 
+  const auto& sessionTzName = connectorQueryCtx_->sessionTimezone();
+  if (!sessionTzName.empty()) {
+    const auto timezone = date::locate_zone(sessionTzName);
+    options.sessionTimezone = timezone;
+  }
+
   // Prevents the memory allocation during the writer creation.
   WRITER_NON_RECLAIMABLE_SECTION_GUARD(writerInfo_.size() - 1);
   auto writer = writerFactory_->createWriter(

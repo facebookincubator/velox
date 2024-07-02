@@ -43,6 +43,7 @@ class E2EWriterTestUtil {
       const std::shared_ptr<Config>& config,
       std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory =
           nullptr,
+      const date::time_zone* sessionTimezone = nullptr,
       std::function<std::unique_ptr<LayoutPlanner>(
           const dwio::common::TypeWithId&)> layoutPlannerFactory = nullptr,
       const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max());
@@ -79,6 +80,7 @@ class E2EWriterTestUtil {
       const std::shared_ptr<Config>& config,
       std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory =
           nullptr,
+      const date::time_zone* sessionTimezone = nullptr,
       std::function<std::unique_ptr<LayoutPlanner>(
           const dwio::common::TypeWithId&)> layoutPlannerFactory = nullptr,
       const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max());
@@ -97,6 +99,8 @@ class E2EWriterTestUtil {
       size_t numStripesLower,
       size_t numStripesUpper,
       const std::shared_ptr<Config>& config,
+      const std::string& sessionTzName = "",
+      const bool useSelectiveColumnReader = false,
       std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory =
           nullptr,
       std::function<std::unique_ptr<LayoutPlanner>(

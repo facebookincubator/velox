@@ -127,7 +127,9 @@ TEST_F(StripeStreamTest, planReads) {
   ProtoUtils::writeType(*type, *footer);
   auto is = std::make_unique<RecordingInputStream>();
   auto isPtr = is.get();
+  facebook::velox::dwio::common::ReaderOptions readerOpts{pool_.get()};
   auto readerBase = std::make_shared<ReaderBase>(
+      readerOpts,
       *pool_,
       std::make_unique<BufferedInput>(
           std::move(is),
@@ -186,7 +188,9 @@ TEST_F(StripeStreamTest, filterSequences) {
   ProtoUtils::writeType(*type, *footer);
   auto is = std::make_unique<RecordingInputStream>();
   auto isPtr = is.get();
+  facebook::velox::dwio::common::ReaderOptions readerOpts{pool_.get()};
   auto readerBase = std::make_shared<ReaderBase>(
+      readerOpts,
       *pool_,
       std::make_unique<BufferedInput>(std::move(is), *pool_),
       std::make_unique<PostScript>(proto::PostScript{}),
@@ -253,7 +257,9 @@ TEST_F(StripeStreamTest, zeroLength) {
   ps.set_compression(proto::CompressionKind::ZSTD);
   auto is = std::make_unique<RecordingInputStream>();
   auto isPtr = is.get();
+  facebook::velox::dwio::common::ReaderOptions readerOpts{pool_.get()};
   auto readerBase = std::make_shared<ReaderBase>(
+      readerOpts,
       *pool_,
       std::make_unique<BufferedInput>(std::move(is), *pool_),
       std::make_unique<PostScript>(std::move(ps)),
@@ -345,7 +351,9 @@ TEST_F(StripeStreamTest, planReadsIndex) {
 
   auto is = std::make_unique<RecordingInputStream>();
   auto isPtr = is.get();
+  facebook::velox::dwio::common::ReaderOptions readerOpts{pool_.get()};
   auto readerBase = std::make_shared<ReaderBase>(
+      readerOpts,
       *pool_,
       std::make_unique<BufferedInput>(std::move(is), *pool_),
       std::make_unique<PostScript>(std::move(ps)),
@@ -476,7 +484,9 @@ TEST_F(StripeStreamTest, readEncryptedStreams) {
   *stripeFooter->add_encryptiongroups() = "";
 
   auto readerPool = pool->addLeafChild("reader");
+  facebook::velox::dwio::common::ReaderOptions readerOpts{pool_.get()};
   auto readerBase = std::make_shared<ReaderBase>(
+      readerOpts,
       *readerPool,
       std::make_unique<BufferedInput>(
           std::make_shared<facebook::velox::InMemoryReadFile>(std::string()),
@@ -558,8 +568,10 @@ TEST_F(StripeStreamTest, schemaMismatch) {
   encrypter.setKey("key");
   pw.writeProto(*stripeFooter->add_encryptiongroups(), group, encrypter);
 
+  facebook::velox::dwio::common::ReaderOptions readerOpts{pool_.get()};
   auto readerPool = pool->addLeafChild("reader");
   auto readerBase = std::make_shared<ReaderBase>(
+      readerOpts,
       *readerPool,
       std::make_unique<BufferedInput>(
           std::make_shared<facebook::velox::InMemoryReadFile>(std::string()),
@@ -631,6 +643,10 @@ class TestStripeStreams : public StripeStreamsBase {
 
   const facebook::velox::dwio::common::ColumnSelector& getColumnSelector()
       const override {
+    VELOX_UNSUPPORTED();
+  }
+
+  const facebook::velox::date::time_zone* getSessionTimezone() const override {
     VELOX_UNSUPPORTED();
   }
 

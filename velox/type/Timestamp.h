@@ -309,14 +309,14 @@ struct Timestamp {
       const TimestampToStringOptions& options,
       char* const startPosition);
 
-  // Assuming the timestamp represents a time at zone, converts it to the GMT
-  // time at the same moment.
-  // Example: Timestamp ts{0, 0};
-  // ts.Timezone("America/Los_Angeles");
-  // ts.toString() returns January 1, 1970 08:00:00
+  /// Assuming the timestamp represents a time at zone, converts it to the GMT
+  /// time at the same moment.
+  /// Example: Timestamp ts{0, 0};
+  /// ts.Timezone("America/Los_Angeles");
+  /// ts.toString() returns January 1, 1970 08:00:00
   void toGMT(const date::time_zone& zone);
 
-  // Same as above, but accepts PrestoDB time zone ID.
+  /// Same as above, but accepts PrestoDB time zone ID.
   void toGMT(int16_t tzID);
 
   /// Assuming the timestamp represents a GMT time, converts it to the time at
@@ -333,6 +333,12 @@ struct Timestamp {
 
   /// A default time zone that is same across the process.
   static const date::time_zone& defaultTimezone();
+
+  /// Calculates the offset in seconds between the given timestamp in the
+  /// specified timezone and UTC.
+  static int64_t getTimezoneOffset(
+      const Timestamp& timestamp,
+      const date::time_zone* timezone);
 
   bool operator==(const Timestamp& b) const {
     return seconds_ == b.seconds_ && nanos_ == b.nanos_;

@@ -77,10 +77,12 @@ FooterStatisticsImpl::FooterStatisticsImpl(
 }
 
 ReaderBase::ReaderBase(
+    const dwio::common::ReaderOptions& options,
     MemoryPool& pool,
     std::unique_ptr<dwio::common::BufferedInput> input,
     FileFormat fileFormat)
     : ReaderBase(
+          options,
           pool,
           std::move(input),
           nullptr,
@@ -89,6 +91,7 @@ ReaderBase::ReaderBase(
           fileFormat) {}
 
 ReaderBase::ReaderBase(
+    const dwio::common::ReaderOptions& options,
     MemoryPool& pool,
     std::unique_ptr<dwio::common::BufferedInput> input,
     std::shared_ptr<DecrypterFactory> decryptorFactory,
@@ -98,7 +101,8 @@ ReaderBase::ReaderBase(
     bool fileColumnNamesReadAsLowerCase,
     std::shared_ptr<random::RandomSkipTracker> randomSkip,
     std::shared_ptr<velox::common::ScanSpec> scanSpec)
-    : pool_{pool},
+    : options_{options},
+      pool_{pool},
       arena_(std::make_unique<google::protobuf::Arena>()),
       decryptorFactory_(decryptorFactory),
       footerEstimatedSize_(footerEstimatedSize),

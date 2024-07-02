@@ -65,8 +65,9 @@ class StripeLoadKeysTest : public Test {
     auto handler =
         DecryptionHandler::create(FooterWrapper(footer_.get()), &factory);
     pool_ = memoryManager()->addLeafPool();
-
+    dwio::common::ReaderOptions readerOpts{pool_.get()};
     reader_ = std::make_unique<ReaderBase>(
+        readerOpts,
         *pool_,
         std::make_unique<BufferedInput>(
             std::make_shared<InMemoryReadFile>(std::string()), *pool_),

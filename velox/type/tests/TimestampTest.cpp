@@ -584,5 +584,23 @@ TEST(TimestampTest, skipTrailingZeros) {
       "0384-01-01 08:00:00.7266");
 }
 
+TEST(TimestampTest, getTimezoneOffset) {
+  auto sessionTzName = "Asia/Shanghai";
+  auto timezone = date::locate_zone(sessionTzName);
+  auto timestamp = Timestamp(946729316, 0);
+  auto timezoneOffset = Timestamp::getTimezoneOffset(timestamp, timezone);
+  EXPECT_EQ(28800, timezoneOffset);
+
+  sessionTzName = "America/Los_Angeles";
+  timezone = date::locate_zone(sessionTzName);
+  timezoneOffset = Timestamp::getTimezoneOffset(timestamp, timezone);
+  EXPECT_EQ(-28800, timezoneOffset);
+
+  sessionTzName = "UTC";
+  timezone = date::locate_zone(sessionTzName);
+  timezoneOffset = Timestamp::getTimezoneOffset(timestamp, timezone);
+  EXPECT_EQ(0, timezoneOffset);
+}
+
 } // namespace
 } // namespace facebook::velox
