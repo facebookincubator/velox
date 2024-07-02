@@ -669,3 +669,8 @@ Spark-specific Configuration
    * - spark.partition_id
      - integer
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.decimal_operations.allow_precision_loss
+     - bool
+     - When true, establishing the result type of an arithmetic operation happens according to Hive behavior and SQL ANSI 2011 specification, i.e.
+       rounding the decimal part of the result if an exact representation is not
+       possible. Otherwise, NULL is returned in those cases, as previously
