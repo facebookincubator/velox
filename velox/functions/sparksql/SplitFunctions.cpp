@@ -50,29 +50,30 @@ class Split final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     // Get the decoded vectors out of arguments.
-    const bool noLimit = (args.size() == 2);
     exec::DecodedArgs decodedArgs(rows, args, context);
     DecodedVector* strings = decodedArgs.at(0);
     DecodedVector* delims = decodedArgs.at(1);
-    DecodedVector* limits = noLimit ? nullptr : decodedArgs.at(2);
+    DecodedVector* limits = (args.size() == 2) ? nullptr : decodedArgs.at(2);
+
     BaseVector::ensureWritable(rows, ARRAY(VARCHAR()), context.pool(), result);
     exec::VectorWriter<Array<Varchar>> resultWriter;
     resultWriter.init(*result->as<ArrayVector>());
-    int32_t limit = std::numeric_limits<int32_t>::max();
     // Optimization for the (flat, const, const) case.
     if (strings->isIdentityMapping() and delims->isConstantMapping() and
-        (noLimit or limits->isConstantMapping())) {
+        (!limits or limits->isConstantMapping())) {
       const auto* rawStrings = strings->data<StringView>();
       const auto delim = delims->valueAt<StringView>(0);
-      if (!noLimit) {
-        limit = limits->valueAt<int32_t>(0);
-        if (limit <= 0) {
-          limit = std::numeric_limits<int32_t>::max();
+      int32_t limit = std::numeric_limits<int32_t>::max();
+      bool isEmptyDelimiter = delim.empty();
+      if (limits) {
+        const auto constant = limits->valueAt<int32_t>(0);
+        if (constant > 0) {
+          limit = constant;
         }
       }
       rows.applyToSelected([&](vector_size_t row) {
-        if (delim.size() == 0) {
-          splitEmptyDelimer(rawStrings[row], limit, row, resultWriter);
+        if (isEmptyDelimiter) {
+          splitEmptyDelimiter(rawStrings[row], limit, row, resultWriter);
         } else {
           splitInner(rawStrings[row], delim, limit, row, resultWriter);
         }
@@ -82,14 +83,15 @@ class Split final : public exec::VectorFunction {
       // direct access.
       rows.applyToSelected([&](vector_size_t row) {
         const auto delim = delims->valueAt<StringView>(row);
-        if (!noLimit) {
-          limit = limits->valueAt<int32_t>(row);
-          if (limit <= 0) {
-            limit = std::numeric_limits<int32_t>::max();
+        int32_t limit = std::numeric_limits<int32_t>::max();
+        if (limits) {
+          const auto limitValue = limits->valueAt<int32_t>(row);
+          if (limitValue > 0) {
+            limit = limitValue;
           }
         }
         if (delim.size() == 0) {
-          splitEmptyDelimer(
+          splitEmptyDelimiter(
               strings->valueAt<StringView>(row), limit, row, resultWriter);
         } else {
           splitInner(
@@ -118,7 +120,7 @@ class Split final : public exec::VectorFunction {
   // The result does not include remaining string when limit is smaller than the
   // string size, e.g. split('abc', '', 2) outputs ["a", "b"] instead of ["a",
   // "bc"].
-  void splitEmptyDelimer(
+  void splitEmptyDelimiter(
       const StringView current,
       int32_t limit,
       vector_size_t row,
@@ -148,6 +150,7 @@ class Split final : public exec::VectorFunction {
       int32_t limit,
       vector_size_t row,
       exec::VectorWriter<Array<Varchar>>& resultWriter) const {
+    VELOX_CHECK(!delim.empty(), "Delimiter size should not empty");
     // Add new array (for the new row) to our array vector.
     resultWriter.setOffset(row);
     auto& arrayWriter = resultWriter.current();
@@ -200,6 +203,20 @@ std::shared_ptr<exec::VectorFunction> createSplit(
     const std::string& /*name*/,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
+  VELOX_USER_CHECK(
+      inputArgs.size() == 2 || inputArgs.size() == 3,
+      "Two or three arguments are required for split function.");
+  VELOX_USER_CHECK(
+      inputArgs[0].type->isVarchar(),
+      "The first argument should be of varchar type.");
+  VELOX_USER_CHECK(
+      inputArgs[1].type->isVarchar(),
+      "The second argument should be of varchar type.");
+  if (inputArgs.size() > 2) {
+    VELOX_USER_CHECK(
+        inputArgs[2].type->kind() == TypeKind::INTEGER,
+        "The third argument should be of integer type.");
+  }
   return std::make_shared<Split>();
 }
 
