@@ -22,6 +22,21 @@ using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
 
+namespace facebook::velox::functions::sparksql {
+void registerNotAllowPrecisionLossFunction() {
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_decimal_add_not_allow_precision_loss, "add_not_allow_precision_loss");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_decimal_sub_not_allow_precision_loss,
+      "subtract_not_allow_precision_loss");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_decimal_mul_not_allow_precision_loss,
+      "multiply_not_allow_precision_loss");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_decimal_div_not_allow_precision_loss,
+      "divide_not_allow_precision_loss");
+}
+} // namespace facebook::velox::functions::sparksql
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
@@ -29,6 +44,7 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
  public:
   DecimalArithmeticTest() {
     options_.parseDecimalAsDouble = false;
+    registerNotAllowPrecisionLossFunction();
   }
 
  protected:
@@ -75,6 +91,13 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       }
     }
     return makeNullableFlatVector<int128_t>(numbers, type);
+  }
+
+  void setDecimalOperationsAllowPrecisionLoss(bool allowPrecisionLoss) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSparkDecimalOperationsAllowPrecisionLoss,
+         std::to_string(allowPrecisionLoss)},
+    });
   }
 };
 
@@ -521,6 +544,51 @@ TEST_F(DecimalArithmeticTest, decimalDivTest) {
       "c0 / 0.01",
       {makeConstant<int128_t>(
           DecimalUtil::kLongDecimalMax, 1, DECIMAL(38, 0))});
+}
+
+TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
+  setDecimalOperationsAllowPrecisionLoss(false);
+
+  testArithmeticFunction(
+      "add_not_allow_precision_loss",
+      {makeFlatVector(
+           std::vector<int128_t>{11232100, 9998888, 12345678, 2135632},
+           DECIMAL(38, 7)),
+       makeFlatVector(std::vector<int64_t>{1, 2, 3, 4}, DECIMAL(10, 0))},
+      makeFlatVector(
+          std::vector<int128_t>{21232100, 29998888, 42345678, 42135632},
+          DECIMAL(38, 7)));
+
+  testArithmeticFunction(
+      "subtract_not_allow_precision_loss",
+      {makeFlatVector(
+           std::vector<int128_t>{11232100, 9998888, 12345678, 2135632},
+           DECIMAL(38, 7)),
+       makeFlatVector(std::vector<int64_t>{1, 2, 3, 4}, DECIMAL(10, 0))},
+      makeFlatVector(
+          std::vector<int128_t>{1232100, -10001112, -17654322, -37864368},
+          DECIMAL(38, 7)));
+
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeConstant<int128_t>(60501, 1, DECIMAL(38, 10)),
+      "multiply_not_allow_precision_loss(c0, c1)",
+      {makeConstant<int128_t>(201, 1, DECIMAL(20, 5)),
+       makeConstant<int128_t>(301, 1, DECIMAL(20, 5))});
+
+  // diff > 0
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeConstant<int128_t>(
+          HugeInt::parse("5" + std::string(18, '0')), 1, DECIMAL(38, 18)),
+      "divide_not_allow_precision_loss(c0, c1)",
+      {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),
+       makeConstant<int64_t>(1000, 1, DECIMAL(17, 3))});
+  // diff < 0
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeConstant<int128_t>(
+          HugeInt::parse("5" + std::string(10, '0')), 1, DECIMAL(31, 10)),
+      "divide_not_allow_precision_loss(c0, c1)",
+      {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),
+       makeConstant<int64_t>(1000, 1, DECIMAL(7, 3))});
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

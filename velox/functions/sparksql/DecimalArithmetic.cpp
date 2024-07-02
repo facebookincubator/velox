@@ -23,14 +23,39 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-std::string getResultScale(std::string precision, std::string scale) {
-  return fmt::format(
-      "({}) <= 38 ? ({}) : max(({}) - ({}) + 38, min(({}), 6))",
-      precision,
-      scale,
-      scale,
-      precision,
-      scale);
+std::string getResultScale(
+    std::string precision,
+    std::string scale,
+    bool allowPrecisionLoss) {
+  return allowPrecisionLoss
+      ? fmt::format(
+            "({}) <= 38 ? ({}) : max(({}) - ({}) + 38, min(({}), 6))",
+            precision,
+            scale,
+            scale,
+            precision,
+            scale)
+      : fmt::format("({}) <= 38 ? ({}) : 38", scale, scale);
+}
+
+std::pair<std::string, std::string>
+getNotAllowPrecisionLossDivideResultScale() {
+  std::string intDig = "min(38, a_precision - a_scale + b_scale)";
+  std::string decDig = "min(38, max(6, a_scale + b_precision + 1))";
+  std::string diff = intDig + " + " + decDig + " - 38";
+  std::string newDecDig = fmt::format("({}) - ({}) / 2 - 1", decDig, diff);
+  std::string newIntDig = fmt::format("38 - ({})", newDecDig);
+  return {
+      fmt::format(
+          "({}) > 0 ? ({}) : ({})",
+          diff,
+          getResultScale("", newIntDig + " + " + newDecDig, false),
+          getResultScale("", intDig + " + " + decDig, false)),
+      fmt::format(
+          "({}) > 0 ? ({}) : ({})",
+          diff,
+          getResultScale("", newDecDig, false),
+          getResultScale("", decDig, false))};
 }
 
 // Returns the whole and fraction parts of a decimal value.
@@ -416,11 +441,14 @@ class Addition {
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,
-      uint8_t bScale) {
+      uint8_t bScale,
+      bool allowPrecisionLoss) {
     auto precision = std::max(aPrecision - aScale, bPrecision - bScale) +
         std::max(aScale, bScale) + 1;
     auto scale = std::max(aScale, bScale);
-    return DecimalUtil::adjustPrecisionScale(precision, scale);
+    return allowPrecisionLoss
+        ? DecimalUtil::adjustPrecisionScale(precision, scale)
+        : DecimalUtil::bounded(precision, scale);
   }
 };
 
@@ -464,9 +492,10 @@ class Subtraction {
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,
-      uint8_t bScale) {
+      uint8_t bScale,
+      bool allowPrecisionLoss) {
     return Addition::computeResultPrecisionScale(
-        aPrecision, aScale, bPrecision, bScale);
+        aPrecision, aScale, bPrecision, bScale, allowPrecisionLoss);
   }
 };
 
@@ -566,9 +595,12 @@ class Multiply {
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,
-      uint8_t bScale) {
-    return DecimalUtil::adjustPrecisionScale(
-        aPrecision + bPrecision + 1, aScale + bScale);
+      uint8_t bScale,
+      bool allowPrecisionLoss) {
+    return allowPrecisionLoss
+        ? DecimalUtil::adjustPrecisionScale(
+              aPrecision + bPrecision + 1, aScale + bScale)
+        : DecimalUtil::bounded(aPrecision + bPrecision + 1, aScale + bScale);
   }
 
  private:
@@ -616,15 +648,27 @@ class Divide {
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,
-      uint8_t bScale) {
-    auto scale = std::max(6, aScale + bPrecision + 1);
-    auto precision = aPrecision - aScale + bScale + scale;
-    return DecimalUtil::adjustPrecisionScale(precision, scale);
+      uint8_t bScale,
+      bool allowPrecisionLoss) {
+    if (allowPrecisionLoss) {
+      auto scale = std::max(6, aScale + bPrecision + 1);
+      auto precision = aPrecision - aScale + bScale + scale;
+      return DecimalUtil::adjustPrecisionScale(precision, scale);
+    } else {
+      auto intDig = std::min(38, aPrecision - aScale + bScale);
+      auto decDig = std::min(38, std::max(6, aScale + bPrecision + 1));
+      auto diff = (intDig + decDig) - 38;
+      if (diff > 0) {
+        decDig -= diff / 2 + 1;
+        intDig = 38 - decDig;
+      }
+      return DecimalUtil::bounded(intDig + decDig, decDig);
+    }
   }
 };
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>
-decimalAddSubtractSignature() {
+decimalAddSubtractSignature(bool allowPrecisionLoss) {
   return {
       exec::FunctionSignatureBuilder()
           .integerVariable("a_precision")
@@ -638,15 +682,17 @@ decimalAddSubtractSignature() {
               "r_scale",
               getResultScale(
                   "max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1",
-                  "max(a_scale, b_scale)"))
+                  "max(a_scale, b_scale)",
+                  allowPrecisionLoss))
           .returnType("DECIMAL(r_precision, r_scale)")
           .argumentType("DECIMAL(a_precision, a_scale)")
           .argumentType("DECIMAL(b_precision, b_scale)")
-          .build()};
+          .build(),
+  };
 }
 
-std::vector<std::shared_ptr<exec::FunctionSignature>>
-decimalMultiplySignature() {
+std::vector<std::shared_ptr<exec::FunctionSignature>> decimalMultiplySignature(
+    bool allowPrecisionLoss) {
   return {exec::FunctionSignatureBuilder()
               .integerVariable("a_precision")
               .integerVariable("a_scale")
@@ -657,45 +703,55 @@ decimalMultiplySignature() {
               .integerVariable(
                   "r_scale",
                   getResultScale(
-                      "a_precision + b_precision + 1", "a_scale + b_scale"))
+                      "a_precision + b_precision + 1",
+                      "a_scale + b_scale",
+                      allowPrecisionLoss))
               .returnType("DECIMAL(r_precision, r_scale)")
               .argumentType("DECIMAL(a_precision, a_scale)")
               .argumentType("DECIMAL(b_precision, b_scale)")
               .build()};
 }
 
-std::vector<std::shared_ptr<exec::FunctionSignature>> decimalDivideSignature() {
-  return {
-      exec::FunctionSignatureBuilder()
-          .integerVariable("a_precision")
-          .integerVariable("a_scale")
-          .integerVariable("b_precision")
-          .integerVariable("b_scale")
-          .integerVariable(
-              "r_precision",
-              "min(38, a_precision - a_scale + b_scale + max(6, a_scale + b_precision + 1))")
-          .integerVariable(
-              "r_scale",
-              getResultScale(
-                  "a_precision - a_scale + b_scale + max(6, a_scale + b_precision + 1)",
-                  "max(6, a_scale + b_precision + 1)"))
-          .returnType("DECIMAL(r_precision, r_scale)")
-          .argumentType("DECIMAL(a_precision, a_scale)")
-          .argumentType("DECIMAL(b_precision, b_scale)")
-          .build()};
+std::vector<std::shared_ptr<exec::FunctionSignature>> decimalDivideSignature(
+    bool allowPrecisionLoss) {
+  auto precisionAndScale = getNotAllowPrecisionLossDivideResultScale();
+  std::string resultPrecision = allowPrecisionLoss
+      ? "min(38, a_precision - a_scale + b_scale + max(6, a_scale + b_precision + 1))"
+      : precisionAndScale.first;
+  std::string resultScale = allowPrecisionLoss
+      ? getResultScale(
+            "a_precision - a_scale + b_scale + max(6, a_scale + b_precision + 1)",
+            "max(6, a_scale + b_precision + 1)",
+            allowPrecisionLoss)
+      : precisionAndScale.second;
+  return {exec::FunctionSignatureBuilder()
+              .integerVariable("a_precision")
+              .integerVariable("a_scale")
+              .integerVariable("b_precision")
+              .integerVariable("b_scale")
+              .integerVariable("r_precision", resultPrecision)
+              .integerVariable("r_scale", resultScale)
+              .returnType("DECIMAL(r_precision, r_scale)")
+              .argumentType("DECIMAL(a_precision, a_scale)")
+              .argumentType("DECIMAL(b_precision, b_scale)")
+              .build()};
 }
 
 template <typename Operation>
 std::shared_ptr<exec::VectorFunction> createDecimalFunction(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& config) {
   const auto& aType = inputArgs[0].type;
   const auto& bType = inputArgs[1].type;
   const auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
   const auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
   const auto [rPrecision, rScale] = Operation::computeResultPrecisionScale(
-      aPrecision, aScale, bPrecision, bScale);
+      aPrecision,
+      aScale,
+      bPrecision,
+      bScale,
+      config.sparkDecimalOperationsAllowPrecisionLoss());
   const uint8_t aRescale =
       Operation::computeRescaleFactor(aScale, bScale, rScale);
   const uint8_t bRescale =
@@ -782,21 +838,41 @@ std::shared_ptr<exec::VectorFunction> createDecimalFunction(
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_add,
-    decimalAddSubtractSignature(),
+    decimalAddSubtractSignature(true),
     createDecimalFunction<Addition>);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_sub,
-    decimalAddSubtractSignature(),
+    decimalAddSubtractSignature(true),
     createDecimalFunction<Subtraction>);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_mul,
-    decimalMultiplySignature(),
+    decimalMultiplySignature(true),
     createDecimalFunction<Multiply>);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_div,
-    decimalDivideSignature(),
+    decimalDivideSignature(true),
+    createDecimalFunction<Divide>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_add_not_allow_precision_loss,
+    decimalAddSubtractSignature(false),
+    createDecimalFunction<Addition>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_sub_not_allow_precision_loss,
+    decimalAddSubtractSignature(false),
+    createDecimalFunction<Subtraction>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_mul_not_allow_precision_loss,
+    decimalMultiplySignature(false),
+    createDecimalFunction<Multiply>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_div_not_allow_precision_loss,
+    decimalDivideSignature(false),
     createDecimalFunction<Divide>);
 } // namespace facebook::velox::functions::sparksql
