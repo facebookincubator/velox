@@ -23,39 +23,22 @@
 
 namespace facebook::velox::functions::sparksql {
 namespace {
+
 /**
- * Masks the characters of the given string value with the provided specific
- * characters respectively.
- *
  * mask(string) -> string
- * replaces upper-case characters with 'X', lower-case characters with 'x',
- * and numbers with 'n'.
- *
  * mask(string, upperChar) -> string
- * replaces upper-case characters with provided `upperChar`, lower-case
- * characters with 'x', and numbers with 'n'.
- * Upper case characters remain unmasked if provided `upperChar` is NULL.
- *
  * mask(string, upperChar, lowerChar) -> string
- * replaces upper-case characters with provided `upperChar`, lower-case
- * characters with provided `lowerChar` and numbers with 'n'.
- * Upper case characters or lower-case characters would remain unmasked if
- * provided `upperChar` or `lowerChar` is NULL.
- *
  * mask(string, upperChar, lowerChar, digitChar) -> string
- * replaces upper-case characters with provided `upperChar`, lower-case
- * characters with provided `lowerChar` and numbers with provided `digitChar`.
- * Upper case characters, lower-case characters and numbers would remain
- * unmasked if provided `upperChar`, `lowerChar` or `digitChar` is NULL.
- *
  * mask(string, upperChar, lowerChar, digitChar, otherChar) -> string
- * replaces upper-case characters with provided `upperChar`, lower-case
- * characters with provided `lowerChar` and numbers with provided `digitChar`
- * and all other characters with provided `otherChar`.
- * Upper case characters remain unmasekd if provided `upperChar` is NULL.
- * Lower case characters remain unmasekd if provided `lowerChar` is NULL.
- * Numbers remain unmasekd if provided `digitChar` is NULL.
- * All other characters remain unmasked if provided `otherChar` is NULL.
+ *
+ * Masks the characters of the given string value with the provided specific
+ * characters respectively. Upper-case characters are replaced with the second
+ * argument. Default value is 'X'. Lower-case characters are replaced with the
+ * third argument. Default value is 'x'. Digit characters are replaced with the
+ * fourth argument. Default value is 'n'. Other characters are replaced with the
+ * last argument. Default value is NULL and the original character is retained.
+ * If the provided nth argument is NULL, the related original character is
+ * retained.
  */
 class MaskFunction final : public exec::VectorFunction {
  public:
@@ -72,20 +55,28 @@ class MaskFunction final : public exec::VectorFunction {
     DecodedVector* lowerChars = args.size() >= 3 ? decodedArgs.at(2) : nullptr;
     DecodedVector* digitChars = args.size() >= 4 ? decodedArgs.at(3) : nullptr;
     DecodedVector* otherChars = args.size() >= 5 ? decodedArgs.at(4) : nullptr;
+
     BaseVector::ensureWritable(rows, VARCHAR(), context.pool(), result);
-    auto* results = result->as<FlatVector<StringView>>();
-    auto getMaskedChar =
-        [&](DecodedVector* inputChars,
-            const VectorPtr& arg,
-            int index,
-            std::string_view maskedChar) -> std::optional<StringView> {
+    auto* flatResult = result->as<FlatVector<StringView>>();
+    auto getMaskedChar = [&](DecodedVector* inputChars,
+                             const VectorPtr& arg,
+                             int index,
+                             std::optional<char> maskedChar,
+                             const char* charType) -> std::optional<char> {
       if (inputChars == nullptr) {
-        return StringView{maskedChar};
+        return maskedChar;
       }
       if (arg->isNullAt(index)) {
         return std::nullopt;
       }
-      return inputChars->valueAt<StringView>(index);
+      std::optional<StringView> inputCharStr =
+          inputChars->valueAt<StringView>(index);
+      if (inputCharStr.has_value()) {
+        VELOX_USER_CHECK(
+            inputCharStr.value().size() == 1,
+            std::string("Length of ") + charType + " should be 1");
+      }
+      return inputCharStr->data()[0];
     };
 
     // Optimization for the (flat, const, const, const, const) case.
@@ -94,23 +85,21 @@ class MaskFunction final : public exec::VectorFunction {
         (lowerChars == nullptr || lowerChars->isConstantMapping()) and
         (digitChars == nullptr || digitChars->isConstantMapping()) and
         (otherChars == nullptr || otherChars->isConstantMapping())) {
-      // TODO: enable the inplace if possible
       const auto* rawStrings = strings->data<StringView>();
       const auto upperChar =
-          getMaskedChar(upperChars, args[1], 0, maskedUpperCase);
+          getMaskedChar(upperChars, args[1], 0, maskedUpperCase_, "upperChar");
       const auto lowerChar =
-          getMaskedChar(lowerChars, args[2], 0, maskedLowerCase);
-      const auto digitChar = getMaskedChar(digitChars, args[3], 0, maskedDigit);
-      const auto otherChar = (otherChars == nullptr || args[4]->isNullAt(0))
-          ? std::nullopt
-          : std::optional(otherChars->valueAt<StringView>(0));
-
+          getMaskedChar(lowerChars, args[2], 0, maskedLowerCase_, "lowerChar");
+      const auto digitChar =
+          getMaskedChar(digitChars, args[3], 0, maskedDigit_, "digitChar");
+      const auto otherChar =
+          getMaskedChar(otherChars, args[4], 0, std::nullopt, "otherChar");
       rows.applyToSelected([&](vector_size_t row) {
         if (args[0]->isNullAt(row)) {
-          results->setNull(row, true);
+          flatResult->setNull(row, true);
           return;
         }
-        auto proxy = exec::StringWriter<>(results, row);
+        auto proxy = exec::StringWriter<>(flatResult, row);
         applyInner(
             rawStrings[row],
             upperChar,
@@ -126,20 +115,18 @@ class MaskFunction final : public exec::VectorFunction {
       // direct access.
       rows.applyToSelected([&](vector_size_t row) {
         if (args[0]->isNullAt(row)) {
-          results->setNull(row, true);
+          flatResult->setNull(row, true);
           return;
         }
-        auto proxy = exec::StringWriter<>(results, row);
-        const auto upperChar =
-            getMaskedChar(upperChars, args[1], row, maskedUpperCase);
-        const auto lowerChar =
-            getMaskedChar(lowerChars, args[2], row, maskedLowerCase);
+        auto proxy = exec::StringWriter<>(flatResult, row);
+        const auto upperChar = getMaskedChar(
+            upperChars, args[1], row, maskedUpperCase_, "upperChar");
+        const auto lowerChar = getMaskedChar(
+            lowerChars, args[2], row, maskedLowerCase_, "lowerChar");
         const auto digitChar =
-            getMaskedChar(digitChars, args[3], row, maskedDigit);
+            getMaskedChar(digitChars, args[3], row, maskedDigit_, "digitChar");
         const auto otherChar =
-            (otherChars == nullptr || args[4]->containsNullAt(row))
-            ? std::nullopt
-            : std::optional(otherChars->valueAt<StringView>(row));
+            getMaskedChar(otherChars, args[4], row, std::nullopt, "otherChar");
         applyInner(
             strings->valueAt<StringView>(row),
             upperChar,
@@ -155,63 +142,40 @@ class MaskFunction final : public exec::VectorFunction {
 
   void applyInner(
       StringView input,
-      const std::optional<StringView> upperChar,
-      const std::optional<StringView> lowerChar,
-      const std::optional<StringView> digitChar,
-      const std::optional<StringView> otherChar,
+      const std::optional<char> upperChar,
+      const std::optional<char> lowerChar,
+      const std::optional<char> digitChar,
+      const std::optional<char> otherChar,
       vector_size_t row,
-      facebook::velox::exec::StringWriter<false>& result) const {
+      exec::StringWriter<false>& result) const {
     const auto inputSize = input.size();
     auto inputBuffer = input.data();
     result.reserve(inputSize);
     auto outputBuffer = result.data();
 
-    auto hasMaskedUpperChar = false;
-    auto hasMaskedLowerChar = false;
-    auto hasMaskedDigitChar = false;
-    auto hasMaskedOtherChar = false;
-    auto maskedUpperChar = "";
-    auto maskedLowerChar = "";
-    auto maskedDigitChar = "";
-    auto maskedOtherChar = "";
-
-    auto processChar = [&](const std::optional<StringView>& charOpt,
-                           const char*& maskedChar,
-                           bool& hasMaskedChar,
-                           const char* charType) {
-      if (charOpt.has_value()) {
-        VELOX_USER_CHECK(
-            charOpt.value().size() == 1,
-            std::string("Length of ") + charType + " should be 1");
-        maskedChar = charOpt.value().data();
-        hasMaskedChar = true;
-      }
-    };
-
-    processChar(upperChar, maskedUpperChar, hasMaskedUpperChar, "upperChar");
-    processChar(lowerChar, maskedLowerChar, hasMaskedLowerChar, "lowerChar");
-    processChar(digitChar, maskedDigitChar, hasMaskedDigitChar, "digitChar");
-    processChar(otherChar, maskedOtherChar, hasMaskedOtherChar, "otherChar");
-
     for (auto i = 0; i < inputSize; i++) {
-      unsigned char p = inputBuffer[i];
-      if (isupper(p)) {
-        outputBuffer[i] = hasMaskedUpperChar ? maskedUpperChar[0] : p;
-      } else if (islower(p)) {
-        outputBuffer[i] = hasMaskedLowerChar ? maskedLowerChar[0] : p;
-      } else if (isdigit(p)) {
-        outputBuffer[i] = hasMaskedDigitChar ? maskedDigitChar[0] : p;
-      } else {
-        outputBuffer[i] = hasMaskedOtherChar ? maskedOtherChar[0] : p;
+      unsigned char input = inputBuffer[i];
+      unsigned char masked = input;
+      if (isupper(input) && upperChar.has_value()) {
+        masked = upperChar.value();
+      } else if (islower(input) && lowerChar.has_value()) {
+        masked = lowerChar.value();
+      } else if (isdigit(input) && digitChar.has_value()) {
+        masked = digitChar.value();
+      } else if (
+          !isupper(input) && !islower(input) && !isdigit(input) &&
+          otherChar.has_value()) {
+        masked = otherChar.value();
       }
+      outputBuffer[i] = masked;
     }
     result.resize(inputSize);
   }
 
  private:
-  static constexpr std::string_view maskedUpperCase{"X"};
-  static constexpr std::string_view maskedLowerCase{"x"};
-  static constexpr std::string_view maskedDigit{"n"};
+  static constexpr char maskedUpperCase_ = 'X';
+  static constexpr char maskedLowerCase_ = 'x';
+  static constexpr char maskedDigit_ = 'n';
 };
 
 std::shared_ptr<exec::VectorFunction> createMask(
