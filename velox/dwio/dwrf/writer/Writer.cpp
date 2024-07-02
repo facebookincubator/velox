@@ -78,8 +78,14 @@ Writer::Writer(
                                     *options.encryptionSpec,
                                     options.encrypterFactory.get())
                               : nullptr);
-  writerBase_->initContext(options.config, pool, std::move(handler));
-
+  writerBase_->initContext(
+      options.config,
+      pool,
+      options.sessionTimezone,
+      options.adjustTimestampToTimezone,
+      std::move(handler));
+  common::testutil::TestValue::adjust(
+      "facebook::velox::dwrf::Writer::Writer", writerBase_.get());
   auto& context = writerBase_->getContext();
   VELOX_CHECK_EQ(
       context.getTotalMemoryUsage(),
@@ -854,6 +860,8 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
   dwrfOptions.memoryPool = options.memoryPool;
   dwrfOptions.spillConfig = options.spillConfig;
   dwrfOptions.nonReclaimableSection = options.nonReclaimableSection;
+  dwrfOptions.sessionTimezone = options.sessionTimezone;
+  dwrfOptions.adjustTimestampToTimezone = options.adjustTimestampToTimezone;
   return dwrfOptions;
 }
 

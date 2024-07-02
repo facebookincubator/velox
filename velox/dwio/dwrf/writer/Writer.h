@@ -51,6 +51,8 @@ struct WriterOptions : public dwio::common::WriterOptions {
       WriterContext& context,
       const velox::dwio::common::TypeWithId& type)>
       columnWriterFactory;
+  const tz::TimeZone* sessionTimezone{nullptr};
+  bool adjustTimestampToTimezone{false};
 
   void processConfigs(
       const config::ConfigBase& connectorConfig,

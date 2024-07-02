@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveTimestampColumnReader.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 
@@ -28,7 +29,9 @@ SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
     common::ScanSpec& scanSpec)
     : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
       precision_(
-          params.stripeStreams().getRowReaderOptions().timestampPrecision()) {
+          params.stripeStreams().getRowReaderOptions().timestampPrecision()),
+      sessionTimezone_(params.getSessionTimezone()),
+      adjustTimestampToTimezone_(params.adjustTimestampToTimezone()) {
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   version_ = convertRleVersion(stripe.getEncoding(encodingKey).kind());
@@ -74,6 +77,11 @@ void SelectiveTimestampColumnReader::read(
   VELOX_CHECK(
       !scanSpec_->valueHook(),
       "Selective reader for TIMESTAMP doesn't support aggregation pushdown yet");
+
+  common::testutil::TestValue::adjust(
+      "facebook::velox::dwrf::SelectiveTimestampColumnReader::read",
+      (void*)sessionTimezone_);
+
   if (!resultNulls_ || !resultNulls_->unique() ||
       resultNulls_->capacity() * 8 < rows.size()) {
     // Make sure a dedicated resultNulls_ is allocated with enough capacity as
@@ -146,7 +154,13 @@ void SelectiveTimestampColumnReader::readHelper(
           nanos *= 10;
         }
       }
-      auto seconds = secondsData[i] + EPOCH_OFFSET;
+      int64_t seconds = 0;
+      if (sessionTimezone_) {
+        seconds = secondsData[i] + UTC_EPOCH_OFFSET;
+      } else {
+        // Compatible with meta internal use cases.
+        seconds = secondsData[i] + EPOCH_OFFSET;
+      }
       if (seconds < 0 && nanos != 0) {
         seconds -= 1;
       }
@@ -161,6 +175,9 @@ void SelectiveTimestampColumnReader::readHelper(
           break;
       }
       rawTs[i] = Timestamp(seconds, nanos);
+      if (adjustTimestampToTimezone_ && sessionTimezone_) {
+        rawTs[i].toGMT(*sessionTimezone_);
+      }
     }
   }
   values_ = tsValues;

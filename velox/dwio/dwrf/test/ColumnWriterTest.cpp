@@ -153,6 +153,14 @@ class TestStripeStreams : public StripeStreamsBase {
     return selector_;
   }
 
+  const tz::TimeZone* getSessionTimezone() const override {
+    return context_.getSessionTimezone();
+  }
+
+  bool adjustTimestampToTimezone() const override {
+    return context_.adjustTimestampToTimezone();
+  }
+
   const RowReaderOptions& getRowReaderOptions() const override {
     return options_;
   }

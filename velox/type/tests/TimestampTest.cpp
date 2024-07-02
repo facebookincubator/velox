@@ -608,6 +608,5 @@ TEST(TimestampTest, skipTrailingZeros) {
       timestampToString(Timestamp(-50049331200, 726600000), options),
       "0384-01-01 08:00:00.7266");
 }
-
 } // namespace
 } // namespace facebook::velox

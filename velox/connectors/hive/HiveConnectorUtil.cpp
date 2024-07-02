@@ -548,6 +548,8 @@ void configureReaderOptions(
     const auto timezone = tz::locateZone(sessionTzName);
     readerOptions.setSessionTimezone(timezone);
   }
+  readerOptions.setAdjustTimestampToTimezone(
+      connectorQueryCtx->adjustTimestampToTimezone());
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(

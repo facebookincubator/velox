@@ -21,17 +21,15 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Statistics.h"
-#include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/common/tests/utils/MapBuilder.h"
 #include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
-#include "velox/vector/FlatVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -62,7 +60,7 @@ class E2EWriterTest : public testing::Test {
     leafPool_ = rootPool_->addLeafChild("leaf");
   }
 
-  std::unique_ptr<dwrf::DwrfReader> createReader(
+  static std::unique_ptr<dwrf::DwrfReader> createReader(
       const MemorySink& sink,
       const dwio::common::ReaderOptions& opts) {
     std::string_view data(sink.data(), sink.size());
@@ -377,6 +375,74 @@ TEST_F(E2EWriterTest, E2E) {
   dwrf::E2EWriterTestUtil::testWriter(*leafPool_, type, batches, 1, 1, config);
 }
 
+TEST_F(E2EWriterTest, testTmestampTimezone) {
+  google::InstallFailureSignalHandler();
+  const size_t batchCount = 4;
+  size_t batchSize = 1100;
+
+  HiveTypeParser parser;
+  auto type = parser.parse("struct<timestamp_val:timestamp>");
+
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::ROW_INDEX_STRIDE, static_cast<uint32_t>(1000));
+
+  std::vector<VectorPtr> batches;
+  for (size_t i = 0; i < batchCount; ++i) {
+    batches.push_back(
+        BatchMaker::createBatch(type, batchSize, *leafPool_, nullptr, i));
+    batchSize = 200;
+  }
+
+  for (bool adjustTimestampToTimezone : {false, true}) {
+    for (bool useSelectiveColumnReader : {false, true}) {
+      SCOPED_TRACE(fmt::format(
+          "useSelectiveColumnReader: {}, adjustTimestampToTimezone: {}",
+          useSelectiveColumnReader,
+          adjustTimestampToTimezone));
+
+      // Verify that the ColumnWriter has obtained the sessionTimezone
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::dwrf::Writer::Writer",
+          std::function<void(dwrf::WriterBase*)>(
+              ([&](dwrf::WriterBase* writerBase) {
+                VELOX_CHECK_EQ(
+                    writerBase->getContext().getSessionTimezone()->name(),
+                    "Asia/Shanghai");
+              })));
+
+      if (useSelectiveColumnReader) {
+        // Verify that the SelectiveTimestampColumnReader has obtained the
+        // sessionTimezone
+        SCOPED_TESTVALUE_SET(
+            "facebook::velox::dwrf::SelectiveTimestampColumnReader::read",
+            std::function<void(tz::TimeZone*)>(
+                ([&](tz::TimeZone* sessionTimezone) {
+                  VELOX_CHECK_EQ(sessionTimezone->name(), "Asia/Shanghai");
+                })));
+      } else {
+        // Verify that the ColumnReader has obtained the sessionTimezone
+        SCOPED_TESTVALUE_SET(
+            "facebook::velox::dwrf::detail::fillTimestamps",
+            std::function<void(tz::TimeZone*)>(
+                ([&](tz::TimeZone* sessionTimezone) {
+                  VELOX_CHECK_EQ(sessionTimezone->name(), "Asia/Shanghai");
+                })));
+      }
+
+      dwrf::E2EWriterTestUtil::testWriter(
+          *leafPool_,
+          type,
+          batches,
+          1,
+          1,
+          config,
+          "Asia/Shanghai",
+          useSelectiveColumnReader,
+          adjustTimestampToTimezone);
+    }
+  }
+}
+
 // Disabled because test is failing in continuous runs T193531984.
 TEST_F(E2EWriterTest, DISABLED_DisableLinearHeuristics) {
   const size_t batchCount = 100;
@@ -674,6 +740,9 @@ TEST_F(E2EWriterTest, FlatMapBackfill) {
       1,
       1,
       config,
+      /*sessionTzName=*/"",
+      /*useSelectiveColumnReader=*/false,
+      /*adjustTimestampToTimezone=*/false,
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(false));
 }
 
@@ -723,6 +792,9 @@ void testFlatMapWithNulls(
       1,
       1,
       config,
+      /*sessionTzName=*/"",
+      /*useSelectiveColumnReader=*/false,
+      /*adjustTimestampToTimezone=*/false,
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(false));
 }
 
@@ -786,6 +858,9 @@ TEST_F(E2EWriterTest, FlatMapEmpty) {
       1,
       1,
       config,
+      /*sessionTzName=*/"",
+      /*useSelectiveColumnReader=*/false,
+      /*adjustTimestampToTimezone=*/false,
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(false));
 }
 
@@ -980,9 +1055,12 @@ TEST_F(E2EWriterTest, OversizeRows) {
       1,
       1,
       config,
+      /*sessionTzName=*/"",
+      /*useSelectiveColumnReader=*/false,
+      /*adjustTimestampToTimezone=*/false,
       /*flushPolicyFactory=*/nullptr,
       /*layoutPlannerFactory=*/nullptr,
-      /*memoryBudget=*/std::numeric_limits<int64_t>::max(),
+      /*writerMemoryCap=*/std::numeric_limits<int64_t>::max(),
       false);
 }
 
@@ -1012,9 +1090,12 @@ TEST_F(E2EWriterTest, OversizeBatches) {
       10,
       10,
       config,
+      /*sessionTzName=*/"",
+      /*useSelectiveColumnReader=*/false,
+      /*adjustTimestampToTimezone=*/false,
       /*flushPolicyFactory=*/nullptr,
       /*layoutPlannerFactory=*/nullptr,
-      /*memoryBudget=*/std::numeric_limits<int64_t>::max(),
+      /*writerMemoryCap=*/std::numeric_limits<int64_t>::max(),
       false);
 
   // Test splitting multiple huge batches.
@@ -1028,9 +1109,12 @@ TEST_F(E2EWriterTest, OversizeBatches) {
       15,
       16,
       config,
+      /*sessionTzName=*/"",
+      /*useSelectiveColumnReader=*/false,
+      /*adjustTimestampToTimezone=*/false,
       /*flushPolicyFactory=*/nullptr,
       /*layoutPlannerFactory=*/nullptr,
-      /*memoryBudget=*/std::numeric_limits<int64_t>::max(),
+      /*writerMemoryCap=*/std::numeric_limits<int64_t>::max(),
       false);
 }
 
@@ -1088,9 +1172,12 @@ TEST_F(E2EWriterTest, OverflowLengthIncrements) {
       1,
       1,
       config,
+      /*sessionTzName=*/"",
+      /*useSelectiveColumnReader=*/false,
+      /*adjustTimestampToTimezone=*/false,
       /*flushPolicyFactory=*/nullptr,
       /*layoutPlannerFactory=*/nullptr,
-      /*memoryBudget=*/std::numeric_limits<int64_t>::max(),
+      /*writerMemoryCap=*/std::numeric_limits<int64_t>::max(),
       false);
 }
 

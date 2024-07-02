@@ -269,6 +269,7 @@ class ConnectorQueryCtx {
       const std::string& planNodeId,
       int driverId,
       const std::string& sessionTimezone,
+      bool adjustTimestampToTimezone = false,
       folly::CancellationToken cancellationToken = {})
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
@@ -283,6 +284,7 @@ class ConnectorQueryCtx {
         driverId_(driverId),
         planNodeId_(planNodeId),
         sessionTimezone_(sessionTimezone),
+        adjustTimestampToTimezone_(adjustTimestampToTimezone),
         cancellationToken_(std::move(cancellationToken)) {
     VELOX_CHECK_NOT_NULL(sessionProperties);
   }
@@ -351,6 +353,11 @@ class ConnectorQueryCtx {
     return sessionTimezone_;
   }
 
+  /// Use legacy TIMESTAMP semantics
+  const bool adjustTimestampToTimezone() const {
+    return adjustTimestampToTimezone_;
+  }
+
   /// Returns the cancellation token associated with this task.
   const folly::CancellationToken& cancellationToken() const {
     return cancellationToken_;
@@ -370,6 +377,7 @@ class ConnectorQueryCtx {
   const int driverId_;
   const std::string planNodeId_;
   const std::string sessionTimezone_;
+  bool adjustTimestampToTimezone_;
   const folly::CancellationToken cancellationToken_;
 };
 

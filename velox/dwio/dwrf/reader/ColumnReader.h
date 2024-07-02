@@ -192,7 +192,9 @@ void fillTimestamps(
     const uint64_t* nulls,
     const int64_t* seconds,
     const uint64_t* nanos,
-    vector_size_t numValues);
+    vector_size_t numValues,
+    const tz::TimeZone* sessionTimezone,
+    const bool adjustTimestampToTimezone);
 
 } // namespace detail
 } // namespace facebook::velox::dwrf
