@@ -45,15 +45,17 @@ struct ToPrettyStringFunction {
       if (inputType_->isVarchar()) {
         result = input;
       } else if (inputType_->isVarbinary()) {
-        result.reserve(1 + 3 * input.size());
-        result.append("[");
+        result.resize(1 + 3 * input.size());
+        char* const startPosition = result.data();
+        char* pos = startPosition;
+        *pos++ = '[';
         for (auto i = 0; i < input.size(); i++) {
-          result.append(fmt::format("{:x}", input.data()[i]));
-          if (i != input.size() - 1) {
-            result.append(" ");
-          }
+          auto formated = fmt::format("{:X}", input.data()[i]);
+          *pos++ = formated.data()[0];
+          *pos++ = formated.data()[1];
+          *pos++ = ' ';
         }
-        result.append("]");
+        *--pos = ']';
       }
       return;
     }

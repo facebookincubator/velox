@@ -68,12 +68,14 @@ TEST_F(ToPrettyStringTest, date) {
 }
 
 TEST_F(ToPrettyStringTest, binary) {
-  EXPECT_EQ(
-      evaluateOnce<std::string>(
-          "toprettystring(c0)",
-          VARBINARY(),
-          std::optional<std::string>("abcdef")),
-      "[61 62 63 64 65 66]");
+  auto toPrettyStringBinary = [&](const std::optional<std::string>& input) {
+    return evaluateOnce<std::string>("toprettystring(c0)", VARBINARY(), input)
+        .value();
+  };
+
+  EXPECT_EQ(toPrettyStringBinary("abcdef"), "[61 62 63 64 65 66]");
+
+  EXPECT_EQ(toPrettyStringBinary("ABC."), "[41 42 43 2E]");
 }
 
 TEST_F(ToPrettyStringTest, timestamp) {
