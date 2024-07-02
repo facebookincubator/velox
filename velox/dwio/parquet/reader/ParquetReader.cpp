@@ -119,8 +119,6 @@ class ReaderBase {
   RowTypePtr schema_;
   std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
 
-  const bool binaryAsString = false;
-
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
@@ -655,7 +653,7 @@ TypePtr ReaderBase::convertType(
         return DOUBLE();
       case thrift::Type::type::BYTE_ARRAY:
       case thrift::Type::type::FIXED_LEN_BYTE_ARRAY:
-        if (binaryAsString) {
+        if (options_.binaryAsString()) {
           return VARCHAR();
         } else {
           return VARBINARY();

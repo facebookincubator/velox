@@ -1150,6 +1150,33 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
           0));
 }
 
+TEST_F(ParquetReaderTest, readBinaryAsStringFromFLBA) {
+  const std::string filename("varbinary_flba.parquet");
+  const std::string sample(getExampleFilePath(filename));
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setBinaryAsString(true);
+  auto reader = createReader(sample, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 100ULL);
+  auto rowType = reader->typeWithId();
+  EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(rowType->size(), 8ULL);
+  EXPECT_EQ(rowType->childAt(0)->type()->kind(), TypeKind::VARCHAR);
+
+  auto outputRowType = ROW({"binary_field"}, {VARCHAR()});
+  auto rowReaderOpts = getReaderOpts(outputRowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto expected = std::string("489acc08-2c38-4bed-9d2f-cf5e7809e9f3");
+  VectorPtr result = BaseVector::create(outputRowType, 0, &(*leafPool_));
+  rowReader->next(1, result);
+  EXPECT_EQ(
+      expected,
+      result->as<RowVector>()->childAt(0)->asFlatVector<StringView>()->valueAt(
+          0));
+}
+
 TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
   // enum_type.parquet contains 1 column (ENUM) with 3 rows.
   const std::string sample(getExampleFilePath("v2_page.parquet"));
