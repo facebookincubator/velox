@@ -89,11 +89,10 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
     Returns the length of ``string`` in characters.
 
-.. spark:function:: levenshtein(string, string[, threshold]) -> integer
+.. spark:function:: levenshtein(string1, string2[, threshold]) -> integer
 
-    Returns the `Levenshtein distance <https://en.wikipedia.org/wiki/Levenshtein_distance>`_ between the two given strings. If
-    ``threshold`` is set and the levenshtein distance exceeds it, return -1.
-    Negative threshold is allowed, return -1. ::
+    Returns the `Levenshtein distance <https://en.wikipedia.org/wiki/Levenshtein_distance>`_ between the two given strings.
+    If the provided ``threshold`` is negative, or the levenshtein distance exceeds ``threshold``, returns -1. ::
 
         SELECT levenshtein('kitten', 'sitting'); -- 3
         SELECT levenshtein('kitten', 'sitting', 10); -- 3

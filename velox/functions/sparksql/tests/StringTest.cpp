@@ -172,79 +172,81 @@ TEST_F(StringTest, conv) {
 }
 
 TEST_F(StringTest, levenshtein) {
-  const auto levenshteinTest = [&](const std::optional<std::string>& left,
-                                   const std::optional<std::string>& right,
-                                   const std::optional<int32_t>& threshold,
-                                   int32_t levenshteinExpected,
-                                   int32_t levenshteinWithThresholdExpected) {
-    EXPECT_EQ(
-        evaluateOnce<int32_t>("levenshtein(c0, c1)", left, right),
-        levenshteinExpected);
-    EXPECT_EQ(
-        evaluateOnce<int32_t>(
-            "levenshtein(c0, c1, c2)", left, right, threshold),
-        levenshteinWithThresholdExpected);
+  const auto levenshtein = [&](const std::optional<std::string>& left,
+                               const std::optional<std::string>& right,
+                               const std::optional<int32_t>& threshold =
+                                   std::nullopt) {
+    if (threshold.has_value()) {
+      return evaluateOnce<int32_t>(
+          "levenshtein(c0, c1, c2)", left, right, threshold);
+    }
+    return evaluateOnce<int32_t>("levenshtein(c0, c1)", left, right);
   };
 
-  levenshteinTest("kitten", "sitting", 2, 3, -1);
+  EXPECT_EQ(levenshtein("abc", "abc"), 0);
+  EXPECT_EQ(levenshtein("kitten", "sitting"), 3);
+  EXPECT_EQ(levenshtein("frog", "fog"), 1);
+  EXPECT_EQ(levenshtein("", "hello"), 5);
+  EXPECT_EQ(levenshtein("hello", ""), 5);
+  EXPECT_EQ(levenshtein("hello", "hello"), 0);
+  EXPECT_EQ(levenshtein("hello", "olleh"), 4);
+  EXPECT_EQ(levenshtein("hello world", "hello"), 6);
+  EXPECT_EQ(levenshtein("hello", "hello world"), 6);
+  EXPECT_EQ(levenshtein("hello world", "hel wold"), 3);
+  EXPECT_EQ(levenshtein("hello world", "hellq wodld"), 2);
+  EXPECT_EQ(levenshtein("hello word", "dello world"), 2);
+  EXPECT_EQ(levenshtein("  facebook  ", "  facebook  "), 0);
+  EXPECT_EQ(levenshtein("hello", std::string(100000, 'h')), 99999);
+  EXPECT_EQ(levenshtein(std::string(100000, 'l'), "hello"), 99998);
+  EXPECT_EQ(levenshtein(std::string(1000001, 'h'), ""), 1000001);
+  EXPECT_EQ(levenshtein("", std::string(1000001, 'h')), 1000001);
+  EXPECT_EQ(levenshtein("千世", "fog"), 3);
+  EXPECT_EQ(levenshtein("世界千世", "大a界b"), 4);
 
-  levenshteinTest("", "", 0, 0, 0);
+  EXPECT_EQ(levenshtein("kitten", "sitting", 2), -1);
 
-  levenshteinTest("aaapppp", "", 8, 7, 7);
-  levenshteinTest("aaapppp", "", 7, 7, 7);
-  levenshteinTest("aaapppp", "", 6, 7, -1);
+  EXPECT_EQ(levenshtein("", "", 0), 0);
 
-  levenshteinTest("elephant", "hippo", 7, 7, 7);
-  levenshteinTest("elephant", "hippo", 6, 7, -1);
-  levenshteinTest("hippo", "elephant", 7, 7, 7);
-  levenshteinTest("hippo", "elephant", 6, 7, -1);
+  EXPECT_EQ(levenshtein("aaapppp", "", 8), 7);
+  EXPECT_EQ(levenshtein("aaapppp", "", 7), 7);
+  EXPECT_EQ(levenshtein("aaapppp", "", 6), -1);
 
-  levenshteinTest("b", "a", 0, 1, -1);
-  levenshteinTest("a", "b", 0, 1, -1);
+  EXPECT_EQ(levenshtein("elephant", "hippo", 7), 7);
+  EXPECT_EQ(levenshtein("elephant", "hippo", 6), -1);
+  EXPECT_EQ(levenshtein("hippo", "elephant", 7), 7);
+  EXPECT_EQ(levenshtein("hippo", "elephant", 6), -1);
 
-  levenshteinTest("aa", "aa", 0, 0, 0);
-  levenshteinTest("aa", "aa", 2, 0, 0);
+  EXPECT_EQ(levenshtein("b", "a", 0), -1);
+  EXPECT_EQ(levenshtein("a", "b", 0), -1);
 
-  levenshteinTest("aaa", "bbb", 2, 3, -1);
-  levenshteinTest("aaa", "bbb", 3, 3, 3);
+  EXPECT_EQ(levenshtein("aa", "aa", 0), 0);
+  EXPECT_EQ(levenshtein("aa", "aa", 2), 0);
 
-  levenshteinTest("aaaaaa", "b", 10, 6, 6);
+  EXPECT_EQ(levenshtein("aaa", "bbb", 2), -1);
+  EXPECT_EQ(levenshtein("aaa", "bbb", 3), 3);
 
-  levenshteinTest("aaapppp", "b", 8, 7, 7);
-  levenshteinTest("a", "bbb", 4, 3, 3);
+  EXPECT_EQ(levenshtein("aaaaaa", "b", 10), 6);
 
-  levenshteinTest("aaapppp", "b", 7, 7, 7);
-  levenshteinTest("a", "bbb", 3, 3, 3);
+  EXPECT_EQ(levenshtein("aaapppp", "b", 8), 7);
+  EXPECT_EQ(levenshtein("a", "bbb", 4), 3);
 
-  levenshteinTest("a", "bbb", 2, 3, -1);
-  levenshteinTest("bbb", "a", 2, 3, -1);
-  levenshteinTest("aaapppp", "b", 6, 7, -1);
+  EXPECT_EQ(levenshtein("aaapppp", "b", 7), 7);
+  EXPECT_EQ(levenshtein("a", "bbb", 3), 3);
 
-  levenshteinTest("a", "bbb", 1, 3, -1);
-  levenshteinTest("bbb", "a", 1, 3, -1);
+  EXPECT_EQ(levenshtein("a", "bbb", 2), -1);
+  EXPECT_EQ(levenshtein("bbb", "a", 2), -1);
+  EXPECT_EQ(levenshtein("aaapppp", "b", 6), -1);
 
-  levenshteinTest("12345", "1234567", 1, 2, -1);
-  levenshteinTest("1234567", "12345", 1, 2, -1);
+  EXPECT_EQ(levenshtein("a", "bbb", 1), -1);
+  EXPECT_EQ(levenshtein("bbb", "a", 1), -1);
 
-  levenshteinTest("千世", "fog", 3, 3, 3);
-  levenshteinTest("千世", "fog", 2, 3, -1);
-  levenshteinTest("世界千世", "大a界b", 4, 4, 4);
-  levenshteinTest("世界千世", "大a界b", 3, 4, -1);
+  EXPECT_EQ(levenshtein("12345", "1234567", 1), -1);
+  EXPECT_EQ(levenshtein("1234567", "12345", 1), -1);
 
-  levenshteinTest("hello world", "hello", 5, 6, -1);
-  levenshteinTest("hello", "hello world", 5, 6, -1);
-  levenshteinTest("hello world", "hel wold", 2, 3, -1);
-  levenshteinTest("hello world", "hellq wodld", 2, 2, 2);
-  levenshteinTest("hello word", "dello world", 2, 2, 2);
-
-  levenshteinTest("  facebook  ", "  facebook  ", 0, 0, 0);
-
-  levenshteinTest("hello", std::string(100000, 'h'), 99999, 99999, 99999);
-  levenshteinTest(std::string(100000, 'l'), "hello", 99997, 99998, -1);
-  levenshteinTest(std::string(1000001, 'h'), "", 1000000, 1000001, -1);
-  levenshteinTest("", std::string(1000001, 'h'), 1000000, 1000001, -1);
-
-  levenshteinTest("kitten", "sitting", -1, 3, -1);
+  EXPECT_EQ(levenshtein("千世", "fog", 3), 3);
+  EXPECT_EQ(levenshtein("千世", "fog", 2), -1);
+  EXPECT_EQ(levenshtein("世界千世", "大a界b", 4), 4);
+  EXPECT_EQ(levenshtein("世界千世", "大a界b", 3), -1);
 }
 
 TEST_F(StringTest, endsWith) {

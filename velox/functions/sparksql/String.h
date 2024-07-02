@@ -1294,9 +1294,9 @@ struct LevenshteinDistanceFunction {
   // O(leftCodePointsSize * rightCodePointsSize) to
   // O(k * rightCodePointsSize) by only computing a diagonal stripe of at most
   // width 2k + 1 of the cost table.
-  // One example: suppose s is of length 5, t is of length 7, and threshold is
-  // 1. In this case we're going to walk through a stripe of length 3. The
-  // matrix would look like so:
+  // One example: suppose the two gives strings are of length 5 and 7, and
+  // threshold is 1. In this case we're going to walk through a stripe of
+  // length 3. The matrix would look like so:
   //
   // <pre>
   //    0 1 2 3 4
