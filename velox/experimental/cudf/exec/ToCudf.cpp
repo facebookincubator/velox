@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/exec/Operator.h" // Compilation fails in Driver.h if Operator.h isn't included first!
 #include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h" // Compilation fails in Driver.h if Operator.h isn't included first!
+#include "velox/experimental/cudf/exec/CudfHashJoin.h"
 
 #include <iostream>
 
@@ -29,11 +29,13 @@ bool CompileState::compile() {
   auto& nodes = driverFactory_.planNodes;
   std::cout << "Number of operators: " << operators.size() << std::endl;
   for (auto& op : operators) {
-    std::cout << "  Operator: ID " << op->operatorId() << ": " << op->toString() << std::endl;
+    std::cout << "  Operator: ID " << op->operatorId() << ": " << op->toString()
+              << std::endl;
   }
   std::cout << "Number of plan nodes: " << nodes.size() << std::endl;
   for (auto& node : nodes) {
-    std::cout << "  Plan node: ID " << node->id() << ": " << node->toString() << std::endl;
+    std::cout << "  Plan node: ID " << node->id() << ": " << node->toString()
+              << std::endl;
   }
   return false;
 
@@ -101,7 +103,8 @@ bool cudfDriverAdapter(
 
 void registerCudf() {
   std::cout << "Registering CudfHashJoinBridgeTranslator" << std::endl;
-  exec::Operator::registerOperator(std::make_unique<CudfHashJoinBridgeTranslator>());
+  exec::Operator::registerOperator(
+      std::make_unique<CudfHashJoinBridgeTranslator>());
   std::cout << "Registering cudfDriverAdapter" << std::endl;
   exec::DriverAdapter cudfAdapter{"cuDF", {}, cudfDriverAdapter};
   exec::DriverFactory::registerAdapter(cudfAdapter);

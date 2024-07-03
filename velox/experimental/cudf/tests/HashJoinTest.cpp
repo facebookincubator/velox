@@ -246,7 +246,7 @@ class HashJoinBuilder {
     planNode_ = planNode;
     auto hash_node_ptr = core::PlanNode::findFirstNode(
         planNode.get(), [](const core::PlanNode* node) {
-            return dynamic_cast<const core::HashJoinNode*>(node) != nullptr;
+          return dynamic_cast<const core::HashJoinNode*>(node) != nullptr;
         });
     if (hash_node_ptr != nullptr) {
       std::cout << "Found a HashJoinNode" << std::endl;
@@ -958,7 +958,8 @@ class HashJoinTest : public HiveConnectorTestBase {
   }
 
   static core::PlanNodePtr flipJoinSides(const core::PlanNodePtr& plan) {
-    // auto joinNode = std::dynamic_pointer_cast<const cudf_velox::CudfHashJoinNode>(plan);
+    // auto joinNode = std::dynamic_pointer_cast<const
+    // cudf_velox::CudfHashJoinNode>(plan);
     auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
     VELOX_CHECK_NOT_NULL(joinNode);
     // return std::make_shared<cudf_velox::CudfHashJoinNode>(
@@ -1003,7 +1004,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .probeVectors(16, 5)
 //       .buildVectors(15, 5)
 //       .referenceQuery(
-//           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
+//           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 =
+//           u.u_k0")
 //       .run();
 // }
 //
@@ -1101,17 +1103,20 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .probeVectors(1600, 5)
 //       .buildVectors(1500, 5)
 //       .referenceQuery(
-//           "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1 = u_k1")
+//           "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0
+//           = u_k0 AND t_k1 = u_k1")
 //       .run();
 // }
 //
 // TEST_P(MultiThreadedHashJoinTest, normalizedKeyOverflow) {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-//       .keyTypes({BIGINT(), VARCHAR(), BIGINT(), BIGINT(), BIGINT(), BIGINT()})
-//       .probeVectors(1600, 5)
-//       .buildVectors(1500, 5)
+//       .keyTypes({BIGINT(), VARCHAR(), BIGINT(), BIGINT(), BIGINT(),
+//       BIGINT()}) .probeVectors(1600, 5) .buildVectors(1500, 5)
 //       .referenceQuery(
-//           "SELECT t_k0, t_k1, t_k2, t_k3, t_k4, t_k5, t_data, u_k0, u_k1, u_k2, u_k3, u_k4, u_k5, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1 = u_k1 AND t_k2 = u_k2 AND t_k3 = u_k3 AND t_k4 = u_k4 AND t_k5 = u_k5")
+//           "SELECT t_k0, t_k1, t_k2, t_k3, t_k4, t_k5, t_data, u_k0, u_k1,
+//           u_k2, u_k3, u_k4, u_k5, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1
+//           = u_k1 AND t_k2 = u_k2 AND t_k3 = u_k3 AND t_k4 = u_k4 AND t_k5 =
+//           u_k5")
 //       .run();
 // }
 //
@@ -1126,7 +1131,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .probeVectors(1600, 5)
 //       .buildVectors(1500, 5)
 //       .referenceQuery(
-//           "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1 = u_k1")
+//           "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0
+//           = u_k0 AND t_k1 = u_k1")
 //       .injectSpill(false)
 //       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //         auto joinStats = task->taskStats()
@@ -1156,7 +1162,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .probeVectors(1600, 5)
 //           .buildVectors(1500, 5)
 //           .referenceQuery(
-//               "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1 = u_k1")
+//               "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE
+//               t_k0 = u_k0 AND t_k1 = u_k1")
 //           .injectSpill(false)
 //           .run(),
 //       "Aborted for external error");
@@ -1175,7 +1182,10 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .probeVectors(1600, 5)
 //       .buildVectors(1500, 5)
 //       .referenceQuery(
-//           "SELECT t_k0, t_k1, t_k2, t_k3, t_k4, t_k5, t_k6, t_data, u_k0, u_k1, u_k2, u_k3, u_k4, u_k5, u_k6, u_data FROM t, u WHERE t_k0 = u_k0 AND t_k1 = u_k1 AND t_k2 = u_k2 AND t_k3 = u_k3 AND t_k4 = u_k4 AND t_k5 = u_k5 AND t_k6 = u_k6")
+//           "SELECT t_k0, t_k1, t_k2, t_k3, t_k4, t_k5, t_k6, t_data, u_k0,
+//           u_k1, u_k2, u_k3, u_k4, u_k5, u_k6, u_data FROM t, u WHERE t_k0 =
+//           u_k0 AND t_k1 = u_k1 AND t_k2 = u_k2 AND t_k3 = u_k3 AND t_k4 =
+//           u_k4 AND t_k5 = u_k5 AND t_k6 = u_k6")
 //       .run();
 // }
 //
@@ -1187,7 +1197,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .buildVectors(1500, 5)
 //       .joinFilter("((t_k0 % 100) + (u_k0 % 100)) % 40 < 20")
 //       .referenceQuery(
-//           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0 AND ((t_k0 % 100) + (u_k0 % 100)) % 40 < 20")
+//           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0 AND
+//           ((t_k0 % 100) + (u_k0 % 100)) % 40 < 20")
 //       .run();
 // }
 //
@@ -1203,7 +1214,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           buildNullRatio);
 //     }
 //   } testSettings[] = {
-//       {0.0, 1.0}, {0.0, 0.1}, {0.1, 1.0}, {0.1, 0.1}, {1.0, 1.0}, {1.0, 0.1}};
+//       {0.0, 1.0}, {0.0, 0.1}, {0.1, 1.0}, {0.1, 0.1}, {1.0, 1.0}, {1.0,
+//       0.1}};
 //   for (const auto& testData : testSettings) {
 //     SCOPED_TRACE(testData.debugString());
 //
@@ -1228,7 +1240,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .nullAware(true)
 //         .joinOutputLayout({"t_k1", "t_k2"})
 //         .referenceQuery(
-//             "SELECT t_k1, t_k2 FROM t WHERE t.t_k2 NOT IN (SELECT u_k2 FROM u)")
+//             "SELECT t_k1, t_k2 FROM t WHERE t.t_k2 NOT IN (SELECT u_k2 FROM
+//             u)")
 //         // NOTE: we might not trigger spilling at build side if we detect the
 //         // null join key in the build rows early.
 //         .checkSpillStats(false)
@@ -1267,7 +1280,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .run();
 // }
 //
-// /// Test hash join where build-side keys come from a small range and allow for
+// /// Test hash join where build-side keys come from a small range and allow
+// for
 // /// array-based lookup instead of a hash table.
 // TEST_P(MultiThreadedHashJoinTest, arrayBasedLookup) {
 //   auto oddIndices = makeIndices(500, [](auto i) { return 2 * i + 1; });
@@ -1293,7 +1307,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           wrapInDictionary(
 //               oddIndices,
 //               500,
-//               makeFlatVector<int32_t>(1'000, [](auto row) { return row * 4; })),
+//               makeFlatVector<int32_t>(1'000, [](auto row) { return row * 4;
+//               })),
 //           makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
 //       })};
 //
@@ -1334,12 +1349,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   // {INTEGER, VARCHAR, INTEGER}. RHS table u has schema {INTEGER, REAL,
 //   // INTEGER}. The filter predicate uses
 //   // a column from the right table  before the left and the corresponding
-//   // columns at the same channel number(1) have different types. This has been
+//   // columns at the same channel number(1) have different types. This has
+//   been
 //   // a source of crashes in the join logic.
 //   size_t batchSize = 100;
 //
-//   std::vector<std::string> stringVector = {"aaa", "bbb", "ccc", "ddd", "eee"};
-//   std::vector<RowVectorPtr> probeVectors =
+//   std::vector<std::string> stringVector = {"aaa", "bbb", "ccc", "ddd",
+//   "eee"}; std::vector<RowVectorPtr> probeVectors =
 //       makeBatches(5, [&](int32_t /*unused*/) {
 //         return makeRowVector({
 //             makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
@@ -1393,7 +1409,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   for (auto finishOnEmpty : finishOnEmptys) {
 //     SCOPED_TRACE(fmt::format("finishOnEmpty: {}", finishOnEmpty));
 //
-//     std::vector<RowVectorPtr> probeVectors = makeBatches(5, [&](int32_t batch) {
+//     std::vector<RowVectorPtr> probeVectors = makeBatches(5, [&](int32_t
+//     batch) {
 //       return makeRowVector({
 //           makeFlatVector<int32_t>(
 //               123,
@@ -1455,8 +1472,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .buildKeys({"u_k1"})
 //       .joinType(core::JoinType::kLeftSemiFilter)
 //       .joinOutputLayout({"t_k2"})
-//       .referenceQuery("SELECT t_k2 FROM t WHERE t_k1 IN (SELECT u_k1 FROM u)")
-//       .run();
+//       .referenceQuery("SELECT t_k2 FROM t WHERE t_k1 IN (SELECT u_k1 FROM
+//       u)") .run();
 // }
 //
 // TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilterWithEmptyBuild) {
@@ -1491,13 +1508,15 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("c0 < 0")
 //         .joinOutputLayout({"c1"})
 //         .referenceQuery(
-//             "SELECT t.c1 FROM t WHERE t.c0 IN (SELECT c0 FROM u WHERE c0 < 0)")
+//             "SELECT t.c1 FROM t WHERE t.c0 IN (SELECT c0 FROM u WHERE c0 <
+//             0)")
 //         .run();
 //   }
 // }
 //
 // TEST_P(MultiThreadedHashJoinTest, leftSemiJoinFilterWithExtraFilter) {
-//   std::vector<RowVectorPtr> probeVectors = makeBatches(5, [&](int32_t batch) {
+//   std::vector<RowVectorPtr> probeVectors = makeBatches(5, [&](int32_t batch)
+//   {
 //     return makeRowVector(
 //         {"t0", "t1"},
 //         {
@@ -1508,7 +1527,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         });
 //   });
 //
-//   std::vector<RowVectorPtr> buildVectors = makeBatches(5, [&](int32_t batch) {
+//   std::vector<RowVectorPtr> buildVectors = makeBatches(5, [&](int32_t batch)
+//   {
 //     return makeRowVector(
 //         {"u0", "u1"},
 //         {
@@ -1531,7 +1551,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinType(core::JoinType::kLeftSemiFilter)
 //         .joinOutputLayout({"t0", "t1"})
 //         .referenceQuery(
-//             "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0)")
+//             "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 =
+//             u0)")
 //         .run();
 //   }
 //
@@ -1548,7 +1569,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("t1 != u1")
 //         .joinOutputLayout({"t0", "t1"})
 //         .referenceQuery(
-//             "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 = u0 AND t1 <> u1)")
+//             "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 =
+//             u0 AND t1 <> u1)")
 //         .run();
 //   }
 // }
@@ -1564,8 +1586,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .buildKeys({"u_k1"})
 //       .joinType(core::JoinType::kRightSemiFilter)
 //       .joinOutputLayout({"u_k2"})
-//       .referenceQuery("SELECT u_k2 FROM u WHERE u_k1 IN (SELECT t_k1 FROM t)")
-//       .run();
+//       .referenceQuery("SELECT u_k2 FROM u WHERE u_k1 IN (SELECT t_k1 FROM
+//       t)") .run();
 // }
 //
 // TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithEmptyBuild) {
@@ -1605,7 +1627,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinType(core::JoinType::kRightSemiFilter)
 //         .joinOutputLayout({"u1"})
 //         .referenceQuery(
-//             "SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t) AND u.u0 < 0")
+//             "SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t) AND u.u0 <
+//             0")
 //         .checkSpillStats(false)
 //         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //           const auto statsPair = taskSpilledStats(*task);
@@ -1697,7 +1720,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("t1 > -1")
 //         .joinOutputLayout({"u0", "u1"})
 //         .referenceQuery(
-//             "SELECT u.* FROM u WHERE EXISTS (SELECT t0 FROM t WHERE u0 = t0 AND t1 > -1)")
+//             "SELECT u.* FROM u WHERE EXISTS (SELECT t0 FROM t WHERE u0 = t0
+//             AND t1 > -1)")
 //         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //           ASSERT_EQ(
 //               getOutputPositions(task, "HashProbe"), 200 * 5 * numDrivers_);
@@ -1719,7 +1743,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("t1 > 100000")
 //         .joinOutputLayout({"u0", "u1"})
 //         .referenceQuery(
-//             "SELECT u.* FROM u WHERE EXISTS (SELECT t0 FROM t WHERE u0 = t0 AND t1 > 100000)")
+//             "SELECT u.* FROM u WHERE EXISTS (SELECT t0 FROM t WHERE u0 = t0
+//             AND t1 > 100000)")
 //         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //           ASSERT_EQ(getOutputPositions(task, "HashProbe"), 0);
 //         })
@@ -1740,10 +1765,12 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("t1 % 5 = 0")
 //         .joinOutputLayout({"u0", "u1"})
 //         .referenceQuery(
-//             "SELECT u.* FROM u WHERE EXISTS (SELECT t0 FROM t WHERE u0 = t0 AND t1 % 5 = 0)")
+//             "SELECT u.* FROM u WHERE EXISTS (SELECT t0 FROM t WHERE u0 = t0
+//             AND t1 % 5 = 0)")
 //         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //           ASSERT_EQ(
-//               getOutputPositions(task, "HashProbe"), 200 / 5 * 5 * numDrivers_);
+//               getOutputPositions(task, "HashProbe"), 200 / 5 * 5 *
+//               numDrivers_);
 //         })
 //         .run();
 //   }
@@ -1755,7 +1782,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         {"t0", "t1"},
 //         {
 //             makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
-//             makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10; }),
+//             makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10;
+//             }),
 //         });
 //   });
 //
@@ -1840,7 +1868,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .inputSplits(splitInput)
 //       .checkSpillStats(false)
 //       .referenceQuery(
-//           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
+//           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1)
+//           % 3 = 0)")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -1848,7 +1877,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .inputSplits(splitInput)
 //       .checkSpillStats(false)
 //       .referenceQuery(
-//           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)")
+//           "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE (t1 + u1)
+//           % 3 = 0)")
 //       .run();
 // }
 //
@@ -1884,7 +1914,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .nullAware(true)
 //         .joinOutputLayout({"c1"})
 //         .referenceQuery(
-//             "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0 IS NOT NULL)")
+//             "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0
+//             IS NOT NULL)")
 //         .checkSpillStats(false)
 //         .run();
 //   }
@@ -1904,7 +1935,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .nullAware(true)
 //         .joinOutputLayout({"c1"})
 //         .referenceQuery(
-//             "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0 < 0)")
+//             "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u WHERE c0
+//             < 0)")
 //         .checkSpillStats(false)
 //         .run();
 //   }
@@ -1935,8 +1967,9 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         return makeRowVector(
 //             {"t0", "t1"},
 //             {
-//                 makeFlatVector<int32_t>(128, [](auto row) { return row % 11; }),
-//                 makeFlatVector<int32_t>(128, [](auto row) { return row; }),
+//                 makeFlatVector<int32_t>(128, [](auto row) { return row % 11;
+//                 }), makeFlatVector<int32_t>(128, [](auto row) { return row;
+//                 }),
 //             });
 //       });
 //
@@ -1945,8 +1978,9 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         return makeRowVector(
 //             {"u0", "u1"},
 //             {
-//                 makeFlatVector<int32_t>(123, [](auto row) { return row % 5; }),
-//                 makeFlatVector<int32_t>(123, [](auto row) { return row; }),
+//                 makeFlatVector<int32_t>(123, [](auto row) { return row % 5;
+//                 }), makeFlatVector<int32_t>(123, [](auto row) { return row;
+//                 }),
 //             });
 //       });
 //
@@ -1961,7 +1995,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .joinFilter("t1 != u1")
 //       .joinOutputLayout({"t0", "t1"})
 //       .referenceQuery(
-//           "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND t1 <> u1)")
+//           "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0
+//           AND t1 <> u1)")
 //       .checkSpillStats(false)
 //       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //         // Verify spilling is not triggered in case of null-aware anti-join
@@ -2016,7 +2051,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("u1 > t1")
 //         .joinOutputLayout({"t0", "t1"})
 //         .referenceQuery(
-//             "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u0 < 0 AND u.u0 = t.t0)")
+//             "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u0 < 0
+//             AND u.u0 = t.t0)")
 //         .checkSpillStats(false)
 //         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //           // Verify spilling is not triggered in case of null-aware anti-join
@@ -2094,7 +2130,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   }
 // }
 //
-// TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
+// TEST_P(MultiThreadedHashJoinTest,
+// nullAwareAntiJoinWithFilterOnNullableColumn) {
 //   const std::string referenceSql =
 //       "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE t1 <> u1)";
 //   const std::string joinFilter = "t1 <> u1";
@@ -2104,8 +2141,9 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       return makeRowVector(
 //           {"t0", "t1"},
 //           {
-//               makeFlatVector<int32_t>(200, [](auto row) { return row % 11; }),
-//               makeFlatVector<int32_t>(200, folly::identity, nullEvery(97)),
+//               makeFlatVector<int32_t>(200, [](auto row) { return row % 11;
+//               }), makeFlatVector<int32_t>(200, folly::identity,
+//               nullEvery(97)),
 //           });
 //     });
 //     auto buildVectors = makeBatches(3, [&](int32_t /*unused*/) {
@@ -2223,7 +2261,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .joinType(core::JoinType::kAnti)
 //       .joinOutputLayout({"t0", "t1"})
 //       .referenceQuery(
-//           "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0)")
+//           "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 =
+//           t.t0)")
 //       .run();
 //
 //   std::vector<std::string> filters({
@@ -2252,8 +2291,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter(filter)
 //         .joinOutputLayout({"t0", "t1"})
 //         .referenceQuery(fmt::format(
-//             "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 = t.t0 AND {})",
-//             filter))
+//             "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u.u0 =
+//             t.t0 AND {})", filter))
 //         .run();
 //   }
 // }
@@ -2292,7 +2331,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("u1 > t1")
 //         .joinOutputLayout({"t0", "t1"})
 //         .referenceQuery(
-//             "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u0 < 0 AND u.u0 = t.t0)")
+//             "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE u0 < 0
+//             AND u.u0 = t.t0)")
 //         .checkSpillStats(false)
 //         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //           const auto statsPair = taskSpilledStats(*task);
@@ -2323,9 +2363,11 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                 {"c0", "c1", "row_number"},
 //                 {
 //                     makeFlatVector<int32_t>(
-//                         77, [](auto row) { return row % 21; }, nullEvery(13)),
-//                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-//                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+//                         77, [](auto row) { return row % 21; },
+//                         nullEvery(13)),
+//                     makeFlatVector<int32_t>(77, [](auto row) { return row;
+//                     }), makeFlatVector<int32_t>(77, [](auto row) { return
+//                     row; }),
 //                 });
 //           }),
 //       makeBatches(
@@ -2338,8 +2380,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                         97,
 //                         [](auto row) { return (row + 3) % 21; },
 //                         nullEvery(13)),
-//                     makeFlatVector<int32_t>(97, [](auto row) { return row; }),
-//                     makeFlatVector<int32_t>(
+//                     makeFlatVector<int32_t>(97, [](auto row) { return row;
+//                     }), makeFlatVector<int32_t>(
 //                         97, [](auto row) { return 97 + row; }),
 //                 });
 //           }),
@@ -2365,7 +2407,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .joinType(core::JoinType::kLeft)
 //       .joinOutputLayout({"row_number", "c0", "c1", "u_c0"})
 //       .referenceQuery(
-//           "SELECT t.row_number, t.c0, t.c1, u.c0 FROM t LEFT JOIN u ON t.c0 = u.c0")
+//           "SELECT t.row_number, t.c0, t.c1, u.c0 FROM t LEFT JOIN u ON t.c0 =
+//           u.c0")
 //       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //         int nullJoinBuildKeyCount = 0;
 //         int nullJoinProbeKeyCount = 0;
@@ -2420,7 +2463,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .joinType(core::JoinType::kLeft)
 //       .joinOutputLayout({"row_number", "c0", "c1", "u_c0"})
 //       .referenceQuery(
-//           "SELECT t.row_number, t.c0, t.c1, u.c0 FROM t LEFT JOIN u ON t.c0 = u.c0")
+//           "SELECT t.row_number, t.c0, t.c1, u.c0 FROM t LEFT JOIN u ON t.c0 =
+//           u.c0")
 //       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //         int nullJoinBuildKeyCount = 0;
 //         int nullJoinProbeKeyCount = 0;
@@ -2460,9 +2504,11 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                   {"c0", "c1", "row_number"},
 //                   {
 //                       makeFlatVector<int32_t>(
-//                           77, [](auto row) { return row % 11; }, nullEvery(13)),
-//                       makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-//                       makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+//                           77, [](auto row) { return row % 11; },
+//                           nullEvery(13)),
+//                       makeFlatVector<int32_t>(77, [](auto row) { return row;
+//                       }), makeFlatVector<int32_t>(77, [](auto row) { return
+//                       row; }),
 //                   });
 //             }),
 //         makeBatches(
@@ -2475,8 +2521,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                           97,
 //                           [](auto row) { return (row + 3) % 11; },
 //                           nullEvery(13)),
-//                       makeFlatVector<int32_t>(97, [](auto row) { return row; }),
-//                       makeFlatVector<int32_t>(
+//                       makeFlatVector<int32_t>(97, [](auto row) { return row;
+//                       }), makeFlatVector<int32_t>(
 //                           97, [](auto row) { return 97 + row; }),
 //                   });
 //             }),
@@ -2504,7 +2550,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinType(core::JoinType::kLeft)
 //         .joinOutputLayout({"row_number", "c1"})
 //         .referenceQuery(
-//             "SELECT t.row_number, t.c1 FROM t LEFT JOIN (SELECT c0 FROM u WHERE c0 < 0) u ON t.c0 = u.c0")
+//             "SELECT t.row_number, t.c1 FROM t LEFT JOIN (SELECT c0 FROM u
+//             WHERE c0 < 0) u ON t.c0 = u.c0")
 //         .checkSpillStats(false)
 //         .run();
 //   }
@@ -2522,9 +2569,11 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                 {"c0", "c1", "row_number"},
 //                 {
 //                     makeFlatVector<int32_t>(
-//                         77, [](auto row) { return row % 11; }, nullEvery(13)),
-//                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-//                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+//                         77, [](auto row) { return row % 11; },
+//                         nullEvery(13)),
+//                     makeFlatVector<int32_t>(77, [](auto row) { return row;
+//                     }), makeFlatVector<int32_t>(77, [](auto row) { return
+//                     row; }),
 //                 });
 //           }),
 //       makeBatches(
@@ -2537,8 +2586,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                         97,
 //                         [](auto row) { return (row + 3) % 11; },
 //                         nullEvery(13)),
-//                     makeFlatVector<int32_t>(97, [](auto row) { return row; }),
-//                     makeFlatVector<int32_t>(
+//                     makeFlatVector<int32_t>(97, [](auto row) { return row;
+//                     }), makeFlatVector<int32_t>(
 //                         97, [](auto row) { return 97 + row; }),
 //                 });
 //           }),
@@ -2564,7 +2613,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .joinType(core::JoinType::kLeft)
 //       .joinOutputLayout({"row_number", "c0", "u_c1"})
 //       .referenceQuery(
-//           "SELECT t.row_number, t.c0, u.c1 FROM t LEFT JOIN (SELECT c0 - 123::INTEGER AS u_c0, c1 FROM u) u ON t.c0 = u.u_c0")
+//           "SELECT t.row_number, t.c0, u.c1 FROM t LEFT JOIN (SELECT c0 -
+//           123::INTEGER AS u_c0, c1 FROM u) u ON t.c0 = u.u_c0")
 //       .run();
 // }
 //
@@ -2580,9 +2630,11 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                 {"c0", "c1", "row_number"},
 //                 {
 //                     makeFlatVector<int32_t>(
-//                         77, [](auto row) { return row % 11; }, nullEvery(13)),
-//                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-//                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+//                         77, [](auto row) { return row % 11; },
+//                         nullEvery(13)),
+//                     makeFlatVector<int32_t>(77, [](auto row) { return row;
+//                     }), makeFlatVector<int32_t>(77, [](auto row) { return
+//                     row; }),
 //                 });
 //           }),
 //       makeBatches(
@@ -2595,8 +2647,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                         97,
 //                         [](auto row) { return (row + 3) % 11; },
 //                         nullEvery(13)),
-//                     makeFlatVector<int32_t>(97, [](auto row) { return row; }),
-//                     makeFlatVector<int32_t>(
+//                     makeFlatVector<int32_t>(97, [](auto row) { return row;
+//                     }), makeFlatVector<int32_t>(
 //                         97, [](auto row) { return 97 + row; }),
 //                 });
 //           }),
@@ -2623,7 +2675,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .joinType(core::JoinType::kLeft)
 //       .joinOutputLayout({"row_number", "c0", "c1", "u_c1"})
 //       .referenceQuery(
-//           "SELECT t.row_number, t.c0, t.c1, u.c1 FROM (SELECT * FROM t WHERE c0 < 5) t LEFT JOIN u ON t.c0 = u.c0")
+//           "SELECT t.row_number, t.c0, t.c1, u.c1 FROM (SELECT * FROM t WHERE
+//           c0 < 5) t LEFT JOIN u ON t.c0 = u.c0")
 //       .run();
 // }
 //
@@ -2639,9 +2692,11 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                 {"c0", "c1", "row_number"},
 //                 {
 //                     makeFlatVector<int32_t>(
-//                         77, [](auto row) { return row % 11; }, nullEvery(13)),
-//                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-//                     makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+//                         77, [](auto row) { return row % 11; },
+//                         nullEvery(13)),
+//                     makeFlatVector<int32_t>(77, [](auto row) { return row;
+//                     }), makeFlatVector<int32_t>(77, [](auto row) { return
+//                     row; }),
 //                 });
 //           }),
 //       makeBatches(
@@ -2654,8 +2709,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                         97,
 //                         [](auto row) { return (row + 3) % 11; },
 //                         nullEvery(13)),
-//                     makeFlatVector<int32_t>(97, [](auto row) { return row; }),
-//                     makeFlatVector<int32_t>(
+//                     makeFlatVector<int32_t>(97, [](auto row) { return row;
+//                     }), makeFlatVector<int32_t>(
 //                         97, [](auto row) { return 97 + row; }),
 //                 });
 //           }),
@@ -2686,7 +2741,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("(c1 + u_c1) % 2 = 1")
 //         .joinOutputLayout({"row_number", "c0", "c1", "u_c1"})
 //         .referenceQuery(
-//             "SELECT t.row_number, t.c0, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (t.c1 + u.c1) % 2 = 1")
+//             "SELECT t.row_number, t.c0, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0
+//             = u.c0 AND (t.c1 + u.c1) % 2 = 1")
 //         .run();
 //   }
 //
@@ -2705,7 +2761,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("(c1 + u_c1) % 2  = 3")
 //         .joinOutputLayout({"row_number", "c0", "c1", "u_c1"})
 //         .referenceQuery(
-//             "SELECT t.row_number, t.c0, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (t.c1 + u.c1) % 2 = 3")
+//             "SELECT t.row_number, t.c0, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0
+//             = u.c0 AND (t.c1 + u.c1) % 2 = 3")
 //         .run();
 //   }
 // }
@@ -2847,7 +2904,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //               makeFlatVector<int32_t>(
 //                   123, [](auto row) { return -3 + row % 7; }, nullEvery(11)),
 //               makeFlatVector<int32_t>(
-//                   123, [](auto row) { return -111 + row * 2; }, nullEvery(13)),
+//                   123, [](auto row) { return -111 + row * 2; },
+//                   nullEvery(13)),
 //           });
 //         });
 //
@@ -2915,7 +2973,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .joinType(core::JoinType::kRight)
 //       .joinOutputLayout({"c0", "c1", "u_c1"})
 //       .referenceQuery(
-//           "SELECT t.c0, t.c1, u.c1 FROM t RIGHT JOIN (SELECT * FROM u WHERE c0 >= 0) u ON t.c0 = u.c0")
+//           "SELECT t.c0, t.c1, u.c1 FROM t RIGHT JOIN (SELECT * FROM u WHERE
+//           c0 >= 0) u ON t.c0 = u.c0")
 //       .run();
 // }
 //
@@ -2970,7 +3029,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("(c1 + u_c1) % 2 = 1")
 //         .joinOutputLayout({"c0", "c1", "u_c1"})
 //         .referenceQuery(
-//             "SELECT t.c0, t.c1, u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0 AND (t.c1 + u.c1) % 2 = 1")
+//             "SELECT t.c0, t.c1, u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0 AND
+//             (t.c1 + u.c1) % 2 = 1")
 //         .run();
 //   }
 //
@@ -2989,7 +3049,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("(c1 + u_c1) % 2 = 3")
 //         .joinOutputLayout({"c0", "c1", "u_c1"})
 //         .referenceQuery(
-//             "SELECT t.c0, t.c1, u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0 AND (t.c1 + u.c1) % 2 = 3")
+//             "SELECT t.c0, t.c1, u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0 AND
+//             (t.c1 + u.c1) % 2 = 3")
 //         .run();
 //   }
 // }
@@ -3081,7 +3142,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //               makeFlatVector<int32_t>(
 //                   123, [](auto row) { return -3 + row % 7; }, nullEvery(11)),
 //               makeFlatVector<int32_t>(
-//                   123, [](auto row) { return -111 + row * 2; }, nullEvery(13)),
+//                   123, [](auto row) { return -111 + row * 2; },
+//                   nullEvery(13)),
 //           });
 //         });
 //
@@ -3097,7 +3159,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinType(core::JoinType::kFull)
 //         .joinOutputLayout({"c1"})
 //         .referenceQuery(
-//             "SELECT t.c1 FROM t FULL OUTER JOIN (SELECT * FROM u WHERE c0 > 100) u ON t.c0 = u.c0")
+//             "SELECT t.c1 FROM t FULL OUTER JOIN (SELECT * FROM u WHERE c0 >
+//             100) u ON t.c0 = u.c0")
 //         .checkSpillStats(false)
 //         .run();
 //   }
@@ -3150,7 +3213,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .joinType(core::JoinType::kFull)
 //       .joinOutputLayout({"c1"})
 //       .referenceQuery(
-//           "SELECT t.c1 FROM t FULL OUTER JOIN (SELECT * FROM u WHERE c0 < 0) u ON t.c0 = u.c0")
+//           "SELECT t.c1 FROM t FULL OUTER JOIN (SELECT * FROM u WHERE c0 < 0)
+//           u ON t.c0 = u.c0")
 //       .run();
 // }
 //
@@ -3205,7 +3269,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("(c1 + u_c1) % 2 = 1")
 //         .joinOutputLayout({"c0", "c1", "u_c1"})
 //         .referenceQuery(
-//             "SELECT t.c0, t.c1, u.c1 FROM t FULL OUTER JOIN u ON t.c0 = u.c0 AND (t.c1 + u.c1) % 2 = 1")
+//             "SELECT t.c0, t.c1, u.c1 FROM t FULL OUTER JOIN u ON t.c0 = u.c0
+//             AND (t.c1 + u.c1) % 2 = 1")
 //         .run();
 //   }
 //
@@ -3224,7 +3289,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .joinFilter("(c1 + u_c1) % 2 = 3")
 //         .joinOutputLayout({"c0", "c1", "u_c1"})
 //         .referenceQuery(
-//             "SELECT t.c0, t.c1, u.c1 FROM t FULL OUTER JOIN u ON t.c0 = u.c0 AND (t.c1 + u.c1) % 2 = 3")
+//             "SELECT t.c0, t.c1, u.c1 FROM t FULL OUTER JOIN u ON t.c0 = u.c0
+//             AND (t.c1 + u.c1) % 2 = 3")
 //         .run();
 //   }
 // }
@@ -3236,7 +3302,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .probeVectors(1600, 5)
 //       .buildVectors(1500, 5)
 //       .referenceQuery(
-//           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
+//           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 =
+//           u.u_k0")
 //       .maxSpillLevel(-1)
 //       .config(core::QueryConfig::kSpillStartPartitionBit, "48")
 //       .config(core::QueryConfig::kSpillNumPartitionBits, "3")
@@ -3395,7 +3462,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   auto probeVectors = makeBatches(3, [&](int32_t /*unused*/) {
 //     return makeRowVector({
 //         makeFlatVector<int64_t>({1, 2, 2, 3, 3, 3, 4, 5, 5, 6, 7}),
-//         makeFlatVector<int64_t>({10, 20, 21, 30, 31, 32, 40, 50, 51, 60, 70}),
+//         makeFlatVector<int64_t>({10, 20, 21, 30, 31, 32, 40, 50, 51, 60,
+//         70}),
 //     });
 //   });
 //
@@ -3431,13 +3499,15 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(plan)
 //       .referenceQuery(
-//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0) FROM t")
+//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0) FROM
+//           t")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(flipJoinSides(plan))
 //       .referenceQuery(
-//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0) FROM t")
+//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0) FROM
+//           t")
 //       .run();
 //
 //   // With extra filter.
@@ -3460,13 +3530,15 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(plan)
 //       .referenceQuery(
-//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND t.c1 * 10 <> u.c1) FROM t")
+//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND
+//           t.c1 * 10 <> u.c1) FROM t")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(flipJoinSides(plan))
 //       .referenceQuery(
-//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND t.c1 * 10 <> u.c1) FROM t")
+//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND
+//           t.c1 * 10 <> u.c1) FROM t")
 //       .run();
 //
 //   // Empty build side.
@@ -3490,7 +3562,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(plan)
 //       .referenceQuery(
-//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE u.c0 < 0 AND t.c0 = u.c0) FROM t")
+//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE u.c0 < 0 AND t.c0
+//           = u.c0) FROM t")
 //       // NOTE: there is no spilling in empty build test case as all the
 //       // build-side rows have been filtered out.
 //       .checkSpillStats(false)
@@ -3499,7 +3572,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(flipJoinSides(plan))
 //       .referenceQuery(
-//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE u.c0 < 0 AND t.c0 = u.c0) FROM t")
+//           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE u.c0 < 0 AND t.c0
+//           = u.c0) FROM t")
 //       // NOTE: there is no spilling in empty build test case as all the
 //       // build-side rows have been filtered out.
 //       .checkSpillStats(false)
@@ -3590,13 +3664,15 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(plan)
 //       .referenceQuery(
-//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0) FROM t WHERE t0 IS NOT NULL")
+//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0) FROM t WHERE
+//           t0 IS NOT NULL")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(flipJoinSides(plan))
 //       .referenceQuery(
-//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0) FROM t WHERE t0 IS NOT NULL")
+//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0) FROM t WHERE
+//           t0 IS NOT NULL")
 //       .run();
 //
 //   plan = makePlan(true /*nullAware*/, "t0 IS NOT NULL");
@@ -3604,13 +3680,15 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(plan)
 //       .referenceQuery(
-//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u) FROM t WHERE t0 IS NOT NULL")
+//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u) FROM t WHERE t0 IS NOT
+//           NULL")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(flipJoinSides(plan))
 //       .referenceQuery(
-//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u) FROM t WHERE t0 IS NOT NULL")
+//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u) FROM t WHERE t0 IS NOT
+//           NULL")
 //       .run();
 //
 //   // Null join keys on probe side-only.
@@ -3619,13 +3697,15 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(plan)
 //       .referenceQuery(
-//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 IS NOT NULL) FROM t")
+//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 IS NOT
+//           NULL) FROM t")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(flipJoinSides(plan))
 //       .referenceQuery(
-//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 IS NOT NULL) FROM t")
+//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 IS NOT
+//           NULL) FROM t")
 //       .run();
 //
 //   plan = makePlan(true /*nullAware*/, "", "u0 IS NOT NULL");
@@ -3633,13 +3713,15 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(plan)
 //       .referenceQuery(
-//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE u0 IS NOT NULL) FROM t")
+//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE u0 IS NOT NULL) FROM
+//           t")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(flipJoinSides(plan))
 //       .referenceQuery(
-//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE u0 IS NOT NULL) FROM t")
+//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE u0 IS NOT NULL) FROM
+//           t")
 //       .run();
 //
 //   // Empty build side.
@@ -3649,14 +3731,16 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .planNode(plan)
 //       .checkSpillStats(false)
 //       .referenceQuery(
-//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 < 0) FROM t")
+//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 < 0)
+//           FROM t")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
 //       .planNode(flipJoinSides(plan))
 //       .checkSpillStats(false)
 //       .referenceQuery(
-//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 < 0) FROM t")
+//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 < 0)
+//           FROM t")
 //       .run();
 //
 //   plan = makePlan(true /*nullAware*/, "", "u0 < 0");
@@ -3682,14 +3766,16 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .planNode(plan)
 //       .checkSpillStats(false)
 //       .referenceQuery(
-//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 IS NULL) FROM t")
+//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 IS
+//           NULL) FROM t")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, executor_.get())
 //       .planNode(flipJoinSides(plan))
 //       .checkSpillStats(false)
 //       .referenceQuery(
-//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 IS NULL) FROM t")
+//           "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE u0 = t0 AND u0 IS
+//           NULL) FROM t")
 //       .run();
 //
 //   plan = makePlan(true /*nullAware*/, "", "u0 IS NULL");
@@ -3759,7 +3845,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //         .planNode(plan)
 //         .referenceQuery(fmt::format(
-//             "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t", filter))
+//             "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE {}) FROM t",
+//             filter))
 //         .injectSpill(false)
 //         .run();
 //
@@ -3770,8 +3857,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //         .planNode(plan)
 //         .referenceQuery(fmt::format(
-//             "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR t0 is not null) AND u0 = t0 AND {}) FROM t",
-//             filter))
+//             "SELECT t0, t1, EXISTS (SELECT * FROM u WHERE (u0 is not null OR
+//             t0 is not null) AND u0 = t0 AND {}) FROM t", filter))
 //         .injectSpill(false)
 //         .run();
 //   }
@@ -3852,7 +3939,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         {"t0", "t1"},
 //         {
 //             makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
-//             makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10; }),
+//             makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10;
+//             }),
 //         });
 //   });
 //
@@ -3937,7 +4025,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .inputSplits(splitInput)
 //       .checkSpillStats(false)
 //       .referenceQuery(
-//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t")
+//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)
+//           FROM t")
 //       .run();
 //
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -3945,7 +4034,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       .inputSplits(splitInput)
 //       .checkSpillStats(false)
 //       .referenceQuery(
-//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t")
+//           "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)
+//           FROM t")
 //       .run();
 // }
 //
@@ -4004,14 +4094,16 @@ class HashJoinTest : public HiveConnectorTestBase {
 //          makeFlatVector<int64_t>(30'000, [](auto row) { return row % 23; }),
 //          makeFlatVector<int32_t>(30'000, [](auto row) { return row % 31; }),
 //          makeFlatVector<StringView>(30'000, [](auto row) {
-//            return StringView::makeInline(fmt::format("{}   string", row % 43));
+//            return StringView::makeInline(fmt::format("{}   string", row %
+//            43));
 //          })});
 //   });
 //
 //   std::vector<RowVectorPtr> buildVectors =
 //       makeBatches(4, [&](int32_t /*unused*/) {
 //         return makeRowVector(
-//             {makeFlatVector<int32_t>(1'000, [](auto row) { return row * 3; }),
+//             {makeFlatVector<int32_t>(1'000, [](auto row) { return row * 3;
+//             }),
 //              makeFlatVector<int64_t>(
 //                  10'000, [](auto row) { return row % 31; })});
 //       });
@@ -4090,8 +4182,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                       {"c0"},
 //                       {"bc0"},
 //                       CudfPlanBuilder(planNodeIdGenerator)
-//                           .tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
-//                           .capturePlanNodeId(buildScanId)
+//                           .tableScan(ROW({"c0", "c1"}, {INTEGER(),
+//                           BIGINT()})) .capturePlanNodeId(buildScanId)
 //                           .project({"c0 as bc0", "c1 as bc1"})
 //                           .planNode(),
 //                       "(c1 + bc1) % 33 < 27",
@@ -4103,7 +4195,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .planNode(std::move(op))
 //         .makeInputSplits(makeInputSplits(probeScanId, buildScanId))
 //         .referenceQuery(
-//             "SELECT t.c1 + 1, U.c1, length(t.c3) FROM t, u WHERE t.c0 = u.c0 and t.c2 < 29 and (t.c1 + u.c1) % 33 < 27")
+//             "SELECT t.c1 + 1, U.c1, length(t.c3) FROM t, u WHERE t.c0 = u.c0
+//             and t.c2 < 29 and (t.c1 + u.c1) % 33 < 27")
 //         .run();
 //   }
 // }
@@ -4115,8 +4208,10 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   // from wrapping an unloaded vector while the temporary wrap is
 //   // still alive.
 //   // This is done by generating a sufficiently small batch to allow the lazy
-//   // vector to remain unloaded, as it doesn't need to be split between batches.
-//   // Then we use a filter that skips the execution of the expression containing
+//   // vector to remain unloaded, as it doesn't need to be split between
+//   batches.
+//   // Then we use a filter that skips the execution of the expression
+//   containing
 //   // the lazy vector, thereby avoiding its loading.
 //
 //   testLazyVectorsWithFilter(
@@ -4127,69 +4222,81 @@ class HashJoinTest : public HiveConnectorTestBase {
 // }
 //
 // TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftJoin) {
-//   // Test the case where a filter loads a subset of the rows that will be output
+//   // Test the case where a filter loads a subset of the rows that will be
+//   output
 //   // from a column on the probe side.
 //
 //   testLazyVectorsWithFilter(
 //       core::JoinType::kLeft,
 //       "c1 > 0 AND c2 > 0",
 //       {"c1", "c2"},
-//       "SELECT t.c1, t.c2 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (c1 > 0 AND c2 > 0)");
+//       "SELECT t.c1, t.c2 FROM t LEFT JOIN u ON t.c0 = u.c0 AND (c1 > 0 AND c2
+//       > 0)");
 // }
 //
 // TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterFullJoin) {
-//   // Test the case where a filter loads a subset of the rows that will be output
+//   // Test the case where a filter loads a subset of the rows that will be
+//   output
 //   // from a column on the probe side.
 //
 //   testLazyVectorsWithFilter(
 //       core::JoinType::kFull,
 //       "c1 > 0 AND c2 > 0",
 //       {"c1", "c2"},
-//       "SELECT t.c1, t.c2 FROM t FULL OUTER JOIN u ON t.c0 = u.c0 AND (c1 > 0 AND c2 > 0)");
+//       "SELECT t.c1, t.c2 FROM t FULL OUTER JOIN u ON t.c0 = u.c0 AND (c1 > 0
+//       AND c2 > 0)");
 // }
 //
 // TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiProject) {
-//   // Test the case where a filter loads a subset of the rows that will be output
+//   // Test the case where a filter loads a subset of the rows that will be
+//   output
 //   // from a column on the probe side.
 //
 //   testLazyVectorsWithFilter(
 //       core::JoinType::kLeftSemiProject,
 //       "c1 > 0 AND c2 > 0",
 //       {"c1", "c2", "match"},
-//       "SELECT t.c1, t.c2, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1 > 0 AND t.c2 > 0)) FROM t");
+//       "SELECT t.c1, t.c2, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1
+//       > 0 AND t.c2 > 0)) FROM t");
 // }
 //
 // TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterAntiJoin) {
-//   // Test the case where a filter loads a subset of the rows that will be output
+//   // Test the case where a filter loads a subset of the rows that will be
+//   output
 //   // from a column on the probe side.
 //
 //   testLazyVectorsWithFilter(
 //       core::JoinType::kAnti,
 //       "c1 > 0 AND c2 > 0",
 //       {"c1", "c2"},
-//       "SELECT t.c1, t.c2 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t.c0 = u.c0 AND (t.c1 > 0 AND t.c2 > 0))");
+//       "SELECT t.c1, t.c2 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t.c0
+//       = u.c0 AND (t.c1 > 0 AND t.c2 > 0))");
 // }
 //
 // TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterInnerJoin) {
-//   // Test the case where a filter loads a subset of the rows that will be output
+//   // Test the case where a filter loads a subset of the rows that will be
+//   output
 //   // from a column on the probe side.
 //
 //   testLazyVectorsWithFilter(
 //       core::JoinType::kInner,
 //       "not (c1 < 15 and c2 >= 0)",
 //       {"c1", "c2"},
-//       "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0 AND NOT (c1 < 15 AND c2 >= 0)");
+//       "SELECT t.c1, t.c2 FROM t, u WHERE t.c0 = u.c0 AND NOT (c1 < 15 AND c2
+//       >= 0)");
 // }
 //
 // TEST_F(HashJoinTest, lazyVectorPartiallyLoadedInFilterLeftSemiFilter) {
-//   // Test the case where a filter loads a subset of the rows that will be output
+//   // Test the case where a filter loads a subset of the rows that will be
+//   output
 //   // from a column on the probe side.
 //
 //   testLazyVectorsWithFilter(
 //       core::JoinType::kLeftSemiFilter,
 //       "not (c1 < 15 and c2 >= 0)",
 //       {"c1", "c2"},
-//       "SELECT t.c1, t.c2 FROM t WHERE c0 IN (SELECT u.c0 FROM u WHERE t.c0 = u.c0 AND NOT (t.c1 < 15 AND t.c2 >= 0))");
+//       "SELECT t.c1, t.c2 FROM t WHERE c0 IN (SELECT u.c0 FROM u WHERE t.c0 =
+//       u.c0 AND NOT (t.c1 < 15 AND t.c2 >= 0))");
 // }
 //
 // TEST_F(HashJoinTest, dynamicFilters) {
@@ -4231,13 +4338,15 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         makeFlatVector<int32_t>(
 //             numRowsBuild / 5,
 //             [i](auto row) { return 35 + 2 * (row + i * numRowsBuild / 5); }),
-//         makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row; }),
+//         makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row;
+//         }),
 //     }));
 //   }
 //   std::vector<RowVectorPtr> keyOnlyBuildVectors;
 //   for (int i = 0; i < 5; ++i) {
 //     keyOnlyBuildVectors.push_back(
-//         makeRowVector({makeFlatVector<int32_t>(numRowsBuild / 5, [i](auto row) {
+//         makeRowVector({makeFlatVector<int32_t>(numRowsBuild / 5, [i](auto
+//         row) {
 //           return 35 + 2 * (row + i * numRowsBuild / 5);
 //         })}));
 //   }
@@ -4281,22 +4390,24 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .planNode(std::move(op))
 //           .makeInputSplits(makeInputSplits(probeScanId))
 //           .referenceQuery(
-//               "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0")
+//               "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 =
+//               u.c0")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
 //             auto planStats = toPlanStats(task->taskStats());
 //             if (hasSpill) {
-//               // Dynamic filtering should be disabled with spilling triggered.
-//               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+//               // Dynamic filtering should be disabled with spilling
+//               triggered. ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
-//               ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+//               ASSERT_EQ(getInputPositions(task, 1), numRowsProbe *
+//               numSplits);
 //               ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
 //             } else {
 //               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
-//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
-//               ASSERT_EQ(
+//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe *
+//               numSplits); ASSERT_EQ(
 //                   planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
 //                   std::unordered_set<core::PlanNodeId>({joinId}));
 //             }
@@ -4324,23 +4435,25 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .planNode(std::move(op))
 //           .makeInputSplits(makeInputSplits(probeScanId))
 //           .referenceQuery(
-//               "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u)")
+//               "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM
+//               u)")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
 //             auto planStats = toPlanStats(task->taskStats());
 //             if (hasSpill) {
-//               // Dynamic filtering should be disabled with spilling triggered.
-//               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+//               // Dynamic filtering should be disabled with spilling
+//               triggered. ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
-//               ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+//               ASSERT_EQ(getInputPositions(task, 1), numRowsProbe *
+//               numSplits);
 //               ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
 //             } else {
 //               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
 //               ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
-//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
-//               ASSERT_EQ(
+//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe *
+//               numSplits); ASSERT_EQ(
 //                   planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
 //                   std::unordered_set<core::PlanNodeId>({joinId}));
 //             }
@@ -4368,23 +4481,25 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .planNode(std::move(op))
 //           .makeInputSplits(makeInputSplits(probeScanId))
 //           .referenceQuery(
-//               "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t)")
+//               "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM
+//               t)")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
 //             auto planStats = toPlanStats(task->taskStats());
 //             if (hasSpill) {
-//               // Dynamic filtering should be disabled with spilling triggered.
-//               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+//               // Dynamic filtering should be disabled with spilling
+//               triggered. ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
-//               ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+//               ASSERT_EQ(getInputPositions(task, 1), numRowsProbe *
+//               numSplits);
 //               ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
 //             } else {
 //               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
-//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
-//               ASSERT_EQ(
+//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe *
+//               numSplits); ASSERT_EQ(
 //                   planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
 //                   std::unordered_set<core::PlanNodeId>({joinId}));
 //             }
@@ -4409,10 +4524,9 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                   .assignments(assignments)
 //                   .endTableScan()
 //                   .capturePlanNodeId(probeScanId)
-//                   .hashJoin({"a"}, {"u_c0"}, buildSide, "", {"a", "b", "u_c1"})
-//                   .capturePlanNodeId(joinId)
-//                   .project({"a", "b + 1", "b + u_c1"})
-//                   .planNode();
+//                   .hashJoin({"a"}, {"u_c0"}, buildSide, "", {"a", "b",
+//                   "u_c1"}) .capturePlanNodeId(joinId) .project({"a", "b + 1",
+//                   "b + u_c1"}) .planNode();
 //
 //     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //         .planNode(std::move(op))
@@ -4615,7 +4729,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //             .tableScan(probeType, {"c0 < 200::INTEGER"})
 //             .capturePlanNodeId(probeScanId)
 //             .hashJoin(
-//                 {"c0"}, {"u_c0"}, buildSide, "", {"c1"}, core::JoinType::kInner)
+//                 {"c0"}, {"u_c0"}, buildSide, "", {"c1"},
+//                 core::JoinType::kInner)
 //             .capturePlanNodeId(joinId)
 //             .project({"c1 + 1"})
 //             .planNode();
@@ -4630,18 +4745,19 @@ class HashJoinTest : public HiveConnectorTestBase {
 //             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
 //             auto planStats = toPlanStats(task->taskStats());
 //             if (hasSpill) {
-//               // Dynamic filtering should be disabled with spilling triggered.
-//               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+//               // Dynamic filtering should be disabled with spilling
+//               triggered. ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
-//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe *
+//               numSplits);
 //               ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
 //             } else {
 //               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
 //               ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
-//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
-//               ASSERT_EQ(
+//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe *
+//               numSplits); ASSERT_EQ(
 //                   planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
 //                   std::unordered_set<core::PlanNodeId>({joinId}));
 //             }
@@ -4669,23 +4785,25 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .planNode(std::move(op))
 //           .makeInputSplits(makeInputSplits(probeScanId))
 //           .referenceQuery(
-//               "SELECT t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND t.c0 < 200")
+//               "SELECT t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND
+//               t.c0 < 200")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
 //             auto planStats = toPlanStats(task->taskStats());
 //             if (hasSpill) {
-//               // Dynamic filtering should be disabled with spilling triggered.
-//               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+//               // Dynamic filtering should be disabled with spilling
+//               triggered. ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
-//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe *
+//               numSplits);
 //               ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
 //             } else {
 //               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
 //               ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
-//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
-//               ASSERT_EQ(
+//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe *
+//               numSplits); ASSERT_EQ(
 //                   planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
 //                   std::unordered_set<core::PlanNodeId>({joinId}));
 //             }
@@ -4713,23 +4831,25 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .planNode(std::move(op))
 //           .makeInputSplits(makeInputSplits(probeScanId))
 //           .referenceQuery(
-//               "SELECT u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t) AND u.c0 < 200")
+//               "SELECT u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t) AND
+//               u.c0 < 200")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
 //             auto planStats = toPlanStats(task->taskStats());
 //             if (hasSpill) {
-//               // Dynamic filtering should be disabled with spilling triggered.
-//               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+//               // Dynamic filtering should be disabled with spilling
+//               triggered. ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
-//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe *
+//               numSplits);
 //               ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
 //             } else {
 //               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
-//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
-//               ASSERT_EQ(
+//               ASSERT_LT(getInputPositions(task, 1), numRowsProbe *
+//               numSplits); ASSERT_EQ(
 //                   planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
 //                   std::unordered_set<core::PlanNodeId>({joinId}));
 //             }
@@ -4827,7 +4947,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         makeFlatVector<int32_t>(
 //             numBuildRows / 5,
 //             [i](auto row) { return 35 + 2 * (row + i * numBuildRows / 5); }),
-//         makeFlatVector<int64_t>(numBuildRows / 5, [](auto row) { return row; }),
+//         makeFlatVector<int64_t>(numBuildRows / 5, [](auto row) { return row;
+//         }),
 //     }));
 //   }
 //
@@ -4949,13 +5070,15 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         makeFlatVector<int32_t>(
 //             numRowsBuild / 5,
 //             [i](auto row) { return 35 + 2 * (row + i * numRowsBuild / 5); }),
-//         makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row; }),
+//         makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row;
+//         }),
 //     }));
 //   }
 //   std::vector<RowVectorPtr> keyOnlyBuildVectors;
 //   for (int i = 0; i < 5; ++i) {
 //     keyOnlyBuildVectors.push_back(
-//         makeRowVector({makeFlatVector<int32_t>(numRowsBuild / 5, [i](auto row) {
+//         makeRowVector({makeFlatVector<int32_t>(numRowsBuild / 5, [i](auto
+//         row) {
 //           return 35 + 2 * (row + i * numRowsBuild / 5);
 //         })}));
 //   }
@@ -4998,12 +5121,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .numDrivers(1)
 //           .makeInputSplits(makeInputSplits(probeScanId))
 //           .referenceQuery(
-//               "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c2 > 0")
+//               "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0
+//               AND t.c2 > 0")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
 //             if (hasSpill) {
-//               // Dynamic filtering should be disabled with spilling triggered.
-//               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+//               // Dynamic filtering should be disabled with spilling
+//               triggered. ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(
 //                   getInputPositions(task, 1),
@@ -5040,12 +5164,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .numDrivers(1)
 //           .makeInputSplits(makeInputSplits(probeScanId))
 //           .referenceQuery(
-//               "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND t.c2 > 0")
+//               "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u)
+//               AND t.c2 > 0")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
 //             if (hasSpill) {
-//               // Dynamic filtering should be disabled with spilling triggered.
-//               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+//               // Dynamic filtering should be disabled with spilling
+//               triggered. ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
 //               ASSERT_EQ(
@@ -5083,12 +5208,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .numDrivers(1)
 //           .makeInputSplits(makeInputSplits(probeScanId))
 //           .referenceQuery(
-//               "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t WHERE t.c2 > 0)")
+//               "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t
+//               WHERE t.c2 > 0)")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
 //             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
 //             if (hasSpill) {
-//               // Dynamic filtering should be disabled with spilling triggered.
-//               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+//               // Dynamic filtering should be disabled with spilling
+//               triggered. ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
 //               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
 //               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
 //               ASSERT_EQ(
@@ -5146,8 +5272,10 @@ class HashJoinTest : public HiveConnectorTestBase {
 //       makeRowVector({"b0"}, {makeFlatVector<int64_t>({0, numSplits})})};
 //   createDuckDbTable("b", buildVectors);
 //
-//   // Executing the join with p1=b0, we expect a dynamic filter for p1 to prune
-//   // the entire file/split. There are total of five splits, and all except the
+//   // Executing the join with p1=b0, we expect a dynamic filter for p1 to
+//   prune
+//   // the entire file/split. There are total of five splits, and all except
+//   the
 //   // first one are expected to be pruned. The result 'preloadedSplits' > 1
 //   // confirms the successful push of dynamic filters to the preloading data
 //   // source.
@@ -5198,7 +5326,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   std::vector<RowVectorPtr> probeVectors =
 //       makeBatches(10, [&](int32_t /*unused*/) {
 //         return makeRowVector(
-//             {makeFlatVector<int32_t>(1'000, [](auto row) { return row % 5; })});
+//             {makeFlatVector<int32_t>(1'000, [](auto row) { return row % 5;
+//             })});
 //       });
 //   std::vector<RowVectorPtr> buildVectors =
 //       makeBatches(5, [&](int32_t /*unused*/) {
@@ -5289,10 +5418,9 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   // probe-side rows to load lazy vectors for.
 //   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
 //       .planNode(std::move(plan))
-//       .config(core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-//       .referenceQuery("SELECT c0, u_c1 FROM t, u WHERE c0 = u_c0 AND c1 < u_c1")
-//       .injectSpill(false)
-//       .run();
+//       .config(core::QueryConfig::kPreferredOutputBatchRows,
+//       std::to_string(10)) .referenceQuery("SELECT c0, u_c1 FROM t, u WHERE c0
+//       = u_c0 AND c1 < u_c1") .injectSpill(false) .run();
 // }
 //
 // TEST_F(HashJoinTest, spillFileSize) {
@@ -5305,11 +5433,13 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .probeVectors(100, 3)
 //         .buildVectors(100, 3)
 //         .referenceQuery(
-//             "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
+//             "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 =
+//             u.u_k0")
 //         .config(core::QueryConfig::kSpillStartPartitionBit, "48")
 //         .config(core::QueryConfig::kSpillNumPartitionBits, "3")
 //         .config(
-//             core::QueryConfig::kMaxSpillFileSize, std::to_string(spillFileSize))
+//             core::QueryConfig::kMaxSpillFileSize,
+//             std::to_string(spillFileSize))
 //         .checkSpillStats(false)
 //         .maxSpillLevel(0)
 //         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
@@ -5339,7 +5469,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .probeVectors(2'000, 3)
 //           .buildVectors(2'000, 3)
 //           .referenceQuery(
-//               "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE t_k0 = u_k0 and t_k1 = u_k1")
+//               "SELECT t_k0, t_k1, t_data, u_k0, u_k1, u_data FROM t, u WHERE
+//               t_k0 = u_k0 and t_k1 = u_k1")
 //           .config(core::QueryConfig::kSpillStartPartitionBit, "8")
 //           .config(core::QueryConfig::kSpillNumPartitionBits, "1")
 //           .checkSpillStats(false)
@@ -5355,7 +5486,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         return std::dynamic_pointer_cast<RowVector>(
 //             BatchMaker::createBatch(probeType_, 1000, *pool_));
 //       });
-//   std::vector<RowVectorPtr> buildVectors = makeBatches(10, [&](int32_t index) {
+//   std::vector<RowVectorPtr> buildVectors = makeBatches(10, [&](int32_t index)
+//   {
 //     return std::dynamic_pointer_cast<RowVector>(
 //         BatchMaker::createBatch(buildType_, 5000 * (1 + index), *pool_));
 //   });
@@ -5374,7 +5506,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                             concat(probeType_->names(), buildType_->names()))
 //                         .planNode();
 //   params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
-//   // NOTE: the spilling setup is to trigger memory reservation code path which
+//   // NOTE: the spilling setup is to trigger memory reservation code path
+//   which
 //   // only gets executed when spilling is enabled. We don't care about if
 //   // spilling is really triggered in test or not.
 //   auto spillDirectory = exec::test::TempDirectoryPath::create();
@@ -5387,7 +5520,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //   auto cursor = TaskCursor::create(params);
 //   auto* task = cursor->task().get();
 //
-//   // Set up a testvalue to trigger task abort when hash build tries to reserve
+//   // Set up a testvalue to trigger task abort when hash build tries to
+//   reserve
 //   // memory.
 //   SCOPED_TESTVALUE_SET(
 //       "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
@@ -5480,7 +5614,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           expectedReclaimable);
 //     }
 //   } testSettings[] = {
-//       {0, true, true}, {0, true, true}, {0, false, false}, {0, false, false}};
+//       {0, true, true}, {0, true, true}, {0, false, false}, {0, false,
+//       false}};
 //   for (const auto& testData : testSettings) {
 //     SCOPED_TRACE(testData.debugString());
 //
@@ -5546,9 +5681,10 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .planNode(plan)
 //           .queryPool(std::move(queryPool))
 //           .injectSpill(false)
-//           .spillDirectory(testData.spillEnabled ? tempDirectory->getPath() : "")
-//           .referenceQuery(
-//               "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//           .spillDirectory(testData.spillEnabled ? tempDirectory->getPath() :
+//           "") .referenceQuery(
+//               "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE
+//               t.t_k1 = u.u_k1")
 //           .config(core::QueryConfig::kSpillStartPartitionBit, "29")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //             const auto statsPair = taskSpilledStats(*task);
@@ -5677,7 +5813,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //             }
 //             ASSERT_TRUE(op->canReclaim());
 //             if (op->pool()->usedBytes() == 0) {
-//               // We skip trigger memory reclaim when the hash table is empty on
+//               // We skip trigger memory reclaim when the hash table is empty
+//               on
 //               // memory reservation.
 //               return;
 //             }
@@ -5703,7 +5840,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .injectSpill(false)
 //         .spillDirectory(tempDirectory->getPath())
 //         .referenceQuery(
-//             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1
+//             = u.u_k1")
 //         .config(core::QueryConfig::kSpillStartPartitionBit, "29")
 //         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //           const auto statsPair = taskSpilledStats(*task);
@@ -5814,9 +5952,9 @@ class HashJoinTest : public HiveConnectorTestBase {
 //               }
 //               ASSERT_EQ(op->canReclaim(), enableSpilling);
 //               uint64_t reclaimableBytes{0};
-//               const bool reclaimable = op->reclaimableBytes(reclaimableBytes);
-//               ASSERT_EQ(reclaimable, enableSpilling);
-//               if (enableSpilling) {
+//               const bool reclaimable =
+//               op->reclaimableBytes(reclaimableBytes); ASSERT_EQ(reclaimable,
+//               enableSpilling); if (enableSpilling) {
 //                 ASSERT_GE(reclaimableBytes, 0);
 //               } else {
 //                 ASSERT_EQ(reclaimableBytes, 0);
@@ -5835,7 +5973,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .injectSpill(false)
 //           .spillDirectory(enableSpilling ? tempDirectory->getPath() : "")
 //           .referenceQuery(
-//               "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//               "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE
+//               t.t_k1 = u.u_k1")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //             const auto statsPair = taskSpilledStats(*task);
 //             ASSERT_EQ(statsPair.first.spilledBytes, 0);
@@ -5954,7 +6093,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //           .injectSpill(false)
 //           .spillDirectory(enableSpilling ? tempDirectory->getPath() : "")
 //           .referenceQuery(
-//               "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//               "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE
+//               t.t_k1 = u.u_k1")
 //           .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //             const auto statsPair = taskSpilledStats(*task);
 //             ASSERT_EQ(statsPair.first.spilledBytes, 0);
@@ -6104,7 +6244,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //         .injectSpill(false)
 //         .spillDirectory(tempDirectory->getPath())
 //         .referenceQuery(
-//             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1
+//             = u.u_k1")
 //         .config(core::QueryConfig::kSpillStartPartitionBit, "29")
 //         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //           const auto statsPair = taskSpilledStats(*task);
@@ -6203,7 +6344,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //               StopReason::kNone);
 //           testData.abortFromRootMemoryPool ? abortPool(op->pool()->root())
 //                                            : abortPool(op->pool());
-//           // We can't directly reclaim memory from this hash build operator as
+//           // We can't directly reclaim memory from this hash build operator
+//           as
 //           // its driver thread is running and in suspension state.
 //           ASSERT_GT(op->pool()->root()->usedBytes(), 0);
 //           ASSERT_EQ(
@@ -6220,7 +6362,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //             .planNode(plan)
 //             .injectSpill(false)
 //             .referenceQuery(
-//                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE
+//                 t.t_k1 = u.u_k1")
 //             .run(),
 //         "Manual MemoryPool Abortion");
 //     waitForAllTasksToBeDeleted();
@@ -6279,7 +6422,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //               StopReason::kNone);
 //           testData.abortFromRootMemoryPool ? abortPool(op->pool()->root())
 //                                            : abortPool(op->pool());
-//           // We can't directly reclaim memory from this hash build operator as
+//           // We can't directly reclaim memory from this hash build operator
+//           as
 //           // its driver thread is running and in suspension state.
 //           ASSERT_GT(op->pool()->root()->usedBytes(), 0);
 //           ASSERT_EQ(
@@ -6296,7 +6440,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //             .planNode(plan)
 //             .injectSpill(false)
 //             .referenceQuery(
-//                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE
+//                 t.t_k1 = u.u_k1")
 //             .run(),
 //         "Manual MemoryPool Abortion");
 //
@@ -6357,7 +6502,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //                   StopReason::kNone);
 //               testData.abortFromRootMemoryPool ? abortPool(pool->root())
 //                                                : abortPool(pool);
-//               // We can't directly reclaim memory from this hash build operator
+//               // We can't directly reclaim memory from this hash build
+//               operator
 //               // as its driver thread is running and in suspegnsion state.
 //               ASSERT_GE(pool->root()->usedBytes(), 0);
 //               ASSERT_EQ(
@@ -6374,7 +6520,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //             .planNode(plan)
 //             .injectSpill(false)
 //             .referenceQuery(
-//                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE
+//                 t.t_k1 = u.u_k1")
 //             .run(),
 //         "Manual MemoryPool Abortion");
 //
@@ -6447,7 +6594,8 @@ class HashJoinTest : public HiveConnectorTestBase {
 //             .planNode(plan)
 //             .injectSpill(false)
 //             .referenceQuery(
-//                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE
+//                 t.t_k1 = u.u_k1")
 //             .run(),
 //         "Manual MemoryPool Abortion");
 //     waitForAllTasksToBeDeleted();
@@ -6461,7 +6609,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
       {"t_k1"},
       // {"t_k1", "t_k2"},
       {makeFlatVector<int32_t>(2000, [](auto row) { return 1 + row % 2; })})};
-      //  makeFlatVector<int32_t>(2000, [](auto row) { return row; })})};
+  //  makeFlatVector<int32_t>(2000, [](auto row) { return row; })})};
   auto buildVectors = std::vector<RowVectorPtr>{
       makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2})})};
   createDuckDbTable("t", probeVectors);
@@ -6474,18 +6622,19 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
     // boilerplate code to re-implement every method from the base PlanBuilder
     // and cast to the derived class type. We need a derived class
     // CudfPlanBuilder& at the point that we call the hashJoin.
-    auto plan = static_cast<CudfPlanBuilder&>(CudfPlanBuilder(planNodeIdGenerator)
-                    .values(probeVectors, true))
-                    .hashJoin(
-                        {"t_k1"},
-                        {"u_k1"},
-                        CudfPlanBuilder(planNodeIdGenerator)
-                            .values(buildVectors, true)
-                            .planNode(),
-                        filter,
-                        {"t_k1", "u_k1"},
-                        core::JoinType::kLeft)
-                    .planNode();
+    auto plan =
+        static_cast<CudfPlanBuilder&>(
+            CudfPlanBuilder(planNodeIdGenerator).values(probeVectors, true))
+            .hashJoin(
+                {"t_k1"},
+                {"u_k1"},
+                CudfPlanBuilder(planNodeIdGenerator)
+                    .values(buildVectors, true)
+                    .planNode(),
+                filter,
+                {"t_k1", "u_k1"},
+                core::JoinType::kLeft)
+            .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)
@@ -6553,8 +6702,10 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //         .run();
 //   };
 //
-//   // In this case the rows with t_k2 = 4 appear at the end of the first batch,
-//   // meaning the last rows in that output batch are misses, and don't get added.
+//   // In this case the rows with t_k2 = 4 appear at the end of the first
+//   batch,
+//   // meaning the last rows in that output batch are misses, and don't get
+//   added.
 //   // The rows with t_k2 = 8 appear in the second batch so only one row is
 //   // written, meaning there is space in the second output batch for the miss
 //   // with tk_2 = 4 to get written.
@@ -6598,12 +6749,14 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //
 //     SCOPED_TESTVALUE_SET(
 //         "facebook::velox::exec::HashBuild::addInput",
-//         std::function<void(exec::HashBuild*)>(([&](exec::HashBuild* hashBuild) {
+//         std::function<void(exec::HashBuild*)>(([&](exec::HashBuild*
+//         hashBuild) {
 //           memory::MemoryPool* pool = hashBuild->pool();
-//           const auto availableReservationBytes = pool->availableReservation();
-//           const auto currentUsedBytes = pool->usedBytes();
-//           // Verifies we always have min reservation after ensuring the input.
-//           ASSERT_GE(
+//           const auto availableReservationBytes =
+//           pool->availableReservation(); const auto currentUsedBytes =
+//           pool->usedBytes();
+//           // Verifies we always have min reservation after ensuring the
+//           input. ASSERT_GE(
 //               availableReservationBytes,
 //               currentUsedBytes * minSpillableReservationPct / 100);
 //         })));
@@ -6615,7 +6768,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //         .injectSpill(false)
 //         .spillDirectory(tempDirectory->getPath())
 //         .referenceQuery(
-//             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//             "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1
+//             = u.u_k1")
 //         .run();
 //   }
 // }
@@ -6655,7 +6809,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       common::globalSpillStats().spillMaxLevelExceededCount;
 //   SCOPED_TESTVALUE_SET(
 //       "facebook::velox::exec::HashBuild::addInput",
-//       std::function<void(exec::HashBuild*)>(([&](exec::HashBuild* hashBuild) {
+//       std::function<void(exec::HashBuild*)>(([&](exec::HashBuild* hashBuild)
+//       {
 //         Operator::ReclaimableSectionGuard guard(hashBuild);
 //         testingRunArbitration(hashBuild->pool());
 //       })));
@@ -6667,7 +6822,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       .maxSpillLevel(0)
 //       .spillDirectory(tempDirectory->getPath())
 //       .referenceQuery(
-//           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 =
+//           u.u_k1")
 //       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
 //       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //         auto opStats = toOperatorStats(task->taskStats());
@@ -6740,8 +6896,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //           .queryCtx(queryCtx)
 //           .config(core::QueryConfig::kSpillEnabled, true)
 //           .config(core::QueryConfig::kJoinSpillEnabled, true)
-//           .config(core::QueryConfig::kMaxSpillBytes, testData.maxSpilledBytes)
-//           .copyResults(pool_.get());
+//           .config(core::QueryConfig::kMaxSpillBytes,
+//           testData.maxSpilledBytes) .copyResults(pool_.get());
 //       ASSERT_FALSE(testData.expectedExceedLimit);
 //     } catch (const VeloxRuntimeError& e) {
 //       ASSERT_TRUE(testData.expectedExceedLimit);
@@ -6796,8 +6952,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //           .queryCtx(queryCtx)
 //           .config(core::QueryConfig::kSpillEnabled, true)
 //           .config(core::QueryConfig::kJoinSpillEnabled, true)
-//           .config(core::QueryConfig::kMaxSpillBytes, testData.maxSpilledBytes)
-//           .copyResults(pool_.get());
+//           .config(core::QueryConfig::kMaxSpillBytes,
+//           testData.maxSpilledBytes) .copyResults(pool_.get());
 //       ASSERT_FALSE(testData.expectedExceedLimit);
 //     } catch (const VeloxRuntimeError& e) {
 //       ASSERT_TRUE(testData.expectedExceedLimit);
@@ -6828,7 +6984,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       runHashJoinTask(
 //           vectors,
 //           newQueryCtx(
-//               memoryManagerWithoutArbitrator.get(), executor_.get(), 8L << 30),
+//               memoryManagerWithoutArbitrator.get(), executor_.get(), 8L <<
+//               30),
 //           numDrivers,
 //           pool(),
 //           false)
@@ -6884,7 +7041,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       "facebook::velox::exec::Driver::runInternal",
 //       std::function<void(exec::Driver*)>([&](exec::Driver* driver) {
 //         numInitializedDrivers++;
-//         // We need to make sure reclaimers on both build and probe side are set
+//         // We need to make sure reclaimers on both build and probe side are
+//         set
 //         // (in Operator::initialize) to avoid race conditions, producing
 //         // consistent test results.
 //         if (numInitializedDrivers.load() == 2) {
@@ -6905,7 +7063,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //               return;
 //             }
 //
-//             // Signal the test control that one of the hash build operator has
+//             // Signal the test control that one of the hash build operator
+//             has
 //             // entered into non-reclaimable section.
 //             nonReclaimableSectionWaitFlag = false;
 //             nonReclaimableSectionWait.notifyAll();
@@ -6933,8 +7092,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //         !reclaimerInitializationWaitFlag.load());
 //   });
 //
-//   // We expect capacity grow fails as we can't reclaim from hash join operators.
-//   memory::testingRunArbitration();
+//   // We expect capacity grow fails as we can't reclaim from hash join
+//   operators. memory::testingRunArbitration();
 //
 //   // Notify the hash build operator that memory arbitration has been done.
 //   memoryArbitrationWaitFlag = false;
@@ -7000,7 +7159,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       .maxSpillLevel(0)
 //       .spillDirectory(tempDirectory->getPath())
 //       .referenceQuery(
-//           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+//           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 =
+//           u.u_k1")
 //       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
 //       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //         auto opStats = toOperatorStats(task->taskStats());
@@ -7011,10 +7171,11 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       .run();
 // }
 //
-// DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredDuringParallelJoinBuild) {
-//   std::unique_ptr<memory::MemoryManager> memoryManager = createMemoryManager();
-//   const auto& arbitrator = memoryManager->arbitrator();
-//   auto rowType = ROW({
+// DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredDuringParallelJoinBuild)
+// {
+//   std::unique_ptr<memory::MemoryManager> memoryManager =
+//   createMemoryManager(); const auto& arbitrator =
+//   memoryManager->arbitrator(); auto rowType = ROW({
 //       {"c0", INTEGER()},
 //       {"c1", INTEGER()},
 //       {"c2", VARCHAR()},
@@ -7034,7 +7195,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       std::function<void(void*)>(
 //           [&](void*) { parallelBuildTriggered = true; }));
 //
-//   // TODO: add driver context to test if the memory allocation is triggered in
+//   // TODO: add driver context to test if the memory allocation is triggered
+//   in
 //   // driver context or not.
 //   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 //   AssertQueryBuilder(duckDbQueryRunner_)
@@ -7058,7 +7220,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //                     core::JoinType::kInner)
 //                 .planNode())
 //       .assertResults(
-//           "SELECT t.c1 FROM tmp as t, tmp AS u WHERE t.c0 == u.c1 AND t.c1 == u.c0");
+//           "SELECT t.c1 FROM tmp as t, tmp AS u WHERE t.c0 == u.c1 AND t.c1 ==
+//           u.c0");
 //   ASSERT_TRUE(parallelBuildTriggered);
 //
 //   // This test uses on-demand created memory manager instead of the global
@@ -7072,7 +7235,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //   SCOPED_TESTVALUE_SET(
 //       "facebook::velox::exec::HashBuild::ensureTableFits",
 //       std::function<void(HashBuild*)>([&](HashBuild* buildOp) {
-//         // Inject the allocation once to ensure the merged table allocation will
+//         // Inject the allocation once to ensure the merged table allocation
+//         will
 //         // trigger memory arbitration.
 //         if (!injectOnce.exchange(false)) {
 //           return;
@@ -7095,7 +7259,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       .joinType(core::JoinType::kRight)
 //       .joinOutputLayout({"t_k1", "t_k2", "u_k1", "t_v1"})
 //       .referenceQuery(
-//           "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
+//           "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON
+//           t.t_k1 = u.u_k1")
 //       .injectSpill(false)
 //       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //         auto opStats = toOperatorStats(task->taskStats());
@@ -7117,8 +7282,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //        {"c2", VARCHAR()},
 //        {"c3", VARCHAR()}});
 //
-//   std::vector<RowVectorPtr> vectors = createVectors(16, rowType, fuzzerOpts_);
-//   createDuckDbTable(vectors);
+//   std::vector<RowVectorPtr> vectors = createVectors(16, rowType,
+//   fuzzerOpts_); createDuckDbTable(vectors);
 //
 //   std::shared_ptr<core::QueryCtx> joinQueryCtx =
 //       newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
@@ -7163,7 +7328,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //   ASSERT_EQ(arbitrator->stats().numFailures, 1);
 //   ASSERT_EQ(arbitrator->stats().numReserves, 1);
 //
-//   // Wait again here as this test uses on-demand created memory manager instead
+//   // Wait again here as this test uses on-demand created memory manager
+//   instead
 //   // of the global one. We need to make sure any used memory got cleaned up
 //   // before exiting the scope
 //   waitForAllTasksToBeDeleted();
@@ -7189,16 +7355,19 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //     SCOPED_TRACE(fmt::format("timeout {}", succinctMillis(timeoutMs)));
 //     auto memoryManager = createMemoryManager(512 << 20, 0, 0, timeoutMs);
 //     auto queryCtx =
-//         newQueryCtx(memoryManager.get(), executor_.get(), queryMemoryCapacity);
+//         newQueryCtx(memoryManager.get(), executor_.get(),
+//         queryMemoryCapacity);
 //
-//     // Set test injection to block one hash build operator to inject delay when
+//     // Set test injection to block one hash build operator to inject delay
+//     when
 //     // memory reclaim waits for task to pause.
 //     folly::EventCount buildBlockWait;
 //     std::atomic<bool> buildBlockWaitFlag{true};
 //     std::atomic<bool> blockOneBuild{true};
 //     SCOPED_TESTVALUE_SET(
 //         "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
-//         std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool* pool) {
+//         std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool*
+//         pool) {
 //           const std::string re(".*HashBuild");
 //           if (!RE2::FullMatch(pool->name(), re)) {
 //             return;
@@ -7235,7 +7404,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       }
 //     });
 //
-//     // Wait for task pause to reach, and then delay for a while before unblock
+//     // Wait for task pause to reach, and then delay for a while before
+//     unblock
 //     // the blocked hash build operator.
 //     taskPauseWait.await([&]() { return taskPauseWaitFlag.load(); });
 //     // Wait for two seconds and expect the short reclaim wait timeout.
@@ -7247,7 +7417,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //     queryThread.join();
 //
 //     // This test uses on-demand created memory manager instead of the global
-//     // one. We need to make sure any used memory got cleaned up before exiting
+//     // one. We need to make sure any used memory got cleaned up before
+//     exiting
 //     // the scope
 //     waitForAllTasksToBeDeleted();
 //   }
@@ -7263,10 +7434,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //
 //     std::string debugString() const {
 //       return fmt::format(
-//           "triggerBuildSpill: {}, afterNoMoreInput: {}, probeOutputIndex: {}",
-//           triggerBuildSpill,
-//           afterNoMoreInput,
-//           probeOutputIndex);
+//           "triggerBuildSpill: {}, afterNoMoreInput: {}, probeOutputIndex:
+//           {}", triggerBuildSpill, afterNoMoreInput, probeOutputIndex);
 //     }
 //   } testSettings[] = {
 //       {false, false, 0},
@@ -7339,7 +7508,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //         .joinType(core::JoinType::kRight)
 //         .joinOutputLayout({"t_k1", "t_k2", "u_k1", "t_v1"})
 //         .referenceQuery(
-//             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
+//             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON
+//             t.t_k1 = u.u_k1")
 //         .injectSpill(false)
 //         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //           auto opStats = toOperatorStats(task->taskStats());
@@ -7358,7 +7528,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //   }
 // }
 //
-// DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfLastOutputProcessing) {
+// DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfLastOutputProcessing)
+// {
 //   std::atomic_int outputCountAfterNoMoreInout{0};
 //   std::atomic_bool injectOnce{true};
 //   SCOPED_TESTVALUE_SET(
@@ -7392,11 +7563,12 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       .buildKeys({"u_k1"})
 //       .buildVectors(std::move(buildVectors))
 //       .config(core::QueryConfig::kJoinSpillEnabled, "true")
-//       .config(core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
-//       .joinType(core::JoinType::kRight)
+//       .config(core::QueryConfig::kPreferredOutputBatchRows,
+//       std::to_string(10)) .joinType(core::JoinType::kRight)
 //       .joinOutputLayout({"t_k1", "t_k2", "u_k1", "t_v1"})
 //       .referenceQuery(
-//           "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
+//           "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON
+//           t.t_k1 = u.u_k1")
 //       .injectSpill(false)
 //       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //         auto opStats = toOperatorStats(task->taskStats());
@@ -7409,7 +7581,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 // }
 //
 // // Inject probe-side spilling in the middle of output processing. If
-// // 'recursiveSpill' is true, we trigger probe-spilling when probe the hash table
+// // 'recursiveSpill' is true, we trigger probe-spilling when probe the hash
+// table
 // // built from spilled data.
 // DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfOutputProcessing) {
 //   for (bool recursiveSpill : {false, true}) {
@@ -7470,7 +7643,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //         .joinType(core::JoinType::kRight)
 //         .joinOutputLayout({"t_k1", "t_k2", "u_k1", "t_v1"})
 //         .referenceQuery(
-//             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
+//             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON
+//             t.t_k1 = u.u_k1")
 //         .injectSpill(false)
 //         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //           auto opStats = toOperatorStats(task->taskStats());
@@ -7523,7 +7697,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //         .buildVectors(32, 5)
 //         .config(core::QueryConfig::kJoinSpillEnabled, "true")
 //         .referenceQuery(
-//             "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
+//             "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 =
+//             u.u_k0")
 //         .injectSpill(false)
 //         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //           auto opStats = toOperatorStats(task->taskStats());
@@ -7539,13 +7714,14 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 // }
 //
 // DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillExceedLimit) {
-//   // If 'buildTriggerSpill' is true, then spilling is triggered by hash build.
-//   for (const bool buildTriggerSpill : {false, true}) {
+//   // If 'buildTriggerSpill' is true, then spilling is triggered by hash
+//   build. for (const bool buildTriggerSpill : {false, true}) {
 //     SCOPED_TRACE(fmt::format("buildTriggerSpill {}", buildTriggerSpill));
 //
 //     SCOPED_TESTVALUE_SET(
 //         "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
-//         std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool* pool) {
+//         std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool*
+//         pool) {
 //           if (buildTriggerSpill && !isHashBuildMemoryPool(*pool)) {
 //             return;
 //           }
@@ -7578,7 +7754,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //         .joinType(core::JoinType::kRight)
 //         .joinOutputLayout({"t_k1", "t_k2", "u_k1", "t_v1"})
 //         .referenceQuery(
-//             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
+//             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON
+//             t.t_k1 = u.u_k1")
 //         .injectSpill(false)
 //         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //           auto opStats = toOperatorStats(task->taskStats());
@@ -7608,7 +7785,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //   std::atomic_bool injectOnce{true};
 //   SCOPED_TESTVALUE_SET(
 //       "facebook::velox::common::memory::MemoryPoolImpl::allocateNonContiguous",
-//       std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool* pool) {
+//       std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool* pool)
+//       {
 //         if (!isHashProbeMemoryPool(*pool)) {
 //           return;
 //         }
@@ -7619,7 +7797,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //         const auto numNonReclaimableAttempts =
 //             arbitrator->stats().numNonReclaimableAttempts;
 //         testingRunArbitration(pool);
-//         // Verifies that we run into non-reclaimable section when reclaim from
+//         // Verifies that we run into non-reclaimable section when reclaim
+//         from
 //         // hash probe.
 //         ASSERT_EQ(
 //             arbitrator->stats().numNonReclaimableAttempts,
@@ -7635,7 +7814,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       .buildVectors(32, 5)
 //       .config(core::QueryConfig::kJoinSpillEnabled, "true")
 //       .referenceQuery(
-//           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
+//           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 =
+//           u.u_k0")
 //       .injectSpill(false)
 //       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
 //         auto opStats = toOperatorStats(task->taskStats());
@@ -7645,12 +7825,14 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //       .run();
 // }
 //
-// // This test case is to cover the case that hash probe trigger spill for right
+// // This test case is to cover the case that hash probe trigger spill for
+// right
 // // semi join types and the pending input needs to be processed in multiple
 // // steps.
 // DEBUG_ONLY_TEST_F(HashJoinTest, spillOutputWithRightSemiJoins) {
 //   for (const auto joinType :
-//        {core::JoinType::kRightSemiFilter, core::JoinType::kRightSemiProject}) {
+//        {core::JoinType::kRightSemiFilter, core::JoinType::kRightSemiProject})
+//        {
 //     std::atomic_bool injectOnce{true};
 //     SCOPED_TESTVALUE_SET(
 //         "facebook::velox::exec::Driver::runInternal::getOutput",
@@ -7671,8 +7853,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //     std::vector<std::string> joinOutputLayout;
 //     bool nullAware{false};
 //     if (joinType == core::JoinType::kRightSemiProject) {
-//       duckDbSqlReference = "SELECT u_k2, u_k1 IN (SELECT t_k1 FROM t) FROM u";
-//       joinOutputLayout = {"u_k2", "match"};
+//       duckDbSqlReference = "SELECT u_k2, u_k1 IN (SELECT t_k1 FROM t) FROM
+//       u"; joinOutputLayout = {"u_k2", "match"};
 //       // Null aware is only supported for semi projection join type.
 //       nullAware = true;
 //     } else {
@@ -7704,7 +7886,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //   }
 // }
 //
-// DEBUG_ONLY_TEST_F(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
+// DEBUG_ONLY_TEST_F(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters)
+// {
 //   const int32_t numSplits = 10;
 //   const int32_t numRowsProbe = 333;
 //   const int32_t numRowsBuild = 100;
@@ -7743,13 +7926,15 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
 //         makeFlatVector<int32_t>(
 //             numRowsBuild / 5,
 //             [i](auto row) { return 35 + 2 * (row + i * numRowsBuild / 5); }),
-//         makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row; }),
+//         makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row;
+//         }),
 //     }));
 //   }
 //   std::vector<RowVectorPtr> keyOnlyBuildVectors;
 //   for (int i = 0; i < 5; ++i) {
 //     keyOnlyBuildVectors.push_back(
-//         makeRowVector({makeFlatVector<int32_t>(numRowsBuild / 5, [i](auto row) {
+//         makeRowVector({makeFlatVector<int32_t>(numRowsBuild / 5, [i](auto
+//         row) {
 //           return 35 + 2 * (row + i * numRowsBuild / 5);
 //         })}));
 //   }

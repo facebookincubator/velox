@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 #include "velox/vector/ComplexVector.h"
 
 using namespace facebook::velox;
@@ -47,7 +47,8 @@ RowTypePtr extract(
   return ROW(std::move(names), std::move(types));
 }
 
-// TODO: The field and fields functions are static members of PlanBuilder but are private
+// TODO: The field and fields functions are static members of PlanBuilder but
+// are private
 std::shared_ptr<const core::FieldAccessTypedExpr> field(
     const RowTypePtr& inputType,
     column_index_t index) {
@@ -84,21 +85,19 @@ std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> fields_(
 }
 } // namespace
 
-
 CudfPlanBuilder::CudfPlanBuilder(
     std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator,
     memory::MemoryPool* pool)
     : PlanBuilder(planNodeIdGenerator, pool) {}
 
 CudfPlanBuilder& CudfPlanBuilder::hashJoin(
-  const std::vector<std::string>& leftKeys,
-  const std::vector<std::string>& rightKeys,
-  const core::PlanNodePtr& build,
-  const std::string& filter,
-  const std::vector<std::string>& outputLayout,
-  core::JoinType joinType,
-  bool nullAware) {
-
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const core::PlanNodePtr& build,
+    const std::string& filter,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType,
+    bool nullAware) {
   std::cout << "Calling CudfPlanBuilder::hashJoin" << std::endl;
 
   VELOX_CHECK_NOT_NULL(planNode_, "CudfHashJoin cannot be the source node");

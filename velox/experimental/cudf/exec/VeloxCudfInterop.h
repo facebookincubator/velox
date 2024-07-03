@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "velox/vector/ComplexVector.h"
-#include "velox/vector/BaseVector.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
 
 #include <cudf/column/column.hpp>
 #include <cudf/table/table.hpp>
@@ -26,8 +26,15 @@
 
 namespace facebook::velox::cudf_velox {
 
-std::unique_ptr<cudf::table> to_cudf_table(const facebook::velox::RowVectorPtr& leftBatch);
-facebook::velox::VectorPtr to_velox_column(const cudf::column_view& col, facebook::velox::memory::MemoryPool* pool);
-facebook::velox::RowVectorPtr to_velox_column(const cudf::table_view& table, facebook::velox::memory::MemoryPool* pool, std::string name_prefix = "c");
+std::unique_ptr<cudf::table> to_cudf_table(
+    const facebook::velox::RowVectorPtr& leftBatch);
+facebook::velox::VectorPtr to_velox_column(
+    const cudf::column_view& col,
+    facebook::velox::memory::MemoryPool* pool);
+facebook::velox::RowVectorPtr to_velox_column(
+    const cudf::table_view& table,
+    facebook::velox::memory::MemoryPool* pool,
+    std::string name_prefix = "c");
 
 } // namespace facebook::velox::cudf_velox
+                                          

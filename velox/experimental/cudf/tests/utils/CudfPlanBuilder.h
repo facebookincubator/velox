@@ -28,8 +28,8 @@ class CudfPlanBuilder : public facebook::velox::exec::test::PlanBuilder {
       std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator,
       memory::MemoryPool* pool = nullptr);
 
-  /// Add a CudfHashJoinNode to join two inputs using one or more join keys and an
-  /// optional filter.
+  /// Add a CudfHashJoinNode to join two inputs using one or more join keys and
+  /// an optional filter.
   ///
   /// @param leftKeys Join keys from the probe side, the preceding plan node.
   /// Cannot be empty.
@@ -53,7 +53,7 @@ class CudfPlanBuilder : public facebook::velox::exec::test::PlanBuilder {
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner,
       bool nullAware = false);
-
 };
 
 } // namespace facebook::velox::cudf_velox::test
+                                                

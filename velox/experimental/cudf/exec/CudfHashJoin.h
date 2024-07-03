@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/core/PlanNode.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
@@ -31,90 +31,92 @@
 namespace facebook::velox::cudf_velox {
 
 // Custom hash join operator which uses libcudf
-// Need to define a new PlanNode, JoinBridge, Operators (Build, Probe), and a PlanNodeTranslator
-// and register the PlanNodeTranslator
+// Need to define a new PlanNode, JoinBridge, Operators (Build, Probe), and a
+// PlanNodeTranslator and register the PlanNodeTranslator
 class CudfHashJoinNode : public core::AbstractJoinNode {
-public:
-    CudfHashJoinNode(
-        const core::PlanNodeId& id,
-        core::JoinType joinType,
-        bool nullAware,
-        const std::vector<core::FieldAccessTypedExprPtr>& leftKeys,
-        const std::vector<core::FieldAccessTypedExprPtr>& rightKeys,
-        core::TypedExprPtr filter,
-        core::PlanNodePtr left,
-        core::PlanNodePtr right,
-        RowTypePtr outputType);
+ public:
+  CudfHashJoinNode(
+      const core::PlanNodeId& id,
+      core::JoinType joinType,
+      bool nullAware,
+      const std::vector<core::FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<core::FieldAccessTypedExprPtr>& rightKeys,
+      core::TypedExprPtr filter,
+      core::PlanNodePtr left,
+      core::PlanNodePtr right,
+      RowTypePtr outputType);
 
-    std::string_view name() const override;
+  std::string_view name() const override;
 };
 
 class CudfHashJoinBridge : public exec::JoinBridge {
-public:
-    using hash_type = std::pair<std::unique_ptr<cudf::table>, std::shared_ptr<cudf::hash_join>>;
+ public:
+  using hash_type =
+      std::pair<std::unique_ptr<cudf::table>, std::shared_ptr<cudf::hash_join>>;
 
-    void setHashTable(std::optional<hash_type> hashObject);
+  void setHashTable(std::optional<hash_type> hashObject);
 
-    std::optional<hash_type> hashOrFuture(ContinueFuture* future);
+  std::optional<hash_type> hashOrFuture(ContinueFuture* future);
 
-private:
-    std::optional<hash_type> hashObject_;
+ private:
+  std::optional<hash_type> hashObject_;
 };
 
 class CudfHashJoinBuild : public exec::Operator {
-public:
+ public:
   CudfHashJoinBuild(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    std::shared_ptr<const CudfHashJoinNode> joinNode);
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfHashJoinNode> joinNode);
 
-    void addInput(RowVectorPtr input) override;
+  void addInput(RowVectorPtr input) override;
 
-    bool needsInput() const override;
+  bool needsInput() const override;
 
-    RowVectorPtr getOutput() override;
+  RowVectorPtr getOutput() override;
 
-    void noMoreInput() override;
+  void noMoreInput() override;
 
-    exec::BlockingReason isBlocked(ContinueFuture* future) override;
+  exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
-    bool isFinished() override;
+  bool isFinished() override;
 
-private:
-    std::vector<RowVectorPtr> inputs_;
-    ContinueFuture future_{ContinueFuture::makeEmpty()};
+ private:
+  std::vector<RowVectorPtr> inputs_;
+  ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
 
 class CudfHashJoinProbe : public exec::Operator {
-public:
-    using hash_type = CudfHashJoinBridge::hash_type;
-    CudfHashJoinProbe(
-        int32_t operatorId,
-        exec::DriverCtx* driverCtx,
-        std::shared_ptr<const CudfHashJoinNode> joinNode);
+ public:
+  using hash_type = CudfHashJoinBridge::hash_type;
+  CudfHashJoinProbe(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const CudfHashJoinNode> joinNode);
 
-    bool needsInput() const override;
+  bool needsInput() const override;
 
-    void addInput(RowVectorPtr input) override;
+  void addInput(RowVectorPtr input) override;
 
-    RowVectorPtr getOutput() override;
+  RowVectorPtr getOutput() override;
 
-    exec::BlockingReason isBlocked(ContinueFuture* future) override;
+  exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
-    bool isFinished() override;
+  bool isFinished() override;
 
-private:
-    std::optional<hash_type> hashObject_;
-    bool finished_{false};
+ private:
+  std::optional<hash_type> hashObject_;
+  bool finished_{false};
 };
 
 class CudfHashJoinBridgeTranslator : public exec::Operator::PlanNodeTranslator {
-public:
-    std::unique_ptr<exec::Operator> toOperator(exec::DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node);
+ public:
+  std::unique_ptr<exec::Operator>
+  toOperator(exec::DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node);
 
-    std::unique_ptr<exec::JoinBridge> toJoinBridge(const core::PlanNodePtr& node);
+  std::unique_ptr<exec::JoinBridge> toJoinBridge(const core::PlanNodePtr& node);
 
-    exec::OperatorSupplier toOperatorSupplier(const core::PlanNodePtr& node);
+  exec::OperatorSupplier toOperatorSupplier(const core::PlanNodePtr& node);
 };
 
 } // namespace facebook::velox::cudf_velox
