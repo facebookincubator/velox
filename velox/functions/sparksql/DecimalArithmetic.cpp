@@ -655,8 +655,6 @@ class Divide {
       auto precision = aPrecision - aScale + bScale + scale;
       return DecimalUtil::adjustPrecisionScale(precision, scale);
     } else {
-      // 20,2    17,3  21  20  3  
-      // 20,2    7,3  21  10  -xx
       auto intDig = std::min(38, aPrecision - aScale + bScale);
       auto decDig = std::min(38, std::max(6, aScale + bPrecision + 1));
       auto diff = (intDig + decDig) - 38;
