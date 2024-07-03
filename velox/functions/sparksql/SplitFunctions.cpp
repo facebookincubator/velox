@@ -24,21 +24,12 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-/**
- * split(string, delimiter[, limit]) -> array(varchar)
- *
- * Splits string on delimiter and returns an array of size at most limit.
- * delimiter is a string representing regular expression.
- * limit is an integer which controls the number of times the regex is applied.
- * By default, limit is -1.
- *
- * If delimiter is not empty, then when limit > 0, the last element in
- * the array will contain the remainder of the string if such left, otherwise
- * not.
- *
- * If limit <= 0, delimiter will be applied as many times as possible, and the
- resulting array can be of any size.
- */
+// split(string, delimiter[, limit]) -> array(varchar)
+//
+// Splits string on delimiter and returns an array of size at most limit.
+// delimiter is a string representing regular expression.
+// limit is an integer which controls the number of times the regex is applied.
+// By default, limit is -1.
 class Split final : public exec::VectorFunction {
  public:
   Split() {}
@@ -58,29 +49,28 @@ class Split final : public exec::VectorFunction {
     BaseVector::ensureWritable(rows, ARRAY(VARCHAR()), context.pool(), result);
     exec::VectorWriter<Array<Varchar>> resultWriter;
     resultWriter.init(*result->as<ArrayVector>());
-    // Optimization for the (flat, const, const) case.
+    // Fast path for (flat, const, const).
     if (strings->isIdentityMapping() and delims->isConstantMapping() and
         (!limits or limits->isConstantMapping())) {
       const auto* rawStrings = strings->data<StringView>();
       const auto delim = delims->valueAt<StringView>(0);
       int32_t limit = std::numeric_limits<int32_t>::max();
-      bool isEmptyDelimiter = delim.empty();
       if (limits) {
         const auto constant = limits->valueAt<int32_t>(0);
         if (constant > 0) {
           limit = constant;
         }
       }
-      rows.applyToSelected([&](vector_size_t row) {
-        if (isEmptyDelimiter) {
+      if (delim.empty()) {
+        rows.applyToSelected([&](vector_size_t row) {
           splitEmptyDelimiter(rawStrings[row], limit, row, resultWriter);
-        } else {
-          splitInner(rawStrings[row], delim, limit, row, resultWriter);
-        }
-      });
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t row) {
+          split(rawStrings[row], delim, limit, row, resultWriter);
+        });
+      }
     } else {
-      // The rest of the cases are handled through this general path and no
-      // direct access.
       rows.applyToSelected([&](vector_size_t row) {
         const auto delim = delims->valueAt<StringView>(row);
         int32_t limit = std::numeric_limits<int32_t>::max();
@@ -90,11 +80,11 @@ class Split final : public exec::VectorFunction {
             limit = limitValue;
           }
         }
-        if (delim.size() == 0) {
+        if (delim.empty()) {
           splitEmptyDelimiter(
               strings->valueAt<StringView>(row), limit, row, resultWriter);
         } else {
-          splitInner(
+          split(
               strings->valueAt<StringView>(row),
               delim,
               limit,
@@ -143,14 +133,18 @@ class Split final : public exec::VectorFunction {
     resultWriter.commit();
   }
 
-  // Split with a non-empty pattern.
-  void splitInner(
+  // Split with a non-empty delimiter. If limit > 0, The resulting array's
+  // length will not be more than limit and the resulting array's last entry
+  // will contain all input beyond the last matched regex. If limit <= 0,
+  // delimiter will be applied as many times as possible, and the resulting
+  // array can be of any size.
+  void split(
       StringView input,
       const StringView delim,
       int32_t limit,
       vector_size_t row,
       exec::VectorWriter<Array<Varchar>>& resultWriter) const {
-    VELOX_CHECK(!delim.empty(), "Delimiter size should not empty");
+    VELOX_USER_CHECK(!delim.empty(), "Non-empty delimiter is expected");
     // Add new array (for the new row) to our array vector.
     resultWriter.setOffset(row);
     auto& arrayWriter = resultWriter.current();
@@ -171,6 +165,13 @@ class Split final : public exec::VectorFunction {
     size_t pos = 0;
     const char* start = input.data();
     re2::StringPiece subMatches[1];
+    // Matches a regular expression against a portion of the input string,
+    // starting from 'pos' to the end of the input string. The match is not
+    // anchored, which means it can start at any position in the string. If a
+    // match is found, the matched portion of the string is stored in
+    // 'subMatches'. The '1' indicates that we are only interested in the first
+    // match found from the current position 'pos' in each iteration of the
+    // loop.
     while (re->Match(
         re2String, pos, input.size(), RE2::Anchor::UNANCHORED, subMatches, 1)) {
       const auto fullMatch = subMatches[0];

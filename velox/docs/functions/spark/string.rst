@@ -201,11 +201,10 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     which controls the number of times the regex is applied. By default, ``limit`` is -1. When ``limit`` > 0,
     the resulting array's length will not be more than ``limit``, and the resulting array's last entry will
     contain all input beyond the last matched regex. When ``limit`` <= 0, ``regex`` will be applied as many
-    times as possible, and the resulting array can be of any size. If ``delimiter`` is empty string, then when ``limit``
-    is smaller than the string size, the resulting array would not contain the remaining string, instead of it would
-    contains ``limit`` number single char splitting from the string, for example the output of split('abc', '', 2) is
-    ["a", "b"] instead of ["a", "bc"], and when limit size greater or equals to the string size, the result would not
-    include empty tail string e.g. the output of split('abc', '') would be ["a", "b", "c"] instead of ["a", "b", "c", ""].::
+    times as possible, and the resulting array can be of any size. When ``delimiter`` is empty, if ``limit``
+    is smaller than the size of ``string``, the resulting array only contains ``limit`` number of single characters
+    splitting from ``string``, otherwise, the resulting array contains all the single characters of ``string`` and 
+    does not include an empty tail character.::
 
         SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
         SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
