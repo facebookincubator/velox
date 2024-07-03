@@ -37,3 +37,9 @@ target_link_libraries(
   Snappy::snappy
   thrift
   zstd::zstd)
+
+
+add_library(velox_dwio_native_parquet_reader_cli ParquetReaderCli.cpp)
+
+target_link_libraries(velox_dwio_native_parquet_reader_cli
+        velox_dwio_parquet_reader)
