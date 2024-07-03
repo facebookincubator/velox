@@ -168,15 +168,12 @@ class WindowPartition {
       vector_size_t* rawFrameBounds) const;
 
  private:
-  bool compareRowsWithSortKeys(
-      const char* lhs,
-      const char* rhs,
-      RowContainer* data) const;
+  bool compareRowsWithSortKeys(const char* lhs, const char* rhs) const;
 
   vector_size_t findPeerGroupEndIndex(
       vector_size_t currentStart,
       vector_size_t lastRow,
-      std::function<bool(const char*, const char*, RowContainer*)> peerCompare);
+      std::function<bool(const char*, const char*)> peerCompare);
 
   // Searches for 'currentRow[frameColumn]' in 'orderByColumn' of rows between
   // 'start' and 'end' in the partition. 'firstMatch' specifies if first or last

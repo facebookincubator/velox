@@ -145,15 +145,13 @@ WindowPartition::extractNulls(
                    : std::nullopt;
 }
 
-bool WindowPartition::compareRowsWithSortKeys(
-    const char* lhs,
-    const char* rhs,
-    RowContainer* data) const {
+bool WindowPartition::compareRowsWithSortKeys(const char* lhs, const char* rhs)
+    const {
   if (lhs == rhs) {
     return false;
   }
   for (auto& key : sortKeyInfo_) {
-    if (auto result = data->compare(
+    if (auto result = data_->compare(
             lhs,
             rhs,
             key.first,
@@ -167,13 +165,12 @@ bool WindowPartition::compareRowsWithSortKeys(
 vector_size_t WindowPartition::findPeerGroupEndIndex(
     vector_size_t currentStart,
     vector_size_t lastPartitionRow,
-    std::function<bool(const char*, const char*, RowContainer*)> peerCompare) {
+    std::function<bool(const char*, const char*)> peerCompare) {
   auto peerEnd = currentStart;
   while (peerEnd <= lastPartitionRow) {
     if (peerCompare(
             partition_[currentStart - startRow()],
-            partition_[peerEnd - startRow()],
-            data_)) {
+            partition_[peerEnd - startRow()])) {
       break;
     }
     peerEnd++;
@@ -188,9 +185,8 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
     vector_size_t prevPeerEnd,
     vector_size_t* rawPeerStarts,
     vector_size_t* rawPeerEnds) {
-  auto peerCompare =
-      [&](const char* lhs, const char* rhs, RowContainer* data) -> bool {
-    return compareRowsWithSortKeys(lhs, rhs, data);
+  auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
+    return compareRowsWithSortKeys(lhs, rhs);
   };
 
   VELOX_CHECK_LE(end, numRows() + startRow());
@@ -203,7 +199,7 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
 
   if (partial_ && start > 0) {
     lastPartitionRow = end - 1;
-    auto peerGroup = peerCompare(partition_[0], partition_[1], data_);
+    auto peerGroup = peerCompare(partition_[0], partition_[1]);
 
     // The first row is the last row in previous batch. So Delete it after
     // compare.
