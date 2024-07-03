@@ -16,6 +16,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -95,11 +96,16 @@ TEST_F(WindowTest, rankWithEqualValue) {
                   .streamingWindow(kClauses)
                   .planNode();
 
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::RowsStreamingWindowBuild::addInput",
+      std::function<void(const RowsStreamingWindowBuild*)>(
+          ([&](const RowsStreamingWindowBuild* build) {
+            ASSERT_EQ(build->windowBuildType(), "RowsStreamingWindowBuild");
+          })));
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
       .config(core::QueryConfig::kMaxOutputBatchRows, "2")
-      .config(core::QueryConfig::kRowsStreamingWindowEnabled, "true")
       .assertResults(
           "SELECT *, rank() over (order by c1 rows unbounded preceding) FROM tmp");
 }
@@ -129,9 +135,15 @@ TEST_F(WindowTest, rowStreamingWindowBuild) {
                   .streamingWindow(kClauses)
                   .planNode();
 
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::RowsStreamingWindowBuild::addInput",
+      std::function<void(const RowsStreamingWindowBuild*)>(
+          ([&](const RowsStreamingWindowBuild* build) {
+            ASSERT_EQ(build->windowBuildType(), "RowsStreamingWindowBuild");
+          })));
+
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(core::QueryConfig::kRowsStreamingWindowEnabled, "true")
       .assertResults(
           "SELECT *, rank() over (partition by c0, c2 order by c1, c3), dense_rank() over (partition by c0, c2 order by c1, c3), row_number() over (partition by c0, c2 order by c1, c3), sum(c4) over (partition by c0, c2 order by c1, c3) FROM tmp");
 }

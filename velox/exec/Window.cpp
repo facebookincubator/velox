@@ -42,8 +42,7 @@ Window::Window(
   auto* spillConfig =
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   if (windowNode->inputsSorted()) {
-    if (driverCtx->queryConfig().rowsStreamingWindowEnabled() ||
-        supportRowsStreaming()) {
+    if (supportRowsStreaming()) {
       windowBuild_ = std::make_unique<RowsStreamingWindowBuild>(
           windowNode_, pool(), spillConfig, &nonReclaimableSection_);
     } else {

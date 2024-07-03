@@ -58,6 +58,10 @@ class RowsStreamingWindowBuild : public WindowBuild {
         outputPartition_ == windowPartitions_.size() - 1;
   }
 
+  std::string_view windowBuildType() const override {
+    return "RowsStreamingWindowBuild";
+  }
+
  private:
   void buildNextInputOrPartition(bool isFinished);
 

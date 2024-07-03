@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/RowsStreamingWindowBuild.h"
+#include "velox/common/testutil/TestValue.h"
 
 namespace facebook::velox::exec {
 
@@ -42,6 +43,8 @@ void RowsStreamingWindowBuild::buildNextInputOrPartition(bool isFinished) {
 }
 
 void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
+  velox::common::testutil::TestValue::adjust(
+      "facebook::velox::exec::RowsStreamingWindowBuild::addInput", this);
   for (auto i = 0; i < inputChannels_.size(); ++i) {
     decodedInputVectors_[i].decode(*input->childAt(inputChannels_[i]));
   }
