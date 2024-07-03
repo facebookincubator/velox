@@ -285,7 +285,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: toprettystring(x) -> varchar
 
-    Returns pretty string for all scalar type except Timestamp. It has several differences with casting value to string:
+    Returns pretty string for all scalar type. It has several differences with casting value to string:
 
     - It prints null values (either from column or struct field) as "NULL".
 
@@ -295,13 +295,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT toprettystring(12);  -- "12"
         SELECT toprettystring(null);  -- "NULL"
         SELECT toprettystring(cast('abcd' as binary));  -- "[61 62 63 64 65 66]"
-
-.. spark:function:: toprettystring(x, timeZone) -> varchar
-
-    Returns pretty string for Timestamp. Returns string NULL for null. ``timeZone`` cannot be null. ::
-
-        SELECT toprettystring('2000-01-01 12:21:56', 'America/Los_Angeles');  -- "2000-01-01 04:21:56"
-        SELECT toprettystring(null, 'America/Los_Angeles');  -- "NULL"
+        SELECT toprettystring('2000-01-01 12:21:56');  -- "2000-01-01 04:21:56"
 
 .. spark:function:: translate(string, match, replace) -> varchar
 
