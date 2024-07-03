@@ -653,21 +653,29 @@ latency at P50, P90, P99, and P100 percentiles.</p></td>
 buckets. It is configured to report latency at P50, P90, P99, and P100
 percentiles.</p></td>
 </tr>
-<tr class="row-odd"><td><p>exchange_data_size_time_ms</p></td>
+<tr class="row-odd"><td><p>exchange_data_bytes</p></td>
+<td><p>Sum</p></td>
+<td><p>The exchange data size in bytes.</p></td>
+</tr>
+<tr class="row-even"><td><p>exchange_data_size</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of exchange data size in range of [0, 128MB] with 128
+buckets. It is configured to report the capacity at P50, P90, P99, and P100
+percentiles.</p></td>
+</tr>
+<tr class="row-odd"><td><p>exchange_data_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of data exchange requests.</p></td>
+</tr>
+<tr class="row-even"><td><p>exchange_data_size_time_ms</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of data exchange size latency in range of [0, 5s] with 50
 buckets. It is configured to report latency at P50, P90, P99, and P100
 percentiles.</p></td>
 </tr>
-<tr class="row-even"><td><p>exchange_data_bytes</p></td>
-<td><p>Sum</p></td>
-<td><p>The exchange data size in bytes.</p></td>
-</tr>
-<tr class="row-odd"><td><p>exchange_data_size</p></td>
-<td><p>Histogram</p></td>
-<td><p>The distribution of exchange data size in range of [0, 128MB] with 128
-buckets. It is configured to report the capacity at P50, P90, P99, and P100
-percentiles.</p></td>
+<tr class="row-odd"><td><p>exchange_data_size_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of data size exchange requests.</p></td>
 </tr>
 </tbody>
 </table>
