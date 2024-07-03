@@ -102,6 +102,7 @@ TEST_F(GetJsonObjectTest, nullResult) {
 
   // Illegal json.
   EXPECT_EQ(getJsonObject(R"({"hello"-3.5})", "$.hello"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a": bad, "b": string})", "$.a"), std::nullopt);
 
   // Illegal json path.
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", "$hello"), std::nullopt);

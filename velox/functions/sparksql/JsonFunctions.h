@@ -55,15 +55,18 @@ struct GetJsonObjectFunction {
     if (simdjsonParse(paddedJson).get(jsonDoc)) {
       return false;
     }
+    try {
+      auto rawResult = jsonPath_.has_value()
+          ? jsonDoc.at_path(jsonPath_.value().data())
+          : jsonDoc.at_path(removeSingleQuotes(jsonPath));
+      if (rawResult.error()) {
+        return false;
+      }
 
-    auto rawResult = jsonPath_.has_value()
-        ? jsonDoc.at_path(jsonPath_.value().data())
-        : jsonDoc.at_path(removeSingleQuotes(jsonPath));
-    if (rawResult.error()) {
-      return false;
-    }
-
-    if (!extractStringResult(rawResult, result)) {
+      if (!extractStringResult(rawResult, result)) {
+        return false;
+      }
+    } catch (simdjson::simdjson_error& e) {
       return false;
     }
 
