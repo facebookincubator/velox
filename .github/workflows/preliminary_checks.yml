@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - { name: "License Header", 
+          - { name: "License Header",
               command: "header-fix",
               message: "Found missing License Header(s)",
             }
@@ -52,7 +52,7 @@ jobs:
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
-      - name: Check ${{ matrix.config.name }} 
+      - name: Check ${{ matrix.config.name }}
         run: |
           make ${{ matrix.config.command }}
 
