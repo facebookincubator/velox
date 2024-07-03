@@ -55,6 +55,13 @@ via the configuration ‘spark.partition_id’.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="raise_error">
+<span class="sig-name descname"><span class="pre">raise_error</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">message</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#raise_error" title="Link to this definition">¶</a></dt>
+<dd><p>Throws a user error with the specified <code class="docutils literal notranslate"><span class="pre">message</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">message</span></code> is NULL, throws a user error with empty message.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="spark_partition_id">
 <span class="sig-name descname"><span class="pre">spark_partition_id</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#spark_partition_id" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the current partition id.
@@ -92,6 +99,7 @@ from Pseudo-Random Numbers with the seed by combining user-specified
     <ul>
 <li><a class="reference internal" href="#">Miscellaneous Functions</a><ul>
 <li><a class="reference internal" href="#monotonically_increasing_id"><code class="docutils literal notranslate"><span class="pre">monotonically_increasing_id()</span></code></a></li>
+<li><a class="reference internal" href="#raise_error"><code class="docutils literal notranslate"><span class="pre">raise_error()</span></code></a></li>
 <li><a class="reference internal" href="#spark_partition_id"><code class="docutils literal notranslate"><span class="pre">spark_partition_id()</span></code></a></li>
 <li><a class="reference internal" href="#uuid"><code class="docutils literal notranslate"><span class="pre">uuid()</span></code></a></li>
 </ul>
