@@ -57,7 +57,7 @@ jobs:
       run:
         shell: bash
     env:
-      CCACHE_DIR: "/__w/velox/velox/.ccache"
+      CCACHE_DIR: "${GITHUB_WORKSPACE}/.ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       Protobuf_SOURCE: BUNDLED # can be removed after #10134 is merged
       simdjson_SOURCE: BUNDLED
@@ -69,7 +69,7 @@ jobs:
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
         # it doesn't work
-        run: git config --global --add safe.directory /__w/velox/velox
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
       - name: Install Dependencies
         run: |
@@ -109,7 +109,7 @@ jobs:
             "-DVELOX_ENABLE_GPU=ON"
           )
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
-    
+
       - name: Ccache after
         run: ccache -s
 
@@ -122,7 +122,7 @@ jobs:
         # Some of the adapters dependencies are in the 'adapters' conda env
         shell: mamba run --no-capture-output -n adapters /usr/bin/bash -e {0}
         env:
-          LIBHDFS3_CONF: "/__w/velox/velox/scripts/hdfs-client.xml"
+          LIBHDFS3_CONF: "${GITHUB_WORKSPACE}/scripts/hdfs-client.xml"
         working-directory: _build/release
         run: |
           ctest -j 8 --output-on-failure --no-tests=error
@@ -169,7 +169,7 @@ jobs:
           MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON"
         run: |
-          make debug 
+          make debug
 
       - name: CCache after
         run: |
