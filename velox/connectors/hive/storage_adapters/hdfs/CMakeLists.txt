@@ -16,7 +16,7 @@
 
 add_library(velox_hdfs RegisterHdfsFileSystem.cpp)
 
-if(VELOX_ENABLE_HDFS)
+if(DEFINED VELOX_ENABLE_HDFS OR DEFINED VELOX_ENABLE_HDFS3)
   target_sources(velox_hdfs PRIVATE HdfsFileSystem.cpp HdfsReadFile.cpp
                                     HdfsWriteFile.cpp hdfs_internal.cc)
   target_link_libraries(velox_hdfs Folly::folly xsimd arrow)
