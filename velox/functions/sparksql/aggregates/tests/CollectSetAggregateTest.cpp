@@ -169,9 +169,10 @@ TEST_F(CollectSetAggregateTest, groupBy) {
       {expected});
 
   data = makeRowVector({
-      makeFlatVector<int16_t>({1}),
+      makeFlatVector<int16_t>({1, 2}),
       makeMapVectorFromJson<int64_t, int64_t>({
-          "{10: 10, 11: 11, 12: 12}",
+          "{10: 10, 11: 11}",
+          "{12: 12}",
       }),
   });
 
