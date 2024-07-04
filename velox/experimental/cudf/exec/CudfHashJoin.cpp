@@ -332,4 +332,3 @@ exec::OperatorSupplier CudfHashJoinBridgeTranslator::toOperatorSupplier(
 }
 
 } // namespace facebook::velox::cudf_velox
-                                          

@@ -56,4 +56,3 @@ class CudfPlanBuilder : public facebook::velox::exec::test::PlanBuilder {
 };
 
 } // namespace facebook::velox::cudf_velox::test
-                                                

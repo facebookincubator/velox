@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_cudf_test_lib
-  CudfPlanBuilder.cpp)
+add_library(velox_cudf_test_lib CudfPlanBuilder.cpp)
 
 target_link_libraries(
   velox_cudf_test_lib

@@ -273,4 +273,3 @@ RowVectorPtr to_velox_column(
 }
 
 } // namespace facebook::velox::cudf_velox
-                                          

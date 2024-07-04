@@ -37,4 +37,3 @@ facebook::velox::RowVectorPtr to_velox_column(
     std::string name_prefix = "c");
 
 } // namespace facebook::velox::cudf_velox
-                                          

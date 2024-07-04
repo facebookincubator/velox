@@ -14,10 +14,7 @@
 
 add_subdirectory(utils)
 
-add_executable(
-  velox_cudf_hash_test
-  HashJoinTest.cpp
-  Main.cpp)
+add_executable(velox_cudf_hash_test HashJoinTest.cpp Main.cpp)
 
 add_test(
   NAME velox_cudf_hash_test

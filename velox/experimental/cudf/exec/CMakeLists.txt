@@ -12,17 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_cudf_exec
-  CudfHashJoin.cpp
-  ToCudf.cpp
-  VeloxCudfInterop.cpp)
+add_library(velox_cudf_exec CudfHashJoin.cpp ToCudf.cpp VeloxCudfInterop.cpp)
 
 set_target_properties(velox_cudf_exec PROPERTIES CUDA_ARCHITECTURES native)
 
-target_link_libraries(
-  velox_cudf_exec
-  cudf::cudf
-  velox_exception
-  velox_common_base
-  velox_exec)
+target_link_libraries(velox_cudf_exec cudf::cudf velox_exception
+                      velox_common_base velox_exec)
