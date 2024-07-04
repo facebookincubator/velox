@@ -176,13 +176,17 @@ class Split final : public exec::VectorFunction {
         re2String, pos, input.size(), RE2::Anchor::UNANCHORED, subMatches, 1)) {
       const auto fullMatch = subMatches[0];
       auto offset = fullMatch.data() - start;
+      const auto size = fullMatch.size();
       if (offset >= input.size()) {
         break;
       }
-
+      if (size == 0) {
+        ++offset;
+      }
       arrayWriter.add_item().setNoCopy(
           StringView(input.data() + pos, offset - pos));
-      pos = offset + fullMatch.size();
+      pos = offset + size;
+
       ++addedElements;
       // If the next element should be the last, leave the loop.
       if (addedElements + 1 == limit) {

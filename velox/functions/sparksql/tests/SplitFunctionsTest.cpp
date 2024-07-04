@@ -262,6 +262,31 @@ TEST_F(SplitTest, split) {
   assertEqualVectors(
       expected2, run(inputStrings, delim, "split(C0, C1, C2)", 2));
 
+  delim = "A|";
+  auto expected3 = makeArrayVector<StringView>({
+      {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y", ""},
+      {"o", "n", "e", ",", ",", ",", "f", "o", "u", "r", ",", ""},
+      {""},
+  });
+  assertEqualVectors(expected3, run(inputStrings, delim, "split(C0, C1)"));
+  auto expected4 = makeArrayVector<StringView>({
+      {"I", ",he,she,they"},
+      {"o", "ne,,,four,"},
+      {""},
+  });
+  assertEqualVectors(
+      expected4, run(inputStrings, delim, "split(C0, C1, C2)", 2));
+
+  delim = "A";
+  auto expected5 = makeArrayVector<StringView>({
+      {"I,he,she,they"},
+      {"one,,,four,"},
+      {""},
+  });
+  assertEqualVectors(expected5, run(inputStrings, delim, "split(C0, C1)"));
+  assertEqualVectors(
+      expected5, run(inputStrings, delim, "split(C0, C1, C2)", 2));
+
   // Non-ascii, flat strings, flat delimiter, no limit.
   delim = "లేదా";
   inputStrings = std::vector<std::string>{
