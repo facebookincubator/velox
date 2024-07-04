@@ -1181,36 +1181,33 @@ struct FindInSetFunction {
   }
 };
 
-/// repeat(input, times) -> varchar
-/// string_repeat(input, times) -> varchar
+/// repeat(input, n) -> varchar
 ///
-///    Returns the string which repeats ``input`` ``times`` times.
+///    Returns the string which repeats input n times.
 ///    Result size must be less than or equal to 1MB.
-///    If ``times`` is less than or equal to 0, empty string is returned.
+///    If n is less than or equal to 0, empty string is returned.
 template <typename T>
 struct RepeatFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   static constexpr bool is_default_ascii_behavior = true;
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
-      const arg_type<Varchar>& input,
-      int32_t times) {
+  FOLLY_ALWAYS_INLINE void
+  call(out_type<Varchar>& result, const arg_type<Varchar>& input, int32_t n) {
     static constexpr size_t resultMaxSize = 1024 * 1024; // 1MB
     auto inputSize = input.size();
-    if (inputSize == 0 || times <= 0) {
+    if (inputSize == 0 || n <= 0) {
       result.resize(0);
       return;
     }
-    int32_t newSize = velox::checkedMultiply<int32_t>(inputSize, times);
+    int32_t newSize = velox::checkedMultiply<int32_t>(inputSize, n);
     VELOX_USER_CHECK_LE(
         newSize,
         resultMaxSize,
         "Result size must be less than or equal to {}",
         resultMaxSize);
     result.resize(newSize);
-    for (auto i = 0; i < times; ++i) {
+    for (auto i = 0; i < n; ++i) {
       std::memcpy(result.data() + i * inputSize, input.data(), inputSize);
     }
   }

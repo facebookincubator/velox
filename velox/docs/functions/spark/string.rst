@@ -141,9 +141,9 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
-.. spark:function:: repeat(string, n) -> varchar
+.. spark:function:: repeat(input, n) -> varchar
 
-    Returns the string which repeats ``string`` ``n`` times. 
+    Returns the string which repeats ``input`` ``n`` times. 
     Result size must be less than or equal to 1MB.
     If ``n`` is less than or equal to 0, empty string is returned. ::
 
@@ -227,10 +227,6 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT startswith('js SQL', 'js'); -- true
         SELECT startswith('js SQL', 'SQL'); -- false
         SELECT startswith('js SQL', null); -- NULL
-
-.. spark:function:: string_repeat(string, n) -> varchar
-
-    This is an alias for :spark:func:`repeat`.
 
 .. spark:function:: str_to_map(string, entryDelimiter, keyValueDelimiter) -> map(string, string)
 
