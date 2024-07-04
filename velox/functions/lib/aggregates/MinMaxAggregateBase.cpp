@@ -284,6 +284,8 @@ template <>
 const double MinAggregate<double>::kInitialValue_ =
     MinMaxTrait<double>::quiet_NaN();
 
+// Spark requires timestamp data precision to be in microseconds. Add this class
+// to align with Spark's behavior.
 class TimestampMicrosPrecisionMaxAggregate : public MaxAggregate<Timestamp> {
  public:
   explicit TimestampMicrosPrecisionMaxAggregate(TypePtr resultType)
@@ -301,6 +303,8 @@ class TimestampMicrosPrecisionMaxAggregate : public MaxAggregate<Timestamp> {
   }
 };
 
+// Spark requires timestamp data precision to be in microseconds. Add this class
+// to align with Spark's behavior.
 class TimestampMicrosPrecisionMinAggregate : public MinAggregate<Timestamp> {
  public:
   explicit TimestampMicrosPrecisionMinAggregate(TypePtr resultType)

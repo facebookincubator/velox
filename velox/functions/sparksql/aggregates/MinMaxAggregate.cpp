@@ -17,7 +17,9 @@
 #include "velox/functions/lib/aggregates/MinMaxAggregateBase.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
+
 namespace {
+
 exec::AggregateRegistrationResult registerMin(
     const std::string& name,
     bool withCompanionFunctions,
@@ -64,7 +66,11 @@ exec::AggregateRegistrationResult registerMax(
           std::vector<TypePtr> argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
-        auto factory = getMaxFunctionFactory(name, true, false, false);
+        auto factory = getMaxFunctionFactory(
+            name,
+            true /*nestedNullAllowed*/,
+            false /*mapTypeSupported*/,
+            false /*useMillisPrecision*/);
         return factory(step, argTypes, resultType, config);
       },
       {false /*orderSensitive*/},
