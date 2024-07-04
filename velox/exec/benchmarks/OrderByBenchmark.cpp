@@ -140,12 +140,13 @@ class OrderByBenchmark {
       vectors.emplace_back(OrderByBenchmarkUtil::fuzzRows(
           test.rowType, test.numRows, test.numKeys, pool_.get()));
     }
-    return makeOrderByPlan(vectors, makeOrderByKeys(test.numKeys));
-  }
 
-  core::PlanNodePtr makeOrderByPlan(
-      const std::vector<RowVectorPtr>& vectors,
-      const std::vector<std::string>& keys) {
+    std::vector<std::string> keys;
+    keys.reserve(test.numKeys);
+    for (auto i = 0; i < test.numKeys; i++) {
+      keys.emplace_back(fmt::format("c{} ASC NULLS LAST", i));
+    }
+
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId orderNodeId;
     return test::PlanBuilder(planNodeIdGenerator)
@@ -153,15 +154,6 @@ class OrderByBenchmark {
         .orderBy(keys, false)
         .capturePlanNodeId(orderNodeId)
         .planNode();
-  }
-
-  std::vector<std::string> makeOrderByKeys(int numKeys) {
-    std::vector<std::string> keys;
-    keys.reserve(numKeys);
-    for (auto i = 0; i < numKeys; i++) {
-      keys.emplace_back(fmt::format("c{} ASC NULLS LAST", i));
-    }
-    return keys;
   }
 
   int64_t run(core::PlanNodePtr plan) {

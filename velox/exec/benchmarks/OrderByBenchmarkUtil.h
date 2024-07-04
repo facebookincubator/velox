@@ -21,9 +21,16 @@ namespace facebook::velox {
 
 class OrderByBenchmarkUtil {
  public:
+  /// Generate bigint row types with or without Varchar.
+  /// @param noPayload the return types does not include Varchar.
+  /// @return row types.
   static std::vector<RowTypePtr> bigintRowTypes(bool noPayload);
+  // Generate Varchar row types.
   static std::vector<RowTypePtr> largeVarcharRowTypes();
 
+  /// Generate RowVector by VectorFuzzer according to rowType, for front keys
+  /// (column 0 to numKeys -2) use high
+  // nullRatio to enforce all columns to be compared.
   static RowVectorPtr fuzzRows(
       const RowTypePtr& rowType,
       size_t numRows,
