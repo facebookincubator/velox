@@ -55,7 +55,7 @@ void WindowPartition::addRows(const std::vector<char*>& rows) {
 
 void WindowPartition::clearOutputRows(vector_size_t numRows) {
   VELOX_CHECK(partial_, "Current WindowPartition should be partial.");
-  if (!complete_ || (complete_ && rows_.size() > numRows)) {
+  if (!complete_ || (complete_ && rows_.size() >= numRows)) {
     data_->eraseRows(folly::Range<char**>(rows_.data(), numRows - 1));
     rows_.erase(rows_.begin(), rows_.begin() + numRows - 1);
     partition_ = folly::Range(rows_.data(), rows_.size());
@@ -239,7 +239,6 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
     rawPeerStarts[j] = peerStart;
     rawPeerEnds[j] = peerEnd - 1;
   }
-
   return {peerStart, peerEnd};
 }
 

@@ -75,10 +75,8 @@ void RowsStreamingWindowBuild::noMoreInput() {
 }
 
 std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
-  if (outputPartition_ > 0) {
-    windowPartitions_[outputPartition_].reset();
-  }
-
+  // The previous partition has already been set to nullptr by the
+  // Window.cpp#callResetPartition() method.
   return windowPartitions_[++outputPartition_];
 }
 

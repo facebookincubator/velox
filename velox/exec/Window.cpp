@@ -618,12 +618,10 @@ vector_size_t Window::callApplyLoop(
 
   // This function requires that the currentPartition_ is available for output.
   VELOX_DCHECK_NOT_NULL(currentPartition_);
-
   while (numOutputRowsLeft > 0) {
     auto rowsForCurrentPartition = currentPartition_->isPartial()
         ? currentPartition_->numRowsForProcessing()
         : currentPartition_->numRowsForProcessing() - partitionOffset_;
-
     if (rowsForCurrentPartition <= numOutputRowsLeft) {
       // Current partition can fit completely in the output buffer.
       // So output all its rows.
@@ -642,7 +640,6 @@ vector_size_t Window::callApplyLoop(
       }
 
       callResetPartition();
-
       if (!currentPartition_) {
         // The WindowBuild doesn't have any more partitions to process right
         // now. So break until the next getOutput call.
@@ -698,7 +695,6 @@ RowVectorPtr Window::getOutput() {
 
   // Compute the output values of window functions.
   auto numResultRows = callApplyLoop(numOutputRows, result);
-
   return numResultRows < numOutputRows
       ? std::dynamic_pointer_cast<RowVector>(result->slice(0, numResultRows))
       : result;
