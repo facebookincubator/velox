@@ -1181,6 +1181,12 @@ struct FindInSetFunction {
   }
 };
 
+/// repeat(input, times) -> varchar
+/// string_repeat(input, times) -> varchar
+///
+///    Returns the string which repeats ``input`` ``times`` times.
+///    Result size must be less than or equal to 1MB.
+///    If ``times`` is less than or equal to 0, empty string is returned.
 template <typename T>
 struct RepeatFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
