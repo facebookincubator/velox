@@ -69,6 +69,23 @@ TEST_F(CollectSetAggregateTest, global) {
 
   testAggregations(
       {data}, {}, {"collect_set(c0)"}, {"spark_array_sort(a0)"}, {expected});
+
+  data = makeRowVector({
+      makeFlatVector<double>(
+          {1,
+           std::numeric_limits<double>::quiet_NaN(),
+           std::nan("1"),
+           std::nan("2")}),
+  });
+
+  expected = makeRowVector({
+      makeArrayVector<double>({
+          {1, std::numeric_limits<double>::quiet_NaN()},
+      }),
+  });
+
+  testAggregations(
+      {data}, {}, {"collect_set(c0)"}, {"spark_array_sort(a0)"}, {expected});
 }
 
 TEST_F(CollectSetAggregateTest, groupBy) {
@@ -150,6 +167,16 @@ TEST_F(CollectSetAggregateTest, groupBy) {
       {"collect_set(c1)"},
       {"c0", "spark_array_sort(a0)"},
       {expected});
+
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1}),
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{10: 10, 11: 11, 12: 12}",
+      }),
+  });
+
+  testFailingAggregations(
+      {data}, {"c0"}, {"collect_set(c1)"}, "Unsupported type MAP");
 }
 
 TEST_F(CollectSetAggregateTest, arrayWithNestedNulls) {

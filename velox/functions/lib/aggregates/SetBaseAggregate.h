@@ -19,8 +19,6 @@
 #include "velox/exec/SetAccumulator.h"
 #include "velox/functions/lib/CheckNestedNulls.h"
 
-using namespace facebook::velox::aggregate::prestosql;
-
 namespace facebook::velox::functions::aggregate {
 
 template <typename T, bool ignoreNulls = false>
@@ -29,7 +27,7 @@ class SetBaseAggregate : public exec::Aggregate {
   explicit SetBaseAggregate(const TypePtr& resultType)
       : exec::Aggregate(resultType) {}
 
-  using AccumulatorType = SetAccumulator<T>;
+  using AccumulatorType = velox::aggregate::prestosql::SetAccumulator<T>;
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
