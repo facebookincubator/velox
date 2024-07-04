@@ -42,21 +42,7 @@ struct ToPrettyStringFunction {
   template <typename TInput>
   void call(out_type<Varchar>& result, const TInput& input) {
     if constexpr (std::is_same_v<TInput, StringView>) {
-      if (inputType_->isVarchar()) {
-        result = input;
-      } else if (inputType_->isVarbinary()) {
-        result.resize(1 + 3 * input.size());
-        char* const startPosition = result.data();
-        char* pos = startPosition;
-        *pos++ = '[';
-        for (auto i = 0; i < input.size(); i++) {
-          auto formated = fmt::format("{:X}", input.data()[i]);
-          *pos++ = formated.data()[0];
-          *pos++ = formated.data()[1];
-          *pos++ = ' ';
-        }
-        *--pos = ']';
-      }
+      result.setNoCopy(input);
       return;
     }
     if constexpr (std::is_same_v<TInput, int32_t>) {
@@ -90,6 +76,30 @@ struct ToPrettyStringFunction {
 };
 
 template <typename TExec>
+struct ToPrettyStringVarbinaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename TInput>
+  void callNullable(out_type<Varchar>& result, const TInput* input) {
+    if (input) {
+      result.resize(1 + 3 * input->size());
+      char* const startPosition = result.data();
+      char* pos = startPosition;
+      *pos++ = '[';
+      for (auto i = 0; i < input->size(); i++) {
+        auto formated = fmt::format("{:X}", input->data()[i]);
+        *pos++ = formated.data()[0];
+        *pos++ = formated.data()[1];
+        *pos++ = ' ';
+      }
+      *--pos = ']';
+    } else {
+      result.setNoCopy(detail::kNull);
+    }
+  }
+};
+
+template <typename TExec>
 struct ToPrettyStringTimeStampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
@@ -104,22 +114,18 @@ struct ToPrettyStringTimeStampFunction {
     timestampRowSize_ = getMaxStringLength(options_);
   }
 
-  void call(out_type<Varchar>& result, const Timestamp& input) {
-    Timestamp inputValue(input);
-    if (options_.timeZone) {
-      inputValue.toTimezone(*(options_.timeZone));
-    }
-    result.reserve(timestampRowSize_);
-    const auto stringView =
-        Timestamp::tsToStringView(inputValue, options_, result.data());
-    result.resize(stringView.size());
-  }
-
   void callNullable(
       out_type<Varchar>& result,
       const arg_type<Timestamp>* timestamp) {
     if (timestamp) {
-      call(result, *timestamp);
+      Timestamp inputValue(*timestamp);
+      if (options_.timeZone) {
+        inputValue.toTimezone(*(options_.timeZone));
+      }
+      result.reserve(timestampRowSize_);
+      const auto stringView =
+          Timestamp::tsToStringView(inputValue, options_, result.data());
+      result.resize(stringView.size());
     } else {
       result.setNoCopy(detail::kNull);
     }
@@ -158,22 +164,17 @@ struct ToPrettyStringDecimalFunction {
   }
 
   template <typename TInput>
-  void call(out_type<Varchar>& result, const TInput& input) {
-    result.reserve(maxRowSize_);
-    auto view = exec::detail::convertToStringView<TInput>(
-        input, scale_, maxRowSize_, result.data());
-    if (view.isInline()) {
-      result.setNoCopy(view);
-      result.resize(0);
-    } else {
-      result.resize(view.size());
-    }
-  }
-
-  template <typename TInput>
-  void callNullable(out_type<Varchar>& result, const TInput* a) {
-    if (a) {
-      call(result, *a);
+  void callNullable(out_type<Varchar>& result, const TInput* input) {
+    if (input) {
+      result.reserve(maxRowSize_);
+      auto view = exec::detail::convertToStringView<TInput>(
+          *input, scale_, maxRowSize_, result.data());
+      if (view.isInline()) {
+        result.setNoCopy(view);
+        result.resize(0);
+      } else {
+        result.resize(view.size());
+      }
     } else {
       result.setNoCopy(detail::kNull);
     }

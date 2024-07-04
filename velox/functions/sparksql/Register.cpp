@@ -168,25 +168,17 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
 }
 
 void registerToPrettyStringFunctions(const std::string& prefix) {
-  registerFunction<ToPrettyStringFunction, Varchar, int8_t>(
+  registerUnaryIntegralWithTReturn<ToPrettyStringFunction, Varchar>(
       {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringFunction, Varchar, int16_t>(
-      {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringFunction, Varchar, int32_t>(
-      {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringFunction, Varchar, int64_t>(
-      {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringFunction, Varchar, float>(
-      {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringFunction, Varchar, double>(
+  registerUnaryFloatingPointWithReturn<ToPrettyStringFunction, Varchar>(
       {prefix + "toprettystring"});
   registerFunction<ToPrettyStringFunction, Varchar, bool>(
       {prefix + "toprettystring"});
   registerFunction<ToPrettyStringFunction, Varchar, Varchar>(
       {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringFunction, Varchar, Varbinary>(
-      {prefix + "toprettystring"});
   registerFunction<ToPrettyStringFunction, Varchar, Date>(
+      {prefix + "toprettystring"});
+  registerFunction<ToPrettyStringVarbinaryFunction, Varchar, Varbinary>(
       {prefix + "toprettystring"});
   registerFunction<ToPrettyStringTimeStampFunction, Varchar, Timestamp>(
       {prefix + "toprettystring"});
