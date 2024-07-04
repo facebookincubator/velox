@@ -60,7 +60,7 @@ void StreamingWindowBuild::noMoreInput() {
   partitionStartRows_.push_back(sortedRows_.size());
 }
 
-std::unique_ptr<WindowPartition> StreamingWindowBuild::nextPartition() {
+std::shared_ptr<WindowPartition> StreamingWindowBuild::nextPartition() {
   VELOX_CHECK_GT(
       partitionStartRows_.size(), 0, "No window partitions available")
 
@@ -89,7 +89,7 @@ std::unique_ptr<WindowPartition> StreamingWindowBuild::nextPartition() {
       sortedRows_.data() + partitionStartRows_[currentPartition_],
       partitionSize);
 
-  return std::make_unique<WindowPartition>(
+  return std::make_shared<WindowPartition>(
       data_.get(), partition, inversedInputChannels_, sortKeyInfo_);
 }
 

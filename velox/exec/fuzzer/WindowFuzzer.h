@@ -88,7 +88,7 @@ class WindowFuzzer : public AggregationFuzzerBase {
 
   // Return a randomly generated frame clause string together with a boolean
   // flag indicating whether it is a ROWS frame.
-  std::tuple<std::string, bool> generateFrameClause();
+  std::tuple<std::string, bool, bool> generateFrameClause();
 
   std::string generateOrderByClause(
       const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders);
@@ -112,7 +112,8 @@ class WindowFuzzer : public AggregationFuzzerBase {
       const std::vector<RowVectorPtr>& input,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier,
-      bool enableWindowVerification);
+      bool enableWindowVerification,
+      bool supportRowsStreaming);
 
   void testAlternativePlans(
       const std::vector<std::string>& partitionKeys,
@@ -121,6 +122,7 @@ class WindowFuzzer : public AggregationFuzzerBase {
       const std::string& functionCall,
       const std::vector<RowVectorPtr>& input,
       bool customVerification,
+      bool supportRowsStreaming,
       const std::shared_ptr<ResultVerifier>& customVerifier,
       const velox::fuzzer::ResultOrError& expected);
 

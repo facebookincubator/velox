@@ -29,6 +29,38 @@ WindowPartition::WindowPartition(
   for (int i = 0; i < inputMapping_.size(); i++) {
     columns_.emplace_back(data_->columnAt(inputMapping_[i]));
   }
+
+  complete_ = true;
+}
+
+WindowPartition::WindowPartition(
+    RowContainer* data,
+    const std::vector<column_index_t>& inputMapping,
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
+    : data_(data), inputMapping_(inputMapping), sortKeyInfo_(sortKeyInfo) {
+  for (int i = 0; i < inputMapping_.size(); i++) {
+    columns_.emplace_back(data_->columnAt(inputMapping_[i]));
+  }
+
+  rows_.clear();
+  partition_ = folly::Range(rows_.data(), rows_.size());
+  complete_ = false;
+  partial_ = true;
+}
+
+void WindowPartition::addRows(const std::vector<char*>& rows) {
+  rows_.insert(rows_.end(), rows.begin(), rows.end());
+  partition_ = folly::Range(rows_.data(), rows_.size());
+}
+
+void WindowPartition::clearOutputRows(vector_size_t numRows) {
+  VELOX_CHECK(partial_, "Current WindowPartition should be partial.");
+  if (!complete_ || (complete_ && rows_.size() >= numRows)) {
+    data_->eraseRows(folly::Range<char**>(rows_.data(), numRows - 1));
+    rows_.erase(rows_.begin(), rows_.begin() + numRows - 1);
+    partition_ = folly::Range(rows_.data(), rows_.size());
+    startRow_ += numRows;
+  }
 }
 
 void WindowPartition::extractColumn(
@@ -51,7 +83,7 @@ void WindowPartition::extractColumn(
     vector_size_t resultOffset,
     const VectorPtr& result) const {
   RowContainer::extractColumn(
-      partition_.data() + partitionOffset,
+      partition_.data() + partitionOffset - startRow(),
       numRows,
       columns_[columnIndex],
       resultOffset,
@@ -130,23 +162,64 @@ bool WindowPartition::compareRowsWithSortKeys(const char* lhs, const char* rhs)
   return false;
 }
 
+vector_size_t WindowPartition::findPeerGroupEndIndex(
+    vector_size_t currentStart,
+    vector_size_t lastPartitionRow,
+    std::function<bool(const char*, const char*)> peerCompare) {
+  auto peerEnd = currentStart;
+  while (peerEnd <= lastPartitionRow) {
+    if (peerCompare(
+            partition_[currentStart - startRow()],
+            partition_[peerEnd - startRow()])) {
+      break;
+    }
+    peerEnd++;
+  }
+  return peerEnd;
+}
+
 std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
     vector_size_t start,
     vector_size_t end,
     vector_size_t prevPeerStart,
     vector_size_t prevPeerEnd,
     vector_size_t* rawPeerStarts,
-    vector_size_t* rawPeerEnds) const {
+    vector_size_t* rawPeerEnds) {
   auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
     return compareRowsWithSortKeys(lhs, rhs);
   };
 
-  VELOX_CHECK_LE(end, numRows());
+  VELOX_CHECK_LE(end, numRows() + startRow());
 
-  auto lastPartitionRow = numRows() - 1;
+  auto lastPartitionRow = numRows() + startRow() - 1;
   auto peerStart = prevPeerStart;
   auto peerEnd = prevPeerEnd;
-  for (auto i = start, j = 0; i < end; i++, j++) {
+
+  auto nextStart = start;
+
+  if (partial_ && start > 0) {
+    lastPartitionRow = end - 1;
+    auto peerGroup = peerCompare(partition_[0], partition_[1]);
+
+    // The first row is the last row in previous batch. So Delete it after
+    // compare.
+    data_->eraseRows(folly::Range<char**>(rows_.data(), 1));
+    rows_.erase(rows_.begin(), rows_.begin() + 1);
+    partition_ = folly::Range(rows_.data(), rows_.size());
+
+    if (!peerGroup) {
+      peerEnd = findPeerGroupEndIndex(start, lastPartitionRow, peerCompare);
+
+      for (auto j = 0; j < (peerEnd - start); j++) {
+        rawPeerStarts[j] = peerStart;
+        rawPeerEnds[j] = peerEnd - 1;
+      }
+
+      nextStart = peerEnd;
+    }
+  }
+
+  for (auto i = nextStart, j = (nextStart - start); i < end; i++, j++) {
     // When traversing input partition rows, the peers are the rows
     // with the same values for the ORDER BY clause. These rows
     // are equal in some ways and affect the results of ranking functions.
@@ -160,13 +233,7 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
       // Compute peerStart and peerEnd rows for the first row of the partition
       // or when past the previous peerGroup.
       peerStart = i;
-      peerEnd = i;
-      while (peerEnd <= lastPartitionRow) {
-        if (peerCompare(partition_[peerStart], partition_[peerEnd])) {
-          break;
-        }
-        peerEnd++;
-      }
+      peerEnd = findPeerGroupEndIndex(peerStart, lastPartitionRow, peerCompare);
     }
 
     rawPeerStarts[j] = peerStart;

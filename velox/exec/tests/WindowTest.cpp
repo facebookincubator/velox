@@ -16,6 +16,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -77,6 +78,74 @@ TEST_F(WindowTest, spill) {
   ASSERT_GT(stats.spilledRows, 0);
   ASSERT_GT(stats.spilledFiles, 0);
   ASSERT_GT(stats.spilledPartitions, 0);
+}
+
+TEST_F(WindowTest, rankWithEqualValue) {
+  auto data = makeRowVector(
+      {"c1"},
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "rank() over (order by c1 rows unbounded preceding)"};
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"c1"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::RowsStreamingWindowBuild::addInput",
+      std::function<void(const RowsStreamingWindowBuild*)>(
+          ([&](const RowsStreamingWindowBuild* build) {
+            ASSERT_EQ(build->windowBuildType(), "RowsStreamingWindowBuild");
+          })));
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(
+          "SELECT *, rank() over (order by c1 rows unbounded preceding) FROM tmp");
+}
+
+TEST_F(WindowTest, rowStreamingWindowBuild) {
+  const vector_size_t size = 1'00;
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+       makeFlatVector<int64_t>(
+           size, [](auto row) { return row % 3 + 1; }, nullEvery(5)),
+       makeFlatVector<int32_t>(size, [](auto row) { return row % 40; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row; })});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "rank() over (partition by c0, c2 order by c1, c3)",
+      "dense_rank() over (partition by c0, c2 order by c1, c3)",
+      "row_number() over (partition by c0, c2 order by c1, c3)",
+      "sum(c4) over (partition by c0, c2 order by c1, c3)"};
+
+  auto plan = PlanBuilder()
+                  .values({split(data, 10)})
+                  .orderBy({"c0", "c2", "c1", "c3"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::RowsStreamingWindowBuild::addInput",
+      std::function<void(const RowsStreamingWindowBuild*)>(
+          ([&](const RowsStreamingWindowBuild* build) {
+            ASSERT_EQ(build->windowBuildType(), "RowsStreamingWindowBuild");
+          })));
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .assertResults(
+          "SELECT *, rank() over (partition by c0, c2 order by c1, c3), dense_rank() over (partition by c0, c2 order by c1, c3), row_number() over (partition by c0, c2 order by c1, c3), sum(c4) over (partition by c0, c2 order by c1, c3) FROM tmp");
 }
 
 TEST_F(WindowTest, missingFunctionSignature) {
