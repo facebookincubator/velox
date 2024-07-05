@@ -4224,7 +4224,7 @@ void PrestoVectorSerde::deserialize(
         codec->uncompress(compressBuf.get(), header.uncompressedSize);
     std::vector<ByteRange> ranges;
     for (auto range : *uncompress) {
-      ranges.emplace_back(ByteRange{
+      ranges.push_back(ByteRange{
           const_cast<uint8_t*>(range.data()),
           static_cast<int32_t>(range.size()),
           0});
