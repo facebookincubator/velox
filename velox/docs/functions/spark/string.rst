@@ -289,13 +289,9 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
     - It prints null values (either from column or struct field) as "NULL".
 
-    - It prints binary values (either from column or struct field) using the hex format. ::
-
-        SELECT toprettystring('spark');  -- "spark"
-        SELECT toprettystring(12);  -- "12"
-        SELECT toprettystring(null);  -- "NULL"
-        SELECT toprettystring(cast('abcd' as binary));  -- "[61 62 63 64 65 66]"
-        SELECT toprettystring('2000-01-01 12:21:56');  -- "2000-01-01 04:21:56"
+    - It prints binary values (either from column or struct field) using the hex format.
+    
+    Considering the time zone if config ``session_timezone`` is set. ::
 
 .. spark:function:: translate(string, match, replace) -> varchar
 

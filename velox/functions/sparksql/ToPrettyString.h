@@ -24,6 +24,10 @@ namespace detail {
 static const StringView kNull = "NULL";
 }
 
+/// Returns pretty string for int8, int16, int32, int64, bool, Date, Varchar. It
+/// has one difference with casting value to string:
+/// - It prints null values (either from column or struct field) as "NULL".
+
 template <typename TExec>
 struct ToPrettyStringFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -40,32 +44,27 @@ struct ToPrettyStringFunction {
   }
 
   template <typename TInput>
-  void call(out_type<Varchar>& result, const TInput& input) {
-    if constexpr (std::is_same_v<TInput, StringView>) {
-      result.setNoCopy(input);
-      return;
-    }
-    if constexpr (std::is_same_v<TInput, int32_t>) {
-      if (inputType_->isDate()) {
-        auto output = DATE()->toString(input);
-        result.append(output);
+  void callNullable(out_type<Varchar>& result, const TInput* input) {
+    if (input) {
+      if constexpr (std::is_same_v<TInput, StringView>) {
+        result.setNoCopy(*input);
         return;
       }
-    }
-    const auto castResult =
-        util::Converter<TypeKind::VARCHAR, void, util::SparkCastPolicy>::
-            tryCast(input);
-    if (castResult.hasError()) {
-      result.setNoCopy(detail::kNull);
-    } else {
-      result.copy_from(castResult.value());
-    }
-  }
-
-  template <typename TInput>
-  void callNullable(out_type<Varchar>& result, const TInput* a) {
-    if (a) {
-      call(result, *a);
+      if constexpr (std::is_same_v<TInput, int32_t>) {
+        if (inputType_->isDate()) {
+          auto output = DATE()->toString(*input);
+          result.append(output);
+          return;
+        }
+      }
+      const auto castResult =
+          util::Converter<TypeKind::VARCHAR, void, util::SparkCastPolicy>::
+              tryCast(*input);
+      if (castResult.hasError()) {
+        result.setNoCopy(detail::kNull);
+      } else {
+        result.copy_from(castResult.value());
+      }
     } else {
       result.setNoCopy(detail::kNull);
     }
@@ -75,6 +74,12 @@ struct ToPrettyStringFunction {
   TypePtr inputType_;
 };
 
+/// Returns pretty string for Varbinary. It has several differences with casting
+/// value to string:
+/// - It prints null values (either from column or struct field) as "NULL".
+/// - It prints binary values (either from column or struct field) using the hex
+/// format. Returns a pretty string of the byte array which prints each byte as
+/// a hex digit and add spaces between them. For example, [1A C0].
 template <typename TExec>
 struct ToPrettyStringVarbinaryFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -82,6 +87,9 @@ struct ToPrettyStringVarbinaryFunction {
   template <typename TInput>
   void callNullable(out_type<Varchar>& result, const TInput* input) {
     if (input) {
+      // One byte spares 2 char, and with the spaces and the boxes.
+      // Byte size: 2 * input->size(), spaces size: input->size() - 1, boxes
+      // size: 2, its sum is 1 + 3 * input->size().
       result.resize(1 + 3 * input->size());
       char* const startPosition = result.data();
       char* pos = startPosition;
@@ -98,6 +106,10 @@ struct ToPrettyStringVarbinaryFunction {
     }
   }
 };
+
+/// Returns pretty string for Timestamp. It has one difference with casting
+/// value to string:
+/// - It prints null values (either from column or struct field) as "NULL".
 
 template <typename TExec>
 struct ToPrettyStringTimeStampFunction {
@@ -142,6 +154,9 @@ struct ToPrettyStringTimeStampFunction {
   std::string::size_type timestampRowSize_;
 };
 
+/// Returns pretty string for short decimal and long decimal. It has one
+/// difference with casting value to string:
+/// - It prints null values (either from column or struct field) as "NULL".
 template <typename TExec>
 struct ToPrettyStringDecimalFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -166,15 +181,17 @@ struct ToPrettyStringDecimalFunction {
   template <typename TInput>
   void callNullable(out_type<Varchar>& result, const TInput* input) {
     if (input) {
-      result.reserve(maxRowSize_);
-      auto view = exec::detail::convertToStringView<TInput>(
-          *input, scale_, maxRowSize_, result.data());
-      if (view.isInline()) {
-        result.setNoCopy(view);
-        result.resize(0);
+      if (StringView::isInline(maxRowSize_)) {
+        auto view = exec::detail::convertToStringView<TInput>(
+            *input, scale_, maxRowSize_, inlined_);
+        result.setNoCopy(inlined_);
       } else {
+        result.reserve(maxRowSize_);
+        auto view = exec::detail::convertToStringView<TInput>(
+            *input, scale_, maxRowSize_, result.data());
         result.resize(view.size());
       }
+
     } else {
       result.setNoCopy(detail::kNull);
     }
@@ -184,5 +201,6 @@ struct ToPrettyStringDecimalFunction {
   uint8_t precision_;
   uint8_t scale_;
   int32_t maxRowSize_;
+  char inlined_[StringView::kInlineSize];
 };
 } // namespace facebook::velox::functions::sparksql
