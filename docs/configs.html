@@ -197,6 +197,16 @@ a limit contains the memory usage.</p></td>
 <td><p>If it is not zero, specifies the time limit that a driver can continuously
 run on a thread before yield. If it is zero, then it no limit.</p></td>
 </tr>
+<tr class="row-odd"><td><p>prefixsort_normalized_key_max_bytes</p></td>
+<td><p>integer</p></td>
+<td><p>128</p></td>
+<td><p>Maximum number of bytes to use for the normalized key in prefix-sort. Use 0 to disable prefix-sort.</p></td>
+</tr>
+<tr class="row-even"><td><p>prefixsort_min_rows</p></td>
+<td><p>integer</p></td>
+<td><p>130</p></td>
+<td><p>Minimum number of rows to use prefix-sort. The default value has been derived using micro-benchmarking.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
