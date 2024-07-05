@@ -136,6 +136,41 @@ TEST_F(ParquetWriterTest, compression) {
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 };
 
+TEST_F(ParquetWriterTest, unsupportedEncoding) {
+  auto schema = ROW({"c0"}, {ARRAY(INTEGER())});
+  std::vector<std::vector<std::optional<int32_t>>> intArray = {
+      {1},
+      {2, 3},
+  };
+  VectorPtr arrayVector = makeNullableArrayVector(intArray);
+  // Wrap in dictionary.
+  auto vectorSize = arrayVector->size();
+  BufferPtr indices =
+      AlignedBuffer::allocate<vector_size_t>(vectorSize, pool_.get());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  // Assign indices such that array is reversed.
+  for (size_t i = 0; i < vectorSize; ++i) {
+    rawIndices[i] = vectorSize - 1 - i;
+  }
+  arrayVector = BaseVector::wrapInDictionary(
+      BufferPtr(nullptr), indices, vectorSize, arrayVector);
+
+  const auto data = makeRowVector({arrayVector});
+
+  // Create an in-memory writer
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto sinkPtr = sink.get();
+  facebook::velox::parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+
+  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, schema);
+  writer->write(data);
+  writer->close();
+};
+
 DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::parquet::Writer::write",

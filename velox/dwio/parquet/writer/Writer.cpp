@@ -315,8 +315,10 @@ void Writer::write(const VectorPtr& data) {
 
   ArrowArray array;
   ArrowSchema schema;
-  exportToArrow(data, array, generalPool_.get(), options_);
-  exportToArrow(data, schema, options_);
+  VectorPtr flattenVector = data;
+  BaseVector::flattenVector(flattenVector);
+  exportToArrow(flattenVector, array, generalPool_.get(), options_);
+  exportToArrow(flattenVector, schema, options_);
 
   // Convert the arrow schema to Schema and then update the column names based
   // on schema_.
