@@ -262,7 +262,6 @@ struct StartsWithFunction {
       result = false;
     } else {
       result = str1.substr(0, str2.length()) == str2;
-      ;
     }
     return true;
   }
@@ -289,6 +288,62 @@ struct EndsWithFunction {
       result =
           str1.substr(str1.length() - str2.length(), str2.length()) == str2;
     }
+    return true;
+  }
+};
+
+/// locate function
+/// locate(string, string) -> integer
+/// locate(string, string, integer) -> integer
+///
+/// Returns the position of the first occurrence of the first string in the
+/// second string after the give position.
+template <typename T>
+struct LocateFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& subString,
+      const arg_type<Varchar>& string) {
+    result = stringImpl::stringPosition<false /*isAscii*/>(
+        string, subString, 1 /*instance*/, 1 /*start*/);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool callAscii(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& subString,
+      const arg_type<Varchar>& string) {
+    result = stringImpl::stringPosition<true /*isAscii*/>(
+        string, subString, 1 /*instance*/, 1 /*start*/);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool callAscii(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& subString,
+      const arg_type<Varchar>& string,
+      const arg_type<int32_t>& start) {
+    result = stringImpl::stringPosition<true /*isAscii*/>(
+        string, subString, 1 /*instance*/, start);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool callNullable(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>* subString,
+      const arg_type<Varchar>* string,
+      const arg_type<int32_t>* start) {
+    if (start == nullptr) {
+      result = 0;
+      return true;
+    }
+    if (subString == nullptr || string == nullptr) {
+      return false;
+    }
+    result = stringImpl::stringPosition<false /*isAscii*/>(
+        *string, *subString, 1 /*instance*/, *start);
     return true;
   }
 };

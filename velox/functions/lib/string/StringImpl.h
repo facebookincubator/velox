@@ -199,27 +199,52 @@ std::vector<int32_t> stringToCodePoints(const T& inputString) {
 
 /// Returns the starting position in characters of the Nth instance(counting
 /// from the left if lpos==true and from the end otherwise) of the substring in
-/// string. Positions start with 1. If not found, 0 is returned. If subString is
-/// empty result is 1.
+/// string after position 'start'. Positions start with 1. If not
+/// found, 0 is returned. If subString is empty result is 1.
+/// @param instance The instance of the substring to find in string.
+/// @param start The start position in characters to search for the substring in
+/// string.
 template <bool isAscii, bool lpos = true, typename T>
-FOLLY_ALWAYS_INLINE int64_t
-stringPosition(const T& string, const T& subString, int64_t instance = 0) {
+FOLLY_ALWAYS_INLINE int64_t stringPosition(
+    const T& string,
+    const T& subString,
+    int64_t instance = 0,
+    int64_t start = 1) {
   VELOX_USER_CHECK_GT(instance, 0, "'instance' must be a positive number");
   if (subString.size() == 0) {
     return 1;
   }
+  if (start < 1 || start > string.size()) {
+    return 0;
+  }
+
+  int64_t startByteIndex;
+  if constexpr (isAscii) {
+    startByteIndex = start - 1;
+  } else {
+    // Calculate the byte index of the start character.
+    const char* pos = string.data();
+    int64_t numCharacters = 0;
+    while (numCharacters < start - 1) {
+      if (!utf_cont(*pos)) {
+        numCharacters++;
+      }
+      pos++;
+    }
+    startByteIndex = pos - string.data();
+  }
+
+  // The string to search for substring.
+  auto view = std::string_view(
+      string.data() + startByteIndex, string.size() - startByteIndex);
 
   int64_t byteIndex = -1;
   if constexpr (lpos) {
     byteIndex = findNthInstanceByteIndexFromStart(
-        std::string_view(string.data(), string.size()),
-        std::string_view(subString.data(), subString.size()),
-        instance);
+        view, std::string_view(subString.data(), subString.size()), instance);
   } else {
     byteIndex = findNthInstanceByteIndexFromEnd(
-        std::string_view(string.data(), string.size()),
-        std::string_view(subString.data(), subString.size()),
-        instance);
+        view, std::string_view(subString.data(), subString.size()), instance);
   }
 
   if (byteIndex == -1) {
@@ -228,7 +253,7 @@ stringPosition(const T& string, const T& subString, int64_t instance = 0) {
 
   // Return the number of characters from the beginning of the string to
   // byteIndex.
-  return length<isAscii>(std::string_view(string.data(), byteIndex)) + 1;
+  return length<isAscii>(std::string_view(view.data(), byteIndex)) + start;
 }
 
 /// Replace replaced with replacement in inputString and write results to
