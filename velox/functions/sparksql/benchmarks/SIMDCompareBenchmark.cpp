@@ -31,6 +31,7 @@ int main(int argc, char** argv) {
   std::vector<TypePtr> inputTypes = {
       TINYINT(),
       SMALLINT(),
+      INTEGER(),
       BIGINT(),
       REAL(),
       DOUBLE(),

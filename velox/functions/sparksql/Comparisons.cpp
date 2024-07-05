@@ -17,8 +17,8 @@
 
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/lib/SIMDComparisionUtil.h"
 #include "velox/functions/sparksql/Comparisons.h"
-#include "velox/functions/sparksql/SIMDComparisionUtil.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -41,59 +41,77 @@ class ComparisonFunction final : public exec::VectorFunction {
     const Cmp cmp;
     context.ensureWritable(rows, BOOLEAN(), result);
     result->clearNulls(rows);
+    vector_size_t size = rows.end() - rows.begin();
+
     if constexpr (
         kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
-        kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
-        kind == TypeKind::REAL || kind == TypeKind::DOUBLE ||
-        kind == TypeKind::TIMESTAMP || kind == TypeKind::VARCHAR ||
-        kind == TypeKind::VARBINARY || kind == TypeKind::HUGEINT) {
-      vector_size_t size = rows.end() - rows.begin();
-      if (size > 32) {
-        if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
-          const __restrict T* rawA =
-              args[0]->asUnchecked<FlatVector<T>>()->rawValues();
-          const __restrict T* rawB =
-              args[1]->asUnchecked<FlatVector<T>>()->rawValues();
-          applySimdComparison(
-              rows,
-              rawA,
-              rawB,
-              [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
-                return cmp(rawA[i], rawB[i]);
-              },
-              result);
-          return;
-        } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
-          const T constant =
-              args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
-          const __restrict T* rawA = nullptr;
-          const __restrict T* rawB =
-              args[1]->asUnchecked<FlatVector<T>>()->rawValues();
-          applySimdComparison(
-              rows,
-              rawA,
-              rawB,
-              [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
-                return cmp(constant, rawB[i]);
-              },
-              result);
-          return;
-        } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
-          const T constant =
-              args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
-          const __restrict T* rawA =
-              args[0]->asUnchecked<FlatVector<T>>()->rawValues();
-          const __restrict T* rawB = nullptr;
-          applySimdComparison(
-              rows,
-              rawA,
-              rawB,
-              [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
-                return cmp(rawA[i], constant);
-              },
-              result);
-          return;
-        }
+        kind == TypeKind::INTEGER || kind == TypeKind::BIGINT) {
+      if ((args[0]->isFlatEncoding() || args[0]->isConstantEncoding()) &&
+          (args[1]->isFlatEncoding() || args[1]->isConstantEncoding()) &&
+          rows.isAllSelected()) {
+        applySimdComparison<T, Cmp>(rows, args, result);
+        return;
+      }
+    }
+
+    if (size > 32) {
+      if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
+        const T* __restrict rawA =
+            args[0]->asUnchecked<FlatVector<T>>()->rawValues();
+        const T* __restrict rawB =
+            args[1]->asUnchecked<FlatVector<T>>()->rawValues();
+        applyAutoSimdComparison(
+            rows,
+            rawA,
+            rawB,
+            [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
+              return cmp(rawA[i], rawB[i]);
+            },
+            result);
+        return;
+      } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
+        const T* __restrict rawA = nullptr;
+        const T* __restrict rawB =
+            args[1]->asUnchecked<FlatVector<T>>()->rawValues();
+        const T constA = args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
+        applyAutoSimdComparison(
+            rows,
+            rawA,
+            rawB,
+            [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
+              return cmp(constA, rawB[i]);
+            },
+            result);
+        return;
+      } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
+        const T* __restrict rawA =
+            args[0]->asUnchecked<FlatVector<T>>()->rawValues();
+        const T* __restrict rawB = nullptr;
+        const T constB = args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
+        applyAutoSimdComparison(
+            rows,
+            rawA,
+            rawB,
+            [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
+              return cmp(rawA[i], constB);
+            },
+            result);
+        return;
+      } else if (
+          args[0]->isConstantEncoding() && args[1]->isConstantEncoding()) {
+        const T* __restrict rawA = nullptr;
+        const T* __restrict rawB = nullptr;
+        const T constA = args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
+        const T constB = args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
+        applyAutoSimdComparison(
+            rows,
+            rawA,
+            rawB,
+            [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
+              return cmp(constA, constB);
+            },
+            result);
+        return;
       }
     }
     auto* flatResult = result->asUnchecked<FlatVector<bool>>();
@@ -193,7 +211,7 @@ class BoolComparisonFunction final : public exec::VectorFunction {
   }
 };
 
-template <template <typename> class Cmp>
+template <template <typename> class Cmp, typename StdCmp>
 std::shared_ptr<exec::VectorFunction> makeImpl(
     const std::string& functionName,
     const std::vector<exec::VectorFunctionArg>& args) {
@@ -202,22 +220,26 @@ std::shared_ptr<exec::VectorFunction> makeImpl(
     VELOX_CHECK(*args[i].type == *args[0].type);
   }
   switch (args[0].type->kind()) {
-#define SCALAR_CASE(kind)                            \
+#define FLOAT_SCALAR_CASE(kind)                      \
   case TypeKind::kind:                               \
     return std::make_shared<ComparisonFunction<      \
         Cmp<TypeTraits<TypeKind::kind>::NativeType>, \
         TypeKind::kind>>();
-    SCALAR_CASE(TINYINT)
-    SCALAR_CASE(SMALLINT)
-    SCALAR_CASE(INTEGER)
-    SCALAR_CASE(BIGINT)
-    SCALAR_CASE(HUGEINT)
-    SCALAR_CASE(REAL)
-    SCALAR_CASE(DOUBLE)
-    SCALAR_CASE(VARCHAR)
-    SCALAR_CASE(VARBINARY)
-    SCALAR_CASE(TIMESTAMP)
+    FLOAT_SCALAR_CASE(REAL)
+    FLOAT_SCALAR_CASE(DOUBLE)
 #undef SCALAR_CASE
+#define STD_SCALAR_CASE(kind) \
+  case TypeKind::kind:        \
+    return std::make_shared<ComparisonFunction<StdCmp, TypeKind::kind>>();
+    STD_SCALAR_CASE(TINYINT)
+    STD_SCALAR_CASE(SMALLINT)
+    STD_SCALAR_CASE(INTEGER)
+    STD_SCALAR_CASE(BIGINT)
+    STD_SCALAR_CASE(HUGEINT)
+    STD_SCALAR_CASE(VARCHAR)
+    STD_SCALAR_CASE(VARBINARY)
+    STD_SCALAR_CASE(TIMESTAMP)
+#undef STDSCALAR_CASE
     case TypeKind::BOOLEAN:
       return std::make_shared<BoolComparisonFunction<
           Cmp<TypeTraits<TypeKind::BOOLEAN>::NativeType>>>();
@@ -297,35 +319,35 @@ std::shared_ptr<exec::VectorFunction> makeEqualTo(
     const std::string& functionName,
     const std::vector<exec::VectorFunctionArg>& args,
     const core::QueryConfig& /*config*/) {
-  return makeImpl<Equal>(functionName, args);
+  return makeImpl<Equal, std::equal_to<>>(functionName, args);
 }
 
 std::shared_ptr<exec::VectorFunction> makeLessThan(
     const std::string& functionName,
     const std::vector<exec::VectorFunctionArg>& args,
     const core::QueryConfig& /*config*/) {
-  return makeImpl<Less>(functionName, args);
+  return makeImpl<Less, std::less<>>(functionName, args);
 }
 
 std::shared_ptr<exec::VectorFunction> makeGreaterThan(
     const std::string& functionName,
     const std::vector<exec::VectorFunctionArg>& args,
     const core::QueryConfig& /*config*/) {
-  return makeImpl<Greater>(functionName, args);
+  return makeImpl<Greater, std::greater<>>(functionName, args);
 }
 
 std::shared_ptr<exec::VectorFunction> makeLessThanOrEqual(
     const std::string& functionName,
     const std::vector<exec::VectorFunctionArg>& args,
     const core::QueryConfig& /*config*/) {
-  return makeImpl<LessOrEqual>(functionName, args);
+  return makeImpl<LessOrEqual, std::less_equal<>>(functionName, args);
 }
 
 std::shared_ptr<exec::VectorFunction> makeGreaterThanOrEqual(
     const std::string& functionName,
     const std::vector<exec::VectorFunctionArg>& args,
     const core::QueryConfig& /*config*/) {
-  return makeImpl<GreaterOrEqual>(functionName, args);
+  return makeImpl<GreaterOrEqual, std::greater_equal<>>(functionName, args);
 }
 
 std::shared_ptr<exec::VectorFunction> makeEqualToNullSafe(
