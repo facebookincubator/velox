@@ -139,7 +139,7 @@ class Split final : public exec::VectorFunction {
   // delimiter will be applied as many times as possible, and the resulting
   // array can be of any size.
   void split(
-      StringView input,
+      const StringView input,
       const StringView delim,
       int32_t limit,
       vector_size_t row,

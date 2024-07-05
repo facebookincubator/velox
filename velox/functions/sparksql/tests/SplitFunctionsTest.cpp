@@ -31,12 +31,12 @@ namespace {
 
 class SplitTest : public SparkFunctionBaseTest {
  protected:
-  /// Method runs the given split function, f.e. split(C0, C1), where C0 is the
-  /// input column and the C1 is delimiter column.
-  /// Encoding arguments control what kind of vectors we should create for the
-  /// function arguments.
-  /// limit should be set to the corresponding limit, if query contains limit
-  /// argument (C2).
+  // Method runs the given split function, f.e. split(C0, C1), where C0 is the
+  // input column and the C1 is delimiter column.
+  // Encoding arguments control what kind of vectors we should create for the
+  // function arguments.
+  // limit should be set to the corresponding limit, if query contains limit
+  // argument (C2).
   VectorPtr run(
       const std::vector<std::string>& input,
       const std::string& delim,
@@ -132,10 +132,10 @@ class SplitTest : public SparkFunctionBaseTest {
     return VectorMaker::flatten(result);
   }
 
-  /// For expected result vectors, for some combinations of input encodings, we
-  /// need to massage the expected vector.
-  /// Const we wrap in const, dictionary we wrap in dictionary and the reast
-  /// leave 'as is'. In the end we flatten.
+  // For expected result vectors, for some combinations of input encodings, we
+  // need to massage the expected vector.
+  // Const we wrap in const, dictionary we wrap in dictionary and the reast
+  // leave 'as is'. In the end we flatten.
   VectorPtr prepare(
       const std::vector<std::vector<std::string>>& arrays,
       VectorEncoding::Simple stringEncoding) {
@@ -177,9 +177,7 @@ class SplitTest : public SparkFunctionBaseTest {
   }
 };
 
-/**
- * Test split vector function on vectors with different encodings.
- */
+// Test split vector function on vectors with different encodings.
 TEST_F(SplitTest, split) {
   std::vector<std::string> inputStrings;
   std::string delim;
