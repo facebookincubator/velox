@@ -344,6 +344,12 @@ primitives.</p>
 <li><p>template &lt;typename ToType&gt; typename VectorWriter&lt;ToType, void&gt;::exec_out_t* <strong>tryCastTo</strong> () : best-effort attempt to cast to a concrete writer type</p></li>
 </ul>
 </section>
+<section id="limitations">
+<h2>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h2>
+<p>1. If a function throws an exception while writing a complex type, then the output of the
+row being written as well as the output of the next row are undefined. Hence, it’s recommended
+to avoid throwing exceptions after writing has started for a complex output within the function.</p>
+</section>
 </section>
 
 
@@ -359,6 +365,7 @@ primitives.</p>
 <li><a class="reference internal" href="#">View and Writer Types</a><ul>
 <li><a class="reference internal" href="#inputs-view-types">Inputs (View Types)</a></li>
 <li><a class="reference internal" href="#outputs-writer-types">Outputs (Writer Types)</a></li>
+<li><a class="reference internal" href="#limitations">Limitations</a></li>
 </ul>
 </li>
 </ul>
