@@ -131,8 +131,7 @@ class DecimalCompareFunction : public exec::VectorFunction {
                 const A* __restrict rawA, const B* __restrict rawB, int i) {
               return Operation::apply(rawA[i], rawB[i], deltaScale, need256);
             },
-            result,
-            *tempBuffer_);
+            result);
         return;
       } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
         const int128_t constant =
@@ -148,8 +147,7 @@ class DecimalCompareFunction : public exec::VectorFunction {
                 const A* __restrict rawA, const B* __restrict rawB, int i) {
               return Operation::apply(constant, rawB[i], deltaScale, need256);
             },
-            result,
-            *tempBuffer_);
+            result);
         return;
       } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
         const int128_t constant =
@@ -165,8 +163,7 @@ class DecimalCompareFunction : public exec::VectorFunction {
                 const A* __restrict rawA, const B* __restrict rawB, int i) {
               return Operation::apply(rawA[i], constant, deltaScale, need256);
             },
-            result,
-            *tempBuffer_);
+            result);
         return;
       }
     }
@@ -255,8 +252,6 @@ class DecimalCompareFunction : public exec::VectorFunction {
   const int8_t deltaScale_;
   // If 256 bits are needed after adjusting the scale.
   const bool need256_;
-  const std::unique_ptr<std::vector<int8_t>> tempBuffer_ =
-      std::make_unique<std::vector<int8_t>>();
 };
 
 template <typename Operation>

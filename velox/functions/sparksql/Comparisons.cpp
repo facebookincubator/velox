@@ -61,8 +61,7 @@ class ComparisonFunction final : public exec::VectorFunction {
               [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
                 return cmp(rawA[i], rawB[i]);
               },
-              result,
-              *tempBuffer_);
+              result);
           return;
         } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
           const T constant =
@@ -77,8 +76,7 @@ class ComparisonFunction final : public exec::VectorFunction {
               [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
                 return cmp(constant, rawB[i]);
               },
-              result,
-              *tempBuffer_);
+              result);
           return;
         } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
           const T constant =
@@ -93,8 +91,7 @@ class ComparisonFunction final : public exec::VectorFunction {
               [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
                 return cmp(rawA[i], constant);
               },
-              result,
-              *tempBuffer_);
+              result);
           return;
         }
       }
@@ -134,10 +131,6 @@ class ComparisonFunction final : public exec::VectorFunction {
       });
     }
   }
-
- private:
-  const std::unique_ptr<std::vector<int8_t>> tempBuffer_ =
-      std::make_unique<std::vector<int8_t>>();
 };
 
 // ComparisonFunction instance for bool as it uses compact representation
