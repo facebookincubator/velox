@@ -619,8 +619,6 @@ class ReaderOptions : public io::ReaderOptions {
     scanSpec_ = std::move(scanSpec);
   }
 
-
-
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
