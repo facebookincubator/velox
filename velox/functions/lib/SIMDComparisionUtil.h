@@ -32,7 +32,7 @@ inline auto loadSimdData(const T* rawData, vector_size_t offset) {
 
 template <bool allSelected>
 inline void setBoolTypeResultVectorByWord(
-    const int8_t* rows,
+    const uint64_t* rows,
     uint8_t* result,
     int8_t* tempRes,
     vector_size_t index) {
@@ -42,13 +42,15 @@ inline void setBoolTypeResultVectorByWord(
     *(reinterpret_cast<uint32_t*>(result + index / 8 + 4)) = simd::toBitMask(
         xsimd::batch_bool<int8_t>(xsimd::load_unaligned(tempRes + 32)));
   } else {
-    uint32_t mask1 = *(reinterpret_cast<const uint32_t*>(rows + index / 8));
+    uint32_t mask1 = *(reinterpret_cast<const uint32_t*>(
+        reinterpret_cast<const int8_t*>(rows) + index / 8));
     uint32_t* addr1 = reinterpret_cast<uint32_t*>(result + index / 8);
     uint32_t res1 = simd::toBitMask(
         xsimd::batch_bool<int8_t>(xsimd::load_unaligned(tempRes)));
     // Set results only for selected rows.
     *addr1 = (*addr1 & ~mask1) | (res1 & mask1);
-    uint32_t mask2 = *(reinterpret_cast<const uint32_t*>(rows + index / 8 + 4));
+    uint32_t mask2 = *(reinterpret_cast<const uint32_t*>(
+        reinterpret_cast<const int8_t*>(rows) + index / 8 + 4));
     uint32_t* addr2 = reinterpret_cast<uint32_t*>(result + index / 8 + 4);
     uint32_t res2 = simd::toBitMask(
         xsimd::batch_bool<int8_t>(xsimd::load_unaligned(tempRes + 32)));
@@ -163,7 +165,7 @@ void applyAutoSimdComparison(
   vector_size_t end = rows.end();
   int8_t tempBuffer[64];
   auto* __restrict tempRes = tempBuffer;
-  auto* rowsData = reinterpret_cast<const int8_t*>(rows.allBits());
+  auto* rowsData = reinterpret_cast<const uint64_t*>(rows.allBits());
   auto* resultVector = result->asUnchecked<FlatVector<bool>>();
   auto* rawResult = resultVector->mutableRawValues<uint8_t>();
   if (rows.isAllSelected()) {
@@ -188,17 +190,18 @@ void applyAutoSimdComparison(
           if (!word) {
             return;
           }
+          const size_t start = idx * 64;
           while (word) {
-            auto index = idx * 64 + __builtin_ctzll(word);
+            auto index = start + __builtin_ctzll(word);
             bits::setBit(rawResult, index, cmp(rawA, rawB, index));
             word &= word - 1;
           }
         },
         [&](int32_t idx) {
           auto word = rowsData[idx];
+          const size_t start = idx * 64;
           if (kAllSet == word) {
-            const size_t start = idx * 64;
-            const size_t end = (idx + 1) * 64;
+            const size_t end = start + 64;
             // Do 64 comparisons in a batch, set results by SIMD.
             for (size_t row = start; row < end; ++row) {
               tempRes[row - start] = cmp(rawA, rawB, row) ? -1 : 0;
@@ -209,11 +212,11 @@ void applyAutoSimdComparison(
             // Do 64 comparisons in a batch, set results by SIMD.
             while (word) {
               auto index = __builtin_ctzll(word);
-              tempRes[index] = cmp(rawA, rawB, idx * 64 + index) ? -1 : 0;
+              tempRes[index] = cmp(rawA, rawB, start + index) ? -1 : 0;
               word &= word - 1;
             }
             setBoolTypeResultVectorByWord<false>(
-                rowsData, rawResult, tempRes, idx * 64);
+                rowsData, rawResult, tempRes, start);
           }
         });
   }
