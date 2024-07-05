@@ -220,13 +220,17 @@ std::shared_ptr<exec::VectorFunction> makeImpl(
     VELOX_CHECK(*args[i].type == *args[0].type);
   }
   switch (args[0].type->kind()) {
-#define FLOAT_SCALAR_CASE(kind)                      \
+#define SCALAR_CASE(kind)                            \
   case TypeKind::kind:                               \
     return std::make_shared<ComparisonFunction<      \
         Cmp<TypeTraits<TypeKind::kind>::NativeType>, \
         TypeKind::kind>>();
-    FLOAT_SCALAR_CASE(REAL)
-    FLOAT_SCALAR_CASE(DOUBLE)
+    SCALAR_CASE(REAL)
+    SCALAR_CASE(DOUBLE)
+    SCALAR_CASE(HUGEINT)
+    SCALAR_CASE(VARCHAR)
+    SCALAR_CASE(VARBINARY)
+    SCALAR_CASE(TIMESTAMP)
 #undef SCALAR_CASE
 #define STD_SCALAR_CASE(kind) \
   case TypeKind::kind:        \
@@ -235,10 +239,6 @@ std::shared_ptr<exec::VectorFunction> makeImpl(
     STD_SCALAR_CASE(SMALLINT)
     STD_SCALAR_CASE(INTEGER)
     STD_SCALAR_CASE(BIGINT)
-    STD_SCALAR_CASE(HUGEINT)
-    STD_SCALAR_CASE(VARCHAR)
-    STD_SCALAR_CASE(VARBINARY)
-    STD_SCALAR_CASE(TIMESTAMP)
 #undef STDSCALAR_CASE
     case TypeKind::BOOLEAN:
       return std::make_shared<BoolComparisonFunction<
