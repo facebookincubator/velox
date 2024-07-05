@@ -20,6 +20,7 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/prestosql/Utf8Utils.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -123,12 +124,15 @@ class Split final : public exec::VectorFunction {
       return;
     }
 
-    const char* const begin = current.begin();
-    const char* const end = current.end();
-    const char* pos = begin;
-    while (pos < end && pos < limit + begin) {
-      arrayWriter.add_item().setNoCopy(StringView(pos, 1));
-      pos += 1;
+    const size_t end = current.size();
+    const char* start = current.data();
+    size_t pos = 0;
+    int32_t count = 0;
+    while (pos < end && count < limit) {
+      auto charLength = tryGetCharLength(start + pos, end - pos);
+      arrayWriter.add_item().setNoCopy(StringView(start + pos, charLength));
+      pos += charLength;
+      count += 1;
     }
     resultWriter.commit();
   }
@@ -161,9 +165,11 @@ class Split final : public exec::VectorFunction {
     // string or the limit.
     int32_t addedElements{0};
     auto* re = cache_.findOrCompile(delim);
-    const auto re2String = re2::StringPiece(input.data(), input.size());
-    size_t pos = 0;
+    const size_t end = input.size();
     const char* start = input.data();
+    const auto re2String = re2::StringPiece(start, end);
+    size_t pos = 0;
+
     re2::StringPiece subMatches[1];
     // Matches a regular expression against a portion of the input string,
     // starting from 'pos' to the end of the input string. The match is not
@@ -173,18 +179,17 @@ class Split final : public exec::VectorFunction {
     // match found from the current position 'pos' in each iteration of the
     // loop.
     while (re->Match(
-        re2String, pos, input.size(), RE2::Anchor::UNANCHORED, subMatches, 1)) {
+        re2String, pos, end, RE2::Anchor::UNANCHORED, subMatches, 1)) {
       const auto fullMatch = subMatches[0];
       auto offset = fullMatch.data() - start;
       const auto size = fullMatch.size();
-      if (offset >= input.size()) {
+      if (offset >= end) {
         break;
       }
       if (size == 0) {
-        ++offset;
+        offset += tryGetCharLength(start + pos, end - pos);
       }
-      arrayWriter.add_item().setNoCopy(
-          StringView(input.data() + pos, offset - pos));
+      arrayWriter.add_item().setNoCopy(StringView(start + pos, offset - pos));
       pos = offset + size;
 
       ++addedElements;
@@ -196,8 +201,7 @@ class Split final : public exec::VectorFunction {
 
     // Add the rest of the string and we are done.
     // Note that the rest of the string can be empty - we still add it.
-    arrayWriter.add_item().setNoCopy(
-        StringView(input.data() + pos, input.size() - pos));
+    arrayWriter.add_item().setNoCopy(StringView(start + pos, end - pos));
     resultWriter.commit();
   }
 

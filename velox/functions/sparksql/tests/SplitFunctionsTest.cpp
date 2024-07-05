@@ -259,7 +259,6 @@ TEST_F(SplitTest, split) {
   });
   assertEqualVectors(
       expected2, run(inputStrings, delim, "split(C0, C1, C2)", 2));
-
   delim = "A|";
   auto expected3 = makeArrayVector<StringView>({
       {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y", ""},
@@ -285,7 +284,48 @@ TEST_F(SplitTest, split) {
   assertEqualVectors(
       expected5, run(inputStrings, delim, "split(C0, C1, C2)", 2));
 
-  // Non-ascii, flat strings, flat delimiter, no limit.
+  delim = "A|";
+  inputStrings = std::vector<std::string>{
+      {"синяя赤いトマト緑の"},
+      {"Hello世界🙂"},
+      {""},
+  };
+  auto expected6 = makeArrayVector<StringView>({
+      {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の", ""},
+      {"H", "e", "l", "l", "o", "世", "界", "🙂", ""},
+      {""},
+  });
+  auto expected7 = makeArrayVector<StringView>({
+      {"с", "иняя赤いトマト緑の"},
+      {"H", "ello世界🙂"},
+      {""},
+  });
+  assertEqualVectors(expected6, run(inputStrings, delim, "split(C0, C1)"));
+  assertEqualVectors(
+      expected7, run(inputStrings, delim, "split(C0, C1, C2)", 2));
+
+  // Non-ascii, empty delimiter
+  delim = "";
+  inputStrings = std::vector<std::string>{
+      {"синяя赤いトマト緑の空"},
+      {"Hello世界🙂"},
+      {""},
+  };
+  auto expected8 = makeArrayVector<StringView>({
+      {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の", "空"},
+      {"H", "e", "l", "l", "o", "世", "界", "🙂"},
+      {""},
+  });
+  auto expected9 = makeArrayVector<StringView>({
+      {"с", "и"},
+      {"H", "e"},
+      {""},
+  });
+  assertEqualVectors(expected8, run(inputStrings, delim, "split(C0, C1)"));
+  assertEqualVectors(
+      expected9, run(inputStrings, delim, "split(C0, C1, C2)", 2));
+
+  // Non-ascii, flat strings, non-empty flat delimiter, no limit.
   delim = "లేదా";
   inputStrings = std::vector<std::string>{
       {"синяя сливаలేదా赤いトマトలేదా黃苹果లేదాbrown pear"}, // Simple
