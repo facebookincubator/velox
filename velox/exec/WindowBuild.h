@@ -70,10 +70,6 @@ class WindowBuild {
   // if called when no partition is available.
   virtual std::shared_ptr<WindowPartition> nextPartition() = 0;
 
-  /// The type of WindowBuild: RowStreamingWindowBuild, StreamingWindowBuild and
-  /// SortWindowBuild.
-  virtual std::string_view windowBuildType() const = 0;
-
   // Returns the average size of input rows in bytes stored in the
   // data container of the WindowBuild.
   std::optional<int64_t> estimateRowSize() {

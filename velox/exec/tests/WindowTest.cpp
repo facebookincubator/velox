@@ -97,11 +97,10 @@ TEST_F(WindowTest, rankWithEqualValue) {
                   .planNode();
 
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::RowsStreamingWindowBuild::addInput",
-      std::function<void(const RowsStreamingWindowBuild*)>(
-          ([&](const RowsStreamingWindowBuild* build) {
-            ASSERT_EQ(build->windowBuildType(), "RowsStreamingWindowBuild");
-          })));
+      "facebook::velox::exec::Window::supportRowsStreaming",
+      std::function<void(bool*)>([&](bool* supportRowsStreamingWindow) {
+        ASSERT_EQ(*supportRowsStreamingWindow, true);
+      }));
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
@@ -136,16 +135,45 @@ TEST_F(WindowTest, rowStreamingWindowBuild) {
                   .planNode();
 
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::RowsStreamingWindowBuild::addInput",
-      std::function<void(const RowsStreamingWindowBuild*)>(
-          ([&](const RowsStreamingWindowBuild* build) {
-            ASSERT_EQ(build->windowBuildType(), "RowsStreamingWindowBuild");
-          })));
+      "facebook::velox::exec::Window::supportRowsStreaming",
+      std::function<void(bool*)>([&](bool* supportRowsStreamingWindow) {
+        ASSERT_EQ(*supportRowsStreamingWindow, true);
+      }));
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
       .assertResults(
           "SELECT *, rank() over (partition by c0, c2 order by c1, c3), dense_rank() over (partition by c0, c2 order by c1, c3), row_number() over (partition by c0, c2 order by c1, c3), sum(c4) over (partition by c0, c2 order by c1, c3) FROM tmp");
+}
+
+TEST_F(WindowTest, nonRowsStreamingWindow) {
+  auto data = makeRowVector(
+      {"c1"},
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "first_value(c1) over (order by c1 rows unbounded preceding)",
+      "nth_value(c1, 1) over (order by c1 rows unbounded preceding)"};
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"c1"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Window::supportRowsStreaming",
+      std::function<void(bool*)>([&](bool* supportRowsStreamingWindow) {
+        ASSERT_EQ(*supportRowsStreamingWindow, false);
+      }));
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(
+          "SELECT *, first_value(c1) over (order by c1 rows unbounded preceding), nth_value(c1, 1) over (order by c1 rows unbounded preceding) FROM tmp");
 }
 
 TEST_F(WindowTest, missingFunctionSignature) {

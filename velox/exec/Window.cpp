@@ -212,12 +212,21 @@ bool Window::supportRowsStreaming() {
            frame.endType == core::WindowNode::BoundType::kCurrentRow);
       if (!windowFunctionMetadata.isAggregateWindow || isDefaultFrame) {
         supportsStreaming = true;
+        velox::common::testutil::TestValue::adjust(
+            "facebook::velox::exec::Window::supportRowsStreaming",
+            &supportsStreaming);
       } else {
         supportsStreaming = false;
+        velox::common::testutil::TestValue::adjust(
+            "facebook::velox::exec::Window::supportRowsStreaming",
+            &supportsStreaming);
         break;
       }
     } else {
       supportsStreaming = false;
+      velox::common::testutil::TestValue::adjust(
+          "facebook::velox::exec::Window::supportRowsStreaming",
+          &supportsStreaming);
       break;
     }
   }

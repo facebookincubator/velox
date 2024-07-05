@@ -457,11 +457,10 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
 
     if (supportRowsStreaming) {
       SCOPED_TESTVALUE_SET(
-          "facebook::velox::exec::RowsStreamingWindowBuild::addInput",
-          std::function<void(const RowsStreamingWindowBuild*)>(
-              ([&](const RowsStreamingWindowBuild* build) {
-                ASSERT_EQ(build->windowBuildType(), "RowsStreamingWindowBuild");
-              })));
+          "facebook::velox::exec::Window::supportRowsStreaming",
+          std::function<void(bool*)>([&](bool* supportRowsStreamingWindow) {
+            ASSERT_EQ(*supportRowsStreamingWindow, true);
+          }));
     }
 
     if (!splits.empty()) {

@@ -55,10 +55,6 @@ class StreamingWindowBuild : public WindowBuild {
         currentPartition_ == partitionStartRows_.size() - 2;
   }
 
-  std::string_view windowBuildType() const override {
-    return "StreamingWindowBuild";
-  }
-
  private:
   void buildNextPartition();
 
