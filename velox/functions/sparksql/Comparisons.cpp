@@ -17,7 +17,7 @@
 
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
-#include "velox/functions/lib/SIMDComparisionUtil.h"
+#include "velox/functions/lib/SIMDComparisonUtil.h"
 #include "velox/functions/sparksql/Comparisons.h"
 #include "velox/type/Type.h"
 
@@ -41,79 +41,22 @@ class ComparisonFunction final : public exec::VectorFunction {
     const Cmp cmp;
     context.ensureWritable(rows, BOOLEAN(), result);
     result->clearNulls(rows);
-    vector_size_t size = rows.end() - rows.begin();
-
-    if constexpr (
-        kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
-        kind == TypeKind::INTEGER || kind == TypeKind::BIGINT) {
-      if ((args[0]->isFlatEncoding() || args[0]->isConstantEncoding()) &&
-          (args[1]->isFlatEncoding() || args[1]->isConstantEncoding()) &&
-          rows.isAllSelected()) {
-        applySimdComparison<T, Cmp>(rows, args, result);
+    if ((args[0]->isFlatEncoding() || args[0]->isConstantEncoding()) &&
+        (args[1]->isFlatEncoding() || args[1]->isConstantEncoding())) {
+      if constexpr (
+          kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+          kind == TypeKind::INTEGER || kind == TypeKind::BIGINT) {
+        if (rows.isAllSelected()) {
+          applySimdComparison<T, Cmp>(rows, args, result);
+          return;
+        }
+      }
+      if (rows.end() - rows.begin() > 64) {
+        applyAutoSimdComparison<T, T, Cmp>(rows, args, result);
         return;
       }
     }
 
-    if (size > 32) {
-      if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
-        const T* __restrict rawA =
-            args[0]->asUnchecked<FlatVector<T>>()->rawValues();
-        const T* __restrict rawB =
-            args[1]->asUnchecked<FlatVector<T>>()->rawValues();
-        applyAutoSimdComparison(
-            rows,
-            rawA,
-            rawB,
-            [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
-              return cmp(rawA[i], rawB[i]);
-            },
-            result);
-        return;
-      } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
-        const T* __restrict rawA = nullptr;
-        const T* __restrict rawB =
-            args[1]->asUnchecked<FlatVector<T>>()->rawValues();
-        const T constA = args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
-        applyAutoSimdComparison(
-            rows,
-            rawA,
-            rawB,
-            [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
-              return cmp(constA, rawB[i]);
-            },
-            result);
-        return;
-      } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
-        const T* __restrict rawA =
-            args[0]->asUnchecked<FlatVector<T>>()->rawValues();
-        const T* __restrict rawB = nullptr;
-        const T constB = args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
-        applyAutoSimdComparison(
-            rows,
-            rawA,
-            rawB,
-            [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
-              return cmp(rawA[i], constB);
-            },
-            result);
-        return;
-      } else if (
-          args[0]->isConstantEncoding() && args[1]->isConstantEncoding()) {
-        const T* __restrict rawA = nullptr;
-        const T* __restrict rawB = nullptr;
-        const T constA = args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
-        const T constB = args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
-        applyAutoSimdComparison(
-            rows,
-            rawA,
-            rawB,
-            [&](const T* __restrict rawA, const T* __restrict rawB, int i) {
-              return cmp(constA, constB);
-            },
-            result);
-        return;
-      }
-    }
     auto* flatResult = result->asUnchecked<FlatVector<bool>>();
 
     if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {

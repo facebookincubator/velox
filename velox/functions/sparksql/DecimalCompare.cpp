@@ -16,7 +16,7 @@
 
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/SIMDComparisionUtil.h"
+#include "velox/functions/lib/SIMDComparisonUtil.h"
 #include "velox/functions/sparksql/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -116,70 +116,12 @@ class DecimalCompareFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     prepareResults(rows, resultType, context, result);
-    vector_size_t size = rows.end() - rows.begin();
-    if (size > 32) {
-      if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
-        const A* __restrict rawA =
-            args[0]->asUnchecked<FlatVector<A>>()->template rawValues<A>();
-        const B* __restrict rawB =
-            args[1]->asUnchecked<FlatVector<B>>()->template rawValues<B>();
-        applyAutoSimdComparison(
-            rows,
-            rawA,
-            rawB,
-            [deltaScale = deltaScale_, need256 = need256_](
-                const A* __restrict rawA, const B* __restrict rawB, int i) {
-              return Operation::apply(rawA[i], rawB[i], deltaScale, need256);
-            },
-            result);
-        return;
-      } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
-        const A* __restrict rawA = nullptr;
-        const B* __restrict rawB =
-            args[1]->asUnchecked<FlatVector<B>>()->template rawValues<B>();
-        const A constA = args[0]->asUnchecked<ConstantVector<A>>()->valueAt(0);
-        applyAutoSimdComparison(
-            rows,
-            rawA,
-            rawB,
-            [deltaScale = deltaScale_, need256 = need256_, constA](
-                const A* __restrict rawA, const B* __restrict rawB, int i) {
-              return Operation::apply(constA, rawB[i], deltaScale, need256);
-            },
-            result);
-        return;
-      } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
-        const A* __restrict rawA =
-            args[0]->asUnchecked<FlatVector<A>>()->template rawValues<A>();
-        const B* __restrict rawB = nullptr;
-        const B constB = args[1]->asUnchecked<ConstantVector<B>>()->valueAt(0);
-        applyAutoSimdComparison(
-            rows,
-            rawA,
-            rawB,
-            [deltaScale = deltaScale_, need256 = need256_, constB](
-                const A* __restrict rawA, const B* __restrict rawB, int i) {
-              return Operation::apply(rawA[i], constB, deltaScale, need256);
-            },
-            result);
-        return;
-      } else if (
-          args[0]->isConstantEncoding() && args[1]->isConstantEncoding()) {
-        const A* __restrict rawA = nullptr;
-        const B* __restrict rawB = nullptr;
-        const A constA = args[0]->asUnchecked<ConstantVector<A>>()->valueAt(0);
-        const B constB = args[1]->asUnchecked<ConstantVector<B>>()->valueAt(0);
-        applyAutoSimdComparison(
-            rows,
-            rawA,
-            rawB,
-            [deltaScale = deltaScale_, need256 = need256_, constA, constB](
-                const A* __restrict rawA, const B* __restrict rawB, int i) {
-              return Operation::apply(constA, constB, deltaScale, need256);
-            },
-            result);
-        return;
-      }
+    if ((args[0]->isFlatEncoding() || args[0]->isConstantEncoding()) &&
+        (args[1]->isFlatEncoding() || args[1]->isConstantEncoding()) &&
+        rows.end() - rows.begin() > 64) {
+      applyAutoSimdComparison<A, B, Operation, int8_t, bool>(
+          rows, args, result, deltaScale_, need256_);
+      return;
     }
 
     // Fast path when the first argument is a flat vector.

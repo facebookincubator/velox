@@ -442,8 +442,8 @@ TEST_F(ComparisonsTest, testflat) {
 }
 
 TEST_F(ComparisonsTest, testSIMDComparsion) {
-  runSIMDCompareAndAssert<TypeKind::BIGINT>(32);
-  runSIMDCompareAndAssert<TypeKind::BIGINT>(33);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(64);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(65);
   runSIMDCompareAndAssert<TypeKind::BIGINT>(1001);
   runSIMDCompareAndAssert<TypeKind::BIGINT>(1001, 27);
   runSIMDCompareAndAssert<TypeKind::BIGINT>(1001, 47);

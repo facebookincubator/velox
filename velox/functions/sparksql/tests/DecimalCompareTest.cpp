@@ -132,16 +132,43 @@ TEST_F(DecimalCompareTest, gt) {
       },
       makeNullableFlatVector<bool>({false, std::nullopt, false, false}));
 
-  // Decimal with 50% rows selected.
-  SelectivityVector row(4);
-  row.setValidRange(0, 2, false);
+  // All rows selected.
   testCompareExpr(
       "decimal_greaterthan(c0, c1)",
       {
-          makeFlatVector<int64_t>({1000, 2000, 3000, 400}, DECIMAL(6, 2)),
-          makeFlatVector<int64_t>({100, 120, 130, 350}, DECIMAL(5, 1)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
       },
-      makeFlatVector<bool>({false, true, true, false}),
+      makeFlatVector<bool>(
+          70, [](auto row) { return row % 2 == 0 ? false : true; }));
+
+  // 90% rows selected.
+  SelectivityVector row(130);
+  row.setValidRange(0, 13, false);
+  testCompareExpr(
+      "decimal_greaterthan(c0, c1)",
+      {
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
+      },
+      makeFlatVector<bool>(
+          130, [](auto row) { return row % 2 == 0 ? false : true; }),
       row);
 }
 
@@ -242,16 +269,41 @@ TEST_F(DecimalCompareTest, gte) {
       },
       makeNullableFlatVector<bool>({false, std::nullopt, false, false}));
 
-  // Decimal with 50% rows selected.
-  SelectivityVector row(4);
-  row.setValidRange(0, 2, false);
+  // All rows selected.
   testCompareExpr(
       "decimal_greaterthanorequal(c0, c1)",
       {
-          makeFlatVector<int64_t>({1000, 2000, 3000, 400}, DECIMAL(6, 2)),
-          makeFlatVector<int64_t>({100, 120, 130, 350}, DECIMAL(5, 1)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
       },
-      makeFlatVector<bool>({false, true, true, false}),
+      makeFlatVector<bool>(70, [](auto /*row*/) { return true; }));
+
+  // 90% rows selected.
+  SelectivityVector row(130);
+  row.setValidRange(0, 13, false);
+  testCompareExpr(
+      "decimal_greaterthanorequal(c0, c1)",
+      {
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
+      },
+      makeFlatVector<bool>(130, [](auto /*row*/) { return true; }),
       row);
 }
 
@@ -352,16 +404,43 @@ TEST_F(DecimalCompareTest, eq) {
       },
       makeNullableFlatVector<bool>({false, std::nullopt, false, false}));
 
-  // Decimal with 50% rows selected.
-  SelectivityVector row(4);
-  row.setValidRange(0, 2, false);
+  // All rows selected.
   testCompareExpr(
       "decimal_equalto(c0, c1)",
       {
-          makeFlatVector<int64_t>({1000, 2000, 3000, 400}, DECIMAL(6, 2)),
-          makeFlatVector<int64_t>({100, 120, 130, 350}, DECIMAL(5, 1)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
       },
-      makeFlatVector<bool>({false, true, false, false}),
+      makeFlatVector<bool>(
+          70, [](auto row) { return row % 2 == 0 ? true : false; }));
+
+  // 90% rows selected.
+  SelectivityVector row(130);
+  row.setValidRange(0, 13, false);
+  testCompareExpr(
+      "decimal_equalto(c0, c1)",
+      {
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
+      },
+      makeFlatVector<bool>(
+          130, [](auto row) { return row % 2 == 0 ? true : false; }),
       row);
 }
 
@@ -462,16 +541,43 @@ TEST_F(DecimalCompareTest, neq) {
       },
       makeNullableFlatVector<bool>({true, std::nullopt, true, true}));
 
-  // Decimal with 50% rows selected.
-  SelectivityVector row(4);
-  row.setValidRange(0, 2, false);
+  // All rows selected.
   testCompareExpr(
       "decimal_notequalto(c0, c1)",
       {
-          makeFlatVector<int64_t>({1000, 2000, 3000, 400}, DECIMAL(6, 2)),
-          makeFlatVector<int64_t>({100, 120, 130, 350}, DECIMAL(5, 1)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
       },
-      makeFlatVector<bool>({false, true, true, true}),
+      makeFlatVector<bool>(
+          70, [](auto row) { return row % 2 == 0 ? false : true; }));
+
+  // 90% rows selected.
+  SelectivityVector row(130);
+  row.setValidRange(0, 13, false);
+  testCompareExpr(
+      "decimal_notequalto(c0, c1)",
+      {
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
+      },
+      makeFlatVector<bool>(
+          130, [](auto row) { return row % 2 == 0 ? false : true; }),
       row);
 }
 
@@ -572,16 +678,41 @@ TEST_F(DecimalCompareTest, lt) {
       },
       makeNullableFlatVector<bool>({true, std::nullopt, true, true}));
 
-  // Decimal with 50% rows selected.
-  SelectivityVector row(4);
-  row.setValidRange(0, 2, false);
+  // All rows selected.
   testCompareExpr(
       "decimal_lessthan(c0, c1)",
       {
-          makeFlatVector<int64_t>({1000, 2000, 3000, 400}, DECIMAL(6, 2)),
-          makeFlatVector<int64_t>({100, 120, 130, 350}, DECIMAL(5, 1)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
       },
-      makeFlatVector<bool>({false, true, false, true}),
+      makeFlatVector<bool>(70, [](auto /*row*/) { return false; }));
+
+  // 90% rows selected.
+  SelectivityVector row(130);
+  row.setValidRange(0, 13, false);
+  testCompareExpr(
+      "decimal_lessthan(c0, c1)",
+      {
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
+      },
+      makeFlatVector<bool>(130, [](auto /*row*/) { return false; }),
       row);
 }
 
@@ -682,16 +813,43 @@ TEST_F(DecimalCompareTest, lte) {
       },
       makeNullableFlatVector<bool>({true, std::nullopt, true, true}));
 
-  // Decimal with 50% rows selected.
-  SelectivityVector row(4);
-  row.setValidRange(0, 2, false);
+  // All rows selected.
   testCompareExpr(
       "decimal_lessthanorequal(c0, c1)",
       {
-          makeFlatVector<int64_t>({1000, 2000, 3000, 400}, DECIMAL(6, 2)),
-          makeFlatVector<int64_t>({100, 120, 130, 350}, DECIMAL(5, 1)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              70,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
       },
-      makeFlatVector<bool>({false, true, false, true}),
+      makeFlatVector<bool>(
+          70, [](auto row) { return row % 2 == 0 ? true : false; }));
+
+  // 90% rows selected.
+  SelectivityVector row(130);
+  row.setValidRange(0, 13, false);
+  testCompareExpr(
+      "decimal_lessthanorequal(c0, c1)",
+      {
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+              nullptr,
+              DECIMAL(6, 2)),
+          makeFlatVector<int64_t>(
+              130,
+              [](auto row) { return row % 2 == 0 ? 100 : 130; },
+              nullptr,
+              DECIMAL(5, 1)),
+      },
+      makeFlatVector<bool>(
+          130, [](auto row) { return row % 2 == 0 ? true : false; }),
       row);
 }
 
