@@ -16,9 +16,49 @@
 
 #include "velox/functions/lib/aggregates/MinMaxAggregateBase.h"
 
+using namespace facebook::velox::functions::aggregate::detail;
+
 namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
+
+// Spark requires timestamp data precision to be in microseconds. Add this class
+// to align with Spark's behavior.
+class TimestampMicrosPrecisionMaxAggregate : public MaxAggregate<Timestamp> {
+ public:
+  explicit TimestampMicrosPrecisionMaxAggregate(TypePtr resultType)
+      : MaxAggregate<Timestamp>(resultType) {}
+
+  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    using BaseAggregate =
+        SimpleNumericAggregate<Timestamp, Timestamp, Timestamp>;
+    BaseAggregate::template doExtractValues<Timestamp>(
+        groups, numGroups, result, [&](char* group) {
+          auto ts = *BaseAggregate::Aggregate::template value<Timestamp>(group);
+          return Timestamp::fromMicros(ts.toMicros());
+        });
+  }
+};
+
+// Spark requires timestamp data precision to be in microseconds. Add this class
+// to align with Spark's behavior.
+class TimestampMicrosPrecisionMinAggregate : public MinAggregate<Timestamp> {
+ public:
+  explicit TimestampMicrosPrecisionMinAggregate(TypePtr resultType)
+      : MinAggregate<Timestamp>(resultType) {}
+
+  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    using BaseAggregate =
+        SimpleNumericAggregate<Timestamp, Timestamp, Timestamp>;
+    BaseAggregate::template doExtractValues<Timestamp>(
+        groups, numGroups, result, [&](char* group) {
+          auto ts = *BaseAggregate::Aggregate::template value<Timestamp>(group);
+          return Timestamp::fromMicros(ts.toMicros());
+        });
+  }
+};
 
 exec::AggregateRegistrationResult registerMin(
     const std::string& name,
@@ -39,7 +79,9 @@ exec::AggregateRegistrationResult registerMin(
           std::vector<TypePtr> argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
-        auto factory = getMinFunctionFactory(name, true, false, false);
+        auto factory =
+            getMinFunctionFactory<TimestampMicrosPrecisionMinAggregate>(
+                name, true /*nestedNullAllowed*/, false /*mapTypeSupported*/);
         return factory(step, argTypes, resultType, config);
       },
       {false /*orderSensitive*/},
@@ -66,11 +108,9 @@ exec::AggregateRegistrationResult registerMax(
           std::vector<TypePtr> argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
-        auto factory = getMaxFunctionFactory(
-            name,
-            true /*nestedNullAllowed*/,
-            false /*mapTypeSupported*/,
-            false /*useMillisPrecision*/);
+        auto factory =
+            getMaxFunctionFactory<TimestampMicrosPrecisionMaxAggregate>(
+                name, true /*nestedNullAllowed*/, false /*mapTypeSupported*/);
         return factory(step, argTypes, resultType, config);
       },
       {false /*orderSensitive*/},

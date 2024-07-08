@@ -82,11 +82,9 @@ int main(int argc, char** argv) {
           {"skewness", nullptr},
           {"kurtosis", nullptr},
           {"collect_list", makeArrayVerifier()},
-          // The Ascending sorting order used  'min' by Spark places nulls
-          // first.
+          // Nulls are put first in Spark ascending sorting, while Velox
+          // configs DuckDB with 'NULLS LAST'.
           {"min", nullptr},
-          // The Ascending sorting order used  'max' by Spark places nulls
-          // first.
           {"max", nullptr},
       };
 
