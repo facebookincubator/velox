@@ -30,9 +30,13 @@ inline auto loadSimdData(const T* rawData, vector_size_t offset) {
   return d_type::load_unaligned(rawData + offset);
 }
 
-inline uint64_t to64Bits(int8_t* resultData) {
+inline uint64_t to64Bits(const int8_t* resultData) {
   using d_type = xsimd::batch<int8_t>;
   constexpr auto numScalarElements = d_type::size;
+  static_assert(
+      numScalarElements == 16 || numScalarElements == 32 ||
+          numScalarElements == 64,
+      "Unsupported number of scalar elements");
   uint64_t res = 0UL;
   if constexpr (numScalarElements == 64) {
     res = simd::toBitMask(
@@ -53,9 +57,6 @@ inline uint64_t to64Bits(int8_t* resultData) {
         xsimd::batch_bool<int8_t>(d_type::load_unaligned(resultData + 32)));
     *(addr + 3) = simd::toBitMask(
         xsimd::batch_bool<int8_t>(d_type::load_unaligned(resultData + 48)));
-  } else {
-    VELOX_UNSUPPORTED(fmt::format(
-        "Unsupported number of scalar elements:{}", numScalarElements));
   }
   return res;
 }
@@ -141,7 +142,11 @@ void applySimdComparison(
   using d_type = xsimd::batch<T>;
   constexpr auto numScalarElements = d_type::size;
   const auto vectorEnd = (end - begin) - (end - begin) % numScalarElements;
-
+  static_assert(
+      numScalarElements == 2 || numScalarElements == 4 ||
+          numScalarElements == 8 || numScalarElements == 16 ||
+          numScalarElements == 32,
+      "Unsupported number of scalar elements");
   if constexpr (numScalarElements == 2 || numScalarElements == 4) {
     for (auto i = begin; i < vectorEnd; i += 8) {
       rawResult[i / 8] = 0;
@@ -167,8 +172,6 @@ void applySimdComparison(
       } else if constexpr (numScalarElements == 32) {
         uint32_t* addr = reinterpret_cast<uint32_t*>(rawResult + i / 8);
         *addr = res;
-      } else {
-        VELOX_FAIL("Unsupported number of scalar elements");
       }
     }
   }
