@@ -72,7 +72,7 @@ struct ArrayInsertFunction {
     } else {
       bool newPosExtendsArrayLeft = -*pos > srcArray->size();
       if (newPosExtendsArrayLeft) {
-        int32_t baseOffset = *legacyNegativeIndex ? 1 : 0;
+        int32_t baseOffset = *legacyNegativeIndex;
         int64_t newArrayLength = -*pos + baseOffset;
         VELOX_USER_CHECK_LE(
             newArrayLength,

@@ -235,12 +235,13 @@ Array Functions
 
 .. spark:function:: array_insert(array(E), pos, E, legacyNegativeIndex) -> array(E)
 
-    Places new element into index pos of the input array.
-    Returns NULL if the input array or index is NULL. Array indices start at 1. The maximum negative index
-    is -1. When legacyNegativeIndex is true, the function is 0-based for negative indexes which means -1
-    points to the last but one position. When legacyNegativeIndex is false, the function is 1-based for
-    negative indexes and -1 points to the last position. Index above array size appends the array or prepends
-    the array if index is negative, with 'null' elements. ::
+    Places new element into index ``pos`` of the input array.
+    Returns NULL if the input array or index is NULL. Array indices start at 1. And 0 index value is
+    not supported. The maximum negative index is -1. For negative index, when ``legacyNegativeIndex``
+    is true, the function is 0-based for negative indexes which means -1 points to the last but one 
+    position. While when ``legacyNegativeIndex`` is false, the function is 1-based for negative indexes
+    and -1 points to the last position. Index above array size appends the array or prepends the array
+    if index is negative, with 'null' elements. ::
 
         SELECT array_insert(NULL, 1, 0, false); -- NULL
         SELECT array_insert(array(1, 2), NULL, 0, false); -- NULL
