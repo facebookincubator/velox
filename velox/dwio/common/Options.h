@@ -535,11 +535,6 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setBinaryAsString(bool flag) {
-    binaryAsString_ = flag;
-    return *this;
-  }
-
   /// Gets the desired tail location.
   uint64_t tailLocation() const {
     return tailLocation_;
@@ -591,10 +586,6 @@ class ReaderOptions : public io::ReaderOptions {
     return useColumnNamesForColumnMapping_;
   }
 
-  bool binaryAsString() const {
-    return binaryAsString_;
-  }
-
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
     return randomSkip_;
   }
@@ -629,7 +620,6 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
   bool useColumnNamesForColumnMapping_{false};
-  bool binaryAsString_{false};
   std::shared_ptr<folly::Executor> ioExecutor_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;

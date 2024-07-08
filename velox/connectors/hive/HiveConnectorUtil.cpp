@@ -562,11 +562,6 @@ void configureReaderOptions(
       readerOptions.setSerDeOptions(*serDeOptions);
     }
 
-    if (readerOptions.fileFormat() == dwio::common::FileFormat::PARQUET) {
-      readerOptions.setBinaryAsString(
-          hiveConfig->parquetBinaryAsString(sessionProperties));
-    }
-
     readerOptions.setFileFormat(hiveSplit->fileFormat);
   }
 }

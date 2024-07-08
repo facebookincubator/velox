@@ -283,12 +283,6 @@ uint8_t HiveConfig::parquetWriteTimestampUnit(const Config* session) const {
   return unit;
 }
 
-bool HiveConfig::parquetBinaryAsString(const Config* session) const {
-  return session->get<bool>(
-      kParquetBinaryAsStringSession,
-      config_->get<bool>(kParquetBinaryAsString, false));
-}
-
 bool HiveConfig::cacheNoRetention(const Config* session) const {
   return session->get<bool>(
       kCacheNoRetentionSession,

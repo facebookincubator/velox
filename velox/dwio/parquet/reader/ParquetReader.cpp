@@ -653,12 +653,17 @@ TypePtr ReaderBase::convertType(
         return DOUBLE();
       case thrift::Type::type::BYTE_ARRAY:
       case thrift::Type::type::FIXED_LEN_BYTE_ARRAY:
-        if (options_.binaryAsString()) {
-          return VARCHAR();
+        if (options_.fileSchema()->containsChild(schemaElement.name)) {
+          const std::shared_ptr<const Type>& requestedType =
+              options_.fileSchema()->findChild(schemaElement.name);
+          if (requestedType->isVarchar()) {
+            return VARCHAR();
+          } else {
+            return VARBINARY();
+          }
         } else {
           return VARBINARY();
         }
-
       default:
         VELOX_FAIL(
             "Unknown Parquet SchemaElement type: {}", schemaElement.type);

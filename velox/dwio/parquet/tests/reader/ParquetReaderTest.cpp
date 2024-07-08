@@ -1155,7 +1155,8 @@ TEST_F(ParquetReaderTest, readBinaryAsStringFromFLBA) {
   const std::string sample(getExampleFilePath(filename));
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-  readerOptions.setBinaryAsString(true);
+  auto outputRowType = ROW({"binary_field"}, {VARCHAR()});
+  readerOptions.setFileSchema(outputRowType);
   auto reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader->numberOfRows(), 100ULL);
   auto rowType = reader->typeWithId();
@@ -1163,7 +1164,6 @@ TEST_F(ParquetReaderTest, readBinaryAsStringFromFLBA) {
   EXPECT_EQ(rowType->size(), 8ULL);
   EXPECT_EQ(rowType->childAt(0)->type()->kind(), TypeKind::VARCHAR);
 
-  auto outputRowType = ROW({"binary_field"}, {VARCHAR()});
   auto rowReaderOpts = getReaderOpts(outputRowType);
   rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
   auto rowReader = reader->createRowReader(rowReaderOpts);
