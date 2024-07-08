@@ -146,6 +146,40 @@ TEST_F(WindowTest, rowStreamingWindowBuild) {
           "SELECT *, rank() over (partition by c0, c2 order by c1, c3), dense_rank() over (partition by c0, c2 order by c1, c3), row_number() over (partition by c0, c2 order by c1, c3), sum(c4) over (partition by c0, c2 order by c1, c3) FROM tmp");
 }
 
+TEST_F(WindowTest, aggregationWithNonDefaultFrame) {
+  const vector_size_t size = 1'00;
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+       makeFlatVector<int64_t>(
+           size, [](auto row) { return row % 3 + 1; }, nullEvery(5)),
+       makeFlatVector<int32_t>(size, [](auto row) { return row % 40; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row; })});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "sum(c4) over (partition by c0, c2 order by c1, c3 range between unbounded preceding and unbounded following)"};
+
+  auto plan = PlanBuilder()
+                  .values({split(data, 10)})
+                  .orderBy({"c0", "c2", "c1", "c3"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Window::supportRowsStreaming",
+      std::function<void(bool*)>([&](bool* supportRowsStreamingWindow) {
+        ASSERT_EQ(*supportRowsStreamingWindow, false);
+      }));
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .assertResults(
+          "SELECT *, sum(c4) over (partition by c0, c2 order by c1, c3 range between unbounded preceding and unbounded following) FROM tmp");
+}
+
 TEST_F(WindowTest, nonRowsStreamingWindow) {
   auto data = makeRowVector(
       {"c1"},
