@@ -27,7 +27,9 @@ struct CardinalityFunction {
     out = input.size();
   }
 
-  void call(int64_t& out, const arg_type<Map<Generic<T1>, Generic<T2>>>& input) {
+  void call(
+      int64_t& out,
+      const arg_type<Map<Generic<T1>, Generic<T2>>>& input) {
     out = input.size();
   }
 };
