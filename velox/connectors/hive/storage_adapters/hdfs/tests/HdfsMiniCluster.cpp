@@ -81,6 +81,18 @@ HdfsMiniCluster::HdfsMiniCluster() {
   if (result != 0) {
     std::cout << "Failed to install JVM." << std::endl;
     return; // Exit if installation fails
+  } else {
+    std::cout << "Successfully install JVM"
+              << "\n";
+  }
+
+  result = system("ls /usr/lib/jvm/java-1.8.0-openjdk/");
+  if (result != 0) {
+    std::cout << "Failed ls /usr/lib/jvm/java-1.8.0-openjdk/"
+              << "\n";
+  } else {
+    std::cout << "Successfully ls /usr/lib/jvm/java-1.8.0-openjdk/"
+              << "\n";
   }
 
   env_["PATH"] = env_["PATH"].to_string() + jvmSearchPath;
@@ -93,6 +105,8 @@ HdfsMiniCluster::HdfsMiniCluster() {
     VELOX_FAIL(
         "Failed to find minicluster jvm executable {}'",
         miniJvmClusterExecutableName);
+  } else {
+    std::cout << "the exePath_ is " << exePath_.string() << "\n";
   }
 
   boost::filesystem::path javaHomeDirectory = exePath_;
