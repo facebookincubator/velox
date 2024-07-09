@@ -58,42 +58,46 @@ function github_checkout {
   cd "${DIRNAME}"
 }
 
-# get_cxx_flags
+# get_cxx_flags [$CPU_ARCH]
+# Echos appropriate compiler flags.
+# If $CPU_ARCH is set then we use that else we determine best possible set of flags
+# to use based on current cpu architecture.
 # The goal of this function is to consolidate all architecture specific flags to one
 # location.
-# Sets and exports the variable VELOX_CXX_FLAGS with appropriate compiler flags.
-# We determine best possible set of flags to use based on the cpu architecture CPU_ARCH.
 # The values that CPU_ARCH can take are as follows:
 #   arm64  : Target Apple silicon.
 #   aarch64: Target general 64 bit arm cpus.
 #   avx:     Target Intel CPUs with AVX.
 #   sse:     Target Intel CPUs with sse.
 # Echo's the appropriate compiler flags which can be captured as so
-# CXX_FLAGS=$(get_cxx_flags)
+# CXX_FLAGS=$(get_cxx_flags) or
+# CXX_FLAGS=$(get_cxx_flags "avx")
 
 function get_cxx_flags {
-  local CPU_ARCH="avx"
+  local CPU_ARCH=${1:-""}
   local OS=$(uname)
   local MACHINE=$(uname -m)
 
-  if [ "$OS" = "Darwin" ]; then
-    if [ "$MACHINE" = "arm64" ]; then
-      CPU_ARCH="arm64"
-    fi
-  elif [ "$OS" = "Linux" ]; then
-    if [ "$MACHINE" = "aarch64" ]; then
-          CPU_ARCH="aarch64"
-    else
-      local CPU_CAPABILITIES=$(cat /proc/cpuinfo | grep flags | head -n 1| awk '{print tolower($0)}')
-      # Even though the default is avx, we need this check since avx machines support sse as well.
-      if [[ $CPU_CAPABILITIES =~ "avx" ]]; then
-          CPU_ARCH="avx"
-      elif [[ $CPU_CAPABILITIES =~ "sse" ]]; then
-          CPU_ARCH="sse"
-      fi
-    fi
-  else
-    echo "Unsupported platform $OS"; exit 1; 
+  if [[ -z "$CPU_ARCH" ]]; then
+   if [ "$OS" = "Darwin" ]; then
+     if [ "$MACHINE" = "arm64" ]; then
+       CPU_ARCH="arm64"
+     fi
+   elif [ "$OS" = "Linux" ]; then
+     if [ "$MACHINE" = "aarch64" ]; then
+           CPU_ARCH="aarch64"
+     else
+       local CPU_CAPABILITIES=$(cat /proc/cpuinfo | grep flags | head -n 1| awk '{print tolower($0)}')
+       # Even though the default is avx, we need this check since avx machines support sse as well.
+       if [[ $CPU_CAPABILITIES =~ "avx" ]]; then
+           CPU_ARCH="avx"
+       elif [[ $CPU_CAPABILITIES =~ "sse" ]]; then
+           CPU_ARCH="sse"
+       fi
+     fi
+   else
+     echo "Unsupported platform $OS"; exit 1;
+   fi
   fi
   case $CPU_ARCH in
 
