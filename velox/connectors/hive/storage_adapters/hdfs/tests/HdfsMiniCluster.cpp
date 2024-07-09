@@ -63,6 +63,7 @@ bool HdfsMiniCluster::isRunning() {
 HdfsMiniCluster::HdfsMiniCluster() {
   env_ = (boost::process::environment)boost::this_process::environment();
   env_["PATH"] = env_["PATH"].to_string() + hadoopSearchPath;
+  env_["PATH"] = env_["PATH"].to_string() + jvmSearchPath;
   auto path = env_["PATH"].to_vector();
   exePath_ = boost::process::search_path(
       miniClusterExecutableName,
@@ -71,6 +72,7 @@ HdfsMiniCluster::HdfsMiniCluster() {
     VELOX_FAIL(
         "Failed to find minicluster executable {}'", miniClusterExecutableName);
   }
+  env_["JAVA_HOME"] = jvmSearchPath;
   boost::filesystem::path hadoopHomeDirectory = exePath_;
   hadoopHomeDirectory.remove_leaf().remove_leaf();
   setupEnvironment(hadoopHomeDirectory.string());
