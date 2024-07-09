@@ -26,7 +26,7 @@ struct ArrayInsertFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T)
 
   // INT_MAX - 15, keep the same limit with spark.
-  static constexpr int32_t kMaxNumberOfElements = 2147483632;
+  static constexpr int32_t kMaxNumberOfElements = 2'147'483'632;
 
   FOLLY_ALWAYS_INLINE bool callNullable(
       out_type<Array<Generic<T1>>>& out,
@@ -53,21 +53,18 @@ struct ArrayInsertFunction {
       out.reserve(newArrayLength);
       int32_t posIdx = *pos - 1;
       int32_t nextIdx = 0;
-      for (const auto& element : *srcArray) {
-        if (nextIdx == posIdx) {
-          item ? out.push_back(*item) : out.add_null();
-          nextIdx++;
-        }
-        out.push_back(element);
-        nextIdx++;
-      }
-      while (nextIdx < newArrayLength) {
-        if (nextIdx == posIdx) {
+      for(int32_t i = 0; i < newArrayLength; i++) {
+        if (i == posIdx) {
           item ? out.push_back(*item) : out.add_null();
         } else {
-          out.add_null();
+          bool newElementInserted = i > posIdx;
+          int32_t potentialIdxInSrcArray = i - newElementInserted;
+          if (potentialIdxInSrcArray < srcArray->size()) {
+            out.push_back((*srcArray)[potentialIdxInSrcArray]);
+          } else {
+            out.add_null();
+          }
         }
-        nextIdx++;
       }
     } else {
       bool newPosExtendsArrayLeft = -*pos > srcArray->size();
@@ -91,7 +88,7 @@ struct ArrayInsertFunction {
         }
       } else {
         int64_t posIdx =
-            *pos + srcArray->size() + (*legacyNegativeIndex ? 0 : 1);
+            *pos + srcArray->size() + !*legacyNegativeIndex;
         int64_t newArrayLength =
             std::max(int64_t(srcArray->size() + 1), posIdx + 1);
         VELOX_USER_CHECK_LE(
