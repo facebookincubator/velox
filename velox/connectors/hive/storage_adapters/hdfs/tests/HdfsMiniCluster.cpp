@@ -62,8 +62,16 @@ bool HdfsMiniCluster::isRunning() {
 
 // requires hadoop executable to be on the PATH
 HdfsMiniCluster::HdfsMiniCluster() {
+
+  auto result = system("yum install java-1.8.0-openjdk -y");
+  if (result != 0) {
+    std::cout << "Failed to install JVM." << std::endl;
+    return; // Exit if installation fails
+  }
+  
   env_ = (boost::process::environment)boost::this_process::environment();
   env_["PATH"] = env_["PATH"].to_string() + hadoopSearchPath;
+  env_["PATH"] = env_["PATH"].to_string() + jvmSearchPath;
   auto path = env_["PATH"].to_vector();
   exePath_ = boost::process::search_path(
       miniClusterExecutableName,
@@ -71,12 +79,6 @@ HdfsMiniCluster::HdfsMiniCluster() {
   if (exePath_.empty()) {
     VELOX_FAIL(
         "Failed to find minicluster executable {}'", miniClusterExecutableName);
-  }
-
-  auto result = system("yum install java-1.8.0-openjdk -y");
-  if (result != 0) {
-    std::cout << "Failed to install JVM." << std::endl;
-    return; // Exit if installation fails
   }
 
   env_["JAVA_HOME"] = "/usr/lib/jvm/java-1.8.0-openjdk/";
