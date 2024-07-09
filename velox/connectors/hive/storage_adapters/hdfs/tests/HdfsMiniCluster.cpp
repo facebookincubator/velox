@@ -73,7 +73,7 @@ HdfsMiniCluster::HdfsMiniCluster() {
         "Failed to find minicluster executable {}'", miniClusterExecutableName);
   }
 
-  auto result = system("sudo yum install java-1.8.0-openjdk -y");
+  auto result = system("yum install java-1.8.0-openjdk -y");
   if (result != 0) {
     std::cout << "Failed to install JVM." << std::endl;
     return; // Exit if installation fails
