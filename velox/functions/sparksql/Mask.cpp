@@ -24,22 +24,20 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-/**
- * mask(string) -> string
- * mask(string, upperChar) -> string
- * mask(string, upperChar, lowerChar) -> string
- * mask(string, upperChar, lowerChar, digitChar) -> string
- * mask(string, upperChar, lowerChar, digitChar, otherChar) -> string
- *
- * Masks the characters of the given string value with the provided specific
- * characters respectively. Upper-case characters are replaced with the second
- * argument. Default value is 'X'. Lower-case characters are replaced with the
- * third argument. Default value is 'x'. Digit characters are replaced with the
- * fourth argument. Default value is 'n'. Other characters are replaced with the
- * last argument. Default value is NULL and the original character is retained.
- * If the provided nth argument is NULL, the related original character is
- * retained.
- */
+// mask(string) -> string
+// mask(string, upperChar) -> string
+// mask(string, upperChar, lowerChar) -> string
+// mask(string, upperChar, lowerChar, digitChar) -> string
+// mask(string, upperChar, lowerChar, digitChar, otherChar) -> string
+//
+// Masks the characters of the given string value with the provided specific
+// characters respectively. Upper-case characters are replaced with the second
+// argument. Default value is 'X'. Lower-case characters are replaced with the
+// third argument. Default value is 'x'. Digit characters are replaced with the
+// fourth argument. Default value is 'n'. Other characters are replaced with the
+// last argument. Default value is NULL and the original character is retained.
+// If the provided nth argument is NULL, the related original character is
+// retained.
 class MaskFunction final : public exec::VectorFunction {
  public:
   void apply(
@@ -79,7 +77,7 @@ class MaskFunction final : public exec::VectorFunction {
       return inputCharStr->data()[0];
     };
 
-    // Optimization for the (flat, const, const, const, const) case.
+    // Fast path for the (flat, const, const, const, const) case.
     if (strings->isIdentityMapping() and
         (upperChars == nullptr || upperChars->isConstantMapping()) and
         (lowerChars == nullptr || lowerChars->isConstantMapping()) and
@@ -111,14 +109,7 @@ class MaskFunction final : public exec::VectorFunction {
         proxy.finalize();
       });
     } else {
-      // The rest of the cases are handled through this general path and no
-      // direct access.
       rows.applyToSelected([&](vector_size_t row) {
-        if (args[0]->isNullAt(row)) {
-          flatResult->setNull(row, true);
-          return;
-        }
-        auto proxy = exec::StringWriter<>(flatResult, row);
         const auto upperChar = getMaskedChar(
             upperChars, args[1], row, maskedUpperCase_, "upperChar");
         const auto lowerChar = getMaskedChar(
@@ -127,6 +118,11 @@ class MaskFunction final : public exec::VectorFunction {
             getMaskedChar(digitChars, args[3], row, maskedDigit_, "digitChar");
         const auto otherChar =
             getMaskedChar(otherChars, args[4], row, std::nullopt, "otherChar");
+        if (args[0]->isNullAt(row)) {
+          flatResult->setNull(row, true);
+          return;
+        }
+        auto proxy = exec::StringWriter<>(flatResult, row);
         applyInner(
             strings->valueAt<StringView>(row),
             upperChar,
