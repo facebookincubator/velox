@@ -468,6 +468,15 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "raise_error"});
 
   registerFunction<
+      LevenshteinDistanceFunction,
+      int32_t,
+      Varchar,
+      Varchar,
+      int32_t>({prefix + "levenshtein"});
+  registerFunction<LevenshteinDistanceFunction, int32_t, Varchar, Varchar>(
+      {prefix + "levenshtein"});
+
+  registerFunction<
       ArrayInsertFunction,
       Array<Generic<T1>>,
       Array<Generic<T1>>,
