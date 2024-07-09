@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#if defined(VELOX_ENABLE_HDFS3) || defined(VELOX_ENABLE_HDFS)
+#ifdef VELOX_ENABLE_HDFS
 #include "folly/concurrency/ConcurrentHashMap.h"
 
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
@@ -25,7 +25,7 @@
 
 namespace facebook::velox::filesystems {
 
-#if defined(VELOX_ENABLE_HDFS3) || defined(VELOX_ENABLE_HDFS)
+#ifdef VELOX_ENABLE_HDFS
 std::mutex mtx;
 
 std::function<std::shared_ptr<
@@ -95,7 +95,7 @@ hdfsWriteFileSinkGenerator() {
 #endif
 
 void registerHdfsFileSystem() {
-#if defined(VELOX_ENABLE_HDFS3) || defined(VELOX_ENABLE_HDFS)
+#ifdef VELOX_ENABLE_HDFS
   registerFileSystem(HdfsFileSystem::isHdfsFile, hdfsFileSystemGenerator());
   dwio::common::FileSink::registerFactory(hdfsWriteFileSinkGenerator());
 #endif
