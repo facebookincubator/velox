@@ -53,7 +53,7 @@ struct ArrayInsertFunction {
       out.reserve(newArrayLength);
       int32_t posIdx = *pos - 1;
       int32_t nextIdx = 0;
-      for(int32_t i = 0; i < newArrayLength; i++) {
+      for (int32_t i = 0; i < newArrayLength; i++) {
         if (i == posIdx) {
           item ? out.push_back(*item) : out.add_null();
         } else {
@@ -87,8 +87,7 @@ struct ArrayInsertFunction {
           out.push_back(element);
         }
       } else {
-        int64_t posIdx =
-            *pos + srcArray->size() + !*legacyNegativeIndex;
+        int64_t posIdx = *pos + srcArray->size() + !*legacyNegativeIndex;
         int64_t newArrayLength =
             std::max(int64_t(srcArray->size() + 1), posIdx + 1);
         VELOX_USER_CHECK_LE(
