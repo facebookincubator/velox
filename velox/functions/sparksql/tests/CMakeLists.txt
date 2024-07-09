@@ -44,7 +44,7 @@ add_executable(
   SortArrayTest.cpp
   SparkCastExprTest.cpp
   SparkPartitionIdTest.cpp
-  SplitFunctionsTest.cpp
+  SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
   UnscaledValueFunctionTest.cpp

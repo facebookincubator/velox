@@ -203,14 +203,16 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     contain all input beyond the last matched regex. When ``limit`` <= 0, ``regex`` will be applied as many
     times as possible, and the resulting array can be of any size. When ``delimiter`` is empty, if ``limit``
     is smaller than the size of ``string``, the resulting array only contains ``limit`` number of single characters
-    splitting from ``string``, otherwise, the resulting array contains all the single characters of ``string`` and 
-    does not include an empty tail character.::
+    splitting from ``string``, if limit is not provided or is larger than the size of string, the resulting array 
+    contains all the single characters of ``string`` and does not include an empty tail character.::
 
         SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
         SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
+        SELECT split('oneAtwoBthreeC', '[ABC]', 5); -- ["one","two","three",""]
         SELECT split('one', '1'); -- ["one"]
-        SELECT split('abcd', ''); -- ["a", "b", "c", "d"]
-        SELECT split('abcd', '', 3); -- ["a", "b", "c"]
+        SELECT split('abcd', ''); -- ["a","b","c","d"]
+        SELECT split('abcd', '', 3); -- ["a","b","c"]
+        SELECT split('abcd', '', 5); -- ["a","b","c","d"]
 
 .. spark:function:: startswith(left, right) -> boolean
 

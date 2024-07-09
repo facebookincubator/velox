@@ -252,37 +252,51 @@ TEST_F(SplitTest, split) {
       {""},
   });
   assertEqualVectors(expected, run(inputStrings, delim, "split(C0, C1)"));
+  assertEqualVectors(
+      expected, run(inputStrings, delim, "split(C0, C1, C2)", 0));
+  assertEqualVectors(
+      expected, run(inputStrings, delim, "split(C0, C1, C2)", -1));
+  assertEqualVectors(
+      expected, run(inputStrings, delim, "split(C0, C1, C2)", 20));
   auto expected2 = makeArrayVector<StringView>({
-      {"I", ","},
-      {"o", "n"},
+      {"I", ",", "h"},
+      {"o", "n", "e"},
       {""},
   });
   assertEqualVectors(
-      expected2, run(inputStrings, delim, "split(C0, C1, C2)", 2));
-  delim = "A|";
+      expected2, run(inputStrings, delim, "split(C0, C1, C2)", 3));
   auto expected3 = makeArrayVector<StringView>({
+      {"I"},
+      {"o"},
+      {""},
+  });
+  assertEqualVectors(
+      expected3, run(inputStrings, delim, "split(C0, C1, C2)", 1));
+
+  delim = "A|";
+  auto expected4 = makeArrayVector<StringView>({
       {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y", ""},
       {"o", "n", "e", ",", ",", ",", "f", "o", "u", "r", ",", ""},
       {""},
   });
-  assertEqualVectors(expected3, run(inputStrings, delim, "split(C0, C1)"));
-  auto expected4 = makeArrayVector<StringView>({
+  assertEqualVectors(expected4, run(inputStrings, delim, "split(C0, C1)"));
+  auto expected5 = makeArrayVector<StringView>({
       {"I", ",he,she,they"},
       {"o", "ne,,,four,"},
       {""},
   });
   assertEqualVectors(
-      expected4, run(inputStrings, delim, "split(C0, C1, C2)", 2));
+      expected5, run(inputStrings, delim, "split(C0, C1, C2)", 2));
 
   delim = "A";
-  auto expected5 = makeArrayVector<StringView>({
+  auto expected6 = makeArrayVector<StringView>({
       {"I,he,she,they"},
       {"one,,,four,"},
       {""},
   });
-  assertEqualVectors(expected5, run(inputStrings, delim, "split(C0, C1)"));
+  assertEqualVectors(expected6, run(inputStrings, delim, "split(C0, C1)"));
   assertEqualVectors(
-      expected5, run(inputStrings, delim, "split(C0, C1, C2)", 2));
+      expected6, run(inputStrings, delim, "split(C0, C1, C2)", 2));
 
   delim = "A|";
   inputStrings = std::vector<std::string>{
@@ -290,19 +304,19 @@ TEST_F(SplitTest, split) {
       {"Hello世界🙂"},
       {""},
   };
-  auto expected6 = makeArrayVector<StringView>({
+  auto expected7 = makeArrayVector<StringView>({
       {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の", ""},
       {"H", "e", "l", "l", "o", "世", "界", "🙂", ""},
       {""},
   });
-  auto expected7 = makeArrayVector<StringView>({
+  auto expected8 = makeArrayVector<StringView>({
       {"с", "иняя赤いトマト緑の"},
       {"H", "ello世界🙂"},
       {""},
   });
-  assertEqualVectors(expected6, run(inputStrings, delim, "split(C0, C1)"));
+  assertEqualVectors(expected7, run(inputStrings, delim, "split(C0, C1)"));
   assertEqualVectors(
-      expected7, run(inputStrings, delim, "split(C0, C1, C2)", 2));
+      expected8, run(inputStrings, delim, "split(C0, C1, C2)", 2));
 
   // Non-ascii, empty delimiter
   delim = "";
@@ -311,19 +325,19 @@ TEST_F(SplitTest, split) {
       {"Hello世界🙂"},
       {""},
   };
-  auto expected8 = makeArrayVector<StringView>({
+  auto expected9 = makeArrayVector<StringView>({
       {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の", "空"},
       {"H", "e", "l", "l", "o", "世", "界", "🙂"},
       {""},
   });
-  auto expected9 = makeArrayVector<StringView>({
+  auto expected10 = makeArrayVector<StringView>({
       {"с", "и"},
       {"H", "e"},
       {""},
   });
-  assertEqualVectors(expected8, run(inputStrings, delim, "split(C0, C1)"));
+  assertEqualVectors(expected9, run(inputStrings, delim, "split(C0, C1)"));
   assertEqualVectors(
-      expected9, run(inputStrings, delim, "split(C0, C1, C2)", 2));
+      expected10, run(inputStrings, delim, "split(C0, C1, C2)", 2));
 
   // Non-ascii, flat strings, non-empty flat delimiter, no limit.
   delim = "లేదా";
@@ -352,8 +366,13 @@ TEST_F(SplitTest, split) {
   for (const auto& sEn : encodings) {
     for (const auto& dEn : encodings) {
       for (const auto& lEn : encodings) {
-        // Cover 'limit <= 0', 'high limit', 'small limit', 'limit 1'.
-        actual = run(inputStrings, delim, "split(C0, C1)", -1, sEn, dEn, lEn);
+        // Cover 'no limit', 'limit <= 0', 'high limit', 'small limit', 'limit
+        // 1'.
+        actual = run(
+            inputStrings, delim, "split(C0, C1)", std::nullopt, sEn, dEn, lEn);
+        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        actual =
+            run(inputStrings, delim, "split(C0, C1, C2)", -1, sEn, dEn, lEn);
         assertEqualVectors(prepare(expectedArrays, sEn), actual);
         actual =
             run(inputStrings, delim, "split(C0, C1, C2)", 10, sEn, dEn, lEn);

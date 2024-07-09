@@ -130,6 +130,7 @@ class Split final : public exec::VectorFunction {
     int32_t count = 0;
     while (pos < end && count < limit) {
       auto charLength = tryGetCharLength(start + pos, end - pos);
+      VELOX_DCHECK_GT(charLength, 0);
       arrayWriter.add_item().setNoCopy(StringView(start + pos, charLength));
       pos += charLength;
       count += 1;
@@ -186,6 +187,16 @@ class Split final : public exec::VectorFunction {
       if (offset >= end) {
         break;
       }
+
+      // Hit an empty match for the specific case when the delimiter has '|' as
+      // a suffix. For example, if the string is 'abc' and the delimiter is 'd|'
+      // where '|' is the suffix of the pattern, using the delimiter 'd|' to
+      // split "abc" would result in an empty size match in each iteration. For
+      // empty matches, instead of inserting an empty character into the result
+      // array, always split the character at the current 'pos' of the string
+      // and put it into the result array. Thus, the result array for the above
+      // example would be ["a", "b", "c"].
+
       if (size == 0) {
         offset += tryGetCharLength(start + pos, end - pos);
       }
