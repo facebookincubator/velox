@@ -39,24 +39,24 @@ double toBytesPerCapacityUnit(CapacityUnit unit) {
   }
 }
 
-CapacityUnit valueOfCapacityUnit(const std::string& unitStr) {
-  if (unitStr == "B") {
+CapacityUnit valueOfCapacityUnit(std::string& unitStr) {
+  folly::toLowerAscii(unitStr);
+  if (unitStr == "b") {
     return CapacityUnit::BYTE;
   }
-  // To be backward compatible this is lowercase.
-  if (unitStr == "kB") {
+  if (unitStr == "kb") {
     return CapacityUnit::KILOBYTE;
   }
-  if (unitStr == "MB") {
+  if (unitStr == "mb") {
     return CapacityUnit::MEGABYTE;
   }
-  if (unitStr == "GB") {
+  if (unitStr == "gb") {
     return CapacityUnit::GIGABYTE;
   }
-  if (unitStr == "TB") {
+  if (unitStr == "tb") {
     return CapacityUnit::TERABYTE;
   }
-  if (unitStr == "PB") {
+  if (unitStr == "pb") {
     return CapacityUnit::PETABYTE;
   }
   VELOX_USER_FAIL("Invalid capacity unit '{}'", unitStr);
