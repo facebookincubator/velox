@@ -162,15 +162,19 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
           if (spec.maxBytes == 0) {
             RECORD_HISTOGRAM_METRIC_VALUE(
                 kMetricExchangeDataSizeTimeMs, requestTimeMs);
+            RECORD_METRIC_VALUE(kMetricExchangeDataSizeCount);
           } else {
             RECORD_HISTOGRAM_METRIC_VALUE(
                 kMetricExchangeDataTimeMs, requestTimeMs);
             RECORD_METRIC_VALUE(kMetricExchangeDataBytes, response.bytes);
             RECORD_HISTOGRAM_METRIC_VALUE(
                 kMetricExchangeDataSize, response.bytes);
+            RECORD_METRIC_VALUE(kMetricExchangeDataCount);
           }
 
+          bool pauseCurrentSource = false;
           std::vector<RequestSpec> requestSpecs;
+          std::shared_ptr<ExchangeSource> currentSource = spec.source;
           {
             std::lock_guard<std::mutex> l(self->queue_->mutex());
             if (self->closed_) {
@@ -190,6 +194,16 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
             }
             self->totalPendingBytes_ -= spec.maxBytes;
             requestSpecs = self->pickSourcesToRequestLocked();
+            pauseCurrentSource =
+                std::find_if(
+                    requestSpecs.begin(),
+                    requestSpecs.end(),
+                    [&currentSource](const RequestSpec& spec) -> bool {
+                      return spec.source.get() == currentSource.get();
+                    }) == requestSpecs.end();
+          }
+          if (pauseCurrentSource) {
+            currentSource->pause();
           }
           self->request(std::move(requestSpecs));
         })

@@ -13,22 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include <cmath>
-#include <type_traits>
-#include "velox/functions/Macros.h"
+#include <stdint.h>
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::common {
 
-template <typename T>
-struct ArraySizeFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+/// Specifies the config for prefix-sort.
+struct PrefixSortConfig {
+  explicit PrefixSortConfig(
+      int64_t maxNormalizedKeySize,
+      int32_t threshold = 130)
+      : maxNormalizedKeySize(maxNormalizedKeySize), threshold(threshold) {}
 
-  FOLLY_ALWAYS_INLINE void call(
-      int32_t& out,
-      const arg_type<velox::Array<Any>>& inputArray) {
-    out = inputArray.size();
-  }
+  /// Max number of bytes can store normalized keys in prefix-sort buffer per
+  /// entry.
+  const int64_t maxNormalizedKeySize;
+
+  /// PrefixSort will have performance regression when the dateset is too small.
+  const int32_t threshold;
 };
-} // namespace facebook::velox::functions::sparksql
+} // namespace facebook::velox::common

@@ -19,7 +19,6 @@ add_executable(
   ArrayGetTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
-  ArraySizeTest.cpp
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
   ArgGeneratorTest.cpp
@@ -40,6 +39,7 @@ add_executable(
   MaskTest.cpp
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
+  RaiseErrorTest.cpp
   RandTest.cpp
   RegexFunctionsTest.cpp
   SizeTest.cpp

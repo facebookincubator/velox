@@ -24,6 +24,7 @@
 #include "velox/functions/prestosql/fuzzer/ApproxDistinctInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ApproxDistinctResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -117,16 +118,17 @@ int main(int argc, char** argv) {
   // fields.
   // TODO: allow custom result verifiers.
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
+  using facebook::velox::exec::test::ApproxPercentileResultVerifier;
 
   static const std::unordered_map<
       std::string,
       std::shared_ptr<facebook::velox::exec::test::ResultVerifier>>
       customVerificationFunctions = {
           // Approx functions.
-          // https://github.com/facebookincubator/velox/issues/9531
-          {"approx_distinct", nullptr},
+          {"approx_distinct", std::make_shared<ApproxDistinctResultVerifier>()},
           {"approx_set", nullptr},
-          {"approx_percentile", nullptr},
+          {"approx_percentile",
+           std::make_shared<ApproxPercentileResultVerifier>()},
           {"approx_most_frequent", nullptr},
           {"merge", nullptr},
           // Semantically inconsistent functions
