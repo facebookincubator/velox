@@ -16,8 +16,6 @@
 
 #include "velox/functions/lib/aggregates/MinMaxAggregateBase.h"
 
-using namespace facebook::velox::functions::aggregate::detail;
-
 namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {

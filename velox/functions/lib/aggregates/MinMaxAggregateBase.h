@@ -26,8 +26,6 @@
 
 namespace facebook::velox::functions::aggregate {
 
-namespace detail {
-
 template <typename T>
 struct MinMaxTrait : public std::numeric_limits<T> {};
 
@@ -632,8 +630,6 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
   return factory;
 }
 
-} // namespace detail
-
 /// Min & Max functions in Presto and Spark have different semantics:
 /// 1. Nested nulls are allowed in Spark but not Presto.
 /// 2. The map type is not orderable in Spark.
@@ -642,25 +638,25 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
 /// We add parameters 'nestedNullAllowed', 'mapTypeSupported',
 /// and template TTimestampAggregate to register min and max functions with
 /// different behaviors.
-template <typename TTimestampMinAggregate = detail::MinAggregate<Timestamp>>
+template <typename TTimestampMinAggregate = MinAggregate<Timestamp>>
 exec::AggregateFunctionFactory getMinFunctionFactory(
     const std::string& name,
     bool nestedNullAllowed,
     bool mapTypeSupported) {
-  return detail::getMinMaxFunctionFactoryInternal<
-      detail::MinAggregate,
-      detail::NonNumericMinAggregate,
+  return getMinMaxFunctionFactoryInternal<
+      MinAggregate,
+      NonNumericMinAggregate,
       TTimestampMinAggregate>(name, nestedNullAllowed, mapTypeSupported);
 }
 
-template <typename TTimestampMaxAggregate = detail::MaxAggregate<Timestamp>>
+template <typename TTimestampMaxAggregate = MaxAggregate<Timestamp>>
 exec::AggregateFunctionFactory getMaxFunctionFactory(
     const std::string& name,
     bool nestedNullAllowed,
     bool mapTypeSupported) {
-  return detail::getMinMaxFunctionFactoryInternal<
-      detail::MaxAggregate,
-      detail::NonNumericMaxAggregate,
+  return getMinMaxFunctionFactoryInternal<
+      MaxAggregate,
+      NonNumericMaxAggregate,
       TTimestampMaxAggregate>(name, nestedNullAllowed, mapTypeSupported);
 }
 } // namespace facebook::velox::functions::aggregate

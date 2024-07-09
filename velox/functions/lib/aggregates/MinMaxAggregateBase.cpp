@@ -16,7 +16,7 @@
 
 #include "velox/functions/lib/aggregates/MinMaxAggregateBase.h"
 
-namespace facebook::velox::functions::aggregate::detail {
+namespace facebook::velox::functions::aggregate {
 
 // Negative INF is the smallest value of floating point type.
 template <>
@@ -36,4 +36,4 @@ template <>
 const double MinAggregate<double>::kInitialValue_ =
     MinMaxTrait<double>::quiet_NaN();
 
-} // namespace facebook::velox::functions::aggregate::detail
+} // namespace facebook::velox::functions::aggregate
