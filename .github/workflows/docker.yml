@@ -47,7 +47,7 @@ jobs:
         include:
           - name: Check
             file: "scripts/check-container.dockfile"
-            tags: "ghcr.io/facebookincubator/velox-dev:check-avx"
+            tags: "ghcr.io/facebookincubator/velox-dev:check"
           - name: Centos 9
             file: "scripts/centos.dockerfile"
             tags: "ghcr.io/facebookincubator/velox-dev:centos9"
