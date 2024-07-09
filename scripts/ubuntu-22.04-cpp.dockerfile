@@ -30,7 +30,7 @@ ADD scripts /velox/scripts/
 # to prompt for region selection.
 ARG DEBIAN_FRONTEND="noninteractive"
 # Set a default timezone, can be overriden via ARG
-ARG tz="Europe/Madrid"
+ARG tz="Etc/UTC"
 ENV TZ=${tz}
 RUN /velox/scripts/setup-ubuntu.sh
 
