@@ -29,5 +29,5 @@ target_link_libraries(
   velox_core
   velox_expression
   velox_expression_fuzzer_test_utility
-  gtest
-  gtest_main)
+  GTest::gtest
+  GTest::gtest_main)
