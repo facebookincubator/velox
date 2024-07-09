@@ -213,7 +213,7 @@ class DecimalUtil {
 
   /// This method is used when
   /// `spark.sql.decimalOperations.allowPrecisionLoss` is set to false.
-  /// Make sure the precision and scale is in range.
+  /// Caps precision and scale at 38.
   inline static std::pair<uint8_t, uint8_t> bounded(
       uint8_t rPrecision,
       uint8_t rScale) {

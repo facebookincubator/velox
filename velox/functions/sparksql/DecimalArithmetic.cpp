@@ -39,7 +39,7 @@ std::string getResultScale(
 }
 
 std::pair<std::string, std::string>
-getNotAllowPrecisionLossDivideResultScale() {
+getStrictDivideResultScale() {
   std::string intDig = "min(38, a_precision - a_scale + b_scale)";
   std::string decDig = "min(38, max(6, a_scale + b_precision + 1))";
   std::string diff = intDig + " + " + decDig + " - 38";
@@ -714,7 +714,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> decimalMultiplySignature(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> decimalDivideSignature(
     bool allowPrecisionLoss) {
-  auto precisionAndScale = getNotAllowPrecisionLossDivideResultScale();
+  auto precisionAndScale = getStrictDivideResultScale();
   std::string resultPrecision = allowPrecisionLoss
       ? "min(38, a_precision - a_scale + b_scale + max(6, a_scale + b_precision + 1))"
       : precisionAndScale.first;

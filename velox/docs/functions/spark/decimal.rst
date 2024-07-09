@@ -27,14 +27,28 @@ Multiplication
 
 Division
 --------
-
+When config ``spark.decimal_operations.allow_precision_loss`` is set to true as default.
 ::
 
     p = p1 - s1 + s2 + max(6, s1 + p2 + 1)
     s = max(6, s1 + p2 + 1)
 
+When config ``spark.decimal_operations.allow_precision_loss`` is set to false.
+::
+
+    intDig = min(38, p1 - s1 + s2);
+    decDig = min(38, max(6, s1 + p2 + 1));
+If ``indDig + decDig`` is more than 38:
+::
+    p = 38
+    s = decDig - (intDig + decDig - 38) / 2 - 1
+Otherwise:
+::
+    p = intDig + decDig
+    s = decDig
+
 For above arithmetic operators, when the precision of result exceeds 38,
-caps p at 38 and reduces the scale, in order to prevent the truncation of
+caps p at 38 and reduces the scale when allowing precision loss, in order to prevent the truncation of
 the integer part of the decimals. Below formula illustrates how the result
 precision and scale are adjusted.
 
@@ -42,6 +56,8 @@ precision and scale are adjusted.
 
     precision = 38
     scale = max(38 - (p - s), min(s, 6))
+
+Caps p ans s at 38 when not allowing precision loss.
 
 Users experience runtime errors when the actual result cannot be represented
 with the calculated decimal type.
