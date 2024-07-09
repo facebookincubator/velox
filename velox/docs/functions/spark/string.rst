@@ -195,22 +195,22 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT soundex('Miller'); -- "M460"
 
-.. spark:function:: split(string, delimiter) -> array(string)
-
-    Splits ``string`` on ``delimiter`` and returns an array. ::
+.. spark:function:: split(string, delimiter[, limit]) -> array(string)
+    Splits ``string`` around occurrences that match ``delimiter`` and returns an array with a length of
+    at most ``limit``. ``delimiter`` is a string representing regular expression. ``limit`` is an integer
+    which controls the number of times the regex is applied. By default, ``limit`` is -1. When ``limit`` > 0,
+    the resulting array's length will not be more than ``limit``, and the resulting array's last entry will
+    contain all input beyond the last matched regex. When ``limit`` <= 0, ``regex`` will be applied as many
+    times as possible, and the resulting array can be of any size. When ``delimiter`` is empty, if ``limit``
+    is smaller than the size of ``string``, the resulting array only contains ``limit`` number of single characters
+    splitting from ``string``, otherwise, the resulting array contains all the single characters of ``string`` and 
+    does not include an empty tail character.::
 
         SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
-        SELECT split('one', ''); -- ["o", "n", "e", ""]
-        SELECT split('one', '1'); -- ["one"]
-
-.. spark:function:: split(string, delimiter, limit) -> array(string)
-   :noindex:
-
-    Splits ``string`` on ``delimiter`` and returns an array of size at most ``limit``. ::
-
-        SELECT split('oneAtwoBthreeC', '[ABC]', -1); -- ["one","two","three",""]
-        SELECT split('oneAtwoBthreeC', '[ABC]', 0); -- ["one", "two", "three", ""]
         SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
+        SELECT split('one', '1'); -- ["one"]
+        SELECT split('abcd', ''); -- ["a", "b", "c", "d"]
+        SELECT split('abcd', '', 3); -- ["a", "b", "c"]
 
 .. spark:function:: startswith(left, right) -> boolean
 
