@@ -160,8 +160,6 @@ function install_hdfs_deps {
     # Dependencies for Hadoop testing
     wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz hadoop
     cp -a hadoop /usr/local/
-
-    yum install -y java-1.8.0-openjdk-devel
   fi
   cmake_install
 }
