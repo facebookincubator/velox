@@ -17,27 +17,12 @@ name: Linux Build
 on:
   push:
     branches:
-      - "main"
-    paths:
-      - "velox/**"
-      - "!velox/docs/**"
-      - "CMakeLists.txt"
-      - "CMake/**"
-      - "third_party/**"
-      - "scripts/setup-ubuntu.sh"
-      - "scripts/setup-helper-functions.sh"
-      - ".github/workflows/linux-build.yml"
+      - "velox-cudf"
+      - "pull-request/[0-9]+"
 
-  pull_request:
-    paths:
-      - "velox/**"
-      - "!velox/docs/**"
-      - "CMakeLists.txt"
-      - "CMake/**"
-      - "third_party/**"
-      - "scripts/setup-ubuntu.sh"
-      - "scripts/setup-helper-functions.sh"
-      - ".github/workflows/linux-build.yml"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
