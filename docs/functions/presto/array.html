@@ -109,6 +109,12 @@ For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="array_dupes">
+<span class="sig-name descname"><span class="pre">array_dupes</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#array_dupes" title="Link to this definition">¶</a></dt>
+<dd><p>This is an alias for <code class="xref py py-func docutils literal notranslate"><span class="pre">array_duplicates(array(E))()</span></code></p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_duplicates">
 <span class="sig-name descname"><span class="pre">array_duplicates</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_duplicates" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a set of elements that occur more than once in array.
@@ -143,6 +149,12 @@ Ignores null elements. Empty array returns empty map. E must be bigint or varcha
 <span class="n">SELECT</span> <span class="n">array_frequency</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[]);</span> <span class="o">--</span> <span class="p">{}</span>
 </pre></div>
 </div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="array_has_dupes">
+<span class="sig-name descname"><span class="pre">array_has_dupes</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#array_has_dupes" title="Link to this definition">¶</a></dt>
+<dd><p>This is an alias for <code class="xref py py-func docutils literal notranslate"><span class="pre">array_has_duplicates(array(E))()</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -612,9 +624,11 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_average"><code class="docutils literal notranslate"><span class="pre">array_average()</span></code></a></li>
 <li><a class="reference internal" href="#array_cum_sum"><code class="docutils literal notranslate"><span class="pre">array_cum_sum()</span></code></a></li>
 <li><a class="reference internal" href="#array_distinct"><code class="docutils literal notranslate"><span class="pre">array_distinct()</span></code></a></li>
+<li><a class="reference internal" href="#array_dupes"><code class="docutils literal notranslate"><span class="pre">array_dupes()</span></code></a></li>
 <li><a class="reference internal" href="#array_duplicates"><code class="docutils literal notranslate"><span class="pre">array_duplicates()</span></code></a></li>
 <li><a class="reference internal" href="#array_except"><code class="docutils literal notranslate"><span class="pre">array_except()</span></code></a></li>
 <li><a class="reference internal" href="#array_frequency"><code class="docutils literal notranslate"><span class="pre">array_frequency()</span></code></a></li>
+<li><a class="reference internal" href="#array_has_dupes"><code class="docutils literal notranslate"><span class="pre">array_has_dupes()</span></code></a></li>
 <li><a class="reference internal" href="#array_has_duplicates"><code class="docutils literal notranslate"><span class="pre">array_has_duplicates()</span></code></a></li>
 <li><a class="reference internal" href="#array_intersect"><code class="docutils literal notranslate"><span class="pre">array_intersect()</span></code></a></li>
 <li><a class="reference internal" href="#array_join"><code class="docutils literal notranslate"><span class="pre">array_join()</span></code></a></li>
