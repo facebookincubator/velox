@@ -3740,7 +3740,9 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
         .hashJoin(
             {"t0"},
             {"u0"},
-            CudfPlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+            CudfPlanBuilder(planNodeIdGenerator)
+                .values(buildVectors)
+                .planNode(),
             filter,
             {"t0", "t1", "match"},
             core::JoinType::kLeftSemiProject,
@@ -5156,23 +5158,24 @@ TEST_F(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId joinNodeId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto op =
-      CudfPlanBuilder(planNodeIdGenerator)
-          .startTableScan()
-          .outputType(outputType)
-          .assignments(assignments)
-          .endTableScan()
-          .capturePlanNodeId(probeScanId)
-          .hashJoin(
-              {"p1"},
-              {"b0"},
-              CudfPlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
-              "",
-              {"p0"},
-              core::JoinType::kInner)
-          .capturePlanNodeId(joinNodeId)
-          .project({"p0"})
-          .planNode();
+  auto op = CudfPlanBuilder(planNodeIdGenerator)
+                .startTableScan()
+                .outputType(outputType)
+                .assignments(assignments)
+                .endTableScan()
+                .capturePlanNodeId(probeScanId)
+                .hashJoin(
+                    {"p1"},
+                    {"b0"},
+                    CudfPlanBuilder(planNodeIdGenerator)
+                        .values(buildVectors)
+                        .planNode(),
+                    "",
+                    {"p0"},
+                    core::JoinType::kInner)
+                .capturePlanNodeId(joinNodeId)
+                .project({"p0"})
+                .planNode();
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "3")
@@ -5424,22 +5427,23 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
 
   core::PlanNodeId probeScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto op =
-      CudfPlanBuilder(planNodeIdGenerator)
-          .startTableScan()
-          .outputType(outputType)
-          .assignments(assignments)
-          .endTableScan()
-          .capturePlanNodeId(probeScanId)
-          .hashJoin(
-              {"n1_1"},
-              {"c0"},
-              CudfPlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
-              "",
-              {"c0"},
-              core::JoinType::kInner)
-          .project({"c0"})
-          .planNode();
+  auto op = CudfPlanBuilder(planNodeIdGenerator)
+                .startTableScan()
+                .outputType(outputType)
+                .assignments(assignments)
+                .endTableScan()
+                .capturePlanNodeId(probeScanId)
+                .hashJoin(
+                    {"n1_1"},
+                    {"c0"},
+                    CudfPlanBuilder(planNodeIdGenerator)
+                        .values(buildVectors)
+                        .planNode(),
+                    "",
+                    {"c0"},
+                    core::JoinType::kInner)
+                .project({"c0"})
+                .planNode();
   SplitInput splits = {{probeScanId, {exec::Split(split)}}};
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
