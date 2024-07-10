@@ -224,7 +224,13 @@ void ReaderBase::initializeSchema() {
   // is the root itself. This is ok because it's never required to check the
   // parent of the root in getParquetColumnInfo().
   schemaWithId_ = getParquetColumnInfo(
-      maxSchemaElementIdx, maxRepeat, maxDefine, 0, schemaIdx, columnIdx, options_.fileSchema());
+      maxSchemaElementIdx,
+      maxRepeat,
+      maxDefine,
+      0,
+      schemaIdx,
+      columnIdx,
+      options_.fileSchema());
   schema_ = createRowType(
       schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
 }
