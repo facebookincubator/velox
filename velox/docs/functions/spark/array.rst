@@ -41,10 +41,10 @@ Array Functions
 
 .. spark:function:: array_insert(array(E), pos, E, legacyNegativeIndex) -> array(E)
 
-    Places new element into index ``pos`` of the input array. Returns NULL if the input array or
+    Places new element into index ``pos`` of the input ``array``. Returns NULL if the input ``array`` or
     ``pos`` is NULL. Array indices start at 1. Throws exception if ``pos`` is 0. The maximum negative
-    index is -1. For negative index, if ``legacyNegativeIndex`` is true, the function is 0-based which
-    means -1 points to the last but one position. Otherwise, the function is 1-based which means -1
+    index is -1. For negative index, if ``legacyNegativeIndex`` is true, the index is 0-based which
+    means -1 points to the last but one position. Otherwise, the negative index is 1-based which means -1
     points to the last position. Index above array size appends the array or prepends the array if
     index is negative, with 'null' elements. ::
 
@@ -52,8 +52,9 @@ Array Functions
         SELECT array_insert(array(1, 2), NULL, 0, false); -- NULL
         SELECT array_insert(array(1, 2), 1, 0, false); -- [0, 1, 2]
         SELECT array_insert(array(1, 2), 4, 0, false); -- [1, 2, NULL, 0]
-        SELECT array_insert(array(1, 2), -1, 0, false); -- [1, 2, -1]
-        SELECT array_insert(array(1, 2), -1, 0, true); -- [1, -1, 2]
+        SELECT array_insert(array(1, 2), -1, 0, false); -- [1, 2, 0]
+        SELECT array_insert(array(1, 2), -4, 0, false); -- [0, NULL, 1, 2]
+        SELECT array_insert(array(1, 2), -1, 0, true); -- [1, 0, 2]
 
 .. spark:function:: array_intersect(array(E), array(E1)) -> array(E2)
 
