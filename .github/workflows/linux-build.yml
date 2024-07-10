@@ -49,8 +49,6 @@ concurrency:
 jobs:
   adapters:
     name: Linux release with adapters
-    # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 8-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
@@ -129,8 +127,6 @@ jobs:
 
   ubuntu-debug:
     runs-on: 8-core-ubuntu
-    # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
     name: "Ubuntu debug with resolve_dependency"
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache"
