@@ -48,7 +48,7 @@ function install_build_prerequisites {
   ${SUDO} apt update
   # The is an issue on 22.04 where a version conflict prevents glog install,
   # installing libunwind first fixes this.
-  ${SUDO} apt install -y libunwind-dev
+  ${SUDO} apt install -y libunwind8
   ${SUDO} apt install -y \
     build-essential \
     python3-pip \
