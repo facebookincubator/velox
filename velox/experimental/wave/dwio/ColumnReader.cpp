@@ -21,16 +21,11 @@ namespace facebook::velox::wave {
 void ColumnReader::makeOp(
     ReadStream* readStream,
     ColumnAction action,
-    int32_t offset,
-    RowSet rows,
     ColumnOp& op) {
   VELOX_CHECK(action == ColumnAction::kValues, "Only values supported");
-  formatData_->newBatch(readOffset_ + offset);
   op.action = action;
   op.reader = this;
   op.waveVector = readStream->operandVector(operand_->id, requestedType_);
-  op.rows = rows;
-  readOffset_ = offset + rows.back() + 1;
 };
 
 bool ColumnReader::hasNonNullFilter() const {

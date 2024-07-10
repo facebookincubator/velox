@@ -693,6 +693,12 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       hiveConfig_->orcWriterMaxStripeSize(connectorSessionProperties));
   options.maxDictionaryMemory = std::optional(
       hiveConfig_->orcWriterMaxDictionaryMemory(connectorSessionProperties));
+  options.orcWriterIntegerDictionaryEncodingEnabled =
+      hiveConfig_->isOrcWriterIntegerDictionaryEncodingEnabled(
+          connectorSessionProperties);
+  options.orcWriterStringDictionaryEncodingEnabled =
+      hiveConfig_->isOrcWriterStringDictionaryEncodingEnabled(
+          connectorSessionProperties);
   options.parquetWriteTimestampUnit =
       hiveConfig_->parquetWriteTimestampUnit(connectorSessionProperties);
   options.orcMinCompressionSize = std::optional(
@@ -748,6 +754,7 @@ HiveDataSink::maybeCreateBucketSortWriter(
       sortCompareFlags_,
       sortPool,
       writerInfo_.back()->nonReclaimableSectionHolder.get(),
+      connectorQueryCtx_->prefixSortConfig(),
       spillConfig_,
       writerInfo_.back()->spillStats.get());
   return std::make_unique<dwio::common::SortingWriter>(

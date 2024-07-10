@@ -592,7 +592,7 @@ identified sort fields as well as a sorting order.
    * - Property
      - Description
    * - sortingKeys
-     - List of one of more input columns to sort by.
+     - List of one of more input columns to sort by. Sorting keys must be unique.
    * - sortingOrders
      - Sorting order for each of the soring keys. The supported orders are: ascending nulls first, ascending nulls last, descending nulls first, descending nulls last.
    * - isPartial
@@ -916,7 +916,7 @@ next batch of input.
 
 This operator accumulates state: a hash table mapping partition keys to total
 number of rows seen in this partition so far. Returning the row numbers as
-a column in the output is optional. This operator doesn't support spilling yet.
+a column in the output is optional. This operator supports spilling.
 
 This operator is equivalent to a WindowNode followed by
 FilterNode(row_number <= limit), but it uses less memory and CPU and makes
