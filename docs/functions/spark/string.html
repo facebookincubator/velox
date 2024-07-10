@@ -232,6 +232,17 @@ if pos + len is negative, it refers to -(pos + len)th element before the end of 
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="repeat">
+<span class="sig-name descname"><span class="pre">repeat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#repeat" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the string which repeats <code class="docutils literal notranslate"><span class="pre">input</span></code> <code class="docutils literal notranslate"><span class="pre">n</span></code> times.
+Result size must be less than or equal to 1MB.
+If <code class="docutils literal notranslate"><span class="pre">n</span></code> is less than or equal to 0, empty string is returned.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">repeat</span><span class="p">(</span><span class="s1">&#39;123&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mi">123123</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="replace">
 <span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replaced</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#replace" title="Link to this definition">¶</a></dt>
 <dd><p>Removes all instances of <code class="docutils literal notranslate"><span class="pre">replaced</span></code> from <code class="docutils literal notranslate"><span class="pre">input</span></code>.
@@ -493,6 +504,7 @@ The specified character is any character contained in <code class="docutils lite
 <li><a class="reference internal" href="#lpad"><code class="docutils literal notranslate"><span class="pre">lpad()</span></code></a></li>
 <li><a class="reference internal" href="#ltrim"><code class="docutils literal notranslate"><span class="pre">ltrim()</span></code></a></li>
 <li><a class="reference internal" href="#overlay"><code class="docutils literal notranslate"><span class="pre">overlay()</span></code></a></li>
+<li><a class="reference internal" href="#repeat"><code class="docutils literal notranslate"><span class="pre">repeat()</span></code></a></li>
 <li><a class="reference internal" href="#replace"><code class="docutils literal notranslate"><span class="pre">replace()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">replace()</span></code></a></li>
 <li><a class="reference internal" href="#reverse"><code class="docutils literal notranslate"><span class="pre">reverse()</span></code></a></li>
