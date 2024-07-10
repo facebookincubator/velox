@@ -57,7 +57,7 @@ precision and scale are adjusted.
     precision = 38
     scale = max(38 - (p - s), min(s, 6))
 
-Caps p ans s at 38 when not allowing precision loss.
+Caps p and s at 38 when not allowing precision loss.
 
 Users experience runtime errors when the actual result cannot be represented
 with the calculated decimal type.

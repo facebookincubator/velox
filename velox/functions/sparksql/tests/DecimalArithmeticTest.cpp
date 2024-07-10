@@ -559,6 +559,21 @@ TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
           std::vector<int128_t>{21232100, 29998888, 42345678, 42135632},
           DECIMAL(38, 7)));
 
+  // Overflow when scaling up the whole part.
+  testArithmeticFunction(
+      "add",
+      {makeNullableLongDecimalVector(
+           {"-99999999999999999999999999999999990000",
+            "99999999999999999999999999999999999000",
+            "-99999999999999999999999999999999999900",
+            "99999999999999999999999999999999999990"},
+           DECIMAL(38, 3)),
+       makeFlatVector(
+           std::vector<int128_t>{-100, 9999999, -999900, 99999},
+           DECIMAL(38, 7))},
+      makeNullableLongDecimalVector(
+          {"null", "null", "null", "null"}, DECIMAL(38, 7)));
+
   testArithmeticFunction(
       "subtract_not_allow_precision_loss",
       {makeFlatVector(
