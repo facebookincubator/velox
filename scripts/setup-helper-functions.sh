@@ -82,6 +82,8 @@ function get_cxx_flags {
    if [ "$OS" = "Darwin" ]; then
      if [ "$MACHINE" = "arm64" ]; then
        CPU_ARCH="arm64"
+     else
+       CPU_ARCH="avx"
      fi
    elif [ "$OS" = "Linux" ]; then
      if [ "$MACHINE" = "aarch64" ]; then
