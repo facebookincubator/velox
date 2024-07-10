@@ -14,7 +14,9 @@
 name: Run Checks
 
 on:
-  pull_request:
+  push:
+    branches:
+      - "pull-request/[0-9]+"
 
 permissions:
   contents: read
