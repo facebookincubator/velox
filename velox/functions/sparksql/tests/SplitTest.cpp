@@ -183,9 +183,9 @@ TEST_F(SplitTest, split) {
   std::string delim;
   std::vector<std::vector<std::string>> actualArrays;
   VectorPtr actual;
-  std::vector<std::vector<std::string>> expectedArrays;
-  std::vector<std::vector<std::string>> expectedArrays3;
   std::vector<std::vector<std::string>> expectedArrays1;
+  std::vector<std::vector<std::string>> expectedArrays2;
+  std::vector<std::vector<std::string>> expectedArrays3;
 
   // We want to check these encodings for the vectors.
   std::vector<VectorEncoding::Simple> encodings{
@@ -203,17 +203,17 @@ TEST_F(SplitTest, split) {
       {""}, // The whole string is empty
   };
   // Base expected data.
-  expectedArrays = std::vector<std::vector<std::string>>{
+  expectedArrays1 = std::vector<std::vector<std::string>>{
       {"I", "he", "she", "they"},
       {"one", "", "", "four", ""},
       {""},
   };
-  expectedArrays3 = std::vector<std::vector<std::string>>{
+  expectedArrays2 = std::vector<std::vector<std::string>>{
       {"I", "he", "she,they"},
       {"one", "", ",four,"},
       {""},
   };
-  expectedArrays1 = std::vector<std::vector<std::string>>{
+  expectedArrays3 = std::vector<std::vector<std::string>>{
       {inputStrings[0]},
       {inputStrings[1]},
       {inputStrings[2]},
@@ -227,19 +227,19 @@ TEST_F(SplitTest, split) {
         // 'small limit', 'limit = 1'.
         actual = run(
             inputStrings, delim, "split(C0, C1)", std::nullopt, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
         actual =
             run(inputStrings, delim, "split(C0, C1, C2)", -1, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
         actual =
             run(inputStrings, delim, "split(C0, C1, C2)", 10, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
         actual =
             run(inputStrings, delim, "split(C0, C1, C2)", 3, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays3, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays2, sEn), actual);
         actual =
             run(inputStrings, delim, "split(C0, C1, C2)", 1, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays3, sEn), actual);
       }
     }
   }
@@ -347,17 +347,17 @@ TEST_F(SplitTest, split) {
       {""}, // The whole string is empty
   };
   // Base expected data.
-  expectedArrays = std::vector<std::vector<std::string>>{
+  expectedArrays1 = std::vector<std::vector<std::string>>{
       {"синяя слива", "赤いトマト", "黃苹果", "brown pear"},
       {"зелёное небо", "", "", "緑の空", ""},
       {""},
   };
-  expectedArrays3 = std::vector<std::vector<std::string>>{
+  expectedArrays2 = std::vector<std::vector<std::string>>{
       {"синяя слива", "赤いトマト", "黃苹果లేదాbrown pear"},
       {"зелёное небо", "", "లేదా緑の空లేదా"},
       {""},
   };
-  expectedArrays1 = std::vector<std::vector<std::string>>{
+  expectedArrays3 = std::vector<std::vector<std::string>>{
       {inputStrings[0]},
       {inputStrings[1]},
       {inputStrings[2]},
@@ -370,19 +370,19 @@ TEST_F(SplitTest, split) {
         // 1'.
         actual = run(
             inputStrings, delim, "split(C0, C1)", std::nullopt, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
         actual =
             run(inputStrings, delim, "split(C0, C1, C2)", -1, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
         actual =
             run(inputStrings, delim, "split(C0, C1, C2)", 10, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
         actual =
             run(inputStrings, delim, "split(C0, C1, C2)", 3, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays3, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays2, sEn), actual);
         actual =
             run(inputStrings, delim, "split(C0, C1, C2)", 1, sEn, dEn, lEn);
-        assertEqualVectors(prepare(expectedArrays1, sEn), actual);
+        assertEqualVectors(prepare(expectedArrays3, sEn), actual);
       }
     }
   }

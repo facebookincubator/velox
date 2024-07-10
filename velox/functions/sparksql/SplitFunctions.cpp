@@ -41,7 +41,6 @@ class Split final : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    // Get the decoded vectors out of arguments.
     exec::DecodedArgs decodedArgs(rows, args, context);
     DecodedVector* strings = decodedArgs.at(0);
     DecodedVector* delims = decodedArgs.at(1);
@@ -50,18 +49,24 @@ class Split final : public exec::VectorFunction {
     BaseVector::ensureWritable(rows, ARRAY(VARCHAR()), context.pool(), result);
     exec::VectorWriter<Array<Varchar>> resultWriter;
     resultWriter.init(*result->as<ArrayVector>());
+
+    auto getLimit = [&](int32_t row) -> int32_t {
+      int32_t limit = std::numeric_limits<int32_t>::max();
+      if (limits) {
+        const auto limitValue = limits->valueAt<int32_t>(row);
+        if (limitValue > 0) {
+          limit = limitValue;
+        }
+      }
+      return limit;
+    };
+
     // Fast path for (flat, const, const).
     if (strings->isIdentityMapping() and delims->isConstantMapping() and
         (!limits or limits->isConstantMapping())) {
       const auto* rawStrings = strings->data<StringView>();
       const auto delim = delims->valueAt<StringView>(0);
-      int32_t limit = std::numeric_limits<int32_t>::max();
-      if (limits) {
-        const auto constant = limits->valueAt<int32_t>(0);
-        if (constant > 0) {
-          limit = constant;
-        }
-      }
+      auto limit = getLimit(0);
       if (delim.empty()) {
         rows.applyToSelected([&](vector_size_t row) {
           splitEmptyDelimiter(rawStrings[row], limit, row, resultWriter);
@@ -74,13 +79,7 @@ class Split final : public exec::VectorFunction {
     } else {
       rows.applyToSelected([&](vector_size_t row) {
         const auto delim = delims->valueAt<StringView>(row);
-        int32_t limit = std::numeric_limits<int32_t>::max();
-        if (limits) {
-          const auto limitValue = limits->valueAt<int32_t>(row);
-          if (limitValue > 0) {
-            limit = limitValue;
-          }
-        }
+        auto limit = getLimit(row);
         if (delim.empty()) {
           splitEmptyDelimiter(
               strings->valueAt<StringView>(row), limit, row, resultWriter);
