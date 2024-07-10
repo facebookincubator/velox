@@ -49,7 +49,7 @@ concurrency:
 jobs:
   adapters:
     name: Linux release with adapters
-    runs-on: 8-core-ubuntu
+    runs-on: linux-amd64-cpu8
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
@@ -126,7 +126,7 @@ jobs:
           ctest -j 8 --output-on-failure --no-tests=error
 
   ubuntu-debug:
-    runs-on: 8-core-ubuntu
+    runs-on: linux-amd64-cpu8
     name: "Ubuntu debug with resolve_dependency"
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache"
