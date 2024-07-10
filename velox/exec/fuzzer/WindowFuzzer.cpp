@@ -17,6 +17,7 @@
 #include "velox/exec/fuzzer/WindowFuzzer.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
+#include "velox/common/base/Portability.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -176,8 +177,7 @@ std::string WindowFuzzer::getFrame(
   return frame.str();
 }
 
-std::vector<WindowFuzzer::SortingKeyAndOrder>
-WindowFuzzer::generateSortingKeysAndOrders(
+std::vector<SortingKeyAndOrder> WindowFuzzer::generateSortingKeysAndOrders(
     const std::string& prefix,
     std::vector<std::string>& names,
     std::vector<TypePtr>& types) {
@@ -319,6 +319,12 @@ void WindowFuzzer::testAlternativePlans(
   if (isTableScanSupported(inputRowType)) {
     auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
+// There is a known issue where LocalPartition will send DictionaryVectors
+// with the same underlying base Vector to multiple threads.  This triggers
+// TSAN to report data races, particularly if that base Vector is from the
+// TableScan and reused.  Don't run these tests when TSAN is enabled to avoid
+// the false negatives.
+#ifndef TSAN_BUILD
     plans.push_back(
         {PlanBuilder()
              .tableScan(inputRowType)
@@ -326,6 +332,7 @@ void WindowFuzzer::testAlternativePlans(
              .window({fmt::format("{} over ({})", functionCall, frame)})
              .planNode(),
          splits});
+#endif
 
     if (!allKeys.empty()) {
       plans.push_back(
@@ -351,11 +358,17 @@ void initializeVerifier(
     const std::shared_ptr<ResultVerifier>& customVerifier,
     const std::vector<RowVectorPtr>& input,
     const std::vector<std::string>& partitionKeys,
+    const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
     const std::string& frame) {
   const auto& windowNode =
       std::dynamic_pointer_cast<const core::WindowNode>(plan);
   customVerifier->initializeWindow(
-      input, partitionKeys, windowNode->windowFunctions()[0], frame, "w0");
+      input,
+      partitionKeys,
+      sortingKeysAndOrders,
+      windowNode->windowFunctions()[0],
+      frame,
+      "w0");
 }
 } // namespace
 
@@ -373,12 +386,6 @@ bool WindowFuzzer::verifyWindow(
       customVerifier->reset();
     }
   };
-
-  // There is a known issue where LocalPartition will send DictionaryVectors
-  // with the same underlying base Vector to multiple threads.  This triggers
-  // TSAN to report data races, particularly if that base Vector is from the
-  // TableScan and reused.  Ignore TSAN issues in these tests for now.
-  folly::annotate_ignore_thread_sanitizer_guard g(__FILE__, __LINE__);
 
   auto frame = getFrame(partitionKeys, sortingKeysAndOrders, frameClause);
   auto plan = PlanBuilder()
@@ -422,7 +429,13 @@ bool WindowFuzzer::verifyWindow(
         VELOX_CHECK(
             customVerifier->supportsVerify(),
             "Window fuzzer only uses custom verify() methods.");
-        initializeVerifier(plan, customVerifier, input, partitionKeys, frame);
+        initializeVerifier(
+            plan,
+            customVerifier,
+            input,
+            partitionKeys,
+            sortingKeysAndOrders,
+            frame);
         customVerifier->verify(resultOrError.result);
       }
     }

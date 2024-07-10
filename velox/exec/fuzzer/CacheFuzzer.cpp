@@ -254,13 +254,14 @@ void CacheFuzzer::readCache() {
   std::vector<std::thread> threads;
   threads.reserve(FLAGS_num_threads);
   for (int32_t i = 0; i < FLAGS_num_threads; ++i) {
-    threads.emplace_back([&]() {
+    threads.emplace_back([&, i]() {
+      FuzzerGenerator rng(currentSeed_ + i);
       while (!readStopped) {
         const auto fileIdx = boost::random::uniform_int_distribution<int32_t>(
-            0, FLAGS_num_source_files - 1)(rng_);
+            0, FLAGS_num_source_files - 1)(rng);
         const auto fragmentIdx =
             boost::random::uniform_int_distribution<int32_t>(
-                0, fileFragments_[fileIdx].size() - 1)(rng_);
+                0, fileFragments_[fileIdx].size() - 1)(rng);
         read(fileIdx, fragmentIdx);
       }
     });
@@ -274,7 +275,7 @@ void CacheFuzzer::readCache() {
 
 void CacheFuzzer::reset() {
   cache_->shutdown();
-  cache_->ssdCache()->testingWaitForWriteToFinish();
+  cache_->ssdCache()->waitForWriteToFinish();
   executor_->join();
   executor_.reset();
   fileNames_.clear();
