@@ -194,9 +194,8 @@ class Split final : public exec::VectorFunction {
       // split "abc" would result in an empty size match in each iteration. For
       // empty matches, instead of inserting an empty character into the result
       // array, always split the character at the current 'pos' of the string
-      // and put it into the result array. Thus, the result array for the above
-      // example would be ["a", "b", "c"].
-
+      // and put it into the result array, and then an empty tail string. Thus,
+      // the result array for the above example would be ["a", "b", "c", ""].
       if (size == 0) {
         offset += tryGetCharLength(start + pos, end - pos);
       }
