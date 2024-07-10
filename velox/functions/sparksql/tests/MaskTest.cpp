@@ -339,9 +339,7 @@ class MaskTest : public SparkFunctionBaseTest {
   }
 };
 
-/**
- * Test mask vector function on vectors with different encodings.
- */
+// Test mask vector function on vectors with different encodings.
 TEST_F(MaskTest, mask) {
   std::vector<std::optional<std::string>> inputStrings;
   std::string upperChar;

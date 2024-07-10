@@ -58,17 +58,17 @@ class MaskFunction final : public exec::VectorFunction {
     auto* flatResult = result->as<FlatVector<StringView>>();
     auto getMaskedChar = [&](DecodedVector* inputChars,
                              const VectorPtr& arg,
-                             int index,
+                             vector_size_t row,
                              std::optional<char> maskedChar,
                              const char* charType) -> std::optional<char> {
       if (inputChars == nullptr) {
         return maskedChar;
       }
-      if (arg->isNullAt(index)) {
+      if (arg->isNullAt(row)) {
         return std::nullopt;
       }
       std::optional<StringView> inputCharStr =
-          inputChars->valueAt<StringView>(index);
+          inputChars->valueAt<StringView>(row);
       if (inputCharStr.has_value()) {
         VELOX_USER_CHECK(
             inputCharStr.value().size() == 1,
@@ -85,11 +85,11 @@ class MaskFunction final : public exec::VectorFunction {
         (otherChars == nullptr || otherChars->isConstantMapping())) {
       const auto* rawStrings = strings->data<StringView>();
       const auto upperChar =
-          getMaskedChar(upperChars, args[1], 0, maskedUpperCase_, "upperChar");
+          getMaskedChar(upperChars, args[1], 0, kMaskedUpperCase_, "upperChar");
       const auto lowerChar =
-          getMaskedChar(lowerChars, args[2], 0, maskedLowerCase_, "lowerChar");
+          getMaskedChar(lowerChars, args[2], 0, kMaskedLowerCase_, "lowerChar");
       const auto digitChar =
-          getMaskedChar(digitChars, args[3], 0, maskedDigit_, "digitChar");
+          getMaskedChar(digitChars, args[3], 0, kMaskedDigit_, "digitChar");
       const auto otherChar =
           getMaskedChar(otherChars, args[4], 0, std::nullopt, "otherChar");
       rows.applyToSelected([&](vector_size_t row) {
@@ -111,11 +111,11 @@ class MaskFunction final : public exec::VectorFunction {
     } else {
       rows.applyToSelected([&](vector_size_t row) {
         const auto upperChar = getMaskedChar(
-            upperChars, args[1], row, maskedUpperCase_, "upperChar");
+            upperChars, args[1], row, kMaskedUpperCase_, "upperChar");
         const auto lowerChar = getMaskedChar(
-            lowerChars, args[2], row, maskedLowerCase_, "lowerChar");
+            lowerChars, args[2], row, kMaskedLowerCase_, "lowerChar");
         const auto digitChar =
-            getMaskedChar(digitChars, args[3], row, maskedDigit_, "digitChar");
+            getMaskedChar(digitChars, args[3], row, kMaskedDigit_, "digitChar");
         const auto otherChar =
             getMaskedChar(otherChars, args[4], row, std::nullopt, "otherChar");
         if (args[0]->isNullAt(row)) {
@@ -169,9 +169,9 @@ class MaskFunction final : public exec::VectorFunction {
   }
 
  private:
-  static constexpr char maskedUpperCase_ = 'X';
-  static constexpr char maskedLowerCase_ = 'x';
-  static constexpr char maskedDigit_ = 'n';
+  static constexpr char kMaskedUpperCase_ = 'X';
+  static constexpr char kMaskedLowerCase_ = 'x';
+  static constexpr char kMaskedDigit_ = 'n';
 };
 
 std::shared_ptr<exec::VectorFunction> createMask(
