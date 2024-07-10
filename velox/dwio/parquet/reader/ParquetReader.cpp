@@ -99,9 +99,12 @@ class ReaderBase {
       uint32_t maxDefine,
       uint32_t parentSchemaIdx,
       uint32_t& schemaIdx,
-      uint32_t& columnIdx) const;
+      uint32_t& columnIdx,
+      const TypePtr& requestedType) const;
 
-  TypePtr convertType(const thrift::SchemaElement& schemaElement) const;
+  TypePtr convertType(
+      const thrift::SchemaElement& schemaElement,
+      const TypePtr& requestedType) const;
 
   template <typename T>
   static std::shared_ptr<const RowType> createRowType(
@@ -122,6 +125,9 @@ class ReaderBase {
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
+  const TypePtr& getRequestedType(
+      const TypePtr& requestedType,
+      std::string& name) const;
 };
 
 ReaderBase::ReaderBase(
@@ -218,7 +224,7 @@ void ReaderBase::initializeSchema() {
   // is the root itself. This is ok because it's never required to check the
   // parent of the root in getParquetColumnInfo().
   schemaWithId_ = getParquetColumnInfo(
-      maxSchemaElementIdx, maxRepeat, maxDefine, 0, schemaIdx, columnIdx);
+      maxSchemaElementIdx, maxRepeat, maxDefine, 0, schemaIdx, columnIdx, options_.fileSchema());
   schema_ = createRowType(
       schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
 }
@@ -229,7 +235,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     uint32_t maxDefine,
     uint32_t parentSchemaIdx,
     uint32_t& schemaIdx,
-    uint32_t& columnIdx) const {
+    uint32_t& columnIdx,
+    const TypePtr& requestedType) const {
   VELOX_CHECK(fileMetaData_ != nullptr);
   VELOX_CHECK_LT(schemaIdx, fileMetaData_->schema.size());
 
@@ -268,13 +275,17 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
     auto curSchemaIdx = schemaIdx;
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
+      ++schemaIdx;
+      auto childName = schema[schemaIdx].name;
+      auto childRequestedType = getRequestedType(requestedType, childName);
       auto child = getParquetColumnInfo(
           maxSchemaElementIdx,
           maxRepeat,
           maxDefine,
           curSchemaIdx,
-          ++schemaIdx,
-          columnIdx);
+          schemaIdx,
+          columnIdx,
+          childRequestedType);
       children.push_back(std::move(child));
     }
     VELOX_CHECK(!children.empty());
@@ -465,7 +476,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       }
     }
   } else { // leaf node
-    const auto veloxType = convertType(schemaElement);
+    const auto veloxType =
+        convertType(schemaElement, getRequestedType(requestedType, name));
     int32_t precision =
         schemaElement.__isset.precision ? schemaElement.precision : 0;
     int32_t scale = schemaElement.__isset.scale ? schemaElement.scale : 0;
@@ -520,8 +532,18 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   return nullptr;
 }
 
+const TypePtr& ReaderBase::getRequestedType(
+    const TypePtr& requestedType,
+    std::string& name) const {
+  return requestedType != nullptr && requestedType->isRow() &&
+          requestedType->asRow().containsChild(name)
+      ? requestedType->asRow().findChild(name)
+      : requestedType;
+}
+
 TypePtr ReaderBase::convertType(
-    const thrift::SchemaElement& schemaElement) const {
+    const thrift::SchemaElement& schemaElement,
+    const TypePtr& requestedType) const {
   VELOX_CHECK(schemaElement.__isset.type && schemaElement.num_children == 0);
   VELOX_CHECK(
       schemaElement.type != thrift::Type::FIXED_LEN_BYTE_ARRAY ||
@@ -653,15 +675,8 @@ TypePtr ReaderBase::convertType(
         return DOUBLE();
       case thrift::Type::type::BYTE_ARRAY:
       case thrift::Type::type::FIXED_LEN_BYTE_ARRAY:
-        if (options_.fileSchema() != nullPtr 
-          && options_.fileSchema()->containsChild(schemaElement.name)) {
-          const std::shared_ptr<const Type>& requestedType =
-              options_.fileSchema()->findChild(schemaElement.name);
-          if (requestedType->isVarchar()) {
-            return VARCHAR();
-          } else {
-            return VARBINARY();
-          }
+        if (requestedType != nullptr && requestedType->isVarchar()) {
+          return VARCHAR();
         } else {
           return VARBINARY();
         }
