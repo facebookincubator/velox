@@ -38,8 +38,7 @@ std::string getResultScale(
       : fmt::format("({}) <= 38 ? ({}) : 38", scale, scale);
 }
 
-std::pair<std::string, std::string>
-getStrictDivideResultScale() {
+std::pair<std::string, std::string> getStrictDivideResultScale() {
   std::string intDig = "min(38, a_precision - a_scale + b_scale)";
   std::string decDig = "min(38, max(6, a_scale + b_precision + 1))";
   std::string diff = intDig + " + " + decDig + " - 38";
