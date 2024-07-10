@@ -187,7 +187,7 @@ function install_duckdb {
   fi
 }
 
-ARROW_VERSION=15.0.0
+ARROW_VERSION=16.1.0
 
 function install_arrow {
   wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow

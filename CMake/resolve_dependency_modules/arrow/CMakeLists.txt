@@ -53,9 +53,9 @@ if(VELOX_ENABLE_ARROW)
                                       ${THRIFT_INCLUDE_DIR})
   set_property(TARGET thrift PROPERTY IMPORTED_LOCATION ${THRIFT_LIB})
 
-  set(VELOX_ARROW_BUILD_VERSION 15.0.0)
+  set(VELOX_ARROW_BUILD_VERSION 16.1.0)
   set(VELOX_ARROW_BUILD_SHA256_CHECKSUM
-      01dd3f70e85d9b5b933ec92c0db8a4ef504a5105f78d2d8622e84279fb45c25d)
+      c9e60c7e87e59383d21b20dc874b17153729ee153264af6d21654b7dff2c60d7)
   set(VELOX_ARROW_SOURCE_URL
       "https://archive.apache.org/dist/arrow/arrow-${VELOX_ARROW_BUILD_VERSION}/apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
   )
