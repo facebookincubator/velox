@@ -50,10 +50,10 @@ class Split final : public exec::VectorFunction {
     exec::VectorWriter<Array<Varchar>> resultWriter;
     resultWriter.init(*result->as<ArrayVector>());
 
-    auto getLimit = [&](int32_t row) -> int32_t {
+    auto getLimit = [&](vector_size_t row) -> int32_t {
       int32_t limit = std::numeric_limits<int32_t>::max();
       if (limits) {
-        const auto limitValue = limits->valueAt<int32_t>(row);
+        const auto limitValue = limits->valueAt<vector_size_t>(row);
         if (limitValue > 0) {
           limit = limitValue;
         }
@@ -187,14 +187,10 @@ class Split final : public exec::VectorFunction {
         break;
       }
 
-      // Hit an empty match for the specific case when the delimiter has '|' as
-      // a suffix. For example, if the string is 'abc' and the delimiter is 'd|'
-      // where '|' is the suffix of the pattern, using the delimiter 'd|' to
-      // split "abc" would result in an empty size match in each iteration. For
-      // empty matches, instead of inserting an empty character into the result
-      // array, always split the character at the current 'pos' of the string
-      // and put it into the result array, and then an empty tail string. Thus,
-      // the result array for the above example would be ["a", "b", "c", ""].
+      // When hitting an empty match, split the character at the current 'pos'
+      // of the input string and put it into the result array, followed by an
+      // empty tail string at last, e.g., the result array for split('abc','d|')
+      // is ["a", "b", "c",""].
       if (size == 0) {
         offset += tryGetCharLength(start + pos, end - pos);
       }
