@@ -122,6 +122,37 @@ It is allowed when the truncated result exceeds the range of result type.</p>
 </div>
 </section>
 </section>
+<section id="cast-to-boolean">
+<h2>Cast to Boolean<a class="headerlink" href="#cast-to-boolean" title="Link to this heading">¶</a></h2>
+<section id="from-varchar">
+<h3>From VARCHAR<a class="headerlink" href="#from-varchar" title="Link to this heading">¶</a></h3>
+<p>The strings <cite>t, f, y, n, 1, 0, yes, no, true, false</cite> and their upper case equivalents are allowed to be casted to boolean.
+Casting from other strings to boolean throws.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;0&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;t&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;true&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;f&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;false&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;y&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;yes&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;n&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;no&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Invalid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.7E308&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tr&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tru&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+</pre></div>
+</div>
+</section>
+</section>
 <section id="cast-to-string">
 <h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Link to this heading">¶</a></h2>
 <section id="from-timestamp">
@@ -186,8 +217,8 @@ Casting from invalid input values throws.</p>
 </section>
 <section id="cast-to-decimal">
 <h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Link to this heading">¶</a></h2>
-<section id="from-varchar">
-<h3>From varchar<a class="headerlink" href="#from-varchar" title="Link to this heading">¶</a></h3>
+<section id="id2">
+<h3>From varchar<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
 <p>Casting varchar to a decimal of given precision and scale is allowed.
 The behavior is similar with Presto except Spark allows leading and trailing white-spaces in input varchars.</p>
 <p>Valid example</p>
@@ -203,8 +234,8 @@ The behavior is similar with Presto except Spark allows leading and trailing whi
 </section>
 <section id="cast-to-varbinary">
 <h2>Cast to Varbinary<a class="headerlink" href="#cast-to-varbinary" title="Link to this heading">¶</a></h2>
-<section id="id2">
-<h3>From integral types<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<section id="id3">
+<h3>From integral types<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <p>Casting integral value to varbinary type is allowed.
 Bytes of input value are converted into an array of bytes in little-endian order.
 Supported types are tinyint, smallint, integer and bigint.</p>
@@ -237,6 +268,10 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 <li><a class="reference internal" href="#from-decimal">From decimal</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#cast-to-boolean">Cast to Boolean</a><ul>
+<li><a class="reference internal" href="#from-varchar">From VARCHAR</a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#cast-to-string">Cast to String</a><ul>
 <li><a class="reference internal" href="#from-timestamp">From TIMESTAMP</a></li>
 </ul>
@@ -246,11 +281,11 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
-<li><a class="reference internal" href="#from-varchar">From varchar</a></li>
+<li><a class="reference internal" href="#id2">From varchar</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-varbinary">Cast to Varbinary</a><ul>
-<li><a class="reference internal" href="#id2">From integral types</a></li>
+<li><a class="reference internal" href="#id3">From integral types</a></li>
 </ul>
 </li>
 </ul>

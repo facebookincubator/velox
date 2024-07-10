@@ -656,6 +656,18 @@ The parameter controls the size when footer is fetched each time. Bigger value c
 <td><p>16M</p></td>
 <td><p>Maximum dictionary memory that can be used in orc writer.</p></td>
 </tr>
+<tr class="row-odd"><td><p>hive.orc.writer.integer-dictionary-encoding-enabled</p></td>
+<td><p>orc_optimized_writer_integer_dictionary_encoding_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether or not dictionary encoding of integer types should be used by the ORC writer.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.orc.writer.string-dictionary-encoding-enabled</p></td>
+<td><p>orc_optimized_writer_string_dictionary_encoding_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether or not dictionary encoding of string types should be used by the ORC writer.</p></td>
+</tr>
 <tr class="row-odd"><td><p>hive.parquet.writer.timestamp-unit</p></td>
 <td><p>hive.parquet.writer.timestamp_unit</p></td>
 <td><p>tinyint</p></td>
