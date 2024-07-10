@@ -541,10 +541,16 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 const TypePtr& ReaderBase::getRequestedType(
     const TypePtr& requestedType,
     std::string& name) const {
-  return requestedType != nullptr && requestedType->isRow() &&
-          requestedType->asRow().containsChild(name)
-      ? requestedType->asRow().findChild(name)
-      : requestedType;
+  if (!requestedType || !requestedType->isRow()) {
+    return requestedType;
+  }
+
+  const auto& rowType = requestedType->asRow();
+  if (!rowType.containsChild(name)) {
+    return requestedType;
+  }
+
+  return rowType.findChild(name);
 }
 
 TypePtr ReaderBase::convertType(
@@ -681,7 +687,7 @@ TypePtr ReaderBase::convertType(
         return DOUBLE();
       case thrift::Type::type::BYTE_ARRAY:
       case thrift::Type::type::FIXED_LEN_BYTE_ARRAY:
-        if (requestedType != nullptr && requestedType->isVarchar()) {
+        if (requestedType && requestedType->isVarchar()) {
           return VARCHAR();
         } else {
           return VARBINARY();
