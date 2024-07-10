@@ -20,10 +20,12 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
+using namespace facebook::velox::window::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -400,7 +402,7 @@ TEST_F(ApproxPercentileTest, finalAggregateAccuracy) {
   assertQuery(op, "SELECT 5");
 }
 
-TEST_F(ApproxPercentileTest, invalidEncoding) {
+TEST_F(ApproxPercentileTest, nonFlatPercentileArray) {
   auto indices = AlignedBuffer::allocate<vector_size_t>(3, pool());
   auto rawIndices = indices->asMutable<vector_size_t>();
   std::iota(rawIndices, rawIndices + indices->size(), 0);
@@ -421,10 +423,8 @@ TEST_F(ApproxPercentileTest, invalidEncoding) {
                   .values({rows})
                   .singleAggregation({}, {"approx_percentile(c0, c1)"})
                   .planNode();
-  AssertQueryBuilder assertQuery(plan);
-  VELOX_ASSERT_THROW(
-      assertQuery.copyResults(pool()),
-      "Only flat encoding is allowed for percentile array elements");
+  auto expected = makeRowVector({makeArrayVector<int32_t>({{0, 5, 9}})});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(ApproxPercentileTest, invalidWeight) {
@@ -565,6 +565,33 @@ TEST_F(ApproxPercentileTest, nullPercentile) {
       testAggregations(
           {rows}, {}, {"approx_percentile(c0, c1)"}, "SELECT NULL"),
       "Percentile cannot be null");
+}
+
+class ApproxPercentileWindowTest : public WindowTestBase {
+ protected:
+  void SetUp() override {
+    WindowTestBase::SetUp();
+    random::setSeed(0);
+  }
+};
+
+TEST_F(ApproxPercentileWindowTest, window) {
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
+       makeArrayVectorFromJson<double>({"[0.5]", "[0.5]", "[0.5]"})});
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3}),
+      makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
+      makeArrayVectorFromJson<double>({"[0.5]", "[0.5]", "[0.5]"}),
+      makeNullableArrayVector<int32_t>({{{10}}, std::nullopt, {{30}}}),
+  });
+  testWindowFunction(
+      {data},
+      "approx_percentile(c1, c2)",
+      "order by c0",
+      "rows between current row and current row",
+      expected);
 }
 
 } // namespace

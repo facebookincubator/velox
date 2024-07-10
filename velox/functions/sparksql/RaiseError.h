@@ -15,20 +15,19 @@
  */
 #pragma once
 
-#include <cmath>
-#include <type_traits>
 #include "velox/functions/Macros.h"
-
 namespace facebook::velox::functions::sparksql {
 
 template <typename T>
-struct ArraySizeFunction {
+struct RaiseErrorFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      int32_t& out,
-      const arg_type<velox::Array<Any>>& inputArray) {
-    out = inputArray.size();
+  FOLLY_ALWAYS_INLINE Status
+  callNullable(out_type<UnknownValue>& result, const arg_type<Varchar>* input) {
+    if (input) {
+      return Status::UserError("{}", *input);
+    }
+    return Status::UserError();
   }
 };
 } // namespace facebook::velox::functions::sparksql
