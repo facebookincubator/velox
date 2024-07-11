@@ -731,7 +731,7 @@ std::shared_ptr<exec::VectorFunction> createDecimalFunction(
 
 // Find the function according to input types under expression compiler.
 // Mark the return type as unknown, the result type will be computed by Function
-// constructor. This signature only make effect in test code.
+// constructor.
 std::vector<std::shared_ptr<exec::FunctionSignature>> decimalSignature() {
   return {exec::FunctionSignatureBuilder()
               .integerVariable("a_precision")
