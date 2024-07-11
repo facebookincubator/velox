@@ -22,41 +22,6 @@
 
 namespace facebook::velox::functions::sparksql {
 namespace {
-
-std::string getResultScale(
-    std::string precision,
-    std::string scale,
-    bool allowPrecisionLoss) {
-  return allowPrecisionLoss
-      ? fmt::format(
-            "({}) <= 38 ? ({}) : max(({}) - ({}) + 38, min(({}), 6))",
-            precision,
-            scale,
-            scale,
-            precision,
-            scale)
-      : fmt::format("({}) <= 38 ? ({}) : 38", scale, scale);
-}
-
-std::pair<std::string, std::string> getStrictDivideResultScale() {
-  std::string intDig = "min(38, a_precision - a_scale + b_scale)";
-  std::string decDig = "min(38, max(6, a_scale + b_precision + 1))";
-  std::string diff = intDig + " + " + decDig + " - 38";
-  std::string newDecDig = fmt::format("({}) - ({}) / 2 - 1", decDig, diff);
-  std::string newIntDig = fmt::format("38 - ({})", newDecDig);
-  return {
-      fmt::format(
-          "({}) > 0 ? ({}) : ({})",
-          diff,
-          getResultScale("", newIntDig + " + " + newDecDig, false),
-          getResultScale("", intDig + " + " + decDig, false)),
-      fmt::format(
-          "({}) > 0 ? ({}) : ({})",
-          diff,
-          getResultScale("", newDecDig, false),
-          getResultScale("", decDig, false))};
-}
-
 // Returns the whole and fraction parts of a decimal value.
 template <typename T>
 inline std::pair<T, T> getWholeAndFraction(T value, uint8_t scale) {
@@ -666,76 +631,6 @@ class Divide {
   }
 };
 
-std::vector<std::shared_ptr<exec::FunctionSignature>>
-decimalAddSubtractSignature(bool allowPrecisionLoss) {
-  return {
-      exec::FunctionSignatureBuilder()
-          .integerVariable("a_precision")
-          .integerVariable("a_scale")
-          .integerVariable("b_precision")
-          .integerVariable("b_scale")
-          .integerVariable(
-              "r_precision",
-              "min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)")
-          .integerVariable(
-              "r_scale",
-              getResultScale(
-                  "max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1",
-                  "max(a_scale, b_scale)",
-                  allowPrecisionLoss))
-          .returnType("DECIMAL(r_precision, r_scale)")
-          .argumentType("DECIMAL(a_precision, a_scale)")
-          .argumentType("DECIMAL(b_precision, b_scale)")
-          .build(),
-  };
-}
-
-std::vector<std::shared_ptr<exec::FunctionSignature>> decimalMultiplySignature(
-    bool allowPrecisionLoss) {
-  return {exec::FunctionSignatureBuilder()
-              .integerVariable("a_precision")
-              .integerVariable("a_scale")
-              .integerVariable("b_precision")
-              .integerVariable("b_scale")
-              .integerVariable(
-                  "r_precision", "min(38, a_precision + b_precision + 1)")
-              .integerVariable(
-                  "r_scale",
-                  getResultScale(
-                      "a_precision + b_precision + 1",
-                      "a_scale + b_scale",
-                      allowPrecisionLoss))
-              .returnType("DECIMAL(r_precision, r_scale)")
-              .argumentType("DECIMAL(a_precision, a_scale)")
-              .argumentType("DECIMAL(b_precision, b_scale)")
-              .build()};
-}
-
-std::vector<std::shared_ptr<exec::FunctionSignature>> decimalDivideSignature(
-    bool allowPrecisionLoss) {
-  auto precisionAndScale = getStrictDivideResultScale();
-  std::string resultPrecision = allowPrecisionLoss
-      ? "min(38, a_precision - a_scale + b_scale + max(6, a_scale + b_precision + 1))"
-      : precisionAndScale.first;
-  std::string resultScale = allowPrecisionLoss
-      ? getResultScale(
-            "a_precision - a_scale + b_scale + max(6, a_scale + b_precision + 1)",
-            "max(6, a_scale + b_precision + 1)",
-            allowPrecisionLoss)
-      : precisionAndScale.second;
-  return {exec::FunctionSignatureBuilder()
-              .integerVariable("a_precision")
-              .integerVariable("a_scale")
-              .integerVariable("b_precision")
-              .integerVariable("b_scale")
-              .integerVariable("r_precision", resultPrecision)
-              .integerVariable("r_scale", resultScale)
-              .returnType("DECIMAL(r_precision, r_scale)")
-              .argumentType("DECIMAL(a_precision, a_scale)")
-              .argumentType("DECIMAL(b_precision, b_scale)")
-              .build()};
-}
-
 template <typename Operation>
 std::shared_ptr<exec::VectorFunction> createDecimalFunction(
     const std::string& name,
@@ -833,45 +728,40 @@ std::shared_ptr<exec::VectorFunction> createDecimalFunction(
     }
   }
 }
+
+// Find the function according to input types under expression compiler.
+// Mark the return type as unknown, the result type will be computed by Function
+// constructor. This signature only make effect in test code.
+std::vector<std::shared_ptr<exec::FunctionSignature>> decimalSignature() {
+  return {exec::FunctionSignatureBuilder()
+              .integerVariable("a_precision")
+              .integerVariable("a_scale")
+              .integerVariable("b_precision")
+              .integerVariable("b_scale")
+              .returnType("unknown")
+              .argumentType("DECIMAL(a_precision, a_scale)")
+              .argumentType("DECIMAL(b_precision, b_scale)")
+              .build()};
+}
 } // namespace
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_add,
-    decimalAddSubtractSignature(true),
+    decimalSignature(),
     createDecimalFunction<Addition>);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_sub,
-    decimalAddSubtractSignature(true),
+    decimalSignature(),
     createDecimalFunction<Subtraction>);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_mul,
-    decimalMultiplySignature(true),
+    decimalSignature(),
     createDecimalFunction<Multiply>);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_div,
-    decimalDivideSignature(true),
-    createDecimalFunction<Divide>);
-
-VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
-    udf_decimal_add_not_allow_precision_loss,
-    decimalAddSubtractSignature(false),
-    createDecimalFunction<Addition>);
-
-VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
-    udf_decimal_sub_not_allow_precision_loss,
-    decimalAddSubtractSignature(false),
-    createDecimalFunction<Subtraction>);
-
-VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
-    udf_decimal_mul_not_allow_precision_loss,
-    decimalMultiplySignature(false),
-    createDecimalFunction<Multiply>);
-
-VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
-    udf_decimal_div_not_allow_precision_loss,
-    decimalDivideSignature(false),
+    decimalSignature(),
     createDecimalFunction<Divide>);
 } // namespace facebook::velox::functions::sparksql
