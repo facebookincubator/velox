@@ -139,6 +139,18 @@ Mathematical Functions
 
     Returns ``x`` rounded to ``d`` decimal places.
 
+.. function:: secure_rand() -> double
+
+    This is an alias for :func:`secure_random()`.
+
+.. function:: secure_random() -> double
+
+    Returns a cryptographically secure random value in the range 0.0 <= x < 1.0.
+
+.. function:: secure_random(lower, upper) -> [same as input]
+
+    Returns a cryptographically secure random value in the range lower <= x < upper, where lower < upper.
+
 .. function:: sign(x) -> [same as x]
 
     Returns the signum function of ``x``. For both integer and floating point arguments, it returns:
@@ -329,6 +341,11 @@ Probability Functions: inverse_cdf
     probability (p): P(N < n). The a, b parameters must be positive real values (all of type DOUBLE).
     The probability p must lie on the interval [0, 1].
 
+.. function:: inverse_weibull_cdf(a, b, p) -> double
+
+    Compute the inverse of the Weibull cdf with given parameters ``a``, ``b`` for the probability ``p``.
+    The ``a``, ``b`` parameters must be positive double values. The probability ``p`` must be a double
+    on the interval [0, 1].
 
 ====================================
 Statistical Functions

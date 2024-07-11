@@ -225,19 +225,30 @@ TEST_P(MemoryPoolTest, addChild) {
   });
   ASSERT_THAT(
       nodes, UnorderedElementsAreArray({childOne.get(), childTwo.get()}));
+
   // Child pool name collision.
   ASSERT_THROW(root->addAggregateChild("child_one"), VeloxRuntimeError);
   ASSERT_EQ(root->getChildCount(), 2);
+
+  constexpr int64_t kChunkSize{128};
+  void* buff = childOne->allocate(kChunkSize);
+  // Add child when 'reservedBytes != 0', in which case 'usedBytes()' will call
+  // 'visitChildren()'.
+  VELOX_ASSERT_THROW(root->addAggregateChild("child_one"), "");
+  childOne->free(buff, kChunkSize);
+  ASSERT_EQ(root->getChildCount(), 2);
+
   childOne.reset();
   ASSERT_EQ(root->getChildCount(), 1);
   childOne = root->addLeafChild("child_one", isLeafThreadSafe_);
   ASSERT_EQ(root->getChildCount(), 2);
-  ASSERT_EQ(root->treeMemoryUsage(), "root usage 0B reserved 0B peak 0B\n");
-  ASSERT_EQ(root->treeMemoryUsage(true), "root usage 0B reserved 0B peak 0B\n");
+  ASSERT_EQ(root->treeMemoryUsage(), "root usage 0B reserved 0B peak 1.00MB\n");
+  ASSERT_EQ(
+      root->treeMemoryUsage(true), "root usage 0B reserved 0B peak 1.00MB\n");
   const std::string treeUsageWithEmptyPool = root->treeMemoryUsage(false);
   ASSERT_THAT(
       treeUsageWithEmptyPool,
-      testing::HasSubstr("root usage 0B reserved 0B peak 0B\n"));
+      testing::HasSubstr("root usage 0B reserved 0B peak 1.00MB\n"));
   ASSERT_THAT(
       treeUsageWithEmptyPool,
       testing::HasSubstr("child_one usage 0B reserved 0B peak 0B\n"));
@@ -743,7 +754,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                     "tinySize: 0B large size: 0B\nCache entries: 0 read pins: "
                     "0 write pins: 0 pinned shared: 0B pinned exclusive: 0B\n "
                     "num write wait: 0 empty entries: 0\nCache access miss: 0 "
-                    "hit: 0 hit bytes: 0B eviction: 0 eviction checks: 0 "
+                    "hit: 0 hit bytes: 0B eviction: 0 savable eviction: 0 eviction checks: 0 "
                     "aged out: 0 stales: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks 0\n"
                     "Allocated pages: 0 cached pages: 0\n",
                     isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
@@ -777,7 +788,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                     "size: 0B tinySize: 0B large size: 0B\nCache entries: 0 "
                     "read pins: 0 write pins: 0 pinned shared: 0B pinned "
                     "exclusive: 0B\n num write wait: 0 empty entries: 0\nCache "
-                    "access miss: 0 hit: 0 hit bytes: 0B eviction: 0 eviction "
+                    "access miss: 0 hit: 0 hit bytes: 0B eviction: 0 savable eviction: 0 eviction "
                     "checks: 0 aged out: 0 stales: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks"
                     " 0\nAllocated pages: 0 cached pages: 0\n",
                     isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),

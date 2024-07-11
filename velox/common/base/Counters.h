@@ -206,6 +206,9 @@ constexpr folly::StringPiece kMetricMemoryCacheNumNew{
 constexpr folly::StringPiece kMetricMemoryCacheNumEvicts{
     "velox.memory_cache_num_evicts"};
 
+constexpr folly::StringPiece kMetricMemoryCacheNumSavableEvicts{
+    "velox.memory_cache_num_savable_evicts"};
+
 constexpr folly::StringPiece kMetricMemoryCacheNumEvictChecks{
     "velox.memory_cache_num_evict_checks"};
 
@@ -293,17 +296,26 @@ constexpr folly::StringPiece kMetricSsdCacheCheckpointsWritten{
 constexpr folly::StringPiece kMetricSsdCacheRegionsEvicted{
     "velox.ssd_cache_regions_evicted"};
 
+constexpr folly::StringPiece kMetricSsdCacheRecoveredEntries{
+    "velox.ssd_cache_recovered_entries"};
+
 constexpr folly::StringPiece kMetricExchangeDataTimeMs{
     "velox.exchange_data_time_ms"};
-
-constexpr folly::StringPiece kMetricExchangeDataSizeTimeMs{
-    "velox.exchange_data_size_time_ms"};
 
 constexpr folly::StringPiece kMetricExchangeDataBytes{
     "velox.exchange_data_bytes"};
 
 constexpr folly::StringPiece kMetricExchangeDataSize{
     "velox.exchange_data_size"};
+
+constexpr folly::StringPiece kMetricExchangeDataCount{
+    "velox.exchange_data_count"};
+
+constexpr folly::StringPiece kMetricExchangeDataSizeTimeMs{
+    "velox.exchange_data_size_time_ms"};
+
+constexpr folly::StringPiece kMetricExchangeDataSizeCount{
+    "velox.exchange_data_size_count"};
 
 constexpr folly::StringPiece kMetricStorageThrottledDurationMs{
     "velox.storage_throttled_duration_ms"};

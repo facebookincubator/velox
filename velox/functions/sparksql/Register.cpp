@@ -38,6 +38,7 @@
 #include "velox/functions/sparksql/LeastGreatest.h"
 #include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/MonotonicallyIncreasingId.h"
+#include "velox/functions/sparksql/RaiseError.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
 #include "velox/functions/sparksql/RegisterArithmetic.h"
 #include "velox/functions/sparksql/RegisterCompare.h"
@@ -461,6 +462,18 @@ void registerFunctions(const std::string& prefix) {
       Array<Array<Generic<T1>>>>({prefix + "flatten"});
 
   registerFunction<SoundexFunction, Varchar, Varchar>({prefix + "soundex"});
+
+  registerFunction<RaiseErrorFunction, UnknownValue, Varchar>(
+      {prefix + "raise_error"});
+
+  registerFunction<
+      LevenshteinDistanceFunction,
+      int32_t,
+      Varchar,
+      Varchar,
+      int32_t>({prefix + "levenshtein"});
+  registerFunction<LevenshteinDistanceFunction, int32_t, Varchar, Varchar>(
+      {prefix + "levenshtein"});
 }
 
 } // namespace sparksql
