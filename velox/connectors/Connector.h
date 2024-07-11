@@ -113,6 +113,10 @@ class ConnectorInsertTableHandle : public ISerializable {
     return false;
   }
 
+  virtual std::string toString() const {
+    VELOX_NYI();
+  }
+
   folly::dynamic serialize() const override {
     VELOX_NYI();
   }
