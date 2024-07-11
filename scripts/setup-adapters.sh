@@ -141,8 +141,12 @@ function install_hdfs_deps {
     sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
     sed -i "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMake/Platform.cmake
     # Dependencies for Hadoop testing
-    wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz hadoop
+    wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-3.3.0/hadoop-3.3.0.tar.gz hadoop
     cp -a hadoop /usr/local/
+    export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
+    
+    yum install -y java-1.8.0-openjdk-devel
+    export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk
   fi
   cmake_install $libhdfs3_dir
 }
