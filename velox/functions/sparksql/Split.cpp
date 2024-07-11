@@ -53,7 +53,7 @@ class Split final : public exec::VectorFunction {
     auto getLimit = [&](vector_size_t row) -> int32_t {
       int32_t limit = std::numeric_limits<int32_t>::max();
       if (limits) {
-        const auto limitValue = limits->valueAt<vector_size_t>(row);
+        const auto limitValue = limits->valueAt<int32_t>(row);
         if (limitValue > 0) {
           limit = limitValue;
         }
