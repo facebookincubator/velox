@@ -20,9 +20,9 @@ on:
       - "velox-cudf"
       - "pull-request/[0-9]+"
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# concurrency:
+#   group: ${{ github.workflow }}-${{ github.ref }}
+#   cancel-in-progress: true
 
 permissions:
   contents: read
@@ -40,7 +40,7 @@ jobs:
       run:
         shell: bash
     env:
-      CCACHE_DIR: "/__w/velox/velox/.ccache"
+      CCACHE_DIR: "${GITHUB_WORKSPACE}/.ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       Protobuf_SOURCE: BUNDLED # can be removed after #10134 is merged
       simdjson_SOURCE: BUNDLED
@@ -64,10 +64,10 @@ jobs:
             install_cuda ${CUDA_VERSION}
           fi
 
-      - uses: assignUser/stash/restore@v1
-        with:
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-linux-adapters
+      # - uses: assignUser/stash/restore@v1
+      #   with:
+      #     path: '${{ env.CCACHE_DIR }}'
+      #     key: ccache-linux-adapters
 
       - name: "Zero Ccache Statistics"
         run: |
@@ -97,10 +97,10 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: assignUser/stash/save@v1
-        with:
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-linux-adapters
+      # - uses: assignUser/stash/save@v1
+      #   with:
+      #     path: '${{ env.CCACHE_DIR }}'
+      #     key: ccache-linux-adapters
 
       - name: Run Tests
         # Some of the adapters dependencies are in the 'adapters' conda env
@@ -122,11 +122,11 @@ jobs:
         working-directory: velox
     steps:
 
-      - name: Get Ccache Stash
-        uses: assignUser/stash/restore@v1
-        with:
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-ubuntu-debug-default
+      # - name: Get Ccache Stash
+      #   uses: assignUser/stash/restore@v1
+      #   with:
+      #     path: '${{ env.CCACHE_DIR }}'
+      #     key: ccache-ubuntu-debug-default
 
       - name: Ensure Stash Dirs Exists
         working-directory: ${{ github.workspace }}
@@ -151,16 +151,16 @@ jobs:
           MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON"
         run: |
-          make debug 
+          make debug
 
       - name: CCache after
         run: |
           ccache -vs
 
-      - uses: assignUser/stash/save@v1
-        with:
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-ubuntu-debug-default
+      # - uses: assignUser/stash/save@v1
+      #   with:
+      #     path: '${{ env.CCACHE_DIR }}'
+      #     key: ccache-ubuntu-debug-default
 
       - name: Run Tests
         run: |
