@@ -210,7 +210,7 @@ class Split final : public exec::VectorFunction {
     resultWriter.commit();
   }
 
-  mutable functions::detail::ReCache cache_;
+  mutable detail::ReCache cache_;
 };
 
 std::shared_ptr<exec::VectorFunction> createSplit(
@@ -242,6 +242,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
                               .argumentType("varchar")
                               .argumentType("varchar")
                               .build());
+  // varchar, varchar, integer -> array(varchar)
   signatures.emplace_back(exec::FunctionSignatureBuilder()
                               .returnType("array(varchar)")
                               .argumentType("varchar")
