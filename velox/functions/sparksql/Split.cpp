@@ -111,7 +111,7 @@ class Split final : public exec::VectorFunction {
   // string size, e.g. split('abc', '', 2) outputs ["a", "b"] instead of ["a",
   // "bc"].
   void splitEmptyDelimiter(
-      const StringView current,
+      const StringView& current,
       int32_t limit,
       vector_size_t row,
       exec::VectorWriter<Array<Varchar>>& resultWriter) const {
@@ -143,8 +143,8 @@ class Split final : public exec::VectorFunction {
   // delimiter will be applied as many times as possible, and the resulting
   // array can be of any size.
   void split(
-      const StringView input,
-      const StringView delim,
+      const StringView& input,
+      const StringView& delim,
       int32_t limit,
       vector_size_t row,
       exec::VectorWriter<Array<Varchar>>& resultWriter) const {

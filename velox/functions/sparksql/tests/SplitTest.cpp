@@ -49,47 +49,42 @@ class SplitTest : public SparkFunctionBaseTest {
     const vector_size_t numRows = input.size();
 
     // Functors to create flat vectors, used as is and for lazy vector.
-    auto funcCreateFlatStrings = [&](RowSet /*rows*/) {
+    auto createFlatStrings = [&](RowSet /*rows*/) {
       return makeFlatVector<StringView>(
           numRows, [&](vector_size_t row) { return StringView{input[row]}; });
     };
 
-    auto funcCreateFlatDelims = [&](RowSet /*rows*/) {
+    auto createFlatDelims = [&](RowSet /*rows*/) {
       return makeFlatVector<StringView>(
           numRows, [&](vector_size_t row) { return StringView{delim}; });
     };
 
-    auto funcCreateFlatLimits = [&](RowSet /*rows*/) {
+    auto createFlatLimits = [&](RowSet /*rows*/) {
       return makeFlatVector<int32_t>(
           numRows, [&](vector_size_t row) { return limit.value(); });
     };
 
-    auto funcReverseIndices = [&](vector_size_t row) {
-      return numRows - 1 - row;
-    };
+    auto reverseIndices = [&](vector_size_t row) { return numRows - 1 - row; };
 
     // Generate strings vector
     if (isFlat(encodingStrings)) {
-      strings = funcCreateFlatStrings({});
+      strings = createFlatStrings({});
     } else if (isConstant(encodingStrings)) {
-      strings =
-          BaseVector::wrapInConstant(numRows, 0, funcCreateFlatStrings({}));
+      strings = BaseVector::wrapInConstant(numRows, 0, createFlatStrings({}));
     } else if (isLazy(encodingStrings)) {
       strings = std::make_shared<LazyVector>(
           execCtx_.pool(),
           CppToType<StringView>::create(),
           numRows,
-          std::make_unique<SimpleVectorLoader>(funcCreateFlatStrings));
+          std::make_unique<SimpleVectorLoader>(createFlatStrings));
     } else if (isDictionary(encodingStrings)) {
       strings = wrapInDictionary(
-          makeIndices(numRows, funcReverseIndices),
-          numRows,
-          funcCreateFlatStrings({}));
+          makeIndices(numRows, reverseIndices), numRows, createFlatStrings({}));
     }
 
     // Generate delimiters vector
     if (isFlat(encodingDelims)) {
-      delims = funcCreateFlatDelims({});
+      delims = createFlatDelims({});
     } else if (isConstant(encodingDelims)) {
       delims = makeConstant(delim.c_str(), numRows);
     } else if (isLazy(encodingDelims)) {
@@ -97,18 +92,16 @@ class SplitTest : public SparkFunctionBaseTest {
           execCtx_.pool(),
           CppToType<StringView>::create(),
           numRows,
-          std::make_unique<SimpleVectorLoader>(funcCreateFlatDelims));
+          std::make_unique<SimpleVectorLoader>(createFlatDelims));
     } else if (isDictionary(encodingDelims)) {
       delims = wrapInDictionary(
-          makeIndices(numRows, funcReverseIndices),
-          numRows,
-          funcCreateFlatDelims({}));
+          makeIndices(numRows, reverseIndices), numRows, createFlatDelims({}));
     }
 
     // Generate limits vector
     if (limit.has_value()) {
       if (isFlat(encodingLimit)) {
-        limits = funcCreateFlatLimits({});
+        limits = createFlatLimits({});
       } else if (isConstant(encodingLimit)) {
         limits = makeConstant(limit, numRows);
       } else if (isLazy(encodingLimit)) {
@@ -116,12 +109,12 @@ class SplitTest : public SparkFunctionBaseTest {
             execCtx_.pool(),
             CppToType<int32_t>::create(),
             numRows,
-            std::make_unique<SimpleVectorLoader>(funcCreateFlatLimits));
+            std::make_unique<SimpleVectorLoader>(createFlatLimits));
       } else if (isDictionary(encodingLimit)) {
         limits = wrapInDictionary(
-            makeIndices(numRows, funcReverseIndices),
+            makeIndices(numRows, reverseIndices),
             numRows,
-            funcCreateFlatLimits({}));
+            createFlatLimits({}));
       }
     }
 
@@ -151,12 +144,12 @@ class SplitTest : public SparkFunctionBaseTest {
     // Dictionary: we will have reversed rows, because we use reverse index
     // functor to generate indices when wrapping in dictionary.
     if (isDictionary(stringEncoding)) {
-      auto funcReverseIndices = [&](vector_size_t row) {
+      auto reverseIndices = [&](vector_size_t row) {
         return arrayVector->size() - 1 - row;
       };
 
       auto dictVector = wrapInDictionary(
-          makeIndices(arrayVector->size(), funcReverseIndices),
+          makeIndices(arrayVector->size(), reverseIndices),
           arrayVector->size(),
           arrayVector);
       return VectorMaker::flatten(dictVector);
