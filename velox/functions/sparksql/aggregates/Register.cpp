@@ -21,6 +21,7 @@
 #include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
 #include "velox/functions/sparksql/aggregates/CentralMomentsAggregate.h"
 #include "velox/functions/sparksql/aggregates/CollectListAggregate.h"
+#include "velox/functions/sparksql/aggregates/ModeAggregate.h"
 #include "velox/functions/sparksql/aggregates/RegrReplacementAggregate.h"
 #include "velox/functions/sparksql/aggregates/SumAggregate.h"
 
@@ -59,5 +60,6 @@ void registerAggregateFunctions(
   registerCollectSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectListAggregate(prefix, withCompanionFunctions, overwrite);
   registerRegrReplacementAggregate(prefix, withCompanionFunctions, overwrite);
+  registerModeAggregate(prefix, withCompanionFunctions, overwrite);
 }
 } // namespace facebook::velox::functions::aggregate::sparksql
