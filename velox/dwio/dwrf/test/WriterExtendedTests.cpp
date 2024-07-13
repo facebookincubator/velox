@@ -83,10 +83,12 @@ void testWriterDefaultFlushPolicy(
       numStripesLower,
       numStripesUpper,
       config,
+      /*sessionTzName=*/"",
+      /*useSelectiveColumnReader=*/false,
       /*flushPolicyFactory=*/nullptr,
       /*layoutPlannerFactory=*/nullptr,
       memoryBudget,
-      false);
+      /*verifyContent=*/false);
 }
 
 class E2EWriterTest : public testing::Test {

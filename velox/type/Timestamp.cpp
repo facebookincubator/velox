@@ -159,6 +159,17 @@ const date::time_zone& Timestamp::defaultTimezone() {
   return *kDefault;
 }
 
+int64_t Timestamp::getTimezoneOffset(
+    const Timestamp& timestamp,
+    const date::time_zone* timezone) {
+  auto tp = timestamp.toTimePoint();
+  auto localTime = date::make_zoned(timezone, tp);
+  auto utcTime = date::make_zoned(tp);
+  return std::chrono::duration_cast<std::chrono::seconds>(
+             localTime.get_local_time() - utcTime.get_local_time())
+      .count();
+}
+
 namespace {
 
 constexpr int kTmYearBase = 1900;

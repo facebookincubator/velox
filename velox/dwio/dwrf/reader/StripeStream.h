@@ -105,6 +105,11 @@ class StripeStreams {
    */
   virtual const dwio::common::ColumnSelector& getColumnSelector() const = 0;
 
+  /**
+   * Session timezone used for reading Timestamp.
+   */
+  virtual const date::time_zone* getSessionTimezone() const = 0;
+
   // Get row reader options
   virtual const dwio::common::RowReaderOptions& getRowReaderOptions() const = 0;
 
@@ -251,6 +256,10 @@ class StripeStreamsImpl : public StripeStreamsBase {
 
   const dwio::common::ColumnSelector& getColumnSelector() const override {
     return *selector_;
+  }
+
+  const date::time_zone* getSessionTimezone() const override {
+    return readState_->readerBase->getReaderOptions().getSessionTimezone();
   }
 
   const dwio::common::RowReaderOptions& getRowReaderOptions() const override {

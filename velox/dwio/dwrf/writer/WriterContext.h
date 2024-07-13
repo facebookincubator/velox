@@ -43,6 +43,7 @@ class WriterContext : public CompressionBufferPool {
       std::shared_ptr<memory::MemoryPool> pool,
       const dwio::common::MetricsLogPtr& metricLogger =
           dwio::common::MetricsLog::voidLog(),
+      const date::time_zone* sessionTimezone = nullptr,
       std::unique_ptr<encryption::EncryptionHandler> handler = nullptr);
 
   ~WriterContext() override;
@@ -595,6 +596,10 @@ class WriterContext : public CompressionBufferPool {
     return compressionBuffer_.get();
   }
 
+  const date::time_zone* getSessionTimezone() const {
+    return sessionTimezone_;
+  }
+
  private:
   void validateConfigs() const;
 
@@ -628,6 +633,7 @@ class WriterContext : public CompressionBufferPool {
   const bool streamSizeAboveThresholdCheckEnabled_;
   const uint64_t rawDataSizePerBatch_;
   const dwio::common::MetricsLogPtr metricLogger_;
+  const date::time_zone* sessionTimezone_;
 
   // Map needs referential stability because reference to map value is stored by
   // another class.

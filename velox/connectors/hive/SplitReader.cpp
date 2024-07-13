@@ -34,7 +34,8 @@ VectorPtr newConstantFromString(
     const TypePtr& type,
     const std::optional<std::string>& value,
     vector_size_t size,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    const std::string& sessionTimezone) {
   using T = typename TypeTraits<kind>::NativeType;
   if (!value.has_value()) {
     return std::make_shared<ConstantVector<T>>(pool, size, true, type, T());
@@ -55,7 +56,13 @@ VectorPtr newConstantFromString(
                       VELOX_USER_FAIL("{}", status.message());
                     });
     if constexpr (kind == TypeKind::TIMESTAMP) {
-      copy.toGMT(Timestamp::defaultTimezone());
+      const date::time_zone* timezone;
+      if (sessionTimezone.empty()) {
+        timezone = &Timestamp::defaultTimezone();
+      } else {
+        timezone = date::locate_zone(sessionTimezone);
+      }
+      copy.toGMT(*timezone);
     }
     return std::make_shared<ConstantVector<T>>(
         pool, size, false, type, std::move(copy));
@@ -361,7 +368,8 @@ std::vector<TypePtr> SplitReader::adaptColumns(
           infoColumnType,
           iter->second,
           1,
-          connectorQueryCtx_->memoryPool());
+          connectorQueryCtx_->memoryPool(),
+          connectorQueryCtx_->sessionTimezone());
       childSpec->setConstantValue(constant);
     } else {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
@@ -413,7 +421,8 @@ void SplitReader::setPartitionValue(
       type,
       value,
       1,
-      connectorQueryCtx_->memoryPool());
+      connectorQueryCtx_->memoryPool(),
+      connectorQueryCtx_->sessionTimezone());
   spec->setConstantValue(constant);
 }
 

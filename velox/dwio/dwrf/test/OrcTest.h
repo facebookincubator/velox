@@ -108,6 +108,10 @@ class MockStripeStreams : public StripeStreams {
     return *getColumnSelectorProxy();
   }
 
+  const date::time_zone* getSessionTimezone() const override {
+    return nullptr;
+  }
+
   const dwio::common::RowReaderOptions& getRowReaderOptions() const override {
     auto ptr = getRowReaderOptionsProxy();
     return ptr ? *ptr : options_;

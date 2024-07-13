@@ -29,7 +29,6 @@
 
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::memory;
-
 namespace facebook::velox::dwrf {
 
 WriterContext::LocalDecodedVector BaseColumnWriter::decode(
@@ -672,7 +671,8 @@ class TimestampColumnWriter : public BaseColumnWriter {
             RleVersion_1,
             newStream(StreamKind::StreamKind_NANO_DATA),
             context.getConfig(Config::USE_VINTS),
-            LONG_BYTE_SIZE)} {
+            LONG_BYTE_SIZE)},
+        sessionTimezone_{context.getSessionTimezone()} {
     reset();
   }
 
@@ -695,14 +695,18 @@ class TimestampColumnWriter : public BaseColumnWriter {
  private:
   std::unique_ptr<IntEncoder<true>> seconds_;
   std::unique_ptr<IntEncoder<false>> nanos_;
+  const date::time_zone* sessionTimezone_{nullptr};
 };
 
 namespace {
-FOLLY_ALWAYS_INLINE int64_t formatTime(int64_t seconds, uint64_t nanos) {
+FOLLY_ALWAYS_INLINE int64_t
+formatTime(const Timestamp& timestamp, const date::time_zone* sessionTimezone) {
+  auto seconds = timestamp.getSeconds();
+  auto nanos = timestamp.getNanos();
   DWIO_ENSURE(seconds >= MIN_SECONDS);
 
   if (seconds < 0 && nanos != 0) {
-    // Adding 1 for neagive seconds is there to imitate the Java ORC writer.
+    // Adding 1 for negative seconds is there to imitate the Java ORC writer.
     // Consider the case where -1500 milliseconds need to be represented.
     // In java world, due to a bug (-1500/1000 will result in -1 or rounding up)
     // Due to this Java represented -1500 millis as -1 for seconds and 5*10^8
@@ -715,6 +719,11 @@ FOLLY_ALWAYS_INLINE int64_t formatTime(int64_t seconds, uint64_t nanos) {
     seconds += 1;
   }
 
+  if (sessionTimezone) {
+    return seconds - UTC_EPOCH_OFFSET +
+        Timestamp::getTimezoneOffset(timestamp, sessionTimezone);
+  }
+  // Compatible with meta internal use cases.
   return seconds - EPOCH_OFFSET;
 }
 
@@ -752,7 +761,7 @@ uint64_t TimestampColumnWriter::write(
     for (auto& pos : ranges) {
       if (!decodedVector.isNullAt(pos)) {
         auto ts = decodedVector.valueAt<Timestamp>(pos);
-        seconds_->writeValue(formatTime(ts.getSeconds(), ts.getNanos()));
+        seconds_->writeValue(formatTime(ts, sessionTimezone_));
         nanos_->writeValue(formatNanos(ts.getNanos()));
         ++count;
       }
@@ -760,7 +769,7 @@ uint64_t TimestampColumnWriter::write(
   } else {
     for (auto& pos : ranges) {
       auto ts = decodedVector.valueAt<Timestamp>(pos);
-      seconds_->writeValue(formatTime(ts.getSeconds(), ts.getNanos()));
+      seconds_->writeValue(formatTime(ts, sessionTimezone_));
       nanos_->writeValue(formatNanos(ts.getNanos()));
       ++count;
     }

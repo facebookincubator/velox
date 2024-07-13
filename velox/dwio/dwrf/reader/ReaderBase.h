@@ -62,6 +62,7 @@ class ReaderBase {
  public:
   /// Creates reader base from buffered input.
   ReaderBase(
+      const dwio::common::ReaderOptions& options,
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
       std::shared_ptr<dwio::common::encryption::DecrypterFactory>
@@ -76,19 +77,22 @@ class ReaderBase {
       std::shared_ptr<velox::common::ScanSpec> scanSpec = nullptr);
 
   ReaderBase(
+      const dwio::common::ReaderOptions& options,
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
       dwio::common::FileFormat fileFormat);
 
   /// Creates reader base from metadata.
   ReaderBase(
+      const dwio::common::ReaderOptions& options,
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
       std::unique_ptr<PostScript> ps,
       const proto::Footer* footer,
       std::unique_ptr<StripeMetadataCache> cache,
       std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
-      : pool_{pool},
+      : options_{options},
+        pool_{pool},
         postScript_{std::move(ps)},
         footer_{std::make_unique<FooterWrapper>(footer)},
         cache_{std::move(cache)},
@@ -105,9 +109,16 @@ class ReaderBase {
   }
 
   // for testing
-  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool}, fileLength_{0} {}
+  explicit ReaderBase(
+      const dwio::common::ReaderOptions& options,
+      memory::MemoryPool& pool)
+      : options_{options}, pool_{pool}, fileLength_{0} {}
 
   virtual ~ReaderBase() = default;
+
+  const dwio::common::ReaderOptions& getReaderOptions() const {
+    return options_;
+  }
 
   memory::MemoryPool& getMemoryPool() const {
     return pool_;
@@ -247,6 +258,7 @@ class ReaderBase {
       uint32_t index = 0,
       bool fileColumnNamesReadAsLowerCase = false);
 
+  const dwio::common::ReaderOptions options_;
   memory::MemoryPool& pool_;
   std::unique_ptr<google::protobuf::Arena> arena_;
   std::unique_ptr<PostScript> postScript_;
