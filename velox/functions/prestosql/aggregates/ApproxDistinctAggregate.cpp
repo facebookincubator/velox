@@ -47,7 +47,9 @@ struct HllAccumulator {
   void append(uint64_t hash) {
     if (isSparse_) {
       if (sparseHll_.insertHash(hash)) {
-        toDense();
+        if (sparseHll_.overLimit()) {
+          toDense();
+        }
       }
     } else {
       denseHll_.insertHash(hash);
