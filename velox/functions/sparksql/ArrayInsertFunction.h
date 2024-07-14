@@ -43,9 +43,10 @@ struct ArrayInsertFunction {
     VELOX_USER_CHECK(*pos != 0, "Array insert position should not be 0.")
 
     if (*pos > 0) {
-      // Insert element into index *pos of the input array, append nulls after the original
-      // elements if target postion is above the input array size.
-      int64_t newArrayLength = std::max((int64_t)srcArray->size() + 1, (int64_t)*pos);
+      // Insert element into index *pos of the input array, append nulls after
+      // the original elements if target postion is above the input array size.
+      int64_t newArrayLength =
+          std::max((int64_t)srcArray->size() + 1, (int64_t)*pos);
       VELOX_USER_CHECK_LE(
           newArrayLength,
           kMaxNumberOfElements,
@@ -71,10 +72,11 @@ struct ArrayInsertFunction {
     } else {
       bool newPosExtendsArrayLeft = -(int64_t)(*pos) > srcArray->size();
       if (newPosExtendsArrayLeft) {
-        // Insert element at the beginning of the array followed by nulls and the original array.
-        // The new array size depends on legacyNegativeIndex, if legacyNegativeIndex is true the
-        // index is 0-based and the new array size is (-*pos + 1), otherwise it's 1-based and the
-        // new array size is -*pos. 
+        // Insert element at the beginning of the array followed by nulls and
+        // the original array. The new array size depends on
+        // legacyNegativeIndex, if legacyNegativeIndex is true the index is
+        // 0-based and the new array size is (-*pos + 1), otherwise it's 1-based
+        // and the new array size is -*pos.
         int64_t newArrayLength = -(int64_t)(*pos) + *legacyNegativeIndex;
         VELOX_USER_CHECK_LE(
             newArrayLength,
@@ -93,8 +95,8 @@ struct ArrayInsertFunction {
           out.push_back(element);
         }
       } else {
-        // Insert element into the array based on the negative index *pos, if legacyNegativeIndex
-        // is true the index is 0-based otherwise 1-based.
+        // Insert element into the array based on the negative index *pos, if
+        // legacyNegativeIndex is true the index is 0-based otherwise 1-based.
         int64_t posIdx = *pos + srcArray->size() + !*legacyNegativeIndex;
         int64_t newArrayLength =
             std::max((int64_t)(srcArray->size()) + 1, posIdx + 1);

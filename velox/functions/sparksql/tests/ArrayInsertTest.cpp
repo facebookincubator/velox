@@ -80,11 +80,14 @@ TEST_F(ArrayInsertTest, posGTArraySize) {
       "array_insert(c0, 3, null::INTEGER, false)", {arrays}, expected);
 
   // Insert into position INT_MAX
-  EXPECT_THROW(evaluateExpression(
-      "array_insert(c0, 2147483647, 0, false)", {arrays}), VeloxUserError);
+  EXPECT_THROW(
+      evaluateExpression("array_insert(c0, 2147483647, 0, false)", {arrays}),
+      VeloxUserError);
   // Insert into position INT_MIN
-  EXPECT_THROW(evaluateExpression(
-      "array_insert(c0, cast(-2147483648 as integer), 0, false)", {arrays}), VeloxUserError);
+  EXPECT_THROW(
+      evaluateExpression(
+          "array_insert(c0, cast(-2147483648 as integer), 0, false)", {arrays}),
+      VeloxUserError);
 }
 
 TEST_F(ArrayInsertTest, negativePos) {
