@@ -55,8 +55,11 @@ struct TableInsertPartitionInfo {
 
 /// Contains input and output parameters for groupProbe and joinProbe APIs.
 struct HashLookup {
-  explicit HashLookup(const std::vector<std::unique_ptr<VectorHasher>>& h)
-      : hashers(h) {}
+  HashLookup(
+      const std::vector<std::unique_ptr<VectorHasher>>& h,
+      HashStringAllocator* hsa)
+      : hashers(h),
+        rows(AlignedStlAllocator<vector_size_t, simd::kPadding>(hsa)) {}
 
   void reset(vector_size_t size) {
     rows.resize(size);
@@ -74,7 +77,8 @@ struct HashLookup {
   /// Input to groupProbe and joinProbe APIs.
 
   /// Set of row numbers of row to probe.
-  raw_vector<vector_size_t> rows;
+  raw_vector<vector_size_t, AlignedStlAllocator<vector_size_t, simd::kPadding>>
+      rows;
 
   /// Hashes or value IDs for rows in 'rows'. Not aligned with 'rows'. Index is
   /// the row number.
@@ -152,7 +156,9 @@ class BaseHashTable {
       return !rows || lastRowIndex == rows->size();
     }
 
-    const raw_vector<vector_size_t>* rows{nullptr};
+    const raw_vector<
+        vector_size_t,
+        AlignedStlAllocator<vector_size_t, simd::kPadding>>* rows{nullptr};
     const raw_vector<char*>* hits{nullptr};
     vector_size_t lastRowIndex{0};
     vector_size_t lastDuplicateRowIndex{0};
