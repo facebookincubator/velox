@@ -36,4 +36,7 @@ std::pair<std::string, TypePtr> inferTypeWithSpaces(
     std::vector<std::string>& words,
     bool cannotHaveFieldName = false);
 
+// Returns true only if 'str' contains digits.
+bool isPositiveInteger(const std::string& str);
+
 } // namespace facebook::velox

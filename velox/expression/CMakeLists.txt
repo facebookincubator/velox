@@ -21,8 +21,8 @@ add_library(
                              ReverseSignatureBinder.cpp)
 
 target_link_libraries(
-  velox_expression_functions velox_common_base velox_type_calculation
-  velox_type_signature velox_signature_parser)
+  velox_expression_functions velox_type_parser velox_common_base
+  velox_type_calculation velox_type_signature velox_signature_parser)
 
 add_library(
   velox_expression

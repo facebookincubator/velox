@@ -52,4 +52,10 @@ std::pair<std::string, std::shared_ptr<const Type>> inferTypeWithSpaces(
       fieldName, typeFromString(allWords.substr(fieldName.size() + 1)));
 }
 
+bool isPositiveInteger(const std::string& str) {
+  return !str.empty() &&
+      std::find_if(str.begin(), str.end(), [](unsigned char c) {
+        return !std::isdigit(c);
+      }) == str.end();
+}
 } // namespace facebook::velox
