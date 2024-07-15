@@ -27,7 +27,7 @@ if(${RAGEL} STREQUAL "RAGEL-NOTFOUND")
     FetchContent_Populate(colm)
   endif()
   execute_process(
-    COMMAND bash -c "./autogen.sh && ./configure && make"
+    COMMAND bash -c "./autogen.sh && ./configure && make && make install"
     WORKING_DIRECTORY ${colm_SOURCE_DIR}
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
