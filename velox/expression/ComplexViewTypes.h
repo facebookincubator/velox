@@ -1208,6 +1208,25 @@ class GenericView {
   vector_size_t index_;
 };
 
+struct GenericViewEqualTo {
+  bool operator()(const GenericView& left, const GenericView& right) const {
+    static constexpr CompareFlags kCompareFlags = CompareFlags::equality(
+        CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+    auto result = left.compare(right, kCompareFlags);
+    if (result.has_value()) {
+      return result.value() == 0;
+    }
+    VELOX_UNSUPPORTED(
+        "Comparison not supported for {} with null elements.",
+        left.type()->toString());
+  }
+};
+
+using GenericViewHashSet = folly::F14FastSet<
+    GenericView,
+    std::hash<facebook::velox::exec::GenericView>,
+    GenericViewEqualTo>;
+
 } // namespace facebook::velox::exec
 
 namespace std {

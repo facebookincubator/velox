@@ -160,6 +160,41 @@ TEST_F(ArrayUnionTest, complexTypes) {
 
   testExpression(
       "array_union(c0, c1)", {arrayOfArrays1, arrayOfArrays2}, expected);
+
+  // Test exception when input arrays contain nested NULL elements.
+  const auto& makeErrorMessage = [](const RowVectorPtr& input) {
+    return fmt::format(
+        "Comparison not supported for {} with null elements.",
+        input->childAt(0)->as<ArrayVector>()->elements()->type()->toString());
+  };
+  const auto& testInTry = [&](const RowVectorPtr& input) {
+    auto result = evaluate("try(array_union(c0, c1))", input);
+    EXPECT_EQ(result->size(), 1);
+    EXPECT_TRUE(result->isNullAt(0));
+  };
+
+  auto input = makeRowVector(
+      {makeNestedArrayVectorFromJson<int32_t>({
+           "[[1], [null]]",
+       }),
+       makeNestedArrayVectorFromJson<int32_t>({
+           "[[null]]",
+       })});
+  VELOX_ASSERT_USER_THROW(
+      evaluate("array_union(c0, c1)", input), makeErrorMessage(input));
+  testInTry(input);
+
+  input = makeRowVector(
+      {makeArrayOfRowVector(
+           ROW({INTEGER(), INTEGER()}),
+           {{variant::row({1, 2}),
+             variant::row({1, variant(TypeKind::INTEGER)})}}),
+       makeArrayOfRowVector(
+           ROW({INTEGER(), INTEGER()}),
+           {{variant::row({1, variant(TypeKind::INTEGER)})}})});
+  VELOX_ASSERT_USER_THROW(
+      evaluate("array_union(c0, c1)", input), makeErrorMessage(input));
+  testInTry(input);
 }
 
 /// Union two floating point arrays including extreme values like infinity and
