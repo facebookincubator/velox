@@ -18,6 +18,8 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h" // Compilation fails in Driver.h if Operator.h isn't included first!
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include <cuda.h>
+#include <cudf/detail/nvtx/ranges.hpp>
 
 #include <iostream>
 
@@ -102,6 +104,8 @@ bool cudfDriverAdapter(
 }
 
 void registerCudf() {
+  CUDF_FUNC_RANGE();
+  cudaFree(0); // to init context.
   std::cout << "Registering CudfHashJoinBridgeTranslator" << std::endl;
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
