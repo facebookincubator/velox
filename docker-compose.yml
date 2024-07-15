@@ -50,6 +50,7 @@ services:
       VELOX_DEPENDENCY_SOURCE: BUNDLED # Build dependencies from source
       CCACHE_DIR: "/velox/.ccache"
       CMAKE_EXPORT_COMPILE_COMMANDS: 1
+    privileged: true
     deploy:
       resources:
         reservations:
