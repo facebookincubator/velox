@@ -20,8 +20,7 @@ namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
 
-// Spark requires timestamp data precision to be in microseconds. Add this class
-// to align with Spark's behavior.
+// Extracts timestamp value as microsecond precision in max aggregate.
 class TimestampMicrosPrecisionMaxAggregate : public MaxAggregate<Timestamp> {
  public:
   explicit TimestampMicrosPrecisionMaxAggregate(TypePtr resultType)
@@ -39,8 +38,7 @@ class TimestampMicrosPrecisionMaxAggregate : public MaxAggregate<Timestamp> {
   }
 };
 
-// Spark requires timestamp data precision to be in microseconds. Add this class
-// to align with Spark's behavior.
+// Extracts timestamp value as microsecond precision in min aggregate.
 class TimestampMicrosPrecisionMinAggregate : public MinAggregate<Timestamp> {
  public:
   explicit TimestampMicrosPrecisionMinAggregate(TypePtr resultType)
