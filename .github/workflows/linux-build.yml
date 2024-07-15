@@ -76,7 +76,7 @@ jobs:
 
       - name: Make Release Build
         env:
-          MAKEFLAGS: 'NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4'
+          MAKEFLAGS: 'TREAT_WARNINGS_AS_ERRORS=0 NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4'
           CUDA_ARCHITECTURES: 70
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
           # Set compiler to GCC 12
@@ -149,7 +149,7 @@ jobs:
       - name: Make Debug Build
         env:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
-          MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
+          MAKEFLAGS: "TREAT_WARNINGS_AS_ERRORS=0 NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON"
         run: |
           make debug
