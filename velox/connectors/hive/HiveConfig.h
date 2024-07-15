@@ -45,7 +45,6 @@ class HiveConfig {
   /// Maximum number of (bucketed) partitions per a single table writer
   /// instance.
   ///
-  /// TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
   /// right now this is only used for testing.
   static constexpr const char* kMaxPartitionsPerWriters =
       "max-partitions-per-writers";
