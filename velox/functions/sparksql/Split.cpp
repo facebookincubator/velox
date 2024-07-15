@@ -213,27 +213,6 @@ class Split final : public exec::VectorFunction {
   mutable detail::ReCache cache_;
 };
 
-std::shared_ptr<exec::VectorFunction> createSplit(
-    const std::string& /*name*/,
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/) {
-  VELOX_USER_CHECK(
-      inputArgs.size() == 2 || inputArgs.size() == 3,
-      "Two or three arguments are required for split function.");
-  VELOX_USER_CHECK(
-      inputArgs[0].type->isVarchar(),
-      "The first argument should be of varchar type.");
-  VELOX_USER_CHECK(
-      inputArgs[1].type->isVarchar(),
-      "The second argument should be of varchar type.");
-  if (inputArgs.size() > 2) {
-    VELOX_USER_CHECK(
-        inputArgs[2].type->kind() == TypeKind::INTEGER,
-        "The third argument should be of integer type.");
-  }
-  return std::make_shared<Split>();
-}
-
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
   // varchar, varchar -> array(varchar)
@@ -253,8 +232,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
 }
 } // namespace
 
-VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION(
     udf_regexp_split,
     signatures(),
-    createSplit);
+    std::make_unique<Split>());
 } // namespace facebook::velox::functions::sparksql
