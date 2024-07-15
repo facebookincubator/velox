@@ -430,8 +430,9 @@ VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
   // return a null constant if the element being wrapped is null in the
   // generated inner vector.
 
-  // Inner vector size can't be zero.
-  auto innerVectorSize = rand<uint32_t>(rng_) % opts_.vectorSize + 1;
+  // Inner vector size can't be zero. opts_.vectorSize could be 0, so 1 is added
+  // to avoid mod 0.
+  auto innerVectorSize = rand<uint32_t>(rng_) % (opts_.vectorSize + 1) + 1;
   auto constantIndex = rand<vector_size_t>(rng_) % innerVectorSize;
 
   ScopedOptions restorer(this);
