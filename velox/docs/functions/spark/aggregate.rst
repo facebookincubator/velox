@@ -84,7 +84,7 @@ General Aggregate Functions
 
     Returns the maximum value of ``x``.
     ``x`` must be an orderable type.
-    Note: 1. the timestamp type represents a time instant in microsecond precision.
+    Note: 1. Timestamp is in microsecond precision.
           2. Map type is not orderable type in Spark.
           3. Nested nulls are allowed within complex types.
 
