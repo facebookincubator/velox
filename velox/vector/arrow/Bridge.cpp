@@ -40,9 +40,12 @@ class VeloxToArrowBridgeHolder {
  public:
   VeloxToArrowBridgeHolder() = default;
 
+  // Call to this method may require a call to `getArrowBuffers()` in order to
+  // re-acquire the underlying buffer
   void resizeBuffers(size_t bufferCount) {
-    if (bufferCount <= numBuffers_)
+    if (bufferCount <= numBuffers_) {
       return;
+    }
     buffers_.resize(bufferCount);
     bufferPtrs_.resize(bufferCount);
     for (size_t i = numBuffers_; i < bufferCount; i++) {
@@ -287,12 +290,14 @@ const char* exportArrowFormatStr(
     // We always map VARCHAR and VARBINARY to the "small" version (lower case
     // format string), which uses 32 bit offsets.
     case TypeKind::VARCHAR:
-      if (options.exportToStringView)
+      if (options.exportToStringView) {
         return "vu";
+      }
       return "u"; // utf-8 string
     case TypeKind::VARBINARY:
-      if (options.exportToStringView)
+      if (options.exportToStringView) {
         return "vz";
+      }
       return "z"; // binary
     case TypeKind::UNKNOWN:
       return "n"; // NullType
@@ -548,7 +553,7 @@ VectorPtr createStringFlatVectorFromUtf8View(
     BufferPtr nulls,
     const ArrowArray& arrowArray,
     WrapInBufferViewFunc wrapInBufferView) {
-  int num_buffers = arrowArray.n_buffers;
+  int64_t num_buffers = arrowArray.n_buffers;
   VELOX_USER_CHECK_GE(
       num_buffers,
       3,
