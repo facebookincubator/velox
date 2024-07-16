@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <charconv>
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/CountBits.h"
@@ -309,6 +310,78 @@ class DecimalUtil {
     return remainder * resultSign;
   }
 
+  /// Returns the max required size to convert the decimal of this precision and
+  /// scale to string
+  static int32_t maxStringViewSize(int precision, int scale) {
+    int32_t rowSize = precision + 1; // Number and symbol.
+    if (scale > 0) {
+      ++rowSize; // A dot.
+    }
+    if (precision == scale) {
+      ++rowSize; // Leading zero.
+    }
+    return rowSize;
+  }
+
+  /// @brief Convert the unscaled value of a decimal to varchar and write to raw
+  /// string buffer from start position.
+  /// @tparam T The type of input value.
+  /// @param unscaledValue The input unscaled value.
+  /// @param scale The scale of decimal.
+  /// @param maxVarcharSize The estimated max size of a varchar.
+  /// @param startPosition The start position to write from.
+  /// @return A string view.
+  template <typename T>
+  static StringView convertToStringView(
+      T unscaledValue,
+      int32_t scale,
+      int32_t maxVarcharSize,
+      char* const startPosition) {
+    char* writePosition = startPosition;
+    if (unscaledValue == 0) {
+      *writePosition++ = '0';
+      if (scale > 0) {
+        *writePosition++ = '.';
+        // Append leading zeros.
+        std::memset(writePosition, '0', scale);
+        writePosition += scale;
+      }
+    } else {
+      if (unscaledValue < 0) {
+        *writePosition++ = '-';
+        unscaledValue = -unscaledValue;
+      }
+      auto [position, errorCode] = std::to_chars(
+          writePosition,
+          writePosition + maxVarcharSize,
+          unscaledValue / DecimalUtil::kPowersOfTen[scale]);
+      VELOX_DCHECK_EQ(
+          errorCode,
+          std::errc(),
+          "Failed to cast decimal to varchar: {}",
+          std::make_error_code(errorCode).message());
+      writePosition = position;
+
+      if (scale > 0) {
+        *writePosition++ = '.';
+        uint128_t fraction = unscaledValue % DecimalUtil::kPowersOfTen[scale];
+        // Append leading zeros.
+        int numLeadingZeros = std::max(scale - countDigits(fraction), 0);
+        std::memset(writePosition, '0', numLeadingZeros);
+        writePosition += numLeadingZeros;
+        // Append remaining fraction digits.
+        auto result = std::to_chars(
+            writePosition, writePosition + maxVarcharSize, fraction);
+        VELOX_DCHECK_EQ(
+            result.ec,
+            std::errc(),
+            "Failed to cast decimal to varchar: {}",
+            std::make_error_code(result.ec).message());
+        writePosition = result.ptr;
+      }
+    }
+    return StringView(startPosition, writePosition - startPosition);
+  }
   /*
    * sum up and return overflow/underflow.
    */

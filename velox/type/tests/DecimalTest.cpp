@@ -106,6 +106,21 @@ void testToByteArray(int128_t value, int8_t* expected, int32_t size) {
   EXPECT_EQ(std::memcmp(expected, out, length), 0);
 }
 
+template <typename T>
+void testConvertToStringView(
+    T unscaleValue,
+    int precision,
+    int scale,
+    int expectedMaxStringSize,
+    std::string expected) {
+  ASSERT_EQ(
+      DecimalUtil::maxStringViewSize(precision, scale), expectedMaxStringSize);
+  char out[expectedMaxStringSize];
+  DecimalUtil::convertToStringView<T>(
+      unscaleValue, scale, expectedMaxStringSize, out);
+  EXPECT_EQ(std::memcmp(expected.data(), out, expected.size()), 0);
+}
+
 std::string zeros(uint32_t numZeros) {
   return std::string(numZeros, '0');
 }
@@ -489,6 +504,48 @@ TEST(DecimalTest, rescaleReal) {
       NAN, DECIMAL(10, 2), "The input value should be finite.");
   assertRescaleRealFail(
       INFINITY, DECIMAL(10, 2), "The input value should be finite.");
+}
+
+TEST(DecimalTest, convertToStringView) {
+  testConvertToStringView<int64_t>(12, 10, 0, 11, "12");
+  testConvertToStringView<int64_t>(12, 10, 1, 12, "1.2");
+  testConvertToStringView<int64_t>(12, 10, 3, 12, "0.012");
+  testConvertToStringView<int64_t>(-12, 10, 3, 12, "-0.012");
+  testConvertToStringView<int64_t>(12, 5, 5, 8, "0.00012");
+  testConvertToStringView<int64_t>(-12, 5, 5, 8, "-0.00012");
+  testConvertToStringView<int64_t>(-12, 5, 5, 8, "-0.00012");
+  testConvertToStringView<int64_t>(
+      DecimalUtil::kShortDecimalMax, 18, 0, 19, std::string(18, '9'));
+  testConvertToStringView<int64_t>(
+      DecimalUtil::kShortDecimalMin, 18, 0, 19, "-" + std::string(18, '9'));
+
+  testConvertToStringView<int128_t>(
+      HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0),
+      20,
+      0,
+      21,
+      "-18446744073709551616");
+
+  testConvertToStringView<int128_t>(
+      HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0),
+      20,
+      3,
+      22,
+      "-18446744073709551.616");
+  int128_t value = HugeInt::parse("-12345678901234567890");
+  std::cout << std::hex << HugeInt::upper(value) << " " << HugeInt::lower(value)
+            << std::endl;
+
+  testConvertToStringView<int128_t>(
+      HugeInt::build(0xffffffffffffffff, 0x54ab567314e0f52e),
+      20,
+      20,
+      23,
+      "-0.12345678901234567890");
+  testConvertToStringView<int128_t>(
+      DecimalUtil::kLongDecimalMax, 38, 0, 39, std::string(38, '9'));
+  testConvertToStringView<int128_t>(
+      DecimalUtil::kLongDecimalMin, 38, 0, 39, "-" + std::string(38, '9'));
 }
 } // namespace
 } // namespace facebook::velox
