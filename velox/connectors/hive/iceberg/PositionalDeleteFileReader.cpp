@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
+#include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -23,6 +24,14 @@
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive::iceberg {
+
+// static
+int64_t readInt64(const char* buffer, std::string::size_type length) {
+  VELOX_CHECK_EQ(length, sizeof(int64_t));
+  int64_t n;
+  memcpy(&n, buffer, sizeof(int64_t));
+  return n;
+}
 
 PositionalDeleteFileReader::PositionalDeleteFileReader(
     const IcebergDeleteFile& deleteFile,
@@ -34,7 +43,9 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     const std::shared_ptr<io::IoStatistics>& ioStats,
     dwio::common::RuntimeStatistics& runtimeStats,
     uint64_t splitOffset,
-    const std::string& connectorId)
+    const std::string& connectorId,
+    std::optional<uint64_t> startRowPosition,
+    std::optional<uint64_t> endRowPosition)
     : deleteFile_(deleteFile),
       baseFilePath_(baseFilePath),
       fileHandleFactory_(fileHandleFactory),
@@ -56,8 +67,32 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     return;
   }
 
-  // TODO: check if the lowerbounds and upperbounds in deleteFile overlap with
-  //  this batch. If not, no need to proceed.
+  // Check if the lowerbounds and upperbounds in deleteFile overlap with
+  // this batch. If not, no need to proceed.
+  if (startRowPosition.has_value() && endRowPosition.has_value()) {
+    std::optional<uint64_t> positionLowerBound;
+    std::optional<uint64_t> positionUpperBound;
+    auto lowerIt = deleteFile.lowerBounds.find(posColumn_->id);
+    if (lowerIt != deleteFile.lowerBounds.end()) {
+      auto lowerBoundBytes = velox::encoding::Base64::decode(lowerIt->second);
+      positionLowerBound =
+          readInt64(lowerBoundBytes.data(), lowerBoundBytes.length());
+    }
+
+    auto upperIt = deleteFile.upperBounds.find(posColumn_->id);
+    if (upperIt != deleteFile.upperBounds.end()) {
+      auto upperBoundBytes = velox::encoding::Base64::decode(upperIt->second);
+      positionUpperBound =
+          readInt64(upperBoundBytes.data(), upperBoundBytes.length());
+    }
+
+    if ((positionLowerBound.has_value() &&
+         positionLowerBound.value() > endRowPosition.value()) ||
+        (positionUpperBound.has_value() &&
+         positionUpperBound.value() < startRowPosition.value())) {
+      return;
+    }
+  }
 
   // Create the ScanSpec for this delete file
   auto scanSpec = std::make_shared<common::ScanSpec>("<root>");

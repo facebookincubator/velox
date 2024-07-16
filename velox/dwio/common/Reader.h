@@ -73,6 +73,26 @@ class RowReader {
   virtual int64_t nextRowNumber() = 0;
 
   /**
+   * Return the start row position to read in this split, This row position is
+   * relative to beginning of the file (0 for the first row),
+   *
+   * This function is mainly used when reading the Iceberg position delete file.
+   */
+  virtual std::optional<uint64_t> startRowPosition() const {
+    return std::nullopt;
+  }
+
+  /**
+   * Return the start row position to read in this split, This row position is
+   * relative to beginning of the file (0 for the first row),
+   *
+   * This function is mainly used when reading the Iceberg position delete file.
+   */
+  virtual std::optional<uint64_t> endRowPosition() const {
+    return std::nullopt;
+  }
+
+  /**
    * Given the max number of rows to read, return the actual number of rows that
    * will be scanned, including any rows to be deleted or filtered.  Return
    * kAtEnd when at end of file.  This is also used to compute the bit mask used

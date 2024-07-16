@@ -45,6 +45,10 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   int64_t nextRowNumber() override;
 
+  std::optional<uint64_t> startRowPosition() const override;
+
+  std::optional<uint64_t> endRowPosition() const override;
+
   int64_t nextReadSize(uint64_t size) override;
 
   uint64_t next(

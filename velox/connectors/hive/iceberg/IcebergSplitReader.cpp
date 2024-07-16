@@ -69,6 +69,9 @@ void IcebergSplitReader::prepareSplit(
   splitOffset_ = baseRowReader_->nextRowNumber();
   positionalDeleteFileReaders_.clear();
 
+  auto startRowPosition = baseRowReader_->startRowPosition();
+  auto endRowPosition = baseRowReader_->endRowPosition();
+
   const auto& deleteFiles = icebergSplit->deleteFiles;
   for (const auto& deleteFile : deleteFiles) {
     if (deleteFile.content == FileContent::kPositionalDeletes) {
@@ -84,7 +87,9 @@ void IcebergSplitReader::prepareSplit(
                 ioStats_,
                 runtimeStats,
                 splitOffset_,
-                hiveSplit_->connectorId));
+                hiveSplit_->connectorId,
+                startRowPosition,
+                endRowPosition));
       }
     } else {
       VELOX_NYI();
