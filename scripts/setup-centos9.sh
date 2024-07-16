@@ -30,9 +30,8 @@ set -efx -o pipefail
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
-CPU_TARGET="${CPU_TARGET:-avx}"
 NPROC=$(getconf _NPROCESSORS_ONLN)
-export CFLAGS=$(get_cxx_flags $CPU_TARGET)  # Used by LZO.
+export CFLAGS=$(get_cxx_flags)  # Used by LZO.
 export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
@@ -191,23 +190,29 @@ ARROW_VERSION=15.0.0
 
 function install_arrow {
   wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
-  cd arrow/cpp
-  cmake_install \
-    -DARROW_PARQUET=OFF \
-    -DARROW_WITH_THRIFT=ON \
-    -DARROW_WITH_LZ4=ON \
-    -DARROW_WITH_SNAPPY=ON \
-    -DARROW_WITH_ZLIB=ON \
-    -DARROW_WITH_ZSTD=ON \
-    -DARROW_JEMALLOC=OFF \
-    -DARROW_SIMD_LEVEL=NONE \
-    -DARROW_RUNTIME_SIMD_LEVEL=NONE \
-    -DARROW_WITH_UTF8PROC=OFF \
-    -DARROW_TESTING=ON \
-    -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DARROW_BUILD_STATIC=ON \
-    -DThrift_SOURCE=BUNDLED
+  (
+    cd arrow/cpp
+    cmake_install \
+      -DARROW_PARQUET=OFF \
+      -DARROW_WITH_THRIFT=ON \
+      -DARROW_WITH_LZ4=ON \
+      -DARROW_WITH_SNAPPY=ON \
+      -DARROW_WITH_ZLIB=ON \
+      -DARROW_WITH_ZSTD=ON \
+      -DARROW_JEMALLOC=OFF \
+      -DARROW_SIMD_LEVEL=NONE \
+      -DARROW_RUNTIME_SIMD_LEVEL=NONE \
+      -DARROW_WITH_UTF8PROC=OFF \
+      -DARROW_TESTING=ON \
+      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DARROW_BUILD_STATIC=ON \
+      -DThrift_SOURCE=BUNDLED
+
+    # Install thrift.
+    cd _build/thrift_ep-prefix/src/thrift_ep-build
+    cmake --install ./ --prefix /usr/local/
+  )
 }
 
 function install_cuda {

@@ -62,7 +62,7 @@ jobs:
       Protobuf_SOURCE: BUNDLED # can be removed after #10134 is merged
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
-      Arrow_SOURCE: BUNDLED
+      Arrow_SOURCE: AUTO
       CUDA_VERSION: "12.4"
     steps:
       - uses: actions/checkout@v4
@@ -110,7 +110,11 @@ jobs:
             "-DVELOX_ENABLE_GPU=ON"
           )
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
-    
+
+      #Temporarily rename Minio binary to include version until CI image is updated with the same.
+      - name: Rename Minio
+        run: [ -f /usr/local/bin/minio ] && mv /usr/local/bin/minio /usr/local/bin/minio-2022-05-26
+
       - name: Ccache after
         run: ccache -s
 

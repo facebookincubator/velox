@@ -32,8 +32,7 @@ source $SCRIPTDIR/setup-helper-functions.sh
 
 # Folly must be built with the same compiler flags so that some low level types
 # are the same size.
-CPU_TARGET="${CPU_TARGET:-avx}"
-COMPILER_FLAGS=$(get_cxx_flags "$CPU_TARGET")
+COMPILER_FLAGS=$(get_cxx_flags)
 export COMPILER_FLAGS
 FB_OS_VERSION=v2024.05.20.00
 FMT_VERSION=10.1.1
@@ -83,7 +82,6 @@ function install_velox_deps_from_apt {
     libre2-dev \
     libsnappy-dev \
     libsodium-dev \
-    libthrift-dev \
     liblzo2-dev \
     libelf-dev \
     libdwarf-dev \
@@ -161,23 +159,29 @@ ARROW_VERSION=15.0.0
 
 function install_arrow {
   wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
-  cd arrow/cpp
-  cmake_install \
-    -DARROW_PARQUET=OFF \
-    -DARROW_WITH_THRIFT=ON \
-    -DARROW_WITH_LZ4=ON \
-    -DARROW_WITH_SNAPPY=ON \
-    -DARROW_WITH_ZLIB=ON \
-    -DARROW_WITH_ZSTD=ON \
-    -DARROW_JEMALLOC=OFF \
-    -DARROW_SIMD_LEVEL=NONE \
-    -DARROW_RUNTIME_SIMD_LEVEL=NONE \
-    -DARROW_WITH_UTF8PROC=OFF \
-    -DARROW_TESTING=ON \
-    -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DARROW_BUILD_STATIC=ON \
-    -DThrift_SOURCE=BUNDLED
+  (
+    cd arrow/cpp
+    cmake_install \
+      -DARROW_PARQUET=OFF \
+      -DARROW_WITH_THRIFT=ON \
+      -DARROW_WITH_LZ4=ON \
+      -DARROW_WITH_SNAPPY=ON \
+      -DARROW_WITH_ZLIB=ON \
+      -DARROW_WITH_ZSTD=ON \
+      -DARROW_JEMALLOC=OFF \
+      -DARROW_SIMD_LEVEL=NONE \
+      -DARROW_RUNTIME_SIMD_LEVEL=NONE \
+      -DARROW_WITH_UTF8PROC=OFF \
+      -DARROW_TESTING=ON \
+      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DARROW_BUILD_STATIC=ON \
+      -DThrift_SOURCE=BUNDLED
+
+    # Install thrift.
+    cd _build/thrift_ep-prefix/src/thrift_ep-build
+    $SUDO cmake --install ./ --prefix /usr/local/
+  )
 }
 
 function install_cuda {

@@ -77,6 +77,10 @@ void registerProbTrigFunctions(const std::string& prefix) {
       {prefix + "weibull_cdf"});
   registerFunction<InverseWeibullCDFFunction, double, double, double, double>(
       {prefix + "inverse_weibull_cdf"});
+  registerFunction<InverseCauchyCDFFunction, double, double, double, double>(
+      {prefix + "inverse_cauchy_cdf"});
+  registerFunction<InverseLaplaceCDFFunction, double, double, double, double>(
+      {prefix + "inverse_laplace_cdf"});
 }
 
 } // namespace
