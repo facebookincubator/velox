@@ -115,5 +115,5 @@ target_link_libraries(
 
 add_library(velox_cache_fuzzer CacheFuzzer.cpp)
 
-target_link_libraries(velox_cache_fuzzer velox_dwio_common velox_temp_path
-                      velox_vector_test_lib)
+target_link_libraries(
+  velox_cache_fuzzer velox_dwio_common velox_temp_path velox_vector_test_lib)
