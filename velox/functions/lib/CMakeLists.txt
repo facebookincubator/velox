@@ -40,7 +40,7 @@ add_library(
   TimeUtils.cpp)
 
 target_link_libraries(velox_functions_lib velox_functions_util velox_vector
-                      re2::re2 Folly::folly hyperscan)
+                      re2::re2 Folly::folly hs)
 
 add_subdirectory(aggregates)
 add_subdirectory(string)

@@ -27,7 +27,9 @@ if(${RAGEL} STREQUAL "RAGEL-NOTFOUND")
     FetchContent_Populate(colm)
   endif()
   execute_process(
-    COMMAND bash -c "./autogen.sh && ./configure && make && make install"
+    COMMAND
+      bash -c
+      "./autogen.sh && ./configure --prefix=/usr/local/ && make && make install"
     WORKING_DIRECTORY ${colm_SOURCE_DIR}
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
@@ -82,4 +84,6 @@ set(CMAKE_CXX_STANDARD 11)
 set(BUILD_EXAMPLES FALSE)
 set(BUILD_AVX512 ON)
 FetchContent_MakeAvailable(hyperscan)
+set_target_properties(hs PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
+                                    ${hyperscan_SOURCE_DIR}/src)
 set(CMAKE_CXX_STANDARD ${CMAKE_CXX_STANDARD_BACKUP})

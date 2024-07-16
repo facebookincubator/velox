@@ -15,10 +15,10 @@
  */
 #include "velox/functions/lib/HyperscanFunctions.h"
 #include <errno.h>
-#include <hs/hs.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "hs.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/vector/FunctionVector.h"
 
