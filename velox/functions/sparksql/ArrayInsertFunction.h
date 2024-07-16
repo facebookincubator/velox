@@ -36,21 +36,22 @@ struct ArrayInsertFunction {
       const arg_type<bool>* legacyNegativeIndex) {
     VELOX_USER_CHECK_NOT_NULL(
         legacyNegativeIndex,
-        "Parameter legacyNegativeIndex should not be NULL.")
+        "Constant legacyNegativeIndex should be provided.");
     if (srcArray == nullptr || pos == nullptr) {
       return false;
     }
-    VELOX_USER_CHECK(*pos != 0, "Array insert position should not be 0.")
+    VELOX_USER_CHECK(*pos != 0, "Array insert position should not be 0.");
 
     if (*pos > 0) {
-      // Insert element into index *pos of the input array, append nulls after
-      // the original elements if target postion is above the input array size.
-      int64_t newArrayLength =
+      // Insert element into input array on the given position. Append nulls
+      // after the original elements if the given position is above the input
+      // array size.
+      const int64_t newArrayLength =
           std::max((int64_t)srcArray->size() + 1, (int64_t)*pos);
       VELOX_USER_CHECK_LE(
           newArrayLength,
           kMaxNumberOfElements,
-          "Array insert result exceeds the max array size limit {}",
+          "The size of result array must be less than or equal to {}.",
           kMaxNumberOfElements);
 
       out.reserve(newArrayLength);
@@ -60,8 +61,8 @@ struct ArrayInsertFunction {
         if (i == posIdx) {
           item ? out.push_back(*item) : out.add_null();
         } else {
-          bool inserted = i > posIdx;
-          int32_t srcIdx = i - inserted;
+          // If inserted, i is large than the source index by 1.
+          int32_t srcIdx = i > posIdx ? i - 1 : i;
           if (srcIdx < srcArray->size()) {
             out.push_back((*srcArray)[srcIdx]);
           } else {
@@ -72,16 +73,14 @@ struct ArrayInsertFunction {
     } else {
       bool newPosExtendsArrayLeft = -(int64_t)(*pos) > srcArray->size();
       if (newPosExtendsArrayLeft) {
-        // Insert element at the beginning of the array followed by nulls and
-        // the original array. The new array size depends on
-        // legacyNegativeIndex, if legacyNegativeIndex is true the index is
-        // 0-based and the new array size is (-*pos + 1), otherwise it's 1-based
-        // and the new array size is -*pos.
+        // Insert element at the beginning of the input array followed by nulls
+        // and the original array. If legacyNegativeIndex is true, the new array
+        // size is larger by 1.
         int64_t newArrayLength = -(int64_t)(*pos) + *legacyNegativeIndex;
         VELOX_USER_CHECK_LE(
             newArrayLength,
             kMaxNumberOfElements,
-            "Array insert result exceeds the max array size limit {}",
+            "The size of result array must be less than or equal to {}.",
             kMaxNumberOfElements);
 
         out.reserve(newArrayLength);
@@ -95,15 +94,15 @@ struct ArrayInsertFunction {
           out.push_back(element);
         }
       } else {
-        // Insert element into the array based on the negative index *pos, if
-        // legacyNegativeIndex is true the index is 0-based otherwise 1-based.
+        // Insert element into input array on the calculated positive position.
+        // When legacyNegativeIndex is true, the inserting position is more to
+        // the left by 1.
         int64_t posIdx = *pos + srcArray->size() + !*legacyNegativeIndex;
-        int64_t newArrayLength =
-            std::max((int64_t)(srcArray->size()) + 1, posIdx + 1);
+        int64_t newArrayLength = (int64_t)srcArray->size() + 1;
         VELOX_USER_CHECK_LE(
             newArrayLength,
             kMaxNumberOfElements,
-            "Array insert result exceeds the max array size limit {}",
+            "The size of result array must be less than or equal to {}.",
             kMaxNumberOfElements);
 
         out.reserve(newArrayLength);
