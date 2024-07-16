@@ -13,54 +13,6 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-find_program(RAGEL ragel)
-if(${RAGEL} STREQUAL "RAGEL-NOTFOUND")
-  message(STATUS "Building colm from source")
-  # Install colm, required by ragel build.
-  FetchContent_Declare(
-    colm
-    URL https://github.com/adrian-thurston/colm/archive/refs/tags/0.14.7.tar.gz
-    URL_HASH
-      SHA256=06c8296cab3c660dcb0b150d5b58c10707278d34a35fe664f8ed05f4606fc079)
-  FetchContent_GetProperties(colm)
-  if(NOT colm_POPULATED)
-    FetchContent_Populate(colm)
-  endif()
-  execute_process(
-    COMMAND
-      bash -c
-      "./autogen.sh && ./configure --prefix=/usr/local/ && make && make install"
-    WORKING_DIRECTORY ${colm_SOURCE_DIR}
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE output)
-
-  message(STATUS "Building ragel from source")
-  # Install ragel, required by hyperscan build.
-  FetchContent_Declare(
-    ragel
-    URL https://github.com/adrian-thurston/ragel/archive/refs/tags/7.0.4.tar.gz
-    URL_HASH
-      SHA256=0f7c3866f82ba2552f1ae1f03b94170121a0ff8bac92c8e22c531d732fd20581)
-  FetchContent_GetProperties(ragel)
-  if(NOT ragel_POPULATED)
-    FetchContent_Populate(ragel)
-  endif()
-  execute_process(
-    COMMAND
-      bash -c
-      "./autogen.sh && ./configure --with-colm=/usr/local/ --disable-manual && make && make install"
-    WORKING_DIRECTORY ${ragel_SOURCE_DIR}
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE output)
-  if(result)
-    message(FATAL_ERROR "Failed to build and install ragel: ${output}")
-  endif()
-else()
-  message(STATUS "Using existing ragel for building hyperscan.")
-endif()
-
 if(DEFINED ENV{VELOX_HYPERSCAN_URL})
   set(VELOX_HYPERSCAN_SOURCE_URL "$ENV{VELOX_HYPERSCAN_URL}")
 else()
