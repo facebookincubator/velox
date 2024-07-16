@@ -121,14 +121,13 @@ function get_cxx_flags {
       ARM_CPU_FILE="/sys/devices/system/cpu/cpu0/regs/identification/midr_el1"
 
       # https://gitlab.arm.com/telemetry-solution/telemetry-solution/-/blob/main/data/pmu/cpu/neoverse/neoverse-n1.json#L13
-      # N1:0xd0c; N2:0xd49; V1:0xd40;
-      Neoverse_N1="0xd0c"
-      Neoverse_N2="0xd49"
-      Neoverse_V1="0xd40"
-      hex_mask="0xfff0"
+      # N1:d0c; N2:d49; V1:d40;
+      Neoverse_N1="d0c"
+      Neoverse_N2="d49"
+      Neoverse_V1="d40"
       if [ -f "$ARM_CPU_FILE" ]; then
         hex_ARM_CPU_DETECT=`cat $ARM_CPU_FILE`
-        ARM_CPU_PRODUCT=$(python -c "print(hex((int('$hex_ARM_CPU_DETECT', 16) & int('$hex_mask', 16)) >> 4))")
+        ARM_CPU_PRODUCT=${hex_ARM_CPU_DETECT: -4:3}
 
         if [ "$ARM_CPU_PRODUCT" = "$Neoverse_N1" ]; then
           echo -n "-mcpu=neoverse-n1 -std=c++17 $ADDITIONAL_FLAGS"
