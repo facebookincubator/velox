@@ -255,18 +255,24 @@ const char* exportArrowFormatStr(
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
+      thread_local std::string timestampString;
       switch (options.timestampUnit) {
         case TimestampUnit::kSecond:
-          return "tss:";
+          timestampString = "tss:" + options.timestampTimeZone;
+          break;
         case TimestampUnit::kMilli:
-          return "tsm:";
+          timestampString = "tsm:" + options.timestampTimeZone;
+          break;
         case TimestampUnit::kMicro:
-          return "tsu:";
+          timestampString = "tsu:" + options.timestampTimeZone;
+          break;
         case TimestampUnit::kNano:
-          return "tsn:";
+          timestampString = "tsn:" + options.timestampTimeZone;
+          break;
         default:
           VELOX_UNREACHABLE();
       }
+      return timestampString.c_str();
     // Complex/nested types.
     case TypeKind::ARRAY:
       static_assert(sizeof(vector_size_t) == 4);

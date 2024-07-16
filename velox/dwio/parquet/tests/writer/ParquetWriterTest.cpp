@@ -150,6 +150,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
                 std::dynamic_pointer_cast<::arrow::TimestampType>(
                     arrowSchema->field(0)->type());
             ASSERT_EQ(tsType->unit(), ::arrow::TimeUnit::MICRO);
+            ASSERT_EQ(tsType->timezone(), "America/Los_Angeles");
           })));
 
   const auto data = makeRowVector({makeFlatVector<Timestamp>(
@@ -157,6 +158,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
   parquet::WriterOptions writerOptions;
   writerOptions.memoryPool = leafPool_.get();
   writerOptions.parquetWriteTimestampUnit = TimestampUnit::kMicro;
+  writerOptions.parquetWriteTimestampTimeZone = "America/Los_Angeles";
 
   // Create an in-memory writer.
   auto sink = std::make_unique<MemorySink>(
