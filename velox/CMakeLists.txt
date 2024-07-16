@@ -67,6 +67,7 @@ if(${VELOX_ENABLE_GPU})
   add_subdirectory(experimental/gpu)
   add_subdirectory(experimental/wave)
 endif()
+add_subdirectory(experimental/cudf)
 
 # substrait converter
 if(${VELOX_ENABLE_SUBSTRAIT})
