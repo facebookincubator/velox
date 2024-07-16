@@ -24,6 +24,7 @@ namespace detail {
 static const StringView kNull = "NULL";
 }
 
+/// toprettystring(x) -> varchar
 /// Returns pretty string for int8, int16, int32, int64, bool, Date, Varchar. It
 /// has one difference with casting value to string:
 /// - It prints null values (either from column or struct field) as "NULL".
