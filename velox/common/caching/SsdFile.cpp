@@ -795,7 +795,7 @@ void SsdFile::checkpoint(bool force) {
           state.write(asChar(&checksum), sizeof(checksum));
         }
       }
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       fileSync->close();
       std::rethrow_exception(std::current_exception());
     }
