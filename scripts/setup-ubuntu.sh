@@ -46,9 +46,6 @@ SUDO="${SUDO:-"sudo --preserve-env"}"
 # Install packages required for build.
 function install_build_prerequisites {
   ${SUDO} apt update
-  # The is an issue on 22.04 where a version conflict prevents glog install,
-  # installing libunwind first fixes this.
-  ${SUDO} apt install -y libunwind8
   ${SUDO} apt install -y \
     build-essential \
     python3-pip \
@@ -72,7 +69,6 @@ function install_velox_deps_from_apt {
     libssl-dev \
     libicu-dev \
     libdouble-conversion-dev \
-    libgoogle-glog-dev \
     libbz2-dev \
     libgflags-dev \
     libgmock-dev \
@@ -184,6 +180,14 @@ function install_arrow {
   )
 }
 
+function install_glog {
+  wget_and_untar https://github.com/google/glog/archive/v0.6.0.tar.gz glog
+  (
+    cd glog
+    cmake_install -DBUILD_SHARED_LIBS=ON
+  )
+}
+
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
   if ! dpkg -l cuda-keyring 1>/dev/null; then
@@ -199,6 +203,7 @@ function install_velox_deps {
   run_and_time install_velox_deps_from_apt
   run_and_time install_fmt
   run_and_time install_boost
+  run_and_time install_glog
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
