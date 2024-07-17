@@ -14,12 +14,7 @@
 project(Arrow)
 
 if(VELOX_ENABLE_ARROW)
-  find_package(Thrift)
-  if(Thrift_FOUND)
-    set(THRIFT_SOURCE "SYSTEM")
-  else()
-    set(THRIFT_SOURCE "BUNDLED")
-  endif()
+  set_source(Thrift)
 
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
   set(ARROW_CMAKE_ARGS
@@ -37,16 +32,20 @@ if(VELOX_ENABLE_ARROW)
       -DCMAKE_INSTALL_PREFIX=${ARROW_PREFIX}/install
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DARROW_BUILD_STATIC=ON
-      -DThrift_SOURCE=${THRIFT_SOURCE})
+      -DThrift_SOURCE=${Thrift_SOURCE})
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
   add_library(thrift STATIC IMPORTED GLOBAL)
-  if(NOT Thrift_FOUND)
+  if(THRIFT_SOURCE STREQUAL "BUNDLED")
     set(THRIFT_ROOT ${ARROW_PREFIX}/src/arrow_ep-build/thrift_ep-install)
     set(THRIFT_LIB ${THRIFT_ROOT}/lib/libthrift.a)
-
-    file(MAKE_DIRECTORY ${THRIFT_ROOT}/include)
     set(THRIFT_INCLUDE_DIR ${THRIFT_ROOT}/include)
+
+    if(NOT EXISTS "${THRIFT_INCLUDE_DIR}")
+      file(MAKE_DIRECTORY "${THRIFT_INCLUDE_DIR}")
+    endif()
+  else()
+    find_package(Thrift)
   endif()
 
   set_property(TARGET thrift PROPERTY INTERFACE_INCLUDE_DIRECTORIES
