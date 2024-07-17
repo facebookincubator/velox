@@ -303,4 +303,14 @@ bool HiveConfig::cacheNoRetention(const Config* session) const {
       config_->get<bool>(kCacheNoRetention, /*defaultValue=*/false));
 }
 
+std::string HiveConfig::parquetDataPageVersion(const Config* session) const {
+  const auto parquetDataPageVersion = session->get<std::string>(
+      kParquetDataPageVersion,
+      config_->get<std::string>(kParquetDataPageVersion, "PARQUET_2_0"));
+  VELOX_CHECK(
+      parquetDataPageVersion == "PARQUET_1_0" ||
+          parquetDataPageVersion == "PARQUET_2_0",
+      "Invalid Parquet version.");
+  return parquetDataPageVersion;
+}
 } // namespace facebook::velox::connector::hive

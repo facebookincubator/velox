@@ -240,6 +240,10 @@ class HiveConfig {
   static constexpr const char* kCacheNoRetention = "cache.no_retention";
   static constexpr const char* kCacheNoRetentionSession = "cache.no_retention";
 
+  /// File format version to be used by Parquet writer.
+  static constexpr const char* kParquetDataPageVersion =
+      "parquet_writer_version";
+
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* session) const;
 
@@ -343,6 +347,11 @@ class HiveConfig {
   /// batch query when mixed running with interactive query which has high data
   /// locality.
   bool cacheNoRetention(const Config* session) const;
+
+  /// Returns the datapage version used by the Parquet writer.
+  /// Default version is PARQUET_2_0; PARQUET_1_0 can be specified
+  /// via session property or Hive config.
+  std::string parquetDataPageVersion(const Config* session) const;
 
   HiveConfig(std::shared_ptr<const Config> config) {
     VELOX_CHECK_NOT_NULL(

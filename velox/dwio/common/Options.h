@@ -592,6 +592,8 @@ class ReaderOptions : public io::ReaderOptions {
   const date::time_zone* sessionTimezone_{nullptr};
 };
 
+enum class ParquetDataPageVersion { V1, V2 };
+
 struct WriterOptions {
   TypePtr schema{nullptr};
   velox::memory::MemoryPool* memoryPool{nullptr};
@@ -615,6 +617,7 @@ struct WriterOptions {
   std::optional<uint8_t> parquetWriteTimestampUnit;
   std::optional<uint8_t> zlibCompressionLevel;
   std::optional<uint8_t> zstdCompressionLevel;
+  ParquetDataPageVersion parquetDataPageVersion;
 
   virtual ~WriterOptions() = default;
 };

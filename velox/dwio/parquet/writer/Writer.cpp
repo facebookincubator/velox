@@ -144,6 +144,7 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
   properties = properties->enable_store_decimal_as_integer();
+  properties = properties->data_page_version(options.parquetDataPageVersion);
   return properties->build();
 }
 
@@ -394,6 +395,16 @@ parquet::WriterOptions getParquetOptions(
     parquetOptions.parquetWriteTimestampUnit =
         options.parquetWriteTimestampUnit.value();
   }
+
+  // Default Parquet datapage version is V2; V1 can be set via session property
+  // or Hive config.
+  if (options.parquetDataPageVersion ==
+      dwio::common::ParquetDataPageVersion::V1) {
+    parquetOptions.parquetDataPageVersion = arrow::ParquetDataPageVersion::V1;
+  } else {
+    parquetOptions.parquetDataPageVersion = arrow::ParquetDataPageVersion::V2;
+  }
+
   return parquetOptions;
 }
 
