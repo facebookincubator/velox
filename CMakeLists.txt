@@ -540,13 +540,6 @@ include_directories(SYSTEM velox/external)
 
 # these were previously vendored in third-party/
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  # NOTE: Use "GTest" other than "gtest" or "GTEST" because both the
-  # "FindGTest.cmake" (See [1]) provided by cmake and the cmake file generated
-  # when compiling and installing gtest from source, "GTest" is used, not
-  # "gtest" or "GTEST".
-  #
-  # [1]
-  # https://github.com/Kitware/CMake/blob/8fe9454bcca64a327fb3e0ccf5aff7477eb036cc/Modules/FindGTest.cmake#L19-L23
   set(GTest_SOURCE AUTO)
   resolve_dependency(GTest)
   set(VELOX_GTEST_INCUDE_DIR
