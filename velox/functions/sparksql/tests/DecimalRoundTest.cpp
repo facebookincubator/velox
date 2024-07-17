@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -24,46 +23,29 @@ class DecimalRoundTest : public SparkFunctionBaseTest {
  protected:
   core::CallTypedExprPtr createDecimalRound(
       const TypePtr& inputType,
-      const std::optional<int32_t>& scaleOpt,
-      bool castScale) {
+      const TypePtr& resultType,
+      const std::optional<int32_t>& scaleOpt) {
     std::vector<core::TypedExprPtr> inputs = {
         std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0")};
     int32_t scale = 0;
     if (scaleOpt.has_value()) {
       scale = scaleOpt.value();
-      if (castScale) {
-        // It is a common case in Spark for the second argument to be cast from
-        // bigint to integer.
-        inputs.emplace_back(std::make_shared<core::CastTypedExpr>(
-            INTEGER(),
-            std::make_shared<core::ConstantTypedExpr>(
-                BIGINT(), variant((int64_t)scale)),
-            true /*nullOnFailure*/));
-      } else {
-        inputs.emplace_back(std::make_shared<core::ConstantTypedExpr>(
-            INTEGER(), variant(scale)));
-      }
+      inputs.emplace_back(
+          std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(scale)));
     }
 
     const auto [inputPrecision, inputScale] =
         getDecimalPrecisionScale(*inputType);
-    const auto [resultPrecision, resultScale] =
-        DecimalRoundCallToSpecialForm::getResultPrecisionScale(
-            inputPrecision, inputScale, scale);
     return std::make_shared<const core::CallTypedExpr>(
-        DECIMAL(resultPrecision, resultScale),
-        std::move(inputs),
-        DecimalRoundCallToSpecialForm::kRoundDecimal);
+        resultType, std::move(inputs), "round");
   }
 
   void testDecimalRound(
       const VectorPtr& input,
       const std::optional<int32_t>& scaleOpt,
       const VectorPtr& expected) {
-    for (auto castScale : {true, false}) {
-      auto expr = createDecimalRound(input->type(), scaleOpt, castScale);
-      testEncodings(expr, {input}, expected);
-    }
+    auto expr = createDecimalRound(input->type(), expected->type(), scaleOpt);
+    testEncodings(expr, {input}, expected);
   }
 };
 

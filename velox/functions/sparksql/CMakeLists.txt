@@ -21,6 +21,7 @@ add_library(
   Comparisons.cpp
   DecimalArithmetic.cpp
   DecimalCompare.cpp
+  DecimalRound.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp

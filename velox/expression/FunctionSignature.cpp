@@ -73,7 +73,9 @@ std::string FunctionSignature::argumentsToString() const {
 
 std::string FunctionSignature::toString() const {
   std::ostringstream out;
-  out << "(" << argumentsToString() << ") -> " << returnType_.toString();
+  auto returnTypeString =
+      returnType_.has_value() ? returnType_.value().toString() : "";
+  out << "(" << argumentsToString() << ") -> " << returnTypeString;
   return out.str();
 }
 
@@ -143,7 +145,7 @@ void validateBaseTypeAndCollectTypeParams(
 
 void validate(
     const std::unordered_map<std::string, SignatureVariable>& variables,
-    const TypeSignature& returnType,
+    const std::optional<TypeSignature>& returnType,
     const std::vector<TypeSignature>& argumentTypes,
     const std::vector<bool>& constantArguments,
     const std::vector<TypeSignature>& additionalTypes = {}) {
@@ -167,8 +169,10 @@ void validate(
     }
   }
 
-  validateBaseTypeAndCollectTypeParams(
-      variables, returnType, usedVariables, true);
+  if (returnType.has_value()) {
+    validateBaseTypeAndCollectTypeParams(
+        variables, returnType.value(), usedVariables, true);
+  }
 
   VELOX_USER_CHECK_EQ(
       usedVariables.size(),
@@ -208,7 +212,7 @@ SignatureVariable::SignatureVariable(
 
 FunctionSignature::FunctionSignature(
     std::unordered_map<std::string, SignatureVariable> variables,
-    TypeSignature returnType,
+    std::optional<TypeSignature> returnType,
     std::vector<TypeSignature> argumentTypes,
     std::vector<bool> constantArguments,
     bool variableArity)
@@ -222,7 +226,7 @@ FunctionSignature::FunctionSignature(
 
 FunctionSignature::FunctionSignature(
     std::unordered_map<std::string, SignatureVariable> variables,
-    facebook::velox::exec::TypeSignature returnType,
+    std::optional<TypeSignature> returnType,
     std::vector<TypeSignature> argumentTypes,
     std::vector<bool> constantArguments,
     bool variableArity,
@@ -248,10 +252,9 @@ std::string AggregateFunctionSignature::toString() const {
 }
 
 FunctionSignaturePtr FunctionSignatureBuilder::build() {
-  VELOX_CHECK(returnType_.has_value());
   return std::make_shared<FunctionSignature>(
       std::move(variables_),
-      returnType_.value(),
+      std::move(returnType_),
       std::move(argumentTypes_),
       std::move(constantArguments_),
       variableArity_);

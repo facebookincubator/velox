@@ -124,7 +124,7 @@ class FunctionSignature {
   /// can appear zero or more times.
   FunctionSignature(
       std::unordered_map<std::string, SignatureVariable> variables,
-      TypeSignature returnType,
+      std::optional<TypeSignature> returnType,
       std::vector<TypeSignature> argumentTypes,
       std::vector<bool> constantArguments,
       bool variableArity);
@@ -132,7 +132,8 @@ class FunctionSignature {
   virtual ~FunctionSignature() = default;
 
   const TypeSignature& returnType() const {
-    return returnType_;
+    VELOX_DCHECK(returnType_.has_value());
+    return returnType_.value();
   }
 
   const std::vector<TypeSignature>& argumentTypes() const {
@@ -178,7 +179,7 @@ class FunctionSignature {
   /// FunctionSignature.
   FunctionSignature(
       std::unordered_map<std::string, SignatureVariable> variables,
-      TypeSignature returnType,
+      std::optional<TypeSignature> returnType,
       std::vector<TypeSignature> argumentTypes,
       std::vector<bool> constantArguments,
       bool variableArity,
@@ -189,7 +190,7 @@ class FunctionSignature {
 
  private:
   const std::unordered_map<std::string, SignatureVariable> variables_;
-  const TypeSignature returnType_;
+  const std::optional<TypeSignature> returnType_;
   const std::vector<TypeSignature> argumentTypes_;
   const std::vector<bool> constantArguments_;
   const bool variableArity_;
@@ -318,7 +319,7 @@ class FunctionSignatureBuilder {
 
  private:
   std::unordered_map<std::string, SignatureVariable> variables_;
-  std::optional<TypeSignature> returnType_;
+  std::optional<TypeSignature> returnType_ = std::nullopt;
   std::vector<TypeSignature> argumentTypes_;
   std::vector<bool> constantArguments_;
   bool variableArity_{false};
