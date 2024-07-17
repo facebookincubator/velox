@@ -377,16 +377,15 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
       }
 
       auto accumulator = value<SingleValueAccumulator>(groups[i]);
-      if constexpr (compareStopAtNull) {
-        if (!accumulator->hasValue() ||
-            compareTest(compare(accumulator, decoded, i))) {
-          accumulator->write(baseVector, indices[i], allocator_);
-        }
-      } else {
-        if (!accumulator->hasValue() ||
-            compareTest(compareWithNullAsValue(accumulator, decoded, i))) {
-          accumulator->write(baseVector, indices[i], allocator_);
-        }
+      if (!accumulator->hasValue() ||
+          compareTest(compare(
+              accumulator,
+              decoded,
+              i,
+              compareStopAtNull
+                  ? CompareFlags::NullHandlingMode::kNullAsIndeterminate
+                  : CompareFlags::NullHandlingMode::kNullAsValue))) {
+        accumulator->write(baseVector, indices[i], allocator_);
       }
     });
   }
@@ -408,16 +407,15 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
       }
 
       auto accumulator = value<SingleValueAccumulator>(group);
-      if constexpr (compareStopAtNull) {
-        if (!accumulator->hasValue() ||
-            compareTest(compare(accumulator, decoded, 0))) {
-          accumulator->write(baseVector, indices[0], allocator_);
-        }
-      } else {
-        if (!accumulator->hasValue() ||
-            compareTest(compareWithNullAsValue(accumulator, decoded, 0))) {
-          accumulator->write(baseVector, indices[0], allocator_);
-        }
+      if (!accumulator->hasValue() ||
+          compareTest(compare(
+              accumulator,
+              decoded,
+              0,
+              compareStopAtNull
+                  ? CompareFlags::NullHandlingMode::kNullAsIndeterminate
+                  : CompareFlags::NullHandlingMode::kNullAsValue))) {
+        accumulator->write(baseVector, indices[0], allocator_);
       }
       return;
     }
@@ -428,17 +426,15 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
               decoded, indices, i, throwOnNestedNulls_)) {
         return;
       }
-
-      if constexpr (compareStopAtNull) {
-        if (!accumulator->hasValue() ||
-            compareTest(compare(accumulator, decoded, i))) {
-          accumulator->write(baseVector, indices[i], allocator_);
-        }
-      } else {
-        if (!accumulator->hasValue() ||
-            compareTest(compareWithNullAsValue(accumulator, decoded, i))) {
-          accumulator->write(baseVector, indices[i], allocator_);
-        }
+      if (!accumulator->hasValue() ||
+          compareTest(compare(
+              accumulator,
+              decoded,
+              i,
+              compareStopAtNull
+                  ? CompareFlags::NullHandlingMode::kNullAsIndeterminate
+                  : CompareFlags::NullHandlingMode::kNullAsValue))) {
+        accumulator->write(baseVector, indices[i], allocator_);
       }
     });
   }
@@ -566,9 +562,8 @@ template <
     typename TTimestampFunc>
 exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
     const std::string& name,
-    bool nestedNullAllowed,
-    bool mapTypeSupported) {
-  auto factory = [name, nestedNullAllowed, mapTypeSupported](
+    bool nestedNullAllowed) {
+  auto factory = [name, nestedNullAllowed](
                      core::AggregationNode::Step step,
                      std::vector<TypePtr> argTypes,
                      const TypePtr& resultType,
@@ -600,14 +595,6 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
         [[fallthrough]];
       case TypeKind::VARCHAR:
         return std::make_unique<TNonNumeric<false>>(inputType, false);
-      case TypeKind::MAP:
-        if (!mapTypeSupported) {
-          VELOX_UNSUPPORTED(
-              "Map type {} is not supported for aggregation {}",
-              inputType->kindName(),
-              name);
-        }
-        [[fallthrough]];
       case TypeKind::ARRAY:
         [[fallthrough]];
       case TypeKind::ROW:
@@ -632,31 +619,28 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
 
 /// Min & Max functions in Presto and Spark have different semantics:
 /// 1. Nested nulls are allowed in Spark but not Presto.
-/// 2. The map type is not orderable in Spark.
-/// 3. The timestamp type represents a time instant in microsecond precision in
+/// 2. The timestamp type represents a time instant in microsecond precision in
 /// Spark, but millis precision in Presto.
-/// We add parameters 'nestedNullAllowed', 'mapTypeSupported',
+/// We add parameter 'nestedNullAllowed'
 /// and template TTimestampAggregate to register min and max functions with
 /// different behaviors.
 template <typename TTimestampMinAggregate = MinAggregate<Timestamp>>
 exec::AggregateFunctionFactory getMinFunctionFactory(
     const std::string& name,
-    bool nestedNullAllowed,
-    bool mapTypeSupported) {
+    bool nestedNullAllowed) {
   return getMinMaxFunctionFactoryInternal<
       MinAggregate,
       NonNumericMinAggregate,
-      TTimestampMinAggregate>(name, nestedNullAllowed, mapTypeSupported);
+      TTimestampMinAggregate>(name, nestedNullAllowed);
 }
 
 template <typename TTimestampMaxAggregate = MaxAggregate<Timestamp>>
 exec::AggregateFunctionFactory getMaxFunctionFactory(
     const std::string& name,
-    bool nestedNullAllowed,
-    bool mapTypeSupported) {
+    bool nestedNullAllowed) {
   return getMinMaxFunctionFactoryInternal<
       MaxAggregate,
       NonNumericMaxAggregate,
-      TTimestampMaxAggregate>(name, nestedNullAllowed, mapTypeSupported);
+      TTimestampMaxAggregate>(name, nestedNullAllowed);
 }
 } // namespace facebook::velox::functions::aggregate

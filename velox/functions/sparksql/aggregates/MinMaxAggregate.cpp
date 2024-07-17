@@ -77,7 +77,7 @@ exec::AggregateRegistrationResult registerMin(
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         auto factory =
             getMinFunctionFactory<TimestampMicrosPrecisionMinAggregate>(
-                name, true /*nestedNullAllowed*/, false /*mapTypeSupported*/);
+                name, true /*nestedNullAllowed*/);
         return factory(step, argTypes, resultType, config);
       },
       {false /*orderSensitive*/},
@@ -106,7 +106,7 @@ exec::AggregateRegistrationResult registerMax(
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         auto factory =
             getMaxFunctionFactory<TimestampMicrosPrecisionMaxAggregate>(
-                name, true /*nestedNullAllowed*/, false /*mapTypeSupported*/);
+                name, true /*nestedNullAllowed*/);
         return factory(step, argTypes, resultType, config);
       },
       {false /*orderSensitive*/},

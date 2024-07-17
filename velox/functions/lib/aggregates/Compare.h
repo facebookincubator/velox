@@ -27,15 +27,14 @@ namespace facebook::velox::functions::aggregate {
 /// equal; <0 if stored value is less then new value; >0 if stored value is
 /// greater than new value.
 ///
-/// The default nullHandlingMode in Presto is StopAtNull so it will throw an
-/// exception when complex type values contain nulls.
+/// If nullHandlingMode is NullAsValue, nested nulls are handled as value. If
+/// nullHandlingMode is StopAtNull, it will throw an exception when complex
+/// type values contain nulls.
+/// Note, The default nullHandlingMode in Presto is StopAtNull while the
+/// default nullHandlingMode is NullAsValue in Spark.
 int32_t compare(
     const velox::functions::aggregate::SingleValueAccumulator* accumulator,
     const DecodedVector& decoded,
-    vector_size_t index);
-
-int32_t compareWithNullAsValue(
-    const velox::functions::aggregate::SingleValueAccumulator* accumulator,
-    const DecodedVector& decoded,
-    vector_size_t index);
+    vector_size_t index,
+    CompareFlags::NullHandlingMode nullHandlingMode);
 } // namespace facebook::velox::functions::aggregate

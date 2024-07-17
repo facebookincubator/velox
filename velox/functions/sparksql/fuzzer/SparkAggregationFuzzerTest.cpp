@@ -82,8 +82,8 @@ int main(int argc, char** argv) {
           {"skewness", nullptr},
           {"kurtosis", nullptr},
           {"collect_list", makeArrayVerifier()},
-          // Nulls are put first in Spark ascending sorting, while Velox
-          // configs DuckDB with 'NULLS LAST'.
+          // Nested nulls are handled as values in Spark. But nested nulls
+          // comparison always generates null in DuckDB.
           {"min", nullptr},
           {"max", nullptr},
       };

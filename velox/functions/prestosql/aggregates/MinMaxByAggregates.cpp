@@ -49,12 +49,18 @@ struct Comparator {
       // is less than vector value.
       if constexpr (greaterThan) {
         return !accumulator->hasValue() ||
-            functions::aggregate::compare(accumulator, newComparisons, index) <
-            0;
+            functions::aggregate::compare(
+                accumulator,
+                newComparisons,
+                index,
+                CompareFlags::NullHandlingMode::kNullAsIndeterminate) < 0;
       } else {
         return !accumulator->hasValue() ||
-            functions::aggregate::compare(accumulator, newComparisons, index) >
-            0;
+            functions::aggregate::compare(
+                accumulator,
+                newComparisons,
+                index,
+                CompareFlags::NullHandlingMode::kNullAsIndeterminate) > 0;
       }
     }
   }

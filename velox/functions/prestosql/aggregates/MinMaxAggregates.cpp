@@ -500,12 +500,12 @@ exec::AggregateRegistrationResult registerMinMax(
           }
         } else {
           if (registerMin) {
-            auto factory = getMinFunctionFactory<>(
-                name, false /*nestedNullAllowed*/, true /*mapTypeSupported*/);
+            auto factory =
+                getMinFunctionFactory<>(name, false /*nestedNullAllowed*/);
             return factory(step, argTypes, resultType, config);
           } else {
-            auto factory = getMaxFunctionFactory<>(
-                name, false /*nestedNullAllowed*/, true /*mapTypeSupported*/);
+            auto factory =
+                getMaxFunctionFactory<>(name, false /*nestedNullAllowed*/);
             return factory(step, argTypes, resultType, config);
           }
         }

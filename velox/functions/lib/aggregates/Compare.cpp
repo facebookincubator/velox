@@ -21,12 +21,13 @@ namespace facebook::velox::functions::aggregate {
 int32_t compare(
     const SingleValueAccumulator* accumulator,
     const DecodedVector& decoded,
-    vector_size_t index) {
+    vector_size_t index,
+    CompareFlags::NullHandlingMode nullHandlingMode) {
   static const CompareFlags kCompareFlags{
       true, // nullsFirst
       true, // ascending
       false, // equalsOnly
-      CompareFlags::NullHandlingMode::kNullAsIndeterminate};
+      nullHandlingMode};
 
   auto result = accumulator->compare(decoded, index, kCompareFlags);
   VELOX_USER_CHECK(
@@ -35,17 +36,5 @@ int32_t compare(
           "{} comparison not supported for values that contain nulls",
           mapTypeKindToName(decoded.base()->typeKind())));
   return result.value();
-}
-
-int32_t compareWithNullAsValue(
-    const SingleValueAccumulator* accumulator,
-    const DecodedVector& decoded,
-    vector_size_t index) {
-  static const CompareFlags kCompareFlags{
-      true, // nullsFirst
-      true, // ascending
-      false, // equalsOnly
-      CompareFlags::NullHandlingMode::kNullAsValue};
-  return accumulator->compare(decoded, index, kCompareFlags).value();
 }
 } // namespace facebook::velox::functions::aggregate
