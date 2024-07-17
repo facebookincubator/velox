@@ -570,9 +570,6 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   int precision = getDecimalPrecisionScale(*fromType).first;
   int scale = getDecimalPrecisionScale(*fromType).second;
-  // A varchar's size is estimated with unscaled value digits, dot, leading
-  // zero, and possible minus sign.
-  
   auto rowSize = DecimalUtil::maxStringViewSize(precision, scale);
   auto flatResult = result->asFlatVector<StringView>();
   if (StringView::isInline(rowSize)) {
