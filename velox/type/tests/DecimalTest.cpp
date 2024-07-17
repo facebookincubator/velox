@@ -118,7 +118,8 @@ void testConvertToStringView(
   char out[expectedMaxStringSize];
   DecimalUtil::convertToStringView<T>(
       unscaleValue, scale, expectedMaxStringSize, out);
-  EXPECT_EQ(std::memcmp(expected.data(), out, expected.size()), 0);
+  EXPECT_EQ(std::memcmp(expected.data(), out, expected.size()), 0)
+      << StringView(out, expectedMaxStringSize);
 }
 
 std::string zeros(uint32_t numZeros) {
@@ -532,9 +533,6 @@ TEST(DecimalTest, convertToStringView) {
       3,
       22,
       "-18446744073709551.616");
-  int128_t value = HugeInt::parse("-12345678901234567890");
-  std::cout << std::hex << HugeInt::upper(value) << " " << HugeInt::lower(value)
-            << std::endl;
 
   testConvertToStringView<int128_t>(
       HugeInt::build(0xffffffffffffffff, 0x54ab567314e0f52e),
