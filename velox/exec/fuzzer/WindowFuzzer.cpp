@@ -141,11 +141,15 @@ std::tuple<std::string, bool, bool> WindowFuzzer::generateFrameClause() {
   auto endBoundMinIdx = std::max(0, static_cast<int>(startBoundIndex) - 1);
   auto endBoundIndex = boost::random::uniform_int_distribution<uint32_t>(
       endBoundMinIdx, endBoundOptions.size() - 1)(rng_);
+  bool isDefaultFrame =
+      (startBoundOptions[startBoundIndex] ==
+           core::WindowNode::BoundType::kUnboundedPreceding &&
+       endBoundOptions[endBoundIndex] ==
+           core::WindowNode::BoundType::kCurrentRow);
+
   auto frameStart = frameBound(startBoundOptions[startBoundIndex]);
   auto frameEnd = frameBound(endBoundOptions[endBoundIndex]);
 
-  bool isDefaultFrame =
-      (frameStart == "UNBOUNDED PRECEDING" && frameEnd == "CURRENT ROW");
   return std::make_tuple(
       frameTypeString + " BETWEEN " + frameStart + " AND " + frameEnd,
       isRowsFrame,

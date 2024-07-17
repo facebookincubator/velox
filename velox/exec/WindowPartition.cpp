@@ -56,8 +56,15 @@ void WindowPartition::addRows(const std::vector<char*>& rows) {
 void WindowPartition::clearOutputRows(vector_size_t numRows) {
   VELOX_CHECK(partial_, "Current WindowPartition should be partial.");
   if (!complete_ || (complete_ && rows_.size() >= numRows)) {
-    data_->eraseRows(folly::Range<char**>(rows_.data(), numRows - 1));
-    rows_.erase(rows_.begin(), rows_.begin() + numRows - 1);
+    if (complete_ && numRows == 1) {
+      // Directly delete the last row if only one row in current partition.
+      data_->eraseRows(folly::Range<char**>(rows_.data(), numRows));
+      rows_.erase(rows_.begin(), rows_.begin() + numRows);
+    } else {
+      data_->eraseRows(folly::Range<char**>(rows_.data(), numRows - 1));
+      rows_.erase(rows_.begin(), rows_.begin() + numRows - 1);
+    }
+
     partition_ = folly::Range(rows_.data(), rows_.size());
     startRow_ += numRows;
   }
