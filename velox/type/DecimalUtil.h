@@ -311,7 +311,8 @@ class DecimalUtil {
   }
 
   /// Returns the max required size to convert the decimal of this precision and
-  /// scale to string
+  /// scale to varchar. A varchar's size is estimated with unscaled value
+  /// digits, dot, leading zero, and possible minus sign.
   static int32_t maxStringViewSize(int precision, int scale) {
     int32_t rowSize = precision + 1; // Number and symbol.
     if (scale > 0) {
