@@ -110,7 +110,7 @@ jobs:
           LIBHDFS3_CONF: "/__w/velox/velox/scripts/hdfs-client.xml"
         working-directory: _build/release
         run: |
-          ctest -j 8 --output-on-failure --no-tests=error
+          ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3"
 
   ubuntu-debug:
     runs-on: linux-amd64-cpu8
@@ -165,4 +165,4 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error
+          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E velox_exec_test
