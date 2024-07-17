@@ -443,14 +443,14 @@ bool isSupportedSignature(
     bool enableComplexType) {
   // Not supporting lambda functions, or functions using decimal and
   // timestamp with time zone types.
-  return !(
-      useTypeName(signature, "opaque") ||
-      useTypeName(signature, "long_decimal") ||
-      useTypeName(signature, "short_decimal") ||
-      useTypeName(signature, "decimal") ||
-      useTypeName(signature, "timestamp with time zone") ||
-      useTypeName(signature, "interval day to second") ||
-      (enableComplexType && useTypeName(signature, "unknown")));
+  return !signature.hasReturnType() ||
+      !(useTypeName(signature, "opaque") ||
+        useTypeName(signature, "long_decimal") ||
+        useTypeName(signature, "short_decimal") ||
+        useTypeName(signature, "decimal") ||
+        useTypeName(signature, "timestamp with time zone") ||
+        useTypeName(signature, "interval day to second") ||
+        (enableComplexType && useTypeName(signature, "unknown")));
 }
 
 /// Returns row numbers for non-null rows among all children in'data' or null

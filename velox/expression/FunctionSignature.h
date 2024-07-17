@@ -149,6 +149,10 @@ class FunctionSignature {
         constantArguments_.begin(), constantArguments_.end(), folly::identity);
   }
 
+  bool hasReturnType() const {
+    return returnType_.has_value();
+  }
+
   bool variableArity() const {
     return variableArity_;
   }
