@@ -249,7 +249,6 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
-  VELOX_REGISTER_VECTOR_FUNCTION(mask, prefix + "mask");
 
   exec::registerStatefulVectorFunction(
       prefix + "least",
@@ -478,6 +477,25 @@ void registerFunctions(const std::string& prefix) {
       int32_t>({prefix + "levenshtein"});
   registerFunction<LevenshteinDistanceFunction, int32_t, Varchar, Varchar>(
       {prefix + "levenshtein"});
+
+  registerFunction<MaskFunction, Varchar, Varchar>({prefix + "mask"});
+
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar>({prefix + "mask"});
+
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "mask"});
+
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "mask"});
+
+  registerFunction<
+      MaskFunction,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar>({prefix + "mask"});
 }
 
 } // namespace sparksql

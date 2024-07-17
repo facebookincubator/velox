@@ -26,7 +26,6 @@ add_library(
   LeastGreatest.cpp
   MakeTimestamp.cpp
   Map.cpp
-  Mask.cpp
   RegexFunctions.cpp
   Register.cpp
   RegisterArithmetic.cpp
