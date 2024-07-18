@@ -48,7 +48,7 @@ class ModeAggregate {
         EqualTo,
         AlignedStlAllocator<std::pair<const T, int64_t>, 16>>;
 
-    /// A map of T -> count.
+    // A map of T -> count.
     ValueMap values;
 
     explicit AccumulatorType(HashStringAllocator* allocator)
@@ -113,10 +113,10 @@ class StringModeAggregate {
         std::equal_to<StringView>,
         AlignedStlAllocator<std::pair<const StringView, int64_t>, 16>>;
 
-    /// A map of unique StringViews pointing to storage managed by 'strings'.
+    // A map of unique StringViews pointing to storage managed by 'strings'.
     ValueMap values;
 
-    /// Stores unique non-null non-inline strings.
+    // Stores unique non-null non-inline strings.
     Strings strings;
 
     explicit AccumulatorType(HashStringAllocator* allocator)
@@ -516,10 +516,7 @@ void registerModeAggregate(
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/) -> std::unique_ptr<Aggregate> {
         VELOX_CHECK_EQ(
-            argTypes.size(),
-            1,
-            "{} ({}): unexpected number of arguments",
-            name);
+            argTypes.size(), 1, "{}: unexpected number of arguments", name);
 
         auto inputType =
             isRawInput(step) ? argTypes[0] : argTypes[0]->childAt(0);

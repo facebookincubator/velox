@@ -15,7 +15,6 @@
  */
 
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/RowContainer.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
