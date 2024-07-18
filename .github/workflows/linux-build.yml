@@ -47,6 +47,7 @@ jobs:
       xsimd_SOURCE: BUNDLED
       Arrow_SOURCE: BUNDLED
       Thrift_SOURCE: BUNDLED
+      cudf_SOURCE:  BUNDLED
       CUDA_VERSION: "12.4"
     steps:
       - uses: actions/checkout@v4
@@ -92,6 +93,7 @@ jobs:
             "-DVELOX_ENABLE_ABFS=ON"
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
             "-DVELOX_ENABLE_GPU=ON"
+            "-DVELOX_ENABLE_CUDF=ON"
           )
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
 
