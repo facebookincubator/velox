@@ -62,8 +62,6 @@ General Aggregate Functions
 
     Returns an array consisting of all unique values from the input ``x`` elements. 
     Null values are excluded, and returns an empty array when all inputs are null.
-    Nested nulls are compared as values.
-    Map type input is not supported as it's not comparable type in Spark.
 
     Example::
 
