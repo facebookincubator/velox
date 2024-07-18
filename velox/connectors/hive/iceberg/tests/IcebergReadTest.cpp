@@ -538,6 +538,8 @@ TEST_F(HiveIcebergTest, singleBaseFileMultiplePositionalDeleteFiles) {
   // Delete the first and last row in each batch (10000 rows per batch).
   assertSingleBaseFileMultipleDeleteFiles({{0}, {9999}, {10000}, {19999}});
 
+  assertSingleBaseFileMultipleDeleteFiles({{500, 21000}});
+
   assertSingleBaseFileMultipleDeleteFiles(
       {makeRandomIncreasingValues(0, 10000),
        makeRandomIncreasingValues(10000, 20000),
