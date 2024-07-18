@@ -88,6 +88,9 @@ class MapVectorHasher;
 template <typename HashClass>
 class RowVectorHasher;
 
+template <typename HashClass>
+class UnknowTypeVectorHasher;
+
 // Class to compute hashes identical to one produced by Spark.
 // Hashes are computed using the algorithm implemented in HashClass.
 template <typename HashClass>
@@ -101,7 +104,7 @@ class SparkVectorHasher {
   virtual ~SparkVectorHasher() = default;
 
   // Compute the hash value of input vector at index.
-  ReturnType hashAt(vector_size_t index, SeedType seed) {
+  virtual ReturnType hashAt(vector_size_t index, SeedType seed) {
     if (decoded_.isNullAt(index)) {
       return seed;
     }
@@ -131,6 +134,8 @@ std::shared_ptr<SparkVectorHasher<HashClass>> createVectorHasher(
       return std::make_shared<MapVectorHasher<HashClass>>(decoded);
     case TypeKind::ROW:
       return std::make_shared<RowVectorHasher<HashClass>>(decoded);
+    case TypeKind::UNKNOWN:
+      return std::make_shared<UnknowTypeVectorHasher<HashClass>>(decoded);
     default:
       return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
           createPrimitiveVectorHasher,
@@ -154,6 +159,24 @@ class PrimitiveVectorHasher : public SparkVectorHasher<HashClass> {
         this->decoded_.template valueAt<typename TypeTraits<kind>::NativeType>(
             index),
         seed);
+  }
+};
+
+template <typename HashClass>
+class UnknowTypeVectorHasher : public SparkVectorHasher<HashClass> {
+ public:
+  using SeedType = typename HashClass::SeedType;
+  using ReturnType = typename HashClass::ReturnType;
+
+  UnknowTypeVectorHasher(DecodedVector& decoded)
+      : SparkVectorHasher<HashClass>(decoded) {}
+
+  ReturnType hashAt(vector_size_t index, SeedType seed) override {
+    return seed;
+  }
+
+  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
+    VELOX_FAIL("hashNotNullAt should not be called for an unknown type");
   }
 };
 
@@ -654,6 +677,7 @@ bool checkHashElementType(const TypePtr& type) {
     case TypeKind::DOUBLE:
     case TypeKind::HUGEINT:
     case TypeKind::TIMESTAMP:
+    case TypeKind::UNKNOWN:
       return true;
     case TypeKind::ARRAY:
       return checkHashElementType(type->asArray().elementType());

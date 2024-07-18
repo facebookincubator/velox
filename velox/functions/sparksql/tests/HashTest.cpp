@@ -252,6 +252,33 @@ TEST_F(HashTest, row) {
   assertEqualVectors(makeFlatVector<int32_t>({42, 42}), hash(row));
 }
 
+TEST_F(HashTest, unknown) {
+  assertEqualVectors(
+      makeFlatVector<int32_t>({42, 42, 42}),
+      hash(makeAllNullFlatVector<UnknownValue>(3)));
+
+  assertEqualVectors(
+      makeFlatVector<int32_t>({42, 42}),
+      hash(makeNullableArrayVector<UnknownValue>({
+          {std::nullopt, std::nullopt},
+          {std::nullopt, std::nullopt, std::nullopt},
+      })));
+
+  auto mapVector = makeNullableMapVector<UnknownValue, UnknownValue>({
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  assertEqualVectors(makeFlatVector<int32_t>({42, 42, 42}), hash(mapVector));
+
+  auto row = makeRowVector({
+      makeFlatVector<int64_t>({1, 3, 4}),
+      makeAllNullFlatVector<UnknownValue>(3),
+  });
+  assertEqualVectors(
+      makeFlatVector<int32_t>({-1712319331, 519220707, 1344313940}), hash(row));
+}
+
 TEST_F(HashTest, simd) {
   runSIMDHashAndAssert<int8_t>(1, -559580957, 1024, 10);
   runSIMDHashAndAssert<int16_t>(-1, -1604776387, 4096);
