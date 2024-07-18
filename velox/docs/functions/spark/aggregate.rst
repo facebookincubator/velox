@@ -154,6 +154,7 @@ General Aggregate Functions
     there are 0 rows, returns NULL.
 
     Example::
+    
         SELECT mode(x)
         FROM (
             VALUES

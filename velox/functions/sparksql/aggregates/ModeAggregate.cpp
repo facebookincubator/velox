@@ -48,6 +48,7 @@ class ModeAggregate {
         EqualTo,
         AlignedStlAllocator<std::pair<const T, int64_t>, 16>>;
 
+    /// A map of T -> count.
     ValueMap values;
 
     explicit AccumulatorType(HashStringAllocator* allocator)
@@ -62,9 +63,9 @@ class ModeAggregate {
     void combine(
         HashStringAllocator* /*allocator*/,
         arg_type<IntermediateType> other) {
-      for (const auto& [key, value] : other) {
-        if (value.has_value()) {
-          values[key] += value.value();
+      for (const auto& [key, count] : other) {
+        if (count.has_value()) {
+          values[key] += count.value();
         }
       }
     }
@@ -112,7 +113,10 @@ class StringModeAggregate {
         std::equal_to<StringView>,
         AlignedStlAllocator<std::pair<const StringView, int64_t>, 16>>;
 
+    /// A map of unique StringViews pointing to storage managed by 'strings'.
     ValueMap values;
+
+    /// Stores unique non-null non-inline strings.
     Strings strings;
 
     explicit AccumulatorType(HashStringAllocator* allocator)
@@ -127,9 +131,9 @@ class StringModeAggregate {
     void combine(
         HashStringAllocator* allocator,
         arg_type<IntermediateType> other) {
-      for (const auto& [key, value] : other) {
-        if (value.has_value()) {
-          values[store(key, allocator)] += value.value();
+      for (const auto& [key, count] : other) {
+        if (count.has_value()) {
+          values[store(key, allocator)] += count.value();
         }
       }
     }
@@ -161,6 +165,7 @@ class StringModeAggregate {
       values.~TValues();
     }
 
+   private:
     StringView store(StringView value, HashStringAllocator* allocator) {
       if (!value.isInline()) {
         auto it = values.find(value);
