@@ -84,7 +84,7 @@ dependencies for a given platform.
 
 ### Setting up dependencies
 
-The following setup scripts use the DEPENDENCY_DIR environment variable to set the
+The following setup scripts use the `DEPENDENCY_DIR` environment variable to set the
 location of the build packages. If you do not set this variable, it will default to
 the current working directory.
 
