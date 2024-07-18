@@ -156,6 +156,7 @@ key differences are listed below.
 * Spark operates on timestamps with "microsecond" precision while Presto with 
   "millisecond" precision.
   Example::
+
       SELECT min(ts)
       FROM (
           VALUES
