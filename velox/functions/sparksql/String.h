@@ -1564,7 +1564,11 @@ struct MaskFunction {
       int charByteSize;
       curCodePoint = utf8proc_codepoint(
           &inputBuffer[inputIdx], inputBuffer + inputSize, charByteSize);
-      charByteSize = curCodePoint == -1 ? 1 : charByteSize;
+      if (curCodePoint == -1) {
+        // That means it is a invalid UTF-8 character for example '\xED',
+        // treat it as char with size is 1.
+        charByteSize = 1;
+      }
       auto maskedChar = &inputBuffer[inputIdx];
       auto maskedCharByteSize = charByteSize;
       // Treat invalid UTF-8 character as other char.

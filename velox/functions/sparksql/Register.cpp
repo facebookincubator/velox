@@ -479,15 +479,11 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "levenshtein"});
 
   registerFunction<MaskFunction, Varchar, Varchar>({prefix + "mask"});
-
   registerFunction<MaskFunction, Varchar, Varchar, Varchar>({prefix + "mask"});
-
   registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar>(
       {prefix + "mask"});
-
   registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar, Varchar>(
       {prefix + "mask"});
-
   registerFunction<
       MaskFunction,
       Varchar,
