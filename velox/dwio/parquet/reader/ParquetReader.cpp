@@ -125,9 +125,8 @@ class ReaderBase {
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
-  const TypePtr& getRequestedType(
-      const TypePtr& requestedType,
-      std::string& name) const;
+  TypePtr getRequestedType(const TypePtr& requestedType, std::string& name)
+      const;
 };
 
 ReaderBase::ReaderBase(
@@ -482,8 +481,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       }
     }
   } else { // leaf node
-    const auto veloxType =
-        convertType(schemaElement, getRequestedType(requestedType, name));
+    const auto veloxType = convertType(schemaElement, requestedType);
     int32_t precision =
         schemaElement.__isset.precision ? schemaElement.precision : 0;
     int32_t scale = schemaElement.__isset.scale ? schemaElement.scale : 0;
@@ -538,7 +536,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   return nullptr;
 }
 
-const TypePtr& ReaderBase::getRequestedType(
+TypePtr ReaderBase::getRequestedType(
     const TypePtr& requestedType,
     std::string& name) const {
   if (!requestedType || !requestedType->isRow()) {
@@ -546,11 +544,11 @@ const TypePtr& ReaderBase::getRequestedType(
   }
 
   const auto& rowType = requestedType->asRow();
-  if (!rowType.containsChild(name)) {
-    return requestedType;
+  if (rowType.containsChild(name)) {
+    return rowType.findChild(name);
   }
 
-  return rowType.findChild(name);
+  return nullptr;
 }
 
 TypePtr ReaderBase::convertType(
