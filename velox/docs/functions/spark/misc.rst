@@ -2,6 +2,11 @@
 Miscellaneous Functions
 ====================================
 
+.. spark:function:: at_least_n_non_nulls(n, value1, value2, ..., valueN) -> bool
+
+    Returns true if there are at least ``n`` non-null and non-NaN values, 
+    or false otherwise.
+
 .. spark:function:: monotonically_increasing_id() -> bigint
 
     Returns monotonically increasing 64-bit integers. The generated ID is
