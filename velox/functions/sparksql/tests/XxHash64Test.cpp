@@ -269,6 +269,36 @@ TEST_F(XxHash64Test, row) {
   assertEqualVectors(makeFlatVector<int64_t>({42, 42}), xxhash64(row));
 }
 
+TEST_F(XxHash64Test, unknown) {
+  assertEqualVectors(
+      makeFlatVector<int64_t>({42, 42, 42}),
+      xxhash64(makeAllNullFlatVector<UnknownValue>(3)));
+
+  assertEqualVectors(
+      makeFlatVector<int64_t>({42, 42}),
+      xxhash64(makeNullableArrayVector<UnknownValue>({
+          {std::nullopt, std::nullopt},
+          {std::nullopt, std::nullopt, std::nullopt},
+      })));
+
+  auto mapVector = makeNullableMapVector<UnknownValue, UnknownValue>({
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  assertEqualVectors(
+      makeFlatVector<int64_t>({42, 42, 42}), xxhash64(mapVector));
+
+  auto row = makeRowVector({
+      makeFlatVector<int64_t>({1, 3, 4}),
+      makeAllNullFlatVector<UnknownValue>(3),
+  });
+  assertEqualVectors(
+      makeFlatVector<int64_t>(
+          {-7001672635703045582, 3188756510806108107, 404280023041566627}),
+      xxhash64(row));
+}
+
 TEST_F(XxHash64Test, hashSeed) {
   auto xxhash64WithSeed = [&](int64_t seed, const std::optional<int64_t>& arg) {
     return evaluateOnce<int64_t>(
