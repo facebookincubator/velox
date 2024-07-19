@@ -199,10 +199,21 @@ Array Functions
 .. spark:function:: slice(array(E), start, length) -> array(E)
 
     Returns a subarray starting at 1-based index ``start`` or from end if negative,
-    with ``length`` elements. Throws exception if ``start`` is 0. ::
+    with ``length`` elements.
 
-        SELECT slice(array(1, 2, 3, 4), 2, 2); -- [2,3]
-        SELECT slice(array(1, 2, 3, 4), -2, 2); -- [3,4]
+        Return empty array if ``start`` point outside of the array;
+        Return elements between ``start`` and the end of the array if ``start + length`` is outside of the array;
+        Return empty array if ``length`` is 0;
+        Throws exception if ``start`` is 0;
+        Throws expcetion if ``length`` is negative. ::
+
+        SELECT slice(array(1, 2, 3, 4), 2, 2); -- [2, 3]
+        SELECT slice(array(1, 2, 3, 4), -2, 2); -- [3, 4]
+        SELECT slice(array(1, 2, 3, 4), 5, 1); -- []
+        SELECT slice(array(1, 2, 3, 4), 2, 5); -- [2, 3, 4]
+        SELECT slice(array(1, 2, 3, 4), 2, 0); -- []
+        SELECT slice(array(1, 2, 3, 4), 1, -1); -- Throws exception
+        SELECT slice(array(1, 2, 3, 4), 0, 1); -- Throws exception
 
 .. spark:function:: sort_array(array(E)) -> array(E)
 

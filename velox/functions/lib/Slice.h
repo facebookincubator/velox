@@ -16,12 +16,12 @@
 
 #pragma once
 
-#include "velox/type/Type.h"
+#include <string>
 
 namespace facebook::velox::functions {
 
-// BIGINT type for start and length (presto's behavior).
-void registerBigIntSliceFunction(const std::string& prefix);
+// BIGINT type for start and length (Presto's behavior).
+void registerBigintSliceFunction(const std::string& prefix);
 
 // INTEGER type for start and length (Spark's behavior).
 void registerIntegerSliceFunction(const std::string& prefix);

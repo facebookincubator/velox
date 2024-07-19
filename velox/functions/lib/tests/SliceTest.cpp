@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -36,125 +35,128 @@ class SliceTest : public FunctionBaseTest {
     assertEqualVectors(expectedArrayVector, result);
     EXPECT_NO_THROW(expectedArrayVector->checkRanges());
   }
+
+  void commonTestCases() {
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4, 5}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      testSlice("slice(C0, 1, 4)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{1, 2}});
+      testSlice("slice(C0, 1, 4)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4, 5}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{3, 4}});
+      testSlice("slice(C0, 3, 2)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{3, 4}});
+      testSlice("slice(C0, 3, 3)", {arrayVector}, expectedArrayVector);
+    }
+    // Negative start index.
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{2, 3, 4}});
+      testSlice("slice(C0, -3, 3)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{2, 3, 4}});
+      testSlice("slice(C0, -3, 5)", {arrayVector}, expectedArrayVector);
+    }
+    // Negative length.
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
+      VELOX_ASSERT_THROW(
+          testSlice(
+              "slice(C0, 1, -1)",
+              {arrayVector, arrayVector, expectedArrayVector},
+              expectedArrayVector),
+          "The value of length argument of slice() function should not be negative");
+    }
+    // 0 start index.
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
+      VELOX_ASSERT_THROW(
+          testSlice(
+              "slice(C0, 0, 1)",
+              {arrayVector, arrayVector, expectedArrayVector},
+              expectedArrayVector),
+          "SQL array indices start at 1");
+    }
+    // 0 length.
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
+      testSlice("slice(C0, 1, 0)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
+      testSlice("slice(C0, -2, 0)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
+      testSlice("slice(C0, -2, 0)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
+      testSlice("slice(C0, -5, 5)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
+      testSlice("slice(C0, -6, 5)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
+      testSlice("slice(C0, -6, 5)", {arrayVector}, expectedArrayVector);
+    }
+    {
+      // The implementation is zero-copy, so floating point number comparison
+      // won't have issue here since numerical representation remains the same.
+      auto arrayVector = makeArrayVector<double>({{2.3, 2.3, 2.2}});
+      auto expectedArrayVector = makeArrayVector<double>({{2.3, 2.2}});
+      testSlice("slice(C0, 2, 3)", {arrayVector}, expectedArrayVector);
+    }
+    // String array.
+    {
+      auto arrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
+      auto expectedArrayVector = makeArrayVector<StringView>({{"b", "c"}});
+      testSlice("slice(C0, 2, 2)", {arrayVector}, expectedArrayVector);
+    }
+    // Out of bound start index.
+    {
+      auto arrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
+      auto expectedArrayVector = makeArrayVector<StringView>({{}});
+      testSlice("slice(C0, 5, 2)", {arrayVector}, expectedArrayVector);
+    }
+    // Out of bound length.
+    {
+      auto arrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
+      auto expectedArrayVector = makeArrayVector<StringView>({{"b", "c", "d"}});
+      testSlice("slice(C0, 2, 5)", {arrayVector}, expectedArrayVector);
+    }
+  }
 };
 
 TEST_F(SliceTest, prestoTestCases) {
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4, 5}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    testSlice("slice(C0, 1, 4)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{1, 2}});
-    testSlice("slice(C0, 1, 4)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4, 5}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{3, 4}});
-    testSlice("slice(C0, 3, 2)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{3, 4}});
-    testSlice("slice(C0, 3, 3)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{2, 3, 4}});
-    testSlice("slice(C0, -3, 3)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{2, 3, 4}});
-    testSlice("slice(C0, -3, 5)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    testSlice("slice(C0, 1, 0)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    testSlice("slice(C0, -2, 0)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    testSlice("slice(C0, -2, 0)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    testSlice("slice(C0, -5, 5)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    testSlice("slice(C0, -6, 5)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    testSlice("slice(C0, -6, 5)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    // The implementation is zero-copy, so floating point number comparison
-    // won't have issue here since numerical representation remains the same.
-    auto arrayVector = makeArrayVector<double>({{2.3, 2.3, 2.2}});
-    auto expectedArrayVector = makeArrayVector<double>({{2.3, 2.2}});
-    testSlice("slice(C0, 2, 3)", {arrayVector}, expectedArrayVector);
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    VELOX_ASSERT_THROW(
-        testSlice(
-            "slice(C0, 1, -1)",
-            {arrayVector, arrayVector, expectedArrayVector},
-            expectedArrayVector),
-        "The value of length argument of slice() function should not be negative");
-  }
-  {
-    auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-    auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    VELOX_ASSERT_THROW(
-        testSlice(
-            "slice(C0, 0, 1)",
-            {arrayVector, arrayVector, expectedArrayVector},
-            expectedArrayVector),
-        "SQL array indices start at 1");
-  }
+  commonTestCases();
 }
 
 TEST_F(SliceTest, integerStartAndLength) {
-  auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4, 5, 6}});
-  auto expectedArrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
   // Parses integer literals as INTEGER, not BIGINT.
   options_.parseIntegerAsBigint = false;
-  testSlice("slice(C0, 1, 4)", {arrayVector}, expectedArrayVector);
-
-  // Negative start index.
-  expectedArrayVector = makeArrayVector<int64_t>({{4, 5}});
-  testSlice("slice(C0, -3, 2)", {arrayVector}, expectedArrayVector);
-
-  // 0 start index.
-  VELOX_ASSERT_THROW(
-      testSlice("slice(C0, 0, 2)", {arrayVector}, expectedArrayVector),
-      "SQL array indices start at 1");
-
-  // String array.
-  auto stringArrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
-  auto expectedStringArrayVector = makeArrayVector<StringView>({{"b", "c"}});
-  testSlice("slice(C0, 2, 2)", {stringArrayVector}, expectedStringArrayVector);
-
-  // Out of bound start index.
-  expectedStringArrayVector = makeArrayVector<StringView>({{}});
-  testSlice("slice(C0, 5, 2)", {stringArrayVector}, expectedStringArrayVector);
-  // Out of bound length.
-  expectedStringArrayVector = makeArrayVector<StringView>({{"b", "c", "d"}});
-  testSlice("slice(C0, 2, 5)", {stringArrayVector}, expectedStringArrayVector);
+  commonTestCases();
   options_.parseIntegerAsBigint = true;
 }
 

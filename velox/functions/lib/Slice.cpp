@@ -229,7 +229,7 @@ void registerSliceFunction(const std::string& prefix, TypeKind kind) {
       prefix + "slice", signatures, std::make_unique<SliceFunction>(kind));
 }
 
-void registerBigIntSliceFunction(const std::string& prefix) {
+void registerBigintSliceFunction(const std::string& prefix) {
   registerSliceFunction(prefix, TypeKind::BIGINT);
 }
 

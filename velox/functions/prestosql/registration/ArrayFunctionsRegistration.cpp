@@ -140,7 +140,7 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "contains");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_arrays_overlap, prefix + "arrays_overlap");
-  registerBigIntSliceFunction(prefix);
+  registerBigintSliceFunction(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, prefix + "zip_with");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
