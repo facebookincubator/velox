@@ -16,7 +16,6 @@
 #pragma once
 
 #include "velox/expression/VectorFunction.h"
-#include "velox/vector/DictionaryVector.h"
 
 namespace facebook::velox::functions {
 
@@ -132,10 +131,8 @@ void applyAutoSimdComparisonInternal(
   }
 }
 
-template <typename T>
-bool isDictEncoding(const VectorPtr& arg) {
-  return arg->encoding() == VectorEncoding::Simple::DICTIONARY &&
-      arg->asUnchecked<DictionaryVector<T>>()->valueVector()->isFlatEncoding();
+inline bool isDictEncoding(const VectorPtr& arg) {
+  return arg->encoding() == VectorEncoding::Simple::DICTIONARY;
 }
 } // namespace detail
 
@@ -307,7 +304,7 @@ void applyAutoSimdComparison(
           }
         },
         result);
-  } else if (args[0]->isFlatEncoding() && detail::isDictEncoding<B>(args[1])) {
+  } else if (args[0]->isFlatEncoding() && detail::isDictEncoding(args[1])) {
     const A* __restrict rawA =
         args[0]->asUnchecked<FlatVector<A>>()->rawValues();
     exec::LocalDecodedVector localBDecoded(context, *args[1], rows);
@@ -325,7 +322,7 @@ void applyAutoSimdComparison(
           }
         },
         result);
-  } else if (detail::isDictEncoding<A>(args[0]) && args[1]->isFlatEncoding()) {
+  } else if (detail::isDictEncoding(args[0]) && args[1]->isFlatEncoding()) {
     exec::LocalDecodedVector localADecoded(context, *args[0], rows);
     const A* __restrict rawA = localADecoded.get()->data<A>();
     const vector_size_t* __restrict indexA = localADecoded.get()->indices();
@@ -356,11 +353,9 @@ bool shouldApplyAutoSimdComparison(
     if ((args[0]->isFlatEncoding() || args[0]->isConstantEncoding()) &&
         (args[1]->isFlatEncoding() || args[1]->isConstantEncoding())) {
       return true;
-    } else if (
-        args[0]->isFlatEncoding() && detail::isDictEncoding<B>(args[1])) {
+    } else if (args[0]->isFlatEncoding() && detail::isDictEncoding(args[1])) {
       return true;
-    } else if (
-        detail::isDictEncoding<A>(args[0]) && args[1]->isFlatEncoding()) {
+    } else if (detail::isDictEncoding(args[0]) && args[1]->isFlatEncoding()) {
       return true;
     }
   }

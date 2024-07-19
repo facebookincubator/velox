@@ -83,6 +83,7 @@ class ComparisonsTest : public SparkFunctionBaseTest {
     auto constant = constVector->template as<ConstantVector<T>>()->value();
     auto lDictVector = fuzzer.fuzzDictionary(lVector);
     auto rDictVector = fuzzer.fuzzDictionary(rVector);
+    auto lDictDictVector = fuzzer.fuzzDictionary(lDictVector);
     SelectivityVector rows(size);
     rows.setValidRange(0, unSelectedRows, false);
 
@@ -136,6 +137,17 @@ class ComparisonsTest : public SparkFunctionBaseTest {
     DecodedVector rDecodedVector(*rDictVector);
     for (auto i = unSelectedRows; i < size; i++) {
       expectedResult[i] = left[i] > rDecodedVector.valueAt<T>(i);
+    }
+    velox::test::assertEqualVectors(
+        makeFlatVector<bool>(expectedResult), result, rows);
+
+    // Dict(Dict(Flat)), Flat
+    childrenVectors = {lDictDictVector, rVector};
+    rowVector = fuzzer.fuzzRow(std::move(childrenVectors), {"c0", "c1"}, size);
+    result = evaluate<SimpleVector<bool>>("lessthanorequal(c0, c1)", rowVector);
+    DecodedVector decodedVector(*lDictDictVector);
+    for (auto i = unSelectedRows; i < size; i++) {
+      expectedResult[i] = decodedVector.valueAt<T>(i) <= right[i];
     }
     velox::test::assertEqualVectors(
         makeFlatVector<bool>(expectedResult), result, rows);
