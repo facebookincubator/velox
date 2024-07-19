@@ -148,7 +148,7 @@ The definition of timezone IDs can be found in ``TimeZoneDatabase.cpp``.
 
 Spark Types
 ~~~~~~~~~~~~
-The data types in Spark have some semantic differences compared to those in 
+The `data types <https://spark.apache.org/docs/latest/sql-ref-datatypes.html>`_ in Spark have some semantic differences compared to those in 
 Presto. These differences require us to implement the same functions 
 separately for each system in Velox, such as min, max and collect_set. The 
 key differences are listed below.
@@ -163,7 +163,7 @@ key differences are listed below.
               (cast('2014-03-08 09:00:00.123456789' as timestamp)),
               (cast('2014-03-08 09:00:00.012345678' as timestamp))
       ) AS t(ts);
-      -- 2014-03-08 09:00:00.123456
+      -- 2014-03-08 09:00:00.012345
 
 * In function comparisons, nested null values are handled as values.
   Example::
@@ -178,5 +178,7 @@ key differences are listed below.
       ) AS t(a);
       -- ARRAY[1, null]
 
-* Map type is not comparable in Spark. Map type is comparable in Presto if both 
-  key and value are comparable.
+* MAP type is not comparable and not orderable in Spark. In Presto, MAP type is
+  also not orderable, but it is comparable if both key and value types are
+  comparable. The implication is that MAP type cannot be used as a join, group
+  by or order by key in Spark.
