@@ -207,7 +207,13 @@ peer row with a NULL and the frame_end index is the last peer row with a NULL va
 </section>
 <section id="empty-frames">
 <h2>Empty frames<a class="headerlink" href="#empty-frames" title="Link to this heading">¶</a></h2>
-<p>Its possible that certain rows have empty frames. Empty frames occur when :</p>
+<p>Window frames can be valid, partial or empty during window function processing.</p>
+<p>Valid frames are the default case when all the rows in the window frame in order
+from frame_start to frame_end are within the partition boundaries. However, it is
+possible that window frames of certain rows are only partially filled or are empty.
+While partial frames don’t need any special treatment from the function author,
+empty frames need some consideration.</p>
+<p>Empty frames occur when :</p>
 <ul>
 <li><p>Both frame_start and frame_end fall before the first partition row.</p>
 <p>E.g. in frame <em>ROWS BETWEEN 5 PRECEDING and 2 PRECEDING</em> the first 2 rows
@@ -254,7 +260,7 @@ partition, but 2 preceding frame_end is within the partition. So for these
 <p>Similarly for frame <em>ROWS BETWEEN 2 FOLLOWING AND 5 FOLLOWING</em>, the last 3-5th rows
 have frame_start within the partition, but frame_end beyond. So they are partial
 frames. The last 2 rows have both bounds outside the partition and are empty frames..</p>
-<p>Empty and partial window frames can be visualized as below</p>
+<p>Empty, partial and valid window frames can be visualized as below</p>
 <a class="reference internal image-reference" href="../_images/empty_frames.png"><img alt="../_images/empty_frames.png" class="align-center" src="../_images/empty_frames.png" style="width: 600px;" /></a>
 <p>Frames with constant frame bounds (like 2 preceding) have strict sliding behavior.
 So the empty frames, partial frames and valid frames cluster together and follow
@@ -288,7 +294,7 @@ the WindowFunction::apply() signature</p>
 </pre></div>
 </div>
 <p>The Window operator also clamps <em>partial</em> window frame indices to
-the first or final partition row before passing them to the funtion.
+the first or final partition row before passing them to the function.
 So the Window function doesn’t need any special logic for partial frames.</p>
 </section>
 </section>

@@ -208,8 +208,15 @@ Rows with NULL values do not participate in the frames of the other rows.
 
 Empty frames
 ------------
+Window frames can be valid, partial or empty during window function processing.
 
-Its possible that certain rows have empty frames. Empty frames occur when :
+Valid frames are the default case when all the rows in the window frame in order
+from frame_start to frame_end are within the partition boundaries. However, it is
+possible that window frames of certain rows are only partially filled or are empty.
+While partial frames don't need any special treatment from the function author,
+empty frames need some consideration.
+
+Empty frames occur when :
 
 * Both frame_start and frame_end fall before the first partition row.
 
@@ -263,7 +270,7 @@ Similarly for frame *ROWS BETWEEN 2 FOLLOWING AND 5 FOLLOWING*, the last 3-5th r
 have frame_start within the partition, but frame_end beyond. So they are partial
 frames. The last 2 rows have both bounds outside the partition and are empty frames..
 
-Empty and partial window frames can be visualized as below
+Empty, partial and valid window frames can be visualized as below
 
 .. image:: images/empty_frames.png
     :width: 600
@@ -309,5 +316,5 @@ the WindowFunction::apply() signature
        const VectorPtr& result) = 0;
 
 The Window operator also clamps *partial* window frame indices to
-the first or final partition row before passing them to the funtion.
+the first or final partition row before passing them to the function.
 So the Window function doesn't need any special logic for partial frames.
