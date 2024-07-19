@@ -1572,8 +1572,7 @@ struct MaskFunction {
       auto maskedChar = &inputBuffer[inputIdx];
       auto maskedCharByteSize = charByteSize;
       // Treat invalid UTF-8 character as other char.
-      utf8proc_propval_t category =
-          curCodePoint == -1 ? 5 : utf8proc_category(curCodePoint);
+      utf8proc_propval_t category = utf8proc_category(curCodePoint);
       if (isUpperChar(category) && upperChar.has_value()) {
         maskedChar = upperChar.value().data();
         maskedCharByteSize = upperChar.value().size();
