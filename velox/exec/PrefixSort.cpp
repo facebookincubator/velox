@@ -133,27 +133,12 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
     if (normalizedKeySize > maxNormalizedKeySize) {
       break;
     }
-    std::optional<uint32_t> encodedSize = std::nullopt;
-    if (types[i]->isLongDecimal()) {
-      const auto [precision, scale] = getDecimalPrecisionScale(*types[i]);
-      encodedSize = PrefixSortHugeIntEncoder::encodedSize(precision, scale);
-    } else {
-      encodedSize = PrefixSortEncoder::encodedSize(types[i]->kind());
-    }
+    auto encodedSize = PrefixSortEncoderFactory::encodedSize(*types[i]);
     if (encodedSize.has_value()) {
       prefixOffsets.push_back(normalizedKeySize);
-      if (types[i]->isLongDecimal()) {
-        const auto [precision, scale] = getDecimalPrecisionScale(*types[i]);
-        auto encoder = std::make_shared<PrefixSortHugeIntEncoder>(
-            compareFlags[i].ascending,
-            compareFlags[i].nullsFirst,
-            precision,
-            scale);
-        encoders.emplace_back(std::move(encoder));
-      } else {
-        encoders.push_back(std::make_shared<PrefixSortEncoder>(
-            compareFlags[i].ascending, compareFlags[i].nullsFirst));
-      }
+      auto encoder = PrefixSortEncoderFactory::create(
+          *types[i], compareFlags[i].ascending, compareFlags[i].nullsFirst);
+      encoders.emplace_back(std::move(encoder));
       normalizedKeySize += encodedSize.value();
       numNormalizedKeys++;
     } else {

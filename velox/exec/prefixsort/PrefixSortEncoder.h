@@ -32,7 +32,7 @@ namespace facebook::velox::exec::prefixsort {
 class PrefixSortEncoder {
  public:
   PrefixSortEncoder(bool ascending, bool nullsFirst)
-      : ascending_(ascending), nullsFirst_(nullsFirst){};
+      : nullsFirst_(nullsFirst), ascending_(ascending){};
 
   virtual ~PrefixSortEncoder() = default;
 
@@ -237,6 +237,61 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
   encodeNoNulls(value.getNanos(), dest + 8);
 }
 
+class PrefixSortLongDecimalToIntEncoder : public PrefixSortEncoder {
+ public:
+  PrefixSortLongDecimalToIntEncoder(
+      bool ascending,
+      bool nullsFirst,
+      int precision,
+      int scale)
+      : PrefixSortEncoder(ascending, nullsFirst),
+        precision_(precision),
+        scale_(scale),
+        newScale_(newPrecision_ - (precision_ - scale_)) {
+    VELOX_DCHECK(precision - scale <= ShortDecimalType::kMaxPrecision);
+  };
+
+  FOLLY_ALWAYS_INLINE void encode(std::optional<int128_t> value, char* dest)
+      const override {
+    if (value.has_value()) {
+      dest[0] = nullsFirst_ ? 1 : 0;
+      int64_t newValue;
+      auto status = DecimalUtil::rescaleWithRoundUp<int128_t, int64_t>(
+          value.value(),
+          precision_,
+          scale_,
+          newPrecision_,
+          newScale_,
+          newValue);
+      if (FOLLY_UNLIKELY(!status.ok())) {
+        if (value < 0) {
+          newValue = std::numeric_limits<int64_t>::min();
+        } else {
+          newValue = std::numeric_limits<int64_t>::max();
+        }
+      }
+      encodeNoNulls(newValue, dest + 1);
+    } else {
+      dest[0] = nullsFirst_ ? 0 : 1;
+      simd::memset(dest + 1, 0, encodedSize() - 1);
+    }
+  }
+
+  static int32_t encodedSize() {
+    return 9;
+  }
+
+  static bool canCastToInt(int precision, int scale) {
+    return precision - scale <= ShortDecimalType::kMaxPrecision;
+  }
+
+ private:
+  const int precision_;
+  const int scale_;
+  const int newPrecision_ = ShortDecimalType::kMaxPrecision;
+  const int newScale_;
+};
+
 class PrefixSortHugeIntEncoder : public PrefixSortEncoder {
  public:
   PrefixSortHugeIntEncoder(
@@ -252,44 +307,55 @@ class PrefixSortHugeIntEncoder : public PrefixSortEncoder {
       const override {
     if (value.has_value()) {
       dest[0] = nullsFirst_ ? 1 : 0;
-      encodeHugeInt(value.value(), dest + 1);
+      auto val = value.value();
+      encodeNoNulls<int64_t>(HugeInt::upper(val), dest + 1);
+      encodeNoNulls<uint64_t>(HugeInt::lower(val), dest + 1 + sizeof(int64_t));
     } else {
       dest[0] = nullsFirst_ ? 0 : 1;
-      simd::memset(dest + 1, 0, encodedSize(precision_, scale_) - 1);
+      simd::memset(dest + 1, 0, encodedSize() - 1);
     }
   }
 
-  static int32_t encodedSize(uint8_t precision, uint8_t scale) {
-    if (precision - scale <= ShortDecimalType::kMaxPrecision) {
-      return 9;
-    } else {
-      return 17;
-    }
+  static int32_t encodedSize() {
+    return 17;
   }
 
  private:
-  void encodeHugeInt(int128_t value, char* dst) const {
-    if (precision_ - scale_ <= ShortDecimalType::kMaxPrecision) {
-      auto newPrecision = ShortDecimalType::kMaxPrecision;
-      auto newScale = newPrecision - (precision_ - scale_);
-      int64_t newValue;
-      auto status = DecimalUtil::rescaleWithRoundUp<int128_t, int64_t>(
-          value, precision_, scale_, newPrecision, newScale, newValue);
-      if (FOLLY_LIKELY(status.ok())) {
-      } else if (value < 0) {
-        newValue = std::numeric_limits<int64_t>::min();
-      } else {
-        newValue = std::numeric_limits<int64_t>::max();
-      }
-      encodeNoNulls(newValue, dst);
-    } else {
-      encodeNoNulls<int64_t>(HugeInt::upper(value), dst);
-      encodeNoNulls<uint64_t>(HugeInt::lower(value), dst + sizeof(int64_t));
-    }
-  }
-
   const int precision_;
   const int scale_;
+};
+
+class PrefixSortEncoderFactory {
+ public:
+  static std::optional<uint32_t> encodedSize(const Type& type) {
+    if (type.isLongDecimal()) {
+      const auto [precision, scale] = getDecimalPrecisionScale(type);
+      if (PrefixSortLongDecimalToIntEncoder::canCastToInt(precision, scale)) {
+        return PrefixSortLongDecimalToIntEncoder::encodedSize();
+      } else {
+        return PrefixSortHugeIntEncoder::encodedSize();
+      }
+    } else {
+      return PrefixSortEncoder::encodedSize(type.kind());
+    }
+    return std::nullopt;
+  }
+
+  static std::shared_ptr<PrefixSortEncoder>
+  create(const Type& type, bool ascending, bool nullsFirst) {
+    if (type.isLongDecimal()) {
+      const auto [precision, scale] = getDecimalPrecisionScale(type);
+      if (PrefixSortLongDecimalToIntEncoder::canCastToInt(precision, scale)) {
+        return std::make_shared<PrefixSortLongDecimalToIntEncoder>(
+            ascending, nullsFirst, precision, scale);
+      } else {
+        return std::make_shared<PrefixSortHugeIntEncoder>(
+            ascending, nullsFirst, precision, scale);
+      }
+    } else {
+      return std::make_shared<PrefixSortEncoder>(ascending, nullsFirst);
+    }
+  }
 };
 
 } // namespace facebook::velox::exec::prefixsort

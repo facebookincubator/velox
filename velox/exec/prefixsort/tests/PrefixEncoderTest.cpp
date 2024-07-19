@@ -282,7 +282,11 @@ class PrefixEncoderTest : public testing::Test,
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
   }
-  const PrefixSortHugeIntEncoder hugeIntEncoder1_ = {false, false, 20, 5};
+  const PrefixSortLongDecimalToIntEncoder hugeIntEncoder1_ = {
+      false,
+      false,
+      20,
+      5};
   const PrefixSortHugeIntEncoder hugeIntEncoder2_ = {false, false, 32, 2};
 
  private:
@@ -342,14 +346,16 @@ TEST_F(PrefixEncoderTest, encode) {
 }
 
 TEST_F(PrefixEncoderTest, encodeHugeInt) {
-  auto size = PrefixSortEncoder::encodedSize(DECIMAL(20, 5));
+  auto type1 = DECIMAL(20, 5);
+  auto size = PrefixSortEncoderFactory::encodedSize(*type1);
   ASSERT_EQ(size, 9);
   char expected[9] = {0, 127, -1, -1, -1, -1, -1, -1, -1};
   testEncodeHugeInt(hugeIntEncoder1_, 12, expected, size.value());
   char expected2[9] = {1, 0, 0, 0, 0, 0, 0, 0, 0};
   testEncodeHugeInt(hugeIntEncoder1_, std::nullopt, expected2, size.value());
 
-  auto size2 = PrefixSortEncoder::encodedSize(DECIMAL(32, 2));
+  auto type2 = DECIMAL(32, 2);
+  auto size2 = PrefixSortEncoderFactory::encodedSize(*type2);
   ASSERT_EQ(size2, 17);
   char expected3[17] = {
       0, 127, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -13};
@@ -361,7 +367,7 @@ TEST_F(PrefixEncoderTest, encodeHugeInt) {
 TEST_F(PrefixEncoderTest, compareHugeInt) {
   // DESC max < mid < min
   auto compare = [](char* left, char* right, int32_t size) {
-    return std::memcmp(left, right, size);
+    return std::memcmp(left + 1, right + 1, size - 1);
   };
 
   char maxEncoded[17];
@@ -369,11 +375,13 @@ TEST_F(PrefixEncoderTest, compareHugeInt) {
   char minEncoded[17];
   char midEncoded2[17];
   hugeIntEncoder1_.encode(
-      std::optional<int128_t>(DecimalUtil::kLongDecimalMax), maxEncoded);
+      std::optional<int128_t>(HugeInt::parse(std::string(20, '9'))),
+      maxEncoded);
   hugeIntEncoder1_.encode(std::optional<int128_t>(20000000), midEncoded);
   hugeIntEncoder1_.encode(std::optional<int128_t>(20200000), midEncoded2);
   hugeIntEncoder1_.encode(
-      std::optional<int128_t>(DecimalUtil::kLongDecimalMin), minEncoded);
+      std::optional<int128_t>(HugeInt::parse("-" + std::string(20, '9'))),
+      minEncoded);
   ASSERT_LT(compare(midEncoded, minEncoded, 9), 0);
   ASSERT_GT(compare(midEncoded, maxEncoded, 9), 0);
   ASSERT_GT(compare(midEncoded, midEncoded2, 9), 0);
