@@ -37,7 +37,13 @@ FOLLY_ALWAYS_INLINE void encodeRowColumn(
   if (RowContainer::isNullAt(row, rowColumn.nullByte(), rowColumn.nullMask())) {
     value = std::nullopt;
   } else {
-    value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
+    if constexpr (std::is_same_v<T, int128_t>) {
+      int128_t newVal;
+      memcpy(&newVal, row + rowColumn.offset(), sizeof(int128_t));
+      value = newVal;
+    } else {
+      value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
+    }
   }
   prefixSortLayout.encoders[index]->encode(
       value, prefix + prefixSortLayout.prefixOffsets[index]);

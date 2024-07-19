@@ -281,10 +281,6 @@ class PrefixSortLongDecimalToIntEncoder : public PrefixSortEncoder {
     return 9;
   }
 
-  static bool canCastToInt(int precision, int scale) {
-    return precision - scale <= ShortDecimalType::kMaxPrecision;
-  }
-
  private:
   const int precision_;
   const int scale_;
@@ -330,7 +326,7 @@ class PrefixSortEncoderFactory {
   static std::optional<uint32_t> encodedSize(const Type& type) {
     if (type.isLongDecimal()) {
       const auto [precision, scale] = getDecimalPrecisionScale(type);
-      if (PrefixSortLongDecimalToIntEncoder::canCastToInt(precision, scale)) {
+      if (canCastToInt(precision, scale)) {
         return PrefixSortLongDecimalToIntEncoder::encodedSize();
       } else {
         return PrefixSortHugeIntEncoder::encodedSize();
@@ -345,7 +341,7 @@ class PrefixSortEncoderFactory {
   create(const Type& type, bool ascending, bool nullsFirst) {
     if (type.isLongDecimal()) {
       const auto [precision, scale] = getDecimalPrecisionScale(type);
-      if (PrefixSortLongDecimalToIntEncoder::canCastToInt(precision, scale)) {
+      if (canCastToInt(precision, scale)) {
         return std::make_shared<PrefixSortLongDecimalToIntEncoder>(
             ascending, nullsFirst, precision, scale);
       } else {
@@ -355,6 +351,11 @@ class PrefixSortEncoderFactory {
     } else {
       return std::make_shared<PrefixSortEncoder>(ascending, nullsFirst);
     }
+  }
+
+ private:
+  static bool canCastToInt(int precision, int scale) {
+    return precision - scale <= ShortDecimalType::kMaxPrecision;
   }
 };
 
