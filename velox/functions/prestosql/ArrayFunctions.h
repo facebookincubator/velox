@@ -881,6 +881,24 @@ struct ArrayUnionFunction {
   template <typename Out, typename In>
   void call(Out& out, const In& inputArray1, const In& inputArray2) {
     util::floating_point::HashSetNaNAware<typename In::element_t> elementSet;
+    doCall(out, inputArray1, inputArray2, elementSet);
+  }
+
+  void call(
+      out_type<Array<Generic<T1>>>& out,
+      const arg_type<Array<Generic<T1>>>& inputArray1,
+      const arg_type<Array<Generic<T1>>>& inputArray2) {
+    exec::GenericViewHashSet elementSet;
+    doCall(out, inputArray1, inputArray2, elementSet);
+  }
+
+ private:
+  template <typename Out, typename In, typename Set>
+  void doCall(
+      Out& out,
+      const In& inputArray1,
+      const In& inputArray2,
+      Set& elementSet) {
     bool nullAdded = false;
     auto addItems = [&](auto& inputArray) {
       for (const auto& item : inputArray) {
