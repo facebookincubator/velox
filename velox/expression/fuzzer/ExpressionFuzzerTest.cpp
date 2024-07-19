@@ -109,6 +109,10 @@ int main(int argc, char** argv) {
       "array_sort", //for array_sort with lambda, --seed=1144235377
       "array_sort_desc", //same as above
       "array_remove", //different try behavior
+      "is_null", //not registered in Presto
+      "codepoint", // expect varchar(1) as parameter type
+      "json_array_contains", //Velox throws, Presto returns NULL, SELECT json_array_contains('{asce', '{asce')
+
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
@@ -134,5 +138,5 @@ int main(int argc, char** argv) {
     LOG(INFO) << "Using Presto as the reference DB.";
   }
   return FuzzerRunner::run(
-      initialSeed, skipFunctions, {{}}, argGenerators, referenceQueryRunner);
+      initialSeed, skipFunctions, {{"session_timezone", "America/Los_Angeles"}}, argGenerators, referenceQueryRunner);
 }

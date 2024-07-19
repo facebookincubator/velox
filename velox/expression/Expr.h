@@ -59,18 +59,22 @@ struct ExprStats {
   /// size.
   uint64_t numProcessedVectors{0};
 
+  bool suppressErrorByNull{false};
+
   void add(const ExprStats& other) {
     timing.add(other.timing);
     numProcessedRows += other.numProcessedRows;
     numProcessedVectors += other.numProcessedVectors;
+    suppressErrorByNull |= other.suppressErrorByNull;
   }
 
   std::string toString() const {
     return fmt::format(
-        "timing: {}, numProcessedRows: {}, numProcessedVectors: {}",
+        "timing: {}, numProcessedRows: {}, numProcessedVectors: {}, suppressErrorByNull: {}",
         timing.toString(),
         numProcessedRows,
-        numProcessedVectors);
+        numProcessedVectors,
+        suppressErrorByNull ? "true" : "false");
   }
 };
 
@@ -372,6 +376,11 @@ class Expr {
   const ExprStats& stats() const {
     return stats_;
   }
+
+  ExprStats& mutableStats() {
+    return stats_;
+  }
+
 
   void addNulls(
       const SelectivityVector& rows,

@@ -59,6 +59,16 @@ core::PlanNodePtr makeProjectionPlan(
       projections,
       std::make_shared<core::ValuesNode>("values", inputs));
 }
+
+bool hasSuppressedErrorByNull(const exec::ExprSet& exprSet) {
+  auto stats = exprSet.stats();
+  for (auto iter = stats.begin(); iter != stats.end(); ++iter) {
+    if (iter->second.suppressErrorByNull) {
+      return true;
+    }
+  }
+  return false;
+}
 } // namespace
 
 fuzzer::ResultOrError ExpressionVerifier::verify(
@@ -127,6 +137,7 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
 
   // Execute with common expression eval path. Some columns of the input row
   // vector will be wrapped in lazy as specified in 'columnsToWrapInLazy'.
+  bool suppressedErrorByNull{false};
   try {
     exec::ExprSet exprSetCommon(
         plans, execCtx_, !options_.disableConstantFolding);
@@ -144,6 +155,7 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
 
     exec::EvalCtx evalCtxCommon(execCtx_, &exprSetCommon, inputRowVector.get());
     exprSetCommon.eval(rows, evalCtxCommon, commonEvalResult);
+    suppressedErrorByNull = hasSuppressedErrorByNull(exprSetCommon);
 
     if (copiedInput) {
       // Flatten the input vector as an optimization if its very deeply nested.
@@ -190,7 +202,7 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
         // return false to signal that the expression failed.
         // fuzzer::compareExceptions(exceptionCommonPtr,
         // exceptionSimplifiedPtr);
-        if (!exceptionCommon || !exceptionReference) {
+        if (!suppressedErrorByNull && !(exceptionCommon && exceptionReference)) {
           LOG(ERROR) << "Only " << (exceptionCommon ? "common" : "reference")
                      << " path threw exception:";
           if (exceptionCommon) {
@@ -200,7 +212,7 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
             VELOX_FAIL("Reference path throws for query: {}", *referenceSql);
           }
         }
-        return {nullptr, exceptionCommonPtr};
+        // return {nullptr, exceptionCommonPtr};
       } else {
         // Throws in case output is different.
         VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());

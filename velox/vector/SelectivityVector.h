@@ -348,6 +348,9 @@ class SelectivityVector {
   template <typename Callable>
   void applyToSelected(Callable func) const;
 
+  template <typename Callable>
+  void applyToUnselected(Callable func) const;
+
   /// Invokes a function on each selected row sequentially in order starting
   /// from the lowest row number until a function returns 'false' or all
   /// selected rows have been processed. The function must take a single "row"
@@ -449,6 +452,11 @@ inline void SelectivityVector::applyToSelected(Callable func) const {
   } else {
     bits::forEachSetBit(bits_.data(), begin_, end_, func);
   }
+}
+
+template <typename Callable>
+inline void SelectivityVector::applyToUnselected(Callable func) const {
+    bits::forEachUnsetBit(bits_.data(), begin_, end_, func);
 }
 
 template <typename Callable>

@@ -326,6 +326,7 @@ ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
     // instance, if other arguments are all null in a function with default null
     // behavior), the query won't fail.
     catch (const VeloxUserError&) {
+      expr->mutableStats().suppressErrorByNull = true;
     }
   }
   return expr;

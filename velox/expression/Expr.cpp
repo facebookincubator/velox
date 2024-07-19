@@ -313,18 +313,25 @@ namespace {
 // used after all arguments of a function call have been evaluated and
 // we decide on whether to throw or what errors to leave in 'context' for the
 // caller.
-void mergeOrThrowArgumentErrors(
+bool mergeOrThrowArgumentErrors(
     const SelectivityVector& rows,
     EvalErrorsPtr& originalErrors,
     EvalErrorsPtr& argumentErrors,
     EvalCtx& context) {
+  bool suppressErrorByNull = false;
   if (argumentErrors) {
+    rows.applyToUnselected([&](auto row) {
+      if (argumentErrors->hasErrorAt(row)) {
+        suppressErrorByNull = true;
+      }
+    });
     if (context.throwOnError()) {
       argumentErrors->throwFirstError(rows);
     }
     context.addErrors(rows, argumentErrors, originalErrors);
   }
   context.swapErrors(originalErrors);
+  return suppressErrorByNull;
 }
 
 // Returns true if vector is a LazyVector that hasn't been loaded yet or
@@ -413,7 +420,7 @@ bool Expr::evalArgsDefaultNulls(
     }
   }
 
-  mergeOrThrowArgumentErrors(
+  stats_.suppressErrorByNull |= mergeOrThrowArgumentErrors(
       rows.rows(), originalErrors, argumentErrors, context);
 
   if (!rows.deselectErrors()) {
