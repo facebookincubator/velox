@@ -46,6 +46,9 @@ struct Date {
   int32_t dayOfYear = 1;
   bool dayOfYearFormat = false;
 
+  int32_t weekOfMonth = 1;
+  bool weekOfMonthDateFormat = false;
+
   bool centuryFormat = false;
 
   bool isYearOfEra = false; // Year of era cannot be zero or negative.
@@ -627,6 +630,8 @@ std::string getSpecifierName(DateTimeFormatSpecifier specifier) {
       return "TIMEZONE_OFFSET_ID";
     case DateTimeFormatSpecifier::LITERAL_PERCENT:
       return "LITERAL_PERCENT";
+    case DateTimeFormatSpecifier::WEEK_OF_MONTH:
+      return "WEEK_OF_MONTH";
     default: {
       VELOX_UNREACHABLE("[Unexpected date format specifier]");
       return ""; // Make compiler happy.
@@ -735,7 +740,6 @@ int32_t parseFromPattern(
       return -1;
     }
     cur += size;
-    date.weekDateFormat = true;
     date.dayOfYearFormat = false;
     if (!date.hasYear) {
       date.hasYear = true;
@@ -873,6 +877,7 @@ int32_t parseFromPattern(
         date.day = number;
         date.weekDateFormat = false;
         date.dayOfYearFormat = false;
+        date.weekOfMonthDateFormat = false;
         // Joda has this weird behavior where it returns 1970 as the year by
         // default (if no year is specified), but if either day or month are
         // specified, it fallsback to 2000.
@@ -887,6 +892,7 @@ int32_t parseFromPattern(
         date.dayOfYear = number;
         date.dayOfYearFormat = true;
         date.weekDateFormat = false;
+        date.weekOfMonthDateFormat = false;
         // Joda has this weird behavior where it returns 1970 as the year by
         // default (if no year is specified), but if either day or month are
         // specified, it fallsback to 2000.
@@ -959,6 +965,7 @@ int32_t parseFromPattern(
         date.weekDateFormat = true;
         date.dayOfYearFormat = false;
         date.centuryFormat = false;
+        date.weekOfMonthDateFormat = false;
         date.hasYear = true;
         break;
 
@@ -969,6 +976,7 @@ int32_t parseFromPattern(
         date.week = number;
         date.weekDateFormat = true;
         date.dayOfYearFormat = false;
+        date.weekOfMonthDateFormat = false;
         if (!date.hasYear) {
           date.hasYear = true;
           date.year = 2000;
@@ -980,12 +988,20 @@ int32_t parseFromPattern(
           return -1;
         }
         date.dayOfWeek = number;
-        date.weekDateFormat = true;
         date.dayOfYearFormat = false;
         if (!date.hasYear) {
           date.hasYear = true;
           date.year = 2000;
         }
+        break;
+      case DateTimeFormatSpecifier::WEEK_OF_MONTH:
+        if (number < 1 || number > 5) {
+          return -1;
+        }
+        date.weekOfMonthDateFormat = true;
+        date.weekOfMonth = number;
+        date.weekDateFormat = false;
+        date.hasYear = true;
         break;
 
       default:
@@ -1069,6 +1085,7 @@ uint32_t DateTimeFormatter::maxResultSize(
       // Not supported.
       case DateTimeFormatSpecifier::WEEK_YEAR:
       case DateTimeFormatSpecifier::WEEK_OF_WEEK_YEAR:
+      case DateTimeFormatSpecifier::WEEK_OF_MONTH:
       default:
         VELOX_UNSUPPORTED(
             "Date format specifier is not supported: {}",
@@ -1321,6 +1338,7 @@ int32_t DateTimeFormatter::format(
         }
         case DateTimeFormatSpecifier::WEEK_YEAR:
         case DateTimeFormatSpecifier::WEEK_OF_WEEK_YEAR:
+        case DateTimeFormatSpecifier::WEEK_OF_MONTH:
         default:
           VELOX_UNSUPPORTED(
               "format is not supported for specifier {}",
@@ -1423,6 +1441,9 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
   } else if (date.dayOfYearFormat) {
     status = util::daysSinceEpochFromDayOfYear(
         date.year, date.dayOfYear, daysSinceEpoch);
+  } else if (date.weekOfMonthDateFormat) {
+    status = util::daysSinceEpochFromWeekOfMonthDate(
+        date.year, date.month, date.weekOfMonth, date.dayOfWeek, daysSinceEpoch);
   } else {
     status = util::daysSinceEpochFromDate(
         date.year, date.month, date.day, daysSinceEpoch);
