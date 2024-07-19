@@ -277,15 +277,7 @@ bool testFilter(
     const TypePtr& type) {
   bool mayHaveNull = true;
 
-  // Has-null statistics is often not set. Hence, we supplement it with
-  // number-of-values statistic to detect no-null columns more often.
-  // Number-of-values is the number of non-null values. When it is equal to
-  // total number of values, we know there are no nulls.
   if (stats->getNumberOfValues().has_value()) {
-    if (stats->getNumberOfValues().value() == 0) {
-      // Column is all null.
-      return filter->testNull();
-    }
     mayHaveNull = stats->getNumberOfValues().value() < totalRows;
   }
 
