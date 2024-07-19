@@ -77,7 +77,7 @@ struct PrefixSortLayout {
   const std::vector<uint32_t> prefixOffsets;
 
   /// The encoders for normalized keys.
-  const std::vector<prefixsort::PrefixSortEncoder> encoders;
+  const std::vector<std::shared_ptr<prefixsort::PrefixSortEncoder>> encoders;
 
   /// Align the buffer size to 8 so that long compare can replace byte compare
   /// during ‘memcmp’

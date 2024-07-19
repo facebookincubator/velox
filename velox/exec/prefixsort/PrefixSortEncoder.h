@@ -22,6 +22,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 
@@ -32,6 +33,8 @@ class PrefixSortEncoder {
  public:
   PrefixSortEncoder(bool ascending, bool nullsFirst)
       : ascending_(ascending), nullsFirst_(nullsFirst){};
+
+  virtual ~PrefixSortEncoder() = default;
 
   /// Encode native primitive types(such as uint64_t, int64_t, uint32_t,
   /// int32_t, float, double, Timestamp). TODO: Add support for strings.
@@ -51,6 +54,10 @@ class PrefixSortEncoder {
       dest[0] = nullsFirst_ ? 0 : 1;
       simd::memset(dest + 1, 0, sizeof(T));
     }
+  }
+
+  virtual void encode(std::optional<int128_t> value, char* dest) const {
+    VELOX_UNREACHABLE();
   }
 
   /// @tparam T Type of value. Supported type are: uint64_t, int64_t, uint32_t,
@@ -91,9 +98,11 @@ class PrefixSortEncoder {
     }
   }
 
+ protected:
+  const bool nullsFirst_;
+
  private:
   const bool ascending_;
-  const bool nullsFirst_;
 };
 
 /// Assuming that value is little-endian encoded, means:
@@ -227,5 +236,60 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
   encodeNoNulls(value.getSeconds(), dest);
   encodeNoNulls(value.getNanos(), dest + 8);
 }
+
+class PrefixSortHugeIntEncoder : public PrefixSortEncoder {
+ public:
+  PrefixSortHugeIntEncoder(
+      bool ascending,
+      bool nullsFirst,
+      int precision,
+      int scale)
+      : PrefixSortEncoder(ascending, nullsFirst),
+        precision_(precision),
+        scale_(scale){};
+
+  FOLLY_ALWAYS_INLINE void encode(std::optional<int128_t> value, char* dest)
+      const override {
+    if (value.has_value()) {
+      dest[0] = nullsFirst_ ? 1 : 0;
+      encodeHugeInt(value.value(), dest + 1);
+    } else {
+      dest[0] = nullsFirst_ ? 0 : 1;
+      simd::memset(dest + 1, 0, encodedSize(precision_, scale_) - 1);
+    }
+  }
+
+  static int32_t encodedSize(uint8_t precision, uint8_t scale) {
+    if (precision - scale <= ShortDecimalType::kMaxPrecision) {
+      return 9;
+    } else {
+      return 17;
+    }
+  }
+
+ private:
+  void encodeHugeInt(int128_t value, char* dst) const {
+    if (precision_ - scale_ <= ShortDecimalType::kMaxPrecision) {
+      auto newPrecision = ShortDecimalType::kMaxPrecision;
+      auto newScale = newPrecision - (precision_ - scale_);
+      int64_t newValue;
+      auto status = DecimalUtil::rescaleWithRoundUp<int128_t, int64_t>(
+          value, precision_, scale_, newPrecision, newScale, newValue);
+      if (FOLLY_LIKELY(status.ok())) {
+      } else if (value < 0) {
+        newValue = std::numeric_limits<int64_t>::min();
+      } else {
+        newValue = std::numeric_limits<int64_t>::max();
+      }
+      encodeNoNulls(newValue, dst);
+    } else {
+      encodeNoNulls<int64_t>(HugeInt::upper(value), dst);
+      encodeNoNulls<uint64_t>(HugeInt::lower(value), dst + sizeof(int64_t));
+    }
+  }
+
+  const int precision_;
+  const int scale_;
+};
 
 } // namespace facebook::velox::exec::prefixsort

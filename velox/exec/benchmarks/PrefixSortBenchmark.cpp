@@ -298,6 +298,35 @@ class PrefixSortBenchmark {
         "no-payloads", "varchar", batchSizes, rowTypes, numKeys, iterations);
   }
 
+  void hugeInt() {
+    const auto iterations = 10;
+    const std::vector<vector_size_t> batchSizes = {
+        1'000, 10'000, 100'000, 1'000'000};
+    std::vector<RowTypePtr> rowTypes = {
+        ROW({DECIMAL(20, 2)}),
+        ROW({DECIMAL(30, 2), DECIMAL(20, 5)}),
+        ROW({DECIMAL(35, 2), DECIMAL(20, 8), DECIMAL(20, 2)}),
+        ROW({DECIMAL(30, 2), DECIMAL(20, 3), DECIMAL(20, 5), DECIMAL(24, 3)}),
+    };
+    std::vector<int> numKeys = {1, 2, 3, 4};
+    benchmark(
+        "no-payloads", "hugeint", batchSizes, rowTypes, numKeys, iterations);
+
+    std::vector<RowTypePtr> rowTypes2 = {
+        ROW({DECIMAL(23, 2)}),
+        ROW({DECIMAL(30, 2), DECIMAL(32, 5)}),
+        ROW({DECIMAL(35, 2), DECIMAL(34, 8), DECIMAL(38, 2)}),
+        ROW({DECIMAL(30, 2), DECIMAL(24, 3), DECIMAL(32, 5), DECIMAL(34, 3)}),
+    };
+    benchmark(
+        "no-payloads-prefix-int128",
+        "hugeint",
+        batchSizes,
+        rowTypes2,
+        numKeys,
+        iterations);
+  }
+
  private:
   std::vector<std::unique_ptr<TestCase>> testCases_;
   memory::MemoryPool* pool_;
@@ -318,6 +347,7 @@ int main(int argc, char** argv) {
   bm.largeBigintWithPayloads();
   bm.smallBigintWithPayload();
   bm.largeVarchar();
+  bm.hugeInt();
   folly::runBenchmarks();
 
   return 0;

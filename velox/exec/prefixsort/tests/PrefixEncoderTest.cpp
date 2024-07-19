@@ -120,6 +120,19 @@ class PrefixEncoderTest : public testing::Test,
     testEncodeWithNull<T>(value, expectedAsc, expectedDesc);
   }
 
+  void testEncodeHugeInt(
+      const PrefixSortEncoder& encoder,
+      std::optional<int128_t> value,
+      char* expected,
+      int32_t expectedSize) {
+    char encoded[expectedSize];
+    encoder.encode(value, encoded);
+    auto compare = [&](char* left, char* right) {
+      return std::memcmp(left, right, expectedSize);
+    };
+    ASSERT_EQ(compare(encoded, expected), 0);
+  }
+
   template <typename T>
   void testNullCompare() {
     std::optional<T> nullValue = std::nullopt;
@@ -226,7 +239,6 @@ class PrefixEncoderTest : public testing::Test,
     auto test = [&](const PrefixSortEncoder& encoder) {
       TypePtr type = TypeTraits<Kind>::ImplType::create();
       VectorFuzzer fuzzer({.vectorSize = vectorSize, .nullRatio = 0.1}, pool());
-
       CompareFlags compareFlag = {
           encoder.isNullsFirst(),
           encoder.isAscending(),
@@ -270,6 +282,8 @@ class PrefixEncoderTest : public testing::Test,
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
   }
+  const PrefixSortHugeIntEncoder hugeIntEncoder1_ = {false, false, 20, 5};
+  const PrefixSortHugeIntEncoder hugeIntEncoder2_ = {false, false, 32, 2};
 
  private:
   const PrefixSortEncoder ascNullsFirstEncoder_ = {true, true};
@@ -327,6 +341,53 @@ TEST_F(PrefixEncoderTest, encode) {
   }
 }
 
+TEST_F(PrefixEncoderTest, encodeHugeInt) {
+  auto size = PrefixSortEncoder::encodedSize(DECIMAL(20, 5));
+  ASSERT_EQ(size, 9);
+  char expected[9] = {0, 127, -1, -1, -1, -1, -1, -1, -1};
+  testEncodeHugeInt(hugeIntEncoder1_, 12, expected, size.value());
+  char expected2[9] = {1, 0, 0, 0, 0, 0, 0, 0, 0};
+  testEncodeHugeInt(hugeIntEncoder1_, std::nullopt, expected2, size.value());
+
+  auto size2 = PrefixSortEncoder::encodedSize(DECIMAL(32, 2));
+  ASSERT_EQ(size2, 17);
+  char expected3[17] = {
+      0, 127, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -13};
+  testEncodeHugeInt(hugeIntEncoder2_, 12, expected3, size2.value());
+  char expected4[17] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  testEncodeHugeInt(hugeIntEncoder2_, std::nullopt, expected4, size2.value());
+}
+
+TEST_F(PrefixEncoderTest, compareHugeInt) {
+  // DESC max < mid < min
+  auto compare = [](char* left, char* right, int32_t size) {
+    return std::memcmp(left, right, size);
+  };
+
+  char maxEncoded[17];
+  char midEncoded[17];
+  char minEncoded[17];
+  char midEncoded2[17];
+  hugeIntEncoder1_.encode(
+      std::optional<int128_t>(DecimalUtil::kLongDecimalMax), maxEncoded);
+  hugeIntEncoder1_.encode(std::optional<int128_t>(20000000), midEncoded);
+  hugeIntEncoder1_.encode(std::optional<int128_t>(20200000), midEncoded2);
+  hugeIntEncoder1_.encode(
+      std::optional<int128_t>(DecimalUtil::kLongDecimalMin), minEncoded);
+  ASSERT_LT(compare(midEncoded, minEncoded, 9), 0);
+  ASSERT_GT(compare(midEncoded, maxEncoded, 9), 0);
+  ASSERT_GT(compare(midEncoded, midEncoded2, 9), 0);
+
+  hugeIntEncoder2_.encode(
+      std::optional<int128_t>(DecimalUtil::kLongDecimalMax), maxEncoded);
+  hugeIntEncoder2_.encode(
+      std::optional<int128_t>(DecimalUtil::kLongDecimalMax / 2), midEncoded);
+  hugeIntEncoder2_.encode(
+      std::optional<int128_t>(DecimalUtil::kLongDecimalMin), minEncoded);
+  ASSERT_LT(compare(midEncoded, minEncoded, 17), 0);
+  ASSERT_GT(compare(midEncoded, maxEncoded, 17), 0);
+}
+
 TEST_F(PrefixEncoderTest, compare) {
   testCompare<uint64_t>();
   testCompare<uint32_t>();
@@ -355,6 +416,56 @@ TEST_F(PrefixEncoderTest, fuzzyDouble) {
 
 TEST_F(PrefixEncoderTest, fuzzyTimestamp) {
   testFuzz<TypeKind::TIMESTAMP>();
+}
+
+TEST_F(PrefixEncoderTest, fuzzyHugeInt) {
+  const int vectorSize = 1024;
+
+  auto compare = [](char* left, char* right, int32_t size) {
+    const auto result = std::memcmp(left, right, size);
+    // Keeping the result of memory compare consistent with the result of
+    // Vector`s compare method can facilitate ASSERT_EQ.
+    return result < 0 ? -1 : (result > 0 ? 1 : 0);
+  };
+
+  auto test = [&](const PrefixSortEncoder& encoder,
+                  const TypePtr& type,
+                  int32_t size) {
+    VectorFuzzer fuzzer({.vectorSize = vectorSize, .nullRatio = 0.1}, pool());
+
+    CompareFlags compareFlag = {
+        encoder.isNullsFirst(),
+        encoder.isAscending(),
+        false,
+        CompareFlags::NullHandlingMode::kNullAsValue};
+    SCOPED_TRACE(compareFlag.toString());
+    const auto leftVector = std::dynamic_pointer_cast<FlatVector<int128_t>>(
+        fuzzer.fuzzFlat(type, vectorSize));
+    const auto rightVector = std::dynamic_pointer_cast<FlatVector<int128_t>>(
+        fuzzer.fuzzFlat(type, vectorSize));
+
+    char leftEncoded[size];
+    char rightEncoded[size];
+
+    for (auto i = 0; i < vectorSize; ++i) {
+      const auto leftValue = leftVector->isNullAt(i)
+          ? std::nullopt
+          : std::optional<int128_t>(leftVector->valueAt(i));
+      const auto rightValue = rightVector->isNullAt(i)
+          ? std::nullopt
+          : std::optional<int128_t>(rightVector->valueAt(i));
+      encoder.encode(leftValue, leftEncoded);
+      encoder.encode(rightValue, rightEncoded);
+
+      const auto result = compare(leftEncoded, rightEncoded, size);
+      const auto expected =
+          leftVector->compare(rightVector.get(), i, i, compareFlag).value();
+      ASSERT_EQ(result, expected);
+    }
+  };
+
+  test(hugeIntEncoder1_, DECIMAL(20, 5), 9);
+  test(hugeIntEncoder2_, DECIMAL(32, 2), 17);
 }
 
 } // namespace facebook::velox::exec::prefixsort::test
