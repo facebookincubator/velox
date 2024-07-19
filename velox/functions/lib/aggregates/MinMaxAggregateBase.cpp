@@ -69,17 +69,12 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
       override {
     if constexpr (std::is_same_v<T, Timestamp>) {
       // Truncate timestamps to corresponding precision.
-      BaseAggregate::template doExtractValues<
-          Timestamp>(groups, numGroups, result, [&](char* group) {
-        auto ts = *BaseAggregate::Aggregate::template value<Timestamp>(group);
-        if (timestampPrecision_ == TimestampPrecision::kMilliseconds) {
-          return Timestamp::fromMillis(ts.toMillis());
-        } else if (timestampPrecision_ == TimestampPrecision::kMicroseconds) {
-          return Timestamp::fromMicros(ts.toMicros());
-        } else {
-          VELOX_UNREACHABLE();
-        }
-      });
+      BaseAggregate::template doExtractValues<Timestamp>(
+          groups, numGroups, result, [&](char* group) {
+            auto ts =
+                *BaseAggregate::Aggregate::template value<Timestamp>(group);
+            return Timestamp::truncate(ts, timestampPrecision_);
+          });
     } else {
       BaseAggregate::template doExtractValues<T>(
           groups, numGroups, result, [&](char* group) {
@@ -576,9 +571,6 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
                      const TypePtr& resultType,
                      const core::QueryConfig& /*config*/)
       -> std::unique_ptr<exec::Aggregate> {
-    const bool throwOnNestedNulls =
-        nullHandlingMode != CompareFlags::NullHandlingMode::kNullAsValue &&
-        velox::exec::isRawInput(step);
     auto inputType = argTypes[0];
     switch (inputType->kind()) {
       case TypeKind::BOOLEAN:
@@ -611,11 +603,11 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
         if (nullHandlingMode == CompareFlags::NullHandlingMode::kNullAsValue) {
           return std::make_unique<
               TNonNumeric<CompareFlags::NullHandlingMode::kNullAsValue>>(
-              inputType, throwOnNestedNulls);
+              inputType, false);
         } else {
           return std::make_unique<TNonNumeric<
               CompareFlags::NullHandlingMode::kNullAsIndeterminate>>(
-              inputType, throwOnNestedNulls);
+              inputType, true);
         }
       case TypeKind::UNKNOWN:
         return std::make_unique<TNumeric<UnknownValue>>(resultType);

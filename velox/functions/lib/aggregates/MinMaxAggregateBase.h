@@ -19,12 +19,13 @@
 
 namespace facebook::velox::functions::aggregate {
 
-/// Min & Max functions in Presto and Spark have different semantics:
-/// 1. Nested nulls are allowed in Spark but not Presto.
+/// Min and max functions in Presto and Spark have different semantics:
+/// 1. Nested NULLs are compared as values in Spark and as "unknown value" in
+/// Presto.
 /// 2. The timestamp type represents a time instant in microsecond precision in
 /// Spark, but millisecond precision in Presto.
-/// We add parameter 'nullHandlingMode' and 'precision' to allow caller
-/// to register min and max functions with different behaviors.
+/// Parameters 'nullHandlingMode' and 'precision' allow to register min and max
+/// functions with different behaviors.
 exec::AggregateFunctionFactory getMinFunctionFactory(
     const std::string& name,
     CompareFlags::NullHandlingMode nullHandlingMode,
