@@ -68,13 +68,11 @@ inline uint64_t to64Bits(const int8_t* resultData) {
 
 template <typename A, typename B, typename Compare>
 void applyAutoSimdComparisonInternal(
-    Compare cmp,
-    VectorPtr& result,
     const SelectivityVector& rows,
     const A* __restrict rawA,
     const B* __restrict rawB,
-    const vector_size_t* __restrict indexA,
-    const vector_size_t* __restrict indexB) {
+    Compare cmp,
+    VectorPtr& result) {
   int8_t tempBuffer[64];
   int8_t* __restrict resultData = tempBuffer;
   const vector_size_t rowsBegin = rows.begin();
@@ -86,12 +84,12 @@ void applyAutoSimdComparisonInternal(
     auto i = 0;
     for (; i + 64 <= rowsEnd; i += 64) {
       for (auto j = 0; j < 64; ++j) {
-        resultData[j] = cmp(rawA, rawB, indexA, indexB, i + j) ? -1 : 0;
+        resultData[j] = cmp(rawA, rawB, i + j) ? -1 : 0;
       }
       rawResult[i / 64] = to64Bits(resultData);
     }
     for (; i < rowsEnd; ++i) {
-      bits::setBit(rawResult, i, cmp(rawA, rawB, indexA, indexB, i));
+      bits::setBit(rawResult, i, cmp(rawA, rawB, i));
     }
   } else {
     static constexpr uint64_t kAllSet = -1ULL;
@@ -106,8 +104,7 @@ void applyAutoSimdComparisonInternal(
           const size_t start = idx * 64;
           while (word) {
             auto index = start + __builtin_ctzll(word);
-            bits::setBit(
-                rawResult, index, cmp(rawA, rawB, indexA, indexB, index));
+            bits::setBit(rawResult, index, cmp(rawA, rawB, index));
             word &= word - 1;
           }
         },
@@ -117,15 +114,13 @@ void applyAutoSimdComparisonInternal(
           if (kAllSet == word) {
             // Do 64 comparisons in a batch, set results by SIMD.
             for (size_t row = 0; row < 64; ++row) {
-              resultData[row] =
-                  cmp(rawA, rawB, indexA, indexB, row + start) ? -1 : 0;
+              resultData[row] = cmp(rawA, rawB, row + start) ? -1 : 0;
             }
             rawResult[idx] = to64Bits(resultData);
           } else {
             while (word) {
               auto index = __builtin_ctzll(word);
-              resultData[index] =
-                  cmp(rawA, rawB, indexA, indexB, start + index) ? -1 : 0;
+              resultData[index] = cmp(rawA, rawB, start + index) ? -1 : 0;
               word &= word - 1;
             }
             // Set results only for selected rows.
@@ -135,6 +130,12 @@ void applyAutoSimdComparisonInternal(
           }
         });
   }
+}
+
+template <typename T>
+bool isDictEncoding(const VectorPtr& arg) {
+  return arg->encoding() == VectorEncoding::Simple::DICTIONARY &&
+      arg->asUnchecked<DictionaryVector<T>>()->valueVector()->isFlatEncoding();
 }
 } // namespace detail
 
@@ -234,6 +235,7 @@ template <typename A, typename B, typename Compare, typename... Args>
 void applyAutoSimdComparison(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args,
+    exec::EvalCtx& context,
     VectorPtr& result,
     Args... cmpArgs) {
   const Compare cmp;
@@ -243,158 +245,104 @@ void applyAutoSimdComparison(
     const B* __restrict rawB =
         args[1]->asUnchecked<FlatVector<B>>()->template rawValues<B>();
     detail::applyAutoSimdComparisonInternal(
-        [&](const A* __restrict rawA,
-            const B* __restrict rawB,
-            const vector_size_t* __restrict indexA,
-            const vector_size_t* __restrict indexB,
-            int i) {
+        rows,
+        rawA,
+        rawB,
+        [&](const A* __restrict rawA, const B* __restrict rawB, int i) {
           if constexpr (sizeof...(cmpArgs) > 0) {
             return Compare::apply(rawA[i], rawB[i], cmpArgs...);
           } else {
             return cmp(rawA[i], rawB[i]);
           }
         },
-        result,
-        rows,
-        rawA,
-        rawB,
-        nullptr,
-        nullptr);
+        result);
   } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
     const A constA = args[0]->asUnchecked<ConstantVector<A>>()->valueAt(0);
     const A* __restrict rawA = &constA;
     const B* __restrict rawB =
         args[1]->asUnchecked<FlatVector<B>>()->template rawValues<B>();
     detail::applyAutoSimdComparisonInternal(
-        [&](const A* __restrict rawA,
-            const B* __restrict rawB,
-            const vector_size_t* __restrict indexA,
-            const vector_size_t* __restrict indexB,
-            int i) {
+        rows,
+        rawA,
+        rawB,
+        [&](const A* __restrict rawA, const B* __restrict rawB, int i) {
           if constexpr (sizeof...(cmpArgs) > 0) {
             return Compare::apply(rawA[0], rawB[i], cmpArgs...);
           } else {
             return cmp(rawA[0], rawB[i]);
           }
         },
-        result,
-        rows,
-        rawA,
-        rawB,
-        nullptr,
-        nullptr);
+        result);
   } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
     const A* __restrict rawA =
         args[0]->asUnchecked<FlatVector<A>>()->template rawValues<A>();
     const B constB = args[1]->asUnchecked<ConstantVector<B>>()->valueAt(0);
     const B* __restrict rawB = &constB;
     detail::applyAutoSimdComparisonInternal(
-        [&](const A* __restrict rawA,
-            const B* __restrict rawB,
-            const vector_size_t* __restrict indexA,
-            const vector_size_t* __restrict indexB,
-            int i) {
+        rows,
+        rawA,
+        rawB,
+        [&](const A* __restrict rawA, const B* __restrict rawB, int i) {
           if constexpr (sizeof...(cmpArgs) > 0) {
             return Compare::apply(rawA[i], rawB[0], cmpArgs...);
           } else {
             return cmp(rawA[i], rawB[0]);
           }
         },
-        result,
-        rows,
-        rawA,
-        rawB,
-        nullptr,
-        nullptr);
+        result);
   } else if (args[0]->isConstantEncoding() && args[1]->isConstantEncoding()) {
     const A constA = args[0]->asUnchecked<ConstantVector<A>>()->valueAt(0);
     const A* __restrict rawA = &constA;
     const B constB = args[1]->asUnchecked<ConstantVector<B>>()->valueAt(0);
     const B* __restrict rawB = &constB;
     detail::applyAutoSimdComparisonInternal(
-        [&](const A* __restrict rawA,
-            const B* __restrict rawB,
-            const vector_size_t* __restrict indexA,
-            const vector_size_t* __restrict indexB,
-            int i) {
+        rows,
+        rawA,
+        rawB,
+        [&](const A* __restrict rawA, const B* __restrict rawB, int i) {
           if constexpr (sizeof...(cmpArgs) > 0) {
             return Compare::apply(rawA[0], rawB[0], cmpArgs...);
           } else {
             return cmp(rawA[0], rawB[0]);
           }
         },
-        result,
+        result);
+  } else if (args[0]->isFlatEncoding() && detail::isDictEncoding<B>(args[1])) {
+    const A* __restrict rawA =
+        args[0]->asUnchecked<FlatVector<A>>()->rawValues();
+    exec::LocalDecodedVector localBDecoded(context, *args[1], rows);
+    const B* __restrict rawB = localBDecoded.get()->data<B>();
+    const vector_size_t* __restrict indexB = localBDecoded.get()->indices();
+    detail::applyAutoSimdComparisonInternal(
         rows,
         rawA,
         rawB,
-        nullptr,
-        nullptr);
-  } else if (
-      args[0]->isFlatEncoding() &&
-      args[1]->encoding() == VectorEncoding::Simple::DICTIONARY &&
-      args[1]
-          ->asUnchecked<DictionaryVector<B>>()
-          ->valueVector()
-          ->isFlatEncoding()) {
-    auto dictB = args[1]->asUnchecked<DictionaryVector<B>>();
-    const A* __restrict rawA =
-        args[0]->asUnchecked<FlatVector<A>>()->rawValues();
-    const B* __restrict rawB = dictB->valueVector()
-                                   ->template asUnchecked<FlatVector<B>>()
-                                   ->rawValues();
-    const vector_size_t* __restrict indexB =
-        dictB->indices()->template as<vector_size_t>();
-    detail::applyAutoSimdComparisonInternal(
-        [&](const A* __restrict rawA,
-            const B* __restrict rawB,
-            const vector_size_t* __restrict indexA,
-            const vector_size_t* __restrict indexB,
-            int i) {
+        [&](const A* __restrict rawA, const B* __restrict rawB, int i) {
           if constexpr (sizeof...(cmpArgs) > 0) {
             return Compare::apply(rawA[i], rawB[indexB[i]], cmpArgs...);
           } else {
             return cmp(rawA[i], rawB[indexB[i]]);
           }
         },
-        result,
-        rows,
-        rawA,
-        rawB,
-        nullptr,
-        indexB);
-  } else if (
-      args[1]->isFlatEncoding() &&
-      args[0]->encoding() == VectorEncoding::Simple::DICTIONARY &&
-      args[0]
-          ->asUnchecked<DictionaryVector<A>>()
-          ->valueVector()
-          ->isFlatEncoding()) {
-    auto dictA = args[0]->asUnchecked<DictionaryVector<A>>();
-    const A* __restrict rawA = dictA->valueVector()
-                                   ->template asUnchecked<FlatVector<A>>()
-                                   ->rawValues();
-    const vector_size_t* __restrict indexA =
-        dictA->indices()->template as<vector_size_t>();
+        result);
+  } else if (detail::isDictEncoding<A>(args[0]) && args[1]->isFlatEncoding()) {
+    exec::LocalDecodedVector localADecoded(context, *args[0], rows);
+    const A* __restrict rawA = localADecoded.get()->data<A>();
+    const vector_size_t* __restrict indexA = localADecoded.get()->indices();
     const B* __restrict rawB =
         args[1]->asUnchecked<FlatVector<B>>()->rawValues();
     detail::applyAutoSimdComparisonInternal(
-        [&](const A* __restrict rawA,
-            const B* __restrict rawB,
-            const vector_size_t* __restrict indexA,
-            const vector_size_t* __restrict indexB,
-            int i) {
+        rows,
+        rawA,
+        rawB,
+        [&](const A* __restrict rawA, const B* __restrict rawB, int i) {
           if constexpr (sizeof...(cmpArgs) > 0) {
             return Compare::apply(rawA[indexA[i]], rawB[i], cmpArgs...);
           } else {
             return cmp(rawA[indexA[i]], rawB[i]);
           }
         },
-        result,
-        rows,
-        rawA,
-        rawB,
-        indexA,
-        nullptr);
+        result);
   } else {
     VELOX_UNREACHABLE();
   }
@@ -409,20 +357,10 @@ bool shouldApplyAutoSimdComparison(
         (args[1]->isFlatEncoding() || args[1]->isConstantEncoding())) {
       return true;
     } else if (
-        args[0]->isFlatEncoding() &&
-        args[1]->encoding() == VectorEncoding::Simple::DICTIONARY &&
-        args[1]
-            ->asUnchecked<DictionaryVector<B>>()
-            ->valueVector()
-            ->isFlatEncoding()) {
+        args[0]->isFlatEncoding() && detail::isDictEncoding<B>(args[1])) {
       return true;
     } else if (
-        args[1]->isFlatEncoding() &&
-        args[0]->encoding() == VectorEncoding::Simple::DICTIONARY &&
-        args[0]
-            ->asUnchecked<DictionaryVector<A>>()
-            ->valueVector()
-            ->isFlatEncoding()) {
+        detail::isDictEncoding<A>(args[0]) && args[1]->isFlatEncoding()) {
       return true;
     }
   }

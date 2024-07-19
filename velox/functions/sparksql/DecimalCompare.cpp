@@ -119,7 +119,7 @@ class DecimalCompareFunction : public exec::VectorFunction {
 
     if (shouldApplyAutoSimdComparison<A, B>(rows, args)) {
       applyAutoSimdComparison<A, B, Operation, int8_t, bool>(
-          rows, args, result, deltaScale_, need256_);
+          rows, args, context, result, deltaScale_, need256_);
       return;
     }
 

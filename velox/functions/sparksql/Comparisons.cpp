@@ -52,7 +52,7 @@ class ComparisonFunction final : public exec::VectorFunction {
       }
     }
     if (shouldApplyAutoSimdComparison<T, T>(rows, args)) {
-      applyAutoSimdComparison<T, T, Cmp>(rows, args, result);
+      applyAutoSimdComparison<T, T, Cmp>(rows, args, context, result);
       return;
     }
 
