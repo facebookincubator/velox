@@ -24,6 +24,20 @@
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
 namespace facebook::velox::parquet {
+namespace {
+TypePtr getRequestedType(const TypePtr& requestedType, std::string& name) {
+  if (!requestedType || !requestedType->isRow()) {
+    return requestedType;
+  }
+
+  const auto& rowType = requestedType->asRow();
+  if (rowType.containsChild(name)) {
+    return rowType.findChild(name);
+  }
+
+  return nullptr;
+}
+} // namespace
 
 /// Metadata and options for reading Parquet.
 class ReaderBase {
@@ -125,8 +139,6 @@ class ReaderBase {
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
-  TypePtr getRequestedType(const TypePtr& requestedType, std::string& name)
-      const;
 };
 
 ReaderBase::ReaderBase(
@@ -533,21 +545,6 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   }
 
   VELOX_FAIL("Unable to extract Parquet column info.")
-  return nullptr;
-}
-
-TypePtr ReaderBase::getRequestedType(
-    const TypePtr& requestedType,
-    std::string& name) const {
-  if (!requestedType || !requestedType->isRow()) {
-    return requestedType;
-  }
-
-  const auto& rowType = requestedType->asRow();
-  if (rowType.containsChild(name)) {
-    return rowType.findChild(name);
-  }
-
   return nullptr;
 }
 
