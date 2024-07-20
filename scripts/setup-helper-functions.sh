@@ -173,7 +173,7 @@ function cmake_install {
   local NAME=$(basename "$(pwd)")
   local BINARY_DIR=_build
   SUDO="${SUDO:-""}"
-  cd "${DIR}"
+  pushd "${DIR}"
   if [ -d "${BINARY_DIR}" ] && prompt "Do you want to rebuild ${NAME}?"; then
     ${SUDO} rm -rf "${BINARY_DIR}"
   fi
@@ -193,5 +193,6 @@ function cmake_install {
   # Exit if the build fails.
   cmake --build "${BINARY_DIR}" || { echo 'build failed' ; exit 1; }
   ${SUDO} cmake --install "${BINARY_DIR}"
+  popd
 }
 
