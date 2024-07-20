@@ -164,7 +164,7 @@ function wget_and_untar {
 }
 
 function cmake_install {
-  if [ -n "$1" ]; then
+  if [ -d "$1" ]; then
     DIR="$1"
     shift
   else
