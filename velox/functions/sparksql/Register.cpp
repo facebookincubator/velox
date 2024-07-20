@@ -115,10 +115,12 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
 
+  // SparkSQL's map_from_arrays have the same semantics with Presto's map
   VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_allow_duplicates, prefix + "map_from_arrays");
+      udf_map_from_arrays, prefix + "map_from_arrays");
   VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map, prefix + "map_from_arrays_exception_on_duplicates");
+      udf_map_from_arrays_allow_duplicates, prefix + "map_from_arrays_allow_duplicates");
+
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_concat_row, exec::RowConstructorCallToSpecialForm::kRowConstructor);
   // String functions.

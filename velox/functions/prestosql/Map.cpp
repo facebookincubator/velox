@@ -358,4 +358,14 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     udf_map_allow_duplicates,
     MapFunction</*AllowDuplicateKeys=*/true>::signatures(),
     std::make_unique<MapFunction</*AllowDuplicateKeys=*/true>>());
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_map_from_arrays,
+    MapFunction</*AllowDuplicateKeys=*/false>::signatures(),
+    std::make_unique<MapFunction</*AllowDuplicateKeys=*/false>>());
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_map_from_arrays_allow_duplicates,
+    MapFunction</*AllowDuplicateKeys=*/true>::signatures(),
+    std::make_unique<MapFunction</*AllowDuplicateKeys=*/true>>());
 } // namespace facebook::velox::functions
