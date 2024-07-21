@@ -1610,26 +1610,28 @@ struct MaskFunction {
     return category == UTF8PROC_CATEGORY_ND;
   }
 
-  std::optional<StringView> getMaskedChar(const arg_type<Varchar>* maskChars) {
-    if (maskChars) {
-      auto maskCharsBuffer = maskChars->data();
-      auto maskCharsSize = maskChars->size();
-      if (maskCharsSize == 1) {
-        return StringView{maskCharsBuffer};
+  std::optional<StringView> getMaskedChar(const arg_type<Varchar>* maskChar) {
+    if (maskChar) {
+      auto maskCharData = maskChar->data();
+      auto maskCharSize = maskChar->size();
+      if (maskCharSize == 1) {
+        return StringView{maskCharData};
       }
 
-      if (maskCharsSize == 0) {
+      if (maskCharSize == 0) {
         VELOX_USER_FAIL("Length of replacing char should be 1");
       }
 
-      // Unicode char handle.
+      // Calculates the byte length of the first unicode character, and compares
+      // it with the length of replacing character. Inequality indicates the
+      // replacing character includes more than one unicode characters.
       int size;
       auto codePoint = utf8proc_codepoint(
-          &maskCharsBuffer[0], maskCharsBuffer + maskCharsSize, size);
+          &maskCharData[0], maskCharData + maskCharSize, size);
       VELOX_USER_CHECK_EQ(
-          maskCharsSize, size, "Length of replacing char should be 1");
+          maskCharSize, size, "Length of replacing char should be 1");
 
-      return StringView(maskCharsBuffer, maskCharsSize);
+      return StringView(maskCharData, maskCharSize);
     }
     return std::nullopt;
   }
