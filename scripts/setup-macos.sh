@@ -34,7 +34,7 @@ source $SCRIPTDIR/setup-helper-functions.sh
 NPROC=$(getconf _NPROCESSORS_ONLN)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="bison boost double-conversion flex fmt gflags glog googletest icu4c libevent libsodium libunwind lz4 lzo openssl protobuf@21 simdjson snappy thirft xz xsimd zstd"
+MACOS_VELOX_DEPS="bison boost double-conversion flex fmt gflags glog googletest icu4c libevent libsodium libunwind lz4 lzo openssl protobuf@21 simdjson snappy thrift xz xsimd zstd"
 MACOS_BUILD_DEPS="ninja cmake ccache"
 FB_OS_VERSION="v2024.05.20.00"
 FMT_VERSION="10.1.1"
