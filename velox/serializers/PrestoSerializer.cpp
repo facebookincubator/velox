@@ -3608,7 +3608,7 @@ FlushSizes flushCompressed(
       "UncompressedSize exceeds limit");
   auto iobuf = out.getIOBuf();
   const auto compressedBuffer = codec.compress(iobuf.get());
-  const int32_t compressedSize = compressedBuffer->length();
+  const int32_t compressedSize = compressedBuffer->computeChainDataLength();
   if (compressedSize > uncompressedSize * minCompressionRatio) {
     flushSerialization(
         numRows,
@@ -4222,9 +4222,14 @@ void PrestoVectorSerde::deserialize(
     compressBuf->append(header.compressedSize);
     auto uncompress =
         codec->uncompress(compressBuf.get(), header.uncompressedSize);
-    ByteRange byteRange{
-        uncompress->writableData(), (int32_t)uncompress->length(), 0};
-    ByteInputStream uncompressedSource({byteRange});
+    std::vector<ByteRange> ranges;
+    for (auto range : *uncompress) {
+      ranges.push_back(ByteRange{
+          const_cast<uint8_t*>(range.data()),
+          static_cast<int32_t>(range.size()),
+          0});
+    }
+    ByteInputStream uncompressedSource(ranges);
 
     readTopColumns(
         uncompressedSource, type, pool, *result, resultOffset, prestoOptions);
