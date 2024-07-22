@@ -235,13 +235,13 @@ void SelectiveStringDictionaryColumnReader::read(
             &alwaysTrue(),
             rows,
             ExtractStringDictionaryToGenericHook(
-                scanSpec_->valueHook(), rows, scanState_.rawState));
+                scanSpec_->valueHook(), rows, &scanState_.rawState));
       } else {
         readHelper<common::AlwaysTrue, false>(
             &alwaysTrue(),
             rows,
             ExtractStringDictionaryToGenericHook(
-                scanSpec_->valueHook(), rows, scanState_.rawState));
+                scanSpec_->valueHook(), rows, &scanState_.rawState));
       }
     } else {
       if (isDense) {

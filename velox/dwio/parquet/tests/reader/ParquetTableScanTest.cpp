@@ -199,7 +199,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   void writeToParquetFile(
       const std::string& path,
       const std::vector<RowVectorPtr>& data,
-      bool writeInt96AsTimestamp) {
+      bool writeInt96AsTimestamp = false) {
     VELOX_CHECK_GT(data.size(), 0);
 
     WriterOptions options;
@@ -834,6 +834,38 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
           kSize, [](auto i) { return Timestamp(i, i * 1'001'000); }),
   });
   assertEqualResults({expected}, result.second);
+}
+
+TEST_F(ParquetTableScanTest, remainingFilterLazyWithMultiReferences) {
+  constexpr int kSize = 10;
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatVector<int64_t>(kSize, folly::identity),
+  });
+  auto schema = asRowType(vector->type());
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector});
+  CursorParameters params;
+  params.copyResult = false;
+  params.singleThreaded = true;
+  params.planNode = PlanBuilder().tableScan(schema, {}, "c0 >= 0").planNode();
+  auto cursor = TaskCursor::create(params);
+  cursor->task()->addSplit("0", exec::Split(makeSplit(file->getPath())));
+  cursor->task()->noMoreSplits("0");
+  int rows = 0;
+  while (cursor->moveNext()) {
+    auto* result = cursor->current()->asUnchecked<RowVector>();
+    ASSERT_FALSE(isLazyNotLoaded(*result->childAt(0)));
+    ASSERT_TRUE(isLazyNotLoaded(*result->childAt(1)));
+    ASSERT_TRUE(isLazyNotLoaded(*result->childAt(2)));
+    for (int i = 0; i < result->size(); ++i) {
+      ASSERT_TRUE(result->loadedVector()->equalValueAt(vector.get(), i, i));
+      rows++;
+    }
+  }
+  ASSERT_EQ(rows, vector->size());
+  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
 }
 
 int main(int argc, char** argv) {

@@ -526,7 +526,7 @@ void PageReader::readWithVisitor(Visitor& visitor) {
   while (rowsForPage(reader, hasFilter, mayProduceNulls, pageRows, nulls)) {
     bool nullsFromFastPath = false;
     int32_t numValuesBeforePage = numRowsInReader<hasFilter>(reader);
-    visitor.setNumValuesBias(numValuesBeforePage);
+    reader.setNumScanned(numValuesBeforePage);
     visitor.setRows(pageRows);
     callDecoder(nulls, nullsFromFastPath, visitor);
     if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED &&

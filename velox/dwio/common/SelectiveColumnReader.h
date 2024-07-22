@@ -276,7 +276,17 @@ class SelectiveColumnReader {
   void initReturnReaderNulls(const RowSet& rows);
 
   void setNumValues(vector_size_t size) {
-    numValues_ = size;
+    numValues_ = numScanned_ + size;
+  }
+
+  void setNumScanned(vector_size_t numScanned) {
+    numScanned_ = numScanned;
+  }
+
+  // Number of rows scanned so far. Contains rows scanned in previous pages
+  // during this read call as well.
+  vector_size_t numScanned() {
+    return numScanned_;
   }
 
   // The number of passing after filtering.
@@ -288,8 +298,9 @@ class SelectiveColumnReader {
   int32_t numValues() const {
     return numValues_;
   }
+
   void setNumRows(vector_size_t size) {
-    outputRows_.resize(size);
+    outputRows_.resize(numScanned_ + size);
   }
 
   // Sets the result nulls to be returned in getValues(). This is used for
@@ -651,6 +662,11 @@ class SelectiveColumnReader {
   // Writable content in 'values'
   void* rawValues_ = nullptr;
   vector_size_t numValues_ = 0;
+
+  // Number of rows scanned so far. Contains rows scanned in previous pages
+  // during this read call as well.
+  vector_size_t numScanned_{0};
+
   // Size of fixed width value in 'rawValues'. For integers, values
   // are read at 64 bit width and can be compacted or extracted at a
   // different width.
