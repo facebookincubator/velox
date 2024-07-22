@@ -406,12 +406,13 @@ endif()
 set_source(fmt)
 resolve_dependency(fmt 9.0.0)
 
+find_package(lz4 REQUIRED)
+
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   # DWIO needs all sorts of stream compression libraries.
   #
   # TODO: make these optional and pluggable.
   find_package(ZLIB REQUIRED)
-  find_package(lz4 REQUIRED)
   find_package(lzo2 REQUIRED)
   find_package(zstd REQUIRED)
   find_package(Snappy REQUIRED)

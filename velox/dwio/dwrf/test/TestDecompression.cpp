@@ -846,8 +846,12 @@ void writeHeader(char* buffer, size_t compressedSize, bool original) {
   buffer[2] = static_cast<char>(compressedSize >> 15);
 }
 
-size_t
-compress(char* buf, size_t size, char* output, size_t offset, Codec& codec) {
+size_t compress(
+    char* buf,
+    size_t size,
+    char* output,
+    size_t offset,
+    folly::io::Codec& codec) {
   auto ioBuf = folly::IOBuf::wrapBuffer(buf, size);
   auto compressed = codec.compress(ioBuf.get());
   auto str = compressed->moveToFbString();
@@ -872,7 +876,7 @@ class TestSeek : public ::testing::Test {
         kind, std::move(input), bufferSize, *pool_, "Test Decompression");
   }
 
-  void runTest(Codec& codec, CompressionKind kind) {
+  void runTest(folly::io::Codec& codec, CompressionKind kind) {
     constexpr size_t inputSize = 1024;
     constexpr size_t outputSize = 4096;
     char output[outputSize];
@@ -913,7 +917,7 @@ class TestSeek : public ::testing::Test {
   }
 
   static void prepareTestData(
-      Codec& codec,
+      folly::io::Codec& codec,
       char* input1,
       char* input2,
       size_t inputSize,
