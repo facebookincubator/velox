@@ -244,6 +244,46 @@ Supported range of milliseconds is [0xFFF8000000000000L, 0x7FFFFFFFFFFFF]
 store timezone ID. Supported range of timezone ID is [1, 1680].
 The definition of timezone IDs can be found in <code class="docutils literal notranslate"><span class="pre">TimeZoneDatabase.cpp</span></code>.</p>
 </section>
+<section id="spark-types">
+<h2>Spark Types<a class="headerlink" href="#spark-types" title="Link to this heading">¶</a></h2>
+<p>The <a class="reference external" href="https://spark.apache.org/docs/latest/sql-ref-datatypes.html">data types</a> in Spark have some semantic differences compared to those in
+Presto. These differences require us to implement the same functions
+separately for each system in Velox, such as min, max and collect_set. The
+key differences are listed below.</p>
+<ul>
+<li><p>Spark operates on timestamps with “microsecond” precision while Presto with
+“millisecond” precision.
+Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">min</span><span class="p">(</span><span class="n">ts</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="p">(</span>
+    <span class="n">VALUES</span>
+        <span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2014-03-08 09:00:00.123456789&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">)),</span>
+        <span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2014-03-08 09:00:00.012345678&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">))</span>
+<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">ts</span><span class="p">);</span>
+<span class="o">--</span> <span class="mi">2014</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">08</span> <span class="mi">09</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.012345</span>
+</pre></div>
+</div>
+</li>
+<li><p>In function comparisons, nested null values are handled as values.
+Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">equalto</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">null</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">null</span><span class="p">]);</span> <span class="o">--</span> <span class="n">true</span>
+
+<span class="n">SELECT</span> <span class="nb">min</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="p">(</span>
+    <span class="n">VALUES</span>
+        <span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]),</span>
+        <span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">null</span><span class="p">])</span>
+<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">a</span><span class="p">);</span>
+<span class="o">--</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">null</span><span class="p">]</span>
+</pre></div>
+</div>
+</li>
+<li><p>MAP type is not comparable and not orderable in Spark. In Presto, MAP type is
+also not orderable, but it is comparable if both key and value types are
+comparable. The implication is that MAP type cannot be used as a join, group
+by or order by key in Spark.</p></li>
+</ul>
+</section>
 </section>
 
 
@@ -262,6 +302,7 @@ The definition of timezone IDs can be found in <code class="docutils literal not
 <li><a class="reference internal" href="#custom-types">Custom Types</a></li>
 <li><a class="reference internal" href="#complex-types">Complex Types</a></li>
 <li><a class="reference internal" href="#presto-types">Presto Types</a></li>
+<li><a class="reference internal" href="#spark-types">Spark Types</a></li>
 </ul>
 </li>
 </ul>
