@@ -241,7 +241,7 @@ all rows. So all frames are empty.</p></li>
 <ul>
 <li><p>frame_start &lt; frame_end (so it’s not an empty frame)</p></li>
 <li><p>One frame end is within partition bounds and the other end outside of it.</p>
-<p>In these cases either :</p>
+<p>This means either :</p>
 <ul class="simple">
 <li><p>frame_start is before the first partition row while frame_end is within
 the partition. In this case, frame_start is clamped to the first partition
@@ -369,7 +369,7 @@ So the Window function doesn’t need any special logic for partial frames.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.6.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
     </div>
   </body>
 </html>

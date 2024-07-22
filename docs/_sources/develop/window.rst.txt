@@ -250,7 +250,7 @@ A partial frame occurs when:
 - frame_start < frame_end (so it's not an empty frame)
 - One frame end is within partition bounds and the other end outside of it.
 
-  In these cases either :
+  This means either :
 
   - frame_start is before the first partition row while frame_end is within
     the partition. In this case, frame_start is clamped to the first partition
