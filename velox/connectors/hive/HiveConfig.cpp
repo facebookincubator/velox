@@ -156,6 +156,12 @@ bool HiveConfig::isOrcUseColumnNames(const Config* session) const {
       kOrcUseColumnNamesSession, config_->get<bool>(kOrcUseColumnNames, false));
 }
 
+bool HiveConfig::isParquetUseColumnNames(const Config* session) const {
+  return session->get<bool>(
+      kParquetUseColumnNamesSession,
+      config_->get<bool>(kParquetUseColumnNames, false));
+}
+
 bool HiveConfig::isFileColumnNamesReadAsLowerCase(const Config* session) const {
   return session->get<bool>(
       kFileColumnNamesReadAsLowerCaseSession,
