@@ -96,6 +96,7 @@ void ParquetData::enqueueRowGroup(
   if (chunk.hasDictionaryPageOffset() && chunk.dictionaryPageOffset() >= 4) {
     // this assumes the data pages follow the dict pages directly.
     chunkReadOffset = chunk.dictionaryPageOffset();
+    hasDictionary_ = true;
   }
 
   uint64_t readSize =
