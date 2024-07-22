@@ -24,7 +24,6 @@ class ArrayInsertTest : public SparkFunctionBaseTest {
  protected:
   void SetUp() override {
     SparkFunctionBaseTest::SetUp();
-    // For parsing literal integers as INTEGER, not BIGINT.
     options_.parseIntegerAsBigint = false;
   }
 
@@ -79,11 +78,11 @@ TEST_F(ArrayInsertTest, posGTArraySize) {
   testExpression(
       "array_insert(c0, 3, null::INTEGER, false)", {arrays}, expected);
 
-  // Insert into position INT_MAX
+  // Insert into position INT_MAX.
   EXPECT_THROW(
       evaluateExpression("array_insert(c0, 2147483647, 0, false)", {arrays}),
       VeloxUserError);
-  // Insert into position INT_MIN
+  // Insert into position INT_MIN.
   EXPECT_THROW(
       evaluateExpression(
           "array_insert(c0, cast(-2147483648 as integer), 0, false)", {arrays}),

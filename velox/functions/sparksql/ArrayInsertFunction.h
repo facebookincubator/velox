@@ -25,8 +25,7 @@ template <typename T>
 struct ArrayInsertFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T)
 
-  // INT_MAX - 15, keep the same limit with spark.
-  static constexpr int32_t kMaxNumberOfElements = 2'147'483'632;
+  static constexpr int32_t kMaxNumberOfElements = 10'000;
 
   FOLLY_ALWAYS_INLINE bool callNullable(
       out_type<Array<Generic<T1>>>& out,
