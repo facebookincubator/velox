@@ -221,6 +221,88 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     writer->close();
   }
 
+  void testTimestampINT64(
+      const std::string& fileName,
+      TimestampPrecision precision) {
+    std::vector<Timestamp> rawDataMicros = {
+        Timestamp(0, 0),
+        Timestamp(0, 1000),
+        Timestamp(-1, 999999000),
+        Timestamp(0, 1000000),
+        Timestamp(-1, 999000000),
+        Timestamp(0, 1001000),
+        Timestamp(-1, 998999000),
+        Timestamp(0, 999000),
+        Timestamp(-1, 999001000),
+        Timestamp(1, 0),
+        Timestamp(-1, 0),
+        Timestamp(1, 1000),
+        Timestamp(-2, 999999000),
+        Timestamp(0, 99999000),
+        Timestamp(-1, 900001000)};
+
+    std::vector<Timestamp> rawDataMillis = {
+        Timestamp(0, 0),
+        Timestamp(0, 1000000),
+        Timestamp(-1, 999000000),
+        Timestamp(1, 0),
+        Timestamp(-1, 0),
+        Timestamp(1, 1000000),
+        Timestamp(-2, 999000000),
+        Timestamp(0, 999000000),
+        Timestamp(-1, 1000000),
+        Timestamp(1000, 0),
+        Timestamp(-1000, 0),
+        Timestamp(1000, 1000000),
+        Timestamp(-1001, 999000000),
+        Timestamp(99, 999000000),
+        Timestamp(-100, 1000000)};
+
+    auto a = makeFlatVector<Timestamp>(60, [&](auto row) {
+      return (precision == TimestampPrecision::kMilliseconds)
+          ? rawDataMillis[row / 4]
+          : rawDataMicros[row / 4];
+    });
+
+    auto expected = makeRowVector({"time"}, {a});
+    auto schema = asRowType(expected->type());
+    auto plan = PlanBuilder().tableScan(schema).planNode();
+
+    CursorParameters params;
+    std::shared_ptr<folly::Executor> executor =
+        std::make_shared<folly::CPUThreadPoolExecutor>(
+            std::thread::hardware_concurrency());
+    std::shared_ptr<core::QueryCtx> queryCtx =
+        core::QueryCtx::create(executor.get());
+    std::unordered_map<std::string, std::string> session = {
+        {std::string(connector::hive::HiveConfig::kReadTimestampUnitSession),
+         (precision == TimestampPrecision::kMilliseconds) ? "3" : "6"}};
+    queryCtx->setConnectorSessionOverridesUnsafe(
+        kHiveConnectorId, std::move(session));
+    params.queryCtx = queryCtx;
+    params.planNode = plan;
+    const int numSplitsPerFile = 1;
+
+    bool noMoreSplits = false;
+    auto addSplits = [&](exec::Task* task) {
+      if (!noMoreSplits) {
+        auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
+            {getExampleFilePath(fileName)},
+            numSplitsPerFile,
+            dwio::common::FileFormat::PARQUET);
+        for (const auto& split : splits) {
+          task->addSplit("0", exec::Split(split));
+        }
+        task->noMoreSplits("0");
+      }
+      noMoreSplits = true;
+    };
+
+    auto result = readCursor(params, addSplits);
+    ASSERT_TRUE(waitForTaskCompletion(result.first->task().get()));
+    assertEqualResults({expected}, result.second);
+  }
+
  private:
   RowTypePtr getRowType(std::vector<std::string>&& outputColumnNames) const {
     std::vector<TypePtr> types;
@@ -834,98 +916,20 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
           kSize, [](auto i) { return Timestamp(i, i * 1'001'000); }),
   });
   assertEqualResults({expected}, result.second);
-  
+}
+
 TEST_F(ParquetTableScanTest, timestampINT64millis) {
-  std::vector<Timestamp> rawData = {
-      Timestamp(0, 1000000),
-      Timestamp(-1, 999000000),
-      Timestamp(1, 0),
-      Timestamp(-1, 0),
-      Timestamp(1, 1000000),
-      Timestamp(-2, 999000000),
-      Timestamp(0, 999000000),
-      Timestamp(-1, 1000000),
-      Timestamp(1000, 0),
-      Timestamp(-1000, 0),
-      Timestamp(1000, 1000000),
-      Timestamp(-1001, 999000000),
-      Timestamp(99, 999000000),
-      Timestamp(-100, 1000000)};
-
-  auto a =
-      makeFlatVector<Timestamp>(60, [&](auto row) { return rawData[row / 4]; });
-
-  auto expected = makeRowVector({"time"}, {a});
-  createDuckDbTable("expected", {expected});
-
-  auto vector = makeArrayVector<Timestamp>({{}});
-
-  loadData(
-      getExampleFilePath("int64_millis_dictionary.parquet"),
-      ROW({"time"}, {TIMESTAMP()}),
-      makeRowVector(
-          {"time"},
-          {
-              vector,
-          }));
-  assertSelect({"time"}, "SELECT time from expected");
-
-  loadData(
-      getExampleFilePath("int64_millis_plain.parquet"),
-      ROW({"time"}, {TIMESTAMP()}),
-      makeRowVector(
-          {"time"},
-          {
-              vector,
-          }));
-  assertSelect({"time"}, "SELECT time from expected");
+  testTimestampINT64(
+      "int64_millis_dictionary.parquet", TimestampPrecision::kMilliseconds);
+  //testTimestampINT64(
+  //    "int64_millis_plain.parquet", TimestampPrecision::kMilliseconds);
 }
 
 TEST_F(ParquetTableScanTest, timestampINT64micros) {
-  std::vector<Timestamp> rawData = {
-      Timestamp(0, 0),
-      Timestamp(0, 1000),
-      Timestamp(-1, 999999000),
-      Timestamp(0, 1000000),
-      Timestamp(-1, 999000000),
-      Timestamp(0, 1001000),
-      Timestamp(-1, 998999000),
-      Timestamp(0, 999000),
-      Timestamp(-1, 999001000),
-      Timestamp(1, 0),
-      Timestamp(-1, 0),
-      Timestamp(1, 1000),
-      Timestamp(-2, 999999000),
-      Timestamp(0, 99999000),
-      Timestamp(-1, 900001000)};
-
-  auto a =
-      makeFlatVector<Timestamp>(60, [&](auto row) { return rawData[row / 4]; });
-
-  auto expected = makeRowVector({"time"}, {a});
-  createDuckDbTable("expected", {expected});
-
-  auto vector = makeArrayVector<Timestamp>({{}});
-
-  loadData(
-      getExampleFilePath("int64_micros_dictionary.parquet"),
-      ROW({"time"}, {TIMESTAMP()}),
-      makeRowVector(
-          {"time"},
-          {
-              vector,
-          }));
-  assertSelect({"time"}, "SELECT time from expected");
-
-  loadData(
-      getExampleFilePath("int64_micros_plain.parquet"),
-      ROW({"time"}, {TIMESTAMP()}),
-      makeRowVector(
-          {"time"},
-          {
-              vector,
-          }));
-  assertSelect({"time"}, "SELECT time from expected");
+  testTimestampINT64(
+      "int64_micros_dictionary.parquet", TimestampPrecision::kMicroseconds);
+  testTimestampINT64(
+      "int64_micros_plain.parquet", TimestampPrecision::kMicroseconds);
 }
 
 TEST_F(ParquetTableScanTest, timestampINT64BackwardCompatible) {

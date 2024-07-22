@@ -30,10 +30,8 @@ class DirectDecoder : public IntDecoder<isSigned> {
       std::unique_ptr<dwio::common::SeekableInputStream> input,
       bool useVInts,
       uint32_t numBytes,
-      bool bigEndian = false,
-      std::optional<TimestampPrecision> precision = std::nullopt)
-      : IntDecoder<isSigned>{std::move(input), useVInts, numBytes, bigEndian},
-        precision_(precision) {}
+      bool bigEndian = false)
+      : IntDecoder<isSigned>{std::move(input), useVInts, numBytes, bigEndian} {}
 
   void seekToRowGroup(dwio::common::PositionProvider&) override;
 
@@ -94,24 +92,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
       } else if constexpr (std::is_same_v<
                                typename Visitor::DataType,
                                int128_t>) {
-        if (precision_.has_value()) {
-          auto units = super::template readInt<int64_t>();
-          Timestamp timestamp;
-          if (precision_.value() == TimestampPrecision::kMilliseconds) {
-            timestamp = Timestamp::fromMillis(units);
-          } else if (precision_.value() == TimestampPrecision::kMicroseconds) {
-            timestamp = Timestamp::fromMicros(units);
-          } else {
-            VELOX_NYI(
-                "Unsupported timestamp unit. Only kMillis and kMicros supported.");
-          }
-
-          int128_t value;
-          memcpy(&value, &timestamp, sizeof(int128_t));
-          toSkip = visitor.process(value, atEnd);
-        } else {
-          toSkip = visitor.process(super::template readInt<int128_t>(), atEnd);
-        }
+        toSkip = visitor.process(super::template readInt<int128_t>(), atEnd);
       } else {
         toSkip = visitor.process(super::template readInt<int64_t>(), atEnd);
       }
@@ -129,8 +110,6 @@ class DirectDecoder : public IntDecoder<isSigned> {
 
  private:
   using super = IntDecoder<isSigned>;
-
-  const std::optional<TimestampPrecision> precision_;
 
   float readFloat() {
     float temp;
