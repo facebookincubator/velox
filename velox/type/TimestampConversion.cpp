@@ -144,7 +144,11 @@ bool isValidWeekDate(int32_t weekYear, int32_t weekOfYear, int32_t dayOfWeek) {
   return true;
 }
 
-bool isValidWeekOfMonthDate(int32_t year, int32_t month, int32_t weekOfMonth, int32_t dayOfWeek) {
+bool isValidWeekOfMonthDate(
+    int32_t year,
+    int32_t month,
+    int32_t weekOfMonth,
+    int32_t dayOfWeek) {
   if (dayOfWeek < 1 || dayOfWeek > 7) {
     return false;
   }
@@ -625,7 +629,7 @@ Status daysSinceEpochFromWeekOfMonthDate(
   int32_t firstDayOfWeek =
       extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
   out = daysSinceEpochOfFirstDayOfMonth - (firstDayOfWeek - 1) +
-        7 * (weekOfMonth - 1) + dayOfWeek - 1;
+      7 * (weekOfMonth - 1) + dayOfWeek - 1;
   return Status::OK();
 }
 

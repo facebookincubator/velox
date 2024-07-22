@@ -1443,7 +1443,11 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
         date.year, date.dayOfYear, daysSinceEpoch);
   } else if (date.weekOfMonthDateFormat) {
     status = util::daysSinceEpochFromWeekOfMonthDate(
-        date.year, date.month, date.weekOfMonth, date.dayOfWeek, daysSinceEpoch);
+        date.year,
+        date.month,
+        date.weekOfMonth,
+        date.dayOfWeek,
+        daysSinceEpoch);
   } else {
     status = util::daysSinceEpochFromDate(
         date.year, date.month, date.day, daysSinceEpoch);
