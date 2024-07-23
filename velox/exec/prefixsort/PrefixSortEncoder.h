@@ -290,14 +290,8 @@ class PrefixSortLongDecimalToIntEncoder : public PrefixSortEncoder {
 
 class PrefixSortHugeIntEncoder : public PrefixSortEncoder {
  public:
-  PrefixSortHugeIntEncoder(
-      bool ascending,
-      bool nullsFirst,
-      int precision,
-      int scale)
-      : PrefixSortEncoder(ascending, nullsFirst),
-        precision_(precision),
-        scale_(scale){};
+  PrefixSortHugeIntEncoder(bool ascending, bool nullsFirst)
+      : PrefixSortEncoder(ascending, nullsFirst){};
 
   FOLLY_ALWAYS_INLINE void encode(std::optional<int128_t> value, char* dest)
       const override {
@@ -315,10 +309,6 @@ class PrefixSortHugeIntEncoder : public PrefixSortEncoder {
   static int32_t encodedSize() {
     return 17;
   }
-
- private:
-  const int precision_;
-  const int scale_;
 };
 
 class PrefixSortEncoderFactory {
@@ -346,7 +336,7 @@ class PrefixSortEncoderFactory {
             ascending, nullsFirst, precision, scale);
       } else {
         return std::make_shared<PrefixSortHugeIntEncoder>(
-            ascending, nullsFirst, precision, scale);
+            ascending, nullsFirst);
       }
     } else {
       return std::make_shared<PrefixSortEncoder>(ascending, nullsFirst);

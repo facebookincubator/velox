@@ -124,13 +124,19 @@ class PrefixEncoderTest : public testing::Test,
       const PrefixSortEncoder& encoder,
       std::optional<int128_t> value,
       char* expected,
-      int32_t expectedSize) {
+      int32_t expectedSize,
+      bool testNullFlag) {
     char encoded[expectedSize];
     encoder.encode(value, encoded);
+    int64_t vaue = reinterpret_cast<int64_t*>(encoded + 1)[0];
     auto compare = [&](char* left, char* right) {
       return std::memcmp(left, right, expectedSize);
     };
-    ASSERT_EQ(compare(encoded, expected), 0);
+    if (testNullFlag) {
+      ASSERT_EQ(compare(encoded, expected), 0);
+    } else {
+      ASSERT_EQ(compare(encoded + 1, expected), 0);
+    }
   }
 
   template <typename T>
@@ -287,7 +293,7 @@ class PrefixEncoderTest : public testing::Test,
       false,
       20,
       5};
-  const PrefixSortHugeIntEncoder hugeIntEncoder2_ = {false, false, 32, 2};
+  const PrefixSortHugeIntEncoder hugeIntEncoder2_ = {false, false};
 
  private:
   const PrefixSortEncoder ascNullsFirstEncoder_ = {true, true};
@@ -350,18 +356,37 @@ TEST_F(PrefixEncoderTest, encodeHugeInt) {
   auto size = PrefixSortEncoderFactory::encodedSize(*type1);
   ASSERT_EQ(size, 9);
   char expected[9] = {0, 127, -1, -1, -1, -1, -1, -1, -1};
-  testEncodeHugeInt(hugeIntEncoder1_, 12, expected, size.value());
+  testEncodeHugeInt(hugeIntEncoder1_, 12, expected, size.value(), true);
   char expected2[9] = {1, 0, 0, 0, 0, 0, 0, 0, 0};
-  testEncodeHugeInt(hugeIntEncoder1_, std::nullopt, expected2, size.value());
+  testEncodeHugeInt(
+      hugeIntEncoder1_, std::nullopt, expected2, size.value(), true);
+
+  // Exceed rescale limit.
+  int64_t minValue = 0;
+  int64_t maxValue = 0xffffffffffffffff;
+  PrefixSortLongDecimalToIntEncoder hugeIntEncoder = {false, false, 20, 2};
+  testEncodeHugeInt(
+      hugeIntEncoder,
+      HugeInt::parse(std::string(18, '9') + "50"),
+      (char*)&minValue,
+      8,
+      false);
+  testEncodeHugeInt(
+      hugeIntEncoder,
+      HugeInt::parse("-" + std::string(18, '9') + "50"),
+      (char*)&maxValue,
+      8,
+      false);
 
   auto type2 = DECIMAL(32, 2);
   auto size2 = PrefixSortEncoderFactory::encodedSize(*type2);
   ASSERT_EQ(size2, 17);
   char expected3[17] = {
       0, 127, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -13};
-  testEncodeHugeInt(hugeIntEncoder2_, 12, expected3, size2.value());
+  testEncodeHugeInt(hugeIntEncoder2_, 12, expected3, size2.value(), true);
   char expected4[17] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-  testEncodeHugeInt(hugeIntEncoder2_, std::nullopt, expected4, size2.value());
+  testEncodeHugeInt(
+      hugeIntEncoder2_, std::nullopt, expected4, size2.value(), true);
 }
 
 TEST_F(PrefixEncoderTest, compareHugeInt) {
