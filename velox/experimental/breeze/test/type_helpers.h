@@ -112,11 +112,13 @@ namespace functions {
 struct ReduceOpAdd;
 struct ReduceOpMin;
 struct ReduceOpMax;
+struct ScanOpAdd;
 }  // namespace functions
 namespace algorithms {
 using ReduceOpAdd = functions::ReduceOpAdd;
 using ReduceOpMin = functions::ReduceOpMin;
 using ReduceOpMax = functions::ReduceOpMax;
+using ScanOpAdd = functions::ScanOpAdd;
 }  // namespace algorithms
 }  // namespace breeze
 
@@ -133,6 +135,11 @@ struct TypeToStr<breeze::functions::ReduceOpMin> {
 template <>
 struct TypeToStr<breeze::functions::ReduceOpMax> {
   constexpr static const char value[] = "max";
+  using type = typename MakeTypeString<value>::type;
+};
+template <>
+struct TypeToStr<breeze::functions::ScanOpAdd> {
+  constexpr static const char value[] = "add";
   using type = typename MakeTypeString<value>::type;
 };
 

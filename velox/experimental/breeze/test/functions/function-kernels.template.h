@@ -39,6 +39,7 @@
 
 #include "functions/load.h"
 #include "functions/reduce.h"
+#include "functions/scan.h"
 #include "functions/store.h"
 #include "platforms/platform.h"
 
@@ -181,6 +182,26 @@ void BlockReduce(const T* in, U* out, int num_items) {
   if (p.thread_idx() == 0) {
     *out = aggregate;
   }
+}
+
+template <typename Op, int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T,
+          typename U>
+PLATFORM("p")
+SHARED_MEM(
+    "typename breeze::functions::BlockScan<PlatformT, U, ITEMS_PER_THREAD>::Scratch",
+    "scratch")
+void BlockScan(const T* in, U* out, int num_items) {
+  T items[ITEMS_PER_THREAD];
+  breeze::functions::BlockLoad<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+      breeze::utils::make_slice(items), num_items);
+  U sums[ITEMS_PER_THREAD];
+  breeze::functions::BlockScan<PlatformT, U, ITEMS_PER_THREAD>::template Scan<
+      Op>(p, breeze::utils::make_slice(items), breeze::utils::make_slice(sums),
+          breeze::utils::make_slice<breeze::utils::SHARED>(scratch), num_items);
+  breeze::functions::BlockStore<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice(sums),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
 }
 
 }  // namespace kernels

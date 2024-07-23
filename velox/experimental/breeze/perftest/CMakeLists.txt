@@ -42,5 +42,5 @@ function(breeze_add_perftests dir type)
   endif()
 endfunction()
 
-breeze_add_perftests("functions" "function" "reduce")
+breeze_add_perftests("functions" "function" "reduce" "scan")
 breeze_add_perftests("algorithms" "algorithm" "reduce")

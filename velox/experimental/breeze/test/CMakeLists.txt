@@ -269,5 +269,6 @@ breeze_add_unittests(
   "function"
   "load"
   "store"
-  "reduce")
+  "reduce"
+  "scan")
 breeze_add_unittests("algorithms" "algorithm" "reduce")

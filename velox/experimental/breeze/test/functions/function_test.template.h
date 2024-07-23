@@ -76,4 +76,9 @@ class FunctionTest : public ::testing::Test {
   SHARED_MEM_TYPE(
       "typename breeze::functions::BlockReduce<PlatformT, U>::Scratch")
   void BlockReduce(USE_AS_SIZE const std::vector<T>& in, U* out);
+  template <typename ScanOp, int BLOCK_THREADS, int ITEMS_PER_THREAD,
+            typename U>
+  SHARED_MEM_TYPE(
+      "typename breeze::functions::BlockScan<PlatformT, U, ITEMS_PER_THREAD>::Scratch")
+  void BlockScan(USE_AS_SIZE const std::vector<T>& in, std::vector<U>& out);
 };

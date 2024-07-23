@@ -199,3 +199,25 @@ GEN_FILL_AT_IF(float)
 GEN_REDUCE(add)
 GEN_REDUCE(min)
 GEN_REDUCE(max)
+
+#define add_scan_op ScanOpAdd
+
+#define GEN_SCAN_T(O, T, BT, IPT)                                       \
+  kernel void NAME(scan_##O##_##T, T, BT, IPT)(                         \
+      const device T *in [[buffer(0)]], device T *out [[buffer(1)]],    \
+      const device int *num_items [[buffer(2)]],                        \
+      uint thread_idx [[thread_index_in_threadgroup]]) {                \
+    MetalPlatform<BT, WARP_THREADS> p{thread_idx, 0};                   \
+    threadgroup BlockScan<decltype(p), T, IPT>::Scratch scratch;        \
+    block_scan<O##_scan_op, BT, IPT>(p, in, out, &scratch, *num_items); \
+  }
+
+#define GEN_SCAN(O)           \
+  GEN_SCAN_T(O, int, 32, 2)   \
+  GEN_SCAN_T(O, int, 64, 1)   \
+  GEN_SCAN_T(O, uint, 32, 2)  \
+  GEN_SCAN_T(O, uint, 64, 1)  \
+  GEN_SCAN_T(O, float, 32, 2) \
+  GEN_SCAN_T(O, float, 64, 1)
+
+GEN_SCAN(add)
