@@ -15,6 +15,7 @@
  */
 
 #include "HdfsMiniCluster.h"
+#include <iostream>
 
 namespace facebook::velox::filesystems::test {
 void HdfsMiniCluster::start() {
@@ -71,9 +72,48 @@ HdfsMiniCluster::HdfsMiniCluster() {
     VELOX_FAIL(
         "Failed to find minicluster executable {}'", miniClusterExecutableName);
   }
+
   boost::filesystem::path hadoopHomeDirectory = exePath_;
   hadoopHomeDirectory.remove_leaf().remove_leaf();
   setupEnvironment(hadoopHomeDirectory.string());
+
+  auto result = system("yum install java-1.8.0-openjdk -y");
+  if (result != 0) {
+    std::cout << "Failed to install JVM." << std::endl;
+    return; // Exit if installation fails
+  } else {
+    std::cout << "Successfully install JVM"
+              << "\n";
+  }
+
+  result = system("ls /usr/lib/jvm/java-1.8.0-openjdk/");
+  if (result != 0) {
+    std::cout << "Failed ls /usr/lib/jvm/java-1.8.0-openjdk/"
+              << "\n";
+  } else {
+    std::cout << "Successfully ls /usr/lib/jvm/java-1.8.0-openjdk/"
+              << "\n";
+  }
+
+  env_["PATH"] = env_["PATH"].to_string() + jvmSearchPath;
+
+  path = env_["PATH"].to_vector();
+  exePath_ = boost::process::search_path(
+      miniJvmClusterExecutableName,
+      std::vector<boost::filesystem::path>(path.begin(), path.end()));
+  if (exePath_.empty()) {
+    VELOX_FAIL(
+        "Failed to find minicluster jvm executable {}'",
+        miniJvmClusterExecutableName);
+  } else {
+    std::cout << "the exePath_ is " << exePath_.string() << "\n";
+  }
+
+  boost::filesystem::path javaHomeDirectory = exePath_;
+  javaHomeDirectory.remove_leaf().remove_leaf();
+  std::cout << "the java home directory is " << javaHomeDirectory.string()
+            << "\n";
+  env_["JAVA_HOME"] = javaHomeDirectory.string();
 }
 
 void HdfsMiniCluster::addFile(std::string source, std::string destination) {

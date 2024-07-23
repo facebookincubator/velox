@@ -16,36 +16,32 @@
 
 #include "HdfsReadFile.h"
 #include <folly/synchronization/CallOnce.h>
-#include <hdfs/hdfs.h>
 
 namespace facebook::velox {
 
-HdfsReadFile::HdfsReadFile(hdfsFS hdfs, const std::string_view path)
-    : hdfsClient_(hdfs), filePath_(path) {
-  fileInfo_ = hdfsGetPathInfo(hdfsClient_, filePath_.data());
+HdfsReadFile::HdfsReadFile(
+    filesystems::arrow::io::internal::LibHdfsShim* driver,
+    hdfsFS hdfs,
+    const std::string_view path)
+    : driver_(driver), hdfsClient_(hdfs), filePath_(path) {
+  fileInfo_ = driver_->GetPathInfo(hdfsClient_, filePath_.data());
   if (fileInfo_ == nullptr) {
-    auto error = hdfsGetLastError();
-    auto errMsg = fmt::format(
-        "Unable to get file path info for file: {}. got error: {}",
-        filePath_,
-        error);
-    if (std::strstr(error, "FileNotFoundException") != nullptr) {
-      VELOX_FILE_NOT_FOUND_ERROR(errMsg);
-    }
+    auto errMsg =
+        fmt::format("Unable to get file path info for file: {}.", filePath_);
     VELOX_FAIL(errMsg);
   }
 }
 
 HdfsReadFile::~HdfsReadFile() {
   // should call hdfsFreeFileInfo to avoid memory leak
-  hdfsFreeFileInfo(fileInfo_, 1);
+  driver_->FreeFileInfo(fileInfo_, 1);
 }
 
 void HdfsReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
     const {
   checkFileReadParameters(offset, length);
   if (!file_->handle_) {
-    file_->open(hdfsClient_, filePath_);
+    file_->open(driver_, hdfsClient_, filePath_);
   }
   file_->seek(offset);
   uint64_t totalBytesRead = 0;

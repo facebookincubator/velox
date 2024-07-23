@@ -14,42 +14,43 @@
  * limitations under the License.
  */
 
-#include <hdfs/hdfs.h>
 #include "velox/common/file/File.h"
+#include "velox/connectors/hive/storage_adapters/hdfs/hdfs.h"
+#include "velox/connectors/hive/storage_adapters/hdfs/hdfs_internal.h"
 
 namespace facebook::velox {
 
 struct HdfsFile {
+  filesystems::arrow::io::internal::LibHdfsShim* driver_;
   hdfsFS client_;
   hdfsFile handle_;
 
-  HdfsFile() : client_(nullptr), handle_(nullptr) {}
+  HdfsFile() : driver_(nullptr), client_(nullptr), handle_(nullptr) {}
   ~HdfsFile() {
-    if (handle_ && hdfsCloseFile(client_, handle_) == -1) {
+    if (handle_ && driver_->CloseFile(client_, handle_) == -1) {
       LOG(ERROR) << "Unable to close file, errno: " << errno;
     }
   }
 
-  void open(hdfsFS client, const std::string& path) {
+  void open(
+      filesystems::arrow::io::internal::LibHdfsShim* driver,
+      hdfsFS client,
+      const std::string& path) {
+    driver_ = driver;
     client_ = client;
-    handle_ = hdfsOpenFile(client, path.data(), O_RDONLY, 0, 0, 0);
-    VELOX_CHECK_NOT_NULL(
-        handle_,
-        "Unable to open file {}. got error: {}",
-        path,
-        hdfsGetLastError());
+    handle_ = driver->OpenFile(client, path.data(), O_RDONLY, 0, 0, 0);
+    VELOX_CHECK_NOT_NULL(handle_, "Unable to open file {}.", path);
   }
 
   void seek(uint64_t offset) const {
     VELOX_CHECK_EQ(
-        hdfsSeek(client_, handle_, offset),
+        driver_->Seek(client_, handle_, offset),
         0,
-        "Cannot seek through HDFS file, error is : {}",
-        std::string(hdfsGetLastError()));
+        "Cannot seek through HDFS file.");
   }
 
   int32_t read(char* pos, uint64_t length) const {
-    auto bytesRead = hdfsRead(client_, handle_, pos, length);
+    auto bytesRead = driver_->Read(client_, handle_, pos, length);
     VELOX_CHECK(bytesRead >= 0, "Read failure in HDFSReadFile::preadInternal.")
     return bytesRead;
   }
@@ -60,7 +61,10 @@ struct HdfsFile {
  */
 class HdfsReadFile final : public ReadFile {
  public:
-  explicit HdfsReadFile(hdfsFS hdfs, std::string_view path);
+  explicit HdfsReadFile(
+      filesystems::arrow::io::internal::LibHdfsShim* driver,
+      hdfsFS hdfs,
+      std::string_view path);
   ~HdfsReadFile() override;
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buf)
@@ -86,6 +90,7 @@ class HdfsReadFile final : public ReadFile {
   void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
   void checkFileReadParameters(uint64_t offset, uint64_t length) const;
 
+  filesystems::arrow::io::internal::LibHdfsShim* driver_;
   hdfsFS hdfsClient_;
   hdfsFileInfo* fileInfo_;
   std::string filePath_;
