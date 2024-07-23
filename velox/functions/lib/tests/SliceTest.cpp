@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/lib/Slice.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -27,7 +28,7 @@ class SliceTest : public FunctionBaseTest {
  protected:
   static const vector_size_t kVectorSize{1000};
 
-  void testSlice(
+  virtual void testSlice(
       const std::string& expression,
       const std::vector<VectorPtr>& parameters,
       const ArrayVectorPtr& expectedArrayVector) {
@@ -149,15 +150,32 @@ class SliceTest : public FunctionBaseTest {
   }
 };
 
-TEST_F(SliceTest, prestoTestCases) {
+class SparkSliceTest : public SliceTest {
+ protected:
+  void SetUp() override {
+    FunctionBaseTest::SetUp();
+    // Parses integer literals as INTEGER, not BIGINT.
+    options_.parseIntegerAsBigint = false;
+    registerIntegerSliceFunction("spark_");
+  }
+
+  void testSlice(
+      const std::string& expression,
+      const std::vector<VectorPtr>& parameters,
+      const ArrayVectorPtr& expectedArrayVector) override {
+    auto result =
+        evaluate<ArrayVector>("spark_" + expression, makeRowVector(parameters));
+    assertEqualVectors(expectedArrayVector, result);
+    EXPECT_NO_THROW(expectedArrayVector->checkRanges());
+  }
+};
+
+TEST_F(SliceTest, presto) {
   commonTestCases();
 }
 
-TEST_F(SliceTest, integerStartAndLength) {
-  // Parses integer literals as INTEGER, not BIGINT.
-  options_.parseIntegerAsBigint = false;
+TEST_F(SparkSliceTest, spark) {
   commonTestCases();
-  options_.parseIntegerAsBigint = true;
 }
 
 TEST_F(SliceTest, constantInputArray) {
