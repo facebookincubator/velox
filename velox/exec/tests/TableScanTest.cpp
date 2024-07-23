@@ -1208,6 +1208,54 @@ TEST_F(TableScanTest, missingColumns) {
   assertQuery(op, filePaths, "SELECT * FROM tmp", 0);
 }
 
+TEST_F(TableScanTest, missingColumnsInRepeatedColumns) {
+  constexpr int kSize = 10;
+  auto bigints = makeFlatVector<int64_t>(kSize, folly::identity);
+  auto structs =
+      makeRowVector({makeFlatVector<int64_t>(kSize, folly::identity)});
+  std::vector<vector_size_t> offsets(kSize);
+  std::iota(offsets.begin(), offsets.end(), 0);
+  auto vector = makeRowVector({
+      bigints,
+      makeArrayVector(offsets, structs),
+      makeMapVector(offsets, bigints, structs),
+  });
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector});
+  auto structType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  auto c1Type = ARRAY(structType);
+  auto c2Type = MAP(BIGINT(), structType);
+  auto plan = PlanBuilder()
+                  .tableScan(
+                      ROW({"c1", "c2"}, {c1Type, c2Type}),
+                      {},
+                      "c0 % 2 = 0",
+                      ROW({"c0", "c1", "c2"}, {BIGINT(), c1Type, c2Type}))
+                  .planNode();
+  auto structs2 = makeRowVector({
+      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeNullConstant(TypeKind::BIGINT, kSize),
+  });
+  auto indices = makeIndices(kSize, [](auto i) {
+    auto index = 2 * i;
+    if (index >= kSize) {
+      index -= kSize;
+    }
+    return index;
+  });
+  auto expected = makeRowVector(
+      {"c1", "c2"},
+      {
+          wrapInDictionary(indices, makeArrayVector(offsets, structs2)),
+          wrapInDictionary(indices, makeMapVector(offsets, bigints, structs2)),
+      });
+  AssertQueryBuilder(plan)
+      .splits(
+          {makeHiveConnectorSplit(file->getPath()),
+           makeHiveConnectorSplit(file->getPath())})
+      .assertResults(expected);
+}
+
 // Tests queries that use Lazy vectors with multiple layers of wrapping.
 TEST_F(TableScanTest, constDictLazy) {
   vector_size_t size = 1'000;
@@ -4455,6 +4503,56 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
       PlanBuilder().tableScan(readSchema, {}, "", writeSchema).planNode();
   auto split = makeHiveConnectorSplit(file->getPath());
   AssertQueryBuilder(plan).split(split).assertResults(vector);
+}
+
+TEST_F(TableScanTest, dynamicFilters) {
+  // Make sure filters on same column from multiple downstream operators are
+  // merged properly without overwriting each other.
+  auto aVector =
+      makeRowVector({"a"}, {makeFlatVector<int64_t>(20'000, folly::identity)});
+  auto bVector =
+      makeRowVector({"b"}, {makeFlatVector<int64_t>(10'000, folly::identity)});
+  auto cVector = makeRowVector(
+      {"c"},
+      {makeFlatVector<int64_t>(10'000, [](auto i) { return i + 10'000; })});
+  std::shared_ptr<TempFilePath> files[3];
+  files[0] = TempFilePath::create();
+  writeToFile(files[0]->getPath(), {aVector});
+  files[1] = TempFilePath::create();
+  writeToFile(files[1]->getPath(), {bVector});
+  files[2] = TempFilePath::create();
+  writeToFile(files[2]->getPath(), {cVector});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId aScanId;
+  core::PlanNodeId bScanId;
+  core::PlanNodeId cScanId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(ROW({"a"}, {BIGINT()}))
+                  .capturePlanNodeId(aScanId)
+                  .hashJoin(
+                      {"a"},
+                      {"b"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .tableScan(ROW({"b"}, {BIGINT()}))
+                          .capturePlanNodeId(bScanId)
+                          .planNode(),
+                      "", /*filter*/
+                      {"a"})
+                  .hashJoin(
+                      {"a"},
+                      {"c"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .tableScan(ROW({"c"}, {BIGINT()}))
+                          .capturePlanNodeId(cScanId)
+                          .planNode(),
+                      "", /*filter*/
+                      {"a"})
+                  .planNode();
+  AssertQueryBuilder(plan)
+      .split(aScanId, makeHiveConnectorSplit(files[0]->getPath()))
+      .split(bScanId, makeHiveConnectorSplit(files[1]->getPath()))
+      .split(cScanId, makeHiveConnectorSplit(files[2]->getPath()))
+      .assertResults(makeRowVector({makeFlatVector<int64_t>(0)}));
 }
 
 // TODO: re-enable this test once we add back driver suspension support for
