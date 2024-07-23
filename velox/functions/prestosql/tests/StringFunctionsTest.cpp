@@ -335,24 +335,27 @@ TEST_F(StringFunctionsTest, substrConstant) {
         " are stored in block and not inlined";
   });
 
-  // Creating vectors
-  auto stringVector = makeStrings(size, strings);
+  auto evaluate = [&](const std::string& fn) -> void {
+    // Creating vectors
+    auto stringVector = makeStrings(size, strings);
+    auto result = evaluateSubstr(fn, {stringVector});
+    EXPECT_EQ(stringVector.use_count(), 1);
+    // Destroying string vector
+    stringVector = nullptr;
 
-  auto result = evaluateSubstr("substr(c0, 1, 2)", {stringVector});
-
-  EXPECT_EQ(stringVector.use_count(), 1);
-  // Destroying string vector
-  stringVector = nullptr;
-
-  for (int i = 0; i < size; ++i) {
-    if (expectNullString(i)) {
-      EXPECT_TRUE(result->isNullAt(i)) << "expected null at " << i;
-    } else {
-      EXPECT_EQ(result->valueAt(i).size(), 2) << "at " << i;
-      EXPECT_EQ(result->valueAt(i).getString(), strings[i].substr(0, 2))
-          << "at " << i;
+    for (int i = 0; i < size; ++i) {
+      if (expectNullString(i)) {
+        EXPECT_TRUE(result->isNullAt(i)) << "expected null at " << i;
+      } else {
+        EXPECT_EQ(result->valueAt(i).size(), 2) << "at " << i;
+        EXPECT_EQ(result->valueAt(i).getString(), strings[i].substr(0, 2))
+            << "at " << i;
+      }
     }
-  }
+  };
+
+  evaluate("substr(c0, 1, 2)");
+  evaluate("substring(c0, 1, 2)");
 }
 
 /**
@@ -377,40 +380,50 @@ TEST_F(StringFunctionsTest, substrVariable) {
   auto lengthVector =
       makeFlatVector<int32_t>(size, expectedLength, expectNullLength);
 
-  auto stringVector = makeStrings(size, strings);
+  auto evaluate = [&](const std::string& fn) {
+    auto stringVector = makeStrings(size, strings);
 
-  result = evaluateSubstr(
-      "substr(c0, c1, c2)", {stringVector, startVector, lengthVector});
-  EXPECT_EQ(stringVector.use_count(), 1);
-  // Destroying string vector
-  stringVector = nullptr;
+    result = evaluateSubstr(fn, {stringVector, startVector, lengthVector});
+    EXPECT_EQ(stringVector.use_count(), 1);
+    // Destroying string vector
+    stringVector = nullptr;
 
-  for (int i = 0; i < size; ++i) {
-    // Checking the null results
-    if (expectNullString(i) || expectNullStart(i) || expectNullLength(i)) {
-      EXPECT_TRUE(result->isNullAt(i)) << "expected null at " << i;
-    } else {
-      if (expectedStart(i) != 0) {
-        EXPECT_EQ(result->valueAt(i).size(), expectedLength(i)) << "at " << i;
-        for (int l = 0; l < expectedLength(i); l++) {
-          EXPECT_EQ(
-              result->valueAt(i).data()[l],
-              strings[i][expectedStart(i) - 1 + l])
-              << "at " << i;
-        }
+    for (int i = 0; i < size; ++i) {
+      // Checking the null results
+      if (expectNullString(i) || expectNullStart(i) || expectNullLength(i)) {
+        EXPECT_TRUE(result->isNullAt(i)) << "expected null at " << i;
       } else {
-        // Special test for start = 0. The Presto semantic expect empty string
-        EXPECT_EQ(result->valueAt(i).size(), 0);
+        if (expectedStart(i) != 0) {
+          EXPECT_EQ(result->valueAt(i).size(), expectedLength(i)) << "at " << i;
+          for (int l = 0; l < expectedLength(i); l++) {
+            EXPECT_EQ(
+                result->valueAt(i).data()[l],
+                strings[i][expectedStart(i) - 1 + l])
+                << "at " << i;
+          }
+        } else {
+          // Special test for start = 0. The Presto semantic expect empty string
+          EXPECT_EQ(result->valueAt(i).size(), 0);
+        }
       }
     }
-  }
+  };
+
+  evaluate("substr(c0, c1, c2)");
+  evaluate("substring(c0, c1, c2)");
 }
 
 TEST_F(StringFunctionsTest, substrInvalidUtf8) {
   const auto substr = [&](std::optional<std::string> str,
                           std::optional<int32_t> start,
                           std::optional<int32_t> length) {
-    return evaluateOnce<std::string>("substr(c0, c1, c2)", str, start, length);
+    static bool useAlias = true;
+    useAlias = !useAlias;
+    return evaluateOnce<std::string>(
+        useAlias ? "substring(c0, c1, c2)" : "substr(c0, c1, c2)",
+        str,
+        start,
+        length);
   };
 
   // The byte \xE7 indicates it should have 2 more bytes to be valid UTF-8, but
@@ -488,12 +501,15 @@ TEST_F(StringFunctionsTest, substrSlowPath) {
   vector_size_t size = 100;
 
   auto dummyInput = makeRowVector(makeRowType({BIGINT()}), size);
-  auto result = evaluate<SimpleVector<StringView>>(
-      "substr('my string here', 5, 2)", dummyInput);
+  auto evaluateFunction = [&](const std::string& fn) {
+    auto result = evaluate<SimpleVector<StringView>>(fn, dummyInput);
+    for (int i = 0; i < size; ++i) {
+      EXPECT_EQ(result->valueAt(i).size(), 2) << "at " << i;
+    }
+  };
 
-  for (int i = 0; i < size; ++i) {
-    EXPECT_EQ(result->valueAt(i).size(), 2) << "at " << i;
-  }
+  evaluateFunction("substr('my string here', 5, 2)");
+  evaluateFunction("substring('my string here', 5, 2)");
 }
 
 /**
@@ -510,7 +526,7 @@ TEST_F(StringFunctionsTest, substrNegativeStarts) {
   EXPECT_EQ(result->valueAt(0).getString(), "ere");
 
   result = evaluate<SimpleVector<StringView>>(
-      "substr('my string here', -1, 3)", dummyInput);
+      "substring('my string here', -1, 3)", dummyInput);
 
   EXPECT_EQ(result->valueAt(0).getString(), "e");
 
@@ -520,7 +536,7 @@ TEST_F(StringFunctionsTest, substrNegativeStarts) {
   EXPECT_EQ(result->valueAt(0).getString(), "re");
 
   result = evaluate<SimpleVector<StringView>>(
-      "substr('my string here', -2, -1)", dummyInput);
+      "substring('my string here', -2, -1)", dummyInput);
 
   EXPECT_EQ(result->valueAt(0).getString(), "");
 
@@ -530,7 +546,7 @@ TEST_F(StringFunctionsTest, substrNegativeStarts) {
   EXPECT_EQ(result->valueAt(0).getString(), "tring here");
 
   result = evaluate<SimpleVector<StringView>>(
-      "substr('my string here', -100)", dummyInput);
+      "substring('my string here', -100)", dummyInput);
 
   EXPECT_EQ(result->valueAt(0).getString(), "");
 }
@@ -539,7 +555,13 @@ TEST_F(StringFunctionsTest, substrNumericOverflow) {
   const auto substr = [&](std::optional<std::string> str,
                           std::optional<int32_t> start,
                           std::optional<int32_t> length) {
-    return evaluateOnce<std::string>("substr(c0, c1, c2)", str, start, length);
+    static bool useAlias = true;
+    useAlias = !useAlias;
+    return evaluateOnce<std::string>(
+        useAlias ? "substring(c0, c1, c2)" : "substr(c0, c1, c2)",
+        str,
+        start,
+        length);
   };
 
   EXPECT_EQ(substr("example", 4, 2147483645), "mple");
@@ -670,16 +692,18 @@ TEST_F(StringFunctionsTest, substrVarbinary) {
   auto substr = [&](const std::string& input,
                     int64_t start,
                     std::optional<int64_t> length = {}) {
+    static bool useAlias = true;
+    useAlias = !useAlias;
     if (length.has_value()) {
       return evaluateOnce<std::string>(
-          "substr(c0, c1, c2)",
+          useAlias ? "substring(c0, c1, c2)" : "substr(c0, c1, c2)",
           {VARBINARY(), BIGINT(), BIGINT()},
           std::optional(input),
           std::optional(start),
           length);
     } else {
       return evaluateOnce<std::string>(
-          "substr(c0, c1)",
+          useAlias ? "substring(c0, c1)" : "substr(c0, c1)",
           {VARBINARY(), BIGINT()},
           std::optional(input),
           std::optional(start));
