@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 
+using namespace facebook::velox::test;
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
@@ -994,6 +995,299 @@ TEST_F(StringTest, trim) {
   EXPECT_EQ(
       trimWithTrimStr("\u6570", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
+}
+
+TEST_F(StringTest, split) {
+  auto limit = -1;
+  auto delim = ",";
+  auto numRows = 3;
+  auto data = std::vector<std::string>{
+      {"I,he,she,they"}, // Simple
+      {"one,,,four,"}, // Empty strings
+      {""}, // The whole string is empty
+  };
+
+  auto createStrings = [&](RowSet /*rows*/) {
+    return makeFlatVector<StringView>(
+        numRows, [&](vector_size_t row) { return StringView{data[row]}; });
+  };
+
+  auto createDelims = [&](RowSet /*rows*/) {
+    return makeFlatVector<StringView>(
+        numRows, [&](vector_size_t row) { return StringView{delim}; });
+  };
+
+  auto createLimits = [&](RowSet /*rows*/) {
+    return makeFlatVector<int32_t>(
+        numRows, [&](vector_size_t row) { return limit; });
+  };
+
+  // No limit.
+  auto strings = createStrings({});
+  auto delims = createDelims({});
+  auto input = makeRowVector({strings, delims});
+  auto result = evaluate("split(c0, c1)", input);
+  auto expected = makeArrayVector<std::string>({
+      {"I", "he", "she", "they"},
+      {"one", "", "", "four", ""},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  // Limit <= 0.
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  assertEqualVectors(expected, result);
+
+  // High limit.
+  limit = 10;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  assertEqualVectors(expected, result);
+
+  // Small limit.
+  limit = 3;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"I", "he", "she,they"},
+      {"one", "", ",four,"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  // limit = 1.
+  limit = 1;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"I,he,she,they"},
+      {"one,,,four,"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  // Check the empty delimiter special case.
+  delim = "";
+  limit = 0;
+  delims = createDelims({});
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y"},
+      {"o", "n", "e", ",", ",", ",", "f", "o", "u", "r", ","},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  limit = -1;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  assertEqualVectors(expected, result);
+
+  limit = 20;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  assertEqualVectors(expected, result);
+
+  limit = 3;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"I", ",", "h"},
+      {"o", "n", "e"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  limit = 1;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"I"},
+      {"o"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  delim = "A|";
+  delims = createDelims({});
+  input = makeRowVector({strings, delims});
+  result = evaluate("split(c0, c1)", input);
+  expected = makeArrayVector<std::string>({
+      {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y", ""},
+      {"o", "n", "e", ",", ",", ",", "f", "o", "u", "r", ",", ""},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  limit = 2;
+  auto limits = createLimits({});
+  input = makeRowVector({strings, delims, limits});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"I", ",he,she,they"},
+      {"o", "ne,,,four,"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  delim = "A";
+  delims = createDelims({});
+  input = makeRowVector({strings, delims});
+  result = evaluate("split(c0, c1)", input);
+  expected = makeArrayVector<std::string>({
+      {"I,he,she,they"},
+      {"one,,,four,"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  delim = "A|";
+  data = std::vector<std::string>{
+      {"синяя赤いトマト緑の"},
+      {"Hello世界🙂"},
+      {""},
+  };
+  strings = createStrings({});
+  delims = createDelims({});
+  input = makeRowVector({strings, delims});
+  result = evaluate("split(c0, c1)", input);
+  expected = makeArrayVector<std::string>({
+      {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の", ""},
+      {"H", "e", "l", "l", "o", "世", "界", "🙂", ""},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  input = makeRowVector({strings, delims, limits});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"с", "иняя赤いトマト緑の"},
+      {"H", "ello世界🙂"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  // Non-ascii, empty delimiter.
+  delim = "";
+  delims = createDelims({});
+  input = makeRowVector({strings, delims});
+  result = evaluate("split(c0, c1)", input);
+  expected = makeArrayVector<std::string>({
+      {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の"},
+      {"H", "e", "l", "l", "o", "世", "界", "🙂"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  input = makeRowVector({strings, delims, limits});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"с", "и"},
+      {"H", "e"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  delim = "లేదా";
+  data = std::vector<std::string>{
+      {"синяя сливаలేదా赤いトマトలేదా黃苹果లేదాbrown pear"}, // Simple
+      {"зелёное небоలేదాలేదాలేదా緑の空లేదా"}, // Empty strings
+      {""}, // The whole string is empty
+  };
+  strings = createStrings({});
+  delims = createDelims({});
+  input = makeRowVector({strings, delims});
+  result = evaluate("split(c0, c1)", input);
+  expected = makeArrayVector<std::string>({
+      {"синяя слива", "赤いトマト", "黃苹果", "brown pear"},
+      {"зелёное небо", "", "", "緑の空", ""},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  limit = -1;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  assertEqualVectors(expected, result);
+
+  limit = 10;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  assertEqualVectors(expected, result);
+
+  limit = 3;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"синяя слива", "赤いトマト", "黃苹果లేదాbrown pear"},
+      {"зелёное небо", "", "లేదా緑の空లేదా"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  limit = 1;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"синяя сливаలేదా赤いトマトలేదా黃苹果లేదాbrown pear"},
+      {"зелёное небоలేదాలేదాలేదా緑の空లేదా"},
+      {""},
+  });
+  assertEqualVectors(expected, result);
+
+  delim = "\\s*[a-z]+\\s*";
+  data = std::vector<std::string>{
+      "1a 2b 14m",
+      "1a 2b 14",
+      "",
+      "a123b",
+  };
+  numRows = 4;
+  delims = createDelims({});
+  strings = createStrings({});
+  input = makeRowVector({strings, delims});
+  result = evaluate("split(c0, c1)", input);
+  expected = makeArrayVector<std::string>({
+      {"1", "2", "14", ""},
+      {"1", "2", "14"},
+      {""},
+      {"", "123", ""},
+  });
+  assertEqualVectors(expected, result);
+
+  limit = -1;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  assertEqualVectors(expected, result);
+
+  limit = 10;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  assertEqualVectors(expected, result);
+
+  limit = 3;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"1", "2", "14m"},
+      {"1", "2", "14"},
+      {""},
+      {"", "123", ""},
+  });
+  assertEqualVectors(expected, result);
+
+  limit = 1;
+  input = makeRowVector({strings, delims, createLimits({})});
+  result = evaluate("split(c0, c1, c2)", input);
+  expected = makeArrayVector<std::string>({
+      {"1a 2b 14m"},
+      {"1a 2b 14"},
+      {""},
+      {"a123b"},
+  });
+  assertEqualVectors(expected, result);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

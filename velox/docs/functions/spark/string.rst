@@ -213,6 +213,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT soundex('Miller'); -- "M460"
 
 .. spark:function:: split(string, delimiter[, limit]) -> array(string)
+
     Splits ``string`` around occurrences that match ``delimiter`` and returns an array with a length of
     at most ``limit``. ``delimiter`` is a string representing regular expression. ``limit`` is an integer
     which controls the number of times the regex is applied. By default, ``limit`` is -1. When ``limit`` > 0,

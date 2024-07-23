@@ -31,7 +31,6 @@ add_library(
   RegisterArithmetic.cpp
   RegisterCompare.cpp
   Size.cpp
-  Split.cpp
   String.cpp
   UnscaledValueFunction.cpp)
 
