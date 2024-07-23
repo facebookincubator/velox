@@ -1,0 +1,186 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+ * Copyright (c) 2024 by Rivos Inc.
+ * Licensed under the Apache License, Version 2.0, see LICENSE for details.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Note: This file is simply a pseudo-c++ template for the purposes of being
+// specialized across the 6 supported backends. Only a limited subset of what
+// you might expect to do in a C++ file will be supported here. In particular:
+//    1. Includes will be copied verbatim
+//    2. Function signatures will be copied but modified for individual
+//    backends
+//    3. Function bodies will copied verbatim.
+//
+// There are a few special attributes for communicating extra information:
+//    1. PLATFORM(name) => the function makes use of a backend-specific
+//    Platform object called `name`.
+//    2. SHARED_MEM(type, name) => the function uses a shared variable of the
+//    given type and name.
+
+#define PLATFORM(X) [[clang::annotate("PlatformName=" X)]]
+#define SHARED_MEM(T, id) [[clang::annotate("SharedMem=" T ";" id)]]
+
+#include "functions/load.h"
+#include "functions/reduce.h"
+#include "functions/store.h"
+#include "platforms/platform.h"
+
+namespace kernels {
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T>
+PLATFORM("p")
+void BlockLoad(const T* in, T* out, int num_items) {
+  T items[ITEMS_PER_THREAD];
+  breeze::functions::BlockLoad<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+      breeze::utils::make_slice(items), num_items);
+  breeze::functions::BlockStore<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice(items),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T>
+PLATFORM("p")
+void BlockLoadIf(const T* in, const int* in_selection_flags, T* out,
+                 int num_items) {
+  int selection_flags[ITEMS_PER_THREAD];
+  breeze::functions::BlockLoad<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in_selection_flags),
+      breeze::utils::make_slice(selection_flags), num_items);
+  T items[ITEMS_PER_THREAD];
+  breeze::functions::BlockLoadIf<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+      breeze::utils::make_slice(selection_flags),
+      breeze::utils::make_slice(items), num_items);
+  breeze::functions::BlockStoreIf<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice(items),
+      breeze::utils::make_slice(selection_flags),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T>
+PLATFORM("p")
+void BlockLoadFrom(const T* in, const int* in_offsets, T* out, int num_items) {
+  int offsets[ITEMS_PER_THREAD];
+  breeze::functions::BlockLoad<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in_offsets),
+      breeze::utils::make_slice(offsets), num_items);
+  T items[ITEMS_PER_THREAD];
+  breeze::functions::BlockLoadFrom<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+      breeze::utils::make_slice(offsets), breeze::utils::make_slice(items),
+      num_items);
+  breeze::functions::BlockStore<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice(items),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T>
+PLATFORM("p")
+void BlockStore(const T* in, T* out, int num_items) {
+  breeze::functions::BlockStore<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p,
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          in),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T>
+PLATFORM("p")
+void BlockStoreIf(const T* in, const int* selection_flags, T* out,
+                  int num_items) {
+  breeze::functions::BlockStoreIf<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p,
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          in),
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          selection_flags),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T>
+PLATFORM("p")
+void BlockStoreAt(const T* in, const int* offsets, T* out, int num_items) {
+  breeze::functions::BlockStoreAt<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p,
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          in),
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          offsets),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T>
+PLATFORM("p")
+void BlockStoreAtIf(const T* in, const int* offsets, const int* selection_flags,
+                    T* out, int num_items) {
+  breeze::functions::BlockStoreAtIf<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p,
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          in),
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          offsets),
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          selection_flags),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T>
+PLATFORM("p")
+void BlockFill(const T* value, T* out, int num_items) {
+  breeze::functions::BlockFill<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, *value, breeze::utils::make_slice<breeze::utils::GLOBAL>(out),
+      num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T>
+PLATFORM("p")
+void BlockFillAtIf(const T* value, const int* offsets,
+                   const int* selection_flags, T* out, int num_items) {
+  breeze::functions::BlockFillAtIf<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, *value,
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          offsets),
+      breeze::utils::make_slice<breeze::utils::GLOBAL, breeze::utils::STRIPED>(
+          selection_flags),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <typename Op, int BLOCK_THREADS, int ITEMS_PER_THREAD, typename T,
+          typename U>
+PLATFORM("p")
+SHARED_MEM("typename breeze::functions::BlockReduce<PlatformT, U>::Scratch",
+           "scratch")
+void BlockReduce(const T* in, U* out, int num_items) {
+  T items[ITEMS_PER_THREAD];
+  breeze::functions::BlockLoad<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+      breeze::utils::make_slice(items), num_items);
+  U aggregate = breeze::functions::BlockReduce<PlatformT, U>::template Reduce<
+      Op, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice(items),
+      breeze::utils::make_slice<breeze::utils::SHARED>(scratch), num_items);
+  p.syncthreads();
+  if (p.thread_idx() == 0) {
+    *out = aggregate;
+  }
+}
+
+}  // namespace kernels
