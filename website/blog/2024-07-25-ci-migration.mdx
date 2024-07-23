@@ -7,7 +7,7 @@ tags: [tech-blog, packaging]
 
 ## TL;DR
 
-In late 2023, the Meta OSS (Open Source Software) Team requested all Meta teams to move the CI deployments from CircleCI to Github Actions. Voltron Data(http://voltrondata.com) and Meta in collaboration migrated all the deployed Velox CI jobs. For the year 2024, Velox CI spend was on track to overshoot the allocated resources by a considerable amount of money. As part of this migration effort, the CI workloads were consolidated and optimized by Q2 2024, bringing down the projected 2024 CI spend by 51%.
+In late 2023, the Meta OSS (Open Source Software) Team requested all Meta teams to move the CI deployments from CircleCI to Github Actions. [Voltron Data](http://voltrondata.com) and Meta in collaboration migrated all the deployed Velox CI jobs. For the year 2024, Velox CI spend was on track to overshoot the allocated resources by a considerable amount of money. As part of this migration effort, the CI workloads were consolidated and optimized by Q2 2024, bringing down the projected 2024 CI spend by 51%.
 
 ## Velox’s Continuous Integration Workload
 
@@ -30,7 +30,7 @@ When a pull request is submitted to Velox, the following jobs are executed:
 4. Run prerequisite tests 
     a. Unit Tests
     b. Benchmarking Tests
-        i. Conbench(https://velox-conbench.voltrondata.run/runs/5bd139fffa9b4e0eb020da4d63211121/) is used to store and compare results, and also alert users on regressions
+        i. [Conbench](https://velox-conbench.voltrondata.run/runs/5bd139fffa9b4e0eb020da4d63211121/) is used to store and compare results, and also alert users on regressions
     c. Various Fuzzer Tests (Expression / Aggregation/ Exchange / Join etc) 
     d. Signature Check and Biased Fuzzer Tests ( Expression / Aggregation)
     e. Fuzzer Tests using Presto as source of truth
@@ -59,7 +59,7 @@ Velox CI builds were instrumented in Conbench so that it can capture various met
 3. Memory pressure 
 4. Measure across time how our changes affect binary sizes 
 
-A nightly job is run to capture these build metrics and it is uploaded to Conbench. Velox build metrics report is available here: Velox Build Metrics Report(https://facebookincubator.github.io/velox/bm-report/)
+A nightly job is run to capture these build metrics and it is uploaded to Conbench. Velox build metrics report is available here: [Velox Build Metrics Report](https://facebookincubator.github.io/velox/bm-report/)
 
 ## Acknowledgements
 
