@@ -26,16 +26,19 @@
 namespace facebook::velox::parquet {
 namespace {
 TypePtr getRequestedType(const TypePtr& requestedType, std::string& name) {
-  if (!requestedType || !requestedType->isRow()) {
+  if (!requestedType) {
     return requestedType;
   }
 
-  const auto& rowType = requestedType->asRow();
-  if (rowType.containsChild(name)) {
-    return rowType.findChild(name);
+  try {
+    return requestedType->asRow().findChild(name);
+  } catch (const VeloxUserError& e) {
+    if (e.errorCode() == error_code::kInvalidArgument &&
+        e.message().find("Field not found") != std::string::npos) {
+      return nullptr;
+    }
+    throw e;
   }
-
-  return nullptr;
 }
 } // namespace
 
