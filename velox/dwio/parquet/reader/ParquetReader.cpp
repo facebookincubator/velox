@@ -31,6 +31,7 @@ TypePtr getRequestedType(const TypePtr& requestedType, std::string& name) {
   }
 
   try {
+    VELOX_CHECK(requestedType->isRow())
     return requestedType->asRow().findChild(name);
   } catch (const VeloxUserError& e) {
     if (e.errorCode() == error_code::kInvalidArgument &&
