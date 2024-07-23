@@ -1566,7 +1566,7 @@ struct MaskFunction {
           &inputBuffer[inputIdx], inputBuffer + inputSize, charByteSize);
       if (curCodePoint == -1) {
         // That means it is a invalid UTF-8 character for example '\xED',
-        // treat it as char with size is 1.
+        // treat it as char with size 1.
         charByteSize = 1;
       }
       auto maskedChar = &inputBuffer[inputIdx];
@@ -1618,9 +1618,8 @@ struct MaskFunction {
         return StringView{maskCharData};
       }
 
-      if (maskCharSize == 0) {
-        VELOX_USER_FAIL("Length of replacing char should be 1");
-      }
+      VELOX_USER_CHECK_NE(
+          maskCharSize, 0, "Length of replacing char should be 1");
 
       // Calculates the byte length of the first unicode character, and compares
       // it with the length of replacing character. Inequality indicates the
