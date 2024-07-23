@@ -2304,4 +2304,35 @@ TEST_F(MysqlDateTimeTest, parseConsecutiveSpecifiers) {
   EXPECT_THROW(parseMysql("1212", "%Y%H"), VeloxUserError);
 }
 
+class WeekOfMonthPatternTest : public DateTimeFormatterTest {};
+
+TEST_F(WeekOfMonthPatternTest, parseWeekOfMonth) {
+  DateTimeFormatterBuilder builder1(1);
+  builder1.appendWeekOfMonth(1);
+  std::shared_ptr<DateTimeFormatter> formatter1 =
+      builder1.setType(DateTimeFormatterType::JODA).build();
+  EXPECT_EQ(
+      fromTimestampString("1969-12-29 00:00:00"),
+      formatter1->parse("1")->timestamp);
+  EXPECT_EQ(
+      fromTimestampString("1970-01-12 00:00:00"),
+      formatter1->parse("3")->timestamp);
+
+  DateTimeFormatterBuilder builder2(11);
+  builder2.appendYear(4);
+  builder2.appendLiteral(" ");
+  builder2.appendMonthOfYear(2);
+  builder2.appendLiteral(" ");
+  builder2.appendWeekOfMonth(1);
+  builder2.appendLiteral(" ");
+  builder2.appendDayOfWeek1Based(1);
+  std::shared_ptr<DateTimeFormatter> formatter2 =
+      builder2.setType(DateTimeFormatterType::JODA).build();
+  EXPECT_EQ(
+      fromTimestampString("1999-11-29 00:00:00"),
+      formatter2->parse("1999 12 1 1")->timestamp);
+  EXPECT_EQ(
+      fromTimestampString("1999-12-14 00:00:00"),
+      formatter2->parse("1999 12 3 2")->timestamp);
+}
 } // namespace facebook::velox::functions
