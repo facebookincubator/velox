@@ -12,6 +12,7 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ * Writer.cpp
  */
 
 #include "velox/dwio/parquet/writer/Writer.h"
@@ -144,6 +145,7 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
   properties = properties->enable_store_decimal_as_integer();
+  properties = properties->data_page_version(options.parquetDataPageVersion);
   return properties->build();
 }
 
@@ -241,6 +243,7 @@ Writer::Writer(
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
+  parquetDataPageVersion_ = options.parquetDataPageVersion;
 }
 
 Writer::Writer(
@@ -421,12 +424,28 @@ std::optional<TimestampUnit> getTimestampUnit(
   return std::nullopt;
 }
 
+std::string HiveConfig::getParquetDataPageVersion(
+    const Config& config,
+    const char* configKey) {
+  const auto version = config.get<std::string>(configKey);
+  VELOX_CHECK(
+      version == "PARQUET_1_0" ||
+          version == "PARQUET_2_0",
+      "Invalid Parquet version.");
+  return version;
+}
+
 } // namespace
 
 void WriterOptions::processSessionConfigs(const Config& config) {
   if (!parquetWriteTimestampUnit) {
     parquetWriteTimestampUnit =
         getTimestampUnit(config, kParquetSessionWriteTimestampUnit);
+  }
+
+  if (!parquetDataPageVersion) {
+    parquetDataPageVersion =
+        getParquetDataPageVersion(config, kParquetSessionWriteTimestampUnit);
   }
 }
 

@@ -12,6 +12,7 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ * Writer.h
  */
 
 #pragma once
@@ -24,6 +25,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -99,6 +101,10 @@ struct WriterOptions : public dwio::common::WriterOptions {
 
   arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
 
+  // Default Parquet datapage version is V2.
+  arrow::ParquetDataPageVersion parquetDataPageVersion =
+      arrow::ParquetDataPageVersion::V2;
+
   // The default factory allows the writer to construct the default flush
   // policy with the configs in its ctor.
   std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
@@ -119,6 +125,11 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.timestamp_unit";
   static constexpr const char* kParquetHiveConnectorWriteTimestampUnit =
       "hive.parquet.writer.timestamp-unit";
+
+  static constexpr const char* kParquetSessionDataPageVersion =
+      "hive.parquet_writer_version";
+  static constexpr const char* kParquetHiveConnectorDataPageVersion =
+      "hive.parquet.writer.version";
 
   // Process hive connector and session configs.
   void processSessionConfigs(const Config& config) override;
@@ -184,6 +195,8 @@ class Writer : public dwio::common::Writer {
 
   // Whether to write Int96 timestamps in Arrow Parquet write.
   bool writeInt96AsTimestamp_;
+
+  arrow::ParquetDataPageVersion parquetDataPageVersion_;
 };
 
 class ParquetWriterFactory : public dwio::common::WriterFactory {

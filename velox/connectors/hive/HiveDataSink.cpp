@@ -771,9 +771,21 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
     options->zlibCompressionLevel =
         compressionLevel.value_or(kDefaultZlibCompressionLevel);
   }
+  
   if (!options->zstdCompressionLevel) {
     options->zstdCompressionLevel =
         compressionLevel.value_or(kDefaultZstdCompressionLevel);
+  }
+
+  auto parquetDataPageVersion =
+      hiveConfig_->parquetDataPageVersion(connectorSessionProperties);
+
+  if (parquetDataPageVersion == "PARQUET_1_0") {
+    options->parquetDataPageVersion =
+        dwio::common::ParquetDataPageVersion::V1;
+  } else {
+    options->parquetDataPageVersion =
+        dwio::common::ParquetDataPageVersion::V2;
   }
 
   // Prevents the memory allocation during the writer creation.
