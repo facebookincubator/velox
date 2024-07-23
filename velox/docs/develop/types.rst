@@ -136,6 +136,8 @@ HYPERLOGLOG               VARBINARY
 JSON                      VARCHAR
 TIMESTAMP WITH TIME ZONE  BIGINT
 UUID                      HUGEINT
+IPADDRESS                 HUGEINT
+IPPREFIX                  (HUGEINT, TINYINT)
 ========================  =====================
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
