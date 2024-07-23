@@ -166,16 +166,20 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
   std::stringstream sql;
   sql << call->name() << "(";
   toCallInputsSql(call->inputs(), sql);
-  if (call->name() == "cast") {
+  /*if (call->name() == "cast") {
     sql << " as " << toTypeSql(call->type());
-  }
+  }*/
   sql << ")";
   return sql.str();
 }
 
 std::string toCastSql(const core::CastTypedExprPtr& cast) {
   std::stringstream sql;
-  sql << "cast(";
+  if (cast->nullOnFailure()) {
+    sql << "try_cast(";
+  } else {
+    sql << "cast(";
+  }
   toCallInputsSql(cast->inputs(), sql);
   sql << " as " << toTypeSql(cast->type());
   sql << ")";
@@ -196,8 +200,12 @@ std::string toConstantSql(const core::ConstantTypedExprPtr& constant) {
     sql << fmt::format("cast(null as {})", toTypeSql(constant->type()));
   } else if (constant->type()->isVarchar()) {
     sql << "'" << escape(constant->valueVector()->toString(0)) << "'";
-  } else if (constant->type()->isPrimitiveType() || !constant->hasValueVector()) {
-    sql << constant->toString();
+  } else if (constant->type()->isVarbinary()) {
+    sql << "cast('" << escape(constant->valueVector()->toString(0)) << "' as varbinary)";
+  } /*else if (constant->type()->isTimestamp()) {
+    sql << "timestamp '" << constant->toString() << "'";
+  }*/ else if (constant->type()->isPrimitiveType() || !constant->hasValueVector()) {
+    sql << fmt::format("{} '{}'", toTypeSql(constant->type()), constant->toString());
   } else {
     VELOX_NYI("complex-typed constants not supported yet.");
   }

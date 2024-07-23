@@ -34,7 +34,8 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_vector_test_lib
   velox_function_registry
-  velox_expression_test_utility)
+  velox_expression_test_utility
+  velox_file)
 
 add_executable(velox_expression_fuzzer_test ExpressionFuzzerTest.cpp)
 
@@ -42,6 +43,7 @@ target_link_libraries(
   velox_expression_fuzzer_test
   velox_expression_fuzzer
   velox_functions_prestosql
+  velox_hive_connector
   GTest::gtest
   GTest::gtest_main)
 

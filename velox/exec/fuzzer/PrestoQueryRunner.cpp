@@ -156,7 +156,6 @@ PrestoQueryRunner::PrestoQueryRunner(
       timeout_(timeout) {
   eventBaseThread_.start("PrestoQueryRunner");
   pool_ = aggregatePool()->addLeafChild("leaf");
-  dwrf::registerDwrfWriterFactory();
 }
 
 std::optional<std::string> PrestoQueryRunner::toSql(

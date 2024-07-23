@@ -26,6 +26,7 @@
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/connectors/hive/HiveConnector.h"
 
 DECLARE_int32(velox_fuzzer_max_level_of_nesting);
 

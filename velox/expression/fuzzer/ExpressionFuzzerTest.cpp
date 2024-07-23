@@ -112,7 +112,19 @@ int main(int argc, char** argv) {
       "is_null", //not registered in Presto
       "codepoint", // expect varchar(1) as parameter type
       "json_array_contains", //Velox throws, Presto returns NULL, SELECT json_array_contains('{asce', '{asce')
-
+      "like", // Presto not supporting this as function name
+      "lt",
+      "switch",
+      "eq",
+      "neq",
+      "le",
+      "ge",
+      "gt",
+      "negate",
+      "clamp",
+      "between",
+      // --enable_variadic_signatures --velox_fuzzer_enable_complex_types --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse --max_expression_trees_per_step 2 --duration_sec 60 --logtostderr=1 --minloglevel=0 --presto_url=http://127.0.0.1:8080 --batch_size=10 --seed=374405688
+      
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 

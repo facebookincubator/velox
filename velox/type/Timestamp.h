@@ -55,7 +55,7 @@ struct TimestampToStringOptions {
   bool zeroPaddingYear = false;
 
   // The separator of date and time.
-  char dateTimeSeparator = 'T';
+  char dateTimeSeparator = ' ';
 
   enum class Mode : int8_t {
     /// ISO 8601 timestamp format: %Y-%m-%dT%H:%M:%S.nnnnnnnnn for nanoseconds
