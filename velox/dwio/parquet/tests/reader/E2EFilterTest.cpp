@@ -159,7 +159,7 @@ TEST_F(E2EFilterTest, compression) {
     }
 
     options_.dataPageSize = 4 * 1024;
-    options_.compression = compression;
+    options_.compressionKind = compression;
 
     testWithTypes(
         "tinyint_val:tinyint,"
@@ -253,6 +253,19 @@ TEST_F(E2EFilterTest, integerDictionary) {
       },
       true,
       {"short_val", "int_val", "long_val"},
+      20);
+}
+
+TEST_F(E2EFilterTest, timestampDictionary) {
+  options_.dataPageSize = 4 * 1024;
+  options_.writeInt96AsTimestamp = true;
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {},
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
       20);
 }
 
