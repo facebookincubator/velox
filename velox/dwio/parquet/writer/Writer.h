@@ -23,6 +23,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -97,6 +98,10 @@ struct WriterOptions {
   common::CompressionKind compression = common::CompressionKind_NONE;
   arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
   velox::memory::MemoryPool* memoryPool;
+  // Default Parquet datapage version is V2 - can be set to V1 via session
+  // property.
+  arrow::ParquetDataPageVersion parquetDataPageVersion =
+      arrow::ParquetDataPageVersion::V2;
   // The default factory allows the writer to construct the default flush
   // policy with the configs in its ctor.
   std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
