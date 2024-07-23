@@ -51,6 +51,7 @@
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
+#include "velox/functions/sparksql/ConcatWs.h
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
@@ -477,6 +478,10 @@ void registerFunctions(const std::string& prefix) {
       int32_t>({prefix + "levenshtein"});
   registerFunction<LevenshteinDistanceFunction, int32_t, Varchar, Varchar>(
       {prefix + "levenshtein"});
+  registerFunction<ConcatWsFunction, Varchar, Variadic<Varchar>>(
+      {prefix + "concat_ws"});
+  registerFunction<ConcatWsFunction, Varchar, Array<Varchar>>(
+      {prefix + "concat_ws"});
 }
 
 } // namespace sparksql
