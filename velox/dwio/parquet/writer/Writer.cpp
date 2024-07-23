@@ -238,7 +238,8 @@ Writer::Writer(
   }
   options_.timestampUnit =
       options.parquetWriteTimestampUnit.value_or(TimestampUnit::kNano);
-  options_.timestampTimeZone = options.parquetWriteTimestampTimeZone.value_or("");
+  options_.timestampTimeZone =
+      options.parquetWriteTimestampTimeZone.value_or("");
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
@@ -452,7 +453,7 @@ void WriterOptions::processHiveConnectorConfigs(const Config& config) {
         getTimestampUnit(config, kParquetHiveConnectorWriteTimestampUnit);
   }
 
-    if (!parquetWriteTimestampTimeZone) {
+  if (!parquetWriteTimestampTimeZone) {
     parquetWriteTimestampTimeZone =
         getTimestampTimeZone(config, core::QueryConfig::kSessionTimezone);
   }
