@@ -100,10 +100,10 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      # - uses: assignUser/stash/save@v1
-      #   with:
-      #     path: '${{ env.CCACHE_DIR }}'
-      #     key: ccache-linux-adapters
+      - uses: assignUser/stash/save@v1
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-linux-adapters
 
       - name: Run Tests
         # Some of the adapters dependencies are in the 'adapters' conda env
@@ -160,10 +160,10 @@ jobs:
         run: |
           ccache -vs
 
-      # - uses: assignUser/stash/save@v1
-      #   with:
-      #     path: '${{ env.CCACHE_DIR }}'
-      #     key: ccache-ubuntu-debug-default
+      - uses: assignUser/stash/save@v1
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-ubuntu-debug-default
 
       - name: Run Tests
         run: |
