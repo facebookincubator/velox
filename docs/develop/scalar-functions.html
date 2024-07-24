@@ -372,7 +372,7 @@ properties and using it when processing inputs.</p>
 <span class="k">struct</span><span class="w"> </span><span class="nc">HourFunction</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
 
-<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">date</span><span class="o">::</span><span class="n">time_zone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">tz</span><span class="o">::</span><span class="n">TimeZone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
 
 <span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span>
 <span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">inputTypes</span><span class="p">,</span>
@@ -400,7 +400,7 @@ individual rows.</p>
 <span class="k">struct</span><span class="w"> </span><span class="nc">DateTruncFunction</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExec</span><span class="p">);</span>
 
-<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">date</span><span class="o">::</span><span class="n">time_zone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">tz</span><span class="o">::</span><span class="n">TimeZone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span>
 <span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">DateTimeUnit</span><span class="o">&gt;</span><span class="w"> </span><span class="n">unit_</span><span class="p">;</span>
 
 <span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span>

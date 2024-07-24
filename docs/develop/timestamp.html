@@ -152,7 +152,7 @@ tzdata-2024a-1.fc38.noarch
 </div>
 <p>Timezone conversions are done using special methods in the Timestamp class:
 <code class="docutils literal notranslate"><span class="pre">Timestamp::toGMT()</span></code> and <code class="docutils literal notranslate"><span class="pre">Timestamp::toTimezone()</span></code>. They can take either a
-timezone ID or a date::time_zone pointer. Providing a date::time_zone is
+timezone ID or a tz::TimeZone pointer. Providing a tz::TimeZone is
 generally more efficient, but std::chrono does not handle time zone offsets
 such as <code class="docutils literal notranslate"><span class="pre">+09:00</span></code>.  Timezone offsets are only supported in the API version
 that takes a timezone ID.</p>
