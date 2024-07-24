@@ -80,6 +80,9 @@ std::string typeName(const TypePtr& type) {
       if (isHyperLogLogType(type)) {
         return "HyperLogLog";
       }
+      if (isIPPrefixType(type)) {
+        return "ipprefix";
+      }
       return "varbinary";
     case TypeKind::TIMESTAMP:
       return "timestamp";
@@ -108,11 +111,6 @@ std::string typeName(const TypePtr& type) {
     }
     case TypeKind::UNKNOWN:
       return "unknown";
-    case TypeKind::OPAQUE:
-      if (isIPPrefixType(type)) {
-        return "ipprefix";
-      }
-      return "opaque";
     default:
       VELOX_UNSUPPORTED("Unsupported type: {}", type->toString())
   }
