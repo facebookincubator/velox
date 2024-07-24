@@ -45,14 +45,9 @@ jobs:
       Protobuf_SOURCE: BUNDLED # can be removed after #10134 is merged
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
-<<<<<<< HEAD
-      Arrow_SOURCE: SYSTEM
-      fmt_SOURCE: SYSTEM
-=======
       Arrow_SOURCE: BUNDLED
       Thrift_SOURCE: BUNDLED
       cudf_SOURCE:  BUNDLED
->>>>>>> rapidsai/velox-cudf
       CUDA_VERSION: "12.4"
     steps:
       - uses: actions/checkout@v4
@@ -71,17 +66,10 @@ jobs:
             install_cuda ${CUDA_VERSION}
           fi
 
-<<<<<<< HEAD
-      #- uses: assignUser/stash/restore@v1
-      #  with:
-      #    path: '${{ env.CCACHE_DIR }}'
-      #    key: ccache-linux-adapters
-=======
       # - uses: assignUser/stash/restore@v1
       #   with:
       #     path: '${{ env.CCACHE_DIR }}'
       #     key: ccache-linux-adapters
->>>>>>> rapidsai/velox-cudf
 
       - name: "Zero Ccache Statistics"
         run: |
@@ -137,19 +125,11 @@ jobs:
         working-directory: velox
     steps:
 
-<<<<<<< HEAD
-      #- name: Get Ccache Stash
-      #  uses: assignUser/stash/restore@v1
-      #  with:
-      #    path: '${{ env.CCACHE_DIR }}'
-      #    key: ccache-ubuntu-debug-default
-=======
       # - name: Get Ccache Stash
       #   uses: assignUser/stash/restore@v1
       #   with:
       #     path: '${{ env.CCACHE_DIR }}'
       #     key: ccache-ubuntu-debug-default
->>>>>>> rapidsai/velox-cudf
 
       - name: Ensure Stash Dirs Exists
         working-directory: ${{ github.workspace }}
