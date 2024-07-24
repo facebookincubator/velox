@@ -15,6 +15,7 @@ by Velox. See details on bundling below.
 | glog              | default         | Yes      |
 | gtest (testing)   | default         | Yes      |
 | libevent          | default         | No       |
+| libcudf           | default         | Yes      |
 | libsodium         | default         | No       |
 | lz4               | default         | No       |
 | snappy            | default         | No       |

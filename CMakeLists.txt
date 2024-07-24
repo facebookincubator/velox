@@ -346,7 +346,7 @@ endif()
 
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
-if(${VELOX_ENABLE_GPU})
+if(VELOX_ENABLE_GPU)
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
@@ -358,6 +358,12 @@ if(${VELOX_ENABLE_GPU})
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
   include_directories("${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}")
+
+  if(VELOX_ENABLE_CUDF)
+    set(VELOX_ENABLE_ARROW ON)
+    set_source(cudf)
+    resolve_dependency(cudf)
+  endif()
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -403,9 +409,6 @@ if(${VELOX_ENABLE_DUCKDB})
   set_source(DuckDB)
   resolve_dependency(DuckDB)
 endif()
-
-set_source(fmt)
-resolve_dependency(fmt 9.0.0)
 
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   # DWIO needs all sorts of stream compression libraries.
@@ -570,6 +573,12 @@ endif()
 if(VELOX_ENABLE_ARROW)
   set_source(Arrow)
   resolve_dependency(Arrow)
+endif()
+
+if(NOT TARGET fmt::fmt)
+  # Needs to be after cudf
+  set_source(fmt)
+  resolve_dependency(fmt 9.0.0)
 endif()
 
 add_subdirectory(velox)
