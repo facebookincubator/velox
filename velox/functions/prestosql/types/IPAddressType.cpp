@@ -15,7 +15,6 @@
  */
 
 #include "velox/functions/prestosql/types/IPAddressType.h"
-#include <iostream>
 
 namespace facebook::velox {
 
