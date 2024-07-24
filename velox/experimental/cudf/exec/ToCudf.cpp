@@ -15,11 +15,11 @@
  */
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include <cuda.h>
+#include <cudf/detail/nvtx/ranges.hpp>
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h" // Compilation fails in Driver.h if Operator.h isn't included first!
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include <cuda.h>
-#include <cudf/detail/nvtx/ranges.hpp>
 
 #include <iostream>
 
