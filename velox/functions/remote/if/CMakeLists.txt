@@ -17,7 +17,7 @@ include(FBThriftCppLibrary)
 add_fbthrift_cpp_library(remote_function_thrift RemoteFunction.thrift
                          SERVICES RemoteFunctionService)
 
-target_compile_options(velox_remote_function_thrift
+target_compile_options(remote_function_thrift
                        PRIVATE -Wno-deprecated-declarations)
 
 velox_add_library(velox_functions_remote_get_serde GetSerde.cpp)
