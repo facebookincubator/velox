@@ -20,6 +20,7 @@ on:
       - scripts/*.dockerfile
       - scripts/setup-*.sh
       - .github/workflows/docker.yml
+      - docker-compose.yml
   push:
     branches: [main]
     paths:
@@ -46,16 +47,14 @@ jobs:
         include:
           - name: Check
             file: "scripts/check-container.dockfile"
-            args: "cpu_target=avx"
-            tags: "ghcr.io/facebookincubator/velox-dev:check-avx"
+            tags: "ghcr.io/facebookincubator/velox-dev:check"
           - name: Centos 9
             file: "scripts/centos.dockerfile"
-            args: "cpu_target=avx"
             tags: "ghcr.io/facebookincubator/velox-dev:centos9"
           - name: Dev
             file: "scripts/ubuntu-22.04-cpp.dockerfile"
             args: ""
-            tags: "ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx"
+            tags: "ghcr.io/facebookincubator/velox-dev:ubuntu-22.04"
 
     steps:
       - name: Login to GitHub Container Registry
@@ -89,11 +88,10 @@ jobs:
         include:
           - name: Adapters
             file: "scripts/adapters.dockerfile"
-            args: "cpu_target=avx"
             tags: "ghcr.io/facebookincubator/velox-dev:adapters"
           - name: Presto Java
             file: "scripts/prestojava-container.dockerfile"
-            args: "PRESTO_VERSION=0.284"
+            args: "PRESTO_VERSION=0.288"
             tags: "ghcr.io/facebookincubator/velox-dev:presto-java"
           - name: Spark server
             file: "scripts/spark-container.dockerfile"

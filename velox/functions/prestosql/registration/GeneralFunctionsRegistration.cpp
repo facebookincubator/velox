@@ -20,6 +20,7 @@
 #include "velox/functions/prestosql/Fail.h"
 #include "velox/functions/prestosql/GreatestLeast.h"
 #include "velox/functions/prestosql/InPredicate.h"
+#include "velox/functions/prestosql/Reduce.h"
 
 namespace facebook::velox::functions {
 
@@ -95,14 +96,15 @@ void registerGeneralFunctions(const std::string& prefix) {
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_transform, prefix + "transform");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "reduce");
+  registerReduceRewrites(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_typeof, prefix + "typeof");
 
   registerAllGreatestLeastFunctions(prefix);
 
-  registerFunction<CardinalityFunction, int64_t, Array<Any>>(
+  registerFunction<CardinalityFunction, int64_t, Array<Generic<T1>>>(
       {prefix + "cardinality"});
-  registerFunction<CardinalityFunction, int64_t, Map<Any, Any>>(
+  registerFunction<CardinalityFunction, int64_t, Map<Generic<T1>, Generic<T2>>>(
       {prefix + "cardinality"});
 
   registerFailFunction({prefix + "fail"});

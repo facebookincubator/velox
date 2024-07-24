@@ -45,7 +45,7 @@ jobs:
       Protobuf_SOURCE: BUNDLED # can be removed after #10134 is merged
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
-      Arrow_SOURCE: BUNDLED
+      Arrow_SOURCE: AUTO
       Thrift_SOURCE: BUNDLED
       cudf_SOURCE:  BUNDLED
       CUDA_VERSION: "12.4"
@@ -94,6 +94,7 @@ jobs:
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
             "-DVELOX_ENABLE_GPU=ON"
             "-DVELOX_ENABLE_CUDF=ON"
+            "-DVELOX_MONO_LIBRARY=ON"
           )
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
 

@@ -404,14 +404,14 @@ class TpchBenchmark {
 #endif
 
         if (cache_) {
-          cache_->testingClear();
+          cache_->clear();
         }
       }
       if (FLAGS_clear_ssd_cache) {
         if (cache_) {
           auto ssdCache = cache_->ssdCache();
           if (ssdCache) {
-            ssdCache->testingClear();
+            ssdCache->clear();
           }
         }
       }
@@ -503,6 +503,11 @@ BENCHMARK(q2) {
 
 BENCHMARK(q3) {
   const auto planContext = queryBuilder->getQueryPlan(3);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q4) {
+  const auto planContext = queryBuilder->getQueryPlan(4);
   benchmark.run(planContext);
 }
 

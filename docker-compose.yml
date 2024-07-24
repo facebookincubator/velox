@@ -21,7 +21,7 @@ services:
     #   or
     #   docker-compose run -e NUM_THREADS=<NUMBER_OF_THREADS_TO_USE> --rm ubuntu-cpp
     #   to set the number of threads used during compilation
-    image: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
+    image: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
     build:
       context: .
       dockerfile: scripts/ubuntu-22.04-cpp.dockerfile
@@ -90,7 +90,7 @@ services:
     image: ghcr.io/facebookincubator/velox-dev:presto-java
     build:
       args:
-        - PRESTO_VERSION=0.284
+        - PRESTO_VERSION=0.288
       context: .
       dockerfile: scripts/prestojava-container.dockerfile
     environment:

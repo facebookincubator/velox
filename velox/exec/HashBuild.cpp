@@ -661,14 +661,14 @@ bool HashBuild::finishHashBuild() {
 
   TestValue::adjust("facebook::velox::exec::HashBuild::finishHashBuild", this);
 
-  auto promisesGuard = folly::makeGuard([&]() {
+  SCOPE_EXIT {
     // Realize the promises so that the other Drivers (which were not
     // the last to finish) can continue from the barrier and finish.
     peers.clear();
     for (auto& promise : promises) {
       promise.setValue();
     }
-  });
+  };
 
   if (joinHasNullKeys_ && isAntiJoin(joinType_) && nullAware_ &&
       !joinNode_->filter()) {
@@ -728,6 +728,21 @@ bool HashBuild::finishHashBuild() {
     ensureNextRowVectorFits(numRows, otherBuilds);
   }
 
+  SCOPE_EXIT {
+    // Make a guard to release the unused memory reservation since we have
+    // finished the merged table build. The guard makes sure we release the
+    // memory reserved for other operators even when exceptions are thrown to
+    // prevent memory leak. We cannot rely on other operator's cleanup mechanism
+    // because when exceptions are thrown, other operator's cleanup mechanism
+    // might already have finished.
+    pool()->release();
+    if (allowDuplicateRows) {
+      for (auto* build : otherBuilds) {
+        build->pool()->release();
+      }
+    }
+  };
+
   if (spiller_ != nullptr) {
     spiller_->finishSpill(spillPartitions);
     removeEmptyPartitions(spillPartitions);
@@ -739,13 +754,23 @@ bool HashBuild::finishHashBuild() {
       !otherTables.empty() && spillPartitions.empty();
   CpuWallTiming timing;
   {
+    // If there is a chance the join build is parallel, we suspend the driver
+    // while the hash table is being built. This is because off-driver thread
+    // memory allocations inside parallel join build might trigger memory
+    // arbitration.
+    std::unique_ptr<SuspendedSection> suspendedSection;
+    if (allowParallelJoinBuild) {
+      suspendedSection = std::make_unique<SuspendedSection>(
+          driverThreadContext()->driverCtx.driver);
+    }
+
     CpuWallTimer cpuWallTimer{timing};
     table_->prepareJoinTable(
         std::move(otherTables),
-        allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                               : nullptr,
         isInputFromSpill() ? spillConfig()->startPartitionBit
-                           : BaseHashTable::kNoSpillInputStartPartitionBit);
+                           : BaseHashTable::kNoSpillInputStartPartitionBit,
+        allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
+                               : nullptr);
   }
   stats_.wlock()->addRuntimeStat(
       BaseHashTable::kBuildWallNanos,
@@ -756,15 +781,6 @@ bool HashBuild::finishHashBuild() {
       std::move(table_), std::move(spillPartitions), joinHasNullKeys_);
   if (spillEnabled()) {
     stateCleared_ = true;
-  }
-
-  // Release the unused memory reservation since we have finished the merged
-  // table build.
-  pool()->release();
-  if (allowDuplicateRows) {
-    for (auto* build : otherBuilds) {
-      build->pool()->release();
-    }
   }
   return true;
 }
