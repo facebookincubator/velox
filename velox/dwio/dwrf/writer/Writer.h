@@ -132,6 +132,11 @@ class Writer : public dwio::common::Writer {
     return writerBase_->getContext();
   }
 
+  google::protobuf::RepeatedPtrField<proto::ColumnStatistics>
+  getFooterStatistics() const {
+    return writerBase_->getFooter().statistics();
+  }
+
   WriterSink& getSink() {
     return writerBase_->getSink();
   }
