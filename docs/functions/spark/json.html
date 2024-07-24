@@ -13,20 +13,20 @@
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Aggregate Functions" href="aggregate.html" />
-    <link rel="prev" title="Binary Functions" href="binary.html" /> 
+    <link rel="next" title="Configuration properties" href="../../configs.html" />
+    <link rel="prev" title="URL Functions" href="url.html" /> 
   </head><body>
-    <div class="related" role="navigation" aria-label="related navigation">
+    <div class="related" role="navigation" aria-label="Related">
       <h3>Navigation</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
           <a href="../../genindex.html" title="General Index"
              accesskey="I">index</a></li>
         <li class="right" >
-          <a href="aggregate.html" title="Aggregate Functions"
+          <a href="../../configs.html" title="Configuration properties"
              accesskey="N">next</a> |</li>
         <li class="right" >
-          <a href="binary.html" title="Binary Functions"
+          <a href="url.html" title="URL Functions"
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../spark_functions.html" accesskey="U">Spark Functions</a> &#187;</li>
@@ -41,30 +41,19 @@
             
   <section id="json-functions">
 <h1>JSON Functions<a class="headerlink" href="#json-functions" title="Link to this heading">¶</a></h1>
-<section id="json-format">
-<h2>JSON Format<a class="headerlink" href="#json-format" title="Link to this heading">¶</a></h2>
-<p>JSON is a language-independent data format that represents data as
-human-readable text. A JSON text can represent a number, a boolean, a
-string, an array, an object, or a null, with slightly different grammar.
-For instance, a JSON text representing a string must escape all characters
-and enclose the string in double quotes, such as <code class="docutils literal notranslate"><span class="pre">&quot;123\n&quot;</span></code>, whereas a JSON
-text representing a number does not need to, such as <code class="docutils literal notranslate"><span class="pre">123</span></code>. A JSON text
-representing an array must enclose the array elements in square brackets,
-such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</span></code>. More detailed grammar can be found in
-<a class="reference external" href="https://www.json.org">this JSON introduction</a>.</p>
-</section>
-<section id="id1">
-<h2>JSON Functions<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
-<dt class="sig sig-object spark" id="get_json_object">
-<span class="sig-name descname"><span class="pre">get_json_object</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#get_json_object" title="Link to this definition">¶</a></dt>
-<dd><p>Extracts a json object from path:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">get_json_object</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;:&quot;b&quot;}&#39;</span><span class="p">,</span> <span class="s1">&#39;$.a&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">b</span>
+<dt class="sig sig-object spark" id="json_object_keys">
+<span class="sig-name descname"><span class="pre">json_object_keys</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonString</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#json_object_keys" title="Link to this definition">¶</a></dt>
+<dd><p>Returns all the keys of the outermost JSON object as an array if a valid JSON object is given.  If it is any other valid JSON string, an invalid JSON string or an empty string, the function returns null.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[]</span>
+<span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s1">&#39;{&quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 5, &quot;id&quot;: &quot;001&quot;}&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="s1">&#39;age&#39;</span><span class="p">,</span> <span class="s1">&#39;id&#39;</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s1">&#39;&quot;hello&quot;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
 </pre></div>
 </div>
 </dd></dl>
 
-</section>
 </section>
 
 
@@ -72,17 +61,13 @@ such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</sp
           </div>
         </div>
       </div>
-      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
         <div class="sphinxsidebarwrapper">
   <div>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">JSON Functions</a><ul>
-<li><a class="reference internal" href="#json-format">JSON Format</a></li>
-<li><a class="reference internal" href="#id1">JSON Functions</a><ul>
-<li><a class="reference internal" href="#get_json_object"><code class="docutils literal notranslate"><span class="pre">get_json_object()</span></code></a></li>
-</ul>
-</li>
+<li><a class="reference internal" href="#json_object_keys"><code class="docutils literal notranslate"><span class="pre">json_object_keys()</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -90,13 +75,13 @@ such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</sp
   </div>
   <div>
     <h4>Previous topic</h4>
-    <p class="topless"><a href="binary.html"
-                          title="previous chapter">Binary Functions</a></p>
+    <p class="topless"><a href="url.html"
+                          title="previous chapter">URL Functions</a></p>
   </div>
   <div>
     <h4>Next topic</h4>
-    <p class="topless"><a href="aggregate.html"
-                          title="next chapter">Aggregate Functions</a></p>
+    <p class="topless"><a href="../../configs.html"
+                          title="next chapter">Configuration properties</a></p>
   </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
@@ -119,17 +104,17 @@ such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</sp
       </div>
       <div class="clearer"></div>
     </div>
-    <div class="related" role="navigation" aria-label="related navigation">
+    <div class="related" role="navigation" aria-label="Related">
       <h3>Navigation</h3>
       <ul>
         <li class="right" style="margin-right: 10px">
           <a href="../../genindex.html" title="General Index"
              >index</a></li>
         <li class="right" >
-          <a href="aggregate.html" title="Aggregate Functions"
+          <a href="../../configs.html" title="Configuration properties"
              >next</a> |</li>
         <li class="right" >
-          <a href="binary.html" title="Binary Functions"
+          <a href="url.html" title="URL Functions"
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../../spark_functions.html" >Spark Functions</a> &#187;</li>
@@ -138,7 +123,7 @@ such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</sp
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
     </div>
   </body>
 </html>
