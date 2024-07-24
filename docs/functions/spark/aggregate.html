@@ -137,6 +137,13 @@ output will be generated.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="max">
+<span class="sig-name descname"><span class="pre">max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#max" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the maximum value of <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+<code class="docutils literal notranslate"><span class="pre">x</span></code> must be an orderable type.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="max_by">
 <span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#max_by" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the value of <cite>x</cite> associated with the maximum value of <cite>y</cite>.
@@ -152,6 +159,13 @@ Note: Spark provides a non-strictly comparator which is greater than or equals t
 </pre></div>
 </div>
 <p>Returns c</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="min">
+<span class="sig-name descname"><span class="pre">min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#min" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the minimum value of <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+<code class="docutils literal notranslate"><span class="pre">x</span></code> must be an orderable type.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -238,7 +252,9 @@ overflowed value rather than raising an error.</p>
 <li><a class="reference internal" href="#kurtosis"><code class="docutils literal notranslate"><span class="pre">kurtosis()</span></code></a></li>
 <li><a class="reference internal" href="#last"><code class="docutils literal notranslate"><span class="pre">last()</span></code></a></li>
 <li><a class="reference internal" href="#last_ignore_null"><code class="docutils literal notranslate"><span class="pre">last_ignore_null()</span></code></a></li>
+<li><a class="reference internal" href="#max"><code class="docutils literal notranslate"><span class="pre">max()</span></code></a></li>
 <li><a class="reference internal" href="#max_by"><code class="docutils literal notranslate"><span class="pre">max_by()</span></code></a></li>
+<li><a class="reference internal" href="#min"><code class="docutils literal notranslate"><span class="pre">min()</span></code></a></li>
 <li><a class="reference internal" href="#min_by"><code class="docutils literal notranslate"><span class="pre">min_by()</span></code></a></li>
 <li><a class="reference internal" href="#regr_replacement"><code class="docutils literal notranslate"><span class="pre">regr_replacement()</span></code></a></li>
 <li><a class="reference internal" href="#skewness"><code class="docutils literal notranslate"><span class="pre">skewness()</span></code></a></li>
