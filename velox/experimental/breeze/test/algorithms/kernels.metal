@@ -53,3 +53,27 @@ using namespace breeze::algorithms;
 GEN_REDUCE(add)
 GEN_REDUCE(min)
 GEN_REDUCE(max)
+
+#define add_scan_op ScanOpAdd
+
+#define GEN_SCAN_T(O, T, BT, IPT, LD)                                          \
+  kernel void NAME(scan_##O##_##T, uint_##T, BT, IPT##x##LD)(                  \
+      const device T *in [[buffer(0)]], device T *out [[buffer(1)]],           \
+      device int *next_block_idx [[buffer(2)]],                                \
+      device uint *blocks [[buffer(3)]],                                       \
+      const device int *num_items [[buffer(4)]],                               \
+      uint thread_idx [[thread_index_in_threadgroup]],                         \
+      uint block_idx [[threadgroup_position_in_grid]]) {                       \
+    MetalPlatform<BT, WARP_THREADS> p{thread_idx, block_idx};                  \
+    threadgroup typename DeviceScan<decltype(p), T, IPT, LD>::Scratch scratch; \
+    scan<O##_scan_op, BT, IPT, LD>(p, in, out, next_block_idx, blocks,         \
+                                   &scratch, *num_items);                      \
+  }
+
+#define GEN_SCAN(O)              \
+  GEN_SCAN_T(O, int, 32, 2, 32)  \
+  GEN_SCAN_T(O, int, 64, 2, 64)  \
+  GEN_SCAN_T(O, uint, 32, 2, 32) \
+  GEN_SCAN_T(O, uint, 64, 2, 64)
+
+GEN_SCAN(add)

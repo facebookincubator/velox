@@ -52,3 +52,23 @@ using namespace breeze::algorithms;
 GEN_REDUCE(add)
 GEN_REDUCE(min)
 GEN_REDUCE(max)
+
+#define add_scan_op ScanOpAdd
+
+#define GEN_SCAN_T(O, T, BT, IPT, LD)                                         \
+  kernel void NAME(scan_##O##_##T, uint_##T, BT, IPT##x##LD)(                 \
+      const global T *in, global T *out, global int *next_block_idx,          \
+      global uint *blocks, const global int *num_items) {                     \
+    using PlatformT = OpenCLPlatform<BT, WARP_THREADS>;                       \
+    local DeviceScan<PlatformT, T, IPT, LD>::Scratch scratch;                 \
+    scan<O##_scan_op, BT, IPT, LD>(in, out, next_block_idx, blocks, &scratch, \
+                                   *num_items);                               \
+  }
+
+#define GEN_SCAN(O)              \
+  GEN_SCAN_T(O, int, 32, 2, 32)  \
+  GEN_SCAN_T(O, int, 64, 2, 64)  \
+  GEN_SCAN_T(O, uint, 32, 2, 32) \
+  GEN_SCAN_T(O, uint, 64, 2, 64)
+
+GEN_SCAN(add)

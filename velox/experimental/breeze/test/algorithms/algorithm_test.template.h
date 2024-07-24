@@ -49,4 +49,11 @@ class AlgorithmTest : public ::testing::Test {
       "typename breeze::algorithms::DeviceReduce<PlatformT, U>::Scratch")
   void Reduce(USE_AS_SIZE const std::vector<T>& in, U* out,
               BLOCK_COUNT int num_blocks);
+  template <typename ScanOp, int BLOCK_THREADS, int ITEMS_PER_THREAD,
+            int LOOKBACK_DISTANCE, typename U, typename V>
+  SHARED_MEM_TYPE(
+      "typename breeze::algorithms::DeviceScan<PlatformT, U, ITEMS_PER_THREAD, LOOKBACK_DISTANCE>::Scratch")
+  void Scan(USE_AS_SIZE const std::vector<T>& in, std::vector<U>& out,
+            int* next_blocks_idx, std::vector<V>& blocks,
+            BLOCK_COUNT int num_blocks);
 };

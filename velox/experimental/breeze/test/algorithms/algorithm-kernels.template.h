@@ -38,6 +38,7 @@
 #define SHARED_MEM(T, id) [[clang::annotate("SharedMem=" T ";" id)]]
 
 #include "algorithms/reduce.h"
+#include "algorithms/scan.h"
 #include "platforms/platform.h"
 #include "utils/types.h"
 
@@ -54,6 +55,23 @@ void Reduce(const T* in, U* out, int num_items) {
       p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
       breeze::utils::make_slice<breeze::utils::GLOBAL>(out),
       breeze::utils::make_slice<breeze::utils::SHARED>(scratch), num_items);
+}
+
+template <typename Op, int BLOCK_THREADS, int ITEMS_PER_THREAD,
+          int LOOKBACK_DISTANCE, typename T, typename U, typename V>
+PLATFORM("p")
+SHARED_MEM(
+    "typename breeze::algorithms::DeviceScan<PlatformT, U, ITEMS_PER_THREAD, LOOKBACK_DISTANCE>::Scratch",
+    "scratch")
+void Scan(const T* in, U* out, int* next_block_idx, V* blocks, int num_items) {
+  breeze::algorithms::DeviceScan<PlatformT, U, ITEMS_PER_THREAD,
+                                 LOOKBACK_DISTANCE>::
+      template Scan<Op>(
+          p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+          breeze::utils::make_slice<breeze::utils::GLOBAL>(out),
+          breeze::utils::make_slice<breeze::utils::GLOBAL>(next_block_idx),
+          breeze::utils::make_slice<breeze::utils::GLOBAL>(blocks),
+          breeze::utils::make_slice<breeze::utils::SHARED>(scratch), num_items);
 }
 
 }  // namespace kernels
