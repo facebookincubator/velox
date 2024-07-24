@@ -1150,30 +1150,33 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
           0));
 }
 
-TEST_F(ParquetReaderTest, readBinaryAsStringFromFLBA) {
-  const std::string filename("varbinary_flba.parquet");
+TEST_F(ParquetReaderTest, readBinaryAsStringFromNation) {
+  const std::string filename("nation.parquet");
   const std::string sample(getExampleFilePath(filename));
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-  auto outputRowType = ROW({"binary_field"}, {VARCHAR()});
+  auto outputRowType =
+      ROW({"nationkey", "name", "regionkey", "comment"},
+          {BIGINT(), VARCHAR(), BIGINT(), VARCHAR()});
+
   readerOptions.setFileSchema(outputRowType);
   auto reader = createReader(sample, readerOptions);
-  EXPECT_EQ(reader->numberOfRows(), 100ULL);
+  EXPECT_EQ(reader->numberOfRows(), 25ULL);
   auto rowType = reader->typeWithId();
   EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
-  EXPECT_EQ(rowType->size(), 8ULL);
-  EXPECT_EQ(rowType->childAt(0)->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(rowType->size(), 4ULL);
+  EXPECT_EQ(rowType->childAt(1)->type()->kind(), TypeKind::VARCHAR);
 
   auto rowReaderOpts = getReaderOpts(outputRowType);
   rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
-  auto expected = std::string("489acc08-2c38-4bed-9d2f-cf5e7809e9f3");
+  auto expected = std::string("ALGERIA");
   VectorPtr result = BaseVector::create(outputRowType, 0, &(*leafPool_));
   rowReader->next(1, result);
   EXPECT_EQ(
       expected,
-      result->as<RowVector>()->childAt(0)->asFlatVector<StringView>()->valueAt(
+      result->as<RowVector>()->childAt(1)->asFlatVector<StringView>()->valueAt(
           0));
 }
 

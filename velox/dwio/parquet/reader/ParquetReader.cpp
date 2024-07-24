@@ -24,25 +24,6 @@
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
 namespace facebook::velox::parquet {
-namespace {
-TypePtr getRequestedType(const TypePtr& requestedType, std::string& name) {
-  if (!requestedType) {
-    return requestedType;
-  }
-
-  try {
-    VELOX_CHECK(requestedType->isRow())
-    return requestedType->asRow().findChild(name);
-  } catch (const VeloxUserError& e) {
-    if (e.errorCode() == error_code::kInvalidArgument &&
-        e.message().find("Field not found") != std::string::npos) {
-      return nullptr;
-    }
-    throw e;
-  }
-}
-} // namespace
-
 /// Metadata and options for reading Parquet.
 class ReaderBase {
  public:
@@ -291,14 +272,15 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     VELOX_CHECK(
         schemaElement.__isset.num_children && schemaElement.num_children > 0,
         "Node has no children but should");
+    VELOX_CHECK(!requestedType || requestedType->isRow());
 
     std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> children;
-
     auto curSchemaIdx = schemaIdx;
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       ++schemaIdx;
       auto childName = schema[schemaIdx].name;
-      auto childRequestedType = getRequestedType(requestedType, childName);
+      auto childRequestedType =
+          requestedType ? requestedType->asRow().findChild(childName) : nullptr;
       auto child = getParquetColumnInfo(
           maxSchemaElementIdx,
           maxRepeat,
