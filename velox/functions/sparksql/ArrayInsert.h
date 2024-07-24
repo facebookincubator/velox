@@ -22,7 +22,7 @@ namespace facebook::velox::functions::sparksql {
 /// array_insert(array(E), pos, E, bool) → array(E)
 /// Places new element into index pos of the input array.
 template <typename T>
-struct ArrayInsertFunction {
+struct ArrayInsert {
   VELOX_DEFINE_FUNCTION_TYPES(T)
 
   static constexpr int32_t kMaxNumberOfElements = 10'000;
