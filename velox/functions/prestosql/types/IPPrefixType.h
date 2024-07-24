@@ -17,7 +17,6 @@
 
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
-#include "velox/type/OpaqueCustomTypes.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
