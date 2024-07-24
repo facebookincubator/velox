@@ -77,10 +77,22 @@ TEST_F(StringToMapTest, basic) {
   // Empty string is used.
   VELOX_ASSERT_THROW(
       evaluateStringToMap({"a:1,b:2", "", ":"}),
-      "entryDelimiter's size should >= 1.");
+      "The entry delimiter should not be empty.");
   VELOX_ASSERT_THROW(
       evaluateStringToMap({"a:1,b:2", ",", ""}),
-      "keyValueDelimiter's size should >= 1.");
+      "The keyValue delimiter should not be empty.");
+
+  // Unicode characters
+  testStringToMap(
+      {"a✈✈1☺☺b✈✈2☺☺c✈✈3", "☺☺", "✈✈"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+  testStringToMap(
+      {"我✈✈是☺☺猪✈✈头☺☺三✈✈！", "☺☺", "✈✈"},
+      {{"我", "是"}, {"猪", "头"}, {"三", "！"}});
+
+  // regular expressions
+  testStringToMap(
+      {"a443d121b344e221c344f", "[12]+", "[34]+"},
+      {{"a", "d"}, {"b", "e"}, {"c", "f"}});
 
   // Exception for duplicated keys.
   VELOX_ASSERT_THROW(

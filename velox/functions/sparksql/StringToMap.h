@@ -23,30 +23,32 @@ namespace facebook::velox::functions::sparksql {
 template <typename T>
 struct StringToMapFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
+
   // Results refer to strings in the first argument.
   static constexpr int32_t reuse_strings_from_arg = 0;
+
   void call(
       out_type<Map<Varchar, Varchar>>& out,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter,
       const arg_type<Varchar>& keyValueDelimiter) {
     VELOX_USER_CHECK_GE(
-        entryDelimiter.size(), 1, "entryDelimiter's size should >= 1.");
+        entryDelimiter.size(), 1, "The entry delimiter should not be empty.");
     VELOX_USER_CHECK_GE(
-        keyValueDelimiter.size(), 1, "keyValueDelimiter's size should >= 1.");
+        keyValueDelimiter.size(),
+        1,
+        "The keyValue delimiter should not be empty.");
     callImpl(out, input, entryDelimiter, keyValueDelimiter);
   }
 
  private:
-  /**
-   * @brief Retrieve the index of the pattern string
-   *
-   * This function retrieves all subscripts in the target string that match the
-   * start and end of the pattern
-   *
-   * @param targetStr The target string to search for
-   * @param pattern Search pattern.
-   */
+  /// @brief Retrieve the index of the pattern string
+  ///
+  /// This function retrieves all subscripts in the target string that match the
+  /// start and end of the pattern
+  ///
+  /// @param targetStr The target string to search for
+  /// @param pattern Search pattern.
   std::vector<std::pair<int, int>> findPatternIndex(
       const StringView& targetStr,
       const StringView& pattern) {
@@ -65,17 +67,16 @@ struct StringToMapFunction {
     }
     return result;
   }
-  /**
-   * @brief Separate the target string based on the delimiter
-   *
-   * This function will separate the target string based on a delimiter and
-   * return an array of separated strings
-   *
-   * @param targetStr The target string to be separated
-   * @param delimeter Delimiter
-   * @param onlyOne When encountering the first delimiter, simply separate the
-   * string into two longer parts
-   */
+
+  /// @brief Separate the target string based on the delimiter
+  ///
+  /// This function will separate the target string based on a delimiter and
+  /// return an array of separated strings
+  ///
+  /// @param targetStr The target string to be separated
+  /// @param delimeter Delimiter
+  /// @param onlyOne When encountering the first delimiter, simply separate the
+  /// string into two longer parts
   std::vector<StringView> split(
       const StringView& targetStr,
       const StringView& delimeter,
