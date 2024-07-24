@@ -23,73 +23,90 @@ namespace facebook::velox::functions::sparksql {
 template <typename T>
 struct StringToMapFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-  static StringView entryDelimiter_;
-  static StringView keyValueDelimiter_;
-
   // Results refer to strings in the first argument.
   static constexpr int32_t reuse_strings_from_arg = 0;
-  // One parameter
   void call(
       out_type<Map<Varchar, Varchar>>& out,
       const arg_type<Varchar>& input) {
     callImpl(out, input, entryDelimiter_, keyValueDelimiter_);
   }
-  // Two parameters
   void call(
       out_type<Map<Varchar, Varchar>>& out,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter) {
-    VELOX_USER_CHECK(
-        entryDelimiter.size() >= 1, "entryDelimiter's size should >= 1.");
+    VELOX_USER_CHECK_GE(
+        entryDelimiter.size(), 1, "entryDelimiter's size should >= 1.");
     callImpl(out, input, entryDelimiter, keyValueDelimiter_);
   }
-  // Three parameters
   void call(
       out_type<Map<Varchar, Varchar>>& out,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter,
       const arg_type<Varchar>& keyValueDelimiter) {
-    VELOX_USER_CHECK(
-        entryDelimiter.size() >= 1, "entryDelimiter's size should >= 1.");
-    VELOX_USER_CHECK(
-        keyValueDelimiter.size() >= 1, "keyValueDelimiter's size should >= 1.");
+    VELOX_USER_CHECK_GE(
+        entryDelimiter.size(), 1, "entryDelimiter's size should >= 1.");
+    VELOX_USER_CHECK_GE(
+        keyValueDelimiter.size(), 1, "keyValueDelimiter's size should >= 1.");
     callImpl(out, input, entryDelimiter, keyValueDelimiter);
   }
 
  private:
-  std::vector<std::pair<int, int>> strStrRex(
-      const StringView& allStr,
-      const StringView& s) {
+  /**
+   * @brief Retrieve the index of the pattern string
+   *
+   * This function retrieves all subscripts in the target string that match the
+   * start and end of the pattern
+   *
+   * @param targetStr The target string to search for
+   * @param pattern Search pattern.
+   */
+  std::vector<std::pair<int, int>> findPatternIndex(
+      const StringView& targetStr,
+      const StringView& pattern) {
     std::vector<std::pair<int, int>> result;
-    boost::regex re(s.str());
-    boost::smatch match;
-    auto inputs = allStr.str();
-    std::string::const_iterator search_start = inputs.begin();
-    while (boost::regex_search(search_start, inputs.cend(), match, re)) {
-      result.push_back(
-          {match[0].first - inputs.begin(), match[0].second - inputs.begin()});
-      search_start = match[0].second;
+    auto patternStr = pattern.str();
+    patternStr.insert(patternStr.begin(), '(');
+    patternStr.push_back(')');
+    re2::RE2 re(patternStr);
+    auto target = targetStr.str();
+    re2::StringPiece sp(target);
+    re2::StringPiece match;
+    while (re2::RE2::FindAndConsume(&sp, re, &match)) {
+      size_t startIndex = match.data() - target.data();
+      size_t endIndex = startIndex + match.size();
+      result.push_back({startIndex, endIndex});
     }
     return result;
   }
-  std::vector<StringView> splitMult(
-      const StringView& target,
+  /**
+   * @brief Separate the target string based on the delimiter
+   *
+   * This function will separate the target string based on a delimiter and
+   * return an array of separated strings
+   *
+   * @param targetStr The target string to be separated
+   * @param delimeter Delimiter
+   * @param onlyOne When encountering the first delimiter, simply separate the
+   * string into two longer parts
+   */
+  std::vector<StringView> split(
+      const StringView& targetStr,
       const StringView& delimeter,
       bool onlyOne = false) {
     std::vector<StringView> result;
-    auto allIndex = strStrRex(target, delimeter);
+    auto allIndex = findPatternIndex(targetStr, delimeter);
     int begin = 0;
     for (int i = 0; i < allIndex.size(); ++i) {
       result.push_back(
-          StringView(target.data() + begin, allIndex[i].first - begin));
+          StringView(targetStr.data() + begin, allIndex[i].first - begin));
       begin = allIndex[i].second;
       if (onlyOne) {
         break;
       }
     }
-    if (begin <= target.size()) {
+    if (begin <= targetStr.size()) {
       result.push_back(
-          StringView(target.data() + begin, target.size() - begin));
+          StringView(targetStr.data() + begin, targetStr.size() - begin));
     }
     return result;
   }
@@ -100,14 +117,13 @@ struct StringToMapFunction {
       const StringView& entryDelimiter,
       const StringView& keyValueDelimiter) {
     folly::F14FastSet<std::string_view> keys;
-    auto entryItems = splitMult(input, entryDelimiter);
+    auto entryItems = split(input, entryDelimiter);
     for (const auto& entryItem : entryItems) {
-      auto kvItems = splitMult(entryItem, keyValueDelimiter, true);
+      auto kvItems = split(entryItem, keyValueDelimiter);
       VELOX_USER_CHECK(
           keys.insert(kvItems[0]).second,
           "Duplicate keys are not allowed: '{}'.",
           kvItems[0]);
-
       if (kvItems.size() > 1) {
         auto [keyWriter, valueWriter] = out.add_item();
         keyWriter.setNoCopy(kvItems[0]);
@@ -117,6 +133,9 @@ struct StringToMapFunction {
       }
     }
   }
+
+  static StringView entryDelimiter_;
+  static StringView keyValueDelimiter_;
 };
 template <typename T>
 StringView StringToMapFunction<T>::entryDelimiter_(",");
