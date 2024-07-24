@@ -188,6 +188,11 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     return toSql(joinNode);
   }
 
+  if (auto valuesNode =
+          std::dynamic_pointer_cast<const core::ValuesNode>(plan)) {
+    return toSql(valuesNode);
+  }
+
   VELOX_NYI();
 }
 
@@ -232,6 +237,12 @@ std::string toWindowCallSql(
   if (ignoreNulls) {
     sql << " IGNORE NULLS";
   }
+  return sql.str();
+}
+
+std::string toCastSql(const core::CastTypedExprPtr& cast) {
+  std::stringstream sql;
+  sql << cast->toString();
   return sql.str();
 }
 
@@ -320,6 +331,10 @@ std::optional<std::string> PrestoQueryRunner::toSql(
         auto call =
             std::dynamic_pointer_cast<const core::CallTypedExpr>(projection)) {
       sql << toCallSql(call);
+    } else if (
+        auto call =
+            std::dynamic_pointer_cast<const core::CastTypedExpr>(projection)) {
+      sql << toCastSql(call);
     } else {
       VELOX_NYI();
     }
@@ -329,6 +344,12 @@ std::optional<std::string> PrestoQueryRunner::toSql(
 
   sql << " FROM (" << sourceSql.value() << ")";
   return sql.str();
+}
+
+std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const velox::core::ValuesNode>& valuesNode) {
+  // Map VALUES to table that is created when data is present.
+  return "tmp";
 }
 
 namespace {
@@ -805,7 +826,8 @@ std::string PrestoQueryRunner::startQuery(
        {"X-Presto-Catalog", "hive"},
        {"X-Presto-Schema", "tpch"},
        {"Content-Type", "text/plain"},
-       {"X-Presto-Session", sessionProperty}});
+       {"X-Presto-Session", sessionProperty},
+       {"X-Presto-Time-Zone", "GMT+3"}});
   cpr::Timeout timeout{timeout_};
   cpr::Response response = cpr::Post(url, body, header, timeout);
   VELOX_CHECK_EQ(
