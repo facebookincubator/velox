@@ -73,10 +73,6 @@ TEST_F(StringToMapTest, basic) {
       {"a::1___b:::2____c::::3", "__", "::"},
       {{"a", "1"}, {"_b", ":2"}, {"", std::nullopt}, {"c", "::3"}});
 
-  // Number of different parameters
-  testStringToMap({"a:1,b:2,c:3", ","}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
-  testStringToMap({"a:1,b:2,c:3"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
-
   // Exception for illegal delimiters.
   // Empty string is used.
   VELOX_ASSERT_THROW(

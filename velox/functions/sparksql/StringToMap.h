@@ -27,19 +27,6 @@ struct StringToMapFunction {
   static constexpr int32_t reuse_strings_from_arg = 0;
   void call(
       out_type<Map<Varchar, Varchar>>& out,
-      const arg_type<Varchar>& input) {
-    callImpl(out, input, entryDelimiter_, keyValueDelimiter_);
-  }
-  void call(
-      out_type<Map<Varchar, Varchar>>& out,
-      const arg_type<Varchar>& input,
-      const arg_type<Varchar>& entryDelimiter) {
-    VELOX_USER_CHECK_GE(
-        entryDelimiter.size(), 1, "entryDelimiter's size should >= 1.");
-    callImpl(out, input, entryDelimiter, keyValueDelimiter_);
-  }
-  void call(
-      out_type<Map<Varchar, Varchar>>& out,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter,
       const arg_type<Varchar>& keyValueDelimiter) {
