@@ -207,7 +207,7 @@ TEST_F(ParquetWriterTest, datapageVersionV2) {
   facebook::velox::parquet::WriterOptions writerOptions;
   writerOptions.memoryPool = leafPool_.get();
   writerOptions.parquetDataPageVersion =
-      facebook::velox::parquet::arrow::ParquetDataPageVersion::V1;
+      facebook::velox::parquet::arrow::ParquetDataPageVersion::V2;
 
   auto writer = std::make_unique<facebook::velox::parquet::Writer>(
       std::move(sink), writerOptions, rootPool_, schema);

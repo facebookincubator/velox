@@ -424,7 +424,7 @@ std::optional<TimestampUnit> getTimestampUnit(
   return std::nullopt;
 }
 
-std::string HiveConfig::getParquetDataPageVersion(
+std::optional<std::string> getParquetDataPageVersion(
     const Config& config,
     const char* configKey) {
   const auto version = config.get<std::string>(configKey);
@@ -432,7 +432,7 @@ std::string HiveConfig::getParquetDataPageVersion(
       version == "PARQUET_1_0" ||
           version == "PARQUET_2_0",
       "Invalid Parquet version.");
-  return version;
+  return version.value();
 }
 
 } // namespace
@@ -443,9 +443,11 @@ void WriterOptions::processSessionConfigs(const Config& config) {
         getTimestampUnit(config, kParquetSessionWriteTimestampUnit);
   }
 
-  if (!parquetDataPageVersion) {
-    parquetDataPageVersion =
-        getParquetDataPageVersion(config, kParquetSessionWriteTimestampUnit);
+  auto parquetDataPageVersionString =
+      getParquetDataPageVersion(config, kParquetSessionWriteTimestampUnit);
+
+  if (parquetDataPageVersionString == "PARQUET_1_0") {
+      parquetDataPageVersion = arrow::ParquetDataPageVersion::V1;
   }
 }
 
