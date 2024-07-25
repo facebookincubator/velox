@@ -478,8 +478,7 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<LevenshteinDistanceFunction, int32_t, Varchar, Varchar>(
       {prefix + "levenshtein"});
 
-  registerFunction<Split, Array<Varchar>, Varchar, Varchar>(
-      {prefix + "split"});
+  registerFunction<Split, Array<Varchar>, Varchar, Varchar>({prefix + "split"});
   registerFunction<Split, Array<Varchar>, Varchar, Varchar, int32_t>(
       {prefix + "split"});
 }
