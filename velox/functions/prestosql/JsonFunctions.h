@@ -121,11 +121,12 @@ struct JsonArrayContainsFunction {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct JsonArrayLengthFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  FOLLY_ALWAYS_INLINE bool call(int64_t& len, const arg_type<Json>& json) {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(T& len, const arg_type<Json>& json) {
     simdjson::ondemand::document jsonDoc;
 
     simdjson::padded_string paddedJson(json.data(), json.size());
