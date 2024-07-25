@@ -101,6 +101,38 @@ void Operator::maybeSetReclaimer() {
       Operator::MemoryReclaimer::create(operatorCtx_->driverCtx(), this));
 }
 
+void Operator::maybeSetQueryTracer() {
+  if (const auto& queryTraceConfig = operatorCtx_->driverCtx()->traceConfig()) {
+    if (queryTraceConfig->queryNodes.count(planNodeId()) != 0) {
+      const auto opTracePath = fmt::format(
+          "{}/{}/{}/data",
+          planNodeId(),
+          operatorCtx_->driverCtx()->pipelineId,
+          operatorCtx_->driverCtx()->driverId);
+      const auto traceDir =
+          operatorCtx_->driverCtx()->task->createTraceDirectory(opTracePath);
+      tracer_ = std::make_unique<TraceWriter>(
+          traceDir,
+          queryTraceConfig->queryTraceWriteBufferSize,
+          memory::MemoryManager::getInstance()->tracePool());
+    }
+  }
+}
+
+void Operator::traceInput(RowVectorPtr input) {
+  // TODO: Make this branch unlikely.
+  if (tracer_ != nullptr) {
+    tracer_->write(input);
+  }
+}
+
+void Operator::finishTrace() {
+  // TODO: Make this branch unlikely.
+  if (tracer_ != nullptr) {
+    tracer_->finish();
+  }
+}
+
 std::vector<std::unique_ptr<Operator::PlanNodeTranslator>>&
 Operator::translators() {
   static std::vector<std::unique_ptr<PlanNodeTranslator>> translators;
@@ -150,6 +182,7 @@ void Operator::initialize() {
       pool()->name());
   initialized_ = true;
   maybeSetReclaimer();
+  maybeSetQueryTracer();
 }
 
 // static

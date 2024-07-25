@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/LocalPlanner.h"
+
+#include "QueryTraceScan.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
@@ -587,6 +589,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
           assignUniqueIdNode,
           assignUniqueIdNode->taskUniqueId(),
           assignUniqueIdNode->uniqueIdCounter()));
+    } else if (
+        auto queryTraceReadNode =
+            std::dynamic_pointer_cast<const core::QueryTraceScanNode>(
+                planNode)) {
+      operators.push_back(
+          std::make_unique<QueryTraceScan>(id, ctx.get(), queryTraceReadNode));
     } else {
       std::unique_ptr<Operator> extended;
       if (planNode->requiresExchangeClient()) {

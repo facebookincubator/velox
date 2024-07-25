@@ -72,6 +72,11 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return queryConfig_;
   }
 
+  const std::unordered_map<std::string, std::shared_ptr<Config>>&
+  connectorSessionProperties() const {
+    return connectorSessionProperties_;
+  }
+
   Config* connectorSessionProperties(const std::string& connectorId) const {
     auto it = connectorSessionProperties_.find(connectorId);
     if (it == connectorSessionProperties_.end()) {
