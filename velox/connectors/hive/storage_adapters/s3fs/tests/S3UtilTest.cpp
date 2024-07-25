@@ -85,6 +85,31 @@ TEST(S3UtilTest, isCosNFile) {
   EXPECT_TRUE(isCosNFile("cosn://bucket/file.txt"));
 }
 
+TEST(S3UtilTest, isValidBucketName) {
+  // valid bucket name in amazon s3
+  EXPECT_TRUE(isValidBucketName("docexamplebucket1"));
+  EXPECT_TRUE(isValidBucketName("log-delivery-march-2020"));
+  EXPECT_TRUE(isValidBucketName("my-hosted-content"));
+
+  // valid bucket name in tencent cos
+  EXPECT_TRUE(isValidBucketName("examplebucket-1-1250000000"));
+  EXPECT_TRUE(isValidBucketName("mybucket123-1250000000"));
+  EXPECT_TRUE(isValidBucketName("1-newproject-1250000000"));
+
+  // valid bucket name in alibaba oss
+  EXPECT_TRUE(isValidBucketName("examplebucket1"));
+  EXPECT_TRUE(isValidBucketName("test-bucket-2021"));
+  EXPECT_TRUE(isValidBucketName("aliyun-oss-bucket"));
+
+  // invalid bucket name in amazon s3, tencent cos and alibaba oss
+  // Underscores (_) are included.
+  EXPECT_FALSE(isValidBucketName("doc_example_bucket"));
+  // Uppercase letters are included.
+  EXPECT_FALSE(isValidBucketName("DocExampleBucket"));
+  // The name ends with a hyphen (-).
+  EXPECT_FALSE(isValidBucketName("doc-example-bucket-"));
+}
+
 // TODO: Each prefix should be implemented as its own filesystem.
 TEST(S3UtilTest, s3Path) {
   auto path_0 = s3Path("s3://bucket/file.txt");
