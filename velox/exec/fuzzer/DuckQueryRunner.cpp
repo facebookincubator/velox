@@ -64,6 +64,7 @@ void DuckQueryRunner::disableAggregateFunctions(
 }
 
 std::multiset<std::vector<velox::variant>> DuckQueryRunner::execute(
+    memory::MemoryPool* /*rootPool*/,
     const std::string& sql,
     const std::vector<RowVectorPtr>& input,
     const RowTypePtr& resultType) {
@@ -73,6 +74,7 @@ std::multiset<std::vector<velox::variant>> DuckQueryRunner::execute(
 }
 
 std::multiset<std::vector<velox::variant>> DuckQueryRunner::execute(
+    memory::MemoryPool* /*rootPool*/,
     const std::string& sql,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput,

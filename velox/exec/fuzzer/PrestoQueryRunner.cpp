@@ -677,22 +677,26 @@ std::optional<std::string> PrestoQueryRunner::toSql(
 }
 
 std::multiset<std::vector<variant>> PrestoQueryRunner::execute(
+    memory::MemoryPool* rootPool,
     const std::string& sql,
     const std::vector<RowVectorPtr>& input,
     const RowTypePtr& resultType) {
-  return exec::test::materialize(executeVector(sql, input, resultType));
+  return exec::test::materialize(
+      executeVector(rootPool, sql, input, resultType));
 }
 
 std::multiset<std::vector<velox::variant>> PrestoQueryRunner::execute(
+    memory::MemoryPool* rootPool,
     const std::string& sql,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput,
     const RowTypePtr& resultType) {
   return exec::test::materialize(
-      executeVector(sql, probeInput, buildInput, resultType));
+      executeVector(rootPool, sql, probeInput, buildInput, resultType));
 }
 
 std::string PrestoQueryRunner::createTable(
+    memory::MemoryPool* rootPool,
     const std::string& name,
     const TypePtr& type) {
   auto inputType = asRowType(type);
@@ -703,45 +707,52 @@ std::string PrestoQueryRunner::createTable(
         "cast(null as {})", toTypeSql(inputType->childAt(i)));
   }
 
-  execute(fmt::format("DROP TABLE IF EXISTS {}", name));
+  execute(rootPool, fmt::format("DROP TABLE IF EXISTS {}", name));
 
-  execute(fmt::format(
-      "CREATE TABLE {}({}) WITH (format = 'DWRF') AS SELECT {}",
-      name,
-      folly::join(", ", inputType->names()),
-      nullValues.str()));
+  execute(
+      rootPool,
+      fmt::format(
+          "CREATE TABLE {}({}) WITH (format = 'DWRF') AS SELECT {}",
+          name,
+          folly::join(", ", inputType->names()),
+          nullValues.str()));
 
   // Query Presto to find out table's location on disk.
-  auto results = execute(fmt::format("SELECT \"$path\" FROM {}", name));
+  auto results =
+      execute(rootPool, fmt::format("SELECT \"$path\" FROM {}", name));
 
   auto filePath = extractSingleValue<StringView>(results);
   auto tableDirectoryPath = fs::path(filePath).parent_path();
 
   // Delete the all-null row.
-  execute(fmt::format("DELETE FROM {}", name));
+  execute(rootPool, fmt::format("DELETE FROM {}", name));
 
   return tableDirectoryPath;
 }
 
 std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
+    memory::MemoryPool* rootPool,
     const std::string& sql,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput,
     const velox::RowTypePtr& resultType) {
   auto probeType = asRowType(probeInput[0]->type());
+  auto leafPool = rootPool->addLeafChild("leaf");
   if (probeType->size() == 0) {
-    auto rowVector = makeNullRows(probeInput, "x", pool());
-    return executeVector(sql, {rowVector}, buildInput, resultType);
+    auto rowVector = makeNullRows(probeInput, "x", leafPool.get());
+    return executeVector(rootPool, sql, {rowVector}, buildInput, resultType);
   }
 
   auto buildType = asRowType(buildInput[0]->type());
   if (probeType->size() == 0) {
-    auto rowVector = makeNullRows(buildInput, "y", pool());
-    return executeVector(sql, probeInput, {rowVector}, resultType);
+    auto rowVector = makeNullRows(buildInput, "y", leafPool.get());
+    return executeVector(rootPool, sql, probeInput, {rowVector}, resultType);
   }
 
-  auto probeTableDirectoryPath = createTable("t", probeInput[0]->type());
-  auto buildTableDirectoryPath = createTable("u", buildInput[0]->type());
+  auto probeTableDirectoryPath =
+      createTable(rootPool, "t", probeInput[0]->type());
+  auto buildTableDirectoryPath =
+      createTable(rootPool, "u", buildInput[0]->type());
 
   // Create a new file in table's directory with fuzzer-generated data.
   auto probeFilePath = fs::path(probeTableDirectoryPath)
@@ -754,25 +765,27 @@ std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
                            .string()
                            .substr(strlen("file:"));
 
-  auto writerPool = rootPool()->addAggregateChild("writer");
+  auto writerPool = rootPool->addAggregateChild("writer");
   writeToFile(probeFilePath, probeInput, writerPool.get());
   writeToFile(buildFilePath, buildInput, writerPool.get());
 
   // Run the query.
-  return execute(sql);
+  return execute(rootPool, sql);
 }
 
 std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
+    memory::MemoryPool* rootPool,
     const std::string& sql,
     const std::vector<velox::RowVectorPtr>& input,
     const velox::RowTypePtr& resultType) {
   auto inputType = asRowType(input[0]->type());
+  auto leafPool = rootPool->addLeafChild("leaf");
   if (inputType->size() == 0) {
-    auto rowVector = makeNullRows(input, "x", pool());
-    return executeVector(sql, {rowVector}, resultType);
+    auto rowVector = makeNullRows(input, "x", leafPool.get());
+    return executeVector(rootPool, sql, {rowVector}, resultType);
   }
 
-  auto tableDirectoryPath = createTable("tmp", input[0]->type());
+  auto tableDirectoryPath = createTable(rootPool, "tmp", input[0]->type());
 
   // Create a new file in table's directory with fuzzer-generated data.
   auto newFilePath = fs::path(tableDirectoryPath)
@@ -780,18 +793,21 @@ std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
                          .string()
                          .substr(strlen("file:"));
 
-  auto writerPool = rootPool()->addAggregateChild("writer");
+  auto writerPool = rootPool->addAggregateChild("writer");
   writeToFile(newFilePath, input, writerPool.get());
 
   // Run the query.
-  return execute(sql);
-}
-
-std::vector<RowVectorPtr> PrestoQueryRunner::execute(const std::string& sql) {
-  return execute(sql, "");
+  return execute(rootPool, sql);
 }
 
 std::vector<RowVectorPtr> PrestoQueryRunner::execute(
+    memory::MemoryPool* rootPool,
+    const std::string& sql) {
+  return execute(rootPool, sql, "");
+}
+
+std::vector<RowVectorPtr> PrestoQueryRunner::execute(
+    memory::MemoryPool* rootPool,
     const std::string& sql,
     const std::string& sessionProperty) {
   LOG(INFO) << "Execute presto sql: " << sql;
@@ -799,8 +815,9 @@ std::vector<RowVectorPtr> PrestoQueryRunner::execute(
   response.throwIfFailed();
 
   std::vector<RowVectorPtr> queryResults;
+  auto leafPool = rootPool->addLeafChild("leaf");
   for (;;) {
-    for (auto& result : response.queryResults(pool_.get())) {
+    for (auto& result : response.queryResults(leafPool.get())) {
       queryResults.push_back(result);
     }
 
