@@ -308,6 +308,8 @@ class PlanBuilder {
       bool parallelizable = false,
       size_t repeatTimes = 1);
 
+  PlanBuilder& traceScan(std::string path);
+
   /// Add an ExchangeNode.
   ///
   /// Use capturePlanNodeId method to capture the node ID needed for adding

@@ -321,6 +321,11 @@ class MemoryManager {
     return spillPool_.get();
   }
 
+  /// Returns the process wide leaf memory pool used for query tracing.
+  MemoryPool* tracePool() const {
+    return tracePool_.get();
+  }
+
   const std::vector<std::shared_ptr<MemoryPool>>& testingSharedLeafPools() {
     return sharedLeafPools_;
   }
@@ -348,6 +353,7 @@ class MemoryManager {
 
   const std::shared_ptr<MemoryPool> sysRoot_;
   const std::shared_ptr<MemoryPool> spillPool_;
+  const std::shared_ptr<MemoryPool> tracePool_;
   const std::vector<std::shared_ptr<MemoryPool>> sharedLeafPools_;
 
   mutable folly::SharedMutex mutex_;
@@ -390,6 +396,9 @@ MemoryPool& deprecatedSharedLeafPool();
 
 /// Returns the system-wide memory pool for spilling memory usage.
 memory::MemoryPool* spillMemoryPool();
+
+/// Returns the system-wide memory pool for tracing memory usage.
+memory::MemoryPool* traceMemoryPool();
 
 /// Returns true if the provided 'pool' is the spilling memory pool.
 bool isSpillMemoryPool(memory::MemoryPool* pool);

@@ -220,6 +220,12 @@ PlanBuilder& PlanBuilder::values(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::traceScan(std::string path) {
+  planNode_ = std::make_shared<core::QueryTraceScanNode>(
+      nextPlanNodeId(), std::move(path));
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::exchange(const RowTypePtr& outputType) {
   VELOX_CHECK_NULL(planNode_, "Exchange must be the source node");
   planNode_ =

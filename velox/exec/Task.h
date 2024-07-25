@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
+
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -23,6 +25,8 @@
 #include "velox/exec/Split.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
+#include "velox/exec/trace/QueryTraceConfig.h"
+#include "velox/exec/trace/QueryTraceMetadataWriter.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec {
@@ -127,6 +131,11 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns QueryCtx specified in the constructor.
   const std::shared_ptr<core::QueryCtx>& queryCtx() const {
     return queryCtx_;
+  }
+
+  /// Returns QueryTraceConfig specified in the constructor.
+  const std::optional<QueryTraceConfig>& queryTraceConfig() const {
+    return traceConfig_;
   }
 
   /// Returns MemoryPool used to allocate memory during execution. This instance
@@ -669,6 +678,12 @@ class Task : public std::enable_shared_from_this<Task> {
     ++numThreads_;
   }
 
+  /// Builds the query trace config.
+  std::optional<QueryTraceConfig> maybeMakeTraceConfig() const;
+
+  /// Create a directory to store the query trace metdata and data.
+  std::string createTraceDirectory(const std::string& traceDir) const;
+
   /// Invoked to run provided 'callback' on each alive driver of the task.
   void testingVisitDrivers(const std::function<void(Driver*)>& callback);
 
@@ -964,6 +979,10 @@ class Task : public std::enable_shared_from_this<Task> {
   std::shared_ptr<ExchangeClient> getExchangeClientLocked(
       int32_t pipelineId) const;
 
+  // Create a subdir and query config trace writer to trace the query metadata
+  // if the query trace enabled.
+  void maybeRecordQueryConfig();
+
   // The helper class used to maintain 'numCreatedTasks_' and 'numDeletedTasks_'
   // on task construction and destruction.
   class TaskCounter {
@@ -994,6 +1013,7 @@ class Task : public std::enable_shared_from_this<Task> {
   core::PlanFragment planFragment_;
   const int destination_;
   const std::shared_ptr<core::QueryCtx> queryCtx_;
+  const std::optional<QueryTraceConfig> traceConfig_;
 
   // The execution mode of the task. It is enforced that a task can only be
   // executed in a single mode throughout its lifetime
@@ -1135,6 +1155,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // message. Subsequent messages will be ignored.
   bool noMoreOutputBuffers_{false};
 
+  std::unique_ptr<QueryMetadataWriter> queryConfigWriter_;
+
   // Thread counts and cancellation -related state.
   //
   // Some variables below are declared atomic for tsan because they are
@@ -1165,6 +1187,12 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Indicates whether the spill directory has been created.
   std::atomic<bool> spillDirectoryCreated_{false};
+
+  std::string traceDirectory_;
+
+  // Lock used to serialize the slow file io operation such as ensuring only one
+  // spill and trace director creations for a task.
+  mutable std::mutex fileOpMutex_;
 
   // Stores unconsumed preloading splits to ensure they are closed promptly.
   folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>

@@ -142,6 +142,10 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->queryConfig();
 }
 
+const std::optional<QueryTraceConfig>& DriverCtx::traceConfig() const {
+  return task->queryTraceConfig();
+}
+
 velox::memory::MemoryPool* DriverCtx::addOperatorPool(
     const core::PlanNodeId& planNodeId,
     const std::string& operatorType) {

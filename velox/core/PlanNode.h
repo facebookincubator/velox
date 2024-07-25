@@ -21,6 +21,8 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 
+#include <row/CompactRow.h>
+
 struct ArrowArrayStream;
 
 namespace facebook::velox::core {
@@ -273,6 +275,38 @@ class ValuesNode : public PlanNode {
   const RowTypePtr outputType_;
   const bool parallelizable_;
   const size_t repeatTimes_;
+};
+
+class QueryTraceScanNode final : public PlanNode {
+ public:
+  QueryTraceScanNode(const PlanNodeId& id, std::string path)
+      : PlanNode(id),
+        path_(std::move(path)),
+        outputType_(getDataType(fmt::format("{}/summary.json", path_))) {}
+
+  const std::string& path() const {
+    return path_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override;
+
+  std::string_view name() const override {
+    return "QueryTraceRead";
+  }
+
+  folly::dynamic serialize() const override;
+
+ private:
+  static RowTypePtr getDataType(const std::string& summaryFile);
+
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::string path_;
+  const RowTypePtr outputType_;
 };
 
 class ArrowStreamNode : public PlanNode {

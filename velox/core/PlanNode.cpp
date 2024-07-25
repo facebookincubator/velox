@@ -16,6 +16,8 @@
 #include <folly/container/F14Set.h>
 
 #include "velox/common/encode/Base64.h"
+#include "velox/common/file/File.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/core/PlanNode.h"
 #include "velox/vector/VectorSaver.h"
 
@@ -712,6 +714,10 @@ PlanNodePtr ValuesNode::create(const folly::dynamic& obj, void* context) {
       obj["repeatTimes"].asInt());
 }
 
+const std::vector<PlanNodePtr>& QueryTraceScanNode::sources() const {
+  return kEmptySources;
+}
+
 void ProjectNode::addDetails(std::stringstream& stream) const {
   stream << "expressions: ";
   for (auto i = 0; i < projections_.size(); i++) {
@@ -745,6 +751,25 @@ PlanNodePtr ProjectNode::create(const folly::dynamic& obj, void* context) {
 
 const std::vector<PlanNodePtr>& TableScanNode::sources() const {
   return kEmptySources;
+}
+
+folly::dynamic QueryTraceScanNode::serialize() const {
+  VELOX_UNSUPPORTED("QueryTraceScan plan node is not serializable");
+  return nullptr;
+}
+
+// Static
+RowTypePtr QueryTraceScanNode::getDataType(const std::string& summaryFile) {
+  const auto fs = filesystems::getFileSystem(summaryFile, nullptr);
+  const auto file = fs->openFileForRead(summaryFile);
+  const auto summary = file->pread(0, file->size());
+  VELOX_USER_CHECK(!summary.empty());
+  folly::dynamic obj = folly::parseJson(summary);
+  return ISerializable::deserialize<RowType>(obj["rowType"]);
+}
+
+void QueryTraceScanNode::addDetails(std::stringstream& stream) const {
+  // Nothing to add.
 }
 
 void TableScanNode::addDetails(std::stringstream& stream) const {
