@@ -15,13 +15,16 @@
  */
 
 #include "velox/exec/SimpleAggregateAdapter.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using facebook::velox::common::testutil::TestValue;
 using facebook::velox::functions::aggregate::test::AggregationTestBase;
+using facebook::velox::window::test::WindowTestBase;
 
 namespace facebook::velox::aggregate::test {
 namespace {
@@ -355,6 +358,8 @@ class CountNullsAggregate {
   using IntermediateType = int64_t; // Intermediate result type.
   using OutputType = int64_t; // Output vector type.
 
+  struct FunctionState {};
+
   static constexpr bool default_null_behavior_ = false;
 
   struct Accumulator {
@@ -362,13 +367,16 @@ class CountNullsAggregate {
 
     Accumulator() = delete;
 
-    explicit Accumulator(HashStringAllocator* /*allocator*/) {
+    explicit Accumulator(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/) {
       nullsCount_ = 0;
     }
 
     bool addInput(
         HashStringAllocator* /*allocator*/,
-        exec::optional_arg_type<double> data) {
+        exec::optional_arg_type<double> data,
+        const FunctionState& /*state*/) {
       if (!data.has_value()) {
         nullsCount_++;
         return true;
@@ -378,7 +386,8 @@ class CountNullsAggregate {
 
     bool combine(
         HashStringAllocator* /*allocator*/,
-        exec::optional_arg_type<int64_t> nullsCount) {
+        exec::optional_arg_type<int64_t> nullsCount,
+        const FunctionState& /*state*/) {
       if (nullsCount.has_value()) {
         nullsCount_ += nullsCount.value();
         return true;
@@ -386,13 +395,17 @@ class CountNullsAggregate {
       return false;
     }
 
-    bool writeFinalResult(bool nonNull, exec::out_type<OutputType>& out) {
+    bool writeFinalResult(
+        bool nonNull,
+        exec::out_type<OutputType>& out,
+        const FunctionState& /*state*/) {
       return writeResult<OutputType>(nonNull, out);
     }
 
     bool writeIntermediateResult(
         bool nonNull,
-        exec::out_type<IntermediateType>& out) {
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& /*state*/) {
       return writeResult<IntermediateType>(nonNull, out);
     }
 
@@ -467,6 +480,236 @@ TEST_F(SimpleCountNullsAggregationTest, basic) {
 
   expected = makeRowVector({makeNullableFlatVector<int64_t>({3})});
   testAggregations({vectors}, {}, {"simple_count_nulls(c2)"}, {expected});
+}
+
+// A testing aggregate function calculates a weighted average by taking an
+// int64_t input value and a constant weight value as input. The sum of all
+// input values is divided by the sum of all weight values to produce the final
+// result. It is used to check for expectations in initialize method.
+template <bool testCompanion>
+class FunctionStateTestAggregate {
+ public:
+  using InputType = Row<int64_t, int64_t>; // Input vector type wrapped in Row.
+  using IntermediateType = Row<int64_t, double>; // Intermediate result type.
+  using OutputType = double; // Output vector type.
+
+  struct FunctionState {
+    core::AggregationNode::Step step;
+    std::vector<TypePtr> rawInputTypes;
+    TypePtr resultType;
+    std::vector<VectorPtr> constantInputs;
+    core::AggregationNode::Step companionStep;
+  };
+
+  static void checkConstantInputs(
+      const std::vector<VectorPtr>& constantInputs) {
+    // Check that the constantInputs is {nullptr, 1}
+    VELOX_CHECK_EQ(constantInputs.size(), 2);
+    VELOX_CHECK_NULL(constantInputs[0]);
+    VELOX_CHECK(constantInputs[1]->isConstantEncoding());
+    VELOX_CHECK_EQ(
+        constantInputs[1]
+            ->template asUnchecked<SimpleVector<int64_t>>()
+            ->valueAt(0),
+        1);
+  }
+
+  static void initialize(
+      FunctionState& state,
+      core::AggregationNode::Step step,
+      const std::vector<TypePtr>& rawInputTypes,
+      const TypePtr& resultType,
+      const std::vector<VectorPtr>& constantInputs,
+      std::optional<core::AggregationNode::Step> companionStep) {
+    std::vector<TypePtr> expectedRawInputTypes = {BIGINT(), BIGINT()};
+    auto expectedIntermediateType = ROW({BIGINT(), DOUBLE()});
+
+    if constexpr (testCompanion) {
+      // Check for companion functions.
+      VELOX_CHECK(companionStep.has_value());
+      if (companionStep.value() == core::AggregationNode::Step::kPartial) {
+        VELOX_CHECK(rawInputTypes == expectedRawInputTypes);
+        if (step == core::AggregationNode::Step::kPartial ||
+            step == core::AggregationNode::Step::kSingle) {
+          // Only check constant inputs in partial and single step.
+          checkConstantInputs(constantInputs);
+        } else {
+          VELOX_CHECK_EQ(constantInputs.size(), 1);
+          VELOX_CHECK_NULL(constantInputs[0]);
+        }
+      } else if (
+          companionStep.value() == core::AggregationNode::Step::kIntermediate ||
+          companionStep.value() == core::AggregationNode::Step::kFinal) {
+        VELOX_CHECK_EQ(rawInputTypes.size(), 1);
+        VELOX_CHECK(rawInputTypes[0]->equivalent(*expectedIntermediateType));
+
+        VELOX_CHECK_EQ(constantInputs.size(), 1);
+        VELOX_CHECK_NULL(constantInputs[0]);
+      } else {
+        VELOX_FAIL("Unexpected aggregation step");
+      }
+    } else {
+      VELOX_CHECK(rawInputTypes == expectedRawInputTypes);
+      if (step == core::AggregationNode::Step::kPartial ||
+          step == core::AggregationNode::Step::kSingle) {
+        // Only check constant inputs in partial and single step.
+        checkConstantInputs(constantInputs);
+      } else {
+        VELOX_CHECK_EQ(constantInputs.size(), 1);
+        VELOX_CHECK_NULL(constantInputs[0]);
+      }
+    }
+
+    state.step = step;
+    state.rawInputTypes = rawInputTypes;
+    state.resultType = resultType;
+    state.constantInputs = constantInputs;
+  }
+
+  struct Accumulator {
+    int64_t sum{0};
+    double count{0};
+
+    explicit Accumulator(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/) {}
+
+    void addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<int64_t> data,
+        exec::arg_type<int64_t> /*increment*/,
+        const FunctionState& state) {
+      VELOX_CHECK_EQ(state.constantInputs.size(), 2);
+      VELOX_CHECK(state.constantInputs[1]->isConstantEncoding());
+      auto constant = state.constantInputs[1]
+                          ->template asUnchecked<SimpleVector<int64_t>>()
+                          ->valueAt(0);
+      sum += data;
+      count += constant;
+    }
+
+    void combine(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<IntermediateType> other,
+        const FunctionState& state) {
+      VELOX_CHECK(other.at<0>().has_value());
+      VELOX_CHECK(other.at<1>().has_value());
+      sum += other.at<0>().value();
+      count += other.at<1>().value();
+    }
+
+    bool writeIntermediateResult(
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& state) {
+      out = std::make_tuple(sum, count);
+      return true;
+    }
+
+    bool writeFinalResult(
+        exec::out_type<OutputType>& out,
+        const FunctionState& state) {
+      out = sum / count;
+      return true;
+    }
+  };
+
+  using AccumulatorType = Accumulator;
+};
+
+template <bool testCompanion>
+exec::AggregateRegistrationResult registerSimpleFunctionStateTestAggregate(
+    const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("DOUBLE")
+          .intermediateType("ROW(BIGINT, DOUBLE)")
+          .argumentType("BIGINT")
+          .argumentType("BIGINT")
+          .build()};
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step /*step*/,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_LE(argTypes.size(), 2, "{} takes at most 2 argument", name);
+        return std::make_unique<
+            SimpleAggregateAdapter<FunctionStateTestAggregate<testCompanion>>>(
+            resultType);
+      },
+      testCompanion,
+      true /*overwrite*/);
+}
+
+void registerFunctionStateTestAggregate() {
+  registerSimpleFunctionStateTestAggregate<false>(
+      "simple_function_state_agg_main");
+  registerSimpleFunctionStateTestAggregate<true>(
+      "simple_function_state_agg_companion");
+}
+
+class SimpleFunctionStateAggregationTest : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+
+    disableTestIncremental();
+    disableTestStreaming();
+    registerFunctionStateTestAggregate();
+  }
+};
+
+TEST_F(SimpleFunctionStateAggregationTest, aggregate) {
+  auto inputVectors = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  std::vector<double> finalResult = {2.5};
+  auto expected = makeRowVector({makeFlatVector<double>(finalResult)});
+  testAggregations(
+      {inputVectors},
+      {},
+      {"simple_function_state_agg_main(c0, 1)"},
+      {expected});
+  testAggregationsWithCompanion(
+      {inputVectors},
+      [](auto& /*builder*/) {},
+      {},
+      {"simple_function_state_agg_companion(c0, 1)"},
+      {{BIGINT(), BIGINT()}},
+      {},
+      {expected},
+      {});
+}
+
+class SimpleFunctionStateWindowTest : public WindowTestBase {
+ protected:
+  void SetUp() override {
+    WindowTestBase::SetUp();
+
+    registerFunctionStateTestAggregate();
+  }
+};
+
+TEST_F(SimpleFunctionStateWindowTest, window) {
+  auto inputVectors = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5}),
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
+  });
+
+  auto expected = makeRowVector({
+      inputVectors->childAt(0),
+      inputVectors->childAt(1),
+      makeFlatVector<double>(
+          {2.0, 2.0, 2.0, 5.0, 5.0, 5.0, 8.0, 8.0, 8.0, 10.5, 10.5, 12.0}),
+  });
+  WindowTestBase::testWindowFunction(
+      {inputVectors},
+      "simple_function_state_agg_main(c1, 1)",
+      {"partition by c0"},
+      {},
+      expected);
 }
 
 } // namespace

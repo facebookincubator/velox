@@ -42,6 +42,8 @@ class AverageAggregate {
   using OutputType =
       std::conditional_t<std::is_same_v<T, float>, float, double>;
 
+  struct FunctionState {};
+
   static bool toIntermediate(
       exec::out_type<Row<double, int64_t>>& out,
       exec::arg_type<T> in) {
@@ -56,14 +58,19 @@ class AverageAggregate {
     AccumulatorType() = delete;
 
     // Constructor used in initializeNewGroups().
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/) {
       sum_ = 0;
       count_ = 0;
     }
 
     // addInput expects one parameter of exec::arg_type<T> for each child-type T
     // wrapped in InputType.
-    void addInput(HashStringAllocator* /*allocator*/, exec::arg_type<T> data) {
+    void addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<T> data,
+        const FunctionState& /*state*/) {
       sum_ += data;
       count_ = checkedPlus<int64_t>(count_, 1);
     }
@@ -71,7 +78,8 @@ class AverageAggregate {
     // combine expects one parameter of exec::arg_type<IntermediateType>.
     void combine(
         HashStringAllocator* /*allocator*/,
-        exec::arg_type<Row<double, int64_t>> other) {
+        exec::arg_type<Row<double, int64_t>> other,
+        const FunctionState& /*state*/) {
       // Both field of an intermediate result should be non-null because
       // writeIntermediateResult() never make an intermediate result with a
       // single null.
@@ -81,12 +89,16 @@ class AverageAggregate {
       count_ = checkedPlus<int64_t>(count_, other.at<1>().value());
     }
 
-    bool writeFinalResult(exec::out_type<OutputType>& out) {
+    bool writeFinalResult(
+        exec::out_type<OutputType>& out,
+        const FunctionState& /*state*/) {
       out = sum_ / count_;
       return true;
     }
 
-    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+    bool writeIntermediateResult(
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& /*state*/) {
       out = std::make_tuple(sum_, count_);
       return true;
     }

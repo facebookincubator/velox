@@ -32,6 +32,8 @@ class BitwiseXorAggregate {
 
   using OutputType = T;
 
+  struct FunctionState {};
+
   static bool toIntermediate(exec::out_type<T>& out, exec::arg_type<T> in) {
     out = in;
     return true;
@@ -42,22 +44,34 @@ class BitwiseXorAggregate {
 
     AccumulatorType() = delete;
 
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/) {}
 
-    void addInput(HashStringAllocator* /*allocator*/, exec::arg_type<T> data) {
+    void addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<T> data,
+        const FunctionState& /*state*/) {
       xor_ ^= data;
     }
 
-    void combine(HashStringAllocator* /*allocator*/, exec::arg_type<T> other) {
+    void combine(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<T> other,
+        const FunctionState& /*state*/) {
       xor_ ^= other;
     }
 
-    bool writeFinalResult(exec::out_type<OutputType>& out) {
+    bool writeFinalResult(
+        exec::out_type<OutputType>& out,
+        const FunctionState& /*state*/) {
       out = xor_;
       return true;
     }
 
-    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+    bool writeIntermediateResult(
+        exec::out_type<IntermediateType>& out,
+        const FunctionState& /*state*/) {
       out = xor_;
       return true;
     }

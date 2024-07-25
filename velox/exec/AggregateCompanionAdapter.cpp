@@ -124,11 +124,39 @@ void AggregateCompanionFunctionBase::extractAccumulators(
   fn_->extractAccumulators(groups, numGroups, result);
 }
 
+void AggregateCompanionAdapter::PartialFunction::initialize(
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& rawInputType,
+    const facebook::velox::TypePtr& resultType,
+    const std::vector<VectorPtr>& constantInputs,
+    std::optional<core::AggregationNode::Step> /*companionStep*/) {
+  fn_->initialize(
+      step,
+      rawInputType,
+      resultType,
+      constantInputs,
+      core::AggregationNode::Step::kPartial);
+}
+
 void AggregateCompanionAdapter::PartialFunction::extractValues(
     char** groups,
     int32_t numGroups,
     VectorPtr* result) {
   fn_->extractAccumulators(groups, numGroups, result);
+}
+
+void AggregateCompanionAdapter::MergeFunction::initialize(
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& rawInputType,
+    const facebook::velox::TypePtr& resultType,
+    const std::vector<VectorPtr>& constantInputs,
+    std::optional<core::AggregationNode::Step> /*companionStep*/) {
+  fn_->initialize(
+      step,
+      rawInputType,
+      resultType,
+      constantInputs,
+      core::AggregationNode::Step::kIntermediate);
 }
 
 void AggregateCompanionAdapter::MergeFunction::addRawInput(
@@ -154,6 +182,20 @@ void AggregateCompanionAdapter::MergeFunction::extractValues(
     int32_t numGroups,
     VectorPtr* result) {
   fn_->extractAccumulators(groups, numGroups, result);
+}
+
+void AggregateCompanionAdapter::MergeExtractFunction::initialize(
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& rawInputType,
+    const facebook::velox::TypePtr& resultType,
+    const std::vector<VectorPtr>& constantInputs,
+    std::optional<core::AggregationNode::Step> /*companionStep*/) {
+  fn_->initialize(
+      step,
+      rawInputType,
+      resultType,
+      constantInputs,
+      core::AggregationNode::Step::kFinal);
 }
 
 void AggregateCompanionAdapter::MergeExtractFunction::extractValues(
@@ -229,6 +271,25 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
   // Perform per-row aggregation.
   std::vector<vector_size_t> allSelectedRange;
   rows.applyToSelected([&](auto row) { allSelectedRange.push_back(row); });
+
+  // Get the raw input types.
+  std::vector<TypePtr> rawInputTypes{args.size()};
+  std::vector<VectorPtr> constantInputs{args.size()};
+  for (auto i = 0; i < args.size(); i++) {
+    rawInputTypes[i] = args[i]->type();
+    if (args[i]->isConstantEncoding()) {
+      constantInputs[i] = args[i];
+    } else {
+      constantInputs[i] = nullptr;
+    }
+  }
+
+  fn_->initialize(
+      core::AggregationNode::Step::kFinal,
+      rawInputTypes,
+      outputType,
+      constantInputs,
+      core::AggregationNode::Step::kFinal);
   fn_->initializeNewGroups(groups, allSelectedRange);
   fn_->enableValidateIntermediateInputs();
   fn_->addIntermediateResults(groups, rows, args, false);

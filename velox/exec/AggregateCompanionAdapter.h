@@ -99,6 +99,13 @@ struct AggregateCompanionAdapter {
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
 
+    void initialize(
+        core::AggregationNode::Step step,
+        const std::vector<TypePtr>& rawInputType,
+        const TypePtr& resultType,
+        const std::vector<VectorPtr>& constantInputs,
+        std::optional<core::AggregationNode::Step> companionStep) override;
+
     void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
         override;
   };
@@ -109,6 +116,13 @@ struct AggregateCompanionAdapter {
         std::unique_ptr<Aggregate> fn,
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
+
+    void initialize(
+        core::AggregationNode::Step step,
+        const std::vector<TypePtr>& rawInputType,
+        const TypePtr& resultType,
+        const std::vector<VectorPtr>& constantInputs,
+        std::optional<core::AggregationNode::Step> companionStep) override;
 
     void addRawInput(
         char** groups,
@@ -132,6 +146,13 @@ struct AggregateCompanionAdapter {
         std::unique_ptr<Aggregate> fn,
         const TypePtr& resultType)
         : MergeFunction{std::move(fn), resultType} {}
+
+    void initialize(
+        core::AggregationNode::Step step,
+        const std::vector<TypePtr>& rawInputType,
+        const TypePtr& resultType,
+        const std::vector<VectorPtr>& constantInputs,
+        std::optional<core::AggregationNode::Step> companionStep) override;
 
     void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
         override;

@@ -36,6 +36,8 @@ class ArrayAggAggregate {
   // Type of output vector.
   using OutputType = Array<Generic<T1>>;
 
+  struct FunctionState {};
+
   static constexpr bool default_null_behavior_ = false;
 
   static bool toIntermediate(
@@ -55,7 +57,9 @@ class ArrayAggAggregate {
     AccumulatorType() = delete;
 
     // Constructor used in initializeNewGroups().
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/)
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        const FunctionState& /*state*/)
         : elements_{} {}
 
     static constexpr bool is_fixed_size_ = false;
@@ -64,7 +68,8 @@ class ArrayAggAggregate {
     // child-type T wrapped in InputType.
     bool addInput(
         HashStringAllocator* allocator,
-        exec::optional_arg_type<Generic<T1>> data) {
+        exec::optional_arg_type<Generic<T1>> data,
+        const FunctionState& /*state*/) {
       elements_.appendValue(data, allocator);
       return true;
     }
@@ -73,7 +78,8 @@ class ArrayAggAggregate {
     // exec::optional_arg_type<IntermediateType>.
     bool combine(
         HashStringAllocator* allocator,
-        exec::optional_arg_type<Array<Generic<T1>>> other) {
+        exec::optional_arg_type<Array<Generic<T1>>> other,
+        const FunctionState& /*state*/) {
       if (!other.has_value()) {
         return false;
       }
@@ -85,7 +91,8 @@ class ArrayAggAggregate {
 
     bool writeFinalResult(
         bool nonNullGroup,
-        exec::out_type<Array<Generic<T1>>>& out) {
+        exec::out_type<Array<Generic<T1>>>& out,
+        const FunctionState& /*state*/) {
       if (!nonNullGroup) {
         return false;
       }
@@ -95,7 +102,8 @@ class ArrayAggAggregate {
 
     bool writeIntermediateResult(
         bool nonNullGroup,
-        exec::out_type<Array<Generic<T1>>>& out) {
+        exec::out_type<Array<Generic<T1>>>& out,
+        const FunctionState& /*state*/) {
       // If the group's accumulator is null, the corresponding intermediate
       // result is null too.
       if (!nonNullGroup) {
