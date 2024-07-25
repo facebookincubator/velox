@@ -104,6 +104,35 @@ TEST(DateTimeUtilTest, fromDateInvalid) {
       1970, 6, 31, "Date out of range: 1970-6-31"));
 }
 
+TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
+  auto testDaysSinceEpochFromWeekOfMonthDate =
+      [](int32_t year, int32_t month, int32_t weekOfMonth, int32_t dayOfWeek) {
+        int64_t daysSinceEpoch;
+        auto status = util::daysSinceEpochFromWeekOfMonthDate(
+            year, month, weekOfMonth, dayOfWeek, daysSinceEpoch);
+        EXPECT_TRUE(status.ok());
+        return daysSinceEpoch;
+      };
+  EXPECT_EQ(4, testDaysSinceEpochFromWeekOfMonthDate(1970, 1, 2, 1));
+  EXPECT_EQ(361, testDaysSinceEpochFromWeekOfMonthDate(1971, 1, 1, 1));
+  EXPECT_EQ(396, testDaysSinceEpochFromWeekOfMonthDate(1971, 2, 1, 1));
+
+  EXPECT_EQ(10952, testDaysSinceEpochFromWeekOfMonthDate(2000, 1, 1, 1));
+  EXPECT_EQ(19905, testDaysSinceEpochFromWeekOfMonthDate(2024, 7, 1, 1));
+
+  // Before unix epoch.
+  EXPECT_EQ(-3, testDaysSinceEpochFromWeekOfMonthDate(1970, 1, 1, 1));
+  EXPECT_EQ(-2, testDaysSinceEpochFromWeekOfMonthDate(1970, 1, 1, 2));
+  EXPECT_EQ(-31, testDaysSinceEpochFromWeekOfMonthDate(1969, 12, 1, 1));
+  EXPECT_EQ(-367, testDaysSinceEpochFromWeekOfMonthDate(1969, 1, 1, 1));
+  EXPECT_EQ(-724, testDaysSinceEpochFromWeekOfMonthDate(1968, 1, 2, 1));
+  EXPECT_EQ(-719533, testDaysSinceEpochFromWeekOfMonthDate(0, 1, 1, 1));
+
+  // Negative year - BC.
+  EXPECT_EQ(-719561, testDaysSinceEpochFromWeekOfMonthDate(-1, 12, 1, 1));
+  EXPECT_EQ(-719897, testDaysSinceEpochFromWeekOfMonthDate(-1, 1, 1, 1));
+}
+
 TEST(DateTimeUtilTest, fromDateString) {
   for (ParseMode mode : {ParseMode::kPrestoCast, ParseMode::kSparkCast}) {
     EXPECT_EQ(0, parseDate("1970-01-01", mode));
