@@ -24,11 +24,11 @@ namespace {
 class SplitTest : public SparkFunctionBaseTest {
  protected:
   void testSplit(
-      const std::vector<std::vector<std::string>>& expected,
       const std::vector<std::string>& input,
       std::string delim,
+      std::optional<int32_t> limit,
       size_t numRows,
-      std::optional<int32_t> limit) {
+      const std::vector<std::vector<std::string>>& expected) {
     auto strings = makeFlatVector(input);
     auto delims = makeFlatVector<StringView>(
         numRows, [&](vector_size_t row) { return StringView{delim}; });
@@ -64,14 +64,14 @@ TEST_F(SplitTest, basic) {
   });
 
   // No limit provided.
-  testSplit(expected, input, delim, numRows, std::nullopt);
+  testSplit(input, delim, std::nullopt, numRows, expected);
 
   // Limit <= 0.
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   // High limit, the limit greater than the input string size.
   limit = 10;
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   // Small limit, the limit is smaller than or equals to input string size.
   limit = 3;
@@ -80,7 +80,7 @@ TEST_F(SplitTest, basic) {
       {"one", "", ",four,"},
       {""},
   };
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   // limit = 1, the resulting array only has one entry to contain all input.
   limit = 1;
@@ -89,7 +89,7 @@ TEST_F(SplitTest, basic) {
       {"one,,,four,"},
       {""},
   };
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   // Non-ascii delimiter.
   delim = "లేదా";
@@ -103,29 +103,29 @@ TEST_F(SplitTest, basic) {
       {"зелёное небо", "", "", "緑の空", ""},
       {""},
   };
-  testSplit(expected, input, delim, numRows, std::nullopt);
+  testSplit(input, delim, std::nullopt, numRows, expected);
   limit = -1;
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
   limit = 10;
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
   limit = 3;
   expected = {
       {"синяя слива", "赤いトマト", "黃苹果లేదాbrown pear"},
       {"зелёное небо", "", "లేదా緑の空లేదా"},
       {""},
   };
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
   limit = 1;
   expected = {
       {"синяя сливаలేదా赤いトマトలేదా黃苹果లేదాbrown pear"},
       {"зелёное небоలేదాలేదాలేదా緑の空లేదా"},
       {""},
   };
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   // Cover case that delimiter not exists in input string.
   delim = "A";
-  testSplit(expected, input, delim, numRows, std::nullopt);
+  testSplit(input, delim, std::nullopt, numRows, expected);
 }
 
 TEST_F(SplitTest, emptyDelimiter) {
@@ -144,14 +144,14 @@ TEST_F(SplitTest, emptyDelimiter) {
   });
 
   // No limit provided.
-  testSplit(expected, input, delim, numRows, std::nullopt);
+  testSplit(input, delim, std::nullopt, numRows, expected);
 
   // Limit <= 0.
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   // High limit, the limit greater than the input string size.
   limit = 20;
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   // Small limit, the limit is smaller than or equals to input string size.
   limit = 3;
@@ -160,7 +160,7 @@ TEST_F(SplitTest, emptyDelimiter) {
       {"o", "n", "e"},
       {""},
   };
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   // limit = 1.
   limit = 1;
@@ -169,7 +169,7 @@ TEST_F(SplitTest, emptyDelimiter) {
       {"o"},
       {""},
   };
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   // Non-ascii, empty delimiter.
   input = std::vector<std::string>{
@@ -182,14 +182,14 @@ TEST_F(SplitTest, emptyDelimiter) {
       {"H", "e", "l", "l", "o", "世", "界", "🙂"},
       {""},
   };
-  testSplit(expected, input, delim, numRows, std::nullopt);
+  testSplit(input, delim, std::nullopt, numRows, expected);
 
   expected = {
       {"с", "и"},
       {"H", "e"},
       {""},
   };
-  testSplit(expected, input, delim, numRows, 2);
+  testSplit(input, delim, 2, numRows, expected);
 }
 
 TEST_F(SplitTest, regexDelimiter) {
@@ -210,12 +210,12 @@ TEST_F(SplitTest, regexDelimiter) {
   });
 
   // No limit.
-  testSplit(expected, input, delim, numRows, std::nullopt);
+  testSplit(input, delim, std::nullopt, numRows, expected);
   // Limit < 0.
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
   // High limit.
   limit = 10;
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
   // Small limit.
   limit = 3;
   expected = {
@@ -224,7 +224,7 @@ TEST_F(SplitTest, regexDelimiter) {
       {""},
       {"", "123", ""},
   };
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
   limit = 1;
   expected = {
       {"1a 2b 14m"},
@@ -232,7 +232,7 @@ TEST_F(SplitTest, regexDelimiter) {
       {""},
       {"a123b"},
   };
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 
   delim = "A|";
   numRows = 3;
@@ -247,7 +247,7 @@ TEST_F(SplitTest, regexDelimiter) {
       {""},
   });
 
-  testSplit(expected, input, delim, numRows, std::nullopt);
+  testSplit(input, delim, std::nullopt, numRows, expected);
 
   limit = 2;
   expected = {
@@ -255,7 +255,7 @@ TEST_F(SplitTest, regexDelimiter) {
       {"H", "ello世界🙂"},
       {""},
   };
-  testSplit(expected, input, delim, numRows, limit);
+  testSplit(input, delim, limit, numRows, expected);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

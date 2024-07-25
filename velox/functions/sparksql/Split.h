@@ -26,7 +26,7 @@ namespace facebook::velox::functions::sparksql {
 /// limit is an integer which controls the number of times the regex is applied.
 /// By default, limit is -1.
 template <typename T>
-struct SplitFunction {
+struct Split {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // Results refer to strings in the first argument.
