@@ -57,7 +57,7 @@ Timestamp Timestamp::now() {
   return fromMillis(epochMs);
 }
 
-void Timestamp::toGMT(const date::time_zone& zone) {
+void Timestamp::toGMT(const tz::TimeZone& zone) {
   // Magic number -2^39 + 24*3600. This number and any number lower than that
   // will cause time_zone::to_sys() to SIGABRT. We don't want that to happen.
   VELOX_USER_CHECK_GT(
@@ -94,7 +94,7 @@ void Timestamp::toGMT(int16_t tzID) {
     seconds_ -= getPrestoTZOffsetInSeconds(tzID);
   } else {
     // Other ids go this path.
-    toGMT(*date::locate_zone(util::getTimeZoneName(tzID)));
+    toGMT(*tz::locateZone(tz::getTimeZoneName(tzID)));
   }
 }
 
@@ -122,7 +122,7 @@ void validateTimePoint(const std::chrono::time_point<
 } // namespace
 
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-Timestamp::toTimePoint(bool allowOverflow) const {
+Timestamp::toTimePointMs(bool allowOverflow) const {
   using namespace std::chrono;
   auto tp = time_point<system_clock, milliseconds>(
       milliseconds(allowOverflow ? toMillisAllowOverflow() : toMillis()));
@@ -130,14 +130,19 @@ Timestamp::toTimePoint(bool allowOverflow) const {
   return tp;
 }
 
-void Timestamp::toTimezone(const date::time_zone& zone, bool allowOverflow) {
-  auto tp = toTimePoint(allowOverflow);
+std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>
+Timestamp::toTimePointSec() const {
+  using namespace std::chrono;
+  auto tp = time_point<system_clock, seconds>(seconds(seconds_));
+  validateTimePoint(tp);
+  return tp;
+}
+
+void Timestamp::toTimezone(const tz::TimeZone& zone) {
+  auto tp = toTimePointSec();
 
   try {
-    auto epoch = zone.to_local(tp).time_since_epoch();
-
-    // NOTE: Round down to get the seconds of the current time point.
-    seconds_ = std::chrono::floor<std::chrono::seconds>(epoch).count();
+    seconds_ = zone.to_local(tp).time_since_epoch().count();
   } catch (const std::invalid_argument& e) {
     // Invalid argument means we hit a conversion not supported by
     // external/date. Need to throw a RuntimeError so that try() statements do
@@ -153,18 +158,18 @@ void Timestamp::toTimezone(int16_t tzID) {
     seconds_ += getPrestoTZOffsetInSeconds(tzID);
   } else {
     // Other ids go this path.
-    toTimezone(*date::locate_zone(util::getTimeZoneName(tzID)));
+    toTimezone(*tz::locateZone(tz::getTimeZoneName(tzID)));
   }
 }
 
-const date::time_zone& Timestamp::defaultTimezone() {
-  static const date::time_zone* kDefault = ({
+const tz::TimeZone& Timestamp::defaultTimezone() {
+  static const tz::TimeZone* kDefault = ({
     // TODO: We are hard-coding PST/PDT here to be aligned with the current
     // behavior in DWRF reader/writer.  Once they are fixed, we can use
     // date::current_zone() here.
     //
     // See https://github.com/facebookincubator/velox/issues/8127
-    auto* tz = date::locate_zone("America/Los_Angeles");
+    auto* tz = tz::locateZone("America/Los_Angeles");
     VELOX_CHECK_NOT_NULL(tz);
     tz;
   });
