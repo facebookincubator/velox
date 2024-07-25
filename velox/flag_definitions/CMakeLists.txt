@@ -13,3 +13,9 @@
 # limitations under the License.
 add_library(velox_flag_definitions OBJECT flags.cpp)
 target_link_libraries(velox_flag_definitions PRIVATE gflags::gflags)
+
+install(TARGETS velox_flag_definitions  EXPORT ${PROJECT_NAME}Targets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
