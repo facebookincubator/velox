@@ -76,6 +76,13 @@ typename HashClass::ReturnType hashOne(
   return HashClass::hashBytes(input, seed);
 }
 
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    UnknownValue /*input*/,
+    typename HashClass::SeedType seed) {
+  return seed;
+}
+
 template <typename HashClass, TypeKind kind>
 class PrimitiveVectorHasher;
 
@@ -104,7 +111,7 @@ class SparkVectorHasher {
   virtual ~SparkVectorHasher() = default;
 
   // Compute the hash value of input vector at index.
-  virtual ReturnType hashAt(vector_size_t index, SeedType seed) {
+  ReturnType hashAt(vector_size_t index, SeedType seed) {
     if (decoded_.isNullAt(index)) {
       return seed;
     }
@@ -171,12 +178,9 @@ class UnknowTypeVectorHasher : public SparkVectorHasher<HashClass> {
   UnknowTypeVectorHasher(DecodedVector& decoded)
       : SparkVectorHasher<HashClass>(decoded) {}
 
-  ReturnType hashAt(vector_size_t index, SeedType seed) override {
-    return seed;
-  }
-
-  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
-    VELOX_FAIL("hashNotNullAt should not be called for an unknown type");
+  ReturnType hashNotNullAt(vector_size_t /*index*/, SeedType /*seed*/)
+      override {
+    VELOX_FAIL("hashNotNullAt should not be called for unknown type.");
   }
 };
 
@@ -325,6 +329,7 @@ void hashSimd(
     SCALAR_CASE(VARCHAR)
     SCALAR_CASE(VARBINARY)
     SCALAR_CASE(TIMESTAMP)
+    SCALAR_CASE(UNKNOWN)
 #undef SCALAR_CASE
     default:
       VELOX_UNREACHABLE();
@@ -367,7 +372,8 @@ void applyWithType(
          kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
          kind == TypeKind::REAL || kind == TypeKind::DOUBLE ||
          kind == TypeKind::TIMESTAMP || kind == TypeKind::VARCHAR ||
-         kind == TypeKind::VARBINARY || kind == TypeKind::HUGEINT) &&
+         kind == TypeKind::VARBINARY || kind == TypeKind::HUGEINT ||
+         kind == TypeKind::UNKNOWN) &&
         args[i]->isFlatEncoding()) {
       hashSimd<HashClass, ReturnType>(selected, args, result, i);
       continue;
