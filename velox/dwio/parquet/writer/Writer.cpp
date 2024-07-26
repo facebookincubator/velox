@@ -239,7 +239,7 @@ Writer::Writer(
   options_.timestampUnit =
       options.parquetWriteTimestampUnit.value_or(TimestampUnit::kNano);
   options_.timestampTimeZone =
-      options.parquetWriteTimestampTimeZone.value_or("");
+      options.parquetWriteTimestampTimeZone.value_or("UTC");
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
@@ -428,7 +428,7 @@ std::optional<std::string> getTimestampTimeZone(
     const Config& config,
     const char* configKey) {
   if (const auto timezone = config.get<std::string>(configKey)) {
-    return std::optional(static_cast<std::string>(timezone.value()));
+    return timezone.value();
   }
   return std::nullopt;
 }

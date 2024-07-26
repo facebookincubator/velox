@@ -884,7 +884,8 @@ TEST_F(ArrowBridgeArrayExportTest, mapTimestamp) {
   EXPECT_EQ(array->null_count(), 0);
   ASSERT_EQ(
       *array->type(),
-      *arrow::map(arrow::int32(), arrow::timestamp(arrow::TimeUnit::NANO)));
+      *arrow::map(
+          arrow::int32(), arrow::timestamp(arrow::TimeUnit::NANO, "UTC")));
   {
     auto& mapArray = static_cast<const arrow::MapArray&>(*array);
     auto& values = static_cast<const arrow::TimestampArray&>(*mapArray.items());
@@ -906,7 +907,8 @@ TEST_F(ArrowBridgeArrayExportTest, mapTimestamp) {
   EXPECT_EQ(array->null_count(), 0);
   ASSERT_EQ(
       *array->type(),
-      *arrow::map(arrow::int32(), arrow::timestamp(arrow::TimeUnit::NANO)));
+      *arrow::map(
+          arrow::int32(), arrow::timestamp(arrow::TimeUnit::NANO, "UTC")));
   {
     auto& mapArray = static_cast<const arrow::MapArray&>(*array);
     auto& values = static_cast<const arrow::TimestampArray&>(*mapArray.items());

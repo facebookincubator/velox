@@ -218,20 +218,25 @@ const char* exportArrowFormatTimestampStr(
     std::string& formatBuffer) {
   switch (options.timestampUnit) {
     case TimestampUnit::kSecond:
-      formatBuffer = fmt::format("tss:{}", options.timestampTimeZone);
+      formatBuffer = "tss:";
       break;
     case TimestampUnit::kMilli:
-      formatBuffer = fmt::format("tsm:{}", options.timestampTimeZone);
+      formatBuffer = "tsm:";
       break;
     case TimestampUnit::kMicro:
-      formatBuffer = fmt::format("tsu:{}", options.timestampTimeZone);
+      formatBuffer = "tsu:";
       break;
     case TimestampUnit::kNano:
-      formatBuffer = fmt::format("tsn:{}", options.timestampTimeZone);
+      formatBuffer = "tsn:";
       break;
     default:
       VELOX_UNREACHABLE();
   }
+
+  if (options.timestampTimeZone.has_value()) {
+    formatBuffer += options.timestampTimeZone.value();
+  }
+
   return formatBuffer.c_str();
 }
 
