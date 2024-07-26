@@ -78,11 +78,19 @@ class ResultVerifier {
       const RowVectorPtr& result,
       const RowVectorPtr& otherResult) = 0;
 
+  /// Same as above but takes a VectorPtr and converts it to a RowVectorPtr in
+  /// implementation.
+  virtual bool compare(const VectorPtr& result, const VectorPtr& altResult) = 0;
+
   /// Verifies results of a Velox plan or reference DB query.
   ///
   /// 'initialize' must be called first. 'verify' may be called multiple times
   /// after single 'initialize' call.
   virtual bool verify(const RowVectorPtr& result) = 0;
+
+  /// Same as above but takes a VectorPtr and converts it to a RowVectorPtr in
+  /// implementation.
+  virtual bool verify(const VectorPtr& result) = 0;
 
   /// Clears internal state after possibly multiple calls to 'compare' and
   /// 'verify'. 'initialize' must be called again after 'reset' to allow calling

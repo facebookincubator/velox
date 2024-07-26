@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::exec::test {
 
@@ -99,6 +100,11 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
     VELOX_UNSUPPORTED();
   }
 
+  bool compare(const VectorPtr& /*result*/, const VectorPtr& /*altResult*/)
+      override {
+    VELOX_UNSUPPORTED();
+  }
+
   bool verify(const RowVectorPtr& result) override {
     // Compute acceptable ranges of percentiles for each value in 'result'.
     RowVectorPtr ranges;
@@ -142,6 +148,11 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
     }
 
     return true;
+  }
+
+  bool verify(const VectorPtr& result) override {
+    velox::test::VectorMaker resultVectorMaker(result->pool());
+    return verify(resultVectorMaker.rowVector({result}));
   }
 
   void reset() override {

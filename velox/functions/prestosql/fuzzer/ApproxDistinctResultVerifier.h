@@ -23,6 +23,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::exec::test {
 
@@ -83,6 +84,11 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
   bool compare(
       const RowVectorPtr& /*result*/,
       const RowVectorPtr& /*altResult*/) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  bool compare(const VectorPtr& /*result*/, const VectorPtr& /*altResult*/)
+      override {
     VELOX_UNSUPPORTED();
   }
 
@@ -159,6 +165,11 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
     }
 
     return largeGaps.empty();
+  }
+
+  bool verify(const VectorPtr& result) override {
+    velox::test::VectorMaker resultVectorMaker(result->pool());
+    return verify(resultVectorMaker.rowVector({result}));
   }
 
   // For approx_distinct in window operations, input sets for rows in the same
