@@ -55,8 +55,7 @@ std::string typeName(const TypePtr& type) {
     case TypeKind::HUGEINT: {
       if (isUuidType(type)) {
         return "uuid";
-      }
-      else if (isIPAddressType(type)) {
+      } else if (isIPAddressType(type)) {
         return "ipaddress";
       }
       VELOX_USER_CHECK(

@@ -58,8 +58,7 @@ class IPAddressCastOperator : public exec::CastOperator {
       castFromVarbinary(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
-          "Cast from {} to IPAddress not supported",
-          resultType->toString());
+          "Cast from {} to IPAddress not supported", resultType->toString());
     }
   }
 
@@ -77,8 +76,7 @@ class IPAddressCastOperator : public exec::CastOperator {
       castToVarbinary(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
-          "Cast from IPAddress to {} not supported",
-          resultType->toString());
+          "Cast from IPAddress to {} not supported", resultType->toString());
     }
   }
 
@@ -134,7 +132,7 @@ class IPAddressCastOperator : public exec::CastOperator {
     });
   }
 
-    static void castToVarbinary(
+  static void castToVarbinary(
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
@@ -168,14 +166,23 @@ class IPAddressCastOperator : public exec::CastOperator {
       folly::ByteArray16 addrBytes = {};
       const auto ipAddressBinary = ipAddressBinaries->valueAt(row);
 
-      if(ipAddressBinary.size() == kIPV4AddressBytes){
+      if (ipAddressBinary.size() == kIPV4AddressBytes) {
         addrBytes[kIPV4ToV6FFIndex] = 0xFF;
         addrBytes[kIPV4ToV6FFIndex + 1] = 0xFF;
-        memcpy(&addrBytes[kIPV4ToV6Index], ipAddressBinary.data(), kIPV4AddressBytes);
-      } else if(ipAddressBinary.size() == kIPAddressBytes){
+        memcpy(
+            &addrBytes[kIPV4ToV6Index],
+            ipAddressBinary.data(),
+            kIPV4AddressBytes);
+      } else if (ipAddressBinary.size() == kIPAddressBytes) {
         memcpy(&addrBytes, ipAddressBinary.data(), kIPAddressBytes);
-      } else{
-        context.setStatus(row, Status::UserError("Varbinary length {}, must be IPV4({}), or IPV6({})", ipAddressBinary.size(), kIPV4AddressBytes, kIPAddressBytes));
+      } else {
+        context.setStatus(
+            row,
+            Status::UserError(
+                "Varbinary length {}, must be IPV4({}), or IPV6({})",
+                ipAddressBinary.size(),
+                kIPV4AddressBytes,
+                kIPAddressBytes));
         return;
       }
 
