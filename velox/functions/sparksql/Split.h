@@ -49,9 +49,9 @@ struct Split {
 
  private:
   void doCall(
-      ArrayWriter<Varchar>& result,
-      StringView input,
-      StringView delimiter,
+      out_type<Array<Varchar>>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& delimiter,
       int32_t limit) const {
     if (delimiter.empty()) {
       splitEmptyDelimiter(result, input, limit);
@@ -67,8 +67,8 @@ struct Split {
   // string size, e.g. split('abc', '', 2) outputs ["a", "b"] instead of ["a",
   // "bc"].
   void splitEmptyDelimiter(
-      ArrayWriter<Varchar>& result,
-      StringView input,
+      out_type<Array<Varchar>>& result,
+      const arg_type<Varchar>& input,
       int32_t limit) const {
     if (input.size() == 0) {
       result.add_item().setNoCopy(StringView());
@@ -94,9 +94,9 @@ struct Split {
   // delimiter will be applied as many times as possible, and the resulting
   // array can be of any size.
   void split(
-      ArrayWriter<Varchar>& result,
-      StringView input,
-      StringView delim,
+      out_type<Array<Varchar>>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& delim,
       int32_t limit) const {
     VELOX_USER_CHECK(!delim.empty(), "Non-empty delimiter is expected");
 

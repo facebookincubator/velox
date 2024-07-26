@@ -222,7 +222,8 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     times as possible, and the resulting array can be of any size. When ``delimiter`` is empty, if ``limit``
     is smaller than the size of ``string``, the resulting array only contains ``limit`` number of single characters
     splitting from ``string``, if ``limit`` is not provided or is larger than the size of ``string``, the resulting 
-    array contains all the single characters of ``string`` and does not include an empty tail character. ::
+    array contains all the single characters of ``string`` and does not include an empty tail character.
+    The split function align with vanilla spark 3.4+ split function. ::
 
         SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
         SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
