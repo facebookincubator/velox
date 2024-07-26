@@ -98,7 +98,7 @@ struct Split {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& delim,
       int32_t limit) const {
-    VELOX_USER_CHECK(!delim.empty(), "Non-empty delimiter is expected");
+    VELOX_DCHECK(!delim.empty(), "Non-empty delimiter is expected");
 
     // Trivial case of converting string to array with 1 element.
     if (limit == 1) {
