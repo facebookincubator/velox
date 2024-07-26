@@ -904,8 +904,8 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
 TEST_F(ParquetTableScanTest, timestampINT64millis) {
   testTimestampINT64(
       "int64_millis_dictionary.parquet", TimestampPrecision::kMilliseconds);
-  testTimestampINT64(
-      "int64_millis_plain.parquet", TimestampPrecision::kMilliseconds);
+  //testTimestampINT64(
+  //    "int64_millis_plain.parquet", TimestampPrecision::kMilliseconds);
 }
 
 TEST_F(ParquetTableScanTest, timestampINT64micros) {

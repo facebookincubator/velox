@@ -75,10 +75,16 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
       return std::make_unique<BooleanColumnReader>(
           requestedType, fileType, params, scanSpec);
 
-    case TypeKind::TIMESTAMP:
+    case TypeKind::TIMESTAMP: {
+      auto& parquetFileType = static_cast<const ParquetTypeWithId&>(*fileType);
+    auto logicalTypeOpt = parquetFileType.logicalType_;
+    if (logicalTypeOpt.has_value() && logicalTypeOpt.value().__isset.TIMESTAMP) {return std::make_unique<TimestampINT64ColumnReader>(
+          requestedType, fileType, params, scanSpec);}
+    else {
       return std::make_unique<TimestampColumnReader>(
           requestedType, fileType, params, scanSpec);
-
+      }
+    }
     default:
       VELOX_FAIL(
           "buildReader unhandled type: " +

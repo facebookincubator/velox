@@ -82,4 +82,87 @@ class TimestampColumnReader : public IntegerColumnReader {
   TimestampPrecision timestampPrecision_;
 };
 
+class TimestampINT64ColumnReader : public IntegerColumnReader {
+ public:
+  TimestampINT64ColumnReader(
+      const TypePtr& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
+      ParquetParams& params,
+      common::ScanSpec& scanSpec)
+      : IntegerColumnReader(BIGINT(), fileType, params, scanSpec) {
+    auto& parquetFileType = static_cast<const ParquetTypeWithId&>(*fileType_);
+    auto logicalTypeOpt = parquetFileType.logicalType_;
+    VELOX_CHECK(logicalTypeOpt.has_value());
+
+    auto logicalType = logicalTypeOpt.value();
+    VELOX_CHECK(logicalType.__isset.TIMESTAMP);
+
+    if (!logicalType.TIMESTAMP.isAdjustedToUTC) {
+      VELOX_NYI("Only UTC adjusted Timestamp is supported.");
+    }
+
+    if (logicalType.TIMESTAMP.unit.__isset.MICROS) {
+      sourcePrecision_ = TimestampPrecision::kMicroseconds;
+    } else if (logicalType.TIMESTAMP.unit.__isset.MILLIS) {
+      sourcePrecision_ = TimestampPrecision::kMilliseconds;
+    } else {
+      VELOX_NYI("Nano Timestamp unit is not supported.");
+    }
+  }
+
+  bool hasBulkPath() const override {
+    return false;
+  }
+
+  void getValues(RowSet rows, VectorPtr* result) override {
+    // Upcast to int128_t here so we have enough memory already in vector to
+    // hold Timestamp (16bit) vs int64_t (8bit)
+    getFlatValues<int64_t, int128_t>(rows, result, requestedType_);
+
+    VectorPtr resultVector = *result;
+    auto intValues = resultVector->asUnchecked<FlatVector<int128_t>>();
+
+    auto rawValues =
+        resultVector->asUnchecked<FlatVector<int128_t>>()->mutableRawValues();
+
+    Timestamp timestamp;
+    for (vector_size_t i = 0; i < numValues_; ++i) {
+      if (intValues->isNullAt(i))
+        continue;
+
+      const auto timestampInt = intValues->valueAt(i);
+      std::cout << static_cast<int64_t>(timestampInt) << std::endl;
+      Timestamp timestamp;
+      if (sourcePrecision_ == TimestampPrecision::kMicroseconds) {
+        timestamp = Timestamp::fromMicros(timestampInt);
+      } else {
+        timestamp = Timestamp::fromMillis(timestampInt);
+      }
+
+      memcpy(&rawValues[i], &timestamp, sizeof(int128_t));
+    }
+
+    *result = std::make_shared<FlatVector<Timestamp>>(
+        &memoryPool_,
+        TIMESTAMP(),
+        resultNulls(),
+        numValues_,
+        intValues->values(),
+        std::move(stringBuffers_));
+  }
+
+  void read(
+      vector_size_t offset,
+      RowSet rows,
+      const uint64_t* /*incomingNulls*/) override {
+    auto& data = formatData_->as<ParquetData>();
+    // Use int128_t as a workaroud. Timestamp in Velox is of 16-byte length.
+    prepareRead<int64_t>(offset, rows, nullptr);
+    readCommon<IntegerColumnReader, true>(rows);
+    readOffset_ += rows.back() + 1;
+  }
+
+ private:
+  TimestampPrecision sourcePrecision_;
+};
 } // namespace facebook::velox::parquet
