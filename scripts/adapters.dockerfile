@@ -37,7 +37,9 @@ ENV HADOOP_HOME=/usr/local/hadoop \
     HADOOP_ROOT_LOGGER="WARN,DRFA" \
     LC_ALL=C \
     LIBHDFS3_CONF=/velox/scripts/hdfs-client.xml \
-    PATH=/usr/local/hadoop/bin:${PATH}
+    PATH=/usr/local/hadoop/bin:${PATH} \
+    JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk \
+    CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
 
 ENTRYPOINT ["/bin/bash", "-c", "source /opt/rh/gcc-toolset-12/enable && exec \"$@\"", "--"]
 CMD ["/bin/bash"]
