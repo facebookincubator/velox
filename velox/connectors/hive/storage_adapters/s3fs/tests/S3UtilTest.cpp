@@ -85,29 +85,62 @@ TEST(S3UtilTest, isCosNFile) {
   EXPECT_TRUE(isCosNFile("cosn://bucket/file.txt"));
 }
 
-TEST(S3UtilTest, isValidBucketName) {
+TEST(S3UtilTest, isValidS3BucketName) {
   // valid bucket name in amazon s3
-  EXPECT_TRUE(isValidBucketName("docexamplebucket1"));
-  EXPECT_TRUE(isValidBucketName("log-delivery-march-2020"));
-  EXPECT_TRUE(isValidBucketName("my-hosted-content"));
+  EXPECT_TRUE(isValidS3BucketName("docexamplebucket1"));
+  EXPECT_TRUE(isValidS3BucketName("log-delivery-march-2020"));
+  EXPECT_TRUE(isValidS3BucketName("my-hosted-content"));
+  EXPECT_TRUE(isValidS3BucketName("my-hosted.content"));
 
-  // valid bucket name in tencent cos
-  EXPECT_TRUE(isValidBucketName("examplebucket-1-1250000000"));
-  EXPECT_TRUE(isValidBucketName("mybucket123-1250000000"));
-  EXPECT_TRUE(isValidBucketName("1-newproject-1250000000"));
-
-  // valid bucket name in alibaba oss
-  EXPECT_TRUE(isValidBucketName("examplebucket1"));
-  EXPECT_TRUE(isValidBucketName("test-bucket-2021"));
-  EXPECT_TRUE(isValidBucketName("aliyun-oss-bucket"));
-
-  // invalid bucket name in amazon s3, tencent cos and alibaba oss
+  // invalid bucket name in amazon s3
   // Underscores (_) are included.
-  EXPECT_FALSE(isValidBucketName("doc_example_bucket"));
+  EXPECT_FALSE(isValidS3BucketName("doc_example_bucket"));
   // Uppercase letters are included.
-  EXPECT_FALSE(isValidBucketName("DocExampleBucket"));
-  // The name ends with a hyphen (-).
-  EXPECT_FALSE(isValidBucketName("doc-example-bucket-"));
+  EXPECT_FALSE(isValidS3BucketName("DocExampleBucket"));
+  // end with a hyphen (-).
+  EXPECT_FALSE(isValidS3BucketName("doc-example-bucket-"));
+  // start with xn--,sthree-,sthree-configurator
+  EXPECT_FALSE(isValidS3BucketName("xn--docexamplebucket1"));
+  EXPECT_FALSE(isValidS3BucketName("sthree-docexamplebucket1"));
+  EXPECT_FALSE(isValidS3BucketName("sthree-configuratordocexamplebucket1"));
+  // end wtih -s3alias,--ol-s3
+  EXPECT_FALSE(isValidS3BucketName("docexamplebucket1-s3alias"));
+  EXPECT_FALSE(isValidS3BucketName("docexamplebucket1--ol-s3"));
+}
+
+TEST(S3UtilTest, isValidCosBucketName) {
+  // valid bucket name in tencent cos
+  EXPECT_TRUE(isValidCosBucketName("examplebucket-1-1250000000"));
+  EXPECT_TRUE(isValidCosBucketName("mybucket123-1250000000"));
+  EXPECT_TRUE(isValidCosBucketName("1-newproject-1250000000"));
+  EXPECT_TRUE(isValidCosBucketName("1-1250000000"));
+
+  // invalid bucket name in tencent cos
+  // Underscores (_) are included.
+  EXPECT_FALSE(isValidCosBucketName("doc_example_bucket"));
+  // Uppercase letters are included.
+  EXPECT_FALSE(isValidCosBucketName("DocExampleBucket"));
+  // end with a hyphen (-).
+  EXPECT_FALSE(isValidCosBucketName("doc-example-bucket-"));
+  // contains (.)
+  EXPECT_FALSE(isValidCosBucketName("doc.examplebucket1"));
+}
+
+TEST(S3UtilTest, isValidOssBucketName) {
+  // valid bucket name in alibaba oss
+  EXPECT_TRUE(isValidOssBucketName("examplebucket1"));
+  EXPECT_TRUE(isValidOssBucketName("test-bucket-2021"));
+  EXPECT_TRUE(isValidOssBucketName("aliyun-oss-bucket"));
+
+  // invalid bucket name in alibaba oss
+  // Underscores (_) are included.
+  EXPECT_FALSE(isValidOssBucketName("doc_example_bucket"));
+  // Uppercase letters are included.
+  EXPECT_FALSE(isValidOssBucketName("DocExampleBucket"));
+  // end with a hyphen (-).
+  EXPECT_FALSE(isValidOssBucketName("doc-example-bucket-"));
+  // end with a hyphen (.).
+  EXPECT_FALSE(isValidCosBucketName("doc.examplebucket1"));
 }
 
 // TODO: Each prefix should be implemented as its own filesystem.

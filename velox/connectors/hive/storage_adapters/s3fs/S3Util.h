@@ -81,45 +81,95 @@ inline bool isS3File(const std::string_view filename) {
       isOssFile(filename) || isCosFile(filename) || isCosNFile(filename);
 }
 
-// Currently,Amazon S3,Alibaba OSS and Tencent COS all support access through
-// s3fs in velox, but each object storage service has different restrictions on
-// bucket names. Here, we have taken the intersection of the bucket name
-// restrictions from each product. The rules are as follows:
-// 1. Bucket names must be between 3 (min) and 63 (max) characters long.
-// 2. Bucket names can consist only of lowercase letters, numbers, dots (.), and
-// hyphens (-).
-// 3. Bucket names must begin and end with a letter or number.
-// 4. Bucket names must not contain two adjacent periods.
-// 5. Bucket names must not be formatted as an IP address (for example,
-// 192.168.5.4).
-//
-// Correctness check for bucket name:
-// 1. Length between 3 and 63:
-//    3 < length(bucket) < 63
-// 2. Mandatory label notation - regexp:
-//    regexp="(^[a-z0-9])([.-]?[a-z0-9]+){2,62}([/]?$)"
-// 3. Disallowed IPv4 notation - regexp:
-//    regexp="^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}[/]?$"
-//
+// Correctness check for Alibaba oss bucket name:
 // Reference:
-// https://www.tencentcloud.com/document/product/436/13312
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
 // https://www.alibabacloud.com/help/en/oss/user-guide/bucket-naming-conventions?spm=a2c63.p38356.0.0.7de17d7dQIXkd4
-inline bool isValidBucketName(const std::string& bucket) {
+inline bool isValidOssBucketName(const std::string& bucket) {
   // Check length
   if (bucket.length() < 3 || bucket.length() > 63) {
     return false;
   }
 
+  // Compile regex patterns once
+  static const std::regex labelNotationRegex(
+      "(^[a-z0-9])([-]?[a-z0-9]+){2,62}([/]?$)");
+  static const std::regex ipv4NotationRegex(
+      "^((25[0-5]|(2[0-4]|1\\d|[1-9]|)\\d)\\.?\\b){4}[/]?$");
+
   // Mandatory label notation regex
-  std::regex labelNotationRegex("(^[a-z0-9])([.-]?[a-z0-9]+){2,62}([/]?$)");
   if (!std::regex_match(bucket, labelNotationRegex)) {
     return false;
   }
 
   // Disallowed IPv4 notation regex
-  std::regex ipv4NotationRegex(
+  if (std::regex_match(bucket, ipv4NotationRegex)) {
+    return false;
+  }
+
+  return true;
+}
+
+// Correctness check for amazon s3 bucket name:
+// Reference:
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+inline bool isValidS3BucketName(const std::string& bucket) {
+  // Check length
+  if (bucket.length() < 3 || bucket.length() > 63) {
+    return false;
+  }
+
+  // Compile regex patterns once
+  static const std::regex labelNotationRegex(
+      "(^[a-z0-9])([.-]?[a-z0-9]+){2,62}([/]?$)");
+  static const std::regex ipv4NotationRegex(
       "^((25[0-5]|(2[0-4]|1\\d|[1-9]|)\\d)\\.?\\b){4}[/]?$");
+  static const std::regex prefixNotationRegex(
+      R"(^xn--|^sthree-|^sthree-configurator)");
+  static const std::regex suffixNotationRegex(R"((-s3alias$|--ol-s3$))");
+
+  // Mandatory label notation regex
+  if (!std::regex_match(bucket, labelNotationRegex)) {
+    return false;
+  }
+
+  // Disallowed IPv4 notation regex
+  if (std::regex_match(bucket, ipv4NotationRegex)) {
+    return false;
+  }
+
+  // Disallowed prefix notation regex
+  if (std::regex_search(bucket, prefixNotationRegex)) {
+    return false;
+  }
+
+  // Disallowed suffix notation regex
+  if (std::regex_search(bucket, suffixNotationRegex)) {
+    return false;
+  }
+
+  return true;
+}
+
+// Correctness check for tencent cos bucket name
+// Reference:
+// https://www.tencentcloud.com/document/product/436/13312
+inline bool isValidCosBucketName(const std::string& bucket) {
+  // Check length
+  if (bucket.length() < 12 || bucket.length() > 34) {
+    return false;
+  }
+
+  static const std::regex labelNotationRegex(
+      "(^[a-z0-9])([-]?[a-z0-9]+){0,23}-\\d{10,}$");
+  static const std::regex ipv4NotationRegex(
+      "^((25[0-5]|(2[0-4]|1\\d|[1-9]|)\\d)\\.?\\b){4}[/]?$");
+
+  // Mandatory label notation regex
+  if (!std::regex_match(bucket, labelNotationRegex)) {
+    return false;
+  }
+
+  // Disallowed IPv4 notation regex
   if (std::regex_match(bucket, ipv4NotationRegex)) {
     return false;
   }
@@ -133,7 +183,6 @@ inline void getBucketAndKeyFromS3Path(
     std::string& key) {
   auto firstSep = path.find_first_of(kSep);
   bucket = path.substr(0, firstSep);
-  VELOX_CHECK(isValidBucketName(bucket), "Invalid Bucket Name : {}", bucket)
   key = path.substr(firstSep + 1);
 }
 
@@ -163,6 +212,33 @@ inline std::string s3Path(const std::string_view& path) {
     return std::string(path.substr(kCosNScheme.length()));
   }
   return std::string(path);
+}
+
+inline void validateBucketNameFromPath(std::string_view path) {
+  std::string bucket;
+  std::string key;
+  getBucketAndKeyFromS3Path(s3Path(path), bucket, key);
+
+  auto validateBucket = [&](auto isValidFunc, const std::string& bucketType) {
+    if (!isValidFunc(bucket)) {
+      VELOX_FAIL("Invalid " + bucketType + " bucket name: " + bucket);
+    }
+  };
+
+  if (isS3AwsFile(path) || isS3aFile(path) || isS3nFile(path)) {
+    validateBucket(isValidS3BucketName, "s3");
+    return;
+  }
+  if (isCosFile(path) || isCosNFile(path)) {
+    validateBucket(isValidCosBucketName, "cos");
+    return;
+  }
+  if (isOssFile(path)) {
+    validateBucket(isValidOssBucketName, "oss");
+    return;
+  }
+
+  VELOX_FAIL("Unsupported file path : {}", path);
 }
 
 inline Aws::String awsString(const std::string& s) {
