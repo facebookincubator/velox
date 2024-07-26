@@ -36,7 +36,7 @@ jobs:
       run:
         shell: bash
     env:
-      CCACHE_DIR: "${GITHUB_WORKSPACE}/.ccache"
+      CCACHE_DIR: "${{ github.workspace }}/.ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       Protobuf_SOURCE: BUNDLED # can be removed after #10134 is merged
       simdjson_SOURCE: BUNDLED
@@ -62,10 +62,11 @@ jobs:
             install_cuda ${CUDA_VERSION}
           fi
 
-      # - uses: assignUser/stash/restore@v1
-      #   with:
-      #     path: '${{ env.CCACHE_DIR }}'
-      #     key: ccache-linux-adapters
+      - uses: assignUser/stash/restore@v1
+        with:
+          token: '${{ secrets.ARTIFACT_CACHE_TOKEN }}'
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-linux-adapters
 
       - name: "Zero Ccache Statistics"
         run: |
@@ -96,16 +97,16 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      # - uses: assignUser/stash/save@v1
-      #   with:
-      #     path: '${{ env.CCACHE_DIR }}'
-      #     key: ccache-linux-adapters
+      - uses: assignUser/stash/save@v1
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-linux-adapters
 
       - name: Run Tests
         # Some of the adapters dependencies are in the 'adapters' conda env
         shell: mamba run --no-capture-output -n adapters /usr/bin/bash -e {0}
         env:
-          LIBHDFS3_CONF: "${GITHUB_WORKSPACE}/scripts/hdfs-client.xml"
+          LIBHDFS3_CONF: "${{ github.workspace }}/scripts/hdfs-client.xml"
         working-directory: _build/release
         run: |
           ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3"
@@ -121,11 +122,12 @@ jobs:
         working-directory: velox
     steps:
 
-      # - name: Get Ccache Stash
-      #   uses: assignUser/stash/restore@v1
-      #   with:
-      #     path: '${{ env.CCACHE_DIR }}'
-      #     key: ccache-ubuntu-debug-default
+      - name: Get Ccache Stash
+        uses: assignUser/stash/restore@v1
+        with:
+          token: '${{ secrets.ARTIFACT_CACHE_TOKEN }}'
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-ubuntu-debug-default
 
       - name: Ensure Stash Dirs Exists
         working-directory: ${{ github.workspace }}
@@ -156,10 +158,10 @@ jobs:
         run: |
           ccache -vs
 
-      # - uses: assignUser/stash/save@v1
-      #   with:
-      #     path: '${{ env.CCACHE_DIR }}'
-      #     key: ccache-ubuntu-debug-default
+      - uses: assignUser/stash/save@v1
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-ubuntu-debug-default
 
       - name: Run Tests
         run: |
