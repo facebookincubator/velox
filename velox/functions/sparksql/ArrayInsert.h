@@ -27,15 +27,25 @@ struct ArrayInsert {
 
   static constexpr int32_t kMaxNumberOfElements = 10'000;
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Array<Generic<T1>>>* /*srcArray*/,
+      const arg_type<int32_t>* /*pos*/,
+      const arg_type<Generic<T1>>* /*item*/,
+      const arg_type<bool>* legacyNegativeIndex) {
+    if (legacyNegativeIndex == nullptr) {
+      VELOX_USER_FAIL("Constant legacyNegativeIndex is expected.");
+    }
+    legacyNegativeIndex_ = *legacyNegativeIndex;
+  }
+
   FOLLY_ALWAYS_INLINE bool callNullable(
       out_type<Array<Generic<T1>>>& out,
       const arg_type<Array<Generic<T1>>>* srcArray,
       const arg_type<int32_t>* pos,
       const arg_type<Generic<T1>>* item,
-      const arg_type<bool>* legacyNegativeIndex) {
-    VELOX_USER_CHECK_NOT_NULL(
-        legacyNegativeIndex,
-        "Constant legacyNegativeIndex should be provided.");
+      const arg_type<bool>* /*legacyNegativeIndex*/) {
     if (srcArray == nullptr || pos == nullptr) {
       return false;
     }
@@ -73,9 +83,9 @@ struct ArrayInsert {
       bool newPosExtendsArrayLeft = -(int64_t)(*pos) > srcArray->size();
       if (newPosExtendsArrayLeft) {
         // Insert element at the beginning of the input array followed by nulls
-        // and the original array. If legacyNegativeIndex is true, the new array
-        // size is larger by 1.
-        int64_t newArrayLength = -(int64_t)(*pos) + *legacyNegativeIndex;
+        // and the original array. If legacyNegativeIndex_ is true, the new
+        // array size is larger by 1.
+        int64_t newArrayLength = -(int64_t)(*pos) + legacyNegativeIndex_;
         VELOX_USER_CHECK_LE(
             newArrayLength,
             kMaxNumberOfElements,
@@ -94,9 +104,9 @@ struct ArrayInsert {
         }
       } else {
         // Insert element into input array on the calculated positive position.
-        // When legacyNegativeIndex is true, the inserting position is more to
+        // When legacyNegativeIndex_ is true, the inserting position is more to
         // the left by 1.
-        int64_t posIdx = *pos + srcArray->size() + !*legacyNegativeIndex;
+        int64_t posIdx = *pos + srcArray->size() + !legacyNegativeIndex_;
         int64_t newArrayLength = (int64_t)srcArray->size() + 1;
         VELOX_USER_CHECK_LE(
             newArrayLength,
@@ -122,5 +132,8 @@ struct ArrayInsert {
 
     return true;
   }
+
+ private:
+  bool legacyNegativeIndex_;
 };
 } // namespace facebook::velox::functions::sparksql
