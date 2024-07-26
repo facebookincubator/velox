@@ -163,4 +163,4 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E velox_exec_test -E 'velox_cudf.*'
+          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E velox_exec_test -E velox_cudf_hash_test
