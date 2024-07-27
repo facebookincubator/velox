@@ -842,6 +842,14 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
+  std::shared_ptr<JoinBridge> getCustomJoinBridgeInternal(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
+  std::shared_ptr<JoinBridge> getCustomJoinBridgeInternalLocked(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
   /// Add remote split to ExchangeClient for the specified plan node. Used to
   /// close remote sources that are added after the task completed early.
   void addRemoteSplit(

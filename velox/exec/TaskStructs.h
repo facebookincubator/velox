@@ -89,6 +89,7 @@ struct LocalExchangeState {
 struct SplitGroupState {
   /// Map from the plan node id of the join to the corresponding JoinBridge.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>> bridges;
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>> custom_bridges;
 
   /// Holds states for Task::allPeersFinished.
   std::unordered_map<core::PlanNodeId, BarrierState> barriers;
@@ -125,6 +126,7 @@ struct SplitGroupState {
   void clear() {
     if (!mixedExecutionMode) {
       bridges.clear();
+      custom_bridges.clear();
       barriers.clear();
     }
     localMergeSources.clear();
