@@ -58,29 +58,35 @@ bool CompileState::compile() {
 
       facebook::velox::exec::Operator* oper = operators[operatorIndex];
       std::cout<<"operator["<<operatorIndex<<"]:";
+      if(oper==nullptr) std::cout<< "operator is nullptr\n\n";
+      printf("%p\n", oper);
       std::cout << "  Operator: ID " << oper->operatorId() << ": " << oper->toString() << std::endl;
       if (auto joinBuildOp = dynamic_cast<facebook::velox::exec::HashBuild*>(oper)) {
         std::cout<<"replaced HashBuild\n";
+        if(joinBuildOp == nullptr) std::cout<<"joinBuildOp is nullptr\n\n\n";
         auto planid = joinBuildOp->planNodeId();
+        std::cout<<"  planid: "<<planid<<std::endl;
         // auto planNode = joinBuildOp->planNode();
         auto id =  joinBuildOp->operatorId(); //TODO should we reuse operator id?
         auto ctx = driver_.driverCtx();
         replace_id.push_back(operatorIndex);
         replace_op.push_back(std::make_unique<CustomJoinBuild>(id, ctx, planid));
+        if(replace_op[0].get() == nullptr) std::cout<<"CustomJoinBuild is nullptr\n";
         replace_op[0]->initialize();
-            auto replaced = driverFactory_.replaceOperators(
-      driver_, replace_id[0], replace_id[0]+1, std::move(replace_op));
+        auto replaced = driverFactory_.replaceOperators(driver_, replace_id[0], replace_id[0]+1, std::move(replace_op));
       } else if (auto joinProbeOp = dynamic_cast<facebook::velox::exec::HashProbe*>(oper)) {
         std::cout<<"replaced HashProbe\n";
+        if(joinProbeOp == nullptr) std::cout<<"joinProbeOp is nullptr\n";
         auto planid = joinProbeOp->planNodeId();
+        std::cout<<"  planid: "<<planid<<std::endl;
         // auto planNode = joinProbeOp->planNode();
         auto id =  joinProbeOp->operatorId(); //TODO should we reuse operator id?
         auto ctx = driver_.driverCtx();
         replace_id.push_back(operatorIndex);
         replace_op.push_back(std::make_unique<CustomJoinProbe>(id, ctx, planid));
+        if(replace_op[0].get() == nullptr) std::cout<<"CustomJoinProbe is nullptr\n";
         replace_op[0]->initialize();
-            auto replaced = driverFactory_.replaceOperators(
-      driver_, replace_id[0], replace_id[0]+1, std::move(replace_op));
+        auto replaced = driverFactory_.replaceOperators(driver_, replace_id[0], replace_id[0]+1, std::move(replace_op));
       }
       // if (not replace_id.empty()) {
       //     auto replaced = driverFactory_.replaceOperators(

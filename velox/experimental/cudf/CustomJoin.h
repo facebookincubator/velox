@@ -23,6 +23,7 @@ class CustomJoinBridge : public JoinBridge {
   }
 
   std::optional<int32_t> numRowsOrFuture(ContinueFuture* future) {
+    printf("JoinBridge future: %p\n", future);
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
     if (numRows_.has_value()) {
@@ -92,6 +93,7 @@ class CustomJoinBuild : public Operator {
     for (auto& peer : peers) {
       auto op = peer->findOperator(planNodeId());
       auto* build = dynamic_cast<CustomJoinBuild*>(op);
+      printf("build: %p\n", build);
       VELOX_CHECK(build);
       numRows_ += build->numRows_;
     }
@@ -103,14 +105,27 @@ class CustomJoinBuild : public Operator {
       promise.setValue();
     }
 
+    std::cout<<"planNodeId():"<<planNodeId()<<", splitGroupId:"<<operatorCtx_->driverCtx()->splitGroupId<<std::endl;
     auto joinBridge = operatorCtx_->task()->getCustomJoinBridge(
         operatorCtx_->driverCtx()->splitGroupId, planNodeId());
-    auto customJoinBridge =
-        std::dynamic_pointer_cast<CustomJoinBridge>(joinBridge);
+    printf("  joinBridgePtr=%p\n", joinBridge.get());
+
+    auto customJoinBridge = std::dynamic_pointer_cast<CustomJoinBridge>(joinBridge);
+    printf("  CjoinBridgPtr=%p\n", customJoinBridge.get());
+
+    // checks
+    if(std::dynamic_pointer_cast<facebook::velox::exec::HashJoinBridge>(joinBridge).get() != nullptr) std::cout<<"JoinBuild: joinBridge is HashJoinBridge\n\n";
+    if (customJoinBridge == nullptr) std::cout << "JoinBuild: customJoinBridge is nullptr\n";
+
+    // VELOX_CHECK_NOT_NULL(
+    //   customJoinBridge,
+    //   "Join bridge for plan node ID is of the wrong type: {}",
+    //   planNodeId());
     customJoinBridge->setNumRows(std::make_optional(numRows_));
   }
 
   BlockingReason isBlocked(ContinueFuture* future) override {
+    printf("JoinBuild future: %p\n", future);
     if (!future_.valid()) {
       return BlockingReason::kNotBlocked;
     }
@@ -194,14 +209,28 @@ class CustomJoinProbe : public Operator {
   }
 
   BlockingReason isBlocked(ContinueFuture* future) override {
+    printf("JoinProbe future: %p\n", future);
     if (numRows_.has_value()) {
       return BlockingReason::kNotBlocked;
     }
 
+    std::cout<<"planNodeId():"<<planNodeId()<<", splitGroupId:"<<operatorCtx_->driverCtx()->splitGroupId<<std::endl;
     auto joinBridge = operatorCtx_->task()->getCustomJoinBridge(
         operatorCtx_->driverCtx()->splitGroupId, planNodeId());
-    auto numRows = std::dynamic_pointer_cast<CustomJoinBridge>(joinBridge)
-                       ->numRowsOrFuture(future);
+    printf("  joinBridgeptr=%p\n", joinBridge.get());
+
+    auto customJoinBridge = std::dynamic_pointer_cast<CustomJoinBridge>(joinBridge);
+    printf("  CjoinBridgPtr=%p\n", customJoinBridge.get());
+
+    // checks
+    if(std::dynamic_pointer_cast<facebook::velox::exec::HashJoinBridge>(joinBridge).get() != nullptr) std::cout<<"JoinProbe: joinBridge is HashJoinBridge\n\n";
+    if (customJoinBridge == nullptr) std::cout << "JoinProbe: customJoinBridge is nullptr\n";
+
+    // VELOX_CHECK_NOT_NULL(
+    //   customJoinBridge,
+    //   "Join bridge for plan node ID is of the wrong type: {}",
+    //   planNodeId());
+    auto numRows = customJoinBridge->numRowsOrFuture(future);
 
     if (!numRows.has_value()) {
       return BlockingReason::kWaitForJoinBuild;
@@ -237,7 +266,8 @@ class CustomJoinBridgeTranslator : public Operator::PlanNodeTranslator {
     if (auto joinNode = std::dynamic_pointer_cast<const CustomJoinNode>(node)) {
         std::cout<<"CustomJoinBridge replaced\n";
       auto joinBridge = std::make_unique<CustomJoinBridge>();
-      return joinBridge;
+      printf("  joinBridge=%p\n", joinBridge.get());
+      return std::move(joinBridge);
     }
     return nullptr;
   }
