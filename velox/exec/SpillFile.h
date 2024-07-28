@@ -333,7 +333,7 @@ class SpillReadFile {
   const uint32_t numSortKeys_;
   const std::vector<CompareFlags> sortCompareFlags_;
   const common::CompressionKind compressionKind_;
-  const serializer::presto::PrestoVectorSerde::PrestoOptions readOptions_;
+  const serializer::presto::PrestoOptions readOptions_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
 
