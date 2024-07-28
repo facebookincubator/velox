@@ -68,15 +68,14 @@ class PrestoSerializerTest
         scratch);
   }
 
-  serializer::presto::PrestoVectorSerde::PrestoOptions getParamSerdeOptions(
-      const serializer::presto::PrestoVectorSerde::PrestoOptions*
-          serdeOptions) {
+  serializer::presto::PrestoOptions getParamSerdeOptions(
+      const serializer::presto::PrestoOptions* serdeOptions) {
     const bool useLosslessTimestamp =
         serdeOptions == nullptr ? false : serdeOptions->useLosslessTimestamp;
     common::CompressionKind kind = GetParam();
     const bool nullsFirst =
         serdeOptions == nullptr ? false : serdeOptions->nullsFirst;
-    serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions{
+    serializer::presto::PrestoOptions paramOptions{
         useLosslessTimestamp, kind, nullsFirst};
 
     return paramOptions;
@@ -85,7 +84,7 @@ class PrestoSerializerTest
   SerializeStats serialize(
       const RowVectorPtr& rowVector,
       std::ostream* output,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions,
+      const serializer::presto::PrestoOptions* serdeOptions,
       std::optional<folly::Range<const IndexRange*>> indexRanges = std::nullopt,
       std::optional<folly::Range<const vector_size_t*>> rows = std::nullopt,
       std::unique_ptr<IterativeVectorSerializer>* reuseSerializer = nullptr,
@@ -162,8 +161,7 @@ class PrestoSerializerTest
 
   void validateLexer(
       const std::string& input,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions&
-          paramOptions) {
+      const serializer::presto::PrestoOptions& paramOptions) {
     if (paramOptions.useLosslessTimestamp ||
         paramOptions.compressionKind !=
             common::CompressionKind::CompressionKind_NONE ||
@@ -193,8 +191,7 @@ class PrestoSerializerTest
   RowVectorPtr deserialize(
       const RowTypePtr& rowType,
       const std::string& input,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions*
-          serdeOptions) {
+      const serializer::presto::PrestoOptions* serdeOptions) {
     auto byteStream = toByteStream(input);
     auto paramOptions = getParamSerdeOptions(serdeOptions);
     validateLexer(input, paramOptions);
@@ -231,8 +228,7 @@ class PrestoSerializerTest
 
   void testRoundTrip(
       VectorPtr vector,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions =
-          nullptr) {
+      const serializer::presto::PrestoOptions* serdeOptions = nullptr) {
     std::unique_ptr<IterativeVectorSerializer> reuseSerializer;
     std::unique_ptr<StreamArena> reuseArena;
     auto rowVector = makeRowVector({vector});
@@ -307,8 +303,7 @@ class PrestoSerializerTest
 
   void testLexer(
       VectorPtr vector,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions =
-          nullptr) {
+      const serializer::presto::PrestoOptions* serdeOptions = nullptr) {
     auto rowVector = makeRowVector({vector});
     std::ostringstream out;
     serialize(rowVector, &out, serdeOptions);
@@ -318,7 +313,7 @@ class PrestoSerializerTest
   SerializeStats testSerializeRows(
       const RowVectorPtr& rowVector,
       BufferPtr indices,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions,
+      const serializer::presto::PrestoOptions* serdeOptions,
       std::unique_ptr<IterativeVectorSerializer>* reuseSerializer,
       std::unique_ptr<StreamArena>* reuseArena) {
     std::ostringstream out;
@@ -376,8 +371,7 @@ class PrestoSerializerTest
       const RowVectorPtr& original,
       const std::string& serialized,
       bool allowFlatteningDictionaries,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions*
-          serdeOptions) {
+      const serializer::presto::PrestoOptions* serdeOptions) {
     auto rowType = asRowType(original->type());
     auto deserialized = deserialize(rowType, serialized, serdeOptions);
 
@@ -430,8 +424,7 @@ class PrestoSerializerTest
   // each of 'vectors' with encoding, then reads them back into a single vector.
   void testEncodedConcatenation(
       std::vector<VectorPtr>& vectors,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions =
-          nullptr) {
+      const serializer::presto::PrestoOptions* serdeOptions = nullptr) {
     std::vector<std::string> pieces;
     std::vector<std::string> reusedPieces;
     auto rowType = ROW({{"f", vectors[0]->type()}});
@@ -502,8 +495,7 @@ class PrestoSerializerTest
   void serializeBatch(
       const RowVectorPtr& rowVector,
       std::ostream* output,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions*
-          serdeOptions) {
+      const serializer::presto::PrestoOptions* serdeOptions) {
     facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
     OStreamOutputStream out(output, &listener);
     auto paramOptions = getParamSerdeOptions(serdeOptions);
@@ -515,8 +507,7 @@ class PrestoSerializerTest
   void testBatchVectorSerializerRoundTrip(
       const RowVectorPtr& data,
       bool allowFlatteningDictionaries = false,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions =
-          nullptr) {
+      const serializer::presto::PrestoOptions* serdeOptions = nullptr) {
     std::ostringstream out;
     serializeBatch(data, &out, serdeOptions);
     const auto serialized = out.str();
@@ -1045,9 +1036,8 @@ TEST_P(PrestoSerializerTest, multiPage) {
 TEST_P(PrestoSerializerTest, timestampWithNanosecondPrecision) {
   // Verify that nanosecond precision is preserved when the right options are
   // passed to the serde.
-  const serializer::presto::PrestoVectorSerde::PrestoOptions
-      kUseLosslessTimestampOptions(
-          true, common::CompressionKind::CompressionKind_NONE);
+  const serializer::presto::PrestoOptions kUseLosslessTimestampOptions(
+      true, common::CompressionKind::CompressionKind_NONE);
   auto timestamp = makeFlatVector<Timestamp>(
       {Timestamp{0, 0},
        Timestamp{12, 0},
@@ -1291,7 +1281,7 @@ TEST_P(PrestoSerializerTest, roundTrip) {
     auto rowType = fuzzer.randRowType();
     auto inputRowVector = (i % 2 == 0) ? fuzzer.fuzzInputRow(rowType)
                                        : nonNullFuzzer.fuzzInputRow(rowType);
-    serializer::presto::PrestoVectorSerde::PrestoOptions prestoOpts;
+    serializer::presto::PrestoOptions prestoOpts;
     // Test every 2/4 with struct nulls first.
     prestoOpts.nullsFirst = i % 4 < 2;
     testRoundTrip(inputRowVector, &prestoOpts);
@@ -1311,7 +1301,7 @@ TEST_P(PrestoSerializerTest, encodedRoundtrip) {
   for (size_t i = 0; i < numRounds; ++i) {
     auto rowType = fuzzer.randRowType();
     auto inputRowVector = fuzzer.fuzzInputRow(rowType);
-    serializer::presto::PrestoVectorSerde::PrestoOptions serdeOpts;
+    serializer::presto::PrestoOptions serdeOpts;
     serdeOpts.nullsFirst = i % 2 == 0;
     testBatchVectorSerializerRoundTrip(inputRowVector, true, &serdeOpts);
   }
@@ -1360,7 +1350,7 @@ TEST_P(PrestoSerializerTest, encodedConcatenation) {
     std::vector<VectorPtr> temp;
     makePermutations(vectors, 4, temp, permutations);
     for (auto i = 0; i < permutations.size(); ++i) {
-      serializer::presto::PrestoVectorSerde::PrestoOptions opts;
+      serializer::presto::PrestoOptions opts;
       opts.nullsFirst = i % 2 == 0;
 
       testEncodedConcatenation(permutations[i], &opts);
@@ -1388,7 +1378,7 @@ TEST_P(PrestoSerializerTest, encodedConcatenation2) {
     std::vector<VectorPtr> temp;
     makePermutations(vectors, 3, temp, permutations);
     for (auto i = 0; i < permutations.size(); ++i) {
-      serializer::presto::PrestoVectorSerde::PrestoOptions opts;
+      serializer::presto::PrestoOptions opts;
       opts.useLosslessTimestamp = true;
       opts.nullsFirst = i % 2 == 0;
 
@@ -1651,7 +1641,7 @@ class PrestoSerializerBatchEstimateSizeTest : public testing::Test,
 
   std::unique_ptr<serializer::presto::PrestoVectorSerde> serde_;
   std::unique_ptr<BatchVectorSerializer> serializer_;
-  serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions_;
+  serializer::presto::PrestoOptions paramOptions_;
 };
 
 TEST_F(PrestoSerializerBatchEstimateSizeTest, flat) {

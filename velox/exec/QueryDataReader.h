@@ -40,7 +40,7 @@ class QueryDataReader {
   std::unique_ptr<common::FileInputStream> getDataInputStream() const;
 
   const std::string traceDir_;
-  const serializer::presto::PrestoVectorSerde::PrestoOptions readOptions_{
+  const serializer::presto::PrestoOptions readOptions_{
       true,
       common::CompressionKind_ZSTD, // TODO: Use trace config.
       /*nullsFirst=*/true};

@@ -23,6 +23,164 @@
 
 namespace facebook::velox::serializer::presto {
 
+// Input options that the serializer recognizes.
+struct PrestoOptions : VectorSerde::Options {
+  PrestoOptions() = default;
+
+  PrestoOptions(
+      bool _useLosslessTimestamp,
+      common::CompressionKind _compressionKind,
+      bool _nullsFirst = false)
+      : VectorSerde::Options(_compressionKind),
+        useLosslessTimestamp(_useLosslessTimestamp),
+        nullsFirst(_nullsFirst) {}
+
+  /// Currently presto only supports millisecond precision and the serializer
+  /// converts velox native timestamp to that resulting in loss of precision.
+  /// This option allows it to serialize with nanosecond precision and is
+  /// currently used for spilling. Is false by default.
+  bool useLosslessTimestamp{false};
+
+  /// Serializes nulls of structs before the columns. Used to allow
+  /// single pass reading of in spilling.
+  ///
+  /// TODO: Make Presto also serialize nulls before columns of
+  /// structs.
+  bool nullsFirst{false};
+
+  /// Minimum achieved compression if compression is enabled. Compressing less
+  /// than this causes subsequent compression attempts to be skipped. The more
+  /// times compression misses the target the less frequently it is tried.
+  float minCompressionRatio{0.8};
+};
+
+using SerdeOpts = PrestoOptions;
+
+// Appendable container for serialized values. To append a value at a
+// time, call appendNull or appendNonNull first. Then call appendLength if the
+// type has a length. A null value has a length of 0. Then call appendValue if
+// the value was not null.
+class VectorStream {
+ public:
+  // This constructor takes an optional encoding and vector. In cases where the
+  // vector (data) is not available when the stream is created, callers can also
+  // manually specify the encoding, which only applies to the top level stream.
+  // If both are specified, `encoding` takes precedence over the actual
+  // encoding of `vector`. Only 'flat' encoding can take precedence over the
+  // input data encoding.
+  VectorStream(
+      const TypePtr& type,
+      std::optional<VectorEncoding::Simple> encoding,
+      std::optional<VectorPtr> vector,
+      StreamArena* streamArena,
+      int32_t initialNumRows,
+      const PrestoOptions& opts);
+
+  void flattenStream(const VectorPtr& vector, int32_t initialNumRows);
+
+  std::optional<VectorEncoding::Simple> getEncoding(
+      std::optional<VectorEncoding::Simple> encoding,
+      std::optional<VectorPtr> vector);
+
+  std::optional<VectorPtr> getChildAt(
+      std::optional<VectorPtr> vector,
+      size_t idx);
+
+  void initializeHeader(std::string_view name, StreamArena& streamArena);
+
+  void appendNull();
+
+  void appendNonNull(const int32_t count = 1);
+
+  void appendLength(const int32_t length);
+
+  void appendNulls(
+      const uint64_t* nulls,
+      int32_t begin,
+      int32_t end,
+      int32_t numNonNull);
+
+  // Appends a zero length for each null bit and a length from lengthFunc(row)
+  // for non-nulls in rows.
+  template <typename LengthFunc>
+  void appendLengths(
+      const uint64_t* nulls,
+      folly::Range<const vector_size_t*> rows,
+      int32_t numNonNull,
+      LengthFunc lengthFunc);
+
+  template <typename T>
+  void append(folly::Range<const T*> values) {
+    values_.append(values);
+  }
+
+  template <typename T>
+  void appendOne(const T& value) {
+    append(folly::Range(&value, 1));
+  }
+
+  bool isDictionaryStream() const {
+    return isDictionaryStream_;
+  }
+
+  bool isConstantStream() const {
+    return isConstantStream_;
+  }
+
+  VectorStream* childAt(int32_t index) {
+    return children_[index].get();
+  }
+
+  ByteOutputStream& values() {
+    return values_;
+  }
+
+  ByteOutputStream& nulls() {
+    return nulls_;
+  }
+
+  // Returns the size to flush to OutputStream before calling `flush`.
+  const size_t serializedSize();
+
+  // Writes out the accumulated contents. Does not change the state.
+  void flush(OutputStream* out);
+
+  void flushNulls(OutputStream* out);
+
+  bool isLongDecimal() const {
+    return isLongDecimal_;
+  }
+
+  void clear();
+
+ private:
+  void initializeFlatStream(
+      std::optional<VectorPtr> vector,
+      vector_size_t initialNumRows);
+
+  const TypePtr type_;
+  StreamArena* const streamArena_;
+  /// Indicates whether to serialize timestamps with nanosecond precision.
+  /// If false, they are serialized with millisecond precision which is
+  /// compatible with presto.
+  const bool useLosslessTimestamp_;
+  const bool nullsFirst_;
+  const bool isLongDecimal_;
+  const SerdeOpts opts_;
+  std::optional<VectorEncoding::Simple> encoding_;
+  int32_t nonNullCount_{0};
+  int32_t nullCount_{0};
+  int32_t totalLength_{0};
+  bool hasLengths_{false};
+  ByteRange header_;
+  ByteOutputStream nulls_;
+  ByteOutputStream lengths_;
+  ByteOutputStream values_;
+  std::vector<std::unique_ptr<VectorStream>> children_;
+  bool isDictionaryStream_{false};
+  bool isConstantStream_{false};
+};
+
 /// There are two ways to serialize data using PrestoVectorSerde:
 ///
 /// 1. In order to append multiple RowVectors into the same serialized payload,
@@ -43,37 +201,6 @@ namespace facebook::velox::serializer::presto {
 /// it tries to preserve the encodings of the input data.
 class PrestoVectorSerde : public VectorSerde {
  public:
-  // Input options that the serializer recognizes.
-  struct PrestoOptions : VectorSerde::Options {
-    PrestoOptions() = default;
-
-    PrestoOptions(
-        bool _useLosslessTimestamp,
-        common::CompressionKind _compressionKind,
-        bool _nullsFirst = false)
-        : VectorSerde::Options(_compressionKind),
-          useLosslessTimestamp(_useLosslessTimestamp),
-          nullsFirst(_nullsFirst) {}
-
-    /// Currently presto only supports millisecond precision and the serializer
-    /// converts velox native timestamp to that resulting in loss of precision.
-    /// This option allows it to serialize with nanosecond precision and is
-    /// currently used for spilling. Is false by default.
-    bool useLosslessTimestamp{false};
-
-    /// Serializes nulls of structs before the columns. Used to allow
-    /// single pass reading of in spilling.
-    ///
-    /// TODO: Make Presto also serialize nulls before columns of
-    /// structs.
-    bool nullsFirst{false};
-
-    /// Minimum achieved compression if compression is enabled. Compressing less
-    /// than this causes subsequent compression attempts to be skipped. The more
-    /// times compression misses the target the less frequently it is tried.
-    float minCompressionRatio{0.8};
-  };
-
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
   void estimateSerializedSize(
@@ -133,6 +260,18 @@ class PrestoVectorSerde : public VectorSerde {
       TypePtr type,
       VectorPtr* result,
       const Options* options);
+
+  void serializeColumn(
+      const VectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      VectorStream* stream,
+      Scratch& scratch);
+
+  void serializeColumn(
+      const VectorPtr& vector,
+      const folly::Range<const vector_size_t*>& rows,
+      VectorStream* stream,
+      Scratch& scratch);
 
   enum class TokenType {
     HEADER,
