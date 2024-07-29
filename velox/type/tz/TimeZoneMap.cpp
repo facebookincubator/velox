@@ -62,8 +62,16 @@ TTimeZoneDatabase buildTimeZoneDatabase(
     // Every single other time zone entry (outside of offsets) needs to be
     // available in external/date or this will throw.
     else {
-      timeZonePtr = std::make_unique<TimeZone>(
-          entry.second, entry.first, date::locate_zone(entry.second));
+      try {
+        auto zone = date::locate_zone(entry.second);
+        timeZonePtr =
+            std::make_unique<TimeZone>(entry.second, entry.first, zone);
+      } catch (std::runtime_error& err) {
+        // Timezone not found in OS, skip it.
+        LOG(WARNING) << "Timezone [" << entry.second << "] not found due to: '"
+                     << err.what() << "', ignoring it. ";
+        continue;
+      }
     }
     tzDatabase[entry.first] = std::move(timeZonePtr);
   }
