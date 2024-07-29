@@ -28,6 +28,12 @@ namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
 
+struct UnknownValueHash {
+  std::size_t operator()(const UnknownValue& val) const noexcept {
+    return folly::hasher<UnknownValue>{}(val);
+  }
+};
+
 template <
     typename T,
     typename Hash = std::hash<T>,
@@ -71,8 +77,7 @@ class ModeAggregate {
     }
 
     bool writeIntermediateResult(out_type<IntermediateType>& out) {
-      auto size = values.size();
-      out.reserve(size);
+      out.reserve(values.size());
       for (const auto& [value, count] : values) {
         out.emplace(value, count);
       }
@@ -139,8 +144,7 @@ class StringModeAggregate {
     }
 
     bool writeIntermediateResult(out_type<IntermediateType>& out) {
-      auto size = values.size();
-      out.reserve(size);
+      out.reserve(values.size());
       for (const auto& [value, count] : values) {
         out.add_item() = std::make_tuple(value, count);
       }
@@ -536,6 +540,9 @@ void registerModeAggregate(
           case TypeKind::BIGINT:
             return std::make_unique<
                 SimpleAggregateAdapter<ModeAggregate<int64_t>>>(resultType);
+          case TypeKind::HUGEINT:
+            return std::make_unique<
+                SimpleAggregateAdapter<ModeAggregate<int128_t>>>(resultType);
           case TypeKind::REAL:
             return std::make_unique<SimpleAggregateAdapter<ModeAggregate<
                 float,
@@ -549,6 +556,11 @@ void registerModeAggregate(
           case TypeKind::TIMESTAMP:
             return std::make_unique<
                 SimpleAggregateAdapter<ModeAggregate<Timestamp>>>(resultType);
+          case TypeKind::UNKNOWN:
+            return std::make_unique<SimpleAggregateAdapter<ModeAggregate<
+                UnknownValue,
+                UnknownValueHash,
+                std::equal_to<UnknownValue>>>>(resultType);
           case TypeKind::VARCHAR:
           case TypeKind::VARBINARY:
             return std::make_unique<

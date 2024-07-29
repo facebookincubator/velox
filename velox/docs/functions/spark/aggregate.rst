@@ -152,6 +152,9 @@ General Aggregate Functions
     Returns the most frequent value for the values within `x`.
     NULL values are ignored. If all the values are NULL, or
     there are 0 rows, returns NULL.
+    If multiple values have the same greatest frequency, the return
+    value is uncertain and could be any one of the values with the
+    greatest frequency.
 
     Example::
     

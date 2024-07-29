@@ -216,6 +216,43 @@ TEST_F(ModeAggregateTest, globalInteger) {
   testGlobalModeWithDuck(vector);
 }
 
+TEST_F(ModeAggregateTest, globalDecimal) {
+  vector_size_t num = 10;
+  auto longDecimalType = DECIMAL(20, 2);
+  auto vector1 = makeFlatVector<int128_t>(
+      num,
+      [](vector_size_t row) { return row % 4; },
+      nullEvery(7),
+      longDecimalType);
+
+  auto expected1 = makeRowVector(
+      {makeFlatVector<int128_t>(std::vector<int128_t>{1}, longDecimalType)});
+
+  testMode("mode(c1)", {}, vector1, vector1, expected1);
+
+  auto shortDecimalType = DECIMAL(6, 2);
+  auto vector2 = makeFlatVector<int64_t>(
+      num,
+      [](vector_size_t row) { return row % 4; },
+      nullEvery(7),
+      shortDecimalType);
+
+  auto expected2 = makeRowVector(
+      {makeFlatVector<int64_t>(std::vector<int64_t>{1}, shortDecimalType)});
+
+  testMode("mode(c1)", {}, vector2, vector2, expected2);
+}
+
+TEST_F(ModeAggregateTest, globalUnknown) {
+  auto vector = makeAllNullFlatVector<UnknownValue>(6);
+
+  auto expected = makeRowVector({
+      BaseVector::createNullConstant(UNKNOWN(), 1, pool()),
+  });
+
+  testMode("mode(c1)", {}, vector, vector, expected);
+}
+
 TEST_F(ModeAggregateTest, globalDouble) {
   vector_size_t num = 32;
   auto vector = makeFlatVector<double>(
