@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/functions/prestosql/Utf8Utils.h"
+#include "velox/functions/lib/Utf8Utils.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -24,7 +24,8 @@ namespace facebook::velox::functions::sparksql {
 /// Splits string on delimiter and returns an array of size at most limit.
 /// delimiter is a string representing regular expression.
 /// limit is an integer which controls the number of times the regex is applied.
-/// By default, limit is -1.
+/// By default, limit is -1, which means 'no limit', the delimiter will be
+/// applied as many times as possible.
 template <typename T>
 struct Split {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -96,9 +97,9 @@ struct Split {
   void split(
       out_type<Array<Varchar>>& result,
       const arg_type<Varchar>& input,
-      const arg_type<Varchar>& delim,
+      const arg_type<Varchar>& delimiter,
       int32_t limit) const {
-    VELOX_DCHECK(!delim.empty(), "Non-empty delimiter is expected");
+    VELOX_DCHECK(!delimiter.empty(), "Non-empty delimiter is expected");
 
     // Trivial case of converting string to array with 1 element.
     if (limit == 1) {
@@ -109,7 +110,7 @@ struct Split {
     // Splits input string using the delimiter and adds the cutting-off pieces
     // to elements vector until the string's end or the limit is reached.
     int32_t addedElements{0};
-    auto* re = cache_.findOrCompile(delim);
+    auto* re = cache_.findOrCompile(delimiter);
     const size_t end = input.size();
     const char* start = input.data();
     const auto re2String = re2::StringPiece(start, end);

@@ -17,7 +17,7 @@
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/functions/prestosql/Utf8Utils.h"
+#include "velox/functions/lib/Utf8Utils.h"
 
 namespace facebook::velox::functions {
 namespace {
