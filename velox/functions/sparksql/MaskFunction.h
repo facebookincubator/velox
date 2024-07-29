@@ -142,9 +142,8 @@ struct MaskFunction {
     size_t inputIdx = 0;
     size_t outputIdx = 0;
     while (inputIdx < inputSize) {
-      utf8proc_int32_t curCodePoint;
       int charByteSize;
-      curCodePoint = utf8proc_codepoint(
+      auto curCodePoint = utf8proc_codepoint(
           &inputBuffer[inputIdx], inputBuffer + inputSize, charByteSize);
       if (curCodePoint == -1) {
         // That means it is a invalid UTF-8 character for example '\xED',
