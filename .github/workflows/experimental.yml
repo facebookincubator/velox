@@ -80,25 +80,25 @@ jobs:
           ccache -s
 
       - name: Upload aggregation fuzzer
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: aggregation
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
 
       - name: Upload spark aggregation fuzzer
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: spark_aggregation_fuzzer
           path: velox/_build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test
 
       - name: Upload aggregation fuzzer
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: aggregation
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
 
       - name: Upload join fuzzer
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: join
           path: velox/_build/debug/velox/exec/tests/velox_join_fuzzer_test
@@ -161,7 +161,7 @@ jobs:
 
       - name: Archive aggregate production artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: aggregate-fuzzer-failure-artifacts
           path: |
@@ -203,7 +203,7 @@ jobs:
 
       - name: Archive Spark aggregate production artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: spark-agg-fuzzer-failure-artifacts
           path: |
@@ -244,7 +244,7 @@ jobs:
 
       - name: Archive aggregate production artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: join-fuzzer-failure-artifacts
           path: |

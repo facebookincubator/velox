@@ -157,7 +157,7 @@ jobs:
           cd wheelhouse
           rename 's/11_0/10_15/g' *.whl
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: wheels
           path: |
