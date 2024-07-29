@@ -362,7 +362,9 @@ TEST_F(PrefixEncoderTest, encodeHugeInt) {
       hugeIntEncoder1_, std::nullopt, expected2, size.value(), true);
 
   // Exceed rescale limit.
+  // Trigger castToInt logic exceed min limit.
   int64_t minValue = 0;
+  // Trigger castToInt logic exceed max limit.
   int64_t maxValue = 0xffffffffffffffff;
   PrefixSortLongDecimalToIntEncoder hugeIntEncoder = {false, false, 20, 2};
   testEncodeHugeInt(

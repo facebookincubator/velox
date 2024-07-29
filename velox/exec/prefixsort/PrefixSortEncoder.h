@@ -32,7 +32,7 @@ namespace facebook::velox::exec::prefixsort {
 class PrefixSortEncoder {
  public:
   PrefixSortEncoder(bool ascending, bool nullsFirst)
-      : nullsFirst_(nullsFirst), ascending_(ascending){};
+      : nullsFirst_(nullsFirst), ascending_(ascending) {};
 
   virtual ~PrefixSortEncoder() = default;
 
@@ -247,10 +247,11 @@ class PrefixSortLongDecimalToIntEncoder : public PrefixSortEncoder {
       : PrefixSortEncoder(ascending, nullsFirst),
         precision_(precision),
         scale_(scale),
-        newScale_(newPrecision_ - (precision_ - scale_)) {
+        newScale_(ShortDecimalType::kMaxPrecision - (precision_ - scale_)) {
     VELOX_DCHECK(precision - scale <= ShortDecimalType::kMaxPrecision);
   };
 
+  // Encode the int128_t to int64_t
   FOLLY_ALWAYS_INLINE void encode(std::optional<int128_t> value, char* dest)
       const override {
     if (value.has_value()) {
@@ -260,14 +261,14 @@ class PrefixSortLongDecimalToIntEncoder : public PrefixSortEncoder {
           value.value(),
           precision_,
           scale_,
-          newPrecision_,
+          ShortDecimalType::kMaxPrecision,
           newScale_,
           newValue);
       if (FOLLY_UNLIKELY(!status.ok())) {
         if (value < 0) {
-          newValue = std::numeric_limits<int64_t>::min();
+          newValue = INT64_MIN;
         } else {
-          newValue = std::numeric_limits<int64_t>::max();
+          newValue = INT64_MAX;
         }
       }
       encodeNoNulls(newValue, dest + 1);
@@ -277,6 +278,8 @@ class PrefixSortLongDecimalToIntEncoder : public PrefixSortEncoder {
     }
   }
 
+  /// encodedSize is 1 for null flag, other for the encoded value, it is
+  /// sizeof[int64_t]
   static int32_t encodedSize() {
     return 9;
   }
@@ -284,20 +287,21 @@ class PrefixSortLongDecimalToIntEncoder : public PrefixSortEncoder {
  private:
   const int precision_;
   const int scale_;
-  const int newPrecision_ = ShortDecimalType::kMaxPrecision;
   const int newScale_;
 };
 
 class PrefixSortHugeIntEncoder : public PrefixSortEncoder {
  public:
   PrefixSortHugeIntEncoder(bool ascending, bool nullsFirst)
-      : PrefixSortEncoder(ascending, nullsFirst){};
+      : PrefixSortEncoder(ascending, nullsFirst) {};
 
   FOLLY_ALWAYS_INLINE void encode(std::optional<int128_t> value, char* dest)
       const override {
     if (value.has_value()) {
       dest[0] = nullsFirst_ ? 1 : 0;
       auto val = value.value();
+      // This implement is same as DuckDB
+      // https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/radix.hpp#L225
       encodeNoNulls<int64_t>(HugeInt::upper(val), dest + 1);
       encodeNoNulls<uint64_t>(HugeInt::lower(val), dest + 1 + sizeof(int64_t));
     } else {
@@ -306,6 +310,8 @@ class PrefixSortHugeIntEncoder : public PrefixSortEncoder {
     }
   }
 
+  /// encodedSize is 1 for null flag, other for the encoded value, it is
+  /// sizeof[int128_t]
   static int32_t encodedSize() {
     return 17;
   }
@@ -316,7 +322,7 @@ class PrefixSortEncoderFactory {
   static std::optional<uint32_t> encodedSize(const Type& type) {
     if (type.isLongDecimal()) {
       const auto [precision, scale] = getDecimalPrecisionScale(type);
-      if (canCastToInt(precision, scale)) {
+      if (canCastLongDecimalToInt(precision, scale)) {
         return PrefixSortLongDecimalToIntEncoder::encodedSize();
       } else {
         return PrefixSortHugeIntEncoder::encodedSize();
@@ -331,7 +337,7 @@ class PrefixSortEncoderFactory {
   create(const Type& type, bool ascending, bool nullsFirst) {
     if (type.isLongDecimal()) {
       const auto [precision, scale] = getDecimalPrecisionScale(type);
-      if (canCastToInt(precision, scale)) {
+      if (canCastLongDecimalToInt(precision, scale)) {
         return std::make_shared<PrefixSortLongDecimalToIntEncoder>(
             ascending, nullsFirst, precision, scale);
       } else {
@@ -344,7 +350,13 @@ class PrefixSortEncoderFactory {
   }
 
  private:
-  static bool canCastToInt(int precision, int scale) {
+  /// Spark implementation:
+  /// https://github.com/apache/spark/blob/branch-3.5/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/SortOrder.scala#L167
+  /// Spark cast the decimal to int when the cast operation will not change its
+  /// actual value except some edge cases. For the value near to the maxium or
+  /// minimum value that this precision can represent, it use a appoximately
+  /// value INT64_MAX or INT64_MIN to represent.
+  static bool canCastLongDecimalToInt(int precision, int scale) {
     return precision - scale <= ShortDecimalType::kMaxPrecision;
   }
 };

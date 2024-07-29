@@ -164,6 +164,19 @@ TEST_F(PrefixSortTest, singleKey) {
   }
 }
 
+TEST_F(PrefixSortTest, longDecimalToInt) {
+  const std::vector<VectorPtr> testData = {makeNullableFlatVector<int128_t>(
+      {std::nullopt,
+       HugeInt::parse(std::string(18, '9') + "50"),
+       HugeInt::parse(std::string(18, '9') + "49"),
+       2,
+       HugeInt::parse("-" + std::string(18, '9') + "49"),
+       HugeInt::parse("-" + std::string(18, '9') + "50")},
+      DECIMAL(20, 5))};
+  const auto data = makeRowVector(testData);
+  testPrefixSort({kAsc}, data);
+}
+
 TEST_F(PrefixSortTest, singleKeyWithNulls) {
   const int numRows = 5;
   const int columnsSize = 7;
@@ -219,6 +232,8 @@ TEST_F(PrefixSortTest, multipleKeys) {
 }
 
 TEST_F(PrefixSortTest, fuzz) {
+  // Because for long decimal can cast to int cases, some edge values will be
+  // considered same, so we cannot test it in fuzzer test.
   std::vector<TypePtr> keyTypes = {
       INTEGER(),
       BOOLEAN(),
@@ -226,7 +241,6 @@ TEST_F(PrefixSortTest, fuzz) {
       SMALLINT(),
       BIGINT(),
       DECIMAL(12, 5),
-      DECIMAL(20, 5),
       DECIMAL(38, 8),
       REAL(),
       DOUBLE(),
@@ -251,7 +265,6 @@ TEST_F(PrefixSortTest, fuzzMulti) {
       SMALLINT(),
       BIGINT(),
       DECIMAL(12, 5),
-      DECIMAL(20, 5),
       DECIMAL(38, 8),
       REAL(),
       DOUBLE(),

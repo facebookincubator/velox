@@ -342,11 +342,11 @@ int main(int argc, char** argv) {
 
   PrefixSortBenchmark bm(leafPool.get());
 
-  // bm.smallBigint();
-  // bm.largeBigint();
-  // bm.largeBigintWithPayloads();
-  // bm.smallBigintWithPayload();
-  // bm.largeVarchar();
+  bm.smallBigint();
+  bm.largeBigint();
+  bm.largeBigintWithPayloads();
+  bm.smallBigintWithPayload();
+  bm.largeVarchar();
   bm.hugeInt();
   folly::runBenchmarks();
 
