@@ -288,8 +288,8 @@ class SimpleAggregateAdapter : public Aggregate {
       override {
     VectorWriter<typename FUNC::IntermediateType> writer;
     auto vector = (*result)
-                      ->as<typename TypeToFlatVector<
-                          typename FUNC::IntermediateType>::type>();
+                      ->as<typename VectorWriter<
+                          typename FUNC::IntermediateType>::vector_t>();
     vector->resize(numGroups);
     writer.init(*vector);
 
@@ -318,7 +318,7 @@ class SimpleAggregateAdapter : public Aggregate {
       override {
     auto flatResult =
         (*result)
-            ->as<typename TypeToFlatVector<typename FUNC::OutputType>::type>();
+            ->as<typename VectorWriter<typename FUNC::OutputType>::vector_t>();
     flatResult->resize(numGroups);
 
     VectorWriter<typename FUNC::OutputType> writer;
@@ -461,10 +461,8 @@ class SimpleAggregateAdapter : public Aggregate {
     auto* rawNulls = result->mutableRawNulls();
     bits::fillBits(rawNulls, 0, result->size(), bits::kNull);
 
-    constexpr auto intermediateKind =
-        SimpleTypeTrait<typename FUNC::IntermediateType>::typeKind;
-    auto* flatResult =
-        result->as<typename KindToFlatVector<intermediateKind>::type>();
+    auto* flatResult = result->as<
+        typename VectorWriter<typename FUNC::IntermediateType>::vector_t>();
     exec::VectorWriter<typename FUNC::IntermediateType> writer;
     writer.init(*flatResult);
 
