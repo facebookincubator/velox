@@ -1443,14 +1443,14 @@ class FloatingPointRange final : public AbstractRange {
         name,
         (lowerExclusive_ || lowerUnbounded_) ? "(" : "[",
         lowerUnbounded_ ? "-inf" : std::to_string(lower_),
-        upperUnbounded_ ? "+inf" : std::to_string(upper_),
-        (upperExclusive_ || upperUnbounded_) ? ")" : "]",
+        upperUnbounded_ ? "nan" : std::to_string(upper_),
+        (upperExclusive_ && !upperUnbounded_) ? ")" : "]",
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
   bool testFloatingPoint(T value) const {
     if (std::isnan(value)) {
-      return false;
+      return upperUnbounded_;
     }
     if (!lowerUnbounded_) {
       if (value < lower_) {
@@ -1495,6 +1495,10 @@ class FloatingPointRange final : public AbstractRange {
       } else {
         result = values <= allUpper;
       }
+    }
+    if (upperUnbounded_) {
+      auto nanResult = xsimd::isnan(values);
+      result = xsimd::bitwise_or(nanResult, result);
     }
     return result;
   }
@@ -2038,16 +2042,14 @@ class MultiRange final : public Filter {
   /// All entries must support the same data types.
   /// @param nullAllowed Null values are passing the filter if true. nullAllowed
   /// flags in the 'ranges' filters are ignored.
-  /// @param nanAllowed Not-a-Number floating point values are passing the
-  /// filter if true. Applies to floating point data types only. NaN values are
-  /// not further tested using contained filters.
+  /// TODO: remove redundant param `nanAllowed` after presto removes the use of
+  /// this param. For now, we set a default value to avoid breaking presto.
   MultiRange(
       std::vector<std::unique_ptr<Filter>> filters,
       bool nullAllowed,
-      bool nanAllowed)
+      bool nanAllowed = false)
       : Filter(true, nullAllowed, FilterKind::kMultiRange),
-        filters_(std::move(filters)),
-        nanAllowed_(nanAllowed) {}
+        filters_(std::move(filters)) {}
 
   folly::dynamic serialize() const override;
 
@@ -2079,15 +2081,10 @@ class MultiRange final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const override final;
 
-  bool nanAllowed() const {
-    return nanAllowed_;
-  }
-
   bool testingEquals(const Filter& other) const final;
 
  private:
   const std::vector<std::unique_ptr<Filter>> filters_;
-  const bool nanAllowed_;
 };
 
 // Helper for applying filters to different types
