@@ -27,31 +27,36 @@ struct AtLeastNNonNullsFunction {
       out_type<bool>& out,
       const arg_type<int32_t>* n,
       const arg_type<Variadic<Any>>* inputs) {
-    out = getNonNullAndNanCount(inputs) >= *n;
-  }
-
- private:
-  int32_t getNonNullAndNanCount(const arg_type<Variadic<Any>>* inputs) {
+    out = false;
     int32_t result = 0;
+    int32_t expectedNum = *n;
     for (const auto& input : *inputs) {
       if (input.has_value()) {
         switch (input.value().kind()) {
           case TypeKind::REAL:
             if (!std::isnan(input.value().template castTo<float>())) {
-              result++;
+              if (++result >= expectedNum) {
+                out = true;
+                return;
+              }
             }
             break;
           case TypeKind::DOUBLE:
             if (!std::isnan(input.value().template castTo<double>())) {
-              result++;
+              if (++result >= expectedNum) {
+                out = true;
+                return;
+              }
             }
             break;
           default:
-            result++;
+            if (++result >= expectedNum) {
+              out = true;
+              return;
+            }
         }
       }
     }
-    return result;
   }
 };
 } // namespace facebook::velox::functions::sparksql
