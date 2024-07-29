@@ -12,6 +12,70 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Set up Spark connect
+file(
+  GLOB PROTO_FILES
+  RELATIVE ${PROJECT_SOURCE_DIR}
+  CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/proto/spark/connect/*.proto)
+foreach(PROTO ${PROTO_FILES})
+  get_filename_component(PROTO_DIR ${PROTO} DIRECTORY)
+  get_filename_component(PROTO_NAME ${PROTO} NAME_WE)
+  set(PROTO_OUTPUT_DIR ${PROJECT_BINARY_DIR}/${PROTO_DIR})
+  list(APPEND PROTO_SRCS "${PROTO_OUTPUT_DIR}/${PROTO_NAME}.pb.cc")
+  list(APPEND PROTO_HDRS "${PROTO_OUTPUT_DIR}/${PROTO_NAME}.pb.h")
+  list(APPEND GRPC_SRCS "${PROTO_OUTPUT_DIR}/${PROTO_NAME}.grpc.pb.cc")
+  list(APPEND GRPC_HDRS "${PROTO_OUTPUT_DIR}/${PROTO_NAME}.grpc.pb.h")
+  list(APPEND PROTO_FILES_FULL
+       "${PROJECT_SOURCE_DIR}/${PROTO_DIR}/${PROTO_NAME}.proto")
+endforeach()
+
+set(PROTO_OUTPUT_FILES ${PROTO_HDRS} ${PROTO_SRCS})
+set_source_files_properties(${PROTO_OUTPUT_FILES} PROPERTIES GENERATED TRUE)
+
+set(GRPC_OUTPUT_FILES ${GRPC_HDRS} ${GRPC_SRCS})
+set_source_files_properties(${GRPC_OUTPUT_FILES} PROPERTIES GENERATED TRUE)
+
+# Ensure that the option --proto_path is not given an empty argument
+foreach(PROTO_PATH ${PROJECT_SOURCE_DIR} ${Protobuf_INCLUDE_DIRS})
+  list(APPEND PROTO_PATH_ARGS --proto_path=${PROTO_PATH})
+endforeach()
+
+# Generate Spark connect hearders and sources
+add_custom_command(
+  OUTPUT ${PROTO_OUTPUT_FILES}
+  COMMAND protobuf::protoc ${PROTO_PATH_ARGS} --cpp_out ${CMAKE_BINARY_DIR}
+          ${PROTO_FILES_FULL}
+  DEPENDS protobuf::protoc
+  COMMENT "Running PROTO compiler"
+  VERBATIM)
+
+# Generate grpc headers and sources
+add_custom_command(
+  OUTPUT ${GRPC_OUTPUT_FILES}
+  COMMAND
+    protobuf::protoc ${PROTO_PATH_ARGS} --grpc_out=${CMAKE_BINARY_DIR}
+    --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+    ${PROTO_FILES_FULL}
+  DEPENDS protobuf::protoc
+  COMMENT "Running gRPC C++ protocol buffer compiler"
+  VERBATIM)
+
+set(SRCS ${PROTO_SRCS} ${GRPC_SRCS} SparkQueryRunner.cpp)
+
+add_library(velox_spark_query_runner ${SRCS})
+target_include_directories(velox_spark_query_runner
+                           PUBLIC ${PROJECT_BINARY_DIR}/)
+
+target_link_libraries(
+  velox_spark_query_runner
+  velox_fuzzer_util
+  velox_exec_test_lib
+  velox_arrow_bridge
+  gRPC::grpc++
+  gRPC::grpc
+  protobuf::libprotobuf
+  arrow)
+
 add_executable(spark_aggregation_fuzzer_test SparkAggregationFuzzerTest.cpp)
 
 target_link_libraries(
@@ -19,8 +83,13 @@ target_link_libraries(
   velox_aggregation_fuzzer
   velox_aggregation_fuzzer_base
   velox_functions_spark_aggregates
+  velox_spark_query_runner
   velox_fuzzer_util
   velox_window
   velox_vector_test_lib
   gtest
   gtest_main)
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()

@@ -14,6 +14,8 @@
 cmake_minimum_required(VERSION 3.28)
 message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
 
+set(BUILD_SHARED_LIBS OFF)
+
 # The policy allows us to change options without caching.
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
@@ -152,6 +154,7 @@ if(${VELOX_BUILD_TESTING})
   set(VELOX_ENABLE_TPCH_CONNECTOR ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
   set(VELOX_ENABLE_EXAMPLES ON)
+  set(VELOX_ENABLE_PARQUET ON)
 endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})
@@ -339,7 +342,6 @@ if("${ENABLE_ALL_WARNINGS}")
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
-       -Wnon-virtual-dtor \
        ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")
 
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
@@ -456,6 +458,18 @@ add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
 
+if(${VELOX_BUILD_TESTING})
+  # Spark qury runner depends on absl, gRPC. gRPC depends on c-ares.
+  set_source(absl)
+  resolve_dependency(absl)
+
+  set_source(c-ares)
+  resolve_dependency(c-ares)
+
+  set_source(gRPC)
+  resolve_dependency(gRPC)
+endif()
+
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
   # requires clients to explicitly install fizz and wangle.
@@ -464,11 +478,7 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(FBThrift CONFIG REQUIRED)
 endif()
 
-if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
-  set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
-else()
-  set(FOLLY_BENCHMARK Folly::follybenchmark)
-endif()
+set(FOLLY_BENCHMARK Folly::follybenchmark)
 
 if(VELOX_ENABLE_GCS)
   set_source(google_cloud_cpp_storage)

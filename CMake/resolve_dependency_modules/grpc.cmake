@@ -25,7 +25,7 @@ string(CONCAT VELOX_GRPC_SOURCE_URL
 
 resolve_dependency_url(GRPC)
 
-message(STATUS "Building Google Cloud CPP from source")
+message(STATUS "Building gRPC from source")
 
 FetchContent_Declare(
   gRPC
