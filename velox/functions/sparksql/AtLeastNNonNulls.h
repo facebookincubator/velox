@@ -29,6 +29,7 @@ struct AtLeastNNonNullsFunction {
       const arg_type<Variadic<Any>>* inputs) {
     out = false;
     int32_t result = 0;
+    VELOX_DCHECK_NOT_NULL(n, "n cannot be NULL");
     int32_t expectedNum = *n;
     for (const auto& input : *inputs) {
       if (input.has_value()) {
