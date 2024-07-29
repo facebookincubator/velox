@@ -13,7 +13,6 @@
 # limitations under the License.
 
 add_executable(velox_type_tz_test TimeZoneMapTest.cpp)
-
 add_test(velox_type_tz_test velox_type_tz_test)
 
 target_link_libraries(
@@ -22,4 +21,17 @@ target_link_libraries(
   velox_exception
   GTest::gtest
   GTest::gtest_main
+  pthread)
+
+add_executable(velox_type_tz_ext_invalid_test
+               TimeZoneMapExternalInvalidTest.cpp)
+add_test(velox_type_tz_ext_invalid_test velox_type_tz_ext_invalid_test)
+
+target_link_libraries(
+  velox_type_tz_ext_invalid_test
+  velox_type_tz
+  velox_test_util
+  velox_exception
+  gtest
+  gtest_main
   pthread)
