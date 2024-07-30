@@ -109,7 +109,6 @@ Status daysSinceEpochFromWeekDate(
 
 /// Computes the (signed) number of days since unix epoch (1970-01-01).
 /// Returns UserError status if the date is invalid.
-/// Runs the aggregation fuzzer.
 /// @param year Year, can be negative e.g: 1996, -2000
 /// @param month Month of year, e.g: 7
 /// @param weekOfMonth Week of month, 1 ~ 5 e.g: 2
