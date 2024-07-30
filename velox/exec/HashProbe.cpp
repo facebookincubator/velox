@@ -994,11 +994,17 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
         }
       }
     } else {
+      std::vector<vector_size_t> listColumns;
+      for (const auto& projection : tableOutputProjections_) {
+        listColumns.push_back(projection.inputChannel);
+      }
       numOut = table_->listJoinResults(
+          listColumns,
           results_,
           joinIncludesMissesFromLeft(joinType_),
           mapping,
-          folly::Range(outputTableRows_.data(), outputTableRows_.size()));
+          folly::Range(outputTableRows_.data(), outputTableRows_.size()),
+          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
     }
 
     // We are done processing the input batch if there are no more joined rows
@@ -1698,7 +1704,7 @@ void HashProbe::spillOutput(const std::vector<HashProbe*>& operators) {
     }
   }
 
-  auto syncGuard = folly::makeGuard([&]() {
+  SCOPE_EXIT {
     for (auto& spillTask : spillTasks) {
       // We consume the result for the pending tasks. This is a cleanup in the
       // guard and must not throw. The first error is already captured before
@@ -1708,7 +1714,7 @@ void HashProbe::spillOutput(const std::vector<HashProbe*>& operators) {
       } catch (const std::exception&) {
       }
     }
-  });
+  };
 
   for (auto& spillTask : spillTasks) {
     const auto result = spillTask->move();
