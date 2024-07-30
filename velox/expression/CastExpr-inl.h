@@ -575,10 +575,9 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
   if (StringView::isInline(rowSize)) {
     char inlined[StringView::kInlineSize];
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-      flatResult->setNoCopy(
-          row,
-          DecimalUtil::convertToStringView<FromNativeType>(
-              simpleInput->valueAt(row), scale, rowSize, inlined));
+      auto actualSize = DecimalUtil::castToString<FromNativeType>(
+          simpleInput->valueAt(row), scale, rowSize, inlined);
+      flatResult->setNoCopy(row, StringView(inlined, actualSize));
     });
     return result;
   }
@@ -588,13 +587,13 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
   char* rawBuffer = buffer->asMutable<char>() + buffer->size();
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    auto stringView = DecimalUtil::convertToStringView<FromNativeType>(
+    auto actualSize = DecimalUtil::castToString<FromNativeType>(
         simpleInput->valueAt(row), scale, rowSize, rawBuffer);
-    flatResult->setNoCopy(row, stringView);
-    if (!stringView.isInline()) {
+    flatResult->setNoCopy(row, StringView(rawBuffer, actualSize));
+    if (!StringView::isInline(actualSize)) {
       // If string view is inline, corresponding bytes on the raw string buffer
       // are not needed.
-      rawBuffer += stringView.size();
+      rawBuffer += actualSize;
     }
   });
   // Update the exact buffer size.
