@@ -27,13 +27,13 @@ Multiplication
 
 Division
 --------
-When config ``spark.decimal_operations.allow_precision_loss`` is set to true as default.
+When config ``SparkRegistrationConfig.allowPrecisionLoss`` is set to true as default.
 ::
 
     p = p1 - s1 + s2 + max(6, s1 + p2 + 1)
     s = max(6, s1 + p2 + 1)
 
-When config ``spark.decimal_operations.allow_precision_loss`` is set to false.
+When config ``SparkRegistrationConfig.allowPrecisionLoss`` is set to false.
 ::
 
     intDig = min(38, p1 - s1 + s2);
