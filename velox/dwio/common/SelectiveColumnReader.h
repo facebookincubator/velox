@@ -151,10 +151,9 @@ class SelectiveColumnReader {
   /**
    * Read the next group of values into a RowVector.
    * @param numValues the number of values to read
-   * @param vector to read into
+   * @param result vector to read into
    */
-  virtual void
-  next(uint64_t /*numValues*/, VectorPtr& /*result*/, const Mutation*) {
+  virtual void next(uint64_t numValues, VectorPtr& result, const Mutation*) {
     VELOX_UNSUPPORTED("next() is only defined in SelectiveStructColumnReader");
   }
 
