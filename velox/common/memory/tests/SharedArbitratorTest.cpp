@@ -574,7 +574,9 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
   }
 }
 
-DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToAggregation) {
+DEBUG_ONLY_TEST_P(
+    SharedArbitrationTestWithThreadingModes,
+    reclaimToAggregation) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -678,7 +680,9 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToAggregation)
   }
 }
 
-DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToJoinBuilder) {
+DEBUG_ONLY_TEST_P(
+    SharedArbitrationTestWithThreadingModes,
+    reclaimToJoinBuilder) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
