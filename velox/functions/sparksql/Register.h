@@ -16,8 +16,13 @@
 #pragma once
 
 #include <string>
+#include "RegistrationConfig.h"
 
 namespace facebook::velox::functions::sparksql {
+
+void registerFunctions(
+    const std::string& prefix,
+    const SparkRegistrationConfig& config);
 
 void registerFunctions(const std::string& prefix);
 

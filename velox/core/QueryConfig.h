@@ -304,15 +304,6 @@ class QueryConfig {
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
-  /// When true, establishing the result type of an arithmetic operation
-  /// according to Hive behavior and SQL ANSI 2011 specification, i.e.
-  /// rounding the decimal part of the result if an exact representation is not
-  /// possible. Otherwise, NULL is returned when the actual result cannot be
-  /// represented with the calculated decimal type. Now we support add,
-  /// subtract, multiply and divide operations.
-  static constexpr const char* kSparkDecimalOperationsAllowPrecisionLoss =
-      "spark.decimal_operations.allow_precision_loss";
-
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -640,10 +631,6 @@ class QueryConfig {
   int64_t sparkBloomFilterNumBits() const {
     constexpr int64_t kDefault = 8'388'608L;
     return get<int64_t>(kSparkBloomFilterNumBits, kDefault);
-  }
-
-  bool sparkDecimalOperationsAllowPrecisionLoss() const {
-    return get<bool>(kSparkDecimalOperationsAllowPrecisionLoss, true);
   }
 
   // Spark kMaxNumBits is 67'108'864, but velox has memory limit sizeClassSizes

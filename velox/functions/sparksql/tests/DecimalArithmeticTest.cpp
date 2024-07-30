@@ -16,6 +16,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/sparksql/DecimalFunctions.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -64,13 +65,6 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       }
     }
     return makeNullableFlatVector<int128_t>(numbers, type);
-  }
-
-  void setDecimalOperationsAllowPrecisionLoss(bool allowPrecisionLoss) {
-    queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kSparkDecimalOperationsAllowPrecisionLoss,
-         std::to_string(allowPrecisionLoss)},
-    });
   }
 };
 
@@ -525,10 +519,13 @@ TEST_F(DecimalArithmeticTest, decimalDivTest) {
 }
 
 TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
-  setDecimalOperationsAllowPrecisionLoss(false);
+  registerDecimalAdd("decimal_", false);
+  registerDecimalSubtract("decimal_", false);
+  registerDecimalMultiply("decimal_", false);
+  registerDecimalDivide("decimal_", false);
 
   testDecimalExpr(
-      "add",
+      "decimal_add",
       makeFlatVector(
           std::vector<int128_t>{21232100, 29998888, 42345678, 42135632},
           DECIMAL(38, 7)),
@@ -539,7 +536,7 @@ TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
 
   // Overflow when scaling up the whole part.
   testDecimalExpr(
-      "add",
+      "decimal_add",
       makeNullableLongDecimalVector(
           {"null", "null", "null", "null"}, DECIMAL(38, 7)),
       {makeNullableLongDecimalVector(
@@ -553,7 +550,7 @@ TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
            DECIMAL(38, 7))});
 
   testDecimalExpr(
-      "subtract",
+      "decimal_subtract",
       makeFlatVector(
           std::vector<int128_t>{1232100, -10001112, -17654322, -37864368},
           DECIMAL(38, 7)),
@@ -562,32 +559,23 @@ TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
            DECIMAL(38, 7)),
        makeFlatVector(std::vector<int64_t>{1, 2, 3, 4}, DECIMAL(10, 0))});
 
+  registerDecimalMultiply("", false);
   testDecimalExpr(
-      "multiply",
+      "decimal_multiply",
       makeConstant<int128_t>(60501, 1, DECIMAL(38, 10)),
       {makeConstant<int128_t>(201, 1, DECIMAL(20, 5)),
        makeConstant<int128_t>(301, 1, DECIMAL(20, 5))});
 
   // diff > 0
   testDecimalExpr(
-      "divide",
+      "decimal_divide",
       makeConstant<int128_t>(
           HugeInt::parse("5" + std::string(18, '0')), 1, DECIMAL(38, 18)),
       {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),
        makeConstant<int64_t>(1000, 1, DECIMAL(17, 3))});
   // diff < 0
   testDecimalExpr(
-      "divide",
-      makeConstant<int128_t>(
-          HugeInt::parse("5" + std::string(10, '0')), 1, DECIMAL(31, 10)),
-      {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),
-       makeConstant<int64_t>(1000, 1, DECIMAL(7, 3))});
-}
-
-TEST_F(DecimalArithmeticTest, tmp) {
-  setDecimalOperationsAllowPrecisionLoss(false);
-  testDecimalExpr(
-      "divide",
+      "decimal_divide",
       makeConstant<int128_t>(
           HugeInt::parse("5" + std::string(10, '0')), 1, DECIMAL(31, 10)),
       {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),

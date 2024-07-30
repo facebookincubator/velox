@@ -16,10 +16,15 @@
 #pragma once
 
 #include <string>
-#include "RegistrationConfig.h"
 
 namespace facebook::velox::functions::sparksql {
-void registerArithmeticFunctions(
-    const std::string& prefix,
-    const SparkRegistrationConfig& config);
+
+void registerDecimalAdd(const std::string& prefix, bool allowPrecisionLoss);
+
+void registerDecimalSubtract(const std::string& prefix, bool allowPrecisionLoss);
+
+void registerDecimalMultiply(const std::string& prefix, bool allowPrecisionLoss);
+
+void registerDecimalDivide(const std::string& prefix, bool allowPrecisionLoss);
+
 } // namespace facebook::velox::functions::sparksql
