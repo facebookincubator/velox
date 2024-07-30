@@ -24,6 +24,7 @@
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
 namespace facebook::velox::parquet {
+
 /// Metadata and options for reading Parquet.
 class ReaderBase {
  public:
@@ -275,10 +276,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     VELOX_CHECK(!requestedType || requestedType->isRow());
 
     std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> children;
+
     auto curSchemaIdx = schemaIdx;
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       ++schemaIdx;
-      auto childName = schema[schemaIdx].name;
+      auto& childName = schema[schemaIdx].name;
       auto childRequestedType =
           requestedType ? requestedType->asRow().findChild(childName) : nullptr;
       auto child = getParquetColumnInfo(
@@ -673,6 +675,7 @@ TypePtr ReaderBase::convertType(
         } else {
           return VARBINARY();
         }
+
       default:
         VELOX_FAIL(
             "Unknown Parquet SchemaElement type: {}", schemaElement.type);
