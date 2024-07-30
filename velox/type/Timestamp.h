@@ -26,8 +26,8 @@
 
 namespace facebook::velox {
 
-namespace date {
-class time_zone;
+namespace tz {
+class TimeZone;
 }
 
 enum class TimestampPrecision : int8_t {
@@ -70,7 +70,7 @@ struct TimestampToStringOptions {
 
   Mode mode = Mode::kFull;
 
-  const date::time_zone* timeZone = nullptr;
+  const tz::TimeZone* timeZone = nullptr;
 };
 
 /// Returns the max length of a converted string from timestamp.
@@ -195,12 +195,25 @@ struct Timestamp {
     }
   }
 
-  /// Due to the limit of std::chrono, throws if timestamp is outside of
+  /// Exports the current timestamp as a std::chrono::time_point of millisecond
+  /// precision. Note that the conversion may overflow since the internal
+  /// `seconds_` value will need to be multiplied by 1000.
+  ///
+  /// If `allowOverflow` is true, integer overflow is allowed in converting
+  /// to milliseconds.
+  ///
+  /// Due to the limit of velox/external/date, throws if timestamp is outside of
   /// [-32767-01-01, 32767-12-31] range.
-  /// If allowOverflow is true, integer overflow is allowed in converting
-  /// timestamp to milliseconds.
   std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-  toTimePoint(bool allowOverflow = false) const;
+  toTimePointMs(bool allowOverflow = false) const;
+
+  /// Exports the current timestamp as a std::chrono::time_point of second
+  /// precision.
+  ///
+  /// Due to the limit of velox/external/date, throws if timestamp is outside of
+  /// [-32767-01-01, 32767-12-31] range.
+  std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>
+  toTimePointSec() const;
 
   static Timestamp fromMillis(int64_t millis) {
     if (millis >= 0 || millis % 1'000 == 0) {
@@ -299,6 +312,20 @@ struct Timestamp {
   /// successful.
   static int64_t calendarUtcToEpoch(const std::tm& tm);
 
+  /// Truncates a Timestamp value to the specified precision.
+  static Timestamp truncate(Timestamp ts, TimestampPrecision precision) {
+    switch (precision) {
+      case TimestampPrecision::kMilliseconds:
+        return Timestamp::fromMillis(ts.toMillis());
+      case TimestampPrecision::kMicroseconds:
+        return Timestamp::fromMicros(ts.toMicros());
+      case TimestampPrecision::kNanoseconds:
+        return ts;
+      default:
+        VELOX_UNREACHABLE();
+    }
+  }
+
   /// Converts a std::tm to a time/date/timestamp string in ISO 8601 format
   /// according to TimestampToStringOptions.
   /// @param startPosition the start position of pre-allocated memory to write
@@ -319,29 +346,29 @@ struct Timestamp {
       char* const startPosition);
 
   // Assuming the timestamp represents a time at zone, converts it to the GMT
-  // time at the same moment.
-  // Example: Timestamp ts{0, 0};
-  // ts.Timezone("America/Los_Angeles");
-  // ts.toString() returns January 1, 1970 08:00:00
-  void toGMT(const date::time_zone& zone);
+  // time at the same moment. For example:
+  //
+  //  Timestamp ts{0, 0};
+  //  ts.Timezone("America/Los_Angeles");
+  //  ts.toString(); // returns January 1, 1970 08:00:00
+  void toGMT(const tz::TimeZone& zone);
 
   // Same as above, but accepts PrestoDB time zone ID.
   void toGMT(int16_t tzID);
 
   /// Assuming the timestamp represents a GMT time, converts it to the time at
-  /// the same moment at zone.
-  /// @param allowOverflow If true, integer overflow is allowed when converting
-  /// timestamp to TimePoint. Otherwise, user exception is thrown for overflow.
-  /// Example: Timestamp ts{0, 0};
-  /// ts.Timezone("America/Los_Angeles");
-  /// ts.toString() returns December 31, 1969 16:00:00
-  void toTimezone(const date::time_zone& zone, bool allowOverflow = false);
+  /// the same moment at zone. For example:
+  ///
+  ///  Timestamp ts{0, 0};
+  ///  ts.Timezone("America/Los_Angeles");
+  ///  ts.toString(); // returns December 31, 1969 16:00:00
+  void toTimezone(const tz::TimeZone& zone);
 
   // Same as above, but accepts PrestoDB time zone ID.
   void toTimezone(int16_t tzID);
 
   /// A default time zone that is same across the process.
-  static const date::time_zone& defaultTimezone();
+  static const tz::TimeZone& defaultTimezone();
 
   bool operator==(const Timestamp& b) const {
     return seconds_ == b.seconds_ && nanos_ == b.nanos_;

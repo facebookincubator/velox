@@ -82,15 +82,19 @@ function get_cxx_flags {
    if [ "$OS" = "Darwin" ]; then
      if [ "$MACHINE" = "arm64" ]; then
        CPU_ARCH="arm64"
-     else
-       CPU_ARCH="avx"
+     else # x86_64
+       local CPU_CAPABILITIES=$(sysctl -a | grep machdep.cpu.features | awk '{print tolower($0)}')
+       if [[ $CPU_CAPABILITIES =~ "avx" ]]; then
+         CPU_ARCH="avx"
+       else
+         CPU_ARCH="sse"
+       fi
      fi
    elif [ "$OS" = "Linux" ]; then
      if [ "$MACHINE" = "aarch64" ]; then
-           CPU_ARCH="aarch64"
-     else
+       CPU_ARCH="aarch64"
+     else # x86_64
        local CPU_CAPABILITIES=$(cat /proc/cpuinfo | grep flags | head -n 1| awk '{print tolower($0)}')
-       # Even though the default is avx, we need this check since avx machines support sse as well.
        if [[ $CPU_CAPABILITIES =~ "avx" ]]; then
            CPU_ARCH="avx"
        elif [[ $CPU_CAPABILITIES =~ "sse" ]]; then
@@ -160,9 +164,16 @@ function wget_and_untar {
 }
 
 function cmake_install {
+  if [ -d "$1" ]; then
+    DIR="$1"
+    shift
+  else
+    DIR=$(pwd)
+  fi
   local NAME=$(basename "$(pwd)")
   local BINARY_DIR=_build
   SUDO="${SUDO:-""}"
+  pushd "${DIR}"
   if [ -d "${BINARY_DIR}" ] && prompt "Do you want to rebuild ${NAME}?"; then
     ${SUDO} rm -rf "${BINARY_DIR}"
   fi
@@ -182,5 +193,6 @@ function cmake_install {
   # Exit if the build fails.
   cmake --build "${BINARY_DIR}" || { echo 'build failed' ; exit 1; }
   ${SUDO} cmake --install "${BINARY_DIR}"
+  popd
 }
 

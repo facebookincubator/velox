@@ -35,7 +35,9 @@
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
+#include "velox/functions/sparksql/JsonObjectKeys.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
+#include "velox/functions/sparksql/MaskFunction.h"
 #include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/MonotonicallyIncreasingId.h"
 #include "velox/functions/sparksql/RaiseError.h"
@@ -175,6 +177,9 @@ void registerFunctions(const std::string& prefix) {
   registerSize(prefix + "size");
 
   registerRegexpReplace(prefix);
+
+  registerFunction<JsonObjectKeysFunction, Array<Varchar>, Varchar>(
+      {prefix + "json_object_keys"});
 
   // Register string functions.
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
@@ -481,6 +486,21 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<Split, Array<Varchar>, Varchar, Varchar>({prefix + "split"});
   registerFunction<Split, Array<Varchar>, Varchar, Varchar, int32_t>(
       {prefix + "split"});
+
+  registerFunction<MaskFunction, Varchar, Varchar>({prefix + "mask"});
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar>({prefix + "mask"});
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "mask"});
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "mask"});
+  registerFunction<
+      MaskFunction,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar>({prefix + "mask"});
 }
 
 } // namespace sparksql

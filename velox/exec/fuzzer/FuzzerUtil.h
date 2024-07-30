@@ -17,6 +17,8 @@
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Split.h"
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec::test {
 const std::string kHiveConnectorId = "test-hive";
@@ -65,6 +67,15 @@ std::shared_ptr<connector::ConnectorSplit> makeConnectorSplit(
 /// Create column names with the pattern '${prefix}${i}'.
 std::vector<std::string> makeNames(const std::string& prefix, size_t n);
 
+/// Create a batch consists of single all-null BIGINT column with as many rows
+/// as original input. Used when the query doesn't need to read any columns, but
+/// it needs to see a specific number of rows. This way we will be able to
+/// create a temporary test table with the necessary number of rows.
+RowVectorPtr makeNullRows(
+    const std::vector<velox::RowVectorPtr>& input,
+    const std::string& colName,
+    memory::MemoryPool* pool);
+
 /// Returns whether type is supported in TableScan. Empty Row type and Unknown
 /// type are not supported.
 bool isTableScanSupported(const TypePtr& type);
@@ -81,4 +92,30 @@ bool containsUnsupportedTypes(const TypePtr& type);
 
 // Invoked to set up memory system with arbitration.
 void setupMemory(int64_t allocatorCapacity, int64_t arbitratorCapacity);
+
+enum ReferenceQueryErrorCode {
+  kSuccess,
+  kReferenceQueryFail,
+  kReferenceQueryUnsupported
+};
+
+// Converts 'plan' into an SQL query and runs it on 'input' in the reference DB.
+// Result is returned as a MaterializedRowMultiset with the
+// ReferenceQueryErrorCode::kSuccess if successful, or an std::nullopt with a
+// ReferenceQueryErrorCode if the query fails.
+std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
+computeReferenceResults(
+    const core::PlanNodePtr& plan,
+    const std::vector<RowVectorPtr>& input,
+    ReferenceQueryRunner* referenceQueryRunner);
+
+// Similar to computeReferenceResults(), but returns the result as a
+// std::vector<RowVectorPtr>. This API throws if referenceQueryRunner doesn't
+// support returning results as a vector.
+std::pair<std::optional<std::vector<RowVectorPtr>>, ReferenceQueryErrorCode>
+computeReferenceResultsAsVector(
+    const core::PlanNodePtr& plan,
+    const std::vector<RowVectorPtr>& input,
+    ReferenceQueryRunner* referenceQueryRunner);
+
 } // namespace facebook::velox::exec::test

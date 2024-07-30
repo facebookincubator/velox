@@ -12,19 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_type_signature OBJECT TypeSignature.cpp)
+velox_add_library(velox_type_signature OBJECT TypeSignature.cpp)
 
-target_link_libraries(velox_type_signature velox_common_base)
+velox_link_libraries(velox_type_signature velox_common_base)
 
-add_library(
-  velox_expression_functions FunctionSignature.cpp SignatureBinder.cpp
-                             ReverseSignatureBinder.cpp)
+velox_add_library(velox_expression_functions FunctionSignature.cpp
+                  SignatureBinder.cpp ReverseSignatureBinder.cpp)
 
-target_link_libraries(
-  velox_expression_functions velox_common_base velox_type_calculation
-  velox_type_signature velox_signature_parser)
+velox_link_libraries(
+  velox_expression_functions
+  velox_common_base
+  velox_type_calculation
+  velox_type_signature
+  velox_signature_parser)
 
-add_library(
+velox_add_library(
   velox_expression
   BooleanMix.cpp
   CastExpr.cpp
@@ -50,13 +52,14 @@ add_library(
   TryExpr.cpp
   VectorFunction.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   velox_expression
   velox_core
   velox_vector
   velox_common_base
   velox_expression_functions
   velox_functions_util
+  velox_type_tz
   double-conversion::double-conversion
   Folly::folly)
 

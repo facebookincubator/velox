@@ -89,9 +89,8 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         : milliSeconds_(milliSeconds), timezoneId_(timezoneId) {}
 
     TimestampWithTimezone(int64_t milliSeconds, std::string_view timezoneName)
-        : TimestampWithTimezone{
-              milliSeconds,
-              util::getTimeZoneID(timezoneName)} {}
+        : TimestampWithTimezone{milliSeconds, tz::getTimeZoneID(timezoneName)} {
+    }
 
     int64_t milliSeconds_{0};
     int16_t timezoneId_{0};
@@ -196,7 +195,7 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   }
 
   VectorPtr makeTimestampWithTimeZoneVector(int64_t timestamp, const char* tz) {
-    auto tzid = util::getTimeZoneID(tz);
+    auto tzid = tz::getTimeZoneID(tz);
 
     return makeNullableFlatVector<int64_t>(
         {pack(timestamp, tzid)}, TIMESTAMP_WITH_TIME_ZONE());
@@ -335,78 +334,52 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeRountTrip) {
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
-  static const double kNan = std::numeric_limits<double>::quiet_NaN();
-
-  vector_size_t size = 37;
-
-  auto unixtimeAt = [](vector_size_t row) -> double {
-    return 1631800000.12345 + row * 11;
+  const auto fromUnixtime = [&](std::optional<double> timestamp,
+                                std::optional<std::string> timezoneName) {
+    return TimestampWithTimezone::unpack(evaluateOnce<int64_t>(
+        "from_unixtime(c0, c1)", timestamp, timezoneName));
   };
 
-  auto unixtimes = makeFlatVector<double>(size, unixtimeAt);
+  // Check null behavior.
+  EXPECT_EQ(fromUnixtime(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(fromUnixtime(std::nullopt, "UTC"), std::nullopt);
+  EXPECT_EQ(fromUnixtime(0, std::nullopt), std::nullopt);
 
-  // Constant timezone parameter.
-  {
-    auto result =
-        evaluate("from_unixtime(c0, '+01:00')", makeRowVector({unixtimes}));
+  EXPECT_EQ(
+      fromUnixtime(1631800000.12345, "-01:00"),
+      TimestampWithTimezone(1631800000123, "-01:00"));
+  EXPECT_EQ(
+      fromUnixtime(123.99, "America/Los_Angeles"),
+      TimestampWithTimezone(123990, "America/Los_Angeles"));
+  EXPECT_EQ(
+      fromUnixtime(1667721600.1, "UTC"),
+      TimestampWithTimezone(1667721600100, "UTC"));
 
-    auto expected = makeTimestampWithTimeZoneVector(
-        size,
-        [&](auto row) { return unixtimeAt(row) * 1'000; },
-        [](auto /*row*/) { return 900; });
-    assertEqualVectors(expected, result);
+  // Nan.
+  static const double kNan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_EQ(fromUnixtime(kNan, "-04:36"), TimestampWithTimezone(0, "-04:36"));
 
-    // NaN timestamp.
-    result = evaluate(
-        "from_unixtime(c0, '+01:00')",
-        makeRowVector({makeFlatVector<double>({kNan, kNan})}));
-    expected = makeTimestampWithTimeZoneVector(
-        2, [](auto /*row*/) { return 0; }, [](auto /*row*/) { return 900; });
-    assertEqualVectors(expected, result);
+  // Test some hard coded pairs of timezone names and internal ids.
+  std::vector<TimeZoneKey> timezoneIds = {900, 960, 1020, 1080, 1140};
+  std::vector<std::string> timezoneNames = {
+      "+01:00", "+02:00", "+03:00", "+04:00", "+05:00"};
+
+  for (size_t i = 0; i < timezoneIds.size(); ++i) {
+    EXPECT_EQ(
+        fromUnixtime(1'000, timezoneNames[i]),
+        TimestampWithTimezone(1'000'000, timezoneIds[i]));
   }
+}
 
-  // Variable timezone parameter.
-  {
-    std::vector<TimeZoneKey> timezoneIds = {900, 960, 1020, 1080, 1140};
-    std::vector<std::string> timezoneNames = {
-        "+01:00", "+02:00", "+03:00", "+04:00", "+05:00"};
-
-    auto timezones = makeFlatVector<StringView>(
-        size, [&](auto row) { return StringView(timezoneNames[row % 5]); });
-
-    auto result = evaluate(
-        "from_unixtime(c0, c1)", makeRowVector({unixtimes, timezones}));
-    auto expected = makeTimestampWithTimeZoneVector(
-        size,
-        [&](auto row) { return unixtimeAt(row) * 1'000; },
-        [&](auto row) { return timezoneIds[row % 5]; });
-    assertEqualVectors(expected, result);
-
-    // NaN timestamp.
-    result = evaluate(
-        "from_unixtime(c0, c1)",
-        makeRowVector({
-            makeFlatVector<double>({kNan, kNan}),
-            makeNullableFlatVector<StringView>({"+01:00", "+02:00"}),
-        }));
-    auto timezonesVector = std::vector<TimeZoneKey>{900, 960};
-    expected = makeTimestampWithTimeZoneVector(
-        timezonesVector.size(),
-        [](auto /*row*/) { return 0; },
-        [&](auto row) { return timezonesVector[row]; });
-    assertEqualVectors(expected, result);
-  }
-
-  auto fromOffset = [&](double epoch, int64_t hours, int64_t minutes) {
+TEST_F(DateTimeFunctionsTest, fromUnixtimeTzOffset) {
+  auto fromOffset = [&](std::optional<double> epoch,
+                        std::optional<int64_t> hours,
+                        std::optional<int64_t> minutes) {
     auto result = evaluateOnce<int64_t>(
-        "from_unixtime(c0, c1, c2)",
-        std::optional(epoch),
-        std::optional(hours),
-        std::optional(minutes));
+        "from_unixtime(c0, c1, c2)", epoch, hours, minutes);
 
     auto otherResult = evaluateOnce<int64_t>(
-        fmt::format("from_unixtime(c0, {}, {})", hours, minutes),
-        std::optional(epoch));
+        fmt::format("from_unixtime(c0, {}, {})", *hours, *minutes), epoch);
 
     VELOX_CHECK_EQ(result.value(), otherResult.value());
     return TimestampWithTimezone::unpack(result.value());
@@ -3659,7 +3632,7 @@ TEST_F(DateTimeFunctionsTest, fromIso8601Timestamp) {
   for (const auto& timezone : timezones) {
     setQueryTimeZone(timezone.name);
 
-    const auto timezoneId = util::getTimeZoneID(timezone.name);
+    const auto timezoneId = tz::getTimeZoneID(timezone.name);
 
     EXPECT_EQ(
         TimestampWithTimezone(
@@ -4453,24 +4426,32 @@ TEST_F(DateTimeFunctionsTest, toISO8601Timestamp) {
     return evaluateOnce<std::string>(
         "to_iso8601(c0)", std::make_optional(parseTimestamp(timestamp)));
   };
+  disableAdjustTimestampToTimezone();
+  EXPECT_EQ("2024-11-01T10:00:00.000+00:00", toIso("2024-11-01 10:00"));
+  EXPECT_EQ("2024-11-04T10:00:00.000+00:00", toIso("2024-11-04 10:00"));
+  EXPECT_EQ("2024-11-04T15:05:34.100+00:00", toIso("2024-11-04 15:05:34.1"));
+  EXPECT_EQ("2024-11-04T15:05:34.123+00:00", toIso("2024-11-04 15:05:34.123"));
+  EXPECT_EQ("0022-11-01T10:00:00.000+00:00", toIso("22-11-01 10:00"));
+
+  setQueryTimeZone("America/Los_Angeles");
+  EXPECT_EQ("2024-11-01T03:00:00.000-07:00", toIso("2024-11-01 10:00"));
 
   setQueryTimeZone("America/New_York");
-
-  EXPECT_EQ("2024-11-01T10:00:00.000-04:00", toIso("2024-11-01 10:00"));
-  EXPECT_EQ("2024-11-04T10:00:00.000-05:00", toIso("2024-11-04 10:00"));
-  EXPECT_EQ("2024-11-04T15:05:34.100-05:00", toIso("2024-11-04 15:05:34.1"));
-  EXPECT_EQ("2024-11-04T15:05:34.123-05:00", toIso("2024-11-04 15:05:34.123"));
-  EXPECT_EQ("0022-11-01T10:00:00.000-04:56:02", toIso("22-11-01 10:00"));
+  EXPECT_EQ("2024-11-01T06:00:00.000-04:00", toIso("2024-11-01 10:00"));
+  EXPECT_EQ("2024-11-04T05:00:00.000-05:00", toIso("2024-11-04 10:00"));
+  EXPECT_EQ("2024-11-04T10:05:34.100-05:00", toIso("2024-11-04 15:05:34.1"));
+  EXPECT_EQ("2024-11-04T10:05:34.123-05:00", toIso("2024-11-04 15:05:34.123"));
+  EXPECT_EQ("0022-11-01T05:03:58.000-04:56:02", toIso("22-11-01 10:00"));
 
   setQueryTimeZone("Asia/Kathmandu");
-
-  EXPECT_EQ("2024-11-01T10:00:00.000+05:45", toIso("2024-11-01 10:00"));
-  EXPECT_EQ("0022-11-01T10:00:00.000+05:41:16", toIso("22-11-01 10:00"));
+  EXPECT_EQ("2024-11-01T15:45:00.000+05:45", toIso("2024-11-01 10:00"));
+  EXPECT_EQ("0022-11-01T15:41:16.000+05:41:16", toIso("22-11-01 10:00"));
+  EXPECT_EQ("0022-11-01T15:41:16.000+05:41:16", toIso("22-11-01 10:00"));
 }
 
 TEST_F(DateTimeFunctionsTest, toISO8601TimestampWithTimezone) {
   const auto toIso = [&](const char* timestamp, const char* timezone) {
-    const auto tzId = util::getTimeZoneID(timezone);
+    const auto tzId = tz::getTimeZoneID(timezone);
     auto ts = parseTimestamp(timestamp);
     ts.toGMT(tzId);
 
@@ -4510,31 +4491,31 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
 
   EXPECT_EQ(
       at_timezone(
-          pack(1500101514, util::getTimeZoneID("Asia/Kathmandu")),
+          pack(1500101514, tz::getTimeZoneID("Asia/Kathmandu")),
           "America/Boise"),
-      pack(1500101514, util::getTimeZoneID("America/Boise")));
+      pack(1500101514, tz::getTimeZoneID("America/Boise")));
 
   EXPECT_EQ(
       at_timezone(
-          pack(1500101514, util::getTimeZoneID("America/Boise")),
+          pack(1500101514, tz::getTimeZoneID("America/Boise")),
           "Europe/London"),
-      pack(1500101514, util::getTimeZoneID("Europe/London")));
+      pack(1500101514, tz::getTimeZoneID("Europe/London")));
 
   EXPECT_EQ(
       at_timezone(
-          pack(1500321297, util::getTimeZoneID("Canada/Yukon")),
+          pack(1500321297, tz::getTimeZoneID("Canada/Yukon")),
           "Australia/Melbourne"),
-      pack(1500321297, util::getTimeZoneID("Australia/Melbourne")));
+      pack(1500321297, tz::getTimeZoneID("Australia/Melbourne")));
 
   EXPECT_EQ(
       at_timezone(
-          pack(1500321297, util::getTimeZoneID("Atlantic/Bermuda")),
+          pack(1500321297, tz::getTimeZoneID("Atlantic/Bermuda")),
           "Pacific/Fiji"),
-      pack(1500321297, util::getTimeZoneID("Pacific/Fiji")));
+      pack(1500321297, tz::getTimeZoneID("Pacific/Fiji")));
 
   EXPECT_EQ(
       at_timezone(
-          pack(1500321297, util::getTimeZoneID("Atlantic/Bermuda")),
+          pack(1500321297, tz::getTimeZoneID("Atlantic/Bermuda")),
           std::nullopt),
       std::nullopt);
 

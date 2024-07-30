@@ -32,25 +32,27 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - { name: "License Header", 
+          - { name: "License Header",
               command: "header-fix",
               message: "Found missing License Header(s)",
             }
           - { name: "Code Format",
               command: "format-fix",
-              message: "Found format issues",
+              message: "Found format issues"
             }
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
+      - run: |
+          apt -y install python3-pip
+          pip3 install --break-system-packages pyyaml
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
         # it doesn't work
-        run: git config --global --add safe.directory /__w/velox/velox
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
-      - name: Check ${{ matrix.config.name }} 
+      - name: Check ${{ matrix.config.name }}
         run: |
           make ${{ matrix.config.command }}
 

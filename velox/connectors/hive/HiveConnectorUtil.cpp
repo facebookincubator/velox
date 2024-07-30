@@ -27,9 +27,9 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive {
-
 namespace {
 
 struct SubfieldSpec {
@@ -91,7 +91,7 @@ std::unique_ptr<common::Filter> makeFloatingPointMapKeyFilter(
   if (filters.size() == 1) {
     return std::move(filters[0]);
   }
-  return std::make_unique<common::MultiRange>(std::move(filters), false, false);
+  return std::make_unique<common::MultiRange>(std::move(filters), false);
 }
 
 // Recursively add subfields to scan spec.
@@ -545,7 +545,7 @@ void configureReaderOptions(
       hiveConfig->cacheNoRetention(sessionProperties));
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
   if (!sessionTzName.empty()) {
-    const auto timezone = date::locate_zone(sessionTzName);
+    const auto timezone = tz::locateZone(sessionTzName);
     readerOptions.setSessionTimezone(timezone);
   }
 
