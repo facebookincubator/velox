@@ -113,7 +113,7 @@ Status daysSinceEpochFromWeekDate(
 /// @param month Month of year, e.g: 7
 /// @param weekOfMonth Week of month, 1 ~ 5 e.g: 2
 /// @param dayOfWeek Day of week, 1 ~ 7 e.g: 4
-/// @param out Reference days since epoch
+/// @param out Reference for days since epoch
 Status daysSinceEpochFromWeekOfMonthDate(
     int32_t year,
     int32_t month,
