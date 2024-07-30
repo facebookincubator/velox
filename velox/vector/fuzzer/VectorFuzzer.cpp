@@ -90,11 +90,27 @@ int64_t rand(FuzzerGenerator& rng) {
 
 template <>
 double rand(FuzzerGenerator& rng) {
+  if (coinToss(rng, 0.1)) {
+    return std::nan("");
+  }
+
+  if (coinToss(rng, 0.1)) {
+    return std::numeric_limits<double>::infinity();
+  }
+
   return boost::random::uniform_01<double>()(rng);
 }
 
 template <>
 float rand(FuzzerGenerator& rng) {
+  if (coinToss(rng, 0.1)) {
+    return std::nanf("");
+  }
+
+  if (coinToss(rng, 0.1)) {
+    return std::numeric_limits<float>::infinity();
+  }
+
   return boost::random::uniform_01<float>()(rng);
 }
 
