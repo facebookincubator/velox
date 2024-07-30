@@ -369,7 +369,7 @@ class QueryConfig {
   // When EXCEPTION, the query fails if duplicated map keys are detected. When
   // LAST_WIN, the map key that is inserted at last takes precedence.
   static constexpr const char* kSparkMapKeyDedupPolicy =
-      "spark.mapKeyDedupPolicy";
+      "spark.sql.mapKeyDedupPolicy";
 
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
@@ -737,9 +737,7 @@ class QueryConfig {
 
   std::string sparkMapKeyDedupPolicy() const {
     std::string res = get<std::string>(kSparkMapKeyDedupPolicy, "EXCEPTION");
-    for (auto& c : res) {
-      c = std::toupper(static_cast<unsigned char>(c));
-    }
+    std::transform(res.begin(), res.end(), res.begin(), ::toupper);
     return res;
   }
 
