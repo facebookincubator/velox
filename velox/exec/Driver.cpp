@@ -365,6 +365,12 @@ RowVectorPtr Driver::next(ContinueFuture* future) {
   RowVectorPtr result;
   auto stop = runInternal(self, blockingState, result);
 
+  if (blockingState) {
+    VELOX_DCHECK_NULL(result)
+    *future = blockingState->future();
+    return nullptr;
+  }
+
   if (stop == StopReason::kPause) {
     VELOX_DCHECK_NULL(blockingState)
     VELOX_DCHECK_NULL(result)

@@ -648,7 +648,7 @@ RowVectorPtr Task::next(ContinueFuture* future) {
 
       ++runnableDrivers;
 
-      ContinueFuture driverFuture;
+      ContinueFuture driverFuture = ContinueFuture::makeEmpty();
       auto result = drivers_[i]->next(&driverFuture);
       if (result) {
         return result;
