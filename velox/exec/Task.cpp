@@ -2757,7 +2757,7 @@ bool Task::pauseRequested(ContinueFuture* future) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   if (!pauseRequested_) {
     VELOX_CHECK(resumePromises_.empty())
-    *future = ContinueFuture ::makeEmpty();
+    *future = ContinueFuture::makeEmpty();
     return false;
   }
   resumePromises_.emplace_back("Task::isPaused");
