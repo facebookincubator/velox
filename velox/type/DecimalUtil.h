@@ -313,37 +313,28 @@ class DecimalUtil {
   /// Returns the max required size to convert the decimal of this precision and
   /// scale to varchar. A varchar's size is estimated with unscaled value
   /// digits, dot, leading zero, and possible minus sign.
-  static int32_t maxStringViewSize(int precision, int scale) {
-    int32_t rowSize = precision + 1; // Number and symbol.
-    if (scale > 0) {
-      ++rowSize; // A dot.
-    }
-    if (precision == scale) {
-      ++rowSize; // Leading zero.
-    }
-    return rowSize;
-  }
+  static int32_t maxStringViewSize(int precision, int scale);
 
-  /// @brief Convert the unscaled value of a decimal to varchar and write to raw
+  /// @brief Convert the unscaled value of a decimal to string and write to raw
   /// string buffer from start position.
   /// @tparam T The type of input value.
   /// @param unscaledValue The input unscaled value.
   /// @param scale The scale of decimal.
-  /// @param maxVarcharSize The estimated max size of a varchar.
+  /// @param maxSize The estimated max size of string.
   /// @param startPosition The start position to write from.
-  /// @return A string view.
+  /// @return The actual size of the string.
   template <typename T>
-  static StringView convertToStringView(
+  static size_t castToString(
       T unscaledValue,
       int32_t scale,
-      int32_t maxVarcharSize,
+      int32_t maxSize,
       char* const startPosition) {
     char* writePosition = startPosition;
     if (unscaledValue == 0) {
       *writePosition++ = '0';
       if (scale > 0) {
         *writePosition++ = '.';
-        // Append leading zeros.
+        // Append trailing zeros.
         std::memset(writePosition, '0', scale);
         writePosition += scale;
       }
@@ -354,7 +345,7 @@ class DecimalUtil {
       }
       auto [position, errorCode] = std::to_chars(
           writePosition,
-          writePosition + maxVarcharSize,
+          writePosition + maxSize,
           unscaledValue / DecimalUtil::kPowersOfTen[scale]);
       VELOX_DCHECK_EQ(
           errorCode,
@@ -371,8 +362,8 @@ class DecimalUtil {
         std::memset(writePosition, '0', numLeadingZeros);
         writePosition += numLeadingZeros;
         // Append remaining fraction digits.
-        auto result = std::to_chars(
-            writePosition, writePosition + maxVarcharSize, fraction);
+        auto result =
+            std::to_chars(writePosition, writePosition + maxSize, fraction);
         VELOX_DCHECK_EQ(
             result.ec,
             std::errc(),
@@ -381,8 +372,9 @@ class DecimalUtil {
         writePosition = result.ptr;
       }
     }
-    return StringView(startPosition, writePosition - startPosition);
+    return writePosition - startPosition;
   }
+
   /*
    * sum up and return overflow/underflow.
    */
