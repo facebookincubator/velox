@@ -355,28 +355,23 @@ void Driver::pushdownFilters(int operatorIndex) {
   op->clearDynamicFilters();
 }
 
-RowVectorPtr Driver::next(std::shared_ptr<BlockingState>& blockingState) {
+RowVectorPtr Driver::next(ContinueFuture* future) {
+  enqueueInternal();
   auto self = shared_from_this();
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(
       self->driverCtx()->threadDebugInfo);
   ScopedDriverThreadContext scopedDriverThreadContext(*self->driverCtx());
+  std::shared_ptr<BlockingState> blockingState;
   RowVectorPtr result;
+  auto stop = runInternal(self, blockingState, result);
 
-  StopReason stop;
-
-  // Spin wait when task is paused.
-  while (true) {
-    if (task()->pauseRequested()) {
-      continue;
-    }
-    enqueueInternal();
-    stop = runInternal(self, blockingState, result);
-    if (stop == StopReason::kPause) {
-      VELOX_DCHECK_NULL(blockingState)
-      VELOX_DCHECK_NULL(result)
-      continue;
-    }
-    break;
+  if (stop == StopReason::kPause) {
+    VELOX_DCHECK_NULL(blockingState)
+    VELOX_DCHECK_NULL(result)
+    ContinueFuture resumeFuture;
+    task()->pauseRequested(&resumeFuture);
+    *future = std::move(resumeFuture);
+    return nullptr;
   }
 
   // We get kBlock if 'result' was produced; kAtEnd if pipeline has finished
