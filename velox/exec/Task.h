@@ -619,7 +619,7 @@ class Task : public std::enable_shared_from_this<Task> {
   int32_t yieldIfDue(uint64_t startTimeMicros);
 
   /// Check if the task is requested to pause. If true, future will be set once
-  /// th task is resumed if it's not nullptr.
+  /// the task is resumed if it's not nullptr.
   bool pauseRequested(ContinueFuture* future = nullptr);
 
   std::timed_mutex& mutex() {
