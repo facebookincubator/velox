@@ -109,6 +109,15 @@ Status daysSinceEpochFromWeekDate(
 
 /// Computes the (signed) number of days since unix epoch (1970-01-01).
 /// Returns UserError status if the date is invalid.
+Status daysSinceEpochFromWeekOfMonthDate(
+    int32_t year,
+    int32_t month,
+    int32_t weekOfMonth,
+    int32_t dayOfWeek,
+    int64_t& out);
+
+/// Computes the (signed) number of days since unix epoch (1970-01-01).
+/// Returns UserError status if the date is invalid.
 Status
 daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear, int64_t& out);
 

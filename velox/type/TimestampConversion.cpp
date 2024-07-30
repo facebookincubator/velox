@@ -144,6 +144,26 @@ bool isValidWeekDate(int32_t weekYear, int32_t weekOfYear, int32_t dayOfWeek) {
   return true;
 }
 
+bool isValidWeekOfMonthDate(
+    int32_t year,
+    int32_t month,
+    int32_t weekOfMonth,
+    int32_t dayOfWeek) {
+  if (dayOfWeek < 1 || dayOfWeek > 7) {
+    return false;
+  }
+  if (weekOfMonth < 1 || weekOfMonth > 5) {
+    return false;
+  }
+  if (month < 1 || month > 12) {
+    return false;
+  }
+  if (year < kMinYear || year > kMaxYear) {
+    return false;
+  }
+  return true;
+}
+
 inline bool validDate(int64_t daysSinceEpoch) {
   return daysSinceEpoch >= std::numeric_limits<int32_t>::min() &&
       daysSinceEpoch <= std::numeric_limits<int32_t>::max();
@@ -590,6 +610,26 @@ Status daysSinceEpochFromWeekDate(
 
   out = daysSinceEpochOfJanFourth - (firstDayOfWeekYear - 1) +
       7 * (weekOfYear - 1) + dayOfWeek - 1;
+  return Status::OK();
+}
+
+Status daysSinceEpochFromWeekOfMonthDate(
+    int32_t year,
+    int32_t month,
+    int32_t weekOfMonth,
+    int32_t dayOfWeek,
+    int64_t& out) {
+  if (!isValidWeekOfMonthDate(year, month, weekOfMonth, dayOfWeek)) {
+    return Status::UserError(
+        "Date out of range: {}-{}-{}-{}", year, month, weekOfMonth, dayOfWeek);
+  }
+  int64_t daysSinceEpochOfFirstDayOfMonth;
+  VELOX_RETURN_NOT_OK(
+      daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth));
+  int32_t firstDayOfWeek =
+      extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
+  out = daysSinceEpochOfFirstDayOfMonth - (firstDayOfWeek - 1) +
+        7 * (weekOfMonth - 1) + dayOfWeek - 1;
   return Status::OK();
 }
 
