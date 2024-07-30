@@ -629,7 +629,7 @@ Status daysSinceEpochFromWeekOfMonthDate(
   int32_t firstDayOfWeek =
       extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
   out = daysSinceEpochOfFirstDayOfMonth - (firstDayOfWeek - 1) +
-        7 * (weekOfMonth - 1) + dayOfWeek - 1;
+      7 * (weekOfMonth - 1) + dayOfWeek - 1;
   return Status::OK();
 }
 
