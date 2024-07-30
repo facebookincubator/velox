@@ -108,10 +108,10 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
   auto testDaysSinceEpochFromWeekOfMonthDate =
       [](int32_t year, int32_t month, int32_t weekOfMonth, int32_t dayOfWeek) {
         int64_t daysSinceEpoch;
-        auto status = util::daysSinceEpochFromWeekOfMonthDate(
-            year, month, weekOfMonth, dayOfWeek, daysSinceEpoch);
-        EXPECT_TRUE(status.ok());
-        return daysSinceEpoch;
+        auto expected = util::daysSinceEpochFromWeekOfMonthDate(
+            year, month, weekOfMonth, dayOfWeek);
+        EXPECT_TRUE(!expected.hasError());
+        return expected.value();
       };
   EXPECT_EQ(4, testDaysSinceEpochFromWeekOfMonthDate(1970, 1, 2, 1));
   EXPECT_EQ(361, testDaysSinceEpochFromWeekOfMonthDate(1971, 1, 1, 1));

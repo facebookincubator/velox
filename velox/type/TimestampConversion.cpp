@@ -613,24 +613,25 @@ Status daysSinceEpochFromWeekDate(
   return Status::OK();
 }
 
-Status daysSinceEpochFromWeekOfMonthDate(
+Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
     int32_t year,
     int32_t month,
     int32_t weekOfMonth,
-    int32_t dayOfWeek,
-    int64_t& out) {
+    int32_t dayOfWeek) {
   if (!isValidWeekOfMonthDate(year, month, weekOfMonth, dayOfWeek)) {
-    return Status::UserError(
-        "Date out of range: {}-{}-{}-{}", year, month, weekOfMonth, dayOfWeek);
+    return folly::makeUnexpected(Status::UserError(
+        "Date out of range: {}-{}-{}-{}", year, month, weekOfMonth, dayOfWeek));
   }
   int64_t daysSinceEpochOfFirstDayOfMonth;
-  VELOX_RETURN_NOT_OK(
-      daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth));
+  Status status = daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth);
+  if (status.ok() == false) {
+    return folly::makeUnexpected(status);
+  }
   int32_t firstDayOfWeek =
       extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
-  out = daysSinceEpochOfFirstDayOfMonth - (firstDayOfWeek - 1) +
+  int64_t result = daysSinceEpochOfFirstDayOfMonth - (firstDayOfWeek - 1) +
       7 * (weekOfMonth - 1) + dayOfWeek - 1;
-  return Status::OK();
+  return result;
 }
 
 Status

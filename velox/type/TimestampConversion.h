@@ -113,13 +113,11 @@ Status daysSinceEpochFromWeekDate(
 /// @param month Month of year, e.g: 7
 /// @param weekOfMonth Week of month, 1 ~ 5 e.g: 2
 /// @param dayOfWeek Day of week, 1 ~ 7 e.g: 4
-/// @param out Reference for days since epoch
-Status daysSinceEpochFromWeekOfMonthDate(
+Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
     int32_t year,
     int32_t month,
     int32_t weekOfMonth,
-    int32_t dayOfWeek,
-    int64_t& out);
+    int32_t dayOfWeek);
 
 /// Computes the (signed) number of days since unix epoch (1970-01-01).
 /// Returns UserError status if the date is invalid.
