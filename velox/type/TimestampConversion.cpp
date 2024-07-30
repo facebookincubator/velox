@@ -623,7 +623,8 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
         "Date out of range: {}-{}-{}-{}", year, month, weekOfMonth, dayOfWeek));
   }
   int64_t daysSinceEpochOfFirstDayOfMonth;
-  Status status = daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth);
+  Status status =
+      daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth);
   if (status.ok() == false) {
     return folly::makeUnexpected(status);
   }
