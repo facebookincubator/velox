@@ -97,11 +97,6 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
   /// supplied before receiving new lengths.
   void skipUnreadLengths();
 
-  void filterRowGroups(
-      uint64_t rowGroupSize,
-      const dwio::common::StatsContext&,
-      dwio::common::FormatData::FilterRowGroupsResult&) const override;
-
  private:
   RepeatedLengths lengths_;
   RepeatedLengths keyLengths_;
@@ -152,11 +147,6 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
   /// end at different positions. Repeated children must use all lengths
   /// supplied before receiving new lengths.
   void skipUnreadLengths();
-
-  void filterRowGroups(
-      uint64_t rowGroupSize,
-      const dwio::common::StatsContext&,
-      dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
  private:
   RepeatedLengths lengths_;
