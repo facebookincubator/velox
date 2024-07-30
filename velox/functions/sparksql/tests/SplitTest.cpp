@@ -49,15 +49,17 @@ class SplitTest : public SparkFunctionBaseTest {
 TEST_F(SplitTest, basic) {
   auto limit = -1;
   auto delim = ",";
-  auto numRows = 3;
+  auto numRows = 4;
   auto input = std::vector<std::string>{
       {"I,he,she,they"}, // Simple
       {"one,,,four,"}, // Empty strings
+      {"a,\xED,\xA0,123"}, // Not a well-formed UTF-8 string
       {""}, // The whole string is empty
   };
   auto expected = std::vector<std::vector<std::string>>({
       {"I", "he", "she", "they"},
       {"one", "", "", "four", ""},
+      {"a", "\xED", "\xA0", "123"},
       {""},
   });
 
@@ -76,6 +78,7 @@ TEST_F(SplitTest, basic) {
   expected = {
       {"I", "he", "she,they"},
       {"one", "", ",four,"},
+      {"a", "\xED", "\xA0,123"},
       {""},
   };
   testSplit(input, delim, limit, numRows, expected);
@@ -85,6 +88,7 @@ TEST_F(SplitTest, basic) {
   expected = {
       {"I,he,she,they"},
       {"one,,,four,"},
+      {"a,\xED,\xA0,123"},
       {""},
   };
   testSplit(input, delim, limit, numRows, expected);
@@ -94,11 +98,13 @@ TEST_F(SplitTest, basic) {
   input = {
       {"синяя сливаలేదా赤いトマトలేదా黃苹果లేదాbrown pear"},
       {"зелёное небоలేదాలేదాలేదా緑の空లేదా"},
+      {"aలేదా\xEDలేదా\xA0లేదా123"},
       {""},
   };
   expected = {
       {"синяя слива", "赤いトマト", "黃苹果", "brown pear"},
       {"зелёное небо", "", "", "緑の空", ""},
+      {"a", "\xED", "\xA0", "123"},
       {""},
   };
   testSplit(input, delim, std::nullopt, numRows, expected);
@@ -110,6 +116,7 @@ TEST_F(SplitTest, basic) {
   expected = {
       {"синяя слива", "赤いトマト", "黃苹果లేదాbrown pear"},
       {"зелёное небо", "", "లేదా緑の空లేదా"},
+      {"a", "\xED", "\xA0లేదా123"},
       {""},
   };
   testSplit(input, delim, limit, numRows, expected);
@@ -117,6 +124,7 @@ TEST_F(SplitTest, basic) {
   expected = {
       {"синяя сливаలేదా赤いトマトలేదా黃苹果లేదాbrown pear"},
       {"зелёное небоలేదాలేదాలేదా緑の空లేదా"},
+      {"aలేదా\xEDలేదా\xA0లేదా123"},
       {""},
   };
   testSplit(input, delim, limit, numRows, expected);
@@ -129,15 +137,17 @@ TEST_F(SplitTest, basic) {
 TEST_F(SplitTest, emptyDelimiter) {
   auto limit = -1;
   auto delim = "";
-  auto numRows = 3;
+  auto numRows = 4;
   auto input = std::vector<std::string>{
       {"I,he,she,they"}, // Simple
       {"one,,,four,"}, // Empty strings
+      {"a\xED\xA0@123"}, // Not a well-formed UTF-8 string
       {""}, // The whole string is empty
   };
   auto expected = std::vector<std::vector<std::string>>({
       {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y"},
       {"o", "n", "e", ",", ",", ",", "f", "o", "u", "r", ","},
+      {"a", "\xED", "\xA0", "@", "1", "2", "3"},
       {""},
   });
 
@@ -156,6 +166,7 @@ TEST_F(SplitTest, emptyDelimiter) {
   expected = {
       {"I", ",", "h"},
       {"o", "n", "e"},
+      {"a", "\xED", "\xA0"},
       {""},
   };
   testSplit(input, delim, limit, numRows, expected);
@@ -165,6 +176,7 @@ TEST_F(SplitTest, emptyDelimiter) {
   expected = {
       {"I"},
       {"o"},
+      {"a"},
       {""},
   };
   testSplit(input, delim, limit, numRows, expected);
@@ -173,11 +185,13 @@ TEST_F(SplitTest, emptyDelimiter) {
   input = std::vector<std::string>{
       {"синяя赤いトマト緑の"},
       {"Hello世界🙂"},
+      {"a\xED\xA0@123"}, // Not a well-formed UTF-8 string
       {""},
   };
   expected = {
       {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の"},
       {"H", "e", "l", "l", "o", "世", "界", "🙂"},
+      {"a", "\xED", "\xA0", "@", "1", "2", "3"},
       {""},
   };
   testSplit(input, delim, std::nullopt, numRows, expected);
@@ -185,6 +199,7 @@ TEST_F(SplitTest, emptyDelimiter) {
   expected = {
       {"с", "и"},
       {"H", "e"},
+      {"a", "\xED"},
       {""},
   };
   testSplit(input, delim, 2, numRows, expected);
@@ -193,16 +208,16 @@ TEST_F(SplitTest, emptyDelimiter) {
 TEST_F(SplitTest, regexDelimiter) {
   auto delim = "\\s*[a-z]+\\s*";
   auto input = std::vector<std::string>{
-      "1a 2b 14m",
-      "1a 2b 14",
+      "1a 2b \xA0 14m",
+      "1a 2b \xA0 14",
       "",
       "a123b",
   };
   auto numRows = 4;
   auto limit = -1;
   auto expected = std::vector<std::vector<std::string>>({
-      {"1", "2", "14", ""},
-      {"1", "2", "14"},
+      {"1", "2", "\xA0 14", ""},
+      {"1", "2", "\xA0 14"},
       {""},
       {"", "123", ""},
   });
@@ -217,16 +232,16 @@ TEST_F(SplitTest, regexDelimiter) {
   // Small limit.
   limit = 3;
   expected = {
-      {"1", "2", "14m"},
-      {"1", "2", "14"},
+      {"1", "2", "\xA0 14m"},
+      {"1", "2", "\xA0 14"},
       {""},
       {"", "123", ""},
   };
   testSplit(input, delim, limit, numRows, expected);
   limit = 1;
   expected = {
-      {"1a 2b 14m"},
-      {"1a 2b 14"},
+      {"1a 2b \xA0 14m"},
+      {"1a 2b \xA0 14"},
       {""},
       {"a123b"},
   };
@@ -236,12 +251,12 @@ TEST_F(SplitTest, regexDelimiter) {
   numRows = 3;
   input = std::vector<std::string>{
       {"синяя赤いトマト緑の"},
-      {"Hello世界🙂"},
+      {"Hello世界\xED🙂"},
       {""},
   };
   expected = std::vector<std::vector<std::string>>({
       {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の", ""},
-      {"H", "e", "l", "l", "o", "世", "界", "🙂", ""},
+      {"H", "e", "l", "l", "o", "世", "界", "\xED", "🙂", ""},
       {""},
   });
 
@@ -250,7 +265,7 @@ TEST_F(SplitTest, regexDelimiter) {
   limit = 2;
   expected = {
       {"с", "иняя赤いトマト緑の"},
-      {"H", "ello世界🙂"},
+      {"H", "ello世界\xED🙂"},
       {""},
   };
   testSplit(input, delim, limit, numRows, expected);

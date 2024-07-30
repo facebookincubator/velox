@@ -82,7 +82,10 @@ struct Split {
     int32_t count = 0;
     while (pos < end && count < limit) {
       auto charLength = tryGetCharLength(start + pos, end - pos);
-      VELOX_DCHECK_GT(charLength, 0);
+      if (charLength <= 0) {
+        // invalid UTF-8 character.
+        charLength = 1;
+      }
       result.add_item().setNoCopy(StringView(start + pos, charLength));
       pos += charLength;
       count += 1;
@@ -138,7 +141,12 @@ struct Split {
       // empty tail string at last, e.g., the result array for split('abc','d|')
       // is ["a","b","c",""].
       if (size == 0) {
-        offset += tryGetCharLength(start + pos, end - pos);
+        auto charLength = tryGetCharLength(start + pos, end - pos);
+        if (charLength <= 0) {
+          // invalid UTF-8 character.
+          charLength = 1;
+        }
+        offset += charLength;
       }
       result.add_item().setNoCopy(StringView(start + pos, offset - pos));
       pos = offset + size;
