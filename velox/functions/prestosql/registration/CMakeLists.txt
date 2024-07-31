@@ -39,6 +39,10 @@ endif()
 
 target_link_libraries(velox_functions_prestosql velox_functions_prestosql_impl
                       velox_is_null_functions simdjson::simdjson)
-
+install(TARGETS velox_functions_prestosql  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 set_property(TARGET velox_functions_prestosql PROPERTY JOB_POOL_COMPILE
                                                        high_memory_pool)

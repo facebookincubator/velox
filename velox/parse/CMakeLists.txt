@@ -14,15 +14,28 @@
 add_library(velox_parse_expression Expressions.cpp)
 target_link_libraries(velox_parse_expression velox_type velox_parse_utils
                       velox_expression velox_exec)
-
+install(TARGETS velox_parse_expression  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_library(velox_parse_parser ExpressionsParser.cpp QueryPlanner.cpp)
 target_link_libraries(velox_parse_parser velox_parse_expression velox_type
                       velox_duckdb_parser)
+install(TARGETS velox_parse_parser  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 
 add_library(velox_parse_utils TypeResolver.cpp)
 target_link_libraries(velox_parse_utils velox_buffer velox_type velox_vector
                       velox_function_registry)
-
+install(TARGETS velox_parse_utils  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

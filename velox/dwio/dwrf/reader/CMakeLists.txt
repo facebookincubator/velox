@@ -43,3 +43,8 @@ target_link_libraries(
   velox_dwio_dwrf_utils
   velox_test_util
   fmt::fmt)
+install(TARGETS velox_dwio_dwrf_reader  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

@@ -19,3 +19,8 @@ else()
   target_link_libraries(velox_codegen velox_core velox_exec velox_expression
                         glog::glog)
 endif()
+install(TARGETS velox_codegen  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

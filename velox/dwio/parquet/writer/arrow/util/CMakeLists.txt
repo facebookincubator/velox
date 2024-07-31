@@ -30,3 +30,8 @@ target_link_libraries(
   zstd::zstd
   ZLIB::ZLIB
   lz4::lz4)
+install(TARGETS velox_dwio_arrow_parquet_writer_util_lib  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

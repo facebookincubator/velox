@@ -15,3 +15,8 @@
 add_library(velox_common_io IoStatistics.cpp)
 
 target_link_libraries(velox_common_io Folly::folly glog::glog)
+install(TARGETS velox_common_io  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

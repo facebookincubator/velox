@@ -52,3 +52,8 @@ target_link_libraries(
   parquet
   arrow
   fmt::fmt)
+install(TARGETS velox_dwio_arrow_parquet_writer_lib  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

@@ -19,7 +19,11 @@ target_link_libraries(
   velox_file
   PUBLIC velox_exception Folly::folly
   PRIVATE velox_common_base fmt::fmt glog::glog)
-
+install(TARGETS velox_file  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

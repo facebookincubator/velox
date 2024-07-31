@@ -40,3 +40,8 @@ target_link_libraries(
   velox_caching
   Snappy::snappy
   zstd::zstd)
+install(TARGETS velox_dwio_dwrf_common  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

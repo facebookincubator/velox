@@ -31,7 +31,11 @@ target_link_libraries(
          fmt::fmt
          gflags::gflags
   PRIVATE velox_time)
-
+install(TARGETS velox_caching  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

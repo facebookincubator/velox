@@ -22,3 +22,8 @@ add_dependencies(velox_dwio_dwrf_utils velox_dwio_dwrf_proto)
 
 target_link_libraries(velox_dwio_dwrf_utils velox_dwio_dwrf_proto velox_type
                       velox_memory)
+install(TARGETS velox_dwio_dwrf_utils  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

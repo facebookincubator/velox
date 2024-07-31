@@ -28,6 +28,14 @@ endif()
 # set the project name
 project(velox)
 
+set(DEPS_INSTALL "/opt/install")
+list(APPEND CMAKE_PREFIX_PATH "${DEPS_INSTALL}")
+list(APPEND CMAKE_MODULE_PATH "${DEPS_INSTALL}")
+set(Boost_USE_STATIC_RUNTIME ON)
+set(GFLAGS_USE_TARGET_NAMESPACE TRUE)
+message(STATUS "prefix path ${CMAKE_PREFIX_PATH}")
+message(STATUS "module path ${CMAKE_MODULE_PATH}")
+
 list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
      "${PROJECT_SOURCE_DIR}/CMake/third-party")
 
@@ -539,3 +547,25 @@ endif()
 
 add_subdirectory(third_party)
 add_subdirectory(velox)
+
+# install as a subdirectory only
+install(EXPORT ${PROJECT_NAME}Targets
+  NAMESPACE velox::
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
+)
+
+configure_package_config_file(
+  CMake/veloxConfig.cmake.in
+  "${PROJECT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
+)
+install(FILES "${PROJECT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
+)
+
+install(DIRECTORY velox
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  FILES_MATCHING
+    PATTERN "*.inc"
+    PATTERN "*.h"
+)

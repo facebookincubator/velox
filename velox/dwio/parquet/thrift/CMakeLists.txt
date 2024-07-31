@@ -14,3 +14,8 @@
 
 add_library(velox_dwio_parquet_thrift ParquetThriftTypes.cpp)
 target_link_libraries(velox_dwio_parquet_thrift arrow thrift Boost::headers)
+install(TARGETS velox_dwio_parquet_thrift  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

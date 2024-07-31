@@ -14,12 +14,20 @@
 add_library(velox_duckdb_conversion DuckConversion.cpp DuckWrapper.cpp)
 
 target_link_libraries(velox_duckdb_conversion velox_core velox_vector duckdb)
-
+install(TARGETS velox_duckdb_conversion  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_library(velox_duckdb_parser DuckParser.cpp)
 
 target_link_libraries(velox_duckdb_parser velox_duckdb_conversion duckdb
                       velox_parse_expression)
-
+install(TARGETS velox_duckdb_parser  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

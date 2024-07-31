@@ -15,3 +15,8 @@
 add_library(velox_dwio_common_encryption Encryption.cpp)
 
 target_link_libraries(velox_dwio_common_encryption Folly::folly)
+install(TARGETS velox_dwio_common_encryption  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

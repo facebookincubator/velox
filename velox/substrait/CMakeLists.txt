@@ -43,6 +43,20 @@ add_custom_command(
 add_custom_target(substrait_proto ALL DEPENDS ${PROTO_OUTPUT_FILES})
 add_dependencies(substrait_proto protobuf::libprotobuf)
 
+# add_custom_target(velox_substrait_proto ALL DEPENDS ${PROTO_OUTPUT_FILES})
+# add_dependencies(velox_substrait_proto protobuf::libprotobuf)
+add_library(velox_substrait_proto ${PROTO_HDRS} ${PROTO_SRCS})
+target_include_directories(velox_substrait_proto PUBLIC
+  $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}>
+  $<INSTALL_INTERFACE:include>
+)
+
+install(TARGETS velox_substrait_proto  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
 set(SRCS
     ${PROTO_SRCS}
     SubstraitParser.cpp
@@ -58,9 +72,21 @@ set(SRCS
 
 add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter
-                           PUBLIC ${PROTO_OUTPUT_DIR})
+                           PUBLIC 
+  $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}>
+  $<INSTALL_INTERFACE:include>
+)
+
 target_link_libraries(velox_substrait_plan_converter velox_connector
-                      velox_dwio_dwrf_common)
+                      velox_dwio_dwrf_common velox_substrait_proto)
+
+install(TARGETS velox_substrait_plan_converter
+  EXPORT veloxTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  INCLUDES DESTINATION include
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

@@ -15,7 +15,11 @@
 add_library(velox_tpch_connector OBJECT TpchConnector.cpp)
 
 target_link_libraries(velox_tpch_connector velox_connector velox_tpch_gen)
-
+install(TARGETS velox_tpch_connector  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

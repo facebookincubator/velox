@@ -14,7 +14,11 @@
 
 add_library(velox_test_util TestValue.cpp)
 target_link_libraries(velox_test_util PUBLIC velox_exception)
-
+install(TARGETS velox_test_util  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

@@ -15,3 +15,8 @@ add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 target_link_libraries(
         md5
         Folly::folly)
+install(TARGETS md5 EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

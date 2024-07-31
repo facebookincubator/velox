@@ -39,3 +39,8 @@ target_link_libraries(
   thrift
   zstd::zstd
   ${Protobuf_LIBRARIES})
+install(TARGETS velox_dwio_native_parquet_reader  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

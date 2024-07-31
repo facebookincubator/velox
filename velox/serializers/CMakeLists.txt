@@ -17,7 +17,11 @@ add_library(
 
 target_link_libraries(velox_presto_serializer velox_dwio_common velox_vector
                       velox_row_fast)
-
+install(TARGETS velox_presto_serializer  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

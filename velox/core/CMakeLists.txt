@@ -17,7 +17,11 @@ endif()
 
 add_library(velox_config Config.cpp)
 target_link_libraries(velox_config PUBLIC velox_exception Folly::folly)
-
+install(TARGETS velox_config  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_library(velox_core Expressions.cpp PlanFragment.cpp PlanNode.cpp
                        QueryConfig.cpp QueryCtx.cpp SimpleFunctionMetadata.cpp)
 
@@ -35,3 +39,9 @@ target_link_libraries(
          Boost::headers
          Folly::folly
   PRIVATE velox_encode)
+
+install(TARGETS velox_core  EXPORT ${PROJECT_NAME}Targets
+                           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+                           LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                           ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                         )

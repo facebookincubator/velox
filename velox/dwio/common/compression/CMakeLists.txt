@@ -17,3 +17,8 @@ add_library(velox_dwio_common_compression Compression.cpp PagedInputStream.cpp
 
 target_link_libraries(velox_dwio_common_compression velox_dwio_common xsimd
                       gtest Folly::folly)
+install(TARGETS velox_dwio_common_compression  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

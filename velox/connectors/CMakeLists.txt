@@ -15,6 +15,11 @@ add_library(velox_connector Connector.cpp)
 
 target_link_libraries(velox_connector velox_config velox_spill_config
                       velox_vector)
+install(TARGETS velox_connector  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 
 add_subdirectory(fuzzer)
 

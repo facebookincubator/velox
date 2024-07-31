@@ -22,3 +22,8 @@ target_link_libraries(
   velox_common_hyperloglog
   PUBLIC velox_memory
   PRIVATE velox_exception)
+install(TARGETS velox_common_hyperloglog  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

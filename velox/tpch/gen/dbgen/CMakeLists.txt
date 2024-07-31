@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 3.0.0)
-cmake_policy(SET CMP0063 NEW)
+# cmake_minimum_required(VERSION 3.0.0)
+# cmake_policy(SET CMP0063 NEW)
 
-project(dbgen CXX C)
+# project(dbgen CXX C)
 
 add_definitions(-DDBNAME=dss -DMAC -DORACLE -DTPCH)
 
@@ -21,3 +21,8 @@ target_include_directories(velox_dbgen PRIVATE include)
 
 # Suppress warnings when compiling dbgen.
 target_compile_options(velox_dbgen PRIVATE -w)
+install(TARGETS velox_dbgen  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

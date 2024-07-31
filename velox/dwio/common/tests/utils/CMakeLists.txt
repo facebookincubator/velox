@@ -25,7 +25,11 @@ target_link_libraries(
   velox_type
   velox_type_fbhive
   velox_vector)
-
+install(TARGETS velox_dwio_common_test_utils  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 # older versions of GCC need it to allow std::filesystem
 if(CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
   target_link_libraries(velox_dwio_common_test_utils stdc++fs)

@@ -29,7 +29,16 @@ add_library(
   duckdb-re2.cpp
   duckdb-utf8proc.cpp)
 
+install(TARGETS duckdb  EXPORT ${PROJECT_NAME}Targets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 set_property(TARGET duckdb PROPERTY JOB_POOL_COMPILE high_memory_pool)
 
 # Suppress warnings when compiling duckdb.
 target_compile_options(duckdb PRIVATE -w)
+# 安装头文件
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/velox/external/duckdb
+        DESTINATION include/velox/external/
+        FILES_MATCHING PATTERN "*.hpp")

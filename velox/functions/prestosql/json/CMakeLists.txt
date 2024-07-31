@@ -16,7 +16,11 @@ add_library(velox_functions_json JsonExtractor.cpp JsonPathTokenizer.cpp
 
 target_link_libraries(velox_functions_json velox_exception Folly::folly
                       simdjson::simdjson)
-
+install(TARGETS velox_functions_json  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

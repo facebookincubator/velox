@@ -15,3 +15,8 @@ add_library(velox_vector_test_lib VectorMaker.cpp VectorTestBase.cpp)
 
 target_link_libraries(velox_vector_test_lib velox_exec velox_vector gtest
                       gtest_main)
+install(TARGETS velox_vector_test_lib  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

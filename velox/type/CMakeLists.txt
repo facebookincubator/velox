@@ -45,3 +45,8 @@ target_link_libraries(
   Boost::headers
   Folly::folly
   re2::re2)
+install(TARGETS velox_type  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

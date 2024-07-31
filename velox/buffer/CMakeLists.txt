@@ -15,7 +15,11 @@
 add_library(velox_buffer StringViewBufferHolder.cpp)
 
 target_link_libraries(velox_buffer velox_memory velox_common_base Folly::folly)
-
+install(TARGETS velox_buffer  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

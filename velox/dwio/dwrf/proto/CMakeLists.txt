@@ -46,4 +46,36 @@ add_library(velox_dwio_dwrf_proto ${PROTO_HDRS} ${PROTO_SRCS})
 #
 # #include "velox/dwio/dwrf/proto/dwrf_proto.pb.h"
 target_link_libraries(velox_dwio_dwrf_proto ${Protobuf_LIBRARIES})
-target_include_directories(velox_dwio_dwrf_proto PUBLIC ${PROJECT_BINARY_DIR})
+
+# Use BUILD_INTERFACE to include the binary directory during the build
+# and INSTALL_INTERFACE to use the install include directory after installation.
+target_include_directories(velox_dwio_dwrf_proto PUBLIC
+  $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}>
+  $<INSTALL_INTERFACE:include>
+)
+
+# Install the generated headers
+install(FILES ${PROTO_HDRS}
+  DESTINATION include/velox/dwio/dwrf/proto)
+
+# Install the library
+install(TARGETS velox_dwio_dwrf_proto
+  EXPORT veloxTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  INCLUDES DESTINATION include)
+
+# Export the targets for find_package
+install(EXPORT veloxTargets
+  FILE veloxTargets.cmake
+  NAMESPACE velox::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/velox)
+
+# set_property(TARGET velox_dwio_dwrf_proto PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${PROJECT_SOURCE_DIR}/_build/debug")
+# install(TARGETS velox_dwio_dwrf_proto  EXPORT ${PROJECT_NAME}Targets
+# RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+# LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+# ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+# )
+

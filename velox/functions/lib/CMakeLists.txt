@@ -15,11 +15,19 @@
 add_library(velox_is_null_functions IsNull.cpp)
 
 target_link_libraries(velox_is_null_functions velox_expression)
-
+install(TARGETS velox_is_null_functions  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_library(velox_functions_util LambdaFunctionUtil.cpp RowsTranslationUtil.cpp)
 
 target_link_libraries(velox_functions_util velox_vector velox_common_base)
-
+install(TARGETS velox_functions_util  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_library(
   velox_functions_lib
   CheckDuplicateKeys.cpp
@@ -34,7 +42,11 @@ add_library(
 
 target_link_libraries(velox_functions_lib velox_functions_util velox_vector
                       re2::re2 Folly::folly)
-
+install(TARGETS velox_functions_lib  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_subdirectory(aggregates)
 add_subdirectory(string)
 add_subdirectory(window)

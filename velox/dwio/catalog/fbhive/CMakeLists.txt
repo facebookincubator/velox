@@ -15,6 +15,11 @@
 add_library(velox_dwio_catalog_fbhive FileUtils.cpp)
 target_link_libraries(velox_dwio_catalog_fbhive velox_dwio_common_exception
                       fmt::fmt Folly::folly)
+install(TARGETS velox_dwio_catalog_fbhive  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(test)

@@ -16,3 +16,8 @@ add_library(velox_dwio_common_exception Exception.cpp Exceptions.cpp)
 
 target_link_libraries(velox_dwio_common_exception velox_exception Folly::folly
                       glog::glog)
+install(TARGETS velox_dwio_common_exception  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

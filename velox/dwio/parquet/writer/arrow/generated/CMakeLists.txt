@@ -16,3 +16,8 @@ add_library(velox_dwio_arrow_parquet_writer_thrift_lib parquet_types.cpp)
 
 target_link_libraries(velox_dwio_arrow_parquet_writer_thrift_lib arrow
                       Boost::headers)
+install(TARGETS velox_dwio_arrow_parquet_writer_thrift_lib  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

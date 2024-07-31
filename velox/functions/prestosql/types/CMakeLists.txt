@@ -16,7 +16,11 @@ add_library(velox_presto_types HyperLogLogType.cpp JsonType.cpp
 
 target_link_libraries(velox_presto_types velox_memory velox_expression
                       velox_functions_util)
-
+install(TARGETS velox_presto_types  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

@@ -15,7 +15,11 @@
 add_library(velox_row_fast UnsafeRowFast.cpp CompactRow.cpp)
 
 target_link_libraries(velox_row_fast PUBLIC velox_vector)
-
+install(TARGETS velox_row_fast  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

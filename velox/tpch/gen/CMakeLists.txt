@@ -19,7 +19,11 @@ add_library(velox_tpch_gen TpchGen.cpp DBGenIterator.cpp)
 target_include_directories(velox_tpch_gen PRIVATE dbgen/include)
 
 target_link_libraries(velox_tpch_gen velox_memory velox_vector velox_dbgen)
-
+install(TARGETS velox_tpch_gen  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

@@ -30,3 +30,8 @@ add_library(
   ${BISON_TypeCalculationParser_OUTPUTS} ${FLEX_TypeCalculationScanner_OUTPUTS}
   Scanner.h TypeCalculation.h)
 target_link_libraries(velox_type_calculation velox_common_base)
+install(TARGETS velox_type_calculation  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

@@ -15,7 +15,11 @@ add_library(velox_arrow_bridge Bridge.cpp)
 
 target_link_libraries(velox_arrow_bridge velox_memory velox_type velox_buffer
                       velox_exception)
-
+install(TARGETS velox_arrow_bridge  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(VELOX_BUILD_TESTING AND VELOX_ENABLE_ARROW)
   add_subdirectory(tests)
 endif()

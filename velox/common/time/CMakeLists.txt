@@ -17,3 +17,9 @@ endif()
 
 add_library(velox_time Timer.cpp CpuWallTimer.cpp)
 target_link_libraries(velox_time PUBLIC velox_process Folly::folly fmt::fmt)
+
+install(TARGETS velox_time  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

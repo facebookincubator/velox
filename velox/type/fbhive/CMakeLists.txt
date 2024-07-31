@@ -15,7 +15,11 @@
 add_library(velox_type_fbhive HiveTypeParser.cpp HiveTypeSerializer.cpp)
 
 target_link_libraries(velox_type_fbhive velox_type)
-
+install(TARGETS velox_type_fbhive  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

@@ -17,7 +17,7 @@ add_library(velox_hive_config OBJECT HiveConfig.cpp)
 target_link_libraries(velox_hive_config velox_exception)
 
 add_library(
-  velox_hive_connector OBJECT
+  velox_hive_connector 
   FileHandle.cpp
   HiveConfig.cpp
   HiveConnector.cpp
@@ -43,10 +43,18 @@ target_link_libraries(
   velox_hdfs
   velox_gcs)
 
+install(TARGETS velox_hive_connector EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
 add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 
 target_link_libraries(velox_hive_partition_function velox_core velox_exec)
-
+install(TARGETS velox_hive_partition_function  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 add_subdirectory(storage_adapters)
 
 if(${VELOX_BUILD_TESTING})

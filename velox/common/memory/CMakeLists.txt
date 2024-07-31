@@ -43,3 +43,8 @@ target_link_libraries(
          gflags::gflags
          glog::glog
   PRIVATE velox_test_util re2::re2)
+install(TARGETS velox_memory  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

@@ -15,7 +15,11 @@
 add_library(velox_temp_path TempFilePath.cpp TempDirectoryPath.cpp)
 
 target_link_libraries(velox_temp_path velox_exception)
-
+install(TARGETS velox_temp_path  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_library(
   velox_exec_test_lib
   AssertQueryBuilder.cpp
@@ -49,7 +53,11 @@ target_link_libraries(
   velox_presto_serializer
   velox_functions_prestosql
   velox_aggregates)
-
+install(TARGETS velox_exec_test_lib  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_library(velox_aggregation_fuzzer AggregationFuzzer.cpp)
 
 target_link_libraries(velox_aggregation_fuzzer velox_type velox_vector_fuzzer

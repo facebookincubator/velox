@@ -16,7 +16,11 @@ add_library(velox_exception Exceptions.cpp VeloxException.cpp Exceptions.h)
 target_link_libraries(
   velox_exception PUBLIC velox_flag_definitions velox_process Folly::folly
                          fmt::fmt gflags::gflags glog::glog)
-
+install(TARGETS velox_exception  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_library(
   velox_common_base
   BitUtil.cpp
@@ -33,7 +37,11 @@ target_link_libraries(
   velox_common_base
   PUBLIC velox_exception Folly::folly fmt::fmt xsimd
   PRIVATE velox_process velox_test_util glog::glog)
-
+install(TARGETS velox_common_base  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

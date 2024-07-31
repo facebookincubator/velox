@@ -31,3 +31,13 @@ if(VELOX_ENABLE_PARQUET)
   target_link_libraries(velox_dwio_parquet_writer
                         velox_dwio_arrow_parquet_writer)
 endif()
+install(TARGETS velox_dwio_parquet_reader  EXPORT ${PROJECT_NAME}Targets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+install(TARGETS velox_dwio_parquet_writer  EXPORT ${PROJECT_NAME}Targets
+RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

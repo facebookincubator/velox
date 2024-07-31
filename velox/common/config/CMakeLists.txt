@@ -15,3 +15,8 @@
 add_library(velox_spill_config SpillConfig.cpp)
 target_link_libraries(velox_spill_config Folly::folly velox_exception
                       velox_common_compression)
+install(TARGETS velox_spill_config  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

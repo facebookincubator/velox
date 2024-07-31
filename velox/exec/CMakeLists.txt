@@ -96,7 +96,11 @@ target_link_libraries(
   velox_test_util
   velox_arrow_bridge
   velox_common_compression)
-
+install(TARGETS velox_exec  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 elseif(${VELOX_BUILD_TEST_UTILS})

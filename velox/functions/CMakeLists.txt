@@ -16,6 +16,11 @@ add_library(velox_coverage_util CoverageUtil.cpp)
 
 target_link_libraries(velox_function_registry velox_expression velox_type
                       velox_core velox_exception)
+install(TARGETS velox_function_registry  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 target_link_libraries(velox_coverage_util velox_function_registry)
 add_subdirectory(lib)
 if(${VELOX_ENABLE_PRESTO_FUNCTIONS})

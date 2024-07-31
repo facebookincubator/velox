@@ -14,3 +14,8 @@
 
 add_library(velox_encode Base64.cpp)
 target_link_libraries(velox_encode PUBLIC Folly::folly)
+install(TARGETS velox_encode  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

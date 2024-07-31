@@ -18,7 +18,11 @@ add_library(
 
 target_link_libraries(velox_expression_functions velox_common_base
                       velox_type_calculation)
-
+install(TARGETS velox_expression_functions  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_library(
   velox_expression
   BooleanMix.cpp
@@ -46,7 +50,11 @@ add_library(
 target_link_libraries(
   velox_expression velox_core velox_vector velox_common_base
   velox_expression_functions velox_functions_util)
-
+install(TARGETS velox_expression  EXPORT ${PROJECT_NAME}Targets
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 add_subdirectory(type_calculation)
 
 if(${VELOX_BUILD_TESTING})
