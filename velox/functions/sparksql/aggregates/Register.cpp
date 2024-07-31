@@ -21,7 +21,6 @@
 #include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
 #include "velox/functions/sparksql/aggregates/CentralMomentsAggregate.h"
 #include "velox/functions/sparksql/aggregates/CollectListAggregate.h"
-#include "velox/functions/sparksql/aggregates/ModeAggregate.h"
 #include "velox/functions/sparksql/aggregates/RegrReplacementAggregate.h"
 #include "velox/functions/sparksql/aggregates/SumAggregate.h"
 
@@ -40,6 +39,10 @@ extern void registerMinMaxAggregates(
     bool withCompanionFunctions,
     bool overwrite);
 extern void registerMinMaxByAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerModeAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);

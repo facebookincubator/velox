@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/sparksql/aggregates/ModeAggregate.h"
 
 #include "folly/container/F14Map.h"
 
@@ -27,12 +26,6 @@ using namespace facebook::velox::exec;
 namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
-
-struct UnknownValueHash {
-  std::size_t operator()(const UnknownValue& val) const noexcept {
-    return folly::hasher<UnknownValue>{}(val);
-  }
-};
 
 template <
     typename T,
@@ -60,6 +53,7 @@ class ModeAggregate {
     explicit AccumulatorType(HashStringAllocator* allocator)
         : values{AlignedStlAllocator<std::pair<const T, int64_t>, 16>(
               allocator)} {}
+
     static constexpr bool is_fixed_size_ = false;
 
     void addInput(HashStringAllocator* /*allocator*/, arg_type<T> data) {
@@ -127,6 +121,7 @@ class StringModeAggregate {
     explicit AccumulatorType(HashStringAllocator* allocator)
         : values{AlignedStlAllocator<std::pair<const StringView, int64_t>, 16>(
               allocator)} {}
+
     static constexpr bool is_fixed_size_ = false;
 
     void addInput(HashStringAllocator* allocator, arg_type<Varchar> data) {
@@ -170,12 +165,12 @@ class StringModeAggregate {
     }
 
    private:
+    // Stores the non-inlined string in memory blocks managed by
+    // HashStringAllocator, if it's not exist in the values map.
     StringView store(StringView value, HashStringAllocator* allocator) {
       if (!value.isInline()) {
         auto it = values.find(value);
-        if (it != values.end()) {
-          value = it->first;
-        } else {
+        if (it == values.end()) {
           value = strings.append(value, *allocator);
         }
       }
@@ -557,9 +552,11 @@ void registerModeAggregate(
             return std::make_unique<
                 SimpleAggregateAdapter<ModeAggregate<Timestamp>>>(resultType);
           case TypeKind::UNKNOWN:
+            // Regitsers Mode function with unknown type, this needs hasher for
+            // UnknownValue, we use folly::hasher for it.
             return std::make_unique<SimpleAggregateAdapter<ModeAggregate<
                 UnknownValue,
-                UnknownValueHash,
+                folly::hasher<UnknownValue>,
                 std::equal_to<UnknownValue>>>>(resultType);
           case TypeKind::VARCHAR:
           case TypeKind::VARBINARY:

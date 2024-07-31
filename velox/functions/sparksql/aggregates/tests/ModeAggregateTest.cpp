@@ -304,7 +304,12 @@ TEST_F(ModeAggregateTest, globalInterval) {
 
 TEST_F(ModeAggregateTest, globalEmpty) {
   auto vector = makeFlatVector<int32_t>({});
-  testGlobalModeWithDuck(vector);
+
+  auto expected = makeRowVector({
+      BaseVector::createNullConstant(INTEGER(), 1, pool()),
+  });
+
+  testMode("mode(c1)", {}, vector, vector, expected);
 }
 
 TEST_F(ModeAggregateTest, globalString) {
@@ -402,6 +407,101 @@ TEST_F(ModeAggregateTest, arrays) {
       }),
   });
   testAggregations({input}, {"c0"}, {"mode(c1)"}, {expected});
+}
+
+TEST_F(ModeAggregateTest, maps) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1}),
+      makeMapVectorFromJson<int32_t, int32_t>({
+          "{1: 10, 2: 20, 3: 30}",
+          "{1: 10, 2: 20}",
+          "{}",
+          "{1: 10, 2: 20}",
+          "{}",
+          "{1: 10, 2: 20, 3: null}",
+          "{1: 10, 2: 20, 3: null}",
+          "{}",
+          "{1: 10, 2: 20, 3: null}",
+          "null",
+          "{1: 10, 2: 20, 3: null}",
+          "null",
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVectorFromJson<int32_t, int32_t>({"{1: 10, 2: 20, 3: null}"}),
+  });
+
+  testAggregations({input}, {}, {"mode(c1)"}, {expected});
+
+  // Group by.
+  expected = makeRowVector({
+      makeFlatVector<int64_t>({0, 1}),
+      makeMapVectorFromJson<int32_t, int32_t>({
+          "{1: 10, 2: 20, 3: null}",
+          "{1: 10, 2: 20}",
+      }),
+  });
+  testAggregations({input}, {"c0"}, {"mode(c1)"}, {expected});
+}
+
+TEST_F(ModeAggregateTest, rows) {
+  auto input = makeRowVector({
+      makeRowVector({
+          makeFlatVector<int32_t>({
+              1,
+              1,
+              2,
+              1,
+          }),
+          makeNullableFlatVector<int32_t>({
+              std::nullopt,
+              1,
+              2,
+              1,
+          }),
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeRowVector({
+          makeConstant(1, 1),
+          makeConstant(1, 1),
+      }),
+  });
+
+  testAggregations({input}, {}, {"mode(c0)"}, {expected});
+
+  // Group by.
+  auto input1 = makeRowVector({
+      makeFlatVector<int64_t>({1, 0, 1, 0, 1, 1}),
+      makeRowVector({
+          makeFlatVector<int32_t>({
+              1,
+              1,
+              2,
+              1,
+              2,
+              2,
+          }),
+          makeNullableFlatVector<int32_t>({
+              std::nullopt,
+              1,
+              2,
+              1,
+              1,
+              2,
+          }),
+      }),
+  });
+  auto expected1 = makeRowVector({
+      makeFlatVector<int64_t>({0, 1}),
+      makeRowVector({
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<int32_t>({1, 2}),
+      }),
+  });
+  testAggregations({input1}, {"c0"}, {"mode(c1)"}, {expected1});
 }
 
 } // namespace
