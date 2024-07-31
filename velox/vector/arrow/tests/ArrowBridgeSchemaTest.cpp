@@ -192,6 +192,17 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARCHAR(), "u");
   testScalarType(VARBINARY(), "z");
 
+  // Test default timezone
+  options_.timestampUnit = TimestampUnit::kSecond;
+  testScalarType(TIMESTAMP(), "tss:");
+  options_.timestampUnit = TimestampUnit::kMilli;
+  testScalarType(TIMESTAMP(), "tsm:");
+  options_.timestampUnit = TimestampUnit::kMicro;
+  testScalarType(TIMESTAMP(), "tsu:");
+  options_.timestampUnit = TimestampUnit::kNano;
+  testScalarType(TIMESTAMP(), "tsn:");
+
+  // Test specific timezone
   options_.timestampTimeZone = "+01:0";
   options_.timestampUnit = TimestampUnit::kSecond;
   testScalarType(TIMESTAMP(), "tss:+01:0");

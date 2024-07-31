@@ -36,7 +36,7 @@ struct ArrowOptions {
   bool flattenDictionary{false};
   bool flattenConstant{false};
   TimestampUnit timestampUnit = TimestampUnit::kNano;
-  std::optional<std::string> timestampTimeZone = {"UTC"};
+  std::optional<std::string> timestampTimeZone{std::nullopt};
 };
 
 namespace facebook::velox {
