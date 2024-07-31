@@ -92,7 +92,7 @@ class SliceFunction : public exec::VectorFunction {
   }
 
  private:
-  /// kind The type kind of start and length.
+  // The type kind of start and length.
   TypeKind kind_;
   // Use template parameter rather than hard-coded TypeKind to specify array
   // data type.
@@ -213,7 +213,7 @@ class SliceFunction : public exec::VectorFunction {
 };
 } // namespace
 
-/// @param kind The type kind of start and length.
+// @param kind The type kind of start and length.
 void registerSliceFunction(const std::string& prefix, TypeKind kind) {
   auto kindName = mapTypeKindToName(kind);
 
