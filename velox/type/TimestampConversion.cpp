@@ -144,10 +144,7 @@ bool isValidWeekDate(int32_t weekYear, int32_t weekOfYear, int32_t dayOfWeek) {
   return true;
 }
 
-bool isValidWeekOfMonthDate(
-    int32_t year,
-    int32_t month,
-    int32_t dayOfWeek) {
+bool isValidWeekOfMonthDate(int32_t year, int32_t month, int32_t dayOfWeek) {
   if (dayOfWeek < 1 || dayOfWeek > 7) {
     return false;
   }
@@ -615,13 +612,17 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
     int32_t weekOfMonth,
     int32_t dayOfWeek) {
   if (!isValidWeekOfMonthDate(year, month, dayOfWeek)) {
-    return folly::makeUnexpected(Status::UserError(
-        "Date out of range: {}-{}-{}-{}", year, month, weekOfMonth, dayOfWeek));
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    } else {
+      return folly::makeUnexpected(Status::UserError(
+          "Date out of range: {}-{}-{}", year, month, dayOfWeek));
+    }
   }
   int64_t daysSinceEpochOfFirstDayOfMonth;
   Status status =
       daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth);
-  if (status.ok() == false) {
+  if (!status.ok()) {
     return folly::makeUnexpected(status);
   }
   int32_t firstDayOfWeek =

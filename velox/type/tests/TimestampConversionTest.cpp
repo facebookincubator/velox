@@ -105,32 +105,36 @@ TEST(DateTimeUtilTest, fromDateInvalid) {
 }
 
 TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
-  auto testDaysSinceEpochFromWeekOfMonthDate =
+  auto daysSinceEpochFromWeekOfMonthDate =
       [](int32_t year, int32_t month, int32_t weekOfMonth, int32_t dayOfWeek) {
-        int64_t daysSinceEpoch;
-        auto expected = util::daysSinceEpochFromWeekOfMonthDate(
+        auto result = util::daysSinceEpochFromWeekOfMonthDate(
             year, month, weekOfMonth, dayOfWeek);
-        EXPECT_TRUE(!expected.hasError());
-        return expected.value();
+        EXPECT_TRUE(!result.hasError());
+        return result.value();
       };
-  EXPECT_EQ(4, testDaysSinceEpochFromWeekOfMonthDate(1970, 1, 2, 1));
-  EXPECT_EQ(361, testDaysSinceEpochFromWeekOfMonthDate(1971, 1, 1, 1));
-  EXPECT_EQ(396, testDaysSinceEpochFromWeekOfMonthDate(1971, 2, 1, 1));
+  EXPECT_EQ(4, daysSinceEpochFromWeekOfMonthDate(1970, 1, 2, 1));
+  EXPECT_EQ(361, daysSinceEpochFromWeekOfMonthDate(1971, 1, 1, 1));
+  EXPECT_EQ(396, daysSinceEpochFromWeekOfMonthDate(1971, 2, 1, 1));
 
-  EXPECT_EQ(10952, testDaysSinceEpochFromWeekOfMonthDate(2000, 1, 1, 1));
-  EXPECT_EQ(19905, testDaysSinceEpochFromWeekOfMonthDate(2024, 7, 1, 1));
+  EXPECT_EQ(10952, daysSinceEpochFromWeekOfMonthDate(2000, 1, 1, 1));
+  EXPECT_EQ(19905, daysSinceEpochFromWeekOfMonthDate(2024, 7, 1, 1));
 
   // Before unix epoch.
-  EXPECT_EQ(-3, testDaysSinceEpochFromWeekOfMonthDate(1970, 1, 1, 1));
-  EXPECT_EQ(-2, testDaysSinceEpochFromWeekOfMonthDate(1970, 1, 1, 2));
-  EXPECT_EQ(-31, testDaysSinceEpochFromWeekOfMonthDate(1969, 12, 1, 1));
-  EXPECT_EQ(-367, testDaysSinceEpochFromWeekOfMonthDate(1969, 1, 1, 1));
-  EXPECT_EQ(-724, testDaysSinceEpochFromWeekOfMonthDate(1968, 1, 2, 1));
-  EXPECT_EQ(-719533, testDaysSinceEpochFromWeekOfMonthDate(0, 1, 1, 1));
+  EXPECT_EQ(-3, daysSinceEpochFromWeekOfMonthDate(1970, 1, 1, 1));
+  EXPECT_EQ(-2, daysSinceEpochFromWeekOfMonthDate(1970, 1, 1, 2));
+  EXPECT_EQ(-31, daysSinceEpochFromWeekOfMonthDate(1969, 12, 1, 1));
+  EXPECT_EQ(-367, daysSinceEpochFromWeekOfMonthDate(1969, 1, 1, 1));
+  EXPECT_EQ(-724, daysSinceEpochFromWeekOfMonthDate(1968, 1, 2, 1));
+  EXPECT_EQ(-719533, daysSinceEpochFromWeekOfMonthDate(0, 1, 1, 1));
 
   // Negative year - BC.
-  EXPECT_EQ(-719561, testDaysSinceEpochFromWeekOfMonthDate(-1, 12, 1, 1));
-  EXPECT_EQ(-719897, testDaysSinceEpochFromWeekOfMonthDate(-1, 1, 1, 1));
+  EXPECT_EQ(-719561, daysSinceEpochFromWeekOfMonthDate(-1, 12, 1, 1));
+  EXPECT_EQ(-719897, daysSinceEpochFromWeekOfMonthDate(-1, 1, 1, 1));
+
+  // day in previous month
+  EXPECT_EQ(19783, daysSinceEpochFromWeekOfMonthDate(2024, 2, 5, 5));
+  // day in next month
+  EXPECT_EQ(19751, daysSinceEpochFromWeekOfMonthDate(2024, 2, 1, 1));
 }
 
 TEST(DateTimeUtilTest, fromDateString) {

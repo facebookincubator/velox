@@ -108,11 +108,17 @@ Status daysSinceEpochFromWeekDate(
     int64_t& out);
 
 /// Computes the (signed) number of days since unix epoch (1970-01-01).
-/// Returns UserError status if the date is invalid.
+/// Returns error status if the date is invalid. We treat days of the previous
+/// or next months as a part of the specified WEEK_OF_MONTH. For example, if
+/// weekOfMonth is 5 but the current month only has 4 weeks (such as February),
+/// the first week of March will be considered as the 5th week of February.
 /// @param year Year, can be negative e.g: 1996, -2000
-/// @param month Month of year, e.g: 7
-/// @param weekOfMonth Week of month, 1 ~ 5 e.g: 2
-/// @param dayOfWeek Day of week, 1 ~ 7 e.g: 4
+/// @param month Month of year, A value in [1, 12] range. For example, 1 is Jan,
+/// 7 is Jul.
+/// @param weekOfMonth Week of the month. A value in [1, 5] range. For example,
+/// 1 is 1st week, 3 is 3rd week.
+/// @param dayOfWeek Day number of week. A value in [1, 7] range. For example, 1
+/// is Monday, 7 is Sunday.
 Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
     int32_t year,
     int32_t month,
