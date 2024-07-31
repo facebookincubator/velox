@@ -43,7 +43,9 @@ struct Block {
     if (allocation != nullptr) {
       allocator.freeNonContiguous(*allocation);
     }
-    allocator.freeContiguous(contiguous);
+    if (contiguous.size() > 0) {
+      allocator.freeContiguous(contiguous);
+    }
   }
 
   MemoryAllocator& allocator;
@@ -92,13 +94,13 @@ class FragmentationTest {
 
   void allocate(size_t size) {
     auto block = std::make_unique<Block>(*memory_);
-    block->size = size;
     if (memory_) {
       if (size <= 8 << 20) {
         block->allocation = std::make_shared<Allocation>();
         if (!memory_->allocateNonContiguous(size / 4096, *block->allocation)) {
           VELOX_FAIL("allocate() faild");
         }
+        size = block->allocation->numPages() * 4096;
         for (int i = 0; i < block->allocation->numRuns(); ++i) {
           auto run = block->allocation->runAt(i);
           for (int64_t offset = 0; offset < run.numPages() * 4096;
@@ -111,6 +113,7 @@ class FragmentationTest {
                 size / 4096, nullptr, block->contiguous)) {
           VELOX_FAIL();
         }
+        size = block->contiguous.size();
         for (auto offset = 0; offset < block->contiguous.numPages() * 4096;
              offset += 4096) {
           block->contiguous.data()[offset] = 1;
@@ -122,6 +125,7 @@ class FragmentationTest {
         block->data[offset] = 1;
       }
     }
+    block->size = size;
     outstanding_ += size;
     blocks_.push_back(std::move(block));
   }
