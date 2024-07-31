@@ -149,7 +149,8 @@ void HashProbe::initialize() {
   }
 
   VELOX_CHECK_NULL(lookup_);
-  lookup_ = std::make_unique<HashLookup>(hashers_);
+  VELOX_CHECK_NOT_NULL(table_);
+  lookup_ = std::make_unique<HashLookup>(hashers_, table_->stringAllocator());
   auto buildType = joinNode_->sources()[1]->outputType();
   auto tableType = makeTableType(buildType.get(), joinNode_->rightKeys());
   if (joinNode_->filter()) {

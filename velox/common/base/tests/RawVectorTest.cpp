@@ -57,23 +57,18 @@ TEST(RawVectorTest, resize) {
 }
 
 TEST(RawVectorTest, copyAndMove) {
+  const auto kNumRows = 1000;
   raw_vector<int32_t> ints(1000);
+  const auto kDataSize = kNumRows * sizeof(int32_t);
   // a raw_vector is intentionally not initialized.
-  memset(ints.data(), 11, ints.size() * sizeof(int32_t));
-  ints[ints.size() - 1] = 12345;
-  raw_vector<int32_t> intsCopy(ints);
-  EXPECT_EQ(
-      0, memcmp(ints.data(), intsCopy.data(), ints.size() * sizeof(int32_t)));
+  memset(ints.data(), 11, kDataSize);
+  ints[kNumRows - 1] = 12345;
+  auto data = ints.data();
 
   raw_vector<int32_t> intsMoved(std::move(ints));
   EXPECT_TRUE(ints.empty());
 
-  EXPECT_EQ(
-      0,
-      memcmp(
-          intsMoved.data(),
-          intsCopy.data(),
-          intsCopy.size() * sizeof(int32_t)));
+  EXPECT_EQ(0, memcmp(intsMoved.data(), data, kDataSize));
 }
 
 TEST(RawVectorTest, iota) {
