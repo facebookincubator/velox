@@ -97,5 +97,5 @@ target_link_libraries(
   glog::glog
   fmt::fmt)
 if(${VELOX_ENABLE_BENCHMARKS})
-    add_subdirectory(benchmarks)
+  add_subdirectory(benchmarks)
 endif()

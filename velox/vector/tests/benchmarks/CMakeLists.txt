@@ -11,9 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_vector_saver_benchmark
-        VectorSaverBenchmark.cpp)
+add_executable(velox_vector_saver_benchmark VectorSaverBenchmark.cpp)
 
 target_link_libraries(
-        velox_vector_saver_benchmark
-        velox_vector_test_lib ${FOLLY_BENCHMARK})
+  velox_vector_saver_benchmark velox_vector_test_lib ${FOLLY_BENCHMARK})
