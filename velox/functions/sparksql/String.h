@@ -1431,6 +1431,10 @@ struct LevenshteinDistanceFunction {
   }
 };
 
+/// empty2null(input) -> varchar
+///
+///    Returns null when the input is empty,
+///    otherwise, it returns the input itself.
 template <typename T>
 struct Empty2NullFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -1438,22 +1442,7 @@ struct Empty2NullFunction {
   // Results refer to strings in the first argument.
   static constexpr int32_t reuse_strings_from_arg = 0;
 
-  static constexpr bool is_default_ascii_behavior = true;
-
   FOLLY_ALWAYS_INLINE bool call(
-      out_type<Varchar>& result,
-      const arg_type<Varchar>& input) {
-    return doCall(result, input);
-  }
-
-  FOLLY_ALWAYS_INLINE bool callAscii(
-      out_type<Varchar>& result,
-      const arg_type<Varchar>& input) {
-    return doCall(result, input);
-  }
-
- private:
-  FOLLY_ALWAYS_INLINE bool doCall(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
     if (input.empty()) {

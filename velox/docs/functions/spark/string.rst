@@ -61,6 +61,13 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT endswith('js SQL', 'js'); -- false
         SELECT endswith('js SQL', NULL); -- NULL
 
+.. spark:function:: empty2null(input) -> varchar
+
+    Returns null when the input is empty, otherwise, it returns the input itself. ::
+
+        SELECT empty2null(''); -- null
+        SELECT empty2null('abc'); -- 'abc'
+
 .. spark:function:: find_in_set(str, strArray) -> integer
 
     Returns 1-based index of the given string ``str`` in the comma-delimited list ``strArray``.
