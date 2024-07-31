@@ -109,7 +109,7 @@ jobs:
           LIBHDFS3_CONF: "${{ github.workspace }}/scripts/hdfs-client.xml"
         working-directory: _build/release
         run: |
-          ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3"
+          ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3|cudf"
 
   ubuntu-debug:
     runs-on: linux-amd64-cpu8
@@ -165,4 +165,4 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E velox_exec_test -E velox_cudf_hash_test
+          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|cudf"
