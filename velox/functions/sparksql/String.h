@@ -1433,7 +1433,7 @@ struct LevenshteinDistanceFunction {
 
 /// empty2null(input) -> varchar
 ///
-///    Returns null when the input is empty,
+///    Returns NULL when the input is empty,
 ///    otherwise, it returns the input itself.
 template <typename T>
 struct Empty2NullFunction {

@@ -53,6 +53,13 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT conv("11abc", 10, 10); -- '11'
         SELECT conv('H016F', 16, 10); -- '0'
 
+.. spark:function:: empty2null(input) -> varchar
+
+    Returns NULL when the ```input``` is empty, otherwise, it returns the ```input``` itself. ::
+
+        SELECT empty2null(''); -- NULL
+        SELECT empty2null('abc'); -- 'abc'
+
 .. spark:function:: endswith(left, right) -> boolean
 
     Returns true if 'left' ends with 'right'. Otherwise, returns false. ::
@@ -60,13 +67,6 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT endswith('js SQL', 'SQL'); -- true
         SELECT endswith('js SQL', 'js'); -- false
         SELECT endswith('js SQL', NULL); -- NULL
-
-.. spark:function:: empty2null(input) -> varchar
-
-    Returns null when the input is empty, otherwise, it returns the input itself. ::
-
-        SELECT empty2null(''); -- null
-        SELECT empty2null('abc'); -- 'abc'
 
 .. spark:function:: find_in_set(str, strArray) -> integer
 
