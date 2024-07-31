@@ -215,8 +215,6 @@ void WindowFuzzer::go() {
     if (customVerification) {
       customVerifier = customVerificationFunctions_.at(signature.name);
     }
-    const bool requireSortedInput =
-        orderDependentFunctions_.count(signature.name) != 0;
 
     std::vector<TypePtr> argTypes = signature.args;
     std::vector<std::string> argNames = makeNames(argTypes.size());
@@ -238,7 +236,7 @@ void WindowFuzzer::go() {
         argNames, argTypes, partitionKeys, signature);
     // If the function is order-dependent or uses "rows" frame, sort all input
     // rows by row_number additionally.
-    if (requireSortedInput || isRowsFrame) {
+    if (customfunction(signature.name) || isRowsFrame) {
       sortingKeysAndOrders.emplace_back("row_number", core::kAscNullsLast);
       ++stats_.numSortedInputs;
     }
@@ -490,6 +488,10 @@ void WindowFuzzer::Stats::print(size_t numIterations) const {
   AggregationFuzzerBase::Stats::print(numIterations);
   LOG(INFO) << "Total functions verified in reference DB: "
             << verifiedFunctionNames.size();
+}
+
+bool WindowFuzzer::customfunction(std::string signatureName) {
+  return orderDependentFunctions_.count(signatureName);
 }
 
 } // namespace facebook::velox::exec::test

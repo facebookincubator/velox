@@ -124,6 +124,7 @@ class WindowFuzzer : public AggregationFuzzerBase {
 
     void print(size_t numIterations) const;
   } stats_;
+  bool customfunction(std::string signatureName);
 };
 
 /// Runs the window fuzzer.
