@@ -96,3 +96,6 @@ target_link_libraries(
   gflags::gflags
   glog::glog
   fmt::fmt)
+if(${VELOX_ENABLE_BENCHMARKS})
+    add_subdirectory(benchmarks)
+endif()

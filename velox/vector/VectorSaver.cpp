@@ -184,31 +184,51 @@ const char* computeStringPointer(
 
   VELOX_FAIL("String offset is outside of the string buffers: {}", offset);
 }
+void writeStringViews(const BaseVector& vector, std::ostream& out) {
+  auto flatVector = vector.asFlatVector<StringView>();
+  const auto& stringRawValues = flatVector->rawValues();
+  // values buffer
+  write<int32_t>(sizeof(StringView) * vector.size(), out);
+  out.write(
+      flatVector->values()->as<char>(), sizeof(StringView) * vector.size());
+  // maybe run onece if i can change length after writer
+  int32_t totalLength = 0;
+  if (vector.nulls()) {
+    for (int i = 0; i < flatVector->size(); ++i) {
+      if (!flatVector->isNullAt(i)) {
+        if (!stringRawValues[i].isInline()) {
+          totalLength += stringRawValues[i].size();
+        }
+      }
+    }
+  } else {
+    for (int i = 0; i < flatVector->size(); ++i) {
+      if (!stringRawValues[i].isInline()) {
+        totalLength += stringRawValues[i].size();
+      }
+    }
+  }
 
-void writeStringViews(
-    vector_size_t size,
-    const BufferPtr& strings,
-    const std::vector<BufferPtr>& stringBuffers,
-    std::ostream& out) {
-  write<int32_t>(strings->size(), out);
+  if (totalLength == 0) {
+    write<int32_t>(0, out);
+    return; // new format
+  }
+  write<int32_t>(1, out); // new format
+  write<int32_t>(totalLength, out);
 
-  auto rawBytes = strings->as<char>();
-  auto rawValues = strings->as<StringView>();
-  for (auto i = 0; i < size; ++i) {
-    auto stringView = rawValues[i];
-    if (stringView.isInline()) {
-      out.write(rawBytes + i * sizeof(StringView), sizeof(StringView));
-    } else {
-      // Size.
-      write<int32_t>(stringView.size(), out);
-
-      // 4 bytes of zeros for prefix. We'll fill this in appropriately when
-      // deserializing.
-      write<int32_t>(0, out);
-
-      // Offset.
-      auto offset = computeStringOffset(stringView, stringBuffers);
-      write<int64_t>(offset, out);
+  if (vector.nulls()) {
+    for (int i = 0; i < flatVector->size(); ++i) {
+      if (!flatVector->isNullAt(i)) {
+        if (!stringRawValues[i].isInline()) {
+          out.write(stringRawValues[i].data(), stringRawValues[i].size());
+        }
+      }
+    }
+  } else {
+    for (int i = 0; i < flatVector->size(); ++i) {
+      if (!stringRawValues[i].isInline()) {
+        out.write(stringRawValues[i].data(), stringRawValues[i].size());
+      }
     }
   }
 }
@@ -216,16 +236,37 @@ void writeStringViews(
 void restoreVectorStringViews(
     vector_size_t size,
     const BufferPtr& strings,
-    const std::vector<BufferPtr>& stringBuffers) {
-  auto rawBytes = strings->as<char>();
+    const BufferPtr& stringBuffers,
+    const BufferPtr& nulls) {
+  auto rawBytes = strings->asMutable<char>();
   auto rawValues = strings->asMutable<StringView>();
-  for (auto i = 0; i < size; ++i) {
-    auto value = rawValues[i];
-    if (!value.isInline()) {
-      auto offset = *reinterpret_cast<const int64_t*>(
-          rawBytes + i * sizeof(StringView) + 8);
-      rawValues[i] =
-          StringView(computeStringPointer(offset, stringBuffers), value.size());
+
+  int64_t offset = reinterpret_cast<int64_t>(stringBuffers->as<char>());
+  // int64_t offset = 0;
+  if (nulls) {
+    auto* rawNulls = nulls->asMutable<uint64_t>();
+    for (auto i = 0; i < size; ++i) {
+      auto value = rawValues[i];
+      if (!bits::isBitNull(rawNulls, i) && !value.isInline()) {
+        int64_t* i1 =
+            reinterpret_cast<int64_t*>(rawBytes + i * sizeof(StringView) + 8);
+        i1[0] = offset;
+        // rawValues[i] =
+        // StringView(stringBuffers->as<char>() + offset, value.size());
+        offset += value.size();
+      }
+    }
+  } else {
+    for (auto i = 0; i < size; ++i) {
+      auto value = rawValues[i];
+      if (!value.isInline()) {
+        int64_t* i1 =
+            reinterpret_cast<int64_t*>(rawBytes + i * sizeof(StringView) + 8);
+        i1[0] = offset;
+        // rawValues[i] =
+        // StringView(stringBuffers->as<char>() + offset, value.size());
+        offset += value.size();
+      }
     }
   }
 }
@@ -244,26 +285,12 @@ void writeFlatVector(const BaseVector& vector, std::ostream& out) {
     const auto& values = vector.values();
     if (values) {
       write<bool>(true, out);
-
-      const auto& stringBuffers =
-          vector.asFlatVector<StringView>()->stringBuffers();
-      writeStringViews(vector.size(), values, stringBuffers, out);
+      writeStringViews(vector, out);
     } else {
       write<bool>(false, out);
     }
   } else {
     writeOptionalBuffer(vector.values(), out);
-  }
-
-  // String buffers.
-  if (isVarcharOrVarbinary(vector)) {
-    const auto& stringBuffers =
-        vector.asFlatVector<StringView>()->stringBuffers();
-    write<int32_t>(stringBuffers.size(), out);
-
-    for (const auto& buffer : stringBuffers) {
-      writeBuffer(buffer, out);
-    }
   }
 }
 
@@ -282,13 +309,13 @@ VectorPtr readFlatVector(
   std::vector<BufferPtr> stringBuffers;
   if (type->isVarchar() || type->isVarbinary()) {
     int32_t numStringBuffers = read<int32_t>(in);
-    for (auto i = 0; i < numStringBuffers; ++i) {
-      stringBuffers.push_back(readBuffer(in, pool));
-    }
-
-    // Update the pointers in the StringViews.
-    if (values) {
-      restoreVectorStringViews(size, values, stringBuffers);
+    if (numStringBuffers > 0) {
+      BufferPtr stringBuffer = readBuffer(in, pool);
+      stringBuffers.push_back(stringBuffer);
+      // Update the pointers in the StringViews.
+      if (values) {
+        restoreVectorStringViews(size, values, stringBuffer, nulls);
+      }
     }
   }
 
