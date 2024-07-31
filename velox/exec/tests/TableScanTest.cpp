@@ -17,7 +17,7 @@
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/Latch.h>
 #include <atomic>
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFile.h"
