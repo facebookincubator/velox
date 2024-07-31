@@ -83,7 +83,7 @@ struct Split {
     while (pos < end && count < limit) {
       auto charLength = tryGetCharLength(start + pos, end - pos);
       if (charLength <= 0) {
-        // invalid UTF-8 character.
+        // Invalid UTF-8 character is treated as single character.
         charLength = 1;
       }
       result.add_item().setNoCopy(StringView(start + pos, charLength));
@@ -143,7 +143,7 @@ struct Split {
       if (size == 0) {
         auto charLength = tryGetCharLength(start + pos, end - pos);
         if (charLength <= 0) {
-          // invalid UTF-8 character.
+          // Invalid UTF-8 character is treated as single character.
           charLength = 1;
         }
         offset += charLength;
