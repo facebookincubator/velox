@@ -38,10 +38,20 @@ static constexpr size_t kMaxBuffers{3};
 // carried by ArrowArray.private_data
 class VeloxToArrowBridgeHolder {
  public:
-  VeloxToArrowBridgeHolder() {
-    for (size_t i = 0; i < kMaxBuffers; ++i) {
+  VeloxToArrowBridgeHolder() = default;
+
+  // Call to this method may require a call to `getArrowBuffers()` in order to
+  // re-acquire the underlying buffer
+  void resizeBuffers(size_t bufferCount) {
+    if (bufferCount <= numBuffers_) {
+      return;
+    }
+    buffers_.resize(bufferCount);
+    bufferPtrs_.resize(bufferCount);
+    for (size_t i = numBuffers_; i < bufferCount; i++) {
       buffers_[i] = nullptr;
     }
+    numBuffers_ = bufferCount;
   }
 
   // Acquires a buffer at index `idx`.
@@ -58,7 +68,7 @@ class VeloxToArrowBridgeHolder {
   }
 
   const void** getArrowBuffers() {
-    return buffers_;
+    return (const void**)&(buffers_[0]);
   }
 
   // Allocates space for `numChildren` ArrowArray pointers.
@@ -88,12 +98,15 @@ class VeloxToArrowBridgeHolder {
   }
 
  private:
+  // Holds the count of total buffers
+  size_t numBuffers_ = kMaxBuffers;
+
   // Holds the pointers to the arrow buffers.
-  const void* buffers_[kMaxBuffers];
+  std::vector<const void*> buffers_{numBuffers_, nullptr};
 
   // Holds ownership over the Buffers being referenced by the buffers vector
   // above.
-  BufferPtr bufferPtrs_[kMaxBuffers];
+  std::vector<BufferPtr> bufferPtrs_{numBuffers_};
 
   // Auxiliary buffers to hold ownership over ArrowArray children structures.
   std::vector<std::unique_ptr<ArrowArray>> childrenPtrs_;
@@ -249,8 +262,14 @@ const char* exportArrowFormatStr(
     // We always map VARCHAR and VARBINARY to the "small" version (lower case
     // format string), which uses 32 bit offsets.
     case TypeKind::VARCHAR:
+      if (options.exportToStringView) {
+        return "vu";
+      }
       return "u"; // utf-8 string
     case TypeKind::VARBINARY:
+      if (options.exportToStringView) {
+        return "vz";
+      }
       return "z"; // binary
     case TypeKind::UNKNOWN:
       return "n"; // NullType
@@ -511,6 +530,59 @@ VectorPtr createFlatVector(
 using WrapInBufferViewFunc =
     std::function<BufferPtr(const void* buffer, size_t length)>;
 
+VectorPtr createStringFlatVectorFromUtf8View(
+    memory::MemoryPool* pool,
+    const TypePtr& type,
+    BufferPtr nulls,
+    const ArrowArray& arrowArray,
+    WrapInBufferViewFunc wrapInBufferView) {
+  int64_t num_buffers = arrowArray.n_buffers;
+  VELOX_USER_CHECK_GE(
+      num_buffers,
+      3,
+      "Expecting three or more buffers as input for string view types.");
+
+  // The last C data buffer stores buffer sizes
+  auto* bufferSizes = (uint64_t*)arrowArray.buffers[num_buffers - 1];
+  std::vector<BufferPtr> stringViewBuffers(num_buffers - 3);
+
+  // Skipping buffer_id = 0 (nulls buffer) and buffer_id = 1 (values buffer)
+  for (int32_t buffer_id = 2; buffer_id < num_buffers - 1; ++buffer_id) {
+    stringViewBuffers[buffer_id - 2] = wrapInBufferView(
+        arrowArray.buffers[buffer_id], bufferSizes[buffer_id - 2]);
+  }
+
+  BufferPtr stringViews =
+      AlignedBuffer::allocate<StringView>(arrowArray.length, pool);
+  auto* rawStringViews = stringViews->asMutable<uint64_t>();
+  auto* rawNulls = nulls->as<uint64_t>();
+
+  // Full copy for inline strings (length <= 12). For non-inline strings,
+  // convert 16-byte Arrow Utf8View [4-byte length, 4-byte prefix, 4-byte
+  // buffer-index, 4-byte buffer-offset] to 16-byte Velox StringView [4-byte
+  // length, 4-byte prefix, 8-byte buffer-ptr]
+  for (int32_t idx_64 = 0; idx_64 < arrowArray.length; ++idx_64) {
+    auto* view = (uint32_t*)(&((uint64_t*)arrowArray.buffers[1])[2 * idx_64]);
+    rawStringViews[2 * idx_64] = *(uint64_t*)view;
+    if (view[0] > 12)
+      rawStringViews[2 * idx_64 + 1] =
+          (uint64_t)arrowArray.buffers[2 + view[2]] + view[3];
+    else
+      rawStringViews[2 * idx_64 + 1] = *(uint64_t*)&view[2];
+  }
+
+  return std::make_shared<FlatVector<StringView>>(
+      pool,
+      type,
+      nulls,
+      arrowArray.length,
+      std::move(stringViews),
+      std::move(stringViewBuffers),
+      SimpleVectorStats<StringView>{},
+      std::nullopt,
+      optionalNullCount(arrowArray.null_count));
+}
+
 template <typename TOffset>
 VectorPtr createStringFlatVector(
     memory::MemoryPool* pool,
@@ -631,6 +703,71 @@ void exportValues(
   holder.setBuffer(1, values);
 }
 
+void exportViews(
+    const FlatVector<StringView>& vec,
+    const Selection& rows,
+    ArrowArray& out,
+    memory::MemoryPool* pool,
+    VeloxToArrowBridgeHolder& holder) {
+  auto stringBuffers = vec.stringBuffers();
+  size_t numStringBuffers = stringBuffers.size();
+  size_t numBuffers = 3 +
+      numStringBuffers; // nulls, values, stringBuffers, variadic_buffer_sizes
+
+  // resize and reassign holder buffers
+  holder.resizeBuffers(numBuffers);
+  out.buffers = holder.getArrowBuffers();
+  // cache for fast [buffer-idx, buffer-offset] calculation
+  std::vector<int32_t> stringBufferVec(numStringBuffers);
+
+  BufferPtr variadicBufferSizes =
+      AlignedBuffer::allocate<size_t>(numStringBuffers, pool);
+  auto rawVariadicBufferSizes = variadicBufferSizes->asMutable<uint64_t>();
+  for (int32_t idx = 0; idx < numStringBuffers; ++idx) {
+    rawVariadicBufferSizes[idx] = stringBuffers[idx]->size();
+    holder.setBuffer(2 + idx, stringBuffers[idx]);
+    stringBufferVec[idx] = idx;
+  }
+  holder.setBuffer(numBuffers - 1, variadicBufferSizes);
+  out.n_buffers = numBuffers;
+
+  // Sorting cache for fast binary search of [4-byte buffer-idx, 4-byte
+  // buffer-offset] from stringBufferVec with key [8-byte buffer-ptr]
+  std::stable_sort(
+      stringBufferVec.begin(),
+      stringBufferVec.end(),
+      [&out](const auto& lhs, const auto& rhs) {
+        return ((uint64_t*)&out.buffers[2])[lhs] <
+            ((uint64_t*)&out.buffers[2])[rhs];
+      });
+
+  auto utf8Views = (uint64_t*)out.buffers[1];
+  int32_t bufferIdxCache = 0;
+  uint64_t bufferAddrCache = 0;
+
+  rows.apply([&](vector_size_t i) {
+    auto view = (uint32_t*)&utf8Views[2 * i];
+    if (!vec.isNullAt(i) && view[0] > 12) {
+      uint64_t currAddr = *(uint64_t*)&view[2];
+      if (i == 0 ||
+          (currAddr - bufferAddrCache) >
+              rawVariadicBufferSizes[bufferIdxCache]) {
+        auto it = std::prev(std::upper_bound(
+            stringBufferVec.begin(),
+            stringBufferVec.end(),
+            currAddr,
+            [&out](const auto& lhs, const auto& rhs) {
+              return lhs < ((uint64_t*)&out.buffers[2])[rhs];
+            }));
+        bufferAddrCache = ((uint64_t*)&out.buffers[2])[*it];
+        bufferIdxCache = *it;
+      }
+      view[2] = bufferIdxCache;
+      view[3] = currAddr - bufferAddrCache;
+    }
+  });
+}
+
 void exportStrings(
     const FlatVector<StringView>& vec,
     const Selection& rows,
@@ -688,8 +825,21 @@ void exportFlat(
       break;
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
-      exportStrings(
-          *vec.asUnchecked<FlatVector<StringView>>(), rows, out, pool, holder);
+      if (options.exportToStringView) {
+        exportValues(vec, rows, options, out, pool, holder);
+        exportViews(
+            *vec.asUnchecked<FlatVector<StringView>>(),
+            rows,
+            out,
+            pool,
+            holder);
+      } else
+        exportStrings(
+            *vec.asUnchecked<FlatVector<StringView>>(),
+            rows,
+            out,
+            pool,
+            holder);
       break;
     default:
       VELOX_NYI(
@@ -1081,6 +1231,15 @@ TypePtr importFromArrowImpl(
     case 'z':
     case 'Z':
       return VARBINARY();
+
+    case 'v':
+      if (format[1] == 'u') {
+        return VARCHAR();
+      }
+      if (format[1] == 'z') {
+        return VARBINARY();
+      }
+      break;
 
     case 't': // temporal types.
       if (format[1] == 's') {
@@ -1713,6 +1872,13 @@ VectorPtr importFromArrowImpl(
 
   // String data types (VARCHAR and VARBINARY).
   if (type->isVarchar() || type->isVarbinary()) {
+    // Import StringView from Utf8View/BinaryView (Zero-copy)
+    if (arrowSchema.format[0] == 'v') {
+      return createStringFlatVectorFromUtf8View(
+          pool, type, nulls, arrowArray, wrapInBufferView);
+    }
+
+    // Import StringView from Utf8/Binary
     VELOX_USER_CHECK_EQ(
         arrowArray.n_buffers,
         3,
