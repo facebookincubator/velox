@@ -19,7 +19,7 @@ velox_add_library(
   ArraySort.cpp
   Bitwise.cpp
   Comparisons.cpp
-  DecimalArithmetic.cpp
+  DecimalFunctions.cpp
   DecimalCompare.cpp
   Hash.cpp
   In.cpp
