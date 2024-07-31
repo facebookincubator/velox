@@ -440,6 +440,8 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "unix_millis"});
   registerUnaryIntegralWithTReturn<MillisToTimestampFunction, Timestamp>(
       {prefix + "timestamp_millis"});
+  registerUnaryFloatingWithTReturn<SecondsToTimestampFunction, Timestamp>(
+        {prefix + "timestamp_seconds"});
 
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
@@ -501,3 +503,4 @@ void registerFunctions(const std::string& prefix) {
 
 } // namespace sparksql
 } // namespace facebook::velox::functions
+
