@@ -179,7 +179,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
                 std::dynamic_pointer_cast<::arrow::TimestampType>(
                     arrowSchema->field(0)->type());
             ASSERT_EQ(tsType->unit(), ::arrow::TimeUnit::MICRO);
-            ASSERT_EQ(tsType->timezone(), "UTC");
+            ASSERT_EQ(tsType->timezone(), "");
           })));
 
   const auto data = makeRowVector({makeFlatVector<Timestamp>(

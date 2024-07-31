@@ -238,8 +238,7 @@ Writer::Writer(
   }
   options_.timestampUnit =
       options.parquetWriteTimestampUnit.value_or(TimestampUnit::kNano);
-  options_.timestampTimeZone =
-      options.parquetWriteTimestampTimeZone.value_or("UTC");
+  options_.timestampTimeZone = options.parquetWriteTimestampTimeZone;
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
