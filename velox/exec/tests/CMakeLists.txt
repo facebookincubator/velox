@@ -326,3 +326,12 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   cpr_http_client_test cpr::cpr gtest gtest_main)
+
+add_executable(velox_driver_test OperatorReplacement.cpp Main.cpp)
+add_test(
+  NAME velox_driver_test
+  COMMAND velox_driver_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(
+  velox_driver_test velox_exec velox_exec_test_lib gtest)
