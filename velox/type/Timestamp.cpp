@@ -57,34 +57,21 @@ Timestamp Timestamp::now() {
   return fromMillis(epochMs);
 }
 
-void Timestamp::toGMT(const date::time_zone& zone) {
-  // Magic number -2^39 + 24*3600. This number and any number lower than that
-  // will cause time_zone::to_sys() to SIGABRT. We don't want that to happen.
-  VELOX_USER_CHECK_GT(
-      seconds_,
-      -1096193779200l + 86400l,
-      "Timestamp seconds out of range for time zone adjustment");
+void Timestamp::toGMT(const tz::TimeZone& zone) {
+  std::chrono::seconds sysSeconds;
 
-  VELOX_USER_CHECK_LE(
-      seconds_,
-      kMaxSeconds,
-      "Timestamp seconds out of range for time zone adjustment");
-
-  date::local_time<std::chrono::seconds> localTime{
-      std::chrono::seconds(seconds_)};
-  std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>
-      sysTime;
   try {
-    sysTime = zone.to_sys(localTime);
+    sysSeconds = zone.to_sys(std::chrono::seconds(seconds_));
   } catch (const date::ambiguous_local_time&) {
     // If the time is ambiguous, pick the earlier possibility to be consistent
     // with Presto.
-    sysTime = zone.to_sys(localTime, date::choose::earliest);
+    sysSeconds = zone.to_sys(
+        std::chrono::seconds(seconds_), tz::TimeZone::TChoose::kEarliest);
   } catch (const date::nonexistent_local_time& error) {
     // If the time does not exist, fail the conversion.
     VELOX_USER_FAIL(error.what());
   }
-  seconds_ = sysTime.time_since_epoch().count();
+  seconds_ = sysSeconds.count();
 }
 
 void Timestamp::toGMT(int16_t tzID) {
@@ -94,50 +81,22 @@ void Timestamp::toGMT(int16_t tzID) {
     seconds_ -= getPrestoTZOffsetInSeconds(tzID);
   } else {
     // Other ids go this path.
-    toGMT(*date::locate_zone(util::getTimeZoneName(tzID)));
+    toGMT(*tz::locateZone(tz::getTimeZoneName(tzID)));
   }
 }
-
-namespace {
-void validateTimePoint(const std::chrono::time_point<
-                       std::chrono::system_clock,
-                       std::chrono::milliseconds>& timePoint) {
-  // Due to the limit of std::chrono we can only represent time in
-  // [-32767-01-01, 32767-12-31] date range
-  const auto minTimePoint = date::sys_days{
-      date::year_month_day(date::year::min(), date::month(1), date::day(1))};
-  const auto maxTimePoint = date::sys_days{
-      date::year_month_day(date::year::max(), date::month(12), date::day(31))};
-  if (timePoint < minTimePoint || timePoint > maxTimePoint) {
-    VELOX_USER_FAIL(
-        "Timestamp is outside of supported range of [{}-{}-{}, {}-{}-{}]",
-        (int)date::year::min(),
-        "01",
-        "01",
-        (int)date::year::max(),
-        "12",
-        "31");
-  }
-}
-} // namespace
 
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-Timestamp::toTimePoint(bool allowOverflow) const {
+Timestamp::toTimePointMs(bool allowOverflow) const {
   using namespace std::chrono;
   auto tp = time_point<system_clock, milliseconds>(
       milliseconds(allowOverflow ? toMillisAllowOverflow() : toMillis()));
-  validateTimePoint(tp);
+  tz::validateRange(tp);
   return tp;
 }
 
-void Timestamp::toTimezone(const date::time_zone& zone, bool allowOverflow) {
-  auto tp = toTimePoint(allowOverflow);
-
+void Timestamp::toTimezone(const tz::TimeZone& zone) {
   try {
-    auto epoch = zone.to_local(tp).time_since_epoch();
-
-    // NOTE: Round down to get the seconds of the current time point.
-    seconds_ = std::chrono::floor<std::chrono::seconds>(epoch).count();
+    seconds_ = zone.to_local(std::chrono::seconds(seconds_)).count();
   } catch (const std::invalid_argument& e) {
     // Invalid argument means we hit a conversion not supported by
     // external/date. Need to throw a RuntimeError so that try() statements do
@@ -153,18 +112,18 @@ void Timestamp::toTimezone(int16_t tzID) {
     seconds_ += getPrestoTZOffsetInSeconds(tzID);
   } else {
     // Other ids go this path.
-    toTimezone(*date::locate_zone(util::getTimeZoneName(tzID)));
+    toTimezone(*tz::locateZone(tz::getTimeZoneName(tzID)));
   }
 }
 
-const date::time_zone& Timestamp::defaultTimezone() {
-  static const date::time_zone* kDefault = ({
+const tz::TimeZone& Timestamp::defaultTimezone() {
+  static const tz::TimeZone* kDefault = ({
     // TODO: We are hard-coding PST/PDT here to be aligned with the current
     // behavior in DWRF reader/writer.  Once they are fixed, we can use
     // date::current_zone() here.
     //
     // See https://github.com/facebookincubator/velox/issues/8127
-    auto* tz = date::locate_zone("America/Los_Angeles");
+    auto* tz = tz::locateZone("America/Los_Angeles");
     VELOX_CHECK_NOT_NULL(tz);
     tz;
   });

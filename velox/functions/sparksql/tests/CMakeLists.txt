@@ -32,10 +32,12 @@ add_executable(
   ElementAtTest.cpp
   HashTest.cpp
   InTest.cpp
+  JsonObjectKeysTest.cpp
   LeastGreatestTest.cpp
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
   MapTest.cpp
+  MaskTest.cpp
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
   RaiseErrorTest.cpp

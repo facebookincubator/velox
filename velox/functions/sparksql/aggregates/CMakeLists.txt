@@ -18,7 +18,9 @@ velox_add_library(
   BloomFilterAggAggregate.cpp
   CentralMomentsAggregate.cpp
   CollectListAggregate.cpp
+  CollectSetAggregate.cpp
   FirstLastAggregate.cpp
+  MinMaxAggregate.cpp
   MinMaxByAggregate.cpp
   Register.cpp
   RegrReplacementAggregate.cpp
