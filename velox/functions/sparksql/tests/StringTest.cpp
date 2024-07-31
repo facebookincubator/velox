@@ -996,7 +996,6 @@ TEST_F(StringTest, trim) {
       "\u6574\u6570 \u6570\u636E!");
 }
 
-
 TEST_F(StringTest, empty2Null) {
   const auto empty2Null = [&](const std::optional<std::string>& a) {
     return evaluateOnce<std::string>("empty2null(c0)", a);
