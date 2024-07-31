@@ -147,12 +147,8 @@ bool isValidWeekDate(int32_t weekYear, int32_t weekOfYear, int32_t dayOfWeek) {
 bool isValidWeekOfMonthDate(
     int32_t year,
     int32_t month,
-    int32_t weekOfMonth,
     int32_t dayOfWeek) {
   if (dayOfWeek < 1 || dayOfWeek > 7) {
-    return false;
-  }
-  if (weekOfMonth < 1 || weekOfMonth > 5) {
     return false;
   }
   if (month < 1 || month > 12) {
@@ -618,7 +614,7 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
     int32_t month,
     int32_t weekOfMonth,
     int32_t dayOfWeek) {
-  if (!isValidWeekOfMonthDate(year, month, weekOfMonth, dayOfWeek)) {
+  if (!isValidWeekOfMonthDate(year, month, dayOfWeek)) {
     return folly::makeUnexpected(Status::UserError(
         "Date out of range: {}-{}-{}-{}", year, month, weekOfMonth, dayOfWeek));
   }
