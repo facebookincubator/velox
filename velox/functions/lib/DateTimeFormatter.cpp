@@ -1086,7 +1086,7 @@ int32_t DateTimeFormatter::format(
   Timestamp t = timestamp;
   if (timezone != nullptr) {
     const auto utcSeconds = timestamp.getSeconds();
-    t.toTimezone(*timezone);
+    t.toTimezone(*timezone, allowOverflow);
 
     offset = t.getSeconds() - utcSeconds;
   }

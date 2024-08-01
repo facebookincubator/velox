@@ -94,9 +94,11 @@ Timestamp::toTimePointMs(bool allowOverflow) const {
   return tp;
 }
 
-void Timestamp::toTimezone(const tz::TimeZone& zone) {
+void Timestamp::toTimezone(const tz::TimeZone& zone, bool allowOverflow) {
   try {
-    seconds_ = zone.to_local(std::chrono::seconds(seconds_)).count();
+    auto tp = toTimePointMs(allowOverflow);
+    auto seconds = tp.time_since_epoch().count() / 1000;
+    seconds_ = zone.to_local(std::chrono::seconds(seconds)).count();
   } catch (const std::invalid_argument& e) {
     // Invalid argument means we hit a conversion not supported by
     // external/date. Need to throw a RuntimeError so that try() statements do
