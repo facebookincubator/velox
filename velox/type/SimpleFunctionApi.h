@@ -235,6 +235,27 @@ struct ConstantChecker {
       isConstantType<TArgs>::value...};
 };
 
+template <typename T>
+struct ConstantArg {
+ public:
+  ConstantArg() {}
+
+  ConstantArg(T* value) : value_(value) {}
+
+  T* value() {
+    VELOX_USER_CHECK_NOT_NULL(value_, "NULL input for constant argument");
+    return value_;
+  }
+
+  // Null Constant.
+  bool isNull() {
+    return value_ == nullptr;
+  }
+
+ private:
+  T* value_ = nullptr;
+};
+
 /// CppToType templates for types introduced above.
 
 template <>
