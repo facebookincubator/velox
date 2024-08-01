@@ -111,7 +111,6 @@ TEST(HugeIntTest, combine) {
   testCombine(13579, 0, "13579" + std::string(18, '0'));
   testCombine(-13579, 0, "-13579" + std::string(18, '0'));
 
-  auto hugeInt = std::numeric_limits<int128_t>::max();
   testCombine(
       999'999'999'999'999'999L, 999'999'999'999'999'999L, std::string(36, '9'));
 
@@ -119,6 +118,9 @@ TEST(HugeIntTest, combine) {
       -999'999'999'999'999'999,
       -999'999'999'999'999'999,
       "-" + std::string(36, '9'));
+
+  testCombine(INT64_MAX, INT64_MAX, "9223372036854775816223372036854775807");
+  testCombine(INT64_MIN, INT64_MIN, "-9223372036854775816223372036854775807");
 
   // uint64Max * 0xDEADBEEF + 0xBADFEED = 0x0{8}DEADBEEEF{8}2D003FFE =
   // 68915718005535514949759025150
