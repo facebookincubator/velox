@@ -63,8 +63,8 @@ struct FromUnixtimeFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const ConstantArg<arg_type<double>>* /*unixtime*/,
-      const ConstantArg<arg_type<Varchar>>* timezone) {
+      const arg_type<double>* /*unixtime*/,
+      const arg_type<Varchar>* timezone) {
     if (timezone != nullptr) {
       tzID_ = tz::getTimeZoneID((std::string_view)(*timezone));
     }
@@ -83,9 +83,9 @@ struct FromUnixtimeFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const ConstantArg<arg_type<double>>* /*unixtime*/,
-      const ConstantArg<arg_type<int64_t>>* hours,
-      const ConstantArg<arg_type<int64_t>>* minutes) {
+      const arg_type<double>* /*unixtime*/,
+      const arg_type<int64_t>* hours,
+      const arg_type<int64_t>* minutes) {
     if (hours != nullptr && minutes != nullptr) {
       tzID_ = tz::getTimeZoneID(*hours * 60 + *minutes);
     }
@@ -151,21 +151,21 @@ struct DateFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<Varchar>>* date) {
+      const arg_type<Varchar>* date) {
     timeZone_ = getTimeZoneFromConfig(config);
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<Timestamp>>* timestamp) {
+      const arg_type<Timestamp>* timestamp) {
     timeZone_ = getTimeZoneFromConfig(config);
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<TimestampWithTimezone>>* timestampWithTimezone) {
+      const arg_type<TimestampWithTimezone>* timestampWithTimezone) {
     // Do nothing. Session timezone doesn't affect the result.
   }
 
@@ -930,8 +930,8 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<Varchar>>* unitString,
-      const ConstantArg<arg_type<Timestamp>>* /*timestamp*/) {
+      const arg_type<Varchar>* unitString,
+      const arg_type<Timestamp>* /*timestamp*/) {
     timeZone_ = getTimeZoneFromConfig(config);
 
     if (unitString != nullptr) {
@@ -942,8 +942,8 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const ConstantArg<arg_type<Varchar>>* unitString,
-      const ConstantArg<arg_type<Date>>* /*date*/) {
+      const arg_type<Varchar>* unitString,
+      const arg_type<Date>* /*date*/) {
     if (unitString != nullptr) {
       unit_ = getDateUnit(*unitString, false);
     }
@@ -952,8 +952,8 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const ConstantArg<arg_type<Varchar>>* unitString,
-      const ConstantArg<arg_type<TimestampWithTimezone>>* /*timestamp*/) {
+      const arg_type<Varchar>* unitString,
+      const arg_type<TimestampWithTimezone>* /*timestamp*/) {
     if (unitString != nullptr) {
       unit_ = getTimestampUnit(*unitString);
     }
@@ -1052,9 +1052,9 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<Varchar>>* unitString,
-      const ConstantArg<int64_t>* /*value*/,
-      const ConstantArg<arg_type<Timestamp>>* /*timestamp*/) {
+      const arg_type<Varchar>* unitString,
+      const int64_t* /*value*/,
+      const arg_type<Timestamp>* /*timestamp*/) {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (unitString != nullptr) {
       unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
@@ -1064,9 +1064,9 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const ConstantArg<arg_type<Varchar>>* unitString,
-      const ConstantArg<int64_t>* /*value*/,
-      const ConstantArg<arg_type<Date>>* /*date*/) {
+      const arg_type<Varchar>* unitString,
+      const int64_t* /*value*/,
+      const arg_type<Date>* /*date*/) {
     if (unitString != nullptr) {
       unit_ = getDateUnit(*unitString, false);
     }
@@ -1156,9 +1156,9 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<Varchar>>* unitString,
-      const ConstantArg<arg_type<Timestamp>>* /*timestamp1*/,
-      const ConstantArg<arg_type<Timestamp>>* /*timestamp2*/) {
+      const arg_type<Varchar>* unitString,
+      const arg_type<Timestamp>* /*timestamp1*/,
+      const arg_type<Timestamp>* /*timestamp2*/) {
     if (unitString != nullptr) {
       unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
     }
@@ -1169,9 +1169,9 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const ConstantArg<arg_type<Varchar>>* unitString,
-      const ConstantArg<arg_type<Date>>* /*date1*/,
-      const ConstantArg<arg_type<Date>>* /*date2*/) {
+      const arg_type<Varchar>* unitString,
+      const arg_type<Date>* /*date1*/,
+      const arg_type<Date>* /*date2*/) {
     if (unitString != nullptr) {
       unit_ = getDateUnit(*unitString, false);
     }
@@ -1180,9 +1180,9 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<Varchar>>* unitString,
-      const ConstantArg<arg_type<TimestampWithTimezone>>* /*timestampWithTimezone1*/,
-      const ConstantArg<arg_type<TimestampWithTimezone>>* /*timestampWithTimezone2*/) {
+      const arg_type<Varchar>* unitString,
+      const arg_type<TimestampWithTimezone>* /*timestampWithTimezone1*/,
+      const arg_type<TimestampWithTimezone>* /*timestampWithTimezone2*/) {
     if (unitString != nullptr) {
       unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
     }
@@ -1257,8 +1257,8 @@ struct DateFormatFunction : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<Timestamp>>* /*timestamp*/,
-      const ConstantArg<arg_type<Varchar>>* formatString) {
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* formatString) {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (formatString != nullptr) {
       setFormatter(*formatString);
