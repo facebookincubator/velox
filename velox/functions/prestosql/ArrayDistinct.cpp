@@ -48,13 +48,17 @@ struct ValueSet<ComplexType> {
 
   struct EqualTo {
     bool operator()(const TKey& left, const TKey& right) const {
-      return std::get<1>(left)
-          ->equalValueAt(
-              std::get<1>(right),
-              std::get<2>(left),
-              std::get<2>(right),
-              CompareFlags::NullHandlingMode::kNullAsValue)
-          .value();
+      auto result = std::get<1>(left)->equalValueAt(
+          std::get<1>(right),
+          std::get<2>(left),
+          std::get<2>(right),
+          CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+      if (result.has_value()) {
+        return result.value();
+      }
+      VELOX_UNSUPPORTED(
+          "Comparison not supported for {} with null elements.",
+          std::get<1>(left)->type()->toString());
     }
   };
 
@@ -145,7 +149,7 @@ class ArrayDistinctFunction : public exec::VectorFunction {
     // Process the rows: store unique values in the hash table.
     ValueSet<T> uniqueSet;
 
-    rows.applyToSelected([&](vector_size_t row) {
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
       auto size = arrayVector->sizeAt(row);
       auto offset = arrayVector->offsetAt(row);
 
@@ -159,11 +163,16 @@ class ArrayDistinctFunction : public exec::VectorFunction {
           }
         } else {
           bool unique;
-          if constexpr (std::is_same_v<ComplexType, T>) {
-            unique = uniqueSet.insert(elements->base(), elements->index(i));
-          } else {
-            auto value = elements->valueAt<T>(i);
-            unique = uniqueSet.insert(value);
+          try {
+            if constexpr (std::is_same_v<ComplexType, T>) {
+              unique = uniqueSet.insert(elements->base(), elements->index(i));
+            } else {
+              auto value = elements->valueAt<T>(i);
+              unique = uniqueSet.insert(value);
+            }
+          } catch (...) {
+            uniqueSet.reset();
+            throw;
           }
 
           if (unique) {
@@ -213,7 +222,7 @@ VectorPtr ArrayDistinctFunction<UnknownType>::applyFlat(
   auto* rawNewSizes = newLengths->asMutable<vector_size_t>();
   auto* rawNewOffsets = newOffsets->asMutable<vector_size_t>();
 
-  rows.applyToSelected([&](vector_size_t row) {
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
     auto size = arrayVector->sizeAt(row);
     auto offset = arrayVector->offsetAt(row);
 
