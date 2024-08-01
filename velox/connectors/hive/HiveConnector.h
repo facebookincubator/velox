@@ -85,9 +85,6 @@ class HiveConnectorFactory : public ConnectorFactory {
   explicit HiveConnectorFactory(const char* FOLLY_NONNULL connectorName)
       : ConnectorFactory(connectorName) {}
 
-  /// Register HiveConnector components such as Dwrf, Parquet readers and
-  /// writers and FileSystems.
-  void initialize() override;
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,

@@ -21,23 +21,9 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/dwio/common/Reader.h"
 // Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_GCS
-#include "velox/connectors/hive/storage_adapters/gcs/RegisterGCSFileSystem.h" // @manual
-#endif
-#ifdef VELOX_ENABLE_HDFS3
-#include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h" // @manual
-#endif
-#ifdef VELOX_ENABLE_S3
-#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h" // @manual
-#endif
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
-// Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
-#include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
-#endif
+
 #include "velox/expression/FieldReference.h"
 
 #include <boost/lexical_cast.hpp>
@@ -135,29 +121,7 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
       constValues_);
 }
 
-void HiveConnectorFactory::initialize() {
-  static bool once = []() {
-    dwio::common::registerFileSinks();
-    dwrf::registerDwrfReaderFactory();
-    dwrf::registerDwrfWriterFactory();
-// Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_PARQUET
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
-#endif
-// Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_S3
-    filesystems::registerS3FileSystem();
-#endif
-#ifdef VELOX_ENABLE_HDFS3
-    filesystems::registerHdfsFileSystem();
-#endif
-#ifdef VELOX_ENABLE_GCS
-    filesystems::registerGCSFileSystem();
-#endif
-    return true;
-  }();
-}
+
 
 std::string HivePartitionFunctionSpec::toString() const {
   std::ostringstream keys;
@@ -222,7 +186,4 @@ void registerHivePartitionFunctionSerDe() {
       "HivePartitionFunctionSpec", HivePartitionFunctionSpec::deserialize);
 }
 
-VELOX_REGISTER_CONNECTOR_FACTORY(std::make_shared<HiveConnectorFactory>())
-VELOX_REGISTER_CONNECTOR_FACTORY(
-    std::make_shared<HiveHadoop2ConnectorFactory>())
 } // namespace facebook::velox::connector::hive
