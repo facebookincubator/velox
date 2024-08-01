@@ -18,6 +18,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/date.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::tz {
@@ -115,6 +116,42 @@ TEST(TimeZoneMapTest, offsetToSys) {
   EXPECT_NE(toSysTime("-07:00", ts), toSysTime("America/Los_Angeles", ts));
 }
 
+TEST(TimeZoneMapTest, timePointBoundary) {
+  using namespace date;
+
+  const auto* tz = locateZone("+00:01");
+  EXPECT_NE(tz, nullptr);
+
+  auto trySysYear = [&](year y) {
+    auto date = year_month_day(y, month(1), day(1));
+    return tz->to_sys(sys_days{date}.time_since_epoch());
+  };
+
+  auto tryLocalYear = [&](year y) {
+    auto date = year_month_day(y, month(1), day(1));
+    return tz->to_local(sys_days{date}.time_since_epoch());
+  };
+
+  EXPECT_NO_THROW(trySysYear(year(0)));
+  EXPECT_NO_THROW(trySysYear(year::max()));
+  EXPECT_NO_THROW(trySysYear(year::min()));
+
+  EXPECT_NO_THROW(tryLocalYear(year(0)));
+  EXPECT_NO_THROW(tryLocalYear(year::max()));
+  EXPECT_NO_THROW(tryLocalYear(year::min()));
+
+  std::string expected = "Timepoint is outside of supported year range";
+  VELOX_ASSERT_THROW(trySysYear(year(int(year::max()) + 1)), expected);
+  VELOX_ASSERT_THROW(trySysYear(year(int(year::min()) - 1)), expected);
+
+  VELOX_ASSERT_THROW(tryLocalYear(year(int(year::max()) + 1)), expected);
+  VELOX_ASSERT_THROW(tryLocalYear(year(int(year::min()) - 1)), expected);
+
+  // This time point triggers an assertion failure in external/date. Make sure
+  // we catch and throw before getting to that point.
+  VELOX_ASSERT_THROW(tz->to_sys(seconds{-1096193779200l - 86400l}), expected);
+}
+
 TEST(TimeZoneMapTest, getTimeZoneName) {
   EXPECT_EQ("America/Los_Angeles", getTimeZoneName(1825));
   EXPECT_EQ("Europe/Moscow", getTimeZoneName(2079));
@@ -145,9 +182,18 @@ TEST(TimeZoneMapTest, getTimeZoneID) {
   // (+/-)XX:MM format.
   EXPECT_EQ(840, getTimeZoneID("-00:01"));
   EXPECT_EQ(0, getTimeZoneID("+00:00"));
+  EXPECT_EQ(0, getTimeZoneID("-00:00"));
   EXPECT_EQ(454, getTimeZoneID("-06:27"));
   EXPECT_EQ(541, getTimeZoneID("-05:00"));
   EXPECT_EQ(1140, getTimeZoneID("+05:00"));
+
+  // Incomplete time zone offsets.
+  EXPECT_EQ(1140, getTimeZoneID("+05"));
+  EXPECT_EQ(1140, getTimeZoneID("+0500"));
+  EXPECT_EQ(1150, getTimeZoneID("+0510"));
+  EXPECT_EQ(181, getTimeZoneID("-1100"));
+  EXPECT_EQ(181, getTimeZoneID("-11"));
+  EXPECT_EQ(0, getTimeZoneID("+0000"));
 
   EXPECT_EQ(0, getTimeZoneID("etc/GMT+0"));
   EXPECT_EQ(0, getTimeZoneID("etc/GMT-0"));
