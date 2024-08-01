@@ -31,18 +31,17 @@ class SplitTest : public SparkFunctionBaseTest {
       const std::vector<std::vector<std::string>>& expected) {
     auto strings = makeFlatVector(input);
     auto delims = makeConstant<StringView>(StringView{delim}, numRows);
+    auto expectedResult = makeArrayVector(expected);
+    VectorPtr result;
     if (limit.has_value()) {
       auto limits = makeConstant<int32_t>(limit.value(), numRows);
       auto input = makeRowVector({strings, delims, limits});
-      auto result = evaluate("split(c0, c1, c2)", input);
-      auto expectedResult = makeArrayVector(expected);
-      assertEqualVectors(expectedResult, result);
+      result = evaluate("split(c0, c1, c2)", input);
     } else {
       auto input = makeRowVector({strings, delims});
-      auto result = evaluate("split(c0, c1)", input);
-      auto expectedResult = makeArrayVector(expected);
-      assertEqualVectors(expectedResult, result);
+      result = evaluate("split(c0, c1)", input);
     }
+    assertEqualVectors(expectedResult, result);
   };
 };
 
