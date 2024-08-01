@@ -169,7 +169,9 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
 }
 } // namespace
 
-void registerFunctions(const std::string& prefix) {
+void registerFunctions(
+    const std::string& prefix,
+    const SparkRegistrationConfig& config) {
   registerAllSpecialFormGeneralFunctions();
 
   // Register size functions
@@ -291,7 +293,7 @@ void registerFunctions(const std::string& prefix) {
 
   // These groups of functions involve instantiating many templates. They're
   // broken out into a separate compilation unit to improve build latency.
-  registerArithmeticFunctions(prefix);
+  registerArithmeticFunctions(prefix, config);
   registerCompareFunctions(prefix);
   registerBitwiseFunctions(prefix);
 
@@ -499,5 +501,9 @@ void registerFunctions(const std::string& prefix) {
       Varchar>({prefix + "mask"});
 }
 
+void registerFunctions(const std::string& prefix) {
+  SparkRegistrationConfig config;
+  registerFunctions(prefix, config);
+}
 } // namespace sparksql
 } // namespace facebook::velox::functions

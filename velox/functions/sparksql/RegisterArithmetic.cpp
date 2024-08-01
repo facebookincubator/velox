@@ -17,6 +17,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/sparksql/Arithmetic.h"
+#include "velox/functions/sparksql/DecimalFunctions.h"
 #include "velox/functions/sparksql/Rand.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -29,7 +30,9 @@ void registerRandFunctions(const std::string& prefix) {
       {prefix + "rand", prefix + "random"});
 }
 
-void registerArithmeticFunctions(const std::string& prefix) {
+void registerArithmeticFunctions(
+    const std::string& prefix,
+    const SparkRegistrationConfig& config) {
   // Operators.
   registerBinaryNumeric<PlusFunction>({prefix + "add"});
   registerBinaryNumeric<MinusFunction>({prefix + "subtract"});
@@ -105,10 +108,11 @@ void registerArithmeticFunctions(const std::string& prefix) {
       int64_t>({prefix + "width_bucket"});
   registerRandFunctions(prefix);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_add, prefix + "add");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_sub, prefix + "subtract");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_mul, prefix + "multiply");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
+  registerDecimalAdd(prefix, config.allowPrecisionLoss);
+  registerDecimalSubtract(prefix, config.allowPrecisionLoss);
+  registerDecimalMultiply(prefix, config.allowPrecisionLoss);
+  registerDecimalDivide(prefix, config.allowPrecisionLoss);
+
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
 

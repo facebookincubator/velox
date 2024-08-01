@@ -13,13 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include <string>
-#include "RegistrationConfig.h"
-
-namespace facebook::velox::functions::sparksql {
-void registerArithmeticFunctions(
-    const std::string& prefix,
-    const SparkRegistrationConfig& config);
-} // namespace facebook::velox::functions::sparksql
+struct SparkRegistrationConfig {
+  /// When true, establishing the result type of an arithmetic operation
+  /// according to Hive behavior and SQL ANSI 2011 specification, i.e.
+  /// rounding the decimal part of the result if an exact representation is not
+  /// possible. Otherwise, NULL is returned when the actual result cannot be
+  /// represented with the calculated decimal type. Now we support add,
+  /// subtract, multiply and divide operations.
+  bool allowPrecisionLoss = true;
+};
