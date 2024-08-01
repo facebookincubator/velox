@@ -110,7 +110,6 @@ struct WriterOptions : public dwio::common::WriterOptions {
   /// Default if not specified: TimestampUnit::kNano (9).
   std::optional<TimestampUnit> parquetWriteTimestampUnit;
   /// Timestamp time zone for Parquet write through Arrow bridge.
-  /// Default if not specified: "UTC".
   std::optional<std::string> parquetWriteTimestampTimeZone{std::nullopt};
   bool writeInt96AsTimestamp = false;
 
