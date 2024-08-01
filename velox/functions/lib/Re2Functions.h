@@ -277,11 +277,11 @@ struct Re2RegexpReplace {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<Varchar>>* /*string*/,
-      const ConstantArg<arg_type<Varchar>>* pattern,
-      const ConstantArg<arg_type<Varchar>>* replacement) {
+      const arg_type<Varchar>* /*string*/,
+      const arg_type<Varchar>* pattern,
+      const arg_type<Varchar>* replacement) {
     if (pattern != nullptr) {
-      const auto processedPattern = prepareRegexpPattern(*pattern->value());
+      const auto processedPattern = prepareRegexpPattern(*pattern);
       re_.emplace(processedPattern, RE2::Quiet);
       VELOX_USER_CHECK(
           re_->ok(),
@@ -294,7 +294,7 @@ struct Re2RegexpReplace {
       // Constant 'replacement' with non-constant 'pattern' needs to be
       // processed separately for each row.
       if (pattern != nullptr) {
-        ensureProcessedReplacement(re_.value(), *replacement->value());
+        ensureProcessedReplacement(re_.value(), *replacement);
         constantReplacement_ = true;
       }
     }
@@ -303,8 +303,8 @@ struct Re2RegexpReplace {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
-      const ConstantArg<arg_type<Varchar>>* string,
-      const ConstantArg<arg_type<Varchar>>* pattern) {
+      const arg_type<Varchar>* string,
+      const arg_type<Varchar>* pattern) {
     initialize(inputTypes, config, string, pattern, nullptr);
   }
 

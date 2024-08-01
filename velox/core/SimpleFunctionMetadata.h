@@ -806,7 +806,7 @@ class UDFHolder {
       void,
       const std::vector<TypePtr>&,
       const core::QueryConfig&,
-      const ConstantArg<exec_arg_type<TArgs>*...>::value>*;
+      const exec_arg_type<TArgs>*...>::value;
 
   // TODO Remove
   static constexpr bool udf_has_legacy_initialize = util::has_method<
