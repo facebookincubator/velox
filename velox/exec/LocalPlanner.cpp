@@ -238,7 +238,6 @@ uint32_t maxDrivers(
       if (!connectorInsertHandle->supportsMultiThreading()) {
         return 1;
       } else {
-        
         auto writerCount = tableWrite->hasPartitioningScheme()
             ? queryConfig.taskPartitionedWriterCount()
             : queryConfig.taskWriterCount();
