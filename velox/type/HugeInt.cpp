@@ -72,6 +72,15 @@ int128_t HugeInt::parse(const std::string& str) {
 
   return negative ? -result : result;
 }
+
+int128_t HugeInt::combine(int64_t hi, int64_t lo) {
+  VELOX_CHECK(
+      hi >= 0 && lo >= 0 || hi <= 0 && lo <= 0,
+      "High {} and low {} should have same symbol",
+      hi,
+      lo)
+  return static_cast<int128_t>(hi) * 1000'000'000'000'000'000 + lo;
+}
 } // namespace facebook::velox
 
 namespace std {

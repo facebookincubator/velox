@@ -32,6 +32,10 @@ void testParse(int128_t hugeInt, const std::string& hugeString) {
   EXPECT_EQ(hugeInt, HugeInt::parse(hugeString));
   EXPECT_EQ(hugeString, std::to_string(hugeInt));
 }
+
+void testCombine(int64_t hi, int64_t lo, const std::string& hugeString) {
+  EXPECT_EQ(std::to_string(HugeInt::combine(hi, lo)), hugeString);
+}
 } // namespace
 
 TEST(HugeIntTest, basic) {
@@ -96,4 +100,31 @@ TEST(HugeIntTest, parse) {
   VELOX_ASSERT_THROW(
       testParse(hugeInt, "170141183460469231731687303715884105730"),
       "out of range of int128_t");
+}
+
+TEST(HugeIntTest, combine) {
+  testCombine(0, 0, "0");
+  testCombine(0, 13579, "13579");
+  testCombine(0, -13579, "-13579");
+  testCombine(1, 13579, "1" + std::string(13, '0') + "13579");
+  testCombine(-1, -13579, "-1" + std::string(13, '0') + "13579");
+  testCombine(13579, 0, "13579" + std::string(18, '0'));
+  testCombine(-13579, 0, "-13579" + std::string(18, '0'));
+
+  auto hugeInt = std::numeric_limits<int128_t>::max();
+  testCombine(
+      999'999'999'999'999'999L, 999'999'999'999'999'999L, std::string(36, '9'));
+
+  testCombine(
+      -999'999'999'999'999'999,
+      -999'999'999'999'999'999,
+      "-" + std::string(36, '9'));
+
+  // uint64Max * 0xDEADBEEF + 0xBADFEED = 0x0{8}DEADBEEEF{8}2D003FFE =
+  // 68915718005535514949759025150
+  testCombine(
+      68'915'718'005, 535'514'949'759'025'150, "68915718005535514949759025150");
+
+  VELOX_ASSERT_THROW(
+      testCombine(12, -3, "xxx"), "High 12 and low -3 should have same symbol");
 }
