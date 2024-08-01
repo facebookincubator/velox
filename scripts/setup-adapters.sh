@@ -144,7 +144,6 @@ function install_hdfs_deps {
     wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-3.3.0/hadoop-3.3.0.tar.gz hadoop
     cp -a hadoop /usr/local/
     
-    yum install -y java-1.8.0-openjdk-devel
   fi
   cmake_install $libhdfs3_dir
 }
