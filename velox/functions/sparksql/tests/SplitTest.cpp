@@ -249,13 +249,13 @@ TEST_F(SplitTest, regexDelimiter) {
   delim = "A|";
   numRows = 3;
   input = std::vector<std::string>{
-      {"синяя赤いトマト緑の"},
-      {"Hello世界\xED🙂"},
+      {"синя🙂赤トマト🙂緑の"},
+      {"Hello🙂世界\xED🙂"},
       {""},
   };
   expected = std::vector<std::vector<std::string>>({
-      {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の", ""},
-      {"H", "e", "l", "l", "o", "世", "界", "\xED", "🙂", ""},
+      {"с", "и", "н", "я", "🙂", "赤", "ト", "マ", "ト", "🙂", "緑", "の", ""},
+      {"H", "e", "l", "l", "o", "🙂", "世", "界", "\xED", "🙂", ""},
       {""},
   });
 
@@ -263,8 +263,17 @@ TEST_F(SplitTest, regexDelimiter) {
 
   limit = 2;
   expected = {
-      {"с", "иняя赤いトマト緑の"},
-      {"H", "ello世界\xED🙂"},
+      {"с", "иня🙂赤トマト🙂緑の"},
+      {"H", "ello🙂世界\xED🙂"},
+      {""},
+  };
+  testSplit(input, delim, limit, numRows, expected);
+
+  delim = "🙂";
+  limit = -1;
+  expected = {
+      {"синя", "赤トマト", "緑の"},
+      {"Hello", "世界\xED", ""},
       {""},
   };
   testSplit(input, delim, limit, numRows, expected);
