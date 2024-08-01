@@ -73,13 +73,9 @@ int128_t HugeInt::parse(const std::string& str) {
   return negative ? -result : result;
 }
 
-int128_t HugeInt::combine(int64_t hi, int64_t lo) {
-  VELOX_CHECK(
-      (hi >= 0 && lo >= 0) || (hi <= 0 && lo <= 0),
-      "High {} and low {} should have same symbol",
-      hi,
-      lo)
-  return static_cast<int128_t>(hi) * 1000'000'000'000'000'000 + lo;
+int128_t HugeInt::combine(int64_t first, int64_t second) {
+  VELOX_CHECK((first >= 0 && second >= 0) || (first <= 0 && second <= 0))
+  return static_cast<int128_t>(first) * 1000'000'000'000'000'000 + second;
 }
 } // namespace facebook::velox
 

@@ -57,12 +57,14 @@ class HugeInt {
 
   static int128_t parse(const std::string& str);
 
-  /// Because value exceeds maxium int64_t cannot write, add this helper
-  /// function to test. It can represent -9223372036854775817223372036854775808
-  /// to 9223372036854775816223372036854775807.
-  /// Example Usage:
-  /// combine(1, 13579) return 1'000'000'000'000'013'579
-  static int128_t combine(int64_t hi, int64_t lo);
+  /// Returns first * 10^18 + second.
+  /// It can represent -9223372036854775817223372036854775808 to
+  /// 9223372036854775816223372036854775807. Notice, it cannot represents all
+  /// the int128.
+  ///
+  /// Example Usage: combine(1, 13579)
+  /// return 1'000'000'000'000'013'579
+  static int128_t combine(int64_t first, int64_t second);
 };
 
 } // namespace facebook::velox

@@ -33,9 +33,6 @@ void testParse(int128_t hugeInt, const std::string& hugeString) {
   EXPECT_EQ(hugeString, std::to_string(hugeInt));
 }
 
-void testCombine(int64_t hi, int64_t lo, const std::string& hugeString) {
-  EXPECT_EQ(std::to_string(HugeInt::combine(hi, lo)), hugeString);
-}
 } // namespace
 
 TEST(HugeIntTest, basic) {
@@ -103,6 +100,11 @@ TEST(HugeIntTest, parse) {
 }
 
 TEST(HugeIntTest, combine) {
+  auto testCombine =
+      [](int64_t first, int64_t second, const std::string& hugeString) {
+        EXPECT_EQ(std::to_string(HugeInt::combine(first, second)), hugeString);
+      };
+
   testCombine(0, 0, "0");
   testCombine(0, 13579, "13579");
   testCombine(0, -13579, "-13579");
