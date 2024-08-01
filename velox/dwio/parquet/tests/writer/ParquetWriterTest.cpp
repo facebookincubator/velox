@@ -170,7 +170,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
   writer->close();
 };
 
-DEBUG_ONLY_TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
+TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::parquet::Writer::write",
       std::function<void(const ::arrow::Schema*)>(
