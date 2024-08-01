@@ -1745,8 +1745,12 @@ void Task::addHashJoinBridgesLocked(
     const std::vector<core::PlanNodeId>& planNodeIds) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNodeId : planNodeIds) {
-    splitGroupState.bridges.emplace(
-        planNodeId, std::make_shared<HashJoinBridge>());
+    auto const inserted =
+        splitGroupState.bridges
+            .emplace(planNodeId, std::make_shared<HashJoinBridge>())
+            .second;
+    VELOX_CHECK(
+        inserted, "Join bridge for node {} is already present", planNode->id());
   }
 }
 
@@ -1756,8 +1760,13 @@ void Task::addCustomJoinBridgesLocked(
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNode : planNodes) {
     if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
-      splitGroupState.custom_bridges.emplace(
-          planNode->id(), std::move(joinBridge));
+      auto const inserted = splitGroupState.custom_bridges
+                                .emplace(planNode->id(), std::move(joinBridge))
+                                .second;
+      VELOX_CHECK(
+          inserted,
+          "Join bridge for node {} is already present",
+          planNode->id());
       return;
     }
   }
@@ -1774,8 +1783,12 @@ void Task::addNestedLoopJoinBridgesLocked(
     const std::vector<core::PlanNodeId>& planNodeIds) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNodeId : planNodeIds) {
-    splitGroupState.bridges.emplace(
-        planNodeId, std::make_shared<NestedLoopJoinBridge>());
+    auto const inserted =
+        splitGroupState.bridges
+            .emplace(planNodeId, std::make_shared<NestedLoopJoinBridge>())
+            .second;
+    VELOX_CHECK(
+        inserted, "Join bridge for node {} is already present", planNode->id());
   }
 }
 
