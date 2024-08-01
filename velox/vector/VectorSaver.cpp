@@ -242,17 +242,13 @@ void restoreVectorStringViews(
   auto rawValues = strings->asMutable<StringView>();
 
   int64_t offset = reinterpret_cast<int64_t>(stringBuffers->as<char>());
-  // int64_t offset = 0;
   if (nulls) {
     auto* rawNulls = nulls->asMutable<uint64_t>();
     for (auto i = 0; i < size; ++i) {
       auto value = rawValues[i];
       if (!bits::isBitNull(rawNulls, i) && !value.isInline()) {
-        int64_t* i1 =
-            reinterpret_cast<int64_t*>(rawBytes + i * sizeof(StringView) + 8);
-        i1[0] = offset;
-        // rawValues[i] =
-        // StringView(stringBuffers->as<char>() + offset, value.size());
+        reinterpret_cast<int64_t*>(rawBytes + i * sizeof(StringView) + 8)[0] =
+            offset;
         offset += value.size();
       }
     }
@@ -260,11 +256,8 @@ void restoreVectorStringViews(
     for (auto i = 0; i < size; ++i) {
       auto value = rawValues[i];
       if (!value.isInline()) {
-        int64_t* i1 =
-            reinterpret_cast<int64_t*>(rawBytes + i * sizeof(StringView) + 8);
-        i1[0] = offset;
-        // rawValues[i] =
-        // StringView(stringBuffers->as<char>() + offset, value.size());
+        reinterpret_cast<int64_t*>(rawBytes + i * sizeof(StringView) + 8)[0] =
+            offset;
         offset += value.size();
       }
     }
