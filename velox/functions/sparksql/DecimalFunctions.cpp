@@ -65,7 +65,7 @@ decimalAddResult(T whole, T fraction, uint8_t resultScale, bool& overflow) {
 // Reduces the scale of input value by 'delta'. Returns the input value if delta
 // is not positive.
 template <typename T>
-inline static T reduceScale(T in, int32_t delta) {
+inline T reduceScale(T in, int32_t delta) {
   if (delta <= 0) {
     return in;
   }
@@ -87,7 +87,7 @@ inline static T reduceScale(T in, int32_t delta) {
 // Adds two non-negative values by adding the whole and fraction parts
 // separately.
 template <typename TResult, typename A, typename B>
-inline static TResult addLargeNonNegative(
+inline TResult addLargeNonNegative(
     A a,
     B b,
     uint8_t aScale,
@@ -128,7 +128,7 @@ inline static TResult addLargeNonNegative(
 
 // Adds two opposite values by adding the whole and fraction parts separately.
 template <typename TResult, typename A, typename B>
-inline static TResult addLargeOpposite(
+inline TResult addLargeOpposite(
     A a,
     B b,
     uint8_t aScale,
@@ -171,7 +171,7 @@ inline static TResult addLargeOpposite(
 }
 
 template <typename TResult, typename A, typename B>
-inline static TResult addLarge(
+inline TResult addLarge(
     A a,
     B b,
     uint8_t aScale,
@@ -232,7 +232,7 @@ inline void applyAdd(
   }
 }
 
-static std::pair<uint8_t, uint8_t> computeAddResultPrecisionScale(
+std::pair<uint8_t, uint8_t> computeAddResultPrecisionScale(
     uint8_t aPrecision,
     uint8_t aScale,
     uint8_t bPrecision,
@@ -373,8 +373,8 @@ struct DecimalMultiplyFunction {
     uint8_t bPrecision = getDecimalPrecisionScale(*bType).first;
     aScale_ = getDecimalPrecisionScale(*aType).second;
     bScale_ = getDecimalPrecisionScale(*bType).second;
-    auto [rPrecision, rScale] =
-        computeResultPrecisionScale(aPrecision, aScale_, bPrecision, bScale_);
+    auto [rPrecision, rScale] = DecimalUtil::adjustPrecisionScale(
+        aPrecision + bPrecision + 1, aScale_ + bScale_);
     rPrecision_ = rPrecision;
     rScale_ = rScale;
     deltaScale_ = aScale_ + bScale_ - rScale_;
@@ -450,15 +450,6 @@ struct DecimalMultiplyFunction {
   }
 
  private:
-  static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
-      uint8_t aPrecision,
-      uint8_t aScale,
-      uint8_t bPrecision,
-      uint8_t bScale) {
-    return DecimalUtil::adjustPrecisionScale(
-        aPrecision + bPrecision + 1, aScale + bScale);
-  }
-
   inline static int256_t reduceScaleBy(int256_t in, int32_t reduceBy) {
     if (reduceBy == 0) {
       return in;
@@ -626,7 +617,7 @@ void registerDecimalMultiply(const std::string& prefix) {
       prefix + "multiply", makeConstraints(rPrecision, rScale));
 }
 
-std::vector<exec::SignatureVariable> getDivideConstraintsAllowPrecisionLoss() {
+std::vector<exec::SignatureVariable> getDivideConstraints() {
   std::string rPrecision = fmt::format(
       "{a_precision} - {a_scale} + {b_scale} + max(6, {a_scale} + {b_precision} + 1)",
       fmt::arg("a_precision", P1::name()),
@@ -641,9 +632,7 @@ std::vector<exec::SignatureVariable> getDivideConstraintsAllowPrecisionLoss() {
 }
 
 void registerDecimalDivide(const std::string& prefix) {
-  std::vector<exec::SignatureVariable> constraints =
-      getDivideConstraintsAllowPrecisionLoss();
-
+  std::vector<exec::SignatureVariable> constraints = getDivideConstraints();
   registerDecimalBinary<DecimalDivideFunction>(prefix + "divide", constraints);
 
   // (short, long) -> short
