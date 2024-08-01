@@ -175,7 +175,7 @@ class UnknowTypeVectorHasher : public SparkVectorHasher<HashClass> {
   using SeedType = typename HashClass::SeedType;
   using ReturnType = typename HashClass::ReturnType;
 
-  UnknowTypeVectorHasher(DecodedVector& decoded)
+  explicit UnknowTypeVectorHasher(DecodedVector& decoded)
       : SparkVectorHasher<HashClass>(decoded) {}
 
   ReturnType hashNotNullAt(vector_size_t /*index*/, SeedType /*seed*/)
