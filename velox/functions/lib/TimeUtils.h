@@ -100,7 +100,7 @@ struct InitSessionTimezone {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<Timestamp>* /*timestamp*/) {
+      const ConstantArg<arg_type<Timestamp>>* /*timestamp*/) {
     timeZone_ = getTimeZoneFromConfig(config);
   }
 };
