@@ -55,7 +55,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: empty2null(input) -> varchar
 
-    Returns NULL when the ``input`` is empty, otherwise, it returns the ``input`` itself. ::
+    Returns NULL if ``input`` is empty. Otherwise, returns ``input``. ::
 
         SELECT empty2null(''); -- NULL
         SELECT empty2null('abc'); -- 'abc'
