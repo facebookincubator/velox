@@ -58,7 +58,7 @@ class HugeInt {
   static int128_t parse(const std::string& str);
 
   /// Because value exceeds maxium int64_t cannot write, add this helper
-  /// function to test. It can represent -9223372036854775816223372036854775807
+  /// function to test. It can represent -9223372036854775817223372036854775808
   /// to 9223372036854775816223372036854775807.
   /// Example Usage:
   /// combine(1, 13579) return 1'000'000'000'000'013'579

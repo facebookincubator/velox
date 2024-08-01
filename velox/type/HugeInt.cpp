@@ -75,7 +75,7 @@ int128_t HugeInt::parse(const std::string& str) {
 
 int128_t HugeInt::combine(int64_t hi, int64_t lo) {
   VELOX_CHECK(
-      hi >= 0 && lo >= 0 || hi <= 0 && lo <= 0,
+      (hi >= 0 && lo >= 0) || (hi <= 0 && lo <= 0),
       "High {} and low {} should have same symbol",
       hi,
       lo)
