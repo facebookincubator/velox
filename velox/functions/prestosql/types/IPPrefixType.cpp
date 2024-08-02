@@ -23,11 +23,11 @@ namespace {
 class IPPrefixCastOperator : public exec::CastOperator {
  public:
   bool isSupportedFromType(const TypePtr& other) const override {
-        switch (other->kind()) {
+    switch (other->kind()) {
       case TypeKind::VARCHAR:
         return true;
       case TypeKind::HUGEINT:
-        if (isIPAddressType(other)){
+        if (isIPAddressType(other)) {
           return true;
         }
         return false;
@@ -41,7 +41,7 @@ class IPPrefixCastOperator : public exec::CastOperator {
       case TypeKind::VARCHAR:
         return true;
       case TypeKind::HUGEINT:
-        if (isIPAddressType(other)){
+        if (isIPAddressType(other)) {
           return true;
         }
         return false;
@@ -125,10 +125,8 @@ class IPPrefixCastOperator : public exec::CastOperator {
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       auto ipAddressString = ipAddressStrings->valueAt(row);
-      if( ipAddressString.str().find('/') == std::string::npos) {
-        context.setStatus(
-            row,
-            Status::UserError("String missing '/'"));
+      if (ipAddressString.str().find('/') == std::string::npos) {
+        context.setStatus(row, Status::UserError("String missing '/'"));
       }
       folly::CIDRNetwork net =
           folly::IPAddress::createNetwork(ipAddressString, -1, false);
@@ -155,10 +153,10 @@ class IPPrefixCastOperator : public exec::CastOperator {
   }
 
   static void castToIPAddress(
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const SelectivityVector& rows,
-    BaseVector& result) {
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
     auto* flatResult = result.as<FlatVector<int128_t>>();
     const auto* ipaddresses = input.as<SimpleVector<StringView>>();
 
@@ -176,10 +174,10 @@ class IPPrefixCastOperator : public exec::CastOperator {
   }
 
   static void castFromIPAddress(
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const SelectivityVector& rows,
-    BaseVector& result) {
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
     auto* flatResult = result.as<FlatVector<StringView>>();
     const auto* ipAddresses = input.as<SimpleVector<int128_t>>();
 

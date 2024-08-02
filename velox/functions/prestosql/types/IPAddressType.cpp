@@ -56,7 +56,7 @@ class IPAddressCastOperator : public exec::CastOperator {
     if (input.typeKind() == TypeKind::VARCHAR) {
       castFromString(input, context, rows, *result);
     } else if (input.typeKind() == TypeKind::VARBINARY) {
-      if(isIPPrefixType(input.type())){
+      if (isIPPrefixType(input.type())) {
         castFromIPPrefix(input, context, rows, *result);
       } else {
         castFromVarbinary(input, context, rows, *result);
@@ -78,7 +78,7 @@ class IPAddressCastOperator : public exec::CastOperator {
     if (resultType->kind() == TypeKind::VARCHAR) {
       castToString(input, context, rows, *result);
     } else if (resultType->kind() == TypeKind::VARBINARY) {
-      if(isIPPrefixType(resultType)){
+      if (isIPPrefixType(resultType)) {
         castToIPPrefix(input, context, rows, *result);
       }
       castToVarbinary(input, context, rows, *result);
@@ -201,10 +201,10 @@ class IPAddressCastOperator : public exec::CastOperator {
   }
 
   static void castFromIPPrefix(
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    const SelectivityVector& rows,
-    BaseVector& result) {
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
     auto* flatResult = result.as<FlatVector<int128_t>>();
     const auto* ipaddresses = input.as<SimpleVector<StringView>>();
 
@@ -221,7 +221,7 @@ class IPAddressCastOperator : public exec::CastOperator {
     });
   }
 
-    static void castToIPPrefix(
+  static void castToIPPrefix(
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
