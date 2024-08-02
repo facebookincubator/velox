@@ -157,7 +157,6 @@ void Unnest::generateRepeatedColumns(
   auto* rawRepeatedIndices = repeatedIndices->asMutable<vector_size_t>();
   vector_size_t index = 0;
   for (auto row = start; row < start + size; ++row) {
-    
     for (auto i = 0; i < rawMaxSizes_[row]; i++) {
       rawRepeatedIndices[index++] = row;
     }

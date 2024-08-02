@@ -108,10 +108,10 @@ TEST(HugeIntTest, combine) {
   testCombine(0, 0, "0");
   testCombine(0, 13579, "13579");
   testCombine(0, -13579, "-13579");
-  testCombine(1, 13579, "1" + std::string(13, '0') + "13579");
-  testCombine(-1, -13579, "-1" + std::string(13, '0') + "13579");
-  testCombine(13579, 0, "13579" + std::string(18, '0'));
-  testCombine(-13579, 0, "-13579" + std::string(18, '0'));
+  testCombine(1, 13579, "1000000000000013579");
+  testCombine(-1, -13579, "-1000000000000013579");
+  testCombine(13579, 0, "13579000000000000000000");
+  testCombine(-13579, 0, "-13579000000000000000000");
 
   testCombine(
       999'999'999'999'999'999L, 999'999'999'999'999'999L, std::string(36, '9'));
@@ -132,5 +132,6 @@ TEST(HugeIntTest, combine) {
       68'915'718'005, 535'514'949'759'025'150, "68915718005535514949759025150");
 
   VELOX_ASSERT_THROW(
-      testCombine(12, -3, "xxx"), "High 12 and low -3 should have same symbol");
+      testCombine(12, -3, "xxx"),
+      "First 12 and second -3 should have the same sign.");
 }

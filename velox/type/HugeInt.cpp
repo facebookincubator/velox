@@ -75,7 +75,7 @@ int128_t HugeInt::parse(const std::string& str) {
 
 int128_t HugeInt::combine(int64_t first, int64_t second) {
   VELOX_CHECK((first >= 0 && second >= 0) || (first <= 0 && second <= 0))
-  return static_cast<int128_t>(first) * 1000'000'000'000'000'000 + second;
+  return static_cast<int128_t>(first) * 1'000'000'000'000'000'000 + second;
 }
 } // namespace facebook::velox
 

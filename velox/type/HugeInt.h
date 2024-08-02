@@ -60,7 +60,7 @@ class HugeInt {
   /// Returns first * 10^18 + second.
   /// It can represent -9223372036854775817223372036854775808 to
   /// 9223372036854775816223372036854775807. Notice, it cannot represents all
-  /// the int128.
+  /// the int128. The first and second should have the same sign.
   ///
   /// Example Usage: combine(1, 13579)
   /// return 1'000'000'000'000'013'579
