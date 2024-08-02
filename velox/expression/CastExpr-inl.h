@@ -51,6 +51,9 @@ inline std::exception_ptr makeBadCastException(
       makeErrorMessage(input, row, resultType, errorDetails),
       false));
 }
+} // namespace
+
+namespace detail {
 
 /// @brief Convert the unscaled value of a decimal to varchar and write to raw
 /// string buffer from start position.
@@ -111,10 +114,6 @@ StringView convertToStringView(
   }
   return StringView(startPosition, writePosition - startPosition);
 }
-
-} // namespace
-
-namespace detail {
 
 /// Represent the varchar fragment.
 ///
@@ -648,7 +647,7 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
       flatResult->setNoCopy(
           row,
-          convertToStringView<FromNativeType>(
+          detail::convertToStringView<FromNativeType>(
               simpleInput->valueAt(row), scale, rowSize, inlined));
     });
     return result;
@@ -659,7 +658,7 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
   char* rawBuffer = buffer->asMutable<char>() + buffer->size();
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    auto stringView = convertToStringView<FromNativeType>(
+    auto stringView = detail::convertToStringView<FromNativeType>(
         simpleInput->valueAt(row), scale, rowSize, rawBuffer);
     flatResult->setNoCopy(row, stringView);
     if (!stringView.isInline()) {
