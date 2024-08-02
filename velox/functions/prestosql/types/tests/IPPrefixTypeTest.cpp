@@ -13,18 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
-
-#include "velox/functions/Macros.h"
-#include "velox/functions/Registerer.h"
-#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/prestosql/types/tests/TypeTestBase.h"
 
-namespace facebook::velox::functions {
+namespace facebook::velox::test {
 
-void registerIPAddressFunctions(const std::string& prefix) {
-  registerIPAddressType();
-  registerIPPrefixType();
+class IPPrefixTypeTest : public testing::Test, public TypeTestBase {
+ public:
+  IPPrefixTypeTest() {
+    registerIPPrefixType();
+  }
+};
+
+TEST_F(IPPrefixTypeTest, basic) {
+  ASSERT_EQ(IPPREFIX()->name(), "IPPREFIX");
+  ASSERT_TRUE(IPPREFIX()->parameters().empty());
+  ASSERT_EQ(IPPREFIX()->toString(), "IPPREFIX");
+  ASSERT_EQ(IPADDRESS()->kindName(), "VARBINARY");
+
+  ASSERT_TRUE(hasType("IPPREFIX"));
+  ASSERT_EQ(*getType("IPPREFIX", {}), *IPPREFIX());
 }
 
-} // namespace facebook::velox::functions
+TEST_F(IPPrefixTypeTest, serde) {
+  testTypeSerde(IPPREFIX());
+}
+} // namespace facebook::velox::test
