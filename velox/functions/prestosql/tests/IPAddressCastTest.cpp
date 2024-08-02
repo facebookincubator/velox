@@ -37,8 +37,7 @@ class IPAddressCastTest : public functions::test::FunctionBaseTest {
     return result;
   }
 
-  std::optional<std::string> allCasts(
-      const std::optional<std::string> input) {
+  std::optional<std::string> allCasts(const std::optional<std::string> input) {
     auto result = evaluateOnce<std::string>(
         "cast(cast(cast(cast(c0 as ipaddress) as varbinary) as ipaddress) as varchar)",
         input);
@@ -53,28 +52,26 @@ TEST_F(IPAddressCastTest, castToVarchar) {
   EXPECT_EQ(
       castToVarchar("2001:0db8:0000:0000:0000:ff00:0042:8329"),
       "2001:db8::ff00:42:8329");
+  EXPECT_EQ(castToVarchar("2001:db8::ff00:42:8329"), "2001:db8::ff00:42:8329");
+  EXPECT_EQ(castToVarchar("2001:db8:0:0:1:0:0:1"), "2001:db8::1:0:0:1");
+  EXPECT_EQ(castToVarchar("2001:db8:0:0:1::1"), "2001:db8::1:0:0:1");
+  EXPECT_EQ(castToVarchar("2001:db8::1:0:0:1"), "2001:db8::1:0:0:1");
   EXPECT_EQ(
-      castToVarchar("2001:db8::ff00:42:8329"),
-      "2001:db8::ff00:42:8329");
-  EXPECT_EQ(
-      castToVarchar("2001:db8:0:0:1:0:0:1"), "2001:db8::1:0:0:1");
-  EXPECT_EQ(
-      castToVarchar("2001:db8:0:0:1::1"), "2001:db8::1:0:0:1");
-  EXPECT_EQ(
-      castToVarchar("2001:db8::1:0:0:1"), "2001:db8::1:0:0:1");
-  EXPECT_EQ(
-      castToVarchar("2001:DB8::FF00:ABCD:12EF"),
-      "2001:db8::ff00:abcd:12ef");
-  VELOX_ASSERT_THROW(castToVarchar("facebook.com"), "Invalid IP address 'facebook.com'");
-  VELOX_ASSERT_THROW(castToVarchar("localhost"), "Invalid IP address 'localhost'");
-  VELOX_ASSERT_THROW(castToVarchar("2001:db8::1::1"), "Invalid IP address '2001:db8::1::1'");
-  VELOX_ASSERT_THROW(castToVarchar("2001:zxy::1::1"), "Invalid IP address '2001:zxy::1::1'");
-  VELOX_ASSERT_THROW(castToVarchar("789.1.1.1"), "Invalid IP address '789.1.1.1'");
+      castToVarchar("2001:DB8::FF00:ABCD:12EF"), "2001:db8::ff00:abcd:12ef");
+  VELOX_ASSERT_THROW(
+      castToVarchar("facebook.com"), "Invalid IP address 'facebook.com'");
+  VELOX_ASSERT_THROW(
+      castToVarchar("localhost"), "Invalid IP address 'localhost'");
+  VELOX_ASSERT_THROW(
+      castToVarchar("2001:db8::1::1"), "Invalid IP address '2001:db8::1::1'");
+  VELOX_ASSERT_THROW(
+      castToVarchar("2001:zxy::1::1"), "Invalid IP address '2001:zxy::1::1'");
+  VELOX_ASSERT_THROW(
+      castToVarchar("789.1.1.1"), "Invalid IP address '789.1.1.1'");
 }
 
 TEST_F(IPAddressCastTest, castToVarbinary) {
-  EXPECT_EQ(
-      castToVarbinary("00000000000000000000ffff01020304"), "1.2.3.4");
+  EXPECT_EQ(castToVarbinary("00000000000000000000ffff01020304"), "1.2.3.4");
   EXPECT_EQ(castToVarbinary("01020304"), "1.2.3.4");
   EXPECT_EQ(castToVarbinary("c0a80000"), "192.168.0.0");
   EXPECT_EQ(
@@ -88,9 +85,7 @@ TEST_F(IPAddressCastTest, allCasts) {
   EXPECT_EQ(
       allCasts("2001:0db8:0000:0000:0000:ff00:0042:8329"),
       "2001:db8::ff00:42:8329");
-  EXPECT_EQ(
-      allCasts("2001:db8::ff00:42:8329"),
-      "2001:db8::ff00:42:8329");
+  EXPECT_EQ(allCasts("2001:db8::ff00:42:8329"), "2001:db8::ff00:42:8329");
 }
 
 TEST_F(IPAddressCastTest, nullTest) {
