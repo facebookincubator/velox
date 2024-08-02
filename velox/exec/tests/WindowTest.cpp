@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <iostream>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -78,6 +79,69 @@ TEST_F(WindowTest, spill) {
   ASSERT_GT(stats.spilledRows, 0);
   ASSERT_GT(stats.spilledFiles, 0);
   ASSERT_GT(stats.spilledPartitions, 0);
+}
+
+TEST_F(WindowTest, rowBasedStreamingWindowMemoryUsageLower) {
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (partition by p order by s)"})
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s) FROM tmp");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& sortWindowStats = taskStats.at(windowId);
+
+  plan = PlanBuilder()
+             .values(split(data, 10))
+             .orderBy({"p", "s"}, false)
+             .streamingWindow({"row_number() over (partition by p order by s)"})
+             .capturePlanNodeId(windowId)
+             .planNode();
+
+  task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .assertResults(
+              "SELECT *, row_number() over (partition by p order by s) FROM tmp");
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Window::supportRowsStreaming",
+      std::function<void(bool*)>([&](bool* supportRowsStreamingWindow) {
+        ASSERT_EQ(*supportRowsStreamingWindow, true);
+      }));
+
+  taskStats = exec::toPlanStats(task->taskStats());
+  const auto& streamingWindowStats = taskStats.at(windowId);
+
+  // Memory usage varies significantly with vector size. For instance, with a
+  // vector size of 1,000, sortWindowStats.peakMemoryBytes reaches 114,624,
+  // while streamingWindowStats.peakMemoryBytes is 96,896. However, increasing
+  // the vector size to 1,000,000 results in sortWindowStats.peakMemoryBytes
+  // soaring to 17,098,688 and streamingWindowStats.peakMemoryBytes climbing to
+  // 2,386,560.
+  ASSERT_GT(
+      sortWindowStats.peakMemoryBytes, streamingWindowStats.peakMemoryBytes);
 }
 
 TEST_F(WindowTest, rankWithEqualValue) {
