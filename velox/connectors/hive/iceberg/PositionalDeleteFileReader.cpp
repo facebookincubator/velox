@@ -112,7 +112,9 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
           deleteSplit_->filePath,
           deleteSplit_->partitionKeys,
           {})) {
-    ++runtimeStats.skippedSplits;
+    // We only count the number of base splits skipped as skippedSplits runtime
+    // statistics in Velox.  Skipped delta split is only counted as skipped
+    // bytes.
     runtimeStats.skippedSplitBytes += deleteSplit_->length;
     deleteSplit_.reset();
     return;
@@ -231,7 +233,9 @@ void PositionalDeleteFileReader::updateDeleteBitmap(
   // the deleteBitmapBuffer should be the largest position among all delte files
   deleteBitmapBuffer->setSize(std::max(
       (uint64_t)deleteBitmapBuffer->size(),
-      deletePositionsOffset_ == 0
+      deletePositionsOffset_ == 0 ||
+              (deletePositionsOffset_ < deletePositionsVector->size() &&
+               deletePositions[deletePositionsOffset_] > rowNumberUpperBound)
           ? 0
           : bits::nbytes(
                 deletePositions[deletePositionsOffset_ - 1] + 1 - offset)));

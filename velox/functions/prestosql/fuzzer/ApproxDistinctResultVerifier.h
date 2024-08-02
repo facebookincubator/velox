@@ -64,6 +64,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
   void initializeWindow(
       const std::vector<RowVectorPtr>& input,
       const std::vector<std::string>& partitionByKeys,
+      const std::vector<SortingKeyAndOrder>& /*sortingKeysAndOrders*/,
       const core::WindowNode::Function& function,
       const std::string& frame,
       const std::string& windowName) override {
@@ -227,7 +228,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
 
     // We expect large deviations (>2 stddev) in < 5% of values.
     if (numGroups >= 50) {
-      return largeGaps.size() <= 3;
+      return largeGaps.size() <= 0.05 * numGroups;
     }
 
     return largeGaps.empty();

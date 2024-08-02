@@ -25,6 +25,7 @@
 #include "velox/common/compression/Compression.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/core/Config.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/ErrorTolerance.h"
 #include "velox/dwio/common/FlatMapHelper.h"
@@ -33,8 +34,8 @@
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/UnitLoader.h"
 #include "velox/dwio/common/encryption/Encryption.h"
-#include "velox/external/date/tz.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -496,7 +497,7 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setSessionTimezone(const date::time_zone* sessionTimezone) {
+  ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
   }
@@ -540,7 +541,7 @@ class ReaderOptions : public io::ReaderOptions {
     return ioExecutor_;
   }
 
-  const date::time_zone* getSessionTimezone() const {
+  const tz::TimeZone* getSessionTimezone() const {
     return sessionTimezone_;
   }
 
@@ -589,23 +590,40 @@ class ReaderOptions : public io::ReaderOptions {
   std::shared_ptr<folly::Executor> ioExecutor_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
-  const date::time_zone* sessionTimezone_{nullptr};
+  const tz::TimeZone* sessionTimezone_{nullptr};
 };
 
 struct WriterOptions {
-  TypePtr schema;
-  velox::memory::MemoryPool* memoryPool;
+  TypePtr schema{nullptr};
+  velox::memory::MemoryPool* memoryPool{nullptr};
   const velox::common::SpillConfig* spillConfig{nullptr};
   tsan_atomic<bool>* nonReclaimableSection{nullptr};
+
+  /// A ready-to-use default memory reclaimer factory. It shall be provided by
+  /// the system that creates writers to ensure a smooth memory system
+  /// integration (e.g. graceful suspension upon arbitration request). Writer
+  /// can choose to implement its custom memory reclaimer if needed and not use
+  /// this default one.
+  std::function<std::unique_ptr<velox::memory::MemoryReclaimer>()>
+      defaultMemoryReclaimerFactory{[]() { return nullptr; }};
+
   std::optional<velox::common::CompressionKind> compressionKind;
   std::optional<uint64_t> orcMinCompressionSize{std::nullopt};
   std::optional<uint64_t> maxStripeSize{std::nullopt};
   std::optional<bool> orcLinearStripeSizeHeuristics{std::nullopt};
   std::optional<uint64_t> maxDictionaryMemory{std::nullopt};
+  std::optional<bool> orcWriterIntegerDictionaryEncodingEnabled{std::nullopt};
+  std::optional<bool> orcWriterStringDictionaryEncodingEnabled{std::nullopt};
   std::map<std::string, std::string> serdeParameters;
-  std::optional<uint8_t> parquetWriteTimestampUnit;
   std::optional<uint8_t> zlibCompressionLevel;
   std::optional<uint8_t> zstdCompressionLevel;
+
+  // WriterOption implementations should provide this function to specify how to
+  // process format-specific session and connector configs.
+  virtual void processSessionConfigs(const Config&) {}
+  virtual void processHiveConnectorConfigs(const Config&) {}
+
+  virtual ~WriterOptions() = default;
 };
 
 } // namespace facebook::velox::dwio::common

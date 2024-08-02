@@ -36,7 +36,9 @@
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
+#include "velox/functions/sparksql/JsonObjectKeys.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
+#include "velox/functions/sparksql/MaskFunction.h"
 #include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/MonotonicallyIncreasingId.h"
 #include "velox/functions/sparksql/RaiseError.h"
@@ -176,6 +178,9 @@ void registerFunctions(const std::string& prefix) {
 
   registerRegexpReplace(prefix);
 
+  registerFunction<JsonObjectKeysFunction, Array<Varchar>, Varchar>(
+      {prefix + "json_object_keys"});
+
   // Register string functions.
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
@@ -238,6 +243,8 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<Sha2HexStringFunction, Varchar, Varbinary, int32_t>(
       {prefix + "sha2"});
   registerFunction<CRC32Function, int64_t, Varbinary>({prefix + "crc32"});
+  registerFunction<Empty2NullFunction, Varchar, Varchar>(
+      {prefix + "empty2null"});
 
   exec::registerStatefulVectorFunction(
       prefix + "regexp_extract", re2ExtractSignatures(), makeRegexExtract);
@@ -462,6 +469,9 @@ void registerFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Array<Array<Generic<T1>>>>({prefix + "flatten"});
 
+  registerFunction<RepeatFunction, Varchar, Varchar, int32_t>(
+      {prefix + "repeat"});
+
   registerFunction<SoundexFunction, Varchar, Varchar>({prefix + "soundex"});
 
   registerFunction<RaiseErrorFunction, UnknownValue, Varchar>(
@@ -483,6 +493,21 @@ void registerFunctions(const std::string& prefix) {
       int32_t,
       Generic<T1>,
       bool>({prefix + "array_insert"});
+
+  registerFunction<MaskFunction, Varchar, Varchar>({prefix + "mask"});
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar>({prefix + "mask"});
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "mask"});
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "mask"});
+  registerFunction<
+      MaskFunction,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar>({prefix + "mask"});
 }
 
 } // namespace sparksql

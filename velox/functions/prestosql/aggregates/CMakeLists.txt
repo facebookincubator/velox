@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
+velox_add_library(
   velox_aggregates
   ApproxDistinctAggregate.cpp
   ApproxMostFrequentAggregate.cpp
@@ -24,7 +24,6 @@ add_library(
   BitwiseXorAggregate.cpp
   BoolAggregates.cpp
   CentralMomentsAggregates.cpp
-  Compare.cpp
   CountAggregate.cpp
   CountIfAggregate.cpp
   CovarianceAggregates.cpp
@@ -47,7 +46,7 @@ add_library(
   SumDataSizeForStatsAggregate.cpp
   VarianceAggregates.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   velox_aggregates
   velox_common_hyperloglog
   velox_exec

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Type.h"
 
@@ -526,6 +527,26 @@ TEST_F(StringTest, overlayVarbinary) {
   EXPECT_EQ(overlay("Spark SQL", "##", -10, 4), "##rk SQL");
 }
 
+TEST_F(StringTest, repeat) {
+  const auto stringRepeat = [&](const std::optional<std::string>& str,
+                                const std::optional<int32_t>& times) {
+    return evaluateOnce<std::string>(
+        fmt::format("{}(c0, c1)", "repeat"), str, times);
+  };
+
+  EXPECT_EQ(stringRepeat("hh", 2), "hhhh");
+  EXPECT_EQ(stringRepeat("abab", 0), "");
+  EXPECT_EQ(stringRepeat("abab", -1), "");
+  EXPECT_EQ(stringRepeat("", 2), "");
+  EXPECT_EQ(stringRepeat("123\u6570", 2), "123\u6570123\u6570");
+  VELOX_ASSERT_USER_THROW(
+      stringRepeat("hh", 524289),
+      "Result size must be less than or equal to 1048576");
+  VELOX_ASSERT_USER_THROW(
+      stringRepeat(std::string(214749, 'l'), 10000),
+      "integer overflow: 214749 * 10000");
+}
+
 TEST_F(StringTest, replace) {
   const auto replace = [&](const std::optional<std::string>& str,
                            const std::optional<std::string>& replaced) {
@@ -973,6 +994,15 @@ TEST_F(StringTest, trim) {
   EXPECT_EQ(
       trimWithTrimStr("\u6570", "\u6574\u6570 \u6570\u636E!"),
       "\u6574\u6570 \u6570\u636E!");
+}
+
+TEST_F(StringTest, empty2Null) {
+  const auto empty2Null = [&](const std::optional<std::string>& a) {
+    return evaluateOnce<std::string>("empty2null(c0)", a);
+  };
+
+  EXPECT_EQ(empty2Null(""), std::nullopt);
+  EXPECT_EQ(empty2Null("abc"), "abc");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

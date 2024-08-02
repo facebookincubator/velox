@@ -32,8 +32,8 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::dwrf {
-
 namespace {
+
 dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
   return dwio::common::StripeProgress{
       .stripeIndex = context.stripeIndex(),
@@ -821,6 +821,18 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
         Config::MAX_DICTIONARY_SIZE.configKey(),
         std::to_string(options.maxDictionaryMemory.value()));
   }
+  if (options.orcWriterIntegerDictionaryEncodingEnabled.has_value()) {
+    configs.emplace(
+        Config::INTEGER_DICTIONARY_ENCODING_ENABLED.configKey(),
+        std::to_string(
+            options.orcWriterIntegerDictionaryEncodingEnabled.value()));
+  }
+  if (options.orcWriterStringDictionaryEncodingEnabled.has_value()) {
+    configs.emplace(
+        Config::STRING_DICTIONARY_ENCODING_ENABLED.configKey(),
+        std::to_string(
+            options.orcWriterStringDictionaryEncodingEnabled.value()));
+  }
   if (options.zlibCompressionLevel.has_value()) {
     configs.emplace(
         Config::ZLIB_COMPRESSION_LEVEL.configKey(),
@@ -843,9 +855,14 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
 
 std::unique_ptr<dwio::common::Writer> DwrfWriterFactory::createWriter(
     std::unique_ptr<dwio::common::FileSink> sink,
-    const dwio::common::WriterOptions& options) {
-  auto dwrfOptions = getDwrfOptions(options);
+    const std::shared_ptr<dwio::common::WriterOptions>& options) {
+  auto dwrfOptions = getDwrfOptions(*options);
   return std::make_unique<Writer>(std::move(sink), dwrfOptions);
+}
+
+std::unique_ptr<dwio::common::WriterOptions>
+DwrfWriterFactory::createWriterOptions() {
+  return std::make_unique<dwrf::WriterOptions>();
 }
 
 void registerDwrfWriterFactory() {

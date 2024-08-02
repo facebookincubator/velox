@@ -509,66 +509,6 @@ bool tryParseTimestampString(
   return true;
 }
 
-bool tryParseUTCOffsetString(
-    const char* buf,
-    size_t& pos,
-    size_t len,
-    int& hourOffset,
-    int& minuteOffset) {
-  minuteOffset = 0;
-  size_t curpos = pos;
-
-  // Parse the next 3 characters.
-  if (curpos + 3 > len) {
-    // No characters left to parse.
-    return false;
-  }
-
-  char sign_char = buf[curpos];
-  if (sign_char != '+' && sign_char != '-') {
-    // Expected either + or -
-    return false;
-  }
-
-  curpos++;
-  if (!characterIsDigit(buf[curpos]) || !characterIsDigit(buf[curpos + 1])) {
-    // Expected +HH or -HH
-    return false;
-  }
-
-  hourOffset = (buf[curpos] - '0') * 10 + (buf[curpos + 1] - '0');
-
-  if (sign_char == '-') {
-    hourOffset = -hourOffset;
-  }
-  curpos += 2;
-
-  // Optional minute specifier: expected either "MM" or ":MM".
-  if (curpos >= len) {
-    // Done, nothing left.
-    pos = curpos;
-    return true;
-  }
-  if (buf[curpos] == ':') {
-    curpos++;
-  }
-
-  if (curpos + 2 > len || !characterIsDigit(buf[curpos]) ||
-      !characterIsDigit(buf[curpos + 1])) {
-    // No MM specifier.
-    pos = curpos;
-    return true;
-  }
-
-  // We have an MM specifier: parse it.
-  minuteOffset = (buf[curpos] - '0') * 10 + (buf[curpos + 1] - '0');
-  if (sign_char == '-') {
-    minuteOffset = -minuteOffset;
-  }
-  pos = curpos + 2;
-  return true;
-}
-
 } // namespace
 
 bool isLeapYear(int32_t year) {
@@ -780,7 +720,8 @@ fromTimestampString(const char* str, size_t len, TimestampParseMode parseMode) {
   return resultTimestamp;
 }
 
-Expected<std::pair<Timestamp, int16_t>> fromTimestampWithTimezoneString(
+Expected<std::pair<Timestamp, const tz::TimeZone*>>
+fromTimestampWithTimezoneString(
     const char* str,
     size_t len,
     TimestampParseMode parseMode) {
@@ -791,7 +732,7 @@ Expected<std::pair<Timestamp, int16_t>> fromTimestampWithTimezoneString(
     return folly::makeUnexpected(parserError(str, len));
   }
 
-  int16_t timezoneID = -1;
+  const tz::TimeZone* timeZone = nullptr;
 
   if (pos < len && characterIsSpace(str[pos])) {
     pos++;
@@ -812,11 +753,11 @@ Expected<std::pair<Timestamp, int16_t>> fromTimestampWithTimezoneString(
       timezonePos++;
     }
 
-    std::string_view timezone(str + pos, timezonePos - pos);
+    std::string_view timeZoneName(str + pos, timezonePos - pos);
 
-    if ((timezoneID = util::getTimeZoneID(timezone, false)) == -1) {
+    if ((timeZone = tz::locateZone(timeZoneName, false)) == nullptr) {
       return folly::makeUnexpected(
-          Status::UserError("Unknown timezone value: \"{}\"", timezone));
+          Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
     }
 
     // Skip any spaces at the end.
@@ -829,10 +770,10 @@ Expected<std::pair<Timestamp, int16_t>> fromTimestampWithTimezoneString(
       return folly::makeUnexpected(parserError(str, len));
     }
   }
-  return std::make_pair(resultTimestamp, timezoneID);
+  return std::make_pair(resultTimestamp, timeZone);
 }
 
-int32_t toDate(const Timestamp& timestamp, const date::time_zone* timeZone_) {
+int32_t toDate(const Timestamp& timestamp, const tz::TimeZone* timeZone_) {
   auto convertToDate = [](const Timestamp& t) -> int32_t {
     static const int32_t kSecsPerDay{86'400};
     auto seconds = t.getSeconds();

@@ -272,7 +272,9 @@ void SplitReader::createReader(
       scanSpec_,
       std::move(metadataFilter),
       ROW(std::move(columnNames), std::move(columnTypes)),
-      hiveSplit_);
+      hiveSplit_,
+      hiveConfig_,
+      connectorQueryCtx_->sessionProperties());
 }
 
 bool SplitReader::checkIfSplitIsEmpty(
@@ -283,7 +285,6 @@ bool SplitReader::checkIfSplitIsEmpty(
     return true;
   }
 
-  // Note that this doesn't apply to Hudi tables.
   if (!baseReader_ || baseReader_->numberOfRows() == 0) {
     emptySplit_ = true;
   } else {
