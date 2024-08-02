@@ -144,6 +144,7 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
   properties = properties->enable_store_decimal_as_integer();
+  properties = properties->data_page_version(options.parquetDataPageVersion);
   return properties->build();
 }
 
@@ -421,6 +422,20 @@ std::optional<TimestampUnit> getTimestampUnit(
   return std::nullopt;
 }
 
+arrow::ParquetDataPageVersion getParquetDataPageVersion(
+    const Config& config,
+    const char* configKey) {
+  const auto version = config.get<std::string>(configKey);
+
+  if (version == "PARQUET_1_0") {
+    return arrow::ParquetDataPageVersion::V1;
+  } else if (version == "PARQUET_2_0") {
+    return arrow::ParquetDataPageVersion::V2;
+  } else {
+    VELOX_FAIL("Unsupported parquet datapage version {}", version.value());
+  }
+}
+
 } // namespace
 
 void WriterOptions::processSessionConfigs(const Config& config) {
@@ -428,6 +443,9 @@ void WriterOptions::processSessionConfigs(const Config& config) {
     parquetWriteTimestampUnit =
         getTimestampUnit(config, kParquetSessionWriteTimestampUnit);
   }
+
+  parquetDataPageVersion =
+      getParquetDataPageVersion(config, kParquetSessionDataPageVersion);
 }
 
 void WriterOptions::processHiveConnectorConfigs(const Config& config) {
