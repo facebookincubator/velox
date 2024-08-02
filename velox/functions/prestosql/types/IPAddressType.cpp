@@ -175,13 +175,19 @@ class IPAddressCastOperator : public exec::CastOperator {
       } else if (ipAddressBinary.size() == kIPAddressBytes) {
         memcpy(&addrBytes, ipAddressBinary.data(), kIPAddressBytes);
       } else {
-        context.setStatus(
+        if (threadSkipErrorDetails()) {
+          context.setStatus(
+            row,
+            Status::UserError());
+        } else {
+          context.setStatus(
             row,
             Status::UserError(
                 "Varbinary length {}, must be IPV4({}), or IPV6({})",
                 ipAddressBinary.size(),
                 kIPV4AddressBytes,
                 kIPAddressBytes));
+        }
         return;
       }
 
