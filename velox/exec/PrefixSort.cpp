@@ -39,7 +39,26 @@ FOLLY_ALWAYS_INLINE void encodeRowColumn(
   } else {
     value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
   }
-  prefixSortLayout.encoders[index].encode(
+  prefixSortLayout.encoders[index]->encode(
+      value, prefix + prefixSortLayout.prefixOffsets[index]);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void encodeRowColumn<int128_t>(
+    const PrefixSortLayout& prefixSortLayout,
+    const uint32_t index,
+    const RowColumn& rowColumn,
+    char* const row,
+    char* const prefix) {
+  std::optional<int128_t> value;
+  if (RowContainer::isNullAt(row, rowColumn.nullByte(), rowColumn.nullMask())) {
+    value = std::nullopt;
+  } else {
+    int128_t newVal;
+    memcpy(&newVal, row + rowColumn.offset(), sizeof(int128_t));
+    value = newVal;
+  }
+  prefixSortLayout.encoders[index]->encode(
       value, prefix + prefixSortLayout.prefixOffsets[index]);
 }
 
@@ -69,6 +88,11 @@ FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
     }
     case TypeKind::TIMESTAMP: {
       encodeRowColumn<Timestamp>(
+          prefixSortLayout, index, rowColumn, row, prefix);
+      return;
+    }
+    case TypeKind::HUGEINT: {
+      encodeRowColumn<int128_t>(
           prefixSortLayout, index, rowColumn, row, prefix);
       return;
     }
@@ -120,7 +144,7 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
   uint32_t numNormalizedKeys = 0;
   const uint32_t numKeys = types.size();
   std::vector<uint32_t> prefixOffsets;
-  std::vector<PrefixSortEncoder> encoders;
+  std::vector<std::shared_ptr<PrefixSortEncoder>> encoders;
 
   // Calculate encoders and prefix-offsets, and stop the loop if a key that
   // cannot be normalized is encountered.
@@ -128,12 +152,12 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
     if (normalizedKeySize > maxNormalizedKeySize) {
       break;
     }
-    std::optional<uint32_t> encodedSize =
-        PrefixSortEncoder::encodedSize(types[i]->kind());
+    auto encodedSize = PrefixSortEncoderFactory::encodedSize(*types[i]);
     if (encodedSize.has_value()) {
       prefixOffsets.push_back(normalizedKeySize);
-      encoders.push_back(
-          {compareFlags[i].ascending, compareFlags[i].nullsFirst});
+      auto encoder = PrefixSortEncoderFactory::create(
+          *types[i], compareFlags[i].ascending, compareFlags[i].nullsFirst);
+      encoders.emplace_back(std::move(encoder));
       normalizedKeySize += encodedSize.value();
       numNormalizedKeys++;
     } else {
