@@ -65,11 +65,11 @@ TEST_F(IPAddressCastTest, castToVarchar) {
   EXPECT_EQ(
       castToVarchar("2001:DB8::FF00:ABCD:12EF"),
       "2001:db8::ff00:abcd:12ef");
-  EXPECT_THROW(castToVarchar("facebook.com"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("localhost"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("2001:db8::1::1"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("2001:zxy::1::1"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("789.1.1.1"), VeloxUserError);
+  VELOX_ASSERT_THROW(castToVarchar("facebook.com"), "Invalid IP address 'facebook.com'");
+  VELOX_ASSERT_THROW(castToVarchar("localhost"), "Invalid IP address 'localhost'");
+  VELOX_ASSERT_THROW(castToVarchar("2001:db8::1::1"), "Invalid IP address '2001:db8::1::1'");
+  VELOX_ASSERT_THROW(castToVarchar("2001:zxy::1::1"), "Invalid IP address '2001:zxy::1::1'");
+  VELOX_ASSERT_THROW(castToVarchar("789.1.1.1"), "Invalid IP address '789.1.1.1'");
 }
 
 TEST_F(IPAddressCastTest, castToVarbinary) {

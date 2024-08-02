@@ -18,14 +18,6 @@
 
 namespace facebook::velox {
 
-// Converts BigEndian <-> native byte array
-// NOOP if system is Big Endian already
-void bigEndianByteArray(folly::ByteArray16& addrBytes) {
-  if (folly::kIsLittleEndian) {
-    std::reverse(addrBytes.begin(), addrBytes.end());
-  }
-}
-
 namespace {
 
 class IPAddressCastOperator : public exec::CastOperator {
@@ -102,7 +94,7 @@ class IPAddressCastOperator : public exec::CastOperator {
 
       memcpy(&addrBytes, &intAddr, kIPAddressBytes);
 
-      bigEndianByteArray(addrBytes);
+      std::reverse(addrBytes.begin(), addrBytes.end());
       folly::IPAddressV6 v6Addr(addrBytes);
 
       if (v6Addr.isIPv4Mapped()) {
@@ -132,7 +124,7 @@ class IPAddressCastOperator : public exec::CastOperator {
 
       auto addrBytes = folly::IPAddress::createIPv6(addr).toByteArray();
 
-      bigEndianByteArray(addrBytes);
+      std::reverse(addrBytes.begin(), addrBytes.end());
       memcpy(&intAddr, &addrBytes, kIPAddressBytes);
 
       flatResult->set(row, intAddr);
@@ -151,7 +143,7 @@ class IPAddressCastOperator : public exec::CastOperator {
       const auto intAddr = ipaddresses->valueAt(row);
       folly::ByteArray16 addrBytes;
       memcpy(&addrBytes, &intAddr, kIPAddressBytes);
-      bigEndianByteArray(addrBytes);
+      std::reverse(addrBytes.begin(), addrBytes.end());
 
       exec::StringWriter<false> result(flatResult, row);
       result.resize(kIPAddressBytes);
@@ -193,7 +185,7 @@ class IPAddressCastOperator : public exec::CastOperator {
         return;
       }
 
-      bigEndianByteArray(addrBytes);
+      std::reverse(addrBytes.begin(), addrBytes.end());
       memcpy(&intAddr, &addrBytes, kIPAddressBytes);
       flatResult->set(row, intAddr);
     });
