@@ -27,6 +27,7 @@ namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
 
+/// Mode aggregate function for scalar types.
 template <
     typename T,
     typename Hash = std::hash<T>,
@@ -96,6 +97,7 @@ class ModeAggregate {
   };
 };
 
+/// Mode aggregate function for VARCHAR type.
 class StringModeAggregate {
  public:
   using InputType = Row<Varchar>;
@@ -262,6 +264,7 @@ struct ComplexTypeAccumulator {
   }
 };
 
+/// Mode aggregate function for complex types.
 template <typename T>
 class ComplexTypeModeAggregate : public Aggregate {
  public:
@@ -311,7 +314,10 @@ class ComplexTypeModeAggregate : public Aggregate {
     VELOX_CHECK_NOT_NULL(mapKeys);
     VELOX_CHECK_NOT_NULL(flatValues);
 
-    const auto numElements = countElements(groups, numGroups);
+    vector_size_t numElements = 0;
+    for (int32_t i = 0; i < numGroups; ++i) {
+      numElements += value<ComplexTypeAccumulator>(groups[i])->size();
+    }
     mapKeys->resize(numElements);
     flatValues->resize(numElements);
 
@@ -459,14 +465,6 @@ class ComplexTypeModeAggregate : public Aggregate {
   }
 
  private:
-  vector_size_t countElements(char** groups, int32_t numGroups) const {
-    vector_size_t size = 0;
-    for (int32_t i = 0; i < numGroups; ++i) {
-      size += value<ComplexTypeAccumulator>(groups[i])->size();
-    }
-    return size;
-  }
-
   // Combines a partial aggregation represented by the key-value pair at row in
   // mapKeys and mapValues into groupMap.
   FOLLY_ALWAYS_INLINE void addToFinalAggregation(

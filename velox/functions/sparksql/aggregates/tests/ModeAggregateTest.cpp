@@ -225,10 +225,7 @@ TEST_F(ModeAggregateTest, globalDecimal) {
       nullEvery(7),
       longDecimalType);
 
-  auto expected1 = makeRowVector(
-      {makeFlatVector<int128_t>(std::vector<int128_t>{1}, longDecimalType)});
-
-  testMode("mode(c1)", {}, vector1, vector1, expected1);
+  testGlobalModeWithDuck(vector1);
 
   auto shortDecimalType = DECIMAL(6, 2);
   auto vector2 = makeFlatVector<int64_t>(
@@ -237,10 +234,7 @@ TEST_F(ModeAggregateTest, globalDecimal) {
       nullEvery(7),
       shortDecimalType);
 
-  auto expected2 = makeRowVector(
-      {makeFlatVector<int64_t>(std::vector<int64_t>{1}, shortDecimalType)});
-
-  testMode("mode(c1)", {}, vector2, vector2, expected2);
+  testGlobalModeWithDuck(vector2);
 }
 
 TEST_F(ModeAggregateTest, globalUnknown) {
