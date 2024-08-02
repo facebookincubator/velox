@@ -35,12 +35,154 @@ class ArrayInsertTest : public SparkFunctionBaseTest {
     assertEqualVectors(expected, result);
   }
 
+  void testExpression(
+      const std::string& expression,
+      const RowVectorPtr& input,
+      const VectorPtr& expected) {
+    const auto result = evaluate(expression, input);
+    assertEqualVectors(expected, result);
+  }
+
   void evaluateExpression(
       const std::string& expression,
       const std::vector<VectorPtr>& input) {
     evaluate(expression, makeRowVector(input));
   }
+
+  template <typename T>
+  void testInt() {
+    const auto input = makeRowVector({
+        makeArrayVectorFromJson<T>({"[1]", "[2, 2]"}),
+        makeNullableFlatVector<T>({0, std::nullopt}),
+    });
+
+    auto expected = makeArrayVectorFromJson<T>({"[0, 1]", "[null, 2, 2]"});
+    testExpression("array_insert(c0, 1, c1, false)", input, expected);
+
+    expected = makeArrayVectorFromJson<T>({"[0, 1]", "[2, null, 2]"});
+    testExpression("array_insert(c0, -2, c1, false)", input, expected);
+  }
+
+  template <typename T>
+  void testFloat() {
+    const auto input = makeRowVector({
+        makeNullableArrayVector<T>(
+            {{1.0001, -2.0},
+             {2.0001, std::numeric_limits<T>::infinity()},
+             {std::numeric_limits<T>::quiet_NaN(), 9.0009},
+             {3.0001}}),
+        makeNullableFlatVector<T>(
+            {0,
+             std::nullopt,
+             std::numeric_limits<T>::infinity(),
+             std::numeric_limits<T>::quiet_NaN()}),
+    });
+
+    auto expected = makeNullableArrayVector<T>(
+        {{0, 1.0001, -2.0},
+         {std::nullopt, 2.0001, std::numeric_limits<T>::infinity()},
+         {std::numeric_limits<T>::infinity(),
+          std::numeric_limits<T>::quiet_NaN(),
+          9.0009},
+         {std::numeric_limits<T>::quiet_NaN(), 3.0001}});
+    testExpression("array_insert(c0, 1, c1, false)", input, expected);
+
+    expected = makeNullableArrayVector<T>(
+        {{1.0001, 0, -2.0},
+         {2.0001, std::nullopt, std::numeric_limits<T>::infinity()},
+         {std::numeric_limits<T>::quiet_NaN(),
+          std::numeric_limits<T>::infinity(),
+          9.0009},
+         {std::numeric_limits<T>::quiet_NaN(), 3.0001}});
+    testExpression("array_insert(c0, -2, c1, false)", input, expected);
+  }
 };
+
+TEST_F(ArrayInsertTest, intArrays) {
+  testInt<int8_t>();
+  testInt<int16_t>();
+  testInt<int32_t>();
+  testInt<int64_t>();
+}
+
+TEST_F(ArrayInsertTest, floatArrays) {
+  testInt<float_t>();
+  testInt<double_t>();
+}
+
+TEST_F(ArrayInsertTest, boolArrays) {
+  const auto arrays = makeArrayVectorFromJson<bool>(
+      {"[true]", "[true, false]", "[true, false, true]"});
+
+  auto expected = makeArrayVectorFromJson<bool>(
+      {"[true, true]", "[true, true, false]", "[true, true, false, true]"});
+  testExpression("array_insert(c0, 1, true, false)", {arrays}, expected);
+
+  expected = makeArrayVectorFromJson<bool>(
+      {"[null, true]", "[null, true, false]", "[null, true, false, true]"});
+  testExpression(
+      "array_insert(c0, 1, null::BOOLEAN, false)", {arrays}, expected);
+
+  expected = expected = makeArrayVectorFromJson<bool>(
+      {"[true, true]", "[true, true, false]", "[true, false, true, true]"});
+  testExpression("array_insert(c0, -2, true, false)", {arrays}, expected);
+}
+
+TEST_F(ArrayInsertTest, strArrays) {
+  using S = StringView;
+
+  auto arrays = makeNullableArrayVector<StringView>({
+      {S("a"), std::nullopt, S("b")},
+      {S("a"), S("b"), S("a"), S("a")},
+      {std::nullopt, S("b"), std::nullopt},
+      {S("purple is an elegant color")},
+  });
+
+  auto expected = makeNullableArrayVector<StringView>({
+      {S("X"), S("a"), std::nullopt, S("b")},
+      {S("X"), S("a"), S("b"), S("a"), S("a")},
+      {S("X"), std::nullopt, S("b"), std::nullopt},
+      {S("X"), S("purple is an elegant color")},
+  });
+  testExpression("array_insert(c0, 1, 'X', false)", {arrays}, expected);
+
+  expected = makeNullableArrayVector<StringView>({
+      {std::nullopt, S("a"), std::nullopt, S("b")},
+      {std::nullopt, S("a"), S("b"), S("a"), S("a")},
+      {std::nullopt, std::nullopt, S("b"), std::nullopt},
+      {std::nullopt, S("purple is an elegant color")},
+  });
+  testExpression(
+      "array_insert(c0, 1, null::STRING, false)", {arrays}, expected);
+
+  expected = makeNullableArrayVector<StringView>({
+      {S("a"), std::nullopt, S("X"), S("b")},
+      {S("a"), S("b"), S("a"), S("X"), S("a")},
+      {std::nullopt, S("b"), S("X"), std::nullopt},
+      {S("X"), S("purple is an elegant color")},
+  });
+  testExpression("array_insert(c0, -2, 'X', false)", {arrays}, expected);
+}
+
+TEST_F(ArrayInsertTest, varbinary) {
+  auto arrays = makeNullableArrayVector<StringView>(
+      {{"a"_sv, "b"_sv, "c"_sv}}, ARRAY(VARBINARY()));
+
+  auto expected = makeNullableArrayVector<StringView>(
+      {{"X"_sv, "a"_sv, "b"_sv, "c"_sv}}, ARRAY(VARBINARY()));
+  testExpression(
+      "array_insert(c0, 1, 'X'::VARBINARY, false)", {arrays}, expected);
+
+  expected = makeNullableArrayVector<StringView>(
+      {{std::nullopt, "a"_sv, "b"_sv, "c"_sv}}, ARRAY(VARBINARY()));
+  testExpression(
+      "array_insert(c0, 1, null::VARBINARY, false)", {arrays}, expected);
+
+  expected = makeNullableArrayVector<StringView>(
+      {{"a"_sv, "b"_sv, "X"_sv, "c"_sv}}, ARRAY(VARBINARY()));
+  testExpression(
+      "array_insert(c0, -2, 'X'::VARBINARY, false)", {arrays}, expected);
+}
 
 TEST_F(ArrayInsertTest, nullSrcArrays) {
   const auto arrays = makeArrayVectorFromJson<int64_t>({"null"});
@@ -53,17 +195,6 @@ TEST_F(ArrayInsertTest, nullPosition) {
   const auto expected = makeArrayVectorFromJson<int64_t>({"null"});
   testExpression(
       "array_insert(c0, null::INTEGER, 1, false)", {arrays}, expected);
-}
-
-TEST_F(ArrayInsertTest, basic) {
-  const auto arrays = makeArrayVectorFromJson<int64_t>({"[1]", "[2, 2]"});
-
-  auto expected = makeArrayVectorFromJson<int64_t>({"[0, 1]", "[0, 2, 2]"});
-  testExpression("array_insert(c0, 1, 0, false)", {arrays}, expected);
-
-  expected = makeArrayVectorFromJson<int64_t>({"[null, 1]", "[null, 2, 2]"});
-  testExpression(
-      "array_insert(c0, 1, null::INTEGER, false)", {arrays}, expected);
 }
 
 TEST_F(ArrayInsertTest, posGTArraySize) {

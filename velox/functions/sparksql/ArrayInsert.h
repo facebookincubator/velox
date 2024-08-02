@@ -49,7 +49,7 @@ struct ArrayInsert {
     if (srcArray == nullptr || pos == nullptr) {
       return false;
     }
-    VELOX_USER_CHECK(*pos != 0, "Array insert position should not be 0.");
+    VELOX_USER_CHECK_NE(*pos, 0, "Array insert position should not be 0.");
 
     if (*pos > 0) {
       // Insert element into input array on the given position. Append nulls
@@ -134,6 +134,8 @@ struct ArrayInsert {
   }
 
  private:
+  // If true, -1 points to the last but one position. Otherwise, -1 points to
+  // the last position.
   bool legacyNegativeIndex_;
 };
 } // namespace facebook::velox::functions::sparksql
