@@ -21,23 +21,23 @@ namespace facebook::velox::functions::prestosql {
 
 namespace {
 
-class IPAddressTest : public functions::test::FunctionBaseTest {
+class IPAddressCastTest : public functions::test::FunctionBaseTest {
  protected:
-  std::optional<std::string> castIPAddressVarcharCycle(
+  std::optional<std::string> castToVarchar(
       const std::optional<std::string> input) {
     auto result = evaluateOnce<std::string>(
         "cast(cast(c0 as ipaddress) as varchar)", input);
     return result;
   }
 
-  std::optional<std::string> castIPAddressVarbinary(
+  std::optional<std::string> castToVarbinary(
       const std::optional<std::string> input) {
     auto result = evaluateOnce<std::string>(
         "cast(cast(from_hex(c0) as ipaddress) as varchar)", input);
     return result;
   }
 
-  std::optional<std::string> castIPAddressVarbinaryVarchar(
+  std::optional<std::string> allCasts(
       const std::optional<std::string> input) {
     auto result = evaluateOnce<std::string>(
         "cast(cast(cast(cast(c0 as ipaddress) as varbinary) as ipaddress) as varchar)",
@@ -46,59 +46,59 @@ class IPAddressTest : public functions::test::FunctionBaseTest {
   }
 };
 
-TEST_F(IPAddressTest, testVarcharIpAddressCast) {
-  EXPECT_EQ(castIPAddressVarcharCycle("::ffff:1.2.3.4"), "1.2.3.4");
-  EXPECT_EQ(castIPAddressVarcharCycle("1.2.3.4"), "1.2.3.4");
-  EXPECT_EQ(castIPAddressVarcharCycle("192.168.0.0"), "192.168.0.0");
+TEST_F(IPAddressCastTest, castToVarchar) {
+  EXPECT_EQ(castToVarchar("::ffff:1.2.3.4"), "1.2.3.4");
+  EXPECT_EQ(castToVarchar("1.2.3.4"), "1.2.3.4");
+  EXPECT_EQ(castToVarchar("192.168.0.0"), "192.168.0.0");
   EXPECT_EQ(
-      castIPAddressVarcharCycle("2001:0db8:0000:0000:0000:ff00:0042:8329"),
+      castToVarchar("2001:0db8:0000:0000:0000:ff00:0042:8329"),
       "2001:db8::ff00:42:8329");
   EXPECT_EQ(
-      castIPAddressVarcharCycle("2001:db8::ff00:42:8329"),
+      castToVarchar("2001:db8::ff00:42:8329"),
       "2001:db8::ff00:42:8329");
   EXPECT_EQ(
-      castIPAddressVarcharCycle("2001:db8:0:0:1:0:0:1"), "2001:db8::1:0:0:1");
+      castToVarchar("2001:db8:0:0:1:0:0:1"), "2001:db8::1:0:0:1");
   EXPECT_EQ(
-      castIPAddressVarcharCycle("2001:db8:0:0:1::1"), "2001:db8::1:0:0:1");
+      castToVarchar("2001:db8:0:0:1::1"), "2001:db8::1:0:0:1");
   EXPECT_EQ(
-      castIPAddressVarcharCycle("2001:db8::1:0:0:1"), "2001:db8::1:0:0:1");
+      castToVarchar("2001:db8::1:0:0:1"), "2001:db8::1:0:0:1");
   EXPECT_EQ(
-      castIPAddressVarcharCycle("2001:DB8::FF00:ABCD:12EF"),
+      castToVarchar("2001:DB8::FF00:ABCD:12EF"),
       "2001:db8::ff00:abcd:12ef");
-  EXPECT_THROW(castIPAddressVarcharCycle("facebook.com"), VeloxUserError);
-  EXPECT_THROW(castIPAddressVarcharCycle("localhost"), VeloxUserError);
-  EXPECT_THROW(castIPAddressVarcharCycle("2001:db8::1::1"), VeloxUserError);
-  EXPECT_THROW(castIPAddressVarcharCycle("2001:zxy::1::1"), VeloxUserError);
-  EXPECT_THROW(castIPAddressVarcharCycle("789.1.1.1"), VeloxUserError);
+  EXPECT_THROW(castToVarchar("facebook.com"), VeloxUserError);
+  EXPECT_THROW(castToVarchar("localhost"), VeloxUserError);
+  EXPECT_THROW(castToVarchar("2001:db8::1::1"), VeloxUserError);
+  EXPECT_THROW(castToVarchar("2001:zxy::1::1"), VeloxUserError);
+  EXPECT_THROW(castToVarchar("789.1.1.1"), VeloxUserError);
 }
 
-TEST_F(IPAddressTest, testVarbinaryIpAddressCast) {
+TEST_F(IPAddressCastTest, castToVarbinary) {
   EXPECT_EQ(
-      castIPAddressVarbinary("00000000000000000000ffff01020304"), "1.2.3.4");
-  EXPECT_EQ(castIPAddressVarbinary("01020304"), "1.2.3.4");
-  EXPECT_EQ(castIPAddressVarbinary("c0a80000"), "192.168.0.0");
+      castToVarbinary("00000000000000000000ffff01020304"), "1.2.3.4");
+  EXPECT_EQ(castToVarbinary("01020304"), "1.2.3.4");
+  EXPECT_EQ(castToVarbinary("c0a80000"), "192.168.0.0");
   EXPECT_EQ(
-      castIPAddressVarbinary("20010db8000000000000ff0000428329"),
+      castToVarbinary("20010db8000000000000ff0000428329"),
       "2001:db8::ff00:42:8329");
-  EXPECT_THROW(castIPAddressVarbinary("f000001100"), VeloxUserError);
+  EXPECT_THROW(castToVarbinary("f000001100"), VeloxUserError);
 }
 
-TEST_F(IPAddressTest, testVarbinaryIpAddressVarchar) {
-  EXPECT_EQ(castIPAddressVarbinaryVarchar("::ffff:1.2.3.4"), "1.2.3.4");
+TEST_F(IPAddressCastTest, allCasts) {
+  EXPECT_EQ(allCasts("::ffff:1.2.3.4"), "1.2.3.4");
   EXPECT_EQ(
-      castIPAddressVarbinaryVarchar("2001:0db8:0000:0000:0000:ff00:0042:8329"),
+      allCasts("2001:0db8:0000:0000:0000:ff00:0042:8329"),
       "2001:db8::ff00:42:8329");
   EXPECT_EQ(
-      castIPAddressVarbinaryVarchar("2001:db8::ff00:42:8329"),
+      allCasts("2001:db8::ff00:42:8329"),
       "2001:db8::ff00:42:8329");
 }
 
-TEST_F(IPAddressTest, nullTest) {
-  EXPECT_EQ(castIPAddressVarcharCycle(std::nullopt), std::nullopt);
-  EXPECT_EQ(castIPAddressVarbinary(std::nullopt), std::nullopt);
+TEST_F(IPAddressCastTest, nullTest) {
+  EXPECT_EQ(castToVarchar(std::nullopt), std::nullopt);
+  EXPECT_EQ(castToVarbinary(std::nullopt), std::nullopt);
 }
 
-TEST_F(IPAddressTest, castRoundTrip) {
+TEST_F(IPAddressCastTest, castRoundTrip) {
   auto strings = makeFlatVector<std::string>(
       {"87a0:ce14:8989:44c9:826e:b4d8:73f9:1542",
        "7cd6:bcec:1216:5c20:4b67:b1bd:173:ced",

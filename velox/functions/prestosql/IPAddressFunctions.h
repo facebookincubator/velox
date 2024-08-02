@@ -15,9 +15,6 @@
  */
 #pragma once
 
-#include "velox/functions/Macros.h"
-#include "velox/functions/Registerer.h"
-#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 
 namespace facebook::velox::functions {

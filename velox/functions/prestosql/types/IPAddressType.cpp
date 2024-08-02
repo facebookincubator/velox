@@ -18,6 +18,14 @@
 
 namespace facebook::velox {
 
+// Converts BigEndian <-> native byte array
+// NOOP if system is Big Endian already
+void bigEndianByteArray(folly::ByteArray16& addrBytes) {
+  if (folly::kIsLittleEndian) {
+    std::reverse(addrBytes.begin(), addrBytes.end());
+  }
+}
+
 namespace {
 
 class IPAddressCastOperator : public exec::CastOperator {
@@ -25,7 +33,6 @@ class IPAddressCastOperator : public exec::CastOperator {
   bool isSupportedFromType(const TypePtr& other) const override {
     switch (other->kind()) {
       case TypeKind::VARBINARY:
-        return true;
       case TypeKind::VARCHAR:
         return true;
       default:
@@ -36,7 +43,6 @@ class IPAddressCastOperator : public exec::CastOperator {
   bool isSupportedToType(const TypePtr& other) const override {
     switch (other->kind()) {
       case TypeKind::VARBINARY:
-        return true;
       case TypeKind::VARCHAR:
         return true;
       default:
@@ -88,11 +94,12 @@ class IPAddressCastOperator : public exec::CastOperator {
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<StringView>>();
     const auto* ipaddresses = input.as<SimpleVector<int128_t>>();
+    folly::ByteArray16 addrBytes;
+    std::string s;
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto intAddr = ipaddresses->valueAt(row);
-      folly::ByteArray16 addrBytes;
-      std::string s;
+
       memcpy(&addrBytes, &intAddr, kIPAddressBytes);
 
       bigEndianByteArray(addrBytes);
@@ -117,10 +124,10 @@ class IPAddressCastOperator : public exec::CastOperator {
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<int128_t>>();
     const auto* ipAddressStrings = input.as<SimpleVector<StringView>>();
+    int128_t intAddr;
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto ipAddressString = ipAddressStrings->valueAt(row);
-      int128_t intAddr;
       folly::IPAddress addr(ipAddressString);
 
       auto addrBytes = folly::IPAddress::createIPv6(addr).toByteArray();

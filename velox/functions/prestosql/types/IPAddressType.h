@@ -31,13 +31,7 @@ static constexpr int kIPV6Bits = 128;
 
 namespace facebook::velox {
 
-// Converts BigEndian <-> native byte array
-// NOOP if system is Big Endian already
-inline void bigEndianByteArray(folly::ByteArray16& addrBytes) {
-  if (folly::kIsLittleEndian) {
-    std::reverse(addrBytes.begin(), addrBytes.end());
-  }
-}
+void bigEndianByteArray(folly::ByteArray16& addrBytes);
 
 class IPAddressType : public HugeintType {
   IPAddressType() = default;
