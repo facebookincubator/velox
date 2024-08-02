@@ -808,7 +808,8 @@ class HashTable : public BaseHashTable {
   void allocateTablesOpt(uint64_t size);
 
   bool enableOpt() const {
-    return hashMode_ == BaseHashTable::HashMode::kNormalizedKey && isJoinBuild_;
+    return false;
+    // return hashMode_ == BaseHashTable::HashMode::kNormalizedKey && isJoinBuild_;
   }
 
   // 'initNormalizedKeys' is passed to 'rehash' --> 'rehash' --> 'insertBatch'.
@@ -990,24 +991,8 @@ class HashTable : public BaseHashTable {
     return numBuckets_;
   }
 
-  void print_trace(void) const
-  {
-    size_t i, size;
-    void *array[1204];
-    size = backtrace(array, 1024);
-    char **strings = backtrace_symbols(array, size);
-    for (i = 0; i < size; i++)
-      printf("%d# %s\n",i, strings[i]);
-    free(strings);
-  }
-
   // Return the row pointer at 'slotIndex' of bucket at 'bucketOffset'.
   char* row(int64_t bucketOffset, int32_t slotIndex) const {
-    /*if(enableOpt()) {
-      print_trace();
-      std::cout << "get here xxxx" << std::endl;
-      return keyAndPointerAt(bucketOffset)->pointerAt(slotIndex);
-    }*/
     return bucketAt(bucketOffset)->pointerAt(slotIndex);
   }
 
