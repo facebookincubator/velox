@@ -88,7 +88,9 @@ struct LocalExchangeState {
 /// Stores inter-operator state (exchange, bridges) for split groups.
 struct SplitGroupState {
   /// Map from the plan node id of the join to the corresponding JoinBridge.
+  /// This map will contain only HashJoinBridge and NestedLoopJoinBridge.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>> bridges;
+  /// This map will contain all other custom bridges.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>>
       custom_bridges;
 
