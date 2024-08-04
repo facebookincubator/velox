@@ -22,13 +22,14 @@
 #include "velox/dwio/common/tests/Lemire/bmipacking32.h"
 #endif
 
-#include "velox/external/duckdb/duckdb-fastpforlib.hpp"
+#include "velox/dwio/common/tests/Lemire/FastPFor/bitpackinghelpers.h"
 
 #include <arrow/util/rle_encoding.h>
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
 #include <folly/init/Init.h>
-#include "velox/external/duckdb/duckdb.hpp"
+
+#include <duckdb.hpp> // @manual
 
 using namespace folly;
 using namespace facebook::velox;
@@ -37,7 +38,7 @@ using RowSet = folly::Range<const facebook::velox::vector_size_t*>;
 
 static const uint64_t kNumValues = 1024768 * 8;
 
-namespace duckdb {
+namespace facebook::velox::parquet {
 
 class ByteBuffer { // on to the 10 thousandth impl
  public:
@@ -64,7 +65,7 @@ class ByteBuffer { // on to the 10 thousandth impl
   template <class T>
   T get() {
     available(sizeof(T));
-    T val = Load<T>((data_ptr_t)ptr);
+    T val = duckdb::Load<T>((duckdb::data_ptr_t)ptr);
     return val;
   }
 
@@ -103,7 +104,7 @@ class ParquetDecodeUtils {
       uint32_t count,
       uint8_t width) {
     if (width >= ParquetDecodeUtils::BITPACK_MASKS_SIZE) {
-      throw InvalidInputException(
+      throw duckdb::InvalidInputException(
           "The width (%d) of the bitpacked data exceeds the supported max width (%d), "
           "the file might be corrupted.",
           width,
@@ -144,9 +145,9 @@ class ParquetDecodeUtils {
     return result;
   }
 };
-} // namespace duckdb
+} // namespace facebook::velox::parquet
 
-const uint64_t duckdb::ParquetDecodeUtils::BITPACK_MASKS[] = {
+const uint64_t facebook::velox::parquet::ParquetDecodeUtils::BITPACK_MASKS[] = {
     0,
     1,
     3,
@@ -213,10 +214,11 @@ const uint64_t duckdb::ParquetDecodeUtils::BITPACK_MASKS[] = {
     9223372036854775807,
     18446744073709551615ULL};
 
-const uint64_t duckdb::ParquetDecodeUtils::BITPACK_MASKS_SIZE =
-    sizeof(ParquetDecodeUtils::BITPACK_MASKS) / sizeof(uint64_t);
+const uint64_t
+    facebook::velox::parquet::ParquetDecodeUtils::BITPACK_MASKS_SIZE =
+        sizeof(ParquetDecodeUtils::BITPACK_MASKS) / sizeof(uint64_t);
 
-const uint8_t duckdb::ParquetDecodeUtils::BITPACK_DLEN = 8;
+const uint8_t facebook::velox::parquet::ParquetDecodeUtils::BITPACK_DLEN = 8;
 
 // Array of bit packed representations of randomInts_u32. The array at index i
 // is packed i bits wide and the values come from the low bits of
@@ -244,13 +246,13 @@ std::vector<char> buffer_u64;
 
 template <typename T>
 void naiveDecodeBitsLE(
-    const uint64_t* FOLLY_NONNULL bits,
+    const uint64_t* bits,
     int32_t bitOffset,
     RowSet rows,
     int32_t rowBias,
     uint8_t bitWidth,
     const char* bufferEnd,
-    T* FOLLY_NONNULL result);
+    T* result);
 
 template <typename T>
 void legacyUnpackNaive(RowSet rows, uint8_t bitWidth, T* result) {
@@ -289,7 +291,7 @@ void fastpforlib(uint8_t bitWidth, T* result) {
   auto inputBuffer = reinterpret_cast<const T*>(bitPackedData[bitWidth].data());
   for (auto i = 0; i < numBatches; i++) {
     // Read 4 bytes and unpack 32 values
-    duckdb_fastpforlib::fastunpack(
+    velox::fastpforlib::fastunpack(
         inputBuffer + i * 4, result + i * 32, bitWidth);
   }
 }
@@ -315,11 +317,11 @@ void arrowBitUnpack(uint8_t bitWidth, T* result) {
 
 template <typename T>
 void duckdbBitUnpack(uint8_t bitWidth, T* result) {
-  duckdb::ByteBuffer duckInputBuffer(
+  facebook::velox::parquet::ByteBuffer duckInputBuffer(
       reinterpret_cast<char*>(bitPackedData[bitWidth].data()),
       BYTES(kNumValues, bitWidth));
   uint8_t bitpack_pos = 0;
-  duckdb::ParquetDecodeUtils::BitUnpack<T>(
+  facebook::velox::parquet::ParquetDecodeUtils::BitUnpack<T>(
       duckInputBuffer, bitpack_pos, result, kNumValues, bitWidth);
 }
 
@@ -526,13 +528,13 @@ void populateBitPacked() {
 // Naive unpacking, original version of IntDecoder::unpack.
 template <typename T>
 void naiveDecodeBitsLE(
-    const uint64_t* FOLLY_NONNULL bits,
+    const uint64_t* bits,
     int32_t bitOffset,
     RowSet rows,
     int32_t rowBias,
     uint8_t bitWidth,
     const char* bufferEnd,
-    T* FOLLY_NONNULL result) {
+    T* result) {
   uint64_t mask = bits::lowMask(bitWidth);
   auto numRows = rows.size();
   if (bitWidth > 56) {
@@ -542,7 +544,7 @@ void naiveDecodeBitsLE(
     }
     return;
   }
-  auto FOLLY_NONNULL lastSafe = bufferEnd - sizeof(uint64_t);
+  auto lastSafe = bufferEnd - sizeof(uint64_t);
   int32_t numSafeRows = numRows;
   bool anyUnsafe = false;
   if (bufferEnd) {
@@ -592,7 +594,7 @@ void naiveDecodeBitsLE(
 }
 
 int32_t main(int32_t argc, char* argv[]) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
 
   // Populate uint32 buffer
 

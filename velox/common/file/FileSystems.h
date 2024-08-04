@@ -35,8 +35,16 @@ namespace facebook::velox::filesystems {
 /// MemoryPool to allocate buffers needed to read/write files on FileSystems
 /// such as S3.
 struct FileOptions {
+  /// A free form option in 'values' that is provided for file creation. The
+  /// form should be defined by specific implementations of file system. e.g.
+  /// inside this property there could be things like block size, encoding, and
+  /// etc.
+  static constexpr folly::StringPiece kFileCreateConfig{"file-create-config"};
+
   std::unordered_map<std::string, std::string> values;
   memory::MemoryPool* pool{nullptr};
+  /// If specified then can be trusted to be the file size.
+  std::optional<int64_t> fileSize;
 };
 
 /// An abstract FileSystem
@@ -48,6 +56,12 @@ class FileSystem {
 
   /// Returns the name of the File System
   virtual std::string name() const = 0;
+
+  /// Returns the file path without the fs scheme prefix such as "local:" prefix
+  /// for local file system.
+  virtual std::string_view extractPath(std::string_view path) {
+    VELOX_NYI();
+  }
 
   /// Returns a ReadFile handle for a given file path
   virtual std::unique_ptr<ReadFile> openFileForRead(
@@ -93,6 +107,10 @@ class FileSystem {
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filename,
     std::shared_ptr<const Config> config);
+
+/// Returns true if filePath is supported by any registered file system,
+/// otherwise false.
+bool isPathSupportedByRegisteredFileSystems(const std::string_view& filePath);
 
 /// FileSystems must be registered explicitly.
 /// The registration function takes two parameters:

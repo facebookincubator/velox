@@ -15,24 +15,43 @@
 add_executable(
   velox_functions_spark_test
   ArithmeticTest.cpp
+  ArrayFlattenTest.cpp
+  ArrayGetTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
   ArraySortTest.cpp
+  ArrayShuffleTest.cpp
+  ArgGeneratorTest.cpp
   BitwiseTest.cpp
   ComparisonsTest.cpp
   DateTimeFunctionsTest.cpp
+  DecimalArithmeticTest.cpp
+  DecimalCompareTest.cpp
+  DecimalRoundTest.cpp
+  DecimalUtilTest.cpp
   ElementAtTest.cpp
   HashTest.cpp
   InTest.cpp
+  JsonObjectKeysTest.cpp
   LeastGreatestTest.cpp
+  MakeDecimalTest.cpp
+  MakeTimestampTest.cpp
   MapTest.cpp
+  MaskTest.cpp
   MightContainTest.cpp
+  MonotonicallyIncreasingIdTest.cpp
+  RaiseErrorTest.cpp
   RandTest.cpp
   RegexFunctionsTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp
+  SparkCastExprTest.cpp
+  SparkPartitionIdTest.cpp
   SplitFunctionsTest.cpp
   StringTest.cpp
+  StringToMapTest.cpp
+  UnscaledValueFunctionTest.cpp
+  UuidTest.cpp
   XxHash64Test.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
@@ -42,6 +61,8 @@ target_link_libraries(
   velox_functions_spark
   velox_functions_test_lib
   velox_exec_test_lib
+  velox_expression_fuzzer_test_utility
+  velox_expression_fuzzer
   fmt::fmt
   gtest
   gtest_main

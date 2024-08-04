@@ -29,6 +29,10 @@ namespace {
 class SimpleComparisonMatcherTest : public testing::Test,
                                     public test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions(prefix_);
     parse::registerTypeResolver();
@@ -43,7 +47,7 @@ class SimpleComparisonMatcherTest : public testing::Test,
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
-  std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
+  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
   const std::string prefix_ = "tp.";

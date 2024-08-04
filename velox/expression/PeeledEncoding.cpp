@@ -20,10 +20,10 @@
 
 namespace facebook::velox::exec {
 
-std::shared_ptr<PeeledEncoding> PeeledEncoding::peel(
+/*static*/ std::shared_ptr<PeeledEncoding> PeeledEncoding::peel(
     const std::vector<VectorPtr>& vectorsToPeel,
     const SelectivityVector& rows,
-    LocalDecodedVector& decodedVector,
+    DecodedVector& decodedVector,
     bool canPeelsHaveNulls,
     std::vector<VectorPtr>& peeledVectors) {
   std::shared_ptr<PeeledEncoding> peeledEncoding(new PeeledEncoding());
@@ -38,10 +38,26 @@ std::shared_ptr<PeeledEncoding> PeeledEncoding::peel(
   return nullptr;
 }
 
+/*static*/ std::shared_ptr<PeeledEncoding> PeeledEncoding::peel(
+    const std::vector<VectorPtr>& vectorsToPeel,
+    const SelectivityVector& rows,
+    LocalDecodedVector& decodedVector,
+    bool canPeelsHaveNulls,
+    std::vector<VectorPtr>& peeledVectors) {
+  return peel(
+      vectorsToPeel,
+      rows,
+      *decodedVector.get(),
+      canPeelsHaveNulls,
+      peeledVectors);
+}
+
 SelectivityVector* PeeledEncoding::translateToInnerRows(
     const SelectivityVector& outerRows,
     LocalSelectivityVector& innerRowsHolder) const {
-  VELOX_CHECK(wrapEncoding_ != VectorEncoding::Simple::FLAT);
+  if (wrapEncoding_ == VectorEncoding::Simple::FLAT) {
+    return innerRowsHolder.get(outerRows);
+  }
   if (wrapEncoding_ == VectorEncoding::Simple::CONSTANT) {
     auto newRows = innerRowsHolder.get(constantWrapIndex_ + 1, false);
     newRows->setValid(constantWrapIndex_, true);
@@ -95,10 +111,65 @@ void PeeledEncoding::setDictionaryWrapping(
   wrapNulls_ = std::move(wrapping.nulls);
 }
 
+void PeeledEncoding::flattenPeeledVectors(
+    const SelectivityVector& rows,
+    const std::vector<bool>& constantFields,
+    std::vector<VectorPtr>& peeledVectors) {
+  VELOX_CHECK(flattenPeeled_.empty());
+  for (int i = 0; i < peeledVectors.size(); ++i) {
+    if (!constantFields.empty() && constantFields[i]) {
+      continue;
+    }
+    if (peeledVectors[i]->isConstantEncoding() && !wrapNulls_) {
+      continue;
+    }
+    switch (peeledVectors[i]->typeKind()) {
+      case TypeKind::ARRAY:
+      case TypeKind::MAP:
+      case TypeKind::ROW:
+        return;
+      default:
+        if (isLazyNotLoaded(*peeledVectors[i])) {
+          return;
+        }
+    }
+  }
+  auto nonNullRows = rows;
+  if (wrapNulls_) {
+    nonNullRows.deselectNulls(
+        wrapNulls_->as<uint64_t>(), rows.begin(), rows.end());
+  }
+  for (int i = 0; i < peeledVectors.size(); ++i) {
+    if (!constantFields.empty() && constantFields[i]) {
+      continue;
+    }
+    if (peeledVectors[i]->isConstantEncoding() && !wrapNulls_) {
+      if (peeledVectors[i]->size() < rows.end()) {
+        peeledVectors[i] =
+            BaseVector::wrapInConstant(rows.end(), 0, peeledVectors[i]);
+      }
+    } else {
+      auto flat = BaseVector::create(
+          peeledVectors[i]->type(), rows.end(), peeledVectors[i]->pool());
+      flat->copy(
+          peeledVectors[i].get(), nonNullRows, wrap_->as<vector_size_t>());
+      if (!nonNullRows.isAllSelected()) {
+        bits::andBits(
+            flat->mutableRawNulls(), nonNullRows.allBits(), 0, rows.end());
+      }
+      peeledVectors[i] = flat;
+      flattenPeeled_.push_back(std::move(flat));
+    }
+  }
+  wrapEncoding_ = VectorEncoding::Simple::FLAT;
+  baseSize_ = rows.end();
+  wrap_.reset();
+}
+
 bool PeeledEncoding::peelInternal(
     const std::vector<VectorPtr>& vectorsToPeel,
     const SelectivityVector& rows,
-    LocalDecodedVector& decodedVector,
+    DecodedVector& decodedVector,
     bool canPeelsHaveNulls,
     std::vector<VectorPtr>& peeledVectors) {
   auto numFields = vectorsToPeel.size();
@@ -189,7 +260,6 @@ bool PeeledEncoding::peelInternal(
       constantWrapIndex_ = rows.begin();
     }
   } else {
-    auto decoded = decodedVector.get();
     auto firstWrapper = vectorsToPeel[firstPeeled];
     // Check if constant encoding can be peeled off too if the input is of the
     // form Dictionary(Constant(complex)).
@@ -199,17 +269,23 @@ bool PeeledEncoding::peelInternal(
       numLevels++; // include the constant layer while decoding.
       peeledVectors.back() = peeledVectors.back()->valueVector();
     }
-    decoded->makeIndices(*firstWrapper, rows, numLevels);
-    if (decoded->isConstantMapping()) {
+    decodedVector.makeIndices(*firstWrapper, rows, numLevels);
+    if (decodedVector.isConstantMapping()) {
       // This can only happen if the attempt to peel a constant encoding layer
       // exposed a null complex constant as the base.
       VELOX_CHECK(peeledVectors.size() == 1);
-      auto innerIdx = decoded->index(rows.begin());
+      auto innerIdx = decodedVector.index(rows.begin());
       VELOX_CHECK(peeledVectors.back()->isNullAt(innerIdx));
       wrapEncoding_ = VectorEncoding::Simple::CONSTANT;
       constantWrapIndex_ = innerIdx;
     } else {
-      setDictionaryWrapping(*decoded, rows, *firstWrapper);
+      setDictionaryWrapping(decodedVector, rows, *firstWrapper);
+      if (baseSize_ / 8 > rows.end()) {
+        // For large base vector, peeling would still need to allocate and
+        // initialize/copy the memory of unselected rows, resulting in large
+        // performance penalty, thus it's safer to do deep copy in this case.
+        flattenPeeledVectors(rows, constantFields, peeledVectors);
+      }
       // Make sure all the constant vectors have at least the same length as the
       // base vector after peeling. This will make sure any translated rows
       // point to valid rows in the constant vector.
@@ -235,7 +311,9 @@ VectorPtr PeeledEncoding::wrap(
     velox::memory::MemoryPool* pool,
     VectorPtr peeledResult,
     const SelectivityVector& rows) const {
-  VELOX_CHECK(wrapEncoding_ != VectorEncoding::Simple::FLAT);
+  if (wrapEncoding_ == VectorEncoding::Simple::FLAT) {
+    return peeledResult;
+  }
   VectorPtr wrappedResult;
   if (wrapEncoding_ == VectorEncoding::Simple::DICTIONARY) {
     if (!peeledResult) {

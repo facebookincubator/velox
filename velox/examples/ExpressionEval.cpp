@@ -50,13 +50,15 @@ int main(int argc, char** argv) {
   // registered.
   registerFunction<TimesTwoFunction, int64_t, int64_t>({"times_two"});
 
+  memory::MemoryManager::initialize({});
+
   // First of all, executing an expression in Velox will require us to create a
   // query context, a memory pool, and an execution context.
   //
   // QueryCtx holds the metadata and configuration associated with a
   // particular query. This is shared between all threads of execution
   // for the same query (one object per query).
-  auto queryCtx = std::make_shared<core::QueryCtx>();
+  auto queryCtx = core::QueryCtx::create();
 
   // ExecCtx holds structures associated with a single thread of execution
   // (one per thread). Each thread of execution requires a scoped memory pool,
@@ -64,8 +66,8 @@ int main(int argc, char** argv) {
   // pointer to this pool can be obtained using execCtx.pool().
   //
   // Optionally, one can control the per-thread memory cap by passing it as an
-  // argument to addDefaultLeafMemoryPool() - no limit by default.
-  auto pool = memory::addDefaultLeafMemoryPool();
+  // argument to add() - no limit by default.
+  auto pool = memory::memoryManager()->addLeafPool();
   core::ExecCtx execCtx{pool.get(), queryCtx.get()};
 
   // Next, let's create an expression tree to be executed in this example. On a

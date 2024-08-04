@@ -84,7 +84,10 @@ class AverageAggregate
 ///     REAL            |     DOUBLE          |    DOUBLE
 ///     ALL INTs        |     DOUBLE          |    DOUBLE
 ///     DECIMAL         |     DECIMAL         |    DECIMAL
-exec::AggregateRegistrationResult registerAverage(const std::string& name) {
+exec::AggregateRegistrationResult registerAverage(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   for (const auto& inputType :
@@ -180,6 +183,7 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
                 return std::make_unique<DecimalAverageAggregateBase<int64_t>>(
                     resultType);
               }
+              [[fallthrough]];
             default:
               VELOX_FAIL(
                   "Unsupported result type for final aggregation: {}",
@@ -187,7 +191,8 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
           }
         }
       },
-      /*registerCompanionFunctions*/ true);
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql

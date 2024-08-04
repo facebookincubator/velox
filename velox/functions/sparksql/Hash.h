@@ -54,12 +54,10 @@ std::shared_ptr<exec::VectorFunction> makeHashWithSeed(
 //   - Decimal
 //   - Date
 //   - Timestamp
-//
-// Unsupported:
-//   - Structs, Arrays: hash the elements in order
-//   - Maps: iterate over map, hashing key then value. Since map ordering is
-//        unspecified, hashing logically equivalent maps may result in
-//        different hash values.
+//   - UnknownType
+//   - Struct
+//   - Array
+//   - Map
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures();
 
@@ -75,5 +73,7 @@ std::shared_ptr<exec::VectorFunction> makeXxHash64WithSeed(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config);
+
+exec::VectorFunctionMetadata hashMetadata();
 
 } // namespace facebook::velox::functions::sparksql

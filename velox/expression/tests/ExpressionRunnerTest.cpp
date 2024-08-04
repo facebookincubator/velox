@@ -22,6 +22,7 @@
 #include "velox/expression/tests/ExpressionVerifier.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/sparksql/Register.h"
 #include "velox/vector/VectorSaver.h"
 
 using namespace facebook::velox;
@@ -53,6 +54,12 @@ DEFINE_string(
     "--sql_path is ignored.");
 
 DEFINE_string(
+    registry,
+    "presto",
+    "Funciton registry to use for expression evaluation. Currently supported values are "
+    "presto and spark. Default is presto.");
+
+DEFINE_string(
     result_path,
     "",
     "Path for result vector to restore from disk. This is optional for "
@@ -79,12 +86,22 @@ DEFINE_string(
     "indices that specify which columns of the input row vector should "
     "be wrapped in lazy.");
 
+DEFINE_bool(
+    use_seperate_memory_pool_for_input_vector,
+    true,
+    "If true, expression evaluator and input vectors use different memory pools."
+    " This helps trigger code-paths that can depend on vectors having different"
+    " pools. For eg, when copying a flat string vector copies of the strings"
+    " stored in the string buffers need to be created. If however, the pools"
+    " were the same between the vectors then the buffers can simply be shared"
+    " between them instead.");
+
 static bool validateMode(const char* flagName, const std::string& value) {
   static const std::unordered_set<std::string> kModes = {
       "common", "simplified", "verify", "query"};
   if (kModes.count(value) != 1) {
-    std::cout << "Invalid value for --" << flagName << ": " << value << ". ";
-    std::cout << "Valid values are: " << folly::join(", ", kModes) << "."
+    std::cerr << "Invalid value for --" << flagName << ": " << value << ". ";
+    std::cerr << "Valid values are: " << folly::join(", ", kModes) << "."
               << std::endl;
     return false;
   }
@@ -92,7 +109,26 @@ static bool validateMode(const char* flagName, const std::string& value) {
   return true;
 }
 
+static bool validateRegistry(const char* flagName, const std::string& value) {
+  static const std::unordered_set<std::string> kRegistries = {
+      "presto", "spark"};
+  if (kRegistries.count(value) != 1) {
+    std::cerr << "Invalid value for --" << flagName << ": " << value << ". ";
+    std::cerr << "Valid values are: " << folly::join(", ", kRegistries) << "."
+              << std::endl;
+    return false;
+  }
+  if (value == "spark") {
+    functions::sparksql::registerFunctions("");
+  } else if (value == "presto") {
+    functions::prestosql::registerAllScalarFunctions();
+  }
+
+  return true;
+}
+
 DEFINE_validator(mode, &validateMode);
+DEFINE_validator(registry, &validateRegistry);
 
 DEFINE_int32(
     num_rows,
@@ -165,14 +201,14 @@ int main(int argc, char** argv) {
   // Calls common init functions in the necessary order, initializing
   // singletons, installing proper signal handlers for better debugging
   // experience, and initialize glog and gflags.
-  folly::init(&argc, &argv);
+  folly::Init init(&argc, &argv);
 
   if (!FLAGS_fuzzer_repro_path.empty()) {
     checkDirForExpectedFiles();
   }
 
   if (FLAGS_sql.empty() && FLAGS_sql_path.empty()) {
-    std::cout << "One of --sql or --sql_path flags must be set." << std::endl;
+    std::cerr << "One of --sql or --sql_path flags must be set." << std::endl;
     exit(1);
   }
 
@@ -181,9 +217,7 @@ int main(int argc, char** argv) {
     sql = restoreStringFromFile(FLAGS_sql_path.c_str());
     VELOX_CHECK(!sql.empty());
   }
-
-  functions::prestosql::registerAllScalarFunctions();
-  aggregate::prestosql::registerAllAggregateFunctions();
+  memory::initializeMemoryManager({});
   test::ExpressionRunner::run(
       FLAGS_input_path,
       sql,
@@ -193,5 +227,6 @@ int main(int argc, char** argv) {
       FLAGS_num_rows,
       FLAGS_store_result_path,
       FLAGS_lazy_column_list_path,
-      FLAGS_find_minimal_subexpression);
+      FLAGS_find_minimal_subexpression,
+      FLAGS_use_seperate_memory_pool_for_input_vector);
 }

@@ -37,6 +37,8 @@ be JSON. Behaviors of the casts are shown with the examples below:
     SELECT CAST('abc' AS JSON); -- JSON '"abc"'
     SELECT CAST(true AS JSON); -- JSON 'true'
     SELECT CAST(1.234 AS JSON); -- JSON '1.234'
+    SELECT CAST(-0.00012 AS JSON); -- JSON '-1.2E-4'
+    SELECT CAST(10000000.0 AS JSON); -- JSON '1.0E7'
     SELECT CAST(ARRAY[1, 23, 456] AS JSON); -- JSON '[1,23,456]'
     SELECT CAST(ARRAY[1, NULL, 456] AS JSON); -- JSON '[1,null,456]'
     SELECT CAST(ARRAY[ARRAY[1, 23], ARRAY[456]] AS JSON); -- JSON '[[1,23],[456]]'
@@ -51,6 +53,12 @@ have nulls in it.
 Another thing to be aware of is that when casting from ROW to JSON, the
 result is a JSON array rather than a JSON object. This is because positions
 are more important than names for rows in SQL.
+
+Also note that casting from REAL or DOUBLE returns the JSON text represented
+in standard notation if the magnitude of input value is greater than or equal
+to 10 :superscript:`-3` but less than 10 :superscript:`7`, and returns the JSON
+text in scientific notation otherwise. The standard and scientific notation
+always has the fractional part, such as ``10.0``.
 
 Finally, keep in mind that casting a VARCHAR string to JSON does not directly
 turn the original string into JSON type. Instead, it creates a JSON text
@@ -109,6 +117,29 @@ JSON Functions
     Returns NULL if ``json`` is not an array::
 
         SELECT json_array_contains('[1, 2, 3]', 2);
+
+.. function:: json_array_get(json_array, index) -> json
+
+   Returns the element at the specified index into the ``json_array``.
+   The index is zero-based::
+
+        SELECT json_array_get('[1, 2, 3]', 0); -- JSON '1'
+        SELECT json_array_get('[1, 2, 3]', 1); -- JSON '2'
+
+   This function also supports negative indexes for fetching element indexed
+   from the end of an array::
+
+        SELECT json_array_get('[1, 2, 3]', -1); -- JSON '3'
+        SELECT json_array_get('[1, 2, 3]', -2); -- JSON '2'
+
+   If the element at the specified index doesn't exist, the function returns null::
+
+        SELECT json_array_get('[1, 2, 3]', 10); -- NULL
+        SELECT json_array_get('[1, 2, 3]', -10); -- NULL
+
+   If ``json_array`` is not an array, the function returns null::
+
+        SELECT json_array_get('{"a": 10, "b": 11}', 1); -- NULL
 
 .. function:: json_array_length(json) -> bigint
 

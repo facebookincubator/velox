@@ -39,7 +39,8 @@ int main() {
   auto normal = std::normal_distribution<double>(mu, sigma);
 
   FuzzerGenerator rng;
-  auto pool = memory::addDefaultLeafMemoryPool();
+  memory::MemoryManager::initialize({});
+  auto pool = memory::memoryManager()->addLeafPool();
 
   GeneratorSpecPtr randomMap =
       RANDOM_MAP(RANDOM_INTEGER(uniform), RANDOM_DOUBLE(normal), lengthDist);

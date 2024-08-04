@@ -28,7 +28,7 @@
 #include <utility>
 
 #include "arrow/util/logging.h"
-#include "parquet/exception.h"
+#include "velox/dwio/parquet/writer/arrow/Exception.h"
 
 using facebook::velox::parquet::arrow::format::SchemaElement;
 
@@ -785,8 +785,8 @@ struct SchemaPrinter : public Node::ConstVisitor {
 
   void Visit(const GroupNode* node) {
     PrintRepLevel(node->repetition(), stream_);
-    stream_ << " group "
-            << "field_id=" << node->field_id() << " " << node->name();
+    stream_ << " group " << "field_id=" << node->field_id() << " "
+            << node->name();
     auto lt = node->converted_type();
     auto la = node->logical_type();
     if (la && la->is_valid() && !la->is_none()) {

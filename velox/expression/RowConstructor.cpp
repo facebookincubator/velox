@@ -32,35 +32,30 @@ TypePtr RowConstructorCallToSpecialForm::resolveType(
 }
 
 ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(
-    const std::string& name,
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
     const core::QueryConfig& config) {
-  auto rowConstructorVectorFunction =
-      vectorFunctionFactories().withRLock([&config, &name](auto& functionMap) {
-        auto functionIterator = functionMap.find(name);
-        return functionIterator->second.factory(name, {}, config);
+  auto [function, metadata] = vectorFunctionFactories().withRLock(
+      [&config](auto& functionMap) -> std::pair<
+                                       std::shared_ptr<VectorFunction>,
+                                       VectorFunctionMetadata> {
+        auto functionIterator = functionMap.find(kRowConstructor);
+        if (functionIterator != functionMap.end()) {
+          return {
+              functionIterator->second.factory(kRowConstructor, {}, config),
+              functionIterator->second.metadata};
+        } else {
+          VELOX_FAIL("Function {} is not registered.", kRowConstructor);
+        }
       });
 
   return std::make_shared<Expr>(
       type,
       std::move(compiledChildren),
-      rowConstructorVectorFunction,
-      name,
-      trackCpuUsage);
-}
-
-ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(
-    const TypePtr& type,
-    std::vector<ExprPtr>&& compiledChildren,
-    bool trackCpuUsage,
-    const core::QueryConfig& config) {
-  return constructSpecialForm(
+      function,
+      metadata,
       kRowConstructor,
-      type,
-      std::move(compiledChildren),
-      trackCpuUsage,
-      config);
+      trackCpuUsage);
 }
 } // namespace facebook::velox::exec

@@ -20,14 +20,15 @@
 namespace facebook::velox::serializer {
 
 void CompactRowVectorSerde::estimateSerializedSize(
-    VectorPtr /* vector */,
+    const BaseVector* /* vector */,
     const folly::Range<const IndexRange*>& /* ranges */,
-    vector_size_t** /* sizes */) {
+    vector_size_t** /* sizes */,
+    Scratch& /*scratch*/) {
   VELOX_UNSUPPORTED();
 }
 
 namespace {
-class CompactRowVectorSerializer : public VectorSerializer {
+class CompactRowVectorSerializer : public IterativeVectorSerializer {
  public:
   using TRowSize = uint32_t;
 
@@ -36,7 +37,8 @@ class CompactRowVectorSerializer : public VectorSerializer {
 
   void append(
       const RowVectorPtr& vector,
-      const folly::Range<const IndexRange*>& ranges) override {
+      const folly::Range<const IndexRange*>& ranges,
+      Scratch& scratch) override {
     size_t totalSize = 0;
     row::CompactRow row(vector);
     if (auto fixedRowSize =
@@ -90,12 +92,36 @@ class CompactRowVectorSerializer : public VectorSerializer {
   }
 
  private:
-  memory::MemoryPool* const FOLLY_NONNULL pool_;
+  memory::MemoryPool* const pool_;
   std::vector<BufferPtr> buffers_;
 };
+
+// Read from the stream until the full row is concatenated.
+std::string concatenatePartialRow(
+    ByteInputStream* source,
+    std::string_view rowFragment,
+    CompactRowVectorSerializer::TRowSize rowSize) {
+  std::string rowBuffer;
+  rowBuffer.reserve(rowSize);
+  rowBuffer.append(rowFragment);
+
+  while (rowBuffer.size() < rowSize) {
+    rowFragment = source->nextView(rowSize - rowBuffer.size());
+    VELOX_CHECK_GT(
+        rowFragment.size(),
+        0,
+        "Unable to read full serialized CompactRow. Needed {} but read {} bytes.",
+        rowSize - rowBuffer.size(),
+        rowFragment.size());
+    rowBuffer += rowFragment;
+  }
+  return rowBuffer;
+}
+
 } // namespace
 
-std::unique_ptr<VectorSerializer> CompactRowVectorSerde::createSerializer(
+std::unique_ptr<IterativeVectorSerializer>
+CompactRowVectorSerde::createIterativeSerializer(
     RowTypePtr /* type */,
     int32_t /* numRows */,
     StreamArena* streamArena,
@@ -104,17 +130,27 @@ std::unique_ptr<VectorSerializer> CompactRowVectorSerde::createSerializer(
 }
 
 void CompactRowVectorSerde::deserialize(
-    ByteStream* source,
+    ByteInputStream* source,
     velox::memory::MemoryPool* pool,
     RowTypePtr type,
     RowVectorPtr* result,
     const Options* /* options */) {
   std::vector<std::string_view> serializedRows;
+  std::vector<std::string> concatenatedRows;
+
   while (!source->atEnd()) {
     // First read row size in big endian order.
     auto rowSize = folly::Endian::big(
         source->read<CompactRowVectorSerializer::TRowSize>());
     auto row = source->nextView(rowSize);
+
+    // If we couldn't read the entire row at once, we need to concatenate it
+    // in a different buffer.
+    if (row.size() < rowSize) {
+      concatenatedRows.push_back(concatenatePartialRow(source, row, rowSize));
+      row = concatenatedRows.back();
+    }
+
     VELOX_CHECK_EQ(row.size(), rowSize);
     serializedRows.push_back(row);
   }

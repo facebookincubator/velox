@@ -22,6 +22,10 @@ using namespace facebook::velox;
 class VectorPrepareForReuseTest : public testing::Test,
                                   public test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   VectorPrepareForReuseTest() = default;
 };
 
@@ -221,6 +225,40 @@ TEST_F(VectorPrepareForReuseTest, arrays) {
   }
 
   vector->copy(otherVector.get(), 0, 0, 1'000);
+  ASSERT_EQ(originalSize, vector->retainedSize());
+}
+
+TEST_F(VectorPrepareForReuseTest, arrayOfStrings) {
+  VectorPtr vector = makeArrayVector<std::string>(
+      1'000,
+      [](auto /*row*/) { return 1; },
+      [](auto row, auto index) {
+        return std::string(20 + index, 'a' + row % 5);
+      });
+  auto originalSize = vector->retainedSize();
+  BaseVector* originalVector = vector.get();
+
+  MemoryAllocationChecker allocationChecker(pool());
+  BaseVector::prepareForReuse(vector, vector->size());
+  ASSERT_EQ(originalVector, vector.get());
+  ASSERT_EQ(originalSize, vector->retainedSize());
+
+  auto* arrayVector = vector->as<ArrayVector>();
+  for (auto i = 0; i < 1'000; i++) {
+    ASSERT_EQ(0, arrayVector->sizeAt(i));
+    ASSERT_EQ(0, arrayVector->offsetAt(i));
+  }
+
+  // Cannot use BaseVector::copy because it is too smart and acquired string
+  // buffers instead of copying the strings.
+  auto* elementsVector = arrayVector->elements()->as<FlatVector<StringView>>();
+  elementsVector->resize(1'000);
+  for (auto i = 0; i < 1'000; i++) {
+    arrayVector->setOffsetAndSize(i, i, 1);
+    std::string newValue(21, 'b' + i % 7);
+    elementsVector->set(i, StringView(newValue));
+  }
+
   ASSERT_EQ(originalSize, vector->retainedSize());
 }
 

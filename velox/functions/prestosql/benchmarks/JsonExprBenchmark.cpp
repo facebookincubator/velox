@@ -22,43 +22,182 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
-#include "velox/functions/prestosql/SIMDJsonFunctions.h"
-#include "velox/functions/prestosql/benchmarks/JsonBenchmarkUtil.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/json/JsonExtractor.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions::prestosql {
 namespace {
+
+template <typename T>
+struct FollyIsJsonScalarFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(bool& result, const arg_type<Json>& json) {
+    auto parsedJson = folly::parseJson(json);
+    result = parsedJson.isNumber() || parsedJson.isString() ||
+        parsedJson.isBool() || parsedJson.isNull();
+  }
+};
+
+// jsonExtractScalar(json, json_path) -> varchar
+// Current implementation support UTF-8 in json, but not in json_path.
+// Like jsonExtract(), but returns the result value as a string (as opposed
+// to being encoded as JSON). The value referenced by json_path must be a scalar
+// (boolean, number or string)
+template <typename T>
+struct FollyJsonExtractScalarFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    const folly::StringPiece& jsonStringPiece = json;
+    const folly::StringPiece& jsonPathStringPiece = jsonPath;
+    auto extractResult =
+        jsonExtractScalar(jsonStringPiece, jsonPathStringPiece);
+    if (extractResult.hasValue()) {
+      UDFOutputString::assign(result, *extractResult);
+      return true;
+    } else {
+      return false;
+    }
+  }
+};
+
+template <typename T>
+struct FollyJsonExtractFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Json>& result,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    auto extractResult =
+        jsonExtract(folly::StringPiece(json), folly::StringPiece(jsonPath));
+    if (!extractResult.hasValue() || extractResult.value().isNull()) {
+      return false;
+    }
+
+    folly::json::serialization_opts opts;
+    opts.sort_keys = true;
+    folly::json::serialize(*extractResult, opts);
+
+    UDFOutputString::assign(
+        result, folly::json::serialize(*extractResult, opts));
+    return true;
+  }
+};
+
+template <typename T>
+struct FollyJsonArrayLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Json>& json) {
+    auto parsedJson = folly::parseJson(json);
+    if (!parsedJson.isArray()) {
+      return false;
+    }
+
+    result = parsedJson.size();
+    return true;
+  }
+};
+
+template <typename T>
+struct FollyJsonArrayContainsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(bool& result, const arg_type<Json>& json, const TInput& value) {
+    auto parsedJson = folly::parseJson(json);
+    if (!parsedJson.isArray()) {
+      return false;
+    }
+
+    result = false;
+    for (const auto& v : parsedJson) {
+      if constexpr (std::is_same_v<TInput, bool>) {
+        if (v.isBool() && v == value) {
+          result = true;
+          break;
+        }
+      } else if constexpr (std::is_same_v<TInput, int64_t>) {
+        if (v.isInt() && v == value) {
+          result = true;
+          break;
+        }
+      } else if constexpr (std::is_same_v<TInput, double>) {
+        if (v.isDouble() && v == value) {
+          result = true;
+          break;
+        }
+      } else {
+        if (v.isString() && v == value) {
+          result = true;
+          break;
+        }
+      }
+    }
+    return true;
+  }
+};
+
+template <typename T>
+struct FollyJsonSizeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    const folly::StringPiece& jsonStringPiece = json;
+    const folly::StringPiece& jsonPathStringPiece = jsonPath;
+    auto extractResult = jsonExtract(jsonStringPiece, jsonPathStringPiece);
+    if (!extractResult.has_value()) {
+      return false;
+    }
+    // The size of the object or array is the number of members, otherwise the
+    // size is zero
+    if (extractResult->isArray() || extractResult->isObject()) {
+      result = extractResult->size();
+    } else {
+      result = 0;
+    }
+
+    return true;
+  }
+};
 
 const std::string smallJson = R"({"k1":"v1"})";
 
 class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
  public:
   JsonBenchmark() : FunctionBenchmarkBase() {
-    velox::functions::prestosql::registerJsonFunctions();
-    registerFunction<IsJsonScalarFunction, bool, Json>(
+    registerJsonType();
+    registerFunction<IsJsonScalarFunction, bool, Json>({"is_json_scalar"});
+    registerFunction<FollyIsJsonScalarFunction, bool, Json>(
         {"folly_is_json_scalar"});
-    registerFunction<SIMDIsJsonScalarFunction, bool, Json>(
-        {"simd_is_json_scalar"});
     registerFunction<JsonArrayContainsFunction, bool, Json, bool>(
+        {"json_array_contains"});
+    registerFunction<FollyJsonArrayContainsFunction, bool, Json, bool>(
         {"folly_json_array_contains"});
-    registerFunction<SIMDJsonArrayContainsFunction, bool, Json, bool>(
-        {"simd_json_array_contains"});
     registerFunction<JsonArrayLengthFunction, int64_t, Json>(
+        {"json_array_length"});
+    registerFunction<FollyJsonArrayLengthFunction, int64_t, Json>(
         {"folly_json_array_length"});
-    registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
-        {"simd_json_array_length"});
     registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
+        {"json_extract_scalar"});
+    registerFunction<FollyJsonExtractScalarFunction, Varchar, Json, Varchar>(
         {"folly_json_extract_scalar"});
-    registerFunction<SIMDJsonExtractScalarFunction, Varchar, Json, Varchar>(
-        {"simd_json_extract_scalar"});
     registerFunction<JsonExtractFunction, Varchar, Json, Varchar>(
+        {"json_extract"});
+    registerFunction<FollyJsonExtractFunction, Varchar, Json, Varchar>(
         {"folly_json_extract"});
-    registerFunction<SIMDJsonExtractFunction, Varchar, Json, Varchar>(
-        {"simd_json_extract"});
-    registerFunction<JsonSizeFunction, int64_t, Json, Varchar>(
+    registerFunction<JsonSizeFunction, int64_t, Json, Varchar>({"json_size"});
+    registerFunction<FollyJsonSizeFunction, int64_t, Json, Varchar>(
         {"folly_json_size"});
-    registerFunction<SIMDJsonSizeFunction, int64_t, Json, Varchar>(
-        {"simd_json_size"});
   }
 
   std::string prepareData(int jsonSize) {
@@ -156,7 +295,7 @@ void SIMDIsJsonScalar(int iter, int vectorSize, int jsonSize) {
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
-  benchmark.runWithJson(iter, vectorSize, "simd_is_json_scalar", json);
+  benchmark.runWithJson(iter, vectorSize, "is_json_scalar", json);
 }
 
 void FollyJsonArrayContains(int iter, int vectorSize, int jsonSize) {
@@ -173,8 +312,7 @@ void SIMDJsonArrayContains(int iter, int vectorSize, int jsonSize) {
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
-  benchmark.runWithJsonContains(
-      iter, vectorSize, "simd_json_array_contains", json);
+  benchmark.runWithJsonContains(iter, vectorSize, "json_array_contains", json);
 }
 
 void FollyJsonArrayLength(int iter, int vectorSize, int jsonSize) {
@@ -190,7 +328,7 @@ void SIMDJsonArrayLength(int iter, int vectorSize, int jsonSize) {
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
-  benchmark.runWithJson(iter, vectorSize, "simd_json_array_length", json);
+  benchmark.runWithJson(iter, vectorSize, "json_array_length", json);
 }
 
 void FollyJsonExtractScalar(int iter, int vectorSize, int jsonSize) {
@@ -208,7 +346,7 @@ void SIMDJsonExtractScalar(int iter, int vectorSize, int jsonSize) {
   auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
   benchmark.runWithJsonExtract(
-      iter, vectorSize, "simd_json_extract_scalar", json, "$.key[7].k1");
+      iter, vectorSize, "json_extract_scalar", json, "$.key[7].k1");
 }
 
 void FollyJsonExtract(int iter, int vectorSize, int jsonSize) {
@@ -226,7 +364,7 @@ void SIMDJsonExtract(int iter, int vectorSize, int jsonSize) {
   auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
   benchmark.runWithJsonExtract(
-      iter, vectorSize, "simd_json_extract", json, "$.key[*].k1");
+      iter, vectorSize, "json_extract", json, "$.key[*].k1");
 }
 
 void FollyJsonSize(int iter, int vectorSize, int jsonSize) {
@@ -243,8 +381,7 @@ void SIMDJsonSize(int iter, int vectorSize, int jsonSize) {
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
-  benchmark.runWithJsonExtract(
-      iter, vectorSize, "simd_json_size", json, "$.key");
+  benchmark.runWithJsonExtract(iter, vectorSize, "json_size", json, "$.key");
 }
 
 BENCHMARK_DRAW_LINE();
@@ -474,7 +611,10 @@ BENCHMARK_DRAW_LINE();
 } // namespace facebook::velox::functions::prestosql
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
+
+  facebook::velox::memory::MemoryManager::initialize({});
+
   folly::runBenchmarks();
   return 0;
 }

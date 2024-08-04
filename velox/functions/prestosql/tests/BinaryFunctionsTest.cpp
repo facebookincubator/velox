@@ -18,6 +18,7 @@
 #include <array>
 #include <limits>
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -43,8 +44,7 @@ class BinaryFunctionsTest : public FunctionBaseTest {};
 
 TEST_F(BinaryFunctionsTest, md5) {
   const auto md5 = [&](std::optional<std::string> arg) {
-    return evaluateOnce<std::string, std::string>(
-        "md5(c0)", {arg}, {VARBINARY()});
+    return evaluateOnce<std::string>("md5(c0)", VARBINARY(), arg);
   };
 
   EXPECT_EQ(hexToDec("533f6357e0210e67d91f651bc49e1278"), md5("hashme"));
@@ -56,8 +56,7 @@ TEST_F(BinaryFunctionsTest, md5) {
 
 TEST_F(BinaryFunctionsTest, sha1) {
   const auto sha1 = [&](std::optional<std::string> arg) {
-    return evaluateOnce<std::string, std::string>(
-        "sha1(c0)", {arg}, {VARBINARY()});
+    return evaluateOnce<std::string>("sha1(c0)", VARBINARY(), arg);
   };
 
   // The result values were obtained from Presto Java sha1 function.
@@ -86,8 +85,7 @@ TEST_F(BinaryFunctionsTest, sha1) {
 
 TEST_F(BinaryFunctionsTest, sha256) {
   const auto sha256 = [&](std::optional<std::string> arg) {
-    return evaluateOnce<std::string, std::string>(
-        "sha256(c0)", {arg}, {VARBINARY()});
+    return evaluateOnce<std::string>("sha256(c0)", VARBINARY(), arg);
   };
 
   EXPECT_EQ(
@@ -108,8 +106,7 @@ TEST_F(BinaryFunctionsTest, sha256) {
 
 TEST_F(BinaryFunctionsTest, sha512) {
   const auto sha512 = [&](std::optional<std::string> arg) {
-    return evaluateOnce<std::string, std::string>(
-        "sha512(c0)", {arg}, {VARBINARY()});
+    return evaluateOnce<std::string>("sha512(c0)", VARBINARY(), arg);
   };
 
   EXPECT_EQ(
@@ -133,8 +130,7 @@ TEST_F(BinaryFunctionsTest, sha512) {
 
 TEST_F(BinaryFunctionsTest, spookyHashV232) {
   const auto spookyHashV232 = [&](std::optional<std::string> arg) {
-    return evaluateOnce<std::string, std::string>(
-        "spooky_hash_v2_32(c0)", {arg}, {VARBINARY()});
+    return evaluateOnce<std::string>("spooky_hash_v2_32(c0)", VARBINARY(), arg);
   };
 
   // The result values were obtained from Presto Java spooky_hash_v2_32
@@ -153,8 +149,7 @@ TEST_F(BinaryFunctionsTest, spookyHashV232) {
 
 TEST_F(BinaryFunctionsTest, spookyHashV264) {
   const auto spookyHashV264 = [&](std::optional<std::string> arg) {
-    return evaluateOnce<std::string, std::string>(
-        "spooky_hash_v2_64(c0)", {arg}, {VARBINARY()});
+    return evaluateOnce<std::string>("spooky_hash_v2_64(c0)", VARBINARY(), arg);
   };
 
   // The result values were obtained from Presto Java spooky_hash_v2_64
@@ -176,8 +171,8 @@ TEST_F(BinaryFunctionsTest, spookyHashV264) {
 TEST_F(BinaryFunctionsTest, HmacSha1) {
   const auto hmacSha1 = [&](std::optional<std::string> arg,
                             std::optional<std::string> key) {
-    return evaluateOnce<std::string, std::string>(
-        "hmac_sha1(c0, c1)", {arg, key}, {VARBINARY(), VARBINARY()});
+    return evaluateOnce<std::string>(
+        "hmac_sha1(c0, c1)", {VARBINARY(), VARBINARY()}, arg, key);
   };
   // Use python hmac lib results as the expected value.
   // >>> import hmac
@@ -215,8 +210,8 @@ TEST_F(BinaryFunctionsTest, HmacSha1) {
 TEST_F(BinaryFunctionsTest, HmacSha256) {
   const auto hmacSha256 = [&](std::optional<std::string> arg,
                               std::optional<std::string> key) {
-    return evaluateOnce<std::string, std::string>(
-        "hmac_sha256(c0, c1)", {arg, key}, {VARBINARY(), VARBINARY()});
+    return evaluateOnce<std::string>(
+        "hmac_sha256(c0, c1)", {VARBINARY(), VARBINARY()}, arg, key);
   };
   // Use python hmac lib results as the expected value.
   // >>> import hmac
@@ -246,8 +241,8 @@ TEST_F(BinaryFunctionsTest, HmacSha256) {
 TEST_F(BinaryFunctionsTest, HmacSha512) {
   const auto hmacSha512 = [&](std::optional<std::string> arg,
                               std::optional<std::string> key) {
-    return evaluateOnce<std::string, std::string>(
-        "hmac_sha512(c0, c1)", {arg, key}, {VARBINARY(), VARBINARY()});
+    return evaluateOnce<std::string>(
+        "hmac_sha512(c0, c1)", {VARBINARY(), VARBINARY()}, arg, key);
   };
   // Use the same expected value from TestVarbinaryFunctions of presto java
   EXPECT_EQ(
@@ -264,8 +259,8 @@ TEST_F(BinaryFunctionsTest, HmacSha512) {
 TEST_F(BinaryFunctionsTest, HmacMd5) {
   const auto hmacMd5 = [&](std::optional<std::string> arg,
                            std::optional<std::string> key) {
-    return evaluateOnce<std::string, std::string>(
-        "hmac_md5(c0, c1)", {arg, key}, {VARBINARY(), VARBINARY()});
+    return evaluateOnce<std::string>(
+        "hmac_md5(c0, c1)", {VARBINARY(), VARBINARY()}, arg, key);
   };
   // The result values were obtained from Presto Java hmac_md5 function.
   EXPECT_EQ(
@@ -279,8 +274,7 @@ TEST_F(BinaryFunctionsTest, HmacMd5) {
 
 TEST_F(BinaryFunctionsTest, crc32) {
   const auto crc32 = [&](std::optional<std::string> value) {
-    return evaluateOnce<int64_t, std::string>(
-        "crc32(c0)", {value}, {VARBINARY()});
+    return evaluateOnce<int64_t>("crc32(c0)", VARBINARY(), value);
   };
   // use python3 zlib result as the expected values,
   // >>> import zlib
@@ -299,8 +293,7 @@ TEST_F(BinaryFunctionsTest, crc32) {
 
 TEST_F(BinaryFunctionsTest, xxhash64) {
   const auto xxhash64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string, std::string>(
-        "xxhash64(c0)", {value}, {VARBINARY()});
+    return evaluateOnce<std::string>("xxhash64(c0)", VARBINARY(), value);
   };
 
   const auto toVarbinary = [](const int64_t input) {
@@ -418,20 +411,43 @@ TEST_F(BinaryFunctionsTest, toBase64Url) {
 
 TEST_F(BinaryFunctionsTest, fromBase64) {
   const auto fromBase64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("from_base64(c0)", value);
+    // from_base64 allows VARCHAR and VARBINARY inputs.
+    auto result =
+        evaluateOnce<std::string>("from_base64(c0)", VARCHAR(), value);
+    auto otherResult =
+        evaluateOnce<std::string>("from_base64(c0)", VARBINARY(), value);
+
+    VELOX_CHECK_EQ(result.has_value(), otherResult.has_value());
+
+    if (!result.has_value()) {
+      return result;
+    }
+
+    VELOX_CHECK_EQ(result.value(), otherResult.value());
+    return result;
   };
 
   EXPECT_EQ(std::nullopt, fromBase64(std::nullopt));
   EXPECT_EQ("", fromBase64(""));
   EXPECT_EQ("a", fromBase64("YQ=="));
+  EXPECT_EQ("ab", fromBase64("YWI="));
   EXPECT_EQ("abc", fromBase64("YWJj"));
   EXPECT_EQ("hello world", fromBase64("aGVsbG8gd29ybGQ="));
   EXPECT_EQ(
       "Hello World from Velox!",
       fromBase64("SGVsbG8gV29ybGQgZnJvbSBWZWxveCE="));
 
-  EXPECT_THROW(fromBase64("YQ="), VeloxUserError);
-  EXPECT_THROW(fromBase64("YQ==="), VeloxUserError);
+  VELOX_ASSERT_USER_THROW(
+      fromBase64("YQ="),
+      "Base64::decode() - invalid input string: string length is not a multiple of 4.");
+  VELOX_ASSERT_USER_THROW(
+      fromBase64("YQ==="),
+      "Base64::decode() - invalid input string: string length is not a multiple of 4.");
+
+  // Check encoded strings without padding
+  EXPECT_EQ("a", fromBase64("YQ"));
+  EXPECT_EQ("ab", fromBase64("YWI"));
+  EXPECT_EQ("abcd", fromBase64("YWJjZA"));
 }
 
 TEST_F(BinaryFunctionsTest, fromBase64Url) {
@@ -463,8 +479,7 @@ TEST_F(BinaryFunctionsTest, fromBase64Url) {
 
 TEST_F(BinaryFunctionsTest, fromBigEndian32) {
   const auto fromBigEndian32 = [&](const std::optional<std::string>& arg) {
-    return evaluateOnce<int32_t, std::string>(
-        "from_big_endian_32(c0)", {arg}, {VARBINARY()});
+    return evaluateOnce<int32_t>("from_big_endian_32(c0)", VARBINARY(), arg);
   };
 
   EXPECT_EQ(std::nullopt, fromBigEndian32(std::nullopt));
@@ -491,8 +506,7 @@ TEST_F(BinaryFunctionsTest, fromBigEndian32) {
 
 TEST_F(BinaryFunctionsTest, toBigEndian32) {
   const auto toBigEndian32 = [&](const std::optional<int32_t>& arg) {
-    return evaluateOnce<std::string, int32_t>(
-        "to_big_endian_32(c0)", {arg}, {INTEGER()});
+    return evaluateOnce<std::string>("to_big_endian_32(c0)", arg);
   };
 
   EXPECT_EQ(std::nullopt, toBigEndian32(std::nullopt));
@@ -512,8 +526,7 @@ TEST_F(BinaryFunctionsTest, toBigEndian32) {
 
 TEST_F(BinaryFunctionsTest, fromBigEndian64) {
   const auto fromBigEndian64 = [&](const std::optional<std::string>& arg) {
-    return evaluateOnce<int64_t, std::string>(
-        "from_big_endian_64(c0)", {arg}, {VARBINARY()});
+    return evaluateOnce<int64_t>("from_big_endian_64(c0)", VARBINARY(), arg);
   };
 
   EXPECT_EQ(std::nullopt, fromBigEndian64(std::nullopt));
@@ -553,8 +566,7 @@ TEST_F(BinaryFunctionsTest, fromBigEndian64) {
 
 TEST_F(BinaryFunctionsTest, toBigEndian64) {
   const auto toBigEndian64 = [&](const std::optional<int64_t>& arg) {
-    return evaluateOnce<std::string, int64_t>(
-        "to_big_endian_64(c0)", {arg}, {BIGINT()});
+    return evaluateOnce<std::string>("to_big_endian_64(c0)", arg);
   };
 
   EXPECT_EQ(std::nullopt, toBigEndian64(std::nullopt));
@@ -628,6 +640,191 @@ TEST_F(BinaryFunctionsTest, toIEEE754Bits64) {
   EXPECT_EQ(
       hexToDec("7FF0000000000000"),
       toIEEE754Bits64(std::numeric_limits<double>::infinity()));
+}
+
+TEST_F(BinaryFunctionsTest, fromIEEE754Bits64) {
+  const auto fromIEEE754Bits64 = [&](const std::optional<std::string>& arg) {
+    return evaluateOnce<double>("from_ieee754_64(c0)", VARBINARY(), arg);
+  };
+
+  const auto toIEEE754Bits64 = [&](std::optional<double> arg) {
+    return evaluateOnce<std::string>("to_ieee754_64(c0)", arg);
+  };
+
+  EXPECT_EQ(std::nullopt, fromIEEE754Bits64(std::nullopt));
+  EXPECT_EQ(1, fromIEEE754Bits64(hexToDec("3FF0000000000000")));
+  EXPECT_EQ(1.0124, fromIEEE754Bits64(hexToDec("3FF032CA57A786C2")));
+  EXPECT_EQ(
+      -1.0123999999999715, fromIEEE754Bits64(hexToDec("BFF032CA57A78642")));
+  EXPECT_EQ(3.1415926, fromIEEE754Bits64(hexToDec("400921fb4d12d84a")));
+  EXPECT_EQ(
+      std::numeric_limits<double>::infinity(),
+      fromIEEE754Bits64(hexToDec("7ff0000000000000")));
+  EXPECT_EQ(
+      1.7976931348623157E308, fromIEEE754Bits64(hexToDec("7fefffffffffffff")));
+  EXPECT_EQ(
+      -1.7976931348623157E308, fromIEEE754Bits64(hexToDec("ffefffffffffffff")));
+  EXPECT_EQ(4.9E-324, fromIEEE754Bits64(hexToDec("0000000000000001")));
+  EXPECT_EQ(-4.9E-324, fromIEEE754Bits64(hexToDec("8000000000000001")));
+  EXPECT_THROW(fromIEEE754Bits64("YQ"), VeloxUserError);
+  EXPECT_EQ(3.1415926, fromIEEE754Bits64(toIEEE754Bits64(3.1415926)));
+  EXPECT_EQ(4.9E-324, fromIEEE754Bits64(toIEEE754Bits64(4.9E-324)));
+  EXPECT_EQ(-4.9E-324, fromIEEE754Bits64(toIEEE754Bits64(-4.9E-324)));
+  EXPECT_EQ(
+      std::numeric_limits<double>::infinity(),
+      fromIEEE754Bits64(
+          toIEEE754Bits64(std::numeric_limits<double>::infinity())));
+}
+
+TEST_F(BinaryFunctionsTest, toIEEE754Bits32) {
+  const auto toIEEE754Bits32 = [&](std::optional<float> value) {
+    return evaluateOnce<std::string, float>(
+        "to_ieee754_32(cast(c0 as real))", value);
+  };
+
+  EXPECT_EQ(hexToDec("00000000"), toIEEE754Bits32(0.0));
+  EXPECT_EQ(hexToDec("3f800000"), toIEEE754Bits32(1.0));
+  EXPECT_EQ(hexToDec("40490FDA"), toIEEE754Bits32(3.1415926));
+  EXPECT_EQ(hexToDec("7F800000"), toIEEE754Bits32(1.7976931348623157E308));
+  EXPECT_EQ(hexToDec("FF800000"), toIEEE754Bits32(-1.7976931348623157E308));
+  EXPECT_EQ(hexToDec("00000000"), toIEEE754Bits32(4.9E-324));
+  EXPECT_EQ(hexToDec("80000000"), toIEEE754Bits32(-4.9E-324));
+  EXPECT_EQ(toIEEE754Bits32(100.0), toIEEE754Bits32(100));
+  EXPECT_EQ(std::nullopt, toIEEE754Bits32(std::nullopt));
+  EXPECT_EQ(
+      hexToDec("7FC00000"),
+      toIEEE754Bits32(std::numeric_limits<float>::quiet_NaN()));
+  EXPECT_EQ(
+      hexToDec("7F800000"),
+      toIEEE754Bits32(std::numeric_limits<float>::infinity()));
+  EXPECT_EQ(
+      hexToDec("FF800000"),
+      toIEEE754Bits32(-std::numeric_limits<float>::infinity()));
+  EXPECT_EQ(
+      hexToDec("00800000"), toIEEE754Bits32(std::numeric_limits<float>::min()));
+  EXPECT_EQ(
+      hexToDec("7F7FFFFF"), toIEEE754Bits32(std::numeric_limits<float>::max()));
+  EXPECT_EQ(
+      hexToDec("FF7FFFFF"),
+      toIEEE754Bits32(std::numeric_limits<float>::lowest()));
+}
+
+TEST_F(BinaryFunctionsTest, fromIEEE754Bits32) {
+  const auto fromIEEE754Bits32 = [&](const std::optional<std::string>& arg) {
+    return evaluateOnce<float>("from_ieee754_32(c0)", VARBINARY(), arg);
+  };
+
+  const auto toIEEE754Bits32 = [&](std::optional<float> arg) {
+    return evaluateOnce<std::string>("to_ieee754_32(c0)", arg);
+  };
+
+  EXPECT_EQ(std::nullopt, fromIEEE754Bits32(std::nullopt));
+  EXPECT_EQ(1.0f, fromIEEE754Bits32(hexToDec("3F800000")));
+  EXPECT_EQ(3.14f, fromIEEE754Bits32(hexToDec("4048F5C3")));
+  EXPECT_EQ(3.4028235E38f, fromIEEE754Bits32(hexToDec("7f7fffff")));
+  EXPECT_EQ(-3.4028235E38f, fromIEEE754Bits32(hexToDec("ff7fffff")));
+  EXPECT_EQ(1.4E-45f, fromIEEE754Bits32(hexToDec("00000001")));
+  EXPECT_EQ(-1.4E-45f, fromIEEE754Bits32(hexToDec("80000001")));
+  EXPECT_EQ(
+      std::numeric_limits<float>::infinity(),
+      fromIEEE754Bits32(hexToDec("7f800000")));
+  EXPECT_EQ(
+      -std::numeric_limits<float>::infinity(),
+      fromIEEE754Bits32(hexToDec("ff800000")));
+  EXPECT_THROW(fromIEEE754Bits32("YQ"), VeloxUserError);
+  EXPECT_EQ(3.4028235E38f, fromIEEE754Bits32(toIEEE754Bits32(3.4028235E38f)));
+  EXPECT_EQ(-3.4028235E38f, fromIEEE754Bits32(toIEEE754Bits32(-3.4028235E38f)));
+  EXPECT_EQ(1.4E-45f, fromIEEE754Bits32(toIEEE754Bits32(1.4E-45f)));
+  EXPECT_EQ(-1.4E-45f, fromIEEE754Bits32(toIEEE754Bits32(-1.4E-45f)));
+  EXPECT_EQ(
+      std::numeric_limits<float>::infinity(),
+      fromIEEE754Bits32(
+          toIEEE754Bits32(std::numeric_limits<float>::infinity())));
+  EXPECT_EQ(
+      -std::numeric_limits<float>::infinity(),
+      fromIEEE754Bits32(
+          toIEEE754Bits32(-std::numeric_limits<float>::infinity())));
+  EXPECT_EQ(
+      std::numeric_limits<float>::max(),
+      fromIEEE754Bits32(toIEEE754Bits32(std::numeric_limits<float>::max())));
+  EXPECT_EQ(
+      std::numeric_limits<float>::min(),
+      fromIEEE754Bits32(toIEEE754Bits32(std::numeric_limits<float>::min())));
+  EXPECT_TRUE(
+      std::isnan(fromIEEE754Bits32(
+                     toIEEE754Bits32(std::numeric_limits<float>::quiet_NaN()))
+                     .value()));
+  EXPECT_TRUE(std::isnan(
+      fromIEEE754Bits32(
+          toIEEE754Bits32(std::numeric_limits<float>::signaling_NaN()))
+          .value()));
+  EXPECT_TRUE(
+      std::isnan(fromIEEE754Bits32(toIEEE754Bits32(std::nan("nan"))).value()));
+  VELOX_ASSERT_THROW(
+      fromIEEE754Bits32(hexToDec("0000000000000001")),
+      "Input floating-point value must be exactly 4 bytes long");
+}
+
+TEST_F(BinaryFunctionsTest, rpad) {
+  const auto rpad = [&](std::optional<StringView> arg,
+                        std::optional<int32_t> size,
+                        std::optional<StringView> key) {
+    return evaluateOnce<std::string, StringView, int32_t, StringView>(
+        "rpad(c0, c1, c2)",
+        {VARBINARY(), INTEGER(), VARBINARY()},
+        {arg},
+        {size},
+        {key});
+  };
+  EXPECT_EQ(rpad("1234", 14, "45"), ("12344545454545"));
+  EXPECT_EQ(
+      rpad("123456789012", 24, "4444555566667777"),
+      ("123456789012444455556666"));
+  EXPECT_EQ(
+      rpad("1234567890", 30, "44445555666677778888"),
+      ("123456789044445555666677778888"));
+  EXPECT_EQ(rpad("1234", 15, "45"), ("123445454545454"));
+  EXPECT_EQ(rpad("1234", 14, "4524"), ("12344524452445"));
+  EXPECT_EQ(rpad("1234", 6, "4524"), ("123445"));
+  EXPECT_EQ(rpad("23", 0, "4524"), (""));
+  EXPECT_EQ(rpad("∆", 2, "˚"), ("∆˚"));
+  EXPECT_EQ(rpad("©", 4, "£"), ("©£££"));
+  EXPECT_EQ(rpad("1234", 2, "4524"), ("12"));
+  EXPECT_EQ(rpad(std::nullopt, 0, std::nullopt), std::nullopt);
+  VELOX_ASSERT_USER_THROW(
+      rpad("2312", -1, "4524"), "pad size must be in the range [0..1048576)");
+  VELOX_ASSERT_USER_THROW(rpad("2312", 1, ""), "padString must not be empty");
+}
+
+TEST_F(BinaryFunctionsTest, lpad) {
+  const auto lpad = [&](std::optional<StringView> arg,
+                        std::optional<int32_t> size,
+                        std::optional<StringView> key) {
+    return evaluateOnce<std::string, StringView, int32_t, StringView>(
+        "lpad(c0, c1, c2)",
+        {VARBINARY(), INTEGER(), VARBINARY()},
+        {arg},
+        {size},
+        {key});
+  };
+  EXPECT_EQ(lpad("1234", 14, "45"), ("45454545451234"));
+  EXPECT_EQ(lpad("1234", 15, "45"), ("454545454541234"));
+  EXPECT_EQ(
+      lpad("123456789012", 24, "4444555566667777"),
+      ("444455556666123456789012"));
+  EXPECT_EQ(
+      lpad("1234567890", 30, "44445555666677778888"),
+      ("444455556666777788881234567890"));
+  EXPECT_EQ(lpad("∆", 2, "˚"), ("˚∆"));
+  EXPECT_EQ(lpad("©", 4, "£"), ("£££©"));
+  EXPECT_EQ(lpad("1234", 14, "4524"), ("45244524451234"));
+  EXPECT_EQ(lpad("1234", 6, "4524"), ("451234"));
+  EXPECT_EQ(lpad("1234", 0, "4524"), (""));
+  EXPECT_EQ(lpad("1234", 2, "4524"), ("12"));
+  EXPECT_EQ(lpad(std::nullopt, 0, std::nullopt), std::nullopt);
+  VELOX_ASSERT_USER_THROW(
+      lpad("2312", -1, "4524"), "pad size must be in the range [0..1048576)");
+  VELOX_ASSERT_USER_THROW(lpad("2312", 1, ""), "padString must not be empty");
 }
 
 } // namespace

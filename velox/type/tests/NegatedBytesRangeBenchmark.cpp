@@ -129,7 +129,7 @@ DEFINE_BENCHMARKS(100, 94)
 DEFINE_BENCHMARKS(100, 98)
 
 int32_t main(int32_t argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   constexpr int32_t kNumValues = 1000000;
   constexpr int32_t kStringPoolSize = 20000;
   const std::vector<int32_t> stringLengths = {2, 3, 5, 10, 100};
@@ -169,8 +169,8 @@ int32_t main(int32_t argc, char** argv) {
           "", true, false, lo, false, true, false));
       rangeFilters.emplace_back(std::make_unique<common::BytesRange>(
           hi, false, false, "", true, false, false));
-      multiRanges.emplace_back(std::make_unique<common::MultiRange>(
-          std::move(rangeFilters), false, false));
+      multiRanges.emplace_back(
+          std::make_unique<common::MultiRange>(std::move(rangeFilters), false));
 
       LOG(INFO) << "Generated filter for length " << len << " with percentage "
                 << pct;

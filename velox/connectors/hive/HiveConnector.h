@@ -17,6 +17,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/core/PlanNode.h"
 
 namespace facebook::velox::dwio::common {
@@ -30,8 +31,12 @@ class HiveConnector : public Connector {
  public:
   HiveConnector(
       const std::string& id,
-      std::shared_ptr<const Config> properties,
-      folly::Executor* FOLLY_NULLABLE executor);
+      std::shared_ptr<const Config> config,
+      folly::Executor* executor);
+
+  const std::shared_ptr<const Config>& connectorConfig() const override {
+    return hiveConfig_->config();
+  }
 
   bool canAddDynamicFilter() const override {
     return true;
@@ -55,7 +60,7 @@ class HiveConnector : public Connector {
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) override final;
 
-  folly::Executor* FOLLY_NULLABLE executor() const override {
+  folly::Executor* executor() const override {
     return executor_;
   }
 
@@ -70,19 +75,19 @@ class HiveConnector : public Connector {
   }
 
  protected:
+  const std::shared_ptr<HiveConfig> hiveConfig_;
   FileHandleFactory fileHandleFactory_;
-  folly::Executor* FOLLY_NULLABLE executor_;
+  folly::Executor* executor_;
 };
 
 class HiveConnectorFactory : public ConnectorFactory {
  public:
-  static constexpr const char* FOLLY_NONNULL kHiveConnectorName = "hive";
-  static constexpr const char* FOLLY_NONNULL kHiveHadoop2ConnectorName =
-      "hive-hadoop2";
+  static constexpr const char* kHiveConnectorName = "hive";
+  static constexpr const char* kHiveHadoop2ConnectorName = "hive-hadoop2";
 
   HiveConnectorFactory() : ConnectorFactory(kHiveConnectorName) {}
 
-  explicit HiveConnectorFactory(const char* FOLLY_NONNULL connectorName)
+  explicit HiveConnectorFactory(const char* connectorName)
       : ConnectorFactory(connectorName) {}
 
   /// Register HiveConnector components such as Dwrf, Parquet readers and
@@ -91,9 +96,9 @@ class HiveConnectorFactory : public ConnectorFactory {
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> properties,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr) override {
-    return std::make_shared<HiveConnector>(id, properties, executor);
+      std::shared_ptr<const Config> config,
+      folly::Executor* executor = nullptr) override {
+    return std::make_shared<HiveConnector>(id, config, executor);
   }
 };
 

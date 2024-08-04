@@ -32,7 +32,46 @@ bool containsList(const ParquetTypeWithId& type) {
   return false;
 }
 } // namespace
-using ::parquet::internal::LevelInfo;
+using arrow::LevelInfo;
+
+std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>>
+ParquetTypeWithId::moveChildren() && {
+  std::vector<std::unique_ptr<TypeWithId>> children;
+  for (auto& child : getChildren()) {
+    auto type = child->type();
+    auto id = child->id();
+    auto maxId = child->maxId();
+    auto column = child->column();
+    auto* parquetChild = (ParquetTypeWithId*)child.get();
+    auto name = parquetChild->name_;
+    auto parquetType = parquetChild->parquetType_;
+    auto logicalType = parquetChild->logicalType_;
+    auto maxRepeat = parquetChild->maxRepeat_;
+    auto maxDefine = parquetChild->maxDefine_;
+    auto isOptional = parquetChild->isOptional_;
+    auto isRepeated = parquetChild->isRepeated_;
+    auto precision = parquetChild->precision_;
+    auto scale = parquetChild->scale_;
+    auto typeLength = parquetChild->typeLength_;
+    children.push_back(std::make_unique<ParquetTypeWithId>(
+        std::move(type),
+        std::move(*parquetChild).moveChildren(),
+        id,
+        maxId,
+        column,
+        std::move(name),
+        parquetType,
+        std::move(logicalType),
+        maxRepeat,
+        maxDefine,
+        isOptional,
+        isRepeated,
+        precision,
+        scale,
+        typeLength));
+  }
+  return children;
+}
 
 bool ParquetTypeWithId::hasNonRepeatedLeaf() const {
   if (type()->kind() == TypeKind::ARRAY) {
@@ -51,26 +90,21 @@ bool ParquetTypeWithId::hasNonRepeatedLeaf() const {
 }
 
 LevelMode ParquetTypeWithId::makeLevelInfo(LevelInfo& info) const {
-  int16_t repeatedAncestor = 0;
-  for (auto parent = parquetParent(); parent;
-       parent = parent->parquetParent()) {
-    if (parent->type()->kind() == TypeKind::ARRAY ||
-        parent->type()->kind() == TypeKind::MAP) {
-      repeatedAncestor = parent->maxDefine_;
-      break;
+  int repeatedAncestor = maxDefine_;
+  auto node = this;
+  do {
+    if (node->isOptional_) {
+      repeatedAncestor--;
     }
-  }
+    node = node->parquetParent();
+  } while (node && !node->isRepeated_);
   bool isList = type()->kind() == TypeKind::ARRAY;
   bool isStruct = type()->kind() == TypeKind::ROW;
   bool isMap = type()->kind() == TypeKind::MAP;
   bool hasList = false;
   if (isStruct) {
-    bool isAllLists = true;
     for (auto i = 0; i < getChildren().size(); ++i) {
-      auto child = parquetChildAt(i);
-      if (child.type()->kind() != TypeKind ::ARRAY) {
-        isAllLists = false;
-      }
+      auto& child = parquetChildAt(i);
       hasList |= hasList || containsList(child);
     }
   }

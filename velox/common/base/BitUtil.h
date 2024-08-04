@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include "velox/common/base/Exceptions.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -714,7 +716,7 @@ inline uint64_t nextPowerOfTwo(uint64_t size) {
     return 0;
   }
   uint32_t bits = 63 - countLeadingZeros(size);
-  uint64_t lower = 1U << bits;
+  uint64_t lower = 1ULL << bits;
   // Size is a power of 2.
   if (lower == size) {
     return size;
@@ -784,24 +786,7 @@ inline uint64_t loadPartialWord(const uint8_t* data, int32_t size) {
   return result;
 }
 
-inline size_t hashBytes(size_t seed, const char* data, size_t size) {
-  auto begin = reinterpret_cast<const uint8_t*>(data);
-  if (size < 8) {
-    return hashMix(seed, loadPartialWord(begin, size));
-  }
-  auto result = seed;
-  auto end = begin + size;
-  while (begin + 8 <= end) {
-    result = hashMix(result, *reinterpret_cast<const uint64_t*>(begin));
-    begin += 8;
-  }
-  if (end != begin) {
-    // Accesses the last 64 bits. Some bytes may get processed twice but the
-    // access is safe.
-    result = hashMix(result, *reinterpret_cast<const uint64_t*>(end - 8));
-  }
-  return result;
-}
+uint64_t hashBytes(uint64_t seed, const char* data, size_t size);
 
 namespace detail {
 // Returns at least 'numBits' bits of data starting at bit 'bitOffset'
@@ -890,13 +875,17 @@ void copyBitsBackward(
     uint64_t targetOffset,
     uint64_t numBits);
 
-// Copies consecutive bits from 'source' to positions in 'target'
-// where 'targetMask' has a 1. 'source' may be a prefix of 'target',
-// so that contiguous bits of source are scattered in place. The
-// positions of 'target' where 'targetMask' is 0 are 0. A sample use
-// case is reading a column of boolean with nulls. The booleans
-// from the column get inserted into the places given by ones in the
-// present bitmap.
+/// Copies consecutive bits from 'source' to positions in 'target' where
+/// 'targetMask' has a 1. 'source' may be a prefix of 'target', so that
+/// contiguous bits of source are scattered in place. The positions of 'target'
+/// where 'targetMask' is 0 are 0. A sample use case is reading a column of
+/// boolean with nulls. The booleans from the column get inserted into the
+/// places given by ones in the present bitmap. All source, target and mask bit
+/// arrays are accessed at 64 bit width and must have a minimum of 64 bits plus
+/// one addressable byte after the last bit. Using std::vector as a
+/// bit array without explicit padding, for example, can crash with
+/// access to unmapped address if the vector happens to border on
+/// unmapped memory.
 void scatterBits(
     int32_t numSource,
     int32_t numTarget,
@@ -904,9 +893,9 @@ void scatterBits(
     const uint64_t* targetMask,
     char* target);
 
-// Extract bits from integer 'a' at the corresponding bit locations
-// specified by 'mask' to contiguous low bits in return value; the
-// remaining upper bits in return value are set to zero.
+/// Extract bits from integer 'a' at the corresponding bit locations specified
+/// by 'mask' to contiguous low bits in return value; the remaining upper bits
+/// in return value are set to zero.
 template <typename T>
 inline T extractBits(T a, T mask);
 
@@ -987,6 +976,26 @@ inline __int128_t builtin_bswap128(__int128_t value) {
 #else
 #undef VELOX_HAS_BUILTIN_BSWAP_INT128
 #endif
+}
+
+/// Store `bits' into the memory region pointed by `byte', at `index' (bit
+/// index).  If `kSize' is 8, we store the whole byte directly; otherwise it
+/// must be 4 and we store either the whole byte or the upper 4 bits only,
+/// depending on the `index'.
+template <int kSize>
+void storeBitsToByte(uint8_t bits, uint8_t* bytes, unsigned index) {
+  VELOX_DCHECK_EQ(index % kSize, 0);
+  VELOX_DCHECK_EQ(bits >> kSize, 0);
+  if constexpr (kSize == 8) {
+    bytes[index / 8] = bits;
+  } else {
+    VELOX_DCHECK_EQ(kSize, 4);
+    if (index % 8 == 0) {
+      bytes[index / 8] = bits;
+    } else {
+      bytes[index / 8] |= bits << 4;
+    }
+  }
 }
 
 } // namespace bits

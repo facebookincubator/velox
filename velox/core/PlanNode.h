@@ -15,12 +15,13 @@
  */
 #pragma once
 
+#include <fmt/format.h>
+
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 
-#include "velox/vector/arrow/Abi.h"
-#include "velox/vector/arrow/Bridge.h"
+struct ArrowArrayStream;
 
 namespace facebook::velox::core {
 
@@ -157,17 +158,17 @@ class PlanNode : public ISerializable {
   /// 'addContext' is not null.
   ///
   /// @param addContext Optional lambda to add context for a given plan node.
-  /// Receives plan node ID, indentation and std::stringstring where to append
+  /// Receives plan node ID, indentation and std::stringstream where to append
   /// the context. Use indentation for second and subsequent lines of a
-  /// mult-line context. Do not use indentation for single-line context. Do not
+  /// multi-line context. Do not use indentation for single-line context. Do not
   /// add trailing new-line character for the last or only line of context.
   std::string toString(
       bool detailed = false,
       bool recursive = false,
-      std::function<void(
+      const std::function<void(
           const PlanNodeId& planNodeId,
           const std::string& indentation,
-          std::stringstream& stream)> addContext = nullptr) const {
+          std::stringstream& stream)>& addContext = nullptr) const {
     std::stringstream stream;
     toString(stream, detailed, recursive, 0, addContext);
     return stream.str();
@@ -210,10 +211,10 @@ class PlanNode : public ISerializable {
       bool detailed,
       bool recursive,
       size_t indentationSize,
-      std::function<void(
+      const std::function<void(
           const PlanNodeId& planNodeId,
           const std::string& indentation,
-          std::stringstream& stream)> addContext) const;
+          std::stringstream& stream)>& addContext) const;
 
   const std::string id_;
 };
@@ -532,6 +533,27 @@ class AggregationNode : public PlanNode {
       bool ignoreNullKeys,
       PlanNodePtr source);
 
+  /// @param globalGroupingSets Group IDs of the global grouping sets produced
+  /// by the preceding GroupId node
+  /// @param groupId Group ID key produced by the preceding GroupId node. Must
+  /// be set if globalGroupingSets is not empty. Must not be set otherwise. Must
+  /// be one of the groupingKeys.
+
+  /// GlobalGroupingSets and groupId trigger special handling when the input
+  /// data set is empty (no rows). In that case, aggregation generates a single
+  /// row with the default global aggregate value per global grouping set.
+  AggregationNode(
+      const PlanNodeId& id,
+      Step step,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+      const std::vector<std::string>& aggregateNames,
+      const std::vector<Aggregate>& aggregates,
+      const std::vector<vector_size_t>& globalGroupingSets,
+      const std::optional<FieldAccessTypedExprPtr>& groupId,
+      bool ignoreNullKeys,
+      PlanNodePtr source);
+
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
@@ -552,6 +574,19 @@ class AggregationNode : public PlanNode {
     return preGroupedKeys_;
   }
 
+  bool isPreGrouped() const {
+    return !preGroupedKeys_.empty() &&
+        std::equal(
+            preGroupedKeys_.begin(),
+            preGroupedKeys_.end(),
+            groupingKeys_.begin(),
+            groupingKeys_.end(),
+            [](const FieldAccessTypedExprPtr& x,
+               const FieldAccessTypedExprPtr& y) -> bool {
+              return (*x == *y);
+            });
+  }
+
   const std::vector<std::string>& aggregateNames() const {
     return aggregateNames_;
   }
@@ -564,18 +599,19 @@ class AggregationNode : public PlanNode {
     return ignoreNullKeys_;
   }
 
+  const std::vector<vector_size_t>& globalGroupingSets() const {
+    return globalGroupingSets_;
+  }
+
+  std::optional<FieldAccessTypedExprPtr> groupId() const {
+    return groupId_;
+  }
+
   std::string_view name() const override {
     return "Aggregation";
   }
 
-  bool canSpill(const QueryConfig& queryConfig) const override {
-    // NOTE: as for now, we don't allow spilling for distinct aggregation
-    // (https://github.com/facebookincubator/velox/issues/3263) and pre-grouped
-    // aggregation (https://github.com/facebookincubator/velox/issues/3264). We
-    // will add support later to re-enable.
-    return (isFinal() || isSingle()) && !(aggregates().empty()) &&
-        preGroupedKeys().empty() && queryConfig.aggregationSpillEnabled();
-  }
+  bool canSpill(const QueryConfig& queryConfig) const override;
 
   bool isFinal() const {
     return step_ == Step::kFinal;
@@ -598,6 +634,10 @@ class AggregationNode : public PlanNode {
   const std::vector<std::string> aggregateNames_;
   const std::vector<Aggregate> aggregates_;
   const bool ignoreNullKeys_;
+
+  std::optional<FieldAccessTypedExprPtr> groupId_;
+  std::vector<vector_size_t> globalGroupingSets_;
+
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
 };
@@ -697,6 +737,10 @@ class TableWriteNode : public PlanNode {
     return aggregationNode_;
   }
 
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return queryConfig.writerSpillEnabled();
+  }
+
   std::string_view name() const override {
     return "TableWrite";
   }
@@ -762,6 +806,56 @@ class TableWriteMergeNode : public PlanNode {
   const RowTypePtr outputType_;
 };
 
+/// For each input row, generates N rows with M columns according to
+/// specified 'projections'. 'projections' is an N x M matrix of expressions: a
+/// vector of N rows each having M columns. Each expression is either a column
+/// reference or a constant. Both null and non-null constants are allowed.
+/// 'names' is a list of M new column names. The semantic of this operator
+/// matches Spark.
+class ExpandNode : public PlanNode {
+ public:
+  ExpandNode(
+      PlanNodeId id,
+      std::vector<std::vector<TypedExprPtr>> projections,
+      std::vector<std::string> names,
+      PlanNodePtr source);
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const RowTypePtr& inputType() const {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const std::vector<std::vector<TypedExprPtr>>& projections() const {
+    return projections_;
+  }
+
+  const std::vector<std::string>& names() const {
+    return outputType_->names();
+  }
+
+  std::string_view name() const override {
+    return "Expand";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<PlanNodePtr> sources_;
+  const RowTypePtr outputType_;
+  const std::vector<std::vector<TypedExprPtr>> projections_;
+};
+
 /// Plan node used to implement aggregations over grouping sets. Duplicates the
 /// aggregation input for each set of grouping keys. The output contains one
 /// column for each grouping key, followed by aggregation inputs, followed by a
@@ -818,7 +912,7 @@ class GroupIdNode : public PlanNode {
     return aggregationInputs_;
   }
 
-  const std::string& groupIdName() {
+  const std::string& groupIdName() const {
     return groupIdName_;
   }
 
@@ -1264,16 +1358,16 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 enum class JoinType {
   // For each row on the left, find all matching rows on the right and return
   // all combinations.
-  kInner,
+  kInner = 0,
   // For each row on the left, find all matching rows on the right and return
   // all combinations. In addition, return all rows from the left that have no
   // match on the right with right-side columns filled with nulls.
-  kLeft,
+  kLeft = 1,
   // Opposite of kLeft. For each row on the right, find all matching rows on the
   // left and return all combinations. In addition, return all rows from the
   // right that have no match on the left with left-side columns filled with
   // nulls.
-  kRight,
+  kRight = 2,
   // A "union" of kLeft and kRight. For each row on the left, find all matching
   // rows on the right and return all combinations. In addition, return all rows
   // from the left that have no
@@ -1281,11 +1375,11 @@ enum class JoinType {
   // all rows from the
   // right that have no match on the left with left-side columns filled with
   // nulls.
-  kFull,
+  kFull = 3,
   // Return a subset of rows from the left side which have a match on the right
   // side. For this join type, cardinality of the output is less than or equal
   // to the cardinality of the left side.
-  kLeftSemiFilter,
+  kLeftSemiFilter = 4,
   // Return each row from the left side with a boolean flag indicating whether
   // there exists a match on the right side. For this join type, cardinality of
   // the output equals the cardinality of the left side.
@@ -1294,11 +1388,11 @@ enum class JoinType {
   // 'nullAware' boolean specified separately.
   //
   // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
-  kLeftSemiProject,
+  kLeftSemiProject = 5,
   // Opposite of kLeftSemiFilter. Return a subset of rows from the right side
   // which have a match on the left side. For this join type, cardinality of the
   // output is less than or equal to the cardinality of the right side.
-  kRightSemiFilter,
+  kRightSemiFilter = 6,
   // Opposite of kLeftSemiProject. Return each row from the right side with a
   // boolean flag indicating whether there exists a match on the left side. For
   // this join type, cardinality of the output equals the cardinality of the
@@ -1308,7 +1402,7 @@ enum class JoinType {
   // 'nullAware' boolean specified separately.
   //
   // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
-  kRightSemiProject,
+  kRightSemiProject = 7,
   // Return each row from the left side which has no match on the right side.
   // The handling of the rows with nulls in the join key depends on the
   // 'nullAware' boolean specified separately.
@@ -1322,7 +1416,8 @@ enum class JoinType {
   // Regular anti join follows NOT EXISTS semantic:
   // (1) ignore right-side rows with nulls in the join keys;
   // (2) unconditionally return left side rows with nulls in the join keys.
-  kAnti,
+  kAnti = 8,
+  kNumJoinTypes = 9,
 };
 
 const char* joinTypeName(JoinType joinType);
@@ -1494,7 +1589,7 @@ class HashJoinNode : public AbstractJoinNode {
     if (nullAware) {
       VELOX_USER_CHECK(
           isNullAwareSupported(joinType),
-          "Null-aware flag is supported only for semi and anti joins");
+          "Null-aware flag is supported only for semi project and anti joins");
       VELOX_USER_CHECK_EQ(
           1, leftKeys_.size(), "Null-aware joins allow only one join key");
 
@@ -1646,6 +1741,15 @@ class OrderByNode : public PlanNode {
         sortingKeys.size(),
         sortingOrders.size(),
         "Number of sorting keys and sorting orders in OrderBy must be the same");
+    // Reject duplicate sorting keys.
+    std::unordered_set<std::string> uniqueKeys;
+    for (const auto& sortKey : sortingKeys) {
+      VELOX_USER_CHECK_NOT_NULL(sortKey, "Sorting key cannot be null");
+      VELOX_USER_CHECK(
+          uniqueKeys.insert(sortKey->name()).second,
+          "Duplicate sorting keys are not allowed: {}",
+          sortKey->name());
+    }
   }
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
@@ -1700,21 +1804,7 @@ class TopNNode : public PlanNode {
       const std::vector<SortOrder>& sortingOrders,
       int32_t count,
       bool isPartial,
-      const PlanNodePtr& source)
-      : PlanNode(id),
-        sortingKeys_(sortingKeys),
-        sortingOrders_(sortingOrders),
-        count_(count),
-        isPartial_(isPartial),
-        sources_{source} {
-    VELOX_USER_CHECK(!sortingKeys.empty(), "TopN must specify sorting keys");
-    VELOX_USER_CHECK_EQ(
-        sortingKeys.size(),
-        sortingOrders.size(),
-        "Number of sorting keys and sorting orders in TopN must be the same");
-    VELOX_USER_CHECK_GT(
-        count, 0, "TopN must specify greater than zero number of rows to keep");
-  }
+      const PlanNodePtr& source);
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
@@ -1765,8 +1855,8 @@ class LimitNode : public PlanNode {
   // nodes.
   LimitNode(
       const PlanNodeId& id,
-      int32_t offset,
-      int32_t count,
+      int64_t offset,
+      int64_t count,
       bool isPartial,
       const PlanNodePtr& source)
       : PlanNode(id),
@@ -1788,11 +1878,11 @@ class LimitNode : public PlanNode {
     return sources_;
   }
 
-  int32_t offset() const {
+  int64_t offset() const {
     return offset_;
   }
 
-  int32_t count() const {
+  int64_t count() const {
     return count_;
   }
 
@@ -1811,8 +1901,8 @@ class LimitNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const int32_t offset_;
-  const int32_t count_;
+  const int64_t offset_;
+  const int64_t count_;
   const bool isPartial_;
   const std::vector<PlanNodePtr> sources_;
 };
@@ -1950,7 +2040,7 @@ class AssignUniqueIdNode : public PlanNode {
 
   const std::shared_ptr<std::atomic_int64_t>& uniqueIdCounter() const {
     return uniqueIdCounter_;
-  };
+  }
 
   folly::dynamic serialize() const override;
 
@@ -2004,7 +2094,6 @@ class WindowNode : public PlanNode {
   /// Frame bounds can be CURRENT ROW, UNBOUNDED PRECEDING(FOLLOWING)
   /// and k PRECEDING(FOLLOWING). K could be a constant or column.
   ///
-  /// k PRECEDING(FOLLOWING) is only supported for ROW frames now.
   /// k has to be of integer or bigint type.
   struct Frame {
     WindowType type;
@@ -2041,26 +2130,6 @@ class WindowNode : public PlanNode {
       bool inputsSorted,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  WindowNode(
-      PlanNodeId id,
-      std::vector<FieldAccessTypedExprPtr> partitionKeys,
-      std::vector<FieldAccessTypedExprPtr> sortingKeys,
-      std::vector<SortOrder> sortingOrders,
-      std::vector<std::string> windowColumnNames,
-      std::vector<Function> windowFunctions,
-      PlanNodePtr source)
-      : WindowNode(
-            id,
-            partitionKeys,
-            sortingKeys,
-            sortingOrders,
-            windowColumnNames,
-            windowFunctions,
-            false,
-            source){};
-#endif
-
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
@@ -2069,6 +2138,18 @@ class WindowNode : public PlanNode {
   /// with the output columns of each window function.
   const RowTypePtr& outputType() const override {
     return outputType_;
+  }
+
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    // No partitioning keys means the whole input is one big partition. In this
+    // case, spilling is not helpful because we need to have a full partition in
+    // memory to produce results.
+    return !partitionKeys_.empty() && !inputsSorted_ &&
+        queryConfig.windowSpillEnabled();
+  }
+
+  const RowTypePtr& inputType() const {
+    return sources_[0]->outputType();
   }
 
   const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {
@@ -2142,6 +2223,10 @@ class RowNumberNode : public PlanNode {
 
   const RowTypePtr& outputType() const override {
     return outputType_;
+  }
+
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return !partitionKeys_.empty() && queryConfig.rowNumberSpillEnabled();
   }
 
   const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {
@@ -2233,6 +2318,9 @@ class MarkDistinctNode : public PlanNode {
 class TopNRowNumberNode : public PlanNode {
  public:
   /// @param partitionKeys Partitioning keys. May be empty.
+  /// @param sortingKeys Sorting keys. May not be empty and may not intersect
+  /// with 'partitionKeys'.
+  /// @param sortingOrders Sorting orders, one per sorting key.
   /// @param rowNumberColumnName Optional name of the column containing row
   /// numbers. If not specified, the output doesn't include 'row number' column.
   /// This is used when computing partial results.
@@ -2254,6 +2342,14 @@ class TopNRowNumberNode : public PlanNode {
 
   const RowTypePtr& outputType() const override {
     return outputType_;
+  }
+
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return !partitionKeys_.empty() && queryConfig.topNRowNumberSpillEnabled();
+  }
+
+  const RowTypePtr& inputType() const {
+    return sources_[0]->outputType();
   }
 
   const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {
@@ -2300,3 +2396,21 @@ class TopNRowNumberNode : public PlanNode {
 };
 
 } // namespace facebook::velox::core
+
+template <>
+struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
+    : formatter<std::string> {
+  auto format(
+      facebook::velox::core::PartitionedOutputNode::Kind s,
+      format_context& ctx) {
+    return formatter<std::string>::format(
+        facebook::velox::core::PartitionedOutputNode::kindString(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
+  auto format(facebook::velox::core::JoinType s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

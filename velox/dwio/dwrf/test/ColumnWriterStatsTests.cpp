@@ -72,7 +72,8 @@ void verifyStats(
   }
 
   bool preload = true;
-  auto stripeInfo = rowReader.loadStripe(0, preload);
+  auto stripeMetadata = rowReader.fetchStripe(0, preload);
+  auto& stripeInfo = stripeMetadata->stripeInfo;
 
   // Verify Stripe content length + index length equals size of the column 0.
   auto totalStreamSize = stripeInfo.dataLength() + stripeInfo.indexLength();
@@ -81,7 +82,7 @@ void verifyStats(
   ASSERT_EQ(node_0_Size, totalStreamSize) << "Total size does not match";
 
   // Compute Node Size and verify the File Footer Node Size matches.
-  auto& stripeFooter = rowReader.getStripeFooter();
+  auto& stripeFooter = *stripeMetadata->footer;
   std::unordered_map<uint32_t, uint64_t> nodeSizes;
   for (auto&& ss : stripeFooter.streams()) {
     nodeSizes[ss.node()] += ss.length();
@@ -101,8 +102,10 @@ void verifyStats(
 
   // Verify Stride Stats.
   StripeStreamsImpl streams{
-      rowReader,
-      rowReader.getColumnSelector(),
+      std::make_shared<StripeReadState>(
+          rowReader.readerBaseShared(), std::move(stripeMetadata)),
+      &rowReader.getColumnSelector(),
+      nullptr,
       rowReader.getRowReaderOptions(),
       stripeInfo.offset(),
       static_cast<int64_t>(stripeInfo.numberOfRows()),
@@ -125,7 +128,7 @@ void verifyStats(
 
     for (auto count = 0; count < rowIndex->entry_size(); count++) {
       auto stridStatistics = buildColumnStatisticsFromProto(
-          rowIndex->entry(count).statistics(),
+          ColumnStatisticsWrapper(&rowIndex->entry(count).statistics()),
           dwrf::StatsContext(WriterVersion_CURRENT));
       // TODO, take in a lambda to verify the entire statistics instead of Just
       // the rawSize.
@@ -141,8 +144,12 @@ using PopulateBatch =
 
 class ColumnWriterStatsTest : public ::testing::Test {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
-    rootPool_ = defaultMemoryManager().addRootPool("ColumnWriterStatsTest");
+    rootPool_ = memory::memoryManager()->addRootPool("ColumnWriterStatsTest");
     leafPool_ = rootPool_->addLeafChild("ColumnWriterStatsTest");
   }
 
@@ -182,8 +189,9 @@ class ColumnWriterStatsTest : public ::testing::Test {
 
     writer.close();
 
-    std::string_view data(sinkPtr->data(), sinkPtr->size());
-    auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(data);
+    std::string data(sinkPtr->data(), sinkPtr->size());
+    auto readFile =
+        std::make_shared<facebook::velox::InMemoryReadFile>(std::move(data));
     auto input = std::make_unique<BufferedInput>(readFile, *leafPool_);
 
     dwio::common::ReaderOptions readerOpts{leafPool_.get()};
@@ -532,7 +540,7 @@ TEST_F(ColumnWriterStatsTest, List) {
     auto nodeSizePerStride = populateFloatBatch(pool, &childVector, childSize);
     *vector = std::make_shared<ArrayVector>(
         &pool,
-        CppToType<Array<float>>::create(),
+        ARRAY(REAL()),
         nulls,
         size,
         offsets,
@@ -581,7 +589,7 @@ TEST_F(ColumnWriterStatsTest, Map) {
     auto nodeSizePerStride = populateFloatBatch(pool, &valueVector, childSize);
     *vector = std::make_shared<MapVector>(
         &pool,
-        CppToType<Map<int32_t, float>>::create(),
+        MAP(INTEGER(), REAL()),
         nulls,
         size,
         offsets,
@@ -635,12 +643,7 @@ TEST_F(ColumnWriterStatsTest, Struct) {
           nodeSizePerStride.push_back(floatBatchSize);
         }
         *vector = std::make_shared<RowVector>(
-            &pool,
-            CppToType<Row<float, float>>::create(),
-            nulls,
-            size,
-            children,
-            nullCount);
+            &pool, ROW({REAL(), REAL()}), nulls, size, children, nullCount);
         nodeSizePerStride.at(0) =
             nullCount + nodeSizePerStride.at(2) + nodeSizePerStride.at(3);
         nodeSizePerStride.at(1) =

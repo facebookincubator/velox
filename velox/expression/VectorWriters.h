@@ -103,7 +103,7 @@ struct VectorWriter<Array<V>> : public VectorWriterBase {
 
   // This should be called once all rows are processed.
   void finish() override {
-    writer_.elementsVector_->resize(writer_.valuesOffset_);
+    writer_.elementsVector()->resize(writer_.valuesOffset_);
     arrayVector_ = nullptr;
     childWriter_.finish();
   }
@@ -277,8 +277,10 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
 
   void ensureSize(size_t size) override {
     if (size > rowVector_->size()) {
+      // Note order is important here, we resize children first to ensure
+      // data_ is cached and are not reset when rowVector resizes them.
+      resizeVectorWriters<0>(size);
       rowVector_->resize(size, /*setNotNull*/ false);
-      resizeVectorWriters<0>(rowVector_->size());
     }
   }
 
@@ -371,16 +373,21 @@ struct VectorWriter<
 
   void commitNull() {
     proxy_.vector_->setNull(proxy_.offset_, true);
+    finalizeNull();
+  }
+
+  void finalizeNull() override {
+    proxy_.prepareForReuse(false);
   }
 
   void commit(bool isSet) override {
     // this code path is called when the slice is top-level
     if (isSet) {
       proxy_.finalize();
+      proxy_.prepareForReuse(true);
     } else {
       commitNull();
     }
-    proxy_.prepareForReuse(isSet);
   }
 
   void setOffset(vector_size_t offset) override {
@@ -487,12 +494,13 @@ struct VectorWriter<std::shared_ptr<T>> : public VectorWriterBase {
   vector_t* vector_;
 };
 
-template <typename T>
-struct VectorWriter<Generic<T>> : public VectorWriterBase {
+template <typename T, bool comparable, bool orderable>
+struct VectorWriter<Generic<T, comparable, orderable>>
+    : public VectorWriterBase {
   using exec_out_t = GenericWriter;
   using vector_t = BaseVector;
 
-  VectorWriter<Generic<T>>() : writer_{castWriter_, castType_, offset_} {}
+  VectorWriter() : writer_{castWriter_, castType_, offset_} {}
 
   void setOffset(vector_size_t offset) override {
     offset_ = offset;
@@ -522,9 +530,20 @@ struct VectorWriter<Generic<T>> : public VectorWriterBase {
     }
   }
 
+  template <TypeKind kind>
+  void ensureCastedWriter() {
+    if constexpr (TypeTraits<kind>::isPrimitiveType) {
+      writer_.ensureWriter<typename KindToSimpleType<kind>::type>();
+    }
+  }
+
   void init(vector_t& vector) {
     vector_ = &vector;
     writer_.initialize(vector_);
+    if (vector.type()->isPrimitiveType()) {
+      TypeKind kind = vector.typeKind();
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(ensureCastedWriter, kind);
+    }
   }
 
   void ensureSize(size_t size) override {
@@ -706,10 +725,10 @@ struct VectorWriter<DynamicRow, void> : public VectorWriterBase {
 
   void ensureSize(size_t size) override {
     if (size > rowVector_->size()) {
-      rowVector_->resize(size, /*setNotNull*/ false);
       for (int i = 0; i < writer_.childrenCount_; ++i) {
         writer_.childrenWriters_[i]->ensureSize(size);
       }
+      rowVector_->resize(size, /*setNotNull*/ false);
     }
   }
 

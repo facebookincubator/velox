@@ -19,6 +19,7 @@
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::exec {
 
@@ -53,14 +54,19 @@ namespace facebook::velox::exec {
 namespace {
 template <TypeKind Kind>
 uint64_t hashOne(DecodedVector& decoded, vector_size_t index) {
-  if (Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
+  if constexpr (
+      Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
       Kind == TypeKind::MAP) {
     // Virtual function call for complex type.
     return decoded.base()->hashValueAt(decoded.index(index));
   }
   // Inlined for scalars.
   using T = typename KindToFlatVector<Kind>::HashRowType;
-  return folly::hasher<T>()(decoded.valueAt<T>(index));
+  if constexpr (std::is_floating_point_v<T>) {
+    return util::floating_point::NaNAwareHash<T>()(decoded.valueAt<T>(index));
+  } else {
+    return folly::hasher<T>()(decoded.valueAt<T>(index));
+  }
 }
 } // namespace
 
@@ -77,16 +83,9 @@ void VectorHasher::hashValues(
     rows.applyToSelected([&](vector_size_t row) {
       result[row] = mix ? bits::hashMix(result[row], hash) : hash;
     });
-  } else if (decoded_.isIdentityMapping()) {
-    rows.applyToSelected([&](vector_size_t row) {
-      if (decoded_.isNullAt(row)) {
-        result[row] = mix ? bits::hashMix(result[row], kNullHash) : kNullHash;
-        return;
-      }
-      auto hash = hashOne<Kind>(decoded_, row);
-      result[row] = mix ? bits::hashMix(result[row], hash) : hash;
-    });
-  } else {
+  } else if (
+      !decoded_.isIdentityMapping() &&
+      rows.countSelected() > decoded_.base()->size()) {
     cachedHashes_.resize(decoded_.base()->size());
     std::fill(cachedHashes_.begin(), cachedHashes_.end(), kNullHash);
     rows.applyToSelected([&](vector_size_t row) {
@@ -100,6 +99,15 @@ void VectorHasher::hashValues(
         hash = hashOne<Kind>(decoded_, row);
         cachedHashes_[baseIndex] = hash;
       }
+      result[row] = mix ? bits::hashMix(result[row], hash) : hash;
+    });
+  } else {
+    rows.applyToSelected([&](vector_size_t row) {
+      if (decoded_.isNullAt(row)) {
+        result[row] = mix ? bits::hashMix(result[row], kNullHash) : kNullHash;
+        return;
+      }
+      auto hash = hashOne<Kind>(decoded_, row);
       result[row] = mix ? bits::hashMix(result[row], hash) : hash;
     });
   }
@@ -158,7 +166,7 @@ bool VectorHasher::makeValueIdsFlatWithNulls<bool>(
     const SelectivityVector& rows,
     uint64_t* result) {
   const auto* values = decoded_.data<uint64_t>();
-  const auto* nulls = decoded_.nulls();
+  const auto* nulls = decoded_.nulls(&rows);
   rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
     if (bits::isBitNull(nulls, row)) {
       if (multiplier_ == 1) {
@@ -173,6 +181,36 @@ bool VectorHasher::makeValueIdsFlatWithNulls<bool>(
   return true;
 }
 
+template <typename T, bool mayHaveNulls>
+void VectorHasher::makeValueIdForOneRow(
+    const uint64_t* nulls,
+    vector_size_t row,
+    const T* values,
+    vector_size_t valueRow,
+    uint64_t* result,
+    bool& success) {
+  if constexpr (mayHaveNulls) {
+    if (bits::isBitNull(nulls, row)) {
+      if (multiplier_ == 1) {
+        result[row] = 0;
+      }
+      return;
+    }
+  }
+  T value = values[valueRow];
+  if (!success) {
+    analyzeValue(value);
+    return;
+  }
+  auto id = valueId(value);
+  if (id == kUnmappable) {
+    success = false;
+    analyzeValue(value);
+  } else {
+    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+  }
+}
+
 template <typename T>
 bool VectorHasher::makeValueIdsFlatNoNulls(
     const SelectivityVector& rows,
@@ -184,20 +222,7 @@ bool VectorHasher::makeValueIdsFlatNoNulls(
 
   bool success = true;
   rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
-    T value = values[row];
-    if (!success) {
-      // If all were not mappable and we do not remove unmappable,
-      // we just analyze the remaining so we can decide the hash mode.
-      analyzeValue(value);
-      return;
-    }
-    uint64_t id = valueId(value);
-    if (id == kUnmappable) {
-      success = false;
-      analyzeValue(value);
-      return;
-    }
-    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+    makeValueIdForOneRow<T, false>(nullptr, row, values, row, result, success);
   });
 
   return success;
@@ -208,30 +233,11 @@ bool VectorHasher::makeValueIdsFlatWithNulls(
     const SelectivityVector& rows,
     uint64_t* result) {
   const auto* values = decoded_.data<T>();
-  const auto* nulls = decoded_.nulls();
+  const auto* nulls = decoded_.nulls(&rows);
 
   bool success = true;
   rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
-    if (bits::isBitNull(nulls, row)) {
-      if (multiplier_ == 1) {
-        result[row] = 0;
-      }
-      return;
-    }
-    T value = values[row];
-    if (!success) {
-      // If all were not mappable we just analyze the remaining so we can decide
-      // the hash mode.
-      analyzeValue(value);
-      return;
-    }
-    uint64_t id = valueId(value);
-    if (id == kUnmappable) {
-      success = false;
-      analyzeValue(value);
-      return;
-    }
-    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+    makeValueIdForOneRow<T, true>(nulls, row, values, row, result, success);
   });
   return success;
 }
@@ -240,13 +246,23 @@ template <typename T, bool mayHaveNulls>
 bool VectorHasher::makeValueIdsDecoded(
     const SelectivityVector& rows,
     uint64_t* result) {
+  auto indices = decoded_.indices();
+  auto values = decoded_.data<T>();
+  bool success = true;
+
+  if (rows.countSelected() <= decoded_.base()->size()) {
+    // Cache is not beneficial in this case and we don't use them.
+    auto* nulls = decoded_.nulls(&rows);
+    rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
+      makeValueIdForOneRow<T, mayHaveNulls>(
+          nulls, row, values, indices[row], result, success);
+    });
+    return success;
+  }
+
   cachedHashes_.resize(decoded_.base()->size());
   std::fill(cachedHashes_.begin(), cachedHashes_.end(), 0);
 
-  auto indices = decoded_.indices();
-  auto values = decoded_.data<T>();
-
-  bool success = true;
   int numCachedHashes = 0;
   rows.testSelected([&](vector_size_t row) INLINE_LAMBDA {
     if constexpr (mayHaveNulls) {
@@ -378,8 +394,7 @@ void VectorHasher::lookupValueIdsTyped(
     const DecodedVector& decoded,
     SelectivityVector& rows,
     raw_vector<uint64_t>& hashes,
-    uint64_t* result,
-    bool noNulls) const {
+    uint64_t* result) const {
   using T = typename TypeTraits<Kind>::NativeType;
   if (decoded.isConstantMapping()) {
     if (decoded.isNullAt(rows.begin())) {
@@ -399,9 +414,9 @@ void VectorHasher::lookupValueIdsTyped(
       });
     }
   } else if (decoded.isIdentityMapping()) {
-    if (Kind == TypeKind::BIGINT && isRange_ && noNulls) {
+    if (Kind == TypeKind::BIGINT && isRange_) {
       lookupIdsRangeSimd<int64_t>(decoded, rows, result);
-    } else if (Kind == TypeKind::INTEGER && isRange_ && noNulls) {
+    } else if (Kind == TypeKind::INTEGER && isRange_) {
       lookupIdsRangeSimd<int32_t>(decoded, rows, result);
     } else {
       rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
@@ -508,8 +523,7 @@ void VectorHasher::lookupValueIds(
     const BaseVector& values,
     SelectivityVector& rows,
     ScratchMemory& scratchMemory,
-    raw_vector<uint64_t>& result,
-    bool noNulls) const {
+    raw_vector<uint64_t>& result) const {
   scratchMemory.decoded.decode(values, rows);
   VALUE_ID_TYPE_DISPATCH(
       lookupValueIdsTyped,
@@ -517,8 +531,7 @@ void VectorHasher::lookupValueIds(
       scratchMemory.decoded,
       rows,
       scratchMemory.hashes,
-      result.data(),
-      noNulls);
+      result.data());
 }
 
 void VectorHasher::hash(
@@ -850,10 +863,14 @@ void VectorHasher::merge(const VectorHasher& other) {
 
 std::string VectorHasher::toString() const {
   std::stringstream out;
-  out << "<VectorHasher type=" << type_->toString() << "  isRange_=" << isRange_
-      << " rangeSize= " << rangeSize_ << " min=" << min_ << " max=" << max_
-      << " multiplier=" << multiplier_
-      << " numDistinct=" << uniqueValues_.size() << ">";
+  out << "VectorHasher channel: " << channel_ << " " << type_->toString()
+      << " multiplier: " << multiplier_;
+  if (isRange_) {
+    out << " range size " << rangeSize_ << ": [" << min_ << ", " << max_ << "]";
+  }
+  if (!distinctOverflow_) {
+    out << " numDistinct: " << uniqueValues_.size();
+  }
   return out.str();
 }
 

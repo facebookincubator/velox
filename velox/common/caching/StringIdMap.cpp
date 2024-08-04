@@ -29,25 +29,25 @@ uint64_t StringIdMap::id(std::string_view string) {
 
 void StringIdMap::release(uint64_t id) {
   std::lock_guard<std::mutex> l(mutex_);
-  auto it = idToString_.find(id);
-  if (it != idToString_.end()) {
+  auto it = idToEntry_.find(id);
+  if (it != idToEntry_.end()) {
     VELOX_CHECK_LT(
         0, it->second.numInUse, "Extra release of id in StringIdMap");
     if (--it->second.numInUse == 0) {
       pinnedSize_ -= it->second.string.size();
       auto strIter = stringToId_.find(it->second.string);
-      assert(strIter != stringToId_.end());
+      VELOX_DCHECK(strIter != stringToId_.end());
       stringToId_.erase(strIter);
-      idToString_.erase(it);
+      idToEntry_.erase(it);
     }
   }
 }
 
 void StringIdMap::addReference(uint64_t id) {
   std::lock_guard<std::mutex> l(mutex_);
-  auto it = idToString_.find(id);
+  auto it = idToEntry_.find(id);
   VELOX_CHECK(
-      it != idToString_.end(),
+      it != idToEntry_.end(),
       "Trying to add a reference to id {} that is not in StringIdMap",
       id);
 
@@ -58,16 +58,15 @@ uint64_t StringIdMap::makeId(std::string_view string) {
   std::lock_guard<std::mutex> l(mutex_);
   auto it = stringToId_.find(string);
   if (it != stringToId_.end()) {
-    auto entry = idToString_.find(it->second);
-    VELOX_CHECK(entry != idToString_.end());
+    auto entry = idToEntry_.find(it->second);
+    VELOX_CHECK(entry != idToEntry_.end());
     if (++entry->second.numInUse == 1) {
       pinnedSize_ += entry->second.string.size();
     }
-
     return it->second;
   }
   Entry entry;
-  entry.string = std::string(string);
+  entry.string = string;
   // Check that we do not use an id twice. In practice this never
   // happens because the int64 counter would have to wrap around for
   // this. Even if this happened, the time spent in the loop would
@@ -75,13 +74,44 @@ uint64_t StringIdMap::makeId(std::string_view string) {
   // be in the 100K range.
   do {
     entry.id = ++lastId_;
-  } while (idToString_.find(entry.id) != idToString_.end());
+  } while (idToEntry_.find(entry.id) != idToEntry_.end());
   entry.numInUse = 1;
-  pinnedSize_ += entry.string.size();
-  auto id = entry.id;
-  auto& entryInTable = idToString_[id] = std::move(entry);
-  stringToId_[entryInTable.string] = entry.id;
+  pinnedSize_ += string.size();
+  const auto id = entry.id;
+  idToEntry_[id] = std::move(entry);
+  stringToId_[string] = id;
   return lastId_;
 }
 
+uint64_t StringIdMap::recoverId(uint64_t id, std::string_view string) {
+  std::lock_guard<std::mutex> l(mutex_);
+  auto it = stringToId_.find(string);
+  if (it != stringToId_.end()) {
+    VELOX_CHECK_EQ(
+        id, it->second, "Multiple recover ids assigned to {}", string);
+    auto entry = idToEntry_.find(it->second);
+    VELOX_CHECK(entry != idToEntry_.end());
+    if (++entry->second.numInUse == 1) {
+      pinnedSize_ += entry->second.string.size();
+    }
+    return id;
+  }
+
+  VELOX_CHECK_EQ(
+      idToEntry_.count(id),
+      0,
+      "Reused recover id {} assigned to {}",
+      id,
+      string);
+
+  Entry entry;
+  entry.string = string;
+  entry.id = id;
+  lastId_ = std::max(lastId_, id);
+  entry.numInUse = 1;
+  pinnedSize_ += string.size();
+  idToEntry_[id] = std::move(entry);
+  stringToId_[string] = id;
+  return id;
+}
 } // namespace facebook::velox

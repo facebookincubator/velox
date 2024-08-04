@@ -13,295 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/Aggregate.h"
-#include "velox/exec/SetAccumulator.h"
+#include "velox/functions/lib/aggregates/SetBaseAggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/Compare.h"
-#include "velox/vector/FlatVector.h"
+
+using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
 
 namespace {
-
-template <typename T>
-class SetBaseAggregate : public exec::Aggregate {
- public:
-  explicit SetBaseAggregate(const TypePtr& resultType)
-      : exec::Aggregate(resultType) {}
-
-  using AccumulatorType = SetAccumulator<T>;
-
-  int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(AccumulatorType);
-  }
-
-  bool isFixedSize() const override {
-    return false;
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    const auto& type = resultType()->childAt(0);
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) AccumulatorType(type, allocator_);
-    }
-  }
-
-  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
-      override {
-    auto arrayVector = (*result)->as<ArrayVector>();
-    arrayVector->resize(numGroups);
-
-    auto* rawOffsets = arrayVector->offsets()->asMutable<vector_size_t>();
-    auto* rawSizes = arrayVector->sizes()->asMutable<vector_size_t>();
-
-    vector_size_t numValues = 0;
-    uint64_t* rawNulls = getRawNulls(arrayVector);
-    for (auto i = 0; i < numGroups; ++i) {
-      auto* group = groups[i];
-      if (isNull(group)) {
-        arrayVector->setNull(i, true);
-      } else {
-        clearNull(rawNulls, i);
-
-        const auto size = value(group)->size();
-
-        rawOffsets[i] = numValues;
-        rawSizes[i] = size;
-
-        numValues += size;
-      }
-    }
-
-    if constexpr (std::is_same_v<T, ComplexType>) {
-      auto values = arrayVector->elements();
-      values->resize(numValues);
-
-      vector_size_t offset = 0;
-      for (auto i = 0; i < numGroups; ++i) {
-        auto* group = groups[i];
-        if (!isNull(group)) {
-          offset += value(group)->extractValues(*values, offset);
-        }
-      }
-    } else {
-      auto values = arrayVector->elements()->as<FlatVector<T>>();
-      values->resize(numValues);
-
-      vector_size_t offset = 0;
-      for (auto i = 0; i < numGroups; ++i) {
-        auto* group = groups[i];
-        if (!isNull(group)) {
-          offset += value(group)->extractValues(*values, offset);
-        }
-      }
-    }
-  }
-
-  void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
-      override {
-    return extractValues(groups, numGroups, result);
-  }
-
-  void addIntermediateResults(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    addIntermediateResultsInt(groups, rows, args, false);
-  }
-
-  void addSingleGroupIntermediateResults(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    addSingleGroupIntermediateResultsInt(group, rows, args, false);
-  }
-
-  void destroy(folly::Range<char**> groups) override {
-    for (auto* group : groups) {
-      if (!isNull(group)) {
-        value(group)->free(*allocator_);
-      }
-    }
-  }
-
- protected:
-  inline AccumulatorType* value(char* group) {
-    return reinterpret_cast<AccumulatorType*>(group + Aggregate::offset_);
-  }
-
-  void addIntermediateResultsInt(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool clearNullForAllInputs) {
-    decoded_.decode(*args[0], rows);
-
-    auto baseArray = decoded_.base()->template as<ArrayVector>();
-    decodedElements_.decode(*baseArray->elements());
-
-    rows.applyToSelected([&](vector_size_t i) {
-      if (decoded_.isNullAt(i)) {
-        if (clearNullForAllInputs) {
-          clearNull(groups[i]);
-        }
-        return;
-      }
-
-      auto* group = groups[i];
-      clearNull(group);
-
-      auto tracker = trackRowSize(group);
-
-      auto decodedIndex = decoded_.index(i);
-      value(group)->addValues(
-          *baseArray, decodedIndex, decodedElements_, allocator_);
-    });
-  }
-
-  void addSingleGroupIntermediateResultsInt(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool clearNullForAllInputs) {
-    decoded_.decode(*args[0], rows);
-
-    auto baseArray = decoded_.base()->template as<ArrayVector>();
-
-    decodedElements_.decode(*baseArray->elements());
-
-    auto* accumulator = value(group);
-
-    auto tracker = trackRowSize(group);
-    rows.applyToSelected([&](vector_size_t i) {
-      if (decoded_.isNullAt(i)) {
-        if (clearNullForAllInputs) {
-          clearNull(group);
-        }
-        return;
-      }
-
-      clearNull(group);
-
-      auto decodedIndex = decoded_.index(i);
-      accumulator->addValues(
-          *baseArray, decodedIndex, decodedElements_, allocator_);
-    });
-  }
-
-  DecodedVector decoded_;
-  DecodedVector decodedElements_;
-};
-
-template <typename T>
-class SetAggAggregate : public SetBaseAggregate<T> {
- public:
-  explicit SetAggAggregate(
-      const TypePtr& resultType,
-      const bool throwOnNestedNulls = false)
-      : SetBaseAggregate<T>(resultType),
-        throwOnNestedNulls_(throwOnNestedNulls) {}
-
-  using Base = SetBaseAggregate<T>;
-
-  bool supportsToIntermediate() const override {
-    return true;
-  }
-
-  void toIntermediate(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      VectorPtr& result) const override {
-    const auto& elements = args[0];
-
-    if (throwOnNestedNulls_) {
-      DecodedVector decodedElements(*elements, rows);
-      auto indices = decodedElements.indices();
-      rows.applyToSelected([&](vector_size_t i) {
-        checkNestedNulls(decodedElements, indices, i, throwOnNestedNulls_);
-      });
-    }
-
-    const auto numRows = rows.size();
-
-    // Convert input to a single-entry array.
-
-    // Set nulls for rows not present in 'rows'.
-    auto* pool = Base::allocator_->pool();
-    BufferPtr nulls = allocateNulls(numRows, pool);
-    memcpy(
-        nulls->asMutable<uint64_t>(),
-        rows.asRange().bits(),
-        bits::nbytes(numRows));
-
-    // Set offsets to 0, 1, 2, 3...
-    BufferPtr offsets = allocateOffsets(numRows, pool);
-    auto* rawOffsets = offsets->asMutable<vector_size_t>();
-    std::iota(rawOffsets, rawOffsets + numRows, 0);
-
-    // Set sizes to 1.
-    BufferPtr sizes = allocateSizes(numRows, pool);
-    auto* rawSizes = sizes->asMutable<vector_size_t>();
-    std::fill(rawSizes, rawSizes + numRows, 1);
-
-    result = std::make_shared<ArrayVector>(
-        pool,
-        ARRAY(elements->type()),
-        nulls,
-        numRows,
-        offsets,
-        sizes,
-        BaseVector::loadedVectorShared(elements));
-  }
-
-  void addRawInput(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    Base::decoded_.decode(*args[0], rows);
-    auto indices = Base::decoded_.indices();
-    rows.applyToSelected([&](vector_size_t i) {
-      auto* group = groups[i];
-      Base::clearNull(group);
-
-      if (throwOnNestedNulls_) {
-        checkNestedNulls(Base::decoded_, indices, i, throwOnNestedNulls_);
-      }
-
-      auto tracker = Base::trackRowSize(group);
-      Base::value(group)->addValue(Base::decoded_, i, Base::allocator_);
-    });
-  }
-
-  void addSingleGroupRawInput(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool /*mayPushdown*/) override {
-    Base::decoded_.decode(*args[0], rows);
-
-    Base::clearNull(group);
-    auto* accumulator = Base::value(group);
-
-    auto tracker = Base::trackRowSize(group);
-    auto indices = Base::decoded_.indices();
-    rows.applyToSelected([&](vector_size_t i) {
-      if (throwOnNestedNulls_) {
-        checkNestedNulls(Base::decoded_, indices, i, throwOnNestedNulls_);
-      }
-
-      accumulator->addValue(Base::decoded_, i, Base::allocator_);
-    });
-  }
-
- private:
-  const bool throwOnNestedNulls_;
-};
 
 template <typename T>
 class SetUnionAggregate : public SetBaseAggregate<T> {
@@ -381,11 +100,66 @@ class SetUnionAggregate : public SetBaseAggregate<T> {
   }
 };
 
+/// Returns the number of distinct non-null values in a group. This is an
+/// internal function only used for testing.
+template <typename T>
+class CountDistinctAggregate : public SetAggAggregate<T, true> {
+ public:
+  explicit CountDistinctAggregate(
+      const TypePtr& resultType,
+      const TypePtr& inputType)
+      : SetAggAggregate<T, true>(resultType, false), inputType_{inputType} {}
+
+  using Base = SetAggAggregate<T, true>;
+
+  bool supportsToIntermediate() const override {
+    return false;
+  }
+
+  void initializeNewGroups(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + Base::offset_)
+          SetAccumulator<T>(inputType_, Base::allocator_);
+    }
+  }
+
+  void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    return Base::extractValues(groups, numGroups, result);
+  }
+
+  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    auto flatResult = (*result)->as<FlatVector<int64_t>>();
+    flatResult->resize(numGroups);
+
+    uint64_t* rawNulls = exec::Aggregate::getRawNulls(flatResult);
+    for (auto i = 0; i < numGroups; ++i) {
+      auto* group = groups[i];
+      if (Base::isNull(group)) {
+        Base::clearNull(rawNulls, i);
+        flatResult->set(i, 0);
+      } else {
+        Base::clearNull(rawNulls, i);
+
+        const auto size = Base::value(group)->size();
+        flatResult->set(i, size);
+      }
+    }
+  }
+
+ private:
+  TypePtr inputType_;
+};
+
 template <template <typename T> class Aggregate>
 std::unique_ptr<exec::Aggregate> create(
-    TypeKind typeKind,
+    const TypePtr& inputType,
     const TypePtr& resultType) {
-  switch (typeKind) {
+  switch (inputType->kind()) {
     case TypeKind::BOOLEAN:
       return std::make_unique<Aggregate<bool>>(resultType);
     case TypeKind::TINYINT:
@@ -396,6 +170,11 @@ std::unique_ptr<exec::Aggregate> create(
       return std::make_unique<Aggregate<int32_t>>(resultType);
     case TypeKind::BIGINT:
       return std::make_unique<Aggregate<int64_t>>(resultType);
+    case TypeKind::HUGEINT:
+      VELOX_CHECK(
+          inputType->isLongDecimal(),
+          "Non-decimal use of HUGEINT is not supported");
+      return std::make_unique<Aggregate<int128_t>>(resultType);
     case TypeKind::REAL:
       return std::make_unique<Aggregate<float>>(resultType);
     case TypeKind::DOUBLE:
@@ -413,11 +192,17 @@ std::unique_ptr<exec::Aggregate> create(
     case TypeKind::ROW:
       return std::make_unique<Aggregate<ComplexType>>(resultType);
     default:
-      VELOX_UNREACHABLE("Unexpected type {}", mapTypeKindToName(typeKind));
+      VELOX_UNREACHABLE(
+          "Unexpected type {}", mapTypeKindToName(inputType->kind()));
   }
 }
 
-exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
+} // namespace
+
+void registerSetAggAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -426,7 +211,8 @@ exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
           .argumentType("T")
           .build()};
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kSetAgg;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -438,8 +224,9 @@ exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
         const bool isRawInput = exec::isRawInput(step);
-        const TypeKind typeKind =
-            isRawInput ? argTypes[0]->kind() : argTypes[0]->childAt(0)->kind();
+        const TypePtr& inputType =
+            isRawInput ? argTypes[0] : argTypes[0]->childAt(0);
+        const TypeKind typeKind = inputType->kind();
         const bool throwOnNestedNulls = isRawInput;
 
         switch (typeKind) {
@@ -453,6 +240,11 @@ exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
             return std::make_unique<SetAggAggregate<int32_t>>(resultType);
           case TypeKind::BIGINT:
             return std::make_unique<SetAggAggregate<int64_t>>(resultType);
+          case TypeKind::HUGEINT:
+            VELOX_CHECK(
+                inputType->isLongDecimal(),
+                "Non-decimal use of HUGEINT is not supported");
+            return std::make_unique<SetAggAggregate<int128_t>>(resultType);
           case TypeKind::REAL:
             return std::make_unique<SetAggAggregate<float>>(resultType);
           case TypeKind::DOUBLE:
@@ -474,10 +266,15 @@ exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
             VELOX_UNREACHABLE(
                 "Unexpected type {}", mapTypeKindToName(typeKind));
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
-exec::AggregateRegistrationResult registerSetUnion(const std::string& name) {
+void registerSetUnionAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -486,7 +283,8 @@ exec::AggregateRegistrationResult registerSetUnion(const std::string& name) {
           .argumentType("array(T)")
           .build()};
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kSetUnion;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -497,20 +295,86 @@ exec::AggregateRegistrationResult registerSetUnion(const std::string& name) {
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
-        const TypeKind typeKind = argTypes[0]->childAt(0)->kind();
-
-        return create<SetUnionAggregate>(typeKind, resultType);
-      });
+        return create<SetUnionAggregate>(argTypes[0]->childAt(0), resultType);
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
-} // namespace
+void registerCountDistinctAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("bigint")
+          .intermediateType("array(T)")
+          .argumentType("T")
+          .build()};
 
-void registerSetAggAggregate(const std::string& prefix) {
-  registerSetAgg(prefix + kSetAgg);
-}
+  auto name = prefix + "$internal$count_distinct";
+  exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_EQ(argTypes.size(), 1);
 
-void registerSetUnionAggregate(const std::string& prefix) {
-  registerSetUnion(prefix + kSetUnion);
+        const bool isRawInput = exec::isRawInput(step);
+        const TypeKind typeKind =
+            isRawInput ? argTypes[0]->kind() : argTypes[0]->childAt(0)->kind();
+
+        switch (typeKind) {
+          case TypeKind::BOOLEAN:
+            return std::make_unique<CountDistinctAggregate<bool>>(
+                resultType, argTypes[0]);
+          case TypeKind::TINYINT:
+            return std::make_unique<CountDistinctAggregate<int8_t>>(
+                resultType, argTypes[0]);
+          case TypeKind::SMALLINT:
+            return std::make_unique<CountDistinctAggregate<int16_t>>(
+                resultType, argTypes[0]);
+          case TypeKind::INTEGER:
+            return std::make_unique<CountDistinctAggregate<int32_t>>(
+                resultType, argTypes[0]);
+          case TypeKind::BIGINT:
+            return std::make_unique<CountDistinctAggregate<int64_t>>(
+                resultType, argTypes[0]);
+          case TypeKind::HUGEINT:
+            return std::make_unique<CountDistinctAggregate<int128_t>>(
+                resultType, argTypes[0]);
+          case TypeKind::REAL:
+            return std::make_unique<CountDistinctAggregate<float>>(
+                resultType, argTypes[0]);
+          case TypeKind::DOUBLE:
+            return std::make_unique<CountDistinctAggregate<double>>(
+                resultType, argTypes[0]);
+          case TypeKind::TIMESTAMP:
+            return std::make_unique<CountDistinctAggregate<Timestamp>>(
+                resultType, argTypes[0]);
+          case TypeKind::VARBINARY:
+            [[fallthrough]];
+          case TypeKind::VARCHAR:
+            return std::make_unique<CountDistinctAggregate<StringView>>(
+                resultType, argTypes[0]);
+          case TypeKind::ARRAY:
+            [[fallthrough]];
+          case TypeKind::MAP:
+            [[fallthrough]];
+          case TypeKind::ROW:
+            return std::make_unique<CountDistinctAggregate<ComplexType>>(
+                resultType, argTypes[0]);
+          default:
+            VELOX_UNREACHABLE(
+                "Unexpected type {}", mapTypeKindToName(typeKind));
+        }
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

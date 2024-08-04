@@ -12,21 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
+velox_add_library(
   velox_caching
-  FileIds.cpp
-  StringIdMap.cpp
   AsyncDataCache.cpp
+  CacheTTLController.cpp
+  FileIds.cpp
   ScanTracker.cpp
   SsdCache.cpp
   SsdFile.cpp
-  SsdFileTracker.cpp)
-target_link_libraries(
+  SsdFileTracker.cpp
+  StringIdMap.cpp)
+velox_link_libraries(
   velox_caching
   PUBLIC velox_common_base
          velox_exception
          velox_file
          velox_memory
+         velox_process
+         velox_time
          Folly::folly
          fmt::fmt
          gflags::gflags

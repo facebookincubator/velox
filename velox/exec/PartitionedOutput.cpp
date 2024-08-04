@@ -15,74 +15,68 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
-
 namespace detail {
 BlockingReason Destination::advance(
     uint64_t maxBytes,
     const std::vector<vector_size_t>& sizes,
     const RowVectorPtr& output,
-    PartitionedOutputBufferManager& bufferManager,
+    OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     bool* atEnd,
-    ContinueFuture* future) {
-  if (rangeIdx_ >= ranges_.size()) {
+    ContinueFuture* future,
+    Scratch& scratch) {
+  if (rowIdx_ >= rows_.size()) {
     *atEnd = true;
     return BlockingReason::kNotBlocked;
   }
 
+  const auto firstRow = rowIdx_;
   const uint32_t adjustedMaxBytes = (maxBytes * targetSizePct_) / 100;
   if (bytesInCurrent_ >= adjustedMaxBytes) {
     return flush(bufferManager, bufferReleaseFn, future);
   }
 
-  // Collect ranges to serialize.
-  rangesToSerialize_.clear();
+  // Collect rows to serialize.
   bool shouldFlush = false;
-  while (rangeIdx_ < ranges_.size() && !shouldFlush) {
-    auto& currRange = ranges_[rangeIdx_];
-    auto startRow = rowsInCurrentRange_;
-    for (; rowsInCurrentRange_ < currRange.size && !shouldFlush;
-         rowsInCurrentRange_++) {
-      ++rowsInCurrent_;
-      bytesInCurrent_ += sizes[currRange.begin + rowsInCurrentRange_];
-      shouldFlush = bytesInCurrent_ >= adjustedMaxBytes ||
-          rowsInCurrent_ >= targetNumRows_;
-    }
-    rangesToSerialize_.push_back(
-        {currRange.begin + startRow, rowsInCurrentRange_ - startRow});
-    if (rowsInCurrentRange_ == currRange.size) {
-      rowsInCurrentRange_ = 0;
-      rangeIdx_++;
-    }
+  while (rowIdx_ < rows_.size() && !shouldFlush) {
+    bytesInCurrent_ += sizes[rows_[rowIdx_]];
+    ++rowIdx_;
+    ++rowsInCurrent_;
+    shouldFlush =
+        bytesInCurrent_ >= adjustedMaxBytes || rowsInCurrent_ >= targetNumRows_;
   }
 
   // Serialize
   if (!current_) {
     current_ = std::make_unique<VectorStreamGroup>(pool_);
     auto rowType = asRowType(output->type());
-    current_->createStreamTree(rowType, rowsInCurrent_);
+    serializer::presto::PrestoVectorSerde::PrestoOptions options;
+    options.compressionKind =
+        OutputBufferManager::getInstance().lock()->compressionKind();
+    options.minCompressionRatio = PartitionedOutput::minCompressionRatio();
+    current_->createStreamTree(rowType, rowsInCurrent_, &options);
   }
   current_->append(
-      output, folly::Range(&rangesToSerialize_[0], rangesToSerialize_.size()));
+      output, folly::Range(&rows_[firstRow], rowIdx_ - firstRow), scratch);
   // Update output state variable.
-  if (rangeIdx_ == ranges_.size()) {
+  if (rowIdx_ == rows_.size()) {
     *atEnd = true;
   }
-  if (shouldFlush) {
+  if (shouldFlush || (eagerFlush_ && rowsInCurrent_ > 0)) {
     return flush(bufferManager, bufferReleaseFn, future);
   }
   return BlockingReason::kNotBlocked;
 }
 
 BlockingReason Destination::flush(
-    PartitionedOutputBufferManager& bufferManager,
+    OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     ContinueFuture* future) {
-  if (!current_) {
+  if (!current_ || rowsInCurrent_ == 0) {
     return BlockingReason::kNotBlocked;
   }
 
@@ -93,8 +87,13 @@ BlockingReason Destination::flush(
       *current_->pool(),
       listener.get(),
       std::max<int64_t>(kMinMessageSize, current_->size()));
+  const int64_t flushedRows = rowsInCurrent_;
+
   current_->flush(&stream);
-  current_.reset();
+  current_->clear();
+
+  const int64_t flushedBytes = stream.tellp();
+
   bytesInCurrent_ = 0;
   rowsInCurrent_ = 0;
   setTargetSizePct();
@@ -102,17 +101,34 @@ BlockingReason Destination::flush(
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(stream.getIOBuf(bufferReleaseFn)),
+      std::make_unique<SerializedPage>(
+          stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
       future);
+
+  recordEnqueued_(flushedBytes, flushedRows);
+
   return blocked ? BlockingReason::kWaitForConsumer
                  : BlockingReason::kNotBlocked;
 }
+
+void Destination::updateStats(Operator* op) {
+  VELOX_CHECK(finished_);
+  if (current_) {
+    const auto serializerStats = current_->runtimeStats();
+    auto lockedStats = op->stats().wlock();
+    for (auto& pair : serializerStats) {
+      lockedStats->addRuntimeStat(pair.first, pair.second);
+    }
+  }
+}
+
 } // namespace detail
 
 PartitionedOutput::PartitionedOutput(
     int32_t operatorId,
     DriverCtx* ctx,
-    const std::shared_ptr<const core::PartitionedOutputNode>& planNode)
+    const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
+    bool eagerFlush)
     : Operator(
           ctx,
           planNode->outputType(),
@@ -130,7 +146,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(PartitionedOutputBufferManager::getInstance()),
+      bufferManager_(OutputBufferManager::getInstance()),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,
@@ -138,7 +154,8 @@ PartitionedOutput::PartitionedOutput(
       bufferReleaseFn_([task = operatorCtx_->task()]() {}),
       maxBufferedBytes_(ctx->task->queryCtx()
                             ->queryConfig()
-                            .maxPartitionedOutputBufferSize()) {
+                            .maxPartitionedOutputBufferSize()),
+      eagerFlush_(eagerFlush) {
   if (!planNode->isPartitioned()) {
     VELOX_USER_CHECK_EQ(numDestinations_, 1);
   }
@@ -179,20 +196,18 @@ void PartitionedOutput::initializeDestinations() {
   if (destinations_.empty()) {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
-      destinations_.push_back(
-          std::make_unique<detail::Destination>(taskId, i, pool()));
+      destinations_.push_back(std::make_unique<detail::Destination>(
+          taskId, i, pool(), eagerFlush_, [&](uint64_t bytes, uint64_t rows) {
+            auto lockedStats = stats_.wlock();
+            lockedStats->addOutputVector(bytes, rows);
+          }));
     }
   }
 }
 
 void PartitionedOutput::initializeSizeBuffers() {
   auto numInput = input_->size();
-  if (numInput > topLevelRanges_.size()) {
-    vector_size_t numOld = topLevelRanges_.size();
-    topLevelRanges_.resize(numInput);
-    for (auto i = numOld; i < numInput; ++i) {
-      topLevelRanges_[i] = IndexRange{i, 1};
-    }
+  if (numInput > rowSize_.size()) {
     rowSize_.resize(numInput);
     sizePointers_.resize(numInput);
     // Set all the size pointers since 'rowSize_' may have been reallocated.
@@ -205,21 +220,18 @@ void PartitionedOutput::initializeSizeBuffers() {
 void PartitionedOutput::estimateRowSizes() {
   auto numInput = input_->size();
   std::fill(rowSize_.begin(), rowSize_.end(), 0);
+  raw_vector<vector_size_t> storage;
+  auto numbers = iota(numInput, storage);
   for (int i = 0; i < output_->childrenSize(); ++i) {
     VectorStreamGroup::estimateSerializedSize(
-        output_->childAt(i),
-        folly::Range(topLevelRanges_.data(), numInput),
-        sizePointers_.data());
+        output_->childAt(i).get(),
+        folly::Range(numbers, numInput),
+        sizePointers_.data(),
+        scratch_);
   }
 }
 
 void PartitionedOutput::addInput(RowVectorPtr input) {
-  // TODO Report outputBytes as bytes after serialization
-  {
-    auto lockedStats = stats_.wlock();
-    lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
-  }
-
   initializeInput(std::move(input));
 
   initializeDestinations();
@@ -285,11 +297,18 @@ void PartitionedOutput::collectNullRows() {
 
   decodedVectors_.resize(keyChannels_.size());
 
-  for (auto i : keyChannels_) {
-    auto& keyVector = input_->childAt(i);
+  for (size_t keyChannelIndex = 0; keyChannelIndex < keyChannels_.size();
+       ++keyChannelIndex) {
+    column_index_t keyChannel = keyChannels_[keyChannelIndex];
+    // Skip constant channel.
+    if (keyChannel == kConstantChannel) {
+      continue;
+    }
+    auto& keyVector = input_->childAt(keyChannel);
     if (keyVector->mayHaveNulls()) {
-      decodedVectors_[i].decode(*keyVector, rows_);
-      if (auto* rawNulls = decodedVectors_[i].nulls()) {
+      DecodedVector& decodedVector = decodedVectors_[keyChannelIndex];
+      decodedVector.decode(*keyVector, rows_);
+      if (auto* rawNulls = decodedVector.nulls(&rows_)) {
         bits::orWithNegatedBits(
             nullRows_.asMutableRange().bits(), rawNulls, 0, size);
       }
@@ -307,7 +326,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
   detail::Destination* blockedDestination = nullptr;
   auto bufferManager = bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
-      bufferManager, "PartitionedOutputBufferManager was already destructed");
+      bufferManager, "OutputBufferManager was already destructed");
 
   // Limit serialized pages to 1MB.
   static const uint64_t kMaxPageSize = 1 << 20;
@@ -327,7 +346,8 @@ RowVectorPtr PartitionedOutput::getOutput() {
           *bufferManager,
           bufferReleaseFn_,
           &atEnd,
-          &future_);
+          &future_,
+          scratch_);
       if (blockingReason_ != BlockingReason::kNotBlocked) {
         blockedDestination = destination.get();
         workLeft = false;
@@ -365,6 +385,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
       }
       destination->flush(*bufferManager, bufferReleaseFn_, nullptr);
       destination->setFinished();
+      destination->updateStats(this);
     }
 
     bufferManager->noMoreData(operatorCtx_->task()->taskId());

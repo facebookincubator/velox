@@ -19,6 +19,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/type/Variant.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::exec::test;
@@ -26,7 +27,22 @@ using namespace facebook::velox;
 
 namespace facebook::velox::test {
 
-class QueryAssertionsTest : public OperatorTestBase {};
+class QueryAssertionsTest : public OperatorTestBase {
+ public:
+  void assertQueryWithThreadingConfigs(
+      const core::PlanNodePtr& plan,
+      const std::string& duckDbSql) {
+    CursorParameters multiThreadedParams{};
+    multiThreadedParams.planNode = plan;
+    multiThreadedParams.singleThreaded = false;
+    assertQuery(multiThreadedParams, duckDbSql);
+
+    CursorParameters singleThreadedParams{};
+    singleThreadedParams.planNode = plan;
+    singleThreadedParams.singleThreaded = true;
+    assertQuery(singleThreadedParams, duckDbSql);
+  }
+};
 
 TEST_F(QueryAssertionsTest, basic) {
   auto data = makeRowVector({
@@ -35,7 +51,7 @@ TEST_F(QueryAssertionsTest, basic) {
   createDuckDbTable({data});
 
   auto plan = PlanBuilder().values({data}).project({"c0"}).planNode();
-  assertQuery(plan, "SELECT c0 FROM tmp");
+  assertQueryWithThreadingConfigs(plan, "SELECT c0 FROM tmp");
 
   EXPECT_NONFATAL_FAILURE(
       assertQuery(plan, "SELECT c0 + 1 FROM tmp"),
@@ -350,7 +366,7 @@ TEST_F(QueryAssertionsTest, nullDecimalValue) {
 
   createDuckDbTable({shortDecimal});
   auto plan = PlanBuilder().values({shortDecimal}).planNode();
-  assertQuery(plan, "SELECT c0 FROM tmp");
+  assertQueryWithThreadingConfigs(plan, "SELECT c0 FROM tmp");
 
   auto longDecimal = makeRowVector(
       {makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(20, 2))});
@@ -358,11 +374,69 @@ TEST_F(QueryAssertionsTest, nullDecimalValue) {
 
   createDuckDbTable({longDecimal});
   plan = PlanBuilder().values({longDecimal}).planNode();
-  assertQuery(plan, "SELECT c0 FROM tmp");
+  assertQueryWithThreadingConfigs(plan, "SELECT c0 FROM tmp");
 
   EXPECT_NONFATAL_FAILURE(
       assertEqualResults({shortDecimal}, {longDecimal}),
       "Types of expected and actual results do not match");
+}
+
+TEST_F(QueryAssertionsTest, valuesMismatch) {
+  auto test = makeRowVector({
+      makeFlatVector<int64_t>({10, 20}, DECIMAL(12, 2)),
+  });
+  createDuckDbTable({test});
+
+  // The expected values should be off by 1.
+  auto plan = PlanBuilder().values({test}).project({"c0"}).planNode();
+  EXPECT_NONFATAL_FAILURE(
+      assertQuery(plan, "SELECT c0 + 1 FROM tmp"),
+      "Expected 2, got 2\n"
+      "2 extra rows, 2 missing rows\n"
+      "2 of extra rows:\n\t"
+      "0.10\n\t"
+      "0.20\n\n"
+      "2 of missing rows:\n\t"
+      "1.10\n\t"
+      "1.20");
+}
+
+TEST_F(QueryAssertionsTest, noExpectedRows) {
+  auto actual = makeRowVector({
+      makeFlatVector(std::vector<int64_t>{4000}, DECIMAL(6, 2)),
+  });
+  createDuckDbTable({actual});
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({}, BIGINT()),
+  });
+  auto plan = PlanBuilder().values({actual}).project({"c0"}).planNode();
+  EXPECT_NONFATAL_FAILURE(
+      assertQuery(plan, expected),
+      "Expected 0, got 1\n"
+      "1 extra rows, 0 missing rows\n"
+      "1 of extra rows:\n\t"
+      "40.00\n\n"
+      "0 of missing rows:");
+}
+
+TEST_F(QueryAssertionsTest, noActualRows) {
+  auto actual = makeRowVector({
+      makeFlatVector<int64_t>({}, BIGINT()),
+  });
+  createDuckDbTable({actual});
+
+  auto expected = makeRowVector({
+      makeFlatVector(std::vector<int64_t>{1000}, DECIMAL(6, 2)),
+  });
+  auto plan = PlanBuilder().values({actual}).project({"c0"}).planNode();
+  EXPECT_NONFATAL_FAILURE(
+      assertQuery(plan, expected),
+      "Expected 1, got 0\n"
+      "0 extra rows, 1 missing rows\n"
+      "0 of extra rows:\n\n"
+      "1 of missing rows:\n\t"
+      "10.00");
 }
 
 TEST_F(QueryAssertionsTest, nullVariant) {
@@ -373,7 +447,7 @@ TEST_F(QueryAssertionsTest, nullVariant) {
            {{std::nullopt, 1.1}, {2.2, 3.3, 4.4}, {std::nullopt}})});
   createDuckDbTable({input});
   auto plan = PlanBuilder().values({input}).planNode();
-  assertQuery(plan, "SELECT * FROM tmp");
+  assertQueryWithThreadingConfigs(plan, "SELECT * FROM tmp");
 
   input = makeRowVector({makeNullableMapVector<int64_t, double>(
       {std::nullopt,
@@ -384,14 +458,80 @@ TEST_F(QueryAssertionsTest, nullVariant) {
        {{{6, std::nullopt}}}})});
   createDuckDbTable({input});
   plan = PlanBuilder().values({input}).planNode();
-  assertQuery(plan, "SELECT * FROM tmp");
+  assertQueryWithThreadingConfigs(plan, "SELECT * FROM tmp");
 
   input = makeRowVector({makeRowVector(
       {makeNullConstant(TypeKind::BIGINT, 10),
        makeNullConstant(TypeKind::DOUBLE, 10)})});
   createDuckDbTable({input});
   plan = PlanBuilder().values({input}).planNode();
-  assertQuery(plan, "SELECT * FROM tmp");
+  assertQueryWithThreadingConfigs(plan, "SELECT * FROM tmp");
+}
+
+TEST_F(QueryAssertionsTest, varbinary) {
+  auto data = makeRowVector({makeFlatVector<std::string>(
+      {"Short string", "Longer strings...", "abc"}, VARBINARY())});
+
+  auto rowType = asRowType(data->type());
+
+  createDuckDbTable({data});
+
+  auto duckResult = duckDbQueryRunner_.execute("SELECT * FROM tmp", rowType);
+  ASSERT_EQ(duckResult.size(), data->size());
+  ASSERT_EQ(duckResult.begin()->begin()->kind(), TypeKind::VARBINARY);
+  ASSERT_TRUE(assertEqualResults(duckResult, rowType, {data}));
+
+  auto plan = PlanBuilder().values({data}).planNode();
+  assertQueryWithThreadingConfigs(plan, "SELECT * FROM tmp");
+}
+
+TEST_F(QueryAssertionsTest, intervalDayTime) {
+  // INTERVAL_DAY_TIME needs special handling as it is a logical (vs physical)
+  // type mapping to BIGINT. Tests its use as a FLAT vector and in a MAP
+  // serialized to DuckDB to cover the specialized code-paths.
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({5, 10, 15, 0}, INTERVAL_DAY_TIME())});
+
+  createDuckDbTable({data});
+  auto plan = PlanBuilder().values({data}).planNode();
+  assertQueryWithThreadingConfigs(plan, "SELECT * FROM tmp");
+
+  data = makeRowVector({makeMapVectorFromJson<int64_t, double>(
+      {"null",
+       "{1: 1.1, 2: null}",
+       "{}",
+       "{3: 3.3, 4: 4.4, 5: 5.5}",
+       "null",
+       "{6: null}"},
+      MAP(INTERVAL_DAY_TIME(), DOUBLE()))});
+  createDuckDbTable({data});
+  plan = PlanBuilder().values({data}).planNode();
+  assertQueryWithThreadingConfigs(plan, "SELECT * FROM tmp");
+}
+
+TEST_F(QueryAssertionsTest, plansWithEqualResults) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+
+  auto input = fuzzer.fuzzInputRow(ROW({"c0"}, {INTEGER()}));
+  auto plan1 = PlanBuilder().values({input}).orderBy({"c0"}, false).planNode();
+
+  // The input plan has 100 rows. So the limit has no effect here.
+  auto plan2 = PlanBuilder()
+                   .values({input})
+                   .orderBy({"c0"}, false)
+                   .limit(0, 100, false)
+                   .planNode();
+  assertEqualResults(plan1, plan2);
+
+  // The limit drops 50 result rows from the original plan.
+  plan2 = PlanBuilder()
+              .values({input})
+              .orderBy({"c0"}, false)
+              .limit(0, 50, false)
+              .planNode();
+  EXPECT_NONFATAL_FAILURE(
+      assertEqualResults(plan1, plan2), "Expected 100, got 50");
 }
 
 } // namespace facebook::velox::test

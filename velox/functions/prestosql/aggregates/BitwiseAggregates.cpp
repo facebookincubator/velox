@@ -101,9 +101,21 @@ class BitwiseAndAggregate : public BitwiseAggregateBase<T> {
 
 } // namespace
 
-void registerBitwiseAggregates(const std::string& prefix) {
-  registerBitwise<BitwiseOrAggregate>(prefix + kBitwiseOr);
-  registerBitwise<BitwiseAndAggregate>(prefix + kBitwiseAnd);
+void registerBitwiseAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool onlyPrestoSignatures,
+    bool overwrite) {
+  registerBitwise<BitwiseOrAggregate>(
+      prefix + kBitwiseOr,
+      withCompanionFunctions,
+      onlyPrestoSignatures,
+      overwrite);
+  registerBitwise<BitwiseAndAggregate>(
+      prefix + kBitwiseAnd,
+      withCompanionFunctions,
+      onlyPrestoSignatures,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

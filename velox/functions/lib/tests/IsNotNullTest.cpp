@@ -26,7 +26,7 @@ void registerIsNotNull() {
   registerIsNotNullFunction("isnotnull");
 }
 
-}; // namespace facebook::velox::functions
+} // namespace facebook::velox::functions
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -35,6 +35,7 @@ class IsNotNullTest : public functions::test::FunctionBaseTest {
  public:
   static void SetUpTestCase() {
     functions::registerIsNotNull();
+    memory::MemoryManager::testingSetInstance({});
   }
 
   template <typename T>

@@ -1,5 +1,5 @@
-#ifndef TZ_H
-#define TZ_H
+#ifndef VELOX_TZ_H
+#define VELOX_TZ_H
 
 // The MIT License (MIT)
 //
@@ -143,6 +143,10 @@ static_assert(HAS_REMOTE_API == 0 ? AUTO_DOWNLOAD == 0 : true,
 #  endif
 #endif
 
+namespace facebook
+{
+namespace velox
+{
 namespace date
 {
 
@@ -786,6 +790,19 @@ private:
 #if USE_OS_TZDB
     std::vector<detail::transition>      transitions_;
     std::vector<detail::expanded_ttinfo> ttinfos_;
+
+    // Stores extended OS_TZDB timezone information, in addition to possible
+    // repetition rules (although these are not supported yet)
+    struct {
+      std::string extended_name_;
+      std::string rule_start_;
+      std::string rule_end_;
+
+      bool has_rules() const {
+        return !rule_start_.empty();
+      }
+    } extended_info_;
+
 #else  // !USE_OS_TZDB
     std::vector<detail::zonelet>         zonelets_;
 #endif  // !USE_OS_TZDB
@@ -2790,5 +2807,7 @@ to_gps_time(const tai_time<Duration>& t)
 #endif  // !MISSING_LEAP_SECONDS
 
 }  // namespace date
+}  // namespace velox
+}  // namespace facebook
 
-#endif  // TZ_H
+#endif  // VELOX_TZ_H

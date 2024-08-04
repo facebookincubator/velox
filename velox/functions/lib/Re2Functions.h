@@ -30,19 +30,119 @@ namespace facebook::velox::functions {
 enum class PatternKind {
   /// Pattern containing wildcard character '_' only, such as _, __, ____.
   kExactlyN,
-  /// Pattern containing wildcard characters ('_' or '%') only with atleast one
+  /// Pattern containing wildcard characters ('_' or '%') only with at least one
   /// '%', such as ___%, _%__.
   kAtLeastN,
   /// Pattern with no wildcard characters, such as 'presto', 'foo'.
   kFixed,
+  /// Pattern with single wildcard chars(_) & normal chars, such as
+  /// '_pr_es_to_'.
+  kRelaxedFixed,
   /// Fixed pattern followed by one or more '%', such as 'hello%', 'foo%%%%'.
   kPrefix,
+  /// kRelaxedFixed pattern followed by one or more '%', such as '_pr_es_to_%',
+  /// '_pr_es_to_%%%%'.
+  kRelaxedPrefix,
   /// Fixed pattern preceded by one or more '%', such as '%foo', '%%%hello'.
   kSuffix,
+  /// kRelaxedFixed preceded by one or more '%', such as '%_pr_es_to_',
+  /// '%%%_pr_es_to_'.
+  kRelaxedSuffix,
+  /// Patterns matching '%{c0}%', such as '%foo%%', '%%%hello%'.
+  kSubstring,
   /// Patterns which do not fit any of the above types, such as 'hello_world',
   /// '_presto%'.
   kGeneric,
 };
+
+// Kind of sub-pattern.
+enum SubPatternKind {
+  /// e.g. '___'.
+  kSingleCharWildcard = 0,
+  // e.g. '%%'.
+  kAnyCharsWildcard = 1,
+  // e.g. 'abc'.
+  kLiteralString = 2
+};
+
+struct SubPatternMetadata {
+  SubPatternKind kind;
+  // The index of current pattern in terms of 'bytes'.
+  size_t start;
+  // Length in terms of bytes.
+  size_t length;
+};
+
+class PatternMetadata {
+ public:
+  static PatternMetadata generic();
+
+  static PatternMetadata atLeastN(size_t length);
+
+  static PatternMetadata exactlyN(size_t length);
+
+  static PatternMetadata fixed(const std::string& fixedPattern);
+
+  static PatternMetadata relaxedFixed(
+      std::string fixedPattern,
+      std::vector<SubPatternMetadata> subPatterns);
+
+  static PatternMetadata prefix(const std::string& fixedPattern);
+
+  static PatternMetadata relaxedPrefix(
+      std::string fixedPattern,
+      std::vector<SubPatternMetadata> subPatterns);
+
+  static PatternMetadata suffix(const std::string& fixedPattern);
+
+  static PatternMetadata relaxedSuffix(
+      std::string fixedPattern,
+      std::vector<SubPatternMetadata> subPatterns);
+
+  static PatternMetadata substring(const std::string& fixedPattern);
+
+  PatternKind patternKind() const {
+    return patternKind_;
+  }
+
+  size_t length() const {
+    return length_;
+  }
+
+  const std::vector<SubPatternMetadata>& subPatterns() const {
+    return subPatterns_;
+  }
+
+  const std::string& fixedPattern() const {
+    return fixedPattern_;
+  }
+
+ private:
+  PatternMetadata(
+      PatternKind patternKind,
+      size_t length,
+      std::string fixedPattern,
+      std::vector<SubPatternMetadata> subPatterns);
+
+  PatternKind patternKind_;
+
+  /// Contains the length of the unescaped fixed pattern for patterns of kind
+  /// k[Relaxed]Fixed, k[Relaxed]Prefix, k[Relaxed]Suffix and
+  /// k[Relaxed]Substring. Contains the count of wildcard character '_' for
+  /// patterns of kind kExactlyN and kAtLeastN. Contains 0 otherwise.
+  size_t length_;
+
+  /// Contains the fixed pattern in patterns of kind k[Relaxed]Fixed,
+  /// k[Relaxed]Prefix, k[Relaxed]Suffix and k[Relaxed]Substring.
+  std::string fixedPattern_;
+
+  /// Contains the literal/single char wildcard sub patterns, it is only
+  /// used for kRelaxedXxx patterns. e.g. If the pattern is: _pr_sto%, we will
+  /// have four sub-patterns here: _, pr, _ and sto.
+  std::vector<SubPatternMetadata> subPatterns_;
+};
+
+inline const int kMaxCompiledRegexes = 20;
 
 /// The functions in this file use RE2 as the regex engine. RE2 is fast, but
 /// supports only a subset of PCRE syntax and in particular does not support
@@ -102,7 +202,9 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures();
 /// prefix, and suffix patterns. Return the pair {pattern kind, number of '_'
 /// characters} for patterns with wildcard characters only. Return
 /// {kGenericPattern, 0} for generic patterns).
-std::pair<PatternKind, vector_size_t> determinePatternKind(StringView pattern);
+PatternMetadata determinePatternKind(
+    std::string_view pattern,
+    std::optional<char> escapeChar);
 
 std::shared_ptr<exec::VectorFunction> makeLike(
     const std::string& name,
@@ -135,6 +237,25 @@ std::shared_ptr<exec::VectorFunction> makeRe2ExtractAll(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractAllSignatures();
 
+namespace detail {
+
+// A cache of compiled regular expressions (RE2 instances). Allows up to
+// 'kMaxCompiledRegexes' different expressions.
+//
+// Compiling regular expressions is expensive. It can take up to 200 times
+// more CPU time to compile a regex vs. evaluate it.
+class ReCache {
+ public:
+  RE2* findOrCompile(const StringView& pattern);
+
+  Expected<RE2*> tryFindOrCompile(const StringView& pattern);
+
+ private:
+  folly::F14FastMap<std::string, std::unique_ptr<RE2>> cache_;
+};
+
+} // namespace detail
+
 /// regexp_replace(string, pattern, replacement) -> string
 /// regexp_replace(string, pattern) -> string
 ///
@@ -153,53 +274,151 @@ template <
 struct Re2RegexpReplace {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  std::string processedReplacement_;
-  std::string result_;
-  std::optional<RE2> re_;
-
   FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*string*/,
       const arg_type<Varchar>* pattern,
       const arg_type<Varchar>* replacement) {
-    VELOX_USER_CHECK(
-        pattern != nullptr, "Pattern of regexp_replace must be constant.");
-    VELOX_USER_CHECK(
-        replacement != nullptr,
-        "Replacement sequence of regexp_replace must be constant.");
-
-    auto processedPattern = prepareRegexpPattern(*pattern);
-
-    re_.emplace(processedPattern, RE2::Quiet);
-    if (UNLIKELY(!re_->ok())) {
-      VELOX_USER_FAIL(
-          "Invalid regular expression {}: {}.", processedPattern, re_->error());
+    if (pattern != nullptr) {
+      const auto processedPattern = prepareRegexpPattern(*pattern);
+      re_.emplace(processedPattern, RE2::Quiet);
+      VELOX_USER_CHECK(
+          re_->ok(),
+          "Invalid regular expression {}: {}.",
+          processedPattern,
+          re_->error());
     }
 
-    processedReplacement_ = prepareRegexpReplacement(*re_, *replacement);
+    if (replacement != nullptr) {
+      // Constant 'replacement' with non-constant 'pattern' needs to be
+      // processed separately for each row.
+      if (pattern != nullptr) {
+        ensureProcessedReplacement(re_.value(), *replacement);
+        constantReplacement_ = true;
+      }
+    }
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
       const arg_type<Varchar>* string,
       const arg_type<Varchar>* pattern) {
-    StringView emptyReplacement;
-
-    initialize(config, string, pattern, &emptyReplacement);
+    initialize(inputTypes, config, string, pattern, nullptr);
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& out,
       const arg_type<Varchar>& string,
-      const arg_type<Varchar>& /*pattern*/,
-      const arg_type<Varchar>& /*replacement*/ = StringView{}) {
+      const arg_type<Varchar>& pattern,
+      const arg_type<Varchar>& replacement = StringView{}) {
+    auto& re = ensurePattern(pattern);
+    const auto& processedReplacement =
+        ensureProcessedReplacement(re, replacement);
+
     result_.assign(string.data(), string.size());
-    RE2::GlobalReplace(&result_, *re_, processedReplacement_);
+    RE2::GlobalReplace(&result_, re, processedReplacement);
 
     UDFOutputString::assign(out, result_);
-
-    return true;
   }
+
+ private:
+  RE2& ensurePattern(const arg_type<Varchar>& pattern) {
+    if (!re_.has_value()) {
+      auto processedPattern = prepareRegexpPattern(pattern);
+      return *cache_.findOrCompile(StringView(processedPattern));
+    } else {
+      return re_.value();
+    }
+  }
+
+  const std::string& ensureProcessedReplacement(
+      RE2& re,
+      const arg_type<Varchar>& replacement) {
+    if (!constantReplacement_) {
+      processedReplacement_ = prepareRegexpReplacement(re, replacement);
+    }
+
+    return processedReplacement_;
+  }
+
+  // Used when pattern is constant.
+  std::optional<RE2> re_;
+
+  // True if replacement is constant.
+  bool constantReplacement_{false};
+
+  // Constant replacement if 'constantReplacement_' is true, or 'current'
+  // replacement.
+  std::string processedReplacement_;
+
+  // Used when pattern is not constant.
+  detail::ReCache cache_;
+
+  // Scratch memory to store result of replacement.
+  std::string result_;
 };
 
+template <typename TExec>
+struct Re2RegexpSplit {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  void call(
+      out_type<Array<Varchar>>& out,
+      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& pattern) {
+    auto* re = cache_.findOrCompile(pattern);
+
+    const auto re2String = re2::StringPiece(string.data(), string.size());
+
+    size_t pos = 0;
+    const char* start = string.data();
+
+    re2::StringPiece subMatches[1];
+    while (re->Match(
+        re2String,
+        pos,
+        string.size(),
+        RE2::Anchor::UNANCHORED,
+        subMatches,
+        1)) {
+      const auto fullMatch = subMatches[0];
+      const auto offset = fullMatch.data() - start;
+      const auto size = fullMatch.size();
+
+      out.add_item().setNoCopy(StringView(string.data() + pos, offset - pos));
+
+      pos = offset + size;
+      if (UNLIKELY(size == 0)) {
+        ++pos;
+      }
+    }
+
+    out.add_item().setNoCopy(
+        StringView(string.data() + pos, string.size() - pos));
+  }
+
+ private:
+  detail::ReCache cache_;
+};
+
+std::shared_ptr<exec::VectorFunction> makeRegexpReplaceWithLambda(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+regexpReplaceWithLambdaSignatures();
+
 } // namespace facebook::velox::functions
+
+template <>
+struct fmt::formatter<facebook::velox::functions::PatternKind>
+    : formatter<int> {
+  auto format(facebook::velox::functions::PatternKind s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

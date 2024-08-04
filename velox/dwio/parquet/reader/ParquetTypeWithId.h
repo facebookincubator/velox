@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include <parquet/level_conversion.h>
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 
 namespace facebook::velox::parquet {
 
@@ -36,7 +36,7 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
 
   ParquetTypeWithId(
       TypePtr type,
-      std::vector<std::shared_ptr<const TypeWithId>>&& children,
+      std::vector<std::unique_ptr<TypeWithId>>&& children,
       uint32_t id,
       uint32_t maxId,
       uint32_t column,
@@ -45,6 +45,8 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
       std::optional<thrift::LogicalType> logicalType,
       uint32_t maxRepeat,
       uint32_t maxDefine,
+      bool isOptional,
+      bool isRepeated,
       int32_t precision = 0,
       int32_t scale = 0,
       int32_t typeLength = 0)
@@ -54,6 +56,8 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
         logicalType_(std::move(logicalType)),
         maxRepeat_(maxRepeat),
         maxDefine_(maxDefine),
+        isOptional_(isOptional),
+        isRepeated_(isRepeated),
         precision_(precision),
         scale_(scale),
         typeLength_(typeLength) {}
@@ -67,18 +71,22 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
     return *reinterpret_cast<const ParquetTypeWithId*>(childAt(index).get());
   }
 
-  const ParquetTypeWithId* FOLLY_NULLABLE parquetParent() const {
+  const ParquetTypeWithId* parquetParent() const {
     return reinterpret_cast<const ParquetTypeWithId*>(parent());
   }
 
   /// Fills 'info' and returns the mode for interpreting levels.
-  LevelMode makeLevelInfo(::parquet::internal::LevelInfo& info) const;
+  LevelMode makeLevelInfo(arrow::LevelInfo& info) const;
+
+  std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> moveChildren() &&;
 
   const std::string name_;
   const std::optional<thrift::Type::type> parquetType_;
   const std::optional<thrift::LogicalType> logicalType_;
   const uint32_t maxRepeat_;
   const uint32_t maxDefine_;
+  const bool isOptional_;
+  const bool isRepeated_;
   const int32_t precision_;
   const int32_t scale_;
   const int32_t typeLength_;

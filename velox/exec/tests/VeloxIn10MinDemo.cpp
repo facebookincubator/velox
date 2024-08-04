@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/init/Init.h>
+#include "velox/common/memory/Memory.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/core/Expressions.h"
@@ -50,7 +51,8 @@ class VeloxIn10MinDemo : public VectorTestBase {
     auto tpchConnector =
         connector::getConnectorFactory(
             connector::tpch::TpchConnectorFactory::kTpchConnectorName)
-            ->newConnector(kTpchConnectorId, nullptr);
+            ->newConnector(
+                kTpchConnectorId, std::make_shared<core::MemConfig>());
     connector::registerConnector(tpchConnector);
   }
 
@@ -100,7 +102,7 @@ class VeloxIn10MinDemo : public VectorTestBase {
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency())};
   std::shared_ptr<core::QueryCtx> queryCtx_{
-      std::make_shared<core::QueryCtx>(executor_.get())};
+      core::QueryCtx::create(executor_.get())};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
 };
@@ -233,7 +235,7 @@ void VeloxIn10MinDemo::run() {
   // nation table and print first 10 rows.
 
   plan = PlanBuilder()
-             .tableScan(
+             .tpchTableScan(
                  tpch::Table::TBL_NATION,
                  {"n_nationkey", "n_name"},
                  1 /*scaleFactor*/)
@@ -259,14 +261,14 @@ void VeloxIn10MinDemo::run() {
   core::PlanNodeId nationScanId;
   core::PlanNodeId regionScanId;
   plan = PlanBuilder(planNodeIdGenerator)
-             .tableScan(
+             .tpchTableScan(
                  tpch::Table::TBL_NATION, {"n_regionkey"}, 1 /*scaleFactor*/)
              .capturePlanNodeId(nationScanId)
              .hashJoin(
                  {"n_regionkey"},
                  {"r_regionkey"},
                  PlanBuilder(planNodeIdGenerator)
-                     .tableScan(
+                     .tpchTableScan(
                          tpch::Table::TBL_REGION,
                          {"r_regionkey", "r_name"},
                          1 /*scaleFactor*/)
@@ -290,7 +292,10 @@ void VeloxIn10MinDemo::run() {
 }
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv, false);
+  folly::Init init{&argc, &argv, false};
+
+  // Initializes the process-wide memory-manager with the default options.
+  memory::initializeMemoryManager({});
 
   VeloxIn10MinDemo demo;
   demo.run();

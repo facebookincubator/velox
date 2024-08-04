@@ -461,12 +461,29 @@ TEST_F(BitUtilTest, forEachBit) {
 }
 
 TEST_F(BitUtilTest, hash) {
-  std::unordered_set<size_t> hashes;
-  const char* text = "Forget the night, come live with us in forests of azure";
-  for (int32_t i = 0; i < strlen(text); ++i) {
-    hashes.insert(hashBytes(1, text, i));
+  std::unordered_map<uint64_t, int32_t> hashes;
+  std::string text =
+      "Forget the night, come live with us in forests of azure, "
+      "for we have constructed pyramids in honor of our escaping...";
+  for (int32_t i = 0; i < text.size(); ++i) {
+    // starts hashing at unaligned addresses.
+    int32_t offset = i > 3 && i < text.size() - 3 ? i % 3 : 0;
+    auto hash = hashBytes(1, text.data() + offset, i);
+    if (i + offset < text.size() - 1) {
+      ++text[i + offset];
+      // Change the first byte after the hashed range and check that the hash
+      // function does not overread its range.
+      EXPECT_EQ(hash, hashBytes(1, text.data() + offset, i));
+      --text[i + offset];
+    }
+    auto it = hashes.find(hash);
+    if (it == hashes.end()) {
+      hashes[hash] = i;
+    } else {
+      EXPECT_TRUE(false) << "Duplicate hash at " << i;
+    }
   }
-  EXPECT_EQ(hashes.size(), strlen(text));
+  EXPECT_EQ(hashes.size(), text.size());
 }
 
 TEST_F(BitUtilTest, nextPowerOfTwo) {
@@ -482,6 +499,9 @@ TEST_F(BitUtilTest, nextPowerOfTwo) {
   EXPECT_EQ(nextPowerOfTwo(31), 32);
   EXPECT_EQ(nextPowerOfTwo(32), 32);
   EXPECT_EQ(nextPowerOfTwo(33), 64);
+  EXPECT_EQ(nextPowerOfTwo(1ULL << 32), 1ULL << 32);
+  EXPECT_EQ(nextPowerOfTwo((1ULL << 32) + 1), 1ULL << 33);
+  EXPECT_EQ(nextPowerOfTwo((1ULL << 62) + 1), 1ULL << 63);
 }
 
 TEST_F(BitUtilTest, isPowerOfTwo) {
@@ -833,6 +853,23 @@ TEST_F(BitUtilTest, countLeadingZeros) {
   EXPECT_EQ(
       countLeadingZeros<__uint128_t>(HugeInt::build(0x08FFFFFFFFFFFFFF, 0)), 4);
 }
+
+TEST_F(BitUtilTest, storeBitsToByte) {
+  uint8_t bytes[3]{};
+  storeBitsToByte<8>(0xAA, bytes, 0);
+  ASSERT_EQ(bytes[0], 0xAA);
+  ASSERT_EQ(bytes[1], 0);
+  ASSERT_EQ(bytes[2], 0);
+  storeBitsToByte<4>(0x5, bytes, 8);
+  ASSERT_EQ(bytes[0], 0xAA);
+  ASSERT_EQ(bytes[1], 0x5);
+  ASSERT_EQ(bytes[2], 0);
+  storeBitsToByte<4>(0xA, bytes, 12);
+  ASSERT_EQ(bytes[0], 0xAA);
+  ASSERT_EQ(bytes[1], 0xA5);
+  ASSERT_EQ(bytes[2], 0);
+}
+
 } // namespace bits
 } // namespace velox
 } // namespace facebook

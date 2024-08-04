@@ -23,8 +23,11 @@
 
 #include <aws/s3/S3Errors.h>
 #include <aws/s3/model/HeadObjectResult.h>
+#include <folly/Uri.h>
 
 #include "velox/common/base/Exceptions.h"
+
+#include <fmt/format.h>
 
 namespace facebook::velox {
 
@@ -154,21 +157,63 @@ inline std::string getRequestID(
 } // namespace
 
 /// Only Amazon (amz) and Alibaba (oss) request IDs are supported.
-#define VELOX_CHECK_AWS_OUTCOME(outcome, errorMsgPrefix, bucket, key)                                                          \
-  {                                                                                                                            \
-    if (!outcome.IsSuccess()) {                                                                                                \
-      auto error = outcome.GetError();                                                                                         \
-      VELOX_FAIL(                                                                                                              \
-          "{} due to: '{}'. Path:'{}', SDK Error Type:{}, HTTP Status Code:{}, S3 Service:'{}', Message:'{}', RequestID:'{}'", \
-          errorMsgPrefix,                                                                                                      \
-          getErrorStringFromS3Error(error),                                                                                    \
-          s3URI(bucket, key),                                                                                                  \
-          error.GetErrorType(),                                                                                                \
-          error.GetResponseCode(),                                                                                             \
-          getS3BackendService(error.GetResponseHeaders()),                                                                     \
-          error.GetMessage(),                                                                                                  \
-          getRequestID(error.GetResponseHeaders()))                                                                            \
-    }                                                                                                                          \
+#define VELOX_CHECK_AWS_OUTCOME(outcome, errorMsgPrefix, bucket, key)                                                           \
+  {                                                                                                                             \
+    if (!outcome.IsSuccess()) {                                                                                                 \
+      auto error = outcome.GetError();                                                                                          \
+      auto errMsg = fmt::format(                                                                                                \
+          "{} due to: '{}'. Path:'{}', SDK Error Type:{}, HTTP Status Code:{}, S3 Service:'{}', Message:'{}', RequestID:'{}'.", \
+          errorMsgPrefix,                                                                                                       \
+          getErrorStringFromS3Error(error),                                                                                     \
+          s3URI(bucket, key),                                                                                                   \
+          static_cast<int>(error.GetErrorType()),                                                                               \
+          error.GetResponseCode(),                                                                                              \
+          getS3BackendService(error.GetResponseHeaders()),                                                                      \
+          error.GetMessage(),                                                                                                   \
+          getRequestID(error.GetResponseHeaders()));                                                                            \
+      if (IsRetryableHttpResponseCode(error.GetResponseCode())) {                                                               \
+        auto retryHint = fmt::format(                                                                                           \
+            " Request failed after retrying {} times. Try increasing the value of 'hive.s3.max-attempts'.",                     \
+            outcome.GetRetryCount());                                                                                           \
+        errMsg.append(retryHint);                                                                                               \
+      }                                                                                                                         \
+      if (error.GetResponseCode() == Aws::Http::HttpResponseCode::NOT_FOUND) {                                                  \
+        VELOX_FILE_NOT_FOUND_ERROR(errMsg);                                                                                     \
+      }                                                                                                                         \
+      VELOX_FAIL(errMsg)                                                                                                        \
+    }                                                                                                                           \
   }
 
+bool isHostExcludedFromProxy(
+    const std::string& hostname,
+    const std::string& noProxyList);
+
+std::string getHttpProxyEnvVar();
+std::string getHttpsProxyEnvVar();
+std::string getNoProxyEnvVar();
+
+class S3ProxyConfigurationBuilder {
+ public:
+  S3ProxyConfigurationBuilder(const std::string& s3Endpoint)
+      : s3Endpoint_(s3Endpoint){};
+
+  S3ProxyConfigurationBuilder& useSsl(const bool& useSsl) {
+    useSsl_ = useSsl;
+    return *this;
+  }
+
+  std::optional<folly::Uri> build();
+
+ private:
+  const std::string s3Endpoint_;
+  bool useSsl_;
+};
+
 } // namespace facebook::velox
+
+template <>
+struct fmt::formatter<Aws::Http::HttpResponseCode> : formatter<int> {
+  auto format(Aws::Http::HttpResponseCode s, format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

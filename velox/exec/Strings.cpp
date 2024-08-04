@@ -29,7 +29,7 @@ StringView Strings::append(StringView value, HashStringAllocator& allocator) {
   const int32_t requiredBytes =
       value.size() + HashStringAllocator::Header::kContinuedPtrSize + 8;
 
-  ByteStream stream(&allocator);
+  ByteOutputStream stream(&allocator);
   if (firstBlock == nullptr) {
     // Allocate first block.
     currentBlock = allocator.newWrite(stream, requiredBytes);
@@ -39,19 +39,20 @@ StringView Strings::append(StringView value, HashStringAllocator& allocator) {
   }
 
   // Check if there is enough space left.
-  if (stream.ranges().back().size < requiredBytes) {
+  auto& currentRange = stream.ranges().back();
+  if (currentRange.size - currentRange.position < requiredBytes) {
     // Not enough space. Allocate new block.
     ByteRange newRange;
     allocator.newContiguousRange(requiredBytes, &newRange);
 
-    stream.setRange(newRange);
+    stream.setRange(newRange, 0);
   }
 
   VELOX_DCHECK_LE(requiredBytes, stream.ranges().back().size);
 
   // Copy the string and return a StringView over the copy.
   char* start = stream.writePosition();
-  stream.appendStringPiece(folly::StringPiece(value.data(), value.size()));
+  stream.appendStringView(value);
   currentBlock = allocator.finishWrite(stream, maxStringSize * 4).second;
   return StringView(start, value.size());
 }

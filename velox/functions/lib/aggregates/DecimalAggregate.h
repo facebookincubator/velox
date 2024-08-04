@@ -74,20 +74,11 @@ class DecimalAggregate : public exec::Aggregate {
   explicit DecimalAggregate(TypePtr resultType) : exec::Aggregate(resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(DecimalAggregate);
+    return sizeof(LongDecimalWithOverflowState);
   }
 
   int32_t accumulatorAlignmentSize() const override {
     return static_cast<int32_t>(sizeof(int128_t));
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) LongDecimalWithOverflowState();
-    }
   }
 
   void addRawInput(
@@ -132,9 +123,6 @@ class DecimalAggregate : public exec::Aggregate {
     decodedRaw_.decode(*args[0], rows);
     if (decodedRaw_.isConstantMapping()) {
       if (!decodedRaw_.isNullAt(0)) {
-        const auto numRows = rows.countSelected();
-        int64_t overflow = 0;
-        int128_t totalSum{0};
         auto value = decodedRaw_.valueAt<TInputType>(0);
         rows.template applyToSelected([&](vector_size_t i) {
           updateNonNullValue(group, TResultType(value));
@@ -327,6 +315,16 @@ class DecimalAggregate : public exec::Aggregate {
     accumulator->overflow +=
         DecimalUtil::addWithOverflow(accumulator->sum, value, accumulator->sum);
     accumulator->count += 1;
+  }
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) LongDecimalWithOverflowState();
+    }
   }
 
  private:

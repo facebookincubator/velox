@@ -25,6 +25,10 @@ using namespace facebook::velox;
 class HivePartitionFunctionTest : public ::testing::Test,
                                   public test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   void assertPartitions(
       const VectorPtr& vector,
       int bucketCount,
@@ -726,4 +730,18 @@ TEST_F(HivePartitionFunctionTest, function) {
       ASSERT_EQ(partitionIdsWithMap[j], partitionIdsWithoutMap[j]) << j;
     }
   }
+}
+
+TEST_F(HivePartitionFunctionTest, unknown) {
+  auto values = makeAllNullFlatVector<UnknownValue>(4);
+
+  assertPartitions(values, 1, {0, 0, 0, 0});
+  assertPartitions(values, 2, {0, 0, 0, 0});
+  assertPartitions(values, 500, {0, 0, 0, 0});
+  assertPartitions(values, 997, {0, 0, 0, 0});
+
+  assertPartitionsWithConstChannel(values, 1);
+  assertPartitionsWithConstChannel(values, 2);
+  assertPartitionsWithConstChannel(values, 500);
+  assertPartitionsWithConstChannel(values, 997);
 }

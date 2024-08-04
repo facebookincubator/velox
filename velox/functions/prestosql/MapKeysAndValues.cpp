@@ -89,7 +89,7 @@ class MapKeysFunction : public MapKeyValueFunction {
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // map(K,V) -> array(K)
     return {exec::FunctionSignatureBuilder()
-                .knownTypeVariable("K")
+                .typeVariable("K")
                 .typeVariable("V")
                 .returnType("array(K)")
                 .argumentType("map(K,V)")
@@ -107,7 +107,7 @@ class MapValuesFunction : public MapKeyValueFunction {
       exec::EvalCtx& context) const override {
     VELOX_CHECK(
         arg->typeKind() == TypeKind::MAP,
-        "Unsupported type for map_keys function {}",
+        "Unsupported type for map_values function {}",
         mapTypeKindToName(arg->typeKind()));
 
     auto mapVector = arg->as<MapVector>();
@@ -126,7 +126,7 @@ class MapValuesFunction : public MapKeyValueFunction {
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // map(K,V) -> array(V)
     return {exec::FunctionSignatureBuilder()
-                .knownTypeVariable("K")
+                .typeVariable("K")
                 .typeVariable("V")
                 .returnType("array(V)")
                 .argumentType("map(K,V)")

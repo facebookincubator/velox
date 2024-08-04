@@ -102,14 +102,14 @@ struct FilterNode {
     return name == other.name;
   }
 
-  bool match(const std::string_view& name) const {
+  bool match(const std::string_view& name_to_match_2) const {
     // no match if any is invalid
     if (!valid()) {
       // even current is invlaid
       return false;
     }
 
-    return this->name == name;
+    return name == name_to_match_2;
   }
 
   // expect the incoming list has all valid nodes
@@ -117,8 +117,8 @@ struct FilterNode {
   std::vector<FilterNode>::const_iterator in(
       const std::vector<FilterNode>& list) const {
     return std::find_if(
-        list.cbegin(), list.cend(), [this](const FilterNode& node) {
-          return node.match(*this);
+        list.cbegin(), list.cend(), [this](const FilterNode& filter_node_2) {
+          return filter_node_2.match(*this);
         });
   }
 
@@ -166,7 +166,7 @@ class FilterType {
   // request type in the filter tree node
   std::shared_ptr<const velox::Type> requestType_;
   // data type in the filter tree node
-  std::shared_ptr<const velox::Type> dataType_;
+  std::shared_ptr<const velox::Type> fileType_;
   // sequence filter for given node - empty if no filter
   SeqFilter seqFilter_;
 
@@ -191,7 +191,7 @@ class FilterType {
         read_{node.node == 0},
         inContent_{inContent},
         requestType_{std::move(type)},
-        dataType_{std::move(contentType)},
+        fileType_{std::move(contentType)},
         seqFilter_{std::make_shared<std::unordered_set<size_t>>()} {}
 
   FilterType(
@@ -236,11 +236,11 @@ class FilterType {
   }
 
   inline const std::shared_ptr<const velox::Type>& getDataType() const {
-    return dataType_;
+    return fileType_;
   }
 
-  inline void setDataType(const std::shared_ptr<const velox::Type>& dataType) {
-    dataType_ = dataType;
+  inline void setDataType(const std::shared_ptr<const velox::Type>& fileType) {
+    fileType_ = fileType;
   }
 
   inline bool valid() const {
@@ -267,8 +267,8 @@ class FilterType {
     return node_.node == 0;
   }
 
-  inline void addChild(const FilterTypePtr& child) {
-    children_.push_back(child);
+  inline void addChild(FilterTypePtr child) {
+    children_.push_back(std::move(child));
   }
 
   inline void setSequenceFilter(const SeqFilter& seqFilter) {

@@ -55,16 +55,6 @@ class FirstLastAggregateBase
     return 1;
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    Aggregate::setAllNulls(groups, indices);
-
-    for (auto i : indices) {
-      new (groups[i] + Aggregate::offset_) TAccumulator();
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     if constexpr (numeric) {
@@ -112,19 +102,6 @@ class FirstLastAggregateBase
     }
   }
 
-  void destroy(folly::Range<char**> groups) override {
-    if constexpr (!numeric) {
-      for (auto group : groups) {
-        auto accumulator = Aggregate::value<TAccumulator>(group);
-        // If ignoreNull is true and groups are all null, accumulator will not
-        // set.
-        if (accumulator->has_value()) {
-          accumulator->value().destroy(Aggregate::allocator_);
-        }
-      }
-    }
-  }
-
  protected:
   void decodeIntermediateRows(
       const SelectivityVector& rows,
@@ -138,6 +115,31 @@ class FirstLastAggregateBase
         2,
         "intermediate results must have 2 children");
     this->decodedValue_.decode(*rowVector->childAt(0), rows);
+  }
+
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    Aggregate::setAllNulls(groups, indices);
+
+    for (auto i : indices) {
+      new (groups[i] + Aggregate::offset_) TAccumulator();
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    if constexpr (!numeric) {
+      for (auto group : groups) {
+        if (BaseAggregate::isInitialized(group)) {
+          auto accumulator = Aggregate::value<TAccumulator>(group);
+          // If ignoreNull is true and groups are all null, accumulator will not
+          // set.
+          if (accumulator->has_value()) {
+            accumulator->value().destroy(Aggregate::allocator_);
+          }
+        }
+      }
+    }
   }
 
   DecodedVector decodedValue_;
@@ -429,7 +431,10 @@ class LastAggregate : public FirstLastAggregateBase<numeric, TData> {
 } // namespace
 
 template <template <bool B1, typename T, bool B2> class TClass, bool ignoreNull>
-AggregateRegistrationResult registerFirstLast(const std::string& name) {
+AggregateRegistrationResult registerFirstLast(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures = {
       AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -499,14 +504,23 @@ AggregateRegistrationResult registerFirstLast(const std::string& name) {
                 name,
                 inputType->toString());
         }
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
-void registerFirstLastAggregates(const std::string& prefix) {
-  registerFirstLast<FirstAggregate, false>(prefix + "first");
-  registerFirstLast<FirstAggregate, true>(prefix + "first_ignore_null");
-  registerFirstLast<LastAggregate, false>(prefix + "last");
-  registerFirstLast<LastAggregate, true>(prefix + "last_ignore_null");
+void registerFirstLastAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerFirstLast<FirstAggregate, false>(
+      prefix + "first", withCompanionFunctions, overwrite);
+  registerFirstLast<FirstAggregate, true>(
+      prefix + "first_ignore_null", withCompanionFunctions, overwrite);
+  registerFirstLast<LastAggregate, false>(
+      prefix + "last", withCompanionFunctions, overwrite);
+  registerFirstLast<LastAggregate, true>(
+      prefix + "last_ignore_null", withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql

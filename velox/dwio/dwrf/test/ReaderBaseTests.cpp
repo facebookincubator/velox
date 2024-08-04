@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 #include <cstring>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/common/exception/Exception.h"
@@ -48,8 +49,12 @@ void addStats(
 
 class EncryptedStatsTest : public Test {
  protected:
+  static void SetUpTestCase() {
+    MemoryManager::testingSetInstance({});
+  }
+
   void SetUp() override {
-    pool_ = defaultMemoryManager().addRootPool("EncryptedStatsTest");
+    pool_ = memoryManager()->addRootPool("EncryptedStatsTest");
     sinkPool_ = pool_->addLeafChild("sink");
     ProtoWriter writer{pool_, *sinkPool_};
     auto& context = const_cast<const ProtoWriter&>(writer).getContext();
@@ -173,7 +178,7 @@ TEST_F(EncryptedStatsTest, getColumnStatisticsKeyNotLoaded) {
 std::unique_ptr<ReaderBase> createCorruptedFileReader(
     uint64_t footerLen,
     uint32_t cacheLen) {
-  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
+  auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
   MemorySink sink{1024, {.pool = pool.get()}};
   DataBufferHolder holder{*pool, 1024, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
   BufferedOutputStream output{holder};
@@ -206,14 +211,23 @@ std::unique_ptr<ReaderBase> createCorruptedFileReader(
 
   sink.write(std::move(buf));
   auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(
-      std::string_view(sink.data(), sink.size()));
+      std::string(sink.data(), sink.size()));
   return std::make_unique<ReaderBase>(
       *pool, std::make_unique<BufferedInput>(readFile, *pool));
 }
 
-TEST(ReaderBaseTest, InvalidPostScriptThrows) {
-  EXPECT_THROW(
-      { createCorruptedFileReader(1'000'000, 0); }, exception::LoggedException);
-  EXPECT_THROW(
-      { createCorruptedFileReader(0, 1'000'000); }, exception::LoggedException);
+class ReaderBaseTest : public Test {
+ protected:
+  static void SetUpTestCase() {
+    MemoryManager::testingSetInstance({});
+  }
+};
+
+TEST_F(ReaderBaseTest, InvalidPostScriptThrows) {
+  VELOX_ASSERT_THROW(
+      createCorruptedFileReader(1'000'000, 0),
+      "Corrupted file, footer size is invalid");
+  VELOX_ASSERT_THROW(
+      createCorruptedFileReader(0, 1'000'000),
+      "Corrupted file, cache size is invalid");
 }

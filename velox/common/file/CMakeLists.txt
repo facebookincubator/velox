@@ -14,15 +14,12 @@
 
 # for generated headers
 include_directories(.)
-add_library(velox_file File.cpp FileSystems.cpp Utils.cpp)
-target_link_libraries(
+velox_add_library(velox_file File.cpp FileSystems.cpp Utils.cpp)
+velox_link_libraries(
   velox_file
   PUBLIC velox_exception Folly::folly
   PRIVATE velox_common_base fmt::fmt glog::glog)
 
-if(${VELOX_BUILD_TESTING})
+if(${VELOX_BUILD_TESTING} OR ${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests)
-endif()
-if(${VELOX_ENABLE_BENCHMARKS})
-  add_subdirectory(benchmark)
 endif()

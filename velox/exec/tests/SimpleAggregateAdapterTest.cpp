@@ -17,7 +17,7 @@
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -34,7 +34,6 @@ class SimpleAverageAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
 
     registerSimpleAverageAggregate(kSimpleAvg);
   }
@@ -114,7 +113,6 @@ class SimpleArrayAggAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    disallowInputShuffle();
 
     registerSimpleArrayAggAggregate(kSimpleArrayAgg);
   }
@@ -301,6 +299,8 @@ TEST_F(SimpleArrayAggAggregationTest, trackRowSize) {
         offset,
         RowContainer::nullByte(0),
         RowContainer::nullMask(0),
+        RowContainer::initializedByte(0),
+        RowContainer::initializedMask(0),
         rowSizeOffset);
 
     // Make two groups for odd and even rows.
@@ -331,9 +331,9 @@ TEST_F(SimpleArrayAggAggregationTest, trackRowSize) {
       }
     }
 
-    VELOX_CHECK_GT(groups[0][rowSizeOffset], 0);
+    VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[0] + rowSizeOffset), 0);
     if (!testGlobal) {
-      VELOX_CHECK_GT(groups[1][rowSizeOffset], 0);
+      VELOX_CHECK_GT(*reinterpret_cast<int32_t*>(groups[1] + rowSizeOffset), 0);
     }
   };
 
@@ -410,7 +410,8 @@ class CountNullsAggregate {
   using AccumulatorType = Accumulator;
 };
 
-bool registerSimpleCountNullsAggregate(const std::string& name) {
+exec::AggregateRegistrationResult registerSimpleCountNullsAggregate(
+    const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("bigint")
@@ -418,7 +419,7 @@ bool registerSimpleCountNullsAggregate(const std::string& name) {
           .argumentType("double")
           .build()};
 
-  exec::registerAggregateFunction(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -431,8 +432,9 @@ bool registerSimpleCountNullsAggregate(const std::string& name) {
             argTypes.size(), 1, "{} takes at most one argument", name);
         return std::make_unique<SimpleAggregateAdapter<CountNullsAggregate>>(
             resultType);
-      });
-  return true;
+      },
+      false /*registerCompanionFunctions*/,
+      true /*overwrite*/);
 }
 
 void registerSimpleCountNullsAggregate() {

@@ -32,6 +32,10 @@ namespace facebook::velox::test {
 
 class DecodedVectorTest : public testing::Test, public VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   DecodedVectorTest() : allSelected_(10010), halfSelected_(10010) {
     allSelected_.setAll();
     halfSelected_.setAll();
@@ -40,19 +44,26 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     }
   }
 
-  void assertNoNulls(DecodedVector& decodedVector) {
-    ASSERT_TRUE(decodedVector.nulls() == nullptr);
+  void assertNoNulls(
+      DecodedVector& decodedVector,
+      const SelectivityVector* rows = nullptr) {
+    ASSERT_TRUE(decodedVector.nulls(nullptr) == nullptr);
     for (auto i = 0; i < decodedVector.size(); ++i) {
       ASSERT_FALSE(decodedVector.isNullAt(i));
     }
   }
 
-  void assertNulls(const VectorPtr& vector, DecodedVector& decodedVector) {
+  void assertNulls(
+      const VectorPtr& vector,
+      DecodedVector& decodedVector,
+      const SelectivityVector* rows = nullptr) {
     SCOPED_TRACE(vector->toString(true));
-    ASSERT_TRUE(decodedVector.nulls() != nullptr);
+    ASSERT_TRUE(decodedVector.nulls(rows) != nullptr);
     for (auto i = 0; i < decodedVector.size(); ++i) {
       ASSERT_EQ(decodedVector.isNullAt(i), vector->isNullAt(i));
-      ASSERT_EQ(bits::isBitNull(decodedVector.nulls(), i), vector->isNullAt(i));
+      ASSERT_EQ(
+          bits::isBitNull(decodedVector.nulls(nullptr), i),
+          vector->isNullAt(i));
     }
   }
 
@@ -137,7 +148,7 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     auto check = [&](auto& decoded) {
       EXPECT_TRUE(decoded.isConstantMapping());
       EXPECT_TRUE(!decoded.isIdentityMapping());
-      EXPECT_TRUE(decoded.nulls() == nullptr);
+      EXPECT_TRUE(decoded.nulls(nullptr) == nullptr);
       for (int32_t i = 0; i < 100; i++) {
         EXPECT_FALSE(decoded.isNullAt(i));
         EXPECT_EQ(decoded.template valueAt<T>(i), value);
@@ -167,13 +178,13 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
       EXPECT_EQ(base->encoding(), decoded.base()->encoding());
       bool isNull = base->isNullAt(index);
       if (isNull) {
-        EXPECT_TRUE(decoded.nulls() != nullptr);
+        EXPECT_TRUE(decoded.nulls(nullptr) != nullptr);
         for (int32_t i = 0; i < 100; i++) {
           EXPECT_TRUE(decoded.isNullAt(i)) << "at " << i;
-          EXPECT_TRUE(bits::isBitNull(decoded.nulls(), i)) << "at " << i;
+          EXPECT_TRUE(bits::isBitNull(decoded.nulls(nullptr), i)) << "at " << i;
         }
       } else {
-        EXPECT_TRUE(decoded.nulls() == nullptr);
+        EXPECT_TRUE(decoded.nulls(nullptr) == nullptr);
         for (int32_t i = 0; i < 100; i++) {
           EXPECT_FALSE(decoded.isNullAt(i));
           EXPECT_TRUE(
@@ -243,10 +254,10 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
       }
       EXPECT_TRUE(decoded.isConstantMapping());
       EXPECT_TRUE(!decoded.isIdentityMapping());
-      ASSERT_TRUE(decoded.nulls() != nullptr);
+      ASSERT_TRUE(decoded.nulls(nullptr) != nullptr);
       for (int32_t i = 0; i < 100; i++) {
         EXPECT_TRUE(decoded.isNullAt(i));
-        EXPECT_TRUE(bits::isBitNull(decoded.nulls(), i));
+        EXPECT_TRUE(bits::isBitNull(decoded.nulls(nullptr), i));
       }
     };
 
@@ -328,7 +339,7 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
     auto check = [&](auto& decoded) {
       ASSERT_FALSE(decoded.isIdentityMapping());
       ASSERT_FALSE(decoded.isConstantMapping());
-      ASSERT_TRUE(decoded.nulls() != nullptr);
+      ASSERT_TRUE(decoded.nulls(nullptr) != nullptr);
       for (auto i = 0; i < dictionarySize; i++) {
         if (i % 2 == 0) {
           ASSERT_TRUE(decoded.isNullAt(i)) << "at " << i;
@@ -337,7 +348,8 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
         }
         ASSERT_EQ(decoded.isNullAt(i), dictionaryVector->isNullAt(i));
         ASSERT_EQ(
-            bits::isBitNull(decoded.nulls(), i), dictionaryVector->isNullAt(i));
+            bits::isBitNull(decoded.nulls(nullptr), i),
+            dictionaryVector->isNullAt(i));
       }
     };
 
@@ -602,7 +614,7 @@ TEST_F(DecodedVectorTest, dictionaryOverLazy) {
     checkUnloaded(decoded);
   }
   dictionaryVector->loadedVector();
-  EXPECT_TRUE(dictionaryVector->valueVector()->as<LazyVector>()->isLoaded());
+  EXPECT_TRUE(!dictionaryVector->valueVector()->isLazy());
   {
     SelectivityVector selection(dictionarySize);
     DecodedVector decoded(*dictionaryVector, selection, false);
@@ -1183,14 +1195,14 @@ TEST_F(DecodedVectorTest, flatNulls) {
   }
 
   // Flat vector with nulls.
-  auto flatWithNulls = makeFlatVector<int64_t>(
-      100, [](auto row) { return row; }, nullEvery(7));
+  auto flatWithNulls =
+      makeFlatVector<int64_t>(100, [](auto row) { return row; }, nullEvery(7));
 
   auto check = [&](auto& d) {
-    ASSERT_TRUE(d.nulls() != nullptr);
+    ASSERT_TRUE(d.nulls(nullptr) != nullptr);
     for (auto i = 0; i < 100; ++i) {
       ASSERT_EQ(d.isNullAt(i), i % 7 == 0);
-      ASSERT_EQ(bits::isBitNull(d.nulls(), i), i % 7 == 0);
+      ASSERT_EQ(bits::isBitNull(d.nulls(nullptr), i), i % 7 == 0);
     }
   };
 
@@ -1211,13 +1223,13 @@ TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {
   DecodedVector d;
 
   auto flatNoNulls = makeFlatVector<int64_t>(100, [](auto row) { return row; });
-  auto flatWithNulls = makeFlatVector<int64_t>(
-      100, [](auto row) { return row; }, nullEvery(7));
+  auto flatWithNulls =
+      makeFlatVector<int64_t>(100, [](auto row) { return row; }, nullEvery(7));
 
   auto decodeAndCheckNulls = [&](auto& vector) {
     {
       d.decode(*vector, rows);
-      assertNulls(vector, d);
+      assertNulls(vector, d, &rows);
     }
 
     {
@@ -1229,7 +1241,7 @@ TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {
   auto decodeAndCheckNotNulls = [&](auto& vector) {
     {
       d.decode(*vector, rows);
-      assertNoNulls(d);
+      assertNoNulls(d, &rows);
     }
 
     {
@@ -1425,6 +1437,53 @@ TEST_F(DecodedVectorTest, previousIndicesInReUsedDecodedVector) {
   auto rawIndices = wrapping.indices->as<vector_size_t>();
   // Ensure the previous index on the unselected row is reset.
   EXPECT_EQ(rawIndices[0], 0);
+}
+
+TEST_F(DecodedVectorTest, toString) {
+  auto vector = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  {
+    DecodedVector decoded(*vector);
+    EXPECT_EQ("1", decoded.toString(0));
+    EXPECT_EQ("null", decoded.toString(1));
+    EXPECT_EQ("3", decoded.toString(2));
+  }
+
+  auto dict = wrapInDictionary(makeIndicesInReverse(3), vector);
+  {
+    DecodedVector decoded(*dict);
+    EXPECT_EQ("3", decoded.toString(0));
+    EXPECT_EQ("null", decoded.toString(1));
+    EXPECT_EQ("1", decoded.toString(2));
+  }
+
+  auto constant = makeConstant<int32_t>(123, 10);
+  {
+    DecodedVector decoded(*constant);
+    EXPECT_EQ("123", decoded.toString(0));
+    EXPECT_EQ("123", decoded.toString(1));
+    EXPECT_EQ("123", decoded.toString(2));
+  }
+
+  constant = makeNullConstant(TypeKind::INTEGER, 5);
+  {
+    DecodedVector decoded(*constant);
+    EXPECT_EQ("null", decoded.toString(0));
+    EXPECT_EQ("null", decoded.toString(1));
+    EXPECT_EQ("null", decoded.toString(2));
+  }
+
+  dict = BaseVector::wrapInDictionary(
+      makeNulls(10, nullEvery(2)),
+      makeIndices(10, [](auto row) { return row % 3; }),
+      10,
+      makeFlatVector<int32_t>({1, 2, 3}));
+  {
+    DecodedVector decoded(*dict);
+    EXPECT_EQ("null", decoded.toString(0));
+    EXPECT_EQ("2", decoded.toString(1));
+    EXPECT_EQ("null", decoded.toString(2));
+    EXPECT_EQ("1", decoded.toString(3));
+  }
 }
 
 } // namespace facebook::velox::test

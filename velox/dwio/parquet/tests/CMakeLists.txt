@@ -15,6 +15,8 @@
 set(TEST_LINK_LIBS
     velox_dwio_common_test_utils
     velox_vector_test_lib
+    velox_exec_test_lib
+    velox_temp_path
     gtest
     gtest_main
     gmock
@@ -41,3 +43,6 @@ target_link_libraries(
   velox_aggregates
   velox_tpch_gen
   ${TEST_LINK_LIBS})
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
+     DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

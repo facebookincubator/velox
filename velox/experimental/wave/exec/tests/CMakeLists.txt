@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_wave_exec_test FilterProjectTest.cpp Main.cpp)
+add_subdirectory(utils)
 
-set_target_properties(velox_wave_exec_test PROPERTIES CUDA_ARCHITECTURES native)
+add_executable(velox_wave_exec_test FilterProjectTest.cpp TableScanTest.cpp
+                                    AggregationTest.cpp Main.cpp)
 
 add_test(velox_wave_exec_test velox_wave_exec_test)
 
 target_link_libraries(
   velox_wave_exec_test
   velox_wave_exec
+  velox_wave_mock_reader
   velox_aggregates
   velox_dwio_common
   velox_dwio_common_exception

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -55,7 +56,6 @@ class MapBuilder {
 
     BufferPtr valueNulls = allocateNulls(items, &pool);
     auto* valueNullsPtr = valueNulls->asMutable<uint64_t>();
-    size_t valueNullCount = 0;
 
     auto i = 0;
     auto offset = 0;
@@ -73,7 +73,6 @@ class MapBuilder {
             valuesPtr[offset] = *pair.second;
             bits::clearNull(valueNullsPtr, offset);
           } else {
-            valueNullCount++;
             bits::setNull(valueNullsPtr, offset);
           }
           ++offset;

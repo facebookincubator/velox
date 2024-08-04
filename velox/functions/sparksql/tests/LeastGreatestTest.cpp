@@ -27,8 +27,8 @@ class LeastTest : public SparkFunctionBaseTest {
       std::optional<T> arg1,
       std::optional<T> arg2,
       const TypePtr& type = CppToType<T>::create()) {
-    return evaluateOnce<T, T>(
-        "least(c0, c1, c2)", {arg0, arg1, arg2}, {type, type, type});
+    return evaluateOnce<T>(
+        "least(c0, c1, c2)", {type, type, type}, arg0, arg1, arg2);
   }
 
   template <typename T>
@@ -38,10 +38,13 @@ class LeastTest : public SparkFunctionBaseTest {
       std::optional<T> arg2,
       std::optional<T> arg3,
       const TypePtr& type = CppToType<T>::create()) {
-    return evaluateOnce<T, T>(
+    return evaluateOnce<T>(
         "least(c0, c1, c2, c3)",
-        {arg0, arg1, arg2, arg3},
-        {type, type, type, type});
+        {type, type, type, type},
+        arg0,
+        arg1,
+        arg2,
+        arg3);
   }
 
   template <typename T>
@@ -176,6 +179,14 @@ TEST_F(LeastTest, date) {
   EXPECT_EQ(least<int32_t>(100, 1000, 10000, DATE()), 100);
 }
 
+TEST_F(LeastTest, decimal) {
+  flat<int64_t>(DECIMAL(6, 2));
+  constant<int64_t>(DECIMAL(6, 2));
+
+  flat<int128_t>(DECIMAL(28, 12));
+  constant<int128_t>(DECIMAL(28, 12));
+}
+
 class GreatestTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
@@ -184,8 +195,8 @@ class GreatestTest : public SparkFunctionBaseTest {
       std::optional<T> arg1,
       std::optional<T> arg2,
       const TypePtr& type = CppToType<T>::create()) {
-    return evaluateOnce<T, T>(
-        "greatest(c0, c1, c2)", {arg0, arg1, arg2}, {type, type, type});
+    return evaluateOnce<T>(
+        "greatest(c0, c1, c2)", {type, type, type}, arg0, arg1, arg2);
   }
 
   template <typename T>
@@ -195,10 +206,13 @@ class GreatestTest : public SparkFunctionBaseTest {
       std::optional<T> arg2,
       std::optional<T> arg3,
       const TypePtr& type = CppToType<T>::create()) {
-    return evaluateOnce<T, T>(
+    return evaluateOnce<T>(
         "greatest(c0, c1, c2, c3)",
-        {arg0, arg1, arg2, arg3},
-        {type, type, type, type});
+        {type, type, type, type},
+        arg0,
+        arg1,
+        arg2,
+        arg3);
   }
 
   template <typename T>
@@ -332,6 +346,14 @@ TEST_F(GreatestTest, timestamp) {
 
 TEST_F(GreatestTest, date) {
   EXPECT_EQ(greatest<int32_t>(100, 1000, 10000, DATE()), 10000);
+}
+
+TEST_F(GreatestTest, decimal) {
+  flat<int64_t>(DECIMAL(6, 2));
+  constant<int64_t>(DECIMAL(6, 2));
+
+  flat<int128_t>(DECIMAL(28, 12));
+  constant<int128_t>(DECIMAL(28, 12));
 }
 
 } // namespace

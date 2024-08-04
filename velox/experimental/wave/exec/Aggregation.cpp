@@ -20,19 +20,19 @@
 #include "velox/experimental/wave/exec/ToWave.h"
 #include "velox/experimental/wave/exec/Vectors.h"
 
-#define KEY_TYPE_DISPATCH(_func, _kindExpr, ...) \
-  [&]() {                                        \
-    auto _kind = (_kindExpr);                    \
-    switch (_kind) {                             \
-      case PhysicalType::kInt32:                 \
-        return _func<int32_t>(__VA_ARGS__);      \
-      case PhysicalType::kInt64:                 \
-        return _func<int64_t>(__VA_ARGS__);      \
-      case PhysicalType::kString:                \
-        return _func<StringView>(__VA_ARGS__);   \
-      default:                                   \
-        VELOX_UNSUPPORTED("{}", _kind);          \
-    };                                           \
+#define KEY_TYPE_DISPATCH(_func, _kindExpr, ...)              \
+  [&]() {                                                     \
+    auto _kind = (_kindExpr);                                 \
+    switch (_kind) {                                          \
+      case PhysicalType::kInt32:                              \
+        return _func<int32_t>(__VA_ARGS__);                   \
+      case PhysicalType::kInt64:                              \
+        return _func<int64_t>(__VA_ARGS__);                   \
+      case PhysicalType::kString:                             \
+        return _func<StringView>(__VA_ARGS__);                \
+      default:                                                \
+        VELOX_UNSUPPORTED("{}", static_cast<int32_t>(_kind)); \
+    };                                                        \
   }()
 
 namespace facebook::velox::wave {
@@ -80,10 +80,10 @@ Aggregation::Aggregation(
     const core::AggregationNode& node,
     const std::shared_ptr<aggregation::AggregateFunctionRegistry>&
         functionRegistry)
-    : WaveOperator(state, node.outputType()),
+    : WaveOperator(state, node.outputType(), node.id()),
       arena_(&state.arena()),
       functionRegistry_(functionRegistry) {
-  VELOX_CHECK_EQ(node.step(), core::AggregationNode::Step::kSingle);
+  VELOX_CHECK(node.step() == core::AggregationNode::Step::kSingle);
   VELOX_CHECK(node.preGroupedKeys().empty());
   auto& inputType = node.sources()[0]->outputType();
   container_ = arena_->allocate<aggregation::GroupsContainer>(
@@ -279,15 +279,15 @@ void Aggregation::flush(bool noMoreInput) {
   flushDone_.record(*flushStream_);
 }
 
-int32_t Aggregation::canAdvance() {
+AdvanceResult Aggregation::canAdvance(WaveStream& stream) {
   if (!noMoreInput_ || finished_) {
-    return 0;
+    return {};
   }
   while (!inputs_.empty()) {
     waitFlushDone();
     flush(true);
   }
-  return container_->actualNumGroups;
+  return {.numRows = container_->actualNumGroups};
 }
 
 void Aggregation::schedule(WaveStream& waveStream, int32_t maxRows) {
@@ -299,12 +299,21 @@ void Aggregation::schedule(WaveStream& waveStream, int32_t maxRows) {
       numColumns, exec->deviceData.emplace_back());
   auto* instructions = arena_->allocate<aggregation::Instruction>(
       numColumns, exec->deviceData.emplace_back());
+  auto numBlocks = bits::roundUp(maxRows, kBlockSize) / kBlockSize;
+  auto* rowStatus =
+      arena_->allocate<BlockStatus>(numBlocks, exec->deviceData.emplace_back());
+  bzero(rowStatus, numBlocks * sizeof(BlockStatus));
+  for (auto i = 0; i < numBlocks; ++i) {
+    rowStatus[i].numRows =
+        i == numBlocks - 1 ? maxRows - kBlockSize * i : kBlockSize;
+  }
   auto* status = arena_->allocate<BlockStatus>(
       numColumns, exec->deviceData.emplace_back());
   bzero(status, numColumns * sizeof(BlockStatus));
   exec->operands =
       arena_->allocate<Operand>(numColumns, exec->deviceData.emplace_back());
   exec->outputOperands = outputIds_;
+  exec->firstOutputOperandIdx = 0;
   for (int i = 0; i < numColumns; ++i) {
     auto column = WaveVector::create(outputType_->childAt(i), *arena_);
     column->resize(maxRows, false);
@@ -333,6 +342,9 @@ void Aggregation::schedule(WaveStream& waveStream, int32_t maxRows) {
         int sharedSize = std::max(
             aggregation::ExtractKeys::sharedSize(),
             aggregation::ExtractValues::sharedSize());
+        auto control = std::make_unique<LaunchControl>(id_, maxRows);
+        control->params.status = rowStatus;
+        waveStream.addLaunchControl(id_, std::move(control));
         aggregation::call(
             *stream, numColumns, programs, nullptr, status, sharedSize);
         waveStream.markLaunch(*stream, *exes[0]);

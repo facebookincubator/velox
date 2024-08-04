@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include "velox/common/base/CompareFlags.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -123,12 +125,35 @@ std::shared_ptr<exec::VectorFunction> makeGreaterThanOrEqual(
 
 inline std::vector<std::shared_ptr<exec::FunctionSignature>>
 comparisonSignatures() {
-  return {exec::FunctionSignatureBuilder()
-              .typeVariable("T")
-              .returnType("boolean")
-              .argumentType("T")
-              .argumentType("T")
-              .build()};
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+  signatures.emplace_back(exec::FunctionSignatureBuilder()
+                              .integerVariable("a_precision")
+                              .integerVariable("a_scale")
+                              .returnType("boolean")
+                              .argumentType("DECIMAL(a_precision, a_scale)")
+                              .argumentType("DECIMAL(a_precision, a_scale)")
+                              .build());
+  for (const auto& inputType :
+       {"tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "real",
+        "double",
+        "boolean",
+        "varchar",
+        "varbinary",
+        "timestamp",
+        "date",
+        "interval day to second",
+        "interval year to month"}) {
+    signatures.emplace_back(exec::FunctionSignatureBuilder()
+                                .returnType("boolean")
+                                .argumentType(inputType)
+                                .argumentType(inputType)
+                                .build());
+  }
+  return signatures;
 }
 
 template <typename T>
@@ -143,19 +168,46 @@ struct BetweenFunction {
   }
 };
 
-inline std::vector<std::shared_ptr<exec::FunctionSignature>>
-equalNullSafeSignatures() {
-  return {exec::FunctionSignatureBuilder()
-              .typeVariable("T")
-              .returnType("boolean")
-              .argumentType("T")
-              .argumentType("T")
-              .build()};
-}
-
 std::shared_ptr<exec::VectorFunction> makeEqualToNullSafe(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config);
+
+template <typename T>
+struct EqualToFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  // For arbitrary nested complex types.
+  FOLLY_ALWAYS_INLINE void call(
+      bool& out,
+      const arg_type<Generic<T1>>& lhs,
+      const arg_type<Generic<T1>>& rhs) {
+    static constexpr CompareFlags kFlags =
+        CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+
+    auto result = lhs.compare(rhs, kFlags);
+    out = (result.value() == 0);
+  }
+};
+
+template <typename T>
+struct EqualNullSafeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  // For arbitrary nested complex types.
+  FOLLY_ALWAYS_INLINE void callNullable(
+      bool& out,
+      const arg_type<Generic<T1>>* lhs,
+      const arg_type<Generic<T1>>* rhs) {
+    static constexpr CompareFlags kFlags =
+        CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+    if (!lhs && !rhs) {
+      out = true;
+    } else if (!lhs || !rhs) {
+      out = false;
+    } else {
+      auto result = lhs->compare(*rhs, kFlags);
+      out = (result.value() == 0);
+    }
+  }
+};
 
 } // namespace facebook::velox::functions::sparksql

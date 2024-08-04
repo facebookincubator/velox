@@ -145,11 +145,21 @@ TEST_F(ArrayMaxTest, longVarcharNoNulls) {
 
 // Test documented example.
 TEST_F(ArrayMaxTest, docs) {
-  auto input = makeNullableArrayVector<int32_t>(
-      {{1, 2, 3}, {-1, -2, -2}, {-1, -2, std::nullopt}, {}});
-  auto expected =
-      makeNullableFlatVector<int32_t>({3, -1, std::nullopt, std::nullopt});
-  testArrayMax(input, expected);
+  {
+    auto input = makeNullableArrayVector<int32_t>(
+        {{1, 2, 3}, {-1, -2, -2}, {-1, -2, std::nullopt}, {}});
+    auto expected =
+        makeNullableFlatVector<int32_t>({3, -1, std::nullopt, std::nullopt});
+    testArrayMax(input, expected);
+  }
+  {
+    static const float kNaN = std::numeric_limits<float>::quiet_NaN();
+    static const float kInfinity = std::numeric_limits<float>::infinity();
+    auto input = makeNullableArrayVector<float>(
+        {{-1, kNaN, std::nullopt}, {-1, -2, -3, kNaN}, {kInfinity, kNaN}});
+    auto expected = makeNullableFlatVector<float>({std::nullopt, kNaN, kNaN});
+    testArrayMax(input, expected);
+  }
 }
 
 template <typename Type>
@@ -238,6 +248,7 @@ class ArrayMaxFloatingPointTest : public FunctionBaseTest {
           -0.0003,
           std::numeric_limits<T>::max()},
          {},
+         {std::nullopt},
          {std::numeric_limits<T>::min(), 1.1, 1.22222, 1.33, std::nullopt},
          {-0.00001, -0.0002, 0.0001}});
 
@@ -245,6 +256,7 @@ class ArrayMaxFloatingPointTest : public FunctionBaseTest {
         {0.00001,
          std::nullopt,
          std::numeric_limits<T>::max(),
+         std::nullopt,
          std::nullopt,
          std::nullopt,
          0.0001});
@@ -278,6 +290,22 @@ class ArrayMaxFloatingPointTest : public FunctionBaseTest {
          0.0001});
     testArrayMax(input, expected);
   }
+
+  void testExtremeValues() {
+    static const T kNaN = std::numeric_limits<T>::quiet_NaN();
+    static const T kInfinity = std::numeric_limits<T>::infinity();
+    static const T kNegativeInfinity = -1 * std::numeric_limits<T>::infinity();
+    auto input = makeNullableArrayVector<T>(
+        {{-1, std::nullopt, kNaN},
+         {-1, std::nullopt, 2},
+         {-1, 0, 2},
+         {kNegativeInfinity, kNegativeInfinity},
+         {-1, 2, kInfinity},
+         {kInfinity, kNaN}});
+    auto expected = makeNullableFlatVector<T>(
+        {std::nullopt, std::nullopt, 2, kNegativeInfinity, kInfinity, kNaN});
+    testArrayMax(input, expected);
+  }
 };
 
 } // namespace
@@ -302,4 +330,8 @@ TYPED_TEST(ArrayMaxFloatingPointTest, arrayMaxNullable) {
 
 TYPED_TEST(ArrayMaxFloatingPointTest, arrayMax) {
   this->testNoNulls();
+}
+
+TYPED_TEST(ArrayMaxFloatingPointTest, arrayMaxExtreme) {
+  this->testExtremeValues();
 }

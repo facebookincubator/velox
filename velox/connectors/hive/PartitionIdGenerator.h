@@ -20,8 +20,7 @@
 
 namespace facebook::velox::connector::hive {
 /// Generate sequential integer IDs for distinct partition values, which could
-/// be used as vector index. Only single partition key is supported at the
-/// moment.
+/// be used as vector index.
 class PartitionIdGenerator {
  public:
   /// @param inputType RowType of the input.
@@ -30,11 +29,14 @@ class PartitionIdGenerator {
   /// @param maxPartitions The max number of distinct partitions.
   /// @param pool Memory pool. Used to allocate memory for storing unique
   /// partition key values.
+  /// @param partitionPathAsLowerCase Used to control whether the partition path
+  /// need to convert to lower case.
   PartitionIdGenerator(
       const RowTypePtr& inputType,
       std::vector<column_index_t> partitionChannels,
       uint32_t maxPartitions,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      bool partitionPathAsLowerCase);
 
   /// Generate sequential partition IDs for input vector.
   /// @param input Input RowVector.
@@ -77,7 +79,10 @@ class PartitionIdGenerator {
 
   const uint32_t maxPartitions_;
 
+  const bool partitionPathAsLowerCase_;
+
   std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
+  bool hasMultiplierSet_ = false;
 
   // A mapping from value ID produced by VectorHashers to a partition ID.
   std::unordered_map<uint64_t, uint64_t> partitionIds_;

@@ -19,6 +19,7 @@
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/PrefixSort.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/Spill.h"
 #include "velox/vector/BaseVector.h"
@@ -34,12 +35,11 @@ class SortBuffer {
       const RowTypePtr& input,
       const std::vector<column_index_t>& sortColumnIndices,
       const std::vector<CompareFlags>& sortCompareFlags,
-      uint32_t outputBatchSize,
       velox::memory::MemoryPool* pool,
       tsan_atomic<bool>* nonReclaimableSection,
-      uint32_t* numSpillRuns,
+      common::PrefixSortConfig prefixSortConfig,
       const common::SpillConfig* spillConfig = nullptr,
-      uint64_t spillMemoryThreshold = 0);
+      folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 
   void addInput(const VectorPtr& input);
 
@@ -50,47 +50,49 @@ class SortBuffer {
   void noMoreInput();
 
   /// Returns the sorted output rows in batch.
-  RowVectorPtr getOutput();
+  RowVectorPtr getOutput(uint32_t maxOutputRows);
 
-  /// Invoked to spill from 'data_' to disk with specified targets.
-  ///
-  /// NOTE: if either 'targetRows' or 'targetBytes' is zero, then we spill all
-  /// the rows from 'data_'.
-  void spill(int64_t targetRows, int64_t targetBytes);
-
-  /// Returns the spiller stats including total bytes and rows spilled so far.
-  std::optional<SpillStats> spilledStats() const {
-    if (spiller_ == nullptr) {
-      return std::nullopt;
-    }
-    return spiller_->stats();
+  /// Indicates if this sort buffer can spill or not.
+  bool canSpill() const {
+    return spillConfig_ != nullptr;
   }
+
+  /// Invoked to spill all the rows from 'data_'.
+  void spill();
+
+  memory::MemoryPool* pool() const {
+    return pool_;
+  }
+
+  std::optional<uint64_t> estimateOutputRowSize() const;
 
  private:
   // Ensures there is sufficient memory reserved to process 'input'.
   void ensureInputFits(const VectorPtr& input);
+  void updateEstimatedOutputRowSize();
   // Invoked to initialize or reset the reusable output buffer to get output.
-  void prepareOutput();
+  void prepareOutput(uint32_t maxOutputRows);
   void getOutputWithoutSpill();
   void getOutputWithSpill();
+  // Spill during input stage.
+  void spillInput();
+  // Spill during output stage.
+  void spillOutput();
+  // Finish spill, and we shouldn't get any rows from non-spilled partition as
+  // there is only one hash partition for SortBuffer.
+  void finishSpill();
 
   const RowTypePtr input_;
   const std::vector<CompareFlags> sortCompareFlags_;
-  // Maximum number of rows to return in one output batch.
-  const uint32_t outputBatchSize_;
   velox::memory::MemoryPool* const pool_;
   // The flag is passed from the associated operator such as OrderBy or
   // TableWriter to indicate if this sort buffer object is under non-reclaimable
   // execution section or not.
   tsan_atomic<bool>* const nonReclaimableSection_;
-  // A recorder for number of spill runs passed in from order by operator.
-  uint32_t* const numSpillRuns_;
+  // Configuration settings for prefix-sort.
+  const common::PrefixSortConfig prefixSortConfig_;
   const common::SpillConfig* const spillConfig_;
-  // The maximum size that an SortBuffer can hold in memory before spilling.
-  // Zero indicates no limit.
-  //
-  // NOTE: 'spillMemoryThreshold_' only applies if disk spilling is enabled.
-  const uint64_t spillMemoryThreshold_;
+  folly::Synchronized<common::SpillStats>* const spillStats_;
 
   // The column projection map between 'input_' and 'spillerStoreType_' as sort
   // buffer stores the sort columns first in 'data_'.
@@ -114,11 +116,12 @@ class SortBuffer {
   // Records the source rows to copy to 'output_' in order.
   std::vector<const RowVector*> spillSources_;
   std::vector<vector_size_t> spillSourceRows_;
-  // Counts input batches to trigger spilling for test.
-  uint64_t spillTestCounter_{0};
 
   // Reusable output vector.
   RowVectorPtr output_;
+  // Estimated size of a single output row by using the max
+  // 'data_->estimateRowSize()' across all accumulated data set.
+  std::optional<uint64_t> estimatedOutputRowSize_{};
   // The number of rows that has been returned.
   size_t numOutputRows_{0};
 };

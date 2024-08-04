@@ -16,6 +16,8 @@
 #include "velox/type/Type.h"
 #include <sstream>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/type/CppToType.h"
+#include "velox/type/SimpleFunctionApi.h"
 
 using namespace facebook;
 using namespace facebook::velox;
@@ -31,6 +33,28 @@ void testTypeSerde(const TypePtr& type) {
   ASSERT_EQ(*type, *copy);
 }
 } // namespace
+
+TEST(TypeTest, constructorThrow) {
+  EXPECT_NO_THROW(RowType({"a", "b"}, {VARCHAR(), INTEGER()}));
+
+  EXPECT_THROW(RowType({"a"}, {VARCHAR(), INTEGER()}), VeloxRuntimeError);
+  VELOX_ASSERT_THROW(
+      RowType({"a"}, {VARCHAR(), INTEGER()}),
+      "Mismatch names/types sizes: "
+      "[names: {'a'}, types: {VARCHAR, INTEGER}]");
+
+  EXPECT_THROW(RowType({"a", "b"}, {}), VeloxRuntimeError);
+  VELOX_ASSERT_THROW(
+      RowType({"a", "b"}, {}),
+      "Mismatch names/types sizes: "
+      "[names: {'a', 'b'}, types: { }]");
+
+  EXPECT_THROW(RowType({"a", "b"}, {VARCHAR(), nullptr}), VeloxRuntimeError);
+  VELOX_ASSERT_THROW(
+      RowType({"a", "b"}, {VARCHAR(), nullptr}),
+      "Child types cannot be null: "
+      "[names: {'a', 'b'}, types: {VARCHAR, NULL}]");
+}
 
 TEST(TypeTest, array) {
   auto arrayType = ARRAY(ARRAY(ARRAY(INTEGER())));
@@ -184,7 +208,26 @@ TEST(TypeTest, intervalYearMonth) {
   month = kMonthInYear * -2 + -1;
   EXPECT_EQ("-2-1", INTERVAL_YEAR_MONTH()->valueToString(month));
 
+  EXPECT_EQ(
+      "-178956970-8",
+      INTERVAL_YEAR_MONTH()->valueToString(
+          std::numeric_limits<int32_t>::min()));
+
   testTypeSerde(interval);
+}
+
+TEST(TypeTest, unknown) {
+  auto type = UNKNOWN();
+  EXPECT_EQ(type->toString(), "UNKNOWN");
+  EXPECT_EQ(type->size(), 0);
+  EXPECT_THROW(type->childAt(0), std::invalid_argument);
+  EXPECT_EQ(type->kind(), TypeKind::UNKNOWN);
+  EXPECT_STREQ(type->kindName(), "UNKNOWN");
+  EXPECT_EQ(type->begin(), type->end());
+  EXPECT_TRUE(type->isComparable());
+  EXPECT_TRUE(type->isOrderable());
+
+  testTypeSerde(type);
 }
 
 TEST(TypeTest, shortDecimal) {
@@ -198,6 +241,9 @@ TEST(TypeTest, shortDecimal) {
   EXPECT_EQ(*DECIMAL(10, 5), *shortDecimal);
   EXPECT_NE(*DECIMAL(9, 5), *shortDecimal);
   EXPECT_NE(*DECIMAL(10, 4), *shortDecimal);
+
+  VELOX_ASSERT_THROW(
+      DECIMAL(0, 0), "Precision of decimal type must be at least 1");
 
   EXPECT_STREQ(shortDecimal->name(), "DECIMAL");
   EXPECT_EQ(shortDecimal->parameters().size(), 2);
@@ -429,6 +475,33 @@ TEST(TypeTest, emptyRow) {
   testTypeSerde(row);
 }
 
+TEST(TypeTest, rowParametersMultiThreaded) {
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  for (int i = 0; i < 20'000; ++i) {
+    auto name = fmt::format("c{}", i);
+    names.push_back(name);
+    types.push_back(ROW({name}, {BIGINT()}));
+  }
+  auto type = ROW(std::move(names), std::move(types));
+  constexpr int kNumThreads = 72;
+  const std::vector<TypeParameter>* parameters[kNumThreads];
+  std::vector<std::thread> threads;
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i] { parameters[i] = &type->parameters(); });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  for (int i = 1; i < kNumThreads; ++i) {
+    ASSERT_TRUE(parameters[i] == parameters[0]);
+  }
+  ASSERT_EQ(parameters[0]->size(), type->size());
+  for (int i = 0; i < parameters[0]->size(); ++i) {
+    ASSERT_TRUE((*parameters[0])[i].type.get() == type->childAt(i).get());
+  }
+}
+
 class Foo {};
 class Bar {};
 
@@ -586,11 +659,16 @@ TEST(TypeTest, equality) {
   EXPECT_FALSE(
       *ROW({{"a", INTEGER()}, {"b", REAL()}}) ==
       *ROW({{"a", INTEGER()}, {"d", REAL()}}));
+  EXPECT_FALSE(
+      *ROW({{"a", ROW({{"x", INTEGER()}, {"y", INTEGER()}})}}) ==
+      *ROW({{"a", ROW({{"x", INTEGER()}, {"z", INTEGER()}})}}));
+  EXPECT_FALSE(
+      *ROW({{"a", ROW({{"x", INTEGER()}, {"y", INTEGER()}})}}) ==
+      *ARRAY(INTEGER()));
 
   // mix
   EXPECT_FALSE(MAP(REAL(), INTEGER())
-                   ->
-                   operator==(*ROW({{"a", REAL()}, {"b", INTEGER()}})));
+                   ->operator==(*ROW({{"a", REAL()}, {"b", INTEGER()}})));
   EXPECT_FALSE(ARRAY(REAL())->operator==(*ROW({{"a", REAL()}})));
 }
 
@@ -615,6 +693,7 @@ TEST(TypeTest, cpp2Type) {
 TEST(TypeTest, equivalent) {
   EXPECT_TRUE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"b", BIGINT()}})));
   EXPECT_FALSE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"a", INTEGER()}})));
+  EXPECT_TRUE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"b", BIGINT()}})));
   EXPECT_TRUE(MAP(BIGINT(), BIGINT())->equivalent(*MAP(BIGINT(), BIGINT())));
   EXPECT_FALSE(
       MAP(BIGINT(), BIGINT())->equivalent(*MAP(BIGINT(), ARRAY(BIGINT()))));
@@ -755,7 +834,7 @@ TEST(TypeTest, follySformat) {
           "{}", ROW({{"a", BOOLEAN()}, {"b", VARCHAR()}, {"c", BIGINT()}})));
 }
 
-TEST(TypeTest, unknown) {
+TEST(TypeTest, unknownArray) {
   auto unknownArray = ARRAY(UNKNOWN());
   EXPECT_TRUE(unknownArray->containsUnknown());
 
@@ -770,36 +849,6 @@ TEST(TypeTest, isVariadicType) {
   EXPECT_FALSE(isVariadicType<velox::StringView>::value);
   EXPECT_FALSE(isVariadicType<bool>::value);
   EXPECT_FALSE((isVariadicType<Map<int8_t, Date>>::value));
-}
-
-TEST(TypeTest, fromKindToScalerType) {
-  for (const TypeKind& kind :
-       {TypeKind::BOOLEAN,
-        TypeKind::TINYINT,
-        TypeKind::SMALLINT,
-        TypeKind::INTEGER,
-        TypeKind::BIGINT,
-        TypeKind::REAL,
-        TypeKind::DOUBLE,
-        TypeKind::VARCHAR,
-        TypeKind::VARBINARY,
-        TypeKind::TIMESTAMP,
-        TypeKind::UNKNOWN}) {
-    SCOPED_TRACE(mapTypeKindToName(kind));
-    auto type = fromKindToScalerType(kind);
-    ASSERT_EQ(type->kind(), kind);
-  }
-
-  for (const TypeKind& kind :
-       {TypeKind::ARRAY,
-        TypeKind::MAP,
-        TypeKind::ROW,
-        TypeKind::OPAQUE,
-        TypeKind::FUNCTION,
-        TypeKind::INVALID}) {
-    SCOPED_TRACE(mapTypeKindToName(kind));
-    EXPECT_ANY_THROW(fromKindToScalerType(kind));
-  }
 }
 
 TEST(TypeTest, rowEquvialentCheckWithChildRowsWithDifferentNames) {

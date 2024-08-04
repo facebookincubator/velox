@@ -27,6 +27,8 @@ class NestedLoopJoinProbe : public Operator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode);
 
+  void initialize() override;
+
   void addInput(RowVectorPtr input) override;
 
   RowVectorPtr getOutput() override;
@@ -121,6 +123,7 @@ class NestedLoopJoinProbe : public Operator {
  private:
   // Maximum number of rows in the output batch.
   const uint32_t outputBatchSize_;
+  std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
   const core::JoinType joinType_;
 
   ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
@@ -143,6 +146,10 @@ class NestedLoopJoinProbe : public Operator {
   std::vector<IdentityProjection> filterProbeProjections_;
   BufferPtr probeOutMapping_;
   BufferPtr probeIndices_;
+  // Indicate if the probe side has empty input or not. For the last prober,
+  // this indicates if all the probe sides are empty or not. This flag is used
+  // for mismatched output producing.
+  bool probeSideEmpty_{true};
 
   // Build side state
   std::optional<std::vector<RowVectorPtr>> buildVectors_;

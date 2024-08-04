@@ -32,7 +32,6 @@ void JsonToProtoConverter::readFromFile(
   auto status = google::protobuf::util::JsonStringToMessage(msgData, &msg);
   VELOX_CHECK(
       status.ok(),
-      "Failed to parse Substrait JSON: {} {}",
-      status.code(),
-      status.message());
+      "Failed to parse Substrait JSON: {}",
+      std::string_view(status.message().data(), status.message().size()));
 }

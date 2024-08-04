@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
+velox_add_library(
   velox_dwio_dwrf_reader
   BinaryStreamReader.cpp
   ColumnReader.cpp
@@ -35,6 +35,11 @@ add_library(
   StripeReaderBase.cpp
   StripeStream.cpp)
 
-target_link_libraries(
-  velox_dwio_dwrf_reader velox_dwio_common velox_dwio_dwrf_common velox_caching
-  velox_dwio_dwrf_utils fmt::fmt)
+velox_link_libraries(
+  velox_dwio_dwrf_reader
+  velox_dwio_common
+  velox_dwio_dwrf_common
+  velox_caching
+  velox_dwio_dwrf_utils
+  velox_test_util
+  fmt::fmt)

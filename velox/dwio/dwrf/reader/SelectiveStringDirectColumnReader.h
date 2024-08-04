@@ -26,7 +26,7 @@ class SelectiveStringDirectColumnReader
  public:
   using ValueType = StringView;
   SelectiveStringDirectColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
@@ -66,15 +66,6 @@ class SelectiveStringDirectColumnReader
   template <typename TVisitor>
   void readWithVisitor(RowSet rows, TVisitor visitor);
 
-  template <typename TFilter, bool isDense, typename ExtractValues>
-  void readHelper(common::Filter* filter, RowSet rows, ExtractValues values);
-
-  template <bool isDense, typename ExtractValues>
-  void processFilter(
-      common::Filter* filter,
-      RowSet rows,
-      ExtractValues extractValues);
-
   void extractCrossBuffers(
       const int32_t* lengths,
       const int32_t* starts,
@@ -93,6 +84,10 @@ class SelectiveStringDirectColumnReader
 
   template <bool scatter, bool skip>
   bool try8Consecutive(int32_t start, const int32_t* rows, int32_t row);
+
+  template <bool kScatter, bool kGreaterThan4>
+  bool
+  try8ConsecutiveSmall(const char* data, const uint16_t* offsets, int startRow);
 
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> lengthDecoder_;
   std::unique_ptr<dwio::common::SeekableInputStream> blobStream_;

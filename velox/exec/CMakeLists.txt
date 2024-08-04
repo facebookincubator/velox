@@ -11,16 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(
+velox_add_library(
   velox_exec
   AddressableNonNullValueList.cpp
   Aggregate.cpp
   AggregateCompanionAdapter.cpp
   AggregateCompanionSignatures.cpp
   AggregateFunctionRegistry.cpp
+  AggregateInfo.cpp
   AggregationMasks.cpp
   AggregateWindow.cpp
   ArrowStream.cpp
+  AssignUniqueId.cpp
   ContainerRowSerde.cpp
   DistinctAggregations.cpp
   Driver.cpp
@@ -29,6 +31,7 @@ add_library(
   ExchangeClient.cpp
   ExchangeQueue.cpp
   ExchangeSource.cpp
+  Expand.cpp
   FilterProject.cpp
   GroupId.cpp
   GroupingSet.cpp
@@ -52,10 +55,12 @@ add_library(
   Operator.cpp
   OperatorUtils.cpp
   OrderBy.cpp
+  OutputBuffer.cpp
+  OutputBufferManager.cpp
   PartitionedOutput.cpp
-  PartitionedOutputBuffer.cpp
-  PartitionedOutputBufferManager.cpp
+  PartitionFunction.cpp
   PlanNodeStats.cpp
+  PrefixSort.cpp
   ProbeOperatorState.cpp
   RowContainer.cpp
   RowNumber.cpp
@@ -63,7 +68,7 @@ add_library(
   SortedAggregations.cpp
   SortWindowBuild.cpp
   Spill.cpp
-  SpillOperatorGroup.cpp
+  SpillFile.cpp
   Spiller.cpp
   StreamingAggregation.cpp
   StreamingWindowBuild.cpp
@@ -80,24 +85,23 @@ add_library(
   Window.cpp
   WindowBuild.cpp
   WindowFunction.cpp
-  WindowPartition.cpp
-  AssignUniqueId.cpp
-  PartitionFunction.cpp)
+  WindowPartition.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   velox_exec
   velox_file
   velox_core
   velox_vector
   velox_connector
+  velox_expression
   velox_time
-  velox_codegen
   velox_common_base
   velox_test_util
   velox_arrow_bridge
   velox_common_compression)
 
 if(${VELOX_BUILD_TESTING})
+  add_subdirectory(fuzzer)
   add_subdirectory(tests)
 elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
@@ -106,3 +110,5 @@ endif()
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(benchmarks)
 endif()
+
+add_subdirectory(prefixsort)

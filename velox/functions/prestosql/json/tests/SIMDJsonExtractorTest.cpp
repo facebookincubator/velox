@@ -22,9 +22,18 @@
 #include "gtest/gtest.h"
 #include "velox/common/base/VeloxException.h"
 
+namespace facebook::velox::functions {
 namespace {
-using facebook::velox::VeloxUserError;
-using facebook::velox::functions::simdJsonExtract;
+
+template <typename TConsumer>
+simdjson::error_code simdJsonExtract(
+    const std::string& json,
+    const std::string& path,
+    TConsumer&& consumer) {
+  auto& extractor = SIMDJsonExtractor::getInstance(path);
+  return simdJsonExtract(
+      velox::StringView(json), extractor, std::forward<TConsumer>(consumer));
+}
 
 class SIMDJsonExtractorTest : public testing::Test {
  public:
@@ -49,11 +58,13 @@ class SIMDJsonExtractorTest : public testing::Test {
     auto consumer = [&res](auto& v) {
       SIMDJSON_ASSIGN_OR_RAISE(auto jsonStr, simdjson::to_json_string(v));
       res.emplace_back(jsonStr);
-      return true;
+      return simdjson::SUCCESS;
     };
 
-    EXPECT_TRUE(simdJsonExtract(json, path, consumer))
-        << "with json " << json << " and path " << path;
+    SCOPED_TRACE(json);
+    SCOPED_TRACE(path);
+
+    EXPECT_EQ(simdJsonExtract(json, path, consumer), simdjson::SUCCESS);
 
     if (!expected) {
       EXPECT_EQ(0, res.size());
@@ -80,7 +91,7 @@ class SIMDJsonExtractorTest : public testing::Test {
         // We expect a single value, if consumer gets called multiple times,
         // e.g. the path contains [*], return null.
         actual = std::nullopt;
-        return true;
+        return simdjson::SUCCESS;
       }
 
       resultPopulated = true;
@@ -105,10 +116,10 @@ class SIMDJsonExtractorTest : public testing::Test {
           SIMDJSON_ASSIGN_OR_RAISE(actual, simdjson::to_json_string(v));
         }
       }
-      return true;
+      return simdjson::SUCCESS;
     };
 
-    EXPECT_TRUE(simdJsonExtract(json, path, consumer))
+    EXPECT_EQ(simdJsonExtract(json, path, consumer), simdjson::SUCCESS)
         << "with json " << json << " and path " << path;
 
     EXPECT_EQ(expected, actual) << "with json " << json << " and path " << path;
@@ -419,7 +430,7 @@ TEST_F(SIMDJsonExtractorTest, fullJsonValueTest) {
 
 TEST_F(SIMDJsonExtractorTest, invalidJsonPathTest) {
   expectThrowInvalidArgument("", "");
-  expectThrowInvalidArgument("{}", "$.bar[2][-1]");
+  expectThrowInvalidArgument("{}", "$.bar[2]-1");
   expectThrowInvalidArgument("{}", "$.fuu..bar");
   expectThrowInvalidArgument("{}", "$.");
   expectThrowInvalidArgument("", "$$");
@@ -464,7 +475,7 @@ TEST_F(SIMDJsonExtractorTest, reextractJsonTest) {
   std::string ret;
   auto consumer = [&ret](auto& v) {
     SIMDJSON_ASSIGN_OR_RAISE(ret, simdjson::to_json_string(v));
-    return true;
+    return simdjson::SUCCESS;
   };
 
   simdJsonExtract(json, "$", consumer);
@@ -510,7 +521,7 @@ TEST_F(SIMDJsonExtractorTest, jsonMultipleExtractsTest) {
   std::string ret;
   auto consumer = [&ret](auto& v) {
     SIMDJSON_ASSIGN_OR_RAISE(ret, simdjson::to_json_string(v));
-    return true;
+    return simdjson::SUCCESS;
   };
 
   simdJsonExtract(json, "$.store", consumer);
@@ -523,17 +534,19 @@ TEST_F(SIMDJsonExtractorTest, jsonMultipleExtractsTest) {
 
 TEST_F(SIMDJsonExtractorTest, invalidJson) {
   // No-op consumer.
-  auto consumer = [](auto& /* unused */) { return true; };
+  auto consumer = [](auto& /* unused */) { return simdjson::SUCCESS; };
 
   // Object key is invalid.
   std::string json = "{\"foo: \"bar\"}";
-  EXPECT_FALSE(simdJsonExtract(json, "$.foo", consumer));
+  EXPECT_NE(simdJsonExtract(json, "$.foo", consumer), simdjson::SUCCESS);
   // Object value is invalid.
   json = "{\"foo\": \"bar}";
-  EXPECT_FALSE(simdJsonExtract(json, "$.foo", consumer));
+  EXPECT_NE(simdJsonExtract(json, "$.foo", consumer), simdjson::SUCCESS);
   // Value in array is invalid.
   // Inner object is invalid.
   json = "{\"foo\": [\"bar\", \"baz]}";
-  EXPECT_FALSE(simdJsonExtract(json, "$.foo[0]", consumer));
+  EXPECT_NE(simdJsonExtract(json, "$.foo[0]", consumer), simdjson::SUCCESS);
 }
+
 } // namespace
+} // namespace facebook::velox::functions

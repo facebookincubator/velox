@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include "folly/CPortability.h"
+
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/CheckedArithmeticImpl.h"
 #include "velox/functions/lib/aggregates/DecimalAggregate.h"
@@ -22,7 +24,11 @@
 
 namespace facebook::velox::functions::aggregate {
 
-template <typename TInput, typename TAccumulator, typename ResultType>
+template <
+    typename TInput,
+    typename TAccumulator,
+    typename ResultType,
+    bool Overflow>
 class SumAggregateBase
     : public SimpleNumericAggregate<TInput, TAccumulator, ResultType> {
   using BaseAggregate =
@@ -37,15 +43,6 @@ class SumAggregateBase
 
   int32_t accumulatorAlignmentSize() const override {
     return 1;
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (auto i : indices) {
-      *exec::Aggregate::value<TAccumulator>(groups[i]) = 0;
-    }
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -129,7 +126,7 @@ class SumAggregateBase
 
     if (mayPushdown && arg->isLazy()) {
       BaseAggregate::template pushdown<
-          facebook::velox::aggregate::SumHook<TValue, TData>>(
+          facebook::velox::aggregate::SumHook<TValue, TData, Overflow>>(
           groups, rows, arg);
       return;
     }
@@ -143,13 +140,32 @@ class SumAggregateBase
     }
   }
 
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto i : indices) {
+      *exec::Aggregate::value<TAccumulator>(groups[i]) = 0;
+    }
+  }
+
  private:
   /// Update functions that check for overflows for integer types.
   /// For floating points, an overflow results in +/- infinity which is a
   /// valid output.
+  // Spark's sum function sets Overflow to true and intentionally let the result
+  // value be automatically wrapped around when integer overflow happens. Hence,
+  // disable undefined behavior sanitizer to not fail on signed integer
+  // overflow. The disablement of the sanitizer doesn't affect the Presto's sum
+  // function that sets Overflow to false because overflow is handled explicitly
+  // in checkedPlus.
   template <typename TData>
+#if defined(FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER)
+  FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("signed-integer-overflow")
+#endif
   static void updateSingleValue(TData& result, TData value) {
     if constexpr (
+        (std::is_same_v<TData, int64_t> && Overflow) ||
         std::is_same_v<TData, double> || std::is_same_v<TData, float>) {
       result += value;
     } else {
@@ -157,9 +173,15 @@ class SumAggregateBase
     }
   }
 
+  // Disable undefined behavior sanitizer to not fail on signed integer
+  // overflow.
   template <typename TData>
+#if defined(FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER)
+  FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("signed-integer-overflow")
+#endif
   static void updateDuplicateValues(TData& result, TData value, int n) {
     if constexpr (
+        (std::is_same_v<TData, int64_t> && Overflow) ||
         std::is_same_v<TData, double> || std::is_same_v<TData, float>) {
       result += n * value;
     } else {
@@ -179,19 +201,11 @@ class DecimalSumAggregate
 
   virtual int128_t computeFinalValue(
       functions::aggregate::LongDecimalWithOverflowState* accumulator) final {
-    // Value is valid if the conditions below are true.
-    int128_t sum = accumulator->sum;
-    if ((accumulator->overflow == 1 && accumulator->sum < 0) ||
-        (accumulator->overflow == -1 && accumulator->sum > 0)) {
-      sum = static_cast<int128_t>(
-          DecimalUtil::kOverflowMultiplier * accumulator->overflow +
-          accumulator->sum);
-    } else {
-      VELOX_CHECK(accumulator->overflow == 0, "Decimal overflow");
-    }
-
-    DecimalUtil::valueInRange(sum);
-    return sum;
+    auto sum = DecimalUtil::adjustSumForOverflow(
+        accumulator->sum, accumulator->overflow);
+    VELOX_USER_CHECK(sum.has_value(), "Decimal overflow");
+    DecimalUtil::valueInRange(sum.value());
+    return sum.value();
   }
 };
 

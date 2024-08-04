@@ -15,15 +15,16 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
+add_subdirectory(parser)
 add_subdirectory(tz)
 add_subdirectory(fbhive)
 
-add_library(
+velox_add_library(
   velox_type
   Conversions.cpp
   DecimalUtil.cpp
-  DoubleUtil.cpp
   Filter.cpp
+  FloatingPointUtil.cpp
   HugeInt.cpp
   StringView.cpp
   StringView.h
@@ -34,7 +35,7 @@ add_library(
   Type.cpp
   Variant.cpp)
 
-target_link_libraries(
+velox_link_libraries(
   velox_type
   velox_type_tz
   velox_common_base
@@ -42,6 +43,7 @@ target_link_libraries(
   velox_exception
   velox_serialization
   velox_external_date
+  velox_status
   Boost::headers
   Folly::folly
   re2::re2)

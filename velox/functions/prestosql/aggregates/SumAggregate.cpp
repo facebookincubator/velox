@@ -20,9 +20,14 @@ using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
 namespace {
+template <typename TInput, typename TAccumulator, typename ResultType>
+using SumAggregate = SumAggregateBase<TInput, TAccumulator, ResultType, false>;
 
 template <template <typename U, typename V, typename W> class T>
-exec::AggregateRegistrationResult registerSum(const std::string& name) {
+exec::AggregateRegistrationResult registerSum(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("real")
@@ -99,18 +104,23 @@ exec::AggregateRegistrationResult registerSum(const std::string& name) {
             return std::make_unique<DecimalSumAggregate<int128_t>>(resultType);
 
           default:
-            VELOX_CHECK(
-                false,
+            VELOX_UNREACHABLE(
                 "Unknown input type for {} aggregation {}",
                 name,
                 inputType->kindName());
         }
-      });
+      },
+      {false /*orderSensitive*/},
+      withCompanionFunctions,
+      overwrite);
 }
 } // namespace
 
-void registerSumAggregate(const std::string& prefix) {
-  registerSum<SumAggregateBase>(prefix + kSum);
+void registerSumAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  registerSum<SumAggregate>(prefix + kSum, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

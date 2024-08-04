@@ -21,6 +21,10 @@ General Aggregate Functions
 
     Returns an arbitrary non-null value of ``x``, if one exists.
 
+.. function:: any_value(x) -> [same as x]
+
+    This is an alias for :func:`arbitrary`.
+
 .. function:: array_agg(x) -> array<[same as x]>
 
     Returns an array created from the input ``x`` elements. Ignores null
@@ -91,6 +95,7 @@ General Aggregate Functions
 .. function:: max_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
 
 .. function:: max_by(x, y, n) -> array([same as x])
     :noindex:
@@ -100,6 +105,7 @@ General Aggregate Functions
 .. function:: min_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
 
 .. function:: min_by(x, y, n) -> array([same as x])
     :noindex:
@@ -110,23 +116,35 @@ General Aggregate Functions
 
     Returns the maximum value of all input values.
     ``x`` must not contain nulls when it is complex type.
+    ``x`` must be an orderable type.
+    Nulls are ignored if there are any non-null inputs.
+    For REAL and DOUBLE types, NaN is considered greater than Infinity.
 
 .. function:: max(x, n) -> array<[same as x]>
     :noindex:
 
     Returns ``n`` largest values of all input values of ``x``.
     ``n`` must be a positive integer and not exceed 10'000.
+    Currently not supported for ARRAY, MAP, and ROW input types.
+    Nulls are not included in the output array.
+    For REAL and DOUBLE types, NaN is considered greater than Infinity.
 
 .. function:: min(x) -> [same as x]
 
     Returns the minimum value of all input values.
     ``x`` must not contain nulls when it is complex type.
+    ``x`` must be an orderable type.
+    Nulls are ignored if there are any non-null inputs.
+    For REAL and DOUBLE types, NaN is considered greater than Infinity.
 
 .. function:: min(x, n) -> array<[same as x]>
     :noindex:
 
     Returns ``n`` smallest values of all input values of ``x``.
     ``n`` must be a positive integer and not exceed 10'000.
+    Currently not supported for ARRAY, MAP, and ROW input types.
+    Nulls are not included in output array.
+    For REAL and DOUBLE types, NaN is considered greater than Infinity.
 
 .. function:: multimap_agg(K key, V value) -> map(K,array(V))
 
@@ -142,6 +160,27 @@ General Aggregate Functions
     ``combineFunction`` will be invoked to combine two states into a new state.
     The final state is returned. Throws an error if ``initialState`` is NULL or
     ``inputFunction`` or ``combineFunction`` returns a NULL.
+
+    Take care when designing ``initialState``, ``inputFunction`` and ``combineFunction``.
+    These need to support evaluating aggregation in a distributed manner using partial
+    aggregation on many nodes, followed by shuffle over group-by keys, followed by
+    final aggregation. Given a set of all possible values of state, make sure that
+    combineFunction is `commutative <https://en.wikipedia.org/wiki/Commutative_property>`_
+    and `associative <https://en.wikipedia.org/wiki/Associative_property>`_
+    operation with initialState as the
+    `identity <https://en.wikipedia.org/wiki/Identity_element>`_ value.
+
+     combineFunction(s, initialState) = s for any s
+
+     combineFunction(s1, s2) = combineFunction(s2, s1) for any s1 and s2
+
+     combineFunction(s1, combineFunction(s2, s3)) = combineFunction(combineFunction(s1, s2), s3) for any s1, s2, s3
+
+    In addition, make sure that the following holds for the inputFunction:
+
+     inputFunction(inputFunction(initialState, x), y) = combineFunction(inputFunction(initialState, x), inputFunction(initialState, y)) for any x and y
+
+    Check out `blog post about reduce_agg <https://velox-lib.io/blog/reduce-agg>`_ for more context.
 
     Note that reduce_agg doesn't support evaluation over sorted inputs.::
 
@@ -295,6 +334,9 @@ Approximate Aggregate Functions
     value is a map containing the top elements with corresponding estimated
     frequency.
 
+    For BOOLEAN 'value', this function always returns 'perfect' result.
+    'bucket' and 'capacity' arguments are ignored in this case.
+
     The error of the function depends on the permutation of the values and its
     cardinality.  We can set the capacity same as the cardinality of the
     underlying data to achieve the least error.
@@ -395,14 +437,50 @@ Statistical Aggregate Functions
 
    where :math:`\mu` is the mean, and :math:`\sigma` is the standard deviation.
 
+.. function:: regr_avgx(y, x) -> double
+
+    Returns the average of the independent value in a group. ``y`` is the dependent
+    value. ``x`` is the independent value.
+
+.. function:: regr_avgy(y, x) -> double
+
+    Returns the average of the dependent value in a group. ``y`` is the dependent
+    value. ``x`` is the independent value.
+
+.. function:: regr_count(y, x) -> double
+
+    Returns the number of non-null pairs of input values. ``y`` is the dependent
+    value. ``x`` is the independent value.
+
 .. function:: regr_intercept(y, x) -> double
 
     Returns linear regression intercept of input values. ``y`` is the dependent
     value. ``x`` is the independent value.
 
+.. function:: regr_r2(y, x) -> double
+
+    Returns the coefficient of determination of the linear regression. ``y`` is the dependent
+    value. ``x`` is the independent value. If regr_sxx(y, x) is 0, result is null. If regr_syy(y, x) is 0
+    and regr_sxx(y, x) isn't 0, result is 1.
+
 .. function:: regr_slope(y, x) -> double
 
     Returns linear regression slope of input values. ``y`` is the dependent
+    value. ``x`` is the independent value.
+
+.. function:: regr_sxx(y, x) -> double
+
+    Returns the sum of the squares of the independent values in a group. ``y`` is the dependent
+    value. ``x`` is the independent value.
+
+.. function:: regr_sxy(y, x) -> double
+
+    Returns the sum of the product of the dependent and independent values in a group. ``y`` is the dependent
+    value. ``x`` is the independent value.
+
+.. function:: regr_syy(y, x) -> double
+
+    Returns the sum of the squares of the dependent values in a group. ``y`` is the dependent
     value. ``x`` is the independent value.
 
 .. function:: skewness(x) -> double
@@ -411,7 +489,7 @@ Statistical Aggregate Functions
 
 .. function:: stddev(x) -> double
 
-    This is an alias for stddev_samp().
+    This is an alias for :func:`stddev_samp`.
 
 .. function:: stddev_pop(x) -> double
 
@@ -423,7 +501,7 @@ Statistical Aggregate Functions
 
 .. function:: variance(x) -> double
 
-    This is an alias for var_samp().
+    This is an alias for :func:`var_samp`.
 
 .. function:: var_pop(x) -> double
 

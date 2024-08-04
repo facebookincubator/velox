@@ -91,7 +91,7 @@ FilterTypePtr ColumnSelector::buildNode(
   // column selector filter tree
   nodes_.reserve(nodes_.size() + type->size());
   if (node.node == 0) {
-    auto rowType = type->asRow();
+    auto& rowType = type->asRow();
     for (size_t i = 0, size = type->size(); i < size; ++i) {
       bool inData = contentType && i < contentType->size();
       current->addChild(buildNode(
@@ -340,6 +340,29 @@ void ColumnSelector::logFilter() const {
 
   // log it out
   getLog()->logColumnFilter(filter_, numColumns, numNodes, hasSchema());
+}
+
+std::shared_ptr<ColumnSelector> ColumnSelector::fromScanSpec(
+    const velox::common::ScanSpec& spec,
+    const RowTypePtr& rowType) {
+  std::vector<std::string> columnNames;
+  for (auto& child : spec.children()) {
+    if (child->isConstant()) {
+      continue;
+    }
+    std::string name = child->fieldName();
+    if (!child->flatMapFeatureSelection().empty()) {
+      name += "#[";
+      name += folly::join(',', child->flatMapFeatureSelection());
+      name += ']';
+    }
+    columnNames.push_back(std::move(name));
+  }
+  if (columnNames.empty()) {
+    static const RowTypePtr kEmpty{ROW({}, {})};
+    return std::make_shared<ColumnSelector>(kEmpty);
+  }
+  return std::make_shared<ColumnSelector>(rowType, columnNames);
 }
 
 } // namespace facebook::velox::dwio::common

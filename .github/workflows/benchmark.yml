@@ -22,6 +22,8 @@ on:
       - 'third_party/**'
       - 'pyvelox/**'
       - '.github/workflows/benchmark.yml'
+      - 'scripts/benchmark-requirements.txt'
+
   push:
     branches: [main]
 
@@ -35,11 +37,11 @@ concurrency:
 defaults:
   run:
     shell: bash
-#TODO  concurrency groups?
+
 jobs:
   benchmark:
     if: github.repository == 'facebookincubator/velox'
-    runs-on: 8-core
+    runs-on: 8-core-ubuntu
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
@@ -69,10 +71,6 @@ jobs:
           fetch-depth: 0
           submodules: 'recursive'
 
-      - name: "Install dependencies"
-        if: ${{ github.event_name == 'pull_request' }}
-        run: source velox/scripts/setup-ubuntu.sh
-
       - name: "Checkout Merge Base"
         if: ${{ github.event_name == 'pull_request' }}
         working-directory: velox
@@ -89,6 +87,10 @@ jobs:
           git checkout $merge_base
           git submodule update --init --recursive
           echo $(git log -n 1)
+
+      - name: "Install dependencies"
+        if: ${{ github.event_name == 'pull_request' }}
+        run: source velox/scripts/setup-ubuntu.sh && install_apt_deps && install_duckdb
 
       - name: Build Baseline Benchmarks
         if: ${{ github.event_name == 'pull_request' }}
@@ -115,7 +117,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "Install dependencies"
-        run: source velox/scripts/setup-ubuntu.sh
+        run: source velox/scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Build Contender Benchmarks
         working-directory: velox
@@ -198,7 +200,7 @@ jobs:
           echo "::endgroup::"
 
       - name: "Save PR number"
-        run: echo "${{ github.event.pull_request.number }}" > pr_number.txt
+        run: echo "${{ github.event.pull_request.number || 0 }}" > pr_number.txt
 
       - name: "Upload PR number"
         uses: actions/upload-artifact@v3

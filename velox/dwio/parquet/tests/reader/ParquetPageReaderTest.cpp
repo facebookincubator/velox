@@ -15,20 +15,14 @@
  */
 
 #include "velox/dwio/parquet/reader/PageReader.h"
-#include "velox/dwio/parquet/reader/ParquetReader.h"
-#include "velox/dwio/parquet/tests/ParquetReaderTestBase.h"
+#include "velox/dwio/parquet/tests/ParquetTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
 using namespace facebook::velox::dwio::common;
-using namespace facebook::velox::dwio::parquet;
 using namespace facebook::velox::parquet;
 
-class ParquetPageReaderTest : public ParquetReaderTestBase {};
-
-namespace {
-auto defaultPool = memory::addDefaultLeafMemoryPool();
-}
+class ParquetPageReaderTest : public ParquetTestBase {};
 
 TEST_F(ParquetPageReaderTest, smallPage) {
   auto readFile =
@@ -36,11 +30,11 @@ TEST_F(ParquetPageReaderTest, smallPage) {
   auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
-      std::move(file), 0, headerSize, *defaultPool, LogType::TEST);
+      std::move(file), 0, headerSize, *leafPool_, LogType::TEST);
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
-      *defaultPool,
-      thrift::CompressionCodec::type::GZIP,
+      *leafPool_,
+      common::CompressionKind::CompressionKind_GZIP,
       headerSize);
   auto header = pageReader->readPageHeader();
   EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
@@ -64,11 +58,11 @@ TEST_F(ParquetPageReaderTest, largePage) {
   auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
-      std::move(file), 0, headerSize, *defaultPool, LogType::TEST);
+      std::move(file), 0, headerSize, *leafPool_, LogType::TEST);
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
-      *defaultPool,
-      thrift::CompressionCodec::type::GZIP,
+      *leafPool_,
+      common::CompressionKind::CompressionKind_GZIP,
       headerSize);
   auto header = pageReader->readPageHeader();
 
@@ -93,22 +87,23 @@ TEST_F(ParquetPageReaderTest, corruptedPageHeader) {
   auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
-      std::move(file), 0, headerSize, *defaultPool, LogType::TEST);
+      std::move(file), 0, headerSize, *leafPool_, LogType::TEST);
 
   // In the corrupted_page_header, the min_value length is set incorrectly on
   // purpose. This is to simulate the situation where the Parquet Page Header is
   // corrupted. And an error is expected to be thrown.
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
-      *defaultPool,
-      thrift::CompressionCodec::type::GZIP,
+      *leafPool_,
+      common::CompressionKind::CompressionKind_GZIP,
       headerSize);
 
   EXPECT_THROW(pageReader->readPageHeader(), VeloxException);
 }
 
 TEST(CompressionOptionsTest, testCompressionOptions) {
-  auto options = PageReader::getParquetDecompressionOptions();
+  auto options = getParquetDecompressionOptions(
+      facebook::velox::common::CompressionKind_ZLIB);
   EXPECT_EQ(
       options.format.zlib.windowBits,
       dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS);

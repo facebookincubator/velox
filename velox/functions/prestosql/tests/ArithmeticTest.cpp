@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <cmath>
+#include <limits>
 #include <optional>
 
 #include <gmock/gmock.h>
@@ -30,6 +31,8 @@ constexpr double kInf = std::numeric_limits<double>::infinity();
 constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 constexpr float kInfF = std::numeric_limits<float>::infinity();
 constexpr float kNanF = std::numeric_limits<float>::quiet_NaN();
+constexpr int64_t kLongMax = std::numeric_limits<int64_t>::max();
+constexpr int64_t kLongMin = std::numeric_limits<int64_t>::min();
 
 MATCHER(IsNan, "is NaN") {
   return arg && std::isnan(*arg);
@@ -61,6 +64,15 @@ class ArithmeticTest : public functions::test::FunctionBaseTest {
     }
   }
 
+  void assertExpression(
+      const std::string& expression,
+      const VectorPtr& arg0,
+      const VectorPtr& arg1,
+      const VectorPtr& expected) {
+    auto result = evaluate(expression, makeRowVector({arg0, arg1}));
+    test::assertEqualVectors(expected, result);
+  }
+
   template <typename T, typename U = T, typename V = T>
   void assertError(
       const std::string& expression,
@@ -79,6 +91,30 @@ class ArithmeticTest : public functions::test::FunctionBaseTest {
     }
   }
 };
+
+TEST_F(ArithmeticTest, plus) {
+  // Test plus for intervals.
+  auto op1 = makeNullableFlatVector<int64_t>(
+      {-1, 2, -3, 4, kLongMax, -1, std::nullopt, 0}, INTERVAL_DAY_TIME());
+  auto op2 = makeNullableFlatVector<int64_t>(
+      {2, -3, -1, 1, 1, kLongMin, 0, std::nullopt}, INTERVAL_DAY_TIME());
+  auto expected = makeNullableFlatVector<int64_t>(
+      {1, -1, -4, 5, kLongMin, kLongMax, std::nullopt, std::nullopt},
+      INTERVAL_DAY_TIME());
+  assertExpression("c0 + c1", op1, op2, expected);
+}
+
+TEST_F(ArithmeticTest, minus) {
+  // Test plus for intervals.
+  auto op1 = makeNullableFlatVector<int64_t>(
+      {-1, 2, -3, 4, kLongMin, -1, std::nullopt, 0}, INTERVAL_DAY_TIME());
+  auto op2 = makeNullableFlatVector<int64_t>(
+      {2, 3, -4, 1, 1, kLongMax, 0, std::nullopt}, INTERVAL_DAY_TIME());
+  auto expected = makeNullableFlatVector<int64_t>(
+      {-3, -1, 1, 3, kLongMax, kLongMin, std::nullopt, std::nullopt},
+      INTERVAL_DAY_TIME());
+  assertExpression("c0 - c1", op1, op2, expected);
+}
 
 TEST_F(ArithmeticTest, divide)
 #if defined(__has_feature)
@@ -107,6 +143,43 @@ __attribute__((__no_sanitize__("float-divide-by-zero")))
       {5.25, kInfF, kNanF, 0.0});
   assertExpression<double>(
       "c0 / c1", {10.5, 9.2, 0.0, 0.0}, {2, 0, 0, -1}, {5.25, kInf, kNan, 0.0});
+
+  // Test interval divided by double.
+  auto intervalVector = makeNullableFlatVector<int64_t>(
+      {3, 6, 9, std::nullopt, 12, 15, 18, 21, 0, 0, 1}, INTERVAL_DAY_TIME());
+  auto doubleVector = makeNullableFlatVector<double>(
+      {0.5,
+       -2.0,
+       5.0,
+       1.0,
+       std::nullopt,
+       kNan,
+       kInf,
+       -kInf,
+       0.0,
+       -0.0,
+       0.00000001});
+  auto expected = makeNullableFlatVector<int64_t>(
+      {6, -3, 1, std::nullopt, std::nullopt, 0, 0, 0, 0, 0, 100000000},
+      INTERVAL_DAY_TIME());
+  assertExpression("c0 / c1", intervalVector, doubleVector, expected);
+
+  intervalVector = makeFlatVector<int64_t>(
+      {1, 1, 1, 1, kLongMax, kLongMin, kLongMax, kLongMin},
+      INTERVAL_DAY_TIME());
+  doubleVector = makeFlatVector<double>(
+      {0.0, -0.0, 4.9e-324, -4.9e-324, 0.1, 0.1, -0.1, -0.1});
+  expected = makeFlatVector<int64_t>(
+      {kLongMax,
+       kLongMin,
+       kLongMax,
+       kLongMin,
+       kLongMax,
+       kLongMin,
+       kLongMin,
+       kLongMax},
+      INTERVAL_DAY_TIME());
+  assertExpression("c0 / c1", intervalVector, doubleVector, expected);
 }
 
 TEST_F(ArithmeticTest, multiply) {
@@ -115,6 +188,50 @@ TEST_F(ArithmeticTest, multiply) {
       {std::numeric_limits<int32_t>::min()},
       {-1},
       "integer overflow: -2147483648 * -1");
+
+  // Test multiplication of interval type with bigint.
+  auto intervalVector = makeNullableFlatVector<int64_t>(
+      {1, 2, 3, std::nullopt, 10, 20}, INTERVAL_DAY_TIME());
+  auto bigintVector = makeNullableFlatVector<int64_t>(
+      {1, std::nullopt, 3, 4, kLongMax, kLongMin});
+  auto expected = makeNullableFlatVector<int64_t>(
+      {1, std::nullopt, 9, std::nullopt, -10, 0}, INTERVAL_DAY_TIME());
+  assertExpression("c0 * c1", intervalVector, bigintVector, expected);
+  assertExpression("c1 * c0", intervalVector, bigintVector, expected);
+
+  // Test multiplication of interval type with double.
+  intervalVector = makeNullableFlatVector<int64_t>(
+      {1, 2, 3, std::nullopt, 10, 20, 30, 40, 1000, 1000, 1000, 1000},
+      INTERVAL_DAY_TIME());
+  auto doubleVector = makeNullableFlatVector<double>(
+      {-1.8,
+       2.1,
+       kNan,
+       4.2,
+       0.0,
+       -0.0,
+       kInf,
+       -kInf,
+       9223372036854775807.01,
+       -9223372036854775808.01,
+       1.7e308,
+       -1.7e308});
+  expected = makeNullableFlatVector<int64_t>(
+      {-1,
+       4,
+       0,
+       std::nullopt,
+       0,
+       0,
+       kLongMax,
+       kLongMin,
+       kLongMax,
+       kLongMin,
+       kLongMax,
+       kLongMin},
+      INTERVAL_DAY_TIME());
+  assertExpression("c0 * c1", intervalVector, doubleVector, expected);
+  assertExpression("c1 * c0", intervalVector, doubleVector, expected);
 }
 
 TEST_F(ArithmeticTest, mod) {
@@ -482,6 +599,7 @@ TEST_F(ArithmeticTest, isFinite) {
   EXPECT_EQ(false, isFinite(-kInf));
   EXPECT_EQ(false, isFinite(1.0 / 0.0));
   EXPECT_EQ(false, isFinite(-1.0 / 0.0));
+  EXPECT_EQ(false, isFinite(kNan));
 }
 
 TEST_F(ArithmeticTest, isInfinite) {
@@ -490,6 +608,7 @@ TEST_F(ArithmeticTest, isInfinite) {
   };
 
   EXPECT_EQ(false, isInfinite(0.0));
+  EXPECT_EQ(false, isInfinite(kNan));
   EXPECT_EQ(true, isInfinite(kInf));
   EXPECT_EQ(true, isInfinite(-kInf));
   EXPECT_EQ(true, isInfinite(1.0 / 0.0));
@@ -659,10 +778,24 @@ TEST_F(ArithmeticTest, clamp) {
   EXPECT_EQ(clamp(123456, 1, -1), -1);
 }
 
-TEST_F(ArithmeticTest, truncate) {
-  const auto truncate = [&](std::optional<double> a,
-                            std::optional<int32_t> n = 0) {
-    return evaluateOnce<double>("truncate(c0,c1)", a, n);
+TEST_F(ArithmeticTest, truncateDouble) {
+  const auto truncate = [&](std::optional<double> d) {
+    const auto r = evaluateOnce<double>("truncate(c0)", d);
+
+    // truncate(d) == truncate(d, 0)
+    if (d.has_value() && std::isfinite(d.value())) {
+      const auto otherResult =
+          evaluateOnce<double>("truncate(c0, 0::integer)", d);
+
+      VELOX_CHECK_EQ(r.value(), otherResult.value());
+    }
+
+    return r;
+  };
+
+  const auto truncateN = [&](std::optional<double> d,
+                             std::optional<int32_t> n) {
+    return evaluateOnce<double>("truncate(c0, c1)", d, n);
   };
 
   EXPECT_EQ(truncate(0), 0);
@@ -672,37 +805,86 @@ TEST_F(ArithmeticTest, truncate) {
   EXPECT_THAT(truncate(kNan), IsNan());
   EXPECT_THAT(truncate(kInf), IsInf());
 
-  EXPECT_EQ(truncate(0, 0), 0);
-  EXPECT_EQ(truncate(1.5, 0), 1);
-  EXPECT_EQ(truncate(-1.5, 0), -1);
-  EXPECT_EQ(truncate(std::nullopt, 0), std::nullopt);
-  EXPECT_EQ(truncate(1.5, std::nullopt), std::nullopt);
-  EXPECT_THAT(truncate(kNan, 0), IsNan());
-  EXPECT_THAT(truncate(kNan, 1), IsNan());
-  EXPECT_THAT(truncate(kInf, 0), IsInf());
-  EXPECT_THAT(truncate(kInf, 1), IsInf());
+  EXPECT_EQ(truncate(0), 0);
+  EXPECT_EQ(truncate(1.5), 1);
+  EXPECT_EQ(truncate(-1.5), -1);
+  EXPECT_EQ(truncate(std::nullopt), std::nullopt);
+  EXPECT_THAT(truncate(kNan), IsNan());
+  EXPECT_THAT(truncate(kInf), IsInf());
 
-  EXPECT_DOUBLE_EQ(truncate(1.5678, 2).value(), 1.56);
-  EXPECT_DOUBLE_EQ(truncate(-1.5678, 2).value(), -1.56);
-  EXPECT_DOUBLE_EQ(truncate(1.333, -1).value(), 0);
-  EXPECT_DOUBLE_EQ(truncate(3.54555, 2).value(), 3.54);
-  EXPECT_DOUBLE_EQ(truncate(1234, 1).value(), 1234);
-  EXPECT_DOUBLE_EQ(truncate(1234, -1).value(), 1230);
-  EXPECT_DOUBLE_EQ(truncate(1234.56, 1).value(), 1234.5);
-  EXPECT_DOUBLE_EQ(truncate(1234.56, -1).value(), 1230.0);
-  EXPECT_DOUBLE_EQ(truncate(1239.999, 2).value(), 1239.99);
-  EXPECT_DOUBLE_EQ(truncate(1239.999, -2).value(), 1200.0);
+  EXPECT_EQ(truncateN(1.5, std::nullopt), std::nullopt);
+  EXPECT_THAT(truncateN(kNan, 1), IsNan());
+  EXPECT_THAT(truncateN(kInf, 1), IsInf());
+
+  EXPECT_DOUBLE_EQ(truncateN(1.5678, 2).value(), 1.56);
+  EXPECT_DOUBLE_EQ(truncateN(-1.5678, 2).value(), -1.56);
+  EXPECT_DOUBLE_EQ(truncateN(1.333, -1).value(), 0);
+  EXPECT_DOUBLE_EQ(truncateN(3.54555, 2).value(), 3.54);
+  EXPECT_DOUBLE_EQ(truncateN(1234, 1).value(), 1234);
+  EXPECT_DOUBLE_EQ(truncateN(1234, -1).value(), 1230);
+  EXPECT_DOUBLE_EQ(truncateN(1234.56, 1).value(), 1234.5);
+  EXPECT_DOUBLE_EQ(truncateN(1234.56, -1).value(), 1230.0);
+  EXPECT_DOUBLE_EQ(truncateN(1239.999, 2).value(), 1239.99);
+  EXPECT_DOUBLE_EQ(truncateN(1239.999, -2).value(), 1200.0);
   EXPECT_DOUBLE_EQ(
-      truncate(123456789012345678901.23, 3).value(), 123456789012345678901.23);
+      truncateN(123456789012345678901.23, 3).value(), 123456789012345678901.23);
   EXPECT_DOUBLE_EQ(
-      truncate(-123456789012345678901.23, 3).value(),
+      truncateN(-123456789012345678901.23, 3).value(),
       -123456789012345678901.23);
   EXPECT_DOUBLE_EQ(
-      truncate(123456789123456.999, 2).value(), 123456789123456.99);
-  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.0, -21).value(), 0.0);
-  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
-  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.0, -21).value(), 0.0);
-  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
+      truncateN(123456789123456.999, 2).value(), 123456789123456.99);
+  EXPECT_DOUBLE_EQ(truncateN(123456789012345678901.0, -21).value(), 0.0);
+  EXPECT_DOUBLE_EQ(truncateN(123456789012345678901.23, -21).value(), 0.0);
+  EXPECT_DOUBLE_EQ(truncateN(123456789012345678901.0, -21).value(), 0.0);
+  EXPECT_DOUBLE_EQ(truncateN(123456789012345678901.23, -21).value(), 0.0);
+}
+
+TEST_F(ArithmeticTest, truncateReal) {
+  const auto truncate = [&](std::optional<float> d) {
+    const auto r = evaluateOnce<float>("truncate(c0)", d);
+
+    // truncate(d) == truncate(d, 0)
+    if (d.has_value() && std::isfinite(d.value())) {
+      const auto otherResult =
+          evaluateOnce<float>("truncate(c0, 0::integer)", d);
+
+      VELOX_CHECK_EQ(r.value(), otherResult.value());
+    }
+
+    return r;
+  };
+
+  const auto truncateN = [&](std::optional<float> d, std::optional<int32_t> n) {
+    return evaluateOnce<float>("truncate(c0, c1)", d, n);
+  };
+
+  EXPECT_EQ(truncate(0), 0);
+  EXPECT_EQ(truncate(1.5), 1);
+  EXPECT_EQ(truncate(-1.5), -1);
+
+  EXPECT_EQ(truncate(std::nullopt), std::nullopt);
+  EXPECT_THAT(truncate(kNan), IsNan());
+  EXPECT_THAT(truncate(kInf), IsInf());
+
+  EXPECT_FLOAT_EQ(truncateN(123.456, 0).value(), 123);
+  EXPECT_FLOAT_EQ(truncateN(123.456, 1).value(), 123.4);
+  EXPECT_FLOAT_EQ(truncateN(123.456, 2).value(), 123.45);
+  EXPECT_FLOAT_EQ(truncateN(123.456, 3).value(), 123.456);
+  EXPECT_FLOAT_EQ(truncateN(123.456, 4).value(), 123.456);
+
+  EXPECT_FLOAT_EQ(truncateN(123.456, -1).value(), 120);
+  EXPECT_FLOAT_EQ(truncateN(123.456, -2).value(), 100);
+  EXPECT_FLOAT_EQ(truncateN(123.456, -3).value(), 0);
+
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 0).value(), -123);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 1).value(), -123.4);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 2).value(), -123.45);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 3).value(), -123.456);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, 4).value(), -123.456);
+
+  EXPECT_FLOAT_EQ(truncateN(-123.456, -1).value(), -120);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, -2).value(), -100);
+  EXPECT_FLOAT_EQ(truncateN(-123.456, -3).value(), 0);
 }
 
 TEST_F(ArithmeticTest, wilsonIntervalLower) {
@@ -819,6 +1001,52 @@ TEST_F(ArithmeticTest, wilsonIntervalUpper) {
   VELOX_ASSERT_THROW(
       wilsonIntervalUpper(1, 3, -kInf), "z-score must not be negative");
   EXPECT_DOUBLE_EQ(wilsonIntervalUpper(1, 3, kInf).value(), 1.0);
+}
+
+TEST_F(ArithmeticTest, cosineSimilarity) {
+  const auto cosineSimilarity =
+      [&](const std::vector<std::pair<std::string, std::optional<double>>>&
+              left,
+          const std::vector<std::pair<std::string, std::optional<double>>>&
+              right) {
+        auto leftMap = makeMapVector<std::string, double>({left});
+        auto rightMap = makeMapVector<std::string, double>({right});
+        return evaluateOnce<double>(
+                   "cosine_similarity(c0,c1)",
+                   makeRowVector({leftMap, rightMap}))
+            .value();
+      };
+
+  EXPECT_DOUBLE_EQ(
+      (2.0 * 3.0) / (std::sqrt(5.0) * std::sqrt(10.0)),
+      cosineSimilarity({{"a", 1}, {"b", 2}}, {{"c", 1}, {"b", 3}}));
+
+  EXPECT_DOUBLE_EQ(
+      (2.0 * 3.0 + (-1) * 1) / (std::sqrt(1 + 4 + 1) * std::sqrt(1 + 9)),
+      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"c", 1}, {"b", 3}}));
+
+  EXPECT_DOUBLE_EQ(
+      (2.0 * 3.0 + (-1) * 1) / (std::sqrt(1 + 4 + 1) * std::sqrt(1 + 9)),
+      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"c", 1}, {"b", 3}}));
+
+  EXPECT_DOUBLE_EQ(
+      0.0,
+      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"d", 1}, {"e", 3}}));
+
+  EXPECT_TRUE(std::isnan(cosineSimilarity({}, {})));
+  EXPECT_TRUE(std::isnan(cosineSimilarity({{"d", 1}, {"e", 3}}, {})));
+  EXPECT_TRUE(
+      std::isnan(cosineSimilarity({{"a", 1}, {"b", 3}}, {{"a", 0}, {"b", 0}})));
+
+  auto nullableLeftMap = makeNullableMapVector<StringView, double>(
+      {{{{"a"_sv, 1}, {"b"_sv, std::nullopt}}}});
+  auto rightMap =
+      makeMapVector<StringView, double>({{{{"c"_sv, 1}, {"b"_sv, 3}}}});
+
+  EXPECT_FALSE(evaluateOnce<double>(
+                   "cosine_similarity(c0,c1)",
+                   makeRowVector({nullableLeftMap, rightMap}))
+                   .has_value());
 }
 
 } // namespace

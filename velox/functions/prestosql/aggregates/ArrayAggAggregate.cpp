@@ -15,9 +15,8 @@
  */
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/lib/aggregates/ValueList.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/ValueList.h"
-#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
 namespace {
@@ -90,14 +89,6 @@ class ArrayAggAggregate : public exec::Aggregate {
         offsets,
         sizes,
         loadedElements);
-  }
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    for (auto index : indices) {
-      new (groups[index] + offset_) ArrayAccumulator();
-    }
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -213,9 +204,20 @@ class ArrayAggAggregate : public exec::Aggregate {
     });
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    for (auto index : indices) {
+      new (groups[index] + offset_) ArrayAccumulator();
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     for (auto group : groups) {
-      value<ArrayAccumulator>(group)->elements.free(allocator_);
+      if (isInitialized(group)) {
+        value<ArrayAccumulator>(group)->elements.free(allocator_);
+      }
     }
   }
 
@@ -235,7 +237,12 @@ class ArrayAggAggregate : public exec::Aggregate {
   DecodedVector decodedIntermediate_;
 };
 
-exec::AggregateRegistrationResult registerArray(const std::string& name) {
+} // namespace
+
+void registerArrayAggAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("E")
@@ -244,7 +251,8 @@ exec::AggregateRegistrationResult registerArray(const std::string& name) {
           .argumentType("E")
           .build()};
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kArrayAgg;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -257,13 +265,39 @@ exec::AggregateRegistrationResult registerArray(const std::string& name) {
         return std::make_unique<ArrayAggAggregate>(
             resultType, config.prestoArrayAggIgnoreNulls());
       },
-      /*registerCompanionFunctions*/ true);
+      withCompanionFunctions,
+      overwrite);
 }
 
-} // namespace
+void registerInternalArrayAggAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("E")
+          .returnType("array(E)")
+          .intermediateType("array(E)")
+          .argumentType("E")
+          .build()};
 
-void registerArrayAggregate(const std::string& prefix) {
-  registerArray(prefix + kArrayAgg);
+  auto name = prefix + "$internal$array_agg";
+  exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step /*step*/,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_EQ(
+            argTypes.size(), 1, "{} takes at most one argument", name);
+        return std::make_unique<ArrayAggAggregate>(
+            resultType, /*ignoreNulls*/ false);
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -15,28 +15,40 @@
  */
 
 #include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/common/base/PeriodicStatsReporter.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/dwio/common/FileSink.h"
-#include "velox/exec/Exchange.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
+
+DECLARE_bool(velox_memory_leak_check_enabled);
+DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
 
 using namespace facebook::velox::common::testutil;
-
-DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
+using namespace facebook::velox::memory;
 
 namespace facebook::velox::exec::test {
 
 OperatorTestBase::OperatorTestBase() {
+  // Overloads the memory pools used by VectorTestBase to work with memory
+  // arbitrator.
+  rootPool_ = memory::memoryManager()->addRootPool(
+      "", memory::kMaxMemory, exec::MemoryReclaimer::create());
+  pool_ = rootPool_->addLeafChild("", true, exec::MemoryReclaimer::create());
+  vectorMaker_ = velox::test::VectorMaker(pool_.get());
+
   parse::registerTypeResolver();
 }
 
@@ -47,21 +59,52 @@ void OperatorTestBase::registerVectorSerde() {
 OperatorTestBase::~OperatorTestBase() {
   // Wait for all the tasks to be deleted.
   exec::test::waitForAllTasksToBeDeleted();
-  // Revert to default process-wide MemoryAllocator.
-  memory::MemoryAllocator::setDefaultInstance(nullptr);
 }
 
 void OperatorTestBase::SetUpTestCase() {
   FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
-  memory::MemoryArbitrator::registerAllFactories();
+  FLAGS_velox_memory_leak_check_enabled = true;
+  memory::SharedArbitrator::registerFactory();
+  resetMemory();
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   TestValue::enable();
 }
 
 void OperatorTestBase::TearDownTestCase() {
+  asyncDataCache_->shutdown();
   waitForAllTasksToBeDeleted();
-  memory::MemoryArbitrator::unregisterAllFactories();
+  memory::SharedArbitrator::unregisterFactory();
+}
+
+void OperatorTestBase::setupMemory(
+    int64_t allocatorCapacity,
+    int64_t arbitratorCapacity,
+    int64_t arbitratorReservedCapacity,
+    int64_t memoryPoolInitCapacity,
+    int64_t memoryPoolReservedCapacity) {
+  if (asyncDataCache_ != nullptr) {
+    asyncDataCache_->clear();
+    asyncDataCache_.reset();
+  }
+  MemoryManagerOptions options;
+  options.allocatorCapacity = allocatorCapacity;
+  options.arbitratorCapacity = arbitratorCapacity;
+  options.arbitratorReservedCapacity = arbitratorReservedCapacity;
+  options.memoryPoolInitCapacity = memoryPoolInitCapacity;
+  options.memoryPoolReservedCapacity = memoryPoolReservedCapacity;
+  options.arbitratorKind = "SHARED";
+  options.checkUsageLeak = true;
+  options.globalArbitrationEnabled = true;
+  options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
+  memory::MemoryManager::testingSetInstance(options);
+  asyncDataCache_ =
+      cache::AsyncDataCache::create(memory::memoryManager()->allocator());
+  cache::AsyncDataCache::setInstance(asyncDataCache_.get());
+}
+
+void OperatorTestBase::resetMemory() {
+  OperatorTestBase::setupMemory(8L << 30, 6L << 30, 0, 512 << 20, 0);
 }
 
 void OperatorTestBase::SetUp() {
@@ -70,18 +113,29 @@ void OperatorTestBase::SetUp() {
   }
   driverExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(3);
   ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
-  allocator_ = std::make_shared<memory::MallocAllocator>(8L << 30);
-  if (!asyncDataCache_) {
-    asyncDataCache_ = cache::AsyncDataCache::create(allocator_.get());
-    cache::AsyncDataCache::setInstance(asyncDataCache_.get());
-  }
-  memory::MemoryAllocator::setDefaultInstance(allocator_.get());
+  PeriodicStatsReporter::Options options;
+  options.allocator = memory::memoryManager()->allocator();
+  options.allocatorStatsIntervalMs = 2'000;
+  options.cache = asyncDataCache_.get();
+  options.cacheStatsIntervalMs = 2'000;
+  options.arbitrator = memory::memoryManager()->arbitrator();
+  options.arbitratorStatsIntervalMs = 2'000;
+  options.spillMemoryPool = memory::spillMemoryPool();
+  options.spillStatsIntervalMs = 2'000;
+  startPeriodicStatsReporter(options);
+  testingStartLocalExchangeSource();
 }
 
 void OperatorTestBase::TearDown() {
-  if (asyncDataCache_ != nullptr) {
-    asyncDataCache_->shutdown();
-  }
+  waitForAllTasksToBeDeleted();
+  stopPeriodicStatsReporter();
+  // There might be lingering exchange source on executor even after all tasks
+  // are deleted. This can cause memory leak because exchange source holds
+  // reference to memory pool. We need to make sure they are properly cleaned.
+  testingShutdownLocalExchangeSource();
+  pool_.reset();
+  rootPool_.reset();
+  resetMemory();
 }
 
 std::shared_ptr<Task> OperatorTestBase::assertQuery(

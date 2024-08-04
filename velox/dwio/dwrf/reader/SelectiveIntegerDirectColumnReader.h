@@ -28,16 +28,16 @@ class SelectiveIntegerDirectColumnReader
   using ValueType = int64_t;
 
   SelectiveIntegerDirectColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      std::shared_ptr<const dwio::common::TypeWithId> dataType,
+      const TypePtr& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       DwrfParams& params,
       uint32_t numBytes,
       common::ScanSpec& scanSpec)
       : SelectiveIntegerColumnReader(
-            requestedType->type(),
+            requestedType,
             params,
             scanSpec,
-            std::move(dataType)) {
+            std::move(fileType)) {
     EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
     auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
     auto& stripe = params.stripeStreams();

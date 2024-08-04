@@ -56,23 +56,20 @@ void registerBinaryScalar(const std::vector<std::string>& aliases) {
   registerFunction<T, TReturn, Date, Date>(aliases);
 }
 
-template <template <class> class T, typename TReturn>
-void registerNonSimdizableScalar(const std::vector<std::string>& aliases) {
-  registerFunction<T, TReturn, Varchar, Varchar>(aliases);
-  registerFunction<T, TReturn, Varbinary, Varbinary>(aliases);
-  registerFunction<T, TReturn, bool, bool>(aliases);
-  registerFunction<T, TReturn, Timestamp, Timestamp>(aliases);
-  registerFunction<T, TReturn, Date, Date>(aliases);
-  registerFunction<T, TReturn, TimestampWithTimezone, TimestampWithTimezone>(
-      aliases);
-}
-
 template <template <class> class T>
 void registerUnaryIntegral(const std::vector<std::string>& aliases) {
   registerFunction<T, int8_t, int8_t>(aliases);
   registerFunction<T, int16_t, int16_t>(aliases);
   registerFunction<T, int32_t, int32_t>(aliases);
   registerFunction<T, int64_t, int64_t>(aliases);
+}
+
+template <template <class> class T, typename TReturn>
+void registerUnaryIntegralWithTReturn(const std::vector<std::string>& aliases) {
+  registerFunction<T, TReturn, int8_t>(aliases);
+  registerFunction<T, TReturn, int16_t>(aliases);
+  registerFunction<T, TReturn, int32_t>(aliases);
+  registerFunction<T, TReturn, int64_t>(aliases);
 }
 
 template <template <class> class T>

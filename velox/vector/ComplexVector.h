@@ -109,20 +109,38 @@ class RowVector : public BaseVector {
     return childrenSize_;
   }
 
-  // Resize a row vector by adding trailing nulls to the top level row without
-  // resizing children.
-  // Caller should ensure that the vector is unique before calling this method.
+  /// Resize a row vector by adding trailing nulls to the top level row without
+  /// resizing children.
+  /// Caller should ensure that the vector is unique before calling this method.
   void appendNulls(vector_size_t numberOfRows);
 
   /// Get the child vector at a given offset.
   VectorPtr& childAt(column_index_t index) {
-    VELOX_USER_CHECK_LT(index, childrenSize_);
+    VELOX_CHECK_LT(
+        index,
+        childrenSize_,
+        "Trying to access non-existing child in RowVector: {}",
+        toString());
     return children_[index];
   }
 
   const VectorPtr& childAt(column_index_t index) const {
-    VELOX_USER_CHECK_LT(index, childrenSize_);
+    VELOX_CHECK_LT(
+        index,
+        childrenSize_,
+        "Trying to access non-existing child in RowVector: {}",
+        toString());
     return children_[index];
+  }
+
+  /// Returns child vector for the specified field name. Throws if field with
+  /// specified name doesn't exist.
+  VectorPtr& childAt(const std::string& name) {
+    return children_[type_->asRow().getChildIdx(name)];
+  }
+
+  const VectorPtr& childAt(const std::string& name) const {
+    return children_[type_->asRow().getChildIdx(name)];
   }
 
   std::vector<VectorPtr>& children() {
@@ -132,6 +150,8 @@ class RowVector : public BaseVector {
   const std::vector<VectorPtr>& children() const {
     return children_;
   }
+
+  void setType(const TypePtr& type) override;
 
   void copy(
       const BaseVector* source,
@@ -147,6 +167,24 @@ class RowVector : public BaseVector {
   void copyRanges(
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
+
+  VectorPtr copyPreserveEncodings(
+      velox::memory::MemoryPool* pool = nullptr) const override {
+    std::vector<VectorPtr> copiedChildren(children_.size());
+
+    for (auto i = 0; i < children_.size(); ++i) {
+      copiedChildren[i] = children_[i]->copyPreserveEncodings(pool);
+    }
+
+    auto selfPool = pool ? pool : pool_;
+    return std::make_shared<RowVector>(
+        selfPool,
+        type_,
+        AlignedBuffer::copy(selfPool, nulls_),
+        length_,
+        copiedChildren,
+        nullCount_);
+  }
 
   uint64_t retainedSize() const override {
     auto size = BaseVector::retainedSize();
@@ -196,6 +234,21 @@ class RowVector : public BaseVector {
 
   void validate(const VectorValidateOptions& options) const override;
 
+  /// Only calls BaseVector::resize and doesnt resize the children.
+  /// This function is present for backwards compatibility,
+  /// until the few places that require it are migrated over.
+  void unsafeResize(vector_size_t newSize, bool setNotNull = true);
+
+  /// Resizes the parent row container and also recursively resizes the
+  /// children. Note that this function will throw if the children are not
+  /// uniquely referenced by the parent when increasing the size.
+  /// Note : If the child is null, then it will stay null after the resize.
+  void resize(vector_size_t newSize, bool setNotNull = true) override;
+
+  VectorPtr& rawVectorForBatchReader() {
+    return rawVectorForBatchReader_;
+  }
+
  private:
   vector_size_t childSize() const {
     bool allConstant = false;
@@ -239,10 +292,14 @@ class RowVector : public BaseVector {
   // loadedVector is called, and reset to false when updateContainsLazyNotLoaded
   // is called (i.e. some children are likely updated to lazy).
   mutable bool childrenLoaded_ = false;
+
+  // For some non-selective reader, we need to keep the original vector that is
+  // unprojected and unfilterd, and reuse its memory.
+  VectorPtr rawVectorForBatchReader_;
 };
 
-// Common parent class for ARRAY and MAP vectors.  Contains 'offsets' and
-// 'sizes' data and provide manipulations on them.
+/// Common parent class for ARRAY and MAP vectors.  Contains 'offsets' and
+/// 'sizes' data and provide manipulations on them.
 struct ArrayVectorBase : BaseVector {
   ArrayVectorBase(const ArrayVectorBase&) = delete;
   const BufferPtr& offsets() const {
@@ -270,27 +327,25 @@ struct ArrayVectorBase : BaseVector {
   }
 
   BufferPtr mutableOffsets(size_t size) {
-    BaseVector::resizeIndices(size, pool_, &offsets_, &rawOffsets_);
+    BaseVector::resizeIndices(length_, size, pool_, offsets_, &rawOffsets_);
     return offsets_;
   }
 
   BufferPtr mutableSizes(size_t size) {
-    BaseVector::resizeIndices(size, pool_, &sizes_, &rawSizes_);
+    BaseVector::resizeIndices(length_, size, pool_, sizes_, &rawSizes_);
     return sizes_;
   }
 
   void resize(vector_size_t size, bool setNotNull = true) override {
     if (BaseVector::length_ < size) {
-      BaseVector::resizeIndices(size, pool_, &offsets_, &rawOffsets_);
-      BaseVector::resizeIndices(size, pool_, &sizes_, &rawSizes_);
-      clearIndices(sizes_, length_, size);
-      // No need to clear offset indices since we set sizes to 0.
+      BaseVector::resizeIndices(length_, size, pool_, offsets_, &rawOffsets_);
+      BaseVector::resizeIndices(length_, size, pool_, sizes_, &rawSizes_);
     }
     BaseVector::resize(size, setNotNull);
   }
 
-  // Its the caller responsibility to make sure that `offsets_` and `sizes_` are
-  // safe to write at index i, i.ex not shared, or not large enough.
+  /// Its the caller responsibility to make sure that `offsets_` and `sizes_`
+  /// are safe to write at index i, i.ex not shared, or not large enough.
   void
   setOffsetAndSize(vector_size_t i, vector_size_t offset, vector_size_t size) {
     DCHECK_LT(i, BaseVector::length_);
@@ -407,9 +462,25 @@ class ArrayVector : public ArrayVectorBase {
         std::move(elements), type()->childAt(0), pool_);
   }
 
+  void setType(const TypePtr& type) override;
+
   void copyRanges(
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
+
+  VectorPtr copyPreserveEncodings(
+      velox::memory::MemoryPool* pool = nullptr) const override {
+    auto selfPool = pool ? pool : pool_;
+    return std::make_shared<ArrayVector>(
+        selfPool,
+        type_,
+        AlignedBuffer::copy(selfPool, nulls_),
+        length_,
+        AlignedBuffer::copy(selfPool, offsets_),
+        AlignedBuffer::copy(selfPool, sizes_),
+        elements_->copyPreserveEncodings(pool),
+        nullCount_);
+  }
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
@@ -523,6 +594,8 @@ class MapVector : public ArrayVectorBase {
     return values_;
   }
 
+  void setType(const TypePtr& type) override;
+
   bool hasSortedKeys() const {
     return sortedKeys_;
   }
@@ -538,6 +611,22 @@ class MapVector : public ArrayVectorBase {
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges) override;
 
+  VectorPtr copyPreserveEncodings(
+      velox::memory::MemoryPool* pool = nullptr) const override {
+    auto selfPool = pool ? pool : pool_;
+    return std::make_shared<MapVector>(
+        selfPool,
+        type_,
+        AlignedBuffer::copy(selfPool, nulls_),
+        length_,
+        AlignedBuffer::copy(selfPool, offsets_),
+        AlignedBuffer::copy(selfPool, sizes_),
+        keys_->copyPreserveEncodings(pool),
+        values_->copyPreserveEncodings(pool),
+        nullCount_,
+        sortedKeys_);
+  }
+
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
         sizes_->capacity() + keys_->retainedSize() + values_->retainedSize();
@@ -549,17 +638,17 @@ class MapVector : public ArrayVectorBase {
 
   std::string toString(vector_size_t index) const override;
 
-  // Sorts all maps smallest key first. This enables linear time
-  // comparison and log time lookup.  This may only be done if there
-  // are no other references to 'map'. Checks that 'map' is uniquely
-  // referenced. This is guaranteed after construction or when
-  // retrieving values from aggregation or join row containers.
+  /// Sorts all maps smallest key first. This enables linear time
+  /// comparison and log time lookup.  This may only be done if there
+  /// are no other references to 'map'. Checks that 'map' is uniquely
+  /// referenced. This is guaranteed after construction or when
+  /// retrieving values from aggregation or join row containers.
   static void canonicalize(
       const std::shared_ptr<MapVector>& map,
       bool useStableSort = false);
 
-  // Returns indices into the map at 'index' such
-  // that keys[indices[i]] < keys[indices[i + 1]].
+  /// Returns indices into the map at 'index' such
+  /// that keys[indices[i]] < keys[indices[i + 1]].
   std::vector<vector_size_t> sortedKeyIndices(vector_size_t index) const;
 
   void ensureWritable(const SelectivityVector& rows) override;
@@ -581,6 +670,14 @@ class MapVector : public ArrayVectorBase {
 
   void validate(const VectorValidateOptions& options) const override;
 
+  /// Update this map vector (base) with a list of map vectors (updates) of same
+  /// size.  Maps are updated row-wise, i.e. for a certain key in each row, we
+  /// keep the entry from the last update map containing the key.  If no update
+  /// map contains the key, we use the entry from base.  Any null map in either
+  /// base or updates creates a null row in the result.
+  std::shared_ptr<MapVector> update(
+      const std::vector<std::shared_ptr<MapVector>>& others) const;
+
  protected:
   virtual void resetDataDependentFlags(const SelectivityVector* rows) override {
     BaseVector::resetDataDependentFlags(rows);
@@ -595,6 +692,10 @@ class MapVector : public ArrayVectorBase {
   // makes a Buffer with 0, 1, 2,... size-1. This is later sorted to
   // get elements in key order in each map.
   BufferPtr elementIndices() const;
+
+  template <TypeKind kKeyTypeKind>
+  std::shared_ptr<MapVector> updateImpl(
+      const std::vector<std::shared_ptr<MapVector>>& others) const;
 
   VectorPtr keys_;
   VectorPtr values_;
@@ -616,4 +717,5 @@ inline BufferPtr allocateOffsets(vector_size_t size, memory::MemoryPool* pool) {
 inline BufferPtr allocateSizes(vector_size_t size, memory::MemoryPool* pool) {
   return AlignedBuffer::allocate<vector_size_t>(size, pool, 0);
 }
+
 } // namespace facebook::velox

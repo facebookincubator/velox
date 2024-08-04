@@ -64,6 +64,7 @@ unsigned integer for nanoseconds. Nanoseconds represent the high-precision part 
 the timestamp, which is less than 1 second. Valid range of nanoseconds is [0, 10^9).
 Timestamps before the epoch are specified using negative values for the seconds.
 Examples:
+
 * Timestamp(0, 0) represents 1970-01-0 T00:00:00 (epoch).
 * Timestamp(10*24*60*60 + 125, 0) represents 1970-01-11 00:02:05 (10 days 125 seconds after epoch).
 * Timestamp(19524*24*60*60 + 500, 38726411) represents 2023-06-16 08:08:20.038726411
@@ -96,8 +97,8 @@ point in a number. For example, the number `123.45` has a precision of `5` and a
 scale of `2`. DECIMAL types are backed by `BIGINT` and `HUGEINT` physical types,
 which store the unscaled value. For example, the unscaled value of decimal
 `123.45` is `12345`. `BIGINT` is used upto 18 precision, and has a range of
-[:math:`-10^{18} + 1, +10^{18} - 1`]. `HUGEINT` is used starting from 19 precision
-upto 38 precision, with a range of [:math:`-10^{38} + 1, +10^{38} - 1`].
+:math:`[-10^{18} + 1, +10^{18} - 1]`. `HUGEINT` is used starting from 19 precision
+upto 38 precision, with a range of :math:`[-10^{38} + 1, +10^{38} - 1]`.
 
 All the three values, precision, scale, unscaled value are required to represent a
 decimal value.
@@ -133,10 +134,51 @@ Presto Type               Physical Type
 ========================  =====================
 HYPERLOGLOG               VARBINARY
 JSON                      VARCHAR
-TIMESTAMP WITH TIME ZONE  ROW<BIGINT, SMALLINT>
+TIMESTAMP WITH TIME ZONE  BIGINT
+UUID                      HUGEINT
 ========================  =====================
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
-from UNIX epoch with timezone information. Its physical type contains one 64-bit
-signed integer for milliseconds and another 16-bit signed integer for timezone ID.
-Valid range of timezone ID is [1, 1680], its definition can be found in ``TimeZoneDatabase.cpp``.
+from UNIX epoch with timezone information. Its physical type is BIGINT.
+The high 52 bits of bigint store signed integer for milliseconds in UTC.
+Supported range of milliseconds is [0xFFF8000000000000L, 0x7FFFFFFFFFFFF]
+(or [-69387-04-22T03:45:14.752, 73326-09-11T20:14:45.247]). The low 12 bits
+store timezone ID. Supported range of timezone ID is [1, 1680].
+The definition of timezone IDs can be found in ``TimeZoneDatabase.cpp``.
+
+Spark Types
+~~~~~~~~~~~~
+The `data types <https://spark.apache.org/docs/latest/sql-ref-datatypes.html>`_ in Spark have some semantic differences compared to those in 
+Presto. These differences require us to implement the same functions 
+separately for each system in Velox, such as min, max and collect_set. The 
+key differences are listed below.
+
+* Spark operates on timestamps with "microsecond" precision while Presto with 
+  "millisecond" precision.
+  Example::
+
+      SELECT min(ts)
+      FROM (
+          VALUES
+              (cast('2014-03-08 09:00:00.123456789' as timestamp)),
+              (cast('2014-03-08 09:00:00.012345678' as timestamp))
+      ) AS t(ts);
+      -- 2014-03-08 09:00:00.012345
+
+* In function comparisons, nested null values are handled as values.
+  Example::
+
+      SELECT equalto(ARRAY[1, null], ARRAY[1, null]); -- true
+
+      SELECT min(a)
+      FROM (
+          VALUES
+              (ARRAY[1, 2]),
+              (ARRAY[1, null])  
+      ) AS t(a);
+      -- ARRAY[1, null]
+
+* MAP type is not comparable and not orderable in Spark. In Presto, MAP type is
+  also not orderable, but it is comparable if both key and value types are
+  comparable. The implication is that MAP type cannot be used as a join, group
+  by or order by key in Spark.

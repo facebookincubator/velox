@@ -26,13 +26,11 @@ namespace {
 
 template <typename K, typename S>
 struct Accumulator {
-  folly::F14FastMap<
+  using ValuesMap = typename util::floating_point::HashMapNaNAwareTypeTraits<
       K,
       S,
-      std::hash<K>,
-      std::equal_to<K>,
-      AlignedStlAllocator<std::pair<const K, S>, 16>>
-      sums;
+      AlignedStlAllocator<std::pair<const K, S>, 16>>::Type;
+  ValuesMap sums;
 
   explicit Accumulator(HashStringAllocator* allocator)
       : sums{AlignedStlAllocator<std::pair<const K, S>, 16>(allocator)} {}
@@ -186,15 +184,6 @@ class MapUnionSumAggregate : public exec::Aggregate {
     return false;
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto index : indices) {
-      new (groups[index] + offset_) AccumulatorType{allocator_};
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto mapVector = (*result)->as<MapVector>();
@@ -290,10 +279,20 @@ class MapUnionSumAggregate : public exec::Aggregate {
     addSingleGroupRawInput(group, rows, args, false);
   }
 
-  void destroy(folly::Range<char**> groups) override {
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto index : indices) {
+      new (groups[index] + offset_) AccumulatorType{allocator_};
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
     if constexpr (std::is_same_v<K, StringView>) {
       for (auto* group : groups) {
-        if (!isNull(group)) {
+        if (isInitialized(group) && !isNull(group)) {
           value<AccumulatorType>(group)->strings.free(*allocator_);
         }
       }
@@ -345,7 +344,12 @@ std::unique_ptr<exec::Aggregate> createMapUnionSumAggregate(
   }
 }
 
-exec::AggregateRegistrationResult registerMapUnionSum(const std::string& name) {
+} // namespace
+
+void registerMapUnionSumAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   const std::vector<std::string> keyTypes = {
       "tinyint",
       "smallint",
@@ -376,7 +380,8 @@ exec::AggregateRegistrationResult registerMapUnionSum(const std::string& name) {
     }
   }
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kMapUnionSum;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -414,13 +419,9 @@ exec::AggregateRegistrationResult registerMapUnionSum(const std::string& name) {
           default:
             VELOX_UNREACHABLE();
         }
-      });
-}
-
-} // namespace
-
-void registerMapUnionSumAggregate(const std::string& prefix) {
-  registerMapUnionSum(prefix + kMapUnionSum);
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

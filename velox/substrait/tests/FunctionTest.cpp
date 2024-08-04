@@ -19,16 +19,10 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 
+#include "velox/core/QueryCtx.h"
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/TypeUtils.h"
 #include "velox/substrait/VariantToVectorConverter.h"
-
-#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-#include "velox/core/QueryCtx.h"
-#else
-#include "velox/common/base/Fs.h"
-#include "velox/substrait/VeloxToSubstraitType.h"
-#endif
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -37,11 +31,14 @@ namespace vestrait = facebook::velox::substrait;
 
 class FunctionTest : public ::testing::Test {
  protected:
-  std::shared_ptr<core::QueryCtx> queryCtx_ =
-      std::make_shared<core::QueryCtx>();
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
+  std::shared_ptr<core::QueryCtx> queryCtx_ = core::QueryCtx::create();
 
   std::shared_ptr<memory::MemoryPool> pool_ =
-      memory::addDefaultLeafMemoryPool();
+      memory::memoryManager()->addLeafPool();
 
   std::shared_ptr<vestrait::SubstraitParser> substraitParser_ =
       std::make_shared<vestrait::SubstraitParser>();
@@ -211,4 +208,35 @@ TEST_F(FunctionTest, setVectorFromVariants) {
   ASSERT_TRUE(resultVec->type()->isIntervalYearMonth());
   ASSERT_EQ(20, resultVec->asFlatVector<int32_t>()->valueAt(0));
   ASSERT_EQ(30, resultVec->asFlatVector<int32_t>()->valueAt(1));
+}
+
+TEST_F(FunctionTest, getFunctionType) {
+  std::vector<std::string> types =
+      SubstraitParser::getSubFunctionTypes("sum:opt_i32");
+  ASSERT_EQ("i32", types[0]);
+
+  types = SubstraitParser::getSubFunctionTypes("sum:i32");
+  ASSERT_EQ("i32", types[0]);
+
+  types = SubstraitParser::getSubFunctionTypes("split:req_str_str");
+  ASSERT_EQ(2, types.size());
+  ASSERT_EQ("str", types[0]);
+  ASSERT_EQ("str", types[1]);
+}
+
+TEST_F(FunctionTest, getInputTypes) {
+  std::vector<TypePtr> types = SubstraitParser::getInputTypes("sum:opt_i32");
+  ASSERT_EQ(types[0]->kind(), TypeKind::INTEGER);
+
+  types = SubstraitParser::getInputTypes("and:opt_bool_bool");
+  ASSERT_EQ(2, types.size());
+  ASSERT_EQ(types[0]->kind(), TypeKind::BOOLEAN);
+  ASSERT_EQ(types[1]->kind(), TypeKind::BOOLEAN);
+
+  types = SubstraitParser::getInputTypes("function:i32_str_ts_date_fp64");
+  ASSERT_EQ(types[0]->kind(), TypeKind::INTEGER);
+  ASSERT_EQ(types[1]->kind(), TypeKind::VARCHAR);
+  ASSERT_EQ(types[2]->kind(), TypeKind::TIMESTAMP);
+  ASSERT_EQ(types[3]->kind(), TypeKind::INTEGER);
+  ASSERT_EQ(types[4]->kind(), TypeKind::DOUBLE);
 }

@@ -39,10 +39,8 @@ class ArbitraryAggregate : public SimpleNumericAggregate<T, T, T> {
     return sizeof(T);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
+  int32_t accumulatorAlignmentSize() const override {
+    return 1;
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -60,10 +58,11 @@ class ArbitraryAggregate : public SimpleNumericAggregate<T, T, T> {
     DecodedVector decoded(*args[0], rows);
 
     if (decoded.isConstantMapping()) {
-      if (decoded.isNullAt(0)) {
+      auto begin = rows.begin();
+      if (decoded.isNullAt(begin)) {
         return;
       }
-      auto value = decoded.valueAt<T>(0);
+      auto value = decoded.valueAt<T>(begin);
       rows.applyToSelected([&](vector_size_t i) {
         if (exec::Aggregate::isNull(groups[i])) {
           updateValue(groups[i], value);
@@ -101,14 +100,15 @@ class ArbitraryAggregate : public SimpleNumericAggregate<T, T, T> {
       return;
     }
     DecodedVector decoded(*args[0], rows);
+    auto begin = rows.begin();
 
     if (decoded.isConstantMapping()) {
-      if (decoded.isNullAt(0)) {
+      if (decoded.isNullAt(begin)) {
         return;
       }
-      updateValue(group, decoded.valueAt<T>(0));
+      updateValue(group, decoded.valueAt<T>(begin));
     } else if (!decoded.mayHaveNulls()) {
-      updateValue(group, decoded.valueAt<T>(0));
+      updateValue(group, decoded.valueAt<T>(begin));
     } else {
       // Find the first non-null value.
       rows.testSelected([&](vector_size_t i) {
@@ -129,12 +129,27 @@ class ArbitraryAggregate : public SimpleNumericAggregate<T, T, T> {
     addSingleGroupRawInput(group, rows, args, mayPushdown);
   }
 
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+  }
+
  private:
   inline void updateValue(char* group, T value) {
     exec::Aggregate::clearNull(group);
     *exec::Aggregate::value<T>(group) = value;
   }
 };
+
+/// Override 'accumulatorAlignmentSize' for UnscaledLongDecimal values as it
+/// uses int128_t type. Some CPUs don't support misaligned access to int128_t
+/// type.
+template <>
+inline int32_t ArbitraryAggregate<int128_t>::accumulatorAlignmentSize() const {
+  return static_cast<int32_t>(sizeof(int128_t));
+}
 
 // Arbitrary for non-numeric types. We always keep the first (non-NULL) element
 // seen. Arbitrary (x) will produce partial and final aggregations of type x.
@@ -147,16 +162,6 @@ class NonNumericArbitrary : public exec::Aggregate {
   // struct will allow us to save variable-width value.
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(SingleValueAccumulator);
-  }
-
-  // Initialize each group, we will not use the null flags because
-  // SingleValueAccumulator has its own flag.
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    for (auto i : indices) {
-      new (groups[i] + offset_) SingleValueAccumulator();
-    }
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -183,19 +188,13 @@ class NonNumericArbitrary : public exec::Aggregate {
     extractValues(groups, numGroups, result);
   }
 
-  void destroy(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      value<SingleValueAccumulator>(group)->destroy(allocator_);
-    }
-  }
-
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
     DecodedVector decoded(*args[0], rows, true);
-    if (decoded.isConstantMapping() && decoded.isNullAt(0)) {
+    if (decoded.isConstantMapping() && decoded.isNullAt(rows.begin())) {
       // nothing to do; all values are nulls
       return;
     }
@@ -226,15 +225,19 @@ class NonNumericArbitrary : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
+    auto* accumulator = value<SingleValueAccumulator>(group);
+    if (accumulator->hasValue()) {
+      return;
+    }
+
     DecodedVector decoded(*args[0], rows, true);
-    if (decoded.isConstantMapping() && decoded.isNullAt(0)) {
+    if (decoded.isConstantMapping() && decoded.isNullAt(rows.begin())) {
       // nothing to do; all values are nulls
       return;
     }
 
     const auto* indices = decoded.indices();
     const auto* baseVector = decoded.base();
-    auto* accumulator = value<SingleValueAccumulator>(group);
     // Find the first non-null value.
     rows.testSelected([&](vector_size_t i) {
       if (!decoded.isNullAt(i)) {
@@ -252,9 +255,33 @@ class NonNumericArbitrary : public exec::Aggregate {
       bool mayPushdown) override {
     addSingleGroupRawInput(group, rows, args, mayPushdown);
   }
+
+ protected:
+  // Initialize each group, we will not use the null flags because
+  // SingleValueAccumulator has its own flag.
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    for (auto i : indices) {
+      new (groups[i] + offset_) SingleValueAccumulator();
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    for (auto group : groups) {
+      if (isInitialized(group)) {
+        value<SingleValueAccumulator>(group)->destroy(allocator_);
+      }
+    }
+  }
 };
 
-exec::AggregateRegistrationResult registerArbitrary(const std::string& name) {
+} // namespace
+
+void registerArbitraryAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -263,10 +290,11 @@ exec::AggregateRegistrationResult registerArbitrary(const std::string& name) {
           .argumentType("T")
           .build()};
 
-  return exec::registerAggregateFunction(
-      name,
+  std::vector<std::string> names = {prefix + kArbitrary, prefix + kAnyValue};
+  exec::registerAggregateFunction(
+      names,
       std::move(signatures),
-      [name](
+      [name = names.front()](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& /*resultType*/,
@@ -285,6 +313,11 @@ exec::AggregateRegistrationResult registerArbitrary(const std::string& name) {
             return std::make_unique<ArbitraryAggregate<int32_t>>(inputType);
           case TypeKind::BIGINT:
             return std::make_unique<ArbitraryAggregate<int64_t>>(inputType);
+          case TypeKind::HUGEINT:
+            if (inputType->isLongDecimal()) {
+              return std::make_unique<ArbitraryAggregate<int128_t>>(inputType);
+            }
+            VELOX_NYI();
           case TypeKind::REAL:
             return std::make_unique<ArbitraryAggregate<float>>(inputType);
           case TypeKind::DOUBLE:
@@ -309,13 +342,9 @@ exec::AggregateRegistrationResult registerArbitrary(const std::string& name) {
                 name,
                 inputType->kindName());
         }
-      });
-}
-
-} // namespace
-
-void registerArbitraryAggregate(const std::string& prefix) {
-  registerArbitrary(prefix + kArbitrary);
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

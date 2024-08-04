@@ -28,11 +28,17 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "velox/common/process/Profiler.h"
+
 DEFINE_int64(custom_size, 0, "Custom number of entries");
 DEFINE_int32(custom_hit_rate, 0, "Percentage of hits in custom test");
 DEFINE_int32(custom_key_spacing, 1, "Spacing between key values");
 
 DEFINE_int32(custom_num_ways, 10, "Number of build threads");
+
+DEFINE_bool(profile, false, "Generate perf profiles and memory stats");
+
+DECLARE_bool(velox_time_allocations);
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -189,7 +195,10 @@ class HashTableBenchmark : public VectorTestBase {
       batches_.insert(batches_.end(), batches.begin(), batches.end());
       startOffset += params_.size;
     }
-    topTable_->prepareJoinTable(std::move(otherTables), executor_.get());
+    topTable_->prepareJoinTable(
+        std::move(otherTables),
+        BaseHashTable::kNoSpillInputStartPartitionBit,
+        executor_.get());
     LOG(INFO) << "Made table " << topTable_->toString();
 
     if (topTable_->hashMode() == BaseHashTable::HashMode::kNormalizedKey) {
@@ -263,12 +272,13 @@ class HashTableBenchmark : public VectorTestBase {
 
     if (rehash) {
       if (table.hashMode() != BaseHashTable::HashMode::kHash) {
-        table.decideHashMode(input.size());
+        table.decideHashMode(
+            input.size(), BaseHashTable::kNoSpillInputStartPartitionBit);
       }
       insertGroups(input, rows, lookup, table);
       return;
     }
-    table.groupProbe(lookup);
+    table.groupProbe(lookup, BaseHashTable::kNoSpillInputStartPartitionBit);
   }
 
   void copyVectorsToTable(
@@ -321,7 +331,6 @@ class HashTableBenchmark : public VectorTestBase {
     int32_t mask = powerOfTwo - 1;
     int32_t position = 0;
     int32_t delta = 1;
-    int32_t numInserted = 0;
     auto nextOffset = rowContainer->nextOffset();
 
     // We insert values in a geometric skip order. 1, 2, 4, 7,
@@ -340,7 +349,6 @@ class HashTableBenchmark : public VectorTestBase {
         if (nextOffset) {
           *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
         }
-        ++numInserted;
         for (auto i = 0; i < batches[batchIndex]->type()->size(); ++i) {
           rowContainer->store(decoded[batchIndex][i], rowIndex, newRow, i);
         }
@@ -560,9 +568,10 @@ class HashTableBenchmark : public VectorTestBase {
         << std::endl;
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
-  std::unique_ptr<test::VectorMaker> vectorMaker_{
-      std::make_unique<test::VectorMaker>(pool_.get())};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
+  std::unique_ptr<VectorMaker> vectorMaker_{
+      std::make_unique<VectorMaker>(pool_.get())};
   // Bitmap of positions in batches_ that end up in the table.
   std::vector<uint64_t> isInTable_;
   // Test payload, keys first.
@@ -611,18 +620,25 @@ void combineResults(
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
-  memory::MmapAllocator::Options options;
-  options.capacity = 10UL << 30;
+  folly::Init init{&argc, &argv};
+  memory::MemoryManagerOptions options;
+  options.useMmapAllocator = true;
+  options.allocatorCapacity = 10UL << 30;
   options.useMmapArena = true;
   options.mmapArenaCapacityRatio = 1;
-
-  auto allocator = std::make_shared<memory::MmapAllocator>(options);
-  memory::MemoryAllocator::setDefaultInstance(allocator.get());
-  memory::MemoryManager::getInstance(memory::MemoryManagerOptions{
-      .capacity = static_cast<int64_t>(options.capacity),
-      .allocator = allocator.get()});
-
+  memory::MemoryManager::initialize(options);
+  if (FLAGS_profile) {
+    auto allocator = memory::MemoryManager::getInstance()->allocator();
+    std::function<void()> reportInit;
+    std::function<std::string()> report;
+    allocator->getTracingHooks(reportInit, report, nullptr);
+    FLAGS_profiler_check_interval_seconds = 20;
+    FLAGS_profiler_min_cpu_pct = 50;
+    FLAGS_profiler_max_sample_seconds = 30;
+    FLAGS_velox_time_allocations = true;
+    filesystems::registerLocalFileSystem();
+    process::Profiler::start("/tmp/hashprof", reportInit, report);
+  }
   auto bm = std::make_unique<HashTableBenchmark>();
   std::vector<HashTableBenchmarkRun> results;
 

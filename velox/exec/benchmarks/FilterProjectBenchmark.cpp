@@ -181,7 +181,7 @@ class FilterProjectBenchmark : public VectorTestBase {
       bool shareStringDicts,
       bool stringNulls) {
     assert(!rows.empty());
-    auto type = rows[0]->type()->as<TypeKind::ROW>();
+    auto& type = rows[0]->type()->as<TypeKind::ROW>();
     auto numColumns = rows[0]->type()->size();
     for (auto column = 0; column < numColumns; ++column) {
       if (type.childAt(column)->kind() == TypeKind::VARCHAR) {
@@ -253,9 +253,7 @@ class FilterProjectBenchmark : public VectorTestBase {
 
   int64_t run(std::shared_ptr<const core::PlanNode> plan) {
     auto start = getCurrentTimeMicro();
-    int32_t numRows = 0;
     auto result = exec::test::AssertQueryBuilder(plan).copyResults(pool_.get());
-    numRows += result->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0);
     auto elapsedMicros = getCurrentTimeMicro() - start;
     return elapsedMicros;
   }
@@ -266,7 +264,7 @@ class FilterProjectBenchmark : public VectorTestBase {
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   parse::registerTypeResolver();

@@ -120,7 +120,8 @@ void gatherCopy(
 // per event. This function returns true for such metrics.
 bool shouldAggregateRuntimeMetric(const std::string& name) {
   static const folly::F14FastSet<std::string> metricNames{
-      "dataSourceWallNanos",
+      "dataSourceAddSplitWallNanos",
+      "dataSourceReadWallNanos",
       "dataSourceLazyWallNanos",
       "queuedWallNanos",
       "flushTimes"};
@@ -146,7 +147,7 @@ void deselectRowsWithNulls(
     auto& decoded = hashers[i]->decodedVector();
     if (decoded.mayHaveNulls()) {
       anyChange = true;
-      const auto* nulls = hashers[i]->decodedVector().nulls();
+      const auto* nulls = hashers[i]->decodedVector().nulls(&rows);
       bits::andBits(rows.asMutableRange().bits(), nulls, 0, rows.end());
     }
   }
@@ -181,7 +182,7 @@ vector_size_t processConstantFilterResults(
   if (constant->isNullAt(0) || constant->valueAt(0) == false) {
     return 0;
   }
-  return rows.size();
+  return rows.countSelected();
 }
 
 vector_size_t processFlatFilterResults(
@@ -198,6 +199,9 @@ vector_size_t processFlatFilterResults(
     bits::andBits(selectedBits, nonNullBits, filterResult->rawNulls(), 0, size);
   } else {
     memcpy(selectedBits, nonNullBits, bits::nbytes(size));
+  }
+  if (!rows.isAllSelected()) {
+    bits::andBits(selectedBits, rows.allBits(), 0, size);
   }
 
   vector_size_t passed = 0;
@@ -219,7 +223,7 @@ vector_size_t processEncodedFilterResults(
   DecodedVector& decoded = filterEvalCtx.decodedResult;
   decoded.decode(*filterResult.get(), rows);
   auto values = decoded.data<uint64_t>();
-  auto nulls = decoded.nulls();
+  auto nulls = decoded.nulls(&rows);
   auto indices = decoded.indices();
 
   vector_size_t passed = 0;
@@ -229,7 +233,7 @@ vector_size_t processEncodedFilterResults(
   for (int32_t i = 0; i < size; ++i) {
     auto index = indices[i];
     if ((!nulls || !bits::isBitNull(nulls, i)) &&
-        bits::isBitSet(values, index)) {
+        bits::isBitSet(values, index) && rows.isValid(i)) {
       rawSelected[passed++] = i;
       bits::setBit(rawSelectedBits, i);
     }

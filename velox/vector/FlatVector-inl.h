@@ -15,11 +15,12 @@
  */
 #include <folly/hash/Hash.h>
 
-#include <velox/vector/BaseVector.h>
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/vector/BuilderTypeUtils.h"
 #include "velox/vector/ConstantVector.h"
+#include "velox/vector/DecodedVector.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook {
@@ -84,23 +85,14 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
   auto hashData = hashBuffer->asMutable<uint64_t>();
 
   if (rawValues_ != nullptr) { // non all-null case
-    if constexpr (std::is_same_v<T, StringView>) {
-      folly::hasher<folly::StringPiece> stringHasher;
-      for (size_t i = 0; i < BaseVector::length_; ++i) {
-        auto view = valueAt(i);
-        folly::StringPiece piece(view.data(), view.size());
-        hashData[i] = stringHasher(piece);
-      }
-    } else {
-      folly::hasher<T> hasher;
-      for (size_t i = 0; i < BaseVector::length_; ++i) {
-        hashData[i] = hasher(valueAtFast(i));
-      }
+    folly::hasher<T> hasher;
+    for (size_t i = 0; i < BaseVector::length_; ++i) {
+      hashData[i] = hasher(valueAtFast(i));
     }
   }
 
   // overwrite the null hash values
-  if (BaseVector::getNullCount().value_or(1) > 0) {
+  if (BaseVector::rawNulls_ != nullptr) {
     for (size_t i = 0; i < BaseVector::length_; ++i) {
       if (bits::isBitNull(BaseVector::rawNulls_, i)) {
         hashData[i] = BaseVector::kNullHash;
@@ -143,14 +135,17 @@ void FlatVector<T>::copyValuesAndNulls(
     const vector_size_t* toSourceRow) {
   if (source->typeKind() == TypeKind::UNKNOWN) {
     auto* rawNulls = BaseVector::mutableRawNulls();
-    rows.applyToSelected([&](auto row) { bits::setNull(rawNulls, row, true); });
+    rows.setNulls(rawNulls);
     return;
   }
 
   source = source->loadedVector();
   VELOX_CHECK_EQ(BaseVector::typeKind(), source->typeKind());
   VELOX_CHECK_GE(BaseVector::length_, rows.end());
-  const uint64_t* sourceNulls = source->rawNulls();
+  if (!toSourceRow) {
+    VELOX_CHECK_GE(source->size(), rows.end());
+  }
+
   uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
   if (source->mayHaveNulls()) {
     rawNulls = BaseVector::mutableRawNulls();
@@ -166,8 +161,7 @@ void FlatVector<T>::copyValuesAndNulls(
     auto* flatSource = source->asUnchecked<FlatVector<T>>();
     if (flatSource->values() == nullptr) {
       // All source values are null.
-      rows.applyToSelected(
-          [&](auto row) { bits::setNull(rawNulls, row, true); });
+      rows.setNulls(rawNulls);
       return;
     }
 
@@ -176,19 +170,29 @@ void FlatVector<T>::copyValuesAndNulls(
       auto* sourceValues = flatSource->template rawValues<uint64_t>();
       if (toSourceRow) {
         rows.applyToSelected([&](auto row) {
-          int32_t sourceRow = toSourceRow[row];
+          auto sourceRow = toSourceRow[row];
+          VELOX_DCHECK_GT(source->size(), sourceRow);
           bits::setBit(rawValues, row, bits::isBitSet(sourceValues, sourceRow));
         });
       } else {
-        rows.applyToSelected([&](auto row) {
-          bits::setBit(rawValues, row, bits::isBitSet(sourceValues, row));
-        });
+        const auto numBits = rows.countSelected();
+        if (numBits == rows.end() - rows.begin()) {
+          // Fast path for copying contiguous range of bits.
+          bits::copyBits(
+              sourceValues, rows.begin(), rawValues, rows.begin(), numBits);
+        } else {
+          rows.applyToSelected([&](auto row) {
+            bits::setBit(rawValues, row, bits::isBitSet(sourceValues, row));
+          });
+        }
       }
     } else {
       auto* sourceValues = flatSource->rawValues();
       if (toSourceRow) {
         rows.applyToSelected([&](auto row) {
-          rawValues_[row] = sourceValues[toSourceRow[row]];
+          auto sourceRow = toSourceRow[row];
+          VELOX_DCHECK_GT(source->size(), sourceRow);
+          rawValues_[row] = sourceValues[sourceRow];
         });
       } else {
         rows.applyToSelected(
@@ -197,26 +201,26 @@ void FlatVector<T>::copyValuesAndNulls(
     }
 
     if (rawNulls) {
+      const uint64_t* sourceNulls = source->rawNulls();
+
       if (!sourceNulls) {
-        rows.applyToSelected(
-            [&](vector_size_t row) { bits::setNull(rawNulls, row, false); });
+        rows.clearNulls(rawNulls);
       } else {
         if (toSourceRow) {
           rows.applyToSelected([&](auto row) {
             auto sourceRow = toSourceRow[row];
+            VELOX_DCHECK_GT(source->size(), sourceRow);
             bits::setNull(
                 rawNulls, row, bits::isBitNull(sourceNulls, sourceRow));
           });
         } else {
-          rows.applyToSelected([&](vector_size_t row) {
-            bits::setNull(rawNulls, row, bits::isBitNull(sourceNulls, row));
-          });
+          rows.copyNulls(rawNulls, sourceNulls);
         }
       }
     }
   } else if (source->isConstantEncoding()) {
     if (source->isNullAt(0)) {
-      BaseVector::addNulls(nullptr, rows);
+      BaseVector::addNulls(rows);
       return;
     }
     auto constant = source->asUnchecked<ConstantVector<T>>();
@@ -236,24 +240,48 @@ void FlatVector<T>::copyValuesAndNulls(
 
     rows.clearNulls(rawNulls);
   } else {
-    auto sourceVector = source->asUnchecked<SimpleVector<T>>();
-    rows.applyToSelected([&](auto row) {
-      auto sourceRow = toSourceRow ? toSourceRow[row] : row;
-      if (!source->isNullAt(sourceRow)) {
-        if constexpr (std::is_same_v<T, bool>) {
-          auto* rawValues = reinterpret_cast<uint64_t*>(rawValues_);
-          bits::setBit(rawValues, row, sourceVector->valueAt(sourceRow));
-        } else {
-          rawValues_[row] = sourceVector->valueAt(sourceRow);
+    DecodedVector decoded(*source);
+    if (toSourceRow == nullptr) {
+      rows.applyToSelected([&](auto row) {
+        if (!decoded.isNullAt(row)) {
+          if constexpr (std::is_same_v<T, bool>) {
+            auto* rawValues = reinterpret_cast<uint64_t*>(rawValues_);
+            bits::setBit(rawValues, row, decoded.valueAt<T>(row));
+          } else {
+            rawValues_[row] = decoded.valueAt<T>(row);
+          }
         }
+      });
 
-        if (rawNulls) {
-          bits::clearNull(rawNulls, row);
+      if (rawNulls != nullptr) {
+        auto* sourceNulls = decoded.nulls();
+        if (sourceNulls == nullptr) {
+          rows.clearNulls(rawNulls);
+        } else {
+          rows.copyNulls(rawNulls, sourceNulls);
         }
-      } else {
-        bits::setNull(rawNulls, row);
       }
-    });
+
+    } else {
+      rows.applyToSelected([&](auto row) {
+        const auto sourceRow = toSourceRow[row];
+        VELOX_DCHECK_GT(source->size(), sourceRow);
+        if (!decoded.isNullAt(sourceRow)) {
+          if constexpr (std::is_same_v<T, bool>) {
+            auto* rawValues = reinterpret_cast<uint64_t*>(rawValues_);
+            bits::setBit(rawValues, row, decoded.valueAt<T>(sourceRow));
+          } else {
+            rawValues_[row] = decoded.valueAt<T>(sourceRow);
+          }
+
+          if (rawNulls) {
+            bits::clearNull(rawNulls, row);
+          }
+        } else {
+          bits::setNull(rawNulls, row);
+        }
+      });
+    }
   }
 }
 
@@ -402,7 +430,7 @@ VectorPtr FlatVector<T>::slice(vector_size_t offset, vector_size_t length)
 
 template <typename T>
 void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
-  auto previousSize = BaseVector::length_;
+  const vector_size_t previousSize = BaseVector::length_;
   if (newSize == previousSize) {
     return;
   }
@@ -414,8 +442,9 @@ void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
   if constexpr (std::is_same_v<T, StringView>) {
     resizeValues(newSize, StringView());
     if (newSize < previousSize) {
-      auto vector = this->template asUnchecked<SimpleVector<StringView>>();
-      vector->invalidateIsAscii();
+      // If we downsize, just invalidate ascii, because we might have become
+      // 'all ascii' from 'not all ascii'.
+      SimpleVector<StringView>::invalidateIsAscii();
     } else {
       // Properly init stringView objects. This is useful when vectors are
       // re-used where the size changes but not the capacity.
@@ -425,9 +454,10 @@ void FlatVector<T>::resize(vector_size_t newSize, bool setNotNull) {
       for (auto index = previousSize; index < newSize; ++index) {
         new (&stringViews[index]) StringView();
       }
+      SimpleVector<StringView>::resizeIsAsciiIfNotEmpty(newSize, false);
     }
     if (newSize == 0) {
-      clearStringBuffers();
+      keepAtMostOneStringBuffer();
     }
   } else {
     resizeValues(newSize, std::nullopt);
@@ -447,14 +477,16 @@ void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
       newValues = AlignedBuffer::allocate<T>(newSize, BaseVector::pool_);
     }
 
-    SelectivityVector rowsToCopy(BaseVector::length_);
-    rowsToCopy.deselect(rows);
-
     if constexpr (std::is_same_v<T, bool>) {
       auto rawNewValues = newValues->asMutable<uint64_t>();
-      std::memcpy(rawNewValues, rawValues_, values_->size());
+      std::memcpy(
+          rawNewValues,
+          rawValues_,
+          std::min(values_->size(), newValues->size()));
     } else {
       auto rawNewValues = newValues->asMutable<T>();
+      SelectivityVector rowsToCopy(BaseVector::length_);
+      rowsToCopy.deselect(rows);
       rowsToCopy.applyToSelected(
           [&](vector_size_t row) { rawNewValues[row] = rawValues_[row]; });
     }
@@ -512,11 +544,11 @@ void FlatVector<T>::resizeValues(
       auto len = std::min(values_->size(), newValues->size());
       memcpy(dst, src, len);
     } else {
-      auto previousSize = BaseVector::length_;
-      auto rawOldValues = newValues->asMutable<T>();
-      auto rawNewValues = newValues->asMutable<T>();
-      auto len = std::min<vector_size_t>(newSize, previousSize);
-      for (vector_size_t row = 0; row < len; row++) {
+      const vector_size_t previousSize = BaseVector::length_;
+      auto* rawOldValues = newValues->asMutable<T>();
+      auto* rawNewValues = newValues->asMutable<T>();
+      const auto len = std::min<vector_size_t>(newSize, previousSize);
+      for (vector_size_t row = 0; row < len; ++row) {
         rawNewValues[row] = rawOldValues[row];
       }
     }

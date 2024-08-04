@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
 #include "gtest/gtest.h"
@@ -30,8 +31,18 @@ constexpr int kOneMB = 1 << 20;
 
 static constexpr std::string_view kDummyPath = "s3://dummy/foo.txt";
 
-class S3Test : public testing::Test {
+class S3Test : public testing::Test, public ::test::VectorTestBase {
  protected:
+  void SetUp() override {
+    minioServer_ = std::make_unique<MinioServer>();
+    minioServer_->start();
+    ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
+  }
+
+  void TearDown() override {
+    minioServer_->stop();
+  }
+
   void addBucket(const char* bucket) {
     minioServer_->addBucket(bucket);
   }
@@ -76,7 +87,8 @@ class S3Test : public testing::Test {
         folly::Range<char*>(middle, sizeof(middle)),
         folly::Range<char*>(
             nullptr,
-            (char*)(uint64_t)(15 + kOneMB - 500000 - sizeof(head) - sizeof(middle) - sizeof(tail))),
+            (char*)(uint64_t)(15 + kOneMB - 500000 - sizeof(head) -
+                              sizeof(middle) - sizeof(tail))),
         folly::Range<char*>(tail, sizeof(tail))};
     ASSERT_EQ(15 + kOneMB, readFile->preadv(0, buffers));
     ASSERT_EQ(std::string_view(head, sizeof(head)), "aaaaabbbbbcc");
@@ -84,7 +96,6 @@ class S3Test : public testing::Test {
     ASSERT_EQ(std::string_view(tail, sizeof(tail)), "ccddddd");
   }
 
-  static std::shared_ptr<MinioServer> minioServer_;
+  std::unique_ptr<MinioServer> minioServer_;
+  std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };
-
-std::shared_ptr<MinioServer> S3Test::minioServer_ = nullptr;

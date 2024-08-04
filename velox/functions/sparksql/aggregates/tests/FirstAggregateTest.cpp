@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 using namespace facebook::velox::functions::aggregate::test;
+using facebook::velox::exec::test::AssertQueryBuilder;
+using facebook::velox::exec::test::PlanBuilder;
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 
@@ -29,6 +33,9 @@ class FirstAggregateTest : public AggregationTestBase {
   void SetUp() override {
     AggregationTestBase::SetUp();
     registerAggregateFunctions("spark_");
+    // Disable incremental aggregation tests because the boolean field in
+    // intermediate result of spark_first is unset and has undefined value.
+    AggregationTestBase::disableTestIncremental();
   }
 
   template <typename T>
@@ -52,9 +59,7 @@ class FirstAggregateTest : public AggregationTestBase {
             vectors,
             {"c0"},
             {"spark_first_ignore_null(c1)"},
-            "SELECT c0, first(c1 ORDER BY c1 NULLS LAST) FROM tmp GROUP BY c0",
-            /*config*/ {},
-            /*testWithTableScan*/ false);
+            "SELECT c0, first(c1 ORDER BY c1 NULLS LAST) FROM tmp GROUP BY c0");
       }
       {
         // Expected result should have first 7 rows including nulls.
@@ -66,13 +71,7 @@ class FirstAggregateTest : public AggregationTestBase {
                 [](auto row) { return row; }, // valueAt
                 [](auto row) { return row % 3 == 0; }), // nullAt
         })};
-        testAggregations(
-            vectors,
-            {"c0"},
-            {"spark_first(c1)"},
-            expected,
-            /*config*/ {},
-            /*testWithTableScan*/ false);
+        testAggregations(vectors, {"c0"}, {"spark_first(c1)"}, expected);
       }
     }
 
@@ -85,24 +84,13 @@ class FirstAggregateTest : public AggregationTestBase {
         SCOPED_TRACE("ignore null + global");
         auto expectedTrue = {makeRowVector({makeNullableFlatVector<T>({1})})};
         testAggregations(
-            vectors,
-            {},
-            {"spark_first_ignore_null(c0)"},
-            expectedTrue,
-            /*config*/ {},
-            /*testWithTableScan*/ false);
+            vectors, {}, {"spark_first_ignore_null(c0)"}, expectedTrue);
       }
       {
         SCOPED_TRACE("not ignore null + global");
         auto expectedFalse = {
             makeRowVector({makeNullableFlatVector<T>({std::nullopt})})};
-        testAggregations(
-            vectors,
-            {},
-            {"spark_first(c0)"},
-            expectedFalse,
-            /*config*/ {},
-            /*testWithTableScan*/ false);
+        testAggregations(vectors, {}, {"spark_first(c0)"}, expectedFalse);
       }
     }
   }
@@ -114,23 +102,12 @@ class FirstAggregateTest : public AggregationTestBase {
     {
       SCOPED_TRACE("ignore null + group by");
       testAggregations(
-          data,
-          {"c0"},
-          {"spark_first_ignore_null(c1)"},
-          ignoreNullData,
-          /*config*/ {},
-          /*testWithTableScan*/ false);
+          data, {"c0"}, {"spark_first_ignore_null(c1)"}, ignoreNullData);
     }
 
     {
       SCOPED_TRACE("not ignore null + group by");
-      testAggregations(
-          data,
-          {"c0"},
-          {"spark_first(c1)"},
-          hasNullData,
-          /*config*/ {},
-          /*testWithTableScan*/ false);
+      testAggregations(data, {"c0"}, {"spark_first(c1)"}, hasNullData);
     }
   }
 
@@ -141,23 +118,12 @@ class FirstAggregateTest : public AggregationTestBase {
     {
       SCOPED_TRACE("ignore null + global");
       testAggregations(
-          data,
-          {},
-          {"spark_first_ignore_null(c0)"},
-          ignoreNullData,
-          /*config*/ {},
-          /*testWithTableScan*/ false);
+          data, {}, {"spark_first_ignore_null(c0)"}, ignoreNullData);
     }
 
     {
       SCOPED_TRACE("not ignore null + global");
-      testAggregations(
-          data,
-          {},
-          {"spark_first(c0)"},
-          hasNullData,
-          /*config*/ {},
-          /*testWithTableScan*/ false);
+      testAggregations(data, {}, {"spark_first(c0)"}, hasNullData);
     }
   }
 };
@@ -422,9 +388,7 @@ TEST_F(FirstAggregateTest, varcharGroupBy) {
         vectors,
         {"c0"},
         {"spark_first_ignore_null(c1)"},
-        "SELECT c0, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0",
-        /*config*/ {},
-        /*testWithTableScan*/ false);
+        "SELECT c0, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0");
   }
 
   {
@@ -436,13 +400,7 @@ TEST_F(FirstAggregateTest, varcharGroupBy) {
             [&data](auto row) { return StringView(data[row]); }, // valueAt
             nullEvery(3)),
     })};
-    testAggregations(
-        vectors,
-        {"c0"},
-        {"spark_first(c1)"},
-        expected,
-        /*config*/ {},
-        /*testWithTableScan*/ false);
+    testAggregations(vectors, {"c0"}, {"spark_first(c1)"}, expected);
   }
 }
 
@@ -533,13 +491,7 @@ TEST_F(FirstAggregateTest, mapGroupBy) {
           [](auto idx) { return idx * 0.1; }), // valueAt
   })};
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"spark_first(c1)"},
-      expected,
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+  testAggregations(vectors, {"c0"}, {"spark_first(c1)"}, expected);
 }
 
 TEST_F(FirstAggregateTest, mapGlobal) {
@@ -560,6 +512,36 @@ TEST_F(FirstAggregateTest, mapGlobal) {
   })};
 
   testGlobalAggregate(vectors, ignoreNullData, hasNullData);
+}
+
+TEST_F(FirstAggregateTest, spillingAndSorting) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 2, 2, 2}),
+      makeFlatVector<int32_t>({3, 2, 1, 0, 6, 5, 4, 5, 1, 3}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values(split(data))
+                  .singleAggregation({"c0"}, {"spark_first(c1 ORDER BY c1)"})
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<int32_t>({0, 1}),
+  });
+
+  auto results = AssertQueryBuilder(plan).copyResults(pool());
+  exec::test::assertEqualResults({expected}, {results});
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+  exec::TestScopedSpillInjection scopedSpillInjection(100);
+  results = AssertQueryBuilder(plan)
+                .config(core::QueryConfig::kSpillEnabled, "true")
+                .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+                .spillDirectory(spillDirectory->getPath())
+                .copyResults(pool());
+  exec::test::assertEqualResults({expected}, {results});
 }
 
 } // namespace

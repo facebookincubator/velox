@@ -16,7 +16,9 @@
 
 #pragma once
 #include <boost/intrusive_ptr.hpp>
-#include "velox/common/base/Exceptions.h"
+#include <atomic>
+#include <cstdint>
+#include <string>
 
 namespace facebook::velox::wave {
 
@@ -31,6 +33,8 @@ class GpuArena;
 /// Buffer free list.
 class Buffer {
  public:
+  virtual ~Buffer() = default;
+
   template <typename T>
   T* as() {
     return reinterpret_cast<T*>(ptr_);
@@ -45,7 +49,7 @@ class Buffer {
   }
 
   void setSize(size_t newSize) {
-    VELOX_DCHECK_LE(newSize, capacity_);
+    assert(newSize <= capacity_);
     size_ = newSize;
   }
 
@@ -54,7 +58,7 @@ class Buffer {
   }
 
   bool unpin() {
-    VELOX_DCHECK_LT(0, pinCount_);
+    assert(0 < pinCount_);
     return --pinCount_ == 0;
   }
 
@@ -70,9 +74,31 @@ class Buffer {
     return referenceCount_;
   }
 
-  void release();
+  virtual void release();
 
- private:
+  const std::string& debugInfo() const {
+    return debugInfo_;
+  }
+
+  void setDebugInfo(std::string info) {
+    debugInfo_ = std::move(info);
+  }
+
+  /// Checks consistency of magic numbers. Throws on error.
+  void check() const;
+
+  std::string toString() const;
+
+ protected:
+  static constexpr int64_t kMagic = 0xe0be0be0be0be0b;
+
+  int64_t* magicPtr() const {
+    return reinterpret_cast<int64_t*>(
+        reinterpret_cast<char*>(ptr_) + capacity_);
+  }
+
+  void setMagic();
+
   // Number of WaveBufferPtrs referencing 'this'.
   std::atomic<int32_t> referenceCount_{0};
 
@@ -94,6 +120,7 @@ class Buffer {
   // The containeing arena.
   GpuArena* arena_{nullptr};
 
+  std::string debugInfo_;
   friend class GpuArena;
 };
 
@@ -106,5 +133,35 @@ static inline void intrusive_ptr_add_ref(Buffer* buffer) {
 static inline void intrusive_ptr_release(Buffer* buffer) {
   buffer->release();
 }
+
+template <typename Releaser>
+class WaveBufferView : public Buffer {
+ public:
+  static WaveBufferPtr create(uint8_t* data, size_t size, Releaser releaser) {
+    WaveBufferView<Releaser>* view = new WaveBufferView(data, size, releaser);
+    WaveBufferPtr result(view);
+    return result;
+  }
+
+  ~WaveBufferView() override = default;
+
+  void release() override {
+    if (referenceCount_.fetch_sub(1) == 1) {
+      // Destructs releaser, which should release the hold on the underlying
+      // buffer.
+      delete this;
+    }
+  }
+
+ private:
+  WaveBufferView(uint8_t* data, size_t size, Releaser releaser)
+      : Buffer(), releaser_(releaser) {
+    ptr_ = data;
+    size_ = size;
+    capacity_ = size;
+  }
+
+  Releaser const releaser_;
+};
 
 } // namespace facebook::velox::wave

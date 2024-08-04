@@ -36,16 +36,6 @@ class MatchFunction : public exec::VectorFunction {
   virtual const VectorPtr& lambdaArgument(
       const std::shared_ptr<TContainer>& flatContainer) const = 0;
 
-  bool isDefaultNullBehavior() const override {
-    // Match functions are null preserving for the array/map argument, but
-    // predicate expression may use other fields and may not preserve nulls in
-    // these.
-    //
-    // For example, all_match(array[1, 2, 3], x -> x > coalesce(a, 0)) should
-    // not return null when 'a' is null.
-    return false;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -77,7 +67,7 @@ class MatchFunction : public exec::VectorFunction {
       auto wrapCapture = toWrapCapture<TContainer>(
           numElements, entry.callable, *entry.rows, flatContainer);
 
-      ErrorVectorPtr elementErrors;
+      exec::EvalErrorsPtr elementErrors;
       entry.callable->applyNoThrow(
           elementRows,
           nullptr, // No need to preserve any values in 'matchBits'.
@@ -105,19 +95,13 @@ class MatchFunction : public exec::VectorFunction {
     }
   }
 
-  static FOLLY_ALWAYS_INLINE bool hasError(
-      const ErrorVectorPtr& errors,
-      vector_size_t row) {
-    return errors && row < errors->size() && !errors->isNullAt(row);
-  }
-
   void applyInternal(
       FlatVector<bool>& flatResult,
       exec::EvalCtx& context,
       vector_size_t arrayRow,
       vector_size_t offset,
       vector_size_t size,
-      const ErrorVectorPtr& elementErrors,
+      const exec::EvalErrorsPtr& elementErrors,
       const exec::LocalDecodedVector& bitsDecoder) const {
     // all_match, none_match and any_match need to loop over predicate results
     // for element arrays and check for results, nulls and errors.
@@ -187,10 +171,11 @@ class MatchFunction : public exec::VectorFunction {
     std::exception_ptr errorPtr{nullptr};
     for (auto i = 0; i < size; ++i) {
       auto idx = offset + i;
-      if (hasError(elementErrors, idx)) {
-        errorPtr = *std::static_pointer_cast<std::exception_ptr>(
-            elementErrors->valueAt(idx));
-        continue;
+      if (elementErrors) {
+        if (auto error = elementErrors->errorAt(idx)) {
+          errorPtr = *error.value();
+          continue;
+        }
       }
 
       if (bitsDecoder->isNullAt(idx)) {
@@ -309,44 +294,59 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> valuesSignatures() {
 
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+/// Match functions are null preserving for the array/map argument, but
+/// predicate expression may use other fields and may not preserve nulls in
+/// these.
+///
+/// For example, all_match(array[1, 2, 3], x -> x > coalesce(a, 0)) should
+/// not return null when 'a' is null.
+
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_all_match,
     signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<AllMatchFunction>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_any_match,
     signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<AnyMatchFunction>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_none_match,
     signatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<NoneMatchFunction>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_all_keys_match,
     keysSignatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<AllKeysMatchFunction>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_any_keys_match,
     keysSignatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<AnyKeysMatchFunction>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_no_keys_match,
     keysSignatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<NoKeysMatchFunction>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_any_values_match,
     valuesSignatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<AnyValuesMatchFunction>());
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_no_values_match,
     valuesSignatures(),
+    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<NoValuesMatchFunction>());
 
 } // namespace facebook::velox::functions

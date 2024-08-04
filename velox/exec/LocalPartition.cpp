@@ -77,16 +77,15 @@ void LocalExchangeQueue::noMoreProducers() {
 
 BlockingReason LocalExchangeQueue::enqueue(
     RowVectorPtr input,
+    int64_t inputBytes,
     ContinueFuture* future) {
-  auto inputBytes = input->estimateFlatSize();
-
   std::vector<ContinuePromise> consumerPromises;
   bool blockedOnConsumer = false;
   bool isClosed = queue_.withWLock([&](auto& queue) {
     if (closed_) {
       return true;
     }
-    queue.push(std::move(input));
+    queue.emplace(std::move(input), inputBytes);
     consumerPromises = std::move(consumerPromises_);
 
     if (memoryManager_->increaseMemoryUsage(future, inputBytes)) {
@@ -139,11 +138,11 @@ BlockingReason LocalExchangeQueue::next(
       return BlockingReason::kWaitForProducer;
     }
 
-    *data = queue.front();
+    int64_t size;
+    std::tie(*data, size) = queue.front();
     queue.pop();
 
-    memoryPromises =
-        memoryManager_->decreaseMemoryUsage((*data)->estimateFlatSize());
+    memoryPromises = memoryManager_->decreaseMemoryUsage(size);
 
     return BlockingReason::kNotBlocked;
   });
@@ -151,8 +150,7 @@ BlockingReason LocalExchangeQueue::next(
   return blockingReason;
 }
 
-bool LocalExchangeQueue::isFinishedLocked(
-    const std::queue<RowVectorPtr>& queue) const {
+bool LocalExchangeQueue::isFinishedLocked(const Queue& queue) const {
   if (closed_) {
     return true;
   }
@@ -174,7 +172,7 @@ void LocalExchangeQueue::close() {
   queue_.withWLock([&](auto& queue) {
     uint64_t freedBytes = 0;
     while (!queue.empty()) {
-      freedBytes += queue.front()->estimateFlatSize();
+      freedBytes += queue.front().second;
       queue.pop();
     }
 
@@ -261,13 +259,12 @@ LocalPartition::LocalPartition(
 
 namespace {
 std::vector<BufferPtr> allocateIndexBuffers(
-    int numBuffers,
-    vector_size_t size,
+    const std::vector<vector_size_t>& sizes,
     memory::MemoryPool* pool) {
   std::vector<BufferPtr> indexBuffers;
-  indexBuffers.reserve(numBuffers);
-  for (auto i = 0; i < numBuffers; i++) {
-    indexBuffers.emplace_back(allocateIndices(size, pool));
+  indexBuffers.reserve(sizes.size());
+  for (auto size : sizes) {
+    indexBuffers.push_back(allocateIndices(size, pool));
   }
   return indexBuffers;
 }
@@ -307,11 +304,10 @@ void LocalPartition::addInput(RowVectorPtr input) {
     child->loadedVector();
   }
 
-  input_ = std::move(input);
-
   if (numPartitions_ == 1) {
     ContinueFuture future;
-    auto blockingReason = queues_[0]->enqueue(input_, &future);
+    auto blockingReason =
+        queues_[0]->enqueue(input, input->retainedSize(), &future);
     if (blockingReason != BlockingReason::kNotBlocked) {
       blockingReasons_.push_back(blockingReason);
       futures_.push_back(std::move(future));
@@ -320,11 +316,11 @@ void LocalPartition::addInput(RowVectorPtr input) {
   }
 
   const auto singlePartition =
-      partitionFunction_->partition(*input_, partitions_);
+      partitionFunction_->partition(*input, partitions_);
   if (singlePartition.has_value()) {
     ContinueFuture future;
-    auto blockingReason =
-        queues_[singlePartition.value()]->enqueue(input_, &future);
+    auto blockingReason = queues_[singlePartition.value()]->enqueue(
+        input, input->retainedSize(), &future);
     if (blockingReason != BlockingReason::kNotBlocked) {
       blockingReasons_.push_back(blockingReason);
       futures_.push_back(std::move(future));
@@ -332,29 +328,33 @@ void LocalPartition::addInput(RowVectorPtr input) {
     return;
   }
 
-  auto numInput = input_->size();
-  auto indexBuffers = allocateIndexBuffers(numPartitions_, numInput, pool());
+  const auto numInput = input->size();
+  std::vector<vector_size_t> maxIndex(numPartitions_, 0);
+  for (auto i = 0; i < numInput; ++i) {
+    ++maxIndex[partitions_[i]];
+  }
+  auto indexBuffers = allocateIndexBuffers(maxIndex, pool());
   auto rawIndices = getRawIndices(indexBuffers);
 
-  std::vector<vector_size_t> maxIndex(numPartitions_, 0);
+  std::fill(maxIndex.begin(), maxIndex.end(), 0);
   for (auto i = 0; i < numInput; ++i) {
     auto partition = partitions_[i];
     rawIndices[partition][maxIndex[partition]] = i;
     ++maxIndex[partition];
   }
 
+  const int64_t totalSize = input->retainedSize();
   for (auto i = 0; i < numPartitions_; i++) {
     auto partitionSize = maxIndex[i];
     if (partitionSize == 0) {
       // Do not enqueue empty partitions.
       continue;
     }
-    indexBuffers[i]->setSize(partitionSize * sizeof(vector_size_t));
     auto partitionData =
-        wrapChildren(input_, partitionSize, std::move(indexBuffers[i]));
-
+        wrapChildren(input, partitionSize, std::move(indexBuffers[i]));
     ContinueFuture future;
-    auto reason = queues_[i]->enqueue(partitionData, &future);
+    auto reason = queues_[i]->enqueue(
+        partitionData, totalSize * partitionSize / numInput, &future);
     if (reason != BlockingReason::kNotBlocked) {
       blockingReasons_.push_back(reason);
       futures_.push_back(std::move(future));

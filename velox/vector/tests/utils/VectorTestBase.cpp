@@ -110,15 +110,36 @@ BufferPtr VectorTestBase::makeNulls(const std::vector<bool>& values) {
   return nulls;
 }
 
-std::vector<RowVectorPtr> VectorTestBase::split(const RowVectorPtr& vector) {
+std::vector<RowVectorPtr> VectorTestBase::split(
+    const RowVectorPtr& vector,
+    int32_t n) {
   const auto numRows = vector->size();
-  VELOX_CHECK_GE(numRows, 2);
+  VELOX_CHECK_GE(numRows, n);
 
-  const auto n = numRows / 2;
-  return {
-      std::dynamic_pointer_cast<RowVector>(vector->slice(0, n)),
-      std::dynamic_pointer_cast<RowVector>(vector->slice(n, numRows - n)),
-  };
+  const auto numRowsPerVector = numRows / n;
+  std::vector<RowVectorPtr> vectors;
+
+  vector_size_t offset = 0;
+  for (auto i = 0; i < n - 1; ++i) {
+    vectors.push_back(std::dynamic_pointer_cast<RowVector>(
+        vector->slice(offset, numRowsPerVector)));
+    offset += numRowsPerVector;
+  }
+
+  vectors.push_back(std::dynamic_pointer_cast<RowVector>(
+      vector->slice(offset, numRows - offset)));
+  return vectors;
+}
+
+VectorPtr VectorTestBase::asArray(VectorPtr elements) {
+  auto* pool = elements->pool();
+  auto arrayType = ARRAY(elements->type());
+
+  BufferPtr sizes =
+      AlignedBuffer::allocate<vector_size_t>(1, pool, elements->size());
+  BufferPtr offsets = allocateOffsets(1, pool);
+  return std::make_shared<ArrayVector>(
+      pool, arrayType, nullptr, 1, offsets, sizes, std::move(elements));
 }
 
 void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual) {

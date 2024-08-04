@@ -20,17 +20,15 @@
 namespace facebook::velox::functions {
 namespace {
 
-class FindFirstFunctionBase : public exec::VectorFunction {
- public:
-  bool isDefaultNullBehavior() const override {
-    // find_first function is null preserving for the array argument, but
-    // predicate expression may use other fields and may not preserve nulls in
-    // these.
-    // For example: find_first(array[1, 2, 3], x -> x > coalesce(a, 0)) should
-    // not return null when 'a' is null.
-    return false;
+void recordInvalidStartIndex(vector_size_t row, exec::EvalCtx& context) {
+  try {
+    VELOX_USER_FAIL("SQL array indices start at 1. Got 0.");
+  } catch (const VeloxUserError&) {
+    context.setVeloxExceptionError(row, std::current_exception());
   }
+}
 
+class FindFirstFunctionBase : public exec::VectorFunction {
  protected:
   ArrayVectorPtr prepareInputArray(
       const VectorPtr& input,
@@ -66,6 +64,7 @@ class FindFirstFunctionBase : public exec::VectorFunction {
       exec::EvalCtx& context,
       THit onHit,
       TMiss onMiss) const {
+    const auto* rawNulls = flatArray->rawNulls();
     const auto* rawOffsets = flatArray->rawOffsets();
     const auto* rawSizes = flatArray->rawSizes();
 
@@ -79,7 +78,7 @@ class FindFirstFunctionBase : public exec::VectorFunction {
     StartIndexProcessor startIndexProcessor;
     if (startIndex != nullptr) {
       startIndexProcessor.process(
-          startIndex, rows, rawOffsets, rawSizes, context);
+          startIndex, rows, rawNulls, rawOffsets, rawSizes, context);
       rawOffsets = startIndexProcessor.adjustedOffsets->as<vector_size_t>();
       rawSizes = startIndexProcessor.adjustedSizes->as<vector_size_t>();
     }
@@ -88,12 +87,18 @@ class FindFirstFunctionBase : public exec::VectorFunction {
     // in most cases there will be only one function and the loop will run once.
     auto it = predicates.iterator(&rows);
     while (auto entry = it.next()) {
-      auto elementRows =
-          toElementRows(numElements, *entry.rows, rawOffsets, rawSizes);
+      auto elementRows = toElementRows(
+          numElements, *entry.rows, rawNulls, rawOffsets, rawSizes);
+      if (!elementRows.hasSelections()) {
+        // All arrays are NULL or empty.
+        entry.rows->applyToSelected([&](vector_size_t row) { onMiss(row); });
+        continue;
+      }
+
       auto wrapCapture = toWrapCapture<ArrayVector>(
           numElements, entry.callable, *entry.rows, flatArray);
 
-      ErrorVectorPtr elementErrors;
+      exec::EvalErrorsPtr elementErrors;
       entry.callable->applyNoThrow(
           elementRows,
           nullptr, // No need to preserve any values in 'matchBits'.
@@ -105,7 +110,10 @@ class FindFirstFunctionBase : public exec::VectorFunction {
 
       bitsDecoder.get()->decode(*matchBits, elementRows);
       entry.rows->applyToSelected([&](vector_size_t row) {
-        if (auto firstMatchingIndex = findFirstMatch(
+        if (rawNulls != nullptr && bits::isBitNull(rawNulls, row)) {
+          onMiss(row);
+        } else if (
+            auto firstMatchingIndex = findFirstMatch(
                 context,
                 row,
                 rawOffsets[row],
@@ -133,6 +141,7 @@ class FindFirstFunctionBase : public exec::VectorFunction {
     void process(
         const VectorPtr& startIndex,
         const SelectivityVector& rows,
+        const uint64_t* rawNulls,
         const vector_size_t* rawOffsets,
         const vector_size_t* rawSizes,
         exec::EvalCtx& context) {
@@ -147,7 +156,10 @@ class FindFirstFunctionBase : public exec::VectorFunction {
       auto* rawAdjustedSizes = adjustedSizes->asMutable<vector_size_t>();
 
       rows.applyToSelected([&](auto row) {
-        if (startIndexDecoder->isNullAt(row)) {
+        if (rawNulls != nullptr && bits::isBitNull(rawNulls, row)) {
+          rawAdjustedOffsets[row] = 0;
+          rawAdjustedSizes[row] = 0;
+        } else if (startIndexDecoder->isNullAt(row)) {
           rawAdjustedOffsets[row] = 0;
           rawAdjustedSizes[row] = 0;
         } else {
@@ -161,11 +173,7 @@ class FindFirstFunctionBase : public exec::VectorFunction {
             rawAdjustedOffsets[row] = 0;
             rawAdjustedSizes[row] = 0;
 
-            try {
-              VELOX_USER_FAIL("SQL array indices start at 1. Got 0.");
-            } catch (const VeloxUserError& exception) {
-              context.setVeloxExceptionError(row, std::current_exception());
-            }
+            recordInvalidStartIndex(row, context);
           } else if (start > 0) {
             rawAdjustedOffsets[row] = offset + (start - 1);
             rawAdjustedSizes[row] = size - (start - 1);
@@ -182,11 +190,16 @@ class FindFirstFunctionBase : public exec::VectorFunction {
   static SelectivityVector toElementRows(
       vector_size_t numElements,
       const SelectivityVector& arrayRows,
+      const uint64_t* rawNulls,
       const vector_size_t* rawOffsets,
       const vector_size_t* rawSizes) {
     SelectivityVector elementRows(numElements, false);
 
     arrayRows.applyToSelected([&](auto arrayRow) {
+      if (rawNulls != nullptr && bits::isBitNull(rawNulls, arrayRow)) {
+        return;
+      }
+
       const auto offset = rawOffsets[arrayRow];
       const auto size = rawSizes[arrayRow];
 
@@ -201,17 +214,6 @@ class FindFirstFunctionBase : public exec::VectorFunction {
     return elementRows;
   }
 
-  static FOLLY_ALWAYS_INLINE std::optional<std::exception_ptr> getOptionalError(
-      const ErrorVectorPtr& errors,
-      vector_size_t row) {
-    if (errors && row < errors->size() && !errors->isNullAt(row)) {
-      return *std::static_pointer_cast<std::exception_ptr>(
-          errors->valueAt(row));
-    }
-
-    return std::nullopt;
-  }
-
   // Returns an index of the first matching element or std::nullopt if no
   // element matches or there was an error evaluating the predicate.
   //
@@ -222,15 +224,16 @@ class FindFirstFunctionBase : public exec::VectorFunction {
       vector_size_t arrayRow,
       vector_size_t offset,
       vector_size_t size,
-      const ErrorVectorPtr& elementErrors,
+      const exec::EvalErrorsPtr& elementErrors,
       const exec::LocalDecodedVector& matchDecoder) const {
     const auto step = size > 0 ? 1 : -1;
-    for (auto i = offset; i != offset + size; i += step) {
-      auto index = i;
-      if (auto error = getOptionalError(elementErrors, index)) {
-        // Report first error to match Presto's implementation.
-        context.setError(arrayRow, error.value());
-        return std::nullopt;
+    for (auto index = offset; index != offset + size; index += step) {
+      if (elementErrors) {
+        if (auto error = elementErrors->errorAt(index)) {
+          // Report first error to match Presto's implementation.
+          context.setError(arrayRow, *error.value());
+          return std::nullopt;
+        }
       }
 
       if (!matchDecoder->isNullAt(index) &&
@@ -248,12 +251,38 @@ class FindFirstFunction : public FindFirstFunctionBase {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      const TypePtr& /*outputType*/,
+      const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     auto flatArray = prepareInputArray(args[0], rows, context);
-    auto* predicateVector = args.back()->asUnchecked<FunctionVector>();
     auto startIndexVector = (args.size() == 3 ? args[1] : nullptr);
+
+    if (flatArray->elements()->size() == 0) {
+      // All arrays are NULL or empty.
+
+      if (startIndexVector != nullptr) {
+        // Check start indices for zeros.
+
+        exec::LocalDecodedVector startIndexDecoder(
+            context, *startIndexVector, rows);
+        rows.applyToSelected([&](auto row) {
+          if (flatArray->isNullAt(row) || startIndexDecoder->isNullAt(row)) {
+            return;
+          }
+          const auto start = startIndexDecoder->valueAt<int64_t>(row);
+          if (start == 0) {
+            recordInvalidStartIndex(row, context);
+          }
+        });
+      }
+
+      auto localResult = BaseVector::createNullConstant(
+          outputType, rows.end(), context.pool());
+      context.moveOrCopyResult(localResult, rows, result);
+      return;
+    }
+
+    auto* predicateVector = args.back()->asUnchecked<FunctionVector>();
 
     // Collect indices of the first matching elements or NULLs if no match or
     // error.
@@ -273,7 +302,7 @@ class FindFirstFunction : public FindFirstFunctionBase {
           if (flatArray->elements()->isNullAt(firstMatchingIndex)) {
             try {
               VELOX_USER_FAIL("find_first found NULL as the first match");
-            } catch (const VeloxUserError& exception) {
+            } catch (const VeloxUserError&) {
               context.setVeloxExceptionError(row, std::current_exception());
             }
           } else {
@@ -367,6 +396,12 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> indexSignatures() {
 }
 
 } // namespace
+
+/// find_first function is null preserving for the array argument, but
+/// predicate expression may use other fields and may not preserve nulls in
+/// these.
+/// For example: find_first(array[1, 2, 3], x -> x > coalesce(a, 0)) should
+/// not return null when 'a' is null.
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_find_first,

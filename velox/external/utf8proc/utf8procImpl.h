@@ -384,7 +384,7 @@ UTF8PROC_DLLEXPORT utf8proc_bool utf8proc_grapheme_break_stateful(
 
 UTF8PROC_DLLEXPORT utf8proc_bool
 utf8proc_grapheme_break(utf8proc_int32_t c1, utf8proc_int32_t c2) {
-  return utf8proc_grapheme_break_stateful(c1, c2, NULL);
+  return utf8proc_grapheme_break_stateful(c1, c2, nullptr);
 }
 
 static utf8proc_int32_t seqindex_decode_entry(const utf8proc_uint16_t** entry) {
@@ -421,7 +421,7 @@ static utf8proc_ssize_t seqindex_write_char_decomposed(
 
     written += utf8proc_decompose_char(
         entry_cp,
-        dst + written,
+        dst ? dst + written : dst,
         (bufsize > written) ? (bufsize - written) : 0,
         options,
         last_boundclass);
@@ -589,7 +589,7 @@ UTF8PROC_DLLEXPORT utf8proc_ssize_t utf8proc_decompose(
     utf8proc_ssize_t bufsize,
     utf8proc_int16_t options) {
   return utf8proc_decompose_custom(
-      str, strlen, buffer, bufsize, options, NULL, NULL);
+      str, strlen, buffer, bufsize, options, nullptr, nullptr);
 }
 
 UTF8PROC_DLLEXPORT utf8proc_ssize_t utf8proc_decompose_custom(
@@ -635,7 +635,7 @@ UTF8PROC_DLLEXPORT utf8proc_ssize_t utf8proc_decompose_custom(
       }
       decomp_result = utf8proc_decompose_char(
           uc,
-          buffer + wpos,
+          buffer ? buffer + wpos : buffer,
           (bufsize > wpos) ? (bufsize - wpos) : 0,
           options,
           &boundclass);

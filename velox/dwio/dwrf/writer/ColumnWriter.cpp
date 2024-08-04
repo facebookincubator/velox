@@ -205,7 +205,9 @@ class IntegerColumnWriter : public BaseColumnWriter {
                 context.shareFlatMapDictionaries() ? 0 : sequence},
             getMemoryPool(MemoryUsageCategory::DICTIONARY),
             getMemoryPool(MemoryUsageCategory::GENERAL))},
-        rows_{getMemoryPool(MemoryUsageCategory::GENERAL)},
+        rows_{
+            getMemoryPool(MemoryUsageCategory::GENERAL),
+            /*initialCapacity=*/16},
         dictionaryKeySizeThreshold_{
             getConfig(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD)},
         sort_{getConfig(Config::DICTIONARY_SORT_KEYS)},
@@ -443,6 +445,11 @@ class IntegerColumnWriter : public BaseColumnWriter {
     if (endOfLastStride < rows_.size()) {
       populateData(endOfLastStride, rows_.size());
     }
+  }
+
+  bool useDictionaryEncoding() const override {
+    return getConfig(Config::INTEGER_DICTIONARY_ENCODING_ENABLED) &&
+        BaseColumnWriter::useDictionaryEncoding();
   }
 
   void populateDictionaryEncodingStreams();
@@ -795,7 +802,9 @@ class StringColumnWriter : public BaseColumnWriter {
         dictEncoder_{
             getMemoryPool(MemoryUsageCategory::DICTIONARY),
             getMemoryPool(MemoryUsageCategory::GENERAL)},
-        rows_{getMemoryPool(MemoryUsageCategory::GENERAL)},
+        rows_{
+            getMemoryPool(MemoryUsageCategory::GENERAL),
+            /*initialCapacity=*/16},
         encodingSelector_{
             getMemoryPool(MemoryUsageCategory::GENERAL),
             getConfig(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD),
@@ -951,14 +960,6 @@ class StringColumnWriter : public BaseColumnWriter {
     return true;
   }
 
- protected:
-  bool useDictionaryEncoding() const override {
-    return (sequence_ == 0 ||
-            !context_.getConfig(
-                Config::MAP_FLAT_DISABLE_DICT_ENCODING_STRING)) &&
-        !context_.isLowMemoryMode();
-  }
-
  private:
   uint64_t writeDict(
       DecodedVector& decodedVector,
@@ -1052,6 +1053,13 @@ class StringColumnWriter : public BaseColumnWriter {
     if (endOfLastStride < rows_.size()) {
       populateData(endOfLastStride, rows_.size(), numStrides);
     }
+  }
+
+  bool useDictionaryEncoding() const override {
+    return getConfig(Config::STRING_DICTIONARY_ENCODING_ENABLED) &&
+        (sequence_ == 0 ||
+         !getConfig(Config::MAP_FLAT_DISABLE_DICT_ENCODING_STRING)) &&
+        !context_.isLowMemoryMode();
   }
 
   void populateDictionaryEncodingStreams();
@@ -1245,20 +1253,22 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
                 [&](auto buf, auto size) {
                   inDictionary_->add(buf, common::Ranges::of(0, size), nullptr);
                 });
-
+            auto errorGuard =
+                folly::makeGuard([&inDictWriter]() { inDictWriter.abort(); });
             uint32_t strideDictSize = 0;
             for (size_t i = start; i != end; ++i) {
               auto origIndex = rows_[i];
               bool valInDict = inDict[origIndex];
               inDictWriter.add(valInDict ? 1 : 0);
-              // TODO: optimize this branching either through restoring visitor
-              // pattern, or through separating the index backfill.
+              // TODO: optimize this branching either through restoring
+              // visitor pattern, or through separating the index backfill.
               if (!valInDict) {
                 auto strideDictIndex = lookupTable[origIndex];
                 sortedStrideDictKeyIndexBuffer[strideDictIndex] = origIndex;
                 ++strideDictSize;
               }
             }
+            errorGuard.dismiss();
             inDictWriter.close();
             VELOX_CHECK_EQ(strideDictSize, strideDictKeyCount);
           }
@@ -1273,12 +1283,16 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
                   strideDictionaryDataLength_->add(
                       buf, common::Ranges::of(0, size), nullptr);
                 });
+            auto errorGuard = folly::makeGuard(
+                [&strideLengthWriter]() { strideLengthWriter.abort(); });
 
             for (size_t i = 0; i < strideDictKeyCount; ++i) {
               auto val = dictEncoder_.getKey(sortedStrideDictKeyIndexBuffer[i]);
               strideDictionaryData_->write(val.data(), val.size());
               strideLengthWriter.add(val.size());
             }
+
+            errorGuard.dismiss();
             strideLengthWriter.close();
           }
         }
@@ -1318,12 +1332,16 @@ void StringColumnWriter::convertToDirectEncoding() {
             [&](auto buf, auto size) {
               dataDirectLength_->add(buf, common::Ranges::of(0, size), nullptr);
             });
+        auto errorGuard =
+            folly::makeGuard([&lengthWriter]() { lengthWriter.abort(); });
 
         for (size_t i = start; i != end; ++i) {
           auto key = dictEncoder_.getKey(rows_[i]);
           dataDirect_->write(key.data(), key.size());
           lengthWriter.add(key.size());
         }
+
+        errorGuard.dismiss();
         lengthWriter.close();
       };
 
@@ -1389,13 +1407,13 @@ uint64_t FloatColumnWriter<T>::write(
           [&](auto buf, auto size) {
             data_.write(reinterpret_cast<const char*>(buf), size * sizeof(T));
           });
+      auto errorGuard = folly::makeGuard([&writer]() { writer.abort(); });
 
       auto processRow = [&](size_t pos) {
         auto val = data[pos];
         writer.add(val);
         statsBuilder.addValues(val);
       };
-
       for (auto& pos : ranges) {
         if (bits::isBitNull(nulls, pos)) {
           ++nullCount;
@@ -1403,6 +1421,8 @@ uint64_t FloatColumnWriter<T>::write(
           processRow(pos);
         }
       }
+
+      errorGuard.dismiss();
       writer.close();
     } else {
       for (auto& pos : ranges) {
@@ -1426,12 +1446,13 @@ uint64_t FloatColumnWriter<T>::write(
         [&](auto buf, auto size) {
           data_.write(reinterpret_cast<const char*>(buf), size * sizeof(T));
         });
+    auto errorGuard = folly::makeGuard([&writer]() { writer.abort(); });
+
     auto processRow = [&](size_t pos) {
       auto val = decodedVector.template valueAt<T>(pos);
       writer.add(val);
       statsBuilder.addValues(val);
     };
-
     if (decodedVector.mayHaveNulls()) {
       for (auto& pos : ranges) {
         if (decodedVector.isNullAt(pos)) {
@@ -1445,6 +1466,8 @@ uint64_t FloatColumnWriter<T>::write(
         processRow(pos);
       }
     }
+
+    errorGuard.dismiss();
     writer.close();
   }
 

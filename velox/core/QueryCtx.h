@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/Executor.h>
@@ -25,8 +26,12 @@
 
 namespace facebook::velox::core {
 
-class QueryCtx {
+class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
  public:
+  ~QueryCtx() {
+    VELOX_CHECK(!underArbitration_);
+  }
+
   /// QueryCtx is used in different places. When used with `Task::start()`, it's
   /// required that the caller supplies the executor and ensure its lifetime
   /// outlives the tasks that use it. In contrast, when used in expression
@@ -34,39 +39,14 @@ class QueryCtx {
   /// mode, executor is not needed. Hence, we don't require executor to always
   /// be passed in here, but instead, ensure that executor exists when actually
   /// being used.
-  // TODO(jtan6): Deprecate this constructor after external dependencies are
-  //   migrated
-  QueryCtx(
-      folly::Executor* executor,
-      std::unordered_map<std::string, std::string> queryConfigValues,
-      std::unordered_map<std::string, std::shared_ptr<Config>>
-          connectorConfigs = {},
-      cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
-      std::shared_ptr<memory::MemoryPool> pool = nullptr,
-      std::shared_ptr<folly::Executor> spillExecutor = nullptr,
-      const std::string& queryId = "");
-
-  QueryCtx(
+  static std::shared_ptr<QueryCtx> create(
       folly::Executor* executor = nullptr,
       QueryConfig&& queryConfig = QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<Config>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
-      std::shared_ptr<folly::Executor> spillExecutor = nullptr,
-      const std::string& queryId = "");
-
-  /// Constructor to block the destruction of executor while this
-  /// object is alive.
-  ///
-  /// This constructor does not keep the ownership of executor.
-  explicit QueryCtx(
-      folly::Executor::KeepAlive<> executorKeepalive,
-      std::unordered_map<std::string, std::string> queryConfigValues = {},
-      std::unordered_map<std::string, std::shared_ptr<Config>>
-          connectorConfigs = {},
-      cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
-      std::shared_ptr<memory::MemoryPool> pool = nullptr,
+      folly::Executor* spillExecutor = nullptr,
       const std::string& queryId = "");
 
   static std::string generatePoolName(const std::string& queryId);
@@ -80,21 +60,21 @@ class QueryCtx {
   }
 
   folly::Executor* executor() const {
-    if (executor_ != nullptr) {
-      return executor_;
-    }
-    auto executor = executorKeepalive_.get();
-    VELOX_CHECK(executor, "Executor was not supplied.");
-    return executor;
+    return executor_;
+    ;
+  }
+
+  bool isExecutorSupplied() const {
+    return executor_ != nullptr;
   }
 
   const QueryConfig& queryConfig() const {
     return queryConfig_;
   }
 
-  Config* getConnectorConfig(const std::string& connectorId) const {
-    auto it = connectorConfigs_.find(connectorId);
-    if (it == connectorConfigs_.end()) {
+  Config* connectorSessionProperties(const std::string& connectorId) const {
+    auto it = connectorSessionProperties_.find(connectorId);
+    if (it == connectorSessionProperties_.end()) {
       return getEmptyConfig();
     }
     return it->second.get();
@@ -109,26 +89,91 @@ class QueryCtx {
 
   // Overrides the previous connector-specific configuration. Note that this
   // function is NOT thread-safe and should probably only be used in tests.
-  void setConnectorConfigOverridesUnsafe(
+  void setConnectorSessionOverridesUnsafe(
       const std::string& connectorId,
       std::unordered_map<std::string, std::string>&& configOverrides) {
-    connectorConfigs_[connectorId] =
+    connectorSessionProperties_[connectorId] =
         std::make_shared<MemConfig>(std::move(configOverrides));
   }
 
   folly::Executor* spillExecutor() const {
-    return spillExecutor_.get();
+    return spillExecutor_;
   }
 
   const std::string& queryId() const {
     return queryId_;
   }
 
+  /// Checks if the associated query is under memory arbitration or not. The
+  /// function returns true if it is and set future which is fulfilled when the
+  /// the memory arbiration finishes.
+  bool checkUnderArbitration(ContinueFuture* future);
+
+  /// Updates the aggregated spill bytes of this query, and and throws if
+  /// exceeds the max spill bytes limit.
+  void updateSpilledBytesAndCheckLimit(uint64_t bytes);
+
   void testingOverrideMemoryPool(std::shared_ptr<memory::MemoryPool> pool) {
     pool_ = std::move(pool);
   }
 
+  /// Indicates if the query is under memory arbitration or not.
+  bool testingUnderArbitration() const {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(underArbitration_ || arbitrationPromises_.empty());
+    return underArbitration_;
+  }
+
  private:
+  /// QueryCtx is used in different places. When used with `Task::start()`, it's
+  /// required that the caller supplies the executor and ensure its lifetime
+  /// outlives the tasks that use it. In contrast, when used in expression
+  /// evaluation through `ExecCtx` or 'Task::next()' for single thread execution
+  /// mode, executor is not needed. Hence, we don't require executor to always
+  /// be passed in here, but instead, ensure that executor exists when actually
+  /// being used.
+  QueryCtx(
+      folly::Executor* executor = nullptr,
+      QueryConfig&& queryConfig = QueryConfig{{}},
+      std::unordered_map<std::string, std::shared_ptr<Config>>
+          connectorConfigs = {},
+      cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
+      std::shared_ptr<memory::MemoryPool> pool = nullptr,
+      folly::Executor* spillExecutor = nullptr,
+      const std::string& queryId = "");
+
+  class MemoryReclaimer : public memory::MemoryReclaimer {
+   public:
+    static std::unique_ptr<memory::MemoryReclaimer> create(
+        QueryCtx* queryCtx,
+        memory::MemoryPool* pool);
+
+    uint64_t reclaim(
+        memory::MemoryPool* pool,
+        uint64_t targetBytes,
+        uint64_t maxWaitMs,
+        memory::MemoryReclaimer::Stats& stats) override;
+
+   protected:
+    MemoryReclaimer(
+        const std::shared_ptr<QueryCtx>& queryCtx,
+        memory::MemoryPool* pool)
+        : queryCtx_(queryCtx), pool_(pool) {
+      VELOX_CHECK_NOT_NULL(pool_);
+    }
+
+    // Gets the shared pointer to the associated query ctx to ensure its
+    // liveness during the query memory reclaim operation.
+    //
+    // NOTE: an operator's memory pool can outlive its operator.
+    std::shared_ptr<QueryCtx> ensureQueryCtx() const {
+      return queryCtx_.lock();
+    }
+
+    const std::weak_ptr<QueryCtx> queryCtx_;
+    memory::MemoryPool* const pool_;
+  };
+
   static Config* getEmptyConfig() {
     static const std::unique_ptr<Config> kEmptyConfig =
         std::make_unique<MemConfig>();
@@ -137,20 +182,35 @@ class QueryCtx {
 
   void initPool(const std::string& queryId) {
     if (pool_ == nullptr) {
-      pool_ = memory::defaultMemoryManager().addRootPool(
-          QueryCtx::generatePoolName(queryId));
+      pool_ = memory::memoryManager()->addRootPool(
+          QueryCtx::generatePoolName(queryId), memory::kMaxMemory);
     }
   }
 
-  const std::string queryId_;
+  // Setup the memory reclaimer for arbitration if user provided memory pool
+  // hasn't set it.
+  void maybeSetReclaimer();
 
-  std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs_;
-  cache::AsyncDataCache* cache_;
+  // Invoked to start memory arbitration on this query.
+  void startArbitration();
+  // Invoked to stop memory arbitration on this query.
+  void finishArbitration();
+
+  const std::string queryId_;
+  folly::Executor* const executor_{nullptr};
+  folly::Executor* const spillExecutor_{nullptr};
+  cache::AsyncDataCache* const cache_;
+
+  std::unordered_map<std::string, std::shared_ptr<Config>>
+      connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
-  folly::Executor* executor_;
-  folly::Executor::KeepAlive<> executorKeepalive_;
   QueryConfig queryConfig_;
-  std::shared_ptr<folly::Executor> spillExecutor_;
+  std::atomic<uint64_t> numSpilledBytes_{0};
+
+  mutable std::mutex mutex_;
+  // Indicates if this query is under memory arbitration or not.
+  bool underArbitration_{false};
+  std::vector<ContinuePromise> arbitrationPromises_;
 };
 
 // Represents the state of one thread of query execution.

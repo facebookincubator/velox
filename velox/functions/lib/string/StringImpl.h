@@ -111,6 +111,30 @@ FOLLY_ALWAYS_INLINE int64_t length(const T& input) {
   }
 }
 
+/// Return a capped length in characters(controlled by maxLength) of a string.
+/// The returned length is not greater than maxLength.
+template <bool isAscii, typename T>
+FOLLY_ALWAYS_INLINE int64_t cappedLength(const T& input, size_t maxLength) {
+  if constexpr (isAscii) {
+    return input.size() > maxLength ? maxLength : input.size();
+  } else {
+    return cappedLengthUnicode(input.data(), input.size(), maxLength);
+  }
+}
+
+/// Return a capped length in bytes(controlled by maxCharacters) of a string.
+/// The returned length may be greater than maxCharacters if there are
+/// multi-byte characters present in the input string.
+template <bool isAscii, typename TString>
+FOLLY_ALWAYS_INLINE int64_t
+cappedByteLength(const TString& input, size_t maxCharacters) {
+  if constexpr (isAscii) {
+    return input.size() > maxCharacters ? maxCharacters : input.size();
+  } else {
+    return cappedByteLengthUnicode(input.data(), input.size(), maxCharacters);
+  }
+}
+
 /// Write the Unicode codePoint as string to the output string. The function
 /// behavior is undefined when code point it invalid. Implements the logic of
 /// presto chr function.
@@ -285,7 +309,7 @@ FOLLY_ALWAYS_INLINE bool md5_radix(
 
 namespace {
 FOLLY_ALWAYS_INLINE int64_t asciiWhitespaces() {
-  std::vector<int32_t> codes = {9, 10, 11, 12, 13, 28, 29, 30, 31, 32};
+  int8_t codes[] = {9, 10, 11, 12, 13, 28, 29, 30, 31, 32};
   int64_t bitMask = 0;
   for (auto code : codes) {
     bits::setBit(&bitMask, code, true);
@@ -294,7 +318,7 @@ FOLLY_ALWAYS_INLINE int64_t asciiWhitespaces() {
 }
 
 FOLLY_ALWAYS_INLINE int64_t asciiWhitespaceCodes() {
-  std::vector<int32_t> codes = {9, 10, 11, 12, 13, 28, 29, 30, 31, 32};
+  int8_t codes[] = {9, 10, 11, 12, 13, 28, 29, 30, 31, 32};
   int64_t bitMask = 0;
   for (auto code : codes) {
     bits::setBit(&bitMask, code, true);
@@ -303,7 +327,7 @@ FOLLY_ALWAYS_INLINE int64_t asciiWhitespaceCodes() {
 }
 
 FOLLY_ALWAYS_INLINE std::array<int64_t, 2> unicodeWhitespaceCodes() {
-  std::vector<int32_t> codes = {
+  int16_t codes[] = {
       8192,
       8193,
       8194,
@@ -482,8 +506,15 @@ template <
 FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
     TOutString& output,
     const TInString& input) {
+  auto emptyOutput = [&]() {
+    if constexpr (std::is_same_v<TOutString, StringView>) {
+      output = StringView("");
+    } else {
+      output.setEmpty();
+    }
+  };
   if (input.empty()) {
-    output.setEmpty();
+    emptyOutput();
     return;
   }
 
@@ -502,7 +533,7 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
     }
 
     if (curStartPos >= input.size()) {
-      output.setEmpty();
+      emptyOutput();
       return;
     }
   }
@@ -524,12 +555,17 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
     }
 
     if (endIndex < startIndex) {
-      output.setEmpty();
+      emptyOutput();
       return;
     }
   }
 
-  output.setNoCopy(StringView(stringStart, endIndex - startIndex + 1));
+  auto view = StringView(stringStart, endIndex - startIndex + 1);
+  if constexpr (std::is_same_v<TOutString, StringView>) {
+    output = view;
+  } else {
+    output.setNoCopy(view);
+  }
 }
 
 template <bool ascii, typename TOutString, typename TInString>
@@ -557,13 +593,16 @@ FOLLY_ALWAYS_INLINE void pad(
       "pad size must be in the range [0..{})",
       padMaxSize);
   VELOX_USER_CHECK(padString.size() > 0, "padString must not be empty");
+  int64_t padStringCharLength = length<isAscii>(padString);
+  VELOX_USER_CHECK(padStringCharLength > 0, "padString must be a valid string");
 
   int64_t stringCharLength = length<isAscii>(string);
   // If string has at most size characters, truncate it if necessary
   // and return it as the result.
   if (UNLIKELY(stringCharLength >= size)) {
     size_t prefixByteSize =
-        stringCore::getByteRange<isAscii>(string.data(), 1, size).second;
+        stringCore::getByteRange<isAscii>(string.data(), string.size(), 1, size)
+            .second;
     output.resize(prefixByteSize);
     if (LIKELY(prefixByteSize > 0)) {
       std::memcpy(output.data(), string.data(), prefixByteSize);
@@ -571,7 +610,6 @@ FOLLY_ALWAYS_INLINE void pad(
     return;
   }
 
-  int64_t padStringCharLength = length<isAscii>(padString);
   // How many characters do we need to add to string.
   int64_t fullPaddingCharLength = size - stringCharLength;
   // How many full copies of padString need to be added.
@@ -579,10 +617,12 @@ FOLLY_ALWAYS_INLINE void pad(
   // If the length of padString does not evenly divide the length of the
   // padding we need to add, how long of a prefix of padString needs to be
   // added at the end of the padding.  Will be 0 if it is evenly divisible.
-  size_t padPrefixByteLength =
-      stringCore::getByteRange<isAscii>(
-          padString.data(), 1, fullPaddingCharLength % padStringCharLength)
-          .second;
+  size_t padPrefixByteLength = stringCore::getByteRange<isAscii>(
+                                   padString.data(),
+                                   padString.size(),
+                                   1,
+                                   fullPaddingCharLength % padStringCharLength)
+                                   .second;
   int64_t fullPaddingByteLength =
       padString.size() * fullPadCopies + padPrefixByteLength;
   // The final size of the output string in bytes.

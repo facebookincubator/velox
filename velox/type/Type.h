@@ -15,12 +15,10 @@
  */
 #pragma once
 
-#include <fmt/core.h>
-#include <fmt/format.h>
-#include <folly/Format.h>
+#include <folly/CPortability.h>
 #include <folly/Range.h>
-#include <folly/String.h>
-#include <folly/json.h>
+#include <folly/dynamic.h>
+
 #include <cstdint>
 #include <cstring>
 #include <ctime>
@@ -33,7 +31,6 @@
 #include <typeindex>
 #include <vector>
 
-#include "folly/CPortability.h"
 #include "velox/common/base/ClassName.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/HugeInt.h"
@@ -541,6 +538,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   VELOX_FLUENT_CAST(Row, ROW)
   VELOX_FLUENT_CAST(Opaque, OPAQUE)
   VELOX_FLUENT_CAST(UnKnown, UNKNOWN)
+  VELOX_FLUENT_CAST(Function, FUNCTION)
 
   const ShortDecimalType& asShortDecimal() const;
   const LongDecimalType& asLongDecimal() const;
@@ -666,7 +664,7 @@ class DecimalType : public ScalarType<KIND> {
  public:
   static_assert(KIND == TypeKind::BIGINT || KIND == TypeKind::HUGEINT);
   static constexpr uint8_t kMaxPrecision = KIND == TypeKind::BIGINT ? 18 : 38;
-  static constexpr uint8_t kMinPrecision = KIND == TypeKind::BIGINT ? 0 : 19;
+  static constexpr uint8_t kMinPrecision = KIND == TypeKind::BIGINT ? 1 : 19;
 
   inline bool equivalent(const Type& other) const override {
     if (!Type::hasSameTypeId(other)) {
@@ -787,6 +785,14 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
 
   size_t cppSizeInBytes() const override {
     return 0;
+  }
+
+  bool isOrderable() const override {
+    return true;
+  }
+
+  bool isComparable() const override {
+    return true;
   }
 
   bool equivalent(const Type& other) const override {
@@ -915,6 +921,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
       std::vector<std::string>&& names,
       std::vector<std::shared_ptr<const Type>>&& types);
 
+  ~RowType() override;
+
   uint32_t size() const override;
 
   const std::shared_ptr<const Type>& childAt(uint32_t idx) const override;
@@ -961,14 +969,24 @@ class RowType : public TypeBase<TypeKind::ROW> {
   }
 
   const std::vector<TypeParameter>& parameters() const override {
-    return parameters_;
+    auto* parameters = parameters_.load();
+    if (FOLLY_UNLIKELY(!parameters)) {
+      parameters = makeParameters().release();
+      std::vector<TypeParameter>* oldParameters = nullptr;
+      if (!parameters_.compare_exchange_strong(oldParameters, parameters)) {
+        delete parameters;
+        parameters = oldParameters;
+      }
+    }
+    return *parameters;
   }
 
  private:
+  std::unique_ptr<std::vector<TypeParameter>> makeParameters() const;
+
   const std::vector<std::string> names_;
   const std::vector<std::shared_ptr<const Type>> children_;
-  const std::vector<TypeParameter> parameters_;
-  const folly::F14FastMap<std::string, uint32_t> childrenIndices_;
+  mutable std::atomic<std::vector<TypeParameter>*> parameters_{nullptr};
 };
 
 using RowTypePtr = std::shared_ptr<const RowType>;
@@ -1268,6 +1286,10 @@ class DateType : public IntegerType {
   }
 
   std::string toString(int32_t days) const;
+
+  /// Returns a date, represented as days since epoch,
+  /// as an ISO 8601-formatted string.
+  static std::string toIso8601(int32_t days);
 
   int32_t toDays(folly::StringPiece in) const;
 
@@ -1716,152 +1738,6 @@ std::shared_ptr<const Type> createType<TypeKind::OPAQUE>(
 
 #undef VELOX_SCALAR_ACCESSOR
 
-template <typename UNDERLYING_TYPE>
-struct Variadic {
-  using underlying_type = UNDERLYING_TYPE;
-
-  Variadic() = delete;
-};
-
-// A type that can be used in simple function to represent any type.
-// Two Generics with the same type variables should bound to the same type.
-template <size_t id>
-struct TypeVariable {
-  static size_t getId() {
-    return id;
-  }
-};
-
-using T1 = TypeVariable<1>;
-using T2 = TypeVariable<2>;
-using T3 = TypeVariable<3>;
-using T4 = TypeVariable<4>;
-using T5 = TypeVariable<5>;
-using T6 = TypeVariable<6>;
-using T7 = TypeVariable<7>;
-using T8 = TypeVariable<8>;
-
-struct AnyType {};
-
-template <typename T = AnyType>
-struct Generic {
-  Generic() = delete;
-};
-
-using Any = Generic<>;
-
-template <typename>
-struct isVariadicType : public std::false_type {};
-
-template <typename T>
-struct isVariadicType<Variadic<T>> : public std::true_type {};
-
-template <typename>
-struct isGenericType : public std::false_type {};
-
-template <typename T>
-struct isGenericType<Generic<T>> : public std::true_type {};
-
-template <typename>
-struct isOpaqueType : public std::false_type {};
-
-template <typename T>
-struct isOpaqueType<std::shared_ptr<T>> : public std::true_type {};
-
-template <typename KEY, typename VALUE>
-struct Map {
-  using key_type = KEY;
-  using value_type = VALUE;
-
-  static_assert(
-      !isVariadicType<key_type>::value,
-      "Map keys cannot be Variadic");
-  static_assert(
-      !isVariadicType<value_type>::value,
-      "Map values cannot be Variadic");
-
- private:
-  Map() {}
-};
-
-template <typename ELEMENT>
-struct Array {
-  using element_type = ELEMENT;
-
-  static_assert(
-      !isVariadicType<element_type>::value,
-      "Array elements cannot be Variadic");
-
- private:
-  Array() {}
-};
-
-template <typename ELEMENT>
-using ArrayWriterT = Array<ELEMENT>;
-
-template <typename... T>
-struct Row {
-  template <size_t idx>
-  using type_at = typename std::tuple_element<idx, std::tuple<T...>>::type;
-
-  static const size_t size_ = sizeof...(T);
-
-  static_assert(
-      std::conjunction<std::bool_constant<!isVariadicType<T>::value>...>::value,
-      "Struct fields cannot be Variadic");
-
- private:
-  Row() {}
-};
-
-struct DynamicRow {
- private:
-  DynamicRow() {}
-};
-
-// T must be a struct with T::type being a built-in type and T::typeName
-// type name to use in FunctionSignature.
-template <typename T>
-struct CustomType {
- private:
-  CustomType() {}
-};
-
-template <typename T>
-struct UnwrapCustomType {
-  using type = T;
-};
-
-template <typename T>
-struct UnwrapCustomType<CustomType<T>> {
-  using type = typename T::type;
-};
-
-struct IntervalDayTime {
- private:
-  IntervalDayTime() {}
-};
-
-struct IntervalYearMonth {
- private:
-  IntervalYearMonth() {}
-};
-
-struct Date {
- private:
-  Date() {}
-};
-
-struct Varbinary {
- private:
-  Varbinary() {}
-};
-
-struct Varchar {
- private:
-  Varchar() {}
-};
-
 template <typename T>
 struct SimpleTypeTrait {};
 
@@ -1890,204 +1766,10 @@ template <>
 struct SimpleTypeTrait<bool> : public TypeTraits<TypeKind::BOOLEAN> {};
 
 template <>
-struct SimpleTypeTrait<Varchar> : public TypeTraits<TypeKind::VARCHAR> {};
-
-template <>
-struct SimpleTypeTrait<Varbinary> : public TypeTraits<TypeKind::VARBINARY> {};
-
-template <>
 struct SimpleTypeTrait<Timestamp> : public TypeTraits<TypeKind::TIMESTAMP> {};
 
 template <>
-struct SimpleTypeTrait<Date> : public SimpleTypeTrait<int32_t> {
-  static constexpr const char* name = "DATE";
-};
-
-template <>
-struct SimpleTypeTrait<IntervalDayTime> : public SimpleTypeTrait<int64_t> {
-  static constexpr const char* name = "INTERVAL DAY TO SECOND";
-};
-
-template <>
-struct SimpleTypeTrait<IntervalYearMonth> : public SimpleTypeTrait<int32_t> {
-  static constexpr const char* name = "INTERVAL YEAR TO MONTH";
-};
-
-template <typename T>
-struct SimpleTypeTrait<Generic<T>> {
-  static constexpr TypeKind typeKind = TypeKind::UNKNOWN;
-  static constexpr bool isPrimitiveType = false;
-  static constexpr bool isFixedWidth = false;
-};
-
-template <typename T>
-struct SimpleTypeTrait<std::shared_ptr<T>>
-    : public TypeTraits<TypeKind::OPAQUE> {};
-
-template <typename KEY, typename VAL>
-struct SimpleTypeTrait<Map<KEY, VAL>> : public TypeTraits<TypeKind::MAP> {};
-
-template <typename ELEMENT>
-struct SimpleTypeTrait<Array<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {};
-
-template <typename... T>
-struct SimpleTypeTrait<Row<T...>> : public TypeTraits<TypeKind::ROW> {};
-
-template <>
-struct SimpleTypeTrait<DynamicRow> : public TypeTraits<TypeKind::ROW> {};
-
-// T is also a simple type that represent the physical type of the custom type.
-template <typename T>
-struct SimpleTypeTrait<CustomType<T>>
-    : public SimpleTypeTrait<typename T::type> {
-  using physical_t = SimpleTypeTrait<typename T::type>;
-  static constexpr TypeKind typeKind = physical_t::typeKind;
-  static constexpr bool isPrimitiveType = physical_t::isPrimitiveType;
-  static constexpr bool isFixedWidth = physical_t::isFixedWidth;
-
-  // This is different than the physical type name.
-  static constexpr char* name = T::typeName;
-};
-
-template <>
 struct SimpleTypeTrait<UnknownValue> : public TypeTraits<TypeKind::UNKNOWN> {};
-
-// TODO: move cppToType testing utilities.
-template <typename T>
-struct CppToType {};
-
-template <TypeKind KIND>
-struct CppToTypeBase : public TypeTraits<KIND> {
-  static auto create() {
-    return TypeFactory<KIND>::create();
-  }
-};
-
-template <>
-struct CppToType<int128_t> : public CppToTypeBase<TypeKind::HUGEINT> {};
-
-template <>
-struct CppToType<__uint128_t> : public CppToTypeBase<TypeKind::HUGEINT> {};
-
-template <>
-struct CppToType<int64_t> : public CppToTypeBase<TypeKind::BIGINT> {};
-
-template <>
-struct CppToType<uint64_t> : public CppToTypeBase<TypeKind::BIGINT> {};
-
-template <>
-struct CppToType<int32_t> : public CppToTypeBase<TypeKind::INTEGER> {};
-
-template <>
-struct CppToType<uint32_t> : public CppToTypeBase<TypeKind::INTEGER> {};
-
-template <>
-struct CppToType<int16_t> : public CppToTypeBase<TypeKind::SMALLINT> {};
-
-template <>
-struct CppToType<uint16_t> : public CppToTypeBase<TypeKind::SMALLINT> {};
-
-template <>
-struct CppToType<int8_t> : public CppToTypeBase<TypeKind::TINYINT> {};
-
-template <>
-struct CppToType<uint8_t> : public CppToTypeBase<TypeKind::TINYINT> {};
-
-template <>
-struct CppToType<bool> : public CppToTypeBase<TypeKind::BOOLEAN> {};
-
-template <>
-struct CppToType<Varchar> : public CppToTypeBase<TypeKind::VARCHAR> {};
-
-template <>
-struct CppToType<folly::StringPiece> : public CppToTypeBase<TypeKind::VARCHAR> {
-};
-
-template <>
-struct CppToType<velox::StringView> : public CppToTypeBase<TypeKind::VARCHAR> {
-};
-
-template <>
-struct CppToType<std::string_view> : public CppToTypeBase<TypeKind::VARCHAR> {};
-
-template <>
-struct CppToType<std::string> : public CppToTypeBase<TypeKind::VARCHAR> {};
-
-template <>
-struct CppToType<const char*> : public CppToTypeBase<TypeKind::VARCHAR> {};
-
-template <>
-struct CppToType<Varbinary> : public CppToTypeBase<TypeKind::VARBINARY> {};
-
-template <>
-struct CppToType<folly::ByteRange> : public CppToTypeBase<TypeKind::VARBINARY> {
-};
-
-template <>
-struct CppToType<float> : public CppToTypeBase<TypeKind::REAL> {};
-
-template <>
-struct CppToType<double> : public CppToTypeBase<TypeKind::DOUBLE> {};
-
-template <>
-struct CppToType<Timestamp> : public CppToTypeBase<TypeKind::TIMESTAMP> {};
-
-template <>
-struct CppToType<Date> : public CppToTypeBase<TypeKind::INTEGER> {};
-
-template <typename T>
-struct CppToType<Generic<T>> : public CppToTypeBase<TypeKind::UNKNOWN> {};
-
-// TODO: maybe do something smarter than just matching any shared_ptr, e.g. we
-// can declare "registered" types explicitly
-template <typename T>
-struct CppToType<std::shared_ptr<T>> : public CppToTypeBase<TypeKind::OPAQUE> {
-  // We override the type with the concrete specialization here!
-  // using NativeType = std::shared_ptr<T>;
-  static auto create() {
-    return OpaqueType::create<T>();
-  }
-};
-
-template <typename KEY, typename VAL>
-struct CppToType<Map<KEY, VAL>> : public TypeTraits<TypeKind::MAP> {
-  static auto create() {
-    return MAP(CppToType<KEY>::create(), CppToType<VAL>::create());
-  }
-};
-
-template <typename ELEMENT>
-struct CppToType<Array<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
-  static auto create() {
-    return ARRAY(CppToType<ELEMENT>::create());
-  }
-};
-
-template <typename... T>
-struct CppToType<Row<T...>> : public TypeTraits<TypeKind::ROW> {
-  static auto create() {
-    return ROW({CppToType<T>::create()...});
-  }
-};
-
-template <>
-struct CppToType<DynamicRow> : public TypeTraits<TypeKind::ROW> {
-  static std::shared_ptr<const Type> create() {
-    throw std::logic_error{"can't determine exact type for DynamicRow"};
-  }
-};
-
-template <>
-struct CppToType<UnknownValue> : public CppToTypeBase<TypeKind::UNKNOWN> {};
-
-template <typename T>
-struct CppToType<CustomType<T>> : public CppToType<typename T::type> {
-  static auto create() {
-    return CppToType<typename T::type>::create();
-  }
-};
-
-// todo: remaining cpp2type
 
 template <TypeKind KIND>
 static inline int32_t sizeOfTypeKindHelper() {
@@ -2200,140 +1882,8 @@ void toAppend(
   result->append(type->toString());
 }
 
-template <typename T>
-struct MaterializeType {
-  using null_free_t = T;
-  using nullable_t = T;
-  static constexpr bool requiresMaterialization = false;
-};
-
-template <typename V>
-struct MaterializeType<Array<V>> {
-  using null_free_t = std::vector<typename MaterializeType<V>::null_free_t>;
-  using nullable_t =
-      std::vector<std::optional<typename MaterializeType<V>::nullable_t>>;
-  static constexpr bool requiresMaterialization = true;
-};
-
-template <typename K, typename V>
-struct MaterializeType<Map<K, V>> {
-  using key_t = typename MaterializeType<K>::null_free_t;
-
-  using nullable_t = folly::
-      F14FastMap<key_t, std::optional<typename MaterializeType<V>::nullable_t>>;
-
-  using null_free_t =
-      folly::F14FastMap<key_t, typename MaterializeType<V>::null_free_t>;
-  static constexpr bool requiresMaterialization = true;
-};
-
-template <typename... T>
-struct MaterializeType<Row<T...>> {
-  using nullable_t =
-      std::tuple<std::optional<typename MaterializeType<T>::nullable_t>...>;
-
-  using null_free_t = std::tuple<typename MaterializeType<T>::null_free_t...>;
-  static constexpr bool requiresMaterialization = true;
-};
-
-template <typename T>
-struct MaterializeType<std::shared_ptr<T>> {
-  using nullable_t = T;
-  using null_free_t = T;
-  static constexpr bool requiresMaterialization = false;
-};
-
-template <typename T>
-struct MaterializeType<CustomType<T>> {
-  using inner_materialize_t = MaterializeType<typename T::type>;
-  using nullable_t = typename inner_materialize_t::nullable_t;
-  using null_free_t = typename inner_materialize_t::null_free_t;
-  static constexpr bool requiresMaterialization =
-      inner_materialize_t::requiresMaterialization;
-};
-
-template <>
-struct MaterializeType<Varchar> {
-  using nullable_t = std::string;
-  using null_free_t = std::string;
-  static constexpr bool requiresMaterialization = false;
-};
-
-template <>
-struct MaterializeType<Varbinary> {
-  using nullable_t = std::string;
-  using null_free_t = std::string;
-  static constexpr bool requiresMaterialization = false;
-};
-
-// Recursively check that T and vectorType associate to the same TypeKind.
-template <typename T>
-struct CastTypeChecker {
-  static_assert(
-      CppToType<T>::maxSubTypes == 0,
-      "Complex types should be checked separately.");
-
-  static bool check(const TypePtr& vectorType) {
-    return CppToType<T>::typeKind == vectorType->kind();
-  }
-};
-
-template <>
-struct CastTypeChecker<DynamicRow> {
-  static bool check(const TypePtr& vectorType) {
-    return TypeKind::ROW == vectorType->kind();
-  }
-};
-
-template <typename T>
-struct CastTypeChecker<Generic<T>> {
-  static bool check(const TypePtr&) {
-    return true;
-  }
-};
-
-template <typename T>
-struct CastTypeChecker<Array<T>> {
-  static bool check(const TypePtr& vectorType) {
-    return TypeKind::ARRAY == vectorType->kind() &&
-        CastTypeChecker<T>::check(vectorType->childAt(0));
-  }
-};
-
-template <typename K, typename V>
-struct CastTypeChecker<Map<K, V>> {
-  static bool check(const TypePtr& vectorType) {
-    return TypeKind::MAP == vectorType->kind() &&
-        CastTypeChecker<K>::check(vectorType->childAt(0)) &&
-        CastTypeChecker<V>::check(vectorType->childAt(1));
-  }
-};
-
-template <typename... T>
-struct CastTypeChecker<Row<T...>> {
-  static bool check(const TypePtr& vectorType) {
-    int index = 0;
-    return TypeKind::ROW == vectorType->kind() &&
-        (CastTypeChecker<T>::check(vectorType->childAt(index++)) && ... &&
-         true);
-  }
-};
-
-/// Return the scalar type for a given 'kind'.
-TypePtr fromKindToScalerType(TypeKind kind);
-
 /// Appends type's SQL string to 'out'. Uses DuckDB SQL.
 void toTypeSql(const TypePtr& type, std::ostream& out);
-
-template <typename T>
-struct IsRowType {
-  static constexpr bool value = false;
-};
-
-template <typename... Ts>
-struct IsRowType<Row<Ts...>> {
-  static constexpr bool value = true;
-};
 
 } // namespace facebook::velox
 
@@ -2385,14 +1935,11 @@ class FormatValue<
 } // namespace folly
 
 template <>
-struct fmt::formatter<facebook::velox::TypeKind> {
-  constexpr auto parse(format_parse_context& ctx) {
-    return ctx.begin();
-  }
-
+struct fmt::formatter<facebook::velox::TypeKind> : fmt::formatter<string_view> {
   template <typename FormatContext>
-  auto format(const facebook::velox::TypeKind& k, FormatContext& ctx) const {
-    return format_to(ctx.out(), "{}", facebook::velox::mapTypeKindToName(k));
+  auto format(facebook::velox::TypeKind k, FormatContext& ctx) const {
+    return formatter<string_view>::format(
+        facebook::velox::mapTypeKindToName(k), ctx);
   }
 };
 
@@ -2400,13 +1947,10 @@ template <typename T>
 struct fmt::formatter<
     std::shared_ptr<T>,
     typename std::
-        enable_if_t<std::is_base_of_v<facebook::velox::Type, T>, char>> {
-  constexpr auto parse(format_parse_context& ctx) {
-    return ctx.begin();
-  }
-
+        enable_if_t<std::is_base_of_v<facebook::velox::Type, T>, char>>
+    : fmt::formatter<string_view> {
   template <typename FormatContext>
   auto format(const std::shared_ptr<T>& k, FormatContext& ctx) const {
-    return format_to(ctx.out(), "{}", k->toString());
+    return formatter<string_view>::format(k->toString(), ctx);
   }
 };

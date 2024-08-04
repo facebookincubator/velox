@@ -27,9 +27,11 @@ PartitionIdGenerator::PartitionIdGenerator(
     const RowTypePtr& inputType,
     std::vector<column_index_t> partitionChannels,
     uint32_t maxPartitions,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    bool partitionPathAsLowerCase)
     : partitionChannels_(std::move(partitionChannels)),
-      maxPartitions_(maxPartitions) {
+      maxPartitions_(maxPartitions),
+      partitionPathAsLowerCase_(partitionPathAsLowerCase) {
   VELOX_USER_CHECK(
       !partitionChannels_.empty(), "There must be at least one partition key.");
   for (auto channel : partitionChannels_) {
@@ -98,7 +100,8 @@ void PartitionIdGenerator::run(
 
 std::string PartitionIdGenerator::partitionName(uint64_t partitionId) const {
   return FileUtils::makePartName(
-      extractPartitionKeyValues(partitionValues_, partitionId));
+      extractPartitionKeyValues(partitionValues_, partitionId),
+      partitionPathAsLowerCase_);
 }
 
 void PartitionIdGenerator::computeValueIds(
@@ -109,6 +112,9 @@ void PartitionIdGenerator::computeValueIds(
 
   bool rehash = false;
   for (auto& hasher : hashers_) {
+    // NOTE: for boolean column type, computeValueIds() always returns true and
+    // this might cause problem in case of multiple boolean partition columns as
+    // we might not set the multiplier properly.
     auto partitionVector = input->childAt(hasher->channel())->loadedVector();
     hasher->decode(*partitionVector, allRows_);
     if (!hasher->computeValueIds(allRows_, valueIds)) {
@@ -116,12 +122,13 @@ void PartitionIdGenerator::computeValueIds(
     }
   }
 
-  if (!rehash) {
+  if (!rehash && hasMultiplierSet_) {
     return;
   }
 
   uint64_t multiplier = 1;
   for (auto& hasher : hashers_) {
+    hasMultiplierSet_ = true;
     multiplier = hasher->typeKind() == TypeKind::BOOLEAN
         ? hasher->enableValueRange(multiplier, 50)
         : hasher->enableValueIds(multiplier, 50);

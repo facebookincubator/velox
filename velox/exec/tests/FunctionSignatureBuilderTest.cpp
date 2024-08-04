@@ -86,7 +86,7 @@ TEST_F(FunctionSignatureBuilderTest, basicTypeTests) {
           .argumentType("T")
           .argumentType("array(M)")
           .build(),
-      "Type doesn't exist: M");
+      "Type doesn't exist: 'M'");
 
   // Only supported types.
   VELOX_ASSERT_THROW(
@@ -95,7 +95,7 @@ TEST_F(FunctionSignatureBuilderTest, basicTypeTests) {
           .returnType("nosuchtype")
           .argumentType("array(T)")
           .build(),
-      "Type doesn't exist: NOSUCHTYPE");
+      "Type doesn't exist: 'NOSUCHTYPE'");
 
   // Any Type.
   EXPECT_TRUE(
@@ -115,16 +115,16 @@ TEST_F(FunctionSignatureBuilderTest, typeParamTests) {
           .returnType("integer")
           .argumentType("Any(T)")
           .build(),
-      "Type 'Any' cannot have parameters");
+      "Failed to parse type signature [Any(T)]: syntax error, unexpected LPAREN, expecting YYEOF");
 
   // Variable Arity in argument fails.
   VELOX_ASSERT_THROW(
       FunctionSignatureBuilder()
           .typeVariable("T")
           .returnType("integer")
-          .argumentType("row(T ..., varchar)")
+          .argumentType("row(..., varchar)")
           .build(),
-      "Type doesn't exist: T ...");
+      "Failed to parse type signature [row(..., varchar)]: syntax error, unexpected COMMA");
 
   // Type params cant have type params.
   VELOX_ASSERT_THROW(
@@ -134,7 +134,7 @@ TEST_F(FunctionSignatureBuilderTest, typeParamTests) {
           .returnType("integer")
           .argumentType("T(M)")
           .build(),
-      "Named type cannot have parameters : T(M)");
+      "Failed to parse type signature [T(M)]: syntax error, unexpected LPAREN, expecting YYEOF");
 }
 
 TEST_F(FunctionSignatureBuilderTest, anyInReturn) {
@@ -337,4 +337,16 @@ TEST_F(FunctionSignatureBuilderTest, orderableComparableAggregate) {
           .argumentType("T")
           .build(),
       "Variable T declared twice");
+}
+
+TEST_F(FunctionSignatureBuilderTest, allowVariablesForIntermediateType) {
+  ASSERT_NO_THROW(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .integerVariable("i_precision", "min(38, a_precision + 10)")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .intermediateType("ROW(DECIMAL(i_precision, a_scale), BIGINT)")
+          .returnType("DECIMAL(a_precision, a_scale)")
+          .build());
 }

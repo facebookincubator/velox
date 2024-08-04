@@ -30,6 +30,18 @@ template <typename T>
 class Set : public folly::F14FastSet<T, folly::hasher<T>, Equal<T>> {};
 
 template <>
+class Set<float> : public folly::F14FastSet<
+                       float,
+                       util::floating_point::NaNAwareHash<float>,
+                       util::floating_point::NaNAwareEquals<float>> {};
+
+template <>
+class Set<double> : public folly::F14FastSet<
+                        double,
+                        util::floating_point::NaNAwareHash<double>,
+                        util::floating_point::NaNAwareEquals<double>> {};
+
+template <>
 class Set<StringView> {
  public:
   using value_type = std::string_view;
@@ -69,6 +81,7 @@ struct InFunctionOuter {
     VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
 
     FOLLY_ALWAYS_INLINE void initialize(
+        const std::vector<TypePtr>& /*inputTypes*/,
         const core::QueryConfig& /*config*/,
         const arg_type<TInput>* /*searchTerm*/,
         const arg_type<velox::Array<TInput>>* searchElements) {

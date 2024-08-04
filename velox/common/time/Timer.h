@@ -19,6 +19,7 @@
 #include <folly/chrono/Hardware.h>
 #include <atomic>
 #include <chrono>
+#include <optional>
 
 namespace facebook::velox {
 
@@ -68,6 +69,9 @@ class ClockTimer {
   std::atomic<uint64_t>* atomicTotal_{nullptr};
   uint64_t start_;
 };
+
+// Returns the current epoch time in seconds.
+size_t getCurrentTimeSec();
 
 /// Returns the current epoch time in milliseconds.
 size_t getCurrentTimeMs();

@@ -18,21 +18,49 @@
 #include <optional>
 #include <unordered_map>
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/FileProperties.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::hive {
+
+/// A bucket conversion that should happen on the split.  This happens when we
+/// increase the bucket count of a table, but the old partitions are still
+/// generated using the old bucket count, so that multiple new buckets can exist
+/// in the same file, and we need to apply extra filter when we read these files
+/// to make sure we read the rows corresponding to the selected bucket number
+/// only.
+struct HiveBucketConversion {
+  int32_t tableBucketCount;
+  int32_t partitionBucketCount;
+  std::vector<std::unique_ptr<HiveColumnHandle>> bucketColumnHandles;
+};
 
 struct HiveConnectorSplit : public connector::ConnectorSplit {
   const std::string filePath;
   dwio::common::FileFormat fileFormat;
   const uint64_t start;
   const uint64_t length;
+
+  /// Mapping from partition keys to values. Values are specified as strings
+  /// formatted the same way as CAST(x as VARCHAR). Null values are specified as
+  /// std::nullopt. Date values must be formatted using ISO 8601 as YYYY-MM-DD.
+  /// All scalar types and date type are supported.
   const std::unordered_map<std::string, std::optional<std::string>>
       partitionKeys;
   std::optional<int32_t> tableBucketNumber;
+  std::optional<HiveBucketConversion> bucketConversion;
   std::unordered_map<std::string, std::string> customSplitInfo;
   std::shared_ptr<std::string> extraFileInfo;
   std::unordered_map<std::string, std::string> serdeParameters;
+
+  /// These represent columns like $file_size, $file_modified_time that are
+  /// associated with the HiveSplit.
+  std::unordered_map<std::string, std::string> infoColumns;
+
+  /// These represent file properties like file size that are used while opening
+  /// the file handle.
+  std::optional<FileProperties> properties;
 
   HiveConnectorSplit(
       const std::string& connectorId,
@@ -45,8 +73,11 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       std::optional<int32_t> _tableBucketNumber = std::nullopt,
       const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
       const std::shared_ptr<std::string>& _extraFileInfo = {},
-      const std::unordered_map<std::string, std::string>& _serdeParameters = {})
-      : ConnectorSplit(connectorId),
+      const std::unordered_map<std::string, std::string>& _serdeParameters = {},
+      int64_t _splitWeight = 0,
+      const std::unordered_map<std::string, std::string>& _infoColumns = {},
+      std::optional<FileProperties> _properties = std::nullopt)
+      : ConnectorSplit(connectorId, _splitWeight),
         filePath(_filePath),
         fileFormat(_fileFormat),
         start(_start),
@@ -55,7 +86,9 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
         tableBucketNumber(_tableBucketNumber),
         customSplitInfo(_customSplitInfo),
         extraFileInfo(_extraFileInfo),
-        serdeParameters(_serdeParameters) {}
+        serdeParameters(_serdeParameters),
+        infoColumns(_infoColumns),
+        properties(_properties) {}
 
   std::string toString() const override {
     if (tableBucketNumber.has_value()) {

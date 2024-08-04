@@ -24,13 +24,14 @@ class UnsafeRowVectorSerde : public VectorSerde {
   UnsafeRowVectorSerde() = default;
   // We do not implement this method since it is not used in production code.
   void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* vector,
       const folly::Range<const IndexRange*>& ranges,
-      vector_size_t** sizes) override;
+      vector_size_t** sizes,
+      Scratch& scratch) override;
 
   // This method is not used in production code. It is only used to
   // support round-trip tests for deserialization.
-  std::unique_ptr<VectorSerializer> createSerializer(
+  std::unique_ptr<IterativeVectorSerializer> createIterativeSerializer(
       RowTypePtr type,
       int32_t numRows,
       StreamArena* streamArena,
@@ -38,7 +39,7 @@ class UnsafeRowVectorSerde : public VectorSerde {
 
   // This method is used when reading data from the exchange.
   void deserialize(
-      ByteStream* source,
+      ByteInputStream* source,
       velox::memory::MemoryPool* pool,
       RowTypePtr type,
       RowVectorPtr* result,

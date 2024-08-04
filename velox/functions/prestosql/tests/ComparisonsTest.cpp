@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/Comparisons.h"
 #include <string>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -27,30 +29,22 @@ class ComparisonsTest : public functions::test::FunctionBaseTest {
   }
 
  protected:
-  template <typename T>
-  void testDistinctFrom(
-      const std::vector<std::optional<T>>& col1,
-      const std::vector<std::optional<T>>& col2,
-      const std::vector<bool>& expected) {
-    auto data = vectorMaker_.rowVector(
-        {vectorMaker_.flatVectorNullable<T>(col1),
-         vectorMaker_.flatVectorNullable<T>(col2)});
-
-    auto result = evaluate<SimpleVector<bool>>("c0 IS DISTINCT FROM c1", data);
-
-    ASSERT_EQ((size_t)result->size(), expected.size());
-    for (size_t i = 0; i < expected.size(); ++i) {
-      ASSERT_TRUE(!result->isNullAt(i));
-      ASSERT_EQ(expected[i], result->valueAt(i));
-    }
-  }
-
   void testBetweenExpr(
       const std::string& exprStr,
       const std::vector<VectorPtr>& input,
       const VectorPtr& expectedResult) {
-    auto actual = evaluate<SimpleVector<bool>>(exprStr, makeRowVector(input));
+    auto actual = evaluate(exprStr, makeRowVector(input));
     test::assertEqualVectors(expectedResult, actual);
+  }
+
+  void registerSimpleComparisonFunctions() {
+    using namespace facebook::velox::functions;
+    registerBinaryScalar<EqFunction, bool>({"simple_eq"});
+    registerBinaryScalar<NeqFunction, bool>({"simple_neq"});
+    registerBinaryScalar<LtFunction, bool>({"simple_lt"});
+    registerBinaryScalar<LteFunction, bool>({"simple_lte"});
+    registerBinaryScalar<GtFunction, bool>({"simple_gt"});
+    registerBinaryScalar<GteFunction, bool>({"simple_gte"});
   }
 };
 
@@ -89,10 +83,6 @@ TEST_F(ComparisonsTest, betweenVarchar) {
 }
 
 TEST_F(ComparisonsTest, betweenDate) {
-  auto parseDate = [](const std::string& dateStr) {
-    return DATE()->toDays(dateStr);
-  };
-
   std::vector<std::tuple<int32_t, bool>> testData = {
       {parseDate("2019-05-01"), false},
       {parseDate("2019-06-01"), true},
@@ -111,17 +101,14 @@ TEST_F(ComparisonsTest, betweenDate) {
 }
 
 TEST_F(ComparisonsTest, betweenTimestamp) {
-  using util::fromTimestampString;
-
   const auto between = [&](std::optional<std::string> s) {
     auto expr =
         "c0 between cast(\'2019-02-28 10:00:00.500\' as timestamp) and"
         " cast(\'2019-02-28 10:00:00.600\' as timestamp)";
-    if (s.has_value()) {
-      return evaluateOnce<bool>(
-          expr, std::optional(fromTimestampString((StringView)s.value())));
+    if (!s.has_value()) {
+      return evaluateOnce<bool>(expr, std::optional<Timestamp>());
     }
-    return evaluateOnce<bool>(expr, std::optional<Timestamp>());
+    return evaluateOnce<bool>(expr, std::optional{parseTimestamp(s.value())});
   };
 
   EXPECT_EQ(std::nullopt, between(std::nullopt));
@@ -543,20 +530,51 @@ TEST_F(ComparisonsTest, eqRow) {
 }
 
 TEST_F(ComparisonsTest, distinctFrom) {
-  testDistinctFrom(
-      std::vector<std::optional<int64_t>>{3, 1, 1, std::nullopt, std::nullopt},
-      std::vector<std::optional<int64_t>>{3, 2, std::nullopt, 2, std::nullopt},
-      {false, true, true, true, false});
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({3, 1, 1, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<int64_t>({3, 2, std::nullopt, 2, std::nullopt}),
+  });
+
+  auto result = evaluate("c0 is distinct from c1", input);
+  auto expected = makeFlatVector<bool>({false, true, true, true, false});
+  test::assertEqualVectors(expected, result);
 
   const Timestamp ts1(998474645, 321000000);
   const Timestamp ts2(998423705, 321000000);
   const Timestamp ts3(400000000, 123000000);
-  testDistinctFrom(
-      std::vector<std::optional<Timestamp>>{
-          ts3, ts1, ts1, std::nullopt, std::nullopt},
-      std::vector<std::optional<Timestamp>>{
-          ts3, ts2, std::nullopt, ts2, std::nullopt},
-      {false, true, true, true, false});
+  input = makeRowVector({
+      makeNullableFlatVector<Timestamp>(
+          {ts3, ts1, ts1, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<Timestamp>(
+          {ts3, ts2, std::nullopt, ts2, std::nullopt}),
+  });
+
+  result = evaluate("c0 is distinct from c1", input);
+  expected = makeFlatVector<bool>({false, true, true, true, false});
+  test::assertEqualVectors(expected, result);
+
+  input = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3]",
+          "null",
+          "[]",
+          "[1, null]",
+          "[null, 2, 3]",
+          "null",
+      }),
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 4]",
+          "null",
+          "[]",
+          "[1, null]",
+          "[null, 2, 4]",
+          "[]",
+      }),
+  });
+
+  result = evaluate("c0 is distinct from c1", input);
+  expected = makeFlatVector<bool>({true, false, false, false, true, true});
+  test::assertEqualVectors(expected, result);
 }
 
 TEST_F(ComparisonsTest, eqNestedComplex) {
@@ -599,6 +617,125 @@ TEST_F(ComparisonsTest, eqNestedComplex) {
         evaluate<SimpleVector<bool>>("c0 == c1", makeRowVector({row1, row2}));
     ASSERT_EQ(result->isNullAt(0), true);
   }
+}
+
+TEST_F(ComparisonsTest, overflowTest) {
+  auto makeFlatVector = [&](size_t numRows, size_t delta) {
+    BufferPtr values =
+        AlignedBuffer::allocate<int64_t>(numRows + delta, pool());
+    auto rawValues = values->asMutable<int64_t>();
+    for (size_t i = 0; i < numRows + delta; ++i) {
+      rawValues[i] = i;
+    }
+    return std::make_shared<FlatVector<int64_t>>(
+        pool(), BIGINT(), nullptr, numRows, values, std::vector<BufferPtr>{});
+  };
+
+  size_t numRows = 1006;
+  size_t delta = 2;
+  auto rowVector = makeRowVector(
+      {makeFlatVector(numRows, delta), makeFlatVector(numRows, delta)});
+  auto result =
+      evaluate<SimpleVector<bool>>(fmt::format("{}(c0, c1)", "eq"), rowVector);
+  for (auto i = 0; i < result->size(); ++i) {
+    ASSERT_TRUE(result->valueAt(i));
+  }
+
+  auto flatResult = result->asFlatVector<bool>();
+  auto rawResult = flatResult->mutableRawValues();
+  for (auto i = 0; i < result->size(); ++i) {
+    ASSERT_TRUE(
+        bits::isBitSet(reinterpret_cast<const uint64_t*>(rawResult), i));
+  }
+  for (auto i = result->size(); i < result->size() + delta; ++i) {
+    ASSERT_FALSE(
+        bits::isBitSet(reinterpret_cast<const uint64_t*>(rawResult), i));
+  }
+}
+
+TEST_F(ComparisonsTest, nanComparison) {
+  registerSimpleComparisonFunctions();
+  static const auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+  static const auto kInf = std::numeric_limits<double>::infinity();
+
+  auto testNaN =
+      [&](std::string prefix, RowVectorPtr rowVector, bool primitiveInput) {
+        auto eval = [&](const std::string& expr,
+                        const std::string& lhs,
+                        const std::string& rhs) {
+          return evaluate<SimpleVector<bool>>(
+              fmt::format("{}({}, {})", expr, lhs, rhs), rowVector);
+        };
+
+        auto allFalse = makeFlatVector<bool>({false, false});
+        auto allTrue = makeFlatVector<bool>({true, true});
+
+        // NaN compared with NaN (multiple binary representations)
+        test::assertEqualVectors(eval(prefix + "eq", "c0", "c1"), allTrue);
+        test::assertEqualVectors(eval(prefix + "neq", "c0", "c1"), allFalse);
+        if (primitiveInput) {
+          test::assertEqualVectors(eval(prefix + "lt", "c0", "c1"), allFalse);
+          test::assertEqualVectors(eval(prefix + "gt", "c0", "c1"), allFalse);
+          test::assertEqualVectors(eval(prefix + "lte", "c0", "c1"), allTrue);
+          test::assertEqualVectors(eval(prefix + "gte", "c0", "c1"), allTrue);
+          // NaN between Infinity and NaN
+          test::assertEqualVectors(
+              evaluate<SimpleVector<bool>>("c0 BETWEEN c2 and c1", rowVector),
+              allTrue);
+          // NaN distinct from NaN
+          test::assertEqualVectors(
+              evaluate<SimpleVector<bool>>("c0 IS DISTINCT FROM c1", rowVector),
+              allFalse);
+        }
+
+        // NaN compared with Inf
+        test::assertEqualVectors(eval(prefix + "eq", "c0", "c2"), allFalse);
+        test::assertEqualVectors(eval(prefix + "neq", "c0", "c2"), allTrue);
+        if (primitiveInput) {
+          test::assertEqualVectors(eval(prefix + "lt", "c0", "c2"), allFalse);
+          test::assertEqualVectors(eval(prefix + "gt", "c0", "c2"), allTrue);
+          test::assertEqualVectors(eval(prefix + "lte", "c0", "c2"), allFalse);
+          test::assertEqualVectors(eval(prefix + "gte", "c0", "c2"), allTrue);
+          // NaN between 0 and Infinity
+          test::assertEqualVectors(
+              evaluate<SimpleVector<bool>>(
+                  "c0 BETWEEN cast(0 as double) and c2", rowVector),
+              allFalse);
+          // NaN distinct from Infinity
+          test::assertEqualVectors(
+              evaluate<SimpleVector<bool>>("c0 IS DISTINCT FROM c2", rowVector),
+              allTrue);
+        }
+      };
+
+  // Primitive type input
+  auto input = makeRowVector(
+      {makeFlatVector<double>({kNaN, kSNaN}),
+       makeFlatVector<double>({kNaN, kNaN}),
+       makeFlatVector<double>({kInf, kInf})});
+  // Test the Vector function ComparisonSimdFunction.
+  testNaN("", input, true);
+  // Test the Simple functions.
+  testNaN("simple_", input, true);
+
+  // Complex type input
+  input = makeRowVector({
+      makeRowVector({
+          makeFlatVector<double>({kNaN, kSNaN}),
+          makeFlatVector<int32_t>({1, 1}),
+      }),
+      makeRowVector({
+          makeFlatVector<double>({kNaN, kNaN}),
+          makeFlatVector<int32_t>({1, 1}),
+      }),
+      makeRowVector({
+          makeFlatVector<double>({kInf, kInf}),
+          makeFlatVector<int32_t>({1, 1}),
+      }),
+  });
+  // Note: Complex comparison functions are only registered as simple functions.
+  testNaN("", input, false);
 }
 
 namespace {
@@ -726,29 +863,6 @@ class SimdComparisonsTest : public functions::test::FunctionBaseTest {
         rhsVector.begin(), rhsVector.end(), std::numeric_limits<T>::min());
 
     testVectorComparison(lhsVector, rhsVector);
-
-    // Add tests against Nan and other edge cases.
-    if constexpr (std::is_floating_point_v<T>) {
-      lhsVector = std::vector<T>(47);
-      rhsVector = std::vector<T>(47);
-
-      std::fill(
-          lhsVector.begin(),
-          lhsVector.end(),
-          std::numeric_limits<T>::signaling_NaN());
-      std::fill(
-          rhsVector.begin(),
-          rhsVector.end(),
-          std::numeric_limits<T>::signaling_NaN());
-      testVectorComparison(lhsVector, rhsVector);
-
-      std::fill(
-          lhsVector.begin(),
-          lhsVector.end(),
-          std::numeric_limits<T>::signaling_NaN());
-      std::fill(rhsVector.begin(), rhsVector.end(), 1);
-      testVectorComparison(lhsVector, rhsVector);
-    }
   }
 
   void testDictionary() {

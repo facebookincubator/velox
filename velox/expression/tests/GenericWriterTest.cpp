@@ -55,7 +55,6 @@ TEST_F(GenericWriterTest, boolean) {
 
   writer.setOffset(0);
   auto& current = writer.current();
-  ASSERT_THROW(current.castTo<int32_t>(), VeloxUserError);
 
   ASSERT_NO_THROW(current.tryCastTo<int32_t>());
   ASSERT_TRUE(current.tryCastTo<int32_t>() == nullptr);
@@ -117,12 +116,7 @@ struct ArrayTrimFunction {
       const int64_t& n) {
     int64_t end = inputArray.size() - n;
     for (int i = 0; i < end; ++i) {
-      if (inputArray[i].has_value()) {
-        auto& newItem = out.add_item();
-        newItem.copy_from(inputArray[i].value());
-      } else {
-        out.add_null();
-      }
+      out.push_back(inputArray[i]);
     }
   }
 };
@@ -205,7 +199,6 @@ TEST_F(GenericWriterTest, arrayAnyCast) {
 
   writer.setOffset(0);
   auto& current = writer.current();
-  ASSERT_THROW(current.castTo<double>(), VeloxUserError);
 
   ASSERT_NO_THROW(current.tryCastTo<double>());
   ASSERT_TRUE(current.tryCastTo<double>() == nullptr);
@@ -261,7 +254,6 @@ TEST_F(GenericWriterTest, arrayIntCast) {
 
   writer.setOffset(0);
   auto& current = writer.current();
-  ASSERT_THROW(current.castTo<double>(), VeloxUserError);
 
   ASSERT_NO_THROW(current.tryCastTo<double>());
   ASSERT_TRUE(current.tryCastTo<double>() == nullptr);

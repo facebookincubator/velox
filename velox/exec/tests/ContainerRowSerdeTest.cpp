@@ -13,8 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/exec/ContainerRowSerde.h"
+
 #include <gtest/gtest.h>
+
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -26,13 +30,20 @@ namespace {
 class ContainerRowSerdeTest : public testing::Test,
                               public velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   // Writes all rows together and returns a position at the start of this
   // combined write.
-  HashStringAllocator::Position serialize(const VectorPtr& data) {
-    ByteStream out(&allocator_);
+  HashStringAllocator::Position serialize(
+      const VectorPtr& data,
+      bool isKey = true) {
+    ByteOutputStream out(&allocator_);
     auto position = allocator_.newWrite(out);
+    exec::ContainerRowSerdeOptions options{.isKey = isKey};
     for (auto i = 0; i < data->size(); ++i) {
-      ContainerRowSerde::serialize(*data, i, out);
+      ContainerRowSerde::serialize(*data, i, out, options);
     }
     allocator_.finishWrite(out, 0);
     return position;
@@ -40,15 +51,17 @@ class ContainerRowSerdeTest : public testing::Test,
 
   // Writes each row individually and returns positions for individual rows.
   std::vector<HashStringAllocator::Position> serializeWithPositions(
-      const VectorPtr& data) {
+      const VectorPtr& data,
+      bool isKey = true) {
     std::vector<HashStringAllocator::Position> positions;
     auto size = data->size();
     positions.reserve(size);
+    exec::ContainerRowSerdeOptions options{.isKey = isKey};
 
     for (auto i = 0; i < size; ++i) {
-      ByteStream out(&allocator_);
+      ByteOutputStream out(&allocator_);
       auto position = allocator_.newWrite(out);
-      ContainerRowSerde::serialize(*data, i, out);
+      ContainerRowSerde::serialize(*data, i, out, options);
       allocator_.finishWrite(out, 0);
       positions.emplace_back(position);
     }
@@ -67,8 +80,7 @@ class ContainerRowSerdeTest : public testing::Test,
       data->setNull(i, true);
     }
 
-    ByteStream in;
-    HashStringAllocator::prepareRead(position.header, in);
+    auto in = HashStringAllocator::prepareRead(position.header);
     for (auto i = 0; i < numRows; ++i) {
       ContainerRowSerde::deserialize(in, i, data.get());
     }
@@ -83,6 +95,9 @@ class ContainerRowSerdeTest : public testing::Test,
     allocator_.clear();
   }
 
+  // If the mode is NullAsIndeterminate with equalsOnly is false, and expected
+  // is kIndeterminate, then the test ensures that an exception is thrown with
+  // the message "Ordering nulls is not supported".
   void testCompareWithNulls(
       const DecodedVector& decodedVector,
       const std::vector<HashStringAllocator::Position>& positions,
@@ -96,33 +111,89 @@ class ContainerRowSerdeTest : public testing::Test,
         mode};
 
     for (auto i = 0; i < expected.size(); ++i) {
-      ByteStream stream;
-      HashStringAllocator::prepareRead(positions.at(i).header, stream);
-      ASSERT_EQ(
-          expected.at(i),
-          ContainerRowSerde::compareWithNulls(
-              stream, decodedVector, i, compareFlags));
+      auto stream = HashStringAllocator::prepareRead(positions.at(i).header);
+      if (expected.at(i) == kIndeterminate &&
+          mode == CompareFlags::NullHandlingMode::kNullAsIndeterminate &&
+          !equalsOnly) {
+        VELOX_ASSERT_THROW(
+            ContainerRowSerde::compareWithNulls(
+                stream, decodedVector, i, compareFlags),
+            "Ordering nulls is not supported");
+      } else {
+        ASSERT_EQ(
+            expected.at(i),
+            ContainerRowSerde::compareWithNulls(
+                stream, decodedVector, i, compareFlags));
+      }
+    }
+  }
+
+  // If the mode is NullAsIndeterminate with equalsOnly is false, and expected
+  // is kIndeterminate, then the test ensures that an exception is thrown with
+  // the message "Ordering nulls is not supported".
+  void testCompareByteStreamWithNulls(
+      const std::vector<HashStringAllocator::Position>& leftPositions,
+      const std::vector<HashStringAllocator::Position>& rightPositions,
+      const std::vector<std::optional<int32_t>>& expected,
+      const TypePtr& type,
+      bool equalsOnly,
+      CompareFlags::NullHandlingMode mode) {
+    CompareFlags compareFlags{
+        true, // nullsFirst
+        true, // ascending
+        equalsOnly,
+        mode};
+
+    for (auto i = 0; i < expected.size(); ++i) {
+      auto leftStream =
+          HashStringAllocator::prepareRead(leftPositions.at(i).header);
+      auto rightStream =
+          HashStringAllocator::prepareRead(rightPositions.at(i).header);
+      if (expected.at(i) == kIndeterminate &&
+          mode == CompareFlags::NullHandlingMode::kNullAsIndeterminate &&
+          !equalsOnly) {
+        VELOX_ASSERT_THROW(
+            ContainerRowSerde::compareWithNulls(
+                leftStream, rightStream, type.get(), compareFlags),
+            "Ordering nulls is not supported");
+      } else {
+        ASSERT_EQ(
+            expected.at(i),
+            ContainerRowSerde::compareWithNulls(
+                leftStream, rightStream, type.get(), compareFlags));
+      }
     }
   }
 
   void testCompare(const VectorPtr& vector) {
     auto positions = serializeWithPositions(vector);
 
-    CompareFlags compareFlags{
-        true, // nullsFirst
-        true, // ascending
-        true,
-        CompareFlags::NullHandlingMode::NoStop};
+    CompareFlags compareFlags =
+        CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
 
     DecodedVector decodedVector(*vector);
 
     for (auto i = 0; i < positions.size(); ++i) {
-      ByteStream stream;
-      HashStringAllocator::prepareRead(positions.at(i).header, stream);
+      auto stream = HashStringAllocator::prepareRead(positions.at(i).header);
       ASSERT_EQ(
           0, ContainerRowSerde::compare(stream, decodedVector, i, compareFlags))
           << "at " << i << ": " << vector->toString(i);
     }
+  }
+
+  void assertNotEqualVectors(
+      const VectorPtr& actual,
+      const VectorPtr& expected) {
+    ASSERT_EQ(actual->size(), expected->size());
+    ASSERT_TRUE(actual->type()->equivalent(*expected->type()))
+        << "Expected " << expected->type()->toString() << ", but got "
+        << actual->type()->toString();
+    for (auto i = 0; i < expected->size(); i++) {
+      if (!actual->equalValueAt(expected.get(), i, i)) {
+        return;
+      }
+    }
+    FAIL() << "Expect two vectors are not equal.";
   }
 
   HashStringAllocator allocator_{pool()};
@@ -186,6 +257,33 @@ TEST_F(ContainerRowSerdeTest, arrayOfString) {
   testRoundTrip(data);
 }
 
+TEST_F(ContainerRowSerdeTest, map) {
+  auto data = makeMapVector<int64_t, int64_t>({
+      {{2, 20}, {3, 30}, {1, 10}},
+      {{4, 40}},
+  });
+
+  testRoundTrip(data);
+
+  // When sortMap is not set, serialized Map has the same order of map entries
+  // as the input.
+  {
+    auto position = serialize(data, false);
+    auto deserialized = deserialize(position, data->type(), data->size());
+    test::assertEqualVectors(
+        data->mapKeys(), deserialized->as<MapVector>()->mapKeys());
+  }
+
+  // When sortMap is set, serialized Map has map entries sorted and thus in a
+  // different order than the input.
+  {
+    auto position = serialize(data, true);
+    auto deserialized = deserialize(position, data->type(), data->size());
+    assertNotEqualVectors(
+        data->mapKeys(), deserialized->as<MapVector>()->mapKeys());
+  }
+}
+
 TEST_F(ContainerRowSerdeTest, nested) {
   auto data = makeRowVector(
       {makeNullableFlatVector<int64_t>({1, 2, 3}),
@@ -232,19 +330,19 @@ TEST_F(ContainerRowSerdeTest, compareNullsInArrayVector) {
       positions,
       {{0}, {1}, {-1}, std::nullopt, std::nullopt, std::nullopt},
       false,
-      CompareFlags::NullHandlingMode::StopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
       {{0}, {1}, {1}, {1}, std::nullopt, {1}},
       true,
-      CompareFlags::NullHandlingMode::StopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
       {{0}, {1}, {-1}, {1}, {0}, {-1}},
       false,
-      CompareFlags::NullHandlingMode::NoStop);
+      CompareFlags::NullHandlingMode::kNullAsValue);
 
   allocator_.clear();
 }
@@ -270,37 +368,27 @@ TEST_F(ContainerRowSerdeTest, compareNullsInMapVector) {
       positions,
       {{-1}, {0}, {1}, std::nullopt},
       false,
-      CompareFlags::NullHandlingMode::StopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
       {{1}, {0}, {1}, std::nullopt},
       true,
-      CompareFlags::NullHandlingMode::StopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
       {{1}, {0}, {1}, {0}},
       true,
-      CompareFlags::NullHandlingMode::NoStop);
+      CompareFlags::NullHandlingMode::kNullAsValue);
 
   allocator_.clear();
 }
 
 TEST_F(ContainerRowSerdeTest, compareNullsInRowVector) {
-  auto data = makeRowVector({makeFlatVector<int32_t>({
-      1,
-      2,
-      3,
-      4,
-  })});
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3, 4})});
   auto positions = serializeWithPositions(data);
-  auto someNulls = makeNullableFlatVector<int32_t>({
-      1,
-      3,
-      2,
-      std::nullopt,
-  });
+  auto someNulls = makeNullableFlatVector<int32_t>({1, 3, 2, std::nullopt});
   auto rowVector = makeRowVector({someNulls});
   DecodedVector decodedVector(*rowVector);
 
@@ -309,13 +397,129 @@ TEST_F(ContainerRowSerdeTest, compareNullsInRowVector) {
       positions,
       {{0}, {-1}, {1}, std::nullopt},
       false,
-      CompareFlags::NullHandlingMode::StopAtNull);
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
   testCompareWithNulls(
       decodedVector,
       positions,
       {{0}, {-1}, {1}, {1}},
       false,
-      CompareFlags::NullHandlingMode::NoStop);
+      CompareFlags::NullHandlingMode::kNullAsValue);
+
+  allocator_.clear();
+}
+
+TEST_F(ContainerRowSerdeTest, compareNullsInArrayByteStream) {
+  auto left = makeNullableArrayVector<int64_t>({
+      {1, 2},
+      {1, 5},
+      {1, 3, 5},
+      {1, 2, 3, 4},
+      {1, 2, std::nullopt, 4},
+      {1, std::nullopt, 5},
+  });
+  auto leftPositions = serializeWithPositions(left);
+
+  auto right = makeNullableArrayVector<int64_t>({
+      {1, 2},
+      {1, 3},
+      {1, 5},
+      {std::nullopt, 1},
+      {1, 2, std::nullopt, 4},
+      {1, 5},
+  });
+  auto rightPositions = serializeWithPositions(right);
+
+  testCompareByteStreamWithNulls(
+      leftPositions,
+      rightPositions,
+      {{0}, {1}, {-1}, std::nullopt, std::nullopt, std::nullopt},
+      ARRAY(BIGINT()),
+      false,
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  testCompareByteStreamWithNulls(
+      leftPositions,
+      rightPositions,
+      {{0}, {1}, {1}, {1}, std::nullopt, {1}},
+      ARRAY(BIGINT()),
+      true,
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  testCompareByteStreamWithNulls(
+      leftPositions,
+      rightPositions,
+      {{0}, {1}, {-1}, {1}, {0}, {-1}},
+      ARRAY(BIGINT()),
+      false,
+      CompareFlags::NullHandlingMode::kNullAsValue);
+
+  allocator_.clear();
+}
+
+TEST_F(ContainerRowSerdeTest, compareNullsInRowByteStream) {
+  auto left = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3, 4}),
+       makeFlatVector<int32_t>({1, 2, 3, 4})});
+  auto leftPositions = serializeWithPositions(left);
+  auto right = makeRowVector(
+      {makeNullableFlatVector<int32_t>({1, 3, 2, std::nullopt}),
+       makeFlatVector<int32_t>({1, 2, 3, 4})});
+  auto rightPositions = serializeWithPositions(right);
+
+  testCompareByteStreamWithNulls(
+      leftPositions,
+      rightPositions,
+      {{0}, {-1}, {1}, std::nullopt},
+      ROW({INTEGER(), INTEGER()}),
+      false,
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  testCompareByteStreamWithNulls(
+      leftPositions,
+      rightPositions,
+      {{0}, {-1}, {1}, {1}},
+      ROW({INTEGER(), INTEGER()}),
+      false,
+      CompareFlags::NullHandlingMode::kNullAsValue);
+
+  allocator_.clear();
+}
+
+TEST_F(ContainerRowSerdeTest, compareNullsInMapByteStream) {
+  auto left = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 10}, {4, 30}, {2, 3}}},
+      {{{2, 20}}},
+      {{{3, 50}}},
+      {{{4, std::nullopt}}},
+  });
+  auto leftPositions = serializeWithPositions(left);
+
+  auto right = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 10}, {3, 20}}},
+      {{{2, 20}}},
+      {{{3, 40}}},
+      {{{4, std::nullopt}}},
+  });
+  auto rightPositions = serializeWithPositions(right);
+
+  testCompareByteStreamWithNulls(
+      leftPositions,
+      rightPositions,
+      {{-1}, {0}, {1}, std::nullopt},
+      MAP(BIGINT(), BIGINT()),
+      false,
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  testCompareByteStreamWithNulls(
+      leftPositions,
+      rightPositions,
+      {{1}, {0}, {1}, std::nullopt},
+      MAP(BIGINT(), BIGINT()),
+      true,
+      CompareFlags::NullHandlingMode::kNullAsIndeterminate);
+  testCompareByteStreamWithNulls(
+      leftPositions,
+      rightPositions,
+      {{1}, {0}, {1}, {0}},
+      MAP(BIGINT(), BIGINT()),
+      true,
+      CompareFlags::NullHandlingMode::kNullAsValue);
 
   allocator_.clear();
 }
@@ -364,6 +568,39 @@ TEST_F(ContainerRowSerdeTest, fuzzCompare) {
       auto rowVector = makeRowVector(children);
       testCompare(rowVector);
     }
+  }
+}
+
+TEST_F(ContainerRowSerdeTest, nans) {
+  // Verify that the NaNs with different representations are considered equal
+  // and have the same hash value.
+  auto vector = makeNullableFlatVector<double>(
+      {std::nan("1"),
+       std::nan("2"),
+       std::numeric_limits<double>::quiet_NaN(),
+       std::numeric_limits<double>::signaling_NaN()});
+
+  // Compare with the same NaN value
+  auto expected = makeConstant(std::nan("1"), 4, vector->type());
+
+  auto positions = serializeWithPositions(vector);
+
+  CompareFlags compareFlags =
+      CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+
+  DecodedVector decodedVector(*expected);
+
+  for (auto i = 0; i < positions.size(); ++i) {
+    auto stream = HashStringAllocator::prepareRead(positions.at(i).header);
+    ASSERT_EQ(
+        0, ContainerRowSerde::compare(stream, decodedVector, i, compareFlags))
+        << "at " << i << ": " << vector->toString(i);
+
+    stream = HashStringAllocator::prepareRead(positions.at(i).header);
+    ASSERT_EQ(
+        expected->hashValueAt(i),
+        ContainerRowSerde::hash(stream, vector->type().get()))
+        << "at " << i << ": " << vector->toString(i);
   }
 }
 

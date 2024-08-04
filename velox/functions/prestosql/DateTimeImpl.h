@@ -17,7 +17,10 @@
 
 #include <chrono>
 #include <optional>
+
+#include "velox/common/base/Doubles.h"
 #include "velox/external/date/date.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
 
@@ -34,33 +37,32 @@ FOLLY_ALWAYS_INLINE double toUnixtime(const Timestamp& timestamp) {
   return result;
 }
 
-FOLLY_ALWAYS_INLINE std::optional<Timestamp> fromUnixtime(double unixtime) {
-  if (UNLIKELY(std::isnan(unixtime))) {
+FOLLY_ALWAYS_INLINE Timestamp fromUnixtime(double unixtime) {
+  if (FOLLY_UNLIKELY(std::isnan(unixtime))) {
     return Timestamp(0, 0);
   }
 
-  static const int64_t kMax = std::numeric_limits<int64_t>::max();
   static const int64_t kMin = std::numeric_limits<int64_t>::min();
 
-  // On some compilers if we cast kMax to a double, we can get a number larger
-  // than 'kMax'. This will allow 'unixtime' values > 'kMax'. The workaround
-  // here is to use uint64_t to represent ('kMax' + 1), which can be represented
-  // exactly as double. We then check if the difference with 'unixtime' <= 1.
-  if (UNLIKELY((static_cast<uint64_t>(kMax) + 1) - unixtime <= 1)) {
+  if (FOLLY_UNLIKELY(unixtime >= kMinDoubleAboveInt64Max)) {
     return Timestamp::maxMillis();
   }
 
-  if (UNLIKELY(unixtime <= kMin)) {
+  if (FOLLY_UNLIKELY(unixtime <= kMin)) {
     return Timestamp::minMillis();
   }
 
-  if (UNLIKELY(std::isinf(unixtime))) {
+  if (FOLLY_UNLIKELY(std::isinf(unixtime))) {
     return unixtime < 0 ? Timestamp::minMillis() : Timestamp::maxMillis();
   }
 
   auto seconds = std::floor(unixtime);
-  auto nanos = unixtime - seconds;
-  return Timestamp(seconds, nanos * kNanosecondsInSecond);
+  auto milliseconds = std::llround((unixtime - seconds) * kMillisInSecond);
+  if (FOLLY_UNLIKELY(milliseconds == kMillisInSecond)) {
+    ++seconds;
+    milliseconds = 0;
+  }
+  return Timestamp(seconds, milliseconds * kNanosecondsInMillisecond);
 }
 
 namespace {
@@ -105,6 +107,8 @@ addToDate(const int32_t input, const DateTimeUnit unit, const int32_t value) {
 
   if (unit == DateTimeUnit::kDay) {
     outDate = inDate + date::days(value);
+  } else if (unit == DateTimeUnit::kWeek) {
+    outDate = inDate + date::days(value * 7);
   } else {
     const date::year_month_day inCalDate(inDate);
     date::year_month_day outCalDate;
@@ -174,8 +178,17 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
       outTimestamp = inTimestamp + std::chrono::milliseconds(value);
       break;
     }
+    case DateTimeUnit::kWeek: {
+      const int32_t inDate =
+          std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
+              .count();
+      const int32_t outDate = addToDate(inDate, DateTimeUnit::kDay, 7 * value);
+
+      outTimestamp = inTimestamp + date::days(outDate - inDate);
+      break;
+    }
     default:
-      VELOX_UNREACHABLE();
+      VELOX_UNREACHABLE("Unsupported datetime unit");
   }
 
   Timestamp milliTimestamp =
@@ -184,6 +197,15 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
       milliTimestamp.getSeconds(),
       milliTimestamp.getNanos() +
           timestamp.getNanos() % kNanosecondsInMillisecond);
+}
+
+FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
+    int64_t timestampWithTimezone,
+    const DateTimeUnit unit,
+    const int32_t value) {
+  auto timestamp = unpackTimestampUtc(timestampWithTimezone);
+  auto finalTimeStamp = addToTimestamp(timestamp, unit, (int32_t)value);
+  return pack(finalTimeStamp, unpackZoneKeyId(timestampWithTimezone));
 }
 
 FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
@@ -195,7 +217,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     return 0;
   }
 
-  int8_t sign = fromTimestamp < toTimestamp ? 1 : -1;
+  const int8_t sign = fromTimestamp < toTimestamp ? 1 : -1;
 
   // fromTimepoint is less than or equal to toTimepoint
   const std::chrono::
@@ -238,6 +260,12 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
           std::chrono::duration_cast<date::days>(toTimepoint - fromTimepoint)
               .count();
     }
+    case DateTimeUnit::kWeek: {
+      return sign *
+          std::chrono::duration_cast<date::days>(toTimepoint - fromTimepoint)
+              .count() /
+          7;
+    }
     default:
       break;
   }
@@ -267,9 +295,8 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   const uint8_t toLastYearMonthDay =
       static_cast<unsigned>(toCalLastYearMonthDay.day());
 
-  int64_t diff;
   if (unit == DateTimeUnit::kMonth || unit == DateTimeUnit::kQuarter) {
-    diff = (int(toCalDate.year()) - int(fromCalDate.year())) * 12 +
+    int64_t diff = (int(toCalDate.year()) - int(fromCalDate.year())) * 12 +
         int(toMonth) - int(fromMonth);
 
     if ((toDay != toLastYearMonthDay && fromDay > toDay) ||
@@ -282,7 +309,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
   }
 
   if (unit == DateTimeUnit::kYear) {
-    diff = (toCalDate.year() - fromCalDate.year()).count();
+    int64_t diff = (toCalDate.year() - fromCalDate.year()).count();
 
     if (fromMonth > toMonth ||
         (fromMonth == toMonth && fromDay > toDay &&
@@ -294,7 +321,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
     return sign * diff;
   }
 
-  VELOX_UNREACHABLE();
+  VELOX_UNREACHABLE("Unsupported datetime unit");
 }
 
 FOLLY_ALWAYS_INLINE

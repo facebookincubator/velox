@@ -67,6 +67,10 @@ class ExpressionVerifierUnitTest : public testing::Test, public VectorTestBase {
   }
 
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   core::TypedExprPtr parseExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
@@ -75,15 +79,16 @@ class ExpressionVerifierUnitTest : public testing::Test, public VectorTestBase {
     return core::Expressions::inferTypes(untyped, rowType, pool_.get());
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
-  core::QueryCtx queryCtx_{};
-  core::ExecCtx execCtx_{pool_.get(), &queryCtx_};
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
+  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
+  core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
 };
 
 TEST_F(ExpressionVerifierUnitTest, persistReproInfo) {
   filesystems::registerLocalFileSystem();
   auto reproFolder = exec::test::TempDirectoryPath::create();
-  const auto reproPath = reproFolder->path;
+  const auto reproPath = reproFolder->getPath();
   auto localFs = filesystems::getFileSystem(reproPath, nullptr);
 
   ExpressionVerifierOptions options{false, reproPath.c_str(), false};

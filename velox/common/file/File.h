@@ -50,8 +50,8 @@ class ReadFile {
   // buffer 'buf'. The bytes are returned as a string_view pointing to 'buf'.
   //
   // This method should be thread safe.
-  virtual std::string_view
-  pread(uint64_t offset, uint64_t length, void* FOLLY_NONNULL buf) const = 0;
+  virtual std::string_view pread(uint64_t offset, uint64_t length, void* buf)
+      const = 0;
 
   // Same as above, but returns owned data directly.
   //
@@ -74,17 +74,19 @@ class ReadFile {
   // array must be pre-allocated by the caller, with the same size as `regions`,
   // but don't need to be initialized, since each iobuf will be copy-constructed
   // by the preadv.
+  // Returns the total number of bytes read, which might be different than the
+  // sum of all buffer sizes (for example, if coalescing was used).
   //
   // This method should be thread safe.
-  virtual void preadv(
+  virtual uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs) const;
 
-  // Like preadv but may execute asynchronously and returns the read
-  // size or exception via SemiFuture. Use hasPreadvAsync() to check
-  // if the implementation is in fact asynchronous.
-  //
-  // This method should be thread safe.
+  /// Like preadv but may execute asynchronously and returns the read size or
+  /// exception via SemiFuture. Use hasPreadvAsync() to check if the
+  /// implementation is in fact asynchronous.
+  ///
+  /// This method should be thread safe.
   virtual folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers) const {
@@ -124,10 +126,8 @@ class ReadFile {
 
   virtual std::string getName() const = 0;
 
-  //
-  // Get the natural size for reads.
-  // @return the number of bytes that should be read at once
-  //
+  /// Gets the natural size for reads. Returns the number of bytes that should
+  /// be read at once.
   virtual uint64_t getNaturalReadSize() const = 0;
 
  protected:
@@ -143,6 +143,11 @@ class WriteFile {
   // Appends data to the end of the file.
   virtual void append(std::string_view data) = 0;
 
+  // Appends data to the end of the file.
+  virtual void append(std::unique_ptr<folly::IOBuf> /* data */) {
+    VELOX_NYI("IOBuf appending is not implemented");
+  }
+
   // Flushes any local buffers, i.e. ensures the backing medium received
   // all data that has been appended.
   virtual void flush() = 0;
@@ -150,7 +155,9 @@ class WriteFile {
   // Close the file. Any cleanup (disk flush, etc.) will be done here.
   virtual void close() = 0;
 
-  // Current file size, i.e. the sum of all previous Appends.
+  /// Current file size, i.e. the sum of all previous Appends.  No flush should
+  /// be needed to get the exact size written, and this should be able to be
+  /// called after the file close.
   virtual uint64_t size() const = 0;
 };
 
@@ -169,10 +176,8 @@ class InMemoryReadFile : public ReadFile {
   explicit InMemoryReadFile(std::string file)
       : ownedFile_(std::move(file)), file_(ownedFile_) {}
 
-  std::string_view pread(
-      uint64_t offset,
-      uint64_t length,
-      void* FOLLY_NONNULL buf) const override;
+  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
+      const override;
 
   std::string pread(uint64_t offset, uint64_t length) const override;
 
@@ -208,31 +213,33 @@ class InMemoryReadFile : public ReadFile {
 
 class InMemoryWriteFile final : public WriteFile {
  public:
-  explicit InMemoryWriteFile(std::string* FOLLY_NONNULL file) : file_(file) {}
+  explicit InMemoryWriteFile(std::string* file) : file_(file) {}
 
   void append(std::string_view data) final;
+  void append(std::unique_ptr<folly::IOBuf> data) final;
   void flush() final {}
   void close() final {}
   uint64_t size() const final;
 
  private:
-  std::string* FOLLY_NONNULL file_;
+  std::string* file_;
 };
 
-// Current implementation for the local version is quite simple (e.g. no
-// internal arenaing), as local disk writes are expected to be cheap. Local
-// files match against any filepath starting with '/'.
-
+/// Current implementation for the local version is quite simple (e.g. no
+/// internal arenaing), as local disk writes are expected to be cheap. Local
+/// files match against any filepath starting with '/'.
 class LocalReadFile final : public ReadFile {
  public:
   explicit LocalReadFile(std::string_view path);
 
+  /// TODO: deprecate this after creating local file all through velox fs
+  /// interface.
   explicit LocalReadFile(int32_t fd);
 
   ~LocalReadFile();
 
-  std::string_view
-  pread(uint64_t offset, uint64_t length, void* FOLLY_NONNULL buf) const final;
+  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
+      const final;
 
   uint64_t size() const final;
 
@@ -258,8 +265,7 @@ class LocalReadFile final : public ReadFile {
   }
 
  private:
-  void preadInternal(uint64_t offset, uint64_t length, char* FOLLY_NONNULL pos)
-      const;
+  void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
 
   std::string path_;
   int32_t fd_;
@@ -277,13 +283,17 @@ class LocalWriteFile final : public WriteFile {
   ~LocalWriteFile();
 
   void append(std::string_view data) final;
+  void append(std::unique_ptr<folly::IOBuf> data) final;
   void flush() final;
   void close() final;
-  uint64_t size() const final;
+
+  uint64_t size() const final {
+    return size_;
+  }
 
  private:
-  FILE* FOLLY_NONNULL file_;
-  mutable long size_;
+  FILE* file_;
+  uint64_t size_{0};
   bool closed_{false};
 };
 

@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 using namespace facebook::velox::functions::aggregate::test;
@@ -28,7 +29,6 @@ class MinMaxByAggregateTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    AggregationTestBase::disallowInputShuffle();
     registerAggregateFunctions("spark_");
   }
 };
@@ -113,54 +113,18 @@ TEST_F(MinMaxByAggregateTest, arrayCompare) {
 
 TEST_F(MinMaxByAggregateTest, mapCompare) {
   auto data = makeRowVector({
-      makeArrayVector<int64_t>({
-          {1, 2, 3},
-          {4, 5},
-          {6, 7, 8},
-      }),
-      makeNullableMapVector<int64_t, int64_t>({
-          {{{1, 1}, {2, 2}}},
-          {{{1, 1}, {2, std::nullopt}}},
-          {{{4, 50}}},
-      }),
+      makeArrayVector<int64_t>({}),
+      makeNullableMapVector<int64_t, int64_t>({}),
   });
+  std::vector<RowVectorPtr> expected = {};
 
-  auto expected = makeRowVector({
-      makeArrayVector<int64_t>({
-          {4, 5},
-      }),
-      makeArrayVector<int64_t>({
-          {6, 7, 8},
-      }),
-  });
+  VELOX_ASSERT_USER_THROW(
+      testAggregations({data}, {}, {"spark_min_by(c0, c1)"}, expected),
+      "Aggregate function signature is not supported");
 
-  testAggregations(
-      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
-
-  data = makeRowVector({
-      makeArrayVector<int64_t>({
-          {1, 2, 3},
-          {4, 5},
-          {6, 7, 8},
-      }),
-      makeNullableMapVector<int64_t, int64_t>({
-          {{{1, 1}, {2, 2}}},
-          {{{1, 1}, {2, 3}}},
-          {{{4, 50}}},
-      }),
-  });
-
-  expected = makeRowVector({
-      makeArrayVector<int64_t>({
-          {1, 2, 3},
-      }),
-      makeArrayVector<int64_t>({
-          {6, 7, 8},
-      }),
-  });
-
-  testAggregations(
-      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
+  VELOX_ASSERT_USER_THROW(
+      testAggregations({data}, {}, {"spark_max_by(c0, c1)"}, expected),
+      "Aggregate function signature is not supported");
 }
 
 TEST_F(MinMaxByAggregateTest, rowCompare) {

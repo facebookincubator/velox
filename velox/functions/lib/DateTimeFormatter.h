@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Status.h"
 #include "velox/type/Timestamp.h"
 
 namespace facebook::velox::functions {
@@ -173,11 +174,27 @@ class DateTimeFormatter {
     return tokens_;
   }
 
-  DateTimeResult parse(const std::string_view& input) const;
+  // Returns an Expected<DateTimeResult> object containing the parsed
+  // Timestamp and timezone information if parsing succeeded. Otherwise,
+  // Returns Unexpected with UserError status if parsing failed.
+  Expected<DateTimeResult> parse(const std::string_view& input) const;
 
-  std::string format(
+  /// Returns max size of the formatted string. Can be used to preallocate
+  /// memory before calling format() to avoid extra copy.
+  uint32_t maxResultSize(const tz::TimeZone* timezone) const;
+
+  /// Result buffer is pre-allocated according to maxResultSize.
+  /// Returns actual size.
+  ///
+  /// The timestamp will be firstly converted to millisecond then to
+  /// std::chrono::time_point. If allowOverflow is true, integer overflow is
+  /// allowed in converting to milliseconds.
+  int32_t format(
       const Timestamp& timestamp,
-      const date::time_zone* timezone) const;
+      const tz::TimeZone* timezone,
+      const uint32_t maxResultSize,
+      char* result,
+      bool allowOverflow = false) const;
 
  private:
   std::unique_ptr<char[]> literalBuf_;
@@ -193,3 +210,23 @@ std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
     const std::string_view& format);
 
 } // namespace facebook::velox::functions
+
+template <>
+struct fmt::formatter<facebook::velox::functions::DateTimeFormatterType>
+    : formatter<int> {
+  auto format(
+      facebook::velox::functions::DateTimeFormatterType s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::functions::DateTimeFormatSpecifier>
+    : formatter<int> {
+  auto format(
+      facebook::velox::functions::DateTimeFormatSpecifier s,
+      format_context& ctx) {
+    return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};

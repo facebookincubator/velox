@@ -18,23 +18,59 @@
 
 namespace facebook::velox::functions {
 
+namespace {
 const char ROOT = '$';
 const char DOT = '.';
 const char COLON = ':';
 const char DASH = '-';
-const char QUOTE = '"';
+const char DOUBLE_QUOTE = '"';
+const char SINGLE_QUOTE = '\'';
 const char STAR = '*';
 const char BACK_SLASH = '\\';
 const char UNDER_SCORE = '_';
 const char OPEN_BRACKET = '[';
 const char CLOSE_BRACKET = ']';
 
-bool JsonPathTokenizer::reset(folly::StringPiece path) {
-  if (path.empty() || path[0] != ROOT) {
+bool isUnquotedBracketKeyFormat(char c) {
+  return c == UNDER_SCORE || c == STAR || c == DASH || std::isalnum(c);
+}
+
+bool isDotKeyFormat(char c) {
+  return c == COLON || c == DASH || isUnquotedBracketKeyFormat(c);
+}
+
+} // namespace
+
+bool JsonPathTokenizer::reset(std::string_view path) {
+  if (path.empty()) {
+    index_ = 0;
+    path_ = {};
     return false;
   }
-  index_ = 1;
+
+  if (path[0] == ROOT) {
+    index_ = 1;
+    path_ = path;
+    return true;
+  }
+
+  // Presto supplements basic JsonPath implementation with Jayway engine,
+  // which allows paths that do not start with '$'. Jayway simply prepends
+  // such paths with '$.'. This logic supports paths like 'foo' by converting
+  // them to '$.foo'. However, this logic converts paths like '.foo' into
+  // '$..foo' which uses deep scan operator (..). This changes the meaning of
+  // the path in unexpected way.
+  //
+  // Here, we allow paths like 'foo', 'foo.bar', [0] and similar. We do not
+  // allow paths like '.foo'.
+
+  index_ = 0;
+  if (path[0] == DOT) {
+    path_ = {};
+    return false;
+  }
   path_ = path;
+
   return true;
 }
 
@@ -42,87 +78,95 @@ bool JsonPathTokenizer::hasNext() const {
   return index_ < path_.size();
 }
 
-ParseResult JsonPathTokenizer::getNext() {
-  if (match(DOT)) {
+std::optional<std::string> JsonPathTokenizer::getNext() {
+  if (index_ == 0 && path_[0] != OPEN_BRACKET) {
+    // We are parsing first token in a path that doesn't start with '$' and
+    // doesn't start with '['. In this case, we assume the path starts with
+    // '$.'.
     return matchDotKey();
   }
+
+  if (index_ > 0 && match(DOT)) {
+    if (hasNext() && path_[index_] != OPEN_BRACKET) {
+      return matchDotKey();
+    }
+    // Simply ignore the '.' followed by '['. This allows non-standard paths
+    // like '$.[0].[1].[2]' supported by Jayway / Presto.
+  }
+
   if (match(OPEN_BRACKET)) {
-    auto token =
-        match(QUOTE) ? matchQuotedSubscriptKey() : matchUnquotedSubscriptKey();
+    auto token = match(DOUBLE_QUOTE)
+        ? matchQuotedSubscriptKey(DOUBLE_QUOTE)
+        : (match(SINGLE_QUOTE) ? matchQuotedSubscriptKey(SINGLE_QUOTE)
+                               : matchUnquotedSubscriptKey());
     if (!token || !match(CLOSE_BRACKET)) {
-      return folly::makeUnexpected(false);
+      return std::nullopt;
     }
     return token;
   }
-  return folly::makeUnexpected(false);
+
+  return std::nullopt;
 }
 
 bool JsonPathTokenizer::match(char expected) {
-  if (index_ < path_.size() && path_[index_] == expected) {
+  if (hasNext() && path_[index_] == expected) {
     index_++;
     return true;
   }
   return false;
 }
 
-ParseResult JsonPathTokenizer::matchDotKey() {
+std::optional<std::string> JsonPathTokenizer::matchDotKey() {
   auto start = index_;
-  while ((index_ < path_.size()) && isDotKeyFormat(path_[index_])) {
+  while (hasNext() && isDotKeyFormat(path_[index_])) {
     index_++;
   }
-  if (index_ <= start) {
-    return folly::makeUnexpected(false);
+  if (index_ == start) {
+    return std::nullopt;
   }
-  return path_.subpiece(start, index_ - start).str();
+  return std::string(path_.substr(start, index_ - start));
 }
 
-ParseResult JsonPathTokenizer::matchUnquotedSubscriptKey() {
+std::optional<std::string> JsonPathTokenizer::matchUnquotedSubscriptKey() {
   auto start = index_;
-  while (index_ < path_.size() && isUnquotedBracketKeyFormat(path_[index_])) {
+  while (hasNext() && isUnquotedBracketKeyFormat(path_[index_])) {
     index_++;
   }
-  if (index_ <= start) {
-    return folly::makeUnexpected(false);
+  if (index_ == start) {
+    return std::nullopt;
   }
-  return path_.subpiece(start, index_ - start).str();
+  return std::string(path_.substr(start, index_ - start));
 }
 
 // Reference Presto logic in
 // src/test/java/io/prestosql/operator/scalar/TestJsonExtract.java and
 // src/main/java/io/prestosql/operator/scalar/JsonExtract.java
-ParseResult JsonPathTokenizer::matchQuotedSubscriptKey() {
+std::optional<std::string> JsonPathTokenizer::matchQuotedSubscriptKey(
+    char quote) {
   bool escaped = false;
   std::string token;
-  while ((index_ < path_.size()) && (escaped || path_[index_] != QUOTE)) {
+  while (hasNext() && (escaped || path_[index_] != quote)) {
     if (escaped) {
-      if (path_[index_] != QUOTE && path_[index_] != BACK_SLASH) {
-        return folly::makeUnexpected(false);
+      if (path_[index_] != quote && path_[index_] != BACK_SLASH) {
+        return std::nullopt;
       }
       escaped = false;
       token.append(1, path_[index_]);
     } else {
       if (path_[index_] == BACK_SLASH) {
         escaped = true;
-      } else if (path_[index_] == QUOTE) {
-        return folly::makeUnexpected(false);
+      } else if (path_[index_] == quote) {
+        return std::nullopt;
       } else {
         token.append(1, path_[index_]);
       }
     }
     index_++;
   }
-  if (escaped || token.empty() || !match(QUOTE)) {
-    return folly::makeUnexpected(false);
+  if (escaped || token.empty() || !match(quote)) {
+    return std::nullopt;
   }
   return token;
-}
-
-bool JsonPathTokenizer::isDotKeyFormat(char c) {
-  return c == COLON || c == DASH || isUnquotedBracketKeyFormat(c);
-}
-
-bool JsonPathTokenizer::isUnquotedBracketKeyFormat(char c) {
-  return c == UNDER_SCORE || c == STAR || std::isalnum(c);
 }
 
 } // namespace facebook::velox::functions

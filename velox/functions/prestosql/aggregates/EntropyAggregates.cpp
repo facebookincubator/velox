@@ -85,15 +85,6 @@ class EntropyAggregate : public exec::Aggregate {
     return sizeof(EntropyAccumulator);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) EntropyAccumulator();
-    }
-  }
-
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
@@ -131,8 +122,11 @@ class EntropyAggregate : public exec::Aggregate {
       if (!decodedRaw_.isNullAt(0)) {
         const T value = decodedRaw_.valueAt<T>(0);
         const auto numRows = rows.countSelected();
-        EntropyAccumulator accData(
-            numRows * value, numRows * value * std::log(value));
+        // The "sum" is the constant value times the number of rows.
+        // Use double to prevent overflows (this is the same as what is done in
+        // updateNonNullValue).
+        const auto sum = (double)numRows * (double)value;
+        EntropyAccumulator accData(sum, sum * std::log(value));
         updateNonNullValue(group, accData);
       }
     } else if (decodedRaw_.mayHaveNulls()) {
@@ -273,7 +267,7 @@ class EntropyAggregate : public exec::Aggregate {
     for (int32_t i = 0; i < numGroups; ++i) {
       char* group = groups[i];
       if (isNull(group)) {
-        vector->setNull(i, true);
+        rawValues[i] = 0.0;
       } else {
         clearNull(rawNulls, i);
         EntropyAccumulator* accData = accumulator(group);
@@ -285,6 +279,15 @@ class EntropyAggregate : public exec::Aggregate {
  protected:
   inline EntropyAccumulator* accumulator(char* group) {
     return exec::Aggregate::value<EntropyAccumulator>(group);
+  }
+
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) EntropyAccumulator();
+    }
   }
 
  private:
@@ -334,7 +337,12 @@ void checkRowType(const TypePtr& type, const std::string& errorMessage) {
       errorMessage);
 }
 
-exec::AggregateRegistrationResult registerEntropy(const std::string& name) {
+} // namespace
+
+void registerEntropyAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {"smallint", "integer", "bigint"};
   for (const auto& inputType : inputTypes) {
@@ -345,7 +353,8 @@ exec::AggregateRegistrationResult registerEntropy(const std::string& name) {
                              .build());
   }
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kEntropy;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -379,13 +388,9 @@ exec::AggregateRegistrationResult registerEntropy(const std::string& name) {
           // final agg not use template T, int64_t here has no effect.
           return std::make_unique<EntropyAggregate<int64_t>>(resultType);
         }
-      });
-}
-
-} // namespace
-
-void registerEntropyAggregates(const std::string& prefix) {
-  registerEntropy(prefix + kEntropy);
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

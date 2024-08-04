@@ -23,13 +23,40 @@ class Project : public WaveOperator {
   Project(
       CompileState& state,
       RowTypePtr outputType,
-      std::vector<AbstractOperand*> operands,
-      std::vector<std::vector<ProgramPtr>> levels)
-      : WaveOperator(state, outputType), levels_(std::move(levels)) {}
+      std::vector<std::vector<ProgramPtr>> levels,
+      AbstractWrap* filterWrap = nullptr)
+      : WaveOperator(state, outputType, ""),
+        levels_(std::move(levels)),
+        filterWrap_(filterWrap) {}
+
+  AbstractWrap* findWrap() const override;
 
   bool isStreaming() const override {
+    if (!levels_.empty() && levels_[0].size() == 1 &&
+        levels_[0][0]->isSource()) {
+      return false;
+    }
     return true;
   }
+
+  bool isSource() const override {
+    return !isStreaming();
+  }
+
+  /// True if the last  level is a sink like aggregation or partitioned output
+  /// or hash build. No output operands but the output will be consumed in
+  /// another pipeline.
+  bool isSink() const override {
+    if (levels_.empty()) {
+      // Can be temporarily empty if all instructions are fused into previous
+      // and this is only to designate a wrap.
+      return false;
+    }
+    auto& last = levels_.back();
+    return last.size() == 1 && last[0]->isSink();
+  }
+
+  AdvanceResult canAdvance(WaveStream& Stream) override;
 
   void schedule(WaveStream& stream, int32_t maxRows = 0) override;
 
@@ -38,7 +65,7 @@ class Project : public WaveOperator {
   void finalize(CompileState& state) override;
 
   std::string toString() const override {
-    return "Project";
+    return fmt::format("Project {}", WaveOperator::toString());
   }
 
   const OperandSet& syncSet() const override {
@@ -46,8 +73,14 @@ class Project : public WaveOperator {
   }
 
  private:
+  struct ContinueLocation {
+    int32_t programIdx;
+    int32_t instructionIdx;
+  };
+
   std::vector<std::vector<ProgramPtr>> levels_;
   OperandSet computedSet_;
+  AbstractWrap* filterWrap_{nullptr};
 };
 
 } // namespace facebook::velox::wave

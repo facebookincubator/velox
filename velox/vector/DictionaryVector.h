@@ -15,10 +15,9 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <memory>
 #include <type_traits>
-
-#include <folly/container/F14Map.h>
 
 #include "velox/common/base/SimdUtil.h"
 #include "velox/vector/LazyVector.h"
@@ -65,7 +64,9 @@ class DictionaryVector : public SimpleVector<T> {
       std::optional<ByteCount> representedBytes = std::nullopt,
       std::optional<ByteCount> storageByteCount = std::nullopt);
 
-  virtual ~DictionaryVector() override = default;
+  virtual ~DictionaryVector() override {
+    dictionaryValues_->clearContainingLazyAndWrapped();
+  }
 
   bool mayHaveNulls() const override {
     VELOX_DCHECK(initialized_);
@@ -122,7 +123,15 @@ class DictionaryVector : public SimpleVector<T> {
     return indices_;
   }
 
+  inline BufferPtr& indices() {
+    return indices_;
+  }
+
   const VectorPtr& valueVector() const override {
+    return dictionaryValues_;
+  }
+
+  VectorPtr& valueVector() override {
     return dictionaryValues_;
   }
 
@@ -131,7 +140,8 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   BufferPtr mutableIndices(vector_size_t size) {
-    BaseVector::resizeIndices(size, BaseVector::pool_, &indices_, &rawIndices_);
+    BaseVector::resizeIndices(
+        BaseVector::length_, size, BaseVector::pool_, indices_, &rawIndices_);
     return indices_;
   }
 
@@ -159,6 +169,7 @@ class DictionaryVector : public SimpleVector<T> {
     rows.updateBounds();
 
     LazyVector::ensureLoadedRows(dictionaryValues_, rows);
+    dictionaryValues_ = BaseVector::loadedVectorShared(dictionaryValues_);
     setInternalState();
     return this;
   }
@@ -187,6 +198,7 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   void setDictionaryValues(VectorPtr dictionaryValues) {
+    dictionaryValues_->clearContainingLazyAndWrapped();
     dictionaryValues_ = dictionaryValues;
     initialized_ = false;
     setInternalState();
@@ -198,9 +210,15 @@ class DictionaryVector : public SimpleVector<T> {
   void resize(vector_size_t size, bool setNotNull = true) override {
     if (size > BaseVector::length_) {
       BaseVector::resizeIndices(
-          size, BaseVector::pool(), &indices_, &rawIndices_);
-      this->clearIndices(indices_, BaseVector::length_, size);
+          BaseVector::length_,
+          size,
+          BaseVector::pool(),
+          indices_,
+          &rawIndices_);
     }
+
+    // TODO Fix the case when base vector is empty.
+    // https://github.com/facebookincubator/velox/issues/7828
 
     BaseVector::resize(size, setNotNull);
   }
@@ -208,6 +226,23 @@ class DictionaryVector : public SimpleVector<T> {
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
 
   void validate(const VectorValidateOptions& options) const override;
+
+  VectorPtr copyPreserveEncodings(
+      velox::memory::MemoryPool* pool = nullptr) const override {
+    auto selfPool = pool ? pool : BaseVector::pool_;
+    return std::make_shared<DictionaryVector<T>>(
+        selfPool,
+        AlignedBuffer::copy(selfPool, BaseVector::nulls_),
+        BaseVector::length_,
+        dictionaryValues_->copyPreserveEncodings(),
+        AlignedBuffer::copy(selfPool, indices_),
+        SimpleVector<T>::stats_,
+        BaseVector::distinctValueCount_,
+        BaseVector::nullCount_,
+        SimpleVector<T>::isSorted_,
+        BaseVector::representedByteCount_,
+        BaseVector::storageByteCount_);
+  }
 
  private:
   // return the dictionary index for the specified vector index.

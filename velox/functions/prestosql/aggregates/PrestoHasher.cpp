@@ -15,6 +15,8 @@
  */
 #include "velox/functions/prestosql/aggregates/PrestoHasher.h"
 
+#include <type_traits>
+
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
@@ -64,6 +66,34 @@ FOLLY_ALWAYS_INLINE void hashIntegral(
   });
 }
 
+template <
+    typename T,
+    typename std::enable_if_t<
+        std::is_same_v<T, float> || std::is_same_v<T, double>,
+        int> = 0>
+FOLLY_ALWAYS_INLINE void hashFloating(
+    const DecodedVector& vector,
+    const SelectivityVector& rows,
+    BufferPtr& hashes) {
+  using IntegralType =
+      std::conditional_t<std::is_same_v<T, float>, int32_t, int64_t>;
+  applyHashFunction(rows, vector, hashes, [&](auto row) {
+    auto value = vector.valueAt<T>(row);
+    if (std::isnan(value)) {
+      if constexpr (std::is_same_v<T, float>) {
+        return hashInteger<IntegralType>(0x7fc00000);
+      } else {
+        return hashInteger<IntegralType>(0x7ff8000000000000L);
+      }
+    } else if (value == (T{})) {
+      // If -0.0 treat it same as 0
+      return hashInteger<IntegralType>(0);
+    } else {
+      return hashInteger<IntegralType>(vector.valueAt<IntegralType>(row));
+    }
+  });
+}
+
 #if defined(__clang__)
 __attribute__((no_sanitize("integer")))
 #endif
@@ -100,11 +130,59 @@ FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::BOOLEAN>(
 }
 
 template <>
+FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::BIGINT>(
+    const SelectivityVector& rows,
+    BufferPtr& hashes) {
+  if (vector_->base()->type()->isShortDecimal()) {
+    applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
+      // The Presto java ShortDecimal hash implementation
+      // returns the corresponding value directly.
+      return vector_->valueAt<int64_t>(row);
+    });
+  } else if (isTimestampWithTimeZoneType(vector_->base()->type())) {
+    // Hash only timestamp value.
+    applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
+      return hashInteger(unpackMillisUtc(vector_->valueAt<int64_t>(row)));
+    });
+  } else {
+    applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
+      return hashInteger(vector_->valueAt<int64_t>(row));
+    });
+  }
+}
+
+FOLLY_ALWAYS_INLINE uint64_t updateTail(uint64_t hash, uint64_t value) {
+  auto mix = XXH_rotl64(value * XXH_PRIME64_2, 31) * XXH_PRIME64_1;
+  auto temp = hash ^ mix;
+  return XXH_rotl64(temp, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
+}
+
+FOLLY_ALWAYS_INLINE uint64_t hashLongDecimalPart(const uint64_t value) {
+  auto hash = XXH_PRIME64_5 + sizeof(uint64_t);
+  hash = updateTail(hash, value);
+  hash = XXH64_avalanche(hash);
+  return hash;
+}
+
+// The implementation of Presto LongDecimal hash can be found in
+// https://github.com/prestodb/presto/blob/master/presto-common/src/main/java/com/facebook/presto/common/type/LongDecimalType.java#L91-L96.
+template <>
 FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::HUGEINT>(
     const SelectivityVector& rows,
     BufferPtr& hashes) {
   applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
-    return hashInteger(vector_->valueAt<int128_t>(row));
+    auto value = vector_->valueAt<int128_t>(row);
+    // Presto Java UnscaledDecimal128 representation uses signed magnitude
+    // representation. Only negative values differ in this representation.
+    // The processing here is mainly for the convenience of hash computation.
+    if (value < 0) {
+      value *= -1;
+      value |= DecimalUtil::kInt128Mask;
+    }
+    auto lower = HugeInt::lower(value);
+    auto high = HugeInt::upper(value);
+    return hashLongDecimalPart(lower) ^
+        hashLongDecimalPart(high & DecimalUtil::kInt64Mask);
   });
 }
 
@@ -112,7 +190,7 @@ template <>
 FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::REAL>(
     const SelectivityVector& rows,
     BufferPtr& hashes) {
-  hashIntegral<int32_t>(*vector_.get(), rows, hashes);
+  hashFloating<float>(*vector_.get(), rows, hashes);
 }
 
 template <>
@@ -137,7 +215,7 @@ template <>
 FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::DOUBLE>(
     const SelectivityVector& rows,
     BufferPtr& hashes) {
-  hashIntegral<int64_t>(*vector_.get(), rows, hashes);
+  hashFloating<double>(*vector_.get(), rows, hashes);
 }
 
 template <>
@@ -249,20 +327,6 @@ void PrestoHasher::hash<TypeKind::ROW>(
       AlignedBuffer::allocate<int64_t>(elementRows.end(), baseRow->pool());
 
   auto rawHashes = hashes->asMutable<int64_t>();
-
-  if (isTimestampWithTimeZoneType(vector_->base()->type())) {
-    // Hash only timestamp value.
-    children_[0]->hash(baseRow->childAt(0), elementRows, childHashes);
-    auto rawChildHashes = childHashes->as<int64_t>();
-    rows.applyToSelected([&](auto row) {
-      if (!baseRow->isNullAt(indices[row])) {
-        rawHashes[row] = rawChildHashes[indices[row]];
-      } else {
-        rawHashes[row] = 0;
-      }
-    });
-    return;
-  }
 
   BufferPtr combinedChildHashes =
       AlignedBuffer::allocate<int64_t>(elementRows.end(), baseRow->pool());

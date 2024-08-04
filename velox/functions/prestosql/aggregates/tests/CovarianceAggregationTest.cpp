@@ -15,7 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -28,7 +28,6 @@ class CovarianceAggregationTest
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 
   void testGroupBy(const std::string& aggName, const RowVectorPtr& data) {
@@ -146,6 +145,40 @@ TEST_P(CovarianceAggregationTest, floatSomeNulls) {
   testDistinctGroupBy(aggName, data);
 }
 
+TEST_P(CovarianceAggregationTest, allSameValue) {
+  vector_size_t size = 1'000;
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 7; }),
+      makeFlatVector<float>(size, [](auto row) { return 1; }),
+      makeFlatVector<float>(size, [](auto row) { return 2; }),
+  });
+
+  createDuckDbTable({data});
+
+  auto aggName = GetParam();
+  testGlobalAgg(aggName, data);
+  testGroupBy(aggName, data);
+  testDistinctGlobalAgg(aggName, data);
+  testDistinctGroupBy(aggName, data);
+}
+
+TEST_P(CovarianceAggregationTest, constantY) {
+  vector_size_t size = 1'000;
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 7; }),
+      makeFlatVector<float>(size, [](auto /*row*/) { return 1; }),
+      makeFlatVector<float>(size, [](auto row) { return row * 0.2; }),
+  });
+
+  createDuckDbTable({data});
+
+  auto aggName = GetParam();
+  testGlobalAgg(aggName, data);
+  testGroupBy(aggName, data);
+  testDistinctGlobalAgg(aggName, data);
+  testDistinctGroupBy(aggName, data);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     CovarianceAggregationTest,
     CovarianceAggregationTest,
@@ -154,5 +187,12 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
         "covar_pop",
         "corr",
         "regr_intercept",
-        "regr_slope"));
+        "regr_slope",
+        "regr_count",
+        "regr_avgy",
+        "regr_avgx",
+        "regr_sxy",
+        "regr_sxx",
+        "regr_syy",
+        "regr_r2"));
 } // namespace facebook::velox::aggregate::test

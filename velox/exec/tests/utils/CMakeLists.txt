@@ -14,13 +14,14 @@
 
 add_library(velox_temp_path TempFilePath.cpp TempDirectoryPath.cpp)
 
-target_link_libraries(velox_temp_path velox_exception)
+target_link_libraries(
+  velox_temp_path velox_exception)
 
 add_library(
   velox_exec_test_lib
   AssertQueryBuilder.cpp
+  ArbitratorTestUtil.cpp
   Cursor.cpp
-  DuckQueryRunner.cpp
   HiveConnectorTestBase.cpp
   LocalExchangeSource.cpp
   OperatorTestBase.cpp
@@ -28,7 +29,8 @@ add_library(
   QueryAssertions.cpp
   SumNonPODAggregate.cpp
   TpchQueryBuilder.cpp
-  VectorTestUtil.cpp)
+  VectorTestUtil.cpp
+  PortUtil.cpp)
 
 target_link_libraries(
   velox_exec_test_lib
@@ -43,14 +45,10 @@ target_link_libraries(
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_writer
   velox_dwio_common_test_utils
+  velox_file_test_utils
   velox_type_fbhive
   velox_hive_connector
   velox_tpch_connector
   velox_presto_serializer
   velox_functions_prestosql
   velox_aggregates)
-
-add_library(velox_aggregation_fuzzer AggregationFuzzer.cpp)
-
-target_link_libraries(velox_aggregation_fuzzer velox_type velox_vector_fuzzer
-                      velox_exec_test_lib velox_expression_test_utility)

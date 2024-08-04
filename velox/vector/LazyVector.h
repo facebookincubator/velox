@@ -105,12 +105,6 @@ class VectorLoader {
       ValueHook* hook,
       vector_size_t resultSize,
       VectorPtr* result) = 0;
-
-  virtual void loadInternal(
-      const SelectivityVector& rows,
-      ValueHook* hook,
-      vector_size_t resultSize,
-      VectorPtr* result);
 };
 
 // Vector class which produces values on first use. This is used for
@@ -148,6 +142,7 @@ class LazyVector : public BaseVector {
     loader_ = std::move(loader);
     allLoaded_ = false;
     containsLazyAndIsWrapped_ = false;
+    resetNulls();
   }
 
   inline bool isLoaded() const {
@@ -188,29 +183,13 @@ class LazyVector : public BaseVector {
   // Returns a shared_ptr to the vector holding the values. If vector is not
   // loaded, loads all the rows, otherwise returns the loaded vector which can
   // have partially loaded rows.
+  VectorPtr& loadedVectorShared() {
+    loadVectorInternal();
+    return vector_;
+  }
+
   const VectorPtr& loadedVectorShared() const {
-    if (!allLoaded_) {
-      if (!vector_) {
-        vector_ = BaseVector::create(type_, 0, pool_);
-      }
-      SelectivityVector allRows(BaseVector::length_);
-      loader_->load(allRows, nullptr, size(), &vector_);
-      VELOX_CHECK(vector_);
-      if (vector_->encoding() == VectorEncoding::Simple::LAZY) {
-        vector_ = vector_->asUnchecked<LazyVector>()->loadedVectorShared();
-      } else {
-        // If the load produced a wrapper, load the wrapped vector.
-        vector_->loadedVector();
-      }
-      allLoaded_ = true;
-      const_cast<LazyVector*>(this)->BaseVector::nulls_ = vector_->nulls_;
-      if (BaseVector::nulls_) {
-        const_cast<LazyVector*>(this)->BaseVector::rawNulls_ =
-            BaseVector::nulls_->as<uint64_t>();
-      }
-    } else {
-      VELOX_CHECK(vector_);
-    }
+    loadVectorInternal();
     return vector_;
   }
 
@@ -280,6 +259,11 @@ class LazyVector : public BaseVector {
 
   void validate(const VectorValidateOptions& options) const override;
 
+  VectorPtr copyPreserveEncodings(
+      velox::memory::MemoryPool* /* pool */ = nullptr) const override {
+    VELOX_UNSUPPORTED("copyPreserveEncodings not defined for LazyVector");
+  }
+
  private:
   static void ensureLoadedRowsImpl(
       const VectorPtr& vector,
@@ -287,10 +271,12 @@ class LazyVector : public BaseVector {
       const SelectivityVector& rows,
       SelectivityVector& baseRows);
 
+  void loadVectorInternal() const;
+
   std::unique_ptr<VectorLoader> loader_;
 
   // True if all values are loaded.
-  mutable bool allLoaded_ = false;
+  mutable tsan_atomic<bool> allLoaded_{false};
   // Vector to hold loaded values. This may be present before load for
   // reuse. If loading is with ValueHook, this will not be created.
   mutable VectorPtr vector_;

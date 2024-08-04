@@ -18,10 +18,14 @@
 #include <folly/Executor.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <gtest/gtest.h>
+#include <optional>
+#include "velox/type/CppToType.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::test {
 
@@ -51,9 +55,6 @@ class VectorTestBase {
   VectorTestBase() = default;
 
   ~VectorTestBase();
-
-  template <typename T>
-  using EvalType = typename CppToType<T>::NativeType;
 
   static std::shared_ptr<const RowType> makeRowType(
       std::vector<std::shared_ptr<const Type>>&& types) {
@@ -130,27 +131,53 @@ class VectorTestBase {
     return vectorMaker_.rowVector(rowType, size);
   }
 
-  /// Splits input vector into 2. First half of rows goes to first vector, the
-  /// rest to the second vector. Input vector must have at least 2 rows.
-  /// @return 2 vectors
-  std::vector<RowVectorPtr> split(const RowVectorPtr& vector);
-
-  // Returns a one element ArrayVector with 'vector' as elements of array at 0.
-  VectorPtr asArray(VectorPtr vector) {
-    BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(
-        1, vector->pool(), vector->size());
-    BufferPtr offsets =
-        AlignedBuffer::allocate<vector_size_t>(1, vector->pool(), 0);
-    return std::make_shared<ArrayVector>(
-        vector->pool(),
-        ARRAY(vector->type()),
-        BufferPtr(nullptr),
-        1,
-        offsets,
-        sizes,
-        vector,
-        0);
+  RowVectorPtr makeRowVector(
+      const RowTypePtr& type,
+      const VectorFuzzer::Options& fuzzerOpts) {
+    VectorFuzzer fuzzer(fuzzerOpts, pool());
+    return fuzzer.fuzzRow(type);
   }
+
+  std::vector<RowVectorPtr> createVectors(
+      const RowTypePtr& type,
+      uint64_t byteSize,
+      const VectorFuzzer::Options& fuzzerOpts) {
+    VectorFuzzer fuzzer(fuzzerOpts, pool());
+    uint64_t totalSize{0};
+    std::vector<RowVectorPtr> vectors;
+    while (totalSize < byteSize) {
+      vectors.push_back(fuzzer.fuzzInputRow(type));
+      totalSize += vectors.back()->estimateFlatSize();
+    }
+    return vectors;
+  }
+
+  std::vector<RowVectorPtr>
+  createVectors(const RowTypePtr& type, size_t vectorSize, uint64_t byteSize) {
+    return createVectors(type, byteSize, {.vectorSize = vectorSize});
+  }
+
+  std::vector<RowVectorPtr> createVectors(
+      uint32_t numVectors,
+      const RowTypePtr& type,
+      const VectorFuzzer::Options& fuzzerOpts = {}) {
+    VectorFuzzer fuzzer(fuzzerOpts, pool());
+    std::vector<RowVectorPtr> vectors;
+    vectors.reserve(numVectors);
+    for (int i = 0; i < numVectors; ++i) {
+      vectors.emplace_back(fuzzer.fuzzRow(type));
+    }
+    return vectors;
+  }
+
+  /// Splits input vector into 'n' vectors evenly. Input vector must have at
+  /// least 'n' rows.
+  /// @return 'n' vectors
+  std::vector<RowVectorPtr> split(const RowVectorPtr& vector, int32_t n = 2);
+
+  /// Returns a one element ArrayVector with 'elements' as elements of array at
+  /// 0.
+  VectorPtr asArray(VectorPtr elements);
 
   template <typename T>
   FlatVectorPtr<EvalType<T>> makeFlatVector(
@@ -282,7 +309,7 @@ class VectorTestBase {
       if (!vector.has_value()) {
         bits::setNull(rawNulls, i, true);
         rawSizes[i] = 0;
-        rawOffsets[i] = 0;
+        rawOffsets[i] = (i == 0) ? 0 : rawOffsets[i - 1] + rawSizes[i - 1];
       } else {
         flattenedData.insert(
             flattenedData.end(), vector->begin(), vector->end());
@@ -472,6 +499,20 @@ class VectorTestBase {
       const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
     return vectorMaker_.arrayVector<T>(
         size, sizeAt, valueAt, isNullAt, valueIsNullAt, arrayType);
+  }
+
+  /// Similar to makeArrayVectorFromJson. Creates an ArrayVector from list of
+  /// JSON arrays of arrays.
+  /// @tparam T Type of array elements. Must be an integer: int8_t, int16_t,
+  /// int32_t, int64_t.
+  /// @param jsonArrays A list of JSON arrays. JSON array cannot be an empty
+  /// string.
+  /// @param arrayType type of array elements.
+  template <typename T>
+  ArrayVectorPtr makeNestedArrayVectorFromJson(
+      const std::vector<std::string>& jsonArrays,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
+    return vectorMaker_.nestedArrayVectorFromJson<T>(jsonArrays, arrayType);
   }
 
   template <typename T>
@@ -724,13 +765,72 @@ class VectorTestBase {
     return pool_.get();
   }
 
+  // Create LazyVector that produces a flat vector and asserts that is is being
+  // loaded for a specific set of rows.
+  template <typename T>
+  std::shared_ptr<LazyVector> makeLazyFlatVector(
+      vector_size_t size,
+      std::function<T(vector_size_t /*row*/)> valueAt,
+      std::function<bool(vector_size_t /*row*/)> isNullAt =
+          [](vector_size_t row) { return false; },
+      std::optional<vector_size_t> expectedSize = std::nullopt,
+      const std::optional<
+          std::function<vector_size_t(vector_size_t /*index*/)>>&
+          expectedRowAt = std::nullopt) {
+    return std::make_shared<LazyVector>(
+        pool(),
+        CppToType<T>::create(),
+        size,
+        std::make_unique<SimpleVectorLoader>([=](RowSet rows) {
+          if (expectedSize.has_value()) {
+            VELOX_CHECK_EQ(rows.size(), *expectedSize);
+          }
+          if (expectedRowAt.has_value()) {
+            for (auto i = 0; i < rows.size(); i++) {
+              VELOX_CHECK_EQ(rows[i], (*expectedRowAt)(i));
+            }
+          }
+          return makeFlatVector<T>(size, valueAt, isNullAt);
+        }));
+  }
+
+  VectorPtr wrapInLazyDictionary(VectorPtr vector) {
+    return std::make_shared<LazyVector>(
+        pool(),
+        vector->type(),
+        vector->size(),
+        std::make_unique<SimpleVectorLoader>([=](RowSet /*rows*/) {
+          auto indices =
+              makeIndices(vector->size(), [](auto row) { return row; });
+          return wrapInDictionary(indices, vector->size(), vector);
+        }));
+  }
+
   std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::defaultMemoryManager().addRootPool()};
+      memory::memoryManager()->addRootPool()};
   std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
   velox::test::VectorMaker vectorMaker_{pool_.get()};
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency())};
+  std::shared_ptr<folly::Executor> spillExecutor_{
+      std::make_shared<folly::CPUThreadPoolExecutor>(
+          std::thread::hardware_concurrency())};
+};
+
+class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
+ public:
+  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+      override {
+    stats_.emplace_back(name, value);
+  }
+
+  const std::vector<std::pair<std::string, RuntimeCounter>>& stats() const {
+    return stats_;
+  }
+
+ private:
+  std::vector<std::pair<std::string, RuntimeCounter>> stats_;
 };
 
 } // namespace facebook::velox::test

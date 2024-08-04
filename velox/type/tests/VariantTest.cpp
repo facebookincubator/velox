@@ -16,7 +16,6 @@
 
 #include "velox/type/Variant.h"
 #include <gtest/gtest.h>
-#include <velox/type/Type.h>
 #include <numeric>
 #include "velox/common/base/tests/GTestUtils.h"
 
@@ -196,6 +195,33 @@ TEST(VariantTest, equalsWithEpsilonFloat) {
 
   ASSERT_NE(sum1, sum3);
   ASSERT_FALSE(variant(sum1).equalsWithEpsilon(variant(sum3)));
+}
+
+TEST(VariantTest, mapWithNaNKey) {
+  // Verify that map variants treat all NaN keys as equivalent and comparable
+  // (consider them the largest) with other values.
+  static const double KNan = std::numeric_limits<double>::quiet_NaN();
+  auto mapType = MAP(DOUBLE(), INTEGER());
+  {
+    // NaN added at the start of insertions.
+    std::map<variant, variant> mapVariant;
+    mapVariant.insert({variant(KNan), variant(1)});
+    mapVariant.insert({variant(1.2), variant(2)});
+    mapVariant.insert({variant(12.4), variant(3)});
+    EXPECT_EQ(
+        "[{\"key\":1.2,\"value\":2},{\"key\":12.4,\"value\":3},{\"key\":\"NaN\",\"value\":1}]",
+        variant::map(mapVariant).toJson(mapType));
+  }
+  {
+    // NaN added in the middle of insertions.
+    std::map<variant, variant> mapVariant;
+    mapVariant.insert({variant(1.2), variant(2)});
+    mapVariant.insert({variant(KNan), variant(1)});
+    mapVariant.insert({variant(12.4), variant(3)});
+    EXPECT_EQ(
+        "[{\"key\":1.2,\"value\":2},{\"key\":12.4,\"value\":3},{\"key\":\"NaN\",\"value\":1}]",
+        variant::map(mapVariant).toJson(mapType));
+  }
 }
 
 TEST(VariantTest, serialize) {

@@ -40,15 +40,25 @@ String Functions
 .. function:: from_utf8(binary) -> varchar
 
     Decodes a UTF-8 encoded string from ``binary``. Invalid UTF-8 sequences
-    are replaced with the Unicode replacement character ``U+FFFD``.
+    are replaced with the Unicode replacement character ``U+FFFD``. Each
+    invalid UTF-8 codepoint, including those of multi-byte long, is replaced
+    with one replacement character.
 
 .. function:: from_utf8(binary, replace) -> varchar
     :noindex:
 
     Decodes a UTF-8 encoded string from ``binary``. Invalid UTF-8 sequences are
-    replaced with `replace`. The `replace` argument can be either Unicode code
-    point (bigint), a single character or empty string. When `replace` is an
-    empty string invalid characters are removed.
+    replaced with `replace`. Each invalid UTF-8 codepoint, including those of
+    multi-byte long, is replaced with one replacement character. The `replace`
+    argument can be either Unicode code point (bigint), a single character or
+    empty string. When `replace` is an empty string invalid characters are
+    removed.
+
+.. function:: hamming_distance(string1, string2) -> bigint
+
+    Returns the Hamming distance of ``string1`` and ``string2``,
+    i.e. the number of positions at which the corresponding characters are different.
+    Note that the two strings must have the same length.
 
 .. function:: length(string) -> bigint
 
@@ -98,7 +108,12 @@ String Functions
 .. function:: reverse(string) -> varchar
     :noindex:
 
-    Reverses ``string``.
+    Returns input string with characters in reverse order.
+
+.. function:: reverse(varbinary) -> varbinary
+    :noindex:
+
+    Returns input binary with bytes in reversed order.
 
 .. function:: rpad(string, size, padstring) -> varchar
 
@@ -146,9 +161,24 @@ String Functions
     each pair into key and value. Note that ``entryDelimiter`` and ``keyValueDelimiter`` are
     interpreted literally, i.e., as full string matches.
 
-    entryDelimiter and keyValueDelimiter must not be empty and must not be the same.
+    ``entryDelimiter`` and ``keyValueDelimiter`` must not be empty and must not be the same.
+    ``entryDelimiter`` is allowed to be the trailing character.
 
     Raises an error if there are duplicate keys.
+
+.. function:: split_to_map(string, entryDelimiter, keyValueDelimiter, function(K,V1,V2,R)) -> map<varchar, varchar>
+
+    Splits ``string`` by ``entryDelimiter`` and ``keyValueDelimiter`` and returns a map.
+    ``entryDelimiter`` splits ``string`` into key-value pairs. ``keyValueDelimiter`` splits
+    each pair into key and value. Note that ``entryDelimiter`` and ``keyValueDelimiter`` are
+    interpreted literally, i.e., as full string matches.
+
+    ``function(K,V1,V2,R)`` is used to decide whether to keep first or last value for
+    duplicate keys. (k, v1, v2) -> v1 keeps first value. (k, v1, v2) -> v2 keeps last
+    value. Arbitrary functions are not supported. ::
+
+        SELECT(split_to_map('a:1;b:2;a:3', ';', ':', (k, v1, v2) -> v1)); -- {"a": "1", "b": "2"}
+        SELECT(split_to_map('a:1;b:2;a:3', ';', ':', (k, v1, v2) -> v2)); -- {"a": "3", "b": "2"}
 
 .. function:: starts_with(string, substring) -> boolean
 
@@ -181,7 +211,7 @@ String Functions
     ``instance`` must be a positive number.
     Positions start with ``1``. If not found, ``0`` is returned.
     It takes into account overlapping strings when counting occurrences. ::
-        
+
         SELECT strrpos('aaa', 'aa', 2); -- 1
 
 .. function:: substr(string, start) -> varchar
@@ -239,8 +269,69 @@ String Functions
 
     Converts ``string`` to uppercase.
 
+.. function:: word_stem(word) -> varchar
+
+    Returns the stem of ``word`` in the English language. If the ``word`` is not an English word,
+    the ``word`` in lowercase is returned.
+
+.. function:: word_stem(word, lang) -> varchar
+
+    Returns the stem of ``word`` in the ``lang`` language. This function supports the following languages:
+
+    =========== ================
+    lang        Language
+    =========== ================
+    ``ca``      ``Catalan``
+    ``da``      ``Danish``
+    ``de``      ``German``
+    ``en``      ``English``
+    ``es``      ``Spanish``
+    ``eu``      ``Basque``
+    ``fi``      ``Finnish``
+    ``fr``      ``French``
+    ``hu``      ``Hungarian``
+    ``hy``      ``Armenian``
+    ``ir``      ``Irish``
+    ``it``      ``Italian``
+    ``lt``      ``Lithuanian``
+    ``nl``      ``Dutch``
+    ``no``      ``Norwegian``
+    ``pt``      ``Portuguese``
+    ``ro``      ``Romanian``
+    ``ru``      ``Russian``
+    ``sv``      ``Swedish``
+    ``tr``      ``Turkish``
+    =========== ================
+
+    If the specified ``lang`` is not supported, this function throws a user error.
+
+
 Unicode Functions
 -----------------
+
+.. function:: normalize(string) -> varchar
+
+    Transforms ``string`` with NFC normalization form.
+
+.. function:: normalize(string, form) -> varchar
+
+    Reference: https://unicode.org/reports/tr15/#Norm_Forms
+    Transforms ``string`` with the specified normalization form.
+    ``form`` must be be one of the following keywords:
+
+    ======== ===========
+    Form     Description
+    ======== ===========
+    ``NFD``  Canonical Decomposition
+    ``NFC``  Canonical Decomposition, followed by Canonical Composition
+    ``NFKD`` Compatibility Decomposition
+    ``NFKC`` Compatibility Decomposition, followed by Canonical Composition
+    ======== ===========
+
+    .. note::
+
+        This SQL-standard function has special syntax and requires
+        specifying ``form`` as a keyword, not as a string.
 
 .. function:: to_utf8(string) -> varbinary
 

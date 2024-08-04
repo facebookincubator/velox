@@ -35,7 +35,7 @@ namespace {
 
 constexpr int kBlockSize = 256;
 
-__device__ uint32_t jenkinsRevMix32(uint32_t key) {
+[[maybe_unused]] __device__ uint32_t jenkinsRevMix32(uint32_t key) {
   key += (key << 12); // key *= (1 + (1 << 12))
   key ^= (key >> 22);
   key += (key << 4); // key *= (1 + (1 << 4))
@@ -298,7 +298,7 @@ __global__ void probe<true>(
       j = (j + sizeof(uint32_t)) & tableSizeMask;
       cmpMask = 0xffffffff;
     }
-  end:
+  end:;
   }
 }
 
@@ -627,7 +627,7 @@ __global__ void probePartitioned<true>(
       j = (j + sizeof(uint32_t)) & tableSizeMask;
       cmpMask = 0xffffffff;
     }
-  end:
+  end:;
   }
 }
 
@@ -745,7 +745,7 @@ void runPartitioned() {
 
 int main(int argc, char** argv) {
   using namespace facebook::velox::gpu;
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   assert(__builtin_popcount(FLAGS_table_size) == 1);
   assert(FLAGS_table_size % kBlockSize == 0);
   CUDA_CHECK_FATAL(cudaSetDevice(FLAGS_device));

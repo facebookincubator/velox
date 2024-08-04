@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/common/base/Nulls.h"
 #include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/common/IntDecoder.h"
 
@@ -36,40 +35,27 @@ class DirectDecoder : public IntDecoder<isSigned> {
 
   void seekToRowGroup(dwio::common::PositionProvider&) override;
 
-  void skip(uint64_t numValues) override;
+  using IntDecoder<isSigned>::skip;
 
-  template <typename T>
-  void nextValues(
-      T* FOLLY_NONNULL data,
-      uint64_t numValues,
-      const uint64_t* FOLLY_NULLABLE nulls);
-
-  void next(
-      int64_t* FOLLY_NONNULL data,
-      uint64_t numValues,
-      const uint64_t* FOLLY_NULLABLE nulls) override {
-    nextValues<int64_t>(data, numValues, nulls);
+  void skipPending() final {
+    auto toSkip = this->pendingSkip;
+    this->pendingSkip = 0;
+    this->skipLongs(toSkip);
   }
 
-  template <bool hasNulls>
-  inline void skip(
-      int32_t numValues,
-      int32_t current,
-      const uint64_t* FOLLY_NULLABLE nulls) {
-    if (!numValues) {
-      return;
-    }
-    if (hasNulls) {
-      numValues = bits::countNonNulls(nulls, current, current + numValues);
-    }
-    IntDecoder<isSigned>::skipLongsFast(numValues);
+  template <typename T>
+  void nextValues(T* data, uint64_t numValues, const uint64_t* nulls);
+
+  void next(int64_t* data, uint64_t numValues, const uint64_t* nulls) override {
+    nextValues<int64_t>(data, numValues, nulls);
   }
 
   template <bool hasNulls, typename Visitor>
   void readWithVisitor(
-      const uint64_t* FOLLY_NULLABLE nulls,
+      const uint64_t* nulls,
       Visitor visitor,
       bool useFastPath = true) {
+    skipPending();
     if constexpr (!std::is_same_v<typename Visitor::DataType, int128_t>) {
       if (useFastPath &&
           dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
@@ -78,7 +64,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
       }
     }
     int32_t current = visitor.start();
-    skip<hasNulls>(current, 0, nulls);
+    this->template skip<hasNulls>(current, 0, nulls);
     const bool allowNulls = hasNulls && visitor.allowNulls();
     for (;;) {
       bool atEnd = false;
@@ -87,7 +73,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
         if (!allowNulls) {
           toSkip = visitor.checkAndSkipNulls(nulls, current, atEnd);
           if (!Visitor::dense) {
-            skip<false>(toSkip, current, nullptr);
+            this->template skip<false>(toSkip, current, nullptr);
           }
           if (atEnd) {
             return;
@@ -113,7 +99,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
     skip:
       ++current;
       if (toSkip) {
-        skip<hasNulls>(toSkip, current, nulls);
+        this->template skip<hasNulls>(toSkip, current, nulls);
         current += toSkip;
       }
       if (atEnd) {
@@ -140,7 +126,8 @@ class DirectDecoder : public IntDecoder<isSigned> {
   // Returns a pointer to the next element of 'size' bytes in the
   // buffer. If the element would straddle buffers, it is copied to
   // *temp and temp is returned.
-  const void* FOLLY_NONNULL readFixed(int32_t size, void* FOLLY_NONNULL temp) {
+  const void* readFixed(int32_t size, void* temp) {
+    skipPending();
     auto ptr = super::bufferStart;
     if (ptr && ptr + size <= super::bufferEnd) {
       super::bufferStart += size;
@@ -156,7 +143,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
   }
 
   template <bool hasNulls, typename Visitor>
-  void fastPath(const uint64_t* FOLLY_NULLABLE nulls, Visitor& visitor) {
+  void fastPath(const uint64_t* nulls, Visitor& visitor) {
     using T = typename Visitor::DataType;
     constexpr bool hasFilter =
         !std::
@@ -200,7 +187,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
           visitor.setHasNulls();
         }
         if (innerVector->empty()) {
-          skip<false>(tailSkip, 0, nullptr);
+          this->template skip<false>(tailSkip, 0, nullptr);
           visitor.setAllNull(hasFilter ? 0 : numRows);
           return;
         }
@@ -211,7 +198,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
         } else {
           super::bulkReadRows(*innerVector, data);
         }
-        skip<false>(tailSkip, 0, nullptr);
+        this->template skip<false>(tailSkip, 0, nullptr);
         auto dataRows = innerVector
             ? folly::Range<const int*>(innerVector->data(), innerVector->size())
             : folly::Range<const int32_t*>(rows, outerVector->size());
@@ -239,7 +226,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
             super::bufferEnd,
             visitor.filter(),
             visitor.hook());
-        skip<false>(tailSkip, 0, nullptr);
+        this->template skip<false>(tailSkip, 0, nullptr);
       }
     } else {
       if (super::useVInts) {

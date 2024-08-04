@@ -18,23 +18,4 @@
 
 #include "velox/experimental/wave/vector/Operand.h"
 
-namespace facebook::velox::wave {
-
-///
-enum class ErrorCode : uint8_t {
-  // All operations completed.
-  kOk = 0,
-
-  // Catchall for runtime errors.
-  kError,
-
-  kInsuffcientMemory,
-};
-
-/// Contains a count of active lanes and a per lane error code.
-struct BlockStatus {
-  int32_t numRows{0};
-  ErrorCode errors[kBlockSize];
-};
-
-} // namespace facebook::velox::wave
+namespace facebook::velox::wave {} // namespace facebook::velox::wave

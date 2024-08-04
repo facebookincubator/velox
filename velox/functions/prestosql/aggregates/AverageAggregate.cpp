@@ -20,7 +20,6 @@
 using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
-namespace {
 
 /// Count is BIGINT() while sum and the final aggregates type depends on
 /// the input types:
@@ -30,7 +29,10 @@ namespace {
 ///     REAL            |     DOUBLE          |    REAL
 ///     ALL INTs        |     DOUBLE          |    DOUBLE
 ///     DECIMAL         |     DECIMAL         |    DECIMAL
-exec::AggregateRegistrationResult registerAverage(const std::string& name) {
+void registerAverageAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   for (const auto& inputType : {"smallint", "integer", "bigint", "double"}) {
@@ -55,7 +57,8 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
                            .returnType("DECIMAL(a_precision, a_scale)")
                            .build());
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kAvg;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -131,6 +134,7 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
                 return std::make_unique<DecimalAverageAggregateBase<int64_t>>(
                     resultType);
               }
+              [[fallthrough]];
             default:
               VELOX_FAIL(
                   "Unsupported result type for final aggregation: {}",
@@ -138,12 +142,9 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
           }
         }
       },
-      /*registerCompanionFunctions*/ true);
-}
-} // namespace
-
-void registerAverageAggregate(const std::string& prefix) {
-  registerAverage(prefix + kAvg);
+      {false /*orderSensitive*/},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

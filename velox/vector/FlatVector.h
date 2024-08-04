@@ -28,9 +28,9 @@
 
 namespace facebook::velox {
 
-// FlatVector is marked final to allow for inlining on virtual methods called
-// on a pointer that has the static type FlatVector<T>; this can be a
-// significant performance win when these methods are called in loops.
+/// FlatVector is marked final to allow for inlining on virtual methods called
+/// on a pointer that has the static type FlatVector<T>; this can be a
+/// significant performance win when these methods are called in loops.
 template <typename T>
 class FlatVector final : public SimpleVector<T> {
  public:
@@ -43,14 +43,14 @@ class FlatVector final : public SimpleVector<T> {
        std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
        std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
 
-  // Minimum size of a string buffer. 32 KB value is chosen to ensure that a
-  // single buffer is sufficient for a "typical" vector: 1K rows, medium size
-  // strings.
-  static constexpr vector_size_t kInitialStringSize =
+  /// Minimum size of a string buffer. 32 KB value is chosen to ensure that a
+  /// single buffer is sufficient for a "typical" vector: 1K rows, medium size
+  /// strings.
+  static constexpr size_t kInitialStringSize =
       (32 * 1024) - sizeof(AlignedBuffer);
   /// Maximum size of a string buffer to re-use (see
   /// BaseVector::prepareForReuse): 1MB.
-  static constexpr vector_size_t kMaxStringSizeForReuse =
+  static constexpr size_t kMaxStringSizeForReuse =
       (1 << 20) - sizeof(AlignedBuffer);
 
   FlatVector(
@@ -86,6 +86,13 @@ class FlatVector final : public SimpleVector<T> {
         values_ || BaseVector::nulls_,
         "FlatVector needs to either have values or nulls");
     if (!values_) {
+      // Make sure that all rows are null.
+      auto cnt =
+          bits::countNonNulls(BaseVector::rawNulls_, 0, BaseVector::length_);
+      VELOX_CHECK_EQ(
+          0,
+          cnt,
+          "FlatVector with null values buffer must have all rows set to null")
       return;
     }
     auto byteSize = BaseVector::byteSize<T>(BaseVector::length_);
@@ -114,28 +121,23 @@ class FlatVector final : public SimpleVector<T> {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
-  /**
-   * Loads a SIMD vector of data at the virtual byteOffset given
-   * Note this method is implemented on each vector type, but is intentionally
-   * not virtual for performance reasons
-   *
-   * @param byteOffset - the byte offset to load from
-   */
+  /// Loads a SIMD vector of data at the virtual byteOffset given
+  /// Note this method is implemented on each vector type, but is intentionally
+  /// not virtual for performance reasons.
+  /// 'index' indicates the byte offset to load from
   xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
 
-  // dictionary vector makes internal usehere for SIMD functions
+  /// dictionary vector makes internal usehere for SIMD functions
   template <typename X>
   friend class DictionaryVector;
 
-  // Sequence vector needs to get shared_ptr to value array
+  /// Sequence vector needs to get shared_ptr to value array
   template <typename X>
   friend class SequenceVector;
 
-  /**
-   * @return a smart pointer holding the values for
-   * this vector. This is used during execution to process over the subset of
-   * values when possible.
-   */
+  /// Returns a smart pointer holding the values for
+  /// this vector. This is used during execution to process over the subset of
+  /// values when possible.
   const BufferPtr& values() const override {
     return values_;
   }
@@ -181,16 +183,12 @@ class FlatVector final : public SimpleVector<T> {
     return values_;
   }
 
-  /**
-   * @return true if this number of comparison values on this vector should use
-   * simd for equality constraint filtering, false to use standard set
-   * examination filtering.
-   */
+  /// Returns true if this number of comparison values on this vector should use
+  /// simd for equality constraint filtering, false to use standard set
+  /// examination filtering.
   bool useSimdEquality(size_t numCmpVals) const;
 
-  /**
-   * @return the raw values of this vector as a continuous array.
-   */
+  /// Returns the raw values of this vector as a continuous array.
   const T* rawValues() const;
 
   const void* valuesAsVoid() const override {
@@ -202,8 +200,8 @@ class FlatVector final : public SimpleVector<T> {
     return reinterpret_cast<const As*>(rawValues_);
   }
 
-  // Bool uses compact representation, use mutableRawValues<uint64_t> and
-  // bits::setBit instead.
+  /// Bool uses compact representation, use mutableRawValues<uint64_t> and
+  /// bits::setBit instead.
   T* mutableRawValues() {
     if (!(values_ && values_->isMutable())) {
       BufferPtr newValues =
@@ -227,9 +225,17 @@ class FlatVector final : public SimpleVector<T> {
 
   Range<T> asRange() const;
 
+  void setNull(vector_size_t idx, bool isNull) override {
+    BaseVector::setNull(idx, isNull);
+    if (!isNull) {
+      ensureValues();
+    }
+  }
+
   void set(vector_size_t idx, T value) {
-    VELOX_DCHECK(idx < BaseVector::length_);
-    VELOX_DCHECK(!values_->isView());
+    VELOX_DCHECK_LT(idx, BaseVector::length_);
+    ensureValues();
+    VELOX_DCHECK(!values_->isView())
     rawValues_[idx] = value;
     if (BaseVector::nulls_) {
       BaseVector::setNull(idx, false);
@@ -265,6 +271,23 @@ class FlatVector final : public SimpleVector<T> {
   void copyRanges(
       const BaseVector* source,
       const folly::Range<const BaseVector::CopyRange*>& ranges) override;
+
+  VectorPtr copyPreserveEncodings(
+      velox::memory::MemoryPool* pool = nullptr) const override {
+    return std::make_shared<FlatVector<T>>(
+        pool ? pool : BaseVector::pool_,
+        BaseVector::type_,
+        AlignedBuffer::copy(BaseVector::pool_, BaseVector::nulls_),
+        BaseVector::length_,
+        AlignedBuffer::copy(BaseVector::pool_, values_),
+        std::vector<BufferPtr>(stringBuffers_),
+        SimpleVector<T>::stats_,
+        BaseVector::distinctValueCount_,
+        BaseVector::nullCount_,
+        SimpleVector<T>::isSorted_,
+        BaseVector::representedByteCount_,
+        BaseVector::storageByteCount_);
+  }
 
   void resize(vector_size_t newSize, bool setNotNull = true) override;
 
@@ -378,12 +401,10 @@ class FlatVector final : public SimpleVector<T> {
     return size;
   }
 
-  /**
-   * Used for vectors of type VARCHAR and VARBINARY to hold data referenced by
-   * StringView's. It is safe to share these among multiple vectors. These
-   * buffers are append only. It is allowed to append data, but it is prohibited
-   * to modify already written data.
-   */
+  /// Used for vectors of type VARCHAR and VARBINARY to hold data referenced by
+  /// StringView's. It is safe to share these among multiple vectors. These
+  /// buffers are append only. It is allowed to append data, but it is
+  /// prohibited to modify already written data.
   const std::vector<BufferPtr>& stringBuffers() const {
     return stringBuffers_;
   }
@@ -423,28 +444,47 @@ class FlatVector final : public SimpleVector<T> {
     return true;
   }
 
-  // Acquire ownership for any string buffer that appears in source, the
-  // function does nothing if the vector type is not Varchar or Varbinary.
-  // The function throws if input encoding is lazy.
+  /// Acquire ownership for any string buffer that appears in source, the
+  /// function does nothing if the vector type is not Varchar or Varbinary.
+  /// The function throws if input encoding is lazy.
   void acquireSharedStringBuffers(const BaseVector* source);
 
-  // Acquire ownership for any string buffer that appears in source or any
-  // of its children recursively. The function throws if input encoding is lazy.
+  /// Acquire ownership for any string buffer that appears in source or any
+  /// of its children recursively. The function throws if input encoding is
+  /// lazy.
   void acquireSharedStringBuffersRecursive(const BaseVector* source);
 
-  Buffer* getBufferWithSpace(vector_size_t /* unused */) {
+  /// This API is available only for string vectors (T = StringView).
+  /// Prefer getRawStringBufferWithSpace(bytes) API as it is easier to use
+  /// safely.
+  ///
+  /// Returns a string buffer with enough capacity to fit 'size' more bytes.
+  /// This could be an existing or newly allocated buffer. The caller must not
+  /// assume that the buffer is empty and must use Buffer::size() API to find
+  /// the start of the writable memory. The caller must also call
+  /// Buffer::setSize(n) to update the size of the buffer to include newly
+  /// written content ('n' cannot exceed 'size', but can be less than 'size').
+  /// The caller must ensure not to write more then 'size' bytes.
+  ///
+  /// If allocates new buffer and 'exactSize' is true, allocates 'size' bytes.
+  /// Otherwise, allocates at least kInitialStringSize bytes.
+  Buffer* getBufferWithSpace(size_t /*size*/, bool exactSize = false) {
     return nullptr;
   }
 
-  // Finds an existing string buffer that's singly-referenced (not shared) and
-  // have enough unused capacity to fit 'size' bytes. If found, resizes the
-  // buffer to add 'size' bytes and returns a pointer to the start of writable
-  // memory. If not found, allocates new buffer, adds it to 'stringBuffers',
-  // sets buffer size to 'size' and returns a pointer to the start of writable
-  // memory.
-  // The caller needs to make sure not to write more then 'size' bytes.
-
-  char* getRawStringBufferWithSpace(vector_size_t /* size */) {
+  /// This API is available only for string vectors (T = StringView).
+  ///
+  /// Finds an existing string buffer that's singly-referenced (not shared) and
+  /// have enough unused capacity to fit 'size' bytes. If found, resizes the
+  /// buffer to add 'size' bytes and returns a pointer to the start of writable
+  /// memory. If not found, allocates new buffer, adds it to 'stringBuffers',
+  /// sets buffer size to 'size' and returns a pointer to the start of writable
+  /// memory.
+  /// The caller must ensure not to write more then 'size' bytes.
+  ///
+  /// If allocates new buffer and 'exactSize' is true, allocates 'size' bytes.
+  /// Otherwise, allocates at least kInitialStringSize bytes.
+  char* getRawStringBufferWithSpace(size_t /*size*/, bool exactSize = false) {
     return nullptr;
   }
 
@@ -469,7 +509,22 @@ class FlatVector final : public SimpleVector<T> {
     }
   }
 
+  void unsafeSetSize(vector_size_t newSize) {
+    this->length_ = newSize;
+  }
+
+  void unsafeSetValues(BufferPtr values) {
+    values_ = std::move(values);
+    rawValues_ = values_ ? const_cast<T*>(values_->as<T>()) : nullptr;
+  }
+
  private:
+  void ensureValues() {
+    if (rawValues_ == nullptr) {
+      mutableRawValues();
+    }
+  }
+
   void copyValuesAndNulls(
       const BaseVector* source,
       const SelectivityVector& rows,
@@ -481,6 +536,23 @@ class FlatVector final : public SimpleVector<T> {
   void resizeValues(
       vector_size_t newSize,
       const std::optional<T>& initialValue);
+
+  // Check string buffers. Keep at most one singly-referenced buffer if it is
+  // not too large.
+  void keepAtMostOneStringBuffer() {
+    if (stringBuffers_.empty()) {
+      return;
+    }
+
+    auto& firstBuffer = stringBuffers_.front();
+    if (firstBuffer->isMutable() &&
+        firstBuffer->capacity() <= kMaxStringSizeForReuse) {
+      firstBuffer->setSize(0);
+      setStringBuffers({firstBuffer});
+    } else {
+      clearStringBuffers();
+    }
+  }
 
   // Contiguous values.
   // If strings, these are velox::StringViews into memory held by
@@ -533,23 +605,18 @@ void FlatVector<StringView>::validate(
     const VectorValidateOptions& options) const;
 
 template <>
-Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size);
+Buffer* FlatVector<StringView>::getBufferWithSpace(size_t size, bool exactSize);
 
 template <>
-char* FlatVector<StringView>::getRawStringBufferWithSpace(vector_size_t size);
+char* FlatVector<StringView>::getRawStringBufferWithSpace(
+    size_t size,
+    bool exactSize);
 
 template <>
 void FlatVector<StringView>::prepareForReuse();
 
 template <typename T>
 using FlatVectorPtr = std::shared_ptr<FlatVector<T>>;
-
-// Error vector uses an opaque flat vector to store std::exception_ptr.
-// Since opaque types are stored as shared_ptr<void>, this ends up being a
-// double pointer in the form of std::shared_ptr<std::exception_ptr>. This is
-// fine since we only need to actually follow the pointer in failure cases.
-using ErrorVector = FlatVector<std::shared_ptr<void>>;
-using ErrorVectorPtr = std::shared_ptr<ErrorVector>;
 
 } // namespace facebook::velox
 

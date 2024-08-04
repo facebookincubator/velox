@@ -16,7 +16,7 @@
 #include <random>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -29,7 +29,6 @@ class CentralMomentsAggregationTest
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 
   void testGroupBy(

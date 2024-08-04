@@ -13,14 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <velox/type/Timestamp.h>
+#include <regex>
+
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/exec/PartitionedOutputBufferManager.h"
-#include "velox/exec/TableScan.h"
+#include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
@@ -39,8 +41,8 @@ class GroupedExecutionTest : public virtual HiveConnectorTestBase {
       int32_t count,
       int32_t rowsPerVector,
       const RowTypePtr& rowType = nullptr) {
-    auto inputs = rowType ? rowType : rowType_;
-    return HiveConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
+    auto inputType = rowType ? rowType : rowType_;
+    return HiveConnectorTestBase::makeVectors(inputType, count, rowsPerVector);
   }
 
   exec::Split makeHiveSplitWithGroup(std::string path, int32_t group) {
@@ -117,19 +119,29 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   planFragment.executionStrategy = core::ExecutionStrategy::kUngrouped;
   planFragment.groupedExecutionLeafNodeIds.clear();
   planFragment.groupedExecutionLeafNodeIds.emplace(tableScanNodeId);
-  queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
+  queryCtx = core::QueryCtx::create(executor_.get());
+  task = exec::Task::create(
+      "0",
+      planFragment,
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       "groupedExecutionLeafNodeIds must be empty in ungrouped execution mode");
 
   // Check grouped execution without supplied leaf node ids.
   planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
   planFragment.groupedExecutionLeafNodeIds.clear();
-  queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
+  queryCtx = core::QueryCtx::create(executor_.get());
+  task = exec::Task::create(
+      "0",
+      planFragment,
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       "groupedExecutionLeafNodeIds must not be empty in "
       "grouped execution mode");
 
@@ -137,10 +149,15 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
   planFragment.groupedExecutionLeafNodeIds.clear();
   planFragment.groupedExecutionLeafNodeIds.emplace(projectNodeId);
-  queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
+  queryCtx = core::QueryCtx::create(executor_.get());
+  task = exec::Task::create(
+      "0",
+      planFragment,
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       fmt::format(
           "Grouped execution leaf node {} is not a leaf node in any pipeline",
           projectNodeId));
@@ -150,10 +167,15 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   planFragment.groupedExecutionLeafNodeIds.clear();
   planFragment.groupedExecutionLeafNodeIds.emplace(tableScanNodeId);
   planFragment.groupedExecutionLeafNodeIds.emplace(projectNodeId);
-  queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
+  queryCtx = core::QueryCtx::create(executor_.get());
+  task = exec::Task::create(
+      "0",
+      planFragment,
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       fmt::format(
           "Grouped execution leaf node {} is not a leaf node in any pipeline",
           projectNodeId));
@@ -163,10 +185,15 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
   planFragment.groupedExecutionLeafNodeIds.clear();
   planFragment.groupedExecutionLeafNodeIds.emplace(localPartitionNodeId);
-  queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
+  queryCtx = core::QueryCtx::create(executor_.get());
+  task = exec::Task::create(
+      "0",
+      planFragment,
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
   VELOX_ASSERT_THROW(
-      task->start(task, 3, 1),
+      task->start(3, 1),
       fmt::format(
           "Grouped execution leaf node {} not found or it is not a leaf node",
           localPartitionNodeId));
@@ -178,7 +205,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   // Create source file - we will read from it in 6 splits.
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->path, vectors);
+  writeToFile(filePath->getPath(), vectors);
 
   // A chain of three pipelines separated by local exchange with the leaf one
   // having scan running grouped execution - this will make all three pipelines
@@ -199,17 +226,21 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
   planFragment.groupedExecutionLeafNodeIds.emplace(tableScanNodeId);
   planFragment.numSplitGroups = 10;
-  auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  auto task =
-      exec::Task::create("0", std::move(planFragment), 0, std::move(queryCtx));
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  auto task = exec::Task::create(
+      "0",
+      std::move(planFragment),
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
   // 3 drivers max and 1 concurrent split group.
-  task->start(task, 3, 1);
+  task->start(3, 1);
 
   // All pipelines run grouped execution, so no drivers should be running.
   EXPECT_EQ(0, task->numRunningDrivers());
 
   // Add one split for group (8).
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 8));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 8));
 
   // Only one split group should be in the processing mode, so 9 drivers (3 per
   // pipeline).
@@ -217,11 +248,11 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   EXPECT_EQ(std::unordered_set<int32_t>{}, getCompletedSplitGroups(task));
 
   // Add the rest of splits
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 1));
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 5));
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 8));
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 5));
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 8));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 1));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 5));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 8));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 5));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 8));
 
   // One split group should be in the processing mode, so 9 drivers.
   EXPECT_EQ(9, task->numRunningDrivers());
@@ -256,8 +287,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
 
   // 'Delete results' from output buffer triggers 'set all output consumed',
   // which should finish the task.
-  auto outputBufferManager =
-      exec::PartitionedOutputBufferManager::getInstance().lock();
+  auto outputBufferManager = exec::OutputBufferManager::getInstance().lock();
   outputBufferManager->deleteResults(task->taskId(), 0);
 
   // Task must be finished at this stage.
@@ -282,13 +312,188 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   EXPECT_EQ(18, taskStats.pipelineStats[1].operatorStats[1].inputVectors);
 }
 
+DEBUG_ONLY_TEST_F(
+    GroupedExecutionTest,
+    groupedExecutionWithHashJoinSpillCheck) {
+  // Create source file to read as split input.
+  auto vectors = makeVectors(24, 20);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  const int numDriversPerGroup{3};
+
+  struct {
+    bool enableSpill;
+    bool mixedExecutionMode;
+    int groupConcurrency;
+    int expectedNumDrivers;
+    bool expectedSpill;
+
+    std::string debugString() const {
+      return fmt::format(
+          "enableSpill {}, mixedExecutionMode {}, groupConcurrency {}, expectedNumDrivers {}, expectedSpill {}",
+          enableSpill,
+          mixedExecutionMode,
+          groupConcurrency,
+          expectedNumDrivers,
+          groupConcurrency,
+          expectedSpill);
+    }
+  } testSettings[] = {
+      {false, false, 1, 12, false},
+      {false, true, 1, 9, false},
+      {true, false, 1, 12, true},
+      {true, true, 1, 9, false},
+      {false, false, 2, 12, false},
+      {false, true, 2, 9, false},
+      {true, false, 2, 12, true},
+      {true, true, 2, 9, false}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId probeScanNodeId;
+    core::PlanNodeId buildScanNodeId;
+
+    PlanBuilder planBuilder(planNodeIdGenerator, pool_.get());
+    planBuilder.tableScan(rowType_)
+        .capturePlanNodeId(probeScanNodeId)
+        .project({"c0 as x"});
+    // Hash join.
+    core::PlanNodeId joinNodeId;
+    auto planFragment = planBuilder
+                            .hashJoin(
+                                {"x"},
+                                {"y"},
+                                PlanBuilder(planNodeIdGenerator, pool_.get())
+                                    .tableScan(rowType_, {"c0 > 0"})
+                                    .capturePlanNodeId(buildScanNodeId)
+                                    .project({"c0 as y"})
+                                    .planNode(),
+                                "",
+                                {"x", "y"})
+                            .capturePlanNodeId(joinNodeId)
+                            .partitionedOutput({}, 1, {"x", "y"})
+                            .planFragment();
+
+    planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
+    planFragment.groupedExecutionLeafNodeIds.emplace(probeScanNodeId);
+    if (!testData.mixedExecutionMode) {
+      planFragment.groupedExecutionLeafNodeIds.emplace(buildScanNodeId);
+    }
+    planFragment.numSplitGroups = 2;
+
+    auto queryCtx = core::QueryCtx::create(executor_.get());
+    if (testData.enableSpill) {
+      std::unordered_map<std::string, std::string> configs;
+      configs.emplace(core::QueryConfig::kSpillEnabled, "true");
+      configs.emplace(core::QueryConfig::kJoinSpillEnabled, "true");
+      queryCtx->testingOverrideConfigUnsafe(std::move(configs));
+    }
+
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::noMoreInput",
+        std::function<void(Operator*)>([&](Operator* op) {
+          if (op->operatorType() == "HashProbe") {
+            ASSERT_NE(op->splitGroupId(), kUngroupedGroupId);
+            const int pipelineId =
+                op->testingOperatorCtx()->driverCtx()->pipelineId;
+            const auto peerOps =
+                op->testingOperatorCtx()->task()->findPeerOperators(
+                    pipelineId, op);
+            ASSERT_LE(peerOps.size(), numDriversPerGroup);
+          }
+          if (op->operatorType() != "HashBuild") {
+            return;
+          }
+          if (testData.mixedExecutionMode) {
+            ASSERT_EQ(op->splitGroupId(), kUngroupedGroupId);
+          } else {
+            ASSERT_NE(op->splitGroupId(), kUngroupedGroupId);
+          }
+          const int pipelineId =
+              op->testingOperatorCtx()->driverCtx()->pipelineId;
+          const auto peerOps =
+              op->testingOperatorCtx()->task()->findPeerOperators(
+                  pipelineId, op);
+          ASSERT_LE(peerOps.size(), numDriversPerGroup);
+
+          ASSERT_EQ(op->canReclaim(), testData.expectedSpill);
+          if (testData.enableSpill) {
+            memory::testingRunArbitration(op->pool());
+          }
+        }));
+
+    auto task = exec::Task::create(
+        "0",
+        std::move(planFragment),
+        0,
+        std::move(queryCtx),
+        Task::ExecutionMode::kParallel);
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    if (testData.enableSpill) {
+      task->setSpillDirectory(spillDirectory->getPath());
+    }
+
+    // 'numDriversPerGroup' drivers max to execute one group at a time.
+    task->start(numDriversPerGroup, testData.groupConcurrency);
+    ASSERT_EQ(task->hasMixedExecutionGroup(), testData.mixedExecutionMode);
+
+    // Add split(s) to the build scan.
+    if (testData.mixedExecutionMode) {
+      task->addSplit(buildScanNodeId, makeHiveSplit(filePath->getPath()));
+    } else {
+      task->addSplit(
+          buildScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 0));
+      task->addSplit(
+          buildScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 1));
+    }
+    // Add one split for probe split group (0).
+    task->addSplit(
+        probeScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 0));
+    // Add one split for probe split group (1).
+    task->addSplit(
+        probeScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 1));
+
+    // Finalize the build split(s).
+    if (testData.mixedExecutionMode) {
+      task->noMoreSplits(buildScanNodeId);
+    } else {
+      task->noMoreSplitsForGroup(buildScanNodeId, 0);
+      task->noMoreSplitsForGroup(buildScanNodeId, 1);
+    }
+    // Finalize probe split groups.
+    task->noMoreSplitsForGroup(probeScanNodeId, 0);
+    task->noMoreSplitsForGroup(probeScanNodeId, 1);
+
+    waitForFinishedDrivers(task, testData.expectedNumDrivers);
+
+    // 'Delete results' from output buffer triggers 'set all output consumed',
+    // which should finish the task.
+    auto outputBufferManager = exec::OutputBufferManager::getInstance().lock();
+    outputBufferManager->deleteResults(task->taskId(), 0);
+
+    // Task must be finished at this stage.
+    ASSERT_EQ(task->state(), exec::TaskState::kFinished);
+
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    auto& planStats = taskStats.at(joinNodeId);
+    if (testData.expectedSpill) {
+      ASSERT_GT(planStats.spilledBytes, 0);
+    } else {
+      ASSERT_EQ(planStats.spilledBytes, 0);
+    }
+  }
+}
+
 // Here we test various aspects of grouped/bucketed execution involving
 // output buffer and 3 pipelines.
 TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
   // Create source file - we will read from it in 6 splits.
   auto vectors = makeVectors(4, 20);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->path, vectors);
+  writeToFile(filePath->getPath(), vectors);
 
   // Run the test twice - for Hash and Cross Join.
   for (size_t i = 0; i < 2; ++i) {
@@ -301,6 +506,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
         .capturePlanNodeId(probeScanNodeId)
         .project({"c3 as x", "c2 as y", "c1 as z", "c0 as w", "c4", "c5"});
     // Hash or Nested Loop join.
+    core::PlanNodeId joinNodeId;
     if (i == 0) {
       planBuilder
           .hashJoin(
@@ -313,6 +519,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
                   .planNode(),
               "",
               {"x", "y", "z", "w", "c4", "c5"})
+          .capturePlanNodeId(joinNodeId)
           .localPartitionRoundRobinRow()
           .project({"w as c0", "z as c1", "y as c2", "x as c3", "c4", "c5"})
           .planNode();
@@ -337,21 +544,26 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
     planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
     planFragment.groupedExecutionLeafNodeIds.emplace(probeScanNodeId);
     planFragment.numSplitGroups = 10;
-    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    auto queryCtx = core::QueryCtx::create(executor_.get());
     auto task = exec::Task::create(
-        "0", std::move(planFragment), 0, std::move(queryCtx));
+        "0",
+        std::move(planFragment),
+        0,
+        std::move(queryCtx),
+        Task::ExecutionMode::kParallel);
     // 3 drivers max and 1 concurrent split group.
-    task->start(task, 3, 1);
+    task->start(3, 1);
 
     // Build pipeline runs ungrouped execution, so it should have drivers
     // running.
     EXPECT_EQ(3, task->numRunningDrivers());
 
     // Add single split to the build scan.
-    task->addSplit(buildScanNodeId, makeHiveSplit(filePath->path));
+    task->addSplit(buildScanNodeId, makeHiveSplit(filePath->getPath()));
 
     // Add one split for group (8).
-    task->addSplit(probeScanNodeId, makeHiveSplitWithGroup(filePath->path, 8));
+    task->addSplit(
+        probeScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 8));
 
     // Only one split group should be in the processing mode, so 9 drivers (3
     // per pipeline) grouped + 3 ungrouped.
@@ -359,11 +571,16 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
     EXPECT_EQ(std::unordered_set<int32_t>{}, getCompletedSplitGroups(task));
 
     // Add the rest of splits
-    task->addSplit(probeScanNodeId, makeHiveSplitWithGroup(filePath->path, 1));
-    task->addSplit(probeScanNodeId, makeHiveSplitWithGroup(filePath->path, 5));
-    task->addSplit(probeScanNodeId, makeHiveSplitWithGroup(filePath->path, 8));
-    task->addSplit(probeScanNodeId, makeHiveSplitWithGroup(filePath->path, 5));
-    task->addSplit(probeScanNodeId, makeHiveSplitWithGroup(filePath->path, 8));
+    task->addSplit(
+        probeScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 1));
+    task->addSplit(
+        probeScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 5));
+    task->addSplit(
+        probeScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 8));
+    task->addSplit(
+        probeScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 5));
+    task->addSplit(
+        probeScanNodeId, makeHiveSplitWithGroup(filePath->getPath(), 8));
 
     // One split group should be in the processing mode, so 9 drivers (3 per
     // pipeline) grouped + 3 ungrouped.
@@ -410,14 +627,36 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
 
     // 'Delete results' from output buffer triggers 'set all output consumed',
     // which should finish the task.
-    auto outputBufferManager =
-        exec::PartitionedOutputBufferManager::getInstance().lock();
+    auto outputBufferManager = exec::OutputBufferManager::getInstance().lock();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
     // Task must be finished at this stage.
     EXPECT_EQ(exec::TaskState::kFinished, task->state());
     EXPECT_EQ(
         std::unordered_set<int32_t>({1, 5, 8}), getCompletedSplitGroups(task));
+    if (i == 0) {
+      // Check each split group has a separate hash join node pool.
+      const std::unordered_set<int32_t> expectedSplitGroupIds({1, 5, 8});
+      int numSplitGroupJoinNodes{0};
+      task->pool()->visitChildren([&](memory::MemoryPool* childPool) -> bool {
+        if (folly::StringPiece(childPool->name())
+                .startsWith(fmt::format("node.{}[", joinNodeId))) {
+          ++numSplitGroupJoinNodes;
+          std::vector<std::string> parts;
+          folly::split(".", childPool->name(), parts);
+          const std::string name = parts[1];
+          parts.clear();
+          folly::split("[", name, parts);
+          const std::string splitGroupIdStr =
+              parts[1].substr(0, parts[1].size() - 1);
+          EXPECT_TRUE(
+              expectedSplitGroupIds.count(atoi(splitGroupIdStr.c_str())))
+              << splitGroupIdStr;
+        }
+        return true;
+      });
+      ASSERT_EQ(numSplitGroupJoinNodes, expectedSplitGroupIds.size());
+    }
   }
 }
 
@@ -427,7 +666,7 @@ TEST_F(GroupedExecutionTest, groupedExecution) {
   const size_t numSplits{6};
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->path, vectors);
+  writeToFile(filePath->getPath(), vectors);
 
   CursorParameters params;
   params.planNode = tableScanNode(ROW({}, {}));
@@ -443,11 +682,11 @@ TEST_F(GroupedExecutionTest, groupedExecution) {
   params.numConcurrentSplitGroups = 2;
 
   // Create the cursor with the task underneath. It is not started yet.
-  auto cursor = std::make_unique<TaskCursor>(params);
+  auto cursor = TaskCursor::create(params);
   auto task = cursor->task();
 
   // Add one splits before start to ensure we can handle such cases.
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 8));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 8));
 
   // Start task now.
   cursor->start();
@@ -457,11 +696,11 @@ TEST_F(GroupedExecutionTest, groupedExecution) {
   EXPECT_EQ(std::unordered_set<int32_t>{}, getCompletedSplitGroups(task));
 
   // Add the rest of splits
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 1));
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 5));
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 8));
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 5));
-  task->addSplit("0", makeHiveSplitWithGroup(filePath->path, 8));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 1));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 5));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 8));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 5));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 8));
 
   // Only two split groups should be in the processing mode, so 4 drivers.
   EXPECT_EQ(4, task->numRunningDrivers());
@@ -515,4 +754,50 @@ TEST_F(GroupedExecutionTest, groupedExecution) {
   EXPECT_EQ(numRead, numSplits * 10'000);
 }
 
+TEST_F(GroupedExecutionTest, allGroupSplitsReceivedBeforeTaskStart) {
+  // Create source file - we will read from it in 6 splits.
+  const size_t numSplits{6};
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  CursorParameters params;
+  params.planNode = tableScanNode(ROW({}, {}));
+  params.maxDrivers = 1;
+  params.executionStrategy = core::ExecutionStrategy::kGrouped;
+  params.groupedExecutionLeafNodeIds.emplace(params.planNode->id());
+  params.numSplitGroups = 3;
+  params.numConcurrentSplitGroups = 1;
+
+  // Create the cursor with the task underneath. It is not started yet.
+  auto cursor = TaskCursor::create(params);
+  auto task = cursor->task();
+
+  // Add all split groups before start to ensure we can handle such cases.
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 0));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 1));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 2));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 0));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 1));
+  task->addSplit("0", makeHiveSplitWithGroup(filePath->getPath(), 2));
+  task->noMoreSplits("0");
+
+  // Start task now.
+  cursor->start();
+  waitForFinishedDrivers(task, 3);
+  ASSERT_EQ(
+      getCompletedSplitGroups(task), std::unordered_set<int32_t>({0, 1, 2}));
+
+  // Make sure we've got the right number of rows.
+  int32_t numReadRows{0};
+  while (cursor->moveNext()) {
+    auto vector = cursor->current();
+    EXPECT_EQ(vector->childrenSize(), 0);
+    numReadRows += vector->size();
+  }
+
+  // Task must be finished at this stage.
+  ASSERT_EQ(task->state(), exec::TaskState::kFinished);
+  ASSERT_EQ(numSplits * 10'000, numReadRows);
+}
 } // namespace facebook::velox::exec::test

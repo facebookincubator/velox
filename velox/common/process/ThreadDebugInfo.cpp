@@ -42,22 +42,30 @@ static void printCurrentQueryId() {
     const char* msg2 = " Task Id= ";
     write(STDERR_FILENO, msg2, strlen(msg2));
     write(STDERR_FILENO, info->taskId_.c_str(), info->taskId_.length());
+    if (!fatalSignalProcessed && info->callback_) {
+      fatalSignalProcessed = true;
+      info->callback_();
+    }
   }
   write(STDERR_FILENO, "\n", 1);
-
-  if (!fatalSignalProcessed && info->callback_) {
-    fatalSignalProcessed = true;
-    info->callback_();
-  }
 }
 
 const ThreadDebugInfo* GetThreadDebugInfo() {
   return threadDebugInfo;
 }
+
 ScopedThreadDebugInfo::ScopedThreadDebugInfo(
-    const ThreadDebugInfo& localDebugInfo) {
-  prevThreadDebugInfo_ = threadDebugInfo;
+    const ThreadDebugInfo& localDebugInfo)
+    : prevThreadDebugInfo_(threadDebugInfo) {
   threadDebugInfo = &localDebugInfo;
+}
+
+ScopedThreadDebugInfo::ScopedThreadDebugInfo(
+    const ThreadDebugInfo* localDebugInfo)
+    : prevThreadDebugInfo_(threadDebugInfo) {
+  if (localDebugInfo != nullptr) {
+    threadDebugInfo = localDebugInfo;
+  }
 }
 
 ScopedThreadDebugInfo::~ScopedThreadDebugInfo() {

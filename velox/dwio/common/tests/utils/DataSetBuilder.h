@@ -43,7 +43,8 @@ class DataSetBuilder {
   DataSetBuilder& makeDataset(
       RowTypePtr rowType,
       const size_t batchCount,
-      const size_t numRows);
+      const size_t numRows,
+      const bool withRecursiveNulls = true);
 
   // Adds high values to 'batches_' so that these values occur only in some row
   // groups. Tests skipping row groups based on row group stats.
@@ -112,6 +113,54 @@ class DataSetBuilder {
       }
     }
 
+    return *this;
+  }
+
+  template <typename T>
+  DataSetBuilder& withIntRleForField(const common::Subfield& field) {
+    constexpr int kMinRun = 5;
+    constexpr int kMaxRun = 101;
+    int remaining = 0;
+    T value;
+    auto vec = *batches_;
+    for (auto& batch : vec) {
+      auto numbers = dwio::common::getChildBySubfield(batch.get(), field)
+                         ->as<FlatVector<T>>();
+      for (auto row = 0; row < numbers->size(); ++row) {
+        if (numbers->isNullAt(row)) {
+          continue;
+        }
+        if (remaining == 0) {
+          value = numbers->valueAt(row);
+          remaining =
+              kMinRun + folly::Random::rand32(rng_) % (kMaxRun - kMinRun);
+        }
+        numbers->set(row, value);
+        --remaining;
+      }
+    }
+    return *this;
+  }
+
+  template <typename T>
+  DataSetBuilder& withIntMainlyConstantForField(const common::Subfield& field) {
+    for (auto& batch : *batches_) {
+      std::optional<T> value;
+      auto* numbers = dwio::common::getChildBySubfield(batch.get(), field)
+                          ->as<FlatVector<T>>();
+      for (auto row = 0; row < numbers->size(); ++row) {
+        if (numbers->isNullAt(row)) {
+          continue;
+        }
+        if (folly::Random::randDouble01(rng_) < 0.95) {
+          if (!value.has_value()) {
+            value = numbers->valueAt(row);
+          } else {
+            numbers->set(row, *value);
+          }
+        }
+      }
+    }
     return *this;
   }
 

@@ -2,26 +2,12 @@
 JSON Functions
 ==============
 
-JSON Format
------------
+.. spark:function:: json_object_keys(jsonString) -> array(string)
 
-JSON is a language-independent data format that represents data as
-human-readable text. A JSON text can represent a number, a boolean, a
-string, an array, an object, or a null, with slightly different grammar.
-For instance, a JSON text representing a string must escape all characters
-and enclose the string in double quotes, such as ``"123\n"``, whereas a JSON
-text representing a number does not need to, such as ``123``. A JSON text
-representing an array must enclose the array elements in square brackets,
-such as ``[1,2,3]``. More detailed grammar can be found in
-`this JSON introduction`_.
+    Returns all the keys of the outermost JSON object as an array if a valid JSON object is given.  If it is any other valid JSON string, an invalid JSON string or an empty string, the function returns null. ::
 
-.. _this JSON introduction: https://www.json.org
-
-JSON Functions
---------------
-
-.. spark:function:: get_json_object(json, path) -> varchar
-
-    Extracts a json object from path::
-
-        SELECT get_json_object('{"a":"b"}', '$.a'); -- b
+        SELECT json_object_keys('{}'); -- []
+        SELECT json_object_keys('{"name": "Alice", "age": 5, "id": "001"}'); -- ['name', 'age', 'id']
+        SELECT json_object_keys(''); -- NULL
+        SELECT json_object_keys(1); -- NULL
+        SELECT json_object_keys('"hello"'); -- NULL

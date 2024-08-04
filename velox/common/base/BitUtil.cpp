@@ -16,7 +16,10 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/SimdUtil.h"
 #include "velox/common/process/ProcessBase.h"
+
+#include <folly/BenchmarkUtil.h>
 
 namespace facebook::velox::bits {
 
@@ -30,12 +33,13 @@ void scatterBitsSimple(
     char* target) {
   int64_t from = numSource - 1;
   for (int64_t to = numTarget - 1; to >= 0; to--) {
-    bool maskIsSet = bits::isBitSet(targetMask, to);
+    const bool maskIsSet = bits::isBitSet(targetMask, to);
     bits::setBit(target, to, maskIsSet && bits::isBitSet(source, from));
     from -= maskIsSet ? 1 : 0;
   }
 }
 
+#ifdef __BMI2__
 // Fetches 'numBits' bits of data, from data starting at lastBit -
 // numbits (inclusive) and ending at lastBit (exclusive). 'lastBit' is
 // updated to be the bit offset of the lowest returned bit. Successive
@@ -55,6 +59,7 @@ uint64_t getBitField(const char* data, int32_t numBits, int32_t& lastBit) {
   lastBit -= numBits;
   return bits;
 }
+#endif
 
 // Copy bits backward while the remaining data is still larger than size of T.
 template <typename T>
@@ -117,6 +122,17 @@ void scatterBits(
   int32_t highBit = numTarget & 7;
   int lowByte = std::max(0, highByte - 7);
   auto maskAsBytes = reinterpret_cast<const char*>(targetMask);
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+  int32_t sourceOffset = std::min(0, (numSource / 8) - 7) + 1;
+  folly::doNotOptimizeAway(
+      *reinterpret_cast<const uint64_t*>(source + sourceOffset));
+  folly::doNotOptimizeAway(
+      *reinterpret_cast<const uint64_t*>(maskAsBytes + lowByte + 1));
+  folly::doNotOptimizeAway(*reinterpret_cast<uint64_t*>(target + lowByte + 1));
+#endif
+#endif
+
   // Loop from top to bottom of 'targetMask' up to 64 bits at a time,
   // with a partial word at either end. Count the set bits and fetch
   // as many consecutive bits of source data. Scatter the source bits
@@ -158,4 +174,49 @@ void scatterBits(
 #endif
 }
 
+uint64_t hashBytes(uint64_t seed, const char* data, size_t size) {
+  auto begin = reinterpret_cast<const uint8_t*>(data);
+  const uint64_t kMul = 0x9ddfea08eb382d69ULL;
+  if (size < 8) {
+    auto word = loadPartialWord(begin, size);
+    uint64_t crc = simd::crc32U64(seed, word);
+    uint64_t crc2 = simd::crc32U64(seed, word >> 32);
+    return crc | (crc2 << 32);
+  }
+  uint64_t a0 = seed;
+  uint64_t a1 = seed << 32;
+  uint64_t a2 = seed >> 16;
+  int32_t toGo = size;
+  auto words = reinterpret_cast<const uint64_t*>(data);
+  while (toGo >= 24) {
+    a0 = simd::crc32U64(a0, words[0]);
+    a1 = simd::crc32U64(a1, words[1]);
+    a2 = simd::crc32U64(a2, words[2]);
+    words += 3;
+    toGo -= 24;
+  }
+  if (toGo > 16) {
+    a0 = simd::crc32U64(a0, words[0]);
+    a1 = simd::crc32U64(a1, words[1]);
+    a2 = simd::crc32U64(
+        a2,
+        loadPartialWord(
+            reinterpret_cast<const uint8_t*>(words + 2), toGo - 16));
+  } else if (toGo > 8) {
+    a0 = simd::crc32U64(a0, words[0]);
+    a1 = simd::crc32U64(
+        a1,
+        toGo == 16
+            ? words[1]
+            : loadPartialWord(
+                  reinterpret_cast<const uint8_t*>(words + 1), toGo - 8));
+  } else if (toGo > 0) {
+    a0 = simd::crc32U64(
+        a0,
+        toGo == 8
+            ? words[0]
+            : loadPartialWord(reinterpret_cast<const uint8_t*>(words), toGo));
+  }
+  return a0 ^ ((a1 * kMul)) ^ (a2 * kMul);
+}
 } // namespace facebook::velox::bits

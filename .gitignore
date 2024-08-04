@@ -88,7 +88,8 @@ _build/
 *.pdf
 *.swp
 a.out
-CMake/resolve_dependency_module/boost/FindBoost.cmake
+CMake/resolve_dependency_modules/boost/FindBoost.cmake
+__cmake_systeminformation/
 
 #==============================================================================#
 # Kate Swap Files
@@ -278,6 +279,7 @@ settings.json
 
 # User's build configuration
 Makefile.config
+CMakeUserPresets.json
 
 # build, distribute, and bins (+ python proto bindings)
 build
@@ -319,3 +321,4 @@ src/amalgamation/
 #docs
 velox/docs/sphinx/source/README_generated_*
 velox/docs/bindings/python/_generate/*
+scripts/bm-report/report.html

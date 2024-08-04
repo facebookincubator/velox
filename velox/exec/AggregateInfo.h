@@ -54,4 +54,36 @@ struct AggregateInfo {
   /// Type of intermediate results. Used for spilling.
   TypePtr intermediateType;
 };
+
+class OperatorCtx;
+
+/// Translate an AggregationNode to a list of AggregationInfo, which could be
+/// a hash aggregation plan node or a streaming aggregation plan node. Ignore
+/// sorting properties if aggregate function is not sensitive to the order of
+/// inputs.
+///
+/// @param aggregationNode Plan node of this aggregation.
+/// @param operatorCtx Operator context.
+/// @param numKeys Number of grouping keys.
+/// @param expressionEvaluator An Expression evaluator. It is used by an
+/// aggregate operator to compile and eval lambda expression. It should be
+/// initiated/assigned for at most one time.
+/// @param isStreaming Indicate whether this aggregation is streaming or not.
+/// Pass true if the aggregate operator is a StreamingAggregation and false if
+/// the aggregate operator is a HashAggregation. This parameter will be
+/// removed after sorted, distinct aggregation, and lambda functions support
+/// are added to StreamingAggregation.
+/// @return List of AggregationInfo.
+std::vector<AggregateInfo> toAggregateInfo(
+    const core::AggregationNode& aggregationNode,
+    const OperatorCtx& operatorCtx,
+    uint32_t numKeys,
+    std::shared_ptr<core::ExpressionEvaluator>& expressionEvaluator,
+    bool isStreaming = false);
+
+/// Extract index of the 'mask' column for each aggregation from aggregations.
+/// Aggregations without masks use std::nullopt.
+std::vector<std::optional<column_index_t>> extractMaskChannels(
+    const std::vector<AggregateInfo>& aggregates);
+
 } // namespace facebook::velox::exec

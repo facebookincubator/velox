@@ -48,17 +48,14 @@ VectorPtr createScalar(
   BufferPtr values = AlignedBuffer::allocate<T>(size, &pool);
   auto valuesPtr = values->asMutableRange<T>();
 
-  BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
+  BufferPtr nulls = allocateNulls(size, &pool);
   auto* nullsPtr = nulls->asMutable<uint64_t>();
 
-  size_t nullCount = 0;
   for (size_t i = 0; i < size; ++i) {
     auto notNull = isNotNull(gen, i, isNullAt);
     bits::setNull(nullsPtr, i, !notNull);
     if (notNull) {
       valuesPtr[i] = val();
-    } else {
-      nullCount++;
     }
   }
 
@@ -68,7 +65,7 @@ VectorPtr createScalar(
 
 template <TypeKind KIND>
 VectorPtr BatchMaker::createVector(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /* unused */,
     size_t /* unused */,
     memory::MemoryPool& /* unused */,
     std::mt19937& /* unused */,
@@ -78,7 +75,7 @@ VectorPtr BatchMaker::createVector(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::BOOLEAN>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /* unused */,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -93,7 +90,7 @@ VectorPtr BatchMaker::createVector<TypeKind::BOOLEAN>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::TINYINT>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /* unused */,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -108,7 +105,7 @@ VectorPtr BatchMaker::createVector<TypeKind::TINYINT>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::SMALLINT>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /* unused */,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -123,7 +120,7 @@ VectorPtr BatchMaker::createVector<TypeKind::SMALLINT>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::INTEGER>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -133,12 +130,13 @@ VectorPtr BatchMaker::createVector<TypeKind::INTEGER>(
       gen,
       [&gen]() { return static_cast<int32_t>(Random::rand32(gen)); },
       pool,
-      isNullAt);
+      isNullAt,
+      type);
 }
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::BIGINT>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /*type*/,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -149,7 +147,7 @@ VectorPtr BatchMaker::createVector<TypeKind::BIGINT>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::REAL>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /* unused */,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -164,7 +162,7 @@ VectorPtr BatchMaker::createVector<TypeKind::REAL>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::DOUBLE>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /* unused */,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -179,16 +177,24 @@ VectorPtr BatchMaker::createVector<TypeKind::DOUBLE>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::HUGEINT>(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
+  int bitsToMove = 0;
+  // Generate proper bits of random value for LongDecimalType tests.
+  if (type->isLongDecimal()) {
+    auto [precision, scale] = getDecimalPrecisionScale(*type);
+    // Round up if the bit number is not the multiples of 8 (1 byte).
+    bitsToMove = 128 - ceil(log2(std::pow(10, precision)) / 8) * 8;
+  }
   return createScalar<int128_t>(
       size,
       gen,
-      [&gen]() {
-        return HugeInt::build(Random::rand32(gen), Random::rand32(gen));
+      [&gen, bitsToMove]() {
+        return HugeInt::build(Random::rand64(gen), Random::rand64(gen)) >>
+            bitsToMove;
       },
       pool,
       isNullAt,
@@ -241,7 +247,7 @@ VectorPtr createBinary(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::VARCHAR>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /* unused */,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -251,7 +257,7 @@ VectorPtr BatchMaker::createVector<TypeKind::VARCHAR>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::VARBINARY>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /* unused */,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -261,7 +267,7 @@ VectorPtr BatchMaker::createVector<TypeKind::VARBINARY>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::TIMESTAMP>(
-    const std::shared_ptr<const Type>& /* unused */,
+    const TypePtr& /* unused */,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -281,7 +287,7 @@ VectorPtr BatchMaker::createVector<TypeKind::TIMESTAMP>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::ROW>(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -289,7 +295,7 @@ VectorPtr BatchMaker::createVector<TypeKind::ROW>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::ARRAY>(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -297,14 +303,14 @@ VectorPtr BatchMaker::createVector<TypeKind::ARRAY>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::MAP>(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt);
 
 VectorPtr createRows(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     size_t size,
     bool allowNulls,
     MemoryPool& pool,
@@ -314,7 +320,7 @@ VectorPtr createRows(
   size_t nullCount = 0;
 
   if (allowNulls) {
-    nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
+    nulls = allocateNulls(size, &pool);
     auto* nullsPtr = nulls->asMutable<uint64_t>();
     for (size_t i = 0; i < size; ++i) {
       auto notNull = isNotNull(gen, i, isNullAt);
@@ -345,7 +351,7 @@ VectorPtr createRows(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::ROW>(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
@@ -355,18 +361,18 @@ VectorPtr BatchMaker::createVector<TypeKind::ROW>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::ARRAY>(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  BufferPtr offsets = AlignedBuffer::allocate<int32_t>(size, &pool);
+  BufferPtr offsets = allocateOffsets(size, &pool);
   auto* offsetsPtr = offsets->asMutable<int32_t>();
 
-  BufferPtr lengths = AlignedBuffer::allocate<vector_size_t>(size, &pool);
+  BufferPtr lengths = allocateSizes(size, &pool);
   auto* lengthsPtr = lengths->asMutable<vector_size_t>();
 
-  BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
+  BufferPtr nulls = allocateNulls(size, &pool);
   auto* nullsPtr = nulls->asMutable<uint64_t>();
 
   size_t nullCount = 0;
@@ -556,18 +562,18 @@ VectorPtr createMapKeys(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::MAP>(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, &pool);
+  BufferPtr offsets = allocateOffsets(size, &pool);
   auto* offsetsPtr = offsets->asMutable<vector_size_t>();
 
-  BufferPtr lengths = AlignedBuffer::allocate<vector_size_t>(size, &pool);
+  BufferPtr lengths = allocateSizes(size, &pool);
   auto* lengthsPtr = lengths->asMutable<vector_size_t>();
 
-  BufferPtr nulls = AlignedBuffer::allocate<char>(bits::nbytes(size), &pool);
+  BufferPtr nulls = allocateNulls(size, &pool);
   auto* nullsPtr = nulls->asMutable<uint64_t>();
 
   size_t nullCount = 0;
@@ -605,7 +611,7 @@ VectorPtr BatchMaker::createVector<TypeKind::MAP>(
 }
 
 VectorPtr BatchMaker::createBatch(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     uint64_t capacity,
     MemoryPool& memoryPool,
     std::mt19937& gen,
@@ -617,7 +623,7 @@ VectorPtr BatchMaker::createBatch(
 }
 
 VectorPtr BatchMaker::createBatch(
-    const std::shared_ptr<const Type>& type,
+    const TypePtr& type,
     uint64_t capacity,
     MemoryPool& memoryPool,
     std::function<bool(vector_size_t /*index*/)> isNullAt,

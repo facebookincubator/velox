@@ -645,6 +645,64 @@ TEST_F(MapWriterTest, appendToKeysAndValues) {
   ASSERT_EQ(values->asFlatVector<int64_t>()->valueAt(1), 20);
 }
 
+// Make sure MapWriter correctly handles 'result' MapVector, where keys and
+// values child vectors have different sizes.
+TEST_F(MapWriterTest, differentKeyValueSizes) {
+  using out_t = Map<int32_t, int32_t>;
+  auto mapType = CppToType<out_t>::create();
+
+  // Keys vector is shorter than values vector.
+  auto result = std::make_shared<MapVector>(
+      pool(),
+      mapType,
+      nullptr, // no nulls
+      3,
+      makeIndices({0, 2, 4}), // offsets
+      makeIndices({2, 2, 2}), // sizes
+      makeFlatVector<int32_t>({0, 1, 0, 1, 0, 1}), // keys
+      makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) // values
+  );
+
+  EXPECT_EQ(6, result->mapKeys()->size());
+  EXPECT_EQ(10, result->mapValues()->size());
+
+  {
+    // Write map at offset 0.
+    exec::VectorWriter<out_t> vectorWriter;
+    vectorWriter.init(*result);
+    vectorWriter.setOffset(0);
+    auto& mapWriter = vectorWriter.current();
+    mapWriter.copy_from(folly::F14FastMap<int64_t, int64_t>{{1, 2}});
+
+    vectorWriter.commit();
+    vectorWriter.finish();
+  }
+
+  {
+    // Write map at offset 2.
+    exec::VectorWriter<out_t> vectorWriter;
+    vectorWriter.init(*result);
+    vectorWriter.setOffset(2);
+    auto& mapWriter = vectorWriter.current();
+    mapWriter.copy_from(folly::F14FastMap<int64_t, int64_t>{{3, 4}});
+
+    vectorWriter.commit();
+    vectorWriter.finish();
+  }
+
+  // Verify sizes of keys and values vectors.
+  EXPECT_EQ(8, result->mapKeys()->size());
+  EXPECT_EQ(8, result->mapValues()->size());
+
+  auto expected = makeMapVector<int32_t, int32_t>({
+      {{1, 2}},
+      {{0, 2}, {1, 3}},
+      {{3, 4}},
+  });
+
+  assertEqualVectors(expected, result);
+}
+
 // Make sure copy from MapView correctly resizes children vectors.
 TEST_F(MapWriterTest, copyFromViewTypeResizedChildren) {
   using out_t = Map<int64_t, Map<int64_t, int64_t>>;
@@ -695,6 +753,54 @@ TEST_F(MapWriterTest, copyFromViewTypeResizedChildren) {
 
   ASSERT_EQ(outerValues->mapKeys()->asFlatVector<int64_t>()->size(), 6);
   ASSERT_EQ(outerValues->mapValues()->asFlatVector<int64_t>()->size(), 6);
+}
+
+// Throws an error if n is even, otherwise creates a map of maps.
+template <typename T>
+struct ThrowsErrorsFunc {
+  template <typename TOut>
+  void call(TOut& out, const int64_t& n) {
+    for (auto i = 0; i < 3; i++) {
+      auto [keyWriter, valueWriter] = out.add_item();
+      keyWriter = i + n * 3;
+      for (auto j = 0; j < 3; j++) {
+        // If commit isn't called as part of error handling, the first inner
+        // map in odd number rows will pick up the entries from the last
+        // inner map of the previous row.
+        auto [innerKeyWriter, innerValueWriter] = valueWriter.add_item();
+        innerKeyWriter.copy_from(std::string(1, 'a' + (i * 3 + j)));
+        innerValueWriter = n * 10 + i * 3 + j;
+      }
+    }
+
+    VELOX_USER_CHECK_EQ(n % 2, 1);
+  }
+};
+
+TEST_F(MapWriterTest, errorHandlingE2E) {
+  registerFunction<
+      ThrowsErrorsFunc,
+      Map<int64_t, Map<Varchar, float>>,
+      int64_t>({"throws_errors"});
+
+  auto result = evaluate(
+      "try(throws_errors(c0))",
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})}));
+
+  auto innerKeys = makeFlatVector<StringView>(
+      {"a", "b", "c", "d", "e", "f", "g", "h", "i", "a", "b", "c", "d", "e",
+       "f", "g", "h", "i", "a", "b", "c", "d", "e", "f", "g", "h", "i"});
+  auto innerValues = makeFlatVector<float>(
+      {10, 11, 12, 13, 14, 15, 16, 17, 18, 30, 31, 32, 33, 34,
+       35, 36, 37, 38, 50, 51, 52, 53, 54, 55, 56, 57, 58});
+  std::vector<vector_size_t> innerOffsets{0, 3, 6, 9, 12, 15, 18, 21, 24};
+  auto innerMaps = makeMapVector(innerOffsets, innerKeys, innerValues);
+
+  auto outerKeys = makeFlatVector<int64_t>({3, 4, 5, 9, 10, 11, 15, 16, 17});
+  std::vector<vector_size_t> outerOffsets{0, 3, 3, 6, 6, 9};
+  auto expected = makeMapVector(outerOffsets, outerKeys, innerMaps, {1, 3, 5});
+
+  assertEqualVectors(result, expected);
 }
 
 } // namespace

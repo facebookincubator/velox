@@ -22,25 +22,62 @@ namespace {
 class SplitToMapTest : public test::FunctionBaseTest {};
 
 TEST_F(SplitToMapTest, basic) {
+  auto callFunc = [&](const RowVectorPtr& input) {
+    return evaluate("split_to_map(c0, ',', ':')", input);
+  };
+
+  auto tryCallFunc = [&](const RowVectorPtr& input) {
+    auto result = evaluate("try(split_to_map(c0, ',', ':'))", input);
+    auto expected = makeAllNullMapVector(input->size(), VARCHAR(), VARCHAR());
+    velox::test::assertEqualVectors(expected, result);
+  };
+
+  // Valid string cases.
   auto data = makeRowVector({
       makeFlatVector<std::string>({
           "1:10,2:20,3:30,4:",
           "4:40",
           "",
           ":00,1:11,3:33,5:55,7:77",
+          ":",
+          "11:17,",
+          ":,",
       }),
   });
 
-  auto result = evaluate("split_to_map(c0, ',', ':')", data);
+  auto result = callFunc(data);
 
   auto expected = makeMapVector<std::string, std::string>({
       {{"1", "10"}, {"2", "20"}, {"3", "30"}, {"4", ""}},
       {{"4", "40"}},
       {},
       {{"", "00"}, {"1", "11"}, {"3", "33"}, {"5", "55"}, {"7", "77"}},
+      {{"", ""}},
+      {{"11", "17"}},
+      {{"", ""}},
   });
 
   velox::test::assertEqualVectors(expected, result);
+
+  // Invalid string cases.
+  const std::string errorMessage =
+      "Key-value delimiter must appear exactly once in each entry. Bad input:";
+
+  data = makeRowVector({makeFlatVector<std::string>({","})});
+  VELOX_ASSERT_THROW(callFunc(data), errorMessage);
+  tryCallFunc(data);
+
+  data = makeRowVector({makeFlatVector<std::string>({",11:17"})});
+  VELOX_ASSERT_THROW(callFunc(data), errorMessage);
+  tryCallFunc(data);
+
+  data = makeRowVector({makeFlatVector<std::string>({"11:17,,"})});
+  VELOX_ASSERT_THROW(callFunc(data), errorMessage);
+  tryCallFunc(data);
+
+  data = makeRowVector({makeFlatVector<std::string>({"11"})});
+  VELOX_ASSERT_THROW(callFunc(data), errorMessage);
+  tryCallFunc(data);
 }
 
 TEST_F(SplitToMapTest, invalidInput) {
@@ -58,16 +95,74 @@ TEST_F(SplitToMapTest, invalidInput) {
         data);
   };
 
+  auto trySplitToMap = [&](const std::string& entryDelimiter,
+                           const std::string& keyValueDelimiter) {
+    SCOPED_TRACE(fmt::format("{} {}", entryDelimiter, keyValueDelimiter));
+    auto result = evaluate(
+        fmt::format(
+            "try(split_to_map(c0, '{}', '{}'))",
+            entryDelimiter,
+            keyValueDelimiter),
+        data);
+    auto expected = makeAllNullMapVector(data->size(), VARCHAR(), VARCHAR());
+    velox::test::assertEqualVectors(expected, result);
+  };
+
   VELOX_ASSERT_THROW(
       splitToMap(".", "."),
       "entryDelimiter and keyValueDelimiter must not be the same");
+  trySplitToMap(".", ".");
+
   VELOX_ASSERT_THROW(splitToMap(".", ""), "keyValueDelimiter is empty");
+  trySplitToMap(".", "");
+
   VELOX_ASSERT_THROW(splitToMap("", "."), "entryDelimiter is empty");
+  trySplitToMap("", ".");
+
   VELOX_ASSERT_THROW(
       splitToMap(":", ","),
       "Key-value delimiter must appear exactly once in each entry. Bad input: '1'");
+  trySplitToMap(":", ",");
+
   VELOX_ASSERT_THROW(
       splitToMap(",", ":"), "Duplicate keys (1) are not allowed.");
+  trySplitToMap(",", ":");
+}
+
+TEST_F(SplitToMapTest, lambda) {
+  auto splitToMap = [&](const std::string& input, const std::string& lambda) {
+    auto rowVector = makeRowVector({
+        makeFlatVector<std::string>({input}),
+    });
+
+    return evaluate(
+        fmt::format("split_to_map(c0, ',', ':', {})", lambda), rowVector);
+  };
+
+  // No duplicate keys.
+  auto result = splitToMap("1:a,2:b,3:c", "(k, v1, v2) -> v1");
+  auto expected = makeMapVector<std::string, std::string>({
+      {{"1", "a"}, {"2", "b"}, {"3", "c"}},
+  });
+  velox::test::assertEqualVectors(expected, result);
+
+  // Duplicate keys. Keep first.
+  result = splitToMap("1:a,2:b,1:c,2:d,3:e", "(k, v1, v2) -> v1");
+  expected = makeMapVector<std::string, std::string>({
+      {{"1", "a"}, {"2", "b"}, {"3", "e"}},
+  });
+  velox::test::assertEqualVectors(expected, result);
+
+  // Duplicate keys. Keep last.
+  result = splitToMap("1:a,2:b,1:c,2:d,3:e", "(k, v1, v2) -> v2");
+  expected = makeMapVector<std::string, std::string>({
+      {{"1", "c"}, {"2", "d"}, {"3", "e"}},
+  });
+  velox::test::assertEqualVectors(expected, result);
+
+  VELOX_ASSERT_USER_THROW(
+      splitToMap("1:a,2:b,1:c,2:d,3:e", "(k, v1, v2) -> concat(v1, v2)"),
+      "split_to_map with arbitrary lambda is not supported");
 }
 
 } // namespace

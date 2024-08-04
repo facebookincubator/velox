@@ -105,7 +105,7 @@ TEST_F(VeloxSubstraitRoundTripTest, project) {
   createDuckDbTable(vectors);
   auto plan =
       PlanBuilder().values(vectors).project({"c0 + c1", "c1 / c2"}).planNode();
-  assertPlanConversion(plan, "SELECT c0 + c1, c1 / c2 FROM tmp");
+  assertPlanConversion(plan, "SELECT c0 + c1, c1 // c2 FROM tmp");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, cast) {
@@ -509,6 +509,6 @@ TEST_F(VeloxSubstraitRoundTripTest, dateType) {
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::init(&argc, &argv, false);
+  folly::Init init{&argc, &argv, false};
   return RUN_ALL_TESTS();
 }

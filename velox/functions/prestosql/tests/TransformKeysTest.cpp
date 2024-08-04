@@ -69,19 +69,33 @@ TEST_F(TransformKeysTest, evaluateSubsetOfRows) {
           nullEvery(13)),
   });
 
-  SelectivityVector inputRows(size, false);
-  inputRows.setValidRange(0, size / 3, true);
-  inputRows.updateBounds();
+  // Test using 2 selectivity vectors. One of size 100 with 33 first rows
+  // selected. Another of size 33 with all rows selected. Both should produce
+  // the same result.
 
-  auto result = evaluate<MapVector>(
-      "transform_keys(c0, (k, v) -> k + 5)", input, inputRows);
   auto expectedResult = makeMapVector<int64_t, int32_t>(
       size / 3,
       [](auto row) { return row % 5; },
       [](auto row) { return row % 7 + 5; },
       [](auto row) { return row % 11; },
       nullEvery(13));
-  assertEqualVectors(expectedResult, result, inputRows);
+
+  {
+    SelectivityVector inputRows(size, false);
+    inputRows.setValidRange(0, size / 3, true);
+    inputRows.updateBounds();
+
+    auto result = evaluate<MapVector>(
+        "transform_keys(c0, (k, v) -> k + 5)", input, inputRows);
+    assertEqualVectors(expectedResult, result, inputRows);
+  }
+
+  {
+    SelectivityVector inputRows(size / 3);
+    auto result = evaluate<MapVector>(
+        "transform_keys(c0, (k, v) -> k + 5)", input, inputRows);
+    assertEqualVectors(expectedResult, result, inputRows);
+  }
 }
 
 TEST_F(TransformKeysTest, duplicateKeys) {
@@ -101,6 +115,80 @@ TEST_F(TransformKeysTest, duplicateKeys) {
 
   ASSERT_NO_THROW(
       evaluate("try(transform_keys(c0, (k, v) -> 10 + k % 2))", input));
+}
+
+TEST_F(TransformKeysTest, nullKeys) {
+  auto data = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20, 3: 30}",
+          "{1: 10, 2: 20}",
+      }),
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate("transform_keys(c0, (k, v) -> null::double)", data),
+      "map key cannot be null");
+
+  auto result =
+      evaluate("try(transform_keys(c0, (k, v) -> null::double))", data);
+  VectorPtr expected =
+      BaseVector::createNullConstant(MAP(DOUBLE(), BIGINT()), 2, pool());
+  assertEqualVectors(expected, result);
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "transform_keys(c0, (k, v) -> if (k < 3, k::double + 0.5, null::double))",
+          data),
+      "map key cannot be null");
+
+  result = evaluate(
+      "try(transform_keys(c0, (k, v) -> if (k < 3, k::double + 0.5, null::double)))",
+      data);
+  expected = makeMapVectorFromJson<double, int64_t>({
+      "null",
+      "{1.5: 10, 2.5: 20}",
+  });
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(TransformKeysTest, indeterminateKeys) {
+  auto data = makeRowVector({
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20, 3: 30}",
+          "{1: 10, 2: 20}",
+      }),
+      makeArrayVectorFromJson<int64_t>({
+          "[1, null, 2]",
+          "[1, null, 2]",
+      }),
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate("transform_keys(c0, (k, v) -> c1)", data),
+      "map key cannot be indeterminate");
+
+  auto result = evaluate("try(transform_keys(c0, (k, v) -> c1))", data);
+  VectorPtr expected =
+      BaseVector::createNullConstant(MAP(ARRAY(BIGINT()), BIGINT()), 2, pool());
+  assertEqualVectors(expected, result);
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "transform_keys(c0, (k, v) -> if (k < 3, sequence(0, k), c1))", data),
+      "map key cannot be indeterminate");
+
+  result = evaluate(
+      "try(transform_keys(c0, (k, v) -> if (k < 3, sequence(0, k), c1)))",
+      data);
+  expected = makeMapVector(
+      {0, 0},
+      makeArrayVectorFromJson<int64_t>({
+          "[0, 1]",
+          "[0, 1, 2]",
+      }),
+      makeFlatVector<int64_t>({10, 20}));
+  expected->setNull(0, true);
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(TransformKeysTest, differentResultType) {

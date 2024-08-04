@@ -41,6 +41,10 @@ class FileSink : public Closeable {
     /// Connector properties are required to create a FileSink on FileSystems
     /// such as S3.
     const std::shared_ptr<const Config>& connectorProperties{nullptr};
+    /// Config used to create sink files. This config is provided to underlying
+    /// file system and the config is free form. The form should be defined by
+    /// the underlying file system.
+    const std::string fileCreateConfig{""};
     memory::MemoryPool* pool{nullptr};
     MetricsLogPtr metricLogger{MetricsLog::voidLog()};
     IoStatistics* stats{nullptr};
@@ -152,10 +156,6 @@ class WriteFileSink final : public FileSink {
 class LocalFileSink : public FileSink {
  public:
   LocalFileSink(const std::string& name, const Options& options);
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  LocalFileSink(const std::string& name, MetricsLogPtr metricLogger)
-      : LocalFileSink(name, {.metricLogger = std::move(metricLogger)}) {}
-#endif
 
   ~LocalFileSink() override {
     destroy();

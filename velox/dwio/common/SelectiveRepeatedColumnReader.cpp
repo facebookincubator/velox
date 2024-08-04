@@ -75,6 +75,17 @@ void prepareResult(
   // makeOffsetsAndSizes.  Child vectors are handled in child column readers.
 }
 
+vector_size_t
+advanceNestedRows(const RowSet& rows, vector_size_t i, vector_size_t last) {
+  while (i + 16 < rows.size() && rows[i + 16] < last) {
+    i += 16;
+  }
+  while (i < rows.size() && rows[i] < last) {
+    ++i;
+  }
+  return i;
+}
+
 } // namespace
 
 void SelectiveRepeatedColumnReader::makeNestedRowSet(
@@ -137,24 +148,21 @@ void SelectiveRepeatedColumnReader::makeOffsetsAndSizes(
     auto row = rows[i];
     currentOffset += sumLengths(allLengths_, nulls, currentRow, row);
     currentRow = row + 1;
-    while (nestedRowIndex < nestedRows_.size() &&
-           nestedRows_[nestedRowIndex] < currentOffset) {
-      ++nestedRowIndex;
-    }
+    nestedRowIndex =
+        advanceNestedRows(nestedRows_, nestedRowIndex, currentOffset);
     rawOffsets[i] = nestedRowIndex;
     if (nulls && bits::isBitNull(nulls, row)) {
       rawSizes[i] = 0;
-      bits::setNull(rawResultNulls_, i);
+      if (!returnReaderNulls_) {
+        bits::setNull(rawResultNulls_, i);
+      }
       anyNulls_ = true;
     } else {
-      vector_size_t length = 0;
       currentOffset += allLengths_[row];
-      while (nestedRowIndex < nestedRows_.size() &&
-             nestedRows_[nestedRowIndex] < currentOffset) {
-        ++length;
-        ++nestedRowIndex;
-      }
-      rawSizes[i] = length;
+      auto newNestedRowIndex =
+          advanceNestedRows(nestedRows_, nestedRowIndex, currentOffset);
+      rawSizes[i] = newNestedRowIndex - nestedRowIndex;
+      nestedRowIndex = newNestedRowIndex;
     }
   }
   numValues_ = rows.size();
@@ -180,26 +188,13 @@ RowSet SelectiveRepeatedColumnReader::applyFilter(RowSet rows) {
   return outputRows_;
 }
 
-void SelectiveRepeatedColumnReader::setResultNulls(BaseVector& result) {
-  if (anyNulls_) {
-    resultNulls_->setSize(bits::nbytes(result.size()));
-    result.setNulls(resultNulls_);
-  } else {
-    result.resetNulls();
-  }
-}
-
 SelectiveListColumnReader::SelectiveListColumnReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-    const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+    const TypePtr& requestedType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     FormatParams& params,
     velox::common::ScanSpec& scanSpec)
-    : SelectiveRepeatedColumnReader(
-          dataType->type(),
-          params,
-          scanSpec,
-          dataType),
-      requestedType_{requestedType} {}
+    : SelectiveRepeatedColumnReader(requestedType, params, scanSpec, fileType) {
+}
 
 uint64_t SelectiveListColumnReader::skip(uint64_t numValues) {
   numValues = formatData_->skipNulls(numValues);
@@ -242,28 +237,24 @@ void SelectiveListColumnReader::read(
 
 void SelectiveListColumnReader::getValues(RowSet rows, VectorPtr* result) {
   VELOX_DCHECK_NOT_NULL(result);
-  prepareResult(*result, requestedType_->type(), rows.size(), &memoryPool_);
+  prepareResult(*result, requestedType_, rows.size(), &memoryPool_);
   auto* resultArray = result->get()->asUnchecked<ArrayVector>();
   makeOffsetsAndSizes(rows, *resultArray);
-  setResultNulls(**result);
+  result->get()->setNulls(resultNulls());
   if (child_ && !nestedRows_.empty()) {
     auto& elements = resultArray->elements();
-    prepareStructResult(requestedType_->type()->childAt(0), &elements);
+    prepareStructResult(requestedType_->childAt(0), &elements);
     child_->getValues(nestedRows_, &elements);
   }
 }
 
 SelectiveMapColumnReader::SelectiveMapColumnReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-    const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+    const TypePtr& requestedType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     FormatParams& params,
     velox::common::ScanSpec& scanSpec)
-    : SelectiveRepeatedColumnReader(
-          dataType->type(),
-          params,
-          scanSpec,
-          dataType),
-      requestedType_{requestedType} {}
+    : SelectiveRepeatedColumnReader(requestedType, params, scanSpec, fileType) {
+}
 
 uint64_t SelectiveMapColumnReader::skip(uint64_t numValues) {
   numValues = formatData_->skipNulls(numValues);
@@ -323,10 +314,14 @@ void SelectiveMapColumnReader::read(
 
 void SelectiveMapColumnReader::getValues(RowSet rows, VectorPtr* result) {
   VELOX_DCHECK_NOT_NULL(result);
-  prepareResult(*result, requestedType_->type(), rows.size(), &memoryPool_);
+  VELOX_CHECK(
+      !result->get() || result->get()->type()->isMap(),
+      "Expect MAP result vector, got {}",
+      result->get()->type()->toString());
+  prepareResult(*result, requestedType_, rows.size(), &memoryPool_);
   auto* resultMap = result->get()->asUnchecked<MapVector>();
   makeOffsetsAndSizes(rows, *resultMap);
-  setResultNulls(**result);
+  result->get()->setNulls(resultNulls());
   VELOX_CHECK(
       keyReader_ && elementReader_,
       "keyReader_ and elementReaer_ must exist in "
@@ -334,7 +329,7 @@ void SelectiveMapColumnReader::getValues(RowSet rows, VectorPtr* result) {
   if (!nestedRows_.empty()) {
     keyReader_->getValues(nestedRows_, &resultMap->mapKeys());
     auto& values = resultMap->mapValues();
-    prepareStructResult(requestedType_->type()->childAt(1), &values);
+    prepareStructResult(requestedType_->childAt(1), &values);
     elementReader_->getValues(nestedRows_, &values);
   }
 }

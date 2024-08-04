@@ -28,6 +28,10 @@ using limits = std::numeric_limits<T>;
 class PrestoHasherTest : public testing::Test,
                          public facebook::velox::test::VectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   template <typename T>
   void assertHash(
       const std::vector<std::optional<T>>& data,
@@ -196,12 +200,40 @@ TEST_F(PrestoHasherTest, date) {
 
 TEST_F(PrestoHasherTest, unscaledShortDecimal) {
   assertHash<int64_t>(
-      {0, 1000, std::nullopt}, {0, 2343331593029422743, 0}, DECIMAL(10, 5));
+      {0,
+       1000,
+       -1000,
+       std::nullopt,
+       DecimalUtil::kShortDecimalMax,
+       DecimalUtil::kShortDecimalMin},
+      {0,
+       1000,
+       -1000,
+       0,
+       DecimalUtil::kShortDecimalMax,
+       DecimalUtil::kShortDecimalMin},
+      DECIMAL(18, 0));
 }
 
 TEST_F(PrestoHasherTest, unscaledLongDecimal) {
   assertHash<int128_t>(
-      {0, 1000, std::nullopt}, {0, 2343331593029422743, 0}, DECIMAL(20, 5));
+      {0,
+       1000,
+       -1000,
+       HugeInt::build(0, 6223891681234568000UL),
+       HugeInt::build(9223372036854775805UL, 6898690891216455152UL),
+       std::nullopt,
+       DecimalUtil::kLongDecimalMax,
+       DecimalUtil::kLongDecimalMin},
+      {0,
+       -3317384982385163790,
+       -3317384982385163790,
+       -2440068372815350100,
+       8392582729122626937,
+       0,
+       3027397587645285649,
+       3027397587645285649},
+      DECIMAL(38, 0));
 }
 
 TEST_F(PrestoHasherTest, doubles) {
@@ -362,39 +394,30 @@ TEST_F(PrestoHasherTest, timestampWithTimezone) {
   const auto toUnixtimeWithTimeZone =
       [&](const std::vector<std::optional<std::pair<int64_t, std::string>>>&
               timestampWithTimeZones) {
-        std::vector<std::optional<int64_t>> timestamps;
-        std::vector<std::optional<int16_t>> timeZoneIds;
+        std::vector<std::optional<int64_t>> timestampWithTimeZoneVector;
         auto size = timestampWithTimeZones.size();
         BufferPtr nulls =
             AlignedBuffer::allocate<uint64_t>(bits::nwords(size), pool());
         auto rawNulls = nulls->asMutable<uint64_t>();
-        timestamps.reserve(size);
-        timeZoneIds.reserve(size);
+        timestampWithTimeZoneVector.reserve(size);
 
         for (auto i = 0; i < size; i++) {
           auto timestampWithTimeZone = timestampWithTimeZones[i];
           if (timestampWithTimeZone.has_value()) {
             auto timestamp = timestampWithTimeZone.value().first;
             auto tz = timestampWithTimeZone.value().second;
-            const int16_t tzid = util::getTimeZoneID(tz);
-            timeZoneIds.push_back(tzid);
-            timestamps.push_back(timestamp);
+            const int16_t tzid = tz::getTimeZoneID(tz);
+            auto timestampWithTimezone = pack(timestamp, tzid);
+            timestampWithTimeZoneVector.push_back(timestampWithTimezone);
             bits::clearNull(rawNulls, i);
           } else {
-            timeZoneIds.push_back(std::nullopt);
-            timestamps.push_back(std::nullopt);
+            timestampWithTimeZoneVector.push_back(std::nullopt);
             bits::setNull(rawNulls, i);
           }
         }
 
-        return std::make_shared<RowVector>(
-            pool(),
-            TIMESTAMP_WITH_TIME_ZONE(),
-            nulls,
-            size,
-            std::vector<VectorPtr>{
-                makeNullableFlatVector(timestamps),
-                makeNullableFlatVector(timeZoneIds)});
+        return makeNullableFlatVector(
+            timestampWithTimeZoneVector, TIMESTAMP_WITH_TIME_ZONE());
       };
 
   auto timestampWithTimeZones = toUnixtimeWithTimeZone(

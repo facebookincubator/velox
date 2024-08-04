@@ -16,23 +16,26 @@
 
 #include "velox/expression/EvalCtx.h"
 #include <exception>
-#include "velox/common/base/RawVector.h"
+#include "velox/common/testutil/TestValue.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/PeeledEncoding.h"
 
-namespace facebook::velox::exec {
+using facebook::velox::common::testutil::TestValue;
 
-ScopedContextSaver::~ScopedContextSaver() {
-  if (context) {
-    context->restore(*this);
-  }
-}
+namespace facebook::velox::exec {
 
 EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
     : execCtx_(execCtx),
       exprSet_(exprSet),
       row_(row),
-      cacheEnabled_(execCtx->exprEvalCacheEnabled()) {
+      cacheEnabled_(execCtx->exprEvalCacheEnabled()),
+      maxSharedSubexprResultsCached_(
+          execCtx->queryCtx()
+              ? execCtx->queryCtx()
+                    ->queryConfig()
+                    .maxSharedSubexprResultsCached()
+              : core::QueryConfig({}).maxSharedSubexprResultsCached()) {
   // TODO Change the API to replace raw pointers with non-const references.
   // Sanity check inputs to prevent crashes.
   VELOX_CHECK_NOT_NULL(execCtx);
@@ -53,13 +56,17 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx)
     : execCtx_(execCtx),
       exprSet_(nullptr),
       row_(nullptr),
-      cacheEnabled_(execCtx->exprEvalCacheEnabled()) {
+      cacheEnabled_(execCtx->exprEvalCacheEnabled()),
+      maxSharedSubexprResultsCached_(
+          execCtx->queryCtx()
+              ? execCtx->queryCtx()
+                    ->queryConfig()
+                    .maxSharedSubexprResultsCached()
+              : core::QueryConfig({}).maxSharedSubexprResultsCached()) {
   VELOX_CHECK_NOT_NULL(execCtx);
 }
 
-void EvalCtx::saveAndReset(
-    ScopedContextSaver& saver,
-    const SelectivityVector& rows) {
+void EvalCtx::saveAndReset(ContextSaver& saver, const SelectivityVector& rows) {
   if (saver.context) {
     return;
   }
@@ -76,80 +83,81 @@ void EvalCtx::saveAndReset(
   }
 }
 
-void EvalCtx::ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size)
+void EvalCtx::ensureErrorsVectorSize(EvalErrorsPtr& vector, vector_size_t size)
     const {
-  auto oldSize = vector ? vector->size() : 0;
   if (!vector) {
-    vector = std::make_shared<ErrorVector>(
-        pool(),
-        OpaqueType::create<void>(),
-        AlignedBuffer::allocate<bool>(size, pool(), true) /*nulls*/,
-        size /*length*/,
-        AlignedBuffer::allocate<ErrorVector::value_type>(
-            size, pool(), ErrorVector::value_type()),
-        std::vector<BufferPtr>(0),
-        SimpleVectorStats<std::shared_ptr<void>>{},
-        1 /*distinctValueCount*/,
-        size /*nullCount*/,
-        false /*isSorted*/,
-        size /*representedBytes*/);
-  } else if (vector->size() < size) {
-    vector->resize(size, false);
+    vector = std::make_shared<EvalErrors>(pool(), size);
+  } else {
+    vector->ensureCapacity(size);
   }
-  // Set all new positions to null, including the one to be set.
-  for (auto i = oldSize; i < size; ++i) {
-    vector->setNull(i, true);
-  }
+}
+
+void EvalCtx::addError(vector_size_t index, EvalErrorsPtr& errorsPtr) const {
+  ensureErrorsVectorSize(errorsPtr, index + 1);
+  errorsPtr->setError(index);
 }
 
 void EvalCtx::addError(
     vector_size_t index,
     const std::exception_ptr& exceptionPtr,
-    ErrorVectorPtr& errorsPtr) const {
+    EvalErrorsPtr& errorsPtr) const {
   ensureErrorsVectorSize(errorsPtr, index + 1);
-  if (errorsPtr->isNullAt(index)) {
-    errorsPtr->setNull(index, false);
-    errorsPtr->set(index, std::make_shared<std::exception_ptr>(exceptionPtr));
-  }
+  errorsPtr->setError(index, exceptionPtr);
 }
 
 void EvalCtx::addErrors(
     const SelectivityVector& rows,
-    const ErrorVectorPtr& fromErrors,
-    ErrorVectorPtr& toErrors) const {
+    const EvalErrorsPtr& fromErrors,
+    EvalErrorsPtr& toErrors) const {
   if (!fromErrors) {
     return;
   }
 
   ensureErrorsVectorSize(toErrors, fromErrors->size());
-  rows.testSelected([&](auto row) {
-    if (!fromErrors->isIndexInRange(row)) {
-      return false;
-    }
-    if (!fromErrors->isNullAt(row) && toErrors->isNullAt(row)) {
-      toErrors->set(
-          row,
-          std::static_pointer_cast<std::exception_ptr>(
-              fromErrors->valueAt(row)));
-    }
-    return true;
-  });
+  toErrors->copyErrors(rows, *fromErrors);
 }
 
-void EvalCtx::restore(ScopedContextSaver& saver) {
+void EvalCtx::addError(
+    vector_size_t row,
+    const EvalErrorsPtr& fromErrors,
+    EvalErrorsPtr& toErrors) const {
+  if (fromErrors != nullptr) {
+    copyError(*fromErrors, row, toErrors, row);
+  }
+}
+
+void EvalCtx::copyError(
+    const EvalErrors& from,
+    vector_size_t fromIndex,
+    EvalErrorsPtr& to,
+    vector_size_t toIndex) const {
+  const auto fromSize = from.size();
+  if (from.hasErrorAt(fromIndex)) {
+    ensureErrorsVectorSize(to, toIndex + 1);
+    to->copyError(from, fromIndex, toIndex);
+  }
+}
+
+void EvalCtx::deselectErrors(SelectivityVector& rows) const {
+  if (!errors_) {
+    return;
+  }
+  // A non-null in errors resets the row. AND with the errors null mask.
+  rows.deselectNonNulls(
+      errors_->errorFlags(),
+      rows.begin(),
+      std::min(errors_->size(), rows.end()));
+}
+
+void EvalCtx::restore(ContextSaver& saver) {
+  TestValue::adjust("facebook::velox::exec::EvalCtx::restore", this);
+
   peeledFields_ = std::move(saver.peeled);
   nullsPruned_ = saver.nullsPruned;
   if (errors_) {
-    int32_t errorSize = errors_->size();
     peeledEncoding_->applyToNonNullInnerRows(
         *saver.rows, [&](auto outerRow, auto innerRow) {
-          if (innerRow < errorSize && !errors_->isNullAt(innerRow)) {
-            addError(
-                outerRow,
-                *std::static_pointer_cast<std::exception_ptr>(
-                    errors_->valueAt(innerRow)),
-                saver.errors);
-          }
+          copyError(*errors_, innerRow, saver.errors, outerRow);
         });
   }
   errors_ = std::move(saver.errors);
@@ -161,7 +169,37 @@ namespace {
 auto throwError(const std::exception_ptr& exceptionPtr) {
   std::rethrow_exception(toVeloxException(exceptionPtr));
 }
+
+std::exception_ptr toVeloxUserError(const std::string& message) {
+  return std::make_exception_ptr(VeloxUserError(
+      __FILE__,
+      __LINE__,
+      __FUNCTION__,
+      "",
+      message,
+      error_source::kErrorSourceUser,
+      error_code::kInvalidArgument,
+      false /*retriable*/));
+}
+
 } // namespace
+
+void EvalCtx::setStatus(vector_size_t index, const Status& status) {
+  VELOX_CHECK(!status.ok(), "Status must be an error");
+
+  if (status.isUserError()) {
+    if (throwOnError_) {
+      VELOX_USER_FAIL(status.message());
+    }
+    if (captureErrorDetails_) {
+      addError(index, toVeloxUserError(status.message()), errors_);
+    } else {
+      addError(index, errors_);
+    }
+  } else {
+    VELOX_FAIL(status.message());
+  }
+}
 
 void EvalCtx::setError(
     vector_size_t index,
@@ -170,11 +208,13 @@ void EvalCtx::setError(
     throwError(exceptionPtr);
   }
 
-  addError(index, toVeloxException(exceptionPtr), errors_);
+  if (captureErrorDetails_) {
+    addError(index, toVeloxException(exceptionPtr), errors_);
+  } else {
+    addError(index, errors_);
+  }
 }
 
-// This should be used onlly when exceptionPtr is guranteed to be a
-// VeloxException.
 void EvalCtx::setVeloxExceptionError(
     vector_size_t index,
     const std::exception_ptr& exceptionPtr) {
@@ -182,7 +222,11 @@ void EvalCtx::setVeloxExceptionError(
     std::rethrow_exception(exceptionPtr);
   }
 
-  addError(index, exceptionPtr, errors_);
+  if (captureErrorDetails_) {
+    addError(index, exceptionPtr, errors_);
+  } else {
+    addError(index, errors_);
+  }
 }
 
 void EvalCtx::setErrors(
@@ -192,15 +236,19 @@ void EvalCtx::setErrors(
     throwError(exceptionPtr);
   }
 
-  auto veloxException = toVeloxException(exceptionPtr);
-  rows.applyToSelected(
-      [&](auto row) { addError(row, veloxException, errors_); });
+  if (captureErrorDetails_) {
+    auto veloxException = toVeloxException(exceptionPtr);
+    rows.applyToSelected(
+        [&](auto row) { addError(row, veloxException, errors_); });
+  } else {
+    rows.applyToSelected([&](auto row) { addError(row, errors_); });
+  }
 }
 
 void EvalCtx::addElementErrorsToTopLevel(
     const SelectivityVector& elementRows,
     const BufferPtr& elementToTopLevelRows,
-    ErrorVectorPtr& topLevelErrors) {
+    EvalErrorsPtr& topLevelErrors) {
   if (!errors_) {
     return;
   }
@@ -208,12 +256,7 @@ void EvalCtx::addElementErrorsToTopLevel(
   const auto* rawElementToTopLevelRows =
       elementToTopLevelRows->as<vector_size_t>();
   elementRows.applyToSelected([&](auto row) {
-    if (errors_->isIndexInRange(row) && !errors_->isNullAt(row)) {
-      addError(
-          rawElementToTopLevelRows[row],
-          *std::static_pointer_cast<std::exception_ptr>(errors_->valueAt(row)),
-          topLevelErrors);
-    }
+    copyError(*errors_, row, topLevelErrors, rawElementToTopLevelRows[row]);
   });
 }
 
@@ -230,10 +273,26 @@ void EvalCtx::convertElementErrorsToTopLevelNulls(
   const auto* rawElementToTopLevelRows =
       elementToTopLevelRows->as<vector_size_t>();
   elementRows.applyToSelected([&](auto row) {
-    if (errors_->isIndexInRange(row) && !errors_->isNullAt(row)) {
+    if (errors_->hasErrorAt(row)) {
       bits::setNull(rawNulls, rawElementToTopLevelRows[row], true);
     }
   });
+}
+
+void EvalCtx::moveAppendErrors(EvalErrorsPtr& other) {
+  if (!errors_) {
+    return;
+  }
+
+  if (!other) {
+    std::swap(errors_, other);
+    return;
+  }
+
+  ensureErrorsVectorSize(other, errors_->size());
+  other->copyErrors(*errors_);
+
+  errors_.reset();
 }
 
 const VectorPtr& EvalCtx::getField(int32_t index) const {
@@ -279,6 +338,46 @@ VectorPtr EvalCtx::ensureFieldLoaded(
   return field;
 }
 
+// Utility function used to extend the size of a complex Vector by wrapping it
+// in a dictionary with identity mapping for existing rows.
+// Note: If targetSize < the current size of the vector, then the result will
+// have the same size as the input vector.
+VectorPtr extendSizeByWrappingInDictionary(
+    VectorPtr& vector,
+    vector_size_t targetSize,
+    EvalCtx& context) {
+  auto currentSize = vector->size();
+  targetSize = std::max(targetSize, currentSize);
+  VELOX_DCHECK(
+      !vector->type()->isPrimitiveType(), "Only used for complex types.");
+  BufferPtr indices = allocateIndices(targetSize, context.pool());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  // Only fill in indices for existing rows in the vector.
+  std::iota(rawIndices, rawIndices + currentSize, 0);
+  // A nulls buffer is required otherwise wrapInDictionary() can return a
+  // constant. Moreover, nulls will eventually be added, so it's not wasteful.
+  auto nulls = allocateNulls(targetSize, context.pool());
+  return BaseVector::wrapInDictionary(
+      std::move(nulls), std::move(indices), targetSize, std::move(vector));
+}
+
+// Utility function used to resize a primitive type vector while ensuring that
+// the result has all unique and writable buffers.
+void resizePrimitiveTypeVectors(
+    VectorPtr& vector,
+    vector_size_t targetSize,
+    EvalCtx& context) {
+  VELOX_DCHECK(
+      vector->type()->isPrimitiveType(), "Only used for primitive types.");
+  auto currentSize = vector->size();
+  LocalSelectivityVector extraRows(context, targetSize);
+  extraRows->setValidRange(0, currentSize, false);
+  extraRows->setValidRange(currentSize, targetSize, true);
+  extraRows->updateBounds();
+  BaseVector::ensureWritable(
+      *extraRows, vector->type(), context.pool(), vector);
+}
+
 // static
 void EvalCtx::addNulls(
     const SelectivityVector& rows,
@@ -306,21 +405,35 @@ void EvalCtx::addNulls(
     return;
   }
 
+  auto currentSize = result->size();
+  auto targetSize = rows.end();
   if (!result.unique() || !result->isNullsWritable()) {
-    BaseVector::ensureWritable(
-        SelectivityVector::empty(), type, context.pool(), result);
-  }
-
-  if (result->size() < rows.end()) {
-    BaseVector::ensureWritable(
-        SelectivityVector::empty(), type, context.pool(), result);
-    if (result->encoding() == VectorEncoding::Simple::ROW) {
-      // Avoid calling resize on all children by adding top level nulls only.
-      // We know from the check above that result is unique and isNullsWritable.
-      result->asUnchecked<RowVector>()->appendNulls(
-          rows.end() - result->size());
+    if (result->type()->isPrimitiveType()) {
+      if (currentSize < targetSize) {
+        resizePrimitiveTypeVectors(result, targetSize, context);
+      } else {
+        BaseVector::ensureWritable(
+            SelectivityVector::empty(), type, context.pool(), result);
+      }
     } else {
-      result->resize(rows.end());
+      result = extendSizeByWrappingInDictionary(result, targetSize, context);
+    }
+  } else if (currentSize < targetSize) {
+    VELOX_DCHECK(
+        !result->isConstantEncoding(),
+        "Should have been handled in code-path for !isNullsWritable()");
+    if (VectorEncoding::isDictionary(result->encoding())) {
+      // We can just resize the dictionary layer in-place. It also ensures
+      // indices buffer is unique after resize.
+      result->resize(targetSize);
+    } else {
+      if (result->type()->isPrimitiveType()) {
+        // A flat vector can still have a shared values_ buffer so we ensure all
+        // its buffers are unique while resizing.
+        resizePrimitiveTypeVectors(result, targetSize, context);
+      } else {
+        result = extendSizeByWrappingInDictionary(result, targetSize, context);
+      }
     }
   }
 

@@ -29,13 +29,6 @@ namespace facebook::velox::core {
 Expressions::TypeResolverHook Expressions::resolverHook_;
 
 namespace {
-std::vector<TypePtr> getTypes(const std::vector<TypedExprPtr>& inputs) {
-  std::vector<TypePtr> types{};
-  for (auto& i : inputs) {
-    types.push_back(i->type());
-  }
-  return types;
-}
 
 // Determine output type based on input types.
 TypePtr resolveTypeImpl(
@@ -49,8 +42,8 @@ TypePtr resolveTypeImpl(
 namespace {
 std::shared_ptr<const core::CastTypedExpr> makeTypedCast(
     const TypePtr& type,
-    const std::vector<TypedExprPtr>& inputs) {
-  return std::make_shared<const core::CastTypedExpr>(type, inputs, false);
+    const TypedExprPtr& input) {
+  return std::make_shared<const core::CastTypedExpr>(type, input, false);
 }
 
 std::vector<TypePtr> implicitCastTargets(const TypePtr& type) {
@@ -85,7 +78,7 @@ std::vector<TypePtr> implicitCastTargets(const TypePtr& type) {
       break;
     }
     default: // make compilers happy
-        ;
+      (void)0; // Statement to avoid empty semicolon warning
   }
   return targetTypes;
 }
@@ -100,7 +93,7 @@ std::vector<TypedExprPtr> genImplicitCasts(const TypedExprPtr& typedExpr) {
   std::vector<TypedExprPtr> implicitCasts;
   implicitCasts.reserve(targetTypes.size());
   for (auto targetType : targetTypes) {
-    implicitCasts.emplace_back(makeTypedCast(targetType, {typedExpr}));
+    implicitCasts.emplace_back(makeTypedCast(targetType, typedExpr));
   }
   return implicitCasts;
 }
@@ -139,21 +132,6 @@ TypedExprPtr adjustLastNArguments(
   }
 
   return nullptr;
-}
-
-std::string toString(
-    const std::shared_ptr<const core::CallExpr>& expr,
-    const std::vector<TypedExprPtr>& inputs) {
-  std::ostringstream signature;
-  signature << expr->getFunctionName() << "(";
-  for (auto i = 0; i < inputs.size(); i++) {
-    if (i > 0) {
-      signature << ", ";
-    }
-    signature << inputs[i]->type()->toString();
-  }
-  signature << ")";
-  return signature.str();
 }
 
 TypedExprPtr createWithImplicitCast(
@@ -207,12 +185,14 @@ TypedExprPtr Expressions::inferTypes(
   VELOX_CHECK_NOT_NULL(expr);
 
   if (auto lambdaExpr = std::dynamic_pointer_cast<const LambdaExpr>(expr)) {
-    return resolveLambdaExpr(lambdaExpr, inputRow, lambdaInputTypes, pool);
+    return resolveLambdaExpr(
+        lambdaExpr, inputRow, lambdaInputTypes, pool, complexConstants);
   }
 
   if (auto call = std::dynamic_pointer_cast<const CallExpr>(expr)) {
     if (!expr->getInputs().empty()) {
-      if (auto returnType = tryResolveCallWithLambdas(call, inputRow, pool)) {
+      if (auto returnType = tryResolveCallWithLambdas(
+              call, inputRow, pool, complexConstants)) {
         return returnType;
       }
     }
@@ -221,8 +201,15 @@ TypedExprPtr Expressions::inferTypes(
   // try rebuilding complex constant type from vector
   if (auto fun = std::dynamic_pointer_cast<const CallExpr>(expr)) {
     if (fun->getFunctionName() == "__complex_constant") {
-      VELOX_CHECK(complexConstants);
+      VELOX_CHECK_NOT_NULL(
+          complexConstants,
+          "Expression contains __complex_constant function call, but complexConstants is missing")
+
       auto ccInputRow = complexConstants->as<RowVector>();
+      VELOX_CHECK_NOT_NULL(
+          ccInputRow,
+          "Expected RowVector for complexConstants: {}",
+          complexConstants->toString());
       auto name =
           std::dynamic_pointer_cast<const FieldAccessExpr>(fun->getInputs()[0])
               ->getFieldName();
@@ -268,11 +255,16 @@ TypedExprPtr Expressions::inferTypes(
       // ConstantVector<ComplexType>.
       VELOX_CHECK_NOT_NULL(
           pool, "parsing array literals requires a memory pool");
-      auto arrayVector = variantArrayToVector(
-          constant->type(), constant->value().array(), pool);
-      auto constantVector =
-          std::make_shared<ConstantVector<velox::ComplexType>>(
-              pool, 1, 0, arrayVector);
+      VectorPtr constantVector;
+      if (constant->value().isNull()) {
+        constantVector =
+            BaseVector::createNullConstant(constant->type(), 1, pool);
+      } else {
+        auto arrayVector = variantArrayToVector(
+            constant->type(), constant->value().array(), pool);
+        constantVector = std::make_shared<ConstantVector<velox::ComplexType>>(
+            pool, 1, 0, arrayVector);
+      }
       return std::make_shared<const ConstantTypedExpr>(constantVector);
     }
     return std::make_shared<const ConstantTypedExpr>(
@@ -294,7 +286,8 @@ TypedExprPtr Expressions::resolveLambdaExpr(
     const std::shared_ptr<const core::LambdaExpr>& lambdaExpr,
     const TypePtr& inputRow,
     const std::vector<TypePtr>& lambdaInputTypes,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const VectorPtr& complexConstants) {
   auto names = lambdaExpr->inputNames();
   auto body = lambdaExpr->body();
 
@@ -318,7 +311,7 @@ TypedExprPtr Expressions::resolveLambdaExpr(
   auto lambdaRow = ROW(std::move(names), std::move(types));
 
   return std::make_shared<LambdaTypedExpr>(
-      signature, inferTypes(body, lambdaRow, pool));
+      signature, inferTypes(body, lambdaRow, pool, complexConstants));
 }
 
 namespace {
@@ -413,7 +406,8 @@ const exec::FunctionSignature* findLambdaSignature(
 TypedExprPtr Expressions::tryResolveCallWithLambdas(
     const std::shared_ptr<const CallExpr>& callExpr,
     const TypePtr& inputRow,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const VectorPtr& complexConstants) {
   auto signature = findLambdaSignature(callExpr);
 
   if (signature == nullptr) {
@@ -426,7 +420,8 @@ TypedExprPtr Expressions::tryResolveCallWithLambdas(
   std::vector<TypePtr> childTypes(numArgs);
   for (auto i = 0; i < numArgs; ++i) {
     if (!isLambdaArgument(signature->argumentTypes()[i])) {
-      children[i] = inferTypes(callExpr->getInputs()[i], inputRow, pool);
+      children[i] = inferTypes(
+          callExpr->getInputs()[i], inputRow, pool, complexConstants);
       childTypes[i] = children[i]->type();
     }
   }
@@ -446,8 +441,12 @@ TypedExprPtr Expressions::tryResolveCallWithLambdas(
         lambdaTypes.push_back(type);
       }
 
-      children[i] =
-          inferTypes(callExpr->getInputs()[i], inputRow, lambdaTypes, pool);
+      children[i] = inferTypes(
+          callExpr->getInputs()[i],
+          inputRow,
+          lambdaTypes,
+          pool,
+          complexConstants);
     }
   }
 

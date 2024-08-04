@@ -43,14 +43,14 @@ void ScanState::updateRawState() {
 
 SelectiveColumnReader::SelectiveColumnReader(
     const TypePtr& requestedType,
+    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     dwio::common::FormatParams& params,
-    velox::common::ScanSpec& scanSpec,
-    std::shared_ptr<const dwio::common::TypeWithId> type)
+    velox::common::ScanSpec& scanSpec)
     : memoryPool_(params.pool()),
-      fileType_(type),
-      formatData_(params.toFormatData(type, scanSpec)),
-      scanSpec_(&scanSpec),
-      requestedType_(requestedType) {}
+      requestedType_(requestedType),
+      fileType_(fileType),
+      formatData_(params.toFormatData(fileType, scanSpec)),
+      scanSpec_(&scanSpec) {}
 
 void SelectiveColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
@@ -90,6 +90,16 @@ void SelectiveColumnReader::seekTo(vector_size_t offset, bool readsNullsOnly) {
   }
 }
 
+void SelectiveColumnReader::initReturnReaderNulls(RowSet rows) {
+  if (useBulkPath() && !scanSpec_->hasFilter()) {
+    anyNulls_ = nullsInReadRange_ != nullptr;
+    bool isDense = rows.back() == rows.size() - 1;
+    returnReaderNulls_ = anyNulls_ && isDense;
+  } else {
+    returnReaderNulls_ = false;
+  }
+}
+
 void SelectiveColumnReader::prepareNulls(
     RowSet rows,
     bool hasNulls,
@@ -98,31 +108,23 @@ void SelectiveColumnReader::prepareNulls(
     anyNulls_ = false;
     return;
   }
-  auto numRows = rows.size() + extraRows;
-  if (useBulkPath()) {
-    bool isDense = rows.back() == rows.size() - 1;
-    if (!scanSpec_->hasFilter()) {
-      anyNulls_ = nullsInReadRange_ != nullptr;
-      returnReaderNulls_ = anyNulls_ && isDense;
-      // No need for null flags if fast path
-      if (returnReaderNulls_) {
-        return;
-      }
-    }
-  }
-  if (resultNulls_ && resultNulls_->unique() &&
-      resultNulls_->capacity() >= bits::nbytes(numRows) + simd::kPadding) {
-    // Clear whole capacity because future uses could hit
-    // uncleared data between capacity() and 'numBytes'.
-    simd::memset(rawResultNulls_, bits::kNotNullByte, resultNulls_->capacity());
-    anyNulls_ = false;
+  initReturnReaderNulls(rows);
+  if (returnReaderNulls_) {
+    // No need for null flags if fast path.
     return;
   }
-
+  auto numRows = rows.size() + extraRows;
+  if (resultNulls_ && resultNulls_->unique() &&
+      resultNulls_->capacity() >= bits::nbytes(numRows) + simd::kPadding) {
+    resultNulls_->setSize(bits::nbytes(numRows));
+  } else {
+    resultNulls_ = AlignedBuffer::allocate<bool>(
+        numRows + (simd::kPadding * 8), &memoryPool_);
+    rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
+  }
   anyNulls_ = false;
-  resultNulls_ = AlignedBuffer::allocate<bool>(
-      numRows + (simd::kPadding * 8), &memoryPool_);
-  rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
+  // Clear whole capacity because future uses could hit uncleared data between
+  // capacity() and 'numBytes'.
   simd::memset(rawResultNulls_, bits::kNotNullByte, resultNulls_->capacity());
 }
 
@@ -217,6 +219,75 @@ void SelectiveColumnReader::getIntValues(
     default:
       VELOX_FAIL(
           "Not a valid type for integer reader: {}", requestedType->toString());
+  }
+}
+
+void SelectiveColumnReader::getUnsignedIntValues(
+    RowSet rows,
+    const TypePtr& requestedType,
+    VectorPtr* result) {
+  switch (requestedType->kind()) {
+    case TypeKind::TINYINT:
+      switch (valueSize_) {
+        case 1:
+          getFlatValues<uint8_t, uint8_t>(rows, result, requestedType);
+          break;
+        case 4:
+          getFlatValues<uint32_t, uint8_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    case TypeKind::SMALLINT:
+      switch (valueSize_) {
+        case 2:
+          getFlatValues<uint16_t, uint16_t>(rows, result, requestedType);
+          break;
+        case 4:
+          getFlatValues<uint32_t, uint16_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    case TypeKind::INTEGER:
+      switch (valueSize_) {
+        case 4:
+          getFlatValues<uint32_t, uint32_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    case TypeKind::BIGINT:
+      switch (valueSize_) {
+        case 4:
+          getFlatValues<uint32_t, uint64_t>(rows, result, requestedType);
+          break;
+        case 8:
+          getFlatValues<uint64_t, uint64_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    case TypeKind::HUGEINT:
+      switch (valueSize_) {
+        case 8:
+          getFlatValues<uint64_t, uint128_t>(rows, result, requestedType);
+          break;
+        case 16:
+          getFlatValues<uint128_t, uint128_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    default:
+      VELOX_FAIL(
+          "Not a valid type for unsigned integer reader: {}",
+          requestedType->toString());
   }
 }
 
@@ -320,17 +391,6 @@ void SelectiveColumnReader::addStringValue(folly::StringPiece value) {
   auto copy = copyStringValue(value);
   reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
       StringView(copy, value.size());
-}
-
-bool SelectiveColumnReader::readsNullsOnly() const {
-  auto filter = scanSpec_->filter();
-  if (filter) {
-    auto kind = filter->kind();
-    return kind == velox::common::FilterKind::kIsNull ||
-        (!scanSpec_->keepValues() &&
-         kind == velox::common::FilterKind::kIsNotNull);
-  }
-  return false;
 }
 
 void SelectiveColumnReader::setNulls(BufferPtr resultNulls) {

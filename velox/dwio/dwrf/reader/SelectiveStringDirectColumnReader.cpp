@@ -15,17 +15,19 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
+
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 
 namespace facebook::velox::dwrf {
 
 SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType->type(), params, scanSpec, nodeType) {
-  EncodingKey encodingKey{nodeType->id(), params.flatMapContext().sequence};
+    : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec) {
+  EncodingKey encodingKey{fileType->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   RleVersion rleVersion =
       convertRleVersion(stripe.getEncoding(encodingKey).kind());
@@ -134,18 +136,117 @@ void SelectiveStringDirectColumnReader::extractNSparse(
   lengthIndex_ = rows[row + numValues - 1] + 1;
 }
 
+namespace {
+
+#if XSIMD_WITH_AVX2
+xsimd::make_sized_batch_t<uint16_t, 8> toUint16x8(xsimd::batch<uint32_t> x) {
+  auto y = _mm256_castsi128_si256(_mm256_extracti128_si256(x, 1));
+  return _mm256_castsi256_si128(_mm256_packus_epi32(x, y));
+}
+#endif
+
+bool allSmallEnough(const uint32_t* lengths, uint16_t* offsets, bool& gt4) {
+#if XSIMD_WITH_AVX2
+  auto vlength = xsimd::load_unaligned(lengths);
+  static_assert(vlength.size == 8);
+  if (simd::toBitMask(vlength > xsimd::broadcast<uint32_t>(12))) {
+    return false;
+  }
+  gt4 = simd::toBitMask(vlength > xsimd::broadcast<uint32_t>(4));
+  // Convert to 128 bit vector to calculate prefix sums, because
+  // _mm256_slli_si256 is not shifting all 8 lanes together.
+  auto vlength16 = toUint16x8(vlength);
+  vlength16 += _mm_slli_si128(vlength16, 2);
+  vlength16 += _mm_slli_si128(vlength16, 4);
+  vlength16 += _mm_slli_si128(vlength16, 8);
+  offsets[0] = 0;
+  vlength16.store_unaligned(offsets + 1);
+#else
+  for (int i = 0; i < 8; ++i) {
+    if (lengths[i] > 12) {
+      return false;
+    }
+  }
+  gt4 = false;
+  for (int i = 0; i < 8; ++i) {
+    gt4 = gt4 || lengths[i] > 4;
+  }
+  offsets[0] = 0;
+  for (int i = 0; i < 8; ++i) {
+    offsets[i + 1] = offsets[i] + lengths[i];
+  }
+#endif
+  return true;
+}
+
+} // namespace
+
+template <bool kScatter, bool kGreaterThan4>
+bool SelectiveStringDirectColumnReader::try8ConsecutiveSmall(
+    const char* data,
+    const uint16_t* offsets,
+    int startRow) {
+#ifndef NDEBUG
+  bool testCoverage[] = {kScatter, kGreaterThan4};
+  common::testutil::TestValue::adjust(
+      "facebook::velox::dwrf::SelectiveStringDirectColumnReader::try8ConsecutiveSmall",
+      testCoverage);
+#endif
+  auto* result = reinterpret_cast<uint64_t*>(rawValues_);
+  // Make sure the iterations are independent with each other.
+  for (int i = 0; i < 8; ++i) {
+    unsigned j = kScatter ? outerNonNullRows_[startRow + i] : numValues_ + i;
+    uint64_t word;
+    memcpy(&word, data + offsets[i], 4);
+    uint64_t length = offsets[i + 1] - offsets[i];
+    if (kGreaterThan4 && length > 4) {
+      uint64_t word2;
+      memcpy(&word2, data + offsets[i] + 4, 8);
+      uint64_t mask = length == 12 ? -1ull : (1ull << (8 * (length - 4))) - 1;
+      result[2 * j] = length | (word << 32);
+      result[2 * j + 1] = word2 & mask;
+    } else {
+      uint64_t mask = (1ull << (8 * length)) - 1;
+      result[2 * j] = length | ((word & mask) << 32);
+      result[2 * j + 1] = 0;
+    }
+  }
+  bufferStart_ = data + offsets[8];
+  bytesToSkip_ = 0;
+  if constexpr (!kScatter) {
+    numValues_ += 8;
+  } else {
+    numValues_ = outerNonNullRows_[startRow + 7] + 1;
+  }
+  lengthIndex_ += 8;
+  return true;
+}
+
 template <bool scatter, bool sparse>
 inline bool SelectiveStringDirectColumnReader::try8Consecutive(
     int32_t start,
     const int32_t* rows,
     int32_t row) {
-  // If we haven't read in a buffer yet.
-  if (!bufferStart_) {
+  // If we haven't read in a buffer yet, or there is not enough data left.  This
+  // check is important to make sure the subsequent fast path will have enough
+  // data to read.
+  if (!bufferStart_ ||
+      bufferEnd_ - bufferStart_ - bytesToSkip_ < start + 8 * 12) {
     return false;
   }
   const char* data = bufferStart_ + start + bytesToSkip_;
-  if (!data || bufferEnd_ - data < start + 8 * 12) {
-    return false;
+  if constexpr (!sparse) {
+    auto* lengths = rawLengths_ + rows[row];
+    uint16_t offsets[9];
+    bool gt4;
+    if (allSmallEnough(lengths, offsets, gt4)) {
+      if (gt4) {
+        VELOX_DCHECK_LE(data + offsets[7] + 12, bufferEnd_);
+        return try8ConsecutiveSmall<scatter, true>(data, offsets, row);
+      } else {
+        return try8ConsecutiveSmall<scatter, false>(data, offsets, row);
+      }
+    }
   }
   int32_t* result = reinterpret_cast<int32_t*>(rawValues_);
   int32_t resultIndex = numValues_ * 4 - 4;
@@ -171,8 +272,12 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
       return false;
     }
     result[resultIndex] = length;
-    auto first16 = xsimd::make_sized_batch_t<int8_t, 16>::load_unaligned(data);
-    first16.store_unaligned(reinterpret_cast<char*>(result + resultIndex + 1));
+    xsimd::make_sized_batch_t<int8_t, 16> first16;
+    if (length > 0) {
+      first16 = decltype(first16)::load_unaligned(data);
+      first16.store_unaligned(
+          reinterpret_cast<char*>(result + resultIndex + 1));
+    }
     if (length <= 12) {
       data += length;
       *reinterpret_cast<int64_t*>(
@@ -188,7 +293,7 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
     first16.store_unaligned<char>(rawStringBuffer_ + rawUsed);
     if (length > 16) {
       size_t copySize = bits::roundUp(length - 16, 16);
-      VELOX_CHECK_LE(data + copySize, bufferEnd_);
+      VELOX_CHECK_LE(copySize, bufferEnd_ - data - 16);
       simd::memcpy(rawStringBuffer_ + rawUsed + 16, data + 16, copySize);
     }
     rawUsed += length;
@@ -236,12 +341,12 @@ void SelectiveStringDirectColumnReader::extractSparse(
       });
 }
 
-template <bool hasNulls>
+template <bool kHasNulls>
 void SelectiveStringDirectColumnReader::skipInDecode(
     int32_t numValues,
     int32_t current,
     const uint64_t* nulls) {
-  if (hasNulls) {
+  if (kHasNulls) {
     numValues = bits::countNonNulls(nulls, current, current + numValues);
   }
   for (size_t i = lengthIndex_; i < lengthIndex_ + numValues; ++i) {
@@ -266,19 +371,19 @@ folly::StringPiece SelectiveStringDirectColumnReader::readValue(
   return folly::StringPiece(tempString_);
 }
 
-template <bool hasNulls, typename Visitor>
+template <bool kHasNulls, typename Visitor>
 void SelectiveStringDirectColumnReader::decode(
     const uint64_t* nulls,
     Visitor visitor) {
   int32_t current = visitor.start();
   bool atEnd = false;
-  bool allowNulls = hasNulls && visitor.allowNulls();
+  bool allowNulls = kHasNulls && visitor.allowNulls();
   for (;;) {
     int32_t toSkip;
-    if (hasNulls && allowNulls && bits::isBitNull(nulls, current)) {
+    if (kHasNulls && allowNulls && bits::isBitNull(nulls, current)) {
       toSkip = visitor.processNull(atEnd);
     } else {
-      if (hasNulls && !allowNulls) {
+      if (kHasNulls && !allowNulls) {
         toSkip = visitor.checkAndSkipNulls(nulls, current, atEnd);
         if (!Visitor::dense) {
           skipInDecode<false>(toSkip, current, nullptr);
@@ -301,7 +406,7 @@ void SelectiveStringDirectColumnReader::decode(
     }
     ++current;
     if (toSkip) {
-      skipInDecode<hasNulls>(toSkip, current, nulls);
+      skipInDecode<kHasNulls>(toSkip, current, nulls);
       current += toSkip;
     }
     if (atEnd) {
@@ -317,9 +422,7 @@ void SelectiveStringDirectColumnReader::readWithVisitor(
   int32_t current = visitor.start();
   constexpr bool isExtract =
       std::is_same_v<typename TVisitor::FilterType, common::AlwaysTrue> &&
-      std::is_same_v<
-          typename TVisitor::Extract,
-          dwio::common::ExtractToReader<SelectiveStringDirectColumnReader>>;
+      std::is_same_v<typename TVisitor::Extract, dwio::common::ExtractToReader>;
   auto nulls = nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
 
   if (process::hasAvx2() && isExtract) {
@@ -360,67 +463,11 @@ void SelectiveStringDirectColumnReader::readWithVisitor(
   }
 }
 
-template <typename TFilter, bool isDense, typename ExtractValues>
-void SelectiveStringDirectColumnReader::readHelper(
-    common::Filter* filter,
-    RowSet rows,
-    ExtractValues extractValues) {
-  readWithVisitor(
-      rows,
-      dwio::common::
-          ColumnVisitor<folly::StringPiece, TFilter, ExtractValues, isDense>(
-              *reinterpret_cast<TFilter*>(filter), this, rows, extractValues));
-}
-
-template <bool isDense, typename ExtractValues>
-void SelectiveStringDirectColumnReader::processFilter(
-    common::Filter* filter,
-    RowSet rows,
-    ExtractValues extractValues) {
-  switch (filter ? filter->kind() : common::FilterKind::kAlwaysTrue) {
-    case common::FilterKind::kAlwaysTrue:
-      readHelper<common::AlwaysTrue, isDense>(filter, rows, extractValues);
-      break;
-    case common::FilterKind::kIsNull:
-      filterNulls<StringView>(
-          rows,
-          true,
-          !std::is_same_v<decltype(extractValues), dwio::common::DropValues>);
-      break;
-    case common::FilterKind::kIsNotNull:
-      if (std::is_same_v<decltype(extractValues), dwio::common::DropValues>) {
-        filterNulls<StringView>(rows, false, false);
-      } else {
-        readHelper<common::IsNotNull, isDense>(filter, rows, extractValues);
-      }
-      break;
-    case common::FilterKind::kBytesRange:
-      readHelper<common::BytesRange, isDense>(filter, rows, extractValues);
-      break;
-    case common::FilterKind::kNegatedBytesRange:
-      readHelper<common::NegatedBytesRange, isDense>(
-          filter, rows, extractValues);
-      break;
-    case common::FilterKind::kBytesValues:
-      readHelper<common::BytesValues, isDense>(filter, rows, extractValues);
-      break;
-    case common::FilterKind::kNegatedBytesValues:
-      readHelper<common::NegatedBytesValues, isDense>(
-          filter, rows, extractValues);
-      break;
-    default:
-      readHelper<common::Filter, isDense>(filter, rows, extractValues);
-      break;
-  }
-}
-
 void SelectiveStringDirectColumnReader::read(
     vector_size_t offset,
     RowSet rows,
     const uint64_t* incomingNulls) {
   prepareRead<folly::StringPiece>(offset, rows, incomingNulls);
-  bool isDense = rows.back() == rows.size() - 1;
-
   auto numRows = rows.back() + 1;
   auto numNulls = nullsInReadRange_
       ? BaseVector::countNulls(nullsInReadRange_, 0, numRows)
@@ -431,38 +478,8 @@ void SelectiveStringDirectColumnReader::read(
       lengths_->asMutable<int32_t>(), numRows - numNulls);
   rawLengths_ = lengths_->as<uint32_t>();
   lengthIndex_ = 0;
-  if (scanSpec_->keepValues()) {
-    if (scanSpec_->valueHook()) {
-      if (isDense) {
-        readHelper<common::AlwaysTrue, true>(
-            &dwio::common::alwaysTrue(),
-            rows,
-            dwio::common::ExtractToGenericHook(scanSpec_->valueHook()));
-      } else {
-        readHelper<common::AlwaysTrue, false>(
-            &dwio::common::alwaysTrue(),
-            rows,
-            dwio::common::ExtractToGenericHook(scanSpec_->valueHook()));
-      }
-    } else {
-      if (isDense) {
-        processFilter<true>(
-            scanSpec_->filter(), rows, dwio::common::ExtractToReader(this));
-      } else {
-        processFilter<false>(
-            scanSpec_->filter(), rows, dwio::common::ExtractToReader(this));
-      }
-    }
-  } else {
-    if (isDense) {
-      processFilter<true>(
-          scanSpec_->filter(), rows, dwio::common::DropValues());
-    } else {
-      processFilter<false>(
-          scanSpec_->filter(), rows, dwio::common::DropValues());
-    }
-  }
-
+  dwio::common::StringColumnReadWithVisitorHelper<true>(
+      *this, rows)([&](auto visitor) { readWithVisitor(rows, visitor); });
   readOffset_ += numRows;
 }
 

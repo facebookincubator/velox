@@ -918,7 +918,8 @@ TEST(ByteRle, testSeek) {
   position.push_back(VELOX_ARRAY_SIZE(buffer));
   position.push_back(1);
   PositionProvider pp2{position};
-  EXPECT_THROW(rle->seekToRowGroup(pp2), exception::LoggedException);
+  rle->seekToRowGroup(pp2);
+  EXPECT_THROW(rle->next(data.data(), 1, nullptr), exception::LoggedException);
 }
 
 TEST(BooleanRle, simpleTest) {
@@ -1200,15 +1201,12 @@ TEST(BooleanRle, skipTestWithNulls) {
   std::unique_ptr<SeekableInputStream> stream(
       new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
-  std::vector<char> data;
-  // Buffers are expected to be writable in full words. Init a full
-  // word for valgrind, then resize to actually used size.
-  data.resize(bits::roundUp(3, 8));
+  raw_vector<char> data;
   data.resize(3);
   std::vector<uint64_t> someNull(1, ~0x0505050505050505);
   std::vector<uint64_t> allNull(1, bits::kNull64);
   for (size_t i = 0; i < 16384; i += 5) {
-    data.assign(data.size(), -1);
+    std::fill(data.begin(), data.end(), -1);
     rle->next(data.data(), data.size(), someNull.data());
     EXPECT_EQ(0, bits::isBitSet(data.data(), 0)) << "Output wrong at " << i;
     EXPECT_EQ(0, bits::isBitSet(data.data(), 2)) << "Output wrong at " << i;
@@ -1218,7 +1216,7 @@ TEST(BooleanRle, skipTestWithNulls) {
       rle->skip(4);
     }
     rle->skip(0);
-    data.assign(data.size(), -1);
+    std::fill(data.begin(), data.end(), -1);
     ;
     rle->next(data.data(), data.size(), allNull.data());
     for (size_t j = 0; j < data.size(); ++j) {
@@ -1502,17 +1500,25 @@ TEST(BooleanRle, seekTestWithNulls) {
       0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c,
       0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c, 0x71, 0xc7, 0x1c,
       0x71, 0xc7, 0x1c, 0x71};
-  std::unique_ptr<SeekableInputStream> stream(
-      new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer)));
-  std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
+  auto* stream = new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer));
+  auto rle = createBooleanDecoder(std::unique_ptr<SeekableInputStream>(stream));
+  ASSERT_EQ(stream->totalRead(), 0);
+  auto lastTotalReadBytes = stream->totalRead();
+  auto getNumReadBytes = [&] {
+    auto ans = stream->totalRead() - lastTotalReadBytes;
+    lastTotalReadBytes = stream->totalRead();
+    return ans;
+  };
   std::vector<char> data(NUM_VALUES);
   std::vector<uint64_t> allNull(256, bits::kNull64);
   std::vector<uint64_t> noNull(256, bits::kNotNull64);
   rle->next(data.data(), data.size(), allNull.data());
+  ASSERT_EQ(getNumReadBytes(), 0);
   for (size_t i = 0; i < data.size(); ++i) {
     EXPECT_EQ(0, bits::isBitSet(data.data(), i)) << "Output wrong at " << i;
   }
   rle->next(data.data(), data.size(), noNull.data());
+  ASSERT_EQ(getNumReadBytes(), VELOX_ARRAY_SIZE(buffer));
   for (size_t i = 0; i < data.size(); ++i) {
     EXPECT_EQ(i < 8192 ? i & 1 : (i / 3) & 1, bits::isBitSet(data.data(), i))
         << "Output wrong at " << i;
@@ -1537,12 +1543,15 @@ TEST(BooleanRle, seekTestWithNulls) {
     --i;
     PositionProvider location(positions[i]);
     rle->seekToRowGroup(location);
+    ASSERT_EQ(getNumReadBytes(), 0);
     char readByte;
     rle->next(&readByte, 1, noNull.data());
+    ASSERT_GT(getNumReadBytes(), 0);
     EXPECT_EQ(i < 8192 ? i & 1 : (i / 3) & 1, readByte & 1)
         << "Output wrong at " << i;
     bits::setBit(&readByte, 0, 1);
     rle->next(&readByte, 1, allNull.data());
+    ASSERT_EQ(getNumReadBytes(), 0);
     EXPECT_FALSE(bits::isBitSet(&readByte, 0)) << "Output wrong at " << i;
   } while (i != 0);
 }

@@ -88,6 +88,8 @@ class NthValueTest : public WindowTestBase {
         makeRandomInputVector(VARBINARY(), size, 0.7),
         makeRandomInputVector(TIMESTAMP(), size, 0.8),
         makeRandomInputVector(DATE(), size, 0.9),
+        makeRandomInputVector(DECIMAL(10, 2), size, 0.1),
+        makeRandomInputVector(DECIMAL(20, 5), size, 0.2),
     });
 
     const std::string overClause =
@@ -335,6 +337,32 @@ TEST_F(NthValueTest, ignoreNulls) {
   }
 }
 
+TEST_F(NthValueTest, frameStartsFromFollowing) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 2}),
+      makeFlatVector<bool>({false, false, false}),
+      makeFlatVector<int64_t>({1, 2, 3}),
+  });
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, std::nullopt, 2}),
+       makeFlatVector<bool>({false, false, false}),
+       makeFlatVector<int64_t>({1, 2, 3}),
+       makeNullableFlatVector<int64_t>({2, 2, std::nullopt})});
+
+  WindowTestBase::testWindowFunction(
+      {input},
+      "first_value(c0 IGNORE NULLS)",
+      "partition by c1 order by c2",
+      "rows between 1 following and unbounded following",
+      expected);
+  WindowTestBase::testWindowFunction(
+      {input},
+      "last_value(c0 IGNORE NULLS)",
+      "partition by c1 order by c2",
+      "rows between 1 following and unbounded following",
+      expected);
+}
+
 // These tests are added since DuckDB has issues with
 // CURRENT ROW frames. These tests will be replaced by DuckDB based
 // tests after it is upgraded to v0.8.
@@ -466,5 +494,5 @@ TEST_F(NthValueTest, ignoreNullsCurrentRow) {
       "range between current row and unbounded following");
 }
 
-}; // namespace
-}; // namespace facebook::velox::window::test
+} // namespace
+} // namespace facebook::velox::window::test

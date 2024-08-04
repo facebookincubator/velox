@@ -32,8 +32,13 @@
 #include "velox/common/time/Timer.h"
 #include "velox/experimental/wave/common/GpuArena.h"
 #include "velox/experimental/wave/common/tests/BlockTest.h"
+#include "velox/experimental/wave/common/tests/CpuTable.h"
+#include "velox/experimental/wave/common/tests/HashTestUtil.h"
+#include "velox/experimental/wave/common/tests/Util.h"
 
 #include <iostream>
+
+DEFINE_bool(list_kernels, false, "Lists kernel occupancy and registers");
 
 DEFINE_int32(num_streams, 0, "Number of paralll streams");
 DEFINE_int32(op_size, 0, "Size of invoke kernel (ints read and written)");
@@ -67,6 +72,15 @@ DEFINE_int64(
 DEFINE_string(mode, "all", "Mode for reduce test memory transfers.");
 
 DEFINE_bool(enable_bm, false, "Enable custom and long running tests");
+
+DEFINE_string(
+    roundtrip_ops,
+    "",
+    "Custom roundtrip composition, see comments in RoundtripThread");
+
+DEFINE_int32(gpu_repeats, 64, "Number of repeats for GPU round trips");
+DEFINE_int32(cpu_repeats, 32, "Number of repeats for CPU round trips");
+
 using namespace facebook::velox;
 using namespace facebook::velox::wave;
 
@@ -427,6 +441,565 @@ class ProcessDeviceCoalesced : public ProcessBatchBase {
   Semaphore syncSem_{0};
 };
 
+struct RoundtripStats {
+  // id of experiment.
+  int32_t id{0};
+  bool isCpu{false};
+  // Description of round trip.
+  std::string mode;
+  // Threads in experiment.
+  int32_t numThreads{0};
+  // Number of times a thread repeats the sequence given by 'mode'.
+  int64_t numOps{0};
+  // Number of additions in the ops
+  int64_t numAdds{0};
+
+  // Bytes transferred to device.
+  int64_t toDeviceBytes{0};
+
+  // Bytes copied to host.
+  int64_t toHostBytes{0};
+
+  int64_t startMicros{0};
+
+  int64_t endMicros{0};
+
+  // Wall time of experiment.
+  float micros{0};
+  void init(
+      int32_t _id,
+      bool _isCpu,
+      int32_t _numThreads,
+      std::string _mode,
+      int32_t repeats) {
+    id = _id;
+    isCpu = _isCpu;
+    numThreads = _numThreads;
+    mode = _mode;
+    numOps = repeats;
+  }
+
+  void add(RoundtripStats& other) {
+    startMicros = std::min(startMicros, other.startMicros);
+    endMicros = std::max(endMicros, other.endMicros);
+    toHostBytes += other.toHostBytes;
+    toDeviceBytes += other.toDeviceBytes;
+    numAdds += other.numAdds;
+  }
+
+  std::string toString() const {
+    return fmt::format(
+        "{}: rps={:.2f} gips={:.4f}  mode={} threads={} micros={} avgus={:.2f} toDev={:.2f} GB/s toHost={:.2f} GB/s",
+        id,
+        (numThreads * numOps) / (micros / 1000000.0),
+        numAdds / (micros * 1000.0),
+        mode,
+        numThreads,
+        micros,
+        micros / numOps,
+        toDeviceBytes / (micros * 1000.0),
+        toHostBytes / (micros * 1000.0));
+  }
+};
+
+// Checks a number for being prime. Returns 0 for prime and a factor for others.
+int64_t factor(int64_t n) {
+  int64_t end = sqrt(n);
+  for (int64_t f = 3; f < end; f += 2) {
+    if (n % f == 0) {
+      return f;
+    }
+  }
+  return 0;
+}
+
+/// Describes one thread of execution in round trip measurement. Each thread
+/// does a sequence of data transfers, kernel calls and synchronizations. The
+/// operations are described in a string of the form:
+///
+///  dnnn - Transfer nnn KB to device.
+/// hnnn - transfer nnn KB to host.
+/// annn,xxx - Increment nnn KB of ints in a kernel xxx times. Reads and writes
+/// nnn KB sequentially over up to 10K threads in 256 thread blocks rnnn,xxx -
+/// Increment nnn KB of int32 counters by a random increment fetched from a
+/// lookup table of nnn KB. This is done xxx times. Read and write sequential,
+/// read random in up to 10K lanes in blocks of 256. wnnn,xxx Same as 'a' but
+/// invokes the kernel wit a 8KB struct. Measures difference of sending a small
+/// parameter block as kernel parameter as opposed to pre-staging it on device
+/// with a small transfer. s - Synchronize the stream. e - Synchronize the
+/// stream with record event + wait event.
+class RoundtripThread {
+ public:
+  // Up to 64 MB of ints.
+  static constexpr int32_t kNumKB = 64 << 10;
+  static constexpr int32_t kNumInts = kNumKB * 256;
+
+  RoundtripThread(int32_t device, ArenaSet* arenas) : arenas_(arenas) {
+    device_ = getDevice(device);
+    setDevice(device_);
+    hostBuffer_ = arenas_->host->allocate<int32_t>(kNumInts);
+    deviceBuffer_ = arenas_->device->allocate<int32_t>(kNumInts);
+    lookupBuffer_ = arenas_->device->allocate<int32_t>(kNumInts);
+
+    stream_ = std::make_unique<TestStream>();
+    event_ = std::make_unique<Event>();
+    for (auto i = 0; i < kNumInts; ++i) {
+      hostBuffer_->as<int32_t>()[i] = i;
+    }
+    stream_->hostToDeviceAsync(
+        lookupBuffer_->as<int32_t>(),
+        hostBuffer_->as<int32_t>(),
+        kNumInts * sizeof(int32_t));
+    stream_->wait();
+    hostInts_ = std::make_unique<int32_t[]>(kNumInts);
+    hostLookup_ = std::make_unique<int32_t[]>(kNumInts);
+    memcpy(
+        hostLookup_.get(),
+        hostBuffer_->as<int32_t>(),
+        kNumInts * sizeof(int32_t));
+    serial_ = ++serialCounter_;
+  }
+
+  ~RoundtripThread() {
+    try {
+      stream_->wait();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Error in sync on ~RoundtripThread(): " << e.what();
+    }
+  }
+
+  enum class OpCode {
+    kToDevice,
+    kToHost,
+    kAdd,
+    kAddShared,
+    kAddReg,
+    kAddFunc,
+    kAddBranch,
+    kAddFuncStore,
+    kAddSwitch,
+    kAddRandom,
+    kAddRandomEmptyWarps,
+    kAddRandomEmptyThreads,
+    kWideAdd,
+    kAdd4x64,
+    kEnd,
+    kSync,
+    kSyncEvent
+  };
+
+  struct Op {
+    OpCode opCode;
+    Add64Mode add64Mode;
+    int32_t param1{1};
+    int32_t param2{0};
+    int32_t param3{0};
+    int32_t param4{0};
+    int32_t param5{0};
+  };
+
+  void run(RoundtripStats& stats) {
+    stats.startMicros = getCurrentTimeMicro();
+    for (auto counter = 0; counter < stats.numOps; ++counter) {
+      int32_t position = 0;
+      bool done = false;
+      for (;;) {
+        auto op = nextOp(stats.mode, position);
+        switch (op.opCode) {
+          case OpCode::kEnd:
+            done = true;
+            break;
+          case OpCode::kToDevice:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              memcpy(
+                  hostInts_.get(),
+                  hostBuffer_->as<int32_t>(),
+                  op.param1 * 1024);
+            } else {
+              stream_->hostToDeviceAsync(
+                  deviceBuffer_->as<int32_t>(),
+                  hostBuffer_->as<int32_t>(),
+                  op.param1 * 1024);
+            }
+            stats.toDeviceBytes += op.param1 * 1024;
+            break;
+          case OpCode::kToHost:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              memcpy(
+                  hostBuffer_->as<int32_t>(),
+                  hostInts_.get(),
+                  op.param1 * 1024);
+            } else {
+              stream_->deviceToHostAsync(
+                  hostBuffer_->as<int32_t>(),
+                  deviceBuffer_->as<int32_t>(),
+                  op.param1 * 1024);
+            }
+            stats.toHostBytes += op.param1 * 1024;
+            break;
+          case OpCode::kAdd:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneCpu(op.param1 * 256, op.param2);
+            } else {
+              stream_->addOne(
+                  deviceBuffer_->as<int32_t>(),
+                  op.param1 * 256,
+                  op.param2,
+                  op.param3);
+            }
+            stats.numAdds += op.param1 * op.param2 * 256;
+            break;
+          case OpCode::kAddShared:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneCpu(op.param1 * 256, op.param2);
+            } else {
+              stream_->addOneShared(
+                  deviceBuffer_->as<int32_t>(),
+                  op.param1 * 256,
+                  op.param2,
+                  op.param3);
+            }
+            stats.numAdds += op.param1 * op.param2 * 256;
+            break;
+          case OpCode::kAddReg:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneCpu(op.param1 * 256, op.param2);
+            } else {
+              stream_->addOneReg(
+                  deviceBuffer_->as<int32_t>(),
+                  op.param1 * 256,
+                  op.param2,
+                  op.param3);
+            }
+            stats.numAdds += op.param1 * op.param2 * 256;
+            break;
+          case OpCode::kAddFunc:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneCpu(op.param1 * 256, op.param2);
+            } else {
+              stream_->addOneFunc(
+                  deviceBuffer_->as<int32_t>(),
+                  op.param1 * 256,
+                  op.param2,
+                  op.param3);
+            }
+            stats.numAdds += op.param1 * op.param2 * 256;
+            break;
+
+          case OpCode::kAddFuncStore:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneCpu(op.param1 * 256, op.param2);
+            } else {
+              stream_->addOneFuncStore(
+                  deviceBuffer_->as<int32_t>(),
+                  op.param1 * 256,
+                  op.param2,
+                  op.param3);
+            }
+            stats.numAdds += op.param1 * op.param2 * 256;
+            break;
+
+          case OpCode::kAddSwitch:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneCpu(op.param1 * 256, op.param2);
+            } else {
+              stream_->addOneSwitch(
+                  deviceBuffer_->as<int32_t>(),
+                  op.param1 * 256,
+                  op.param2,
+                  op.param3);
+            }
+            stats.numAdds += op.param1 * op.param2 * 256;
+            break;
+
+          case OpCode::kAddBranch:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneCpu(op.param1 * 256, op.param2);
+            } else {
+              stream_->addOneBranch(
+                  deviceBuffer_->as<int32_t>(),
+                  op.param1 * 256,
+                  op.param2,
+                  op.param3);
+            }
+            stats.numAdds += op.param1 * op.param2 * 256;
+            break;
+
+          case OpCode::kAdd4x64:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneCpu64(op.param1 * 128, op.param2);
+            } else {
+              stream_->addOne4x64(
+                  deviceBuffer_->as<int64_t>(),
+                  op.param1 * 128,
+                  op.param2,
+                  op.param3,
+                  op.add64Mode);
+            }
+            stats.numAdds += op.param1 * op.param2 * 128;
+            break;
+
+          case OpCode::kWideAdd:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneCpu(op.param1 * 256, op.param2);
+            } else {
+              stream_->addOneWide(
+                  deviceBuffer_->as<int32_t>(), op.param1 * 256, op.param2);
+            }
+            stats.numAdds += op.param1 * op.param2 * 256;
+            break;
+
+          case OpCode::kAddRandom:
+          case OpCode::kAddRandomEmptyWarps:
+          case OpCode::kAddRandomEmptyThreads:
+            VELOX_CHECK_LE(op.param1, kNumKB);
+            if (stats.isCpu) {
+              addOneRandomCpu(op.param1 * 256, op.param2, op.param4, op.param5);
+            } else {
+              stream_->addOneRandom(
+                  deviceBuffer_->as<int32_t>(),
+                  lookupBuffer_->as<int32_t>(),
+                  op.param1 * 256,
+                  op.param2,
+                  op.param3,
+                  op.param4,
+                  op.param5,
+                  op.opCode == OpCode::kAddRandomEmptyWarps,
+                  op.opCode == OpCode::kAddRandomEmptyThreads);
+            }
+            stats.numAdds += op.param1 * op.param2 * 256;
+            break;
+
+          case OpCode::kSync:
+            if (!stats.isCpu) {
+              stream_->wait();
+            }
+            break;
+          case OpCode::kSyncEvent:
+            if (!stats.isCpu) {
+              event_->record(*stream_);
+              event_->wait();
+            }
+            break;
+          default:
+            VELOX_FAIL("Bad test opcode {}", static_cast<int32_t>(op.opCode));
+        }
+        if (done) {
+          break;
+        }
+      }
+    }
+    stats.endMicros = getCurrentTimeMicro();
+  }
+
+  FOLLY_NOINLINE void addOneCpu(int32_t size, int32_t repeat) {
+    int32_t* ints = hostInts_.get();
+    for (auto counter = 0; counter < repeat; ++counter) {
+      for (auto i = 0; i < size; ++i) {
+        ++ints[i];
+      }
+    }
+  }
+
+  FOLLY_NOINLINE void addOneRandomCpu(
+      uint32_t size,
+      int32_t repeat,
+      int32_t numLocal,
+      int32_t localStride) {
+    int32_t* ints = hostInts_.get();
+    int32_t* lookup = hostLookup_.get();
+    for (uint32_t counter = 0; counter < repeat; ++counter) {
+      for (auto i = 0; i < size; ++i) {
+        auto rnd = scale32(i * (counter + 1) * kPrime32, size);
+        auto sum = lookup[rnd];
+        auto limit =
+            std::min<int32_t>(rnd + localStride * (1 + numLocal), size);
+        for (auto j = rnd + localStride; j < limit; j += localStride) {
+          sum += lookup[j];
+        }
+        ints[i] += sum;
+      }
+    }
+  }
+
+  FOLLY_NOINLINE void addOneCpu64(int32_t size, int32_t repeat) {
+    int64_t* ints = reinterpret_cast<int64_t*>(hostInts_.get());
+    for (auto counter = 0; counter < repeat; ++counter) {
+      for (auto i = 0; i < size; ++i) {
+        ++ints[i];
+      }
+    }
+  }
+
+  Op nextOp(const std::string& str, int32_t& position) {
+    Op op;
+    for (;;) {
+      if (position >= str.size()) {
+        op.opCode = OpCode::kEnd;
+        return op;
+      }
+      switch (str[position]) {
+        case ' ':
+          ++position;
+          break;
+        case 'd':
+          op.opCode = OpCode::kToDevice;
+          ++position;
+          op.param1 = parseInt(str, position, 1);
+          return op;
+        case 'h':
+          op.opCode = OpCode::kToHost;
+          ++position;
+          op.param1 = parseInt(str, position, 1);
+          return op;
+        case 'a':
+          op.opCode = OpCode::kAdd;
+          ++position;
+          if (str[position] == 's') {
+            op.opCode = OpCode::kAddShared;
+            ++position;
+          } else if (str[position] == 'r') {
+            op.opCode = OpCode::kAddReg;
+            ++position;
+          } else if (str[position] == 'f') {
+            op.opCode = OpCode::kAddFunc;
+            ++position;
+          } else if (str[position] == 'F') {
+            op.opCode = OpCode::kAddFuncStore;
+            ++position;
+          } else if (str[position] == 'b') {
+            op.opCode = OpCode::kAddBranch;
+            ++position;
+          } else if (str[position] == 'w') {
+            op.opCode = OpCode::kAddSwitch;
+            ++position;
+          }
+          op.param1 = parseInt(str, position, 1);
+          op.param2 = parseInt(str, position, 1);
+          op.param3 = parseInt(str, position, 10240);
+          return op;
+
+        case 'A':
+          op.opCode = OpCode::kAdd4x64;
+          op.add64Mode = Add64Mode::k4Seq;
+          ++position;
+          if (str[position] == 's') {
+            op.add64Mode = Add64Mode::k4SMemFunc;
+            ++position;
+          } else if (str[position] == 'r') {
+            op.add64Mode = Add64Mode::k4Reg;
+            ++position;
+          } else if (str[position] == 'o') {
+            op.add64Mode = Add64Mode::k1Add;
+            ++position;
+          } else if (str[position] == 'O') {
+            op.add64Mode = Add64Mode::k4Add;
+            ++position;
+          } else if (str[position] == 'c') {
+            op.add64Mode = Add64Mode::k4Coa;
+            ++position;
+          } else if (str[position] == 'f') {
+            op.add64Mode = Add64Mode::k4Func;
+            ++position;
+          } else if (str[position] == 'F') {
+            op.add64Mode = Add64Mode::k1Func;
+            ++position;
+          } else if (str[position] == 'b') {
+            op.add64Mode = Add64Mode::k4Branch;
+            ++position;
+          }
+          op.param1 = parseInt(str, position, 1);
+          op.param2 = parseInt(str, position, 1);
+          op.param3 = parseInt(str, position, 10240);
+          return op;
+
+        case 'w':
+          op.opCode = OpCode::kWideAdd;
+          ++position;
+          op.param1 = parseInt(str, position, 1);
+          op.param2 = parseInt(str, position, 1);
+          return op;
+
+        case 'r':
+          ++position;
+          if (str[position] == 'w') {
+            op.opCode = OpCode::kAddRandomEmptyWarps;
+            ++position;
+          } else if (str[position] == 't') {
+            op.opCode = OpCode::kAddRandomEmptyThreads;
+            ++position;
+          } else {
+            op.opCode = OpCode::kAddRandom;
+          }
+          // Size of data to update and lookup array (KB).
+          op.param1 = parseInt(str, position, 1);
+          // Number of repeats.
+          op.param2 = parseInt(str, position, 1);
+          // target number of  threads in kernel.
+          op.param3 = parseInt(str, position, 10240);
+          // Number of nearby memory accesses
+          op.param4 = parseInt(str, position, 0);
+          // Stride of nearby memory accesses
+          op.param5 = parseInt(str, position, 0);
+          return op;
+
+        case 's':
+          op.opCode = OpCode::kSync;
+          ++position;
+          return op;
+        case 'e':
+          op.opCode = OpCode::kSyncEvent;
+          ++position;
+          return op;
+        default:
+          VELOX_FAIL("No opcode {}", str[position]);
+      }
+    }
+  }
+
+  int32_t parseInt(const std::string& str, int32_t& position, int32_t deflt) {
+    int32_t result = 0;
+    if (position >= str.size()) {
+      return deflt;
+    }
+    if (str[position] == ',') {
+      ++position;
+    } else if (!isdigit(str[position])) {
+      return deflt;
+    }
+    for (;;) {
+      result = 10 * result + str[position++] - '0';
+      if (position == str.size() || !isdigit(str[position])) {
+        break;
+      }
+    }
+    return result;
+  }
+
+  ArenaSet* const arenas_;
+  Device* device_{nullptr};
+  WaveBufferPtr deviceBuffer_;
+  WaveBufferPtr hostBuffer_;
+  WaveBufferPtr lookupBuffer_;
+  std::unique_ptr<int32_t[]> hostLookup_;
+  std::unique_ptr<int32_t[]> hostInts_;
+  std::unique_ptr<TestStream> stream_;
+  std::unique_ptr<Event> event_;
+  int32_t serial_{0};
+  static inline std::atomic<int32_t> serialCounter_{0};
+};
+
 class CudaTest : public testing::Test {
  protected:
   static constexpr int64_t kArenaQuantum = 512 << 20;
@@ -439,7 +1012,7 @@ class CudaTest : public testing::Test {
     hostAllocator_ = getHostAllocator(device_);
   }
 
-  void setupMemory(int64_t capacity = 16UL << 30) {
+  void setupMemory(int64_t capacity = 24UL << 30) {
     static bool inited = false;
     if (!globalSyncExecutor) {
       globalSyncExecutor = std::make_unique<folly::CPUThreadPoolExecutor>(10);
@@ -450,13 +1023,10 @@ class CudaTest : public testing::Test {
     }
     inited = true;
     memory::MemoryManagerOptions options;
-    options.capacity = capacity;
-    memory::MmapAllocator::Options opts{(uint64_t)options.capacity};
-    mmapAllocator_ = std::make_shared<memory::MmapAllocator>(opts);
-    memory::MemoryAllocator::setDefaultInstance(mmapAllocator_.get());
-
-    options.allocator = mmapAllocator_.get();
-    manager_ = &memory::MemoryManager::getInstance(options);
+    options.useMmapAllocator = true;
+    options.allocatorCapacity = capacity;
+    memory::MemoryManager::initialize(options);
+    manager_ = memory::memoryManager();
   }
 
   void waitFinish() {
@@ -520,7 +1090,7 @@ class CudaTest : public testing::Test {
         waitEach(streams, events);
       }
       for (auto i = 0; i < numStreams; ++i) {
-        streams[i]->addOne(ints[i], opSize);
+        streams[i]->incOne(ints[i], opSize);
         if (counter == 0 || counter >= firstNotify) {
           streams[i]->addCallback([&]() {
             auto d = getCurrentTimeMicro() - start;
@@ -611,7 +1181,7 @@ class CudaTest : public testing::Test {
   void createData(int32_t numBatches, int32_t numColumns, int32_t numRows) {
     batches_.clear();
     if (!batchPool_) {
-      batchPool_ = memory::addDefaultLeafMemoryPool();
+      batchPool_ = memory::memoryManager()->addLeafPool();
     }
     int32_t sequence = 1;
     for (auto i = 0; i < numBatches; ++i) {
@@ -736,6 +1306,58 @@ class CudaTest : public testing::Test {
     return gbs;
   }
 
+  void roundtripTest(
+      const std::string& title,
+      const std::vector<std::string>& modeValues,
+      bool isCpu,
+      int numOps = 10000) {
+    auto arenas = getArenas();
+    std::vector<RoundtripStats> allStats;
+    std::vector<int32_t> numThreadsValues = {1, 2, 4, 8, 16, 32};
+    int32_t ordinal = 0;
+    for (auto numThreads : numThreadsValues) {
+      std::vector<RoundtripStats> runStats;
+      for (auto& mode : modeValues) {
+        std::vector<std::thread> threads;
+        std::vector<std::unique_ptr<RoundtripThread>> runs;
+        threads.reserve(numThreads);
+        runs.reserve(numThreads);
+        std::vector<RoundtripStats> threadStats;
+        threadStats.resize(numThreads);
+
+        for (int32_t i = 0; i < numThreads; ++i) {
+          threadStats[i].init(++ordinal, isCpu, numThreads, mode, numOps);
+          runs.push_back(std::make_unique<RoundtripThread>(0, arenas.get()));
+        }
+        for (int32_t i = 0; i < numThreads; ++i) {
+          threads.push_back(std::thread(
+              [i, &runs, &threadStats]() { runs[i]->run(threadStats[i]); }));
+        }
+        for (auto i = 0; i < numThreads; ++i) {
+          threads[i].join();
+          if (i == 0) {
+            allStats.push_back(threadStats[i]);
+          } else {
+            allStats.back().add(threadStats[i]);
+          }
+        }
+        allStats.back().micros =
+            allStats.back().endMicros - allStats.back().startMicros;
+      }
+    }
+    std::sort(
+        allStats.begin(),
+        allStats.end(),
+        [](const RoundtripStats& left, const RoundtripStats& right) {
+          return left.numAdds / left.micros > right.numAdds / right.micros;
+        });
+    std::cout << std::endl << title << std::endl;
+    for (auto& stats : allStats) {
+      std::cout << stats.toString() << std::endl;
+    }
+    releaseArenas(std::move(arenas));
+  }
+
   std::unique_ptr<ArenaSet> getArenas() {
     {
       std::lock_guard<std::mutex> l(mutex_);
@@ -788,7 +1410,7 @@ TEST_F(CudaTest, stream) {
   stream.prefetch(nullptr, ints, opSize * sizeof(int32_t));
   stream.wait();
   for (auto i = 0; i < opSize; ++i) {
-    ASSERT_EQ(ints[i], i + 1);
+    ASSERT_EQ(ints[i], i + (i & 31));
   }
   allocator_->free(ints, sizeof(int32_t) * opSize);
 }
@@ -899,12 +1521,147 @@ TEST_F(CudaTest, reduceMatrix) {
   waitFinish();
 }
 
+TEST_F(CudaTest, roundtripMatrix) {
+  if (!FLAGS_roundtrip_ops.empty()) {
+    std::vector<std::string> modes = {FLAGS_roundtrip_ops};
+    roundtripTest(
+        fmt::format("{} GPU, {} repeats", modes[0], FLAGS_gpu_repeats),
+        modes,
+        false,
+        FLAGS_gpu_repeats);
+    roundtripTest(
+        fmt::format("{} CPU, {} repeats", modes[0], FLAGS_cpu_repeats),
+        modes,
+        true,
+        FLAGS_cpu_repeats);
+    return;
+  }
+  if (!FLAGS_enable_bm) {
+    return;
+  }
+  std::vector<std::string> syncModeValues = {
+      "dahs",
+      "dahe",
+      "dsashs",
+      "deaehe",
+      "whs",
+      "d10w10h1sw10h1sw10h1s",
+      "d10a10h1sd1a10h1sd1a10h1s"};
+  roundtripTest("Sync GPU", syncModeValues, false, 10000);
+  roundtripTest("Sync CPU", syncModeValues, true, 10000);
+
+  std::vector<std::string> seqModeValues = {
+      "d10h10h10s",
+      "d100a100h100s",
+      "d1000a1000h1000s",
+      "d1000a1000,10h1000s",
+      "d1000a1000,10h1sd1a1000,5h1s",
+      "d100a100,10h1s",
+      "d1000a1000,30h1sd1a1000,30h1s",
+      "d1000a1000,150h1sd1a1000,150h1s",
+  };
+  roundtripTest("Seq GPU", seqModeValues, false, 32);
+  roundtripTest("Seq CPU", seqModeValues, true, 16);
+
+  std::vector<std::string> randomModeValues = {
+      "d100r100,10h1s",
+      "d100r100,10r100,10h1s",
+      "d100r100,10r100,100h1s",
+      "d100r100,1000h1s",
+      "d1000r1000,10h1s",
+      "d1000r1000,100h1s",
+      "d10000r10000,10h1s",
+      "d30000r30000,50h1s"};
+  roundtripTest("Random GPU", randomModeValues, false, 16);
+  roundtripTest("Random CPU", randomModeValues, true, 8);
+
+  std::vector<std::string> widthModeValues = {
+      "d100r100,10,256h1s",
+      "d100r100,10,1024",
+      "d100r100,10,8192",
+      "d30000r30000,5,256h1s",
+      "d30000r30000,5,256h1s",
+      "d30000r30000,5,512h1s",
+      "d30000r30000,5,2048h1s",
+      "d30000r30000,5,10240h1s",
+      "d30000rw30000,5,10240h1s",
+      "d30000rt30000,5,10240h1s"};
+  roundtripTest("Random GPU, width and conditional", widthModeValues, false, 8);
+}
+
+TEST_F(CudaTest, addRandom) {
+  constexpr int32_t kNumInts = 16 << 20;
+  auto arenas = getArenas();
+  auto stream = std::make_unique<TestStream>();
+  auto indices = arenas->unified->allocate<int32_t>(kNumInts);
+  auto sourceBuffer = arenas->unified->allocate<int32_t>(kNumInts);
+  auto rawIndices = indices->as<int32_t>();
+  for (auto i = 0; i < kNumInts; ++i) {
+    rawIndices[i] = i + 1;
+  }
+  stream->prefetch(getDevice(), rawIndices, indices->capacity());
+  auto ints1 = arenas->unified->allocate<int32_t>(kNumInts);
+  auto rawInts1 = ints1->as<int32_t>();
+  auto ints2 = arenas->unified->allocate<int32_t>(kNumInts);
+  auto rawInts2 = ints2->as<int32_t>();
+  auto ints3 = arenas->unified->allocate<int32_t>(kNumInts);
+  auto rawInts3 = ints3->as<int32_t>();
+  memset(rawInts1, 0, kNumInts * sizeof(int32_t));
+  memset(rawInts2, 0, kNumInts * sizeof(int32_t));
+  memset(rawInts3, 0, kNumInts * sizeof(int32_t));
+  stream->prefetch(getDevice(), rawInts1, ints1->capacity());
+  stream->prefetch(getDevice(), rawInts2, ints2->capacity());
+  stream->prefetch(getDevice(), rawInts3, ints3->capacity());
+  // Let prefetch finish.
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  // warm up.
+  stream->addOneRandom(rawInts1, rawIndices, kNumInts, 20, 10240);
+  stream->addOneRandom(rawInts2, rawIndices, kNumInts, 20, 10240, true);
+  stream->addOneRandom(rawInts3, rawIndices, kNumInts, 20, 10240, false, true);
+  stream->wait();
+
+  uint64_t time1 = 0;
+  uint64_t time2 = 0;
+  uint64_t time3 = 0;
+  for (auto count = 0; count < 20; ++count) {
+    {
+      MicrosecondTimer t(&time1);
+      stream->addOneRandom(rawInts1, rawIndices, kNumInts, 20, 10240);
+      stream->wait();
+    }
+    {
+      MicrosecondTimer t(&time2);
+      stream->addOneRandom(rawInts2, rawIndices, kNumInts, 20, 10240, true);
+      stream->wait();
+    }
+    {
+      MicrosecondTimer t(&time3);
+      stream->addOneRandom(
+          rawInts3, rawIndices, kNumInts, 20, 10240, false, true);
+      stream->wait();
+    }
+  }
+  std::cout << fmt::format(
+                   "All {}, half warps {} half threads {}", time1, time2, time3)
+            << std::endl;
+
+  stream->prefetch(nullptr, rawInts1, ints1->capacity());
+  stream->prefetch(nullptr, rawInts2, ints2->capacity());
+  stream->prefetch(nullptr, rawInts3, ints3->capacity());
+
+  EXPECT_EQ(0, memcmp(rawInts1, rawInts2, kNumInts * sizeof(int32_t)));
+  EXPECT_EQ(0, memcmp(rawInts1, rawInts3, kNumInts * sizeof(int32_t)));
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
   if (int device; cudaGetDevice(&device) != cudaSuccess) {
     LOG(WARNING) << "No CUDA detected, skipping all tests";
     return 0;
+  }
+  if (FLAGS_list_kernels) {
+    printKernels();
   }
   return RUN_ALL_TESTS();
 }

@@ -9,7 +9,8 @@ make contributions to the project and community.
 
 ## Code of Conduct
 
-First and foremost, the Velox project and all its contributors and maintainers
+First and foremost, the Velox project and all its contributors and
+[maintainers]((https://velox-lib.io/docs/community/components-and-maintainers))
 are governed by a [Code of Conduct](CODE_OF_CONDUCT.md). When participating,
 you are expected to uphold this code.
 
@@ -20,6 +21,12 @@ conversations in GitHub [Issues](https://github.com/facebookincubator/velox/issu
 and [Discussions](https://github.com/facebookincubator/velox/discussions), and join the
 [the Velox-OSS Slack workspace](http://velox-oss.slack.com) - please reach out to 
 **velox@meta.com** to get access.
+
+## Components and Maintainers
+
+Velox is logically organized into components, each maintained by a group of
+individuals.  The list of components and their respective maintainers [can be
+found here](https://velox-lib.io/docs/community/components-and-maintainers).
 
 ## Documentation
 
@@ -166,7 +173,8 @@ Velox and the code review process. In addition to the general contribution
 guidelines presented above, here are specific guidelines for contributing
 functions:
 
-1. Read [How to add a scalar function?](https://facebookincubator.github.io/velox/develop/scalar-functions.html) guide.
+1. Read [How to add a scalar function?](https://facebookincubator.github.io/velox/develop/scalar-functions.html) guide. When implementing a function, simple function is preferred unless the implementation of vector function provides a significant performance gain which can be demonstrated
+with a benchmark.
 
 2. Use the following template for the PR title: Add xxx [Presto|Spark] function (replace xxx with the function name).
    * Ensure the PR description contains a link to the function documentation

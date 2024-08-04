@@ -48,7 +48,7 @@ struct EmptyApproxSetFunction {
 
   FOLLY_ALWAYS_INLINE bool call(out_type<HyperLogLog>& result) {
     static const std::string kEmpty =
-        common::hll::SparseHll::serializeEmpty(11);
+        common::hll::SparseHll::serializeEmpty(12);
 
     result.resize(kEmpty.size());
     memcpy(result.data(), kEmpty.data(), kEmpty.size());
@@ -62,6 +62,7 @@ struct EmptyApproxSetWithMaxErrorFunction {
   std::string serialized_;
 
   FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const double* maxStandardError) {
     VELOX_USER_CHECK_NOT_NULL(

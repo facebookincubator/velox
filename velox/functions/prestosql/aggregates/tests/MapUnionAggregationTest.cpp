@@ -15,7 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -278,20 +278,8 @@ TEST_F(MapUnionTest, unknownKeysAndValues) {
       makeMapVector<UnknownValue, UnknownValue>({{}, {}}),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"map_union(c1)"},
-      {expectedGlobalResult},
-      /*config*/ {},
-      /*testWithTableScan*/ false);
-  testAggregations(
-      {data},
-      {"c0"},
-      {"map_union(c1)"},
-      {expectedGroupByResult},
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+  testAggregations({data}, {}, {"map_union(c1)"}, {expectedGlobalResult});
+  testAggregations({data}, {"c0"}, {"map_union(c1)"}, {expectedGroupByResult});
 
   // map_union over non-empty map(T, unknown) where T is not unknown is allowed.
   data = makeRowVector({
@@ -329,20 +317,8 @@ TEST_F(MapUnionTest, unknownKeysAndValues) {
       }),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"map_union(c1)"},
-      {expectedGlobalResult},
-      /*config*/ {},
-      /*testWithTableScan*/ false);
-  testAggregations(
-      {data},
-      {"c0"},
-      {"map_union(c1)"},
-      {expectedGroupByResult},
-      /*config*/ {},
-      /*testWithTableScan*/ false);
+  testAggregations({data}, {}, {"map_union(c1)"}, {expectedGlobalResult});
+  testAggregations({data}, {"c0"}, {"map_union(c1)"}, {expectedGroupByResult});
 
   // map_union over non-emtpy map(unknown, T) is not allowed.
   data = makeRowVector({
@@ -367,6 +343,78 @@ TEST_F(MapUnionTest, unknownKeysAndValues) {
              .planNode();
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()), "map key cannot be null");
+}
+
+TEST_F(MapUnionTest, nans) {
+  // Verify that NaNs with different binary representations are considered equal
+  // and deduplicated when used as keys in the output map.
+  static const auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+
+  // Global Aggregation, Primitive type
+  auto data = makeRowVector(
+      {makeMapVectorFromJson<double, int32_t>(
+           {"{1: 1}", "{2: 2}", "{NaN: 4}", "{3: 3}", "{NaN: 5}", "{NaN: 6}"}),
+       makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2})});
+
+  auto expectedResult = makeRowVector({
+      makeMapVectorFromJson<double, int32_t>({
+          "{ 1: 1, 2: 2, 3: 3, NaN: 4}",
+      }),
+  });
+
+  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+
+  // Group by Aggregation, Primitive type
+  expectedResult = makeRowVector(
+      {makeMapVectorFromJson<double, int32_t>(
+           {"{ 1: 1, 2: 2, NaN: 4}", "{ 3: 3, NaN: 5}"}),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
+
+  // Global Aggregation, Complex type(Row)
+  // The complex input values are:
+  // [{"key":[1,1],"value":1},{"key":["NaN",2],"value":2},{"key":[2,4],"value":3},{"key":[3,5],"value":4},
+  // {"key":["NaN",2],"value":5}, {"key":["NaN",2],"value":5}]
+  data = makeRowVector(
+      {makeMapVector(
+           {0, 1, 2, 3, 4, 5},
+           makeRowVector(
+               {makeFlatVector<double>({1, kSNaN, 2, 3, kNaN, kSNaN}),
+                makeFlatVector<int32_t>({1, 2, 4, 5, 2, 2})}),
+           makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6})),
+       makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2})});
+
+  // The expected result is
+  // [{"key":[1,1],"value":1},{"key":[2,4],"value":3},{"key":[3,5],"value":4},
+  // {"key":["NaN",2],"value":2}]
+  expectedResult = makeRowVector({makeMapVector(
+      {0},
+      makeRowVector(
+          {makeFlatVector<double>({1, 2, 3, kNaN}),
+           makeFlatVector<int32_t>({1, 4, 5, 2})}),
+      makeFlatVector<int32_t>({1, 3, 4, 2}))});
+
+  testAggregations({data}, {}, {"map_union(c0)"}, {expectedResult});
+
+  // Group by Aggregation, Complex type(Row)
+  // The expected result is
+  // [{"key":[1,1],"value":1},{"key":[2,4],"value":3},
+  //  {"key":["NaN",2],"value":2}] | 1
+  // [{"key":[3,5],"value":4},{"key":["NaN",2],"value":5}] | 2
+  expectedResult = makeRowVector(
+      {makeMapVector(
+           {0, 3},
+           makeRowVector(
+               {makeFlatVector<double>({1, 2, kNaN, 3, kNaN}),
+                makeFlatVector<int32_t>({1, 4, 2, 5, 2})}),
+           makeFlatVector<int32_t>({1, 3, 2, 4, 5})),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c1"}, {"map_union(c0)"}, {"a0", "c1"}, {expectedResult});
 }
 
 } // namespace

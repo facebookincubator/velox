@@ -21,6 +21,9 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+
 // Meta's buck build system needs this check.
 #ifdef VELOX_ENABLE_GCS
 #include "velox/connectors/hive/storage_adapters/gcs/RegisterGCSFileSystem.h" // @manual
@@ -31,8 +34,12 @@
 #ifdef VELOX_ENABLE_S3
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h" // @manual
 #endif
+#ifdef VELOX_ENABLE_ABFS
+#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h" // @manual
+#endif
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/orc/reader/OrcReader.h"
 // Meta's buck build system needs this check.
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
@@ -48,24 +55,27 @@ using namespace facebook::velox::dwrf;
 
 namespace facebook::velox::connector::hive {
 
-int32_t numCachedFileHandles(const Config* properties) {
-  return properties ? HiveConfig::numCacheFileHandles(properties) : 20'000;
-}
-
 HiveConnector::HiveConnector(
     const std::string& id,
-    std::shared_ptr<const Config> properties,
-    folly::Executor* FOLLY_NULLABLE executor)
-    : Connector(id, properties),
+    std::shared_ptr<const Config> config,
+    folly::Executor* executor)
+    : Connector(id),
+      hiveConfig_(std::make_shared<HiveConfig>(config)),
       fileHandleFactory_(
-          std::make_unique<
-              SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(
-              numCachedFileHandles(properties.get())),
-          std::make_unique<FileHandleGenerator>(properties)),
+          hiveConfig_->isFileHandleCacheEnabled()
+              ? std::make_unique<SimpleLRUCache<std::string, FileHandle>>(
+                    hiveConfig_->numCacheFileHandles())
+              : nullptr,
+          std::make_unique<FileHandleGenerator>(config)),
       executor_(executor) {
-  LOG(INFO) << "Hive connector " << connectorId() << " created with maximum of "
-            << numCachedFileHandles(properties.get())
-            << " cached file handles.";
+  if (hiveConfig_->isFileHandleCacheEnabled()) {
+    LOG(INFO) << "Hive connector " << connectorId()
+              << " created with maximum of "
+              << hiveConfig_->numCacheFileHandles() << " cached file handles.";
+  } else {
+    LOG(INFO) << "Hive connector " << connectorId()
+              << " created with file handle cache disabled";
+  }
 }
 
 std::unique_ptr<DataSource> HiveConnector::createDataSource(
@@ -75,27 +85,14 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
-  options.setMaxCoalesceBytes(
-      HiveConfig::maxCoalescedBytes(connectorQueryCtx->config()));
-  options.setMaxCoalesceDistance(
-      HiveConfig::maxCoalescedDistanceBytes(connectorQueryCtx->config()));
-  options.setFileColumnNamesReadAsLowerCase(
-      HiveConfig::isFileColumnNamesReadAsLowerCase(
-          connectorQueryCtx->config()));
-  options.setUseColumnNamesForColumnMapping(
-      HiveConfig::isOrcUseColumnNames(connectorQueryCtx->config()));
-
   return std::make_unique<HiveDataSource>(
       outputType,
       tableHandle,
       columnHandles,
       &fileHandleFactory_,
-      connectorQueryCtx->expressionEvaluator(),
-      connectorQueryCtx->cache(),
-      connectorQueryCtx->scanId(),
       executor_,
-      options);
+      connectorQueryCtx,
+      hiveConfig_);
 }
 
 std::unique_ptr<DataSink> HiveConnector::createDataSink(
@@ -112,7 +109,7 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
       hiveInsertHandle,
       connectorQueryCtx,
       commitStrategy,
-      connectorProperties());
+      hiveConfig_);
 }
 
 std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
@@ -136,10 +133,11 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
 }
 
 void HiveConnectorFactory::initialize() {
-  static bool once = []() {
+  [[maybe_unused]] static bool once = []() {
     dwio::common::registerFileSinks();
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
+    orc::registerOrcReaderFactory();
 // Meta's buck build system needs this check.
 #ifdef VELOX_ENABLE_PARQUET
     parquet::registerParquetReaderFactory();
@@ -154,6 +152,9 @@ void HiveConnectorFactory::initialize() {
 #endif
 #ifdef VELOX_ENABLE_GCS
     filesystems::registerGCSFileSystem();
+#endif
+#ifdef VELOX_ENABLE_ABFS
+    filesystems::abfs::registerAbfsFileSystem();
 #endif
     return true;
   }();

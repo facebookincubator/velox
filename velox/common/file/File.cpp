@@ -61,17 +61,21 @@ uint64_t ReadFile::preadv(
   return numRead;
 }
 
-void ReadFile::preadv(
+uint64_t ReadFile::preadv(
     folly::Range<const common::Region*> regions,
     folly::Range<folly::IOBuf*> iobufs) const {
   VELOX_CHECK_EQ(regions.size(), iobufs.size());
+  uint64_t length = 0;
   for (size_t i = 0; i < regions.size(); ++i) {
     const auto& region = regions[i];
     auto& output = iobufs[i];
     output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
     pread(region.offset, region.length, output.writableData());
     output.append(region.length);
+    length += region.length;
   }
+
+  return length;
 }
 
 std::string_view
@@ -90,19 +94,30 @@ void InMemoryWriteFile::append(std::string_view data) {
   file_->append(data);
 }
 
+void InMemoryWriteFile::append(std::unique_ptr<folly::IOBuf> data) {
+  for (auto rangeIter = data->begin(); rangeIter != data->end(); ++rangeIter) {
+    file_->append(
+        reinterpret_cast<const char*>(rangeIter->data()), rangeIter->size());
+  }
+}
+
 uint64_t InMemoryWriteFile::size() const {
   return file_->size();
 }
 
 LocalReadFile::LocalReadFile(std::string_view path) : path_(path) {
   fd_ = open(path_.c_str(), O_RDONLY);
-  VELOX_CHECK_GE(
-      fd_,
-      0,
-      "open failure in LocalReadFile constructor, {} {} {}.",
-      fd_,
-      path,
-      folly::errnoStr(errno));
+  if (fd_ < 0) {
+    if (errno == ENOENT) {
+      VELOX_FILE_NOT_FOUND_ERROR("No such file or directory: {}", path);
+    } else {
+      VELOX_FAIL(
+          "open failure in LocalReadFile constructor, {} {} {}.",
+          fd_,
+          path,
+          folly::errnoStr(errno));
+    }
+  }
   const off_t rc = lseek(fd_, 0, SEEK_END);
   VELOX_CHECK_GE(
       rc,
@@ -227,14 +242,12 @@ LocalWriteFile::LocalWriteFile(
   {
     if (shouldThrowOnFileAlreadyExists) {
       FILE* exists = fopen(buf.get(), "rb");
-      VELOX_CHECK(
-          !exists,
-          "Failure in LocalWriteFile: path '{}' already exists.",
-          path);
+      VELOX_CHECK_NULL(
+          exists, "Failure in LocalWriteFile: path '{}' already exists.", path);
     }
   }
-  auto file = fopen(buf.get(), "ab");
-  VELOX_CHECK(
+  auto* file = fopen(buf.get(), "ab");
+  VELOX_CHECK_NOT_NULL(
       file,
       "fopen failure in LocalWriteFile constructor, {} {}.",
       path,
@@ -254,13 +267,41 @@ LocalWriteFile::~LocalWriteFile() {
 
 void LocalWriteFile::append(std::string_view data) {
   VELOX_CHECK(!closed_, "file is closed");
-  const uint64_t bytes_written = fwrite(data.data(), 1, data.size(), file_);
+  const uint64_t bytesWritten = fwrite(data.data(), 1, data.size(), file_);
   VELOX_CHECK_EQ(
-      bytes_written,
+      bytesWritten,
       data.size(),
-      "fwrite failure in LocalWriteFile::append, {} vs {}.",
-      bytes_written,
-      data.size());
+      "fwrite failure in LocalWriteFile::append, {} vs {}: {}",
+      bytesWritten,
+      data.size(),
+      folly::errnoStr(errno));
+  size_ += bytesWritten;
+}
+
+void LocalWriteFile::append(std::unique_ptr<folly::IOBuf> data) {
+  VELOX_CHECK(!closed_, "file is closed");
+  uint64_t totalBytesWritten{0};
+  for (auto rangeIter = data->begin(); rangeIter != data->end(); ++rangeIter) {
+    const auto bytesToWrite = rangeIter->size();
+    const auto bytesWritten =
+        fwrite(rangeIter->data(), 1, rangeIter->size(), file_);
+    totalBytesWritten += bytesWritten;
+    if (bytesWritten != bytesToWrite) {
+      VELOX_FAIL(
+          "fwrite failure in LocalWriteFile::append, {} vs {}: {}",
+          bytesWritten,
+          bytesToWrite,
+          folly::errnoStr(errno));
+    }
+  }
+  const auto totalBytesToWrite = data->computeChainDataLength();
+  VELOX_CHECK_EQ(
+      totalBytesWritten,
+      totalBytesToWrite,
+      "Failure in LocalWriteFile::append, {} vs {}",
+      totalBytesWritten,
+      totalBytesToWrite);
+  size_ += totalBytesWritten;
 }
 
 void LocalWriteFile::flush() {
@@ -285,7 +326,4 @@ void LocalWriteFile::close() {
   }
 }
 
-uint64_t LocalWriteFile::size() const {
-  return ftell(file_);
-}
 } // namespace facebook::velox

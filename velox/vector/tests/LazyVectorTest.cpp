@@ -22,7 +22,12 @@
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class LazyVectorTest : public testing::Test, public VectorTestBase {};
+class LazyVectorTest : public testing::Test, public VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
 
 TEST_F(LazyVectorTest, lazyInDictionary) {
   // We have a dictionary over LazyVector. We load for some indices in
@@ -59,10 +64,7 @@ TEST_F(LazyVectorTest, lazyInDictionary) {
   rows.updateBounds();
   LazyVector::ensureLoadedRows(wrapped, rows);
   EXPECT_EQ(wrapped->encoding(), VectorEncoding::Simple::DICTIONARY);
-  EXPECT_EQ(wrapped->valueVector()->encoding(), VectorEncoding::Simple::LAZY);
-  EXPECT_EQ(
-      wrapped->valueVector()->loadedVector()->encoding(),
-      VectorEncoding::Simple::FLAT);
+  EXPECT_EQ(wrapped->valueVector()->encoding(), VectorEncoding::Simple::FLAT);
 
   EXPECT_EQ(loadedRows, (std::vector<vector_size_t>{0, 5}));
   assertCopyableVector(wrapped);
@@ -604,4 +606,42 @@ TEST_F(LazyVectorTest, lazyWithDictionaryInConstant) {
   for (int i = 0; i < kOuterSize; i++) {
     EXPECT_EQ(constant->as<SimpleVector<int32_t>>()->valueAt(i), 7);
   }
+}
+
+TEST_F(LazyVectorTest, reset) {
+  static constexpr int32_t kVectorSize = 10;
+  auto loader = [&](RowSet rows) {
+    return makeFlatVector<int32_t>(
+        rows.back() + 1, [](auto row) { return row; });
+  };
+  LazyVector lazy(
+      pool_.get(),
+      INTEGER(),
+      kVectorSize,
+      std::make_unique<test::SimpleVectorLoader>(loader));
+  lazy.setNull(0, true);
+  lazy.reset(std::make_unique<test::SimpleVectorLoader>(loader), kVectorSize);
+  ASSERT_EQ(lazy.nulls(), nullptr);
+}
+
+TEST_F(LazyVectorTest, runtimeStats) {
+  TestRuntimeStatWriter writer;
+  RuntimeStatWriterScopeGuard guard(&writer);
+  auto lazy = std::make_shared<LazyVector>(
+      pool_.get(),
+      INTEGER(),
+      10,
+      std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
+        return makeFlatVector<int32_t>(rows.back() + 1, folly::identity);
+      }));
+  ASSERT_EQ(lazy->loadedVector()->size(), 10);
+  auto stats = writer.stats();
+  std::sort(stats.begin(), stats.end(), [](auto& x, auto& y) {
+    return x.first < y.first;
+  });
+  ASSERT_EQ(stats.size(), 2);
+  ASSERT_EQ(stats[0].first, LazyVector::kCpuNanos);
+  ASSERT_GE(stats[0].second.value, 0);
+  ASSERT_EQ(stats[1].first, LazyVector::kWallNanos);
+  ASSERT_GE(stats[1].second.value, 0);
 }

@@ -15,7 +15,8 @@
  */
 
 #include "velox/common/base/Portability.h"
-#include "velox/dwio/common/tests/E2EFilterTestBase.h"
+#include "velox/common/testutil/TestValue.h"
+#include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -78,21 +79,22 @@ class E2EFilterTest : public E2EFilterTestBase {
         200 * 1024 * 1024,
         dwio::common::FileSink::Options{.pool = leafPool_.get()});
     ASSERT_TRUE(sink->isBuffered());
-    sinkPtr_ = sink.get();
+    auto* sinkPtr = sink.get();
     options.memoryPool = rootPool_.get();
     writer_ = std::make_unique<dwrf::Writer>(std::move(sink), options);
     for (auto& batch : batches) {
       writer_->write(batch);
     }
     writer_->close();
+    sinkData_ = std::string_view(sinkPtr->data(), sinkPtr->size());
   }
 
   void setUpRowReaderOptions(
       dwio::common::RowReaderOptions& opts,
       const std::shared_ptr<ScanSpec>& spec) override {
     E2EFilterTestBase::setUpRowReaderOptions(opts, spec);
-    if (!flatmapNodeIdsAsStruct_.empty()) {
-      opts.setFlatmapNodeIdsAsStruct(flatmapNodeIdsAsStruct_);
+    for (auto& field : flatMapAsStructFields_) {
+      spec->childByName(field)->setFlatMapAsStruct(true);
     }
   }
 
@@ -125,6 +127,7 @@ class E2EFilterTest : public E2EFilterTestBase {
           mapFlatColsStructKeys.back().push_back(name);
         }
         columnTypes[i] = MAP(VARCHAR(), columnTypes[i]->childAt(0));
+        flatMapAsStructFields_.push_back(rowType.nameOf(i));
       }
       writerSchema = ROW(
           std::vector<std::string>(rowType.names()), std::move(columnTypes));
@@ -135,10 +138,6 @@ class E2EFilterTest : public E2EFilterTestBase {
         }
         auto& child = schemaWithId->childAt(i);
         mapFlatCols.push_back(child->column());
-        if (!rowType.childAt(i)->isRow()) {
-          continue;
-        }
-        flatmapNodeIdsAsStruct_[child->id()] = mapFlatColsStructKeys[i];
       }
       config->set(dwrf::Config::FLATTEN_MAP, true);
       config->set(dwrf::Config::MAP_FLAT_DISABLE_DICT_ENCODING, false);
@@ -156,8 +155,7 @@ class E2EFilterTest : public E2EFilterTestBase {
   }
 
   std::unique_ptr<dwrf::Writer> writer_;
-  std::unordered_map<uint32_t, std::vector<std::string>>
-      flatmapNodeIdsAsStruct_;
+  std::vector<std::string> flatMapAsStructFields_;
 };
 
 TEST_F(E2EFilterTest, integerDirect) {
@@ -244,6 +242,14 @@ TEST_F(E2EFilterTest, floatAndDouble) {
 }
 
 TEST_F(E2EFilterTest, stringDirect) {
+  testutil::TestValue::enable();
+  bool coverage[2][2]{};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::dwrf::SelectiveStringDirectColumnReader::try8ConsecutiveSmall",
+      std::function<void(bool*)>([&](bool* params) {
+        coverage[0][params[0]] = true;
+        coverage[1][params[1]] = true;
+      }));
   flushEveryNBatches_ = 1;
   testWithTypes(
       "string_val:string,"
@@ -252,11 +258,16 @@ TEST_F(E2EFilterTest, stringDirect) {
         makeStringUnique("string_val");
         makeStringUnique("string_val_2");
       },
-
       true,
       {"string_val", "string_val_2"},
       20,
       true);
+#ifndef NDEBUG
+  ASSERT_TRUE(coverage[0][0]);
+  ASSERT_TRUE(coverage[0][1]);
+  ASSERT_TRUE(coverage[1][0]);
+  ASSERT_TRUE(coverage[1][1]);
+#endif
 }
 
 TEST_F(E2EFilterTest, stringDictionary) {
@@ -373,8 +384,7 @@ TEST_F(E2EFilterTest, flatMapAsStruct) {
       "long_vals:struct<v1:bigint,v2:bigint,v3:bigint>,"
       "struct_vals:struct<nested1:struct<v1:bigint, v2:float>,nested2:struct<v1:bigint, v2:float>>";
   flatMapColumns_ = {"long_vals", "struct_vals"};
-  testWithTypes(
-      kColumns, [] {}, false, {"long_val"}, 10, true);
+  testWithTypes(kColumns, [] {}, false, {"long_val"}, 10, true);
 }
 
 TEST_F(E2EFilterTest, flatMapScalar) {
@@ -439,6 +449,6 @@ TEST_F(E2EFilterTest, mutationCornerCases) {
 // Define main so that gflags get processed.
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::init(&argc, &argv, false);
+  folly::Init init{&argc, &argv, false};
   return RUN_ALL_TESTS();
 }

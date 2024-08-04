@@ -22,6 +22,9 @@ namespace facebook::velox {
 
 namespace exec {
 class EvalCtx;
+class EvalErrors;
+
+using EvalErrorsPtr = std::shared_ptr<EvalErrors>;
 } // namespace exec
 
 // Represents a function with possible captures.
@@ -67,7 +70,7 @@ class Callable {
       const BufferPtr& wrapCapture,
       exec::EvalCtx* context,
       const std::vector<VectorPtr>& args,
-      ErrorVectorPtr& elementErrors,
+      exec::EvalErrorsPtr& elementErrors,
       VectorPtr* result) = 0;
 };
 
@@ -191,6 +194,11 @@ class FunctionVector : public BaseVector {
 
   VectorPtr slice(vector_size_t, vector_size_t) const override {
     VELOX_NYI();
+  }
+
+  VectorPtr copyPreserveEncodings(
+      velox::memory::MemoryPool* /* pool */ = nullptr) const override {
+    VELOX_UNSUPPORTED("copyPreserveEncodings not defined for FunctionVector");
   }
 
  private:

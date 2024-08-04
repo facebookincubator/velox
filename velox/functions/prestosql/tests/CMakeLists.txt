@@ -24,27 +24,31 @@ add_executable(
   ArrayConcatTest.cpp
   ArrayConstructorTest.cpp
   ArrayContainsTest.cpp
+  ArrayCumSumTest.cpp
   ArrayDistinctTest.cpp
   ArrayDuplicatesTest.cpp
   ArrayExceptTest.cpp
   ArrayFilterTest.cpp
+  ArrayFrequencyTest.cpp
   ArrayFlattenTest.cpp
-  ArrayJoinTest.cpp
   ArrayHasDuplicatesTest.cpp
   ArrayIntersectTest.cpp
+  ArrayJoinTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  ArrayNGramsTest.cpp
   ArrayNoneMatchTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
-  ArrayRemoveTest.cpp
   ArrayRemoveNullsTest.cpp
-  ArraySortTest.cpp
+  ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
+  ArraySortTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
   ArrayTrimTest.cpp
   ArrayUnionTest.cpp
+  ArgGeneratorTest.cpp
   BinaryFunctionsTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
@@ -53,8 +57,10 @@ add_executable(
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
   ElementAtTest.cpp
+  FailTest.cpp
   FindFirstTest.cpp
   FromUtf8Test.cpp
+  GreatestLeastTest.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
   InPredicateTest.cpp
@@ -64,34 +70,39 @@ add_executable(
   MapEntriesTest.cpp
   MapFilterTest.cpp
   MapFromEntriesTest.cpp
+  MapNormalizeTest.cpp
+  MapTopNTest.cpp
+  MapTopNKeysTest.cpp
   MapKeysAndValuesTest.cpp
   MapMatchTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp
+  MultimapFromEntriesTest.cpp
   NotTest.cpp
   ProbabilityTest.cpp
   RandTest.cpp
   ReduceTest.cpp
   RegexpReplaceTest.cpp
-  RepeatTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
   ScalarFunctionRegTest.cpp
+  SequenceTest.cpp
   SimpleComparisonMatcherTest.cpp
   SliceTest.cpp
-  SequenceTest.cpp
   SplitTest.cpp
   SplitToMapTest.cpp
   StringFunctionsTest.cpp
   TimestampWithTimeZoneCastTest.cpp
-  TransformTest.cpp
   TransformKeysTest.cpp
+  TransformTest.cpp
   TransformValuesTest.cpp
   TrimFunctionsTest.cpp
+  TypeOfTest.cpp
   URLFunctionsTest.cpp
   Utf8Test.cpp
+  UuidFunctionsTest.cpp
   WidthBucketArrayTest.cpp
-  GreatestLeastTest.cpp
+  WordStemTest.cpp
   ZipTest.cpp
   ZipWithTest.cpp)
 
@@ -107,6 +118,8 @@ target_link_libraries(
   velox_exec_test_lib
   velox_dwio_common_test_utils
   velox_vector_fuzzer
+  velox_expression_fuzzer_test_utility
+  velox_expression_fuzzer
   gtest
   gtest_main
   gflags::gflags

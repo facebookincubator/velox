@@ -18,6 +18,8 @@
 
 #include <stdint.h>
 
+using facebook::velox::test::assertEqualVectors;
+
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
@@ -26,6 +28,42 @@ class HashTest : public SparkFunctionBaseTest {
   template <typename T>
   std::optional<int32_t> hash(std::optional<T> arg) {
     return evaluateOnce<int32_t>("hash(c0)", arg);
+  }
+
+  VectorPtr hash(VectorPtr vector) {
+    return evaluate("hash(c0)", makeRowVector({vector}));
+  }
+
+  template <typename T>
+  void runSIMDHashAndAssert(
+      const T value,
+      const int32_t expectedResult,
+      const int32_t size,
+      int unSelectedRows = 0) {
+    // Generate 'size' flat vector to test SIMD code path.
+    // We use same value in the vector to make comparing the results easier.
+    std::vector<int32_t> resultData;
+    resultData.reserve(size);
+    for (auto i = 0; i < size; ++i) {
+      resultData.emplace_back(expectedResult);
+    }
+    VectorPtr input;
+    if constexpr (std::is_same_v<T, UnknownValue>) {
+      input = makeAllNullFlatVector<T>(size);
+    } else {
+      std::vector<T> inputData;
+      inputData.reserve(size);
+      for (auto i = 0; i < size; ++i) {
+        inputData.emplace_back(value);
+      }
+      input = makeFlatVector<T>(inputData);
+    }
+    SelectivityVector rows(size);
+    rows.setValidRange(0, unSelectedRows, false);
+    auto result =
+        evaluate<SimpleVector<int32_t>>("hash(c0)", makeRowVector({input}));
+    velox::test::assertEqualVectors(
+        makeFlatVector<int32_t>(resultData), result, rows);
   }
 };
 
@@ -126,6 +164,143 @@ TEST_F(HashTest, Float) {
   EXPECT_EQ(hash<float>(limits::quiet_NaN()), -349261430);
   EXPECT_EQ(hash<float>(limits::infinity()), 2026854605);
   EXPECT_EQ(hash<float>(-limits::infinity()), 427440766);
+}
+
+TEST_F(HashTest, array) {
+  assertEqualVectors(
+      makeFlatVector<int32_t>({2101165938, 42, 1045631400}),
+      hash(makeArrayVector<int64_t>({{1, 2, 3, 4, 5}, {}, {1, 2, 3}})));
+
+  assertEqualVectors(
+      makeFlatVector<int32_t>({-559580957, 1765031574, 42}),
+      hash(makeNullableArrayVector<int32_t>(
+          {{1, std::nullopt}, {std::nullopt, 2}, {std::nullopt}})));
+
+  // Nested array.
+  {
+    auto arrayVector = makeNestedArrayVectorFromJson<int64_t>(
+        {"[[1, null, 2, 3], [4, 5]]",
+         "[[1, null, 2, 3], [6, 7, 8]]",
+         "[[]]",
+         "[[null]]",
+         "[null]"});
+    assertEqualVectors(
+        makeFlatVector<int32_t>({2101165938, -992561130, 42, 42, 42}),
+        hash(arrayVector));
+  }
+
+  // Array of map.
+  {
+    using S = StringView;
+    using P = std::pair<int64_t, std::optional<S>>;
+    std::vector<P> a{P{1, S{"a"}}, P{2, std::nullopt}};
+    std::vector<P> b{P{3, S{"c"}}};
+    std::vector<std::vector<std::vector<P>>> data = {{a, b}};
+    auto arrayVector = makeArrayOfMapVector<int64_t, S>(data);
+    assertEqualVectors(
+        makeFlatVector<int32_t>(std::vector<int32_t>{-718462205}),
+        hash(arrayVector));
+  }
+
+  // Array of row.
+  {
+    std::vector<std::vector<std::optional<std::tuple<int32_t, std::string>>>>
+        data = {
+            {{{1, "red"}}, {{2, "blue"}}, {{3, "green"}}},
+            {{{1, "red"}}, std::nullopt, {{3, "green"}}},
+            {std::nullopt},
+        };
+    auto arrayVector = makeArrayOfRowVector(data, ROW({INTEGER(), VARCHAR()}));
+    assertEqualVectors(
+        makeFlatVector<int32_t>({-1458343314, 551500425, 42}),
+        hash(arrayVector));
+  }
+}
+
+TEST_F(HashTest, map) {
+  auto mapVector = makeMapVector<int64_t, double>(
+      {{{1, 17.0}, {2, 36.0}, {3, 8.0}, {4, 28.0}, {5, 24.0}, {6, 32.0}}});
+  assertEqualVectors(
+      makeFlatVector<int32_t>(std::vector<int32_t>{1263683448}),
+      hash(mapVector));
+
+  auto mapOfArrays = createMapOfArraysVector<int32_t, int32_t>(
+      {{{1, {{1, 2, 3}}}}, {{2, {{4, 5, 6}}}}, {{3, {{7, 8, 9}}}}});
+  assertEqualVectors(
+      makeFlatVector<int32_t>({-1818148947, 529298908, 825098912}),
+      hash(mapOfArrays));
+
+  auto mapWithNullArrays = createMapOfArraysVector<int64_t, int64_t>(
+      {{{1, std::nullopt}}, {{2, {{4, 5, std::nullopt}}}}, {{3, {{}}}}});
+  assertEqualVectors(
+      makeFlatVector<int32_t>({-1712319331, 2060637564, 519220707}),
+      hash(mapWithNullArrays));
+}
+
+TEST_F(HashTest, row) {
+  auto row = makeRowVector({
+      makeFlatVector<int64_t>({1, 3}),
+      makeFlatVector<int64_t>({2, 4}),
+  });
+  assertEqualVectors(
+      makeFlatVector<int32_t>({-1181176833, 1717636039}), hash(row));
+
+  row = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, std::nullopt}),
+      makeNullableFlatVector<int64_t>({std::nullopt, 4}),
+  });
+  assertEqualVectors(
+      makeFlatVector<int32_t>({-1712319331, 1344313940}), hash(row));
+
+  row->setNull(0, true);
+  assertEqualVectors(makeFlatVector<int32_t>({42, 1344313940}), hash(row));
+
+  row->setNull(1, true);
+  assertEqualVectors(makeFlatVector<int32_t>({42, 42}), hash(row));
+}
+
+TEST_F(HashTest, unknown) {
+  assertEqualVectors(
+      makeFlatVector<int32_t>({42, 42, 42}),
+      hash(makeAllNullFlatVector<UnknownValue>(3)));
+
+  assertEqualVectors(
+      makeFlatVector<int32_t>({42, 42}),
+      hash(makeNullableArrayVector<UnknownValue>({
+          {std::nullopt, std::nullopt},
+          {std::nullopt, std::nullopt, std::nullopt},
+      })));
+
+  auto mapVector = makeNullableMapVector<UnknownValue, UnknownValue>({
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  assertEqualVectors(makeFlatVector<int32_t>({42, 42, 42}), hash(mapVector));
+
+  auto row = makeRowVector({
+      makeFlatVector<int64_t>({1, 3, 4}),
+      makeAllNullFlatVector<UnknownValue>(3),
+  });
+  assertEqualVectors(
+      makeFlatVector<int32_t>({-1712319331, 519220707, 1344313940}), hash(row));
+}
+
+TEST_F(HashTest, simd) {
+  runSIMDHashAndAssert<int8_t>(1, -559580957, 1024, 10);
+  runSIMDHashAndAssert<int16_t>(-1, -1604776387, 4096);
+  runSIMDHashAndAssert<int32_t>(0xcafecafe, 638354558, 33);
+  runSIMDHashAndAssert<int64_t>(-1, -939490007, 34);
+  runSIMDHashAndAssert<std::string>("Spark", 228093765, 33);
+  runSIMDHashAndAssert<float>(1, -466301895, 77);
+  runSIMDHashAndAssert<double>(1, -460888942, 1000, 32);
+  runSIMDHashAndAssert<Timestamp>(
+      Timestamp::fromMicros(12345678), 1402875301, 1000);
+
+  runSIMDHashAndAssert<int64_t>(-1, -939490007, 1024, 1023);
+  runSIMDHashAndAssert<int64_t>(-1, -939490007, 1024, 512);
+  runSIMDHashAndAssert<int64_t>(-1, -939490007, 1024, 3);
+  runSIMDHashAndAssert<UnknownValue>(UnknownValue(), 42, 10);
 }
 
 } // namespace

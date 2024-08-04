@@ -99,8 +99,14 @@ inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
 // Error caused by failing to allocate cache buffer space for IO.
 inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
 
+// An error raised when spill bytes exceeds limits.
+inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
+
 // Errors indicating file read corruptions.
 inline constexpr auto kFileCorruption = "FILE_CORRUPTION"_fs;
+
+// Errors indicating file not found.
+inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
 
 // We do not know how to classify it yet.
 inline constexpr auto kUnknown = "UNKNOWN"_fs;
@@ -201,8 +207,8 @@ class VeloxException : public std::exception {
     return state_->context;
   }
 
-  const std::string& topLevelContext() const {
-    return state_->topLevelContext;
+  const std::string& additionalContext() const {
+    return state_->additionalContext;
   }
 
   const std::exception_ptr& wrappedException() const {
@@ -224,7 +230,7 @@ class VeloxException : public std::exception {
     // The current exception context.
     std::string context;
     // The top-level ancestor of the current exception context.
-    std::string topLevelContext;
+    std::string additionalContext;
     bool isRetriable;
     // The original std::exception.
     std::exception_ptr wrappedException;
@@ -335,6 +341,25 @@ class VeloxRuntimeError final : public VeloxException {
 /// Returns a reference to a thread level counter of Velox error throws.
 int64_t& threadNumVeloxThrow();
 
+/// Returns a reference to a thread level boolean that controls whether no-throw
+/// APIs include detailed error messages in Status.
+bool& threadSkipErrorDetails();
+
+class ScopedThreadSkipErrorDetails {
+ public:
+  ScopedThreadSkipErrorDetails(bool skip = true)
+      : original_{threadSkipErrorDetails()} {
+    threadSkipErrorDetails() = skip;
+  }
+
+  ~ScopedThreadSkipErrorDetails() {
+    threadSkipErrorDetails() = original_;
+  }
+
+ private:
+  bool original_;
+};
+
 /// Holds a pointer to a function that provides addition context to be
 /// added to the detailed error message in case of an exception.
 struct ExceptionContext {
@@ -346,6 +371,10 @@ struct ExceptionContext {
 
   /// Value to pass to `messageFunc`. Can be null.
   void* arg{nullptr};
+
+  /// If true, then the addition context in 'this' is always included when there
+  /// are hierarchical exception contexts.
+  bool isEssential{false};
 
   /// Pointer to the parent context when there are hierarchical exception
   /// contexts.

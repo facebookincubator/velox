@@ -21,16 +21,16 @@
 namespace facebook::velox::dwrf {
 
 DwrfData::DwrfData(
-    std::shared_ptr<const dwio::common::TypeWithId> nodeType,
+    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
     FlatMapContext flatMapContext)
     : memoryPool_(stripe.getMemoryPool()),
-      nodeType_(std::move(nodeType)),
+      fileType_(std::move(fileType)),
       flatMapContext_(std::move(flatMapContext)),
       stripeRows_{stripe.stripeRows()},
       rowsPerRowGroup_{stripe.rowsPerRowGroup()} {
-  EncodingKey encodingKey{nodeType_->id(), flatMapContext_.sequence};
+  EncodingKey encodingKey{fileType_->id(), flatMapContext_.sequence};
   std::unique_ptr<dwio::common::SeekableInputStream> stream = stripe.getStream(
       encodingKey.forKind(proto::Stream_Kind_PRESENT),
       streamLabels.label(),
@@ -39,11 +39,10 @@ DwrfData::DwrfData(
     notNullDecoder_ = createBooleanRleDecoder(std::move(stream), encodingKey);
   }
 
-  // We always initialize indexStream_ because indices are needed as
-  // soon as there is a single filter that can trigger row group skips
-  // anywhere in the reader tree. This is not known at construct time
-  // because the first filter can come from a hash join or other run
-  // time pushdown.
+  // We always initialize indexStream_ because indices are needed as soon as
+  // there is a single filter that can trigger row group skips anywhere in the
+  // reader tree. This is not known at construct time because the first filter
+  // can come from a hash join or other run time push-down.
   indexStream_ = stripe.getStream(
       encodingKey.forKind(proto::Stream_Kind_ROW_INDEX),
       streamLabels.label(),
@@ -107,7 +106,7 @@ dwio::common::PositionProvider DwrfData::seekToRowGroup(uint32_t index) {
 
 void DwrfData::readNulls(
     vector_size_t numValues,
-    const uint64_t* FOLLY_NULLABLE incomingNulls,
+    const uint64_t* incomingNulls,
     BufferPtr& nulls,
     bool /*nullsOnly*/) {
   if (!notNullDecoder_ && !flatMapContext_.inMapDecoder && !incomingNulls) {
@@ -160,11 +159,11 @@ void DwrfData::filterRowGroups(
   }
   for (auto i = 0; i < index_->entry_size(); i++) {
     const auto& entry = index_->entry(i);
-    auto columnStats =
-        buildColumnStatisticsFromProto(entry.statistics(), *dwrfContext);
+    auto columnStats = buildColumnStatisticsFromProto(
+        ColumnStatisticsWrapper(&entry.statistics()), *dwrfContext);
     if (filter &&
         !testFilter(
-            filter, columnStats.get(), rowGroupSize, nodeType_->type())) {
+            filter, columnStats.get(), rowGroupSize, fileType_->type())) {
       VLOG(1) << "Drop stride " << i << " on " << scanSpec.toString();
       bits::setBit(result.filterResult.data(), i);
       continue;
@@ -175,7 +174,7 @@ void DwrfData::filterRowGroups(
               metadataFilter,
               columnStats.get(),
               rowGroupSize,
-              nodeType_->type())) {
+              fileType_->type())) {
         bits::setBit(
             result.metadataFilterResults[metadataFiltersStartIndex + j]
                 .second.data(),

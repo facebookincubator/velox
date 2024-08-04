@@ -1,5 +1,5 @@
-#ifndef DATE_H
-#define DATE_H
+#ifndef VELOX_DATE_H
+#define VELOX_DATE_H
 
 // The MIT License (MIT)
 //
@@ -86,6 +86,10 @@
 #   pragma warning(disable : 4127)
 #endif
 
+namespace facebook
+{
+namespace velox
+{
 namespace date
 {
 
@@ -7933,7 +7937,9 @@ operator<<(std::basic_ostream<CharT, Traits>& os,
                  detail::get_units<CharT>(typename Period::type{});
 }
 
-}  // namespace date
+} // namespace date
+} // namespace velox
+} // namespace facebook
 
 #ifdef _MSC_VER
 #   pragma warning(pop)
@@ -7943,4 +7949,4 @@ operator<<(std::basic_ostream<CharT, Traits>& os,
 # pragma GCC diagnostic pop
 #endif
 
-#endif  // DATE_H
+#endif  // VELOX_DATE_H

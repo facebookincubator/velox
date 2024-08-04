@@ -16,13 +16,31 @@
 
 #pragma once
 
+#include "folly/Executor.h"
 #include "folly/synchronization/Baton.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/common/UnitLoader.h"
 #include "velox/dwio/dwrf/reader/SelectiveDwrfReader.h"
 
 namespace facebook::velox::dwrf {
 
 class ColumnReader;
+class DwrfUnit;
+
+class DwrfOptions : public dwio::common::FormatSpecificOptions {
+ public:
+  void setColumnReaderFactory(
+      std::shared_ptr<ColumnReaderFactory> columnReaderFactory) {
+    columnReaderFactory_ = std::move(columnReaderFactory);
+  }
+
+  const std::shared_ptr<ColumnReaderFactory>& columnReaderFactory() const {
+    return columnReaderFactory_;
+  }
+
+ private:
+  std::shared_ptr<ColumnReaderFactory> columnReaderFactory_;
+};
 
 class DwrfRowReader : public StrideIndexProvider,
                       public StripeReaderBase,
@@ -30,7 +48,7 @@ class DwrfRowReader : public StrideIndexProvider,
  public:
   /**
    * Constructor that lets the user specify additional options.
-   * @param contents of the file
+   * @param reader contents of the file
    * @param options options for reading
    */
   DwrfRowReader(
@@ -54,15 +72,15 @@ class DwrfRowReader : public StrideIndexProvider,
   }
 
   std::shared_ptr<const dwio::common::TypeWithId> getSelectedType() const {
-    if (!selectedSchema) {
-      selectedSchema = columnSelector_->buildSelected();
+    if (!selectedSchema_) {
+      selectedSchema_ = columnSelector_->buildSelected();
     }
 
-    return selectedSchema;
+    return selectedSchema_;
   }
 
   uint64_t getRowNumber() const {
-    return previousRow;
+    return previousRow_;
   }
 
   uint64_t seekToRow(uint64_t rowNumber);
@@ -70,7 +88,7 @@ class DwrfRowReader : public StrideIndexProvider,
   uint64_t skipRows(uint64_t numberOfRowsToSkip);
 
   uint32_t getCurrentStripe() const {
-    return currentStripe;
+    return currentStripe_;
   }
 
   uint64_t getStrideIndex() const override {
@@ -111,73 +129,74 @@ class DwrfRowReader : public StrideIndexProvider,
     return it->second;
   }
 
-  // Creates column reader tree and may start prefetch of frequently read
-  // columns.
-  void startNextStripe();
+  void loadCurrentStripe();
 
-  void safeFetchNextStripe();
-
-  std::optional<std::vector<PrefetchUnit>> prefetchUnits() override;
+  std::optional<std::vector<PrefetchUnit>> prefetchUnits() override {
+    return std::nullopt;
+  }
 
   int64_t nextRowNumber() override;
 
   int64_t nextReadSize(uint64_t size) override;
 
- private:
-  // Represents the status of a stripe being fetched.
-  enum class FetchStatus { NOT_STARTED, IN_PROGRESS, FINISHED, ERROR };
+  std::shared_ptr<const RowType> getType() const {
+    if (columnSelector_) {
+      return columnSelector_->getSchema();
+    }
+    return options_.requestedType();
+  }
 
-  FetchResult fetch(uint32_t stripeIndex);
-  FetchResult prefetch(uint32_t stripeToFetch);
+ private:
+  bool shouldReadNode(uint32_t nodeId) const;
+
+  std::optional<size_t> estimatedRowSizeHelper(
+      const FooterWrapper& fileFooter,
+      const dwio::common::Statistics& stats,
+      uint32_t nodeId) const;
+
+  bool isEmptyFile() const {
+    return stripeCeiling_ == firstStripe_;
+  }
+
+  void checkSkipStrides(uint64_t strideSize);
+
+  void readNext(
+      uint64_t rowsToRead,
+      const dwio::common::Mutation*,
+      VectorPtr& result);
+
+  uint64_t skip(uint64_t numValues);
+
+  std::unique_ptr<ColumnReader>& getColumnReader();
+
+  std::unique_ptr<dwio::common::SelectiveColumnReader>&
+  getSelectiveColumnReader();
+
+  std::unique_ptr<dwio::common::UnitLoader> getUnitLoader();
 
   // footer
-  std::vector<uint64_t> firstRowOfStripe;
-  mutable std::shared_ptr<const dwio::common::TypeWithId> selectedSchema;
+  std::vector<uint64_t> firstRowOfStripe_;
+  mutable std::shared_ptr<const dwio::common::TypeWithId> selectedSchema_;
 
   // reading state
-  uint64_t previousRow;
-  uint32_t firstStripe;
-  uint32_t currentStripe;
-  uint32_t lastStripe; // the stripe AFTER the last one
-  uint64_t currentRowInStripe;
-  bool newStripeReadyForRead;
-  uint64_t rowsInCurrentStripe;
+  uint64_t previousRow_;
+  uint32_t firstStripe_;
+  uint32_t currentStripe_;
+  // The the stripe AFTER the last one that should be read. e.g. if the highest
+  // stripe in the RowReader's bounds is 3, then stripeCeiling_ is 4.
+  uint32_t stripeCeiling_;
+  uint64_t currentRowInStripe_;
+  uint64_t rowsInCurrentStripe_;
   uint64_t strideIndex_;
-  std::shared_ptr<StripeDictionaryCache> stripeDictionaryCache_;
   dwio::common::RowReaderOptions options_;
-
-  struct PrefetchedStripeState {
-    bool preloaded;
-    std::unique_ptr<ColumnReader> columnReader;
-    std::unique_ptr<dwio::common::SelectiveColumnReader> selectiveColumnReader;
-    std::shared_ptr<StripeDictionaryCache> stripeDictionaryCache;
-  };
-
-  // stripeLoadStatuses_ and prefetchedStripeStates_ will never be acquired
-  // simultaneously on the same thread.
-  // Key is stripe index
-  folly::Synchronized<folly::F14FastMap<uint32_t, PrefetchedStripeState>>
-      prefetchedStripeStates_;
-
-  // Indicates the status of load requests. The ith element in
-  // stripeLoadStatuses_ represents the status of the ith stripe.
-  folly::Synchronized<std::vector<FetchStatus>> stripeLoadStatuses_;
-
-  // Currently, seek logic relies on reloading the stripe every time the row is
-  // seeked to, even if the row was present in the already loaded stripe. This
-  // is a temporary flag to disable seek on a reader which has already
-  // prefetched, until we implement a good way to support both.
-  std::atomic<bool> prefetchHasOccurred_{false};
-
-  // Used to indicate which stripes are finished loading. If stripeLoadBatons[i]
-  // is posted, it means the ith stripe has finished loading
-  std::vector<std::unique_ptr<folly::Baton<>>> stripeLoadBatons_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      decodingTimeCallback_;
 
   // column selector
   std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
 
-  std::unique_ptr<ColumnReader> columnReader_;
-  std::unique_ptr<dwio::common::SelectiveColumnReader> selectiveColumnReader_;
+  std::shared_ptr<BitSet> projectedNodes_;
+
   const uint64_t* stridesToSkip_;
   int stridesToSkipSize_;
   // Record of strides to skip in each visited stripe. Used for diagnostics.
@@ -192,32 +211,10 @@ class DwrfRowReader : public StrideIndexProvider,
 
   dwio::common::ColumnReaderStatistics columnReaderStatistics_;
 
-  // internal methods
+  std::optional<int64_t> nextRowNumber_;
 
-  std::optional<size_t> estimatedRowSizeHelper(
-      const FooterWrapper& footer,
-      const dwio::common::Statistics& stats,
-      uint32_t nodeId) const;
-
-  std::shared_ptr<const RowType> getType() const {
-    return columnSelector_->getSchema();
-  }
-
-  bool isEmptyFile() const {
-    return (lastStripe == 0);
-  }
-
-  void checkSkipStrides(uint64_t strideSize);
-
-  void readNext(
-      uint64_t rowsToRead,
-      const dwio::common::Mutation*,
-      VectorPtr& result);
-
-  void readWithRowNumber(
-      uint64_t rowsToRead,
-      const dwio::common::Mutation*,
-      VectorPtr& result);
+  std::unique_ptr<dwio::common::UnitLoader> unitLoader_;
+  DwrfUnit* currentUnit_;
 };
 
 class DwrfReader : public dwio::common::Reader {
@@ -297,9 +294,9 @@ class DwrfReader : public dwio::common::Reader {
   }
 
   std::optional<uint64_t> numberOfRows() const override {
-    auto& footer = readerBase_->getFooter();
-    if (footer.hasNumberOfRows()) {
-      return footer.numberOfRows();
+    auto& fileFooter = readerBase_->getFooter();
+    if (fileFooter.hasNumberOfRows()) {
+      return fileFooter.numberOfRows();
     }
     return std::nullopt;
   }
@@ -331,12 +328,16 @@ class DwrfReader : public dwio::common::Reader {
 
   /**
    * Create a reader to the for the dwrf file.
-   * @param stream the stream to read
+   * @param input the stream to read
    * @param options the options for reading the file
    */
   static std::unique_ptr<DwrfReader> create(
       std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options);
+
+  ReaderBase* testingReaderBase() const {
+    return readerBase_.get();
+  }
 
  private:
   // Ensures that files column names match the ones from the table schema using
@@ -346,8 +347,6 @@ class DwrfReader : public dwio::common::Reader {
  private:
   std::shared_ptr<ReaderBase> readerBase_;
   const dwio::common::ReaderOptions options_;
-
-  friend class E2EEncryptionTest;
 };
 
 class DwrfReaderFactory : public dwio::common::ReaderFactory {
@@ -360,9 +359,5 @@ class DwrfReaderFactory : public dwio::common::ReaderFactory {
     return DwrfReader::create(std::move(input), options);
   }
 };
-
-void registerDwrfReaderFactory();
-
-void unregisterDwrfReaderFactory();
 
 } // namespace facebook::velox::dwrf

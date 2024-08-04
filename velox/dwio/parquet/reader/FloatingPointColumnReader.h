@@ -32,7 +32,7 @@ class FloatingPointColumnReader
 
   FloatingPointColumnReader(
       const TypePtr& requestedType,
-      std::shared_ptr<const dwio::common::TypeWithId> dataType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 
@@ -48,7 +48,7 @@ class FloatingPointColumnReader
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override {
     using T = FloatingPointColumnReader<TData, TRequested>;
-    this->template readCommon<T>(offset, rows, incomingNulls);
+    this->template readCommon<T, true>(offset, rows, incomingNulls);
     this->readOffset_ += rows.back() + 1;
   }
 
@@ -59,12 +59,12 @@ class FloatingPointColumnReader
 template <typename TData, typename TRequested>
 FloatingPointColumnReader<TData, TRequested>::FloatingPointColumnReader(
     const TypePtr& requestedType,
-    std::shared_ptr<const dwio::common::TypeWithId> dataType,
+    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     ParquetParams& params,
     common::ScanSpec& scanSpec)
     : dwio::common::SelectiveFloatingPointColumnReader<TData, TRequested>(
           requestedType,
-          std::move(dataType),
+          std::move(fileType),
           params,
           scanSpec) {}
 

@@ -15,7 +15,10 @@
  */
 #pragma once
 
+#include <boost/math/distributions.hpp>
+#include <boost/math/distributions/cauchy.hpp>
 #include <boost/math/distributions/laplace.hpp>
+#include <boost/math/distributions/weibull.hpp>
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
 #include "boost/math/distributions/cauchy.hpp"
@@ -23,6 +26,7 @@
 #include "boost/math/distributions/fisher_f.hpp"
 #include "boost/math/distributions/gamma.hpp"
 #include "boost/math/distributions/poisson.hpp"
+#include "boost/math/special_functions/erf.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -221,6 +225,107 @@ struct PoissonCDFFunction {
 
     boost::math::poisson_distribution<double> poisson(lambda);
     result = boost::math::cdf(poisson, value);
+  }
+};
+
+template <typename T>
+struct WeibullCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double a, double b, double value) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK_GT(a, 0, "a must be greater than 0");
+    VELOX_USER_CHECK_GT(b, 0, "b must be greater than 0");
+
+    if (std::isnan(value)) {
+      result = std::numeric_limits<double>::quiet_NaN();
+    } else if (b == kInf) {
+      result = 0.0;
+    } else if (a == kInf || value == kInf) {
+      result = 1.0;
+    } else {
+      boost::math::weibull_distribution<> dist(a, b);
+      result = boost::math::cdf(dist, value);
+    }
+  }
+};
+
+template <typename T>
+struct InverseNormalCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(double& result, double m, double sd, double p) {
+    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be 0 > p > 1");
+    VELOX_USER_CHECK_GT(sd, 0, "standardDeviation must be > 0");
+
+    static const double kSqrtOfTwo = std::sqrt(2);
+    result = m + sd * kSqrtOfTwo * boost::math::erf_inv(2 * p - 1);
+  }
+};
+
+template <typename T>
+struct InverseWeibullCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(double& result, double a, double b, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
+    VELOX_USER_CHECK_GT(a, 0, "a must be greater than 0");
+    VELOX_USER_CHECK_GT(b, 0, "b must be greater than 0");
+
+    if (b == kInf) {
+      result = kInf;
+    } else {
+      // https://commons.apache.org/proper/commons-math/javadocs/api-3.6.1/org/apache/commons/math3/distribution/WeibullDistribution.html#inverseCumulativeProbability(double)
+      result = b * std::pow(-std::log1p(-p), 1.0 / a);
+    }
+  }
+};
+
+template <typename T>
+struct InverseCauchyCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double median, double scale, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+    static constexpr double kDoubleMax = std::numeric_limits<double>::max();
+    static constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+
+    VELOX_USER_CHECK(p >= 0 && p <= 1, "p must be in the interval [0, 1]");
+    VELOX_USER_CHECK_GT(scale, 0, "scale must be greater than 0");
+
+    if (p == 1.0) {
+      result = kInf;
+    } else if (scale == kInf) {
+      result = median;
+    } else if (std::isnan(median)) {
+      result = kNan;
+    } else if (median == kInf) {
+      result = kInf;
+    } else {
+      boost::math::cauchy_distribution<> cauchyDist(median, scale);
+      result = boost::math::quantile(cauchyDist, p);
+    }
+  }
+};
+
+template <typename T>
+struct InverseLaplaceCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double location, double scale, double p) {
+    VELOX_USER_CHECK_GT(scale, 0, "scale must be greater than 0");
+    VELOX_USER_CHECK(p >= 0 && p <= 1, "p must be in the interval [0, 1]")
+
+    if (std::isnan(location) || std::isinf(location)) {
+      result = std::numeric_limits<double>::quiet_NaN();
+    } else {
+      boost::math::laplace_distribution<> laplaceDist(location, scale);
+      result = boost::math::quantile(laplaceDist, p);
+    }
   }
 };
 

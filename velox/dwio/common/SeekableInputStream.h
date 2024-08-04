@@ -57,6 +57,12 @@ class SeekableInputStream : public google::protobuf::io::ZeroCopyInputStream {
   // ORC/DWRF stream address.
   virtual size_t positionSize() = 0;
 
+  virtual bool SkipInt64(int64_t count) = 0;
+
+  bool Skip(int32_t count) final override {
+    return SkipInt64(count);
+  }
+
   void readFully(char* buffer, size_t bufferSize);
 };
 
@@ -64,16 +70,6 @@ class SeekableInputStream : public google::protobuf::io::ZeroCopyInputStream {
  * Create a seekable input stream based on a memory range.
  */
 class SeekableArrayInputStream : public SeekableInputStream {
- private:
-  // data may optionally be owned by *this via ownedData.
-  std::unique_ptr<char[]> ownedData;
-  const char* data;
-  std::function<std::tuple<const char*, uint64_t>()> dataRead;
-  uint64_t length;
-  uint64_t position;
-  uint64_t blockSize;
-  void loadIfAvailable();
-
  public:
   SeekableArrayInputStream(
       const unsigned char* list,
@@ -94,30 +90,38 @@ class SeekableArrayInputStream : public SeekableInputStream {
       uint64_t block_size = 0);
 
   ~SeekableArrayInputStream() override = default;
+
   virtual bool Next(const void** data, int32_t* size) override;
   virtual void BackUp(int32_t count) override;
-  virtual bool Skip(int32_t count) override;
+  virtual bool SkipInt64(int64_t count) override;
   virtual google::protobuf::int64 ByteCount() const override;
   virtual void seekToPosition(PositionProvider& position) override;
   virtual std::string getName() const override;
   virtual size_t positionSize() override;
+
+  /// Return the total number of bytes returned from Next() calls.  Intended to
+  /// be used for test validation.
+  int64_t totalRead() const {
+    return totalRead_;
+  }
+
+ private:
+  void loadIfAvailable();
+
+  // data may optionally be owned by *this via ownedData.
+  const std::unique_ptr<char[]> ownedData_;
+  const char* data_;
+  std::function<std::tuple<const char*, uint64_t>()> dataRead_;
+  uint64_t length_;
+  uint64_t position_;
+  uint64_t blockSize_;
+  int64_t totalRead_ = 0;
 };
 
 /**
  * Create a seekable input stream based on an io stream.
  */
 class SeekableFileInputStream : public SeekableInputStream {
- private:
-  memory::MemoryPool& pool;
-  std::shared_ptr<ReadFileInputStream> input;
-  LogType logType;
-  const uint64_t start;
-  const uint64_t length;
-  const uint64_t blockSize;
-  DataBuffer<char> buffer;
-  uint64_t position;
-  uint64_t pushBack;
-
  public:
   SeekableFileInputStream(
       std::shared_ptr<ReadFileInputStream> input,
@@ -130,11 +134,23 @@ class SeekableFileInputStream : public SeekableInputStream {
 
   virtual bool Next(const void** data, int32_t* size) override;
   virtual void BackUp(int32_t count) override;
-  virtual bool Skip(int32_t count) override;
+  virtual bool SkipInt64(int64_t count) override;
   virtual google::protobuf::int64 ByteCount() const override;
   virtual void seekToPosition(PositionProvider& position) override;
   virtual std::string getName() const override;
   virtual size_t positionSize() override;
+
+ private:
+  const std::shared_ptr<ReadFileInputStream> input_;
+  const LogType logType_;
+  const uint64_t start_;
+  const uint64_t length_;
+  const uint64_t blockSize_;
+  memory::MemoryPool* const pool_;
+
+  DataBuffer<char> buffer_;
+  uint64_t position_;
+  uint64_t pushback_;
 };
 
 } // namespace facebook::velox::dwio::common

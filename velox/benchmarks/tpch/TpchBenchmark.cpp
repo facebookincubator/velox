@@ -182,6 +182,8 @@ DEFINE_int32(
     "prefetch. 1 means prefetch the next row group before decoding "
     "the current one");
 
+DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
+
 struct RunStats {
   std::map<std::string, std::string> flags;
   int64_t micros{0};
@@ -219,29 +221,32 @@ class TpchBenchmark {
  public:
   void initialize() {
     if (FLAGS_cache_gb) {
+      memory::MemoryManagerOptions options;
       int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
-      memory::MmapAllocator::Options options;
-      options.capacity = memoryBytes;
+      options.useMmapAllocator = true;
+      options.allocatorCapacity = memoryBytes;
       options.useMmapArena = true;
       options.mmapArenaCapacityRatio = 1;
+      memory::MemoryManager::testingSetInstance(options);
       std::unique_ptr<cache::SsdCache> ssdCache;
       if (FLAGS_ssd_cache_gb) {
         constexpr int32_t kNumSsdShards = 16;
         cacheExecutor_ =
             std::make_unique<folly::IOThreadPoolExecutor>(kNumSsdShards);
-        ssdCache = std::make_unique<cache::SsdCache>(
+        const cache::SsdCache::Config config(
             FLAGS_ssd_path,
             static_cast<uint64_t>(FLAGS_ssd_cache_gb) << 30,
             kNumSsdShards,
             cacheExecutor_.get(),
             static_cast<uint64_t>(FLAGS_ssd_checkpoint_interval_gb) << 30);
+        ssdCache = std::make_unique<cache::SsdCache>(config);
       }
 
-      allocator_ = std::make_shared<memory::MmapAllocator>(options);
-      cache_ =
-          cache::AsyncDataCache::create(allocator_.get(), std::move(ssdCache));
+      cache_ = cache::AsyncDataCache::create(
+          memory::memoryManager()->allocator(), std::move(ssdCache));
       cache::AsyncDataCache::setInstance(cache_.get());
-      memory::MemoryAllocator::setDefaultInstance(allocator_.get());
+    } else {
+      memory::MemoryManager::testingSetInstance({});
     }
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
@@ -258,6 +263,8 @@ class TpchBenchmark {
     configurationValues
         [connector::hive::HiveConfig::kMaxCoalescedDistanceBytes] =
             std::to_string(FLAGS_max_coalesced_distance_bytes);
+    configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
+        std::to_string(FLAGS_parquet_prefetch_rowgroups);
     auto properties =
         std::make_shared<const core::MemConfig>(configurationValues);
 
@@ -281,6 +288,8 @@ class TpchBenchmark {
         CursorParameters params;
         params.maxDrivers = FLAGS_num_drivers;
         params.planNode = tpchPlan.plan;
+        params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
+            std::to_string(FLAGS_split_preload_per_driver);
         const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
         bool noMoreSplits = false;
@@ -487,8 +496,18 @@ BENCHMARK(q1) {
   benchmark.run(planContext);
 }
 
+BENCHMARK(q2) {
+  const auto planContext = queryBuilder->getQueryPlan(2);
+  benchmark.run(planContext);
+}
+
 BENCHMARK(q3) {
   const auto planContext = queryBuilder->getQueryPlan(3);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q4) {
+  const auto planContext = queryBuilder->getQueryPlan(4);
   benchmark.run(planContext);
 }
 
@@ -519,6 +538,11 @@ BENCHMARK(q9) {
 
 BENCHMARK(q10) {
   const auto planContext = queryBuilder->getQueryPlan(10);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q11) {
+  const auto planContext = queryBuilder->getQueryPlan(11);
   benchmark.run(planContext);
 }
 

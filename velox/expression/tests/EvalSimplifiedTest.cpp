@@ -86,13 +86,13 @@ class EvalSimplifiedTest : public FunctionBaseTest {
 
     try {
       exprSetCommon.eval(rows, evalCtxCommon, commonEvalResult);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       exceptionCommonPtr = std::current_exception();
     }
 
     try {
       exprSetSimplified.eval(rows, evalCtxSimplified, simplifiedEvalResult);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       exceptionSimplifiedPtr = std::current_exception();
     }
 
@@ -210,6 +210,23 @@ TEST_F(EvalSimplifiedTest, dereference) {
     testDereference("c0.c0", makeRowVector({data}));
     testDereference("c0.c1", makeRowVector({data}));
   }
+}
+
+TEST_F(EvalSimplifiedTest, lambda) {
+  // filter(array, x -> x > 0).
+  auto data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 0, -4, 3]",
+          "[-5, 0, -3, 1, 7]",
+      }),
+  });
+
+  SelectivityVector rows(data->size());
+  auto expr =
+      makeTypedExpr("filter(c0, x -> (x > 0))", asRowType(data->type()));
+  exec::ExprSet exprSetCommon({expr}, &execCtx_);
+  exec::ExprSetSimplified exprSetSimplified({expr}, &execCtx_);
+  compareEvals(exprSetCommon, exprSetSimplified, data, rows);
 }
 
 TEST_F(EvalSimplifiedTest, propagateNulls) {

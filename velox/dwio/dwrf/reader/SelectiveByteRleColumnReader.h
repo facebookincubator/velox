@@ -26,16 +26,16 @@ class SelectiveByteRleColumnReader
   using ValueType = int8_t;
 
   SelectiveByteRleColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      std::shared_ptr<const dwio::common::TypeWithId> dataType,
+      const TypePtr& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
       bool isBool)
       : dwio::common::SelectiveByteRleColumnReader(
-            requestedType->type(),
+            requestedType,
+            std::move(fileType),
             params,
-            scanSpec,
-            std::move(dataType)) {
+            scanSpec) {
     EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
     auto& stripe = params.stripeStreams();
     if (isBool) {
@@ -79,7 +79,7 @@ class SelectiveByteRleColumnReader
 
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override {
-    readCommon<SelectiveByteRleColumnReader>(offset, rows, incomingNulls);
+    readCommon<SelectiveByteRleColumnReader, true>(offset, rows, incomingNulls);
     readOffset_ += rows.back() + 1;
   }
 

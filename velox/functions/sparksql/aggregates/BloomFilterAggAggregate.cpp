@@ -56,7 +56,7 @@ struct BloomFilterAccumulator {
   }
 
   BloomFilter<StlAllocator<uint64_t>> bloomFilter;
-}; // namespace
+};
 
 class BloomFilterAggAggregate : public exec::Aggregate {
  public:
@@ -76,13 +76,12 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     return false;
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    setAllNulls(groups, indices);
-    for (auto i : indices) {
-      new (groups[i] + offset_) BloomFilterAccumulator(allocator_);
-    }
+  static FOLLY_ALWAYS_INLINE void checkBloomFilterNotNull(
+      DecodedVector& decoded,
+      vector_size_t idx) {
+    VELOX_USER_CHECK(
+        !decoded.isNullAt(idx),
+        "First argument of bloom_filter_agg cannot be null");
   }
 
   void addRawInput(
@@ -92,10 +91,11 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
     computeCapacity();
-    VELOX_USER_CHECK(
-        !decodedRaw_.mayHaveNulls(),
-        "First argument of bloom_filter_agg cannot be null");
+    auto mayHaveNulls = decodedRaw_.mayHaveNulls();
     rows.applyToSelected([&](vector_size_t row) {
+      if (mayHaveNulls) {
+        checkBloomFilterNotNull(decodedRaw_, row);
+      }
       auto group = groups[row];
       auto tracker = trackRowSize(group);
       auto accumulator = value<BloomFilterAccumulator>(group);
@@ -133,15 +133,17 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     auto tracker = trackRowSize(group);
     auto accumulator = value<BloomFilterAccumulator>(group);
     accumulator->init(capacity_);
-    VELOX_USER_CHECK(
-        !decodedRaw_.mayHaveNulls(),
-        "First argument of bloom_filter_agg cannot be null");
     if (decodedRaw_.isConstantMapping()) {
       // All values are same, just do for the first.
+      checkBloomFilterNotNull(decodedRaw_, 0);
       accumulator->insert(decodedRaw_.valueAt<int64_t>(0));
       return;
     }
+    auto mayHaveNulls = decodedRaw_.mayHaveNulls();
     rows.applyToSelected([&](vector_size_t row) {
+      if (mayHaveNulls) {
+        checkBloomFilterNotNull(decodedRaw_, row);
+      }
       accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
     });
   }
@@ -192,6 +194,16 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     extractValues(groups, numGroups, result);
+  }
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) BloomFilterAccumulator(allocator_);
+    }
   }
 
  private:
@@ -277,7 +289,9 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 } // namespace
 
 exec::AggregateRegistrationResult registerBloomFilterAggAggregate(
-    const std::string& name) {
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .argumentType("bigint")
@@ -307,6 +321,8 @@ exec::AggregateRegistrationResult registerBloomFilterAggAggregate(
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<BloomFilterAggAggregate>(resultType, config);
-      });
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 } // namespace facebook::velox::functions::aggregate::sparksql

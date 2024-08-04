@@ -21,11 +21,11 @@ namespace facebook::velox::test {
 
 class MockVectorSerde : public VectorSerde {
   void estimateSerializedSize(
-      VectorPtr vector,
+      const BaseVector* /*vector*/,
       const folly::Range<const IndexRange*>& ranges,
       vector_size_t** sizes) override {}
 
-  std::unique_ptr<VectorSerializer> createSerializer(
+  std::unique_ptr<IterativeVectorSerializer> createIterativeSerializer(
       RowTypePtr type,
       int32_t numRows,
       StreamArena* streamArena,
@@ -34,7 +34,7 @@ class MockVectorSerde : public VectorSerde {
   };
 
   void deserialize(
-      ByteStream* source,
+      ByteInputStream* source,
       velox::memory::MemoryPool* pool,
       RowTypePtr type,
       RowVectorPtr* result,

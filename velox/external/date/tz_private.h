@@ -1,5 +1,5 @@
-#ifndef TZ_PRIVATE_H
-#define TZ_PRIVATE_H
+#ifndef VELOX_TZ_PRIVATE_H
+#define VELOX_TZ_PRIVATE_H
 
 // The MIT License (MIT)
 //
@@ -33,6 +33,12 @@
 #include "date.h"
 #include <vector>
 #endif
+
+namespace facebook
+{
+
+namespace velox
+{
 
 namespace date
 {
@@ -309,8 +315,12 @@ struct transition
 
 }  // namespace date
 
+}  // namespace velox
+
+}  // namespace facebook
+
 #if defined(_MSC_VER) && (_MSC_VER < 1900)
 #include "tz.h"
 #endif
 
-#endif  // TZ_PRIVATE_H
+#endif  // VELOX_TZ_PRIVATE_H

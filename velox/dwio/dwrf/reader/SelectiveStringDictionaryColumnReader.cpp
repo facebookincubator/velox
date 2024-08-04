@@ -23,10 +23,10 @@ namespace facebook::velox::dwrf {
 using namespace dwio::common;
 
 SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
-    const std::shared_ptr<const TypeWithId>& nodeType,
+    const std::shared_ptr<const TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType->type(), params, scanSpec, nodeType),
+    : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()),
       statistics_(params.runtimeStatistics()) {
@@ -65,8 +65,6 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
       params.streamLabels().label(),
       false);
   if (inDictStream) {
-    formatData_->as<DwrfData>().ensureRowGroupIndex();
-
     inDictionaryReader_ =
         createBooleanRleDecoder(std::move(inDictStream), encodingKey);
 
@@ -107,11 +105,11 @@ void SelectiveStringDictionaryColumnReader::loadDictionary(
   dwio::common::ensureCapacity<StringView>(
       values.values, values.numValues, &memoryPool_);
   // The lengths are read in the low addresses of the string views array.
-  int64_t* int64Values = values.values->asMutable<int64_t>();
-  lengthDecoder.next(int64Values, values.numValues, nullptr);
+  auto* lengths = values.values->asMutable<int32_t>();
+  lengthDecoder.nextLengths(lengths, values.numValues);
   int64_t stringsBytes = 0;
   for (auto i = 0; i < values.numValues; ++i) {
-    stringsBytes += int64Values[i];
+    stringsBytes += lengths[i];
   }
   // read bytes from underlying string
   values.strings = AlignedBuffer::allocate<char>(stringsBytes, &memoryPool_);
@@ -125,8 +123,8 @@ void SelectiveStringDictionaryColumnReader::loadDictionary(
   // the lengths at the start of values.
   auto offset = stringsBytes;
   for (int32_t i = values.numValues - 1; i >= 0; --i) {
-    offset -= int64Values[i];
-    views[i] = StringView(strings + offset, int64Values[i]);
+    offset -= lengths[i];
+    views[i] = StringView(strings + offset, lengths[i]);
   }
 }
 
@@ -154,7 +152,7 @@ void SelectiveStringDictionaryColumnReader::loadStrideDictionary() {
   lastStrideIndex_ = nextStride;
   dictionaryValues_ = nullptr;
 
-  if (scanSpec_->hasFilter()) {
+  if (DictionaryValues::hasFilter(scanSpec_->filter())) {
     scanState_.filterCache.resize(
         scanState_.dictionary.numValues + scanState_.dictionary2.numValues);
     simd::memset(
@@ -335,7 +333,7 @@ void SelectiveStringDictionaryColumnReader::ensureInitialized() {
 
   loadDictionary(*blobStream_, *lengthDecoder_, scanState_.dictionary);
 
-  if (scanSpec_->hasFilter()) {
+  if (DictionaryValues::hasFilter(scanSpec_->filter())) {
     scanState_.filterCache.resize(scanState_.dictionary.numValues);
     simd::memset(
         scanState_.filterCache.data(),

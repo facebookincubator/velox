@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -27,7 +27,6 @@ class SumDataSizeForStatsTest : public AggregationTestBase {
  public:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 };
 
@@ -212,12 +211,12 @@ TEST_F(SumDataSizeForStatsTest, complexRecursiveGlobalAggregate) {
           createMapOfArraysVector<int8_t, int64_t>({
               {{1, std::nullopt}},
               {{2, {{4, 5, std::nullopt}}}},
-              {{std::nullopt, {{7, 8, 9}}}},
+              {{3, {{7, 8, 9}}}},
           }),
       }),
   })};
 
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 118");
+  testAggregations(vectors, {}, {"sum_data_size_for_stats(c0)"}, "SELECT 115");
 }
 
 TEST_F(SumDataSizeForStatsTest, constantEncodingTest) {
@@ -256,7 +255,7 @@ TEST_F(SumDataSizeForStatsTest, dictionaryEncodingTest) {
       createMapOfArraysVector<int8_t, int64_t>({
           {{1, std::nullopt}},
           {{2, {{4, 5, std::nullopt}}}},
-          {{std::nullopt, {{7, 8, 9}}}},
+          {{3, {{7, 8, 9}}}},
       }),
   });
   vector_size_t size = 3;
@@ -269,10 +268,10 @@ TEST_F(SumDataSizeForStatsTest, dictionaryEncodingTest) {
       BaseVector::wrapInDictionary(nullptr, indices, size, columnTwo);
   auto vectors = {makeRowVector({columnOne, columnTwoDictionaryEncoded})};
 
-  testAggregations(vectors, {}, {"sum_data_size_for_stats(c1)"}, "SELECT 118");
+  testAggregations(vectors, {}, {"sum_data_size_for_stats(c1)"}, "SELECT 115");
 
   testAggregations(
-      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,82),(2,36)");
+      vectors, {"c0"}, {"sum_data_size_for_stats(c1)"}, "VALUES (1,79),(2,36)");
 }
 
 TEST_F(SumDataSizeForStatsTest, mask) {

@@ -121,12 +121,48 @@ struct SubstrFunction {
       length = numCharacters - start + 1;
     }
 
-    auto byteRange =
-        stringCore::getByteRange<isAscii>(input.data(), start, length);
+    auto byteRange = stringCore::getByteRange<isAscii>(
+        input.data(), input.size(), start, length);
 
     // Generating output string
     result.setNoCopy(StringView(
         input.data() + byteRange.first, byteRange.second - byteRange.first));
+  }
+};
+
+template <typename TExec>
+struct SubstrVarbinaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int64_t start,
+      int64_t length = std::numeric_limits<int64_t>::max()) {
+    if (start == 0 || length <= 0) {
+      result.setEmpty();
+      return;
+    }
+
+    int64_t size = input.size();
+
+    if (start < 0) {
+      start = size + start + 1;
+    }
+
+    if (start <= 0 || start > size) {
+      result.setEmpty();
+      return;
+    }
+
+    if (size - start + 1 < length) {
+      length = size - start + 1;
+    }
+
+    result.setNoCopy(StringView(input.data() + start - 1, length));
   }
 };
 
@@ -341,6 +377,70 @@ struct StrLPosFunction : public StrPosFunctionBase<T, true> {};
 template <typename T>
 struct StrRPosFunction : public StrPosFunctionBase<T, false> {};
 
+/// hamming_distance(string, string) -> bigint
+/// Computes the hamming distance between two strings.
+template <typename T>
+struct HammingDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(
+      out_type<int64_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    int64_t leftLength = left.size();
+    int64_t rightLength = right.size();
+
+    int64_t distance = 0;
+    int64_t leftPosition = 0;
+    int64_t rightPosition = 0;
+    while (leftPosition < leftLength && rightPosition < rightLength) {
+      int leftSize = 0;
+      int rightSize = 0;
+      auto codePointLeft = utf8proc_codepoint(
+          left.data() + leftPosition, left.data() + leftLength, leftSize);
+      auto codePointRight = utf8proc_codepoint(
+          right.data() + rightPosition, right.data() + rightLength, rightSize);
+
+      // if both code points are invalid, we do not care if they are equal
+      // the following code treats them as equal if they happen to be of the
+      // same length
+      leftPosition += codePointLeft >= 0 ? leftSize : -codePointLeft;
+      rightPosition += codePointRight >= 0 ? rightSize : -codePointRight;
+
+      if (codePointLeft != codePointRight) {
+        distance++;
+      }
+    }
+    VELOX_USER_CHECK(
+        leftPosition == leftLength && rightPosition == rightLength,
+        "The input strings to hamming_distance function must have the same length");
+
+    result = distance;
+  }
+
+  void callAscii(
+      out_type<int64_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    int64_t leftLength = left.size();
+    int64_t rightLength = right.size();
+    VELOX_USER_CHECK_EQ(
+        leftLength,
+        rightLength,
+        "The input strings to hamming_distance function must have the same length");
+
+    auto leftCodePoints = reinterpret_cast<const uint8_t*>(left.data());
+    auto rightCodePoints = reinterpret_cast<const uint8_t*>(right.data());
+    int64_t distance = 0;
+    for (int i = 0; i < leftLength; i++) {
+      if (leftCodePoints[i] != rightCodePoints[i]) {
+        distance++;
+      }
+    }
+    result = distance;
+  }
+};
+
 template <typename T>
 struct LevenshteinDistanceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -427,6 +527,68 @@ struct LevenshteinDistanceFunction {
       }
     }
     result = distances[rightCodePointsSize - 1];
+  }
+};
+
+template <typename T>
+struct NormalizeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Map for holding normalization form options
+  const static inline std::unordered_map<std::string, utf8proc_int16_t>
+      normalizationOptions{
+          {"NFC", (UTF8PROC_STABLE | UTF8PROC_COMPOSE)},
+          {"NFD", (UTF8PROC_STABLE | UTF8PROC_DECOMPOSE)},
+          {"NFKC", (UTF8PROC_STABLE | UTF8PROC_COMPOSE | UTF8PROC_COMPAT)},
+          {"NFKD", (UTF8PROC_STABLE | UTF8PROC_DECOMPOSE | UTF8PROC_COMPAT)}};
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* /*string*/,
+      const arg_type<Varchar>* form) {
+    VELOX_USER_CHECK_NOT_NULL(form);
+    VELOX_USER_CHECK_NE(
+        normalizationOptions.count(*form),
+        0,
+        "Normalization form must be one of [NFD, NFC, NFKD, NFKC]");
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& string) {
+    doCall(result, string, "NFC");
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& form) {
+    doCall(result, string, form);
+  }
+
+  // Note: This function newly allocates output using malloc so it should be
+  // free'd at the end.
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& form) {
+    utf8proc_uint8_t* output = nullptr;
+    auto outputLength = utf8proc_map(
+        (utf8proc_uint8_t*)string.data(),
+        string.size(),
+        &output,
+        normalizationOptions.at(form));
+    if (outputLength < 0) {
+      result = string;
+    } else {
+      result.resize(outputLength);
+      if (result.data()) {
+        std::memcpy(
+            result.data(), reinterpret_cast<const char*>(output), outputLength);
+      }
+    }
+    free(output);
   }
 };
 

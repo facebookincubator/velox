@@ -87,6 +87,15 @@ class LeadLagFunction : public exec::WindowFunction {
   }
 
  private:
+  // Lead/Lag return default value (using kDefaultValueRow) if offsets for
+  // target rowNumbers are outside the partition. If offset is null, then the
+  // functions return null (using kNullRow) .
+  //
+  // kDefaultValueRow needs to be a negative number so that
+  // WindowPartition::extractColumn calls skip this row. It is set to -2 to
+  // distinguish it from kNullRow which is -1.
+  static constexpr vector_size_t kDefaultValueRow = -2;
+
   void initializeOffset(const std::vector<exec::WindowFunctionArg>& args) {
     if (args.size() == 1) {
       constantOffset_ = 1;
@@ -102,6 +111,9 @@ class LeadLagFunction : public exec::WindowFunction {
             constantOffset->as<ConstantVector<int64_t>>()->valueAt(0);
         VELOX_USER_CHECK_GE(
             constantOffset_.value(), 0, "Offset must be at least 0");
+        if (constantOffset_.value() == 0) {
+          isConstantOffsetZero_ = true;
+        }
       }
     } else {
       offsetIndex_ = offsetArg.index.value();
@@ -130,15 +142,21 @@ class LeadLagFunction : public exec::WindowFunction {
   void setRowNumbersForConstantOffset(vector_size_t offset);
 
   void setRowNumbersForConstantOffset() {
+    // Set row number to kNullRow for NULL offset.
     if (isConstantOffsetNull_) {
       std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
       return;
     }
+    // If the offset is 0 then it means always return the current row.
+    if (isConstantOffsetZero_) {
+      std::iota(rowNumbers_.begin(), rowNumbers_.end(), partitionOffset_);
+      return;
+    }
 
     auto constantOffsetValue = constantOffset_.value();
-    // Set row number to kNullRow for out of range offset.
+    // Set row number to kDefaultValueRow for out of range offset.
     if (constantOffsetValue > partition_->numRows()) {
-      std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
+      std::fill(rowNumbers_.begin(), rowNumbers_.end(), kDefaultValueRow);
       return;
     }
 
@@ -154,14 +172,20 @@ class LeadLagFunction : public exec::WindowFunction {
     const auto maxRowNumber = partition_->numRows() - 1;
     auto* rawNulls = nulls_->as<uint64_t>();
     for (auto i = 0; i < numRows; ++i) {
+      // Set row number to kNullRow for NULL offset.
       if (offsets_->isNullAt(i)) {
         rowNumbers_[i] = kNullRow;
       } else {
         auto offset = offsets_->valueAt(i);
         VELOX_USER_CHECK_GE(offset, 0, "Offset must be at least 0");
-        // Set rowNumber to kNullRow for out of range offset.
+        // Set rowNumber to kDefaultValueRow for out of range offset.
         if (offset > partition_->numRows()) {
-          rowNumbers_[i] = kNullRow;
+          rowNumbers_[i] = kDefaultValueRow;
+          continue;
+        }
+        // If the offset is 0 then it means always return the current row.
+        if (offset == 0) {
+          rowNumbers_[i] = partitionOffset_ + i;
           continue;
         }
 
@@ -170,8 +194,9 @@ class LeadLagFunction : public exec::WindowFunction {
             rowNumbers_[i] = rowNumberIgnoreNull(
                 rawNulls, offset, partitionOffset_ + i - 1, -1, -1);
           } else {
+            // Set rowNumber to kDefaultValueRow for out of range offset.
             auto rowNumber = partitionOffset_ + i - offset;
-            rowNumbers_[i] = rowNumber >= 0 ? rowNumber : kNullRow;
+            rowNumbers_[i] = rowNumber >= 0 ? rowNumber : kDefaultValueRow;
           }
         } else {
           if constexpr (ignoreNulls) {
@@ -182,14 +207,17 @@ class LeadLagFunction : public exec::WindowFunction {
                 partition_->numRows(),
                 1);
           } else {
+            // Set rowNumber to kDefaultValueRow for out of range offset.
             auto rowNumber = partitionOffset_ + i + offset;
-            rowNumbers_[i] = rowNumber <= maxRowNumber ? rowNumber : kNullRow;
+            rowNumbers_[i] =
+                rowNumber <= maxRowNumber ? rowNumber : kDefaultValueRow;
           }
         }
       }
     }
   }
 
+  // This method assumes the input offset > 0
   vector_size_t rowNumberIgnoreNull(
       const uint64_t* rawNulls,
       vector_size_t offset,
@@ -206,20 +234,20 @@ class LeadLagFunction : public exec::WindowFunction {
       }
     }
 
-    return kNullRow;
+    return kDefaultValueRow;
   }
 
   void setDefaultValue(const VectorPtr& result, int32_t resultOffset) {
+    // Default value is not specified, just return.
     if (!constantDefaultValue_ && !defaultValueIndex_) {
       return;
     }
 
     // Copy default values into 'result' for rows with invalid offsets or empty
     // frames.
-
     if (constantDefaultValue_) {
       for (auto i = 0; i < rowNumbers_.size(); ++i) {
-        if (rowNumbers_[i] == kNullRow) {
+        if (rowNumbers_[i] == kDefaultValueRow) {
           result->copy(constantDefaultValue_.get(), resultOffset + i, 0, 1);
         }
       }
@@ -227,7 +255,7 @@ class LeadLagFunction : public exec::WindowFunction {
       std::vector<vector_size_t> defaultValueRowNumbers;
       defaultValueRowNumbers.reserve(rowNumbers_.size());
       for (auto i = 0; i < rowNumbers_.size(); ++i) {
-        if (rowNumbers_[i] == kNullRow) {
+        if (rowNumbers_[i] == kDefaultValueRow) {
           defaultValueRowNumbers.push_back(partitionOffset_ + i);
         }
       }
@@ -268,6 +296,7 @@ class LeadLagFunction : public exec::WindowFunction {
   // Value of the 'offset' if constant.
   std::optional<int64_t> constantOffset_;
   bool isConstantOffsetNull_ = false;
+  bool isConstantOffsetZero_ = false;
 
   // Index of the 'default_value' argument if default value is specified and not
   // constant.
@@ -281,7 +310,7 @@ class LeadLagFunction : public exec::WindowFunction {
   // Reusable vector of offsets if these are not constant.
   FlatVectorPtr<int64_t> offsets_;
 
-  // Reusable vector of default values if these are not cosntant.
+  // Reusable vector of default values if these are not constant.
   VectorPtr defaultValues_;
 
   // Null positions buffer to use for ignoreNulls.
@@ -302,13 +331,14 @@ class LeadLagFunction : public exec::WindowFunction {
 template <>
 void LeadLagFunction<true>::setRowNumbersForConstantOffset(
     vector_size_t offset) {
-  // Figure out how many rows at the start should be NULL.
+  // Figure out how many rows at the start is out of range.
   vector_size_t nullCnt = 0;
   if (offset > partitionOffset_) {
     nullCnt =
         std::min<vector_size_t>(offset - partitionOffset_, rowNumbers_.size());
     if (nullCnt) {
-      std::fill(rowNumbers_.begin(), rowNumbers_.begin() + nullCnt, kNullRow);
+      std::fill(
+          rowNumbers_.begin(), rowNumbers_.begin() + nullCnt, kDefaultValueRow);
     }
   }
 
@@ -330,14 +360,15 @@ void LeadLagFunction<true>::setRowNumbersForConstantOffset(
 template <>
 void LeadLagFunction<false>::setRowNumbersForConstantOffset(
     vector_size_t offset) {
-  // Figure out how many rows at the end should be NULL.
+  // Figure out how many rows at the end is out of range.
   vector_size_t nonNullCnt = std::max<vector_size_t>(
       0,
       std::min<vector_size_t>(
           rowNumbers_.size(),
           partition_->numRows() - partitionOffset_ - offset));
   if (nonNullCnt < rowNumbers_.size()) {
-    std::fill(rowNumbers_.begin() + nonNullCnt, rowNumbers_.end(), kNullRow);
+    std::fill(
+        rowNumbers_.begin() + nonNullCnt, rowNumbers_.end(), kDefaultValueRow);
   }
 
   // Populate sequential values for non-NULL rows.

@@ -13,8 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include "velox/exec/Aggregate.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -28,7 +31,6 @@ class HistogramTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 
   void testHistogramWithDuck(
@@ -145,9 +147,7 @@ TEST_F(HistogramTest, groupByTimestamp) {
       num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
   auto vector2 = makeFlatVector<Timestamp>(
       num,
-      [](vector_size_t row) {
-        return Timestamp{row % 2, 17'123'456};
-      },
+      [](vector_size_t row) { return Timestamp{row % 2, 17'123'456}; },
       nullEvery(5));
 
   auto expected = makeRowVector(
@@ -234,9 +234,7 @@ TEST_F(HistogramTest, globalTimestamp) {
   vector_size_t num = 10;
   auto vector = makeFlatVector<Timestamp>(
       num,
-      [](vector_size_t row) {
-        return Timestamp{row % 4, 100};
-      },
+      [](vector_size_t row) { return Timestamp{row % 4, 100}; },
       nullEvery(7));
 
   auto expected = makeRowVector({makeMapVector<Timestamp, int64_t>(
@@ -305,6 +303,125 @@ TEST_F(HistogramTest, globalString) {
       },
       nullEvery(7));
   testGlobalHistogramWithDuck(data);
+}
+
+TEST_F(HistogramTest, globalNaNs) {
+  // Verify that NaNs with different binary representations are considered equal
+  // and deduplicated.
+  static const auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+  auto vector = makeFlatVector<double>({1, kNaN, kSNaN, 2, 3, kNaN, kSNaN, 3});
+
+  auto expected = makeRowVector({makeMapVectorFromJson<double, int64_t>({
+      "{1: 1, 2: 1, 3: 2, NaN: 4}",
+  })});
+
+  testHistogram("histogram(c1)", {}, vector, vector, expected);
+}
+
+TEST_F(HistogramTest, arrays) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1}),
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3]",
+          "[1, 2]",
+          "[]",
+          "[1, 2]",
+          "[]",
+          "[1, null, 2, null]",
+          "[1, null, 2, null]",
+          "[]",
+          "[1, null, 2, null]",
+          "null",
+          "[1, null, 2, null]",
+          "null",
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVector(
+          std::vector<vector_size_t>{0},
+          makeArrayVectorFromJson<int32_t>({
+              "[1, 2, 3]",
+              "[1, 2]",
+              "[]",
+              "[1, null, 2, null]",
+          }),
+          makeFlatVector<int64_t>({1, 2, 3, 4})),
+  });
+
+  testAggregations({input}, {}, {"histogram(c1)"}, {expected});
+
+  expected = makeRowVector({
+      makeMapVector(
+          std::vector<vector_size_t>{0},
+          makeArrayVectorFromJson<int32_t>({
+              "[1, 2, 3]",
+              "[1, 2]",
+              "[]",
+              "[1, null, 2, null]",
+          }),
+          makeFlatVector<int64_t>({3, 6, 9, 12})),
+  });
+  testAggregations({input, input, input}, {}, {"histogram(c1)"}, {expected});
+
+  // Group by.
+  expected = makeRowVector({
+      makeFlatVector<int64_t>({0, 1}),
+      makeMapVector(
+          std::vector<vector_size_t>{0, 3},
+          makeArrayVectorFromJson<int32_t>({
+              // 1st map.
+              "[1, 2, 3]",
+              "[]",
+              "[1, null, 2, null]",
+              // 2nd map.
+              "[1, 2]",
+              "[]",
+              "[1, null, 2, null]",
+          }),
+          makeFlatVector<int64_t>({1, 2, 3, 2, 1, 1})),
+  });
+  testAggregations({input}, {"c0"}, {"histogram(c1)"}, {expected});
+
+  expected = makeRowVector({
+      makeFlatVector<int64_t>({0, 1}),
+      makeMapVector(
+          std::vector<vector_size_t>{0, 3},
+          makeArrayVectorFromJson<int32_t>({
+              // 1st map.
+              "[1, 2, 3]",
+              "[]",
+              "[1, null, 2, null]",
+              // 2nd map.
+              "[1, 2]",
+              "[]",
+              "[1, null, 2, null]",
+          }),
+          makeFlatVector<int64_t>({3, 6, 9, 6, 3, 3})),
+  });
+  testAggregations(
+      {input, input, input}, {"c0"}, {"histogram(c1)"}, {expected});
+}
+
+TEST_F(HistogramTest, unknown) {
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>(100, [](auto row) { return row % 2; }),
+      makeAllNullFlatVector<UnknownValue>(100),
+  });
+
+  auto expected = makeRowVector({
+      BaseVector::createNullConstant(MAP(UNKNOWN(), BIGINT()), 1, pool()),
+  });
+
+  testAggregations({input}, {}, {"histogram(c1)"}, {expected});
+
+  expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      BaseVector::createNullConstant(MAP(UNKNOWN(), BIGINT()), 2, pool()),
+  });
+
+  testAggregations({input}, {"c0"}, {"histogram(c1)"}, {expected});
 }
 
 } // namespace

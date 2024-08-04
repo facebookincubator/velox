@@ -14,16 +14,25 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
+#include "velox/expression/VectorReaders.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::test;
+using namespace facebook::velox::common::testutil;
 
 class RowContainerTest : public exec::test::RowContainerTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+    TestValue::enable();
+  }
+
   void testExtractColumn(
       RowContainer& container,
       const std::vector<char*>& rows,
@@ -252,8 +261,29 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     for (auto row : rows) {
       sum += data.rowSize(row) - data.fixedRowSize();
     }
-    auto usage = data.stringAllocator().cumulativeBytes();
+    auto usage = data.stringAllocator().currentBytes();
     EXPECT_EQ(usage, sum);
+  }
+
+  std::vector<char*> store(
+      RowContainer& rowContainer,
+      const RowVectorPtr& data) {
+    std::vector<DecodedVector> decodedVectors;
+    for (auto& vector : data->children()) {
+      decodedVectors.emplace_back(*vector);
+    }
+
+    std::vector<char*> rows;
+    for (auto i = 0; i < data->size(); ++i) {
+      auto* row = rowContainer.newRow();
+      rows.push_back(row);
+
+      for (auto j = 0; j < decodedVectors.size(); ++j) {
+        rowContainer.store(decodedVectors[j], i, row, j);
+      }
+    }
+
+    return rows;
   }
 
   std::vector<char*> store(
@@ -284,121 +314,503 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     return rowContainer;
   }
 
+  // Count number of nulls at the start of the list.
   template <typename T>
-  void testCompareFloats(TypePtr type, bool ascending, bool nullsFirst) {
-    // NOTE: set 'isJoinBuild' to true to enable nullable sort key in test.
-    auto rowContainer = makeRowContainer({type}, {type}, false);
-    auto lowest = std::numeric_limits<T>::lowest();
-    auto min = std::numeric_limits<T>::min();
-    auto max = std::numeric_limits<T>::max();
-    auto nan = std::numeric_limits<T>::quiet_NaN();
-    auto inf = std::numeric_limits<T>::infinity();
-
-    facebook::velox::test::VectorMaker vectorMaker{pool_.get()};
-    VectorPtr values = vectorMaker.flatVectorNullable<T>(
-        {std::nullopt, max, inf, 0.0, nan, lowest, min});
-    int numRows = values->size();
-
-    SelectivityVector allRows(numRows);
-    DecodedVector decoded(*values, allRows);
-    std::vector<char*> rows(numRows);
-    std::vector<std::pair<int, char*>> indexedRows(numRows);
-    for (size_t i = 0; i < numRows; ++i) {
-      rows[i] = rowContainer->newRow();
-      rowContainer->store(decoded, i, rows[i], 0);
-      indexedRows[i] = std::make_pair(i, rows[i]);
+  static size_t countLeadingNulls(const std::vector<std::optional<T>>& values) {
+    for (auto i = 0; i < values.size(); ++i) {
+      if (values[i].has_value()) {
+        return i;
+      }
     }
+    return values.size();
+  }
 
-    std::vector<std::optional<T>> expectedOrder = {
-        std::nullopt, lowest, 0.0, min, max, inf, nan};
-    if (!ascending) {
-      if (nullsFirst) {
-        std::reverse(expectedOrder.begin() + 1, expectedOrder.end());
+  // Given a list of values sorted in ascending order with nulls first re-orders
+  // the elements to reverse the order and / or put nulls last.
+  template <typename T>
+  void changeSortingOrder(
+      std::vector<std::optional<T>>& values,
+      const CompareFlags& flags) {
+    if (flags.ascending) {
+      if (flags.nullsFirst) {
+        // Nothing to do. 'values' are expected to be already sorted in
+        // ascending order with nulls first.
       } else {
-        std::reverse(expectedOrder.begin(), expectedOrder.end());
+        // Move the nulls from the start of the list to the end of the list.
+        const auto numNulls = countLeadingNulls(values);
+        for (auto i = 0; i < values.size() - numNulls; ++i) {
+          values[i] = values[i + numNulls];
+        }
+
+        for (auto i = values.size() - numNulls; i < values.size(); ++i) {
+          values[i].reset();
+        }
       }
     } else {
-      if (!nullsFirst) {
-        for (int i = 0; i < expectedOrder.size() - 1; ++i) {
-          expectedOrder[i] = expectedOrder[i + 1];
-        }
-        expectedOrder[expectedOrder.size() - 1] = std::nullopt;
+      if (flags.nullsFirst) {
+        // Keeps nulls at the start of the list. Reverse the order of remaining
+        // non-null elements.
+        const auto numNulls = countLeadingNulls(values);
+        std::reverse(values.begin() + numNulls, values.end());
+      } else {
+        // Reverse the order of all elements.
+        std::reverse(values.begin(), values.end());
       }
     }
-    VectorPtr expected = vectorMaker.flatVectorNullable<T>(expectedOrder);
+  }
+
+  using IndexAndRow = std::pair<vector_size_t, char*>;
+  // A list of rows with unique zero-based indices.
+  using IndexAndRowVector = std::vector<IndexAndRow>;
+
+  static IndexAndRowVector indexRows(const std::vector<char*>& rows) {
+    IndexAndRowVector indexedRows;
+    indexedRows.reserve(rows.size());
+    for (auto i = 0; i < rows.size(); ++i) {
+      indexedRows.push_back({i, rows[i]});
+    }
+    return indexedRows;
+  }
+
+  VectorPtr copyValues(
+      const IndexAndRowVector& indexedRows,
+      const VectorPtr& values) {
+    const auto numRows = indexedRows.size();
+    auto copy = BaseVector::create(values->type(), numRows, pool_.get());
+    for (auto i = 0; i < numRows; ++i) {
+      copy->copy(values.get(), i, indexedRows[i].first, 1);
+    }
+    return copy;
+  }
+
+  static std::vector<char*> storeRows(
+      const DecodedVector& decoded,
+      vector_size_t numRows,
+      RowContainer& rowContainer) {
+    std::vector<char*> rows(numRows);
+    for (size_t i = 0; i < numRows; ++i) {
+      rows[i] = rowContainer.newRow();
+      rowContainer.store(decoded, i, rows[i], 0);
+    }
+
+    return rows;
+  }
+
+  void testRowContainerCompareAPIs(
+      const TypePtr& type,
+      const VectorPtr& values,
+      const VectorPtr& expected,
+      std::optional<CompareFlags> flags) {
+    // If no flags provided then it must be the default of {true, true}.
+    SCOPED_TRACE(fmt::format(
+        "{}, ascending = {}, nullsFirst = {}",
+        type->toString(),
+        flags.has_value() ? flags.value().ascending : true,
+        flags.has_value() ? flags.value().nullsFirst : true));
+
+    // Set 'isJoinBuild' to true to enable nullable sort key in test.
+    auto rowContainer = makeRowContainer({type}, {type}, false);
+    int numRows = values->size();
+
+    DecodedVector decoded(*values);
+    auto rows = storeRows(decoded, numRows, *rowContainer);
+    auto indexedRows = indexRows(rows);
+
+    std::function<int(const char*, const char*)> compareRows =
+        [&](const auto& l, const auto& r) {
+          return rowContainer->compare(l, r, 0) < 0;
+        };
+
+    // If compare flags are specified pass them into the compare function.
+    if (flags.has_value()) {
+      compareRows = [&](const auto& l, const auto& r) {
+        return rowContainer->compare(l, r, 0, flags.value()) < 0;
+      };
+    }
+
+    // Verify compare method with two rows as input - using compareRows
     {
-      // Verify compare method with two rows as input
-      std::sort(rows.begin(), rows.end(), [&](const char* l, const char* r) {
-        return rowContainer->compare(l, r, 0, {nullsFirst, ascending}) < 0;
-      });
+      std::sort(rows.begin(), rows.end(), compareRows);
       VectorPtr result = BaseVector::create(type, numRows, pool_.get());
       rowContainer->extractColumn(rows.data(), numRows, 0, result);
       assertEqualVectors(expected, result);
     }
 
-    // Verify compare method with row and decoded vector as input
-    {
-      std::sort(
-          indexedRows.begin(),
-          indexedRows.end(),
-          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
-            return rowContainer->compare(
-                       l.second,
-                       rowContainer->columnAt(0),
-                       decoded,
-                       r.first,
-                       {nullsFirst, ascending}) < 0;
-          });
-      std::vector<std::optional<T>> sorted;
-      for (const auto& irow : indexedRows) {
-        if (decoded.isNullAt(irow.first)) {
-          sorted.push_back(std::nullopt);
-        } else {
-          sorted.push_back(decoded.valueAt<T>(irow.first));
-        }
-      }
-      VectorPtr result = vectorMaker.template flatVectorNullable<T>(sorted);
-      assertEqualVectors(expected, result);
+    std::function<int(
+        const std::pair<int, char*>&, const std::pair<int, char*>&)>
+        compareDecodedAndRows = [&](const auto& l, const auto& r) {
+          return rowContainer->compare(
+                     l.second, rowContainer->columnAt(0), decoded, r.first) < 0;
+        };
+
+    if (flags.has_value()) {
+      compareDecodedAndRows = [&](const auto& l, const auto& r) {
+        return rowContainer->compare(
+                   l.second,
+                   rowContainer->columnAt(0),
+                   decoded,
+                   r.first,
+                   flags.value()) < 0;
+      };
     }
 
-    // Verify compareRows method with row as input.
+    // Verify compare method with row and decoded vector as input - using
+    // compareDecodedAndRows.
+    // This test assumes that the rows and decoded vector are in the same order
+    // so that indexRows can be sorted. The decoded vector is a different
+    // representation of the same row data. This allows for using sort which
+    // compares each element in decoded vector and each row value to each other
+    // testing the compare API as if the same row is sorted.
     {
-      std::sort(
-          indexedRows.begin(),
-          indexedRows.end(),
-          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
-            return rowContainer->compareRows(
-                       l.second, r.second, {{nullsFirst, ascending}}) < 0;
-          });
-      std::vector<std::optional<T>> sorted;
-      for (const auto& irow : indexedRows) {
-        if (decoded.isNullAt(irow.first)) {
-          sorted.push_back(std::nullopt);
-        } else {
-          sorted.push_back(decoded.valueAt<T>(irow.first));
-        }
-      }
-      VectorPtr result = vectorMaker.template flatVectorNullable<T>(sorted);
+      std::sort(indexedRows.begin(), indexedRows.end(), compareDecodedAndRows);
+      auto result = copyValues(indexedRows, values);
       assertEqualVectors(expected, result);
     }
-    // Verify compareRows method with default compare flags.
-    if (ascending && nullsFirst) {
-      std::sort(
-          indexedRows.begin(),
-          indexedRows.end(),
-          [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
-            return rowContainer->compareRows(l.second, r.second) < 0;
-          });
-      std::vector<std::optional<T>> sorted;
-      for (const auto& irow : indexedRows) {
-        if (decoded.isNullAt(irow.first)) {
-          sorted.push_back(std::nullopt);
-        } else {
-          sorted.push_back(decoded.valueAt<T>(irow.first));
-        }
+  }
+
+  template <bool canHandleNulls>
+  void testRowContainerEqualsAPI(
+      const TypePtr& type,
+      const VectorPtr& lhs,
+      const VectorPtr& rhs,
+      const std::vector<bool>& expected) {
+    auto numRows = lhs->size();
+    EXPECT_EQ(numRows, rhs->size());
+    EXPECT_EQ(numRows, expected.size());
+
+    auto rowContainer = makeRowContainer({type}, {type}, false);
+    DecodedVector lhsDecoded(*lhs);
+    auto rows = storeRows(lhsDecoded, numRows, *rowContainer);
+
+    DecodedVector rhsDecoded(*rhs);
+
+    int32_t index{0};
+    for (auto row : rows) {
+      ASSERT_EQ(
+          expected[index],
+          rowContainer->equals<canHandleNulls>(
+              row, rowContainer->columnAt(0), rhsDecoded, index))
+          << fmt::format(
+                 "Mismatch at index {} with canHandleNulls {}",
+                 index,
+                 canHandleNulls);
+      ++index;
+    }
+  }
+
+  void testRowContainerEqualityEdgeValues(
+      const TypePtr& type,
+      const VectorPtr& values) {
+    auto numRows = values->size();
+    if (values->mayHaveNulls()) {
+      auto numNulls = BaseVector::countNulls(values->nulls(), 0, numRows);
+      auto vecWithoutNulls = values->slice(numNulls, numRows - numNulls);
+      std::vector<bool> expectedResults(vecWithoutNulls->size(), true);
+      testRowContainerEqualsAPI<false>(
+          type, vecWithoutNulls, vecWithoutNulls, expectedResults);
+    } else {
+      std::vector<bool> expectedResults(numRows, true);
+      testRowContainerEqualsAPI<true>(type, values, values, expectedResults);
+    }
+  }
+
+  template <typename T>
+  void testOrderAndEqualsWithNullsFirstVariations(
+      const TypePtr& type,
+      const VectorPtr& values,
+      const std::vector<std::optional<T>>& ascNullsFirstOrder,
+      std::function<VectorPtr(const std::vector<std::optional<T>>&)>
+          generateExpectedVector) {
+    // The default flags are ascending == true, nullsFirst == true.
+    // std::nullopt means use the default for the compare function.
+    const std::vector<std::optional<CompareFlags>> compareFlags{
+        {{std::nullopt}}, {{true, false}}, {{false, true}}, {{false, false}}};
+
+    for (auto flags : compareFlags) {
+      std::vector<std::optional<T>> expectedOrder{ascNullsFirstOrder};
+      // The expectedOrder is ascNullsFirstOrder for the case
+      // where no compare flags are provided.
+      if (flags.has_value()) {
+        changeSortingOrder<T>(expectedOrder, flags.value());
       }
-      VectorPtr result = vectorMaker.template flatVectorNullable<T>(sorted);
-      assertEqualVectors(expected, result);
+      auto expected = generateExpectedVector(expectedOrder);
+
+      testRowContainerCompareAPIs(type, values, expected, flags);
+    }
+
+    testRowContainerEqualityEdgeValues(type, values);
+  }
+
+#define TEST_FLOATING_TYPE_LIMIT_VARIABLES        \
+  auto lowest = std::numeric_limits<T>::lowest(); \
+  auto min = std::numeric_limits<T>::min();       \
+  auto max = std::numeric_limits<T>::max();       \
+  auto nan = std::numeric_limits<T>::quiet_NaN(); \
+  auto inf = std::numeric_limits<T>::infinity()
+
+  template <typename T>
+  void testComparePrimitiveFloats(const TypePtr& type) {
+    TEST_FLOATING_TYPE_LIMIT_VARIABLES;
+
+    auto values = makeNullableFlatVector<T>(
+        {std::nullopt, max, inf, 0.0, nan, lowest, min});
+
+    std::vector<std::optional<T>> ascNullsFirstOrder = {
+        std::nullopt, lowest, 0.0, min, max, inf, nan};
+
+    testOrderAndEqualsWithNullsFirstVariations<T>(
+        type, values, ascNullsFirstOrder, [&](const auto& expectedOrder) {
+          return makeNullableFlatVector<T>(expectedOrder);
+        });
+  }
+
+  /// This function constructions a vector of random floating point
+  /// values including special floating point values as well as an
+  /// boolean result vector. The result vector contains the expected
+  /// boolean result if a value at data vector position i is compared
+  /// with a NaN.
+  template <typename T>
+  void populateFloatingPointTestVectorsForNaNComparison(
+      int32_t numRows,
+      std::vector<std::optional<T>>& rawData,
+      std::vector<bool>& rawExpected) {
+    TEST_FLOATING_TYPE_LIMIT_VARIABLES;
+    std::mt19937 gen(numRows);
+
+    std::vector<std::optional<T>> rawSpecialValues = {
+        std::nullopt, min, 0.0, lowest, max, inf};
+    std::vector<bool> rawExpectedSpecialValues(rawSpecialValues.size(), false);
+    // Make sure the null value is at the beginning of the dataset.
+    // This knowledge is later used to build vectors without null values.
+    rawData.insert(
+        rawData.end(), rawSpecialValues.begin(), rawSpecialValues.end());
+    rawExpected.insert(
+        rawExpected.end(),
+        rawExpectedSpecialValues.begin(),
+        rawExpectedSpecialValues.end());
+
+    while (numRows) {
+      auto value = folly::Random::randDouble(min, max, gen);
+      // Intersperse nan values.
+      if (static_cast<int64_t>(std::fmod(value, 3.0)) == 0) {
+        rawData.push_back(nan);
+        rawExpected.push_back(true);
+      } else {
+        rawData.push_back(value);
+        rawExpected.push_back(false);
+      }
+      --numRows;
+    }
+  }
+
+  template <typename T>
+  void runTestNanEquals(
+      const TypePtr& type,
+      const VectorPtr& lhs,
+      const VectorPtr& rhs,
+      const std::vector<bool>& rawExpected) {
+    auto numRows = lhs->size();
+    EXPECT_EQ(numRows, rawExpected.size());
+    EXPECT_EQ(numRows, rhs->size());
+
+    testRowContainerEqualsAPI<true>(type, lhs, rhs, rawExpected);
+
+    // Remove nulls and re-run.
+    auto numNulls = BaseVector::countNulls(lhs->nulls(), 0, numRows);
+    auto lhsNoNulls = lhs->slice(numNulls, numRows - numNulls);
+    auto rhsNoNulls = rhs->slice(numNulls, numRows - numNulls);
+    std::vector<bool> rawExpectedNoNulls(
+        rawExpected.cbegin() + numNulls, rawExpected.cend());
+    EXPECT_EQ(lhsNoNulls->size(), rawExpectedNoNulls.size());
+    testRowContainerEqualsAPI<false>(
+        type, lhsNoNulls, rhsNoNulls, rawExpectedNoNulls);
+  }
+
+  template <typename T>
+  void testNanEqualsPrimitiveFloats(const TypePtr& type) {
+    constexpr auto nan = std::numeric_limits<T>::quiet_NaN();
+    constexpr int32_t kNumRows = 100;
+    std::vector<std::optional<T>> rawValues;
+    std::vector<bool> rawExpected;
+
+    populateFloatingPointTestVectorsForNaNComparison<T>(
+        kNumRows, rawValues, rawExpected);
+    auto nanVector = makeConstant<T>(nan, rawValues.size());
+    auto values = makeNullableFlatVector<T>(rawValues);
+    runTestNanEquals<T>(type, values, nanVector, rawExpected);
+  }
+
+  template <typename T>
+  void testCompareArrayFloats(const TypePtr& type) {
+    TEST_FLOATING_TYPE_LIMIT_VARIABLES;
+
+    auto values = makeNullableArrayVector<T>(
+        {std::nullopt,
+         {{std::nullopt}},
+         {{max}},
+         {{inf}},
+         {{0.0}},
+         {{nan}},
+         {{lowest}},
+         {{min}}});
+
+    std::vector<std::optional<std::vector<std::optional<T>>>>
+        ascNullsFirstOrder = {
+            std::nullopt,
+            {{std::nullopt}},
+            {{lowest}},
+            {{0.0}},
+            {{min}},
+            {{max}},
+            {{inf}},
+            {{nan}}};
+
+    testOrderAndEqualsWithNullsFirstVariations<std::vector<std::optional<T>>>(
+        type, values, ascNullsFirstOrder, [&](const auto& expectedOrder) {
+          return makeNullableArrayVector<T>(expectedOrder);
+        });
+  }
+
+  template <typename T>
+  void testNanEqualsArrayFloats(const TypePtr& type) {
+    constexpr auto nan = std::numeric_limits<T>::quiet_NaN();
+    constexpr int32_t kNumRows = 100;
+    std::vector<std::optional<T>> rawValues;
+    std::vector<bool> rawExpected;
+    std::vector<std::optional<std::vector<std::optional<T>>>> rawArrayData;
+    std::vector<std::vector<T>> rawNanArrayData;
+
+    rawArrayData.push_back(std::nullopt);
+    rawExpected.push_back(false);
+    rawNanArrayData.push_back({nan});
+
+    populateFloatingPointTestVectorsForNaNComparison<T>(
+        kNumRows, rawValues, rawExpected);
+
+    for (auto value : rawValues) {
+      std::vector<std::optional<T>> temp = {value};
+      rawArrayData.push_back(temp);
+      rawNanArrayData.push_back({nan});
+    }
+
+    auto arrayData = makeNullableArrayVector<T>(rawArrayData);
+    auto nanArrayData = makeArrayVector<T>(rawNanArrayData);
+    runTestNanEquals<T>(type, arrayData, nanArrayData, rawExpected);
+  }
+
+  template <typename T>
+  void testCompareMapFloats(const TypePtr& type) {
+    TEST_FLOATING_TYPE_LIMIT_VARIABLES;
+
+    auto values = makeNullableMapVector<T, int32_t>(
+        {{{std::nullopt}},
+         {{{max, 1}}},
+         {{{inf, 2}}},
+         {{{0.0, 3}}},
+         {{{nan, 4}}},
+         {{{lowest, 5}}},
+         {{{min, 6}}}});
+
+    std::vector<
+        std::optional<std::vector<std::pair<T, std::optional<int32_t>>>>>
+        ascNullsFirstOrder{
+            {{std::nullopt}},
+            {{{lowest, 5}}},
+            {{{0.0, 3}}},
+            {{{min, 6}}},
+            {{{max, 1}}},
+            {{{inf, 2}}},
+            {{{nan, 4}}}};
+
+    testOrderAndEqualsWithNullsFirstVariations<
+        std::vector<std::pair<T, std::optional<int32_t>>>>(
+        type, values, ascNullsFirstOrder, [&](const auto& expectedOrder) {
+          return makeNullableMapVector<T, int32_t>(expectedOrder);
+        });
+  }
+
+  template <typename T>
+  void testNanEqualsMapFloats(const TypePtr& type) {
+    constexpr auto nan = std::numeric_limits<T>::quiet_NaN();
+    constexpr int32_t kNumRows = 100;
+    std::vector<std::optional<T>> rawValues;
+    std::vector<bool> rawExpected;
+    std::vector<
+        std::optional<std::vector<std::pair<T, std::optional<int32_t>>>>>
+        rawMapData;
+    std::vector<std::vector<std::pair<T, std::optional<int32_t>>>>
+        rawNanMapData;
+
+    rawMapData.push_back({std::nullopt});
+    rawExpected.push_back(false);
+    rawNanMapData.push_back({{{nan, std::nullopt}}});
+
+    populateFloatingPointTestVectorsForNaNComparison<T>(
+        kNumRows, rawValues, rawExpected);
+    // Remove nulls in data because keys cannot be null.
+    auto numNulls = countLeadingNulls(rawValues);
+    rawValues.erase(rawValues.begin(), rawValues.begin() + numNulls);
+    rawExpected.erase(rawExpected.begin(), rawExpected.begin() + numNulls);
+    std::optional<int32_t> second = 0;
+    for (auto value : rawValues) {
+      std::vector<std::pair<T, std::optional<int32_t>>> temp{
+          {{value.value(), second}}};
+      rawMapData.push_back(temp);
+      rawNanMapData.push_back({{{nan, second}}});
+      ++second.value();
+    }
+
+    auto mapData = makeNullableMapVector<T, int32_t>(rawMapData);
+    auto nanMapData = makeMapVector<T, int32_t>(rawNanMapData);
+    runTestNanEquals<T>(type, mapData, nanMapData, rawExpected);
+  }
+
+  template <typename T>
+  void testCompareRowFloats(const TypePtr& type) {
+    TEST_FLOATING_TYPE_LIMIT_VARIABLES;
+
+    auto values = makeRowVector({makeNullableFlatVector<T>(
+        {std::nullopt, max, inf, 0.0, nan, lowest, min})});
+
+    std::vector<std::optional<T>> ascNullsFirstOrder = {
+        std::nullopt, lowest, 0.0, min, max, inf, nan};
+
+    testOrderAndEqualsWithNullsFirstVariations<T>(
+        type, values, ascNullsFirstOrder, [&](const auto& expectedOrder) {
+          return makeRowVector({makeNullableFlatVector<T>(expectedOrder)});
+        });
+  }
+
+  template <typename T>
+  void testNanEqualsRowFloats(const TypePtr& type) {
+    constexpr auto nan = std::numeric_limits<T>::quiet_NaN();
+    constexpr int32_t kNumRows = 100;
+    std::vector<std::optional<T>> rawValues;
+    std::vector<bool> rawExpected;
+
+    populateFloatingPointTestVectorsForNaNComparison<T>(
+        kNumRows, rawValues, rawExpected);
+
+    auto rowData = makeRowVector({makeNullableFlatVector<T>(rawValues)});
+    auto nanRowData = makeRowVector({makeConstant<T>(nan, rawValues.size())});
+    runTestNanEquals<T>(type, rowData, nanRowData, rawExpected);
+  }
+#undef TEST_FLOATING_TYPE_LIMIT_VARIABLES
+
+  template <typename T>
+  void testEqualAndCompareRowContainerTypeFloat(const TypePtr& type) {
+    if (type->isPrimitiveType()) {
+      testComparePrimitiveFloats<T>(type);
+      testNanEqualsPrimitiveFloats<T>(type);
+    } else if (type->isArray()) {
+      testCompareArrayFloats<T>(type);
+      testNanEqualsArrayFloats<T>(type);
+    } else if (type->isMap()) {
+      testCompareMapFloats<T>(type);
+      testNanEqualsMapFloats<T>(type);
+    } else if (type->isRow()) {
+      testCompareRowFloats<T>(type);
+      testNanEqualsRowFloats<T>(type);
     }
   }
 };
@@ -592,9 +1004,13 @@ TEST_F(RowContainerTest, types) {
       if (column < keys.size()) {
         EXPECT_TRUE(
             data->equals<false>(rows[i], data->columnAt(column), decoded, i));
-      } else {
+      } else if (!columnType->isMap()) {
         EXPECT_TRUE(
             data->equals<true>(rows[i], data->columnAt(column), decoded, i));
+      }
+      // Non-key map columns are not comparable, as the map keys are not sorted.
+      if (columnType->isMap() && column >= keys.size()) {
+        continue;
       }
       if (i > 0) {
         // We compare the values on consecutive rows.
@@ -856,64 +1272,15 @@ TEST_F(RowContainerTest, estimateRowSize) {
   EXPECT_EQ(0x440000, rowContainer->stringAllocator().retainedSize());
 }
 
-class AggregateWithAlignment : public Aggregate {
- public:
-  explicit AggregateWithAlignment(TypePtr resultType, int alignment)
-      : Aggregate(std::move(resultType)), alignment_(alignment) {}
-
-  int32_t accumulatorFixedWidthSize() const override {
-    return 42;
-  }
-
-  int32_t accumulatorAlignmentSize() const override {
-    return alignment_;
-  }
-
-  void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/) override {}
-
-  void addRawInput(
-      char** /*groups*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void extractValues(
-      char** /*groups*/,
-      int32_t /*numGroups*/,
-      VectorPtr* /*result*/) override {}
-
-  void addIntermediateResults(
-      char** /*groups*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addSingleGroupRawInput(
-      char* /*group*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addSingleGroupIntermediateResults(
-      char* /*group*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void extractAccumulators(
-      char** /*groups*/,
-      int32_t /*numGroups*/,
-      VectorPtr* /*result*/) override {}
-
- private:
-  int alignment_;
-};
-
 TEST_F(RowContainerTest, alignment) {
-  AggregateWithAlignment aggregate(BIGINT(), 64);
-  std::vector<Accumulator> accumulators{Accumulator(&aggregate)};
+  std::vector<Accumulator> accumulators{Accumulator(
+      true, // isFixedSize
+      42, // fixedSize
+      false, // usesExternalMemory
+      64, // alignment
+      nullptr, // spillType
+      [](auto, auto) { VELOX_UNREACHABLE(); },
+      [](auto) {})};
   RowContainer data(
       {SMALLINT()},
       true,
@@ -944,24 +1311,40 @@ TEST_F(RowContainerTest, alignment) {
   }
 }
 
-// Verify comparison of fringe float valuesg
-TEST_F(RowContainerTest, compareFloat) {
-  // Verify ascending order
-  testCompareFloats<float>(REAL(), true, true);
-  testCompareFloats<float>(REAL(), true, false);
-  //  Verify descending order
-  testCompareFloats<float>(REAL(), false, true);
-  testCompareFloats<float>(REAL(), false, false);
+// Verify comparison of fringe float values
+TEST_F(RowContainerTest, equalAndCompareFloat) {
+  testEqualAndCompareRowContainerTypeFloat<float>(REAL());
 }
 
 // Verify comparison of fringe double values
-TEST_F(RowContainerTest, compareDouble) {
-  // Verify ascending order
-  testCompareFloats<double>(DOUBLE(), true, true);
-  testCompareFloats<double>(DOUBLE(), true, false);
-  // Verify descending order
-  testCompareFloats<double>(DOUBLE(), false, true);
-  testCompareFloats<double>(DOUBLE(), false, false);
+TEST_F(RowContainerTest, equalAndCompareDouble) {
+  testEqualAndCompareRowContainerTypeFloat<double>(DOUBLE());
+}
+
+TEST_F(RowContainerTest, equalAndCompareArrayTypeFloat) {
+  testEqualAndCompareRowContainerTypeFloat<float>(ARRAY(REAL()));
+}
+
+TEST_F(RowContainerTest, equalAndCompareArrayTypeDouble) {
+  testEqualAndCompareRowContainerTypeFloat<double>(ARRAY(DOUBLE()));
+}
+
+TEST_F(RowContainerTest, equalAndCompareMapTypeFloat) {
+  testEqualAndCompareRowContainerTypeFloat<float>(MAP(REAL(), INTEGER()));
+}
+
+TEST_F(RowContainerTest, equalAndCompareMapTypeDouble) {
+  testEqualAndCompareRowContainerTypeFloat<double>(MAP(DOUBLE(), INTEGER()));
+}
+
+TEST_F(RowContainerTest, equalAndCompareRowTypeFloat) {
+  static const std::string colName{"floatCol"};
+  testEqualAndCompareRowContainerTypeFloat<float>(ROW({colName}, {REAL()}));
+}
+
+TEST_F(RowContainerTest, equalAndCompareRowTypeDouble) {
+  static const std::string colName{"doubleCol"};
+  testEqualAndCompareRowContainerTypeFloat<double>(ROW({colName}, {DOUBLE()}));
 }
 
 TEST_F(RowContainerTest, partition) {
@@ -1305,4 +1688,331 @@ TEST_F(RowContainerTest, unknown) {
       [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
         return rowContainer->compareRows(l.second, r.second) < 0;
       }));
+}
+
+TEST_F(RowContainerTest, nans) {
+  const static auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  const static auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+  static const auto kNaNHash = folly::hasher<double>{}(kNaN);
+  std::vector<TypePtr> types = {DOUBLE()};
+  auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
+
+  auto data = makeRowVector({
+      makeFlatVector<double>({kNaN, kSNaN}),
+  });
+
+  auto size = data->size();
+  DecodedVector decoded(*data->childAt(0));
+  auto rows = store(*rowContainer, decoded, size);
+
+  // Verify that the hashes are equal.
+  std::vector<uint64_t> hashes(size, 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), false /*mix*/, hashes.data());
+  for (auto hash : hashes) {
+    ASSERT_EQ(kNaNHash, hash);
+  }
+
+  // Fill in hashes with sequential numbers: 0, 1, 2,..
+  std::iota(hashes.begin(), hashes.end(), 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), true /*mix*/, hashes.data());
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_EQ(bits::hashMix(i, kNaNHash), hashes[i]);
+  }
+
+  // Verify that they are considered equal.
+  for (size_t row = 0; row < size; ++row) {
+    ASSERT_TRUE(rowContainer->equals<false>(
+        rows[row], rowContainer->columnAt(0), decoded, row));
+  }
+  ASSERT_EQ(rowContainer->compare(rows[0], rows[1], 0, {}), 0);
+}
+
+TEST_F(RowContainerTest, toString) {
+  std::vector<TypePtr> keyTypes = {BIGINT(), VARCHAR()};
+  std::vector<TypePtr> dependentTypes = {TINYINT(), REAL(), ARRAY(BIGINT())};
+  auto rowContainer =
+      std::make_unique<RowContainer>(keyTypes, dependentTypes, pool_.get());
+
+  EXPECT_EQ(
+      rowContainer->toString(),
+      "Keys: BIGINT, VARCHAR Dependents: TINYINT, REAL, ARRAY<BIGINT> Num rows: 0");
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<std::string>({"summer", "fall", "winter", "spring"}),
+      makeFlatVector<int16_t>({11, 12, 13}),
+      makeFlatVector<float>({0.1, 2.34, 123.003}),
+      makeArrayVectorFromJson<int64_t>({"[1, 2, 3]", "[4, 5]", "null"}),
+  });
+
+  std::vector<DecodedVector> decoded;
+  for (auto i = 0; i < data->childrenSize(); ++i) {
+    decoded.emplace_back(*data->childAt(i));
+  }
+
+  const auto numRows = data->size();
+  std::vector<char*> rows(numRows);
+  for (auto row = 0; row < numRows; ++row) {
+    rows[row] = rowContainer->newRow();
+    for (auto i = 0; i < decoded.size(); ++i) {
+      rowContainer->store(decoded[i], row, rows[row], i);
+    }
+  }
+
+  EXPECT_EQ(
+      rowContainer->toString(),
+      "Keys: BIGINT, VARCHAR Dependents: TINYINT, REAL, ARRAY<BIGINT> Num rows: 3");
+
+  EXPECT_EQ(
+      rowContainer->toString(rows[0]),
+      "{1, summer, 11, 0.10000000149011612, 3 elements starting at 0 {1, 2, 3}}");
+  EXPECT_EQ(
+      rowContainer->toString(rows[1]),
+      "{2, fall, 0, 2.3399999141693115, 2 elements starting at 0 {4, 5}}");
+  EXPECT_EQ(
+      rowContainer->toString(rows[2]),
+      "{3, winter, 12, 123.00299835205078, null}");
+}
+
+TEST_F(RowContainerTest, partialWriteComplexTypedRow) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>(1, [](auto row) { return row; }),
+       makeFlatVector<std::string>({"non-inline string"}),
+       makeArrayVector<int64_t>({{1, 2, 3, 4, 5}}),
+       makeMapVector<int64_t, int64_t>({{{4, 41}}}),
+       makeRowVector({makeFlatVector<std::string>({"non-inline string"})})});
+
+  auto rowContainer = std::make_unique<RowContainer>(
+      data->type()->asRow().children(), pool_.get());
+
+  std::vector<DecodedVector> decodedVectors;
+  for (auto& vectorPtr : data->children()) {
+    decodedVectors.emplace_back(*vectorPtr);
+  }
+
+  // No write at all.
+  auto row = rowContainer->newRow();
+  rowContainer->initializeFields(row);
+  rowContainer->eraseRows(folly::Range<char**>(&row, 1));
+
+  row = rowContainer->newRow();
+  rowContainer->initializeFields(row);
+  for (auto i = 0; i < decodedVectors.size(); ++i) {
+    rowContainer->store(decodedVectors[i], 0, row, i);
+  }
+  // Partial writes should not break initializeRow for reuse.
+  rowContainer->initializeRow(row, true);
+  rowContainer->initializeFields(row);
+  for (auto i = 0; i < 3; ++i) {
+    rowContainer->store(decodedVectors[i], 0, row, i);
+  }
+  rowContainer->initializeRow(row, true);
+
+  rowContainer->initializeFields(row);
+  rowContainer->eraseRows(folly::Range<char**>(&row, 1));
+}
+
+TEST_F(RowContainerTest, extractSerializedRow) {
+  VectorFuzzer fuzzer(
+      {
+          .vectorSize = 100,
+          .nullRatio = 0.1,
+      },
+      pool());
+
+  for (auto i = 0; i < 100; ++i) {
+    SCOPED_TRACE(fmt::format("Iteration #: {}", i));
+
+    auto rowType = fuzzer.randRowType();
+    auto data = fuzzer.fuzzInputRow(rowType);
+
+    SCOPED_TRACE(data->toString());
+
+    RowContainer rowContainer{rowType->children(), pool()};
+
+    auto rows = store(rowContainer, data);
+
+    // Extract serialized rows.
+    auto serialized = BaseVector::create<FlatVector<StringView>>(
+        VARBINARY(), data->size(), pool());
+    rowContainer.extractSerializedRows(
+        folly::Range(rows.data(), rows.size()), serialized);
+
+    rowContainer.clear();
+    rows.clear();
+
+    // Load serialized rows back.
+    for (auto i = 0; i < data->size(); ++i) {
+      rows.push_back(rowContainer.newRow());
+      rowContainer.storeSerializedRow(*serialized, i, rows.back());
+    }
+
+    // Extract into regular vector.
+    auto copy = BaseVector::create<RowVector>(rowType, data->size(), pool());
+    for (auto i = 0; i < copy->childrenSize(); ++i) {
+      rowContainer.extractColumn(
+          rows.data(), copy->size(), i, copy->childAt(i));
+    }
+
+    assertEqualVectors(data, copy);
+  }
+}
+
+DEBUG_ONLY_TEST_F(RowContainerTest, eraseAfterOomStoringString) {
+  auto rowContainer = makeRowContainer({VARCHAR()}, {});
+
+  std::string str(StringView::kInlineSize * 2, 'a');
+  auto stringVector = vectorMaker_.flatVector<StringView>(
+      1, [&](auto /*row*/) { return StringView(str); });
+  SelectivityVector allRows(1);
+  DecodedVector decoded(*stringVector, allRows);
+  auto row = rowContainer->newRow();
+  const std::string exceptionMsg = "Expected simulated OOM.";
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::common::memory::MemoryPoolImpl::allocateNonContiguous",
+      std::function<void(memory::MemoryPool*)>(
+          [&](memory::MemoryPool*) { VELOX_FAIL(exceptionMsg); }));
+  VELOX_ASSERT_THROW(rowContainer->store(decoded, 0, row, 0), exceptionMsg);
+
+  std::vector<char*> rows(1);
+  RowContainerIterator iter;
+  auto numRows = rowContainer->listRows(&iter, 1, rows.data());
+  VELOX_CHECK_EQ(numRows, 1);
+  // If the StringView was placed in the row before the memory was
+  // allocated in the container's string allocator, this will fail
+  // attempting to free a string the allocator doesn't own.
+  rowContainer->eraseRows(folly::Range<char**>(rows.data(), numRows));
+}
+
+TEST_F(RowContainerTest, nextRowVector) {
+  int32_t numRows = 100;
+  auto data = makeRowContainer({SMALLINT()}, {SMALLINT()});
+  EXPECT_EQ(data->nextOffset(), 11);
+  std::unordered_set<char*> rowSet;
+  std::vector<char*> rows;
+
+  auto dataClear = [&]() {
+    data->clear();
+    EXPECT_EQ(0, data->numRows());
+    auto free = data->freeSpace();
+    EXPECT_EQ(0, free.first);
+    EXPECT_EQ(0, free.second);
+    rows.clear();
+    rowSet.clear();
+  };
+
+  auto validateNextRowVector = [&]() {
+    for (int i = 0; i < rows.size(); i++) {
+      auto vector = data->getNextRowVector(rows[i]);
+      if (vector) {
+        auto iter = std::find(vector->begin(), vector->end(), rows[i]);
+        EXPECT_NE(iter, vector->end());
+        EXPECT_TRUE(vector->size() <= 2 && vector->size() > 0);
+        for (auto next : *vector) {
+          EXPECT_EQ(data->getNextRowVector(next), vector);
+          EXPECT_TRUE(std::find(rows.begin(), rows.end(), next) != rows.end());
+        }
+      }
+    }
+  };
+
+  auto nextRowVectorAppendValidation = [&]() {
+    for (int i = 0; i < numRows; ++i) {
+      rows.push_back(data->newRow());
+      rowSet.insert(rows.back());
+      EXPECT_EQ(data->getNextRowVector(rows.back()), nullptr);
+    }
+    EXPECT_EQ(numRows, data->numRows());
+    std::vector<char*> rowsFromContainer(numRows);
+    RowContainerIterator iter;
+    EXPECT_EQ(
+        data->listRows(&iter, numRows, rowsFromContainer.data()), numRows);
+    EXPECT_EQ(0, data->listRows(&iter, numRows, rows.data()));
+    EXPECT_EQ(rows, rowsFromContainer);
+
+    for (int i = 0; i + 2 <= numRows; i += 2) {
+      data->appendNextRow(rows[i], rows[i + 1]);
+    }
+    validateNextRowVector();
+  };
+
+  auto nextRowVectorEraseValidation = [&](const std::vector<int>& eraseRows) {
+    dataClear();
+    nextRowVectorAppendValidation();
+    std::vector<char*> erasingRows;
+    for (auto index : eraseRows) {
+      erasingRows.emplace_back(rows[index]);
+    }
+    for (auto row : erasingRows) {
+      rows.erase(std::remove(rows.begin(), rows.end(), row), rows.end());
+    }
+    data->eraseRows(
+        folly::Range<char**>(erasingRows.data(), erasingRows.size()));
+    validateNextRowVector();
+    data->checkConsistency();
+  };
+
+  nextRowVectorAppendValidation();
+  nextRowVectorEraseValidation({0, 1});
+  nextRowVectorEraseValidation({34, 35, 98, 99});
+  nextRowVectorEraseValidation({2, 3, 22, 23, 88, 89, 58, 59});
+  std::vector<int> eraseRows(numRows);
+  std::iota(eraseRows.begin(), eraseRows.end(), 0);
+  nextRowVectorEraseValidation(eraseRows);
+
+  VELOX_ASSERT_THROW(
+      nextRowVectorEraseValidation({1}),
+      "All rows with the same keys must be present in 'rows'");
+
+  dataClear();
+}
+
+TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
+  constexpr int32_t kNumRows = 100;
+  constexpr int32_t kColumnIndex = 0;
+
+  // wrap dictionary vector
+  std::vector<int128_t> rawData;
+  for (auto i = 0; i < kNumRows; ++i) {
+    rawData.push_back(HugeInt::build(i, i));
+  }
+  auto hugeIntVector = makeFlatVector<int128_t>(rawData);
+
+  auto isNullAt = [](vector_size_t i) { return i % 10 == 0; };
+
+  BufferPtr dictNulls = allocateNulls(kNumRows, pool());
+  auto rawDictNulls = dictNulls->asMutable<uint64_t>();
+  for (auto i = 0; i < kNumRows; ++i) {
+    bits::setNull(rawDictNulls, i, isNullAt(i));
+  }
+
+  BufferPtr dictIndices =
+      AlignedBuffer::allocate<vector_size_t>(kNumRows, pool());
+  auto rawDictIndices = dictIndices->asMutable<vector_size_t>();
+  for (auto i = 0; i < kNumRows; ++i) {
+    if (!isNullAt(i)) {
+      rawDictIndices[i] = i;
+    }
+    // indices of null indexes contain garbage values
+  }
+
+  auto source = BaseVector::wrapInDictionary(
+      dictNulls, dictIndices, kNumRows, hugeIntVector);
+
+  std::vector<TypePtr> keys;
+  auto data = makeRowContainer({HUGEINT()}, {}, false);
+  std::vector<char*> rows(kNumRows);
+  for (auto i = 0; i < kNumRows; ++i) {
+    rows[i] = data->newRow();
+  }
+  SelectivityVector allRows(kNumRows);
+  DecodedVector decoded(*source, allRows);
+  for (auto i = 0; i < kNumRows; ++i) {
+    data->store(decoded, i, rows[i], kColumnIndex);
+  }
+  auto extracted = BaseVector::copy(*source);
+  data->extractColumn(rows.data(), kNumRows, kColumnIndex, extracted);
+  assertEqualVectors(source, extracted);
 }

@@ -20,6 +20,7 @@
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/Expand.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/GroupId.h"
 #include "velox/exec/HashAggregation.h"
@@ -51,7 +52,7 @@ namespace detail {
 
 /// Returns true if source nodes must run in a separate pipeline.
 bool mustStartNewPipeline(
-    std::shared_ptr<const core::PlanNode> planNode,
+    const std::shared_ptr<const core::PlanNode>& planNode,
     int sourceId) {
   if (auto localMerge =
           std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
@@ -69,7 +70,8 @@ bool mustStartNewPipeline(
 
 OperatorSupplier makeConsumerSupplier(ConsumerSupplier consumerSupplier) {
   if (consumerSupplier) {
-    return [consumerSupplier](int32_t operatorId, DriverCtx* ctx) {
+    return [consumerSupplier = std::move(consumerSupplier)](
+               int32_t operatorId, DriverCtx* ctx) {
       return std::make_unique<CallbackSink>(
           operatorId, ctx, consumerSupplier());
     };
@@ -87,7 +89,7 @@ OperatorSupplier makeConsumerSupplier(
 
       auto consumer = [mergeSource](
                           RowVectorPtr input, ContinueFuture* future) {
-        return mergeSource->enqueue(input, future);
+        return mergeSource->enqueue(std::move(input), future);
       };
       return std::make_unique<CallbackSink>(operatorId, ctx, consumer);
     };
@@ -122,7 +124,7 @@ OperatorSupplier makeConsumerSupplier(
       auto source =
           ctx->task->getMergeJoinSource(ctx->splitGroupId, planNodeId);
       auto consumer = [source](RowVectorPtr input, ContinueFuture* future) {
-        return source->enqueue(input, future);
+        return source->enqueue(std::move(input), future);
       };
       return std::make_unique<CallbackSink>(operatorId, ctx, consumer);
     };
@@ -140,11 +142,11 @@ void plan(
   if (!currentPlanNodes) {
     driverFactories->push_back(std::make_unique<DriverFactory>());
     currentPlanNodes = &driverFactories->back()->planNodes;
-    driverFactories->back()->consumerSupplier = consumerSupplier;
+    driverFactories->back()->consumerSupplier = std::move(consumerSupplier);
     driverFactories->back()->consumerNode = consumerNode;
   }
 
-  auto sources = planNode->sources();
+  const auto& sources = planNode->sources();
   if (sources.empty()) {
     driverFactories->back()->inputDriver = true;
   } else {
@@ -222,6 +224,12 @@ uint32_t maxDrivers(
     } else if (std::dynamic_pointer_cast<const core::MergeJoinNode>(node)) {
       // Merge join must run single-threaded.
       return 1;
+    } else if (
+        auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
+      // Right semi project doesn't support multi-threaded execution.
+      if (join->isRightSemiProjectJoin()) {
+        return 1;
+      }
     } else if (
         auto tableWrite =
             std::dynamic_pointer_cast<const core::TableWriteNode>(node)) {
@@ -381,6 +389,23 @@ void LocalPlanner::markMixedJoinBridges(
   }
 }
 
+namespace {
+
+// If the upstream is partial limit, downstream is final limit and we want to
+// flush as soon as we can to reach the limit and do as little work as possible.
+bool eagerFlush(const core::PlanNode& node) {
+  if (auto* limit = dynamic_cast<const core::LimitNode*>(&node)) {
+    return limit->isPartial() && limit->offset() + limit->count() < 10'000;
+  }
+  if (node.sources().empty()) {
+    return false;
+  }
+  // Follow the first source, which is driving the output.
+  return eagerFlush(*node.sources()[0]);
+}
+
+} // namespace
+
 std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,
     std::shared_ptr<ExchangeClient> exchangeClient,
@@ -457,7 +482,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
                 planNode)) {
       operators.push_back(std::make_unique<PartitionedOutput>(
-          id, ctx.get(), partitionedOutputNode));
+          id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
     } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
@@ -471,15 +496,17 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
-      if (!aggregationNode->preGroupedKeys().empty() &&
-          aggregationNode->preGroupedKeys().size() ==
-              aggregationNode->groupingKeys().size()) {
+      if (aggregationNode->isPreGrouped()) {
         operators.push_back(std::make_unique<StreamingAggregation>(
             id, ctx.get(), aggregationNode));
       } else {
         operators.push_back(
             std::make_unique<HashAggregation>(id, ctx.get(), aggregationNode));
       }
+    } else if (
+        auto expandNode =
+            std::dynamic_pointer_cast<const core::ExpandNode>(planNode)) {
+      operators.push_back(std::make_unique<Expand>(id, ctx.get(), expandNode));
     } else if (
         auto groupIdNode =
             std::dynamic_pointer_cast<const core::GroupIdNode>(planNode)) {

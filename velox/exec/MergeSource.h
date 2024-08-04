@@ -23,6 +23,9 @@ class MergeExchange;
 
 class MergeSource {
  public:
+  static constexpr int32_t kMaxQueuedBytesUpperLimit = 32 << 20; // 32 MB.
+  static constexpr int32_t kMaxQueuedBytesLowerLimit = 1 << 20; // 1 MB.
+
   virtual ~MergeSource() {}
 
   virtual BlockingReason next(RowVectorPtr& data, ContinueFuture* future) = 0;
@@ -40,7 +43,9 @@ class MergeSource {
       MergeExchange* mergeExchange,
       const std::string& taskId,
       int destination,
-      memory::MemoryPool* FOLLY_NONNULL pool);
+      int64_t maxQueuedBytes,
+      memory::MemoryPool* pool,
+      folly::Executor* executor);
 };
 
 /// Coordinates data transfer between single producer and single consumer. Used
@@ -59,8 +64,15 @@ class MergeJoinSource {
   void close();
 
  private:
+  // Wait consumer to fetch next batch of data.
+  BlockingReason waitForConsumer(ContinueFuture* future) {
+    producerPromise_ = ContinuePromise("MergeJoinSource::waitForConsumer");
+    *future = producerPromise_->getSemiFuture();
+    return BlockingReason::kWaitForConsumer;
+  }
+
   struct State {
-    bool atEnd;
+    bool atEnd = false;
     RowVectorPtr data;
   };
 

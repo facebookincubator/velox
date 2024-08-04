@@ -15,12 +15,12 @@
  */
 
 #include <gtest/gtest.h>
-#include "FuzzerRunner.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/SignatureBinder.h"
-#include "velox/expression/tests/ExpressionFuzzer.h"
+#include "velox/expression/fuzzer/ExpressionFuzzer.h"
+#include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/tests/ExpressionRunner.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/vector/VectorSaver.h"
@@ -35,17 +35,24 @@ class ExpressionRunnerUnitTest : public testing::Test, public VectorTestBase {
   }
 
  protected:
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
-  core::QueryCtx queryCtx_{};
-  core::ExecCtx execCtx_{pool_.get(), &queryCtx_};
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
+  std::shared_ptr<memory::MemoryPool> pool_{
+      memory::memoryManager()->addLeafPool()};
+  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
+  core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
 };
 
 TEST_F(ExpressionRunnerUnitTest, run) {
   auto inputFile = exec::test::TempFilePath::create();
   auto sqlFile = exec::test::TempFilePath::create();
   auto resultFile = exec::test::TempFilePath::create();
-  const char* inputPath = inputFile->path.data();
-  const char* resultPath = resultFile->path.data();
+  const auto inputPathStr = inputFile->getPath();
+  const char* inputPath = inputPathStr.data();
+  const auto resultPathStr = resultFile->getPath();
+  const char* resultPath = resultPathStr.data();
   const int vectorSize = 100;
 
   VectorMaker vectorMaker(pool_.get());
@@ -58,8 +65,20 @@ TEST_F(ExpressionRunnerUnitTest, run) {
   saveVectorToFile(inputVector.get(), inputPath);
   saveVectorToFile(resultVector.get(), resultPath);
 
-  EXPECT_NO_THROW(ExpressionRunner::run(
-      inputPath, "length(c0)", "", resultPath, "verify", 0, "", ""));
+  for (bool useSeperatePoolForInput : {true, false}) {
+    LOG(INFO) << "Using useSeperatePoolForInput: " << useSeperatePoolForInput;
+    EXPECT_NO_THROW(ExpressionRunner::run(
+        inputPath,
+        "length(c0)",
+        "",
+        resultPath,
+        "verify",
+        0,
+        "",
+        "",
+        false,
+        useSeperatePoolForInput));
+  }
 }
 
 TEST_F(ExpressionRunnerUnitTest, persistAndReproComplexSql) {
@@ -91,8 +110,10 @@ TEST_F(ExpressionRunnerUnitTest, persistAndReproComplexSql) {
   // Emulate a reproduce from complex constant SQL
   auto sqlFile = exec::test::TempFilePath::create();
   auto complexConstantsFile = exec::test::TempFilePath::create();
-  auto sqlPath = sqlFile->path.c_str();
-  auto complexConstantsPath = complexConstantsFile->path.c_str();
+  const auto complexConstantsFilePathStr = complexConstantsFile->getPath();
+  auto sqlPathStr = sqlFile->getPath();
+  auto sqlPath = sqlPathStr.c_str();
+  auto complexConstantsPath = complexConstantsFilePathStr.c_str();
 
   // Write to file..
   saveStringToFile(complexConstantsSql, sqlPath);
@@ -112,8 +133,8 @@ TEST_F(ExpressionRunnerUnitTest, persistAndReproComplexSql) {
 }
 
 TEST_F(ExpressionRunnerUnitTest, primitiveConstantsInexpressibleInSql) {
-  auto varbinaryData = vectorMaker_.flatVector<StringView>(
-      {"12"_sv}, CppToType<Varbinary>::create());
+  auto varbinaryData =
+      vectorMaker_.flatVector<StringView>({"12"_sv}, VARBINARY());
   auto constantExpr = std::make_shared<const core::ConstantTypedExpr>(
       BaseVector::wrapInConstant(1, 0, varbinaryData));
 

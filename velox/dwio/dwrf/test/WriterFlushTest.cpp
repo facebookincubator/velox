@@ -57,17 +57,19 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_NYI("{} unsupported", __FUNCTION__);
   }
 
-  int64_t reservedBytes() const override {
+  int64_t releasableReservation() const override {
     VELOX_NYI("{} unsupported", __FUNCTION__);
+  }
+
+  int64_t reservedBytes() const override {
+    return localMemoryUsage_;
   }
 
   bool maybeReserve(uint64_t size) override {
     VELOX_NYI("{} unsupported", __FUNCTION__);
   }
 
-  void release() override {
-    VELOX_NYI("{} unsupported", __FUNCTION__);
-  }
+  void release() override {}
 
   Stats stats() const override {
     VELOX_NYI("{} unsupported", __FUNCTION__);
@@ -154,7 +156,7 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_UNSUPPORTED("growContiguous unsupported");
   }
 
-  int64_t currentBytes() const override {
+  int64_t usedBytes() const override {
     return localMemoryUsage_;
   }
 
@@ -169,7 +171,6 @@ class MockMemoryPool : public velox::memory::MemoryPool {
   }
 
   MOCK_CONST_METHOD0(peakBytes, int64_t());
-  // MOCK_CONST_METHOD0(getMaxBytes, int64_t());
 
   MOCK_METHOD1(updateSubtreeMemoryUsage, int64_t(int64_t));
 
@@ -180,12 +181,10 @@ class MockMemoryPool : public velox::memory::MemoryPool {
   }
 
   void setReclaimer(
-      std::unique_ptr<memory::MemoryReclaimer> reclaimer) override {
-    VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
-  }
+      std::unique_ptr<memory::MemoryReclaimer> reclaimer) override {}
 
   memory::MemoryReclaimer* reclaimer() const override {
-    VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
+    return nullptr;
   }
 
   void enterArbitration() override {
@@ -196,11 +195,12 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
   }
 
-  bool reclaimableBytes(uint64_t& reclaimableBytes) const override {
+  std::optional<uint64_t> reclaimableBytes() const override {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
   }
 
   uint64_t reclaim(
+      uint64_t /*unused*/,
       uint64_t /*unused*/,
       velox::memory::MemoryReclaimer::Stats& /*unused*/) override {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
@@ -210,7 +210,7 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
   }
 
-  uint64_t grow(uint64_t /*unused*/) noexcept override {
+  bool grow(uint64_t /*unused*/, uint64_t /*unused*/) noexcept override {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
   }
 
@@ -228,13 +228,13 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
   }
 
-  std::string treeMemoryUsage() const override {
+  std::string treeMemoryUsage(bool /*unused*/) const override {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
   }
 
  private:
   velox::memory::MemoryAllocator* const allocator_{
-      velox::memory::MemoryAllocator::getInstance()};
+      velox::memory::memoryManager()->allocator()};
   const int64_t capacity_;
   int64_t localMemoryUsage_{0};
 };
@@ -324,7 +324,7 @@ struct SimulatedFlush {
     auto& generalPool = dynamic_cast<MockMemoryPool&>(
         context.getMemoryPool(MemoryUsageCategory::GENERAL));
     dictPool.setLocalMemoryUsage(dictMemoryUsage);
-    ASSERT_EQ(outputStreamMemoryUsage, outputPool.currentBytes());
+    ASSERT_EQ(outputStreamMemoryUsage, outputPool.usedBytes());
     outputPool.updateLocalMemoryUsage(flushOverhead);
     generalPool.setLocalMemoryUsage(generalMemoryUsage);
 
@@ -421,13 +421,12 @@ class WriterFlushTestHelper {
       if (writer->shouldFlush(context, write.numRows)) {
         ASSERT_EQ(
             0,
-            context.getMemoryPool(MemoryUsageCategory::DICTIONARY)
-                .currentBytes());
+            context.getMemoryPool(MemoryUsageCategory::DICTIONARY).usedBytes());
         auto outputStreamMemoryUsage =
             context.getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM)
-                .currentBytes();
+                .usedBytes();
         auto generalMemoryUsage =
-            context.getMemoryPool(MemoryUsageCategory::GENERAL).currentBytes();
+            context.getMemoryPool(MemoryUsageCategory::GENERAL).usedBytes();
 
         uint64_t flushOverhead =
             folly::Random::rand32(0, context.stripeRawSize(), gen);
@@ -478,8 +477,15 @@ class WriterFlushTestHelper {
   }
 };
 
+class TestWriterFlush : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
+
 // This test checks against constructed test cases.
-TEST(TestWriterFlush, CheckAgainstMemoryBudget) {
+TEST_F(TestWriterFlush, CheckAgainstMemoryBudget) {
   auto pool = MockMemoryPool::create();
   {
     auto writer = WriterFlushTestHelper::prepWriter(pool, 1024);
@@ -629,7 +635,7 @@ TEST(TestWriterFlush, CheckAgainstMemoryBudget) {
 }
 
 // Tests the number of stripes produced based on random results.
-TEST(TestWriterFlush, MemoryBasedFlushRandom) {
+TEST_F(TestWriterFlush, MemoryBasedFlushRandom) {
   struct TestCase {
     TestCase(
         uint32_t seed,

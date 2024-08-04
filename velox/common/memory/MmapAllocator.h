@@ -24,8 +24,11 @@
 #include <mutex>
 #include <unordered_set>
 
+#include <folly/ThreadCachedInt.h>
+
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/MemoryAllocator.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/common/memory/MmapArena.h"
 
 namespace facebook::velox::memory {
@@ -50,7 +53,9 @@ class MmapAllocator : public MemoryAllocator {
  public:
   struct Options {
     ///  Capacity in bytes, default unlimited.
-    uint64_t capacity = kDefaultCapacityBytes;
+    uint64_t capacity{kMaxMemory};
+
+    int32_t largestSizeClass{256};
 
     /// If set true, allocations larger than largest size class size will be
     /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
@@ -102,12 +107,13 @@ class MmapAllocator : public MemoryAllocator {
 
   bool growContiguousWithoutRetry(
       MachinePageCount increment,
-      ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr) override;
+      ContiguousAllocation& allocation) override;
 
   void freeContiguous(ContiguousAllocation& allocation) override;
 
   int64_t freeNonContiguous(Allocation& allocation) override;
+
+  MachinePageCount unmap(MachinePageCount targetPages) override;
 
   void freeBytes(void* p, uint64_t bytes) noexcept override;
 
@@ -128,7 +134,7 @@ class MmapAllocator : public MemoryAllocator {
   }
 
   size_t totalUsedBytes() const override {
-    return numMallocBytes_ + AllocationTraits::pageBytes(numAllocated_);
+    return numMallocBytes() + AllocationTraits::pageBytes(numAllocated_);
   }
 
   MachinePageCount numAllocated() const override {
@@ -144,7 +150,7 @@ class MmapAllocator : public MemoryAllocator {
   }
 
   uint64_t numMallocBytes() const {
-    return numMallocBytes_;
+    return numMallocBytes_.readFull();
   }
 
   Stats stats() const override {
@@ -275,7 +281,7 @@ class MmapAllocator : public MemoryAllocator {
     const int32_t pageBitmapSize_;
 
     // Serializes access to all data members and private methods.
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
 
     // Start of address range.
     uint8_t* address_;
@@ -313,23 +319,19 @@ class MmapAllocator : public MemoryAllocator {
   };
 
   bool allocateNonContiguousWithoutRetry(
-      MachinePageCount numPages,
-      Allocation& out,
-      ReservationCallback reservationCB = nullptr,
-      MachinePageCount minSizeClass = 0) override;
+      const SizeMix& sizeMix,
+      Allocation& out) override;
 
   bool allocateContiguousWithoutRetry(
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr,
       MachinePageCount maxPages = 0) override;
 
   bool allocateContiguousImpl(
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB,
       MachinePageCount maxPages);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
@@ -360,7 +362,7 @@ class MmapAllocator : public MemoryAllocator {
 
   // Frees 'allocation and returns the number of freed pages. Does not
   // update 'numAllocated'.
-  MachinePageCount freeInternal(Allocation& allocation);
+  MachinePageCount freeNonContiguousInternal(Allocation& allocation);
 
   void markAllMapped(const Allocation& allocation);
 
@@ -412,7 +414,7 @@ class MmapAllocator : public MemoryAllocator {
   std::atomic<uint64_t> numAllocations_ = 0;
   std::atomic<uint64_t> numAllocatedPages_ = 0;
   std::atomic<uint64_t> numAdvisedPages_ = 0;
-  std::atomic<uint64_t> numMallocBytes_ = 0;
+  folly::ThreadCachedInt<int64_t, MmapAllocator> numMallocBytes_;
 
   // Allocations that are larger than largest size classes will be delegated to
   // ManagedMmapArenas, to avoid calling mmap on every allocation.

@@ -44,7 +44,8 @@ struct WidthBucketFunction {
       result = bucketCount + 1;
     } else {
       result =
-          (int64_t)((double)bucketCount * (operand - lower) / (upper - lower) + 1);
+          (int64_t)((double)bucketCount * (operand - lower) / (upper - lower) +
+                    1);
     }
 
     if (bound1 > bound2) {
@@ -111,7 +112,7 @@ BENCHMARK_RELATIVE(widthBucket) {
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init init{&argc, &argv};
 
   folly::runBenchmarks();
   return 0;

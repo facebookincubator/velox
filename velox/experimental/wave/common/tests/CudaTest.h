@@ -22,10 +22,126 @@
 
 namespace facebook::velox::wave {
 
+struct WideParams {
+  int32_t size;
+  int32_t* numbers;
+  int32_t stride;
+  int32_t repeat;
+  char data[4000];
+  void* result;
+};
+
+enum class Add64Mode {
+  k1Add,
+  k4Add,
+  k4Seq,
+  k4Coa,
+  k4Reg,
+  k4SMem,
+  k4Branch,
+  k4Func,
+  k4SMemFunc,
+  k1Func
+};
+
 class TestStream : public Stream {
  public:
-  // Queues a kernel to add 1 to numbers[0...size - 1].
-  void addOne(int32_t* numbers, int size);
+  // Queues a kernel to add 1 to numbers[0...size - 1]. The kernel repeats
+  // 'repeat' times.
+  void
+  incOne(int32_t* numbers, int size, int32_t repeat = 1, int32_t width = 10240);
+
+  /// Like incOne but adds idx & 31 to numbers[idx].
+  void
+  addOne(int32_t* numbers, int size, int32_t repeat = 1, int32_t width = 10240);
+
+  void addOneWide(
+      int32_t* numbers,
+      int32_t size,
+      int32_t repeat = 1,
+      int32_t width = 10240);
+
+  /// Like addOne but uses shared memory for intermediates, with global
+  /// ead/write at start/end.
+  void addOneShared(
+      int32_t* numbers,
+      int32_t size,
+      int32_t repeat = 1,
+      int32_t width = 10240);
+
+  /// Like addOne but uses registers for intermediates.
+  void addOneReg(
+      int32_t* numbers,
+      int32_t size,
+      int32_t repeat = 1,
+      int32_t width = 10240);
+
+  /// Like addOneReg but does an indirect function call in the inner loop.
+  void addOneFunc(
+      int32_t* numbers,
+      int32_t size,
+      int32_t repeat = 1,
+      int32_t width = 10240);
+
+  void addOneFuncStore(
+      int32_t* numbers,
+      int32_t size,
+      int32_t repeat = 1,
+      int32_t width = 10240);
+
+  /// addOne with indirect jump.
+  void addOneBranch(
+      int32_t* numbers,
+      int32_t size,
+      int32_t repeat = 1,
+      int32_t width = 10240);
+
+  /// addOne with switch.
+  void addOneSwitch(
+      int32_t* numbers,
+      int32_t size,
+      int32_t repeat = 1,
+      int32_t width = 10240);
+
+  void addOne4x64(
+      int64_t* numbers,
+      int32_t size,
+      int32_t repeats,
+      int32_t width,
+      Add64Mode mode);
+
+  /// Increments each of 'numbers by a deterministic pseudorandom
+  /// increment from 'lookup'. If 'numLocal is non-0, also accesses
+  /// 'numLocal' adjacent positions in 'lookup' with a stride of
+  /// 'localStride'.  If 'emptyWarps' is true, odd warps do no work
+  /// but still sync with the other ones with __syncthreads().  If
+  /// 'emptyThreads' is true, odd lanes do no work and even lanes do
+  /// their work instead.
+  void addOneRandom(
+      int32_t* numbers,
+      const int32_t* lookup,
+      int size,
+      int32_t repeat = 1,
+      int32_t width = 10240,
+      int32_t numLocal = 0,
+      int32_t localStride = 0,
+      bool emptyWarps = false,
+      bool emptyLanes = false);
+
+  // Makes random lookup keys and increments, starting at 'startCount'
+  // columns[0] is keys. 'powerOfTwo' is the next power of two from
+  // 'keyRange'. If 'powerOfTwo' is 0 the key columns are set to
+  // zero. Otherwise the key column values are incremented by a a
+  // delta + index of column where delta for element 0 is startCount &
+  // (powerOfTwo - 1).
+  void makeInput(
+      int32_t numRows,
+      int32_t keyRange,
+      int32_t powerOfTwo,
+      int32_t startCount,
+      uint64_t* hash,
+      uint8_t numColumns,
+      int64_t** columns);
 };
 
 } // namespace facebook::velox::wave

@@ -19,30 +19,6 @@
 
 namespace facebook::velox::common {
 
-ScanSpec& ScanSpec::operator=(const ScanSpec& other) {
-  if (this != &other) {
-    numReads_ = other.numReads_;
-    subscript_ = other.subscript_;
-    fieldName_ = other.fieldName_;
-    channel_ = other.channel_;
-    constantValue_ = other.constantValue_;
-    projectOut_ = other.projectOut_;
-    extractValues_ = other.extractValues_;
-    makeFlat_ = other.makeFlat_;
-    filter_ = other.filter_;
-    metadataFilters_ = other.metadataFilters_;
-    selectivity_ = other.selectivity_;
-    enableFilterReorder_ = other.enableFilterReorder_;
-    children_ = other.children_;
-    stableChildren_ = other.stableChildren_;
-    childByFieldName_ = other.childByFieldName_;
-    valueHook_ = other.valueHook_;
-    isArrayElementOrMapEntry_ = other.isArrayElementOrMapEntry_;
-    maxArrayElementsCount_ = other.maxArrayElementsCount_;
-  }
-  return *this;
-}
-
 ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
   auto container = this;
   auto& path = subfield.path();
@@ -155,34 +131,20 @@ bool ScanSpec::hasFilter() const {
 
 void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
   // moves the filters and filter order from 'other'.
-  std::vector<std::shared_ptr<ScanSpec>> newChildren;
-  childByFieldName_.clear();
-  for (auto& otherChild : other.children_) {
-    bool found = false;
-    for (auto& child : children_) {
-      if (child && child->fieldName_ == otherChild->fieldName_) {
-        if (!child->isConstant() && !otherChild->isConstant()) {
-          // If other child is constant, a possible filter on a
-          // constant will have been evaluated at split start time. If
-          // 'child' is constant there is no adaptation that can be
-          // received.
-          child->filter_ = std::move(otherChild->filter_);
-          child->selectivity_ = otherChild->selectivity_;
-        }
-        childByFieldName_[child->fieldName_] = child.get();
-        newChildren.push_back(std::move(child));
-        found = true;
-        break;
-      }
+  for (auto& child : children_) {
+    auto it = other.childByFieldName_.find(child->fieldName_);
+    if (it == other.childByFieldName_.end()) {
+      continue;
     }
-    VELOX_CHECK(found);
-  }
-  children_ = std::move(newChildren);
-  stableChildren_.clear();
-  for (auto& otherChild : other.stableChildren_) {
-    auto child = childByName(otherChild->fieldName_);
-    VELOX_CHECK(child);
-    stableChildren_.push_back(child);
+    auto* otherChild = it->second;
+    if (!child->isConstant() && !otherChild->isConstant()) {
+      // If other child is constant, a possible filter on a
+      // constant will have been evaluated at split start time. If
+      // 'child' is constant there is no adaptation that can be
+      // received.
+      child->filter_ = std::move(otherChild->filter_);
+      child->selectivity_ = otherChild->selectivity_;
+    }
   }
 }
 
@@ -400,18 +362,6 @@ std::string ScanSpec::toString() const {
     out << ")";
   }
   return out.str();
-}
-
-std::shared_ptr<ScanSpec> ScanSpec::removeChild(const ScanSpec* child) {
-  for (auto it = children_.begin(); it != children_.end(); ++it) {
-    if (it->get() == child) {
-      auto removed = std::move(*it);
-      children_.erase(it);
-      childByFieldName_.erase(removed->fieldName());
-      return removed;
-    }
-  }
-  return nullptr;
 }
 
 void ScanSpec::addFilter(const Filter& filter) {

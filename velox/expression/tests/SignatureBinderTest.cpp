@@ -20,7 +20,8 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
-using namespace facebook::velox;
+namespace facebook::velox::exec::test {
+namespace {
 
 void testSignatureBinder(
     const std::shared_ptr<exec::FunctionSignature>& signature,
@@ -237,6 +238,31 @@ TEST(SignatureBinderTest, decimals) {
           exec::SignatureVariable(
               "TypeName", "a = b", exec::ParameterType::kTypeParameter),
           "Type variables cannot have constraints");
+    }
+  }
+  // Scalar function signature with fixed scale.
+  {
+    {
+      auto signature = exec::FunctionSignatureBuilder()
+                           .integerVariable("precision")
+                           .returnType("boolean")
+                           .argumentType("DECIMAL(precision, 6)")
+                           .build();
+      testSignatureBinder(signature, {DECIMAL(11, 6)}, BOOLEAN());
+      assertCannotResolve(signature, {DECIMAL(11, 8)});
+    }
+    {
+      auto signature = exec::FunctionSignatureBuilder()
+                           .integerVariable("precision")
+                           .integerVariable("scale")
+                           .returnType("DECIMAL(precision, scale)")
+                           .argumentType("DECIMAL(precision, 6)")
+                           .argumentType("DECIMAL(18, scale)")
+                           .build();
+      testSignatureBinder(
+          signature, {DECIMAL(11, 6), DECIMAL(18, 4)}, DECIMAL(11, 4));
+      assertCannotResolve(signature, {DECIMAL(11, 6), DECIMAL(20, 4)});
+      assertCannotResolve(signature, {DECIMAL(11, 8), DECIMAL(18, 4)});
     }
   }
 }
@@ -754,7 +780,7 @@ TEST(SignatureBinderTest, logicalType) {
     testSignatureBinder(signature, {INTERVAL_DAY_TIME()}, BIGINT());
   }
 
-  // Logical type as an return type.
+  // Logical type as a return type.
   {
     auto signature = exec::FunctionSignatureBuilder()
                          .returnType("interval day to second")
@@ -810,7 +836,7 @@ TEST(SignatureBinderTest, customType) {
           .returnType("bigint")
           .argumentType("fancy_type")
           .build(),
-      "Type doesn't exist: FANCY_TYPE");
+      "Type doesn't exist: 'FANCY_TYPE'");
 }
 
 TEST(SignatureBinderTest, hugeIntType) {
@@ -823,3 +849,84 @@ TEST(SignatureBinderTest, hugeIntType) {
     testSignatureBinder(signature, {HUGEINT()}, HUGEINT());
   }
 }
+
+TEST(SignatureBinderTest, namedRows) {
+  registerCustomType(
+      "timestamp with time zone",
+      std::make_unique<const TimestampWithTimeZoneTypeFactories>());
+
+  // Simple named row field.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("varchar")
+                         .argumentType("row(bla varchar)")
+                         .build();
+    testSignatureBinder(signature, {ROW({{"bla", VARCHAR()}})}, VARCHAR());
+
+    // Cannot bind if field doesn't have the same name set.
+    assertCannotResolve(signature, {ROW({{VARCHAR()}})});
+  }
+
+  // Multiple named row field.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("varchar")
+                         .argumentType("row(foo varchar, bigint, bar double)")
+                         .build();
+    testSignatureBinder(
+        signature,
+        {ROW({{"foo", VARCHAR()}, {"", BIGINT()}, {"bar", DOUBLE()}})},
+        VARCHAR());
+
+    // Binds even if the middle (unnamed) field has a name.
+    testSignatureBinder(
+        signature,
+        {ROW({{"foo", VARCHAR()}, {"fighters", BIGINT()}, {"bar", DOUBLE()}})},
+        VARCHAR());
+
+    // But not if one of the named fields is not.
+    assertCannotResolve(
+        signature,
+        {ROW({{"foo", VARCHAR()}, {"fighters", BIGINT()}, {"bla", DOUBLE()}})});
+  }
+
+  // Type with a space in the name.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("varchar")
+                         .argumentType("row(timestamp with time zone)")
+                         .build();
+    testSignatureBinder(
+        signature, {ROW({TIMESTAMP_WITH_TIME_ZONE()})}, VARCHAR());
+
+    // Ok to bind if even if the type has a field name set.
+    testSignatureBinder(
+        signature, {ROW({{"name", TIMESTAMP_WITH_TIME_ZONE()}})}, VARCHAR());
+  }
+
+  // Named type with a space.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("varchar")
+                         .argumentType("row(named timestamp with time zone)")
+                         .build();
+    testSignatureBinder(
+        signature, {ROW({{"named", TIMESTAMP_WITH_TIME_ZONE()}})}, VARCHAR());
+  }
+
+  // Nested named.
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .argumentType("row(my_map map(bigint, row(bla varchar)))")
+            .build();
+    testSignatureBinder(
+        signature,
+        {ROW({{"my_map", MAP(BIGINT(), ROW({{"bla", VARCHAR()}}))}})},
+        VARCHAR());
+  }
+}
+
+} // namespace
+} // namespace facebook::velox::exec::test

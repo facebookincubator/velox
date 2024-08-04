@@ -21,6 +21,7 @@
 #include "velox/common/caching/SsdCache.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/HashProbe.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/type/Variant.h"
@@ -31,6 +32,27 @@
 namespace facebook::velox::exec::test {
 class OperatorTestBase : public testing::Test,
                          public velox::test::VectorTestBase {
+ public:
+  /// The following methods are used by google unit test framework to do
+  /// one-time setup/teardown for all the unit tests from OperatorTestBase. We
+  /// make them public as some benchmark like ReduceAgg also call these methods
+  /// to setup/teardown benchmark test environment.
+  static void SetUpTestCase();
+  static void TearDownTestCase();
+
+  /// Sets up the velox memory system.
+  ///
+  /// NOTE: a second call to this will clear the previous memory system
+  /// instances and create a new set.
+  static void setupMemory(
+      int64_t allocatorCapacity,
+      int64_t arbitratorCapacity,
+      int64_t arbitratorReservedCapacity,
+      int64_t memoryPoolInitCapacity,
+      int64_t memoryPoolReservedCapacity);
+
+  static void resetMemory();
+
  protected:
   OperatorTestBase();
   ~OperatorTestBase() override;
@@ -42,10 +64,6 @@ class OperatorTestBase : public testing::Test,
   /// Allow base classes to register custom vector serde.
   /// By default, registers Presto-compatible serde.
   virtual void registerVectorSerde();
-
-  static void SetUpTestCase();
-
-  static void TearDownTestCase();
 
   void createDuckDbTable(const std::vector<RowVectorPtr>& data) {
     duckDbQueryRunner_.createTable("tmp", data);
@@ -139,13 +157,10 @@ class OperatorTestBase : public testing::Test,
   static void deleteTaskAndCheckSpillDirectory(std::shared_ptr<Task>& task);
 
  protected:
-  DuckDbQueryRunner duckDbQueryRunner_;
-
-  // Used as default MemoryAllocator.
-  std::shared_ptr<memory::MemoryAllocator> allocator_;
-
   // Used as default AsyncDataCache.
-  std::shared_ptr<cache::AsyncDataCache> asyncDataCache_;
+  static inline std::shared_ptr<cache::AsyncDataCache> asyncDataCache_;
+
+  DuckDbQueryRunner duckDbQueryRunner_;
 
   // Used for driver thread execution.
   std::unique_ptr<folly::CPUThreadPoolExecutor> driverExecutor_;

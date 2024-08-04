@@ -33,15 +33,6 @@ class BitwiseAggregateBase : public SimpleNumericAggregate<T, T, T> {
     return sizeof(T);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (auto i : indices) {
-      *exec::Aggregate::value<T>(groups[i]) = initialValue_;
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     BaseAggregate::doExtractValues(groups, numGroups, result, [&](char* group) {
@@ -66,13 +57,30 @@ class BitwiseAggregateBase : public SimpleNumericAggregate<T, T, T> {
   }
 
  protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto i : indices) {
+      *exec::Aggregate::value<T>(groups[i]) = initialValue_;
+    }
+  }
+
   const T initialValue_;
 };
 
 template <template <typename U> class T>
-exec::AggregateRegistrationResult registerBitwise(const std::string& name) {
+exec::AggregateRegistrationResult registerBitwise(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool onlyPrestoSignatures,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-  for (const auto& inputType : {"tinyint", "smallint", "integer", "bigint"}) {
+  std::vector<std::string> typeList{"tinyint", "smallint", "integer", "bigint"};
+  if (onlyPrestoSignatures) {
+    typeList = {"bigint"};
+  }
+  for (const auto& inputType : typeList) {
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .returnType(inputType)
                              .intermediateType(inputType)
@@ -100,13 +108,15 @@ exec::AggregateRegistrationResult registerBitwise(const std::string& name) {
           case TypeKind::BIGINT:
             return std::make_unique<T<int64_t>>(resultType);
           default:
-            VELOX_CHECK(
-                false,
+            VELOX_UNREACHABLE(
                 "Unknown input type for {} aggregation {}",
                 name,
                 inputType->kindName());
         }
-      });
+      },
+      {false /*orderSensitive*/},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate

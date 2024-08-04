@@ -18,6 +18,14 @@
 
 namespace facebook::velox::exec {
 
+void Exchange::addTaskIds(std::vector<std::string>& taskIds) {
+  std::shuffle(std::begin(taskIds), std::end(taskIds), rng_);
+  for (const std::string& taskId : taskIds) {
+    exchangeClient_->addRemoteTaskId(taskId);
+  }
+  stats_.wlock()->numSplits += taskIds.size();
+}
+
 bool Exchange::getSplits(ContinueFuture* future) {
   if (!processSplits_) {
     return false;
@@ -25,6 +33,7 @@ bool Exchange::getSplits(ContinueFuture* future) {
   if (noMoreSplits_) {
     return false;
   }
+  std::vector<std::string> taskIds;
   for (;;) {
     exec::Split split;
     auto reason = operatorCtx_->task()->getSplitOrFuture(
@@ -34,26 +43,27 @@ bool Exchange::getSplits(ContinueFuture* future) {
         auto remoteSplit = std::dynamic_pointer_cast<RemoteConnectorSplit>(
             split.connectorSplit);
         VELOX_CHECK(remoteSplit, "Wrong type of split");
-        exchangeClient_->addRemoteTaskId(remoteSplit->taskId);
-        ++stats_.wlock()->numSplits;
+        taskIds.push_back(remoteSplit->taskId);
       } else {
+        addTaskIds(taskIds);
         exchangeClient_->noMoreRemoteTasks();
         noMoreSplits_ = true;
         if (atEnd_) {
           operatorCtx_->task()->multipleSplitsFinished(
-              stats_.rlock()->numSplits);
+              false, stats_.rlock()->numSplits, 0);
           recordExchangeClientStats();
         }
         return false;
       }
     } else {
+      addTaskIds(taskIds);
       return true;
     }
   }
 }
 
 BlockingReason Exchange::isBlocked(ContinueFuture* future) {
-  if (currentPage_ || atEnd_) {
+  if (!currentPages_.empty() || atEnd_) {
     return BlockingReason::kNotBlocked;
   }
 
@@ -64,12 +74,16 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
     getSplits(&splitFuture_);
   }
 
+  const auto maxBytes = getSerde()->supportsAppendInDeserialize()
+      ? preferredOutputBatchBytes_
+      : 1;
+
   ContinueFuture dataFuture;
-  currentPage_ = exchangeClient_->next(&atEnd_, &dataFuture);
-  if (currentPage_ || atEnd_) {
+  currentPages_ = exchangeClient_->next(maxBytes, &atEnd_, &dataFuture);
+  if (!currentPages_.empty() || atEnd_) {
     if (atEnd_ && noMoreSplits_) {
       const auto numSplits = stats_.rlock()->numSplits;
-      operatorCtx_->task()->multipleSplitsFinished(numSplits);
+      operatorCtx_->task()->multipleSplitsFinished(false, numSplits, 0);
     }
     recordExchangeClientStats();
     return BlockingReason::kNotBlocked;
@@ -92,33 +106,35 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
 }
 
 bool Exchange::isFinished() {
-  return atEnd_;
+  return atEnd_ && currentPages_.empty();
 }
 
 RowVectorPtr Exchange::getOutput() {
-  if (!currentPage_) {
+  if (currentPages_.empty()) {
     return nullptr;
   }
 
   uint64_t rawInputBytes{0};
-  if (!inputStream_) {
-    inputStream_ = std::make_unique<ByteStream>();
-    rawInputBytes += currentPage_->size();
-    currentPage_->prepareStreamForDeserialize(inputStream_.get());
+  vector_size_t resultOffset = 0;
+  for (const auto& page : currentPages_) {
+    rawInputBytes += page->size();
+
+    auto inputStream = page->prepareStreamForDeserialize();
+
+    while (!inputStream.atEnd()) {
+      getSerde()->deserialize(
+          &inputStream, pool(), outputType_, &result_, resultOffset, &options_);
+      resultOffset = result_->size();
+    }
   }
 
-  getSerde()->deserialize(
-      inputStream_.get(), operatorCtx_->pool(), outputType_, &result_);
+  currentPages_.clear();
 
   {
     auto lockedStats = stats_.wlock();
     lockedStats->rawInputBytes += rawInputBytes;
+    lockedStats->rawInputPositions += result_->size();
     lockedStats->addInputVector(result_->estimateFlatSize(), result_->size());
-  }
-
-  if (inputStream_->atEnd()) {
-    currentPage_ = nullptr;
-    inputStream_ = nullptr;
   }
 
   return result_;
@@ -126,7 +142,7 @@ RowVectorPtr Exchange::getOutput() {
 
 void Exchange::close() {
   SourceOperator::close();
-  currentPage_ = nullptr;
+  currentPages_.clear();
   result_ = nullptr;
   if (exchangeClient_) {
     recordExchangeClientStats();
@@ -142,7 +158,7 @@ void Exchange::recordExchangeClientStats() {
 
   auto lockedStats = stats_.wlock();
   const auto exchangeClientStats = exchangeClient_->stats();
-  for (const auto& [name, value] : exchangeClient_->stats()) {
+  for (const auto& [name, value] : exchangeClientStats) {
     lockedStats->runtimeStats.erase(name);
     lockedStats->runtimeStats.insert({name, value});
   }

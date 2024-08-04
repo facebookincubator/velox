@@ -19,6 +19,7 @@
 #include "velox/functions/prestosql/SplitPart.h"
 #include "velox/functions/prestosql/SplitToMap.h"
 #include "velox/functions/prestosql/StringFunctions.h"
+#include "velox/functions/prestosql/WordStem.h"
 
 namespace facebook::velox::functions {
 
@@ -36,6 +37,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   // Register string functions.
   registerFunction<ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<CodePointFunction, int32_t, Varchar>({prefix + "codepoint"});
+  registerFunction<HammingDistanceFunction, int64_t, Varchar, Varchar>(
+      {prefix + "hamming_distance"});
   registerFunction<LevenshteinDistanceFunction, int64_t, Varchar, Varchar>(
       {prefix + "levenshtein_distance"});
   registerFunction<LengthFunction, int64_t, Varchar>({prefix + "length"});
@@ -53,10 +56,22 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "substr"});
   registerFunction<SubstrFunction, Varchar, Varchar, int64_t, int64_t>(
       {prefix + "substr"});
+
+  // TODO Presto doesn't allow INTEGER types for 2nd and 3rd arguments. Remove
+  // these signatures.
   registerFunction<SubstrFunction, Varchar, Varchar, int32_t>(
       {prefix + "substr"});
   registerFunction<SubstrFunction, Varchar, Varchar, int32_t, int32_t>(
       {prefix + "substr"});
+
+  registerFunction<SubstrVarbinaryFunction, Varbinary, Varbinary, int64_t>(
+      {prefix + "substr"});
+  registerFunction<
+      SubstrVarbinaryFunction,
+      Varbinary,
+      Varbinary,
+      int64_t,
+      int64_t>({prefix + "substr"});
 
   registerFunction<SplitPart, Varchar, Varchar, Varchar, int64_t>(
       {prefix + "split_part"});
@@ -78,12 +93,50 @@ void registerSimpleFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
 
-  registerFunction<SplitPart, Varchar, Varchar, Varchar, int64_t>(
-      {prefix + "split_part"});
   registerFunction<Re2RegexpReplacePresto, Varchar, Varchar, Varchar>(
       {prefix + "regexp_replace"});
   registerFunction<Re2RegexpReplacePresto, Varchar, Varchar, Varchar, Varchar>(
       {prefix + "regexp_replace"});
+  exec::registerStatefulVectorFunction(
+      prefix + "regexp_replace",
+      regexpReplaceWithLambdaSignatures(),
+      makeRegexpReplaceWithLambda,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
+
+  registerFunction<Re2RegexpSplit, Array<Varchar>, Varchar, Varchar>(
+      {prefix + "regexp_split"});
+}
+
+void registerSplitToMap(const std::string& prefix) {
+  registerFunction<
+      SplitToMapFunction,
+      Map<Varchar, Varchar>,
+      Varchar,
+      Varchar,
+      Varchar>({prefix + "split_to_map"});
+
+  exec::registerVectorFunction(
+      prefix + "split_to_map",
+      {
+          exec::FunctionSignatureBuilder()
+              .returnType("map(varchar,varchar)")
+              .argumentType("varchar")
+              .argumentType("varchar")
+              .argumentType("varchar")
+              .argumentType("function(varchar,varchar,varchar,varchar)")
+              .build(),
+      },
+      std::make_unique<exec::ApplyNeverCalled>());
+  registerFunction<
+      SplitToMapFunction,
+      Map<Varchar, Varchar>,
+      Varchar,
+      Varchar,
+      Varchar,
+      bool>({"$internal$split_to_map"});
+  exec::registerExpressionRewrite([prefix](const auto& expr) {
+    return rewriteSplitToMapCall(prefix, expr);
+  });
 }
 } // namespace
 
@@ -93,12 +146,9 @@ void registerStringFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_lower, prefix + "lower");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_upper, prefix + "upper");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_split, prefix + "split");
-  registerFunction<
-      SplitToMapFunction,
-      Map<Varchar, Varchar>,
-      Varchar,
-      Varchar,
-      Varchar>({prefix + "split_to_map"});
+
+  registerSplitToMap(prefix);
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, prefix + "concat");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reverse, prefix + "reverse");
@@ -123,5 +173,14 @@ void registerStringFunctions(const std::string& prefix) {
       {prefix + "strrpos"});
   registerFunction<StrRPosFunction, int64_t, Varchar, Varchar, int64_t>(
       {prefix + "strrpos"});
+
+  registerFunction<NormalizeFunction, Varchar, Varchar>({prefix + "normalize"});
+  registerFunction<NormalizeFunction, Varchar, Varchar, Varchar>(
+      {prefix + "normalize"});
+
+  // word_stem function
+  registerFunction<WordStemFunction, Varchar, Varchar>({prefix + "word_stem"});
+  registerFunction<WordStemFunction, Varchar, Varchar, Varchar>(
+      {prefix + "word_stem"});
 }
 } // namespace facebook::velox::functions

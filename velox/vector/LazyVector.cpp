@@ -57,27 +57,9 @@ void VectorLoader::load(
     ValueHook* hook,
     vector_size_t resultSize,
     VectorPtr* result) {
-  {
-    DeltaCpuWallTimer timer([&](auto& delta) { writeIOTiming(delta); });
-    loadInternal(rows, hook, resultSize, result);
-  }
-
-  if (hook) {
-    // Record number of rows loaded directly into ValueHook bypassing
-    // materialization into vector. This counter can be used to understand
-    // whether aggregation pushdown is happening or not.
-    addThreadLocalRuntimeStat("loadedToValueHook", RuntimeCounter(rows.size()));
-  }
-}
-
-void VectorLoader::loadInternal(
-    const SelectivityVector& rows,
-    ValueHook* hook,
-    vector_size_t resultSize,
-    VectorPtr* result) {
   if (rows.isAllSelected()) {
     const auto& indices = DecodedVector::consecutiveIndices();
-    assert(!indices.empty());
+    VELOX_DCHECK(!indices.empty());
     if (rows.end() <= indices.size()) {
       load(
           RowSet(&indices[rows.begin()], rows.end() - rows.begin()),
@@ -88,8 +70,8 @@ void VectorLoader::loadInternal(
     }
   }
   std::vector<vector_size_t> positions(rows.countSelected());
-  int index = 0;
-  rows.applyToSelected([&](vector_size_t row) { positions[index++] = row; });
+  simd::indicesOfSetBits(
+      rows.allBits(), rows.begin(), rows.end(), positions.data());
   load(positions, hook, resultSize, result);
 }
 
@@ -271,4 +253,28 @@ void LazyVector::load(RowSet rows, ValueHook* hook) const {
   }
 }
 
+void LazyVector::loadVectorInternal() const {
+  if (!allLoaded_) {
+    if (!vector_) {
+      vector_ = BaseVector::create(type_, 0, pool_);
+    }
+    SelectivityVector allRows(BaseVector::length_);
+    loader_->load(allRows, nullptr, size(), &vector_);
+    VELOX_CHECK(vector_);
+    if (vector_->encoding() == VectorEncoding::Simple::LAZY) {
+      vector_ = vector_->asUnchecked<LazyVector>()->loadedVectorShared();
+    } else {
+      // If the load produced a wrapper, load the wrapped vector.
+      vector_->loadedVector();
+    }
+    allLoaded_ = true;
+    const_cast<LazyVector*>(this)->BaseVector::nulls_ = vector_->nulls_;
+    if (BaseVector::nulls_) {
+      const_cast<LazyVector*>(this)->BaseVector::rawNulls_ =
+          BaseVector::nulls_->as<uint64_t>();
+    }
+  } else {
+    VELOX_CHECK(vector_);
+  }
+}
 } // namespace facebook::velox

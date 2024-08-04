@@ -19,7 +19,7 @@
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/AddressableNonNullValueList.h"
 #include "velox/exec/Strings.h"
-#include "velox/functions/prestosql/aggregates/ValueList.h"
+#include "velox/functions/lib/aggregates/ValueList.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -161,7 +161,7 @@ struct StringViewMapAccumulator {
 struct ComplexTypeMapAccumulator {
   /// A set of pointers to values stored in AddressableNonNullValueList.
   MapAccumulator<
-      HashStringAllocator::Position,
+      AddressableNonNullValueList::Entry,
       AddressableNonNullValueList::Hash,
       AddressableNonNullValueList::EqualTo>
       base;
@@ -180,11 +180,11 @@ struct ComplexTypeMapAccumulator {
       const DecodedVector& decodedValues,
       vector_size_t index,
       HashStringAllocator& allocator) {
-    auto position = serializedKeys.append(decodedKeys, index, &allocator);
+    auto entry = serializedKeys.append(decodedKeys, index, &allocator);
 
     auto cnt = base.keys.size();
-    if (!base.keys.insert({position, cnt}).second) {
-      serializedKeys.removeLast(position);
+    if (!base.keys.insert({entry, cnt}).second) {
+      serializedKeys.removeLast(entry);
       return;
     }
 
@@ -223,6 +223,22 @@ struct ComplexTypeMapAccumulator {
 template <typename T>
 struct MapAccumulatorTypeTraits {
   using AccumulatorType = MapAccumulator<T>;
+};
+
+template <>
+struct MapAccumulatorTypeTraits<float> {
+  using AccumulatorType = MapAccumulator<
+      float,
+      util::floating_point::NaNAwareHash<float>,
+      util::floating_point::NaNAwareEquals<float>>;
+};
+
+template <>
+struct MapAccumulatorTypeTraits<double> {
+  using AccumulatorType = MapAccumulator<
+      double,
+      util::floating_point::NaNAwareHash<double>,
+      util::floating_point::NaNAwareEquals<double>>;
 };
 
 template <>

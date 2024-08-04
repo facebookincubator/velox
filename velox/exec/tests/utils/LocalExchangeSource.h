@@ -19,11 +19,21 @@
 namespace facebook::velox::exec::test {
 
 /// Given taskId that starts with local:// returns an instance of ExchangeSource
-/// that fetches data from local PartitionedoutputBufferManager.
+/// that fetches data from local OutputBufferManager.
 std::unique_ptr<exec::ExchangeSource> createLocalExchangeSource(
     const std::string& taskId,
     int destination,
     std::shared_ptr<exec::ExchangeQueue> queue,
     memory::MemoryPool* pool);
+
+/// Sets the local exchange source to start by clearing 'stop_'. This is used
+/// when we run multiple test cases sequentially and restarts the local exchange
+/// source between tests.
+void testingStartLocalExchangeSource();
+
+/// Ensures that there are no references to ExchangeSource callbacks,
+/// e.g. while waiting for timing out. Call this before end of unit
+/// tests to ensure no ASAN errors at exit.
+void testingShutdownLocalExchangeSource();
 
 } // namespace facebook::velox::exec::test

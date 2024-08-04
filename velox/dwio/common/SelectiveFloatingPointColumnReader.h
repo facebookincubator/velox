@@ -26,21 +26,21 @@ class SelectiveFloatingPointColumnReader : public SelectiveColumnReader {
   using ValueType = TRequested;
   SelectiveFloatingPointColumnReader(
       const TypePtr& requestedType,
-      std::shared_ptr<const dwio::common::TypeWithId> dataType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       FormatParams& params,
       velox::common::ScanSpec& scanSpec)
       : SelectiveColumnReader(
             requestedType,
+            std::move(fileType),
             params,
-            scanSpec,
-            std::move(dataType)) {}
+            scanSpec) {}
 
   // Offers fast path only if data and result widths match.
   bool hasBulkPath() const override {
     return std::is_same_v<TData, TRequested>;
   }
 
-  template <typename Reader>
+  template <typename Reader, bool kEncodingHasNulls>
   void
   readCommon(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls);
 
@@ -57,7 +57,11 @@ class SelectiveFloatingPointColumnReader : public SelectiveColumnReader {
   void
   readHelper(velox::common::Filter* filter, RowSet rows, ExtractValues values);
 
-  template <typename Reader, bool isDense, typename ExtractValues>
+  template <
+      typename Reader,
+      bool isDense,
+      bool kEncodingHasNulls,
+      typename ExtractValues>
   void processFilter(
       velox::common::Filter* filter,
       RowSet rows,
@@ -84,22 +88,39 @@ void SelectiveFloatingPointColumnReader<TData, TRequested>::readHelper(
 }
 
 template <typename TData, typename TRequested>
-template <typename Reader, bool isDense, typename ExtractValues>
+template <
+    typename Reader,
+    bool isDense,
+    bool kEncodingHasNulls,
+    typename ExtractValues>
 void SelectiveFloatingPointColumnReader<TData, TRequested>::processFilter(
     velox::common::Filter* filter,
     RowSet rows,
     ExtractValues extractValues) {
-  switch (filter ? filter->kind() : velox::common::FilterKind::kAlwaysTrue) {
+  if (filter == nullptr) {
+    readHelper<Reader, velox::common::AlwaysTrue, isDense>(
+        &dwio::common::alwaysTrue(), rows, extractValues);
+    return;
+  }
+
+  switch (filter->kind()) {
     case velox::common::FilterKind::kAlwaysTrue:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
           filter, rows, extractValues);
       break;
     case velox::common::FilterKind::kIsNull:
-      filterNulls<TRequested>(
-          rows, true, !std::is_same_v<decltype(extractValues), DropValues>);
+      if constexpr (kEncodingHasNulls) {
+        filterNulls<TRequested>(
+            rows, true, !std::is_same_v<decltype(extractValues), DropValues>);
+      } else {
+        readHelper<Reader, velox::common::IsNull, isDense>(
+            filter, rows, extractValues);
+      }
       break;
     case velox::common::FilterKind::kIsNotNull:
-      if (std::is_same_v<decltype(extractValues), DropValues>) {
+      if constexpr (
+          kEncodingHasNulls &&
+          std::is_same_v<decltype(extractValues), DropValues>) {
         filterNulls<TRequested>(rows, false, false);
       } else {
         readHelper<Reader, velox::common::IsNotNull, isDense>(
@@ -157,7 +178,7 @@ void SelectiveFloatingPointColumnReader<TData, TRequested>::processValueHook(
 }
 
 template <typename TData, typename TRequested>
-template <typename Reader>
+template <typename Reader, bool kEncodingHasNulls>
 void SelectiveFloatingPointColumnReader<TData, TRequested>::readCommon(
     vector_size_t offset,
     RowSet rows,
@@ -173,18 +194,20 @@ void SelectiveFloatingPointColumnReader<TData, TRequested>::readCommon(
       }
     } else {
       if (isDense) {
-        processFilter<Reader, true>(
+        processFilter<Reader, true, kEncodingHasNulls>(
             scanSpec_->filter(), rows, ExtractToReader(this));
       } else {
-        processFilter<Reader, false>(
+        processFilter<Reader, false, kEncodingHasNulls>(
             scanSpec_->filter(), rows, ExtractToReader(this));
       }
     }
   } else {
     if (isDense) {
-      processFilter<Reader, true>(scanSpec_->filter(), rows, DropValues());
+      processFilter<Reader, true, kEncodingHasNulls>(
+          scanSpec_->filter(), rows, DropValues());
     } else {
-      processFilter<Reader, false>(scanSpec_->filter(), rows, DropValues());
+      processFilter<Reader, false, kEncodingHasNulls>(
+          scanSpec_->filter(), rows, DropValues());
     }
   }
 }

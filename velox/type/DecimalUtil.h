@@ -18,8 +18,11 @@
 
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
+#include "velox/common/base/CountBits.h"
+#include "velox/common/base/Doubles.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/Status.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -79,8 +82,11 @@ class DecimalUtil {
   static constexpr int128_t kShortDecimalMax =
       kPowersOfTen[ShortDecimalType::kMaxPrecision] - 1;
 
+  static constexpr uint64_t kInt64Mask = ~(static_cast<uint64_t>(1) << 63);
+  static constexpr uint128_t kInt128Mask = (static_cast<uint128_t>(1) << 127);
+
   FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         (value >= kLongDecimalMin && value <= kLongDecimalMax),
         "Decimal overflow. Value '{}' is not in the range of Decimal Type",
         value);
@@ -95,7 +101,7 @@ class DecimalUtil {
   }
 
   /// Helper function to convert a decimal value to string.
-  static std::string toString(const int128_t value, const TypePtr& type);
+  static std::string toString(int128_t value, const TypePtr& type);
 
   template <typename T>
   inline static void fillDecimals(
@@ -143,12 +149,13 @@ class DecimalUtil {
   }
 
   template <typename TInput, typename TOutput>
-  inline static std::optional<TOutput> rescaleWithRoundUp(
-      const TInput inputValue,
-      const int fromPrecision,
-      const int fromScale,
-      const int toPrecision,
-      const int toScale) {
+  inline static Status rescaleWithRoundUp(
+      TInput inputValue,
+      int fromPrecision,
+      int fromScale,
+      int toPrecision,
+      int toScale,
+      TOutput& output) {
     int128_t rescaledValue = inputValue;
     auto scaleDifference = toScale - fromScale;
     bool isOverflow = false;
@@ -170,20 +177,19 @@ class DecimalUtil {
     }
     // Check overflow.
     if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
-      VELOX_USER_FAIL(
+      return Status::UserError(
           "Cannot cast DECIMAL '{}' to DECIMAL({}, {})",
           DecimalUtil::toString(inputValue, DECIMAL(fromPrecision, fromScale)),
           toPrecision,
           toScale);
     }
-    return static_cast<TOutput>(rescaledValue);
+    output = static_cast<TOutput>(rescaledValue);
+    return Status::OK();
   }
 
   template <typename TInput, typename TOutput>
-  inline static std::optional<TOutput> rescaleInt(
-      const TInput inputValue,
-      const int toPrecision,
-      const int toScale) {
+  inline static std::optional<TOutput>
+  rescaleInt(TInput inputValue, int toPrecision, int toScale) {
     int128_t rescaledValue = static_cast<int128_t>(inputValue);
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
@@ -199,17 +205,88 @@ class DecimalUtil {
     return static_cast<TOutput>(rescaledValue);
   }
 
+  /// Rescales a floating point value to decimal value of given precision and
+  /// scale. Returns error status if fails.
+  /// @tparam TInput Either float or double.
+  /// @tparam TOutput Either int64_t or int128_t.
+  template <typename TInput, typename TOutput>
+  inline static Status rescaleFloatingPoint(
+      TInput value,
+      int precision,
+      int scale,
+      TOutput& output) {
+    if (!std::isfinite(value)) {
+      return Status::UserError("The input value should be finite.");
+    }
+
+    TInput maxValue;
+    if constexpr (std::is_same_v<TOutput, int64_t>) {
+      maxValue = kMaxDoubleBelowInt64Max;
+    } else {
+      maxValue = kMaxDoubleBelowInt128Max;
+    }
+
+    if (value <= std::numeric_limits<TOutput>::min() || value > maxValue) {
+      return Status::UserError("Result overflows.");
+    }
+
+    uint8_t digits;
+    if constexpr (std::is_same_v<TInput, float>) {
+      // A float provides between 6 and 7 decimal digits, so at least 6 digits
+      // are precise.
+      digits = 6;
+    } else {
+      // A double provides from 15 to 17 decimal digits, so at least 15 digits
+      // are precise.
+      digits = 15;
+    }
+
+    // Calculate the precise fractional digits.
+    const auto integralValue = static_cast<uint128_t>(std::abs(value));
+    const auto integralDigits =
+        integralValue == 0 ? 0 : countDigits(integralValue);
+    const auto fractionDigits = std::max(digits - integralDigits, 0);
+
+    // Scales up the input value with all the precise fractional digits kept.
+    // Convert value as long double type because 1) double * int128_t returns
+    // int128_t and fractional digits are lost. 2) we could also convert the
+    // int128_t value as double to avoid 'double * int128_t', but double
+    // multiplication gives inaccurate result on large numbers. For example,
+    // -3333030000000000000 * 1e3 = -3333030000000000065536. No need to
+    // consider the result becoming infinite as DOUBLE_MAX * 10^38 <
+    // LONG_DOUBLE_MAX.
+    long double scaledValue = std::round(
+        (long double)value * DecimalUtil::kPowersOfTen[fractionDigits]);
+    if (scale > fractionDigits) {
+      scaledValue *= DecimalUtil::kPowersOfTen[scale - fractionDigits];
+    } else {
+      scaledValue /= DecimalUtil::kPowersOfTen[fractionDigits - scale];
+    }
+
+    const auto result = folly::tryTo<TOutput>(std::round(scaledValue));
+    if (result.hasError()) {
+      return Status::UserError("Result overflows.");
+    }
+    const TOutput rescaledValue = result.value();
+    if (!valueInPrecisionRange<TOutput>(rescaledValue, precision)) {
+      return Status::UserError(
+          "Result cannot fit in the given precision {}.", precision);
+    }
+    output = rescaledValue;
+    return Status::OK();
+  }
+
   template <typename R, typename A, typename B>
   inline static R divideWithRoundUp(
       R& r,
-      const A& a,
-      const B& b,
+      A a,
+      B b,
       bool noRoundUp,
       uint8_t aRescale,
       uint8_t /*bRescale*/) {
-    VELOX_CHECK_NE(b, 0, "Division by zero");
+    VELOX_USER_CHECK_NE(b, 0, "Division by zero");
     int resultSign = 1;
-    A unsignedDividendRescaled(a);
+    R unsignedDividendRescaled(a);
     if (a < 0) {
       resultSign = -1;
       unsignedDividendRescaled *= -1;
@@ -229,7 +306,7 @@ class DecimalUtil {
       ++quotient;
     }
     r = quotient * resultSign;
-    return remainder;
+    return remainder * resultSign;
   }
 
   /*
@@ -237,8 +314,8 @@ class DecimalUtil {
    */
   inline static int64_t addUnsignedValues(
       int128_t& sum,
-      const int128_t& lhs,
-      const int128_t& rhs,
+      int128_t lhs,
+      int128_t rhs,
       bool isResultNegative) {
     __uint128_t unsignedSum = (__uint128_t)lhs + (__uint128_t)rhs;
     // Ignore overflow value.
@@ -247,8 +324,20 @@ class DecimalUtil {
     return (unsignedSum >> 127);
   }
 
+  /// Adds two signed 128-bit numbers (int128_t), calculates the sum, and
+  /// returns the overflow. It can be used to track the number of overflow when
+  /// adding a batch of input numbers. It takes lhs and rhs as input, and stores
+  /// their sum in result. overflow == 1 indicates upward overflow. overflow ==
+  /// -1 indicates downward overflow. overflow == 0 indicates no overflow.
+  /// Adding negative and non-negative numbers never overflows, so we can
+  /// directly add them. Adding two negative or two positive numbers may
+  /// overflow. To add numbers that may overflow, first convert both numbers to
+  /// unsigned 128-bit number (uint128_t), and perform the addition. The highest
+  /// bits in the result indicates overflow. Adjust the signs of sum and
+  /// overflow based on the signs of the inputs. The caller must sum up overflow
+  /// values and call adjustSumForOverflow after processing all inputs.
   inline static int64_t
-  addWithOverflow(int128_t& result, const int128_t& lhs, const int128_t& rhs) {
+  addWithOverflow(int128_t& result, int128_t lhs, int128_t rhs) {
     bool isLhsNegative = lhs < 0;
     bool isRhsNegative = rhs < 0;
     int64_t overflow = 0;
@@ -256,6 +345,8 @@ class DecimalUtil {
       // Both inputs of same time.
       if (isLhsNegative) {
         // Both negative, ignore signs and add.
+        VELOX_DCHECK_NE(lhs, std::numeric_limits<int128_t>::min());
+        VELOX_DCHECK_NE(rhs, std::numeric_limits<int128_t>::min());
         overflow = addUnsignedValues(result, -lhs, -rhs, true);
         overflow = -overflow;
       } else {
@@ -268,38 +359,35 @@ class DecimalUtil {
     return overflow;
   }
 
-  /*
-   * Computes average. If there is an overflow value uses the following
-   * expression to compute the average.
-   *                       ---                                         ---
-   *                      |    overflow_multiplier          sum          |
-   * average = overflow * |     -----------------  +  ---------------    |
-   *                      |         count              count * overflow  |
-   *                       ---                                         ---
-   */
-  inline static void computeAverage(
-      int128_t& avg,
-      const int128_t& sum,
-      const int64_t count,
-      const int64_t overflow) {
-    if (overflow == 0) {
-      divideWithRoundUp<int128_t, int128_t, int64_t>(
-          avg, sum, count, false, 0, 0);
-    } else {
-      __uint128_t sumA{0};
-      auto remainderA =
-          DecimalUtil::divideWithRoundUp<__uint128_t, __uint128_t, int64_t>(
-              sumA, kOverflowMultiplier, count, true, 0, 0);
-      double totalRemainder = (double)remainderA / count;
-      __uint128_t sumB{0};
-      auto remainderB =
-          DecimalUtil::divideWithRoundUp<__uint128_t, __int128_t, int64_t>(
-              sumB, sum, count * overflow, true, 0, 0);
-      totalRemainder += (double)remainderB / (count * overflow);
-      DecimalUtil::addWithOverflow(avg, sumA, sumB);
-      avg = avg * overflow + (int)(totalRemainder * overflow);
+  /// Corrects the sum result calculated using addWithOverflow. Since the sum
+  /// calculated by addWithOverflow only retains the lower 127 bits,
+  /// it may miss one calculation of +(1 << 127) or -(1 << 127).
+  /// Therefore, we need to make the following adjustments:
+  /// 1. If overflow = 1 && sum < 0, the calculation missed +(1 << 127).
+  /// Add 1 << 127 to the sum.
+  /// 2. If overflow = -1 && sum > 0, the calculation missed -(1 << 127).
+  /// Subtract 1 << 127 to the sum.
+  /// If an overflow indeed occurs and the result cannot be adjusted,
+  /// it will return std::nullopt.
+  inline static std::optional<int128_t> adjustSumForOverflow(
+      int128_t sum,
+      int64_t overflow) {
+    // Value is valid if the conditions below are true.
+    if ((overflow == 1 && sum < 0) || (overflow == -1 && sum > 0)) {
+      return static_cast<int128_t>(
+          DecimalUtil::kOverflowMultiplier * overflow + sum);
     }
+    if (overflow != 0) {
+      // The actual overflow occurred.
+      return std::nullopt;
+    }
+
+    return sum;
   }
+
+  /// avg = (sum + overflow * kOverflowMultiplier) / count
+  static void
+  computeAverage(int128_t& avg, int128_t sum, int64_t count, int64_t overflow);
 
   /// Origins from java side BigInteger#bitLength.
   ///

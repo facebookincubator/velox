@@ -28,7 +28,7 @@ class SelectiveTimestampColumnReader
   using ValueType = int64_t;
 
   SelectiveTimestampColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
@@ -50,6 +50,8 @@ class SelectiveTimestampColumnReader
       const common::Filter* filter,
       const RowSet rows,
       const uint64_t* rawNulls);
+
+  const TimestampPrecision precision_;
 
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ true>> seconds_;
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> nano_;

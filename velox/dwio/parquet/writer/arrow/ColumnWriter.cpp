@@ -71,7 +71,6 @@ using arrow::bit_util::BitWriter;
 using arrow::internal::checked_cast;
 using arrow::internal::checked_pointer_cast;
 using arrow::util::RleEncoder;
-using ::parquet::ParquetException;
 
 namespace bit_util = arrow::bit_util;
 
@@ -152,11 +151,15 @@ struct ValueBufferSlicer {
   NOT_IMPLEMENTED_VISIT(Union);
   NOT_IMPLEMENTED_VISIT(List);
   NOT_IMPLEMENTED_VISIT(LargeList);
+  NOT_IMPLEMENTED_VISIT(ListView);
+  NOT_IMPLEMENTED_VISIT(LargeListView);
   NOT_IMPLEMENTED_VISIT(Struct);
   NOT_IMPLEMENTED_VISIT(FixedSizeList);
   NOT_IMPLEMENTED_VISIT(Dictionary);
   NOT_IMPLEMENTED_VISIT(RunEndEncoded);
   NOT_IMPLEMENTED_VISIT(Extension);
+  NOT_IMPLEMENTED_VISIT(BinaryView);
+  NOT_IMPLEMENTED_VISIT(StringView);
 
 #undef NOT_IMPLEMENTED_VISIT
 

@@ -48,8 +48,8 @@
 #define PSNIP_SAFE_LIKELY(expr) __builtin_expect(!!(expr), 1)
 #define PSNIP_SAFE_UNLIKELY(expr) __builtin_expect(!!(expr), 0)
 #else
-#define PSNIP_SAFE_LIKELY(expr) !!(expr)
-#define PSNIP_SAFE_UNLIKELY(expr) !!(expr)
+#define PSNIP_SAFE_LIKELY(expr) (!!(expr))
+#define PSNIP_SAFE_UNLIKELY(expr) (!!(expr))
 #endif /* defined(__GNUC__) */
 
 #if !defined(PSNIP_SAFE_STATIC_INLINE)
@@ -1312,18 +1312,19 @@ PSNIP_SAFE_DEFINE_UNSIGNED_MOD(psnip_uint64_t, uint64, 0xffffffffffffffffULL)
 
 #endif /* !defined(PSNIP_SAFE_NO_FIXED) */
 
-#define PSNIP_SAFE_C11_GENERIC_SELECTION(res, op)      \
-  _Generic((*res), char                                \
-           : psnip_safe_char_##op, unsigned char       \
-           : psnip_safe_uchar_##op, short              \
-           : psnip_safe_short_##op, unsigned short     \
-           : psnip_safe_ushort_##op, int               \
-           : psnip_safe_int_##op, unsigned int         \
-           : psnip_safe_uint_##op, long                \
-           : psnip_safe_long_##op, unsigned long       \
-           : psnip_safe_ulong_##op, long long          \
-           : psnip_safe_llong_##op, unsigned long long \
-           : psnip_safe_ullong_##op)
+#define PSNIP_SAFE_C11_GENERIC_SELECTION(res, op) \
+  _Generic(                                       \
+      (*res),                                     \
+      char: psnip_safe_char_##op,                 \
+      unsigned char: psnip_safe_uchar_##op,       \
+      short: psnip_safe_short_##op,               \
+      unsigned short: psnip_safe_ushort_##op,     \
+      int: psnip_safe_int_##op,                   \
+      unsigned int: psnip_safe_uint_##op,         \
+      long: psnip_safe_long_##op,                 \
+      unsigned long: psnip_safe_ulong_##op,       \
+      long long: psnip_safe_llong_##op,           \
+      unsigned long long: psnip_safe_ullong_##op)
 
 #define PSNIP_SAFE_C11_GENERIC_BINARY_OP(op, res, a, b) \
   PSNIP_SAFE_C11_GENERIC_SELECTION(res, op)(res, a, b)
@@ -1331,11 +1332,11 @@ PSNIP_SAFE_DEFINE_UNSIGNED_MOD(psnip_uint64_t, uint64, 0xffffffffffffffffULL)
   PSNIP_SAFE_C11_GENERIC_SELECTION(res, op)(res, v)
 
 #if defined(PSNIP_SAFE_HAVE_BUILTIN_OVERFLOW)
-#define psnip_safe_add(res, a, b) !__builtin_add_overflow(a, b, res)
-#define psnip_safe_sub(res, a, b) !__builtin_sub_overflow(a, b, res)
-#define psnip_safe_mul(res, a, b) !__builtin_mul_overflow(a, b, res)
-#define psnip_safe_div(res, a, b) !__builtin_div_overflow(a, b, res)
-#define psnip_safe_mod(res, a, b) !__builtin_mod_overflow(a, b, res)
+#define psnip_safe_add(res, a, b) (!__builtin_add_overflow(a, b, res))
+#define psnip_safe_sub(res, a, b) (!__builtin_sub_overflow(a, b, res))
+#define psnip_safe_mul(res, a, b) (!__builtin_mul_overflow(a, b, res))
+#define psnip_safe_div(res, a, b) (!__builtin_div_overflow(a, b, res))
+#define psnip_safe_mod(res, a, b) (!__builtin_mod_overflow(a, b, res))
 #define psnip_safe_neg(res, v) PSNIP_SAFE_C11_GENERIC_UNARY_OP(neg, res, v)
 
 #elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)

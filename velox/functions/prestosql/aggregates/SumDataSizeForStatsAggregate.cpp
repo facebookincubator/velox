@@ -48,15 +48,6 @@ class SumDataSizeForStatsAggregate
     });
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    exec::Aggregate::setAllNulls(groups, indices);
-    for (auto index : indices) {
-      *BaseAggregate ::value<int64_t>(groups[index]) = 0;
-    }
-  }
-
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     // Partial and final aggregations are the same.
@@ -155,7 +146,7 @@ class SumDataSizeForStatsAggregate
     });
 
     getVectorSerde()->estimateSerializedSize(
-        vector,
+        vector.get(),
         folly::Range(rowIndices_.data(), rowIndices_.size()),
         rowSizePtrs_.data());
   }
@@ -172,6 +163,15 @@ class SumDataSizeForStatsAggregate
     });
   }
 
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto index : indices) {
+      *BaseAggregate ::value<int64_t>(groups[index]) = 0;
+    }
+  }
+
  private:
   using BaseAggregate = SimpleNumericAggregate<int64_t, int64_t, int64_t>;
 
@@ -182,18 +182,23 @@ class SumDataSizeForStatsAggregate
   std::vector<IndexRange> rowIndices_;
 };
 
-exec::AggregateRegistrationResult registerSumDataSizeForStats(
-    const std::string& name) {
+} // namespace
+
+void registerSumDataSizeForStatsAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                            .typeVariable("T")
-                           .returnType("BIGINT")
-                           .intermediateType("BIGINT")
+                           .returnType("bigint")
+                           .intermediateType("bigint")
                            .argumentType("T")
                            .build());
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kSumDataSizeForStats;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -206,13 +211,9 @@ exec::AggregateRegistrationResult registerSumDataSizeForStats(
         auto inputType = argTypes[0];
 
         return std::make_unique<SumDataSizeForStatsAggregate>(resultType);
-      });
-}
-
-} // namespace
-
-void registerSumDataSizeForStatsAggregate(const std::string& prefix) {
-  registerSumDataSizeForStats(prefix + kSumDataSizeForStats);
+      },
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -32,15 +32,68 @@
 #define VELOX_INSTANTIATE_TEST_SUITE_P INSTANTIATE_TEST_CASE_P
 #endif
 
-#define VELOX_ASSERT_THROW(expression, errorMessage)                 \
-  try {                                                              \
-    (expression);                                                    \
-    FAIL() << "Expected an exception";                               \
-  } catch (const facebook::velox::VeloxException& e) {               \
-    ASSERT_TRUE(e.message().find(errorMessage) != std::string::npos) \
-        << "Expected error message to contain '" << errorMessage     \
-        << "', but received '" << e.message() << "'.";               \
+// The void static cast supresses the "unused expression result" warning in
+// clang.
+#define VELOX_ASSERT_THROW_IMPL(_type, _expression, _errorMessage)    \
+  try {                                                               \
+    static_cast<void>(_expression);                                   \
+    FAIL() << "Expected an exception";                                \
+  } catch (const _type& e) {                                          \
+    ASSERT_TRUE(e.message().find(_errorMessage) != std::string::npos) \
+        << "Expected error message to contain '" << (_errorMessage)   \
+        << "', but received '" << e.message() << "'.";                \
   }
+
+#define VELOX_ASSERT_THROW(_expression, _errorMessage) \
+  VELOX_ASSERT_THROW_IMPL(                             \
+      facebook::velox::VeloxException, _expression, _errorMessage)
+
+#define VELOX_ASSERT_USER_THROW(_expression, _errorMessage) \
+  VELOX_ASSERT_THROW_IMPL(                                  \
+      facebook::velox::VeloxUserError, _expression, _errorMessage)
+
+#define VELOX_ASSERT_RUNTIME_THROW(_expression, _errorMessage) \
+  VELOX_ASSERT_THROW_IMPL(                                     \
+      facebook::velox::VeloxRuntimeError, _expression, _errorMessage)
+
+#define VELOX_ASSERT_ERROR_STATUS(_expression, _statusCode, _errorMessage) \
+  const auto status = (_expression);                                       \
+  ASSERT_TRUE(status.code() == _statusCode)                                \
+      << "Expected error code to be '" << toString(_statusCode)            \
+      << "', but received '" << toString(status.code()) << "'.";           \
+  ASSERT_TRUE(status.message().find(_errorMessage) != std::string::npos)   \
+      << "Expected error message to contain '" << (_errorMessage)          \
+      << "', but received '" << status.message() << "'."
+
+#define VELOX_ASSERT_ERROR_CODE_IMPL(                                         \
+    _type, _expression, _errorCode, _errorMessage)                            \
+  try {                                                                       \
+    (_expression);                                                            \
+    FAIL() << "Expected an exception";                                        \
+  } catch (const _type& e) {                                                  \
+    ASSERT_TRUE(e.errorCode() == _errorCode)                                  \
+        << "Expected error code to be '" << _errorCode << "', but received '" \
+        << e.errorCode() << "'.";                                             \
+    ASSERT_TRUE(e.message().find(_errorMessage) != std::string::npos)         \
+        << "Expected error message to contain '" << (_errorMessage)           \
+        << "', but received '" << e.message() << "'.";                        \
+  }
+
+#define VELOX_ASSERT_THROW_CODE(_expression, _errorCode, _errorMessage) \
+  VELOX_ASSERT_ERROR_CODE_IMPL(                                         \
+      facebook::velox::VeloxException, _expression, _errorCode, _errorMessage)
+
+#define VELOX_ASSERT_USER_THROW_CODE(_expression, _errorCode, _errorMessage) \
+  VELOX_ASSERT_ERROR_CODE_IMPL(                                              \
+      facebook::velox::VeloxUserError, _expression, _errorCode, _errorMessage)
+
+#define VELOX_ASSERT_RUNTIME_THROW_CODE(    \
+    _expression, _errorCode, _errorMessage) \
+  VELOX_ASSERT_ERROR_CODE_IMPL(             \
+      facebook::velox::VeloxRuntimeError,   \
+      _expression,                          \
+      _errorCode,                           \
+      _errorMessage)
 
 #ifndef NDEBUG
 #define DEBUG_ONLY_TEST(test_fixture, test_name) TEST(test_fixture, test_name)

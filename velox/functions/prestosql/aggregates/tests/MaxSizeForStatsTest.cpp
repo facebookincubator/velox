@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -27,7 +27,6 @@ class MaxSizeForStatsTest : public AggregationTestBase {
  public:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 };
 
@@ -218,7 +217,7 @@ TEST_F(MaxSizeForStatsTest, complexRecursiveGlobalAggregate) {
           createMapOfArraysVector<int8_t, int64_t>({
               {{1, std::nullopt}},
               {{2, {{4, 5, std::nullopt}}}},
-              {{std::nullopt, {{7, 8, 9}}}},
+              {{3, {{7, 8, 9}}}},
           }),
       }),
   })};
@@ -261,7 +260,7 @@ TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
       createMapOfArraysVector<int8_t, int64_t>({
           {{1, std::nullopt}},
           {{2, {{4, 5, std::nullopt}}}},
-          {{std::nullopt, {{7, 8, 9}}}},
+          {{3, {{7, 8, 9}}}},
       }),
   });
   vector_size_t size = 3;

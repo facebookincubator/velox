@@ -16,6 +16,7 @@
 
 #include "velox/exec/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/expression/SignatureBinder.h"
 
 namespace facebook::velox::exec {
 
@@ -66,25 +67,59 @@ std::unique_ptr<WindowFunction> WindowFunction::create(
     const core::QueryConfig& config) {
   // Lookup the function in the new registry first.
   if (auto func = getWindowFunctionEntry(name)) {
-    return func.value()->factory(
-        args, resultType, ignoreNulls, pool, stringAllocator, config);
+    std::vector<TypePtr> argTypes;
+    argTypes.reserve(args.size());
+    for (const auto& arg : args) {
+      argTypes.push_back(arg.type);
+    }
+
+    const auto& signatures = func.value()->signatures;
+    for (auto& signature : signatures) {
+      SignatureBinder binder(*signature, argTypes);
+      if (binder.tryBind()) {
+        auto type = binder.tryResolveType(signature->returnType());
+        VELOX_USER_CHECK(
+            type->equivalent(*resultType),
+            "Unexpected return type for window function {}. Expected {}. Got {}.",
+            toString(name, argTypes),
+            type->toString(),
+            resultType->toString())
+        return func.value()->factory(
+            args, resultType, ignoreNulls, pool, stringAllocator, config);
+      }
+    }
+
+    VELOX_USER_FAIL(
+        "Window function signature is not supported: {}. Supported signatures: {}.",
+        toString(name, argTypes),
+        toString(signatures));
   }
 
   VELOX_USER_FAIL("Window function not registered: {}", name);
 }
 
-void WindowFunction::setNullEmptyFramesResults(
+void WindowFunction::setEmptyFramesResult(
     const SelectivityVector& validRows,
     vector_size_t resultOffset,
+    const VectorPtr& defaultResult,
     const VectorPtr& result) {
   if (validRows.isAllSelected()) {
+    return;
+  }
+  // Set the null bit for all rows to true if the defaultResult is NULL and
+  // there are no valid rows.
+  if (!validRows.hasSelections() && defaultResult->isNullAt(0)) {
+    uint64_t* rawNulls = result->mutableRawNulls();
+    bits::fillBits(
+        rawNulls, resultOffset, resultOffset + validRows.size(), bits::kNull);
     return;
   }
 
   invalidRows_.resizeFill(validRows.size(), true);
   invalidRows_.deselect(validRows);
-  invalidRows_.applyToSelected(
-      [&](auto i) { result->setNull(resultOffset + i, true); });
+  invalidRows_.applyToSelected([&](auto i) {
+    result->copy(defaultResult.get(), resultOffset + i, 0, 1);
+  });
 }
 
 } // namespace facebook::velox::exec

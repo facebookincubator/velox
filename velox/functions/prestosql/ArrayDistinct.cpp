@@ -14,15 +14,61 @@
  * limitations under the License.
  */
 
-#include <folly/container/F14Set.h>
-
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::functions {
 namespace {
+
+template <typename T>
+struct ValueSet {
+  util::floating_point::HashSetNaNAware<T> values;
+
+  bool insert(const T& value) {
+    return values.insert(value).second;
+  }
+
+  void reset() {
+    values.clear();
+  }
+};
+
+template <>
+struct ValueSet<ComplexType> {
+  using TKey = std::tuple<uint64_t, const BaseVector*, vector_size_t>;
+
+  struct Hash {
+    size_t operator()(const TKey& key) const {
+      return std::get<0>(key);
+    }
+  };
+
+  struct EqualTo {
+    bool operator()(const TKey& left, const TKey& right) const {
+      return std::get<1>(left)
+          ->equalValueAt(
+              std::get<1>(right),
+              std::get<2>(left),
+              std::get<2>(right),
+              CompareFlags::NullHandlingMode::kNullAsValue)
+          .value();
+    }
+  };
+
+  folly::F14FastSet<TKey, Hash, EqualTo> values;
+
+  bool insert(const BaseVector* vector, vector_size_t index) {
+    const uint64_t hash = vector->hashValueAt(index);
+    return values.insert(std::make_tuple(hash, vector, index)).second;
+  }
+
+  void reset() {
+    values.clear();
+  }
+};
 
 /// See documentation at https://prestodb.io/docs/current/functions/array.html
 ///
@@ -93,17 +139,17 @@ class ArrayDistinctFunction : public exec::VectorFunction {
     // Pointers and cursors to the raw data.
     vector_size_t indicesCursor = 0;
     auto* rawNewIndices = newIndices->asMutable<vector_size_t>();
-    auto* rawSizes = newLengths->asMutable<vector_size_t>();
-    auto* rawOffsets = newOffsets->asMutable<vector_size_t>();
+    auto* rawNewSizes = newLengths->asMutable<vector_size_t>();
+    auto* rawNewOffsets = newOffsets->asMutable<vector_size_t>();
 
     // Process the rows: store unique values in the hash table.
-    folly::F14FastSet<T> uniqueSet;
+    ValueSet<T> uniqueSet;
 
     rows.applyToSelected([&](vector_size_t row) {
       auto size = arrayVector->sizeAt(row);
       auto offset = arrayVector->offsetAt(row);
 
-      rawOffsets[row] = indicesCursor;
+      rawNewOffsets[row] = indicesCursor;
       bool hasNulls = false;
       for (vector_size_t i = offset; i < offset + size; ++i) {
         if (elements->isNullAt(i)) {
@@ -112,16 +158,22 @@ class ArrayDistinctFunction : public exec::VectorFunction {
             rawNewIndices[indicesCursor++] = i;
           }
         } else {
-          auto value = elements->valueAt<T>(i);
+          bool unique;
+          if constexpr (std::is_same_v<ComplexType, T>) {
+            unique = uniqueSet.insert(elements->base(), elements->index(i));
+          } else {
+            auto value = elements->valueAt<T>(i);
+            unique = uniqueSet.insert(value);
+          }
 
-          if (uniqueSet.insert(value).second) {
+          if (unique) {
             rawNewIndices[indicesCursor++] = i;
           }
         }
       }
 
-      uniqueSet.clear();
-      rawSizes[row] = indicesCursor - rawOffsets[row];
+      uniqueSet.reset();
+      rawNewSizes[row] = indicesCursor - rawNewOffsets[row];
     });
 
     newIndices->setSize(indicesCursor * sizeof(vector_size_t));
@@ -139,6 +191,58 @@ class ArrayDistinctFunction : public exec::VectorFunction {
         0);
   }
 };
+
+template <>
+VectorPtr ArrayDistinctFunction<UnknownType>::applyFlat(
+    const SelectivityVector& rows,
+    const VectorPtr& arg,
+    exec::EvalCtx& context) const {
+  auto arrayVector = arg->as<ArrayVector>();
+  auto elementsVector = arrayVector->elements();
+  vector_size_t rowCount = rows.end();
+
+  // Allocate new vectors for indices, length and offsets.
+  memory::MemoryPool* pool = context.pool();
+  BufferPtr newIndices = allocateIndices(rowCount, pool);
+  BufferPtr newLengths = allocateSizes(rowCount, pool);
+  BufferPtr newOffsets = allocateOffsets(rowCount, pool);
+
+  // Pointers and cursors to the raw data.
+  vector_size_t indicesCursor = 0;
+  auto* rawNewIndices = newIndices->asMutable<vector_size_t>();
+  auto* rawNewSizes = newLengths->asMutable<vector_size_t>();
+  auto* rawNewOffsets = newOffsets->asMutable<vector_size_t>();
+
+  rows.applyToSelected([&](vector_size_t row) {
+    auto size = arrayVector->sizeAt(row);
+    auto offset = arrayVector->offsetAt(row);
+
+    rawNewOffsets[row] = indicesCursor;
+    if (size > 0) {
+      if (FOLLY_UNLIKELY(indicesCursor == 0)) {
+        rawNewIndices[0] = offset;
+      }
+      rawNewSizes[row] = 1;
+      rawNewIndices[indicesCursor++] = rawNewIndices[0];
+    } else {
+      rawNewSizes[row] = 0;
+    }
+  });
+
+  newIndices->setSize(indicesCursor * sizeof(vector_size_t));
+  auto newElements =
+      BaseVector::transpose(newIndices, std::move(elementsVector));
+
+  return std::make_shared<ArrayVector>(
+      pool,
+      arrayVector->type(),
+      nullptr,
+      rowCount,
+      std::move(newOffsets),
+      std::move(newLengths),
+      std::move(newElements),
+      0);
+}
 
 // Validate number of parameters and types.
 void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
@@ -169,6 +273,13 @@ std::shared_ptr<exec::VectorFunction> create(
     const core::QueryConfig& /*config*/) {
   validateType(inputArgs);
   auto elementType = inputArgs.front().type->childAt(0);
+  if (elementType->isUnKnown()) {
+    return std::make_shared<ArrayDistinctFunction<UnknownType>>();
+  }
+
+  if (elementType->isArray() || elementType->isMap() || elementType->isRow()) {
+    return std::make_shared<ArrayDistinctFunction<ComplexType>>();
+  }
 
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       createTyped, elementType->kind(), inputArgs);
@@ -177,14 +288,13 @@ std::shared_ptr<exec::VectorFunction> create(
 // Define function signature.
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   // array(T) -> array(T)
-  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-  for (const auto& type : exec::primitiveTypeNames()) {
-    signatures.push_back(exec::FunctionSignatureBuilder()
-                             .returnType(fmt::format("array({})", type))
-                             .argumentType(fmt::format("array({})", type))
-                             .build());
-  }
-  return signatures;
+  return std::vector<std::shared_ptr<exec::FunctionSignature>>{
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("array(T)")
+          .argumentType("array(T)")
+          .build(),
+  };
 }
 
 } // namespace

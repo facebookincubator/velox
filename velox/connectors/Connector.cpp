@@ -31,6 +31,18 @@ std::unordered_map<std::string, std::shared_ptr<Connector>>& connectors() {
 }
 } // namespace
 
+bool DataSink::Stats::empty() const {
+  return numWrittenBytes == 0 && numWrittenFiles == 0 && spillStats.empty();
+}
+
+std::string DataSink::Stats::toString() const {
+  return fmt::format(
+      "numWrittenBytes {} numWrittenFiles {} {}",
+      succinctBytes(numWrittenBytes),
+      numWrittenFiles,
+      spillStats.toString());
+}
+
 bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory) {
   factory->initialize();
   bool ok =
@@ -40,6 +52,15 @@ bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory) {
       "ConnectorFactory with name '{}' is already registered",
       factory->connectorName());
   return true;
+}
+
+bool hasConnectorFactory(const std::string& connectorName) {
+  return connectorFactories().count(connectorName) == 1;
+}
+
+bool unregisterConnectorFactory(const std::string& connectorName) {
+  auto count = connectorFactories().erase(connectorName);
+  return count == 1;
 }
 
 std::shared_ptr<ConnectorFactory> getConnectorFactory(

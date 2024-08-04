@@ -76,10 +76,6 @@ class UpperLowerTemplateFunction : public exec::VectorFunction {
   }
 
  public:
-  bool isDefaultNullBehavior() const override {
-    return true;
-  }
-
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -197,10 +193,10 @@ class ConcatFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
+      const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    context.ensureWritable(rows, VARCHAR(), result);
+    context.ensureWritable(rows, outputType, result);
     auto flatResult = result->asFlatVector<StringView>();
 
     auto numArgs = argMapping_.size();
@@ -256,13 +252,22 @@ class ConcatFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // varchar, varchar,.. -> varchar
-    return {exec::FunctionSignatureBuilder()
-                .returnType("varchar")
-                .argumentType("varchar")
-                .argumentType("varchar")
-                .variableArity()
-                .build()};
+    return {
+        // varchar, varchar,.. -> varchar
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .argumentType("varchar")
+            .argumentType("varchar")
+            .variableArity()
+            .build(),
+        // varbinary, varbinary,.. -> varbinary
+        exec::FunctionSignatureBuilder()
+            .returnType("varbinary")
+            .argumentType("varbinary")
+            .argumentType("varbinary")
+            .variableArity()
+            .build(),
+    };
   }
 
   static exec::VectorFunctionMetadata metadata() {

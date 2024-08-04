@@ -18,7 +18,7 @@
 
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/expression/tests/FuzzerToolkit.h"
+#include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -46,9 +46,7 @@ class ExpressionVerifier {
   static constexpr const std::string_view kComplexConstantsFileName =
       "complex_constants";
 
-  ExpressionVerifier(
-      core::ExecCtx* FOLLY_NONNULL execCtx,
-      ExpressionVerifierOptions options)
+  ExpressionVerifier(core::ExecCtx* execCtx, ExpressionVerifierOptions options)
       : execCtx_(execCtx), options_(options) {}
 
   // Executes expressions both using common path (all evaluation
@@ -65,7 +63,7 @@ class ExpressionVerifier {
   //  - exception thrown by the common path if both paths failed with compatible
   //  exceptions.
   //  - throws otherwise (incompatible exceptions or different results).
-  ResultOrError verify(
+  fuzzer::ResultOrError verify(
       const std::vector<core::TypedExprPtr>& plans,
       const RowVectorPtr& rowVector,
       VectorPtr&& resultVector,
@@ -93,7 +91,7 @@ class ExpressionVerifier {
       const std::vector<VectorPtr>& complexConstants);
 
  private:
-  core::ExecCtx* FOLLY_NONNULL execCtx_;
+  core::ExecCtx* execCtx_;
   const ExpressionVerifierOptions options_;
 };
 

@@ -61,6 +61,16 @@ std::shared_ptr<FileSystem> getFileSystem(
   VELOX_FAIL("No registered file system matched with file path '{}'", filePath);
 }
 
+bool isPathSupportedByRegisteredFileSystems(const std::string_view& filePath) {
+  const auto& filesystems = registeredFileSystems();
+  for (const auto& p : filesystems) {
+    if (p.first(filePath)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 namespace {
 
 folly::once_flag localFSInstantiationFlag;
@@ -77,7 +87,7 @@ class LocalFileSystem : public FileSystem {
     return "Local FS";
   }
 
-  inline std::string_view extractPath(std::string_view path) {
+  inline std::string_view extractPath(std::string_view path) override {
     if (path.find(kFileScheme) == 0) {
       return path.substr(kFileScheme.length());
     }
@@ -155,8 +165,8 @@ class LocalFileSystem : public FileSystem {
         0,
         ec.value(),
         "Mkdir {} failed: {}, message: {}",
-        path,
-        ec,
+        std::string(path),
+        ec.value(),
         ec.message());
     VLOG(1) << "LocalFileSystem::mkdir " << path;
   }
@@ -168,8 +178,8 @@ class LocalFileSystem : public FileSystem {
         0,
         ec.value(),
         "Rmdir {} failed: {}, message: {}",
-        path,
-        ec,
+        std::string(path),
+        ec.value(),
         ec.message());
     VLOG(1) << "LocalFileSystem::rmdir " << path;
   }

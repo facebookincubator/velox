@@ -92,8 +92,10 @@ TEST_F(HivePartitionUtilTest, partitionName) {
       std::iota(partitionChannels.begin(), partitionChannels.end(), 0);
 
       EXPECT_EQ(
-          FileUtils::makePartName(extractPartitionKeyValues(
-              makePartitionsVector(input, partitionChannels), 0)),
+          FileUtils::makePartName(
+              extractPartitionKeyValues(
+                  makePartitionsVector(input, partitionChannels), 0),
+              true),
           folly::join(
               "/",
               std::vector<std::string>(
@@ -112,8 +114,40 @@ TEST_F(HivePartitionUtilTest, partitionName) {
     std::vector<column_index_t> partitionChannels{0};
 
     VELOX_ASSERT_THROW(
-        FileUtils::makePartName(extractPartitionKeyValues(
-            makePartitionsVector(input, partitionChannels), 0)),
+        FileUtils::makePartName(
+            extractPartitionKeyValues(
+                makePartitionsVector(input, partitionChannels), 0),
+            true),
         "Unsupported partition type: MAP");
+  }
+}
+
+TEST_F(HivePartitionUtilTest, partitionNameForNull) {
+  std::vector<std::string> partitionColumnNames{
+      "flat_bool_col",
+      "flat_tinyint_col",
+      "flat_smallint_col",
+      "flat_int_col",
+      "flat_bigint_col",
+      "flat_string_col",
+      "const_date_col"};
+
+  RowVectorPtr input = makeRowVector(
+      partitionColumnNames,
+      {makeNullableFlatVector<bool>({std::nullopt}),
+       makeNullableFlatVector<int8_t>({std::nullopt}),
+       makeNullableFlatVector<int16_t>({std::nullopt}),
+       makeNullableFlatVector<int32_t>({std::nullopt}),
+       makeNullableFlatVector<int64_t>({std::nullopt}),
+       makeNullableFlatVector<StringView>({std::nullopt}),
+       makeConstant<int32_t>(std::nullopt, 1, DATE())});
+
+  for (auto i = 0; i < partitionColumnNames.size(); i++) {
+    std::vector<column_index_t> partitionChannels = {(column_index_t)i};
+    auto partitionEntries = extractPartitionKeyValues(
+        makePartitionsVector(input, partitionChannels), 0);
+    EXPECT_EQ(1, partitionEntries.size());
+    EXPECT_EQ(partitionColumnNames[i], partitionEntries[0].first);
+    EXPECT_EQ("", partitionEntries[0].second);
   }
 }

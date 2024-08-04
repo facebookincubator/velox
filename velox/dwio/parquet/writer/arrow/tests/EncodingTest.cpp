@@ -38,7 +38,6 @@
 #include "arrow/util/bit_util.h"
 #include "arrow/util/bitmap_ops.h"
 #include "arrow/util/bitmap_writer.h"
-#include "arrow/util/byte_stream_split.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/hashing.h"
 #include "arrow/util/int_util_overflow.h"
@@ -47,10 +46,11 @@
 #include "arrow/util/ubsan.h"
 #include "arrow/visit_data_inline.h"
 
-#include "parquet/exception.h"
+#include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
+#include "velox/dwio/parquet/writer/arrow/util/ByteStreamSplitInternal.h"
 
 namespace bit_util = arrow::bit_util;
 
@@ -60,7 +60,6 @@ using arrow::internal::AddWithOverflow;
 using arrow::internal::checked_cast;
 using arrow::util::SafeLoad;
 using arrow::util::SafeLoadAs;
-using ::parquet::ParquetException;
 using std::string_view;
 
 template <typename T>
@@ -1005,7 +1004,7 @@ std::shared_ptr<Buffer> ByteStreamSplitEncoder<DType>::FlushValues() {
       AllocateBuffer(this->memory_pool(), EstimatedDataEncodedSize());
   uint8_t* output_buffer_raw = output_buffer->mutable_data();
   const uint8_t* raw_values = sink_.data();
-  ::arrow::util::internal::ByteStreamSplitEncode<T>(
+  ByteStreamSplitEncode<T>(
       raw_values, num_values_in_buffer_, output_buffer_raw);
   sink_.Reset();
   num_values_in_buffer_ = 0;
@@ -3400,7 +3399,7 @@ class RleBooleanDecoder : public DecoderImpl, virtual public BooleanDecoder {
     }
     // Load the first 4 bytes in little-endian, which indicates the length
     num_bytes = ::arrow::bit_util::FromLittleEndian(SafeLoadAs<uint32_t>(data));
-    if (num_bytes < 0 || num_bytes > static_cast<uint32_t>(len - 4)) {
+    if (num_bytes > static_cast<uint32_t>(len - 4)) {
       throw ParquetException(
           "Received invalid number of bytes : " + std::to_string(num_bytes) +
           " (corrupt data page?)");
@@ -3735,7 +3734,7 @@ int ByteStreamSplitDecoder<DType>::Decode(T* buffer, int max_values) {
   const int num_decoded_previously = num_values_in_buffer_ - num_values_;
   const uint8_t* data = data_ + num_decoded_previously;
 
-  ::arrow::util::internal::ByteStreamSplitDecode<T>(
+  ByteStreamSplitDecode<T>(
       data, values_to_decode, num_values_in_buffer_, buffer);
   num_values_ -= values_to_decode;
   len_ -= sizeof(T) * values_to_decode;

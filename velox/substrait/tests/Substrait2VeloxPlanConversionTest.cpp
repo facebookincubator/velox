@@ -33,6 +33,10 @@ using namespace facebook::velox::exec;
 class Substrait2VeloxPlanConversionTest
     : public exec::test::HiveConnectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
   makeSplits(
       const facebook::velox::substrait::SubstraitVeloxPlanConverter& converter,
@@ -53,7 +57,7 @@ class Substrait2VeloxPlanConversionTest
     splits.reserve(paths.size());
 
     for (int i = 0; i < paths.size(); i++) {
-      auto path = fmt::format("{}{}", tmpDir_->path, paths[i]);
+      auto path = fmt::format("{}{}", tmpDir_->getPath(), paths[i]);
       auto start = starts[i];
       auto length = lengths[i];
       auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(path)
@@ -117,7 +121,8 @@ TEST_F(Substrait2VeloxPlanConversionTest, DISABLED_q6) {
            VARCHAR(),
            VARCHAR(),
            VARCHAR()});
-  std::shared_ptr<memory::MemoryPool> pool{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{
+      memory::memoryManager()->addLeafPool()};
   std::vector<VectorPtr> vectors;
   // TPC-H lineitem table has 16 columns.
   int colNum = 16;
@@ -262,7 +267,7 @@ TEST_F(Substrait2VeloxPlanConversionTest, DISABLED_q6) {
 
   // Write data into an ORC file.
   writeToFile(
-      tmpDir_->path + "/mock_lineitem.orc",
+      tmpDir_->getPath() + "/mock_lineitem.orc",
       {makeRowVector(type->names(), vectors)});
 
   // Find and deserialize Substrait plan json file.

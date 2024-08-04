@@ -16,7 +16,7 @@
 #include <random>
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -29,7 +29,6 @@ class EntropyAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    allowInputShuffle();
   }
 
   void testGroupByAgg(
@@ -169,6 +168,35 @@ TEST_F(EntropyAggregationTest, mayHaveNulls) {
            {1, 1, std::nullopt, 1, std::nullopt, 2, std::nullopt, 5, 6})});
   auto expectedResult = makeRowVector(
       {makeFlatVector<double>({1.0, 0.9182958340544898, 0.9940302114769566})});
+  testAggregations({data}, {"c0"}, {"entropy(c1)"}, {"a0"}, {expectedResult});
+}
+
+TEST_F(EntropyAggregationTest, allNulls) {
+  auto data = makeRowVector({makeAllNullFlatVector<int64_t>(10)});
+  auto expectedResult = makeRowVector({makeConstant(0.0, 1)});
+  testAggregations({data}, {}, {"entropy(c0)"}, {expectedResult});
+
+  data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
+       makeNullableFlatVector<int32_t>(
+           {1, 1, std::nullopt, std::nullopt, std::nullopt, std::nullopt})});
+  expectedResult = makeRowVector({makeFlatVector<double>({1.0, 0.0})});
+  testAggregations({data}, {"c0"}, {"entropy(c1)"}, {"a0"}, {expectedResult});
+}
+
+TEST_F(EntropyAggregationTest, largeConstant) {
+  auto data =
+      makeRowVector({makeConstant(std::numeric_limits<int64_t>::max(), 10)});
+
+  auto expectedResult = makeRowVector(
+      {makeFlatVector<double>(std::vector<double>{3.3219280948873693})});
+  testAggregations({data}, {}, {"entropy(c0)"}, {expectedResult});
+
+  data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2}),
+       makeConstant(std::numeric_limits<int64_t>::max(), 10)});
+  expectedResult = makeRowVector(
+      {makeFlatVector<double>({1.5849625007211632, 1.5849625007211632})});
   testAggregations({data}, {"c0"}, {"entropy(c1)"}, {"a0"}, {expectedResult});
 }
 

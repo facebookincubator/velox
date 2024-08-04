@@ -26,7 +26,8 @@ class SerializedPage {
   // Construct from IOBuf chain.
   explicit SerializedPage(
       std::unique_ptr<folly::IOBuf> iobuf,
-      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr);
+      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr,
+      std::optional<int64_t> numRows = std::nullopt);
 
   ~SerializedPage();
 
@@ -35,9 +36,13 @@ class SerializedPage {
     return iobufBytes_;
   }
 
+  std::optional<int64_t> numRows() const {
+    return numRows_;
+  }
+
   // Makes 'input' ready for deserializing 'this' with
   // VectorStreamGroup::read().
-  void prepareStreamForDeserialize(ByteStream* input);
+  ByteInputStream prepareStreamForDeserialize();
 
   std::unique_ptr<folly::IOBuf> getIOBuf() const {
     return iobuf_->clone();
@@ -61,6 +66,9 @@ class SerializedPage {
   // Number of payload bytes in 'iobuf_'.
   const int64_t iobufBytes_;
 
+  // Number of payload rows, if provided.
+  const std::optional<int64_t> numRows_;
+
   // Callback that will be called on destruction of the SerializedPage,
   // primarily used to free externally allocated memory backing folly::IOBuf
   // from caller. Caller is responsible to pass in proper cleanup logic to
@@ -68,17 +76,11 @@ class SerializedPage {
   std::function<void(folly::IOBuf&)> onDestructionCb_;
 };
 
-// Queue of results retrieved from source. Owned by shared_ptr by
-// Exchange and client threads and registered callbacks waiting
-// for input.
+/// Queue of results retrieved from source. Owned by shared_ptr by
+/// Exchange and client threads and registered callbacks waiting
+/// for input.
 class ExchangeQueue {
  public:
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  explicit ExchangeQueue(int64_t /*minBytes*/) {}
-
-  ExchangeQueue() = default;
-#endif
-
   ~ExchangeQueue() {
     clearAllPromises();
   }
@@ -91,21 +93,37 @@ class ExchangeQueue {
     return queue_.empty();
   }
 
+  /// Enqueues 'page' to the queue. One random promise(top of promise queue)
+  /// associated with the future that is waiting for the data from the queue is
+  /// returned in 'promises' if 'page' is not nullptr. When 'page' is nullptr
+  /// and the queue is completed serving data, all left over promises will be
+  /// returned in 'promises'. When 'page' is nullptr and the queue is not
+  /// completed serving data, no 'promises' will be added and returned.
   void enqueueLocked(
       std::unique_ptr<SerializedPage>&& page,
       std::vector<ContinuePromise>& promises);
 
-  // If data is permanently not available, e.g. the source cannot be
-  // contacted, this registers an error message and causes the reading
-  // Exchanges to throw with the message.
+  /// If data is permanently not available, e.g. the source cannot be
+  /// contacted, this registers an error message and causes the reading
+  /// Exchanges to throw with the message.
   void setError(const std::string& error);
 
-  std::unique_ptr<SerializedPage> dequeueLocked(
-      bool* atEnd,
-      ContinueFuture* future);
+  /// Returns pages of data.
+  ///
+  /// Returns empty list if no data is available. If data is still expected,
+  /// sets 'atEnd' to false and 'future' to a Future that will complete when
+  /// data arrives. If no more data is expected, sets 'atEnd' to true. Returns
+  /// at least one page if data is available. If multiple pages are available,
+  /// returns as many pages as fit within 'maxBytes', but no fewer than one.
+  /// Calling this method with 'maxBytes' of 1 returns at most one page.
+  ///
+  /// The data may be compressed, in which case 'maxBytes' applies to compressed
+  /// size.
+  std::vector<std::unique_ptr<SerializedPage>>
+  dequeueLocked(uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
 
   /// Returns the total bytes held by SerializedPages in 'this'.
-  uint64_t totalBytes() const {
+  int64_t totalBytes() const {
     return totalBytes_;
   }
 
@@ -179,7 +197,7 @@ class ExchangeQueue {
   // throw an exception with this message.
   std::string error_;
   // Total size of SerializedPages in queue.
-  uint64_t totalBytes_{0};
+  int64_t totalBytes_{0};
   // Number of SerializedPages received.
   int64_t receivedPages_{0};
   // Total size of SerializedPages received. Used to calculate an average

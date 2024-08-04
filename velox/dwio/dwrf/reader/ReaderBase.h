@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/RandomUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
@@ -59,25 +60,27 @@ class FooterStatisticsImpl : public dwio::common::Statistics {
 
 class ReaderBase {
  public:
-  // create reader base from buffered input
+  /// Creates reader base from buffered input.
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
       std::shared_ptr<dwio::common::encryption::DecrypterFactory>
           decryptorFactory = nullptr,
-      uint64_t directorySizeGuess =
-          dwio::common::ReaderOptions::kDefaultDirectorySizeGuess,
+      uint64_t footerEstimatedSize =
+          dwio::common::ReaderOptions::kDefaultFooterEstimatedSize,
       uint64_t filePreloadThreshold =
           dwio::common::ReaderOptions::kDefaultFilePreloadThreshold,
       dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
-      bool fileColumnNamesReadAsLowerCase = false);
+      bool fileColumnNamesReadAsLowerCase = false,
+      std::shared_ptr<random::RandomSkipTracker> randomSkip = nullptr,
+      std::shared_ptr<velox::common::ScanSpec> scanSpec = nullptr);
 
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
       dwio::common::FileFormat fileFormat);
 
-  // create reader base from metadata
+  /// Creates reader base from metadata.
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
@@ -91,19 +94,18 @@ class ReaderBase {
         cache_{std::move(cache)},
         handler_{std::move(handler)},
         input_{std::move(input)},
+        fileLength_{0},
         schema_{
             std::dynamic_pointer_cast<const RowType>(convertType(*footer_))},
-        fileLength_{0},
         psLength_{0} {
-    DWIO_ENSURE(footer_->getDwrfPtr()->GetArena());
-    DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
+    VELOX_CHECK_NOT_NULL(schema_, "invalid schema");
     if (!handler_) {
       handler_ = encryption::DecryptionHandler::create(*footer);
     }
   }
 
   // for testing
-  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool} {}
+  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool}, fileLength_{0} {}
 
   virtual ~ReaderBase() = default;
 
@@ -123,14 +125,18 @@ class ReaderBase {
     return schema_;
   }
 
-  void setSchema(const RowTypePtr& newSchema) {
-    schema_ = newSchema;
+  void setSchema(RowTypePtr newSchema) {
+    schema_ = std::move(newSchema);
   }
 
   const std::shared_ptr<const dwio::common::TypeWithId>& getSchemaWithId()
       const {
     if (!schemaWithId_) {
-      schemaWithId_ = dwio::common::TypeWithId::create(schema_);
+      if (scanSpec_) {
+        schemaWithId_ = dwio::common::TypeWithId::create(schema_, *scanSpec_);
+      } else {
+        schemaWithId_ = dwio::common::TypeWithId::create(schema_);
+      }
     }
     return schemaWithId_;
   }
@@ -147,8 +153,8 @@ class ReaderBase {
     return *handler_;
   }
 
-  uint64_t getDirectorySizeGuess() const {
-    return directorySizeGuess_;
+  uint64_t getFooterEstimatedSize() const {
+    return footerEstimatedSize_;
   }
 
   uint64_t getFileLength() const {
@@ -231,6 +237,10 @@ class ReaderBase {
     return postScript_->format();
   }
 
+  const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
+    return randomSkip_;
+  }
+
  private:
   static std::shared_ptr<const Type> convertType(
       const FooterWrapper& footer,
@@ -245,16 +255,19 @@ class ReaderBase {
   // Keeps factory alive for possibly async prefetch.
   std::shared_ptr<dwio::common::encryption::DecrypterFactory> decryptorFactory_;
   std::unique_ptr<encryption::DecryptionHandler> handler_;
-  const uint64_t directorySizeGuess_{
-      dwio::common::ReaderOptions::kDefaultDirectorySizeGuess};
+  const uint64_t footerEstimatedSize_{
+      dwio::common::ReaderOptions::kDefaultFooterEstimatedSize};
   const uint64_t filePreloadThreshold_{
       dwio::common::ReaderOptions::kDefaultFilePreloadThreshold};
 
-  std::unique_ptr<dwio::common::BufferedInput> input_;
+  const std::unique_ptr<dwio::common::BufferedInput> input_;
+  const std::shared_ptr<random::RandomSkipTracker> randomSkip_;
+  const std::shared_ptr<velox::common::ScanSpec> scanSpec_;
+  const uint64_t fileLength_;
+
   RowTypePtr schema_;
   // Lazily populated
   mutable std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
-  uint64_t fileLength_;
   uint64_t psLength_;
 };
 

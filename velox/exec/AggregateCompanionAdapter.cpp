@@ -27,8 +27,16 @@ void AggregateCompanionFunctionBase::setOffsetsInternal(
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask,
+    int32_t initializedByte,
+    uint8_t initializedMask,
     int32_t rowSizeOffset) {
-  fn_->setOffsets(offset, nullByte, nullMask, rowSizeOffset);
+  fn_->setOffsets(
+      offset,
+      nullByte,
+      nullMask,
+      initializedByte,
+      initializedMask,
+      rowSizeOffset);
 }
 
 int32_t AggregateCompanionFunctionBase::accumulatorFixedWidthSize() const {
@@ -56,11 +64,22 @@ void AggregateCompanionFunctionBase::destroy(folly::Range<char**> groups) {
   fn_->destroy(groups);
 }
 
+void AggregateCompanionFunctionBase::destroyInternal(
+    folly::Range<char**> groups) {
+  fn_->destroy(groups);
+}
+
 void AggregateCompanionFunctionBase::clearInternal() {
   fn_->clear();
 }
 
 void AggregateCompanionFunctionBase::initializeNewGroups(
+    char** groups,
+    folly::Range<const vector_size_t*> indices) {
+  fn_->initializeNewGroups(groups, indices);
+}
+
+void AggregateCompanionFunctionBase::initializeNewGroupsInternal(
     char** groups,
     folly::Range<const vector_size_t*> indices) {
   fn_->initializeNewGroups(groups, indices);
@@ -154,6 +173,8 @@ int32_t AggregateCompanionAdapter::ExtractFunction::setOffset() const {
       offset,
       RowContainer::nullByte(0),
       RowContainer::nullMask(0),
+      RowContainer::initializedByte(0),
+      RowContainer::initializedMask(0),
       rowSizeOffset);
   return offset;
 }
@@ -304,81 +325,12 @@ bool CompanionFunctionsRegistrar::registerMergeFunction(
       .mainFunction;
 }
 
-bool CompanionFunctionsRegistrar::registerMergeExtractFunctionWithSuffix(
+bool registerAggregateFunction(
     const std::string& name,
-    const std::vector<AggregateFunctionSignaturePtr>& signatures,
+    const std::string& mergeExtractFunctionName,
+    const std::vector<std::shared_ptr<AggregateFunctionSignature>>&
+        mergeExtractSignatures,
     bool overwrite) {
-  auto groupedSignatures =
-      CompanionSignatures::groupSignaturesByReturnType(signatures);
-  bool registered = false;
-  for (const auto& [type, signatureGroup] : groupedSignatures) {
-    auto mergeExtractSignatures =
-        CompanionSignatures::mergeExtractFunctionSignatures(signatureGroup);
-    if (mergeExtractSignatures.empty()) {
-      continue;
-    }
-
-    auto mergeExtractFunctionName =
-        CompanionSignatures::mergeExtractFunctionNameWithSuffix(name, type);
-
-    registered |=
-        exec::registerAggregateFunction(
-            mergeExtractFunctionName,
-            std::move(mergeExtractSignatures),
-            [name, mergeExtractFunctionName](
-                core::AggregationNode::Step /*step*/,
-                const std::vector<TypePtr>& argTypes,
-                const TypePtr& resultType,
-                const core::QueryConfig& config) -> std::unique_ptr<Aggregate> {
-              const auto& [originalResultType, _] =
-                  resolveAggregateFunction(mergeExtractFunctionName, argTypes);
-              if (!originalResultType) {
-                // TODO: limitation -- result type must be resolveable given
-                // intermediate type of the original UDAF.
-                VELOX_UNREACHABLE(
-                    "Signatures whose result types are not resolvable given intermediate types should have been excluded.");
-              }
-
-              if (auto func = getAggregateFunctionEntry(name)) {
-                auto fn = func->factory(
-                    core::AggregationNode::Step::kFinal,
-                    argTypes,
-                    originalResultType,
-                    config);
-                VELOX_CHECK_NOT_NULL(fn);
-                return std::make_unique<
-                    AggregateCompanionAdapter::MergeExtractFunction>(
-                    std::move(fn), resultType);
-              }
-              VELOX_FAIL(
-                  "Original aggregation function {} not found: {}",
-                  name,
-                  mergeExtractFunctionName);
-            },
-            /*registerCompanionFunctions*/ false,
-            overwrite)
-            .mainFunction;
-  }
-  return registered;
-}
-
-bool CompanionFunctionsRegistrar::registerMergeExtractFunction(
-    const std::string& name,
-    const std::vector<AggregateFunctionSignaturePtr>& signatures,
-    bool overwrite) {
-  if (CompanionSignatures::hasSameIntermediateTypesAcrossSignatures(
-          signatures)) {
-    return registerMergeExtractFunctionWithSuffix(name, signatures, overwrite);
-  }
-
-  auto mergeExtractSignatures =
-      CompanionSignatures::mergeExtractFunctionSignatures(signatures);
-  if (mergeExtractSignatures.empty()) {
-    return false;
-  }
-
-  auto mergeExtractFunctionName =
-      CompanionSignatures::mergeExtractFunctionName(name);
   return exec::registerAggregateFunction(
              mergeExtractFunctionName,
              std::move(mergeExtractSignatures),
@@ -418,82 +370,63 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunction(
       .mainFunction;
 }
 
-bool CompanionFunctionsRegistrar::registerExtractFunctionWithSuffix(
-    const std::string& originalName,
+bool CompanionFunctionsRegistrar::registerMergeExtractFunctionWithSuffix(
+    const std::string& name,
     const std::vector<AggregateFunctionSignaturePtr>& signatures,
     bool overwrite) {
   auto groupedSignatures =
       CompanionSignatures::groupSignaturesByReturnType(signatures);
   bool registered = false;
   for (const auto& [type, signatureGroup] : groupedSignatures) {
-    auto extractSignatures =
-        CompanionSignatures::extractFunctionSignatures(signatureGroup);
-    if (extractSignatures.empty()) {
+    auto mergeExtractSignatures =
+        CompanionSignatures::mergeExtractFunctionSignatures(signatureGroup);
+    if (mergeExtractSignatures.empty()) {
       continue;
     }
 
-    auto factory = [originalName](
-                       const std::string& name,
-                       const std::vector<VectorFunctionArg>& inputArgs,
-                       const core::QueryConfig& config)
-        -> std::shared_ptr<VectorFunction> {
-      std::vector<TypePtr> argTypes{inputArgs.size()};
-      std::transform(
-          inputArgs.begin(),
-          inputArgs.end(),
-          argTypes.begin(),
-          [](auto inputArg) { return inputArg.type; });
+    auto mergeExtractFunctionName =
+        CompanionSignatures::mergeExtractFunctionNameWithSuffix(name, type);
 
-      auto resultType = resolveVectorFunction(name, argTypes);
-      if (!resultType) {
-        // TODO: limitation -- result type must be resolveable given
-        // intermediate type of the original UDAF.
-        VELOX_UNREACHABLE(
-            "Signatures whose result types are not resolvable given intermediate types should have been excluded.");
-      }
-
-      if (auto func = getAggregateFunctionEntry(originalName)) {
-        auto fn = func->factory(
-            core::AggregationNode::Step::kFinal, argTypes, resultType, config);
-        VELOX_CHECK_NOT_NULL(fn);
-        return std::make_shared<AggregateCompanionAdapter::ExtractFunction>(
-            std::move(fn));
-      }
-      VELOX_FAIL(
-          "Original aggregation function {} not found: {}", originalName, name);
-    };
-
-    registered |= exec::registerStatefulVectorFunction(
-        CompanionSignatures::extractFunctionNameWithSuffix(originalName, type),
-        extractSignatures,
-        factory,
-        {},
+    registered |= registerAggregateFunction(
+        name,
+        mergeExtractFunctionName,
+        std::move(mergeExtractSignatures),
         overwrite);
   }
   return registered;
 }
 
-bool CompanionFunctionsRegistrar::registerExtractFunction(
-    const std::string& originalName,
+bool CompanionFunctionsRegistrar::registerMergeExtractFunction(
+    const std::string& name,
     const std::vector<AggregateFunctionSignaturePtr>& signatures,
     bool overwrite) {
   if (CompanionSignatures::hasSameIntermediateTypesAcrossSignatures(
           signatures)) {
-    return registerExtractFunctionWithSuffix(
-        originalName, signatures, overwrite);
+    return registerMergeExtractFunctionWithSuffix(name, signatures, overwrite);
   }
 
-  auto extractSignatures =
-      CompanionSignatures::extractFunctionSignatures(signatures);
-  if (extractSignatures.empty()) {
+  auto mergeExtractSignatures =
+      CompanionSignatures::mergeExtractFunctionSignatures(signatures);
+  if (mergeExtractSignatures.empty()) {
     return false;
   }
 
-  auto factory =
-      [originalName](
-          const std::string& name,
-          const std::vector<VectorFunctionArg>& inputArgs,
-          const core::QueryConfig& config) -> std::shared_ptr<VectorFunction> {
+  auto mergeExtractFunctionName =
+      CompanionSignatures::mergeExtractFunctionName(name);
+  return registerAggregateFunction(
+      name,
+      mergeExtractFunctionName,
+      std::move(mergeExtractSignatures),
+      overwrite);
+}
+
+VectorFunctionFactory getVectorFunctionFactory(
+    const std::string& originalName) {
+  return [originalName](
+             const std::string& name,
+             const std::vector<VectorFunctionArg>& inputArgs,
+             const core::QueryConfig& config)
+             -> std::shared_ptr<VectorFunction> {
     std::vector<TypePtr> argTypes{inputArgs.size()};
     std::transform(
         inputArgs.begin(),
@@ -519,11 +452,57 @@ bool CompanionFunctionsRegistrar::registerExtractFunction(
     VELOX_FAIL(
         "Original aggregation function {} not found: {}", originalName, name);
   };
+}
+
+bool CompanionFunctionsRegistrar::registerExtractFunctionWithSuffix(
+    const std::string& originalName,
+    const std::vector<AggregateFunctionSignaturePtr>& signatures,
+    bool overwrite) {
+  auto groupedSignatures =
+      CompanionSignatures::groupSignaturesByReturnType(signatures);
+  bool registered = false;
+  for (const auto& [type, signatureGroup] : groupedSignatures) {
+    auto extractSignatures =
+        CompanionSignatures::extractFunctionSignatures(signatureGroup);
+    if (extractSignatures.empty()) {
+      continue;
+    }
+
+    auto factory = getVectorFunctionFactory(originalName);
+    registered |= exec::registerStatefulVectorFunction(
+        CompanionSignatures::extractFunctionNameWithSuffix(originalName, type),
+        std::move(extractSignatures),
+        std::move(factory),
+        exec::VectorFunctionMetadataBuilder()
+            .defaultNullBehavior(false)
+            .build(),
+        overwrite);
+  }
+  return registered;
+}
+
+bool CompanionFunctionsRegistrar::registerExtractFunction(
+    const std::string& originalName,
+    const std::vector<AggregateFunctionSignaturePtr>& signatures,
+    bool overwrite) {
+  if (CompanionSignatures::hasSameIntermediateTypesAcrossSignatures(
+          signatures)) {
+    return registerExtractFunctionWithSuffix(
+        originalName, signatures, overwrite);
+  }
+
+  auto extractSignatures =
+      CompanionSignatures::extractFunctionSignatures(signatures);
+  if (extractSignatures.empty()) {
+    return false;
+  }
+
+  auto factory = getVectorFunctionFactory(originalName);
   return exec::registerStatefulVectorFunction(
       CompanionSignatures::extractFunctionName(originalName),
-      extractSignatures,
-      factory,
-      {},
+      std::move(extractSignatures),
+      std::move(factory),
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
       overwrite);
 }
 

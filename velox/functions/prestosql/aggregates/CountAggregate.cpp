@@ -34,15 +34,6 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     return sizeof(int64_t);
   }
 
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override {
-    for (auto i : indices) {
-      // result of count is never null
-      *value<int64_t>(groups[i]) = (int64_t)0;
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     BaseAggregate::doExtractValues(groups, numGroups, result, [&](char* group) {
@@ -140,6 +131,16 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     addToGroup(group, count);
   }
 
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    for (auto i : indices) {
+      // result of count is never null
+      *value<int64_t>(groups[i]) = (int64_t)0;
+    }
+  }
+
  private:
   inline void addToGroup(char* group, int64_t count) {
     *value<int64_t>(group) += count;
@@ -148,7 +149,12 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
   DecodedVector decodedIntermediate_;
 };
 
-exec::AggregateRegistrationResult registerCount(const std::string& name) {
+} // namespace
+
+void registerCountAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("bigint")
@@ -162,7 +168,8 @@ exec::AggregateRegistrationResult registerCount(const std::string& name) {
           .build(),
   };
 
-  return exec::registerAggregateFunction(
+  auto name = prefix + kCount;
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -174,13 +181,10 @@ exec::AggregateRegistrationResult registerCount(const std::string& name) {
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         return std::make_unique<CountAggregate>();
-      });
-}
-
-} // namespace
-
-void registerCountAggregate(const std::string& prefix) {
-  registerCount(prefix + kCount);
+      },
+      {false /*orderSensitive*/},
+      withCompanionFunctions,
+      overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

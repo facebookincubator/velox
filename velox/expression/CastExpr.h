@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/expression/CastHooks.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
@@ -72,27 +73,20 @@ class CastExpr : public SpecialForm {
   /// @param type The target type of the cast expression
   /// @param expr The expression to cast
   /// @param trackCpuUsage Whether to track CPU usage
-  CastExpr(TypePtr type, ExprPtr&& expr, bool trackCpuUsage, bool nullOnFailure)
+  CastExpr(
+      TypePtr type,
+      ExprPtr&& expr,
+      bool trackCpuUsage,
+      bool nullOnFailure,
+      std::shared_ptr<CastHooks> hooks)
       : SpecialForm(
             type,
             std::vector<ExprPtr>({expr}),
             nullOnFailure ? kTryCast.data() : kCast.data(),
             false /* supportsFlatNoNullsFastPath */,
             trackCpuUsage),
-        nullOnFailure_(nullOnFailure) {
-    auto fromType = inputs_[0]->type();
-    castFromOperator_ = getCustomTypeCastOperator(fromType->toString());
-    if (castFromOperator_ && !castFromOperator_->isSupportedToType(type)) {
-      VELOX_FAIL(
-          "Cannot cast {} to {}.", fromType->toString(), type->toString());
-    }
-
-    castToOperator_ = getCustomTypeCastOperator(type->toString());
-    if (castToOperator_ && !castToOperator_->isSupportedFromType(fromType)) {
-      VELOX_FAIL(
-          "Cannot cast {} to {}.", fromType->toString(), type->toString());
-    }
-  }
+        nullOnFailure_(nullOnFailure),
+        hooks_(std::move(hooks)) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -172,10 +166,11 @@ class CastExpr : public SpecialForm {
   /// The per-row level Kernel
   /// @tparam ToKind The cast target type
   /// @tparam FromKind The expression type
+  /// @tparam TPolicy The policy used by the cast
   /// @param row The index of the current row
   /// @param input The input vector (of type FromKind)
   /// @param result The output vector (of type ToKind)
-  template <TypeKind ToKind, TypeKind FromKind, bool Truncate>
+  template <TypeKind ToKind, TypeKind FromKind, typename TPolicy>
   void applyCastKernel(
       vector_size_t row,
       EvalCtx& context,
@@ -194,6 +189,12 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const TypePtr& fromType);
 
+  VectorPtr castFromIntervalDayTime(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType);
+
   template <typename TInput, typename TOutput>
   void applyDecimalCastKernel(
       const SelectivityVector& rows,
@@ -205,6 +206,28 @@ class CastExpr : public SpecialForm {
 
   template <typename TInput, typename TOutput>
   void applyIntToDecimalCastKernel(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      VectorPtr& castResult);
+
+  template <typename TInput>
+  VectorPtr applyIntToBinaryCast(
+      const SelectivityVector& rows,
+      exec::EvalCtx& context,
+      const BaseVector& input);
+
+  template <typename TInput, typename TOutput>
+  void applyFloatingPointToDecimalCastKernel(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      VectorPtr& castResult);
+
+  template <typename T>
+  void applyVarcharToDecimalCastKernel(
       const SelectivityVector& rows,
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -264,13 +287,11 @@ class CastExpr : public SpecialForm {
       const BaseVector& input,
       VectorPtr& result);
 
-  template <bool adjustForTimeZone>
-  void castTimestampToDate(
+  VectorPtr applyTimestampToVarcharCast(
+      const TypePtr& toType,
       const SelectivityVector& rows,
-      const BaseVector& input,
       exec::EvalCtx& context,
-      VectorPtr& result,
-      const date::time_zone* timeZone = nullptr);
+      const BaseVector& input);
 
   bool nullOnFailure() const {
     return nullOnFailure_;
@@ -280,15 +301,13 @@ class CastExpr : public SpecialForm {
     return nullOnFailure() && inTopLevel;
   }
 
-  // Custom cast operator for the from-type. Nullptr if the type is native or
-  // doesn't support cast-from.
-  CastOperatorPtr castFromOperator_;
+  CastOperatorPtr getCastOperator(const TypePtr& type);
 
-  // Custom cast operator for the to-type. Nullptr if the type is native or
-  // doesn't support cast-to.
-  CastOperatorPtr castToOperator_;
+  // Custom cast operators for to and from top-level as well as nested types.
+  folly::F14FastMap<std::string, CastOperatorPtr> castOperators_;
 
   bool nullOnFailure_;
+  std::shared_ptr<CastHooks> hooks_;
 
   bool inTopLevel = false;
 };

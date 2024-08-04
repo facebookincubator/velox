@@ -15,8 +15,11 @@
  */
 #pragma once
 
+#include "folly/CPortability.h"
+
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Range.h"
+#include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/LazyVector.h"
 
 namespace facebook::velox::aggregate {
@@ -35,6 +38,7 @@ class AggregationHook : public ValueHook {
   static constexpr Kind kFloatMin = 8;
   static constexpr Kind kDoubleMax = 9;
   static constexpr Kind kDoubleMin = 10;
+  static constexpr Kind kSumBigintToBigintOverflow = 11;
 
   // Make null behavior known at compile time. This is useful when
   // templating a column decoding loop with a hook.
@@ -97,9 +101,20 @@ class AggregationHook : public ValueHook {
 };
 
 namespace {
-template <typename TValue>
+// Spark's sum function sets Overflow to true and intentionally let the result
+// value be automatically wrapped around when integer overflow happens. Hence,
+// disable undefined behavior sanitizer to not fail on signed integer overflow.
+// The disablement of the sanitizer only affects SumHook that is used for
+// pushdown of sum aggregation functions. It doesn't affect the Presto's sum
+// function that sets Overflow to false because overflow is handled explicitly
+// in checkedPlus.
+template <typename TValue, bool Overflow>
+#if defined(FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER)
+FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("signed-integer-overflow")
+#endif
 inline void updateSingleValue(TValue& result, TValue value) {
   if constexpr (
+      (std::is_same_v<TValue, int64_t> && Overflow) ||
       std::is_same_v<TValue, double> || std::is_same_v<TValue, float>) {
     result += value;
   } else {
@@ -108,7 +123,7 @@ inline void updateSingleValue(TValue& result, TValue value) {
 }
 } // namespace
 
-template <typename TValue, typename TAggregate>
+template <typename TValue, typename TAggregate, bool Overflow = false>
 class SumHook final : public AggregationHook {
  public:
   SumHook(
@@ -132,6 +147,9 @@ class SumHook final : public AggregationHook {
         return kSumIntegerToBigint;
       }
       if (std::is_same_v<TValue, int64_t>) {
+        if (Overflow) {
+          return kSumBigintToBigintOverflow;
+        }
         return kSumBigintToBigint;
       }
     }
@@ -141,7 +159,7 @@ class SumHook final : public AggregationHook {
   void addValue(vector_size_t row, const void* value) override {
     auto group = findGroup(row);
     clearNull(group);
-    updateSingleValue(
+    updateSingleValue<TAggregate, Overflow>(
         *reinterpret_cast<TAggregate*>(group + offset_),
         TAggregate(*reinterpret_cast<const TValue*>(value)));
   }
@@ -214,11 +232,18 @@ class MinMaxHook final : public AggregationHook {
 
   void addValue(vector_size_t row, const void* value) override {
     auto group = findGroup(row);
-    if (clearNull(group) ||
-        (*reinterpret_cast<T*>(group + offset_) >
-         *reinterpret_cast<const T*>(value)) == isMin) {
-      *reinterpret_cast<T*>(group + offset_) =
-          *reinterpret_cast<const T*>(value);
+    T* currPtr = reinterpret_cast<T*>(group + offset_);
+    const T* valPtr = reinterpret_cast<const T*>(value);
+    if constexpr (std::is_floating_point_v<T>) {
+      static const auto isGreater =
+          util::floating_point::NaNAwareGreaterThan<T>{};
+      if (clearNull(group) || isGreater(*currPtr, *valPtr) == isMin) {
+        *currPtr = *valPtr;
+      }
+    } else {
+      if (clearNull(group) || (*currPtr > *valPtr) == isMin) {
+        *currPtr = *valPtr;
+      }
     }
   }
 };

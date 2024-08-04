@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/FormatData.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/compression/Compression.h"
@@ -34,14 +33,14 @@ namespace facebook::velox::dwrf {
 class DwrfData : public dwio::common::FormatData {
  public:
   DwrfData(
-      std::shared_ptr<const dwio::common::TypeWithId> nodeType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
       FlatMapContext flatMapContext);
 
   void readNulls(
       vector_size_t numValues,
-      const uint64_t* FOLLY_NULLABLE incomingNulls,
+      const uint64_t* incomingNulls,
       BufferPtr& nulls,
       bool nullsOnly = false) override;
 
@@ -61,7 +60,7 @@ class DwrfData : public dwio::common::FormatData {
     return notNullDecoder_ != nullptr;
   }
 
-  auto* FOLLY_NULLABLE notNullDecoder() const {
+  auto* notNullDecoder() const {
     return notNullDecoder_.get();
   }
 
@@ -69,7 +68,7 @@ class DwrfData : public dwio::common::FormatData {
     return flatMapContext_;
   }
 
-  const uint64_t* FOLLY_NULLABLE inMap() const {
+  const uint64_t* inMap() const {
     return flatMapContext_.inMapDecoder ? inMap_->as<uint64_t>() : nullptr;
   }
 
@@ -101,7 +100,7 @@ class DwrfData : public dwio::common::FormatData {
   }
 
   memory::MemoryPool& memoryPool_;
-  const std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
+  const std::shared_ptr<const dwio::common::TypeWithId> fileType_;
   FlatMapContext flatMapContext_;
   std::unique_ptr<ByteRleDecoder> notNullDecoder_;
   std::unique_ptr<dwio::common::SeekableInputStream> indexStream_;

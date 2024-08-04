@@ -24,27 +24,33 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#ifndef ios_hpp
-#define ios_hpp
+#ifndef velox_ios_hpp
+#define velox_ios_hpp
 
 #if __APPLE__
 # include <TargetConditionals.h>
 # if TARGET_OS_IPHONE
 #   include <string>
 
+    namespace facebook
+    {
+    namespace velox
+    {
     namespace date
     {
     namespace iOSUtils
     {
-    
+
     std::string get_tzdata_path();
     std::string get_current_timezone();
-    
+
     }  // namespace iOSUtils
     }  // namespace date
+    }  // namespace velox
+    }  // namespace facebook
 
 # endif  // TARGET_OS_IPHONE
 #else   // !__APPLE__
 # define TARGET_OS_IPHONE 0
 #endif  // !__APPLE__
-#endif // ios_hpp
+#endif // velox_ios_hpp

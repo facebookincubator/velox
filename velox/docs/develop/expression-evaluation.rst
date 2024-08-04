@@ -241,8 +241,8 @@ This is calculated by Expr::computeMetadata() virtual methods and stored in
 member variables of the exec::Expr class.
 
 * *distinctFields_* - List of distinct input columns.
-* *multiplyReferencedFields_* - Subset of distinctFields_ that are used as inputs by multiple subexpressions.
-* *sameAsParentDistinctFields_* - True if distinctFields_ matches one of the parent's distinctFields_ (parents to refer expressions that have this expression as input).
+* *multiplyReferencedFields_* - Subset of `distinctFields_` that are used as inputs by multiple subexpressions.
+* *sameAsParentDistinctFields_* - True if `distinctFields_` matches one of the parent's `distinctFields_` (parents to refer expressions that have this expression as input).
 * *propagatesNulls_* - Boolean indicating whether a null in any of the input columns causes this expression to always return null for the row.
 * *deterministic_* - Boolean indicating whether this expression and all its children are deterministic.
 * *hasConditionals_* - Boolean indicating whether this expression or any of its children is an IF, SWITCH, AND or OR expression.
@@ -313,7 +313,7 @@ vector has 1’000 entries. These are represented with an indices buffer of 1000
 values in the range of [0, 2] and an inner flat vector of size 3: [red, green,
 blue]. When evaluating **upper(color)** expression, Expr::peelEncodings
 () method is used to peel off a dictionary and produce a new set of inputs:
-inner flat vector or size 3 and a set of indices into that vector: [0, 1, 2].
+inner flat vector of size 3 and a set of indices into that vector: [0, 1, 2].
 Then, “upper” function is applied to 3 values - [red, green, blue] - to produce
 another flat vector of size 3: [RED, GREEN, BLUE]. Finally, the result is
 wrapped in a dictionary vector using the original indices to produce a

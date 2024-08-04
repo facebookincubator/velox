@@ -21,42 +21,54 @@
 
 namespace facebook::velox::core::test {
 
-TEST(TestQueryConfig, emptyConfig) {
-  std::unordered_map<std::string, std::string> configData;
-  auto queryCtx = std::make_shared<QueryCtx>(nullptr, std::move(configData));
+class QueryConfigTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
+
+TEST_F(QueryConfigTest, emptyConfig) {
+  auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
   const QueryConfig& config = queryCtx->queryConfig();
 
-  ASSERT_FALSE(config.codegenEnabled());
-  ASSERT_EQ(config.codegenConfigurationFilePath(), "");
-  ASSERT_FALSE(config.isCastToIntByTruncate());
+  ASSERT_FALSE(config.isLegacyCast());
 }
 
-TEST(TestQueryConfig, setConfig) {
-  std::string path = "/tmp/CodeGenConfig";
+TEST_F(QueryConfigTest, setConfig) {
+  std::string path = "/tmp/setConfig";
   std::unordered_map<std::string, std::string> configData(
-      {{QueryConfig::kCodegenEnabled, "true"},
-       {QueryConfig::kCodegenConfigurationFilePath, path}});
-  auto queryCtx = std::make_shared<QueryCtx>(nullptr, std::move(configData));
+      {{QueryConfig::kLegacyCast, "true"}});
+  auto queryCtx = QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
   const QueryConfig& config = queryCtx->queryConfig();
 
-  ASSERT_TRUE(config.codegenEnabled());
-  ASSERT_EQ(config.codegenConfigurationFilePath(), path);
-  ASSERT_FALSE(config.isCastToIntByTruncate());
+  ASSERT_TRUE(config.isLegacyCast());
 }
 
-TEST(TestQueryConfig, memConfig) {
-  const std::string tz = "timezone1";
+TEST_F(QueryConfigTest, invalidConfig) {
+  std::unordered_map<std::string, std::string> configData(
+      {{QueryConfig::kSessionTimezone, "Invalid"}});
+  VELOX_ASSERT_USER_THROW(
+      QueryCtx::create(nullptr, QueryConfig{std::move(configData)}),
+      "Unknown time zone: 'Invalid'");
+
+  auto queryCtx = QueryCtx::create(nullptr);
+  VELOX_ASSERT_USER_THROW(
+      queryCtx->testingOverrideConfigUnsafe({
+          {core::QueryConfig::kSessionTimezone, ""},
+      }),
+      "Unknown time zone: ''");
+}
+
+TEST_F(QueryConfigTest, memConfig) {
+  const std::string tz = "UTC";
   const std::unordered_map<std::string, std::string> configData(
-      {{QueryConfig::kCodegenEnabled, "true"},
-       {QueryConfig::kSessionTimezone, tz}});
+      {{QueryConfig::kSessionTimezone, tz}});
 
   {
     MemConfig cfg{configData};
     MemConfig cfg2{};
     auto configDataCopy = configData;
-    MemConfig cfg3{std::move(configDataCopy)};
-    ASSERT_TRUE(cfg.Config::get<bool>(QueryConfig::kCodegenEnabled));
-    ASSERT_TRUE(cfg3.Config::get<bool>(QueryConfig::kCodegenEnabled));
     ASSERT_EQ(
         tz,
         cfg.Config::get<std::string>(QueryConfig::kSessionTimezone).value());
@@ -70,15 +82,11 @@ TEST(TestQueryConfig, memConfig) {
     MemConfigMutable cfg2{};
     auto configDataCopy = configData;
     MemConfigMutable cfg3{std::move(configDataCopy)};
-    ASSERT_TRUE(cfg.Config::get<bool>(QueryConfig::kCodegenEnabled).value());
-    ASSERT_TRUE(cfg3.Config::get<bool>(QueryConfig::kCodegenEnabled).value());
     ASSERT_EQ(
         tz,
         cfg.Config::get<std::string>(QueryConfig::kSessionTimezone).value());
     ASSERT_FALSE(cfg.Config::get<std::string>("missing-entry").has_value());
-    ASSERT_NO_THROW(cfg.setValue(QueryConfig::kCodegenEnabled, "false"));
-    ASSERT_FALSE(cfg.Config::get<bool>(QueryConfig::kCodegenEnabled).value());
-    const std::string tz2 = "timezone2";
+    const std::string tz2 = "PST";
     ASSERT_NO_THROW(cfg.setValue(QueryConfig::kSessionTimezone, tz2));
     ASSERT_EQ(
         tz2,
@@ -88,7 +96,7 @@ TEST(TestQueryConfig, memConfig) {
   }
 }
 
-TEST(TestQueryConfig, taskWriterCountConfig) {
+TEST_F(QueryConfigTest, taskWriterCountConfig) {
   struct {
     std::optional<int> numWriterCounter;
     std::optional<int> numPartitionedWriterCounter;
@@ -126,7 +134,8 @@ TEST(TestQueryConfig, taskWriterCountConfig) {
           QueryConfig::kTaskPartitionedWriterCount,
           std::to_string(testConfig.numPartitionedWriterCounter.value()));
     }
-    auto queryCtx = std::make_shared<QueryCtx>(nullptr, std::move(configData));
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
     const QueryConfig& config = queryCtx->queryConfig();
     ASSERT_EQ(config.taskWriterCount(), testConfig.expectedWriterCounter);
     ASSERT_EQ(
@@ -135,23 +144,23 @@ TEST(TestQueryConfig, taskWriterCountConfig) {
   }
 }
 
-TEST(TestQueryConfig, enableExpressionEvaluationCacheConfig) {
-  std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::defaultMemoryManager().addRootPool()};
-  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
+TEST_F(QueryConfigTest, enableExpressionEvaluationCacheConfig) {
+  std::shared_ptr<memory::MemoryPool> rootPool{
+      memory::memoryManager()->addRootPool()};
+  std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
 
   auto testConfig = [&](bool enableExpressionEvaluationCache) {
     std::unordered_map<std::string, std::string> configData(
         {{core::QueryConfig::kEnableExpressionEvaluationCache,
           enableExpressionEvaluationCache ? "true" : "false"}});
     auto queryCtx =
-        std::make_shared<core::QueryCtx>(nullptr, std::move(configData));
+        core::QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
     const core::QueryConfig& config = queryCtx->queryConfig();
     ASSERT_EQ(
         config.isExpressionEvaluationCacheEnabled(),
         enableExpressionEvaluationCache);
 
-    auto execCtx = std::make_shared<core::ExecCtx>(pool_.get(), queryCtx.get());
+    auto execCtx = std::make_shared<core::ExecCtx>(pool.get(), queryCtx.get());
     ASSERT_EQ(execCtx->exprEvalCacheEnabled(), enableExpressionEvaluationCache);
     ASSERT_EQ(
         execCtx->vectorPool() != nullptr, enableExpressionEvaluationCache);
@@ -178,7 +187,7 @@ TEST(TestQueryConfig, enableExpressionEvaluationCacheConfig) {
   testConfig(false);
 }
 
-TEST(TestQueryConfig, capacityConversion) {
+TEST_F(QueryConfigTest, capacityConversion) {
   folly::Random::DefaultGenerator rng;
   rng.seed(1);
 
@@ -215,7 +224,7 @@ TEST(TestQueryConfig, capacityConversion) {
   }
 }
 
-TEST(TestQueryConfig, durationConversion) {
+TEST_F(QueryConfigTest, durationConversion) {
   folly::Random::DefaultGenerator rng;
   rng.seed(1);
 

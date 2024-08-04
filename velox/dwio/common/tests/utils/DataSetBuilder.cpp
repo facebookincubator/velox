@@ -37,7 +37,8 @@ RowTypePtr DataSetBuilder::makeRowType(
 DataSetBuilder& DataSetBuilder::makeDataset(
     RowTypePtr rowType,
     const size_t batchCount,
-    const size_t numRows) {
+    const size_t numRows,
+    const bool withRecursiveNulls) {
   if (batches_) {
     batches_->clear();
   } else {
@@ -45,8 +46,18 @@ DataSetBuilder& DataSetBuilder::makeDataset(
   }
 
   for (size_t i = 0; i < batchCount; ++i) {
-    batches_->push_back(std::static_pointer_cast<RowVector>(
-        BatchMaker::createBatch(rowType, numRows, pool_, nullptr, i)));
+    if (withRecursiveNulls) {
+      batches_->push_back(std::static_pointer_cast<RowVector>(
+          BatchMaker::createBatch(rowType, numRows, pool_, nullptr, i)));
+    } else {
+      batches_->push_back(
+          std::static_pointer_cast<RowVector>(BatchMaker::createBatch(
+              rowType,
+              numRows,
+              pool_,
+              [](vector_size_t /*index*/) { return false; },
+              i)));
+    }
   }
 
   return *this;
@@ -106,7 +117,7 @@ DataSetBuilder& DataSetBuilder::withAllNullsForField(
   for (RowVectorPtr batch : *batches_) {
     auto fieldValues = getChildBySubfield(batch.get(), field);
     SelectivityVector rows(fieldValues->size());
-    fieldValues->addNulls(nullptr, rows);
+    fieldValues->addNulls(rows);
   }
 
   return *this;
@@ -122,7 +133,7 @@ DataSetBuilder& DataSetBuilder::withNullsForField(
     if (nullsPercent == 0) {
       fieldValues->clearNulls(rows);
     } else if (nullsPercent >= 100) {
-      fieldValues->addNulls(nullptr, rows);
+      fieldValues->addNulls(rows);
     } else {
       std::vector<vector_size_t> nonNullRows =
           getSomeNonNullRowNumbers(fieldValues, 23);

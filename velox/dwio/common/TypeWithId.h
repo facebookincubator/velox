@@ -18,22 +18,34 @@
 
 #include <memory>
 #include <vector>
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::dwio::common {
 
 class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
  public:
+  /// NOTE: This constructor will re-parent the children.
   TypeWithId(
       std::shared_ptr<const velox::Type> type,
-      std::vector<std::shared_ptr<const TypeWithId>>&& children,
+      std::vector<std::unique_ptr<TypeWithId>>&& children,
       uint32_t id,
       uint32_t maxId,
       uint32_t column);
 
-  static std::shared_ptr<const TypeWithId> create(
+  TypeWithId(const TypeWithId&) = delete;
+  TypeWithId& operator=(const TypeWithId&) = delete;
+
+  static std::unique_ptr<TypeWithId> create(
       const std::shared_ptr<const velox::Type>& root,
       uint32_t next = 0);
+
+  /// Create TypeWithId node but leave all the unselected children as nullptr.
+  /// The ids are set correctly even when some of the previous nodes are not
+  /// selected.
+  static std::unique_ptr<TypeWithId> create(
+      const RowTypePtr& type,
+      const velox::common::ScanSpec& spec);
 
   uint32_t size() const override;
 
@@ -69,8 +81,10 @@ class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
     return children_;
   }
 
+  std::string fullName() const;
+
  private:
-  static std::shared_ptr<const TypeWithId> create(
+  static std::unique_ptr<TypeWithId> create(
       const std::shared_ptr<const velox::Type>& type,
       uint32_t& next,
       uint32_t column);
