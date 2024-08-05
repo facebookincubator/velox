@@ -170,17 +170,33 @@ fuzzertest: debug
 			--minloglevel=0
 
 format-fix: 			#: Fix formatting issues in the main branch
+ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
 	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main --fix
+else
+	scripts/check.py format main --fix
+endif
 
 format-check: 			#: Check for formatting issues on the main branch
 	clang-format --version
+ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
 	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main
+else
+	scripts/check.py format main
+endif
 
-header-fix:				#: Fix license header issues in the current branch
+header-fix:			#: Fix license header issues in the current branch
+ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
 	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main --fix
+else
+	scripts/check.py header main --fix
+endif
 
 header-check:			#: Check for license header issues on the main branch
+ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
 	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main
+else
+	scripts/check.py header main
+endif
 
 circleci-container:			#: Build the linux container for CircleCi
 	$(MAKE) linux-container CONTAINER_NAME=circleci
