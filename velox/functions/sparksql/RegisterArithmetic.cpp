@@ -17,7 +17,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/sparksql/Arithmetic.h"
-#include "velox/functions/sparksql/DecimalFunctions.h"
+#include "velox/functions/sparksql/DecimalArithmetic.h"
 #include "velox/functions/sparksql/Rand.h"
 
 namespace facebook::velox::functions::sparksql {
