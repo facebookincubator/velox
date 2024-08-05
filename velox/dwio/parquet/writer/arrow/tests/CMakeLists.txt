@@ -52,4 +52,4 @@ add_library(
 
 target_link_libraries(
   velox_dwio_arrow_parquet_writer_test_lib arrow
-  velox_dwio_arrow_parquet_writer_lib gtest)
+  velox_dwio_arrow_parquet_writer_lib GTest::gtest)

@@ -95,7 +95,7 @@ target_link_libraries(
   velox_functions_prestosql
   velox_functions_spark
   velox_parse_parser
-  gtest)
+  GTest::gtest)
 
 add_executable(velox_expression_runner_test ExpressionRunnerTest.cpp)
 target_link_libraries(

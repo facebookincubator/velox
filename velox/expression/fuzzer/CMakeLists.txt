@@ -16,7 +16,8 @@ add_library(velox_expression_test_utility ArgumentTypeFuzzer.cpp
                                           FuzzerToolkit.cpp)
 
 target_link_libraries(
-  velox_expression_test_utility velox_type velox_expression_functions gtest)
+  velox_expression_test_utility velox_type velox_expression_functions
+  GTest::gtest)
 
 add_library(
   velox_expression_fuzzer
