@@ -173,6 +173,7 @@ format-fix: 			#: Fix formatting issues in the main branch
 	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main --fix
 
 format-check: 			#: Check for formatting issues on the main branch
+	clang-format --version
 	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main
 
 header-fix:				#: Fix license header issues in the current branch
