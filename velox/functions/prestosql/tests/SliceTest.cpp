@@ -13,169 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/lib/Slice.h"
-#include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/lib/tests/SliceTestBase.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::functions;
-using namespace facebook::velox::functions::test;
-using namespace facebook::velox::test;
-
+namespace facebook::velox::functions::prestosql {
 namespace {
 
-class SliceTest : public FunctionBaseTest {
+class SliceTest : public SliceTestBase {
  protected:
   static const vector_size_t kVectorSize{1000};
-
-  virtual void testSlice(
-      const std::string& expression,
-      const std::vector<VectorPtr>& parameters,
-      const ArrayVectorPtr& expectedArrayVector) {
-    auto result = evaluate<ArrayVector>(expression, makeRowVector(parameters));
-    assertEqualVectors(expectedArrayVector, result);
-    EXPECT_NO_THROW(expectedArrayVector->checkRanges());
-  }
-
-  void commonTestCases() {
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4, 5}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      testSlice("slice(C0, 1, 4)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{1, 2}});
-      testSlice("slice(C0, 1, 4)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4, 5}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{3, 4}});
-      testSlice("slice(C0, 3, 2)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{3, 4}});
-      testSlice("slice(C0, 3, 3)", {arrayVector}, expectedArrayVector);
-    }
-    // Negative start index.
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{2, 3, 4}});
-      testSlice("slice(C0, -3, 3)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{2, 3, 4}});
-      testSlice("slice(C0, -3, 5)", {arrayVector}, expectedArrayVector);
-    }
-    // Negative length.
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-      VELOX_ASSERT_THROW(
-          testSlice(
-              "slice(C0, 1, -1)",
-              {arrayVector, arrayVector, expectedArrayVector},
-              expectedArrayVector),
-          "The value of length argument of slice() function should not be negative");
-    }
-    // 0 start index.
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-      VELOX_ASSERT_THROW(
-          testSlice(
-              "slice(C0, 0, 1)",
-              {arrayVector, arrayVector, expectedArrayVector},
-              expectedArrayVector),
-          "SQL array indices start at 1");
-    }
-    // 0 length.
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-      testSlice("slice(C0, 1, 0)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-      testSlice("slice(C0, -2, 0)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-      testSlice("slice(C0, -2, 0)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-      testSlice("slice(C0, -5, 5)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-      testSlice("slice(C0, -6, 5)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
-      auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-      testSlice("slice(C0, -6, 5)", {arrayVector}, expectedArrayVector);
-    }
-    {
-      // The implementation is zero-copy, so floating point number comparison
-      // won't have issue here since numerical representation remains the same.
-      auto arrayVector = makeArrayVector<double>({{2.3, 2.3, 2.2}});
-      auto expectedArrayVector = makeArrayVector<double>({{2.3, 2.2}});
-      testSlice("slice(C0, 2, 3)", {arrayVector}, expectedArrayVector);
-    }
-    // String array.
-    {
-      auto arrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
-      auto expectedArrayVector = makeArrayVector<StringView>({{"b", "c"}});
-      testSlice("slice(C0, 2, 2)", {arrayVector}, expectedArrayVector);
-    }
-    // Out of bound start index.
-    {
-      auto arrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
-      auto expectedArrayVector = makeArrayVector<StringView>({{}});
-      testSlice("slice(C0, 5, 2)", {arrayVector}, expectedArrayVector);
-    }
-    // Out of bound length.
-    {
-      auto arrayVector = makeArrayVector<StringView>({{"a", "b", "c", "d"}});
-      auto expectedArrayVector = makeArrayVector<StringView>({{"b", "c", "d"}});
-      testSlice("slice(C0, 2, 5)", {arrayVector}, expectedArrayVector);
-    }
-  }
 };
 
-class SparkSliceTest : public SliceTest {
- protected:
-  void SetUp() override {
-    FunctionBaseTest::SetUp();
-    // Parses integer literals as INTEGER, not BIGINT.
-    options_.parseIntegerAsBigint = false;
-    registerIntegerSliceFunction("spark_");
-  }
-
-  void testSlice(
-      const std::string& expression,
-      const std::vector<VectorPtr>& parameters,
-      const ArrayVectorPtr& expectedArrayVector) override {
-    auto result =
-        evaluate<ArrayVector>("spark_" + expression, makeRowVector(parameters));
-    assertEqualVectors(expectedArrayVector, result);
-    EXPECT_NO_THROW(expectedArrayVector->checkRanges());
-  }
-};
-
-TEST_F(SliceTest, presto) {
-  commonTestCases();
-}
-
-TEST_F(SparkSliceTest, spark) {
-  commonTestCases();
+TEST_F(SliceTest, basic) {
+  basicTestCases();
 }
 
 TEST_F(SliceTest, constantInputArray) {
@@ -450,3 +299,4 @@ TEST_F(SliceTest, constantArrayNonConstantLength) {
 }
 
 } // namespace
+} // namespace facebook::velox::functions::prestosql
