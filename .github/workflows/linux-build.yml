@@ -30,7 +30,7 @@ concurrency:
 jobs:
   adapters:
     name: Linux release with adapters
-    runs-on: linux-amd64-cpu8
+    runs-on: linux-amd64-cpu16
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
@@ -112,7 +112,7 @@ jobs:
           ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3|cudf"
 
   ubuntu-debug:
-    runs-on: linux-amd64-cpu8
+    runs-on: linux-amd64-cpu16
     name: "Ubuntu debug with resolve_dependency"
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache"
@@ -150,7 +150,7 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
           MAKEFLAGS: "TREAT_WARNINGS_AS_ERRORS=0 NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
-          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON"
+          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON"
         run: |
           make debug
 
