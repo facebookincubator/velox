@@ -20,6 +20,7 @@ BENCHMARKS_BASIC_DIR=$(BUILD_BASE_DIR)/$(BUILD_DIR)/velox/benchmarks/basic/
 BENCHMARKS_DUMP_DIR=dumps
 TREAT_WARNINGS_AS_ERRORS ?= 1
 ENABLE_WALL ?= 1
+PYTHON_VENV ?= .venv
 
 # Option to make a minimal build. By default set to "OFF"; set to
 # "ON" to only build a minimal set of components. This may override
@@ -169,17 +170,16 @@ fuzzertest: debug
 			--minloglevel=0
 
 format-fix: 			#: Fix formatting issues in the main branch
-	scripts/check.py format main --fix
+	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main --fix
 
 format-check: 			#: Check for formatting issues on the main branch
-	clang-format --version
-	scripts/check.py format main
+	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main
 
 header-fix:				#: Fix license header issues in the current branch
-	scripts/check.py header main --fix
+	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main --fix
 
 header-check:			#: Check for license header issues on the main branch
-	scripts/check.py header main
+	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main
 
 circleci-container:			#: Build the linux container for CircleCi
 	$(MAKE) linux-container CONTAINER_NAME=circleci

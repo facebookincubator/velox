@@ -30,6 +30,7 @@ set -x # Print commands that are executed.
 
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
+PYTHON_VENV=${PYHTON_VENV:-"${SCRIPTDIR}/../.venv"}
 
 NPROC=$(getconf _NPROCESSORS_ONLN)
 
@@ -71,6 +72,11 @@ function install_build_prerequisites {
   do
     install_from_brew ${pkg}
   done
+  if [ ! -f ${PYTHON_VENV}/pyvenv.cfg ]; then
+    echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
+    python3 -m ${PYTHON_VENV}
+  fi
+  source ${PYTHON_VENV}/bin/activate
   pip3 install --user cmake-format regex pyyaml
 }
 
