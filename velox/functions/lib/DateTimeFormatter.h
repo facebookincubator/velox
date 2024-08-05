@@ -100,7 +100,10 @@ enum class DateTimeFormatSpecifier : uint8_t {
   TIMEZONE_OFFSET_ID = 22,
 
   // A literal % character
-  LITERAL_PERCENT = 23
+  LITERAL_PERCENT = 23,
+
+  // Week of month, e.g: 2
+  WEEK_OF_MONTH = 24
 };
 
 struct FormatPattern {
