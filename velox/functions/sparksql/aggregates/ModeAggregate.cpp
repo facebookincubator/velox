@@ -27,7 +27,7 @@ namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
 
-/// Mode aggregate function for scalar types.
+// Mode aggregate function for scalar types.
 template <
     typename T,
     typename Hash = std::hash<T>,
@@ -97,7 +97,7 @@ class ModeAggregate {
   };
 };
 
-/// Mode aggregate function for VARCHAR type.
+// Mode aggregate function for VARCHAR type.
 class StringModeAggregate {
  public:
   using InputType = Row<Varchar>;
@@ -264,7 +264,7 @@ struct ComplexTypeAccumulator {
   }
 };
 
-/// Mode aggregate function for complex types.
+// Mode aggregate function for complex types.
 template <typename T>
 class ComplexTypeModeAggregate : public Aggregate {
  public:
