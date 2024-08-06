@@ -65,7 +65,7 @@ TTimeZoneDatabase buildTimeZoneDatabase(
       const date::time_zone* zone;
       try {
         zone = date::locate_zone(entry.second);
-      } catch (std::runtime_error& err) {
+      } catch (date::invalid_timezone& err) {
         // Timezone not found in OS, skip it.
         LOG(WARNING) << "Timezone [" << entry.second << "] not found due to: '"
                      << err.what() << "', ignoring it. ";
