@@ -146,9 +146,20 @@ const SharedArbitrator::Candidate& findCandidateWithLargestCapacity(
 
 SharedArbitrator::SharedArbitrator(const MemoryArbitrator::Config& config)
     : MemoryArbitrator(config),
+      fastExponentialGrowthCapacityLimit_(
+          config.fastExponentialGrowthCapacityLimit),
+      slowCapacityGrowPct_(config.slowCapacityGrowPct),
       freeReservedCapacity_(reservedCapacity_),
       freeNonReservedCapacity_(capacity_ - freeReservedCapacity_) {
   VELOX_CHECK_EQ(kind_, config.kind);
+  VELOX_CHECK_EQ(
+      fastExponentialGrowthCapacityLimit_ == 0,
+      slowCapacityGrowPct_ == 0,
+      "fastExponentialGrowthCapacityLimit_ {} and slowCapacityGrowPct_ {} "
+      "both need to be set at the same time to enable growth capacity "
+      "adjustment.",
+      fastExponentialGrowthCapacityLimit_,
+      slowCapacityGrowPct_);
 }
 
 std::string SharedArbitrator::Candidate::toString() const {
@@ -298,7 +309,7 @@ uint64_t SharedArbitrator::shrinkCapacity(
     bool allowAbort) {
   incrementGlobalArbitrationCount();
   requestBytes = requestBytes == 0 ? capacity_ : requestBytes;
-  ArbitrationOperation op(requestBytes, pools);
+  ArbitrationOperation op(requestBytes, std::nullopt, pools);
   ScopedArbitration scopedArbitration(this, &op);
 
   uint64_t fastReclaimTargetBytes =
@@ -343,11 +354,32 @@ uint64_t SharedArbitrator::testingNumRequests() const {
   return numRequests_;
 }
 
+uint64_t SharedArbitrator::getCapacityGrowthTarget(
+    const MemoryPool& pool,
+    uint64_t requestBytes) const {
+  if (fastExponentialGrowthCapacityLimit_ == 0 && slowCapacityGrowPct_ == 0) {
+    return std::max(requestBytes, memoryPoolTransferCapacity_);
+  }
+  uint64_t targetBytes{0};
+  const auto capacity = pool.capacity();
+  if (capacity * 2 <= fastExponentialGrowthCapacityLimit_) {
+    targetBytes = capacity;
+  } else {
+    targetBytes = capacity * slowCapacityGrowPct_;
+  }
+  return std::max(
+      std::max(requestBytes, targetBytes), memoryPoolTransferCapacity_);
+}
+
 bool SharedArbitrator::growCapacity(
     MemoryPool* pool,
     const std::vector<std::shared_ptr<MemoryPool>>& candidatePools,
     uint64_t requestBytes) {
-  ArbitrationOperation op(pool, requestBytes, candidatePools);
+  ArbitrationOperation op(
+      pool,
+      requestBytes,
+      getCapacityGrowthTarget(*pool, requestBytes),
+      candidatePools);
   ScopedArbitration scopedArbitration(this, &op);
 
   bool needGlobalArbitration{false};
@@ -490,9 +522,9 @@ void SharedArbitrator::getGrowTargets(
     ArbitrationOperation* op,
     uint64_t& maxGrowTarget,
     uint64_t& minGrowTarget) {
-  maxGrowTarget = std::min(
-      maxGrowCapacity(*op->requestRoot),
-      std::max(memoryPoolTransferCapacity_, op->requestBytes));
+  VELOX_CHECK(op->targetBytes.has_value());
+  maxGrowTarget =
+      std::min(maxGrowCapacity(*op->requestRoot), op->targetBytes.value());
   minGrowTarget = minGrowCapacity(*op->requestRoot);
 }
 

@@ -68,6 +68,27 @@ class MemoryArbitrator {
     /// during the memory arbitration.
     uint64_t memoryPoolTransferCapacity{128 << 20};
 
+    /// When growing capacity, the growth bytes will be adjusted in the
+    /// following way:
+    ///  - If 2 * current capacity is less than or equal to
+    ///    'fastExponentialGrowthCapacityLimit', grow through fast path by at
+    ///    least doubling the current capacity, when conditions allow (see below
+    ///    NOTE section).
+    ///  - If 2 * current capacity is greater than
+    ///    'fastExponentialGrowthCapacityLimit', grow through slow path by growing
+    ///    capacity by at least 'slowCapacityGrowPct' * current capacity if
+    ///    allowed (see below NOTE section).
+    ///
+    /// NOTE: If original requested growth bytes is larger than the adjusted
+    /// growth bytes or adjusted growth bytes reaches max capacity limit, the
+    /// adjusted growth bytes will not be respected.
+    ///
+    /// NOTE: Capacity growth adjust is only enabled if both
+    /// 'fastExponentialGrowthCapacityLimit' and 'slowCapacityGrowPct' are set,
+    /// otherwise it is disabled.
+    uint64_t fastExponentialGrowthCapacityLimit{512 << 20};
+    double slowCapacityGrowPct{0.25};
+
     /// Specifies the max time to wait for memory reclaim by arbitration. The
     /// memory reclaim might fail if the max time has exceeded. This prevents
     /// the memory arbitration from getting stuck when the memory reclaim waits
@@ -129,12 +150,12 @@ class MemoryArbitrator {
 
   virtual ~MemoryArbitrator() = default;
 
-  /// Invoked by the memory manager to allocate up to 'targetBytes' of free
-  /// memory capacity without triggering memory arbitration. The function will
-  /// grow the memory pool's capacity based on the free available memory
-  /// capacity in the arbitrator, and returns the actual grown capacity in
-  /// bytes.
-  virtual uint64_t growCapacity(MemoryPool* pool, uint64_t bytes) = 0;
+  /// Invoked by the memory manager to attempt to allocate at least
+  /// 'requestBytes' of free memory capacity without triggering memory
+  /// arbitration. The function will grow the memory pool's capacity based on
+  /// the free available memory capacity in the arbitrator, and returns the
+  /// actual grown capacity in bytes.
+  virtual uint64_t growCapacity(MemoryPool* pool, uint64_t requestBytes) = 0;
 
   /// Invoked by the memory manager to grow a memory pool's capacity.
   /// 'pool' is the memory pool to request to grow. 'candidates' is a list
