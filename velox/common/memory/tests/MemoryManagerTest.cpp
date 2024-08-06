@@ -124,19 +124,17 @@ class FakeTestArbitrator : public MemoryArbitrator {
              .memoryPoolTransferCapacity = config.memoryPoolTransferCapacity}) {
   }
 
-  uint64_t growCapacity(MemoryPool* /*unused*/, uint64_t /*unused*/) override {
-    VELOX_NYI();
-  }
+  void addPool(const std::shared_ptr<MemoryPool>& pool) override {}
+
+  void removePool(MemoryPool* pool) override {}
 
   bool growCapacity(
       MemoryPool* /*unused*/,
-      const std::vector<std::shared_ptr<MemoryPool>>& /*unused*/,
       uint64_t /*unused*/) override {
     VELOX_NYI();
   }
 
   uint64_t shrinkCapacity(
-      const std::vector<std::shared_ptr<MemoryPool>>& /*unused*/,
       uint64_t /*unused*/,
       bool /*unused*/,
       bool /*unused*/) override {

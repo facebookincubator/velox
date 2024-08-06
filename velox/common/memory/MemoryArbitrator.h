@@ -61,6 +61,10 @@ class MemoryArbitrator {
     /// capacity of 'memoryPoolReservedCapacity' to run.
     int64_t reservedCapacity{0};
 
+    /// The initial memory capacity to reserve for a newly created query memory
+    /// pool.
+    uint64_t memoryPoolInitCapacity{256 << 20};
+
     /// The minimal amount of memory capacity reserved for each query to run.
     uint64_t memoryPoolReservedCapacity{0};
 
@@ -129,29 +133,23 @@ class MemoryArbitrator {
 
   virtual ~MemoryArbitrator() = default;
 
-  /// Invoked by the memory manager to allocate up to 'targetBytes' of free
-  /// memory capacity without triggering memory arbitration. The function will
-  /// grow the memory pool's capacity based on the free available memory
-  /// capacity in the arbitrator, and returns the actual grown capacity in
-  /// bytes.
-  virtual uint64_t growCapacity(MemoryPool* pool, uint64_t bytes) = 0;
+  /// Invoked by the memory manager to add a newly created memory pool. The
+  /// memory arbitrator allocates the initial capacity for 'pool' and
+  /// dynamically adjusts its capacity based query memory needs through memory
+  /// arbitration.
+  virtual void addPool(const std::shared_ptr<MemoryPool>& pool) = 0;
+
+  /// Invoked by the memory manager to remove a destroyed memory pool. The
+  /// memory arbitrator frees up all its capacity and stops memory arbitration
+  /// operation on it.
+  virtual void removePool(MemoryPool* pool) = 0;
 
   /// Invoked by the memory manager to grow a memory pool's capacity.
-  /// 'pool' is the memory pool to request to grow. 'candidates' is a list
-  /// of query root pools to participate in the memory arbitration. The memory
-  /// arbitrator picks up a number of pools to either shrink its memory capacity
-  /// without actually freeing memory or reclaim its used memory to free up
-  /// enough memory for 'requestor' to grow. Different arbitrators use different
-  /// policies to select the candidate pools. The shared memory arbitrator used
-  /// by both Prestissimo and Prestissimo-on-Spark, selects the candidates with
-  /// more memory capacity.
-  ///
-  /// NOTE: the memory manager keeps 'candidates' valid during the arbitration
-  /// processing.
-  virtual bool growCapacity(
-      MemoryPool* pool,
-      const std::vector<std::shared_ptr<MemoryPool>>& candidatePools,
-      uint64_t targetBytes) = 0;
+  /// 'pool' is the memory pool to request to grow. The memory arbitrator picks
+  /// up a number of pools to either shrink its memory capacity without actually
+  /// freeing memory or reclaim its used memory to free up enough memory for
+  /// 'requestor' to grow.
+  virtual bool growCapacity(MemoryPool* pool, uint64_t targetBytes) = 0;
 
   /// Invoked by the memory manager to shrink up to 'targetBytes' free capacity
   /// from a memory 'pool', and returns them back to the arbitrator. If
@@ -159,17 +157,16 @@ class MemoryArbitrator {
   /// pool. The function returns the actual freed capacity from 'pool'.
   virtual uint64_t shrinkCapacity(MemoryPool* pool, uint64_t targetBytes) = 0;
 
-  /// Invoked by the memory manager to shrink memory capacity from a given list
-  /// of memory pools by reclaiming free and used memory. The freed memory
-  /// capacity is given back to the arbitrator.  If 'targetBytes' is zero, then
-  /// try to reclaim all the memory from 'pools'. The function returns the
-  /// actual freed memory capacity in bytes. If 'allowSpill' is true, it
-  /// reclaims the used memory by spilling. If 'allowAbort' is true, it reclaims
-  /// the used memory by aborting the queries with the most memory usage. If
-  /// both are true, it first reclaims the used memory by spilling and then
-  /// abort queries to reach the reclaim target.
+  /// Invoked by the memory manager to shrink memory capacity from memory pools
+  /// by reclaiming free and used memory. The freed memory capacity is given
+  /// back to the arbitrator.  If 'targetBytes' is zero, then try to reclaim all
+  /// the memory from 'pools'. The function returns the actual freed memory
+  /// capacity in bytes. If 'allowSpill' is true, it reclaims the used memory by
+  /// spilling. If 'allowAbort' is true, it reclaims the used memory by aborting
+  /// the queries with the most memory usage. If both are true, it first
+  /// reclaims the used memory by spilling and then abort queries to reach the
+  /// reclaim target.
   virtual uint64_t shrinkCapacity(
-      const std::vector<std::shared_ptr<MemoryPool>>& pools,
       uint64_t targetBytes,
       bool allowSpill = true,
       bool allowAbort = false) = 0;
@@ -205,10 +202,8 @@ class MemoryArbitrator {
     /// The total number of times of the reclaim attempts that end up failing
     /// due to reclaiming at non-reclaimable stage.
     uint64_t numNonReclaimableAttempts{0};
-    /// The total number of memory reservations.
-    uint64_t numReserves{0};
-    /// The total number of memory releases.
-    uint64_t numReleases{0};
+    /// The total number of memory capacity shrinks.
+    uint64_t numShrinks{0};
 
     Stats(
         uint64_t _numRequests,
@@ -224,8 +219,7 @@ class MemoryArbitrator {
         uint64_t _freeReservedCapacityBytes,
         uint64_t _reclaimTimeUs,
         uint64_t _numNonReclaimableAttempts,
-        uint64_t _numReserves,
-        uint64_t _numReleases);
+        uint64_t _numShrinks);
 
     Stats() = default;
 
@@ -259,6 +253,7 @@ class MemoryArbitrator {
   explicit MemoryArbitrator(const Config& config)
       : capacity_(config.capacity),
         reservedCapacity_(config.reservedCapacity),
+        memoryPoolInitialCapacity_(config.memoryPoolInitCapacity),
         memoryPoolReservedCapacity_(config.memoryPoolReservedCapacity),
         memoryPoolTransferCapacity_(config.memoryPoolTransferCapacity),
         memoryReclaimWaitMs_(config.memoryReclaimWaitMs),
@@ -277,6 +272,7 @@ class MemoryArbitrator {
 
   const uint64_t capacity_;
   const uint64_t reservedCapacity_;
+  const uint64_t memoryPoolInitialCapacity_;
   const uint64_t memoryPoolReservedCapacity_;
   const uint64_t memoryPoolTransferCapacity_;
   const uint64_t memoryReclaimWaitMs_;

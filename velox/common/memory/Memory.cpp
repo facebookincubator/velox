@@ -69,6 +69,7 @@ std::unique_ptr<MemoryArbitrator> createArbitrator(
        .capacity =
            std::min(options.arbitratorCapacity, options.allocatorCapacity),
        .reservedCapacity = options.arbitratorReservedCapacity,
+       .memoryPoolInitCapacity = options.memoryPoolInitCapacity,
        .memoryPoolReservedCapacity = options.memoryPoolReservedCapacity,
        .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
        .memoryReclaimWaitMs = options.memoryReclaimWaitMs,
@@ -243,8 +244,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
       options);
   pools_.emplace(poolName, pool);
   VELOX_CHECK_EQ(pool->capacity(), 0);
-  arbitrator_->growCapacity(
-      pool.get(), std::min<uint64_t>(poolInitCapacity_, maxCapacity));
+  arbitrator_->addPool(pool);
   RECORD_HISTOGRAM_METRIC_VALUE(
       kMetricMemoryPoolInitialCapacityBytes, pool->capacity());
   return pool;
@@ -264,15 +264,14 @@ std::shared_ptr<MemoryPool> MemoryManager::addLeafPool(
 bool MemoryManager::growPool(MemoryPool* pool, uint64_t incrementBytes) {
   VELOX_CHECK_NOT_NULL(pool);
   VELOX_CHECK_NE(pool->capacity(), kMaxMemory);
-  return arbitrator_->growCapacity(pool, getAlivePools(), incrementBytes);
+  return arbitrator_->growCapacity(pool, incrementBytes);
 }
 
 uint64_t MemoryManager::shrinkPools(
     uint64_t targetBytes,
     bool allowSpill,
     bool allowAbort) {
-  return arbitrator_->shrinkCapacity(
-      getAlivePools(), targetBytes, allowSpill, allowAbort);
+  return arbitrator_->shrinkCapacity(targetBytes, allowSpill, allowAbort);
 }
 
 void MemoryManager::dropPool(MemoryPool* pool) {
@@ -284,7 +283,7 @@ void MemoryManager::dropPool(MemoryPool* pool) {
   }
   pools_.erase(it);
   VELOX_DCHECK_EQ(pool->reservedBytes(), 0);
-  arbitrator_->shrinkCapacity(pool, 0);
+  arbitrator_->removePool(pool);
 }
 
 MemoryPool& MemoryManager::deprecatedSharedLeafPool() {

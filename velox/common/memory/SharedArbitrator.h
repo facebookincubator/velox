@@ -19,6 +19,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/Memory.h"
@@ -43,17 +44,15 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   static void unregisterFactory();
 
-  uint64_t growCapacity(MemoryPool* pool, uint64_t requestBytes) final;
+  void addPool(const std::shared_ptr<MemoryPool>& pool) final;
 
-  bool growCapacity(
-      MemoryPool* pool,
-      const std::vector<std::shared_ptr<MemoryPool>>& candidatePools,
-      uint64_t requestBytes) final;
+  void removePool(MemoryPool* pool) final;
+
+  bool growCapacity(MemoryPool* pool, uint64_t requestBytes) final;
 
   uint64_t shrinkCapacity(MemoryPool* pool, uint64_t requestBytes) final;
 
   uint64_t shrinkCapacity(
-      const std::vector<std::shared_ptr<MemoryPool>>& pools,
       uint64_t requestBytes,
       bool allowSpill = true,
       bool force = false) override final;
@@ -63,16 +62,6 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   std::string kind() const override;
 
   std::string toString() const final;
-
-  /// The candidate memory pool stats used by arbitration.
-  struct Candidate {
-    int64_t reclaimableBytes{0};
-    int64_t freeBytes{0};
-    int64_t reservedBytes{0};
-    MemoryPool* pool;
-
-    std::string toString() const;
-  };
 
   /// Returns 'freeCapacity' back to the arbitrator for testing.
   void testingFreeCapacity(uint64_t freeCapacity);
@@ -99,6 +88,26 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   static inline const std::string kGlobalArbitrationLockWaitWallNanos{
       "globalArbitrationLockWaitWallNanos"};
 
+  /// The candidate memory pool stats used by arbitration.
+  struct Candidate {
+    std::shared_ptr<MemoryPool> pool;
+    int64_t reclaimableBytes{0};
+    int64_t freeBytes{0};
+    int64_t reservedBytes{0};
+
+    Candidate(
+        int64_t _reclaimableBytes,
+        int64_t _freeBytes,
+        int64_t _reservedBytes,
+        std::shared_ptr<MemoryPool> _pool)
+        : pool(std::move(_pool)),
+          reclaimableBytes(_reclaimableBytes),
+          freeBytes(_freeBytes),
+          reservedBytes(_reservedBytes) {}
+
+    std::string toString() const;
+  };
+
  private:
   // The kind string of shared arbitrator.
   inline static const std::string kind_{"SHARED"};
@@ -107,12 +116,11 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   struct ArbitrationOperation {
     MemoryPool* const requestPool;
     MemoryPool* const requestRoot;
-    const std::vector<std::shared_ptr<MemoryPool>>& candidatePools;
     const uint64_t requestBytes;
     // The start time of this arbitration operation.
     const std::chrono::steady_clock::time_point startTime;
 
-    // The stats of candidate memory pools used for memory arbitration.
+    // The candidate memory pools.
     std::vector<Candidate> candidates;
 
     // The time that waits in local arbitration queue.
@@ -124,18 +132,12 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     // The time that waits to acquire the global arbitration lock.
     uint64_t globalArbitrationLockWaitTimeUs{0};
 
-    ArbitrationOperation(
-        uint64_t requestBytes,
-        const std::vector<std::shared_ptr<MemoryPool>>& candidatePools)
-        : ArbitrationOperation(nullptr, requestBytes, candidatePools) {}
+    explicit ArbitrationOperation(uint64_t requestBytes)
+        : ArbitrationOperation(nullptr, requestBytes) {}
 
-    ArbitrationOperation(
-        MemoryPool* _requestor,
-        uint64_t _requestBytes,
-        const std::vector<std::shared_ptr<MemoryPool>>& _candidatePools)
+    ArbitrationOperation(MemoryPool* _requestor, uint64_t _requestBytes)
         : requestPool(_requestor),
           requestRoot(_requestor == nullptr ? nullptr : _requestor->root()),
-          candidatePools(_candidatePools),
           requestBytes(_requestBytes),
           startTime(std::chrono::steady_clock::now()) {}
 
@@ -230,12 +232,29 @@ class SharedArbitrator : public memory::MemoryArbitrator {
       uint64_t& maxGrowTarget,
       uint64_t& minGrowTarget);
 
-  // Invoked to get or refresh the memory stats of the candidate memory pools
-  // for arbitration. If 'freeCapacityOnly' is true, then we only get free
-  // capacity stats for each candidate memory pool.
-  void getCandidateStats(
-      ArbitrationOperation* op,
-      bool freeCapacityOnly = false);
+  // Invoked to get or refresh the candidate memory pools for arbitration. If
+  // 'freeCapacityOnly' is true, then we only get free capacity stats for each
+  // candidate memory pool.
+  void getCandidates(ArbitrationOperation* op, bool freeCapacityOnly = false);
+
+  // Sorts 'candidates' based on reclaimable free capacity in descending order.
+  static void sortCandidatesByReclaimableFreeCapacity(
+      std::vector<Candidate>& candidates);
+
+  // Sorts 'candidates' based on reclaimable used capacity in descending order.
+  static void sortCandidatesByReclaimableUsedCapacity(
+      std::vector<Candidate>& candidates);
+
+  // Sorts 'candidates' based on actual used memory in descending order.
+  static void sortCandidatesByUsage(std::vector<Candidate>& candidates);
+
+  // Finds the candidate with the largest capacity. For 'requestor', the
+  // capacity for comparison including its current capacity and the capacity to
+  // grow.
+  static const SharedArbitrator::Candidate& findCandidateWithLargestCapacity(
+      MemoryPool* requestor,
+      uint64_t targetBytes,
+      const std::vector<Candidate>& candidates);
 
   // Invoked to reclaim free memory capacity from 'candidates' without
   // actually freeing used memory.
@@ -348,14 +367,16 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   int64_t minGrowCapacity(const MemoryPool& pool) const;
 
   // Returns true if 'pool' is under memory arbitration.
-  bool isUnderArbitration(MemoryPool* pool) const;
   bool isUnderArbitrationLocked(MemoryPool* pool) const;
 
   void updateArbitrationRequestStats();
   void updateArbitrationFailureStats();
 
+  mutable folly::SharedMutex poolLock_;
+  std::unordered_map<MemoryPool*, std::weak_ptr<MemoryPool>> candidates_;
+
   // Lock used to protect the arbitrator state.
-  mutable std::mutex mutex_;
+  mutable std::mutex stateLock_;
   tsan_atomic<uint64_t> freeReservedCapacity_{0};
   tsan_atomic<uint64_t> freeNonReservedCapacity_{0};
 
@@ -381,7 +402,6 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   tsan_atomic<uint64_t> reclaimedUsedBytes_{0};
   tsan_atomic<uint64_t> reclaimTimeUs_{0};
   tsan_atomic<uint64_t> numNonReclaimableAttempts_{0};
-  tsan_atomic<uint64_t> numReserves_{0};
-  tsan_atomic<uint64_t> numReleases_{0};
+  tsan_atomic<uint64_t> numShrinks_{0};
 };
 } // namespace facebook::velox::memory
