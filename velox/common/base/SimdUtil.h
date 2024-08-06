@@ -497,6 +497,8 @@ xsimd::batch<T, A> reinterpretBatch(xsimd::batch<U, A>, const A& = {});
 template <typename A = xsimd::default_arch>
 inline bool memEqualUnsafe(const void* x, const void* y, int32_t size);
 
+size_t simdStrstr(const char* s, size_t n, const char* needle, size_t k);
+
 } // namespace facebook::velox::simd
 
 #include "velox/common/base/SimdUtil-inl.h"

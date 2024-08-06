@@ -491,4 +491,25 @@ TEST_F(SimdUtilTest, memcpyTime) {
   LOG(INFO) << "simd=" << simd << " sys=" << sys;
 }
 
+TEST_F(SimdUtilTest, testSimdStrStr) {
+  // 48 chars.
+  std::string s1 = "aabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz";
+  std::string s2 = "aabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz";
+  std::string s3 = "xxx";
+  auto test = [](char* text, size_t size, char* needle, size_t k) {
+    ASSERT_EQ(
+        simd::simdStrstr(text, size, needle, k),
+        std::string_view(text, size).find(std::string_view(needle, k)));
+  };
+  // Match cases : substrings in s2 should be a substring in s1.
+  for (int i = 0; i < 20; i++) {
+    for (int k = 0; k < 28; k++) {
+      char* data = s2.data() + i;
+      test(s1.data(), s1.size(), data, k);
+    }
+  }
+  // Not match case : "xxx" not in s1.
+  test(s1.data(), s1.size(), s3.data(), s3.size());
+}
+
 } // namespace
