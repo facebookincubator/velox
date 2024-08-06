@@ -311,6 +311,19 @@ void ExpressionFuzzerVerifier::retryWithTry(
   }
 }
 
+RowVectorPtr ExpressionFuzzerVerifier::fuzzInputWithRowNumber(VectorFuzzer& fuzzer, const RowTypePtr& type) {
+  auto rowVector = fuzzer.fuzzInputRow(type);
+  auto names = type->names();
+  names.push_back("row_number");
+
+  auto& children = rowVector->children();
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  children.push_back(vectorMaker.flatVector<int64_t>(
+rowVector->size(), [&](auto row) { return row; }));
+
+  return vectorMaker.rowVector(names, children);
+}
+
 void ExpressionFuzzerVerifier::go() {
   VELOX_CHECK(
       options_.steps > 0 || options_.durationSeconds > 0,
@@ -334,6 +347,7 @@ void ExpressionFuzzerVerifier::go() {
         1, options_.maxExpressionTreesPerStep)(rng_);
     auto [expressions, inputType, selectionStats] =
         expressionFuzzer_.fuzzExpressions(numExpressionTrees);
+    expressions.push_back(std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "row_number"));
 
     for (auto& [funcName, count] : selectionStats) {
       exprNameToStats_[funcName].numTimesSelected += count;
@@ -341,7 +355,8 @@ void ExpressionFuzzerVerifier::go() {
 
     std::vector<core::TypedExprPtr> plans = std::move(expressions);
 
-    auto rowVector = vectorFuzzer_->fuzzInputRow(inputType);
+    //auto rowVector = vectorFuzzer_->fuzzInputRow(inputType);
+    auto rowVector = fuzzInputWithRowNumber(*vectorFuzzer_, inputType);
 
     auto columnsToWrapInLazy = generateLazyColumnIds(rowVector, *vectorFuzzer_);
 

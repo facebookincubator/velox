@@ -16,6 +16,8 @@
 
 #include "velox/exec/fuzzer/ToSQLUtil.h"
 
+#include "velox/functions/prestosql/types/JsonType.h"
+
 namespace facebook::velox::exec::test {
 
 void appendComma(int32_t i, std::stringstream& sql) {
@@ -164,12 +166,42 @@ void toCallInputsSql(
 
 std::string toCallSql(const core::CallTypedExprPtr& call) {
   std::stringstream sql;
-  sql << call->name() << "(";
-  toCallInputsSql(call->inputs(), sql);
-  /*if (call->name() == "cast") {
-    sql << " as " << toTypeSql(call->type());
-  }*/
-  sql << ")";
+  if (call->name() == "in") {
+    VELOX_CHECK_EQ(call->inputs().size(), 2);
+    toCallInputsSql({call->inputs()[0]}, sql);
+    sql << fmt::format(" in (", call->name());
+    toCallInputsSql({call->inputs()[1]}, sql);
+    sql << ")";
+  } else if (call->name() == "like") {
+    toCallInputsSql({call->inputs()[0]}, sql);
+    sql << fmt::format(" like ", call->name());
+    toCallInputsSql({call->inputs()[1]}, sql);
+    if (call->inputs().size() == 3) {
+      sql << " escape ";
+      toCallInputsSql({call->inputs()[2]}, sql);
+    }
+  } else if (call->name() == "or" || call->name() == "and") {
+    sql << "(";
+    const auto& inputs = call->inputs();
+    for (auto i = 0; i < inputs.size(); ++i) {
+      if (i > 0) {
+        sql << fmt::format(" {} ", call->name());
+      }
+      toCallInputsSql({inputs[i]}, sql);
+    }
+    sql << ")";
+  } else if (call->name() == "array_constructor") {
+    sql << "ARRAY[";
+    toCallInputsSql(call->inputs(), sql);
+    sql << "]";
+  } else {
+    sql << call->name() << "(";
+    toCallInputsSql(call->inputs(), sql);
+    /*if (call->name() == "cast") {
+      sql << " as " << toTypeSql(call->type());
+    }*/
+    sql << ")";
+  }
   return sql.str();
 }
 
@@ -199,6 +231,9 @@ std::string toConstantSql(const core::ConstantTypedExprPtr& constant) {
   if (constant->toString() == "null") {
     sql << fmt::format("cast(null as {})", toTypeSql(constant->type()));
   } else if (constant->type()->isVarchar()) {
+    if (isJsonType(constant->type())) {
+      sql << "json ";
+    }
     sql << "'" << escape(constant->valueVector()->toString(0)) << "'";
   } else if (constant->type()->isVarbinary()) {
     sql << "cast('" << escape(constant->valueVector()->toString(0)) << "' as varbinary)";

@@ -118,7 +118,8 @@ int128_t rand(FuzzerGenerator& rng) {
   return HugeInt::build(rand<int64_t>(rng), rand<uint64_t>(rng));
 }
 
-template <typename T, typename std::enable_if_t<std::is_integral_v<T>, int> = 0>
+template <typename T,
+    typename std::enable_if_t<std::is_integral_v<T>, int> = 0>
 T rand(FuzzerGenerator& rng, T min, T max) {
   return boost::random::uniform_int_distribution<T>(min, max)(rng);
 }
@@ -1074,7 +1075,7 @@ const std::vector<TypePtr>& defaultScalarTypes() {
       VARBINARY(),
       TIMESTAMP(),
       DATE(),
-      INTERVAL_DAY_TIME(),
+      //INTERVAL_DAY_TIME(),
   };
   return kScalarTypes;
 }

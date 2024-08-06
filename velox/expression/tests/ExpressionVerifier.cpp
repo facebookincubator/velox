@@ -69,6 +69,28 @@ bool hasSuppressedErrorByNull(const exec::ExprSet& exprSet) {
   }
   return false;
 }
+
+/*std::optional<RowVectorPtr> combineRowVectors(const std::optional<std::vector<RowVectorPtr>>& vectors) {
+  if (!vectors.has_value()) {
+    return std::nullopt;
+  }
+
+  vector_size_t totalSize = 0;
+  for (auto i = 0; i < vectors->size(); ++i) {
+    totalSize += vectors.value()[i]->size();
+  }
+
+  auto combined = RowVector::createEmpty(vectors.value()[0]->type(), vectors.value()[0]->pool());
+  SelectivityVector rows{totalSize};
+  combined->ensureWritable(rows);
+  auto offset = 0;
+  for (auto i = 0; i < vectors->size(); ++i) {
+    const auto& vector = vectors.value()[i];
+    combined->copy(vector.get(), offset, 0, vector->size());
+    offset += vector->size();
+  }
+  return combined;
+}*/
 } // namespace
 
 fuzzer::ResultOrError ExpressionVerifier::verify(
@@ -193,6 +215,8 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
       (referenceResult.second != ReferenceQueryErrorCode::kSuccess);
   auto referenceEvalResult = referenceResult.first;
 
+  // auto combinedReferenceEvalResult = combineRowVectors(referenceEvalResult);
+
   if (referenceResult.second !=
       ReferenceQueryErrorCode::kReferenceQueryUnsupported) {
     try {
@@ -231,13 +255,22 @@ fuzzer::ResultOrError ExpressionVerifier::verify(
         }
         auto commonEvalResultRow = std::make_shared<RowVector>(execCtx_->pool(), ROW(std::move(types)), nullptr, commonEvalResult[0]->size(), commonEvalResult);
 
-          VELOX_CHECK(
+        VELOX_CHECK(
               exec::test::assertEqualResults(
                   referenceEvalResult.value(),
                   projectionPlan->outputType(),
                   {commonEvalResultRow}),
               "Velox and reference DB results don't match");
           LOG(INFO) << "Verified results against reference DB";
+
+          /*for (auto i = 0; i < plans.size(); ++i) {
+            fuzzer::compareVectors(commonEvalResult[i],
+                                   (*combinedReferenceEvalResult)->childAt(i),
+                                   "common path results ",
+                                   "reference path results",
+                                   rows);
+          }*/
+
         //}
       }
     } catch (...) {

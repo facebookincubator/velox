@@ -31,6 +31,7 @@ target_link_libraries(
   velox_expression_fuzzer
   velox_expression_verifier
   velox_type
+  velox_presto_types
   velox_vector_fuzzer
   velox_vector_test_lib
   velox_function_registry

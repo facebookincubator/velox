@@ -28,7 +28,8 @@ target_link_libraries(
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_writer
   velox_dwio_catalog_fbhive
-  velox_dwio_dwrf_writer)
+  velox_dwio_dwrf_writer
+  velox_presto_types)
 
 add_library(velox_aggregation_fuzzer_base AggregationFuzzerBase.cpp)
 

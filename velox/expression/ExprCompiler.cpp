@@ -312,7 +312,12 @@ ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
       expr->eval(rows, context, result);
       auto constantVector = BaseVector::wrapInConstant(1, 0, result);
 
-      return std::make_shared<ConstantExpr>(constantVector);
+      auto resultExpr = std::make_shared<ConstantExpr>(constantVector);
+      resultExpr->mutableStats().suppressErrorByNull = expr->stats().suppressErrorByNull;
+      for (const auto& input : expr->inputs()) {
+        resultExpr->mutableStats().suppressErrorByNull |= input->stats().suppressErrorByNull;
+      }
+      return resultExpr;
     }
     // Constant folding has a subtle gotcha: if folding a constant expression
     // deterministically throws, we can't throw at expression compilation time
@@ -435,6 +440,7 @@ ExprPtr compileRewrittenExpression(
 
       auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
           inputTypes, getConstantInputs(compiledInputs), config);
+      bool initializeException = func->initializeException();
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
@@ -442,6 +448,7 @@ ExprPtr compileRewrittenExpression(
           simpleFunctionEntry->metadata(),
           call->name(),
           trackCpuUsage);
+      result->mutableStats().suppressErrorByNull = initializeException;
     } else {
       const auto& functionName = call->name();
       auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);

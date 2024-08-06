@@ -259,6 +259,10 @@ class SimpleFunctionAdapter : public VectorFunction {
 
   explicit SimpleFunctionAdapter() {}
 
+  bool initializeException() const override {
+    return initializeException_ != nullptr;
+  }
+
   template <
       int32_t POSITION,
       typename std::enable_if_t<

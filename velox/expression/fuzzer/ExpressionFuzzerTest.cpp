@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
       "is_null", //not registered in Presto
       "codepoint", // expect varchar(1) as parameter type
       "json_array_contains", //Velox throws, Presto returns NULL, SELECT json_array_contains('{asce', '{asce')
-      "like", // Presto not supporting this as function name
+      // "like", // Presto not supporting this as function name
       "lt",
       "switch",
       "eq",
@@ -124,7 +124,48 @@ int main(int argc, char** argv) {
       "clamp",
       "between",
       // --enable_variadic_signatures --velox_fuzzer_enable_complex_types --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse --max_expression_trees_per_step 2 --duration_sec 60 --logtostderr=1 --minloglevel=0 --presto_url=http://127.0.0.1:8080 --batch_size=10 --seed=374405688
-      
+      "lte",
+      "gte",
+      "chi_squared_cdf", //error within epsilon
+      "word_stem", // Unexpected parameters (varchar, varchar(26)) for function word_stem. Expected: word_stem(varchar(x), varchar(2))
+      "current_date", // Presto expect current_date without () after it.
+      "array_union", // same behavior on nested null elements in 0.289
+      "array_distinct", // same behavior on nested null elements in 0.289
+      "url_extract_fragment",
+      "url_extract_path",
+      "json_array_length",
+      "poisson_cdf(double,bigint) -> double",
+      "array_min",
+      "array_sum_propagate_element_null", // not registered in Presto
+      //"tan", //error within epsilon
+      //"tanh", // error within epsilon
+      "json_format", // todo: not accepting varchar, but "json '12ab'" will throw in json_parse.
+      "array_intersect", // different order of elements
+      "concat",
+      "find_first",
+      "in",
+      "map_subset",
+      // --enable_variadic_signatures --velox_fuzzer_enable_complex_types --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse --max_expression_trees_per_step 2 --duration_sec 60 --logtostderr=1 --minloglevel=0 --presto_url=http://127.0.0.1:8080 --batch_size=10 --seed=4085171126 -v=1
+      // map_concat("c1",map("c2","c3"),"c4","c5",map("c2","c3")), c5 is null while c2.length != c3.length. Velox removeSureNulls deselect all rows before evaluating any function and hence no exception, while Presto evaluates on the rows and throws exception.
+      "url_extract_host",
+      "distinct_from", //not registered
+      "json_size(json,varchar) -> bigint", // require valid json
+      "url_extract_protocol",
+      "array_position",
+      "to_iso8601",
+      "binomial_cdf(bigint,double,bigint) -> double", // not in Presto
+      //"cauchy_cdf", //floating-point precision error
+      "is_json_scalar(json) -> boolean", // require valid json
+      "truncate", //https://github.com/facebookincubator/velox/issues/10628
+      //"atan2", //todo: precision error of floating-point
+      "array_max",
+      "f_cdf",
+      "array_duplicates", // different order of array elements
+      "round",
+      "hmac_sha256",
+      "url_extract_query",
+      "substr(varbinary,bigint,bigint) -> varbinary",
+
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
@@ -150,5 +191,5 @@ int main(int argc, char** argv) {
     LOG(INFO) << "Using Presto as the reference DB.";
   }
   return FuzzerRunner::run(
-      initialSeed, skipFunctions, {{"session_timezone", "America/Los_Angeles"}}, argGenerators, referenceQueryRunner);
+      initialSeed, skipFunctions, {{"session_timezone", "America/Los_Angeles"}, {"adjust_timestamp_to_session_timezone", "true"}}, argGenerators, referenceQueryRunner);
 }

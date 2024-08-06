@@ -28,6 +28,7 @@
 #include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/expression/fuzzer/ArgumentTypeFuzzer.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::fuzzer {
 
@@ -452,6 +453,7 @@ bool isSupportedSignature(
       (!enableDecimalType && useTypeName(signature, "decimal")) ||
       (!enableComplexType && useComplexType) ||
       useTypeName(signature, "hugeint") ||
+      useTypeName(signature, "json") ||
       (enableComplexType && useTypeName(signature, "unknown")));
 }
 
@@ -828,7 +830,7 @@ core::TypedExprPtr ExpressionFuzzer::generateArg(const TypePtr& arg) {
     argClass = rand32(0, 1);
   }
 
-  if (argClass == kArgConstant && arg->isPrimitiveType()) {
+  if (argClass == kArgConstant && arg->isPrimitiveType() && !arg->isTimestamp() && !isJsonType(arg)) {
     return generateArgConstant(arg);
   }
   // argClass == kArgColumn
@@ -904,17 +906,30 @@ core::TypedExprPtr ExpressionFuzzer::generateArgFunction(const TypePtr& arg) {
   }
 
   if (eligible.empty()) {
-    return std::make_shared<core::LambdaTypedExpr>(
-        ROW(std::move(names), std::move(args)),
-        generateArgConstant(returnType));
+    if (returnType->isTimestamp() || isJsonType(returnType)) {
+      return std::make_shared<core::LambdaTypedExpr>(
+          ROW(std::move(names), std::move(args)),
+          generateArgColumn(returnType));
+    } else {
+      return std::make_shared<core::LambdaTypedExpr>(
+          ROW(std::move(names), std::move(args)),
+          generateArgConstant(returnType));
+    }
   }
 
   const auto idx = rand32(0, eligible.size() - 1);
   const auto name = eligible[idx];
 
+  core::TypedExprPtr body;
+  if (name == "cast") {
+    bool tryCast = rand32(0, 1);
+    body = std::make_shared<core::CastTypedExpr>(returnType, inputs, tryCast);
+  } else {
+    body = std::make_shared<core::CallTypedExpr>(returnType, inputs, name);
+  }
   return std::make_shared<core::LambdaTypedExpr>(
       ROW(std::move(names), std::move(args)),
-      std::make_shared<core::CallTypedExpr>(returnType, inputs, name));
+      body);
 }
 
 core::TypedExprPtr ExpressionFuzzer::generateArg(
@@ -1039,7 +1054,11 @@ core::TypedExprPtr ExpressionFuzzer::generateExpression(
   if (!expression) {
     VLOG(1) << "Couldn't find a proper function to return '"
             << returnType->toString() << "'. Returning a constant instead.";
-    return generateArgConstant(returnType);
+    if (returnType->isPrimitiveType() && !returnType->isTimestamp() && !isJsonType(returnType)) {
+      return generateArgConstant(returnType);
+    } else {
+      return generateArgColumn(returnType);
+    }
   }
   state.expressionBank_.insert(expression);
   return expression;

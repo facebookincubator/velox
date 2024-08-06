@@ -456,7 +456,7 @@ inline void SelectivityVector::applyToSelected(Callable func) const {
 
 template <typename Callable>
 inline void SelectivityVector::applyToUnselected(Callable func) const {
-    bits::forEachUnsetBit(bits_.data(), begin_, end_, func);
+    bits::forEachUnsetBit(bits_.data(), begin_, size_, func);
 }
 
 template <typename Callable>

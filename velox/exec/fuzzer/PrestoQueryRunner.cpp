@@ -33,6 +33,7 @@
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/parser/TypeParser.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 
 #include <utility>
 
@@ -255,7 +256,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
   if (!isSupportedDwrfType(valuesNode->outputType())) {
     return std::nullopt;
   }
-  return "tmp";
+  return "tmp_expr";
 }
 
 std::optional<std::string> PrestoQueryRunner::toSql(
@@ -297,7 +298,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     }
   }
 
-  sql << " FROM tmp";
+  sql << " FROM tmp_expr";
 
   if (!groupingKeys.empty()) {
     sql << " GROUP BY " << folly::join(", ", groupingKeys);
@@ -480,7 +481,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     sql << ")";
   }
 
-  sql << " FROM tmp";
+  sql << " FROM tmp_expr";
 
   return sql.str();
 }
@@ -511,7 +512,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     }
   }
 
-  sql << ") as row_number FROM tmp";
+  sql << ") as row_number FROM tmp_expr";
 
   return sql.str();
 }
@@ -575,7 +576,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     }
   }
 
-  sql << "FORMAT = 'ORC')  AS SELECT * FROM tmp";
+  sql << "FORMAT = 'ORC')  AS SELECT * FROM tmp_expr";
   return sql.str();
 }
 
@@ -802,7 +803,7 @@ std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
     return executeVector(sql, {rowVector}, resultType);
   }
 
-  auto tableDirectoryPath = createTable("tmp", input[0]->type());
+  auto tableDirectoryPath = createTable("tmp_expr", input[0]->type());
 
   // Create a new file in table's directory with fuzzer-generated data.
   auto newFilePath = fs::path(tableDirectoryPath)

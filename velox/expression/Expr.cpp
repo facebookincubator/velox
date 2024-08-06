@@ -313,25 +313,18 @@ namespace {
 // used after all arguments of a function call have been evaluated and
 // we decide on whether to throw or what errors to leave in 'context' for the
 // caller.
-bool mergeOrThrowArgumentErrors(
+void mergeOrThrowArgumentErrors(
     const SelectivityVector& rows,
     EvalErrorsPtr& originalErrors,
     EvalErrorsPtr& argumentErrors,
     EvalCtx& context) {
-  bool suppressErrorByNull = false;
   if (argumentErrors) {
-    rows.applyToUnselected([&](auto row) {
-      if (argumentErrors->hasErrorAt(row)) {
-        suppressErrorByNull = true;
-      }
-    });
     if (context.throwOnError()) {
       argumentErrors->throwFirstError(rows);
     }
     context.addErrors(rows, argumentErrors, originalErrors);
   }
   context.swapErrors(originalErrors);
-  return suppressErrorByNull;
 }
 
 // Returns true if vector is a LazyVector that hasn't been loaded yet or
@@ -356,6 +349,18 @@ inline void checkResultInternalState(VectorPtr& result) {
     result->validate();
   }
 #endif
+}
+
+bool detectErrorSuppressedByNull(const SelectivityVector& rows, EvalErrorsPtr& argumentErrors) {
+  bool suppressErrorByNull = false;
+  if (argumentErrors) {
+    rows.applyToUnselected([&](auto row) {
+      if (argumentErrors->size() > row && argumentErrors->hasErrorAt(row)) {
+        suppressErrorByNull = true;
+      }
+    });
+  }
+  return suppressErrorByNull;
 }
 
 } // namespace
@@ -420,7 +425,8 @@ bool Expr::evalArgsDefaultNulls(
     }
   }
 
-  stats_.suppressErrorByNull |= mergeOrThrowArgumentErrors(
+  stats_.suppressErrorByNull |= detectErrorSuppressedByNull(rows.mutableRows(), argumentErrors);
+  mergeOrThrowArgumentErrors(
       rows.rows(), originalErrors, argumentErrors, context);
 
   if (!rows.deselectErrors()) {
@@ -1138,6 +1144,9 @@ bool Expr::removeSureNulls(
   }
   if (result) {
     result->updateBounds();
+    if (result->countSelected() == 0) {
+      stats_.suppressErrorByNull = true;
+    }
     return result->countSelected() != rows.countSelected();
   }
   return false;
@@ -1790,9 +1799,9 @@ void addStats(
   uniqueExprs.insert(&expr);
 
   // Do not aggregate empty stats.
-  if (expr.stats().numProcessedRows) {
+  //if (expr.stats().numProcessedRows) {
     stats[expr.name()].add(expr.stats());
-  }
+  //}
 
   for (const auto& input : expr.inputs()) {
     addStats(*input, stats, uniqueExprs);

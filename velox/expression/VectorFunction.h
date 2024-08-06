@@ -121,6 +121,10 @@ class VectorFunction {
   virtual FunctionCanonicalName getCanonicalName() const {
     return FunctionCanonicalName::kUnknown;
   }
+
+  virtual bool initializeException() const {
+    return false;
+  }
 };
 
 /// Vector function that generates the specified error for every row. Use this
