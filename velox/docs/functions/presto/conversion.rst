@@ -30,7 +30,7 @@ are supported if the conversion of their element types are supported. In additio
 supported conversions to/from JSON are listed in :doc:`json`.
 
 .. list-table::
-   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25
+   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25
    :header-rows: 1
 
    * -
@@ -42,11 +42,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - real
      - double
      - varchar
+     - varbinary
      - timestamp
      - timestamp with time zone
      - date
      - interval day to second
      - decimal
+     - ipaddress
    * - tinyint
      - Y
      - Y
@@ -56,11 +58,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - smallint
      - Y
      - Y
@@ -70,11 +74,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - integer
      - Y
      - Y
@@ -84,11 +90,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - bigint
      - Y
      - Y
@@ -98,11 +106,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - boolean
      - Y
      - Y
@@ -112,11 +122,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - real
      - Y
      - Y
@@ -126,11 +138,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - double
      - Y
      - Y
@@ -140,11 +154,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - varchar
      - Y
      - Y
@@ -154,10 +170,28 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      - Y
      - Y
      - Y
      -
+     - Y
+     - Y
+   * - varbinary
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     -
+     - 
      - Y
    * - timestamp
      -
@@ -168,11 +202,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     - 
      - Y
      - Y
      - Y
      -
      -
+     - 
    * - timestamp with time zone
      -
      -
@@ -182,9 +218,11 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     - 
      - Y
      -
      - Y
+     -
      -
      -
    * - date
@@ -196,8 +234,10 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     - 
      - Y
      - Y
+     -
      -
      -
      -
@@ -210,6 +250,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     - 
+     -
      -
      -
      -
@@ -224,11 +266,29 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     -
+   * - ipaddress
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - Y
+     - Y
+     -
+     -
+     -
+     -
+     - 
+     - 
 
 Cast to Integral Types
 ----------------------
@@ -918,6 +978,54 @@ Invalid example
   SELECT cast(' -3E+2' as decimal(12, 2)); -- Value is not a number
   SELECT cast('-3E+2.1' as decimal(12, 2)); -- Value is not a number
   SELECT cast('3E+' as decimal(12, 2)); -- Value is not a number
+
+Cast to IPAddress
+---------------
+
+From varchar type
+^^^^^^^^^^^^^^^^^
+
+To cast a varchar to IPAddress it must be in the form of either
+IPV4 or IPV6. It can be written in full form or shortened form.
+All IPV6 addresses that have the form of an IPV4 mapped IPV6
+address will be assumed to be IPV4 addresses. 
+
+Valid examples
+
+::
+
+  SELECT cast('2001:0db8:0000:0000:0000:ff00:0042:8329' as ipaddress); -- ipaddress '2001:db8::ff00:42:8329'
+  SELECT cast('1.2.3.4' as ipaddress); -- ipaddress '1.2.3.4'
+  SELECT cast('::ffff:ffff:ffff' as ipaddress); -- ipaddress '255.255.255.255'
+
+Invalid examples
+
+::
+
+  SELECT cast('2001:db8::1::1' as ipaddress); -- Invalid IP address
+  SELECT cast('789.1.1.1' as ipaddress); -- Invalid IP address
+
+From varbinary type
+^^^^^^^^^^^^^^^^^
+
+To cast a varbinary to IPAddress it must be either IPV4(4 Bytes)
+or IPV6(16 Bytes) in network byte order.
+All IPV6 addresses that have the form of an IPV4 mapped IPV6
+address will be assumed to be IPV4 addresses. 
+
+Valid examples
+
+::
+
+  SELECT cast(from_hex('20010db8000000000000ff0000428329') as ipaddress); -- ipaddress '2001:db8::ff00:42:8329'
+  SELECT cast(from_hex('01020304') as ipaddress); -- ipaddress '1.2.3.4'
+  SELECT cast(from_hex('00000000000000000000ffff01020304') as ipaddress); -- ipaddress '1.2.3.4'
+
+Invalid examples
+
+::
+
+  SELECT cast(from_hex('f000001100') as ipaddress); -- Varbinary length 5, must be IPV4(4), or IPV6(16)
 
 Miscellaneous
 -------------
