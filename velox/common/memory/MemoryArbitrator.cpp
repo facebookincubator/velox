@@ -114,6 +114,8 @@ class NoopArbitrator : public MemoryArbitrator {
     return 0;
   }
 
+  void maybeShrinkCapacity(MemoryPool* pool) override {}
+
   // Noop arbitrator has no memory capacity limit so no operation needed for
   // memory pool capacity shrink.
   uint64_t shrinkCapacity(

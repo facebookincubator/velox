@@ -171,6 +171,20 @@ struct MemoryManagerOptions {
   /// requests.
   uint64_t memoryPoolReservedCapacity{0};
 
+  /// When shrinking capacity, the shrink bytes will be adjusted in a way such
+  /// that AFTER shrink, the stricter of the following conditions is met:
+  /// - Free capacity is greater or equal to capacity * 'minHeadRoomFreePct'
+  /// - Free capacity is greater or equal to 'minHeadRoomFreeBytes'
+  ///
+  /// NOTE: In the conditions when original requested shrink bytes ends up
+  /// with more free capacity than above 2 conditions, the adjusted shrink
+  /// bytes is not respected.
+  ///
+  /// NOTE: Capacity shrink adjustment is enabled when both
+  /// 'minHeadRoomFreePct' and 'minHeadRoomFreeBytes' are set.
+  double memoryPoolMinFreeCapacityPct{0.25};
+  uint64_t memoryPoolMinFreeCapacity{128 << 20};
+
   /// The minimal memory capacity to transfer out of or into a memory pool
   /// during the memory arbitration.
   uint64_t memoryPoolTransferCapacity{128 << 20};

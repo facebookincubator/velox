@@ -64,6 +64,11 @@ class MemoryArbitrator {
     /// The minimal amount of memory capacity reserved for each query to run.
     uint64_t memoryPoolReservedCapacity{0};
 
+    bool memoryPoolFreeCapacityLazyShrink{true};
+
+    double memoryPoolMinFreeCapacityPct{0.25};
+    uint64_t memoryPoolMinFreeCapacity{128 << 20};
+
     /// The minimal memory capacity to transfer out of or into a memory pool
     /// during the memory arbitration.
     uint64_t memoryPoolTransferCapacity{128 << 20};
@@ -158,6 +163,8 @@ class MemoryArbitrator {
   /// 'targetBytes' is zero, we shrink all the free capacity from the memory
   /// pool. The function returns the actual freed capacity from 'pool'.
   virtual uint64_t shrinkCapacity(MemoryPool* pool, uint64_t targetBytes) = 0;
+
+  virtual void shrinkFreeCapacity(MemoryPool* pool) = 0;
 
   /// Invoked by the memory manager to shrink memory capacity from a given list
   /// of memory pools by reclaiming free and used memory. The freed memory
@@ -260,12 +267,17 @@ class MemoryArbitrator {
       : capacity_(config.capacity),
         reservedCapacity_(config.reservedCapacity),
         memoryPoolReservedCapacity_(config.memoryPoolReservedCapacity),
+        memoryPoolFreeCapacityLazyShrink_(config.memoryPoolFreeCapacityLazyShrink),
+        memoryPoolMinFreeCapacity_(config.memoryPoolMinFreeCapacity),
+        memoryPoolMinFreeCapacityPct_(config.memoryPoolMinFreeCapacityPct),
         memoryPoolTransferCapacity_(config.memoryPoolTransferCapacity),
         memoryReclaimWaitMs_(config.memoryReclaimWaitMs),
         globalArbitrationEnabled_(config.globalArbitrationEnabled),
         arbitrationStateCheckCb_(config.arbitrationStateCheckCb),
         checkUsageLeak_(config.checkUsageLeak) {
     VELOX_CHECK_LE(reservedCapacity_, capacity_);
+    VELOX_CHECK_EQ(
+        memoryPoolMinFreeCapacity_ == 0, memoryPoolMinFreeCapacityPct_ == 0);
   }
 
   /// Helper utilities used by the memory arbitrator implementations to call
@@ -278,6 +290,9 @@ class MemoryArbitrator {
   const uint64_t capacity_;
   const uint64_t reservedCapacity_;
   const uint64_t memoryPoolReservedCapacity_;
+  const bool memoryPoolFreeCapacityLazyShrink_;
+  const double memoryPoolMinFreeCapacityPct_;
+  const uint64_t memoryPoolMinFreeCapacity_;
   const uint64_t memoryPoolTransferCapacity_;
   const uint64_t memoryReclaimWaitMs_;
   const bool globalArbitrationEnabled_;

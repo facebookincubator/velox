@@ -58,6 +58,8 @@ class SharedArbitrator : public memory::MemoryArbitrator {
       bool allowSpill = true,
       bool force = false) override final;
 
+  void shrinkFreeCapacity(MemoryPool* pool) final;
+
   Stats stats() const final;
 
   std::string kind() const override;
@@ -323,10 +325,10 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   Stats statsLocked() const;
 
   // Returns the max reclaimable capacity from 'pool' which includes both used
-  // and free capacities. If 'isSelfReclaim' true, we reclaim memory from the
+  // and free capacities. If 'selfReclaim' true, we reclaim memory from the
   // request pool itself so that we can bypass the reserved free capacity
   // reclaim restriction.
-  int64_t maxReclaimableCapacity(const MemoryPool& pool, bool isSelfReclaim)
+  int64_t maxReclaimableCapacity(const MemoryPool& pool, bool selfReclaim)
       const;
 
   // Returns the free memory capacity that can be reclaimed from 'pool' by
@@ -383,5 +385,6 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   tsan_atomic<uint64_t> numNonReclaimableAttempts_{0};
   tsan_atomic<uint64_t> numReserves_{0};
   tsan_atomic<uint64_t> numReleases_{0};
+  tsan_atomic<uint64_t> numShrinks_{0};
 };
 } // namespace facebook::velox::memory

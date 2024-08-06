@@ -202,13 +202,14 @@ void SharedArbitrator::updateArbitrationFailureStats() {
 
 int64_t SharedArbitrator::maxReclaimableCapacity(
     const MemoryPool& pool,
-    bool isSelfReclaim) const {
+    bool selfReclaim) const {
   // Checks if a query memory pool has finished processing or not. If it has
   // finished, then we don't have to respect the memory pool reserved capacity
   // limit check.
+  //
   // NOTE: for query system like Prestissimo, it holds a finished query
   // state in minutes for query stats fetch request from the Presto coordinator.
-  if (isSelfReclaim || (pool.reservedBytes() == 0 && pool.peakBytes() != 0)) {
+  if (selfReclaim || (pool.reservedBytes() == 0 && pool.peakBytes() != 0)) {
     return pool.capacity();
   }
   return std::max<int64_t>(0, pool.capacity() - memoryPoolReservedCapacity_);
@@ -216,9 +217,16 @@ int64_t SharedArbitrator::maxReclaimableCapacity(
 
 int64_t SharedArbitrator::reclaimableFreeCapacity(
     const MemoryPool& pool,
-    bool isSelfReclaim) const {
-  return std::min<int64_t>(
-      pool.freeBytes(), maxReclaimableCapacity(pool, isSelfReclaim));
+    bool selfReclaim) const {
+  const int64_t reclaimableBytes = maxReclaimableCapacity(pool, selfReclaim);
+  int64_t reclaimableFreeBytes = pool.freeBytes();
+  if (memoryPoolMinFreeCapacity_ != 0) {
+    const int64_t minFreeBytes = std::min<int64_t>(
+        pool.capacity() * memoryPoolMinFreeCapacityPct_,
+        memoryPoolMinFreeCapacity_);
+    reclaimableFreeBytes -= std::min(reclaimableFreeBytes, minFreeBytes);
+  }
+  return std::min<int64_t>(reclaimableFreeBytes, reclaimableBytes);
 }
 
 int64_t SharedArbitrator::reclaimableUsedCapacity(
@@ -289,6 +297,29 @@ uint64_t SharedArbitrator::shrinkCapacity(
   const uint64_t freedBytes = shrinkPool(pool, requestBytes);
   incrementFreeCapacityLocked(freedBytes);
   return freedBytes;
+}
+
+void SharedArbitrator::shrinkFreeCapacity(MemoryPool* pool) {
+  VELOX_CHECK(pool->isRoot());
+
+  if (memoryPoolFreeCapacityLazyShrink_) {
+    return;
+  }
+
+  uint64_t shrinkBytes = reclaimableFreeCapacity(*pool, false);
+  if (shrinkBytes == 0) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> l(mutex_);
+  shrinkBytes = reclaimableFreeCapacity(*pool, false);
+  if (shrinkBytes == 0) {
+    return;
+  }
+
+  ++numShrinks_;
+  const uint64_t freedBytes = shrinkPool(pool, shrinkBytes);
+  incrementFreeCapacityLocked(freedBytes);
 }
 
 uint64_t SharedArbitrator::shrinkCapacity(
