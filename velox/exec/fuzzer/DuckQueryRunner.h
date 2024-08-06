@@ -23,6 +23,30 @@ class DuckQueryRunner : public ReferenceQueryRunner {
  public:
   DuckQueryRunner();
 
+  RunnerType runnerType() const override {
+    return RunnerType::kDuckQueryRunner;
+  }
+
+  /// Skip queries that use Timestamp, Varbinary, Unknown, and IntervalDayTime
+  /// types. DuckDB doesn't support nanosecond precision for timestamps or
+  /// casting from Bigint to Interval.
+  ///
+  /// TODO Investigate mismatches reported when comparing Varbinary.
+  std::vector<TypePtr> supportedScalarTypes() const override {
+    static std::vector<TypePtr> kScalarTypes{
+        BOOLEAN(),
+        TINYINT(),
+        SMALLINT(),
+        INTEGER(),
+        BIGINT(),
+        REAL(),
+        DOUBLE(),
+        VARCHAR(),
+        DATE(),
+    };
+    return kScalarTypes;
+  }
+
   /// Specify names of aggregate function to exclude from the list of supported
   /// functions. Used to exclude functions that are non-determonistic, have bugs
   /// or whose semantics differ from Velox.

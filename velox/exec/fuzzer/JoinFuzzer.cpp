@@ -64,6 +64,10 @@ namespace facebook::velox::exec::test {
 
 namespace {
 
+std::string makePercentageString(size_t value, size_t total) {
+  return fmt::format("{} ({:.2f}%)", value, (double)value / total * 100);
+}
+
 class JoinFuzzer {
  public:
   JoinFuzzer(
@@ -300,6 +304,24 @@ class JoinFuzzer {
 
   VectorFuzzer vectorFuzzer_;
   std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner_;
+
+  struct Stats {
+    // The number of iterations verified against reference DB.
+    size_t numVerified{0};
+
+    // The number of iterations that test cross product.
+    size_t numCrossProduct{0};
+
+    void print(size_t totalIterations) const {
+      LOG(INFO) << "Total iterations tested: " << totalIterations;
+      LOG(INFO) << "Total iterations verified against reference DB: "
+                << makePercentageString(numVerified, totalIterations);
+      LOG(INFO) << "Total iterations testing cross product: "
+                << makePercentageString(numCrossProduct, totalIterations);
+    }
+  };
+
+  Stats stats_;
 };
 
 JoinFuzzer::JoinFuzzer(
@@ -351,7 +373,8 @@ std::vector<TypePtr> JoinFuzzer::generateJoinKeyTypes(int32_t numKeys) {
   types.reserve(numKeys);
   for (auto i = 0; i < numKeys; ++i) {
     // Pick random scalar type.
-    types.push_back(vectorFuzzer_.randType(0 /*maxDepth*/));
+    types.push_back(vectorFuzzer_.randType(
+        referenceQueryRunner_->supportedScalarTypes(), 0 /*maxDepth*/));
   }
   return types;
 }
@@ -374,7 +397,8 @@ std::vector<RowVectorPtr> JoinFuzzer::generateProbeInput(
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
     names.push_back(fmt::format("tp{}", i + keyNames.size()));
-    types.push_back(vectorFuzzer_.randType(2 /*maxDepth*/));
+    types.push_back(vectorFuzzer_.randType(
+        referenceQueryRunner_->supportedScalarTypes(), 2 /*maxDepth*/));
   }
 
   const auto inputType = ROW(std::move(names), std::move(types));
@@ -407,7 +431,8 @@ std::vector<RowVectorPtr> JoinFuzzer::generateBuildInput(
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
     names.push_back(fmt::format("bp{}", i + buildKeys.size()));
-    types.push_back(vectorFuzzer_.randType(2 /*maxDepth*/));
+    types.push_back(vectorFuzzer_.randType(
+        referenceQueryRunner_->supportedScalarTypes(), 2 /*maxDepth*/));
   }
 
   const auto rowType = ROW(std::move(names), std::move(types));
@@ -619,12 +644,13 @@ std::optional<MaterializedRowMultiset> JoinFuzzer::computeReferenceResults(
     const core::PlanNodePtr& plan,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput) {
-  if (containsUnsupportedTypes(probeInput[0]->type())) {
-    return std::nullopt;
-  }
-
-  if (containsUnsupportedTypes(buildInput[0]->type())) {
-    return std::nullopt;
+  if (referenceQueryRunner_->runnerType() == RunnerType::kDuckQueryRunner) {
+    if (containsUnsupportedTypes(probeInput[0]->type())) {
+      return std::nullopt;
+    }
+    if (containsUnsupportedTypes(buildInput[0]->type())) {
+      return std::nullopt;
+    }
   }
 
   if (auto sql = referenceQueryRunner_->toSql(plan)) {
@@ -935,6 +961,9 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
           assertEqualResults(
               referenceResult.value(), plan.plan->outputType(), {expected}),
           "Velox and DuckDB results don't match");
+
+      LOG(INFO) << "Result matches with referenc DB.";
+      stats_.numVerified++;
     }
   }
 
@@ -1008,6 +1037,8 @@ void JoinFuzzer::verify(core::JoinType joinType) {
        core::isFullJoin(joinType)) &&
       FLAGS_batch_size * FLAGS_num_batches <= 500) {
     if (vectorFuzzer_.coinToss(0.1)) {
+      stats_.numCrossProduct++;
+
       auto result = testCrossProduct(
           tableScanDir->getPath(),
           joinType,
@@ -1070,6 +1101,9 @@ void JoinFuzzer::verify(core::JoinType joinType) {
               defaultPlan.plan->outputType(),
               {expected}),
           "Velox and Reference results don't match");
+
+      LOG(INFO) << "Result matches with referenc DB.";
+      stats_.numVerified++;
     }
   }
 
@@ -1453,6 +1487,7 @@ void JoinFuzzer::go() {
     reSeed();
     ++iteration;
   }
+  stats_.print(iteration);
 }
 
 } // namespace
