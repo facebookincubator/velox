@@ -82,7 +82,7 @@ TEST_F(WindowTest, spill) {
 }
 
 TEST_F(WindowTest, rowBasedStreamingWindowMemoryUsageLower) {
-  const vector_size_t size = 1'000;
+  const vector_size_t size = 100'000;
   auto data = makeRowVector(
       {"d", "p", "s"},
       {
@@ -134,14 +134,11 @@ TEST_F(WindowTest, rowBasedStreamingWindowMemoryUsageLower) {
   taskStats = exec::toPlanStats(task->taskStats());
   const auto& streamingWindowStats = taskStats.at(windowId);
 
-  // Memory usage varies significantly with vector size. For instance, with a
-  // vector size of 1,000, sortWindowStats.peakMemoryBytes reaches 114,624,
-  // while streamingWindowStats.peakMemoryBytes is 96,896. However, increasing
-  // the vector size to 1,000,000 results in sortWindowStats.peakMemoryBytes
-  // soaring to 17,098,688 and streamingWindowStats.peakMemoryBytes climbing to
-  // 2,386,560.
-  ASSERT_GT(
-      sortWindowStats.peakMemoryBytes, streamingWindowStats.peakMemoryBytes);
+  // sortWindowStats.peakMemoryBytes: 2418624
+  // streamingWindowStats.peakMemoryBytes: 124672
+  ASSERT_EQ(
+      sortWindowStats.peakMemoryBytes / streamingWindowStats.peakMemoryBytes,
+      19);
 }
 
 TEST_F(WindowTest, rankWithEqualValue) {
