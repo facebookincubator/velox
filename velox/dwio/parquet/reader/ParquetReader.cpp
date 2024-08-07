@@ -273,7 +273,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     VELOX_CHECK(
         schemaElement.__isset.num_children && schemaElement.num_children > 0,
         "Node has no children but should");
-    VELOX_CHECK(!requestedType || requestedType->isRow());
+    VELOX_CHECK(
+        !requestedType || requestedType->isRow() || requestedType->isArray() ||
+        requestedType->isMap());
 
     std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> children;
 
@@ -281,8 +283,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       ++schemaIdx;
       auto& childName = schema[schemaIdx].name;
-      auto childRequestedType =
-          requestedType ? requestedType->asRow().findChild(childName) : nullptr;
+      auto childRequestedType = requestedType && requestedType->isRow()
+          ? requestedType->asRow().findChild(childName)
+          : nullptr;
       auto child = getParquetColumnInfo(
           maxSchemaElementIdx,
           maxRepeat,
