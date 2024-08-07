@@ -30,10 +30,10 @@ class IPAddressCastTest : public functions::test::FunctionBaseTest {
     return result;
   }
 
-  std::optional<std::string> castToVarbinary(
+  std::optional<int128_t> castFromVarbinary(
       const std::optional<std::string> input) {
-    auto result = evaluateOnce<std::string>(
-        "cast(cast(from_hex(c0) as ipaddress) as varchar)", input);
+    auto result = evaluateOnce<int128_t>(
+        "cast(from_hex(c0) as ipaddress)", input);
     return result;
   }
 
@@ -44,6 +44,14 @@ class IPAddressCastTest : public functions::test::FunctionBaseTest {
     return result;
   }
 };
+
+int128_t stringToInt128(std::string value){
+    int128_t res = 0;
+    for(char c : value){
+      res = res * 10 + c - '0';
+    }
+    return res;
+}
 
 TEST_F(IPAddressCastTest, castToVarchar) {
   EXPECT_EQ(castToVarchar("::ffff:1.2.3.4"), "1.2.3.4");
@@ -70,14 +78,14 @@ TEST_F(IPAddressCastTest, castToVarchar) {
       castToVarchar("789.1.1.1"), "Invalid IP address '789.1.1.1'");
 }
 
-TEST_F(IPAddressCastTest, castToVarbinary) {
-  EXPECT_EQ(castToVarbinary("00000000000000000000ffff01020304"), "1.2.3.4");
-  EXPECT_EQ(castToVarbinary("01020304"), "1.2.3.4");
-  EXPECT_EQ(castToVarbinary("c0a80000"), "192.168.0.0");
+TEST_F(IPAddressCastTest, castFromVarbinary) {
+  EXPECT_EQ(castFromVarbinary("00000000000000000000ffff01020304"), stringToInt128("281470698652420"));
+  EXPECT_EQ(castFromVarbinary("01020304"), stringToInt128("281470698652420"));
+  EXPECT_EQ(castFromVarbinary("c0a80000"), stringToInt128("281473913978880"));
   EXPECT_EQ(
-      castToVarbinary("20010db8000000000000ff0000428329"),
-      "2001:db8::ff00:42:8329");
-  EXPECT_THROW(castToVarbinary("f000001100"), VeloxUserError);
+      castFromVarbinary("20010db8000000000000ff0000428329"),
+      stringToInt128("42540766411282592856904265327123268393"));
+  EXPECT_THROW(castFromVarbinary("f000001100"), VeloxUserError);
 }
 
 TEST_F(IPAddressCastTest, allCasts) {
@@ -90,7 +98,7 @@ TEST_F(IPAddressCastTest, allCasts) {
 
 TEST_F(IPAddressCastTest, nullTest) {
   EXPECT_EQ(castToVarchar(std::nullopt), std::nullopt);
-  EXPECT_EQ(castToVarbinary(std::nullopt), std::nullopt);
+  EXPECT_EQ(castFromVarbinary(std::nullopt), std::nullopt);
 }
 
 TEST_F(IPAddressCastTest, castRoundTrip) {
