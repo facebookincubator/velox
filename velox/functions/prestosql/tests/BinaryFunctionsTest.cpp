@@ -442,11 +442,9 @@ TEST_F(BinaryFunctionsTest, fromBase64) {
       fromBase64("SGVsbG8gV29ybGQgZnJvbSBWZWxveCE="));
 
   VELOX_ASSERT_USER_THROW(
-      fromBase64("YQ="),
-      "Base64::decode() - invalid input string: string length is not a multiple of 4.");
+      fromBase64("YQ="), "decode() - invalid input string length.");
   VELOX_ASSERT_USER_THROW(
-      fromBase64("YQ==="),
-      "Base64::decode() - invalid input string: string length is not a multiple of 4.");
+      fromBase64("YQ==="), "decode() - invalid input string length.");
 
   // Check encoded strings without padding
   EXPECT_EQ("a", fromBase64("YQ"));
