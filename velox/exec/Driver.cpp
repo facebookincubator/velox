@@ -363,20 +363,19 @@ RowVectorPtr Driver::next(ContinueFuture* future) {
   ScopedDriverThreadContext scopedDriverThreadContext(*self->driverCtx());
   std::shared_ptr<BlockingState> blockingState;
   RowVectorPtr result;
-  auto stop = runInternal(self, blockingState, result);
+  const auto stop = runInternal(self, blockingState, result);
 
-  if (blockingState) {
-    VELOX_DCHECK_NULL(result)
+  if (blockingState != nullptr) {
+    VELOX_DCHECK_NULL(result);
     *future = blockingState->future();
     return nullptr;
   }
 
   if (stop == StopReason::kPause) {
-    VELOX_DCHECK_NULL(blockingState)
-    VELOX_DCHECK_NULL(result)
-    ContinueFuture resumeFuture;
-    task()->pauseRequested(&resumeFuture);
-    *future = std::move(resumeFuture);
+    VELOX_DCHECK_NULL(result);
+    if (!task()->pauseRequested(future)) {
+      *future = ContinueFuture::makeEmpty();
+    }
     return nullptr;
   }
 

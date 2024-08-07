@@ -2754,6 +2754,7 @@ bool Task::pauseRequested(ContinueFuture* future) {
     // from a thread that this flag concerns.
     return pauseRequested_;
   }
+
   std::lock_guard<std::timed_mutex> l(mutex_);
   if (!pauseRequested_) {
     VELOX_CHECK(resumePromises_.empty())

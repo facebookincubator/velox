@@ -618,8 +618,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// 'this' at the time of requesting yield. Returns 0 if yield not requested.
   int32_t yieldIfDue(uint64_t startTimeMicros);
 
-  /// Check if the task is requested to pause. If true, future will be set once
-  /// the task is resumed if it's not nullptr.
+  /// Check if the task is requested to pause. If it is true and 'future' is not
+  /// null, a task resume future is returned which will be fulfilled once the
+  /// task is resumed.
   bool pauseRequested(ContinueFuture* future = nullptr);
 
   std::timed_mutex& mutex() {
@@ -1153,7 +1154,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // running for 'this'.
   std::vector<ContinuePromise> threadFinishPromises_;
   // Promises for the futures returned to callers of pauseRequested().
-  // They are fulfilled when `resume` is called for this task.
+  // They are fulfilled when `resume()` is called for this task.
   std::vector<ContinuePromise> resumePromises_;
   // Base spill directory for this task.
   std::string spillDirectory_;
