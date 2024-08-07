@@ -170,8 +170,8 @@ inline TResult addLargeOpposite(
   return decimalAddResult(TResult(whole), TResult(fraction), rScale, overflow);
 }
 
-// Add whole and fraction parts separately, and then combine. The caller should
-// check overflow flag first.
+// Add whole and fraction parts separately, and then combine. The overflow flag
+// will be set to true if an overflow occurs during the addition.
 template <typename TResult, typename A, typename B>
 inline TResult addLarge(
     A a,
@@ -195,8 +195,14 @@ inline TResult addLarge(
   }
 }
 
-// Add the value a and b, set the result r. The caller should check overflow
-// flag first.
+// Add the value a and b, set the result r.
+// Suppose aScale is more than bScale, then aRescale is 0, bRescale is `aScale -
+// bScale`, when the result precision and scale do not adjust(result precision
+// is less than LongDecimalType::kMaxPrecision), the result scale is
+// max(aScale, bScale), so we rescale the value with small scale to the result
+// scale.
+// The overflow flag will be set to true if an overflow occurs during the
+// addition.
 template <typename TResult, typename A, typename B>
 inline void applyAdd(
     TResult& r,
@@ -236,7 +242,8 @@ inline void applyAdd(
   }
 }
 
-// Compute the add and subtract operation result precision and scale.
+// Compute the add and subtract operation result precision and scale following
+// Hive's formulas.
 std::pair<uint8_t, uint8_t> computeAddSubtractResultPrecisionScale(
     uint8_t aPrecision,
     uint8_t aScale,
@@ -474,6 +481,7 @@ struct DecimalMultiplyFunction {
   uint8_t bScale_;
   uint8_t rPrecision_;
   uint8_t rScale_;
+  // The difference between result scale and the sum of aScale and bScale.
   int32_t deltaScale_;
 };
 
