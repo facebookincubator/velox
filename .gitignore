@@ -324,5 +324,7 @@ velox/docs/sphinx/source/README_generated_*
 velox/docs/bindings/python/_generate/*
 scripts/bm-report/report.html
 
+# Custom ignores
 aws-sdk-cpp
+velox-tpch-sf10-data
 xsimd
