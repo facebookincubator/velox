@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <fcntl.h>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -140,20 +141,47 @@ class WriteFile {
  public:
   virtual ~WriteFile() = default;
 
-  // Appends data to the end of the file.
+  /// Appends data to the end of the file.
   virtual void append(std::string_view data) = 0;
 
-  // Appends data to the end of the file.
+  /// Appends data to the end of the file.
   virtual void append(std::unique_ptr<folly::IOBuf> /* data */) {
     VELOX_NYI("IOBuf appending is not implemented");
   }
 
-  // Flushes any local buffers, i.e. ensures the backing medium received
-  // all data that has been appended.
-  virtual void flush() = 0;
+  /// Writes data at the given offset in the file.
+  virtual uint64_t write(std::vector<iovec> iovecs, int32_t offset) {
+    VELOX_NYI("write is not implemented");
+  }
 
-  // Close the file. Any cleanup (disk flush, etc.) will be done here.
+  /// Truncates file to a new size.
+  virtual int32_t truncate(int32_t newSize) {
+    VELOX_NYI("truncate is not implemented");
+  }
+
+  /// Flushes any local buffers, i.e. ensures the backing medium received
+  /// all data that has been appended.
+  virtual int32_t flush() {
+    VELOX_NYI("flush is not implemented");
+  }
+
+  /// Sets the file attributes.
+  virtual int32_t setAttributes(int32_t attr) {
+    VELOX_NYI("setAttributes is not implemented");
+  }
+
+  /// Check if the passed inode flag matches the file attributes.
+  virtual bool checkAttributes(int32_t flag) {
+    VELOX_NYI("checkAttributes is not implemented");
+  }
+
+  /// Close the file. Any cleanup (disk flush, etc.) will be done here.
   virtual void close() = 0;
+
+  /// Delete the file.
+  virtual int32_t unlink() {
+    VELOX_NYI("unlink is not implemented");
+  }
 
   /// Current file size, i.e. the sum of all previous Appends.  No flush should
   /// be needed to get the exact size written, and this should be able to be
@@ -217,7 +245,9 @@ class InMemoryWriteFile final : public WriteFile {
 
   void append(std::string_view data) final;
   void append(std::unique_ptr<folly::IOBuf> data) final;
-  void flush() final {}
+  int32_t flush() final {
+    return 0;
+  }
   void close() final {}
   uint64_t size() const final;
 
@@ -279,20 +309,31 @@ class LocalWriteFile final : public WriteFile {
   explicit LocalWriteFile(
       std::string_view path,
       bool shouldCreateParentDirectories = false,
-      bool shouldThrowOnFileAlreadyExists = true);
+      bool shouldThrowOnFileAlreadyExists = true,
+      int32_t oflag = O_WRONLY | O_APPEND | O_CREAT,
+      int32_t mode = S_IRUSR | S_IWUSR);
+
   ~LocalWriteFile();
 
   void append(std::string_view data) final;
   void append(std::unique_ptr<folly::IOBuf> data) final;
-  void flush() final;
+  uint64_t write(std::vector<iovec> iovecs, int32_t offset) final;
+  int32_t truncate(int32_t newSize) final;
+  int32_t flush() final;
+  int32_t setAttributes(int32_t attr) final;
+  bool checkAttributes(int32_t flag) final;
   void close() final;
+  int32_t unlink() final;
 
   uint64_t size() const final {
     return size_;
   }
 
  private:
-  FILE* file_;
+  // File descriptor. 0 (stdin) means file not open.
+  int32_t fd_{0};
+  std::string path_;
+  //  FILE* file_;
   uint64_t size_{0};
   bool closed_{false};
 };

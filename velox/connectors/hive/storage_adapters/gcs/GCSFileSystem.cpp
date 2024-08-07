@@ -219,10 +219,11 @@ class GCSWriteFile final : public WriteFile {
     size_ += data.size();
   }
 
-  void flush() override {
+  int32_t flush() override {
     if (isFileOpen()) {
       stream_.flush();
     }
+    return 0;
   }
 
   void close() override {

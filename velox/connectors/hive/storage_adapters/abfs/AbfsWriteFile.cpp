@@ -88,10 +88,11 @@ class AbfsWriteFile::Impl {
     }
   }
 
-  void flush() {
+  int32_t flush() {
     if (!closed_) {
       blobStorageFileClient_->flush(position_);
     }
+    return 0;
   }
 
   void append(std::string_view data) {
@@ -149,8 +150,8 @@ void AbfsWriteFile::close() {
   impl_->close();
 }
 
-void AbfsWriteFile::flush() {
-  impl_->flush();
+int32_t AbfsWriteFile::flush() {
+  return impl_->flush();
 }
 
 void AbfsWriteFile::append(std::string_view data) {

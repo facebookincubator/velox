@@ -286,11 +286,12 @@ class S3WriteFile::Impl {
   }
 
   // No-op.
-  void flush() {
+  int32_t flush() {
     VELOX_CHECK(!closed(), "File is closed");
     /// currentPartSize must be less than kPartUploadSize since
     /// append() would have already flushed after reaching kUploadPartSize.
     VELOX_CHECK_LT(currentPart_->size(), kPartUploadSize);
+    return 0;
   }
 
   // Complete the multipart upload and close the file.
@@ -409,8 +410,8 @@ void S3WriteFile::append(std::string_view data) {
   return impl_->append(data);
 }
 
-void S3WriteFile::flush() {
-  impl_->flush();
+int32_t S3WriteFile::flush() {
+  return impl_->flush();
 }
 
 void S3WriteFile::close() {

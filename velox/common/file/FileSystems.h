@@ -18,6 +18,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryPool.h"
 
+#include <fcntl.h>
 #include <functional>
 #include <memory>
 #include <string_view>
@@ -45,6 +46,11 @@ struct FileOptions {
   memory::MemoryPool* pool{nullptr};
   /// If specified then can be trusted to be the file size.
   std::optional<int64_t> fileSize;
+
+  bool shouldCreateParentDirectories = false;
+  bool shouldThrowOnFileAlreadyExists = true;
+  int32_t oflag = O_WRONLY | O_APPEND | O_CREAT;
+  int32_t mode = S_IRUSR | S_IWUSR;
 };
 
 /// An abstract FileSystem

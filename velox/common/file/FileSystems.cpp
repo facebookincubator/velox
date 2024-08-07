@@ -102,8 +102,13 @@ class LocalFileSystem : public FileSystem {
 
   std::unique_ptr<WriteFile> openFileForWrite(
       std::string_view path,
-      const FileOptions& /*unused*/) override {
-    return std::make_unique<LocalWriteFile>(extractPath(path));
+      const FileOptions& options) override {
+    return std::make_unique<LocalWriteFile>(
+        extractPath(path),
+        options.shouldCreateParentDirectories,
+        options.shouldThrowOnFileAlreadyExists,
+        options.oflag,
+        options.mode);
   }
 
   void remove(std::string_view path) override {

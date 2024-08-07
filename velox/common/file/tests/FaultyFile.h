@@ -167,9 +167,19 @@ class FaultyWriteFile : public WriteFile {
 
   void append(std::unique_ptr<folly::IOBuf> data) override;
 
-  void flush() override;
+  uint64_t write(std::vector<iovec> iovecs, int32_t offset) override;
+
+  int32_t truncate(int32_t newSize) override;
+
+  int32_t flush() override;
+
+  int32_t setAttributes(int32_t attr) override;
+
+  bool checkAttributes(int32_t flag) override;
 
   void close() override;
+
+  int32_t unlink() override;
 
   uint64_t size() const override {
     return delegatedFile_->size();
