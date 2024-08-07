@@ -13,6 +13,7 @@
 # limitations under the License.
 .PHONY: all cmake build clean debug release unit
 
+SHELL=/bin/bash
 BUILD_BASE_DIR=_build
 BUILD_DIR=release
 BUILD_TYPE=Release
