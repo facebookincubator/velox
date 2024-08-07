@@ -36,10 +36,14 @@ add_library(arrow_testing STATIC IMPORTED GLOBAL)
 
 find_path(ARROW_INCLUDE_PATH arrow/api.h)
 set_target_properties(
-  arrow arrow_testing parquet PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
-                                         ${ARROW_INCLUDE_PATH})
-set_target_properties(arrow PROPERTIES IMPORTED_LOCATION ${ARROW_LIB}
-                                       INTERFACE_LINK_LIBRARIES thrift)
-set_target_properties(parquet PROPERTIES IMPORTED_LOCATION ${PARQUET_LIB})
-set_target_properties(arrow_testing PROPERTIES IMPORTED_LOCATION
-                                               ${ARROW_TESTING_LIB})
+  arrow arrow_testing parquet
+  PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${ARROW_INCLUDE_PATH})
+set_target_properties(
+  arrow
+  PROPERTIES IMPORTED_LOCATION ${ARROW_LIB} INTERFACE_LINK_LIBRARIES thrift)
+set_target_properties(
+  parquet
+  PROPERTIES IMPORTED_LOCATION ${PARQUET_LIB})
+set_target_properties(
+  arrow_testing
+  PROPERTIES IMPORTED_LOCATION ${ARROW_TESTING_LIB})
