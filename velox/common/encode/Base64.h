@@ -73,33 +73,6 @@ class Base64 {
   static Status decodeUrl(std::string_view input, std::string& output);
 
  private:
-  // Padding character used in encoding.
-  static const char kPadding = '=';
-
-  // Calculates the encoded size based on input 'inputSize'.
-  static size_t calculateEncodedSize(size_t inputSize, bool withPadding = true);
-
-  // Calculates the decoded size based on encoded input and adjusts the input
-  // size for padding.
-  static Expected<size_t> calculateDecodedSize(
-      std::string_view input,
-      size_t& inputSize);
-
-  // Checks if the input Base64 string is padded.
-  static inline bool isPadded(std::string_view input) {
-    return (!input.empty() && input.back() == kPadding);
-  }
-
-  // Counts the number of padding characters in encoded input.
-  static inline size_t numPadding(std::string_view input) {
-    size_t numPadding{0};
-    while (!input.empty() && input.back() == kPadding) {
-      numPadding++;
-      input.remove_suffix(1);
-    }
-    return numPadding;
-  }
-
   // Reverse lookup helper function to get the original index of a Base64
   // character.
   static Expected<uint8_t> base64ReverseLookup(
