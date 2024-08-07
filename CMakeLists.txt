@@ -339,7 +339,8 @@ if("${ENABLE_ALL_WARNINGS}")
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
-       -Wnon-virtual-dtor \
+       -Wno-missing-field-initializers \
+       -Wno-deprecated-copy \
        ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")
 
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
@@ -545,9 +546,7 @@ include_directories(SYSTEM velox/external)
 if(NOT VELOX_DISABLE_GOOGLETEST)
   set(gtest_SOURCE AUTO)
   resolve_dependency(gtest)
-  set(VELOX_GTEST_INCUDE_DIR
-      "${gtest_SOURCE_DIR}/googletest/include"
-      PARENT_SCOPE)
+  set(VELOX_GTEST_INCLUDE_DIR "${gtest_SOURCE_DIR}/googletest/include")
 endif()
 
 set_source(xsimd)

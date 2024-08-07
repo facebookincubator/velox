@@ -79,6 +79,7 @@ m4/lt~obsolete.m4
 #m4/
 build/
 _build/
+.cache/
 .ccache/
 #*.m4
 *.o
@@ -322,3 +323,8 @@ src/amalgamation/
 velox/docs/sphinx/source/README_generated_*
 velox/docs/bindings/python/_generate/*
 scripts/bm-report/report.html
+
+# Custom ignores
+aws-sdk-cpp
+velox-tpch-sf10-data
+xsimd

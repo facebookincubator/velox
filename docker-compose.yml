@@ -29,6 +29,35 @@ services:
       NUM_THREADS: 8 # default value for NUM_THREADS
       VELOX_DEPENDENCY_SOURCE: BUNDLED # Build dependencies from source
       CCACHE_DIR: "/velox/.ccache"
+      CMAKE_EXPORT_COMPILE_COMMANDS: 1
+    volumes:
+      - .:/velox:delegated
+    command: scripts/docker-command.sh
+
+  ubuntu-cuda-cpp:
+    # Usage:
+    #   docker-compose pull ubuntu-cuda-cpp or docker-compose build ubuntu-cuda-cpp
+    #   docker-compose run --rm ubuntu-cuda-cpp
+    #   or
+    #   docker-compose run -e NUM_THREADS=<NUMBER_OF_THREADS_TO_USE> --rm ubuntu-cuda-cpp
+    #   to set the number of threads used during compilation
+    #image: ghcr.io/facebookincubator/velox-dev:amd64-ubuntu-22.04-avx
+    build:
+      context: .
+      dockerfile: scripts/ubuntu-22.04-cuda-12.2-cpp.dockerfile
+    environment:
+      NUM_THREADS: 8 # default value for NUM_THREADS
+      VELOX_DEPENDENCY_SOURCE: BUNDLED # Build dependencies from source
+      CCACHE_DIR: "/velox/.ccache"
+      CMAKE_EXPORT_COMPILE_COMMANDS: 1
+    privileged: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       - .:/velox:delegated
     command: scripts/docker-command.sh
