@@ -15,6 +15,9 @@
 
 set -euo pipefail
 
+# To get the data, copy from /datasets/velox-tpch-sf10-data to this repo:
+# cp -r /datasets/velox-tpch-sf10-data .
+
 # Run this to launch the CUDA container:
 # docker-compose run -e NUM_THREADS=$(nproc) --rm ubuntu-cuda-cpp /bin/bash
 # Then invoke ./build.sh to build with GPU support and run tests.
