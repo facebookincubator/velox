@@ -284,7 +284,14 @@ bool MemoryAllocator::allocateContiguous(
     success = cache()->makeSpace(
         pagesToAcquire(numPages, numCollateralPages),
         [&](Allocation& acquired) {
+          const auto numAcquiredPages = acquired.numPages();
           freeNonContiguous(acquired);
+          // We must advise pages away to get the OS to have more
+          // pages available for a contiguous allocation.
+          // freeNonContiguous only deallocates pages but leaves them used by
+          // Velox which can result in allocation failures even though the
+          // allocator technically has plenty of pages available for use.
+          unmap(numAcquiredPages);
           return allocateContiguousWithoutRetry(
               numPages, collateral, allocation, maxPages);
         });
@@ -318,7 +325,9 @@ bool MemoryAllocator::growContiguous(
     success = growContiguousWithoutRetry(increment, allocation);
   } else {
     success = cache()->makeSpace(increment, [&](Allocation& acquired) {
+      const auto numAcquiredPages = acquired.numPages();
       freeNonContiguous(acquired);
+      unmap(numAcquiredPages);
       return growContiguousWithoutRetry(increment, allocation);
     });
   }
