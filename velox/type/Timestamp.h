@@ -351,7 +351,7 @@ struct Timestamp {
   ///  Timestamp ts{0, 0};
   ///  ts.Timezone("America/Los_Angeles");
   ///  ts.toString(); // returns December 31, 1969 16:00:00
-  void toTimezone(const tz::TimeZone& zone);
+  void toTimezone(const tz::TimeZone& zone, bool allowOverflow = false);
 
   /// A default time zone that is same across the process.
   static const tz::TimeZone& defaultTimezone();
