@@ -34,17 +34,19 @@ class ModeAggregateTest : public AggregationTestBase {
     registerAggregateFunctions("");
   }
 
-  void testModeWithDuck(const VectorPtr& vector1, const VectorPtr& vector2) {
-    ASSERT_EQ(vector1->size(), vector2->size());
+  void testModeWithDuck(
+      const VectorPtr& vectorKey,
+      const VectorPtr& vectorInput) {
+    ASSERT_EQ(vectorKey->size(), vectorInput->size());
 
-    auto num = vector1->size();
+    auto num = vectorKey->size();
     auto reverseIndices = makeIndicesInReverse(num);
 
     auto vectors = makeRowVector(
-        {vector1,
-         vector2,
-         wrapInDictionary(reverseIndices, num, vector1),
-         wrapInDictionary(reverseIndices, num, vector2)});
+        {vectorKey,
+         vectorInput,
+         wrapInDictionary(reverseIndices, num, vectorKey),
+         wrapInDictionary(reverseIndices, num, vectorInput)});
 
     createDuckDbTable({vectors});
     testAggregations(
@@ -88,10 +90,10 @@ class ModeAggregateTest : public AggregationTestBase {
   void testMode(
       const std::string& expression,
       const std::vector<std::string>& groupKeys,
-      const VectorPtr& vector1,
-      const VectorPtr& vector2,
+      const VectorPtr& vectorKey,
+      const VectorPtr& vectorInput,
       const RowVectorPtr& expected) {
-    auto vectors = makeRowVector({vector1, vector2});
+    auto vectors = makeRowVector({vectorKey, vectorInput});
     testAggregations({vectors}, groupKeys, {expression}, {expected});
   }
 };
@@ -99,54 +101,54 @@ class ModeAggregateTest : public AggregationTestBase {
 TEST_F(ModeAggregateTest, groupByInteger) {
   vector_size_t num = 37;
 
-  auto vector1 = makeFlatVector<int32_t>(
+  auto vectorKey = makeFlatVector<int32_t>(
       num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
-  auto vector2 = makeFlatVector<int32_t>(
+  auto vectorInput = makeFlatVector<int32_t>(
       num, [](vector_size_t row) { return row % 2; }, nullEvery(5));
 
-  testModeWithDuck(vector1, vector2);
+  testModeWithDuck(vectorKey, vectorInput);
 
   // Test when some group-by keys have only null values.
-  auto vector3 =
-      makeNullableFlatVector<int64_t>({1, 1, 1, 2, 2, 2, 3, 3, std::nullopt});
-  auto vector4 = makeNullableFlatVector<int64_t>(
+  auto vectorKeyNull =
+      makeNullableFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 3, 3, std::nullopt});
+  auto vectorInputNull = makeNullableFlatVector<int64_t>(
       {10, 10, 10, 20, std::nullopt, 20, std::nullopt, std::nullopt, 20});
 
-  testModeWithDuck(vector3, vector4);
+  testModeWithDuck(vectorKeyNull, vectorInputNull);
 }
 
 TEST_F(ModeAggregateTest, groupByDouble) {
   vector_size_t num = 37;
 
-  auto vector1 = makeFlatVector<int32_t>(
+  auto vectorKey = makeFlatVector<int32_t>(
       num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
-  auto vector2 = makeFlatVector<double>(
+  auto vectorInput = makeFlatVector<double>(
       num, [](vector_size_t row) { return row % 2 + 0.05; }, nullEvery(5));
 
-  testModeWithDuck(vector1, vector2);
+  testModeWithDuck(vectorKey, vectorInput);
 }
 
 TEST_F(ModeAggregateTest, groupByBoolean) {
   vector_size_t num = 37;
 
-  auto vector1 = makeFlatVector<int32_t>(
+  auto vectorKey = makeFlatVector<int32_t>(
       num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
-  auto vector2 = makeFlatVector<bool>(
+  auto vectorInput = makeFlatVector<bool>(
       num, [](vector_size_t row) { return row % 2 == 0; }, nullEvery(5));
 
   auto expected = makeRowVector(
       {makeNullableFlatVector<int32_t>({std::nullopt, 0, 1, 2}),
        makeFlatVector<bool>({true, false, false, false})});
 
-  testMode("mode(c1)", {"c0"}, vector1, vector2, expected);
+  testMode("mode(c1)", {"c0"}, vectorKey, vectorInput, expected);
 }
 
 TEST_F(ModeAggregateTest, groupByTimestamp) {
   vector_size_t num = 10;
 
-  auto vector1 = makeFlatVector<int32_t>(
+  auto vectorKey = makeFlatVector<int32_t>(
       num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
-  auto vector2 = makeFlatVector<Timestamp>(
+  auto vectorInput = makeFlatVector<Timestamp>(
       num,
       [](vector_size_t row) { return Timestamp{row % 2, 17'123'456}; },
       nullEvery(5));
@@ -159,35 +161,35 @@ TEST_F(ModeAggregateTest, groupByTimestamp) {
             Timestamp{1, 17'123'456},
             Timestamp{0, 17'123'456}})});
 
-  testMode("mode(c1)", {"c0"}, vector1, vector2, expected);
+  testMode("mode(c1)", {"c0"}, vectorKey, vectorInput, expected);
 }
 
 TEST_F(ModeAggregateTest, groupByDate) {
   vector_size_t num = 10;
 
-  auto vector1 = makeFlatVector<int32_t>(
+  auto vectorKey = makeFlatVector<int32_t>(
       num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
-  auto vector2 = makeFlatVector<int32_t>(
+  auto vectorInput = makeFlatVector<int32_t>(
       num, [](vector_size_t row) { return row % 2; }, nullEvery(5), DATE());
 
   auto expected = makeRowVector(
       {makeNullableFlatVector<int32_t>({std::nullopt, 0, 1, 2}),
        makeFlatVector<int32_t>({0, 1, 1, 0}, DATE())});
 
-  testMode("mode(c1)", {"c0"}, vector1, vector2, expected);
+  testMode("mode(c1)", {"c0"}, vectorKey, vectorInput, expected);
 }
 
 TEST_F(ModeAggregateTest, groupByInterval) {
   vector_size_t num = 30;
 
-  auto vector1 = makeFlatVector<int32_t>(num, [](auto row) { return row; });
-  auto vector2 = makeFlatVector<int64_t>(
+  auto vectorKey = makeFlatVector<int32_t>(num, [](auto row) { return row; });
+  auto vectorInput = makeFlatVector<int64_t>(
       num,
       [](auto row) { return row % 5 == 0 ? 2 : row + 1; },
       nullEvery(5),
       INTERVAL_DAY_TIME());
 
-  testModeWithDuck(vector1, vector2);
+  testModeWithDuck(vectorKey, vectorInput);
 }
 
 TEST_F(ModeAggregateTest, groupByString) {
@@ -219,22 +221,22 @@ TEST_F(ModeAggregateTest, globalInteger) {
 TEST_F(ModeAggregateTest, globalDecimal) {
   vector_size_t num = 10;
   auto longDecimalType = DECIMAL(20, 2);
-  auto vector1 = makeFlatVector<int128_t>(
+  auto vectorLongDecimal = makeFlatVector<int128_t>(
       num,
       [](vector_size_t row) { return row % 4; },
       nullEvery(7),
       longDecimalType);
 
-  testGlobalModeWithDuck(vector1);
+  testGlobalModeWithDuck(vectorLongDecimal);
 
   auto shortDecimalType = DECIMAL(6, 2);
-  auto vector2 = makeFlatVector<int64_t>(
+  auto vectorShortDecimal = makeFlatVector<int64_t>(
       num,
       [](vector_size_t row) { return row % 4; },
       nullEvery(7),
       shortDecimalType);
 
-  testGlobalModeWithDuck(vector2);
+  testGlobalModeWithDuck(vectorShortDecimal);
 }
 
 TEST_F(ModeAggregateTest, globalUnknown) {
@@ -467,7 +469,7 @@ TEST_F(ModeAggregateTest, rows) {
   testAggregations({input}, {}, {"mode(c0)"}, {expected});
 
   // Group by.
-  auto input1 = makeRowVector({
+  auto inputGroupBy = makeRowVector({
       makeFlatVector<int64_t>({1, 0, 1, 0, 1, 1}),
       makeRowVector({
           makeFlatVector<int32_t>({
@@ -488,14 +490,14 @@ TEST_F(ModeAggregateTest, rows) {
           }),
       }),
   });
-  auto expected1 = makeRowVector({
+  auto expectedGroupBy = makeRowVector({
       makeFlatVector<int64_t>({0, 1}),
       makeRowVector({
           makeFlatVector<int32_t>({1, 2}),
           makeFlatVector<int32_t>({1, 2}),
       }),
   });
-  testAggregations({input1}, {"c0"}, {"mode(c1)"}, {expected1});
+  testAggregations({inputGroupBy}, {"c0"}, {"mode(c1)"}, {expectedGroupBy});
 }
 
 } // namespace
