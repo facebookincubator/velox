@@ -24,14 +24,13 @@ General Aggregate Functions
 .. spark:function:: bloom_filter_agg(hash, estimatedNumItems, numBits) -> varbinary
 
     Creates bloom filter from input hashes and returns it serialized into VARBINARY.
-    The caller is expected to apply xxhash64 function to input data before calling bloom_filter_agg.
 
     For example, 
         bloom_filter_agg(xxhash64(x), 100, 1024)
     In Spark implementation, ``estimatedNumItems`` and ``numBits`` are used to decide the number of hash functions and bloom filter capacity.
     In Velox implementation, ``estimatedNumItems`` is not used.
 
-    ``hash`` cannot be null.
+    ``hash`` can be null.
     ``numBits`` specifies max capacity of the bloom filter, which allows to trade accuracy for memory.
     In Spark, the value of ``numBits`` is automatically capped at config value 67,108,864.
     In Velox, the value of ``numBits`` is automatically capped at the value of spark.bloom_filter.max_num_bits configuration property.
@@ -42,7 +41,7 @@ General Aggregate Functions
 
     A version of ``bloom_filter_agg`` that uses ``numBits`` computed as ``estimatedNumItems`` * 8.
 
-    ``hash`` cannot be null.
+    ``hash`` can be null.
     ``estimatedNumItems`` provides an estimate of the number of values of ``x`` under the fact of ``hash`` is xxhash64(x).
     Value of ``estimatedNumItems`` is capped at 4,000,000 like to match Spark's implementation.
     But Spark allows for changing the defaults while Velox does not.
@@ -51,7 +50,7 @@ General Aggregate Functions
     
     A version of ``bloom_filter_agg`` that use the value of spark.bloom_filter.max_num_bits configuration property as ``numBits``.
 
-    ``hash`` cannot be null.
+    ``hash`` can be null.
 
 .. spark:function:: collect_list(x) -> array<[same as x]>
 

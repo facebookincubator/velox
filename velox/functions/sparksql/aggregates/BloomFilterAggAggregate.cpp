@@ -76,14 +76,6 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     return false;
   }
 
-  static FOLLY_ALWAYS_INLINE void checkBloomFilterNotNull(
-      DecodedVector& decoded,
-      vector_size_t idx) {
-    VELOX_USER_CHECK(
-        !decoded.isNullAt(idx),
-        "First argument of bloom_filter_agg cannot be null");
-  }
-
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
@@ -91,17 +83,17 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
     computeCapacity();
-    auto mayHaveNulls = decodedRaw_.mayHaveNulls();
-    rows.applyToSelected([&](vector_size_t row) {
-      if (mayHaveNulls) {
-        checkBloomFilterNotNull(decodedRaw_, row);
-      }
-      auto group = groups[row];
-      auto tracker = trackRowSize(group);
-      auto accumulator = value<BloomFilterAccumulator>(group);
-      accumulator->init(capacity_);
-      accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
-    });
+    const auto mayHaveNulls = decodedRaw_.mayHaveNulls();
+    if (UNLIKELY(mayHaveNulls)) {
+      rows.applyToSelected([&](vector_size_t row) {
+        if (UNLIKELY(decodedRaw_.isNullAt(row))) {
+          return;
+        }
+        insert(groups, row);
+      });
+      return;
+    }
+    rows.applyToSelected([&](vector_size_t row) { insert(groups, row); });
   }
 
   void addIntermediateResults(
@@ -135,17 +127,24 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     accumulator->init(capacity_);
     if (decodedRaw_.isConstantMapping()) {
       // All values are same, just do for the first.
-      checkBloomFilterNotNull(decodedRaw_, 0);
-      accumulator->insert(decodedRaw_.valueAt<int64_t>(0));
-      return;
-    }
-    auto mayHaveNulls = decodedRaw_.mayHaveNulls();
-    rows.applyToSelected([&](vector_size_t row) {
-      if (mayHaveNulls) {
-        checkBloomFilterNotNull(decodedRaw_, row);
+      if (!decodedRaw_.isNullAt(0)) {
+        accumulator->insert(decodedRaw_.valueAt<int64_t>(0));
       }
-      accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
-    });
+    } else {
+      const auto mayHaveNulls = decodedRaw_.mayHaveNulls();
+      if (UNLIKELY(mayHaveNulls)) {
+        rows.applyToSelected([&](vector_size_t row) {
+          if (UNLIKELY(decodedRaw_.isNullAt(row))) {
+            return;
+          }
+          accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
+        });
+        return;
+      }
+      rows.applyToSelected([&](vector_size_t row) {
+        accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
+      });
+    };
   }
 
   void addSingleGroupIntermediateResults(
@@ -227,6 +226,14 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       estimatedNumItems_ = defaultExpectedNumItems_;
       numBits_ = defaultNumBits_;
     }
+  }
+
+  void insert(char** groups, vector_size_t row) {
+    auto group = groups[row];
+    auto tracker = trackRowSize(group);
+    auto accumulator = value<BloomFilterAccumulator>(group);
+    accumulator->init(capacity_);
+    accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
   }
 
   void computeCapacity() {
