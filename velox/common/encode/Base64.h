@@ -24,70 +24,11 @@
 #include <folly/io/IOBuf.h>
 
 #include "velox/common/base/GTestMacros.h"
+#include "velox/common/encode/EncoderUtils.h"
 
 namespace facebook::velox::encoding {
-
-static const size_t kCharsetSize = 64;
-static const size_t kReverseIndexSize = 256;
-
-/// Character set used for encoding purposes.
-/// Contains specific characters that form the encoding scheme.
-using Charset = std::array<char, kCharsetSize>;
-
-/// Reverse lookup table for decoding purposes.
-/// Maps each possible encoded character to its corresponding numeric value
-/// within the encoding base.
-using ReverseIndex = std::array<uint8_t, kReverseIndexSize>;
-
-// Validate the character in charset with ReverseIndex table
-constexpr bool checkForwardIndex(
-    uint8_t idx,
-    const Charset& charset,
-    const ReverseIndex& reverseIndex) {
-  for (uint8_t i = idx; i > 0; --i) {
-    if (reverseIndex[static_cast<uint8_t>(charset[i])] != i) {
-      return false;
-    }
-  }
-  return reverseIndex[static_cast<uint8_t>(charset[0])] == 0;
-}
-
-/// Searches for a character within a charset up to a certain index.
-constexpr bool
-findCharacterInCharSet(const Charset& charset, uint8_t idx, const char c) {
-  for (uint8_t idx = 0; idx < charset.size(); ++idx) {
-    if (charset[idx] == c) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/// Checks the consistency of a reverse index mapping for a given character
-/// set.
-constexpr bool checkReverseIndex(
-    uint8_t idx,
-    const Charset& charset,
-    const ReverseIndex& reverseIndex) {
-  for (int i = idx; i >= 0; --i) {
-    if (reverseIndex[i] == 255) {
-      if (findCharacterInCharSet(charset, 0, static_cast<char>(i))) {
-        return false;
-      }
-    } else {
-      if (charset[reverseIndex[i]] != i) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 class Base64 {
  public:
-  /// Padding character used in encoding.
-  static const char kPadding = '=';
-
   /// Encodes the specified number of characters from the 'data'.
   static std::string encode(const char* data, size_t len);
 
@@ -156,25 +97,6 @@ class Base64 {
   decodeUrl(const char* src, size_t src_len, char* dst, size_t dst_len);
 
  private:
-  /// Checks if there is padding in encoded data.
-  static inline bool isPadded(const char* data, size_t len) {
-    return (len > 0 && data[len - 1] == kPadding);
-  }
-
-  /// Counts the number of padding characters in encoded data.
-  static inline size_t numPadding(const char* src, size_t len) {
-    size_t numPadding{0};
-    while (len > 0 && src[len - 1] == kPadding) {
-      numPadding++;
-      len--;
-    }
-    return numPadding;
-  }
-
-  /// Performs a reverse lookup in the reverse index to retrieve the original
-  /// index of a character in the base.
-  static uint8_t base64ReverseLookup(char p, const ReverseIndex& reverseIndex);
-
   /// Encodes the specified data using the provided charset.
   template <class T>
   static std::string

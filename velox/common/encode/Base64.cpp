@@ -24,6 +24,9 @@
 
 namespace facebook::velox::encoding {
 
+// Encoding base to be used.
+constexpr static int kBase = 64;
+
 // Constants defining the size in bytes of binary and encoded blocks for Base64
 // encoding.
 // Size of a binary block in bytes (3 bytes = 24 bits)
@@ -110,6 +113,7 @@ static_assert(
 static_assert(
     checkReverseIndex(
         sizeof(kBase64ReverseIndexTable) - 1,
+        kBase,
         kBase64Charset,
         kBase64ReverseIndexTable),
     "kBase64ReverseIndexTable has incorrect entries.");
@@ -295,15 +299,6 @@ void Base64::decode(const char* data, size_t size, char* output) {
 }
 
 // static
-uint8_t Base64::base64ReverseLookup(char p, const ReverseIndex& reverseIndex) {
-  auto curr = reverseIndex[(uint8_t)p];
-  if (curr >= 0x40) {
-    VELOX_USER_FAIL("decode() - invalid input string: invalid characters");
-  }
-  return curr;
-}
-
-// static
 size_t
 Base64::decode(const char* src, size_t src_len, char* dst, size_t dst_len) {
   return decodeImpl(src, src_len, dst, dst_len, kBase64ReverseIndexTable);
@@ -375,10 +370,10 @@ size_t Base64::decodeImpl(
     // Each character of the 4 encode 6 bits of the original, grab each with
     // the appropriate shifts to rebuild the original and then split that back
     // into the original 8 bit bytes.
-    uint32_t last = (base64ReverseLookup(src[0], reverseIndex) << 18) |
-        (base64ReverseLookup(src[1], reverseIndex) << 12) |
-        (base64ReverseLookup(src[2], reverseIndex) << 6) |
-        base64ReverseLookup(src[3], reverseIndex);
+    uint32_t last = (baseReverseLookup(kBase, src[0], reverseIndex) << 18) |
+        (baseReverseLookup(kBase, src[1], reverseIndex) << 12) |
+        (baseReverseLookup(kBase, src[2], reverseIndex) << 6) |
+        baseReverseLookup(kBase, src[3], reverseIndex);
     dst[0] = (last >> 16) & 0xff;
     dst[1] = (last >> 8) & 0xff;
     dst[2] = last & 0xff;
@@ -387,14 +382,14 @@ size_t Base64::decodeImpl(
   // Handle the last 2-4 characters.  This is similar to the above, but the
   // last 2 characters may or may not exist.
   DCHECK(src_len >= 2);
-  uint32_t last = (base64ReverseLookup(src[0], reverseIndex) << 18) |
-      (base64ReverseLookup(src[1], reverseIndex) << 12);
+  uint32_t last = (baseReverseLookup(kBase, src[0], reverseIndex) << 18) |
+      (baseReverseLookup(kBase, src[1], reverseIndex) << 12);
   dst[0] = (last >> 16) & 0xff;
   if (src_len > 2) {
-    last |= base64ReverseLookup(src[2], reverseIndex) << 6;
+    last |= baseReverseLookup(kBase, src[2], reverseIndex) << 6;
     dst[1] = (last >> 8) & 0xff;
     if (src_len > 3) {
-      last |= base64ReverseLookup(src[3], reverseIndex);
+      last |= baseReverseLookup(kBase, src[3], reverseIndex);
       dst[2] = last & 0xff;
     }
   }
