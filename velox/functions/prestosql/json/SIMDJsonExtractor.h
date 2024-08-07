@@ -151,7 +151,7 @@ simdjson::error_code simdJsonExtract(
     SIMDJsonExtractor& extractor,
     TConsumer&& consumer) {
   simdjson::padded_string paddedJson(json.data(), json.size());
-  SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson));
+  SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson, true));
 
   if (extractor.isRootOnlyPath()) {
     // If the path is just to return the original object, call consumer on the

@@ -45,6 +45,7 @@ void simdjsonErrorsToExceptions(
 
 /// Parse the input json string using a thread local on demand parser.
 simdjson::simdjson_result<simdjson::ondemand::document> simdjsonParse(
-    const simdjson::padded_string_view& json);
+    const simdjson::padded_string_view& json,
+    bool allowIncompleteJson = false);
 
 } // namespace facebook::velox

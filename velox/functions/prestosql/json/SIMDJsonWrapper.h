@@ -16,8 +16,13 @@
 
 #pragma once
 
+// Enable optional handling of incomplete json in simdjson library.
+#define SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON
+
 #if __has_include("simdjson/singleheader/simdjson.h")
 #include "simdjson/singleheader/simdjson.h"
 #else
 #include "simdjson.h"
 #endif
+
+#undef SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON

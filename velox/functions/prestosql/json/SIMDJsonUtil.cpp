@@ -29,8 +29,12 @@ void simdjsonErrorsToExceptions(
 }
 
 simdjson::simdjson_result<simdjson::ondemand::document> simdjsonParse(
-    const simdjson::padded_string_view& json) {
+    const simdjson::padded_string_view& json,
+    bool allowIncompleteJson) {
   thread_local simdjson::ondemand::parser parser;
+  if (allowIncompleteJson) {
+    return parser.iterate_allow_incomplete_json(json);
+  }
   return parser.iterate(json);
 }
 
