@@ -794,7 +794,8 @@ uint64_t Writer::MemoryReclaimer::reclaim(
       stats);
 }
 
-dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
+std::map<std::string, std::string> getDwrfOptionsConfigs(
+    const dwio::common::WriterOptions& options) {
   std::map<std::string, std::string> configs;
   if (options.compressionKind.has_value()) {
     configs.emplace(
@@ -844,36 +845,18 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
         std::to_string(options.zstdCompressionLevel.value()));
   }
 
-  dwrf::WriterOptions dwrfOptions;
-  dwrfOptions.config = Config::fromMap(configs);
-  dwrfOptions.schema = options.schema;
-  dwrfOptions.memoryPool = options.memoryPool;
-  dwrfOptions.spillConfig = options.spillConfig;
-  dwrfOptions.nonReclaimableSection = options.nonReclaimableSection;
-
-  if (options.flushPolicyFactory) {
-    dwrfOptions.flushPolicyFactory = [options]() {
-      std::unique_ptr<dwio::common::FlushPolicy> flushPolicy =
-          options.flushPolicyFactory();
-      std::unique_ptr<DWRFFlushPolicy> dwrfFlushPolicy(
-          dynamic_cast<DWRFFlushPolicy*>(flushPolicy.release()));
-
-      if (!dwrfFlushPolicy) {
-        throw std::runtime_error(
-            "FlushPolicyFactory did not produce a DWRFFlushPolicy instance.");
-      }
-      return dwrfFlushPolicy;
-    };
-  }
-
-  return dwrfOptions;
+  return configs;
 }
 
 std::unique_ptr<dwio::common::Writer> DwrfWriterFactory::createWriter(
     std::unique_ptr<dwio::common::FileSink> sink,
     const std::shared_ptr<dwio::common::WriterOptions>& options) {
-  auto dwrfOptions = getDwrfOptions(*options);
-  return std::make_unique<Writer>(std::move(sink), dwrfOptions);
+  auto configs = getDwrfOptionsConfigs(*options);
+  auto dwrfOptions = std::dynamic_pointer_cast<dwrf::WriterOptions>(options);
+  dwrfOptions->config = Config::fromMap(configs);
+  VELOX_CHECK_NOT_NULL(
+      dwrfOptions, "DWRF writer factory expected a DWRF WriterOptions object.");
+  return std::make_unique<Writer>(std::move(sink), *dwrfOptions);
 }
 
 std::unique_ptr<dwio::common::WriterOptions>

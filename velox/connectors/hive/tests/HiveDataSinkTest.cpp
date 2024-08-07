@@ -145,8 +145,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       const std::vector<std::string>& partitionedBy = {},
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
           bucketProperty = nullptr,
-      const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>&
-          flushPolicyFactory = nullptr) {
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr) {
     return makeHiveInsertTableHandle(
         outputRowType->names(),
         outputRowType->children(),
@@ -158,7 +158,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             connector::hive::LocationHandle::TableType::kNew),
         fileFormat,
         CompressionKind::CompressionKind_ZSTD,
-        flushPolicyFactory);
+        writerOptions);
   }
 
   std::shared_ptr<HiveDataSink> createDataSink(
@@ -168,8 +168,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       const std::vector<std::string>& partitionedBy = {},
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
           bucketProperty = nullptr,
-      const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>&
-          flushPolicyFactory = nullptr) {
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr) {
     return std::make_shared<HiveDataSink>(
         rowType,
         createHiveInsertTableHandle(
@@ -178,7 +178,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             fileFormat,
             partitionedBy,
             bucketProperty,
-            flushPolicyFactory),
+            writerOptions),
         connectorQueryCtx_.get(),
         CommitStrategy::kNoCommit,
         connectorConfig_);
@@ -984,20 +984,42 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
   VELOX_ASSERT_THROW(dataSink->close(), "inject failure");
 }
 
+TEST_F(HiveDataSinkTest, insertTableHandleToString) {
+  const int32_t numBuckets = 4;
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      numBuckets,
+      std::vector<std::string>{"c5"},
+      std::vector<TypePtr>{VARCHAR()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{
+          std::make_shared<HiveSortingColumn>(
+              "c5", core::SortOrder{false, false})});
+  auto insertTableHandle = createHiveInsertTableHandle(
+      rowType_,
+      "/path/to/test",
+      dwio::common::FileFormat::DWRF,
+      {"c5", "c6"},
+      bucketProperty);
+  ASSERT_EQ(
+      insertTableHandle->toString(),
+      "HiveInsertTableHandle [dwrf zstd], [inputColumns: [ HiveColumnHandle [name: c0, columnType: Regular, dataType: BIGINT, requiredSubfields: [ ]] HiveColumnHandle [name: c1, columnType: Regular, dataType: INTEGER, requiredSubfields: [ ]] HiveColumnHandle [name: c2, columnType: Regular, dataType: SMALLINT, requiredSubfields: [ ]] HiveColumnHandle [name: c3, columnType: Regular, dataType: REAL, requiredSubfields: [ ]] HiveColumnHandle [name: c4, columnType: Regular, dataType: DOUBLE, requiredSubfields: [ ]] HiveColumnHandle [name: c5, columnType: PartitionKey, dataType: VARCHAR, requiredSubfields: [ ]] HiveColumnHandle [name: c6, columnType: PartitionKey, dataType: BOOLEAN, requiredSubfields: [ ]] ], locationHandle: LocationHandle [targetPath: /path/to/test, writePath: /path/to/test, tableType: kNew,, bucketProperty: \nHiveBucketProperty[<HIVE_COMPATIBLE 4>\n\tBucket Columns:\n\t\tc5\n\tBucket Types:\n\t\tVARCHAR\n\tSortedBy Columns:\n\t\t[COLUMN[c5] ORDER[DESC NULLS LAST]]\n]\n]");
+}
+
 TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
 #ifdef VELOX_ENABLE_PARQUET
   const auto outputDirectory = TempDirectoryPath::create();
   auto flushPolicyFactory = []() {
-    return std::make_unique<facebook::velox::parquet::DefaultFlushPolicy>(
-        1234, 0);
+    return std::make_unique<parquet::DefaultFlushPolicy>(1234, 0);
   };
+  auto writeOptions = std::make_shared<parquet::WriterOptions>();
+  writeOptions->flushPolicyFactory = flushPolicyFactory;
   auto dataSink = createDataSink(
       rowType_,
       outputDirectory->getPath(),
       dwio::common::FileFormat::PARQUET,
       {},
       nullptr,
-      flushPolicyFactory);
+      writeOptions);
 
   const int numBatches = 10;
   const auto vectors = createVectors(500, numBatches);
@@ -1023,15 +1045,18 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
 TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
   const auto outputDirectory = TempDirectoryPath::create();
   auto flushPolicyFactory = []() {
-    return std::make_unique<facebook::velox::dwrf::DefaultFlushPolicy>(1234, 0);
+    return std::make_unique<dwrf::DefaultFlushPolicy>(1234, 0);
   };
+
+  auto writeOptions = std::make_shared<dwrf::WriterOptions>();
+  writeOptions->flushPolicyFactory = flushPolicyFactory;
   auto dataSink = createDataSink(
       rowType_,
       outputDirectory->getPath(),
       dwio::common::FileFormat::DWRF,
       {},
       nullptr,
-      flushPolicyFactory);
+      writeOptions);
 
   const int numBatches = 10;
   const auto vectors = createVectors(500, numBatches);

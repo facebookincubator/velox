@@ -266,8 +266,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
-    const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>&
-        flushPolicyFactory) {
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
   return makeHiveInsertTableHandle(
       tableColumnNames,
       tableColumnTypes,
@@ -276,7 +275,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       std::move(locationHandle),
       tableStorageFormat,
       compressionKind,
-      flushPolicyFactory);
+      writerOptions);
 }
 
 // static
@@ -289,8 +288,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
-    const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>&
-        flushPolicyFactory) {
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -340,13 +338,15 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
   VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
 
+  std::unordered_map<std::string, std::string> serdeParameters = {};
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
       tableStorageFormat,
       bucketProperty,
       compressionKind,
-      flushPolicyFactory);
+      serdeParameters,
+      writerOptions);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>

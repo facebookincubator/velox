@@ -19,7 +19,6 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
-#include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
@@ -229,11 +228,6 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return compressionKind_;
   }
 
-  const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>&
-  flushPolicyFactory() const {
-    return flushPolicyFactory_;
-  }
-
   dwio::common::FileFormat tableStorageFormat() const {
     return tableStorageFormat_;
   }
@@ -272,8 +266,6 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const dwio::common::FileFormat tableStorageFormat_;
   const std::shared_ptr<HiveBucketProperty> bucketProperty_;
   const std::optional<common::CompressionKind> compressionKind_;
-  const std::function<std::unique_ptr<dwio::common::FlushPolicy>()>
-      flushPolicyFactory_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
 };
