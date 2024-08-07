@@ -22,6 +22,7 @@
 #include <folly/io/Cursor.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/encode/EncoderUtils.h"
 
 namespace facebook::velox::encoding {
 
@@ -88,15 +89,6 @@ constexpr const Base64::ReverseIndex kBase64UrlReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255};
 
-// Validate the character in charset with ReverseIndex table
-constexpr bool checkForwardIndex(
-    uint8_t index,
-    const Base64::Charset& charset,
-    const Base64::ReverseIndex& reverseIndex) {
-  return (reverseIndex[static_cast<uint8_t>(charset[index])] == index) &&
-      (index > 0 ? checkForwardIndex(index - 1, charset, reverseIndex) : true);
-}
-
 // Verify that for every entry in kBase64Charset, the corresponding entry
 // in kBase64ReverseIndexTable is correct.
 static_assert(
@@ -114,28 +106,6 @@ static_assert(
         kBase64UrlCharset,
         kBase64UrlReverseIndexTable),
     "kBase64UrlCharset has incorrect entries");
-
-// Searches for a character within a charset up to a certain index.
-constexpr bool findCharacterInCharset(
-    const Base64::Charset& charset,
-    uint8_t index,
-    const char targetChar) {
-  return index < charset.size() &&
-      ((charset[index] == targetChar) ||
-       findCharacterInCharset(charset, index + 1, targetChar));
-}
-
-// Checks the consistency of a reverse index mapping for a given character
-// set.
-constexpr bool checkReverseIndex(
-    uint8_t index,
-    const Base64::Charset& charset,
-    const Base64::ReverseIndex& reverseIndex) {
-  return (reverseIndex[index] == 255
-              ? !findCharacterInCharset(charset, 0, static_cast<char>(index))
-              : (charset[reverseIndex[index]] == index)) &&
-      (index > 0 ? checkReverseIndex(index - 1, charset, reverseIndex) : true);
-}
 
 // Verify that for every entry in kBase64ReverseIndexTable, the corresponding
 // entry in kBase64Charset is correct.
@@ -169,21 +139,6 @@ std::string Base64::encodeImpl(
 }
 
 // static
-size_t Base64::calculateEncodedSize(size_t inputSize, bool withPadding) {
-  if (inputSize == 0) {
-    return 0;
-  }
-
-  // Calculate the output size assuming that we are including padding.
-  size_t encodedSize = ((inputSize + 2) / 3) * 4;
-  if (!withPadding) {
-    // If the padding was not requested, subtract the padding bytes.
-    encodedSize -= (3 - (inputSize % 3)) % 3;
-  }
-  return encodedSize;
-}
-
-// static
 void Base64::encode(std::string_view input, std::string& output) {
   encodeImpl(input, kBase64Charset, true, output);
 }
@@ -206,7 +161,8 @@ void Base64::encodeImpl(
     return;
   }
 
-  size_t encodedSize = calculateEncodedSize(inputSize, includePadding);
+  size_t encodedSize = calculateEncodedSize(
+      inputSize, includePadding, kBinaryBlockByteSize, kEncodedBlockByteSize);
   output.reserve(encodedSize);
 
   auto inputIterator = input.begin();
@@ -277,59 +233,7 @@ Status Base64::decode(std::string_view input, std::string& output) {
 Expected<uint8_t> Base64::base64ReverseLookup(
     char encodedChar,
     const ReverseIndex& reverseIndex) {
-  auto reverseLookupValue = reverseIndex[static_cast<uint8_t>(encodedChar)];
-  if (reverseLookupValue >= 0x40) {
-    return folly::makeUnexpected(Status::UserError(
-        "decode() - invalid input string: invalid character '{}'",
-        encodedChar));
-  }
-  return reverseLookupValue;
-}
-
-// static
-Expected<size_t> Base64::calculateDecodedSize(
-    std::string_view input,
-    size_t& inputSize) {
-  if (inputSize == 0) {
-    return 0;
-  }
-
-  // Check if the input string is padded
-  if (isPadded(input)) {
-    // If padded, ensure that the string length is a multiple of the encoded
-    // block size
-    if (inputSize % kEncodedBlockByteSize != 0) {
-      return folly::makeUnexpected(
-          Status::UserError("Base64::decode() - invalid input string: "
-                            "string length is not a multiple of 4."));
-    }
-
-    auto decodedSize =
-        (inputSize * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-    auto paddingCount = numPadding(input);
-    inputSize -= paddingCount;
-
-    // Adjust the needed size by deducting the bytes corresponding to the
-    // padding from the calculated size.
-    return decodedSize -
-        ((paddingCount * kBinaryBlockByteSize) + (kEncodedBlockByteSize - 1)) /
-        kEncodedBlockByteSize;
-  }
-  // If not padded, Calculate extra bytes, if any
-  auto extraBytes = inputSize % kEncodedBlockByteSize;
-  auto decodedSize = (inputSize / kEncodedBlockByteSize) * kBinaryBlockByteSize;
-
-  // Adjust the needed size for extra bytes, if present
-  if (extraBytes) {
-    if (extraBytes == 1) {
-      return folly::makeUnexpected(Status::UserError(
-          "Base64::decode() - invalid input string: "
-          "string length cannot be 1 more than a multiple of 4."));
-    }
-    decodedSize += (extraBytes * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-  }
-
-  return decodedSize;
+  return reverseLookup(encodedChar, reverseIndex, 64);
 }
 
 // static
@@ -343,7 +247,8 @@ Status Base64::decodeImpl(
   }
 
   size_t inputSize = input.size();
-  auto decodedSize = calculateDecodedSize(input, inputSize);
+  auto decodedSize = calculateDecodedSize(
+      input, inputSize, kBinaryBlockByteSize, kEncodedBlockByteSize);
   if (decodedSize.hasError()) {
     return decodedSize.error();
   }
