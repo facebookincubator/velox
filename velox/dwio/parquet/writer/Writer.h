@@ -107,7 +107,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   std::optional<TimestampPrecision> parquetWriteTimestampUnit;
   /// Timestamp time zone for Parquet write through Arrow bridge.
   std::optional<std::string> parquetWriteTimestampTimeZone;
-  bool writeInt96AsTimestamp = false;
+  bool writeInt96AsTimestamp = true;
 
   // Parsing session and hive configs.
 
