@@ -48,8 +48,8 @@ target_link_libraries(
 
 add_executable(velox_dwio_parquet_reader_benchmark
                ParquetReaderBenchmarkMain.cpp)
-target_link_libraries(velox_dwio_parquet_reader_benchmark
-                      velox_dwio_parquet_reader_benchmark_lib)
+target_link_libraries(
+  velox_dwio_parquet_reader_benchmark velox_dwio_parquet_reader_benchmark_lib)
 
 add_executable(velox_dwio_parquet_reader_test ParquetReaderTest.cpp
                                               ParquetReaderBenchmarkTest.cpp)
@@ -57,8 +57,9 @@ add_test(
   NAME velox_dwio_parquet_reader_test
   COMMAND velox_dwio_parquet_reader_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(velox_dwio_parquet_reader_test
-                      velox_dwio_parquet_reader_benchmark_lib velox_link_libs)
+target_link_libraries(
+  velox_dwio_parquet_reader_test velox_dwio_parquet_reader_benchmark_lib
+  velox_link_libs)
 
 add_executable(velox_dwio_parquet_structure_decoder_test
                NestedStructureDecoderTest.cpp)
