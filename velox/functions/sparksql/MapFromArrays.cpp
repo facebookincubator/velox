@@ -17,7 +17,7 @@
 #include "velox/functions/lib/Map.h"
 
 namespace facebook::velox::functions {
-
+namespace {
 std::vector<std::shared_ptr<exec::FunctionSignature>> mapFromArraysSignatures() {
     // array(K), array(V) -> map(K,V)
     return {exec::FunctionSignatureBuilder()
@@ -43,6 +43,7 @@ std::unique_ptr<exec::VectorFunction> createMapFromArrayFunction(
     VELOX_FAIL("Unknown mapKeyDedupPolicy: {}", mapKeyDedupPolicy);
   }
 }
+} // namespace
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_map_from_arrays,

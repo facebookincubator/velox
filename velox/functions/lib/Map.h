@@ -19,10 +19,6 @@
 
 namespace facebook::velox::functions {
 
-static const char* kNullKeyErrorMessage = "map key cannot be null";
-static const char* kIndeterminateKeyErrorMessage =
-    "map key cannot be indeterminate";
-
 template <bool AllowDuplicateKeys>
 class MapFunction : public exec::VectorFunction {
  public:
@@ -41,8 +37,6 @@ class MapFunction : public exec::VectorFunction {
     auto decodedKeys = decodedArgs.at(0);
     auto decodedValues = decodedArgs.at(1);
 
-    static const char* kArrayLengthsMismatch =
-        "Key and value arrays must be the same length";
     auto checkNullsInKey =
         [&](const auto& keysElements, auto offset, auto size) {
           for (auto i = 0; i < size; ++i) {
@@ -287,6 +281,12 @@ class MapFunction : public exec::VectorFunction {
   }
 
  private:
+  const char* kNullKeyErrorMessage = "map key cannot be null";
+  const char* kIndeterminateKeyErrorMessage =
+    "map key cannot be indeterminate";
+  const char* kArrayLengthsMismatch =
+    "Key and value arrays must be the same length";
+
   // Can only take the fast path if keys and values have an equal
   // number of arrays and the offsets and sizes of these arrays match
   // 1:1. The map must be well formed for all elements, also ones not

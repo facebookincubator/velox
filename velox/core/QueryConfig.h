@@ -364,12 +364,12 @@ class QueryConfig {
   /// derived using micro-benchmarking.
   static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
 
-  // The policy to deduplicate map keys in builtin function: CreateMap,
-  // MapFromArrays, MapFromEntries, StringToMap, MapConcat and TransformKeys.
-  // When EXCEPTION, the query fails if duplicated map keys are detected. When
-  // LAST_WIN, the map key that is inserted at last takes precedence.
+  /// The policy to deduplicate map keys in Spark builtin functions: map,
+  /// map_from_arrays, map_from_entries, str_to_map, map_concat etc.
+  /// When set to EXCEPTION, the query fails if duplicated map keys are detected.
+  /// When set to LAST_WIN, the map key that is inserted at last takes precedence.
   static constexpr const char* kSparkMapKeyDedupPolicy =
-      "spark.sql.mapKeyDedupPolicy";
+      "spark.map_key_dedup_policy";
 
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
@@ -736,7 +736,7 @@ class QueryConfig {
   }
 
   std::string sparkMapKeyDedupPolicy() const {
-    std::string res = get<std::string>(kSparkMapKeyDedupPolicy, "EXCEPTION");
+    std::string policy = get<std::string>(kSparkMapKeyDedupPolicy, "EXCEPTION");
     std::transform(res.begin(), res.end(), res.begin(), ::toupper);
     return res;
   }
