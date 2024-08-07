@@ -346,7 +346,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           : sizeof(double);
       auto numBytes = dictionary_.numValues * typeSize;
       if (type_->type()->isShortDecimal() &&
-           parquetType == thrift::Type::INT32) {
+          parquetType == thrift::Type::INT32) {
         auto veloxTypeLength = type_->type()->cppSizeInBytes();
         auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
         dictionary_.values =
