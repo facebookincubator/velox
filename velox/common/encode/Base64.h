@@ -22,6 +22,7 @@
 #include <string>
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Status.h"
+#include "velox/common/encode/EncoderUtils.h"
 
 namespace facebook::velox::encoding {
 
@@ -108,16 +109,6 @@ class Base64 {
       std::string_view input,
       std::string& output,
       const ReverseIndex& reverseIndex);
-
-  // Returns the actual size of the decoded data. Will also remove the padding
-  // length from the 'inputSize'.
-  static Status calculateDecodedSize(
-      std::string_view input,
-      size_t& inputSize,
-      size_t& decodedSize);
-
-  // Calculates the encoded size based on input size.
-  static size_t calculateEncodedSize(size_t inputSize, bool withPadding = true);
 
   VELOX_FRIEND_TEST(Base64Test, isPadded);
   VELOX_FRIEND_TEST(Base64Test, numPadding);

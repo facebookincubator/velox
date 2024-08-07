@@ -55,7 +55,7 @@ TEST_F(Base64Test, calculateDecodedSize) {
     size_t encoded_size = initialEncodedSize;
     size_t decoded_size = 0;
     Status status =
-        Base64::calculateDecodedSize(encodedString, encoded_size, decoded_size);
+        calculateDecodedSize(encodedString, encoded_size, decoded_size, 3, 4);
 
     if (expectedStatus.ok()) {
       EXPECT_EQ(Status::OK(), status);
@@ -75,7 +75,7 @@ TEST_F(Base64Test, calculateDecodedSize) {
       0,
       0,
       Status::UserError(
-          "Base64::decode() - invalid input string: string length is not a multiple of 4."));
+          "decode() - invalid input string: string length is not a multiple of 4."));
   checkDecodedSize("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4=", 32, 31, 23);
   checkDecodedSize("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4", 31, 31, 23);
   checkDecodedSize("MTIzNDU2Nzg5MA==", 16, 14, 10);
