@@ -921,8 +921,8 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
 TEST_F(ParquetTableScanTest, timestampINT64millis) {
   testTimestampINT64(
       "int64_millis_dictionary.parquet", TimestampPrecision::kMilliseconds);
-  //testTimestampINT64(
-  //    "int64_millis_plain.parquet", TimestampPrecision::kMilliseconds);
+  testTimestampINT64(
+      "int64_millis_plain.parquet", TimestampPrecision::kMilliseconds);
 }
 
 TEST_F(ParquetTableScanTest, timestampINT64micros) {
@@ -930,6 +930,78 @@ TEST_F(ParquetTableScanTest, timestampINT64micros) {
       "int64_micros_dictionary.parquet", TimestampPrecision::kMicroseconds);
   testTimestampINT64(
       "int64_micros_plain.parquet", TimestampPrecision::kMicroseconds);
+}
+
+TEST_F(ParquetTableScanTest, timestampINT64Filter) {
+  std::vector<Timestamp> rawDataMillis = {
+      Timestamp(0, 0),
+      Timestamp(0, 1000000),
+      Timestamp(-1, 999000000),
+      Timestamp(1, 0),
+      Timestamp(-1, 0),
+      Timestamp(1, 1000000),
+      Timestamp(-2, 999000000),
+      Timestamp(0, 999000000),
+      Timestamp(-1, 1000000),
+      Timestamp(1000, 0),
+      Timestamp(-1000, 0),
+      Timestamp(1000, 1000000),
+      Timestamp(-1001, 999000000),
+      Timestamp(99, 999000000),
+      Timestamp(-100, 1000000)};
+
+  auto a = makeFlatVector<Timestamp>(
+      60, [&](auto row) { return rawDataMillis[row / 4]; });
+
+  auto expected = makeRowVector({"time"}, {a});
+  createDuckDbTable("expected", {expected});
+
+  auto vector = makeArrayVector<Timestamp>({{}});
+
+  loadData(
+      getExampleFilePath("int64_millis_dictionary.parquet"),
+      ROW({"time"}, {TIMESTAMP()}),
+      makeRowVector(
+          {"time"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter(
+      {"time"},
+      {},
+      "time < TIMESTAMP '1970-01-01 00:00:00'",
+      "SELECT time from expected where time < TIMESTAMP '1970-01-01 00:00:00'");
+
+  assertSelectWithFilter(
+      {"time"},
+      {},
+      "time <= TIMESTAMP '1970-01-01 00:00:00'",
+      "SELECT time from expected where time <= TIMESTAMP '1970-01-01 00:00:00'");
+
+  assertSelectWithFilter(
+      {"time"},
+      {},
+      "time > TIMESTAMP '1970-01-01 00:00:00'",
+      "SELECT time from expected where time > TIMESTAMP '1970-01-01 00:00:00'");
+
+  assertSelectWithFilter(
+      {"time"},
+      {},
+      "time >= TIMESTAMP '1970-01-01 00:00:00'",
+      "SELECT time from expected where time >= TIMESTAMP '1970-01-01 00:00:00'");
+
+  assertSelectWithFilter(
+      {"time"},
+      {},
+      "time == TIMESTAMP '1970-01-01 00:00:00'",
+      "SELECT time from expected where time == TIMESTAMP '1970-01-01 00:00:00'");
+
+  assertSelectWithFilter(
+      {"time"},
+      {},
+      "time != TIMESTAMP '1970-01-01 00:00:00'",
+      "SELECT time from expected where time != TIMESTAMP '1970-01-01 00:00:00'");
 }
 
 TEST_F(ParquetTableScanTest, timestampINT64BackwardCompatible) {

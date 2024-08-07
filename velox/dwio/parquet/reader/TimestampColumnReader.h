@@ -21,9 +21,9 @@
 
 namespace facebook::velox::parquet {
 
-class TimestampColumnReader : public IntegerColumnReader {
+class TimestampINT96ColumnReader : public IntegerColumnReader {
  public:
-  TimestampColumnReader(
+  TimestampINT96ColumnReader(
       const TypePtr& requestedType,
       std::shared_ptr<const dwio::common::TypeWithId> fileType,
       ParquetParams& params,
@@ -89,7 +89,8 @@ class TimestampINT64ColumnReader : public IntegerColumnReader {
       std::shared_ptr<const dwio::common::TypeWithId> fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec)
-      : IntegerColumnReader(BIGINT(), fileType, params, scanSpec) {
+      : IntegerColumnReader(requestedType, fileType, params, scanSpec),
+        timestampPrecision_(params.timestampPrecision()) {
     auto& parquetFileType = static_cast<const ParquetTypeWithId&>(*fileType_);
     auto logicalTypeOpt = parquetFileType.logicalType_;
     VELOX_CHECK(logicalTypeOpt.has_value());
@@ -102,9 +103,9 @@ class TimestampINT64ColumnReader : public IntegerColumnReader {
     }
 
     if (logicalType.TIMESTAMP.unit.__isset.MICROS) {
-      sourcePrecision_ = TimestampPrecision::kMicroseconds;
+      parquetTimestampPrecision_ = TimestampPrecision::kMicroseconds;
     } else if (logicalType.TIMESTAMP.unit.__isset.MILLIS) {
-      sourcePrecision_ = TimestampPrecision::kMilliseconds;
+      parquetTimestampPrecision_ = TimestampPrecision::kMilliseconds;
     } else {
       VELOX_NYI("Nano Timestamp unit is not supported.");
     }
@@ -114,41 +115,87 @@ class TimestampINT64ColumnReader : public IntegerColumnReader {
     return false;
   }
 
-  void getValues(RowSet rows, VectorPtr* result) override {
-    // Upcast to int128_t here so we have enough memory already in vector to
-    // hold Timestamp (16bit) vs int64_t (8bit)
-    getFlatValues<int64_t, int128_t>(rows, result, requestedType_);
+  void
+  processNulls(const bool isNull, const RowSet rows, const uint64_t* rawNulls) {
+    if (!rawNulls) {
+      return;
+    }
+    auto rawTs = values_->asMutable<Timestamp>();
 
-    VectorPtr resultVector = *result;
-    auto intValues = resultVector->asUnchecked<FlatVector<int128_t>>();
-
-    auto rawValues =
-        resultVector->asUnchecked<FlatVector<int128_t>>()->mutableRawValues();
-
-    Timestamp timestamp;
-    for (vector_size_t i = 0; i < numValues_; ++i) {
-      if (intValues->isNullAt(i))
-        continue;
-
-      const auto timestampInt = intValues->valueAt(i);
-      std::cout << static_cast<int64_t>(timestampInt) << std::endl;
-      Timestamp timestamp;
-      if (sourcePrecision_ == TimestampPrecision::kMicroseconds) {
-        timestamp = Timestamp::fromMicros(timestampInt);
+    returnReaderNulls_ = false;
+    anyNulls_ = !isNull;
+    allNull_ = isNull;
+    vector_size_t idx = 0;
+    for (vector_size_t i = 0; i < numValues_; i++) {
+      if (isNull) {
+        if (bits::isBitNull(rawNulls, i)) {
+          bits::setNull(rawResultNulls_, idx);
+          addOutputRow(rows[i]);
+          idx++;
+        }
       } else {
-        timestamp = Timestamp::fromMillis(timestampInt);
+        if (!bits::isBitNull(rawNulls, i)) {
+          bits::setNull(rawResultNulls_, idx, false);
+          rawTs[idx] = rawTs[i];
+          addOutputRow(rows[i]);
+          idx++;
+        }
       }
+    }
+  }
 
-      memcpy(&rawValues[i], &timestamp, sizeof(int128_t));
+  void processFilter(
+      const common::Filter* filter,
+      const RowSet rows,
+      const uint64_t* rawNulls) {
+    auto rawTs = values_->asMutable<Timestamp>();
+
+    returnReaderNulls_ = false;
+    anyNulls_ = false;
+    allNull_ = true;
+    vector_size_t idx = 0;
+    for (vector_size_t i = 0; i < numValues_; i++) {
+      if (rawNulls && bits::isBitNull(rawNulls, i)) {
+        if (filter->testNull()) {
+          bits::setNull(rawResultNulls_, idx);
+          addOutputRow(rows[i]);
+          anyNulls_ = true;
+          idx++;
+        }
+      } else {
+        if (filter->testTimestamp(rawTs[i])) {
+          if (rawNulls) {
+            bits::setNull(rawResultNulls_, idx, false);
+          }
+          rawTs[idx] = rawTs[i];
+          addOutputRow(rows[i]);
+          allNull_ = false;
+          idx++;
+        }
+      }
+    }
+  }
+
+  void getValues(RowSet rows, VectorPtr* result) override {
+    getFlatValues<Timestamp, Timestamp>(rows, result, requestedType_);
+  }
+
+  Timestamp adjustToPrecision(
+      const Timestamp& timestamp,
+      TimestampPrecision precision) {
+    auto nano = timestamp.getNanos();
+    switch (precision) {
+      case TimestampPrecision::kMilliseconds:
+        nano = nano / 1'000'000 * 1'000'000;
+        break;
+      case TimestampPrecision::kMicroseconds:
+        nano = nano / 1'000 * 1'000;
+        break;
+      case TimestampPrecision::kNanoseconds:
+        break;
     }
 
-    *result = std::make_shared<FlatVector<Timestamp>>(
-        &memoryPool_,
-        TIMESTAMP(),
-        resultNulls(),
-        numValues_,
-        intValues->values(),
-        std::move(stringBuffers_));
+    return Timestamp(timestamp.getSeconds(), nano);
   }
 
   void read(
@@ -156,13 +203,67 @@ class TimestampINT64ColumnReader : public IntegerColumnReader {
       RowSet rows,
       const uint64_t* /*incomingNulls*/) override {
     auto& data = formatData_->as<ParquetData>();
-    // Use int128_t as a workaroud. Timestamp in Velox is of 16-byte length.
     prepareRead<int64_t>(offset, rows, nullptr);
+
+    // Remove filter so that we can do filtering here once data is represented
+    // as timestamp type
+    const auto filter = scanSpec_->filter()->clone();
+    scanSpec_->setFilter(nullptr);
+
     readCommon<IntegerColumnReader, true>(rows);
+
+    auto tsValues =
+        AlignedBuffer::allocate<Timestamp>(numValues_, &memoryPool_);
+    auto rawTs = tsValues->asMutable<Timestamp>();
+    auto rawTsInt64 = values_->asMutable<int64_t>();
+    const auto rawNulls =
+        resultNulls() ? resultNulls()->as<uint64_t>() : nullptr;
+
+    Timestamp timestamp;
+    for (vector_size_t i = 0; i < numValues_; i++) {
+      if (!rawNulls || !bits::isBitNull(rawNulls, i)) {
+        if (parquetTimestampPrecision_ == TimestampPrecision::kMicroseconds) {
+          timestamp = Timestamp::fromMicros(rawTsInt64[i]);
+        } else {
+          timestamp = Timestamp::fromMillis(rawTsInt64[i]);
+        }
+
+        rawTs[i] = adjustToPrecision(timestamp, timestampPrecision_);
+      }
+    }
+    values_ = tsValues;
+    rawValues_ = values_->asMutable<char>();
+
+    switch (
+        !filter ||
+                (filter->kind() == common::FilterKind::kIsNotNull && !rawNulls)
+            ? common::FilterKind::kAlwaysTrue
+            : filter->kind()) {
+      case common::FilterKind::kAlwaysTrue:
+        // Simply add all rows to output.
+        for (vector_size_t i = 0; i < numValues_; i++) {
+          addOutputRow(rows[i]);
+        }
+        break;
+      case common::FilterKind::kIsNull:
+        processNulls(true, rows, rawNulls);
+        break;
+      case common::FilterKind::kIsNotNull:
+        processNulls(false, rows, rawNulls);
+        break;
+      case common::FilterKind::kTimestampRange:
+      case common::FilterKind::kMultiRange:
+        processFilter(filter.get(), rows, rawNulls);
+        break;
+      default:
+        VELOX_UNSUPPORTED("Unsupported filter.");
+    }
+
     readOffset_ += rows.back() + 1;
   }
 
  private:
-  TimestampPrecision sourcePrecision_;
+  TimestampPrecision parquetTimestampPrecision_;
+  TimestampPrecision timestampPrecision_;
 };
 } // namespace facebook::velox::parquet
