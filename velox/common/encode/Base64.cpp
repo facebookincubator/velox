@@ -85,15 +85,6 @@ constexpr const Base64::ReverseIndex kBase64UrlReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255};
 
-// Validate the character in charset with ReverseIndex table
-constexpr bool checkForwardIndex(
-    uint8_t index,
-    const Base64::Charset& charset,
-    const Base64::ReverseIndex& reverseIndex) {
-  return (reverseIndex[static_cast<uint8_t>(charset[index])] == index) &&
-      (index > 0 ? checkForwardIndex(index - 1, charset, reverseIndex) : true);
-}
-
 // Verify that for every entry in kBase64Charset, the corresponding entry
 // in kBase64ReverseIndexTable is correct.
 static_assert(
@@ -111,28 +102,6 @@ static_assert(
         kBase64UrlCharset,
         kBase64UrlReverseIndexTable),
     "kBase64UrlCharset has incorrect entries");
-
-// Searches for a character within a charset up to a certain index.
-constexpr bool findCharacterInCharset(
-    const Base64::Charset& charset,
-    uint8_t index,
-    const char targetChar) {
-  return index < charset.size() &&
-      ((charset[index] == targetChar) ||
-       findCharacterInCharset(charset, index + 1, targetChar));
-}
-
-// Checks the consistency of a reverse index mapping for a given character
-// set.
-constexpr bool checkReverseIndex(
-    uint8_t index,
-    const Base64::Charset& charset,
-    const Base64::ReverseIndex& reverseIndex) {
-  return (reverseIndex[index] == 255
-              ? !findCharacterInCharset(charset, 0, static_cast<char>(index))
-              : (charset[reverseIndex[index]] == index)) &&
-      (index > 0 ? checkReverseIndex(index - 1, charset, reverseIndex) : true);
-}
 
 // Verify that for every entry in kBase64ReverseIndexTable, the corresponding
 // entry in kBase64Charset is correct.
@@ -167,21 +136,6 @@ std::string Base64::encodeImpl(
 }
 
 // static
-size_t Base64::calculateEncodedSize(size_t inputSize, bool includePadding) {
-  if (inputSize == 0) {
-    return 0;
-  }
-
-  // Calculate the output size assuming that we are including padding.
-  size_t encodedSize = ((inputSize + 2) / 3) * 4;
-  if (!includePadding) {
-    // If the padding was not requested, subtract the padding bytes.
-    encodedSize -= (3 - (inputSize % 3)) % 3;
-  }
-  return encodedSize;
-}
-
-// static
 Status Base64::encode(std::string_view input, std::string& output) {
   return encodeImpl(input, kBase64Charset, true, output);
 }
@@ -205,7 +159,8 @@ Status Base64::encodeImpl(
   }
 
   // Calculate the output size and resize the string beforehand
-  size_t outputSize = calculateEncodedSize(inputSize, includePadding);
+  size_t outputSize = calculateEncodedSize(
+      inputSize, includePadding, kBinaryBlockByteSize, kEncodedBlockByteSize);
   output.resize(outputSize); // Resize the output string to the required size
 
   // Use a pointer to write into the pre-allocated buffer
@@ -337,65 +292,12 @@ uint8_t Base64::base64ReverseLookup(
     char encodedChar,
     const ReverseIndex& reverseIndex,
     Status& status) {
-  auto reverseLookupValue = reverseIndex[static_cast<uint8_t>(encodedChar)];
-  if (reverseLookupValue >= 0x40) {
-    status = Status::UserError(
-        "decode() - invalid input string: invalid characters");
-  }
-  return reverseLookupValue;
+  return reverseLookup(encodedChar, reverseIndex, status, kCharsetSize);
 }
 
 // static
 Status Base64::decode(std::string_view input, std::string& output) {
   return decodeImpl(input, output, kBase64ReverseIndexTable);
-}
-
-// static
-Status Base64::calculateDecodedSize(
-    std::string_view input,
-    size_t& inputSize,
-    size_t& decodedSize) {
-  if (inputSize == 0) {
-    decodedSize = 0;
-    return Status::OK();
-  }
-
-  // Check if the input string is padded
-  if (isPadded(input)) {
-    // If padded, ensure that the string length is a multiple of the encoded
-    // block size
-    if (inputSize % kEncodedBlockByteSize != 0) {
-      return Status::UserError(
-          "Base64::decode() - invalid input string: "
-          "string length is not a multiple of 4.");
-    }
-
-    decodedSize = (inputSize * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-    auto paddingCount = numPadding(input);
-    inputSize -= paddingCount;
-
-    // Adjust the needed size by deducting the bytes corresponding to the
-    // padding from the calculated size.
-    decodedSize -=
-        ((paddingCount * kBinaryBlockByteSize) + (kEncodedBlockByteSize - 1)) /
-        kEncodedBlockByteSize;
-    return Status::OK();
-  }
-  // If not padded, calculate extra bytes, if any
-  auto extraBytes = inputSize % kEncodedBlockByteSize;
-  decodedSize = (inputSize / kEncodedBlockByteSize) * kBinaryBlockByteSize;
-
-  // Adjust the needed size for extra bytes, if present
-  if (extraBytes) {
-    if (extraBytes == 1) {
-      return Status::UserError(
-          "Base64::decode() - invalid input string: "
-          "string length cannot be 1 more than a multiple of 4.");
-    }
-    decodedSize += (extraBytes * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-  }
-
-  return Status::OK();
 }
 
 // static
@@ -411,7 +313,12 @@ Status Base64::decodeImpl(
 
   // Calculate the decoded size based on the input size
   size_t decodedSize;
-  auto status = calculateDecodedSize(input, inputSize, decodedSize);
+  auto status = calculateDecodedSize(
+      input,
+      inputSize,
+      decodedSize,
+      kBinaryBlockByteSize,
+      kEncodedBlockByteSize);
   if (!status.ok()) {
     return status;
   }
