@@ -146,8 +146,8 @@ TEST_F(ModeAggregateTest, groupByBoolean) {
 TEST_F(ModeAggregateTest, groupByTimestamp) {
   vector_size_t num = 10;
 
-  auto vectorKey = makeFlatVector<int32_t>(
-      num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
+  auto vectorKey = makeNullableFlatVector<int32_t>(
+      {std::nullopt, 1, 2, 0, std::nullopt, 2, 0, 1, std::nullopt, 0});
   auto vectorInput = makeFlatVector<Timestamp>(
       num,
       [](vector_size_t row) { return Timestamp{row % 2, 17'123'456}; },
@@ -167,8 +167,8 @@ TEST_F(ModeAggregateTest, groupByTimestamp) {
 TEST_F(ModeAggregateTest, groupByDate) {
   vector_size_t num = 10;
 
-  auto vectorKey = makeFlatVector<int32_t>(
-      num, [](vector_size_t row) { return row % 3; }, nullEvery(4));
+  auto vectorKey = makeNullableFlatVector<int32_t>(
+      {std::nullopt, 1, 2, 0, std::nullopt, 2, 0, 1, std::nullopt, 0});
   auto vectorInput = makeFlatVector<int32_t>(
       num, [](vector_size_t row) { return row % 2; }, nullEvery(5), DATE());
 
