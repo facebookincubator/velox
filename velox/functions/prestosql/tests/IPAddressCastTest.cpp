@@ -32,8 +32,8 @@ class IPAddressCastTest : public functions::test::FunctionBaseTest {
 
   std::optional<int128_t> castFromVarbinary(
       const std::optional<std::string> input) {
-    auto result = evaluateOnce<int128_t>(
-        "cast(from_hex(c0) as ipaddress)", input);
+    auto result =
+        evaluateOnce<int128_t>("cast(from_hex(c0) as ipaddress)", input);
     return result;
   }
 
@@ -45,12 +45,12 @@ class IPAddressCastTest : public functions::test::FunctionBaseTest {
   }
 };
 
-int128_t stringToInt128(std::string value){
-    int128_t res = 0;
-    for(char c : value){
-      res = res * 10 + c - '0';
-    }
-    return res;
+int128_t stringToInt128(std::string value) {
+  int128_t res = 0;
+  for (char c : value) {
+    res = res * 10 + c - '0';
+  }
+  return res;
 }
 
 TEST_F(IPAddressCastTest, castToVarchar) {
@@ -79,7 +79,9 @@ TEST_F(IPAddressCastTest, castToVarchar) {
 }
 
 TEST_F(IPAddressCastTest, castFromVarbinary) {
-  EXPECT_EQ(castFromVarbinary("00000000000000000000ffff01020304"), stringToInt128("281470698652420"));
+  EXPECT_EQ(
+      castFromVarbinary("00000000000000000000ffff01020304"),
+      stringToInt128("281470698652420"));
   EXPECT_EQ(castFromVarbinary("01020304"), stringToInt128("281470698652420"));
   EXPECT_EQ(castFromVarbinary("c0a80000"), stringToInt128("281473913978880"));
   EXPECT_EQ(

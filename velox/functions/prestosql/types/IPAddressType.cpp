@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include <folly/IPAddress.h>
 #include "velox/expression/CastExpr.h"
-#include "velox/functions/prestosql/types/IPAddressType.h"
 
 static constexpr int kIPV4AddressBytes = 4;
 static constexpr int kIPV4ToV6FFIndex = 10;
@@ -187,7 +187,7 @@ class IPAddressCastOperator : public exec::CastOperator {
               row,
               Status::UserError(
                   "Invalid IP address binary length: {}",
-                  ipAddressBinary.size()))  ;
+                  ipAddressBinary.size()));
         }
         return;
       }
