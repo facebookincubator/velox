@@ -80,9 +80,42 @@ class WindowFuzzer : public AggregationFuzzerBase {
  private:
   void addWindowFunctionSignatures(const WindowFunctionMap& signatureMap);
 
+  std::tuple<
+      core::WindowNode::WindowType,
+      core::WindowNode::BoundType,
+      core::WindowNode::BoundType>
+  generateFrameClause();
+
+  template <TypeKind TKind>
+  void addOffsetColumnsToInput(
+      std::vector<RowVectorPtr>& input,
+      core::WindowNode::BoundType startBoundType,
+      core::WindowNode::BoundType endBoundType,
+      SortingKeyAndOrder& orderByKey);
+
+  // Add offset column to input data for k-range frames. Returns the value of K
+  // as a string.
+  template <typename T>
+  const std::string addKRangeOffsetColumnToInput(
+      std::vector<RowVectorPtr>& input,
+      core::WindowNode::BoundType frameBoundType,
+      std::string& columnName,
+      SortingKeyAndOrder& orderByKey);
+
+  template <typename T>
+  T genOffsetAtIdx(
+      const T& offsetCol,
+      T offsetValue,
+      core::WindowNode::BoundType frameBoundType,
+      core::SortOrder sortOrder);
+
   // Return a randomly generated frame clause string together with a boolean
   // flag indicating whether it is a ROWS frame.
-  std::tuple<std::string, bool> generateFrameClause();
+  std::string frameClauseString(
+      core::WindowNode::WindowType windowType,
+      core::WindowNode::BoundType startBoundType,
+      core::WindowNode::BoundType endBoundType,
+      bool sqlFrame = false);
 
   std::string generateOrderByClause(
       const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders);
@@ -95,7 +128,9 @@ class WindowFuzzer : public AggregationFuzzerBase {
   std::vector<SortingKeyAndOrder> generateSortingKeysAndOrders(
       const std::string& prefix,
       std::vector<std::string>& names,
-      std::vector<TypePtr>& types);
+      std::vector<TypePtr>& types,
+      const bool hasRowNumberKey = true,
+      const bool isKRangeFrame = false);
 
   // Return 'true' if query plans failed.
   bool verifyWindow(
@@ -106,7 +141,8 @@ class WindowFuzzer : public AggregationFuzzerBase {
       const std::vector<RowVectorPtr>& input,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier,
-      bool enableWindowVerification);
+      bool enableWindowVerification,
+      const std::string& prestoFrameClause);
 
   void testAlternativePlans(
       const std::vector<std::string>& partitionKeys,
@@ -125,6 +161,27 @@ class WindowFuzzer : public AggregationFuzzerBase {
 
     void print(size_t numIterations) const;
   } stats_;
+
+  // For k PRECEDING/FOLLOWING frame bounds in RANGE mode, where k is constant,
+  // Velox uses a column with the pre-computed offset values as the frame bound,
+  // instead of the constant k value which is used by Presto. This vector
+  // represents the constant value of the frame bound for such frames, with each
+  // pair in the vector corresponding to a window in the plan node. A pair is
+  // used to represent the frame start and end bounds since they both could be
+  // of type k-RANGE. When Presto is used as reference DB for verification, the
+  // frame bound values are obtained from this variable. Eg: If the window plan
+  // node operator being tested by the window fuzzer has two window operators
+  // i.e window({"sum(c) OVER (ORDER BY s0 FRAME BETWEEN k2 PRECEDING AND k3
+  // FOLLOWING)", "avg(c) OVER (ORDER BY s1 DESC RANGE BETWEEN UNBOUNDED
+  // PRECEDING AND k9 FOLLOWING)"}); where the offset columns k2, k3, and k9 are
+  // pre-computed as k2[row] = s0[row] - 2, k3[row] = s0[row] + 3, k9[row] =
+  // s1[row]- 9, the variable prestoFrames_ corresponding to this window plan
+  // node would look be: std::vector{ std::pair{"2", "3"}, std::pair{"", "3"} },
+  // and the frame clause in Presto, corresponding to the two window operators
+  // would be RANGE BETWEEN 2 PRECEDING AND 3 FOLLOWING, RANGE BETWEEN
+  // UNBOUNDED PRECEDING AND 9 FOLLOWING. This frame clause can be constructed
+  // by looking up the frame bound values from this variable.
+  std::vector<std::pair<std::string, std::string>> prestoFrames_;
 };
 
 /// Runs the window fuzzer.

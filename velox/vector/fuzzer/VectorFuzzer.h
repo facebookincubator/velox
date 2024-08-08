@@ -33,6 +33,23 @@ enum UTF8CharList {
   MATHEMATICAL_SYMBOLS = 3 // Mathematical Symbols.
 };
 
+// @TODO Add decimal TypeKinds to randType.
+// Refer https://github.com/facebookincubator/velox/issues/3942
+static std::vector<TypePtr> kScalarTypes{
+    BOOLEAN(),
+    TINYINT(),
+    SMALLINT(),
+    INTEGER(),
+    BIGINT(),
+    REAL(),
+    DOUBLE(),
+    VARCHAR(),
+    VARBINARY(),
+    TIMESTAMP(),
+    DATE(),
+    INTERVAL_DAY_TIME(),
+};
+
 /// VectorFuzzer is a helper class that generates randomized vectors and their
 /// data for testing, with a high degree of entropy.
 ///

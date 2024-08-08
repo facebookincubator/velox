@@ -180,11 +180,18 @@ class AggregationFuzzerBase {
       std::vector<TypePtr>& types);
 
   // Similar to generateKeys, but restricts types to orderable types (i.e. no
-  // maps).
+  // maps). For range frames with k preceding/following frame bounds:
+  // 1. hasRowNumberKey indicates whether the row_number column should be used
+  //    as the sorting key. The row_number key is added for consistent result
+  //    verification when the function is order dependent or when the frame is
+  //    of ROWS type.
+  // 2. rangeFrame must be set to true.
   std::vector<std::string> generateSortingKeys(
       const std::string& prefix,
       std::vector<std::string>& names,
-      std::vector<TypePtr>& types);
+      std::vector<TypePtr>& types,
+      bool hasRowNumberKey = true,
+      bool rangeFrame = false);
 
   std::pair<CallableSignature, SignatureStats&> pickSignature();
 
@@ -197,11 +204,12 @@ class AggregationFuzzerBase {
   // child named "row_number" of BIGINT row numbers that differentiates every
   // row. Row numbers start from 0. This additional input vector is needed for
   // result verification of window aggregations.
-  std::vector<RowVectorPtr> generateInputDataWithRowNumber(
+  std::vector<RowVectorPtr> generateInputDataForWindowFuzzer(
       std::vector<std::string> names,
       std::vector<TypePtr> types,
       const std::vector<std::string>& partitionKeys,
-      const CallableSignature& signature);
+      const CallableSignature& signature,
+      const bool hasRowNumberKey = true);
 
   velox::fuzzer::ResultOrError execute(
       const core::PlanNodePtr& plan,
