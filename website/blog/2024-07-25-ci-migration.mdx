@@ -29,7 +29,7 @@ When a pull request is submitted to Velox, the following jobs are executed:
 3. Ensure Velox builds under its various configurations
     1. Debug / Release builds
     2. Build default Velox build
-    3. Build Velox with support for Parquet, Arrowm and External Adapters (S3/HDFS/GCS etc.)
+    3. Build Velox with support for Parquet, Arrow and External Adapters (S3/HDFS/GCS etc.)
     4. PyVelox builds
 4. Run prerequisite tests 
     1. Unit Tests
@@ -49,7 +49,7 @@ When a pull request is submitted to Velox, the following jobs are executed:
 
 ## Velox CI Optimization
 
-Previous implementation of CI in CircleCI grew organically and was unoptimized, resulting in long build times, and also significantly costlier. This opportunity to migrate to Github Actions helped to take a holistic view of CI deployments and actively optimized to reduce build times and CI spend. Note however, that there has been continued investment in reducing test times to further improve Velox reliability, stability and developer experience. Some of the optimizations completed are below:  
+Previous implementation of CI in CircleCI grew organically and was unoptimized, resulting in long build times, and also significantly costlier. This opportunity to migrate to Github Actions helped to take a holistic view of CI deployments and actively optimized to reduce build times and CI spend. Note however, that there has been continued investment in reducing test times to further improve Velox reliability, stability and developer experience. Some of the optimizations completed are:  
 
 1. **Persisting build artifacts across builds**: During every build, the object files and binaries produced are cached. In addition to this, artifacts such as scalar function signatures and aggregate function signatures are produced. These signatures are used to compare with the baseline version, by comparing against the changes in the current PR to determine if the current changes are backwards incompatible or bias the newly added changes. Using a stash to persist these artifacts helps save one build cycle.
 
