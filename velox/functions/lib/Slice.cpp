@@ -211,11 +211,10 @@ class SliceFunction : public exec::VectorFunction {
     return std::min(endIndex - start, length);
   }
 };
-} // namespace
 
 // @param kind The type kind of start and length.
 void registerSliceFunction(const std::string& prefix, TypeKind kind) {
-  auto kindName = mapTypeKindToName(kind);
+  auto kindName = exec::sanitizeName(mapTypeKindToName(kind));
 
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures = {
       exec::FunctionSignatureBuilder()
@@ -228,6 +227,7 @@ void registerSliceFunction(const std::string& prefix, TypeKind kind) {
   exec::registerVectorFunction(
       prefix + "slice", signatures, std::make_unique<SliceFunction>(kind));
 }
+} // namespace
 
 void registerBigintSliceFunction(const std::string& prefix) {
   registerSliceFunction(prefix, TypeKind::BIGINT);

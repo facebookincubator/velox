@@ -22,7 +22,6 @@ namespace {
 class SliceTest : public SliceTestBase {
  protected:
   void SetUp() override {
-    FunctionBaseTest::SetUp();
     // Parses integer literals as INTEGER, not BIGINT.
     options_.parseIntegerAsBigint = false;
     registerIntegerSliceFunction("spark_");
