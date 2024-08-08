@@ -54,6 +54,19 @@ class ReaderBase {
     return FileMetaDataPtr(reinterpret_cast<const void*>(fileMetaData_.get()));
   }
 
+  const std::string& getNewFileSchemaColumnName(
+      uint32_t curSchemaIdx,
+      const std::string& name) const {
+    const auto& tableSchema = options_.fileSchema();
+    if (curSchemaIdx != 0) {
+      // this is column name at same index from table schema, we use will column
+      // name from table schema instead to build schemaWithId_ when
+      // we use column indices to map table columns to file columns
+      return tableSchema.get()->nameOf(curSchemaIdx - 1);
+    }
+    return name;
+  }
+
   const std::shared_ptr<const RowType>& schema() const {
     return schema_;
   }
@@ -266,6 +279,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   }
 
   auto name = schemaElement.name;
+  if ((!options_.useColumnNamesForColumnMapping()) &&
+      (options_.fileSchema() != nullptr)) {
+    name = getNewFileSchemaColumnName(curSchemaIdx, name);
+  }
+
   if (isFileColumnNamesReadAsLowerCase()) {
     folly::toLowerAscii(name);
   }
@@ -364,7 +382,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           VELOX_UNREACHABLE(
               "Invalid SchemaElement converted_type: {}, name: {}",
               schemaElement.converted_type,
-              schemaElement.name);
+              name);
       }
     } else {
       if (schemaElement.repetition_type ==
