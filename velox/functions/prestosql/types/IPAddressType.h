@@ -15,23 +15,10 @@
  */
 #pragma once
 
-#include <folly/Bits.h>
-#include <folly/IPAddress.h>
-#include "velox/expression/CastExpr.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
-static constexpr int kIPV4AddressBytes = 4;
-static constexpr int kIPV4ToV6FFIndex = 10;
-static constexpr int kIPV4ToV6Index = 12;
-static constexpr int kIPAddressBytes = 16;
-static constexpr int kIPV4Bits = 32;
-static constexpr int kIPV6HalfBits = 64;
-static constexpr int kIPV6Bits = 128;
-
 namespace facebook::velox {
-
-void bigEndianByteArray(folly::ByteArray16& addrBytes);
 
 class IPAddressType : public HugeintType {
   IPAddressType() = default;

@@ -14,7 +14,15 @@
  * limitations under the License.
  */
 
+#include <folly/IPAddress.h>
+#include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
+
+static constexpr int kIPV4AddressBytes = 4;
+static constexpr int kIPV4ToV6FFIndex = 10;
+static constexpr int kIPV4ToV6Index = 12;
+static constexpr int kIPAddressBytes = 16;
+static constexpr int kIPAddressMaxStrLen = 39;
 
 namespace facebook::velox {
 
@@ -87,24 +95,21 @@ class IPAddressCastOperator : public exec::CastOperator {
     auto* flatResult = result.as<FlatVector<StringView>>();
     const auto* ipaddresses = input.as<SimpleVector<int128_t>>();
     folly::ByteArray16 addrBytes;
-    std::string s;
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto intAddr = ipaddresses->valueAt(row);
-
       memcpy(&addrBytes, &intAddr, kIPAddressBytes);
 
       std::reverse(addrBytes.begin(), addrBytes.end());
       folly::IPAddressV6 v6Addr(addrBytes);
 
-      if (v6Addr.isIPv4Mapped()) {
-        s = v6Addr.createIPv4().str();
-      } else {
-        s = v6Addr.str();
-      }
-
       exec::StringWriter<false> result(flatResult, row);
-      result.append(s);
+      result.reserve(kIPAddressMaxStrLen);
+      if (v6Addr.isIPv4Mapped()) {
+        result.append(v6Addr.createIPv4().str());
+      } else {
+        result.append(v6Addr.str());
+      }
       result.finalize();
     });
   }
@@ -182,7 +187,7 @@ class IPAddressCastOperator : public exec::CastOperator {
               row,
               Status::UserError(
                   "Invalid IP address binary length: {}",
-                  ipAddressBinary.size()));
+                  ipAddressBinary.size()))  ;
         }
         return;
       }
