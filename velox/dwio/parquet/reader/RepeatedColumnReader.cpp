@@ -211,6 +211,13 @@ void MapColumnReader::read(
   elementReader_->seekTo(childTargetReadOffset_, false);
 }
 
+void MapColumnReader::filterRowGroups(
+    uint64_t rowGroupSize,
+    const dwio::common::StatsContext& context,
+    dwio::common::FormatData::FilterRowGroupsResult& result) const {
+  // empty placeholder to avoid incorrect calling on parent's impl
+}
+
 ListColumnReader::ListColumnReader(
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
@@ -304,6 +311,13 @@ void ListColumnReader::read(
   // repdefs will be scanned and new lengths provided, overwriting the
   // previous ones before the next read().
   child_->seekTo(childTargetReadOffset_, false);
+}
+
+void ListColumnReader::filterRowGroups(
+    uint64_t rowGroupSize,
+    const dwio::common::StatsContext& context,
+    dwio::common::FormatData::FilterRowGroupsResult& result) const {
+  // empty placeholder to avoid incorrect calling on parent's impl
 }
 
 } // namespace facebook::velox::parquet
