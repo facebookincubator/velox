@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
@@ -26,6 +27,18 @@ class MapConcatTest : public FunctionBaseTest {
     FunctionBaseTest::SetUpTestCase();
     facebook::velox::functions::registerMapConcatEmptyNullsFunction(
         "map_concat_empty_nulls");
+  }
+
+  void enableThrowExceptionOnDuplicateMapKeys() {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"},
+    });
+  }
+
+  void disableThrowExceptionOnDuplicateMapKeys() {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"},
+    });
   }
 
   template <typename TKey, typename TValue>
@@ -225,6 +238,26 @@ TEST_F(MapConcatTest, duplicateKeys) {
         << "at " << i << ": expected " << expectedMap->toString(i) << ", got "
         << result->toString(i);
   }
+}
+
+TEST_F(MapConcatTest, duplicateKeysThrowException) {
+  vector_size_t size = 1'000;
+
+  std::map<std::string, int32_t> a = {
+      {"a1", 1}, {"a2", 2}, {"a3", 3}, {"a4", 4}};
+  std::map<std::string, int32_t> b = {
+      {"b1", 1}, {"b2", 2}, {"b3", 3}, {"b4", 4}, {"a2", -1}};
+  auto aMap = makeMapVector(size, a);
+  auto bMap = makeMapVector(size, b);
+
+  enableThrowExceptionOnDuplicateMapKeys();
+  VELOX_ASSERT_THROW(
+      evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap})),
+      "Duplicate map keys (a2) are not allowed");
+
+  disableThrowExceptionOnDuplicateMapKeys();
+  auto result =
+      evaluate<MapVector>("map_concat(c0, c1)", makeRowVector({aMap, bMap}));
 }
 
 TEST_F(MapConcatTest, partiallyPopulated) {
