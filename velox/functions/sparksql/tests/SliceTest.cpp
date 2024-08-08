@@ -21,20 +21,14 @@ namespace facebook::velox::functions::sparksql::test {
 namespace {
 class SliceTest : public SliceTestBase {
  protected:
+  static void SetUpTestCase() {
+    SliceTestBase::SetUpTestCase();
+    registerIntegerSliceFunction("");
+  }
+
   void SetUp() override {
     // Parses integer literals as INTEGER, not BIGINT.
     options_.parseIntegerAsBigint = false;
-    registerIntegerSliceFunction("spark_");
-  }
-
-  void testSlice(
-      const std::string& expression,
-      const std::vector<VectorPtr>& parameters,
-      const ArrayVectorPtr& expectedArrayVector) override {
-    auto result =
-        evaluate<ArrayVector>("spark_" + expression, makeRowVector(parameters));
-    assertEqualVectors(expectedArrayVector, result);
-    EXPECT_NO_THROW(expectedArrayVector->checkRanges());
   }
 };
 

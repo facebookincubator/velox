@@ -18,6 +18,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -27,6 +28,11 @@ namespace {
 
 class SliceTestBase : public FunctionBaseTest {
  protected:
+  static void SetUpTestCase() {
+    parse::registerTypeResolver();
+    memory::MemoryManager::testingSetInstance({});
+  }
+
   virtual void testSlice(
       const std::string& expression,
       const std::vector<VectorPtr>& parameters,

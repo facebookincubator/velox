@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/lib/Slice.h"
 #include "velox/functions/lib/tests/SliceTestBase.h"
 
 namespace facebook::velox::functions::prestosql {
@@ -21,6 +22,10 @@ namespace {
 class SliceTest : public SliceTestBase {
  protected:
   static const vector_size_t kVectorSize{1000};
+  static void SetUpTestCase() {
+    SliceTestBase::SetUpTestCase();
+    registerBigintSliceFunction("");
+  }
 };
 
 TEST_F(SliceTest, basic) {
