@@ -1694,7 +1694,7 @@ TEST_F(TaskTest, spillDirNotCreated) {
   ASSERT_FALSE(fs->exists(tmpDirectoryPath));
 }
 
-DEBUG_ONLY_TEST_F(TaskPauseTest, pauseFuture) {
+DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
   // Test for trivial wait on Task::pauseRequested future.
   testPause();
   folly::EventCount taskResumeAllowedWait;
@@ -1721,7 +1721,7 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, pauseFuture) {
   ASSERT_EQ(task_->numRunningDrivers(), 0);
 }
 
-DEBUG_ONLY_TEST_F(TaskPauseTest, pauseFutureNeverFulfilled) {
+DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFutureNeverFulfilled) {
   // Test for Task::pauseRequested future to throw when task is never resumed.
   testPause();
   folly::EventCount taskAbortAllowedWait;
