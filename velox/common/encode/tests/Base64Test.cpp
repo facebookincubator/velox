@@ -18,6 +18,8 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 
+#include "velox/common/base/Exceptions.h"
+
 namespace facebook::velox::encoding {
 class Base64Test : public ::testing::Test {};
 
@@ -61,7 +63,7 @@ TEST_F(Base64Test, calculateDecodedSizeProperSize) {
   encoded_size = 21;
   EXPECT_THROW(
       Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ==", encoded_size),
-      facebook::velox::encoding::Base64Exception);
+      VeloxUserError);
 
   encoded_size = 32;
   EXPECT_EQ(
