@@ -16,13 +16,24 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec::test {
+
+enum RunnerType { kPrestoQueryRunner, kDuckQueryRunner };
 
 /// Query runner that uses reference database, i.e. DuckDB, Presto, Spark.
 class ReferenceQueryRunner {
  public:
   virtual ~ReferenceQueryRunner() = default;
+
+  virtual RunnerType runnerType() const = 0;
+
+  // Scalar types supported by the reference database, to be used to restrict
+  // candidates when generating random types for fuzzers.
+  virtual std::vector<TypePtr> supportedScalarTypes() const {
+    return defaultScalarTypes();
+  }
 
   /// Converts Velox plan into SQL accepted by the reference database.
   /// @return std::nullopt if the plan uses features not supported by the
