@@ -1750,7 +1750,7 @@ void Task::addHashJoinBridgesLocked(
             .emplace(planNodeId, std::make_shared<HashJoinBridge>())
             .second;
     VELOX_CHECK(
-        inserted, "Join bridge for node {} is already present", planNode->id());
+        inserted, "Join bridge for node {} is already present", planNodeId);
   }
 }
 
@@ -1788,7 +1788,7 @@ void Task::addNestedLoopJoinBridgesLocked(
             .emplace(planNodeId, std::make_shared<NestedLoopJoinBridge>())
             .second;
     VELOX_CHECK(
-        inserted, "Join bridge for node {} is already present", planNode->id());
+        inserted, "Join bridge for node {} is already present", planNodeId);
   }
 }
 
