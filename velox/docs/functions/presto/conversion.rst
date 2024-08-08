@@ -991,19 +991,20 @@ IPV4 or IPV6.
 For IPV4 it must be in the form of:
 x.x.x.x where each x is an integer value between 0-255.
 
-For IPV6 it must follow any of the forms defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_
-1. Full form:
+For IPV6 it must follow any of the forms defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_.
+
+Full form:
 
 ::
 
    2001:0DB8:0000:0000:0008:0800:200C:417A
    2001:DB8:0:0:8:800:200C:417A
 
-2. Compressed form:
+Compressed form:
 ::
   2001:DB8::8:800:200C:417A
 
-3. Alternate form:
+Alternate form:
 ::
   0:0:0:0:0:0:13.1.68.3
   ::13.1.68.3
@@ -1014,7 +1015,7 @@ When creating an IPADDRESS, IPv4 addresses will be mapped into that range.
 When formatting an IPADDRESS, any address within the mapped range will be formatted as an IPv4 address.
 Other addresses will be formatted as IPv6 using the canonical format defined in `RFC 5952 <https://datatracker.ietf.org/doc/html/rfc5952.html>`_.
 
-Valid examples
+Valid examples:
 
 ::
 
@@ -1022,7 +1023,7 @@ Valid examples
   SELECT cast('1.2.3.4' as ipaddress); -- ipaddress '1.2.3.4'
   SELECT cast('::ffff:ffff:ffff' as ipaddress); -- ipaddress '255.255.255.255'
 
-Invalid examples
+Invalid examples:
 
 ::
 
@@ -1034,10 +1035,32 @@ From VARBINARY
 
 To cast a varbinary to IPAddress it must be either IPV4(4 Bytes)
 or IPV6(16 Bytes) in network byte order.
-All IPV6 addresses in the form of an IPV4 mapped IPV6
-address will be assumed to be IPV4 addresses. 
 
-Valid examples
+IPV4:
+
+::
+
+[01, 02, 03, 04] -> 1.2.3.4
+
+IPV6:
+
+::
+
+[0x20, 0x01, 0x0d, 0xb8 0x00, 0x00, 0x00, 0x00 0x00 0x00, 0xff, 0x00, 0x00, 0x42, 0x83, 0x29] -> 2001:db8::ff00:42:8329
+
+Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range `(RFC 4291#section-2.5.5.2) <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+When creating an IPADDRESS, IPv4 addresses will be mapped into that range.
+
+When formatting an IPADDRESS, any address within the mapped range will be formatted as an IPv4 address.
+Other addresses will be formatted as IPv6 using the canonical format defined in `RFC 5952 <https://datatracker.ietf.org/doc/html/rfc5952.html>`_.
+
+IPV6 mapped IPV4 address:
+
+::
+
+[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x01, 0x02, 0x03, 0x04] -> 1.2.3.4
+
+Valid examples:
 
 ::
 
@@ -1045,11 +1068,11 @@ Valid examples
   SELECT cast(from_hex('01020304') as ipaddress); -- ipaddress '1.2.3.4'
   SELECT cast(from_hex('00000000000000000000ffff01020304') as ipaddress); -- ipaddress '1.2.3.4'
 
-Invalid examples
+Invalid examples:
 
 ::
 
-  SELECT cast(from_hex('f000001100') as ipaddress); -- Varbinary length 5, must be IPV4(4), or IPV6(16)
+  SELECT cast(from_hex('f000001100') as ipaddress); -- Invalid IP address binary length: 5
 
 Miscellaneous
 -------------

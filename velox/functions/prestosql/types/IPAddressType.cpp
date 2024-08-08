@@ -181,10 +181,8 @@ class IPAddressCastOperator : public exec::CastOperator {
           context.setStatus(
               row,
               Status::UserError(
-                  "Varbinary length {}, must be IPV4({}), or IPV6({})",
-                  ipAddressBinary.size(),
-                  kIPV4AddressBytes,
-                  kIPAddressBytes));
+                  "Invalid IP address binary length: {}",
+                  ipAddressBinary.size()));
         }
         return;
       }
