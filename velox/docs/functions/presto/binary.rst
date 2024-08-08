@@ -135,6 +135,24 @@ Binary Functions
 
      Encodes ``bigint`` in a 64-bit 2’s complement big endian format.
 
+.. function:: to_base32(varbinary) -> string
+
+     Encodes a binary ``varbinary`` value into its Base32 string representation.
+     This function generates padded Base32 strings by default. 
+
+     Examples
+     --------
+     Query to encode a binary value to a padded Base32 string:
+     ::
+        SELECT to_base32(ARRAY[72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]); -- 'JBSWY3DPEBLW64TMMQ======'
+
+     Query to encode a binary value with fewer bytes:
+     ::
+        SELECT to_base32(ARRAY[104, 101, 108, 108, 111]); -- 'NBSWY3DP'
+
+     In the above examples, the binary array `[72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]` is encoded to the padded Base32 string 'JBSWY3DPEBLW64TMMQ======'.
+     The binary array `[104, 101, 108, 108, 111]` is encoded to 'NBSWY3DP'.
+
 .. function:: to_hex(binary) -> varchar
 
     Encodes ``binary`` into a hex string representation.
