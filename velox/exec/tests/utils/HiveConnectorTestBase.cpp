@@ -19,6 +19,8 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
@@ -263,7 +265,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const std::vector<std::string>& partitionedBy,
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind) {
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
   return makeHiveInsertTableHandle(
       tableColumnNames,
       tableColumnTypes,
@@ -271,7 +274,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       nullptr,
       std::move(locationHandle),
       tableStorageFormat,
-      compressionKind);
+      compressionKind,
+      writerOptions);
 }
 
 // static
@@ -283,7 +287,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::HiveBucketProperty> bucketProperty,
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind) {
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -332,12 +337,16 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   VELOX_CHECK_EQ(numPartitionColumns, partitionedBy.size());
   VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
   VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
+
+  std::unordered_map<std::string, std::string> serdeParameters = {};
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
       tableStorageFormat,
       bucketProperty,
-      compressionKind);
+      compressionKind,
+      serdeParameters,
+      writerOptions);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>

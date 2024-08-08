@@ -609,6 +609,8 @@ struct WriterOptions {
 
   std::optional<velox::common::CompressionKind> compressionKind;
   std::optional<uint64_t> orcMinCompressionSize{std::nullopt};
+  std::function<std::unique_ptr<dwio::common::FlushPolicy>()>
+      flushPolicyFactory;
   std::optional<uint64_t> maxStripeSize{std::nullopt};
   std::optional<bool> orcLinearStripeSizeHeuristics{std::nullopt};
   std::optional<uint64_t> maxDictionaryMemory{std::nullopt};

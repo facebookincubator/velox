@@ -181,7 +181,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
       const dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::DWRF,
-      const std::optional<common::CompressionKind> compressionKind = {});
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr);
 
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
@@ -191,7 +193,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
       const dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::DWRF,
-      const std::optional<common::CompressionKind> compressionKind = {});
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr);
 
   static std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
       const std::string& name,
