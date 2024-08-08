@@ -62,7 +62,7 @@ struct FromUnixtimeFunction {
       const arg_type<double>* /*unixtime*/,
       const arg_type<Varchar>* timezone) {
     if (timezone != nullptr) {
-      tzID_ = util::getTimeZoneID((std::string_view)(*timezone));
+      tzID_ = tz::getTimeZoneID((std::string_view)(*timezone));
     }
   }
 
@@ -71,7 +71,7 @@ struct FromUnixtimeFunction {
       const arg_type<double>& unixtime,
       const arg_type<Varchar>& timezone) {
     int16_t timezoneId =
-        tzID_.value_or(util::getTimeZoneID((std::string_view)timezone));
+        tzID_.value_or(tz::getTimeZoneID((std::string_view)timezone));
     result = pack(fromUnixtime(unixtime).toMillis(), timezoneId);
   }
 
@@ -83,7 +83,7 @@ struct FromUnixtimeFunction {
       const arg_type<int64_t>* hours,
       const arg_type<int64_t>* minutes) {
     if (hours != nullptr && minutes != nullptr) {
-      tzID_ = util::getTimeZoneID(*hours * 60 + *minutes);
+      tzID_ = tz::getTimeZoneID(*hours * 60 + *minutes);
     }
   }
 
@@ -93,7 +93,7 @@ struct FromUnixtimeFunction {
       const arg_type<int64_t>& hours,
       const arg_type<int64_t>& minutes) {
     int16_t timezoneId =
-        tzID_.value_or(util::getTimeZoneID(hours * 60 + minutes));
+        tzID_.value_or(tz::getTimeZoneID(hours * 60 + minutes));
     result = pack(fromUnixtime(unixtime).toMillis(), timezoneId);
   }
 
@@ -116,7 +116,8 @@ struct TimestampWithTimezoneSupport {
       bool asGMT = false) {
     auto timestamp = unpackTimestampUtc(timestampWithTimezone);
     if (!asGMT) {
-      timestamp.toTimezone(unpackZoneKeyId(timestampWithTimezone));
+      timestamp.toTimezone(
+          *tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
     }
 
     return timestamp;
@@ -129,7 +130,7 @@ struct TimestampWithTimezoneSupport {
     Timestamp inputTimeStamp = this->toTimestamp(timestampWithTimezone);
     // Create a copy of inputTimeStamp and convert it to GMT
     auto gmtTimeStamp = inputTimeStamp;
-    gmtTimeStamp.toGMT(unpackZoneKeyId(timestampWithTimezone));
+    gmtTimeStamp.toGMT(*tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
 
     // Get offset in seconds with GMT and convert to hour
     return (inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds());
@@ -187,7 +188,7 @@ struct DateFunction : public TimestampWithTimezoneSupport<T> {
   }
 
  private:
-  const date::time_zone* timeZone_ = nullptr;
+  const tz::TimeZone* timeZone_ = nullptr;
 };
 
 template <typename T>
@@ -213,9 +214,11 @@ struct WeekFunction : public InitSessionTimezone<T>,
       auto firstMondayOfYear =
           1 + (mondayOfWeek + kDaysInWeek - 1) % kDaysInWeek;
 
+      // A long year is any year ending on Thursday and any leap year ending on
+      // Friday.
       if ((util::isLeapYear(time.tm_year + 1900 - 1) &&
-           firstMondayOfYear == 2) ||
-          firstMondayOfYear == 3 || firstMondayOfYear == 4) {
+           firstMondayOfYear == 3) ||
+          firstMondayOfYear == 4) {
         week = 53;
       } else {
         week = 52;
@@ -963,7 +966,7 @@ template <typename T>
 struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  const date::time_zone* timeZone_ = nullptr;
+  const tz::TimeZone* timeZone_ = nullptr;
   std::optional<DateTimeUnit> unit_;
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -1164,7 +1167,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     adjustDateTime(dateTime, unit);
     timestamp =
         Timestamp::fromMillis(Timestamp::calendarUtcToEpoch(dateTime) * 1000);
-    timestamp.toGMT(unpackZoneKeyId(timestampWithTimezone));
+    timestamp.toGMT(*tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
 
     result = pack(timestamp, unpackZoneKeyId(timestampWithTimezone));
   }
@@ -1188,7 +1191,7 @@ template <typename T>
 struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  const date::time_zone* sessionTimeZone_ = nullptr;
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
   std::optional<DateTimeUnit> unit_ = std::nullopt;
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -1287,7 +1290,7 @@ template <typename T>
 struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  const date::time_zone* sessionTimeZone_ = nullptr;
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
   std::optional<DateTimeUnit> unit_ = std::nullopt;
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -1437,7 +1440,7 @@ struct DateFormatFunction : public TimestampWithTimezoneSupport<T> {
     maxResultSize_ = mysqlDateTime_->maxResultSize(sessionTimeZone_);
   }
 
-  const date::time_zone* sessionTimeZone_ = nullptr;
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
   std::shared_ptr<DateTimeFormatter> mysqlDateTime_;
   uint32_t maxResultSize_;
   bool isConstFormat_ = false;
@@ -1470,7 +1473,7 @@ struct FromIso8601Timestamp {
       const arg_type<Varchar>* /*input*/) {
     auto sessionTzName = config.sessionTimezone();
     if (!sessionTzName.empty()) {
-      sessionTzID_ = util::getTimeZoneID(sessionTzName);
+      sessionTimeZone_ = tz::locateZone(sessionTzName);
     }
   }
 
@@ -1483,19 +1486,19 @@ struct FromIso8601Timestamp {
       return castResult.error();
     }
 
-    auto [ts, tzID] = castResult.value();
+    auto [ts, timeZone] = castResult.value();
     // Input string may not contain a timezone - if so, it is interpreted in
     // session timezone.
-    if (tzID == -1) {
-      tzID = sessionTzID_;
+    if (timeZone == nullptr) {
+      timeZone = sessionTimeZone_;
     }
-    ts.toGMT(tzID);
-    result = pack(ts, tzID);
+    ts.toGMT(*timeZone);
+    result = pack(ts, timeZone->id());
     return Status::OK();
   }
 
  private:
-  int16_t sessionTzID_{0};
+  const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // default to GMT.
 };
 
 template <typename T>
@@ -1503,7 +1506,9 @@ struct DateParseFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   std::shared_ptr<DateTimeFormatter> format_;
-  std::optional<int64_t> sessionTzID_;
+
+  // By default, assume 0 (GMT).
+  const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)};
   bool isConstFormat_ = false;
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -1519,7 +1524,7 @@ struct DateParseFunction {
 
     auto sessionTzName = config.sessionTimezone();
     if (!sessionTzName.empty()) {
-      sessionTzID_ = util::getTimeZoneID(sessionTzName);
+      sessionTimeZone_ = tz::locateZone(sessionTzName);
     }
   }
 
@@ -1537,10 +1542,7 @@ struct DateParseFunction {
       return dateTimeResult.error();
     }
 
-    // Since MySql format has no timezone specifier, simply check if session
-    // timezone was provided. If not, fallback to 0 (GMT).
-    int16_t timezoneId = sessionTzID_.value_or(0);
-    dateTimeResult->timestamp.toGMT(timezoneId);
+    dateTimeResult->timestamp.toGMT(*sessionTimeZone_);
     result = dateTimeResult->timestamp;
     return Status::OK();
   }
@@ -1579,7 +1581,7 @@ struct FormatDateTimeFunction {
 
     const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
     const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
-    auto* timezonePtr = date::locate_zone(util::getTimeZoneName(timeZoneId));
+    auto* timezonePtr = tz::locateZone(tz::getTimeZoneName(timeZoneId));
 
     const auto maxResultSize = jodaDateTime_->maxResultSize(timezonePtr);
     format(timestamp, timezonePtr, maxResultSize, result);
@@ -1601,7 +1603,7 @@ struct FormatDateTimeFunction {
 
   void format(
       const Timestamp& timestamp,
-      const date::time_zone* timeZone,
+      const tz::TimeZone* timeZone,
       uint32_t maxResultSize,
       out_type<Varchar>& result) const {
     result.reserve(maxResultSize);
@@ -1610,7 +1612,7 @@ struct FormatDateTimeFunction {
     result.resize(resultSize);
   }
 
-  const date::time_zone* sessionTimeZone_ = nullptr;
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
   std::shared_ptr<DateTimeFormatter> jodaDateTime_;
   uint32_t maxResultSize_;
   bool isConstFormat_ = false;
@@ -1621,7 +1623,7 @@ struct ParseDateTimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   std::shared_ptr<DateTimeFormatter> format_;
-  std::optional<int64_t> sessionTzID_;
+  const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // GMT
   bool isConstFormat_ = false;
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -1637,7 +1639,7 @@ struct ParseDateTimeFunction {
 
     auto sessionTzName = config.sessionTimezone();
     if (!sessionTzName.empty()) {
-      sessionTzID_ = util::getTimeZoneID(sessionTzName);
+      sessionTimeZone_ = tz::locateZone(sessionTzName);
     }
   }
 
@@ -1657,11 +1659,11 @@ struct ParseDateTimeFunction {
 
     // If timezone was not parsed, fallback to the session timezone. If there's
     // no session timezone, fallback to 0 (GMT).
-    int16_t timezoneId = dateTimeResult->timezoneId != -1
-        ? dateTimeResult->timezoneId
-        : sessionTzID_.value_or(0);
-    dateTimeResult->timestamp.toGMT(timezoneId);
-    result = pack(dateTimeResult->timestamp, timezoneId);
+    const auto* timeZone = dateTimeResult->timezoneId != -1
+        ? tz::locateZone(dateTimeResult->timezoneId)
+        : sessionTimeZone_;
+    dateTimeResult->timestamp.toGMT(*timeZone);
+    result = pack(dateTimeResult->timestamp, timeZone->id());
     return Status::OK();
   }
 };
@@ -1670,7 +1672,7 @@ template <typename T>
 struct CurrentDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  const date::time_zone* timeZone_ = nullptr;
+  const tz::TimeZone* timeZone_ = nullptr;
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
@@ -1726,12 +1728,7 @@ struct ToISO8601Function {
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*input*/) {
     if (inputTypes[0]->isTimestamp()) {
-      auto sessionTzName = config.sessionTimezone();
-      if (!sessionTzName.empty()) {
-        timeZone_ = date::locate_zone(sessionTzName);
-      } else {
-        timeZone_ = date::locate_zone("UTC");
-      }
+      timeZone_ = getTimeZoneFromConfig(config);
     }
   }
 
@@ -1744,13 +1741,7 @@ struct ToISO8601Function {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Timestamp>& timestamp) {
-    // TODO DateTimeFormatter requires timestamp in UTC. It then converts it to
-    // the specified timezone. We can avoid extra conversion if we change
-    // DateTimeFormatter to accept non-UTC timestamps.
-    auto utcTimestamp = timestamp;
-    utcTimestamp.toGMT(*timeZone_);
-
-    toIso8601(utcTimestamp, timeZone_, result);
+    toIso8601(timestamp, timeZone_, result);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1758,7 +1749,7 @@ struct ToISO8601Function {
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
     const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
-    const auto* timeZone = date::locate_zone(util::getTimeZoneName(timeZoneId));
+    const auto* timeZone = tz::locateZone(tz::getTimeZoneName(timeZoneId));
 
     toIso8601(timestamp, timeZone, result);
   }
@@ -1766,7 +1757,7 @@ struct ToISO8601Function {
  private:
   void toIso8601(
       const Timestamp& timestamp,
-      const date::time_zone* timeZone,
+      const tz::TimeZone* timeZone,
       out_type<Varchar>& result) const {
     const auto maxResultSize = formatter_->maxResultSize(timeZone);
     result.reserve(maxResultSize);
@@ -1775,7 +1766,7 @@ struct ToISO8601Function {
     result.resize(resultSize);
   }
 
-  const date::time_zone* timeZone_{nullptr};
+  const tz::TimeZone* timeZone_{nullptr};
   std::shared_ptr<DateTimeFormatter> formatter_ =
       functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ");
 };
@@ -1792,7 +1783,7 @@ struct AtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<TimestampWithTimezone>* /*tsWithTz*/,
       const arg_type<Varchar>* timezone) {
     if (timezone != nullptr) {
-      targetTimezoneID_ = util::getTimeZoneID(
+      targetTimezoneID_ = tz::getTimeZoneID(
           std::string_view(timezone->data(), timezone->size()));
     }
   }
@@ -1804,8 +1795,7 @@ struct AtTimezoneFunction : public TimestampWithTimezoneSupport<T> {
     const auto inputMs = unpackMillisUtc(tsWithTz);
     const auto targetTimezoneID = targetTimezoneID_.has_value()
         ? targetTimezoneID_.value()
-        : util::getTimeZoneID(
-              std::string_view(timezone.data(), timezone.size()));
+        : tz::getTimeZoneID(std::string_view(timezone.data(), timezone.size()));
 
     // Input and output TimestampWithTimezones should not contain
     // different timestamp values - solely timezone ID should differ between the

@@ -18,8 +18,8 @@
 #include <random>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/external/date/tz.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
 namespace {
@@ -34,6 +34,30 @@ std::string timestampToString(
   const auto view = Timestamp::tsToStringView(ts, options, result.data());
   result.resize(view.size());
   return result;
+}
+
+TEST(TimestampTest, fromDaysAndNanos) {
+  EXPECT_EQ(
+      Timestamp(Timestamp::kSecondsInDay + 2, 1),
+      Timestamp::fromDaysAndNanos(
+          Timestamp::kJulianToUnixEpochDays + 1,
+          2 * Timestamp::kNanosInSecond + 1));
+  EXPECT_EQ(
+      Timestamp(Timestamp::kSecondsInDay + 2, 0),
+      Timestamp::fromDaysAndNanos(
+          Timestamp::kJulianToUnixEpochDays + 1,
+          2 * Timestamp::kNanosInSecond));
+  EXPECT_EQ(
+      Timestamp(
+          Timestamp::kSecondsInDay * 5 - 3, Timestamp::kNanosInSecond - 6),
+      Timestamp::fromDaysAndNanos(
+          Timestamp::kJulianToUnixEpochDays + 5,
+          -2 * Timestamp::kNanosInSecond - 6));
+  EXPECT_EQ(
+      Timestamp(Timestamp::kSecondsInDay * 5 - 2, 0),
+      Timestamp::fromDaysAndNanos(
+          Timestamp::kJulianToUnixEpochDays + 5,
+          -2 * Timestamp::kNanosInSecond));
 }
 
 TEST(TimestampTest, fromMillisAndMicros) {
@@ -370,20 +394,21 @@ TEST(TimestampTest, outOfRange) {
   //
   // #1. external/date cannot handle years larger than 32k (date::year::max()).
   // Any conversions exceeding that threshold will fail right away.
-  auto* timezone = date::locate_zone("GMT");
+  auto* timezone = tz::locateZone("GMT");
   Timestamp t1(-3217830796800, 0);
 
-  VELOX_ASSERT_THROW(
-      t1.toTimePoint(), "Timestamp is outside of supported range");
-  VELOX_ASSERT_THROW(
-      t1.toTimezone(*timezone), "Timestamp is outside of supported range");
+  std::string expected = "Timepoint is outside of supported year range";
+  VELOX_ASSERT_THROW(t1.toTimePointMs(), expected);
+  VELOX_ASSERT_THROW(t1.toTimezone(*timezone), expected);
+
+  timezone = tz::locateZone("America/Los_Angeles");
+  VELOX_ASSERT_THROW(t1.toGMT(*timezone), expected);
 
   // #2. external/date doesn't understand OS_TZDB repetition rules. Therefore,
   // for timezones with pre-defined repetition rules for daylight savings, for
   // example, it will throw for anything larger than 2037 (which is what is
   // currently materialized in OS_TZDBs). America/Los_Angeles is an example of
   // such timezone.
-  timezone = date::locate_zone("America/Los_Angeles");
   Timestamp t2(32517359891, 0);
   VELOX_ASSERT_THROW(
       t2.toTimezone(*timezone),
@@ -396,12 +421,12 @@ TEST(TimestampTest, outOfRange) {
 TEST(TimestampTest, overflow) {
   Timestamp t(std::numeric_limits<int64_t>::max(), 0);
   VELOX_ASSERT_THROW(
-      t.toTimePoint(false),
+      t.toTimePointMs(false),
       fmt::format(
           "Could not convert Timestamp({}, {}) to milliseconds",
           std::numeric_limits<int64_t>::max(),
           0));
-  ASSERT_NO_THROW(t.toTimePoint(true));
+  ASSERT_NO_THROW(t.toTimePointMs(true));
 }
 #endif
 

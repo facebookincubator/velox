@@ -63,10 +63,12 @@ class AggregationFuzzerBase {
           customInputGenerators,
       VectorFuzzer::Options::TimestampPrecision timestampPrecision,
       const std::unordered_map<std::string, std::string>& queryConfigs,
+      bool orderableGroupKeys,
       std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
       : customVerificationFunctions_{customVerificationFunctions},
         customInputGenerators_{customInputGenerators},
         queryConfigs_{queryConfigs},
+        orderableGroupKeys_{orderableGroupKeys},
         persistAndRunOnce_{FLAGS_persist_and_run_once},
         reproPersistPath_{FLAGS_repro_persist_path},
         referenceQueryRunner_{std::move(referenceQueryRunner)},
@@ -102,12 +104,6 @@ class AggregationFuzzerBase {
     size_t numFailed{0};
   };
 
-  enum ReferenceQueryErrorCode {
-    kSuccess,
-    kReferenceQueryFail,
-    kReferenceQueryUnsupported
-  };
-
  protected:
   struct Stats {
     // Names of functions that were tested.
@@ -136,8 +132,7 @@ class AggregationFuzzerBase {
 
     void print(size_t numIterations) const;
 
-    void updateReferenceQueryStats(
-        AggregationFuzzerBase::ReferenceQueryErrorCode errorCode);
+    void updateReferenceQueryStats(ReferenceQueryErrorCode errorCode);
   };
 
   int32_t randInt(int32_t min, int32_t max);
@@ -208,26 +203,12 @@ class AggregationFuzzerBase {
       const std::vector<std::string>& partitionKeys,
       const CallableSignature& signature);
 
-  std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
-  computeReferenceResults(
-      const core::PlanNodePtr& plan,
-      const std::vector<RowVectorPtr>& input);
-
   velox::fuzzer::ResultOrError execute(
       const core::PlanNodePtr& plan,
       const std::vector<exec::Split>& splits = {},
       bool injectSpill = false,
       bool abandonPartial = false,
       int32_t maxDrivers = 2);
-
-  // Will throw if referenceQueryRunner doesn't support
-  // returning results as a vector.
-  std::pair<
-      std::optional<std::vector<RowVectorPtr>>,
-      AggregationFuzzerBase::ReferenceQueryErrorCode>
-  computeReferenceResultsAsVector(
-      const core::PlanNodePtr& plan,
-      const std::vector<RowVectorPtr>& input);
 
   void compare(
       const velox::fuzzer::ResultOrError& actual,
@@ -264,6 +245,9 @@ class AggregationFuzzerBase {
   const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>
       customInputGenerators_;
   const std::unordered_map<std::string, std::string> queryConfigs_;
+
+  // Whether group keys must be orderable or be just comparable.
+  bool orderableGroupKeys_;
   const bool persistAndRunOnce_;
   const std::string reproPersistPath_;
 

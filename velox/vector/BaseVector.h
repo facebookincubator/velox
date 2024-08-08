@@ -127,14 +127,22 @@ class BaseVector {
   template <typename T>
   T* asUnchecked() {
     static_assert(std::is_base_of_v<BaseVector, T>);
-    DCHECK(dynamic_cast<const T*>(this) != nullptr);
+    VELOX_DCHECK_NOT_NULL(
+        dynamic_cast<const T*>(this),
+        "Wrong type cast expected {}, but got {}",
+        typeid(T).name(),
+        typeid(*this).name());
     return static_cast<T*>(this);
   }
 
   template <typename T>
   const T* asUnchecked() const {
     static_assert(std::is_base_of_v<BaseVector, T>);
-    DCHECK(dynamic_cast<const T*>(this) != nullptr);
+    VELOX_DCHECK_NOT_NULL(
+        dynamic_cast<const T*>(this),
+        "Wrong type cast expected {}, but got {}",
+        typeid(T).name(),
+        typeid(*this).name());
     return static_cast<const T*>(this);
   }
 
@@ -464,9 +472,11 @@ class BaseVector {
       const vector_size_t* toSourceRow);
 
   /// Utility for making a deep copy of a whole vector.
-  static VectorPtr copy(const BaseVector& vector) {
-    auto result =
-        BaseVector::create(vector.type(), vector.size(), vector.pool());
+  static VectorPtr copy(
+      const BaseVector& vector,
+      velox::memory::MemoryPool* pool = nullptr) {
+    auto result = BaseVector::create(
+        vector.type(), vector.size(), pool ? pool : vector.pool());
     result->copy(&vector, 0, 0, vector.size());
     return result;
   }
@@ -497,10 +507,11 @@ class BaseVector {
   }
 
   /// This makes a deep copy of the Vector allocating new child Vectors and
-  // Buffers recursively.  Unlike copy, this preserves encodings recursively.
-  virtual VectorPtr copyPreserveEncodings() const = 0;
+  /// Buffers recursively.  Unlike copy, this preserves encodings recursively.
+  virtual VectorPtr copyPreserveEncodings(
+      velox::memory::MemoryPool* pool = nullptr) const = 0;
 
-  // Construct a zero-copy slice of the vector with the indicated offset and
+  /// Construct a zero-copy slice of the vector with the indicated offset and
   /// length.
   virtual VectorPtr slice(vector_size_t offset, vector_size_t length) const = 0;
 
@@ -931,7 +942,7 @@ class BaseVector {
 };
 
 /// Loops over rows in 'ranges' and invokes 'func' for each row.
-/// @param TFunc A void function taking two arguments: targetIndex and
+/// @param func A void function taking two arguments: targetIndex and
 /// sourceIndex.
 template <typename TFunc>
 void applyToEachRow(
@@ -945,7 +956,7 @@ void applyToEachRow(
 }
 
 /// Loops over 'ranges' and invokes 'func' for each range.
-/// @param TFunc A void function taking 3 arguments: targetIndex, sourceIndex
+/// @param func A void function taking 3 arguments: targetIndex, sourceIndex
 /// and count.
 template <typename TFunc>
 void applyToEachRange(

@@ -565,6 +565,8 @@ TEST_F(CastExprTest, stringToTimestamp) {
       "1970-01-01 00:00:00",
       "2000-01-01 12:21:56",
       "1970-01-01 00:00:00-02:00",
+      "1970-01-01 00:00:00 +02",
+      "1970-01-01 00:00:00 -0101",
       std::nullopt,
   };
   std::vector<std::optional<Timestamp>> expected{
@@ -574,6 +576,8 @@ TEST_F(CastExprTest, stringToTimestamp) {
       Timestamp(0, 0),
       Timestamp(946729316, 0),
       Timestamp(7200, 0),
+      Timestamp(-7200, 0),
+      Timestamp(3660, 0),
       std::nullopt,
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
@@ -707,6 +711,15 @@ TEST_F(CastExprTest, timestampToString) {
   };
   VELOX_ASSERT_THROW(
       mustThrow(), "Unable to convert timezone 'America/Los_Angeles' past");
+
+  // try_cast should also throw since it's runtime error.
+  auto tryCastMustThrow = [&]() {
+    return testTryCast<Timestamp, std::string>(
+        "string", {Timestamp(253405036800, 0)}, {"10000-02-01 08:00:00.000"});
+  };
+  VELOX_ASSERT_THROW(
+      tryCastMustThrow(),
+      "Unable to convert timezone 'America/Los_Angeles' past");
 }
 
 TEST_F(CastExprTest, dateToTimestamp) {
@@ -760,6 +773,24 @@ TEST_F(CastExprTest, timestampToDate) {
       },
       TIMESTAMP(),
       DATE());
+
+  // Ensure external/date throws since it doesn't know how to convert large
+  // timestamps.
+  auto mustThrow = [&]() {
+    return testCast<Timestamp, int32_t>(
+        "date", {Timestamp(253405036800, 0)}, {0});
+  };
+  VELOX_ASSERT_THROW(
+      mustThrow(), "Unable to convert timezone 'America/Los_Angeles' past");
+
+  // try_cast should also throw since it's runtime error.
+  auto tryCastMustThrow = [&]() {
+    return testTryCast<Timestamp, int32_t>(
+        "date", {Timestamp(253405036800, 0)}, {0});
+  };
+  VELOX_ASSERT_THROW(
+      tryCastMustThrow(),
+      "Unable to convert timezone 'America/Los_Angeles' past");
 }
 
 TEST_F(CastExprTest, timestampInvalid) {

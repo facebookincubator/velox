@@ -15,8 +15,8 @@
  */
 
 #include "velox/connectors/hive/iceberg/tests/IcebergSplitReaderBenchmark.h"
-
 #include <filesystem>
+#include "velox/exec/tests/utils/PrefixSortUtils.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
@@ -58,6 +58,21 @@ void IcebergSplitReaderBenchmark::writeToPositionDeleteFile(
     posDeletewriter.write(vectors[i]);
   }
   posDeletewriter.close();
+}
+
+std::vector<int64_t> IcebergSplitReaderBenchmark::makeRandomDeleteRows(
+    int32_t deleteRowsCount) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  int64_t totalDataRows = kNumBatches * kNumRowsPerBatch;
+  std::uniform_int_distribution<> dis(0, totalDataRows - 1);
+  std::set<int64_t> uniqueDeleteRows;
+  while (uniqueDeleteRows.size() < deleteRowsCount) {
+    uniqueDeleteRows.insert(dis(gen));
+  }
+  std::vector<int64_t> deleteRows(
+      uniqueDeleteRows.begin(), uniqueDeleteRows.end());
+  return deleteRows;
 }
 
 std::vector<int64_t> IcebergSplitReaderBenchmark::makeSequenceRows(
@@ -119,7 +134,7 @@ std::string IcebergSplitReaderBenchmark::writePositionDeleteFile(
 
   std::vector<int64_t> deleteRowsVec;
   deleteRowsVec.reserve(numDeleteRows);
-  auto deleteRows = makeSequenceRows(numDeleteRows);
+  auto deleteRows = makeRandomDeleteRows(numDeleteRows);
   deleteRowsVec.insert(
       deleteRowsVec.end(), deleteRows.begin(), deleteRows.end());
 
@@ -209,7 +224,7 @@ std::shared_ptr<ScanSpec> IcebergSplitReaderBenchmark::createScanSpec(
   return scanSpec;
 }
 
-// This method is the place where we do the read opeartions using
+// This method is the place where we do the read operations using
 // icebergSplitReader. scanSpec contains the setting of filters. e.g.
 // filterRateX100 = 30 means it would filter out 70% of rows and 30% remain.
 // deleteRateX100 = 30 means it would delete 30% of overall data rows and 70%
@@ -295,6 +310,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           connectorPool.get(),
           connectorSessionProperties_.get(),
           nullptr,
+          exec::test::defaultPrefixSortConfig(),
           nullptr,
           nullptr,
           "query.IcebergSplitReader",

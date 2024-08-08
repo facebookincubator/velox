@@ -144,6 +144,24 @@ std::vector<std::string> makeNames(const std::string& prefix, size_t n) {
   return names;
 }
 
+RowVectorPtr makeNullRows(
+    const std::vector<velox::RowVectorPtr>& input,
+    const std::string& colName,
+    memory::MemoryPool* pool) {
+  vector_size_t numInput = 0;
+  for (const auto& v : input) {
+    numInput += v->size();
+  }
+
+  auto column = BaseVector::createNullConstant(BIGINT(), numInput, pool);
+  return std::make_shared<RowVector>(
+      pool,
+      ROW({colName}, {BIGINT()}),
+      nullptr,
+      numInput,
+      std::vector<VectorPtr>{column});
+}
+
 RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b) {
   std::vector<std::string> names = a->names();
   std::vector<TypePtr> types = a->children();
@@ -223,5 +241,53 @@ void setupMemory(int64_t allocatorCapacity, int64_t arbitratorCapacity) {
   options.checkUsageLeak = true;
   options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
   facebook::velox::memory::MemoryManager::initialize(options);
+}
+
+std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
+computeReferenceResults(
+    const core::PlanNodePtr& plan,
+    const std::vector<RowVectorPtr>& input,
+    ReferenceQueryRunner* referenceQueryRunner) {
+  if (auto sql = referenceQueryRunner->toSql(plan)) {
+    try {
+      return std::make_pair(
+          referenceQueryRunner->execute(sql.value(), input, plan->outputType()),
+          ReferenceQueryErrorCode::kSuccess);
+    } catch (...) {
+      LOG(WARNING) << "Query failed in the reference DB";
+      return std::make_pair(
+          std::nullopt, ReferenceQueryErrorCode::kReferenceQueryFail);
+    }
+  }
+
+  LOG(INFO) << "Query not supported by the reference DB";
+  return std::make_pair(
+      std::nullopt, ReferenceQueryErrorCode::kReferenceQueryUnsupported);
+}
+
+std::pair<std::optional<std::vector<RowVectorPtr>>, ReferenceQueryErrorCode>
+computeReferenceResultsAsVector(
+    const core::PlanNodePtr& plan,
+    const std::vector<RowVectorPtr>& input,
+    ReferenceQueryRunner* referenceQueryRunner) {
+  VELOX_CHECK(referenceQueryRunner->supportsVeloxVectorResults());
+
+  if (auto sql = referenceQueryRunner->toSql(plan)) {
+    try {
+      return std::make_pair(
+          referenceQueryRunner->executeVector(
+              sql.value(), input, plan->outputType()),
+          ReferenceQueryErrorCode::kSuccess);
+    } catch (...) {
+      LOG(WARNING) << "Query failed in the reference DB";
+      return std::make_pair(
+          std::nullopt, ReferenceQueryErrorCode::kReferenceQueryFail);
+    }
+  } else {
+    LOG(INFO) << "Query not supported by the reference DB";
+  }
+
+  return std::make_pair(
+      std::nullopt, ReferenceQueryErrorCode::kReferenceQueryUnsupported);
 }
 } // namespace facebook::velox::exec::test

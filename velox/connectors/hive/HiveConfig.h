@@ -180,6 +180,18 @@ class HiveConfig {
   static constexpr const char* kOrcWriterMaxDictionaryMemorySession =
       "orc_optimized_writer_max_dictionary_memory";
 
+  /// Configs to control dictionary encoding.
+  static constexpr const char* kOrcWriterIntegerDictionaryEncodingEnabled =
+      "hive.orc.writer.integer-dictionary-encoding-enabled";
+  static constexpr const char*
+      kOrcWriterIntegerDictionaryEncodingEnabledSession =
+          "orc_optimized_writer_integer_dictionary_encoding_enabled";
+  static constexpr const char* kOrcWriterStringDictionaryEncodingEnabled =
+      "hive.orc.writer.string-dictionary-encoding-enabled";
+  static constexpr const char*
+      kOrcWriterStringDictionaryEncodingEnabledSession =
+          "orc_optimized_writer_string_dictionary_encoding_enabled";
+
   /// Enables historical based stripe size estimation after compression.
   static constexpr const char* kOrcWriterLinearStripeSizeHeuristics =
       "hive.orc.writer.linear-stripe-size-heuristics";
@@ -219,11 +231,11 @@ class HiveConfig {
   static constexpr const char* kS3UseProxyFromEnv =
       "hive.s3.use-proxy-from-env";
 
-  /// Timestamp unit for Parquet write through Arrow bridge.
-  static constexpr const char* kParquetWriteTimestampUnit =
-      "hive.parquet.writer.timestamp-unit";
-  static constexpr const char* kParquetWriteTimestampUnitSession =
-      "hive.parquet.writer.timestamp_unit";
+  // The unit for reading timestamps from files.
+  static constexpr const char* kReadTimestampUnit =
+      "hive.reader.timestamp-unit";
+  static constexpr const char* kReadTimestampUnitSession =
+      "hive.reader.timestamp_unit";
 
   static constexpr const char* kCacheNoRetention = "cache.no_retention";
   static constexpr const char* kCacheNoRetentionSession = "cache.no_retention";
@@ -299,6 +311,10 @@ class HiveConfig {
 
   uint64_t orcWriterMaxDictionaryMemory(const Config* session) const;
 
+  bool isOrcWriterIntegerDictionaryEncodingEnabled(const Config* session) const;
+
+  bool isOrcWriterStringDictionaryEncodingEnabled(const Config* session) const;
+
   bool orcWriterLinearStripeSizeHeuristics(const Config* session) const;
 
   uint64_t orcWriterMinCompressionSize(const Config* session) const;
@@ -317,9 +333,8 @@ class HiveConfig {
 
   bool s3UseProxyFromEnv() const;
 
-  /// Returns the timestamp unit used when writing timestamps into Parquet
-  /// through Arrow bridge. 0: second, 3: milli, 6: micro, 9: nano.
-  uint8_t parquetWriteTimestampUnit(const Config* session) const;
+  // Returns the timestamp unit used when reading timestamps from files.
+  uint8_t readTimestampUnit(const Config* session) const;
 
   /// Returns true to evict out a query scanned data out of in-memory cache
   /// right after the access, and also skip staging to the ssd cache. This helps

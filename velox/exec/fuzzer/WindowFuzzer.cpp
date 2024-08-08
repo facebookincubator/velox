@@ -177,8 +177,7 @@ std::string WindowFuzzer::getFrame(
   return frame.str();
 }
 
-std::vector<WindowFuzzer::SortingKeyAndOrder>
-WindowFuzzer::generateSortingKeysAndOrders(
+std::vector<SortingKeyAndOrder> WindowFuzzer::generateSortingKeysAndOrders(
     const std::string& prefix,
     std::vector<std::string>& names,
     std::vector<TypePtr>& types) {
@@ -359,11 +358,17 @@ void initializeVerifier(
     const std::shared_ptr<ResultVerifier>& customVerifier,
     const std::vector<RowVectorPtr>& input,
     const std::vector<std::string>& partitionKeys,
+    const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
     const std::string& frame) {
   const auto& windowNode =
       std::dynamic_pointer_cast<const core::WindowNode>(plan);
   customVerifier->initializeWindow(
-      input, partitionKeys, windowNode->windowFunctions()[0], frame, "w0");
+      input,
+      partitionKeys,
+      sortingKeysAndOrders,
+      windowNode->windowFunctions()[0],
+      frame,
+      "w0");
 }
 } // namespace
 
@@ -401,7 +406,8 @@ bool WindowFuzzer::verifyWindow(
 
     if (!customVerification) {
       if (resultOrError.result && enableWindowVerification) {
-        auto referenceResult = computeReferenceResults(plan, input);
+        auto referenceResult =
+            computeReferenceResults(plan, input, referenceQueryRunner_.get());
         stats_.updateReferenceQueryStats(referenceResult.second);
         if (auto expectedResult = referenceResult.first) {
           ++stats_.numVerified;
@@ -424,7 +430,13 @@ bool WindowFuzzer::verifyWindow(
         VELOX_CHECK(
             customVerifier->supportsVerify(),
             "Window fuzzer only uses custom verify() methods.");
-        initializeVerifier(plan, customVerifier, input, partitionKeys, frame);
+        initializeVerifier(
+            plan,
+            customVerifier,
+            input,
+            partitionKeys,
+            sortingKeysAndOrders,
+            frame);
         customVerifier->verify(resultOrError.result);
       }
     }
@@ -459,6 +471,7 @@ void windowFuzzer(
     const std::unordered_set<std::string>& orderDependentFunctions,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
+    bool orderableGroupKeys,
     const std::optional<std::string>& planPath,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner) {
   auto windowFuzzer = WindowFuzzer(
@@ -470,6 +483,7 @@ void windowFuzzer(
       orderDependentFunctions,
       timestampPrecision,
       queryConfigs,
+      orderableGroupKeys,
       std::move(referenceQueryRunner));
   planPath.has_value() ? windowFuzzer.go(planPath.value()) : windowFuzzer.go();
 }

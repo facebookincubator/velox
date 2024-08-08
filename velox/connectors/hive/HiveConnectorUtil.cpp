@@ -27,9 +27,9 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive {
-
 namespace {
 
 struct SubfieldSpec {
@@ -91,7 +91,7 @@ std::unique_ptr<common::Filter> makeFloatingPointMapKeyFilter(
   if (filters.size() == 1) {
     return std::move(filters[0]);
   }
-  return std::make_unique<common::MultiRange>(std::move(filters), false, false);
+  return std::make_unique<common::MultiRange>(std::move(filters), false);
 }
 
 // Recursively add subfields to scan spec.
@@ -545,7 +545,7 @@ void configureReaderOptions(
       hiveConfig->cacheNoRetention(sessionProperties));
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
   if (!sessionTzName.empty()) {
-    const auto timezone = date::locate_zone(sessionTzName);
+    const auto timezone = tz::locateZone(sessionTzName);
     readerOptions.setSessionTimezone(timezone);
   }
 
@@ -572,7 +572,9 @@ void configureRowReaderOptions(
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
-    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit) {
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const Config* sessionProperties) {
   auto skipRowsIt =
       tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
   if (skipRowsIt != tableParameters.end()) {
@@ -582,6 +584,10 @@ void configureRowReaderOptions(
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(hiveSplit->start, hiveSplit->length);
+  if (hiveConfig && sessionProperties) {
+    rowReaderOptions.setTimestampPrecision(static_cast<TimestampPrecision>(
+        hiveConfig->readTimestampUnit(sessionProperties)));
+  }
 }
 
 namespace {

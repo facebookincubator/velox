@@ -210,6 +210,20 @@ uint64_t HiveConfig::orcWriterMaxDictionaryMemory(const Config* session) const {
       core::CapacityUnit::BYTE);
 }
 
+bool HiveConfig::isOrcWriterIntegerDictionaryEncodingEnabled(
+    const Config* session) const {
+  return session->get<bool>(
+      kOrcWriterIntegerDictionaryEncodingEnabledSession,
+      config_->get<bool>(kOrcWriterIntegerDictionaryEncodingEnabled, true));
+}
+
+bool HiveConfig::isOrcWriterStringDictionaryEncodingEnabled(
+    const Config* session) const {
+  return session->get<bool>(
+      kOrcWriterStringDictionaryEncodingEnabledSession,
+      config_->get<bool>(kOrcWriterStringDictionaryEncodingEnabled, true));
+}
+
 bool HiveConfig::orcWriterLinearStripeSizeHeuristics(
     const Config* session) const {
   return session->get<bool>(
@@ -272,13 +286,12 @@ bool HiveConfig::s3UseProxyFromEnv() const {
   return config_->get<bool>(kS3UseProxyFromEnv, false);
 }
 
-uint8_t HiveConfig::parquetWriteTimestampUnit(const Config* session) const {
+uint8_t HiveConfig::readTimestampUnit(const Config* session) const {
   const auto unit = session->get<uint8_t>(
-      kParquetWriteTimestampUnitSession,
-      config_->get<uint8_t>(kParquetWriteTimestampUnit, 9 /*nano*/));
+      kReadTimestampUnitSession,
+      config_->get<uint8_t>(kReadTimestampUnit, 3 /*milli*/));
   VELOX_CHECK(
-      unit == 0 /*second*/ || unit == 3 /*milli*/ || unit == 6 /*micro*/ ||
-          unit == 9,
+      unit == 3 || unit == 6 /*micro*/ || unit == 9 /*nano*/,
       "Invalid timestamp unit.");
   return unit;
 }

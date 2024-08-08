@@ -16,6 +16,7 @@
 
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/SIMDComparisonUtil.h"
 #include "velox/functions/sparksql/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -115,6 +116,12 @@ class DecimalCompareFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     prepareResults(rows, resultType, context, result);
+
+    if (shouldApplyAutoSimdComparison<A, B>(rows, args)) {
+      applyAutoSimdComparison<A, B, Operation, int8_t, bool>(
+          rows, args, context, result, deltaScale_, need256_);
+      return;
+    }
 
     // Fast path when the first argument is a flat vector.
     if (args[0]->isFlatEncoding()) {

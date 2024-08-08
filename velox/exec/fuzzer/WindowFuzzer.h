@@ -18,6 +18,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/fuzzer/AggregationFuzzerBase.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -39,8 +40,9 @@ class WindowFuzzer : public AggregationFuzzerBase {
       const std::unordered_set<std::string>& orderDependentFunctions,
       VectorFuzzer::Options::TimestampPrecision timestampPrecision,
       const std::unordered_map<std::string, std::string>& queryConfigs,
+      bool orderableGroupKeys,
       std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
-      : AggregationFuzzerBase{seed, customVerificationFunctions, customInputGenerators, timestampPrecision, queryConfigs, std::move(referenceQueryRunner)},
+      : AggregationFuzzerBase{seed, customVerificationFunctions, customInputGenerators, timestampPrecision, queryConfigs, orderableGroupKeys, std::move(referenceQueryRunner)},
         orderDependentFunctions_{orderDependentFunctions} {
     VELOX_CHECK(
         !aggregationSignatureMap.empty() || !windowSignatureMap.empty(),
@@ -76,14 +78,6 @@ class WindowFuzzer : public AggregationFuzzerBase {
   void go(const std::string& planPath);
 
  private:
-  struct SortingKeyAndOrder {
-    const std::string key_;
-    const core::SortOrder sortOrder_;
-
-    SortingKeyAndOrder(std::string key, core::SortOrder sortOrder)
-        : key_(std::move(key)), sortOrder_(std::move(sortOrder)) {}
-  };
-
   void addWindowFunctionSignatures(const WindowFunctionMap& signatureMap);
 
   // Return a randomly generated frame clause string together with a boolean
@@ -154,6 +148,7 @@ void windowFuzzer(
     const std::unordered_set<std::string>& orderDependentFunctions,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
+    bool orderableGroupKeys,
     const std::optional<std::string>& planPath,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner);
 

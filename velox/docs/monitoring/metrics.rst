@@ -1,4 +1,3 @@
-
 ===============
 Runtime Metrics
 ===============
@@ -43,7 +42,7 @@ number of shuffle requests per second.
 **Histogram**: tracks the distribution of event data point values, such as query
 execution time distribution. The histogram metric divides the entire data range
 into a series of adjacent equal-sized intervals or buckets, and then count how
-many data values fall into each bucket. DEFINE_HISTOGRAM_STAT specifies the data
+many data values fall into each bucket. DEFINE_HISTOGRAM_METRIC specifies the data
 range by min/max values, and the number of buckets. Any collected data value
 less than min is counted in min bucket, and any one larger than max is counted
 in max bucket. It also allows to specify the value percentiles to report for
@@ -290,6 +289,10 @@ Cache
      - Sum
      - Number of times a valid entry was removed in order to make space, since
        last counter retrieval.
+   * - memory_cache_num_savable_evicts
+     - Sum
+     - Number of times a valid entry was removed in order to make space but has not
+       been saved to SSD yet, since last counter retrieval.
    * - memory_cache_num_evict_checks
      - Sum
      - Number of entries considered for evicting, since last counter retrieval.
@@ -384,6 +387,9 @@ Cache
    * - ssd_cache_regions_evicted
      - Sum
      - Total number of cache regions evicted.
+   * - ssd_cache_recovered_entries
+     - Sum
+     - Total number of cache entries recovered from checkpoint.
 
 Storage
 -------
