@@ -32,71 +32,103 @@ struct StringToMapFunction {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& entryDelimiter,
       const arg_type<Varchar>& keyValueDelimiter) {
-    VELOX_USER_CHECK_EQ(
-        entryDelimiter.size(), 1, "entryDelimiter's size should be 1.");
-    VELOX_USER_CHECK_EQ(
-        keyValueDelimiter.size(), 1, "keyValueDelimiter's size should be 1.");
-
-    callImpl(
-        out,
-        toStringView(input),
-        toStringView(entryDelimiter),
-        toStringView(keyValueDelimiter));
+    VELOX_USER_CHECK_GE(
+        entryDelimiter.size(), 1, "The entry delimiter should not be empty.");
+    VELOX_USER_CHECK_GE(
+        keyValueDelimiter.size(),
+        1,
+        "The keyValue delimiter should not be empty.");
+    callImpl(out, input, entryDelimiter, keyValueDelimiter);
   }
 
  private:
-  static std::string_view toStringView(const arg_type<Varchar>& input) {
-    return std::string_view(input.data(), input.size());
+  /// @brief Retrieve the index of the pattern string
+  ///
+  /// This function retrieves all subscripts in the target string that match the
+  /// start and end of the pattern
+  ///
+  /// @param targetStr The target string to search for
+  /// @param pattern Search pattern.
+  std::vector<std::pair<int, int>> findPatternIndex(
+      const StringView& targetStr,
+      const StringView& pattern) {
+    std::vector<std::pair<int, int>> result;
+    auto patternStr = pattern.str();
+    patternStr.insert(patternStr.begin(), '(');
+    patternStr.push_back(')');
+    re2::RE2 re(patternStr);
+    auto target = targetStr.str();
+    re2::StringPiece sp(target);
+    re2::StringPiece match;
+    while (re2::RE2::FindAndConsume(&sp, re, &match)) {
+      size_t startIndex = match.data() - target.data();
+      size_t endIndex = startIndex + match.size();
+      result.push_back({startIndex, endIndex});
+    }
+    return result;
+  }
+
+  /// @brief Separate the target string based on the delimiter
+  ///
+  /// This function will separate the target string based on a delimiter and
+  /// return an array of separated strings
+  ///
+  /// @param targetStr The target string to be separated
+  /// @param delimeter Delimiter
+  /// @param onlyOne When encountering the first delimiter, simply separate the
+  /// string into two longer parts
+  std::vector<StringView> split(
+      const StringView& targetStr,
+      const StringView& delimeter,
+      bool onlyOne = false) {
+    std::vector<StringView> result;
+    auto allIndex = findPatternIndex(targetStr, delimeter);
+    int begin = 0;
+    for (int i = 0; i < allIndex.size(); ++i) {
+      result.push_back(
+          StringView(targetStr.data() + begin, allIndex[i].first - begin));
+      begin = allIndex[i].second;
+      if (onlyOne) {
+        break;
+      }
+    }
+    if (begin <= targetStr.size()) {
+      result.push_back(
+          StringView(targetStr.data() + begin, targetStr.size() - begin));
+    }
+    return result;
   }
 
   void callImpl(
       out_type<Map<Varchar, Varchar>>& out,
-      std::string_view input,
-      std::string_view entryDelimiter,
-      std::string_view keyValueDelimiter) const {
-    size_t pos = 0;
+      const StringView& input,
+      const StringView& entryDelimiter,
+      const StringView& keyValueDelimiter) {
     folly::F14FastSet<std::string_view> keys;
-
-    auto nextEntryPos = input.find(entryDelimiter, pos);
-    while (nextEntryPos != std::string::npos) {
-      processEntry(
-          out,
-          std::string_view(input.data() + pos, nextEntryPos - pos),
-          keyValueDelimiter,
-          keys);
-
-      pos = nextEntryPos + 1;
-      nextEntryPos = input.find(entryDelimiter, pos);
+    auto entryItems = split(input, entryDelimiter);
+    for (const auto& entryItem : entryItems) {
+      auto kvItems = split(entryItem, keyValueDelimiter);
+      VELOX_USER_CHECK(
+          keys.insert(kvItems[0]).second,
+          "Duplicate keys are not allowed: '{}'.",
+          kvItems[0]);
+      if (kvItems.size() > 1) {
+        auto [keyWriter, valueWriter] = out.add_item();
+        keyWriter.setNoCopy(kvItems[0]);
+        valueWriter.setNoCopy(kvItems[1]);
+      } else {
+        out.add_null().setNoCopy(kvItems[0]);
+      }
     }
-
-    processEntry(
-        out,
-        std::string_view(input.data() + pos, input.size() - pos),
-        keyValueDelimiter,
-        keys);
   }
 
-  void processEntry(
-      out_type<Map<Varchar, Varchar>>& out,
-      std::string_view entry,
-      std::string_view keyValueDelimiter,
-      folly::F14FastSet<std::string_view>& keys) const {
-    const auto delimiterPos = entry.find(keyValueDelimiter, 0);
-    // Allows keyValue delimiter not found.
-    if (delimiterPos == std::string::npos) {
-      out.add_null().setNoCopy(StringView(entry));
-      return;
-    }
-    const auto key = std::string_view(entry.data(), delimiterPos);
-    VELOX_USER_CHECK(
-        keys.insert(key).second, "Duplicate keys are not allowed: '{}'.", key);
-    const auto value = StringView(
-        entry.data() + delimiterPos + 1, entry.size() - delimiterPos - 1);
-
-    auto [keyWriter, valueWriter] = out.add_item();
-    keyWriter.setNoCopy(StringView(key));
-    valueWriter.setNoCopy(value);
-  }
+  static StringView entryDelimiter_;
+  static StringView keyValueDelimiter_;
 };
+template <typename T>
+StringView StringToMapFunction<T>::entryDelimiter_(",");
+
+template <typename T>
+StringView StringToMapFunction<T>::keyValueDelimiter_(":");
 
 } // namespace facebook::velox::functions::sparksql
