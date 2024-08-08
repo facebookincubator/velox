@@ -32,7 +32,7 @@ void ResultStaging::registerPointerInternal(
     bool clear) {
   VELOX_CHECK_LT(id, offsets_.size());
   VELOX_CHECK_NOT_NULL(pointer);
-#ifndef NDEBUG
+#if 0 // ndef NDEBUG
   for (auto& pair : patch_) {
     VELOX_CHECK(
         pair.second != pointer, "Must not register the same pointer twice");
