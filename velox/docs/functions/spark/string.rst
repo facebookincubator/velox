@@ -20,6 +20,25 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     If ``n < 0``, the result is an empty string.
     If ``n >= 256``, the result is equivalent to chr(``n % 256``).
 
+.. spark:function:: concat_ws(separator, [string]/[array<string>], ...) -> varchar
+
+   Returns the concatenation for ``string`` and all elements in ``array<string>``, separated
+   by ``separator``. The type of ``separator`` is VARCHAR . It can take variable number of
+   remaining arguments, where ``string`` and ``array<string>`` can be used in combination. NULL
+   element is skipped in the concatenation. If ``separator`` is NULL, returns NULL, regardless
+   of the following inputs. For non-NULL ``separator``, if no remaining input or all remaining
+   inputs are NULL, returns an empty string. ::
+
+        SELECT concat_ws('~', 'a', 'b', 'c'); -- 'a~b~c'
+        SELECT concat_ws('~', ['a', 'b', 'c'], ['d']); -- 'a~b~c~d'
+        SELECT concat_ws('~', 'a', ['b', 'c']); -- 'a~b~c'
+        SELECT concat_ws('~', '', [''], ['a', '']); -- '~~a~'
+        SELECT concat_ws(NULL, 'a'); -- NULL
+        SELECT concat_ws('~'); -- ''
+        SELECT concat_ws('~', NULL, [NULL], 'a', 'b'); -- 'a~b'
+        SELECT concat_ws('~', NULL, NULL); -- ''
+        SELECT concat_ws('~', [NULL]); -- ''
+
 .. spark:function:: contains(left, right) -> boolean
 
     Returns true if 'right' is found in 'left'. Otherwise, returns false. ::
