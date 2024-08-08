@@ -19,6 +19,11 @@
 
 namespace facebook::velox::functions {
 
+// Returns a map created using the given key/value arrays.
+// It's used for
+// 1. Presto's map function, see documentation at https://prestodb.io/docs/current/functions/map.html#map
+// 2. Spark's map_from_array function, see documentation at https://spark.apache.org/docs/latest/api/sql/#map_from_arrays
+
 template <bool AllowDuplicateKeys>
 class MapFunction : public exec::VectorFunction {
  public:

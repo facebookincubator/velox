@@ -16,6 +16,15 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/Map.h"
 
+// Returns a map created using the given key/value arrays.
+// See documentation at https://spark.apache.org/docs/latest/api/sql/#map_from_arrays
+//
+// Example:
+// Select map_from_arrays(array(1,2,3), array('a','b','c'));
+//
+// Result:
+// {1:"a",2:"b",3:"c"}
+
 namespace facebook::velox::functions {
 namespace {
 std::vector<std::shared_ptr<exec::FunctionSignature>> mapFromArraysSignatures() {
