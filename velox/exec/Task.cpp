@@ -293,6 +293,7 @@ Task::Task(
       planFragment_(std::move(planFragment)),
       destination_(destination),
       queryCtx_(std::move(queryCtx)),
+      traceConfig_(maybeMakeTraceConfig()),
       mode_(mode),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
@@ -304,6 +305,7 @@ Task::Task(
     VELOX_CHECK_NULL(
         dynamic_cast<const folly::InlineLikeExecutor*>(queryCtx_->executor()));
   }
+  maybeRecordQueryConfig();
 }
 
 Task::~Task() {
@@ -387,7 +389,7 @@ const std::string& Task::getOrCreateSpillDirectory() {
     return spillDirectory_;
   }
 
-  std::lock_guard<std::mutex> l(spillDirCreateMutex_);
+  std::lock_guard<std::mutex> l(dirCreateMutex_);
   if (spillDirectoryCreated_) {
     return spillDirectory_;
   }
@@ -416,6 +418,51 @@ void Task::removeSpillDirectoryIfExists() {
     LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_
                << "' for Task " << taskId() << ": " << e.what();
   }
+}
+
+/// Builds the query trace config.
+std::optional<QueryTraceConfig> Task::maybeMakeTraceConfig() const {
+  const auto& queryConfig = queryCtx_->queryConfig();
+  if (!queryConfig.queryTraceEnabled()) {
+    return std::nullopt;
+  }
+
+  const auto queryTraceDir = queryConfig.queryTraceDir();
+  VELOX_CHECK(
+      !queryTraceDir.empty(),
+      "Query trace enabled but the trace dir is not set properly");
+
+  const auto queryTraceNodes = queryConfig.queryTraceNodes();
+  if (queryTraceNodes.empty()) {
+    LOG(WARNING) << "Query trace enabled but no target nodes.";
+    return std::nullopt;
+  }
+
+  std::vector<std::string> nodes;
+  folly::split(',', queryTraceNodes, nodes);
+  const std::unordered_set<std::string> nodeSet(nodes.begin(), nodes.end());
+  VELOX_CHECK_EQ(nodeSet.size(), nodes.size());
+
+  const auto queryTraceWriteBufferSize = queryConfig.queryWriteBufferSize();
+
+  return QueryTraceConfig(nodeSet, queryTraceDir, queryTraceWriteBufferSize);
+}
+
+std::string Task::createTraceDirectory(const std::string& subDir) const {
+  std::lock_guard<std::mutex> l(dirCreateMutex_);
+  std::string traceDir = fmt::format("{}/{}", traceDirectory_, subDir);
+  try {
+    const auto fileSystem =
+        filesystems::getFileSystem(traceDirectory_, nullptr);
+    fileSystem->mkdir(traceDir);
+  } catch (const std::exception& e) {
+    VELOX_FAIL(
+        "Failed to create trace directory '{}' for Task {}: {}",
+        traceDir,
+        taskId(),
+        e.what());
+  }
+  return traceDir;
 }
 
 uint64_t Task::driverCpuTimeSliceLimitMs() const {
@@ -2772,6 +2819,17 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
     int32_t pipelineId) const {
   VELOX_CHECK_LT(pipelineId, exchangeClients_.size());
   return exchangeClients_[pipelineId];
+}
+
+void Task::maybeRecordQueryConfig() {
+  // TODO: Make it unlikely.
+  if (!traceConfig_) {
+    return;
+  }
+  traceDirectory_ = traceConfig_->queryTraceDir;
+  const auto traceMetaDir = createTraceDirectory("metadata");
+  query_config_writer_ = std::make_unique<QueryMetadataWriter>(traceMetaDir);
+  query_config_writer_->write(queryCtx_, planFragment_.planNode);
 }
 
 void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {

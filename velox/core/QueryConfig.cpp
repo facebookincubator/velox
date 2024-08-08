@@ -115,4 +115,9 @@ void QueryConfig::testingOverrideConfigUnsafe(
   config_ = std::make_unique<MemConfig>(std::move(values));
 }
 
+const std::unordered_map<std::string, std::string>& QueryConfig::values()
+    const {
+  return config_->values();
+}
+
 } // namespace facebook::velox::core
