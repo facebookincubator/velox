@@ -126,7 +126,6 @@ class IPAddressCastOperator : public exec::CastOperator {
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto ipAddressString = ipAddressStrings->valueAt(row);
 
-      
       auto maybeIp = folly::IPAddress::tryFromString(ipAddressString);
       if (maybeIp.hasError()) {
         if (threadSkipErrorDetails()) {
@@ -134,9 +133,7 @@ class IPAddressCastOperator : public exec::CastOperator {
         } else {
           context.setStatus(
               row,
-              Status::UserError(
-                  "Invalid IP address '{}'",
-                  ipAddressString));
+              Status::UserError("Invalid IP address '{}'", ipAddressString));
         }
       }
       folly::IPAddress addr = maybeIp.value();
