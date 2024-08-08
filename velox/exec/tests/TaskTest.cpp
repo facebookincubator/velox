@@ -1432,7 +1432,7 @@ class TaskPauseTest : public TaskTest {
     ASSERT_EQ(task_->numTotalDrivers(), 1);
     ASSERT_EQ(task_->numFinishedDrivers(), 0);
     ASSERT_EQ(task_->numRunningDrivers(), 1);
-    ASSERT(task_->pauseRequested());
+    ASSERT_TRUE(task_->pauseRequested());
   }
 
   void TearDown() override {
@@ -1702,11 +1702,11 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, pauseFuture) {
   std::thread observeThread([&]() {
     ContinueFuture future = ContinueFuture::makeEmpty();
     bool requested = task_->pauseRequested(&future);
-    ASSERT(requested);
+    ASSERT_TRUE(requested);
     taskResumeAllowed = true;
     taskResumeAllowedWait.notifyAll();
     future.wait();
-    ASSERT(!task_->pauseRequested());
+    ASSERT_TRUE(!task_->pauseRequested());
   });
 
   taskResumeAllowedWait.await([&]() { return taskResumeAllowed.load(); });
@@ -1729,11 +1729,11 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, pauseFutureNeverFulfilled) {
   std::thread observeThread([&]() {
     ContinueFuture future = ContinueFuture::makeEmpty();
     bool requested = task_->pauseRequested(&future);
-    ASSERT(requested);
+    ASSERT_TRUE(requested);
     taskAbortAllowed = true;
     taskAbortAllowedWait.notifyAll();
     future.wait();
-    ASSERT(future.hasException());
+    ASSERT_TRUE(future.hasException());
     ASSERT_EQ(
         std::string(future.result().exception().what()),
         "folly::BrokenPromise: Broken promise for type name `folly::Unit`");
