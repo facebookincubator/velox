@@ -31,6 +31,7 @@
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArraySort.h"
+#include "velox/functions/sparksql/AtLeastNNonNulls.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
@@ -285,6 +286,9 @@ void registerFunctions(const std::string& prefix) {
 
   // Register 'in' functions.
   registerIn(prefix);
+
+  registerFunction<AtLeastNNonNullsFunction, bool, int32_t, Variadic<Any>>(
+      {prefix + "at_least_n_non_nulls"});
 
   // These vector functions are only accessible via the
   // VELOX_REGISTER_VECTOR_FUNCTION macro, which must be invoked in the same
