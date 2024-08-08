@@ -1080,8 +1080,8 @@ Invalid examples:
 
 ::
 
-  SELECT cast('2001:db8::1::1' as ipaddress); -- Invalid IP address
-  SELECT cast('789.1.1.1' as ipaddress); -- Invalid IP address
+  SELECT cast('2001:db8::1::1' as ipaddress); -- Invalid IP address '2001:db8::1::1'
+  SELECT cast('789.1.1.1' as ipaddress); -- Invalid IP address '789.1.1.1'
 
 From VARBINARY
 ^^^^^^^^^^^^^^

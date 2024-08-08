@@ -125,8 +125,21 @@ class IPAddressCastOperator : public exec::CastOperator {
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto ipAddressString = ipAddressStrings->valueAt(row);
-      folly::IPAddress addr(ipAddressString);
 
+      
+      auto maybeIp = folly::IPAddress::tryFromString(ipAddressString);
+      if (maybeIp.hasError()) {
+        if (threadSkipErrorDetails()) {
+          context.setStatus(row, Status::UserError());
+        } else {
+          context.setStatus(
+              row,
+              Status::UserError(
+                  "Invalid IP address '{}'",
+                  ipAddressString));
+        }
+      }
+      folly::IPAddress addr = maybeIp.value();
       auto addrBytes = folly::IPAddress::createIPv6(addr).toByteArray();
 
       std::reverse(addrBytes.begin(), addrBytes.end());
