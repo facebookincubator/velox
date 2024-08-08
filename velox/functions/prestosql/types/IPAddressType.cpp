@@ -135,6 +135,7 @@ class IPAddressCastOperator : public exec::CastOperator {
               row,
               Status::UserError("Invalid IP address '{}'", ipAddressString));
         }
+        return;
       }
       folly::IPAddress addr = maybeIp.value();
       auto addrBytes = folly::IPAddress::createIPv6(addr).toByteArray();
