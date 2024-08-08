@@ -33,6 +33,28 @@ static bool applyFilter(TFilter& filter, T value);
 
 namespace facebook::velox::dwio::common {
 
+/// In data formats that support page, there is the problem of reading data
+/// across pages, such as Parquet. When reading data through ValueHook, there
+/// may be an issue with data overwriting. This function determines whether to
+/// adjust the index of the row based on the value of numValuesBeforePage.
+inline const int32_t* shiftRowIndex(
+    const int32_t* scatterRows,
+    raw_vector<int32_t>& newScatterRows,
+    int32_t numRows,
+    int32_t numValuesBeforePage,
+    bool hasHook = true) {
+  if (!hasHook || numValuesBeforePage <= 0) {
+    return scatterRows;
+  }
+
+  newScatterRows.resize(numRows);
+  for (auto i = 0; i < numRows; i++) {
+    newScatterRows[i] = scatterRows[i] + numValuesBeforePage;
+  }
+
+  return newScatterRows.data();
+}
+
 inline int32_t firstNullIndex(const uint64_t* nulls, int32_t numRows) {
   int32_t first = -1;
   bits::testUnsetBits(nulls, 0, numRows, [&](int32_t row) {

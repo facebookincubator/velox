@@ -185,7 +185,7 @@ class ParquetData : public dwio::common::FormatData {
   }
 
   bool hasDictionary() const {
-    return reader_->isDictionary();
+    return hasDictionary_;
   }
 
   bool isDeltaBinaryPacked() const {
@@ -217,6 +217,7 @@ class ParquetData : public dwio::common::FormatData {
   int64_t rowsInRowGroup_;
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
+  bool hasDictionary_{false};
 
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;

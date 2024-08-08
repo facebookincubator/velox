@@ -478,8 +478,8 @@ void SelectiveStringDirectColumnReader::read(
       lengths_->asMutable<int32_t>(), numRows - numNulls);
   rawLengths_ = lengths_->as<uint32_t>();
   lengthIndex_ = 0;
-  dwio::common::StringColumnReadWithVisitorHelper<true>(
-      *this, rows)([&](auto visitor) { readWithVisitor(rows, visitor); });
+  dwio::common::StringColumnReadWithVisitorHelper<true>(*this, rows, false)(
+      [&](auto visitor) { readWithVisitor(rows, visitor); });
   readOffset_ += numRows;
 }
 

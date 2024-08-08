@@ -790,6 +790,7 @@ class ParquetRowReader::Impl {
         *options_.getScanSpec());
     columnReader_->setFillMutatedOutputRows(
         options_.getRowNumberColumnInfo().has_value());
+    columnReader_->setIsTopLevel();
 
     filterRowGroups();
     if (!rowGroupIds_.empty()) {

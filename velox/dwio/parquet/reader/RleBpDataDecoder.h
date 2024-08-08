@@ -108,15 +108,24 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
     if (hasNulls) {
       raw_vector<int32_t>* innerVector = nullptr;
       auto outerVector = &visitor.outerNonNullRows();
+      raw_vector<int32_t> newScatterRows;
       if (Visitor::dense || rowsAsRange.back() == rowsAsRange.size() - 1) {
         dwio::common::nonNullRowsFromDense(nulls, numRows, *outerVector);
         if (outerVector->empty()) {
           visitor.setAllNull(hasFilter ? 0 : numRows);
           return;
         }
+
+        auto scatterRows = dwio::common::shiftRowIndex(
+            outerVector->data(),
+            newScatterRows,
+            outerVector->size(),
+            visitor.reader().numScanned(),
+            hasHook);
+
         bulkScan<hasFilter, hasHook, true>(
             folly::Range<const int32_t*>(rows, outerVector->size()),
-            outerVector->data(),
+            scatterRows,
             visitor);
       } else {
         innerVector = &visitor.innerNonNullRows();
@@ -138,8 +147,15 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
           visitor.setAllNull(hasFilter ? 0 : numRows);
           return;
         }
-        bulkScan<hasFilter, hasHook, true>(
-            *innerVector, outerVector->data(), visitor);
+
+        auto scatterRows = dwio::common::shiftRowIndex(
+            outerVector->data(),
+            newScatterRows,
+            outerVector->size(),
+            visitor.reader().numScanned(),
+            hasHook);
+
+        bulkScan<hasFilter, hasHook, true>(*innerVector, scatterRows, visitor);
         skip<false>(tailSkip, 0, nullptr);
       }
     } else {
