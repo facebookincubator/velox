@@ -664,6 +664,59 @@ is the number of whole days in the interval, HH is then number of hours between 
     SELECT cast(now() - date('2024-03-01') as varchar); -- '35 09:15:54.092'
     SELECT cast(date('2024-03-01') - now() as varchar); -- '-35 09:16:20.598'
 
+From IPADDRESS
+^^^^^^^^^^^^^^
+
+Casting from IPADDRESS to VARCHAR returns a string formatted as x.x.x.x for IPV4 formatted IPV6 addresses.
+For all other IPV6 addresses it will be formatted in compressed IPV6 defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_
+
+IPV4:
+
+::
+
+  SELECT cast(ipaddress '1.2.3.4' as varchar); -- '1.2.3.4'
+
+IPV6:
+
+::
+
+  SELECT cast(ipaddress '2001:0db8:0000:0000:0000:ff00:0042:8329' as varchar); -- '2001:db8::ff00:42:8329'
+
+IPV4 mapped IPV6:
+
+::
+
+  SELECT cast(ipaddress '::ffff:ffff:ffff' as varchar); -- '255.255.255.255'
+
+Cast to VARBINARY
+-----------------
+
+From IPADDRESS
+^^^^^^^^^^^^^^
+
+Returns the IPV6 address as a 16 byte varbinary string in network byte order.
+
+Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range `(RFC 4291#section-2.5.5.2) <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+When creating an IPADDRESS, IPv4 addresses will be mapped into that range.
+
+IPV6:
+
+::
+
+  SELECT cast(ipaddress '2001:0db8:0000:0000:0000:ff00:0042:8329' as varbinary); -- 0x20010db8000000000000ff0000428329
+
+IPV4:
+
+::
+
+  SELECT cast('1.2.3.4' as ipaddress); -- 0x00000000000000000000ffff01020304
+
+IPV4 mapped IPV6:
+
+::
+
+  SELECT cast('::ffff:ffff:ffff' as ipaddress); -- 0x00000000000000000000ffffffffffff
+
 Cast to TIMESTAMP
 -----------------
 
@@ -980,10 +1033,10 @@ Invalid example
   SELECT cast('3E+' as decimal(12, 2)); -- Value is not a number
 
 Cast to IPADDRESS
----------------
+-----------------
 
 From VARCHAR
-^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^
 
 To cast a varchar to IPAddress input string must be in the form of either
 IPV4 or IPV6.
@@ -1031,7 +1084,7 @@ Invalid examples:
   SELECT cast('789.1.1.1' as ipaddress); -- Invalid IP address
 
 From VARBINARY
-^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
 
 To cast a varbinary to IPAddress it must be either IPV4(4 Bytes)
 or IPV6(16 Bytes) in network byte order.
