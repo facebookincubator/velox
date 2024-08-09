@@ -153,7 +153,7 @@ As Velox is run on Little Endian systems and the standard is network byte(Big En
 order, we reverse the bytes to allow for masking and other bit operations
 used in IPADDRESS/IPPREFIX related functions. This type can be used to
 create IPPREFIX networks as well as to check IPADDRESS validity within
-IPPREFIX netowrks.
+IPPREFIX networks.
 
 Spark Types
 ~~~~~~~~~~~~

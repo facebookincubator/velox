@@ -55,6 +55,7 @@ int128_t stringToInt128(std::string value) {
 
 TEST_F(IPAddressCastTest, castToVarchar) {
   EXPECT_EQ(castToVarchar("::ffff:1.2.3.4"), "1.2.3.4");
+  EXPECT_EQ(castToVarchar("0:0:0:0:0:0:13.1.68.3"), "::13.1.68.3");
   EXPECT_EQ(castToVarchar("1.2.3.4"), "1.2.3.4");
   EXPECT_EQ(castToVarchar("192.168.0.0"), "192.168.0.0");
   EXPECT_EQ(

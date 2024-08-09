@@ -668,7 +668,7 @@ From IPADDRESS
 ^^^^^^^^^^^^^^
 
 Casting from IPADDRESS to VARCHAR returns a string formatted as x.x.x.x for IPV4 formatted IPV6 addresses.
-For all other IPV6 addresses it will be formatted in compressed IPV6 defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_
+For all other IPV6 addresses it will be formatted in compressed alternate form IPV6 defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_
 
 IPV4:
 
@@ -681,6 +681,7 @@ IPV6:
 ::
 
   SELECT cast(ipaddress '2001:0db8:0000:0000:0000:ff00:0042:8329' as varchar); -- '2001:db8::ff00:42:8329'
+  SELECT cast(ipaddress '0:0:0:0:0:0:13.1.68.3' as varchar); -- '::13.1.68.3'
 
 IPV4 mapped IPV6:
 
