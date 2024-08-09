@@ -20,12 +20,11 @@
 using namespace facebook::velox::common;
 
 std::vector<std::unique_ptr<Subfield::PathElement>> tokenize(
-    const std::string& path,
-    const std::shared_ptr<Separators>& separators = Separators::get()) {
+    const std::string& path) {
   std::vector<std::unique_ptr<Subfield::PathElement>> elements;
-  Tokenizer tokenizer(path, separators);
-  while (tokenizer.hasNext()) {
-    elements.push_back(tokenizer.next());
+  auto tokenizer = Tokenizer::getInstance(path);
+  while (tokenizer->hasNext()) {
+    elements.push_back(tokenizer->next());
   }
   return elements;
 }
@@ -48,10 +47,8 @@ TEST(SubfieldTest, invalidPaths) {
   assertInvalidSubfield("a[2].[3].", "Invalid subfield path: a[2].^[3].");
 }
 
-void testColumnName(
-    const std::string& name,
-    const std::shared_ptr<Separators>& separators = Separators::get()) {
-  auto elements = tokenize(name, separators);
+void testColumnName(const std::string& name) {
+  auto elements = tokenize(name);
   EXPECT_EQ(elements.size(), 1);
   EXPECT_EQ(*elements[0].get(), Subfield::NestedField(name));
 }
@@ -62,9 +59,6 @@ TEST(SubfieldTest, columnNamesWithSpecialCharacters) {
   testColumnName("a/b/c:12");
   testColumnName("@basis");
   testColumnName("@basis|city_id");
-  auto separators = std::make_shared<Separators>();
-  separators->dot = '\0';
-  testColumnName("city.id@address:number/date|day$a-b$10_bucket", separators);
 }
 
 std::vector<std::unique_ptr<Subfield::PathElement>> createElements() {
@@ -153,4 +147,48 @@ TEST(SubfieldTest, longSubscript) {
       dynamic_cast<const Subfield::LongSubscript*>(subfield.path()[1].get());
   ASSERT_TRUE(longSubscript);
   ASSERT_EQ(longSubscript->index(), 3309189884973035076);
+}
+
+class FakeTokenizer : public Tokenizer {
+ public:
+  explicit FakeTokenizer(const std::string& path) : path_(path) {
+    state = State::kNotReady;
+  }
+
+  bool hasNext() override {
+    if (state == State::kDone) {
+      return false;
+    } else if (state == State::kNotReady) {
+      return true;
+    }
+    VELOX_FAIL("Illegal state");
+  }
+
+  std::unique_ptr<Subfield::PathElement> next() override {
+    if (!hasNext()) {
+      VELOX_USER_FAIL("No more tokens");
+    }
+    state = State::kDone;
+    return std::make_unique<Subfield::NestedField>(path_);
+  }
+
+ private:
+  const std::string path_;
+  State state;
+};
+
+TEST(SubfieldTest, CustomTokenizer) {
+  Tokenizer::registerInstanceFactory(
+      [](const std::string& p) { return std::make_unique<FakeTokenizer>(p); });
+
+  testColumnName("$bucket");
+  testColumnName("apollo-11");
+  testColumnName("a/b/c:12");
+  testColumnName("@basis");
+  testColumnName("@basis|city_id");
+  testColumnName("city.id@address*:number/date|day$a-b$10_bucket");
+
+  Tokenizer::registerInstanceFactory([](const std::string& p) {
+    return std::make_unique<DefaultTokenizer>(p);
+  });
 }

@@ -18,21 +18,19 @@
 
 namespace facebook::velox::common {
 
-Subfield::Subfield(
-    const std::string& path,
-    const std::shared_ptr<Separators>& separators) {
-  Tokenizer tokenizer(path, separators);
-  VELOX_CHECK(tokenizer.hasNext(), "Column name is missing: {}", path);
+Subfield::Subfield(const std::string& path) {
+  auto tokenizer = Tokenizer::getInstance(path);
+  VELOX_CHECK(tokenizer->hasNext(), "Column name is missing: {}", path);
 
-  auto firstElement = tokenizer.next();
+  auto firstElement = tokenizer->next();
   VELOX_CHECK(
       firstElement->kind() == kNestedField,
       "Subfield path must start with a name: {}",
       path);
   std::vector<std::unique_ptr<PathElement>> pathElements;
   pathElements.push_back(std::move(firstElement));
-  while (tokenizer.hasNext()) {
-    pathElements.push_back(tokenizer.next());
+  while (tokenizer->hasNext()) {
+    pathElements.push_back(tokenizer->next());
   }
   path_ = std::move(pathElements);
 }
