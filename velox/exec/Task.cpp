@@ -648,14 +648,14 @@ RowVectorPtr Task::next(ContinueFuture* future) {
 
       ++runnableDrivers;
 
-      std::shared_ptr<BlockingState> blockingState;
-      auto result = drivers_[i]->next(blockingState);
+      ContinueFuture driverFuture = ContinueFuture::makeEmpty();
+      auto result = drivers_[i]->next(&driverFuture);
       if (result) {
         return result;
       }
 
-      if (blockingState) {
-        futures[i] = blockingState->future();
+      if (driverFuture.valid()) {
+        futures[i] = std::move(driverFuture);
       }
 
       if (error()) {
@@ -898,6 +898,12 @@ void Task::initializePartitionOutput() {
 void Task::resume(std::shared_ptr<Task> self) {
   std::vector<std::shared_ptr<Driver>> offThreadDrivers;
   {
+    std::vector<ContinuePromise> resumePromises;
+    auto guard = folly::makeGuard([&]() {
+      for (auto& promise : resumePromises) {
+        promise.setValue();
+      }
+    });
     std::lock_guard<std::timed_mutex> l(self->mutex_);
     // Setting pause requested must be atomic with the resuming so that
     // suspended sections do not go back on thread during resume.
@@ -917,13 +923,17 @@ void Task::resume(std::shared_ptr<Task> self) {
             continue;
           }
           VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
-          if (!driver->state().hasBlockingFuture) {
+          if (!driver->state().hasBlockingFuture &&
+              driver->task()->queryCtx()->isExecutorSupplied()) {
             if (driver->state().endExecTimeMs != 0) {
               driver->state().totalPauseTimeMs +=
                   getCurrentTimeMs() - driver->state().endExecTimeMs;
             }
             // Do not continue a Driver that is blocked on external
             // event. The Driver gets enqueued by the promise realization.
+            //
+            // Do not continue the driver if no executor is supplied,
+            // This usually happens in single-threaded execution.
             Driver::enqueue(driver);
           }
         }
@@ -953,6 +963,7 @@ void Task::resume(std::shared_ptr<Task> self) {
         offThreadDrivers.push_back(std::move(driver));
       }
     }
+    resumePromises.swap(self->resumePromises_);
   }
 
   // Get the stats and free the resources of Drivers that were not on thread.
@@ -2734,6 +2745,25 @@ ContinueFuture Task::requestPause() {
   TestValue::adjust("facebook::velox::exec::Task::requestPauseLocked", this);
   pauseRequested_ = true;
   return makeFinishFutureLocked("Task::requestPause");
+}
+
+bool Task::pauseRequested(ContinueFuture* future) {
+  if (FOLLY_LIKELY(future == nullptr)) {
+    // Once 'pauseRequested_' is set, it will not be cleared until
+    // task::resume(). It is therefore OK to read it without a mutex
+    // from a thread that this flag concerns.
+    return pauseRequested_;
+  }
+
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  if (!pauseRequested_) {
+    VELOX_CHECK(resumePromises_.empty())
+    *future = ContinueFuture::makeEmpty();
+    return false;
+  }
+  resumePromises_.emplace_back("Task::isPaused");
+  *future = resumePromises_.back().getSemiFuture();
+  return true;
 }
 
 void Task::createExchangeClientLocked(
