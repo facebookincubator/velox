@@ -63,6 +63,7 @@ class AggregationFuzzerBase {
           customInputGenerators,
       VectorFuzzer::Options::TimestampPrecision timestampPrecision,
       const std::unordered_map<std::string, std::string>& queryConfigs,
+      const std::unordered_map<std::string, std::string>& hiveConfigs,
       bool orderableGroupKeys,
       std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
       : customVerificationFunctions_{customVerificationFunctions},
@@ -78,7 +79,8 @@ class AggregationFuzzerBase {
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                kHiveConnectorId, std::make_shared<core::MemConfig>());
+                kHiveConnectorId,
+                std::make_shared<core::MemConfig>(hiveConfigs));
     connector::registerConnector(hiveConnector);
 
     seed(initialSeed);
