@@ -16,10 +16,12 @@
 #include "velox/exec/fuzzer/AggregationFuzzerBase.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
+#include <gtest/gtest.h>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/RowsStreamingWindowBuild.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -423,6 +425,7 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
     const std::vector<exec::Split>& splits,
     bool injectSpill,
     bool abandonPartial,
+    bool supportRowsStreaming,
     int32_t maxDrivers) {
   LOG(INFO) << "Executing query plan: " << std::endl
             << plan->toString(true, true);
@@ -450,6 +453,14 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
           .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
           .config(core::QueryConfig::kMaxPartialAggregationMemory, "0")
           .config(core::QueryConfig::kMaxExtendedPartialAggregationMemory, "0");
+    }
+
+    if (supportRowsStreaming) {
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::exec::Window::supportRowsStreaming",
+          std::function<void(bool*)>([&](bool* supportRowsStreamingWindow) {
+            ASSERT_EQ(*supportRowsStreamingWindow, true);
+          }));
     }
 
     if (!splits.empty()) {
@@ -491,6 +502,7 @@ void AggregationFuzzerBase::testPlan(
     bool injectSpill,
     bool abandonPartial,
     bool customVerification,
+    bool supportRowsStreaming,
     const std::vector<std::shared_ptr<ResultVerifier>>& customVerifiers,
     const velox::fuzzer::ResultOrError& expected,
     int32_t maxDrivers) {
@@ -499,6 +511,7 @@ void AggregationFuzzerBase::testPlan(
       planWithSplits.splits,
       injectSpill,
       abandonPartial,
+      supportRowsStreaming,
       maxDrivers);
   compare(actual, customVerification, customVerifiers, expected);
 }

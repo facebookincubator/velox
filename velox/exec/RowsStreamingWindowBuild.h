@@ -20,13 +20,16 @@
 
 namespace facebook::velox::exec {
 
-/// The StreamingWindowBuild is used when the input data is already sorted by
-/// {partition keys + order by keys}. The logic identifies partition changes
-/// when receiving input rows and splits out WindowPartitions for the Window
-/// operator to process.
-class StreamingWindowBuild : public WindowBuild {
+/// Unlike StreamingWindowBuild, RowsStreamingWindowBuild is capable of
+/// processing window functions as rows arrive within a single partition,
+/// without the need to wait for the entire partition to be ready. This approach
+/// can significantly reduce memory usage, especially when a single partition
+/// contains a large amount of data. It is particularly suited for optimizing
+/// rank and row_number functions, as well as aggregate window functions with a
+/// default frame.
+class RowsStreamingWindowBuild : public WindowBuild {
  public:
-  StreamingWindowBuild(
+  RowsStreamingWindowBuild(
       const std::shared_ptr<const core::WindowNode>& windowNode,
       velox::memory::MemoryPool* pool,
       const common::SpillConfig* spillConfig,
@@ -51,32 +54,27 @@ class StreamingWindowBuild : public WindowBuild {
   bool needsInput() override {
     // No partitions are available or the currentPartition is the last available
     // one, so can consume input rows.
-    return partitionStartRows_.size() == 0 ||
-        currentPartition_ == partitionStartRows_.size() - 2;
+    return windowPartitions_.size() == 0 ||
+        outputPartition_ == windowPartitions_.size() - 1;
   }
 
  private:
-  void buildNextPartition();
-
-  // Vector of pointers to each input row in the data_ RowContainer.
-  // Rows are erased from data_ when they are output from the
-  // Window operator.
-  std::vector<char*> sortedRows_;
+  void buildNextInputOrPartition(bool isFinished);
 
   // Holds input rows within the current partition.
   std::vector<char*> inputRows_;
 
-  // Indices of  the start row (in sortedRows_) of each partition in
-  // the RowContainer data_. This auxiliary structure helps demarcate
-  // partitions.
-  std::vector<vector_size_t> partitionStartRows_;
-
   // Used to compare rows based on partitionKeys.
   char* previousRow_ = nullptr;
 
-  // Current partition being output. Used to construct WindowPartitions
-  // during resetPartition.
-  vector_size_t currentPartition_ = -1;
+  // Current partition being output. Used to return the WidnowPartitions.
+  vector_size_t outputPartition_ = -1;
+
+  // Current partition when adding input. Used to construct WindowPartitions.
+  vector_size_t inputPartition_ = 0;
+
+  // Holds all the WindowPartitions.
+  std::vector<std::shared_ptr<WindowPartition>> windowPartitions_;
 };
 
 } // namespace facebook::velox::exec

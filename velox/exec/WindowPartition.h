@@ -20,9 +20,15 @@
 
 /// Simple WindowPartition that builds over the RowContainer used for storing
 /// the input rows in the Window Operator. This works completely in-memory.
+/// WindowPartition supports partial window partitioning to facilitate
+/// RowsStreamingWindowBuild, which means that subsequent calculations within
+/// the WindowPartition do not need to wait until the current partition is fully
+/// ready before commencing. Calculations can begin as soon as a portion of the
+/// rows are ready.
 /// TODO: This implementation will be revised for Spill to disk semantics.
 
 namespace facebook::velox::exec {
+
 class WindowPartition {
  public:
   /// The WindowPartition is used by the Window operator and WindowFunction
@@ -42,9 +48,43 @@ class WindowPartition {
       const std::vector<std::pair<column_index_t, core::SortOrder>>&
           sortKeyInfo);
 
+  /// The WindowPartition is used for partial partition when the input data will
+  /// be a subset of the entire partition.
+  WindowPartition(
+      RowContainer* data,
+      const std::vector<column_index_t>& inputMapping,
+      const std::vector<std::pair<column_index_t, core::SortOrder>>&
+          sortKeyInfo);
+
+  /// Adds remaining input rows when building the partial WindowPartition.
+  void addRows(const std::vector<char*>& rows);
+
+  /// Clear the processed rows fow partial WindowPartition.
+  void clearOutputRows(vector_size_t numRows);
+
   /// Returns the number of rows in the current WindowPartition.
   vector_size_t numRows() const {
     return partition_.size();
+  }
+
+  /// Returns the number of rows that will be processed.
+  vector_size_t numRowsForProcessing() const {
+    if (startRow_ > 0) {
+      return partition_.size() - 1;
+    }
+    return partition_.size();
+  }
+
+  bool isComplete() const {
+    return complete_;
+  }
+
+  bool isPartial() const {
+    return partial_;
+  }
+
+  void setComplete() {
+    complete_ = true;
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -107,7 +147,7 @@ class WindowPartition {
       vector_size_t prevPeerStart,
       vector_size_t prevPeerEnd,
       vector_size_t* rawPeerStarts,
-      vector_size_t* rawPeerEnds) const;
+      vector_size_t* rawPeerEnds);
 
   /// Sets in 'rawFrameBounds' the frame boundary for the k range
   /// preceding/following frame.
@@ -129,6 +169,11 @@ class WindowPartition {
 
  private:
   bool compareRowsWithSortKeys(const char* lhs, const char* rhs) const;
+
+  vector_size_t findPeerGroupEndIndex(
+      vector_size_t currentStart,
+      vector_size_t lastRow,
+      std::function<bool(const char*, const char*)> peerCompare);
 
   // Searches for 'currentRow[frameColumn]' in 'orderByColumn' of rows between
   // 'start' and 'end' in the partition. 'firstMatch' specifies if first or last
@@ -162,15 +207,30 @@ class WindowPartition {
       const vector_size_t* rawPeerBounds,
       vector_size_t* rawFrameBounds) const;
 
+  // Returns the starting offset of the current partial window partition within
+  // the full partition.
+  vector_size_t startRow() const {
+    return startRow_;
+  }
+
   // The RowContainer associated with the partition.
   // It is owned by the WindowBuild that creates the partition.
   RowContainer* data_;
+
+  // Holds input rows within the partial partition.
+  std::vector<char*> rows_;
 
   // folly::Range is for the partition rows iterator provided by the
   // Window operator. The pointers are to rows from a RowContainer owned
   // by the operator. We can assume these are valid values for the lifetime
   // of WindowPartition.
   folly::Range<char**> partition_;
+
+  // Indicates that the partial window partitioning process has been completed.
+  bool complete_ = false;
+
+  // Indicates partial window partition.
+  bool partial_ = false;
 
   // Mapping from window input column -> index in data_. This is required
   // because the WindowBuild reorders data_ to place partition and sort keys
@@ -189,5 +249,8 @@ class WindowPartition {
   // corresponding indexes of their input arguments into this vector.
   // They will request for column vector values at the respective index.
   std::vector<exec::RowColumn> columns_;
+
+  // The partition offset of the first row in rows_.
+  vector_size_t startRow_ = 0;
 };
 } // namespace facebook::velox::exec
