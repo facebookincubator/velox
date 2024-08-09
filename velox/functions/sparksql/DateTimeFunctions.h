@@ -155,7 +155,7 @@ struct UnixTimestampParseFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* /*input*/) {
+      const accessor_arg_type<Varchar>* /*input*/) {
     format_ = buildJodaDateTimeFormatter(kDefaultFormat_);
     setTimezone(config);
   }
@@ -205,8 +205,8 @@ struct UnixTimestampParseWithFormatFunction
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* format) {
+      const accessor_arg_type<Varchar>* /*input*/,
+      const accessor_arg_type<Varchar>* format) {
     if (format != nullptr) {
       try {
         this->format_ = buildJodaDateTimeFormatter(
@@ -260,8 +260,8 @@ struct FromUnixtimeFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<int64_t>* /*unixtime*/,
-      const arg_type<Varchar>* format) {
+      const accessor_arg_type<int64_t>* /*unixtime*/,
+      const accessor_arg_type<Varchar>* format) {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
       setFormatter(*format);
@@ -304,8 +304,8 @@ struct ToUtcTimestampFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* timezone) {
+      const accessor_arg_type<Varchar>* /*input*/,
+      const accessor_arg_type<Varchar>* timezone) {
     if (timezone) {
       tzID_ = tz::getTimeZoneID(
           std::string_view((*timezone).data(), (*timezone).size()), false);
@@ -337,8 +337,8 @@ struct FromUtcTimestampFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* timezone) {
+      const accessor_arg_type<Varchar>* /*input*/,
+      const accessor_arg_type<Varchar>* timezone) {
     if (timezone) {
       tzID_ = tz::getTimeZoneID(
           std::string_view((*timezone).data(), (*timezone).size()), false);
@@ -370,8 +370,8 @@ struct GetTimestampFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* format) {
+      const accessor_arg_type<Varchar>* /*input*/,
+      const accessor_arg_type<Varchar>* format) {
     auto sessionTimezoneName = config.sessionTimezone();
     if (!sessionTimezoneName.empty()) {
       sessionTimezoneId_ = tz::getTimeZoneID(sessionTimezoneName);
@@ -650,8 +650,8 @@ struct NextDayFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Date>* /*startDate*/,
-      const arg_type<Varchar>* dayOfWeek) {
+      const accessor_arg_type<Date>* /*startDate*/,
+      const accessor_arg_type<Varchar>* dayOfWeek) {
     if (dayOfWeek != nullptr) {
       weekDay_ = getDayOfWeekFromString(*dayOfWeek);
       if (!weekDay_.has_value()) {

@@ -1253,12 +1253,12 @@ struct ConstantArgumentFunction {
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<int32_t>* /*first*/,
-      const arg_type<int32_t>* /*second*/,
-      const arg_type<Varchar>* /*third*/,
-      const arg_type<Generic<T1>>* /*fourth*/,
-      const arg_type<Array<int32_t>>* /*fifth*/,
-      const arg_type<Map<int32_t, int32_t>>* /*sixth*/) {}
+      const accessor_arg_type<int32_t>* /*first*/,
+      const accessor_arg_type<int32_t>* /*second*/,
+      const accessor_arg_type<Varchar>* /*third*/,
+      const accessor_arg_type<Generic<T1>>* /*fourth*/,
+      const accessor_arg_type<Array<int32_t>>* /*fifth*/,
+      const accessor_arg_type<Map<int32_t, int32_t>>* /*sixth*/) {}
 
   bool callNullable(
       out_type<int64_t>& out,
@@ -1301,7 +1301,7 @@ struct DecimalPlusOneFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      const A* /*a*/) {
+      const accessor_arg_type<A>* /*a*/) {
     scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
   }
 
@@ -1322,7 +1322,7 @@ struct DecimalPlusTwoFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      const A* /*a*/) {
+      const accessor_arg_type<A>* /*a*/) {
     scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
   }
 

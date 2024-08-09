@@ -83,8 +83,8 @@ struct InFunctionOuter {
     FOLLY_ALWAYS_INLINE void initialize(
         const std::vector<TypePtr>& /*inputTypes*/,
         const core::QueryConfig& /*config*/,
-        const arg_type<TInput>* /*searchTerm*/,
-        const arg_type<velox::Array<TInput>>* searchElements) {
+        const accessor_arg_type<TInput>* /*searchTerm*/,
+        const accessor_arg_type<velox::Array<TInput>>* searchElements) {
       if (searchElements == nullptr) {
         return;
       }

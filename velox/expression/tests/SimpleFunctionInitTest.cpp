@@ -39,8 +39,8 @@ struct NonDefaultWithArrayInitFunction {
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<int32_t>* /*first*/,
-      const arg_type<velox::Array<int32_t>>* second) {
+      const accessor_arg_type<int32_t>* /*first*/,
+      const accessor_arg_type<velox::Array<int32_t>>* second) {
     if (second == nullptr) {
       return;
     }
@@ -134,8 +134,8 @@ struct NonDefaultWithMapInitFunction {
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<int32_t>* /*first*/,
-      const arg_type<velox::Map<int32_t, int64_t>>* second) {
+      const accessor_arg_type<int32_t>* /*first*/,
+      const accessor_arg_type<velox::Map<int32_t, int64_t>>* second) {
     if (second == nullptr) {
       return;
     }
@@ -204,7 +204,7 @@ struct InitAlwaysThrowsFunction {
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<int32_t>* /*first*/) {
+      const accessor_arg_type<int32_t>* /*first*/) {
     VELOX_USER_FAIL("Unconditional throw!");
   }
 

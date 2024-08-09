@@ -227,8 +227,9 @@ class SimpleFunctionAdapter : public VectorFunction {
       if (packed.at(POSITION) != nullptr) {
         SelectivityVector rows(1);
         DecodedVector decodedVector(*packed.at(POSITION), rows);
-        auto oneReader = VectorReader<arg_at<POSITION>>(&decodedVector);
-        auto accessor = OptionalAccessor(&oneReader, 0);
+        const auto oneReader = VectorReader<arg_at<POSITION>>(&decodedVector);
+        using temp_type = exec_arg_at<POSITION>;
+        auto accessor = OptionalAccessor<temp_type>(&oneReader, 0);
         unpackInitialize<POSITION + 1>(
               inputTypes,
               config,
