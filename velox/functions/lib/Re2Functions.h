@@ -300,9 +300,9 @@ struct Re2RegexpReplace {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* /*string*/,
-      const arg_type<Varchar>* pattern,
-      const arg_type<Varchar>* replacement) {
+      const optional_arg_type<Varchar>* /*string*/,
+      const optional_arg_type<Varchar>* pattern,
+      const optional_arg_type<Varchar>* replacement) {
     if (pattern != nullptr) {
       const auto processedPattern = prepareRegexpPattern(*pattern);
       re_.emplace(processedPattern, RE2::Quiet);
@@ -327,8 +327,8 @@ struct Re2RegexpReplace {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* string,
-      const arg_type<Varchar>* pattern) {
+      const optional_arg_type<Varchar>* string,
+      const optional_arg_type<Varchar>* pattern) {
     initialize(inputTypes, config, string, pattern, nullptr);
   }
 
