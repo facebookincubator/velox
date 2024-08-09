@@ -196,6 +196,10 @@ class ScanSpec {
   // each level of struct is mandatory.
   uint64_t newRead();
 
+  /// Returns the ScanSpec corresponding to 'name'. Creates it if needed without
+  /// any intermediate level.
+  ScanSpec* getOrCreateChild(const std::string& name);
+
   // Returns the ScanSpec corresponding to 'subfield'. Creates it if
   // needed, including any intermediate levels. This is used at
   // TableScan initialization to create the ScanSpec tree that
