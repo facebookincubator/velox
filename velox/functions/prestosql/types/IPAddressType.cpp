@@ -96,6 +96,9 @@ class IPAddressCastOperator : public exec::CastOperator {
     const auto* ipaddresses = input.as<SimpleVector<int128_t>>();
     folly::ByteArray16 addrBytes;
 
+    flatResult->resize(rows.size());
+    flatResult->getRawStringBufferWithSpace(rows.size() * kIPAddressMaxStrLen);
+
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto intAddr = ipaddresses->valueAt(row);
       memcpy(&addrBytes, &intAddr, kIPAddressBytes);
@@ -104,7 +107,6 @@ class IPAddressCastOperator : public exec::CastOperator {
       folly::IPAddressV6 v6Addr(addrBytes);
 
       exec::StringWriter<false> result(flatResult, row);
-      result.reserve(kIPAddressMaxStrLen);
       if (v6Addr.isIPv4Mapped()) {
         result.append(v6Addr.createIPv4().str());
       } else {
@@ -154,6 +156,9 @@ class IPAddressCastOperator : public exec::CastOperator {
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<StringView>>();
     const auto* ipaddresses = input.as<SimpleVector<int128_t>>();
+
+    flatResult->resize(rows.size());
+    flatResult->getRawStringBufferWithSpace(rows.size() * kIPAddressBytes);
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto intAddr = ipaddresses->valueAt(row);
