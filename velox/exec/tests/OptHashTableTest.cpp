@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/HashTable.h"
+#include "velox/exec/OptHashTable.h"
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/SelectivityInfo.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -36,9 +36,9 @@ using namespace facebook::velox::test;
 namespace facebook::velox::exec::test {
 
 template <bool ignoreNullKeys>
-class HashTableTestHelper {
+class OptHashTableTestHelper {
  public:
-  static HashTableTestHelper create(HashTable<ignoreNullKeys>* table) {
+  static OptHashTableTestHelper create(HashTable<ignoreNullKeys>* table) {
     return HashTableTestHelper(table);
   }
 
@@ -51,7 +51,7 @@ class HashTableTestHelper {
   }
 
   void allocateTables(uint64_t size) {
-    table_->allocateTables(size, BaseHashTable::kNoSpillInputStartPartitionBit);
+    table_->allocateTables(size);
   }
 
   size_t tableSlotSize() const {
@@ -68,12 +68,11 @@ class HashTableTestHelper {
   }
 
   void setHashMode(BaseHashTable::HashMode mode, int32_t numNew) {
-    table_->setHashMode(
-        mode, numNew, BaseHashTable::kNoSpillInputStartPartitionBit);
+    table_->setHashMode(mode, numNew);
   }
 
  private:
-  explicit HashTableTestHelper(HashTable<ignoreNullKeys>* table)
+  explicit OptHashTableTestHelper(HashTable<ignoreNullKeys>* table)
       : table_(table) {
     VELOX_CHECK_NOT_NULL(table_);
   }
@@ -88,7 +87,7 @@ class HashTableTestHelper {
 // measures the time for computing hashes/value ids vs the time spent
 // probing the table. Covers kArray, kNormalizedKey and kHash hash
 // modes.
-class HashTableTest : public testing::TestWithParam<bool>,
+class OptHashTableTest : public testing::TestWithParam<bool>,
                       public VectorTestBase {
  protected:
   static void SetUpTestCase() {
@@ -136,7 +135,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
         keyHashers.emplace_back(std::make_unique<VectorHasher>(
             buildType->childAt(channel), channel));
       }
-      auto table = HashTable<true>::createForJoin(
+      auto table = OptHashTable<true>::createForJoin(
           std::move(keyHashers), dependentTypes, true, false, 1'000, pool());
 
       makeRows(size, 1, sequence, buildType, batches);
@@ -156,10 +155,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
     const uint64_t estimatedTableSize =
         topTable_->estimateHashTableSize(numRows);
     const uint64_t usedMemoryBytes = topTable_->rows()->pool()->usedBytes();
-    topTable_->prepareJoinTable(
-        std::move(otherTables),
-        BaseHashTable::kNoSpillInputStartPartitionBit,
-        executor_.get());
+    topTable_->prepareJoinTable(std::move(otherTables), executor_.get());
     ASSERT_GE(
         estimatedTableSize,
         topTable_->rows()->pool()->usedBytes() - usedMemoryBytes);
@@ -172,12 +168,11 @@ class HashTableTest : public testing::TestWithParam<bool>,
     ASSERT_EQ(rowCount, numRows);
 
     LOG(INFO) << "Made table " << describeTable();
-    //testProbe();
-    testEraseEveryN(3);
-    //testProbe();
-    //testEraseEveryN(4);
-    //testProbe();
-    //testGroupBySpill(size, buildType, numKeys);
+    testProbe();
+    /*testEraseEveryN(3);
+    testProbe();
+    testEraseEveryN(4);
+    testProbe();*/
     const auto memoryUsage = pool()->usedBytes();
     topTable_->clear(true);
     for (const auto* rowContainer : topTable_->allRows()) {
@@ -185,60 +180,6 @@ class HashTableTest : public testing::TestWithParam<bool>,
     }
     ASSERT_EQ(topTable_->numDistinct(), 0);
     ASSERT_LT(pool()->usedBytes(), memoryUsage);
-  }
-
-  // Inserts and deletes rows in a HashTable, similarly to a group by
-  // that periodically spills a fraction of the groups.
-  void testGroupBySpill(
-      int32_t size,
-      TypePtr tableType,
-      int32_t numKeys,
-      int32_t batchSize = 1000,
-      int32_t eraseSize = 500) {
-    int32_t sequence = 0;
-    std::vector<RowVectorPtr> batches;
-    auto table = createHashTableForAggregation(tableType, numKeys);
-    auto lookup = std::make_unique<HashLookup>(table->hashers());
-    std::vector<char*> allInserted;
-    int32_t numErased = 0;
-    // We insert 1000 and delete 500.
-    for (auto round = 0; round < size; round += batchSize) {
-      makeRows(batchSize, 1, sequence, tableType, batches);
-      sequence += batchSize;
-      lookup->reset(batchSize);
-      insertGroups(*batches.back(), *lookup, *table);
-      allInserted.insert(
-          allInserted.end(), lookup->hits.begin(), lookup->hits.end());
-
-      table->erase(folly::Range<char**>(&allInserted[numErased], eraseSize));
-      numErased += eraseSize;
-    }
-    int32_t batchStart = 0;
-    // We loop over the keys one more time. The first half will be all
-    // new rows, the second half will be hits of existing ones.
-    int32_t row = 0;
-    for (auto i = 0; i < batches.size(); ++i) {
-      insertGroups(*batches[0], *lookup, *table);
-      for (; row < batchStart + batchSize; ++row) {
-        if (row >= numErased) {
-          ASSERT_EQ(lookup->hits[row - batchStart], allInserted[row]);
-        }
-      }
-    }
-    table->checkConsistency();
-  }
-
-  std::unique_ptr<HashTable<false>> createHashTableForAggregation(
-      const TypePtr& tableType,
-      int numKeys) {
-    std::vector<std::unique_ptr<VectorHasher>> keyHashers;
-    for (auto channel = 0; channel < numKeys; ++channel) {
-      keyHashers.emplace_back(
-          std::make_unique<VectorHasher>(tableType->childAt(channel), channel));
-    }
-
-    return HashTable<false>::createForAggregation(
-        std::move(keyHashers), std::vector<Accumulator>{}, pool());
   }
 
   void insertGroups(
@@ -275,13 +216,12 @@ class HashTableTest : public testing::TestWithParam<bool>,
 
     if (rehash) {
       if (table.hashMode() != BaseHashTable::HashMode::kHash) {
-        table.decideHashMode(
-            input.size(), BaseHashTable::kNoSpillInputStartPartitionBit);
+        table.decideHashMode(input.size());
       }
       insertGroups(input, rows, lookup, table);
       return;
     }
-    table.groupProbe(lookup, BaseHashTable::kNoSpillInputStartPartitionBit);
+    table.groupProbe(lookup);
   }
 
   std::string describeTable() {
@@ -535,11 +475,10 @@ class HashTableTest : public testing::TestWithParam<bool>,
         {keys, makeFlatVector<int64_t>(keys->size(), folly::identity)});
     std::vector<std::unique_ptr<VectorHasher>> hashers;
     hashers.push_back(std::make_unique<VectorHasher>(keys->type(), 0));
-    auto table = HashTable<false>::createForJoin(
+    auto table = OptHashTable<false>::createForJoin(
         std::move(hashers), {BIGINT()}, true, false, 1'000, pool());
     copyVectorsToTable({batch}, 0, table.get());
-    table->prepareJoinTable(
-        {}, BaseHashTable::kNoSpillInputStartPartitionBit, executor_.get());
+    table->prepareJoinTable({}, executor_.get());
     ASSERT_EQ(table->hashMode(), mode);
     std::vector<char*> rows(nullValues.size());
     BaseHashTable::NullKeyRowsIterator iter;
@@ -565,7 +504,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
   // Corresponds 1:1 to data in 'batches_'. nullptr if the key is not
   // inserted, otherwise pointer into the RowContainer.
   std::vector<char*> rowOfKey_;
-  std::unique_ptr<HashTable<true>> topTable_;
+  std::unique_ptr<OptHashTable<true>> topTable_;
   // Percentage of keys inserted into the table. This is for measuring
   // joins that miss the table part of the time. Used in initializing
   // 'isInTable_'.
@@ -576,205 +515,46 @@ class HashTableTest : public testing::TestWithParam<bool>,
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
 };
 
-TEST_P(HashTableTest, int2DenseArray) {
-  auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
-  testCycle(BaseHashTable::HashMode::kArray, 500, 2, type, 2);
-}
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    OptHashTableTes, OptHashTableTest,
+        testing::Values(true, false));
 
-TEST_P(HashTableTest, string1DenseArray) {
-  auto type = ROW({"k1"}, {VARCHAR()});
-  testCycle(BaseHashTable::HashMode::kArray, 500, 2, type, 1);
-}
-
-TEST_P(HashTableTest, string2Normalized) {
-  auto type = ROW({"k1", "k2"}, {VARCHAR(), VARCHAR()});
-  testCycle(BaseHashTable::HashMode::kNormalizedKey, 5000, 19, type, 2);
-}
-
-TEST_P(HashTableTest, int2SparseArray) {
-  auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
-  keySpacing_ = 1000;
-  testCycle(BaseHashTable::HashMode::kArray, 500, 2, type, 2);
-}
-
-TEST_P(HashTableTest, int2SparseNormalized) {
+TEST_P(OptHashTableTest, int2SparseNormalized2) {
   auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
   keySpacing_ = 1000;
   testCycle(BaseHashTable::HashMode::kNormalizedKey, 10000, 2, type, 2);
 }
 
-TEST_P(HashTableTest, int2SparseNormalizedMostMiss) {
+TEST_P(OptHashTableTest, int2SparseNormalizedMostMiss2) {
   auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
   keySpacing_ = 1000;
   insertPct_ = 10;
   testCycle(BaseHashTable::HashMode::kNormalizedKey, 100000, 2, type, 2);
 }
 
-TEST_P(HashTableTest, structKey) {
-  auto type =
-      ROW({"key"}, {ROW({"k1", "k2", "k3"}, {BIGINT(), VARCHAR(), BIGINT()})});
+
+TEST_P(OptHashTableTest, string2Normalized) {
+  auto type = ROW({"k1", "k2"}, {VARCHAR(), VARCHAR()});
+  testCycle(BaseHashTable::HashMode::kNormalizedKey, 5000, 19, type, 2);
+}
+
+
+TEST_P(OptHashTableTest, int2SparseNormalized) {
+  auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
   keySpacing_ = 1000;
-  testCycle(BaseHashTable::HashMode::kHash, 100000, 2, type, 1);
+  testCycle(BaseHashTable::HashMode::kNormalizedKey, 10000, 2, type, 2);
 }
 
-TEST_P(HashTableTest, mixed6Sparse) {
-  auto type =
-      ROW({"k1", "k2", "k3", "k4", "k5", "k6"},
-          {BIGINT(), BIGINT(), BIGINT(), BIGINT(), BIGINT(), VARCHAR()});
+TEST_P(OptHashTableTest, int2SparseNormalizedMostMiss) {
+  auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
   keySpacing_ = 1000;
-  testCycle(BaseHashTable::HashMode::kHash, 100000, 9, type, 6);
+  insertPct_ = 10;
+  testCycle(BaseHashTable::HashMode::kNormalizedKey, 100000, 2, type, 2);
 }
 
-// It should be safe to call clear() before we insert any data into HashTable
-TEST_P(HashTableTest, clear) {
-  std::vector<std::unique_ptr<VectorHasher>> keyHashers;
-  keyHashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0 /*channel*/));
-  core::QueryConfig config({});
-  auto aggregate = Aggregate::create(
-      "sum",
-      core::AggregationNode::Step::kPartial,
-      std::vector<TypePtr>{BIGINT()},
-      BIGINT(),
-      config);
 
-  for (const bool clearTable : {false, true}) {
-    auto table = HashTable<true>::createForAggregation(
-        std::move(keyHashers), {Accumulator{aggregate.get(), nullptr}}, pool());
-    ASSERT_NO_THROW(table->clear(clearTable));
-  }
-}
 
-// Test a specific code path in HashTable::decodeHashMode where
-// rangesWithReserve overflows, distinctsWithReserve fits and bestWithReserve =
-// rangesWithReserve.
-TEST_P(HashTableTest, bestWithReserveOverflow) {
-  auto rowType =
-      ROW({"a", "b", "c", "d"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
-  const auto numKeys = 4;
-  auto table = createHashTableForAggregation(rowType, numKeys);
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
-
-  // Make sure rangesWithReserve overflows.
-  //  Ranges for keys are: 200K, 200K, 200K, 100K.
-  //  With 50% reserve at both ends: 400K, 400K, 400K, 200K.
-  //  Combined ranges with reserve: 400K * 400K * 400K * 200K =
-  //  12,800,000,000,000,000,000,000.
-  // Also, make sure that distinctsWithReserve fits.
-  //  Number of distinct values (ndv) are: 20K, 20K, 20K, 10K.
-  //  With 50% reserve: 30K, 30K, 30K, 15K.
-  //  Combined ndvs with reserve: 30K * 30K * 30K * 15K =
-  //  405,000,000,000,000,000.
-  // Also, make sure bestWithReserve == rangesWithReserve and therefore
-  // overflows as well.
-  //  Range is considered 'best' if range < 20 * ndv.
-  //
-  // Finally, make sure last key has some duplicate values. The original bug
-  // this test is reproducing was when HashTable failed to set multiplier for
-  // the VectorHasher, which caused the combined value IDs to be computed using
-  // only the last VectorHasher. Hence, all values where last key was the same
-  // were assigned the same value IDs.
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(20'000, [](auto row) { return row * 10; }),
-      makeFlatVector<int64_t>(20'000, [](auto row) { return 1 + row * 10; }),
-      makeFlatVector<int64_t>(20'000, [](auto row) { return 2 + row * 10; }),
-      makeFlatVector<int64_t>(
-          20'000, [](auto row) { return 3 + (row / 2) * 10; }),
-  });
-
-  lookup->reset(data->size());
-  insertGroups(*data, *lookup, *table);
-
-  // Expect 'normalized key' hash mode using distinct values, not ranges.
-  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
-  ASSERT_EQ(table->numDistinct(), data->size());
-
-  for (auto i = 0; i < numKeys; ++i) {
-    ASSERT_FALSE(table->hashers()[i]->isRange());
-    ASSERT_TRUE(table->hashers()[i]->mayUseValueIds());
-  }
-
-  // Compute value IDs and verify all are unique.
-  SelectivityVector rows(data->size());
-  raw_vector<uint64_t> valueIds(data->size());
-
-  for (int32_t i = 0; i < numKeys; ++i) {
-    bool ok = table->hashers()[i]->computeValueIds(rows, valueIds);
-    ASSERT_TRUE(ok);
-  }
-
-  std::unordered_set<uint64_t> uniqueValueIds;
-  for (auto id : valueIds) {
-    ASSERT_TRUE(uniqueValueIds.insert(id).second) << id;
-  }
-}
-
-/// Test edge case that used to trigger a rounding error in
-/// HashTable::enableRangeWhereCan.
-TEST_P(HashTableTest, enableRangeWhereCan) {
-  auto rowType = ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), VARCHAR()});
-  auto table = createHashTableForAggregation(rowType, 3);
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
-
-  // Generate 3 keys with the following ranges and number of distinct values
-  // (ndv):
-  //  0: range=4409503440398, ndv=25
-  //  1: range=18446744073709551615, ndv=748
-  //  2: range=18446744073709551615, ndv=1678
-
-  std::vector<int64_t> a;
-  for (int i = 1; i < 25; i++) {
-    a.push_back(i);
-  }
-  a.back() = 4409503440398;
-
-  std::vector<std::string> b;
-  for (int i = 1; i < 748; i++) {
-    b.push_back(std::string(15, '.') + std::to_string(i));
-  }
-
-  std::vector<std::string> c;
-  for (int i = 1; i < 1678; i++) {
-    c.push_back(std::string(15, '.') + std::to_string(i));
-  }
-
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(
-          2'000, [&](auto row) { return a[row % a.size()]; }),
-      makeFlatVector<StringView>(
-          2'000, [&](auto row) { return StringView(b[row % b.size()]); }),
-      makeFlatVector<StringView>(
-          2'000, [&](auto row) { return StringView(c[row % c.size()]); }),
-  });
-
-  lookup->reset(data->size());
-  insertGroups(*data, *lookup, *table);
-}
-
-TEST_P(HashTableTest, arrayProbeNormalizedKey) {
-  auto table = createHashTableForAggregation(ROW({"a"}, {BIGINT()}), 1);
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
-
-  for (auto i = 0; i < 200; ++i) {
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>(
-            10'000, [&](auto row) { return i * 10'000 + row; }),
-    });
-
-    SelectivityVector rows(5'000);
-    insertGroups(*data, rows, *lookup, *table);
-
-    rows.resize(10'000);
-    rows.clearAll();
-    rows.setValidRange(5'000, 10'000, true);
-    rows.updateBounds();
-    insertGroups(*data, rows, *lookup, *table);
-    EXPECT_LE(table->stats().numDistinct, table->testingRehashSize());
-  }
-
-  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
-}
-
-TEST_P(HashTableTest, regularHashingTableSize) {
+TEST_P(OptHashTableTest, regularHashingTableSize) {
   keySpacing_ = 1000;
   auto checkTableSize = [&](BaseHashTable::HashMode mode,
                             const RowTypePtr& type) {
@@ -788,69 +568,17 @@ TEST_P(HashTableTest, regularHashingTableSize) {
     std::vector<RowVectorPtr> batches;
     makeRows(1 << 12, 1, 0, type, batches);
     copyVectorsToTable(batches, 0, table.get());
-    table->prepareJoinTable(
-        {}, BaseHashTable::kNoSpillInputStartPartitionBit, executor_.get());
+    table->prepareJoinTable({}, executor_.get());
     ASSERT_EQ(table->hashMode(), mode);
-    EXPECT_GE(table->testingRehashSize(), table->numDistinct());
+    EXPECT_GE(table->rehashSize(), table->numDistinct());
   };
-  {
-    auto type = ROW({"key"}, {ROW({"k1"}, {BIGINT()})});
-    checkTableSize(BaseHashTable::HashMode::kHash, type);
-  }
   {
     auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
     checkTableSize(BaseHashTable::HashMode::kNormalizedKey, type);
   }
 }
 
-TEST_P(HashTableTest, groupBySpill) {
-  auto type = ROW({"k1"}, {BIGINT()});
-  testGroupBySpill(5'000'000, type, 1, 1000, 1000);
-}
-
-TEST_P(HashTableTest, checkSizeValidation) {
-  auto rowType = ROW({"a"}, {BIGINT()});
-  auto table = createHashTableForAggregation(rowType, 1);
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
-  auto testHelper = HashTableTestHelper<false>::create(table.get());
-
-  // The initial set hash mode with table size of 256K entries.
-  testHelper.setHashMode(BaseHashTable::HashMode::kHash, 131'072);
-  ASSERT_EQ(table->capacity(), 256 << 10);
-
-  auto vector1 = makeRowVector(
-      {makeFlatVector<int64_t>(131'072, [&](auto row) { return row; })});
-  // The first insertion of 128KB distinct entries.
-  insertGroups(*vector1, *lookup, *table);
-  ASSERT_EQ(table->capacity(), 256 << 10);
-
-  auto vector2 = makeRowVector({makeFlatVector<int64_t>(
-      131'072, [&](auto row) { return 131'072 + row; })});
-  // The second insertion of 128KB distinct entries triggers the table resizing.
-  // And we expect the table size bumps up to 512KB.
-  insertGroups(*vector2, *lookup, *table);
-  ASSERT_EQ(table->capacity(), 512 << 10);
-
-  auto vector3 = makeRowVector(
-      {makeFlatVector<int64_t>(1, [&](auto row) { return row; })});
-  // The last insertion triggers the check size which see the table size matches
-  // the number of distinct entries that it stores.
-  insertGroups(*vector3, *lookup, *table);
-  ASSERT_EQ(table->capacity(), 512 << 10);
-}
-
-TEST_P(HashTableTest, listNullKeyRows) {
-  VectorPtr keys = makeFlatVector<int64_t>(500, folly::identity);
-  testListNullKeyRows(keys, BaseHashTable::HashMode::kArray);
-  {
-    auto flat =
-        makeFlatVector<int64_t>(10'000, [](auto i) { return i * 1000; });
-    keys = makeRowVector({flat, flat});
-  }
-  testListNullKeyRows(keys, BaseHashTable::HashMode::kHash);
-}
-
-TEST(HashTableTest, modeString) {
+TEST(OptHashTableTest, modeString) {
   ASSERT_EQ("HASH", BaseHashTable::modeString(BaseHashTable::HashMode::kHash));
   ASSERT_EQ(
       "NORMALIZED_KEY",
@@ -862,205 +590,14 @@ TEST(HashTableTest, modeString) {
       BaseHashTable::modeString(static_cast<BaseHashTable::HashMode>(100)));
 }
 
-DEBUG_ONLY_TEST_P(HashTableTest, nextBucketOffset) {
-  auto runTest = [&](BaseHashTable::HashMode mode, const RowTypePtr& type) {
-    std::vector<std::unique_ptr<VectorHasher>> keyHashers;
-    for (auto channel = 0; channel < type->size(); ++channel) {
-      keyHashers.emplace_back(
-          std::make_unique<VectorHasher>(type->childAt(channel), channel));
-    }
-    auto table = HashTable<true>::createForJoin(
-        std::move(keyHashers), {}, true, false, 1'000, pool());
-    auto testHelper = HashTableTestHelper<true>::create(table.get());
-    const uint64_t numDistincts = bits::nextPowerOfTwo(
-        2UL * std::numeric_limits<int32_t>::max() / testHelper.tableSlotSize());
-    const uint64_t totalSize = numDistincts * testHelper.tableSlotSize();
-    testHelper.allocateTables(numDistincts);
-    const auto bucketSize = testHelper.bucketSize();
-
-    struct {
-      uint64_t offset;
-      bool expectedNextOffsetError;
-      uint64_t expectedNextOffset;
-
-      std::string debugString() const {
-        return fmt::format(
-            "offset {}, expectedNextOffsetError {}, expectedNextOffset {}",
-            succinctBytes(offset),
-            expectedNextOffsetError,
-            succinctBytes(expectedNextOffset));
-      }
-    } testSettings[] = {
-        {1, true, 0},
-        {bucketSize - 1, true, 0},
-        {bucketSize + 1, true, 0},
-        {0, false, bucketSize},
-        {bucketSize, false, bucketSize + bucketSize},
-        {bits::nextPowerOfTwo(std::numeric_limits<int32_t>::max()),
-         false,
-         bits::nextPowerOfTwo(std::numeric_limits<int32_t>::max()) +
-             bucketSize},
-        {bits::nextPowerOfTwo(std::numeric_limits<int32_t>::max()) + 1,
-         true,
-         0},
-        {bits::nextPowerOfTwo(std::numeric_limits<int32_t>::max()) + bucketSize,
-         false,
-         bits::nextPowerOfTwo(std::numeric_limits<int32_t>::max()) +
-             2 * bucketSize},
-        {totalSize, true, 0},
-        {totalSize + bucketSize, true, 0},
-        {totalSize + 1, true, 0},
-        {totalSize - bucketSize, false, 0}};
-
-    for (const auto& testData : testSettings) {
-      SCOPED_TRACE(testData.debugString());
-
-      if (testData.expectedNextOffsetError) {
-        VELOX_ASSERT_THROW(testHelper.nextBucketOffset(testData.offset), "");
-      } else {
-        ASSERT_EQ(
-            testHelper.nextBucketOffset(testData.offset),
-            testData.expectedNextOffset);
-      }
-    }
-  };
-
-  const auto type = ROW({"key"}, {ROW({"k1"}, {BIGINT()})});
-  runTest(BaseHashTable::HashMode::kHash, type);
-  runTest(BaseHashTable::HashMode::kNormalizedKey, type);
-}
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     HashTableTests,
-    HashTableTest,
+    OptHashTableTest,
     testing::Values(true, false));
 
-/// This tests an issue only seen when the number of unique entries
-/// in the HashTable, crosses over int32 limit. The HashTable::loadTag()
-/// offset argument was int32 and for positions greater than int32 max,
-/// it would seg fault.
-TEST_P(HashTableTest, offsetOverflowLoadTags) {
-  GTEST_SKIP() << "Skipping as it takes long time to converge,"
-                  " re-enable to reproduce the issue";
-  if (GetParam() == true) {
-    return;
-  }
-  auto rowType = ROW({"a"}, {BIGINT()});
-  auto table = createHashTableForAggregation(rowType, rowType->size());
-  table->hashMode();
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
-  auto batchSize = 1 << 25;
-  for (auto i = 0; i < 64; ++i) {
-    std::vector<RowVectorPtr> batches;
-    makeRows(batchSize, 1, i * batchSize, rowType, batches);
-    insertGroups(*batches.back(), *lookup, *table);
-  }
-}
 
-DEBUG_ONLY_TEST_P(HashTableTest, failureInCreateRowPartitions) {
-  // This tests an issue in parallelJoinBuild where an exception in
-  // createRowPartitions could lead to concurrency issues in async table
-  // partitioning threads.
-
-  // It is only relevant when the parallel join build is enabled.
-  if (!GetParam()) {
-    return;
-  }
-
-  // Create a table, and 3 "other" tables.
-  std::unique_ptr<HashTable<false>> topTable;
-  std::vector<std::unique_ptr<BaseHashTable>> otherTables;
-  for (int i = 0; i < 4; i++) {
-    auto batch = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
-    std::vector<std::unique_ptr<VectorHasher>> hashers;
-    hashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0));
-    // Set minTableSizeForParallelJoinBuild to be really small so we can trigger
-    // a parallel join build without needing a lot of data.
-    auto table = HashTable<false>::createForJoin(
-        std::move(hashers), {BIGINT()}, true, false, 1, pool());
-    copyVectorsToTable({batch}, 0, table.get());
-
-    if (topTable == nullptr) {
-      topTable = std::move(table);
-    } else {
-      otherTables.emplace_back(std::move(table));
-    }
-  }
-
-  topTable->prepareJoinTable(
-      std::move(otherTables),
-      BaseHashTable::kNoSpillInputStartPartitionBit,
-      executor_.get());
-  auto topTabletestHelper = HashTableTestHelper<false>::create(topTable.get());
-
-  const std::string expectedFailureMessage =
-      "Triggering expected failure in allocation";
-
-  // Fail when allocating memory for the third table.  So we know 2
-  // RowPartitions have been created.
-  std::atomic_int allocateCount{0};
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::common::memory::MemoryPoolImpl::allocateNonContiguous",
-      std::function<void(void*)>(([&](void*) {
-        if (++allocateCount >= 3) {
-          VELOX_FAIL(expectedFailureMessage);
-        }
-      })));
-
-  std::atomic_bool moveReady{false};
-  folly::EventCount moveWait;
-  std::atomic_bool prepareReady{false};
-  folly::EventCount prepareWait;
-  std::atomic_int moveCount{0};
-  // Wait until prepare hash been called at least once to call move.  This way
-  // we know at least one async thread is running.
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::AsyncSource::move",
-      std::function<void(void*)>(([&](void*) {
-        // We only need to do this the first time it's called.
-        if (++moveCount == 1) {
-          prepareWait.await([&]() { return prepareReady.load(); });
-          moveReady.store(true);
-          moveWait.notifyAll();
-        }
-      })));
-
-  // Make any async table partitioning threads wait until move is
-  // called. Since move blocks until the threads complete, this is as
-  // long as the threads can possibly wait to begin processing. (I.e. we've
-  // given as much time as we can for something to go wrong.)
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::AsyncSource::prepare",
-      std::function<void(void*)>(([&](void*) {
-        prepareReady.store(true);
-        prepareWait.notifyAll();
-        moveWait.await([&]() { return moveReady.load(); });
-      })));
-
-  // Set a flag so we know if something in the future causes the test to miss
-  // the parallelJoinBuild function which is what we're targeting.
-  std::atomic<bool> isParallelBuild{false};
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::HashTable::parallelJoinBuild",
-      std::function<void(void*)>([&](void*) { isParallelBuild = true; }));
-
-  // We expect this to trigger the exception from the TestValue we set for
-  // allocateNonContiguous.
-  // Set hash mode to HASH and numNew to something much larger than the
-  // capacity to trigger a rehash.
-  VELOX_ASSERT_THROW(
-      topTabletestHelper.setHashMode(
-          BaseHashTable::HashMode::kHash, topTable->capacity() * 2),
-      expectedFailureMessage);
-
-  // Double check that the parallelJoinBuild function was called.
-  ASSERT_TRUE(isParallelBuild.load());
-
-  // Any outstanding async work should be finish cleanly despite the exception.
-  executor_->join();
-}
-
-TEST_P(HashTableTest, toStringSingleKey) {
+TEST_P(OptHashTableTest, toStringSingleKey) {
   std::vector<std::unique_ptr<VectorHasher>> hashers;
   hashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0));
 
@@ -1078,7 +615,7 @@ TEST_P(HashTableTest, toStringSingleKey) {
 
   store(*table->rows(), data);
 
-  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  table->prepareJoinTable({});
 
   ASSERT_NO_THROW(table->toString());
   ASSERT_NO_THROW(table->toString(0));
@@ -1087,7 +624,7 @@ TEST_P(HashTableTest, toStringSingleKey) {
   ASSERT_NO_THROW(table->toString(31, 5));
 }
 
-TEST_P(HashTableTest, toStringMultipleKeys) {
+TEST_P(OptHashTableTest, toStringMultipleKeys) {
   std::vector<std::unique_ptr<VectorHasher>> hashers;
   hashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0));
   hashers.push_back(std::make_unique<VectorHasher>(VARCHAR(), 1));
@@ -1109,12 +646,12 @@ TEST_P(HashTableTest, toStringMultipleKeys) {
 
   store(*table->rows(), data);
 
-  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  table->prepareJoinTable({});
 
   ASSERT_NO_THROW(table->toString());
 }
 
-TEST(HashTableTest, tableInsertPartitionInfo) {
+TEST(OptHashTableTest, tableInsertPartitionInfo) {
   std::vector<char*> overflows;
   const auto testFn = [&](PartitionBoundIndexType start,
                           PartitionBoundIndexType end) {
@@ -1156,4 +693,5 @@ TEST(HashTableTest, tableInsertPartitionInfo) {
     ASSERT_EQ(overflows[i], info.overflows[i]);
   }
 }
+
 } // namespace facebook::velox::exec::test
