@@ -49,35 +49,59 @@ class CompactRowTest : public ::testing::Test, public VectorTestBase {
 
     auto rowType = asRowType(data->type());
     auto numRows = data->size();
+    IndexRange range{0, numRows};
+    std::vector<size_t> offsets(numRows);
 
     CompactRow row(data);
 
     size_t totalSize = 0;
     if (auto fixedRowSize = CompactRow::fixedRowSize(rowType)) {
       totalSize = fixedRowSize.value() * numRows;
+      for (auto i = 0; i < numRows; ++i) {
+        offsets[i] = fixedRowSize.value() * i;
+      }
     } else {
       for (auto i = 0; i < numRows; ++i) {
+        offsets[i] = totalSize;
         totalSize += row.rowSize(i);
       }
     }
 
-    std::vector<std::string_view> serialized;
-
     BufferPtr buffer = AlignedBuffer::allocate<char>(totalSize, pool(), 0);
     auto* rawBuffer = buffer->asMutable<char>();
-    size_t offset = 0;
-    for (auto i = 0; i < numRows; ++i) {
-      auto size = row.serialize(i, rawBuffer + offset);
-      serialized.push_back(std::string_view(rawBuffer + offset, size));
-      offset += size;
+    {
+      size_t offset = 0;
+      std::vector<std::string_view> serialized;
+      for (auto i = 0; i < numRows; ++i) {
+        auto size = row.serialize(i, rawBuffer + offset);
+        serialized.push_back(std::string_view(rawBuffer + offset, size));
+        offset += size;
 
-      VELOX_CHECK_EQ(size, row.rowSize(i), "Row {}: {}", i, data->toString(i));
+        VELOX_CHECK_EQ(
+            size, row.rowSize(i), "Row {}: {}", i, data->toString(i));
+      }
+
+      VELOX_CHECK_EQ(offset, totalSize);
+
+      auto copy = CompactRow::deserialize(serialized, rowType, pool());
+      assertEqualVectors(data, copy);
     }
 
-    VELOX_CHECK_EQ(offset, totalSize);
+    memset(rawBuffer, 0, totalSize);
+    {
+      std::vector<std::string_view> serialized;
+      row.serialize(range, rawBuffer, offsets);
+      serialized.push_back(std::string_view(rawBuffer, offsets[0]));
+      for (auto i = 1; i < numRows; ++i) {
+        serialized.push_back(std::string_view(
+            rawBuffer + offsets[i - 1], offsets[i] - offsets[i - 1]));
+      }
 
-    auto copy = CompactRow::deserialize(serialized, rowType, pool());
-    assertEqualVectors(data, copy);
+      VELOX_CHECK_EQ(offsets.back(), totalSize);
+
+      auto copy = CompactRow::deserialize(serialized, rowType, pool());
+      assertEqualVectors(data, copy);
+    }
   }
 };
 
