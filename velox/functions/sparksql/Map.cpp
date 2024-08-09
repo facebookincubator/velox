@@ -18,8 +18,8 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/vector/VectorTypeUtils.h"
 
-// The description of the map function in Spark
-// https://kontext.tech/article/586/spark-sql-map-functions
+// Returns a map created using the given key/value pairs.
+// See documentation at https://spark.apache.org/docs/latest/api/sql/#map
 //
 // Example:
 // Select map(1,'a',2,'b',3,'c');
