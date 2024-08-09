@@ -1751,17 +1751,62 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
 }
 
 template <bool ignoreNullKeys>
+inline uint64_t HashTable<ignoreNullKeys>::joinProjectedVarColumnsSize(
+    const std::vector<vector_size_t>& columns,
+    const char* row) const {
+  uint64_t totalBytes{0};
+  for (const auto& column : columns) {
+    if (!rows_->columnTypes()[column]->isFixedWidth()) {
+      totalBytes += rows_->variableSizeAt(row, column);
+    }
+  }
+  return totalBytes;
+}
+
+template <bool ignoreNullKeys>
+inline uint64_t HashTable<ignoreNullKeys>::joinProjectedFixColumnsSize(
+    const std::vector<vector_size_t>& columns) const {
+  uint64_t totalBytes{0};
+  for (const auto& column : columns) {
+    const auto& type = rows_->columnTypes()[column];
+    VELOX_CHECK(type->isFixedWidth());
+    totalBytes += rows_->fixedSizeAt(column);
+  }
+  return totalBytes;
+}
+
+template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listJoinResults(
+    const std::vector<vector_size_t>& listColumns,
     JoinResultIterator& iter,
     bool includeMisses,
     folly::Range<vector_size_t*> inputRows,
-    folly::Range<char**> hits) {
+    folly::Range<char**> hits,
+    uint64_t maxBytes) {
   VELOX_CHECK_LE(inputRows.size(), hits.size());
-  if (!hasDuplicates_) {
-    return listJoinResultsNoDuplicates(iter, includeMisses, inputRows, hits);
+  std::vector<vector_size_t> varSizeColumns;
+  std::vector<vector_size_t> fixedSizeColumns;
+  for (const auto column : listColumns) {
+    if (rows_->columnTypes()[column]->isFixedWidth()) {
+      fixedSizeColumns.push_back(column);
+    } else {
+      varSizeColumns.push_back(column);
+    }
   }
+  if (varSizeColumns.empty() && !hasDuplicates_) {
+    // When there is no duplicates, and no variable length columns are selected
+    // to be projected, we are able to calculate fixed length columns total size
+    // directly and go through fast path.
+    return listJoinResultsNoDuplicates(
+        fixedSizeColumns, iter, includeMisses, inputRows, hits, maxBytes);
+  }
+
+  const auto fixedColumnSizePerRow =
+      joinProjectedFixColumnsSize(fixedSizeColumns);
+
   size_t numOut = 0;
   auto maxOut = inputRows.size();
+  uint64_t totalBytes{0};
   while (iter.lastRowIndex < iter.rows->size()) {
     auto row = (*iter.rows)[iter.lastRowIndex];
     auto hit = (*iter.hits)[row]; // NOLINT
@@ -1784,6 +1829,9 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       hits[numOut] = hit;
       numOut++;
       iter.lastRowIndex++;
+      totalBytes +=
+          (joinProjectedVarColumnsSize(varSizeColumns, hit) +
+           fixedColumnSizePerRow);
     } else {
       auto numRows = rows->size();
       auto num =
@@ -1795,12 +1843,16 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
           num * sizeof(char*));
       iter.lastDuplicateRowIndex += num;
       numOut += num;
+      for (const auto* dupRow : *rows) {
+        totalBytes += joinProjectedVarColumnsSize(varSizeColumns, dupRow);
+      }
+      totalBytes += (fixedColumnSizePerRow * numRows);
       if (iter.lastDuplicateRowIndex >= numRows) {
         iter.lastDuplicateRowIndex = 0;
         iter.lastRowIndex++;
       }
     }
-    if (numOut >= maxOut) {
+    if (numOut >= maxOut || totalBytes >= maxBytes) {
       return numOut;
     }
   }
@@ -1809,12 +1861,19 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
 
 template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listJoinResultsNoDuplicates(
+    const std::vector<vector_size_t>& fixedSizeColumns,
     JoinResultIterator& iter,
     bool includeMisses,
     folly::Range<vector_size_t*> inputRows,
-    folly::Range<char**> hits) {
+    folly::Range<char**> hits,
+    uint64_t maxBytes) {
+  const auto fixedColumnSizePerRow =
+      joinProjectedFixColumnsSize(fixedSizeColumns);
   int32_t numOut = 0;
-  auto maxOut = inputRows.size();
+  auto maxOut = std::min(
+      static_cast<uint64_t>(inputRows.size()),
+      (fixedColumnSizePerRow != 0 ? maxBytes / fixedColumnSizePerRow
+                                  : std::numeric_limits<uint64_t>::max()));
   int32_t i = iter.lastRowIndex;
   auto numRows = iter.rows->size();
 

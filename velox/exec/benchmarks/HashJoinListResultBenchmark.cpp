@@ -406,7 +406,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     topTable_->joinProbe(lookup);
   }
 
-  // Hash probe andd list join result.
+  // Hash probe and list join result.
   int64_t probeTableAndListResult() {
     auto lookup = std::make_unique<HashLookup>(topTable_->hashers());
     auto numBatch = params_.probeSize / params_.hashTableSize;
@@ -427,12 +427,18 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       outputTableRows.resize(outputBatchSize);
       {
         SelectivityTimer timer(listJoinResultClocks, 0);
+        std::vector<vector_size_t> listColumns{};
+        for (int32_t i = 0; i < topTable_->rows()->columnTypes().size(); i++) {
+          listColumns.push_back(i);
+        }
         while (!results.atEnd()) {
           numJoinListResult += topTable_->listJoinResults(
+              listColumns,
               results,
               false,
               mapping,
-              folly::Range(outputTableRows.data(), outputTableRows.size()));
+              folly::Range(outputTableRows.data(), outputTableRows.size()),
+              std::numeric_limits<uint64_t>::max());
         }
       }
     }
@@ -456,11 +462,17 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     auto mapping = initializeRowNumberMapping(
         outputRowMapping, outputBatchSize, pool_.get());
     outputTableRows.resize(outputBatchSize);
+    std::vector<vector_size_t> listColumns{};
+    for (int32_t i = 0; i < topTable_->rows()->columnTypes().size(); i++) {
+      listColumns.push_back(i);
+    }
     auto num = topTable_->listJoinResults(
+        listColumns,
         results,
         false,
         mapping,
-        folly::Range(outputTableRows.data(), outputTableRows.size()));
+        folly::Range(outputTableRows.data(), outputTableRows.size()),
+        std::numeric_limits<uint64_t>::max());
     {
       SelectivityTimer timer(eraseClock, 0);
       topTable_->rows()->eraseRows(
