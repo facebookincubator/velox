@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/core/Config.h"
+#include "velox/common/config/Config.h"
 
 namespace facebook::velox::core {
 enum class CapacityUnit {
@@ -365,8 +366,9 @@ class QueryConfig {
   static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
 
   uint64_t queryMaxMemoryPerNode() const {
-    return toCapacity(
-        get<std::string>(kQueryMaxMemoryPerNode, "0B"), CapacityUnit::BYTE);
+    return config::toCapacity(
+        get<std::string>(kQueryMaxMemoryPerNode, "0B"),
+        config::CapacityUnit::BYTE);
   }
 
   uint64_t maxPartialAggregationMemoryUsage() const {
