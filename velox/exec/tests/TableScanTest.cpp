@@ -3374,9 +3374,8 @@ TEST_F(TableScanTest, randomSample) {
   auto rows = makeRowVector({column});
   auto rowType = asRowType(rows->type());
   std::vector<std::shared_ptr<TempFilePath>> files;
-  auto writeConfig = std::make_shared<dwrf::Config>();
-  writeConfig->set<uint64_t>(
-      dwrf::Config::STRIPE_SIZE, rows->size() * sizeof(double));
+  dwio::common::WriterOptions options;
+  options.maxStripeSize = rows->size() * sizeof(double);
   int numTotalRows = 0;
   for (int i = 0; i < 10; ++i) {
     auto file = TempFilePath::create();
@@ -3385,10 +3384,10 @@ TEST_F(TableScanTest, randomSample) {
       for (int j = 0; j < 100; ++j) {
         vectors.push_back(rows);
       }
-      writeToFile(file->getPath(), vectors, writeConfig);
+      writeToFile(file->getPath(), vectors, options);
       numTotalRows += rows->size() * vectors.size();
     } else {
-      writeToFile(file->getPath(), {rows}, writeConfig);
+      writeToFile(file->getPath(), {rows}, options);
       numTotalRows += rows->size();
     }
     files.push_back(file);
@@ -4533,14 +4532,13 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
           makeFlatVector<int64_t>(kSize, folly::identity, nullEvery(5)),
           makeFlatVector<int64_t>(kSize, folly::identity, nullEvery(7)),
       })});
-  auto config = std::make_shared<dwrf::Config>();
-  config->set(dwrf::Config::FLATTEN_MAP, true);
-  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
-  config->set<const std::vector<std::vector<std::string>>>(
-      dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS, {keys});
+  dwio::common::WriterOptions options;
+  options.flattenMap = true;
+  options.mapFlatCols = {0};
+  options.mapFlatColsStructKeys = {keys};
   auto file = TempFilePath::create();
   auto writeSchema = ROW({"c0"}, {MAP(INTEGER(), BIGINT())});
-  writeToFile(file->getPath(), {vector}, config, writeSchema);
+  writeToFile(file->getPath(), {vector}, options, writeSchema);
   auto readSchema = asRowType(vector->type());
   auto plan =
       PlanBuilder().tableScan(readSchema, {}, "", writeSchema).planNode();

@@ -19,8 +19,6 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/dwrf/common/Config.h"
-#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
@@ -42,23 +40,23 @@ class HiveConnectorTestBase : public OperatorTestBase {
 
   void resetHiveConnector(const std::shared_ptr<const Config>& config);
 
-  void writeToFile(const std::string& filePath, RowVectorPtr vector);
+  void writeToFile(
+      const std::string& filePath,
+      RowVectorPtr vector,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
 
   void writeToFile(
       const std::string& filePath,
       const std::vector<RowVectorPtr>& vectors,
-      std::shared_ptr<dwrf::Config> config =
-          std::make_shared<facebook::velox::dwrf::Config>(),
-      const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
-          flushPolicyFactory = nullptr);
+      dwio::common::WriterOptions options = {},
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
 
   void writeToFile(
       const std::string& filePath,
       const std::vector<RowVectorPtr>& vectors,
-      std::shared_ptr<dwrf::Config> config,
+      dwio::common::WriterOptions options,
       const TypePtr& schema,
-      const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
-          flushPolicyFactory = nullptr);
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
 
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,

@@ -36,6 +36,7 @@
 #include "velox/dwio/common/encryption/Encryption.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/vector/arrow/Bridge.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -615,8 +616,19 @@ struct WriterOptions {
   std::optional<bool> orcWriterIntegerDictionaryEncodingEnabled{std::nullopt};
   std::optional<bool> orcWriterStringDictionaryEncodingEnabled{std::nullopt};
   std::map<std::string, std::string> serdeParameters;
+
+  // DWRF specific options.
   std::optional<uint8_t> zlibCompressionLevel;
   std::optional<uint8_t> zstdCompressionLevel;
+  std::optional<bool> flattenMap{std::nullopt};
+  std::optional<std::vector<uint32_t>> mapFlatCols{std::nullopt};
+  std::optional<std::vector<std::vector<std::string>>> mapFlatColsStructKeys{
+      std::nullopt};
+  std::optional<std::function<std::unique_ptr<FlushPolicy>()>>
+      flushPolicyFactory;
+
+  // Parquet specific options.
+  std::optional<TimestampUnit> parquetWriteTimestampUnit;
 
   // WriterOption implementations should provide this function to specify how to
   // process format-specific session and connector configs.
