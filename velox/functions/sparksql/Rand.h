@@ -21,13 +21,15 @@ namespace facebook::velox::functions::sparksql {
 
 template <typename T>
 struct RandFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
   static constexpr bool is_deterministic = false;
 
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const TInput* seedInput) {
+      const accessor_arg_type<TInput>* seedInput) {
     const auto partitionId = config.sparkPartitionId();
     int64_t seed = seedInput ? (int64_t)*seedInput : 0;
     generator_.seed(seed + partitionId);

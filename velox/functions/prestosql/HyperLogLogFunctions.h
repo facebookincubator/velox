@@ -64,7 +64,7 @@ struct EmptyApproxSetWithMaxErrorFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const double* maxStandardError) {
+      const accessor_arg_type<double>* maxStandardError) {
     VELOX_USER_CHECK_NOT_NULL(
         maxStandardError,
         "empty_approx_set function requires constant value for maxStandardError argument");

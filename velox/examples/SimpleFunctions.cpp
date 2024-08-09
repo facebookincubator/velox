@@ -333,8 +333,8 @@ struct MyRegexpMatchFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig&,
-      const arg_type<Varchar>*,
-      const arg_type<Varchar>* pattern) {
+      const accessor_arg_type<Varchar>*,
+      const accessor_arg_type<Varchar>* pattern) {
     // Compile the RE2 object just once if pattern is constant. Functions might
     // choose to throw in case the regexp pattern is not constant, as it can be
     // quite expensive to compile it on a per-row basis. In this example we

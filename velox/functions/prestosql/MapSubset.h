@@ -29,8 +29,8 @@ struct MapSubsetPrimitiveFunction {
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Map<Key, Generic<T1>>>* /*inputMap*/,
-      const arg_type<Array<Key>>* keys) {
+      const accessor_arg_type<Map<Key, Generic<T1>>>* /*inputMap*/,
+      const accessor_arg_type<Array<Key>>* keys) {
     if (keys != nullptr) {
       constantSearchKeys_ = true;
       initializeSearchKeys(*keys);
@@ -96,8 +96,8 @@ struct MapSubsetVarcharFunction {
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Map<Varchar, Generic<T1>>>* /*inputMap*/,
-      const arg_type<Array<Varchar>>* keys) {
+      const accessor_arg_type<Map<Varchar, Generic<T1>>>* /*inputMap*/,
+      const accessor_arg_type<Array<Varchar>>* keys) {
     if (keys != nullptr) {
       constantSearchKeys_ = true;
 

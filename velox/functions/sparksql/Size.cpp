@@ -32,7 +32,7 @@ struct Size {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const TInput* /*input*/,
-      const bool* legacySizeOfNull) {
+      const accessor_arg_type<bool>* legacySizeOfNull) {
     if (legacySizeOfNull == nullptr) {
       VELOX_USER_FAIL("Constant legacySizeOfNull is expected.");
     }

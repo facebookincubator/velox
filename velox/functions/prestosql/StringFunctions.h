@@ -545,8 +545,8 @@ struct NormalizeFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Varchar>* /*string*/,
-      const arg_type<Varchar>* form) {
+      const accessor_arg_type<Varchar>* /*string*/,
+      const accessor_arg_type<Varchar>* form) {
     VELOX_USER_CHECK_NOT_NULL(form);
     VELOX_USER_CHECK_NE(
         normalizationOptions.count(*form),

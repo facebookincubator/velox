@@ -32,8 +32,8 @@ struct DecimalPlusFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      B* /*b*/) {
+      accessor_arg_type<A>* /*a*/,
+      accessor_arg_type<B>* /*b*/) {
     auto aType = inputTypes[0];
     auto bType = inputTypes[1];
     auto aScale = getDecimalPrecisionScale(*aType).second;
@@ -81,8 +81,8 @@ struct DecimalMinusFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      B* /*b*/) {
+      accessor_arg_type<A>* /*a*/,
+      accessor_arg_type<B>* /*b*/) {
     const auto& aType = inputTypes[0];
     const auto& bType = inputTypes[1];
     auto aScale = getDecimalPrecisionScale(*aType).second;
@@ -141,8 +141,8 @@ struct DecimalDivideFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      B* /*b*/) {
+      accessor_arg_type<A>* /*a*/,
+      accessor_arg_type<B>* /*b*/) {
     auto aType = inputTypes[0];
     auto bType = inputTypes[1];
     auto aScale = getDecimalPrecisionScale(*aType).second;
@@ -171,8 +171,8 @@ struct DecimalModulusFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      B* /*b*/) {
+      accessor_arg_type<A>* /*a*/,
+      accessor_arg_type<B>* /*b*/) {
     const auto& aType = inputTypes[0];
     const auto& bType = inputTypes[1];
     auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
@@ -221,7 +221,7 @@ struct DecimalRoundFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
-      A* a) {
+      accessor_arg_type<A>* a) {
     initialize(inputTypes, config, a, nullptr);
   }
 
@@ -229,8 +229,8 @@ struct DecimalRoundFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      const int32_t* /*n*/) {
+      accessor_arg_type<A>* /*a*/,
+      const accessor_arg_type<int32_t>* /*n*/) {
     const auto [precision, scale] = getDecimalPrecisionScale(*inputTypes[0]);
     precision_ = precision;
     scale_ = scale;
@@ -271,7 +271,7 @@ struct DecimalFloorFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      A* /*a*/) {
+      accessor_arg_type<A>* /*a*/) {
     scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
   }
 
@@ -296,7 +296,7 @@ struct DecimalTruncateFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
-      A* /*a*/) {
+      accessor_arg_type<A>* /*a*/) {
     const auto [precision, scale] = getDecimalPrecisionScale(*inputTypes[0]);
     precision_ = precision;
     scale_ = scale;
@@ -306,8 +306,8 @@ struct DecimalTruncateFunction {
   void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
-      A* a,
-      const int32_t* /*n*/) {
+      accessor_arg_type<A>* a,
+      const accessor_arg_type<int32_t>* /*n*/) {
     initialize(inputTypes, config, a);
   }
 
