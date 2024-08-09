@@ -30,7 +30,7 @@ concurrency:
 jobs:
   adapters:
     name: Linux release with adapters
-    runs-on: linux-amd64-cpu16
+    runs-on: linux-amd64-cpu32
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
@@ -113,7 +113,7 @@ jobs:
           ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3|cudf"
 
   ubuntu-debug:
-    runs-on: linux-amd64-cpu16
+    runs-on: linux-amd64-cpu32
     name: "Ubuntu debug with resolve_dependency"
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache"
