@@ -112,11 +112,31 @@ void FaultyWriteFile::append(std::unique_ptr<folly::IOBuf> data) {
   delegatedFile_->append(std::move(data));
 }
 
-void FaultyWriteFile::flush() {
-  delegatedFile_->flush();
+uint64_t FaultyWriteFile::write(std::vector<iovec> iovecs, int32_t offset) {
+  return delegatedFile_->write(iovecs, offset);
+}
+
+int32_t FaultyWriteFile::truncate(int32_t newSize) {
+  return delegatedFile_->truncate(newSize);
+}
+
+int32_t FaultyWriteFile::flush() {
+  return delegatedFile_->flush();
+}
+
+int32_t FaultyWriteFile::setAttributes(int32_t attr) {
+  return delegatedFile_->setAttributes(attr);
+}
+
+bool FaultyWriteFile::checkAttributes(int32_t flag) {
+  return delegatedFile_->checkAttributes(flag);
 }
 
 void FaultyWriteFile::close() {
   delegatedFile_->close();
+}
+
+int32_t FaultyWriteFile::unlink() {
+  return delegatedFile_->unlink();
 }
 } // namespace facebook::velox::tests::utils

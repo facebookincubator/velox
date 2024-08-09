@@ -61,7 +61,7 @@ void HdfsWriteFile::close() {
   hdfsFile_ = nullptr;
 }
 
-void HdfsWriteFile::flush() {
+int32_t HdfsWriteFile::flush() {
   VELOX_CHECK_NOT_NULL(
       hdfsFile_,
       "Cannot flush HDFS file because file handle is null, file path: {}",
@@ -69,6 +69,7 @@ void HdfsWriteFile::flush() {
   int success = hdfsFlush(hdfsClient_, hdfsFile_);
   VELOX_CHECK_EQ(
       success, 0, "Hdfs flush error: {}", std::string(hdfsGetLastError()));
+  return success;
 }
 
 void HdfsWriteFile::append(std::string_view data) {

@@ -71,7 +71,7 @@ class AbfsWriteFile : public WriteFile {
   uint64_t size() const override;
 
   /// Flush the data.
-  void flush() override;
+  int32_t flush() override;
 
   /// Write the data by append mode.
   void append(std::string_view data) override;

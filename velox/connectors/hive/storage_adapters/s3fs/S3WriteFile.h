@@ -57,7 +57,7 @@ class S3WriteFile : public WriteFile {
   void append(std::string_view data) override;
 
   /// No-op. Append handles the flush.
-  void flush() override;
+  int32_t flush() override;
 
   /// Close the file. Any cleanup (disk flush, etc.) will be done here.
   void close() override;
