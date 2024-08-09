@@ -24,7 +24,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
 
-namespace {
+namespace facebook::velox::functions::test {
 
 class SliceTestBase : public FunctionBaseTest {
  protected:
@@ -155,4 +155,4 @@ class SliceTestBase : public FunctionBaseTest {
   }
 };
 
-} // namespace
+} // namespace facebook::velox::functions::test

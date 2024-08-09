@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/lib/Slice.h"
 #include "velox/functions/lib/tests/SliceTestBase.h"
+#include "velox/functions/sparksql/Register.h"
 
 namespace facebook::velox::functions::sparksql::test {
 
@@ -23,7 +23,7 @@ class SliceTest : public SliceTestBase {
  protected:
   static void SetUpTestCase() {
     SliceTestBase::SetUpTestCase();
-    registerIntegerSliceFunction("");
+    sparksql::registerFunctions("");
   }
 
   void SetUp() override {
