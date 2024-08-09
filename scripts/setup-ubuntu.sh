@@ -28,22 +28,14 @@
 # Minimal setup for Ubuntu 20.04.
 set -eufx -o pipefail
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-helper-functions.sh
+source $SCRIPTDIR/setup-linux.sh
 
 # Folly must be built with the same compiler flags so that some low level types
 # are the same size.
 COMPILER_FLAGS=$(get_cxx_flags)
 export COMPILER_FLAGS
-NPROC=$(getconf _NPROCESSORS_ONLN)
-DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
-export CMAKE_BUILD_TYPE=Release
-SUDO="${SUDO:-"sudo --preserve-env"}"
 
-FB_OS_VERSION="v2024.05.20.00"
-FMT_VERSION="10.1.1"
-BOOST_VERSION="boost-1.84.0"
-ARROW_VERSION="15.0.0"
+SUDO="${SUDO:-"sudo --preserve-env"}"
 
 # Install packages required for build.
 function install_build_prerequisites {
@@ -77,6 +69,7 @@ function install_velox_deps_from_apt {
     libgoogle-glog-dev \
     libbz2-dev \
     libgflags-dev \
+    libgtest-dev \
     libgmock-dev \
     libevent-dev \
     liblz4-dev \
@@ -93,44 +86,6 @@ function install_velox_deps_from_apt {
     tzdata
 }
 
-function install_fmt {
-  wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
-  cmake_install fmt -DFMT_TEST=OFF
-}
-
-function install_boost {
-  wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
-  (
-   cd boost
-   ./bootstrap.sh --prefix=/usr/local
-   ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
-  )
-}
-
-function install_folly {
-  wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  cmake_install folly -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
-}
-
-function install_fizz {
-  wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
-  cmake_install fizz/fizz -DBUILD_TESTS=OFF
-}
-
-function install_wangle {
-  wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
-  cmake_install wangle/wangle -DBUILD_TESTS=OFF
-}
-
-function install_mvfst {
-  wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
-  cmake_install mvfst -DBUILD_TESTS=OFF
-}
-
-function install_fbthrift {
-  wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
-  cmake_install fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
-}
 
 function install_conda {
   MINICONDA_PATH="${HOME:-/opt}/miniconda-for-velox"
@@ -150,41 +105,6 @@ function install_conda {
   )
 }
 
-function install_duckdb {
-  if $BUILD_DUCKDB ; then
-    echo 'Building DuckDB'
-    wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/v0.8.1.tar.gz duckdb
-    cmake_install duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
-  fi
-}
-
-function install_arrow {
-  wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
-  (
-    cd arrow/cpp
-    cmake_install \
-      -DARROW_PARQUET=OFF \
-      -DARROW_WITH_THRIFT=ON \
-      -DARROW_WITH_LZ4=ON \
-      -DARROW_WITH_SNAPPY=ON \
-      -DARROW_WITH_ZLIB=ON \
-      -DARROW_WITH_ZSTD=ON \
-      -DARROW_JEMALLOC=OFF \
-      -DARROW_SIMD_LEVEL=NONE \
-      -DARROW_RUNTIME_SIMD_LEVEL=NONE \
-      -DARROW_WITH_UTF8PROC=OFF \
-      -DARROW_TESTING=ON \
-      -DCMAKE_INSTALL_PREFIX=/usr/local \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DARROW_BUILD_STATIC=ON \
-      -DThrift_SOURCE=BUNDLED
-
-    # Install thrift.
-    cd _build/thrift_ep-prefix/src/thrift_ep-build
-    $SUDO cmake --install ./ --prefix /usr/local/
-  )
-}
-
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
   if ! dpkg -l cuda-keyring 1>/dev/null; then
@@ -196,10 +116,45 @@ function install_cuda {
   $SUDO apt install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-dev-$(echo $1 | tr '.' '-')
 }
 
+function install_s3 {
+  apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev
+
+  install_aws_deps
+
+  local MINIO_ARCH=$MACHINE
+  if [[ $MACHINE == aarch64 ]]; then
+    MINIO_ARCH="arm64"
+  elif [[ $MACHINE == x86_64 ]]; then
+    MINIO_ARCH="amd64"
+  fi
+  local MINIO_OS="linux"
+  install_minio ${MINIO_ARCH} ${MINIO_OS}
+}
+
+function install_gcs {
+  # Dependencies of GCS, probably a workaround until the docker image is rebuilt
+  apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
+  install_gcs-sdk-cpp
+}
+
+function install_abfs {
+  # Dependencies of Azure Storage Blob cpp
+  apt install -y openssl
+  install_azure-storage-sdk-cpp
+}
+
+function install_adapters {
+  run_and_time install_s3
+  run_and_time install_gcs
+  run_and_time install_abfs
+  run_and_time install_hdfs
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_apt
   run_and_time install_fmt
   run_and_time install_boost
+  run_and_time install_protobuf
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
@@ -208,6 +163,8 @@ function install_velox_deps {
   run_and_time install_conda
   run_and_time install_duckdb
   run_and_time install_arrow
+  run_and_time install_xsimd
+  run_and_time install_simdjson
 }
 
 function install_apt_deps {
