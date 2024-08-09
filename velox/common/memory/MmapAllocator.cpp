@@ -178,11 +178,11 @@ MachinePageCount MmapAllocator::unmap(MachinePageCount targetPages) {
 
 MachinePageCount MmapAllocator::freeNonContiguousInternal(
     Allocation& allocation) {
-  MachinePageCount numFreed{0};
   if (allocation.empty()) {
-    return numFreed;
+    return 0;
   }
 
+  MachinePageCount numFreed{0};
   for (auto i = 0; i < sizeClasses_.size(); ++i) {
     auto& sizeClass = sizeClasses_[i];
     int32_t pages = 0;
@@ -228,7 +228,6 @@ bool MmapAllocator::allocateContiguousImpl(
     VELOX_CHECK_LE(numPages, maxPages);
   }
 
-  MachinePageCount numCollateralPages = 0;
   // 'collateral' and 'allocation' get freed anyway. But the counters are not
   // updated to reflect this. Rather, we add the delta that is needed on top of
   // collaterals to the allocation and mapped counters. In this way another
@@ -243,6 +242,7 @@ bool MmapAllocator::allocateContiguousImpl(
   // have the guarantee that the operation succeeds if 'collateral' and
   // 'allocation' cover the new size, as other threads might grab the
   // transiently free pages.
+  MachinePageCount numCollateralPages = 0;
   if (collateral != nullptr) {
     numCollateralPages = freeNonContiguousInternal(*collateral);
   }
@@ -263,6 +263,8 @@ bool MmapAllocator::allocateContiguousImpl(
   const auto totalCollateralPages =
       numCollateralPages + numLargeCollateralPages;
   if (numPages == 0) {
+    numAllocated_ -= totalCollateralPages;
+    numMapped_ -= numLargeCollateralPages;
     return true;
   }
 
