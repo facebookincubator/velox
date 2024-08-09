@@ -442,9 +442,9 @@ void WriterFuzzer::verifyWriter(
   const auto sql = referenceQueryRunner_->toSql(plan).value();
   std::multiset<std::vector<variant>> expectedResult;
   try {
-    referenceQueryRunner_->execute(dropSql);
-    expectedResult =
-        referenceQueryRunner_->execute(sql, input, plan->outputType());
+    referenceQueryRunner_->execute(rootPool_.get(), dropSql);
+    expectedResult = referenceQueryRunner_->execute(
+        rootPool_.get(), sql, input, plan->outputType());
   } catch (...) {
     LOG(WARNING) << "Query failed in the reference DB";
     return;
@@ -484,7 +484,7 @@ void WriterFuzzer::verifyWriter(
   }
   try {
     auto referenceData = referenceQueryRunner_->execute(
-        "SELECT *" + bucketSql + " FROM tmp_write");
+        rootPool_.get(), "SELECT *" + bucketSql + " FROM tmp_write");
     VELOX_CHECK(
         assertEqualResults(referenceData, {actual}),
         "Velox and reference DB results don't match");
@@ -521,7 +521,7 @@ void WriterFuzzer::verifyWriter(
       std::vector<velox::RowVectorPtr> referenceResult;
       try {
         referenceResult = referenceQueryRunner_->execute(
-            singleSplitReferenceSql, "task_concurrency=1");
+            rootPool_.get(), singleSplitReferenceSql, "task_concurrency=1");
       } catch (...) {
         LOG(WARNING) << "Query failed in the reference DB";
         return;
@@ -609,8 +609,8 @@ RowVectorPtr WriterFuzzer::veloxToPrestoResult(const RowVectorPtr& result) {
 }
 
 std::string WriterFuzzer::getReferenceOutputDirectoryPath(int32_t layers) {
-  auto filePath =
-      referenceQueryRunner_->execute("SELECT \"$path\" FROM tmp_write");
+  auto filePath = referenceQueryRunner_->execute(
+      rootPool_.get(), "SELECT \"$path\" FROM tmp_write");
   auto tableDirectoryPath =
       fs::path(extractSingleValue<StringView>(filePath)).parent_path();
   while (layers-- > 0) {

@@ -245,13 +245,15 @@ void setupMemory(int64_t allocatorCapacity, int64_t arbitratorCapacity) {
 
 std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
 computeReferenceResults(
+    memory::MemoryPool* rootPool,
     const core::PlanNodePtr& plan,
     const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner) {
   if (auto sql = referenceQueryRunner->toSql(plan)) {
     try {
       return std::make_pair(
-          referenceQueryRunner->execute(sql.value(), input, plan->outputType()),
+          referenceQueryRunner->execute(
+              rootPool, sql.value(), input, plan->outputType()),
           ReferenceQueryErrorCode::kSuccess);
     } catch (...) {
       LOG(WARNING) << "Query failed in the reference DB";
@@ -267,6 +269,7 @@ computeReferenceResults(
 
 std::pair<std::optional<std::vector<RowVectorPtr>>, ReferenceQueryErrorCode>
 computeReferenceResultsAsVector(
+    memory::MemoryPool* rootPool,
     const core::PlanNodePtr& plan,
     const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner) {
@@ -276,7 +279,7 @@ computeReferenceResultsAsVector(
     try {
       return std::make_pair(
           referenceQueryRunner->executeVector(
-              sql.value(), input, plan->outputType()),
+              rootPool, sql.value(), input, plan->outputType()),
           ReferenceQueryErrorCode::kSuccess);
     } catch (...) {
       LOG(WARNING) << "Query failed in the reference DB";

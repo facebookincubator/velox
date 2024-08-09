@@ -35,11 +35,13 @@ class DuckQueryRunner : public ReferenceQueryRunner {
   /// Creates 'tmp' table with 'input' data and runs 'sql' query. Returns
   /// results according to 'resultType' schema.
   std::multiset<std::vector<velox::variant>> execute(
+      memory::MemoryPool* rootPool,
       const std::string& sql,
       const std::vector<RowVectorPtr>& input,
       const RowTypePtr& resultType) override;
 
   std::multiset<std::vector<velox::variant>> execute(
+      memory::MemoryPool* rootPool,
       const std::string& sql,
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<RowVectorPtr>& buildInput,

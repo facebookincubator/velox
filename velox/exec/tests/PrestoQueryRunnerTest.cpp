@@ -54,14 +54,15 @@ TEST_F(PrestoQueryRunnerTest, DISABLED_basic) {
       "hive",
       static_cast<std::chrono::milliseconds>(1000));
 
-  auto results = queryRunner->execute("SELECT count(*) FROM nation");
+  auto results =
+      queryRunner->execute(rootPool_.get(), "SELECT count(*) FROM nation");
   auto expected = makeRowVector({
       makeConstant<int64_t>(25, 1),
   });
   velox::exec::test::assertEqualResults({expected}, {results});
 
-  results =
-      queryRunner->execute("SELECT regionkey, count(*) FROM nation GROUP BY 1");
+  results = queryRunner->execute(
+      rootPool_.get(), "SELECT regionkey, count(*) FROM nation GROUP BY 1");
 
   expected = makeRowVector({
       makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
@@ -97,6 +98,7 @@ TEST_F(PrestoQueryRunnerTest, DISABLED_fuzzer) {
   ASSERT_TRUE(sql.has_value());
 
   auto prestoResults = queryRunner->execute(
+      rootPool_.get(),
       sql.value(),
       {data},
       ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), ARRAY(BIGINT())}));

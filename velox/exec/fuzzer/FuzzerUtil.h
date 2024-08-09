@@ -105,6 +105,7 @@ enum ReferenceQueryErrorCode {
 // ReferenceQueryErrorCode if the query fails.
 std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
 computeReferenceResults(
+    memory::MemoryPool* rootPool,
     const core::PlanNodePtr& plan,
     const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner);
@@ -114,6 +115,7 @@ computeReferenceResults(
 // support returning results as a vector.
 std::pair<std::optional<std::vector<RowVectorPtr>>, ReferenceQueryErrorCode>
 computeReferenceResultsAsVector(
+    memory::MemoryPool* rootPool,
     const core::PlanNodePtr& plan,
     const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner);

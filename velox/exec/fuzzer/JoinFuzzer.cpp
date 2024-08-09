@@ -628,7 +628,11 @@ std::optional<MaterializedRowMultiset> JoinFuzzer::computeReferenceResults(
 
   if (auto sql = referenceQueryRunner_->toSql(plan)) {
     return referenceQueryRunner_->execute(
-        sql.value(), probeInput, buildInput, plan->outputType());
+        rootPool_.get(),
+        sql.value(),
+        probeInput,
+        buildInput,
+        plan->outputType());
   }
 
   LOG(INFO) << "Query not supported by the reference DB";

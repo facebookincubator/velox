@@ -708,8 +708,8 @@ bool AggregationFuzzer::verifyWindow(
 
     if (!customVerification && enableWindowVerification) {
       if (resultOrError.result) {
-        auto referenceResult =
-            computeReferenceResults(plan, input, referenceQueryRunner_.get());
+        auto referenceResult = computeReferenceResults(
+            rootPool_.get(), plan, input, referenceQueryRunner_.get());
         stats_.updateReferenceQueryStats(referenceResult.second);
         if (auto expectedResult = referenceResult.first) {
           ++stats_.numVerified;
@@ -1004,8 +1004,8 @@ void AggregationFuzzer::verifyAggregation(
 
   std::optional<MaterializedRowMultiset> expectedResult;
   if (!customVerification) {
-    auto referenceResult =
-        computeReferenceResults(plan, input, referenceQueryRunner_.get());
+    auto referenceResult = computeReferenceResults(
+        rootPool_.get(), plan, input, referenceQueryRunner_.get());
     stats_.updateReferenceQueryStats(referenceResult.second);
     expectedResult = referenceResult.first;
   }
@@ -1087,7 +1087,7 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
     if (resultOrError.result != nullptr) {
       if (!customVerification) {
         auto referenceResult = computeReferenceResults(
-            firstPlan, input, referenceQueryRunner_.get());
+            rootPool_.get(), firstPlan, input, referenceQueryRunner_.get());
         stats_.updateReferenceQueryStats(referenceResult.second);
         auto expectedResult = referenceResult.first;
 
@@ -1105,7 +1105,7 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
         if (isSupportedType(firstPlan->outputType()) &&
             isSupportedType(input.front()->type())) {
           auto referenceResult = computeReferenceResultsAsVector(
-              firstPlan, input, referenceQueryRunner_.get());
+              rootPool_.get(), firstPlan, input, referenceQueryRunner_.get());
           stats_.updateReferenceQueryStats(referenceResult.second);
 
           if (referenceResult.first) {

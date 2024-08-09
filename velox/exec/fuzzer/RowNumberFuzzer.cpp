@@ -264,7 +264,7 @@ std::optional<MaterializedRowMultiset> RowNumberFuzzer::computeReferenceResults(
 
   if (auto sql = referenceQueryRunner_->toSql(plan)) {
     return referenceQueryRunner_->execute(
-        sql.value(), input, plan->outputType());
+        rootPool_.get(), sql.value(), input, plan->outputType());
   }
 
   LOG(INFO) << "Query not supported by the reference DB";
