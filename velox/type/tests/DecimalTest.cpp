@@ -533,21 +533,21 @@ TEST(DecimalTest, castToString) {
       DecimalUtil::kShortDecimalMin, 18, 0, 19, "-" + std::string(18, '9'));
 
   testcastToString<int128_t>(
-      HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0),
+      HugeInt::parse("-18446744073709551616"),
       20,
       0,
       21,
       "-18446744073709551616");
 
   testcastToString<int128_t>(
-      HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0),
+      HugeInt::parse("-18446744073709551616"),
       20,
       3,
       22,
       "-18446744073709551.616");
 
   testcastToString<int128_t>(
-      HugeInt::build(0xffffffffffffffff, 0x54ab567314e0f52e),
+      HugeInt::parse("-12345678901234567890"),
       20,
       20,
       23,
