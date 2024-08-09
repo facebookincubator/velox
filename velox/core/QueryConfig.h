@@ -15,28 +15,10 @@
  */
 #pragma once
 
+#include "velox/common/base/ConfigUtil.h"
 #include "velox/core/Config.h"
 
 namespace facebook::velox::core {
-enum class CapacityUnit {
-  BYTE,
-  KILOBYTE,
-  MEGABYTE,
-  GIGABYTE,
-  TERABYTE,
-  PETABYTE
-};
-
-double toBytesPerCapacityUnit(CapacityUnit unit);
-
-CapacityUnit valueOfCapacityUnit(const std::string& unitStr);
-
-/// Convert capacity string with unit to the capacity number in the specified
-/// units
-uint64_t toCapacity(const std::string& from, CapacityUnit to);
-
-std::chrono::duration<double> toDuration(const std::string& str);
-
 /// A simple wrapper around velox::Config. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
@@ -365,8 +347,9 @@ class QueryConfig {
   static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
 
   uint64_t queryMaxMemoryPerNode() const {
-    return toCapacity(
-        get<std::string>(kQueryMaxMemoryPerNode, "0B"), CapacityUnit::BYTE);
+    return config::toCapacity(
+        get<std::string>(kQueryMaxMemoryPerNode, "0B"),
+        config::CapacityUnit::BYTE);
   }
 
   uint64_t maxPartialAggregationMemoryUsage() const {

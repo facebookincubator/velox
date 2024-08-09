@@ -14,20 +14,27 @@
  * limitations under the License.
  */
 
-#include "velox/core/QueryConfig.h"
+#pragma once
 
-namespace facebook::velox::core {
+#include "velox/common/base/Exceptions.h"
 
-QueryConfig::QueryConfig(
-    const std::unordered_map<std::string, std::string>& values)
-    : config_{std::make_unique<MemConfig>(values)} {}
+namespace facebook::velox::config {
+enum class CapacityUnit {
+  BYTE,
+  KILOBYTE,
+  MEGABYTE,
+  GIGABYTE,
+  TERABYTE,
+  PETABYTE
+};
 
-QueryConfig::QueryConfig(std::unordered_map<std::string, std::string>&& values)
-    : config_{std::make_unique<MemConfig>(std::move(values))} {}
+double toBytesPerCapacityUnit(CapacityUnit unit);
 
-void QueryConfig::testingOverrideConfigUnsafe(
-    std::unordered_map<std::string, std::string>&& values) {
-  config_ = std::make_unique<MemConfig>(std::move(values));
-}
+CapacityUnit valueOfCapacityUnit(const std::string& unitStr);
 
-} // namespace facebook::velox::core
+/// Convert capacity string with unit to the capacity number in the specified
+/// units
+uint64_t toCapacity(const std::string& from, CapacityUnit to);
+
+std::chrono::duration<double> toDuration(const std::string& str);
+} // namespace facebook::velox::config
