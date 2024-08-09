@@ -34,6 +34,11 @@ void toCallInputsSql(
 // Converts a call expression into a SQL string.
 std::string toCallSql(const core::CallTypedExprPtr& call);
 
+std::string toCallSql(const core::CallTypedExprPtr& call);
+std::string toCastSql(const core::CastTypedExprPtr& cast);
+std::string toConcatSql(const core::ConcatTypedExprPtr& concat);
+std::string toConstantSql(const core::ConstantTypedExprPtr& constant);
+
 // Converts aggregate call expression into a SQL string.
 std::string toAggregateCallSql(
     const core::CallTypedExprPtr& call,

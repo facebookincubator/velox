@@ -55,12 +55,6 @@ std::string toTypeSql(const TypePtr& type) {
   }
 }
 
-std::string toCallSql(const core::CallTypedExprPtr& call);
-std::string toCastSql(const core::CastTypedExprPtr& cast);
-std::string toConcatSql(const core::ConcatTypedExprPtr& concat);
-std::string toConstantSql(const core::ConstantTypedExprPtr& constant);
-
-
 std::string escape(const std::string& input) {
   std::string result;
   result.reserve(input.size());

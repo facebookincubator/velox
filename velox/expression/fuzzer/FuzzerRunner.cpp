@@ -83,7 +83,8 @@ DEFINE_string(
 
 DEFINE_string(
     special_forms,
-    "and,or,cast,coalesce,if,switch",
+    // "and,or,cast,coalesce,if,switch",
+    "cast,coalesce,if,switch",
     "Comma-separated list of special forms to use in generated expression. "
     "Supported special forms: and, or, coalesce, if, switch, cast.");
 
