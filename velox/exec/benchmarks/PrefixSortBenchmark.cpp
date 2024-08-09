@@ -16,9 +16,9 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
+#include "OrderByBenchmarkUtil.h"
 #include "glog/logging.h"
 #include "velox/exec/PrefixSort.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -45,7 +45,8 @@ class TestCase {
       }
     }
     data_ = std::make_unique<RowContainer>(keyTypes, dependentTypes, pool);
-    RowVectorPtr sortedRows = fuzzRows(numRows, numKeys);
+    RowVectorPtr sortedRows =
+        OrderByBenchmarkUtil::fuzzRows(rowType, numRows, numKeys, pool_);
     storeRows(numRows, sortedRows);
 
     // Initialize CompareFlags, it could be same for each key in benchmark.
@@ -89,30 +90,6 @@ class TestCase {
         rowContainer()->store(decoded, i, row, column);
       }
     }
-  }
-
-  RowVectorPtr fuzzRows(size_t numRows, int numKeys) {
-    VectorFuzzer fuzzer({.vectorSize = numRows}, pool_);
-    VectorFuzzer fuzzerWithNulls(
-        {.vectorSize = numRows, .nullRatio = 0.7}, pool_);
-    std::vector<VectorPtr> children;
-
-    // Fuzz keys: for front keys (column 0 to numKeys -2) use high
-    // nullRatio to enforce all columns to be compared.
-    {
-      for (auto i = 0; i < numKeys - 1; ++i) {
-        children.push_back(fuzzerWithNulls.fuzz(rowType_->childAt(i)));
-      }
-      children.push_back(fuzzer.fuzz(rowType_->childAt(numKeys - 1)));
-    }
-    // Fuzz payload
-    {
-      for (auto i = numKeys; i < rowType_->size(); ++i) {
-        children.push_back(fuzzer.fuzz(rowType_->childAt(i)));
-      }
-    }
-    return std::make_shared<RowVector>(
-        pool_, rowType_, nullptr, numRows, std::move(children));
   }
 
   const std::string testName_;
@@ -222,29 +199,12 @@ class PrefixSortBenchmark {
     }
   }
 
-  std::vector<RowTypePtr> bigintRowTypes(bool noPayload) {
-    if (noPayload) {
-      return {
-          ROW({BIGINT()}),
-          ROW({BIGINT(), BIGINT()}),
-          ROW({BIGINT(), BIGINT(), BIGINT()}),
-          ROW({BIGINT(), BIGINT(), BIGINT(), BIGINT()}),
-      };
-    } else {
-      return {
-          ROW({BIGINT(), VARCHAR(), VARCHAR()}),
-          ROW({BIGINT(), BIGINT(), VARCHAR(), VARCHAR()}),
-          ROW({BIGINT(), BIGINT(), BIGINT(), VARCHAR(), VARCHAR()}),
-          ROW({BIGINT(), BIGINT(), BIGINT(), BIGINT(), VARCHAR(), VARCHAR()}),
-      };
-    }
-  }
-
   void bigint(
       bool noPayload,
       int numIterations,
       const std::vector<vector_size_t>& batchSizes) {
-    std::vector<RowTypePtr> rowTypes = bigintRowTypes(noPayload);
+    std::vector<RowTypePtr> rowTypes =
+        OrderByBenchmarkUtil::bigintRowTypes(noPayload);
     std::vector<int> numKeys = {1, 2, 3, 4};
     benchmark(
         noPayload ? "no-payload" : "payload",
@@ -287,12 +247,8 @@ class PrefixSortBenchmark {
     const auto iterations = 10;
     const std::vector<vector_size_t> batchSizes = {
         1'000, 10'000, 100'000, 1'000'000};
-    std::vector<RowTypePtr> rowTypes = {
-        ROW({VARCHAR()}),
-        ROW({VARCHAR(), VARCHAR()}),
-        ROW({VARCHAR(), VARCHAR(), VARCHAR()}),
-        ROW({VARCHAR(), VARCHAR(), VARCHAR(), VARCHAR()}),
-    };
+    std::vector<RowTypePtr> rowTypes =
+        OrderByBenchmarkUtil::largeVarcharRowTypes();
     std::vector<int> numKeys = {1, 2, 3, 4};
     benchmark(
         "no-payloads", "varchar", batchSizes, rowTypes, numKeys, iterations);
