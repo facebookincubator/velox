@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/core/Metaprogramming.h"
+#include "velox/expression/ComplexViewTypes.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
@@ -35,6 +36,10 @@
   template <typename TArgs>                                             \
   using opt_out_type = std::optional<                                   \
       typename __Velox_ExecParams::template resolver<TArgs>::out_type>; \
+                                                                        \
+  template <typename TArgs>                                             \
+  using accessor_arg_type = facebook::velox::exec::OptionalAccessor<    \
+      typename __Velox_ExecParams::template resolver<TArgs>::in_type>;  \
                                                                         \
   DECLARE_CONDITIONAL_TYPE_NAME(                                        \
       null_free_in_type_resolver, null_free_in_type, in_type);          \
