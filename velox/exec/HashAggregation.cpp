@@ -46,7 +46,15 @@ HashAggregation::HashAggregation(
       abandonPartialAggregationMinPct_(
           driverCtx->queryConfig().abandonPartialAggregationMinPct()),
       maxPartialAggregationMemoryUsage_(
-          driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {}
+          driverCtx->queryConfig().maxPartialAggregationMemoryUsage()),
+      mergingVectorInput_(std::make_unique<MergingVector>(
+          driverCtx->queryConfig().preferredOutputBatchRows(),
+          driverCtx->queryConfig().preferredOutputBatchBytes(),
+          driverCtx->queryConfig().maxMergingBatchRows(),
+          driverCtx->queryConfig().maxMergingBatchBytes(),
+          aggregationNode->preGroupedKeys().size() == 0 ? false : true,
+          true,
+          operatorCtx_->pool())) {}
 
 void HashAggregation::initialize() {
   Operator::initialize();
@@ -118,7 +126,21 @@ bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
       100 * numOutput / numInputRows_ >= abandonPartialAggregationMinPct_;
 }
 
+void HashAggregation::processMergedVectors(bool noMoreInput) {
+  auto mergedVector = mergingVectorInput_->getOutput(noMoreInput);
+  while (nullptr != mergedVector) {
+    addInputInternal(mergedVector);
+    mergingVectorInput_->reuseIfNeed(mergedVector);
+    mergedVector = mergingVectorInput_->getOutput(noMoreInput);
+  }
+}
+
 void HashAggregation::addInput(RowVectorPtr input) {
+  mergingVectorInput_->addInput(input);
+  processMergedVectors(false);
+}
+
+void HashAggregation::addInputInternal(RowVectorPtr input) {
   if (!pushdownChecked_) {
     mayPushdown_ = operatorCtx_->driver()->mayPushdownAggregation(this);
     pushdownChecked_ = true;
@@ -380,6 +402,8 @@ RowVectorPtr HashAggregation::getDistinctOutput() {
 }
 
 void HashAggregation::noMoreInput() {
+  processMergedVectors(true);
+
   updateEstimatedOutputRowSize();
   groupingSet_->noMoreInput();
   Operator::noMoreInput();

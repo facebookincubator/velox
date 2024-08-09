@@ -166,6 +166,17 @@ class QueryConfig {
   static constexpr const char* kPreferredOutputBatchRows =
       "preferred_output_batch_rows";
 
+  /// Max number of rows to be merged by MergingVector. It is used when an
+  /// estimate of average row size is known. Otherwise
+  /// kMaxMergingBatchRows is used.
+  static constexpr const char* kMaxMergingBatchBytes =
+      "max_merging_batch_bytes";
+
+  /// Max size of batches in bytes to be merged by MergingVector. It is used
+  /// when an estimate of average row size is not known. When the estimate of
+  /// average row size is known, kMaxMergingBatchBytes is used.
+  static constexpr const char* kMaxMergingBatchRows = "max_merging_batch_rows";
+
   /// Max number of rows that could be return by operators from
   /// Operator::getOutput. It is used when an estimate of average row size is
   /// known and kPreferredOutputBatchBytes is used to compute the number of
@@ -448,6 +459,14 @@ class QueryConfig {
 
   uint32_t preferredOutputBatchRows() const {
     return get<uint32_t>(kPreferredOutputBatchRows, 1024);
+  }
+
+  uint32_t maxMergingBatchBytes() const {
+    return get<uint32_t>(kMaxMergingBatchBytes, 10UL << 14);
+  }
+
+  uint32_t maxMergingBatchRows() const {
+    return get<uint32_t>(kMaxMergingBatchRows, 16);
   }
 
   uint32_t maxOutputBatchRows() const {

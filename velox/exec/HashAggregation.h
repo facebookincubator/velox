@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/exec/GroupingSet.h"
+#include "velox/exec/MergingVector.h"
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec {
@@ -54,6 +55,11 @@ class HashAggregation : public Operator {
   void updateRuntimeStats();
 
   void prepareOutput(vector_size_t size);
+
+  // Get all merged vectors and transfer to addInputInternal.
+  void processMergedVectors(bool noMoreInput);
+
+  void addInputInternal(RowVectorPtr input);
 
   // Invoked to reset partial aggregation state if it was full and has been
   // flushed.
@@ -94,6 +100,8 @@ class HashAggregation : public Operator {
   // 'groupingSet_->estimateRowSize()'. If spilling, this value is set to max
   // 'groupingSet_->estimateRowSize()' across all accumulated data set.
   std::optional<int64_t> estimatedOutputRowSize_;
+
+  std::unique_ptr<MergingVector> mergingVectorInput_;
 
   bool partialFull_ = false;
   bool newDistincts_ = false;
