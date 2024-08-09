@@ -32,6 +32,7 @@ add_executable(
   ElementAtTest.cpp
   HashTest.cpp
   InTest.cpp
+  JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
   LeastGreatestTest.cpp
   MakeDecimalTest.cpp
