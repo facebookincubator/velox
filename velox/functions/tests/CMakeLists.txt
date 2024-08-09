@@ -19,6 +19,7 @@ target_link_libraries(
   velox_function_registry_test
   velox_function_registry
   velox_functions_test_lib
+  velox_window
   gmock
   gtest
   gtest_main)
