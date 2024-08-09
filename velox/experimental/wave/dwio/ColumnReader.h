@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/experimental/wave/dwio/FormatData.h"
 #include "velox/experimental/wave/exec/Wave.h"
@@ -113,6 +114,8 @@ class ReadStream : public Executable {
   ReadStream(
       StructColumnReader* columnReader,
       WaveStream& waveStream,
+      velox::io::IoStatistics* ioStats,
+      FileInfo& fileInfo,
       const OperandSet* firstColumns = nullptr);
 
   void setNullable(const AbstractOperand& op, bool nullable) {
@@ -159,6 +162,8 @@ class ReadStream : public Executable {
   // Sets the ops to 'offset_' and 'rows_'. Call before each batch.
   void prepareRead();
   void makeControl();
+
+  io::IoStatistics* const ioStats_;
 
   // Makes steps to align values from non-last filters to the selection of the
   // last filter.
@@ -211,6 +216,7 @@ class ReadStream : public Executable {
 
   // Set to true when after first griddize() and akeOps().
   bool inited_{false};
+  FileInfo fileInfo_;
 };
 
 } // namespace facebook::velox::wave

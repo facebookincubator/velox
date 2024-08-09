@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/process/TraceContext.h"
 #include "velox/experimental/wave/dwio/ColumnReader.h"
 #include "velox/experimental/wave/dwio/StructColumnReader.h"
 
@@ -49,13 +50,15 @@ void allOperands(
 ReadStream::ReadStream(
     StructColumnReader* columnReader,
     WaveStream& _waveStream,
+    io::IoStatistics* ioStats,
+    FileInfo& fileInfo,
     const OperandSet* firstColumns)
-    : Executable() {
+    : Executable(), ioStats_(ioStats), fileInfo_(fileInfo) {
   waveStream = &_waveStream;
   allOperands(columnReader, outputOperands, &abstractOperands_);
   output.resize(outputOperands.size());
   reader_ = columnReader;
-  reader_->splitStaging().push_back(std::make_unique<SplitStaging>());
+  reader_->splitStaging().push_back(std::make_unique<SplitStaging>(fileInfo_));
   currentStaging_ = reader_->splitStaging().back().get();
 }
 
@@ -99,7 +102,9 @@ void ReadStream::makeGrid(Stream* stream) {
   }
   if (!programs_.programs.empty()) {
     WaveStats& stats = waveStream->stats();
-    stats.bytesToDevice += currentStaging_->bytesToDevice();
+    auto bytes = currentStaging_->bytesToDevice();
+    ioStats_->incRawBytesRead(bytes);
+    stats.bytesToDevice += bytes;
     ++stats.numKernels;
     stats.numPrograms += programs_.programs.size();
     stats.numThreads +=
@@ -108,12 +113,16 @@ void ReadStream::makeGrid(Stream* stream) {
     deviceStaging_.makeDeviceBuffer(waveStream->arena());
     currentStaging_->transfer(*waveStream, *stream);
     WaveBufferPtr extra;
-    launchDecode(programs_, &waveStream->arena(), extra, stream);
+    {
+      PrintTime l("grid");
+      launchDecode(programs_, &waveStream->arena(), extra, stream);
+    }
     reader_->recordGriddize(*stream);
     if (extra) {
       commands_.push_back(std::move(extra));
     }
-    reader_->splitStaging().push_back(std::make_unique<SplitStaging>());
+    reader_->splitStaging().push_back(
+        std::make_unique<SplitStaging>(fileInfo_));
     currentStaging_ = reader_->splitStaging().back().get();
   }
 }
@@ -321,7 +330,9 @@ void ReadStream::launch(
         readStream->prepareRead();
         for (;;) {
           bool done = readStream->makePrograms(needSync);
-          stats.bytesToDevice += readStream->currentStaging_->bytesToDevice();
+          auto bytes = readStream->currentStaging_->bytesToDevice();
+          readStream->ioStats_->incRawBytesRead(bytes);
+          stats.bytesToDevice += bytes;
           ++stats.numKernels;
           stats.numPrograms += readStream->programs_.programs.size();
           stats.numThreads += readStream->programs_.programs.size() *
@@ -342,13 +353,16 @@ void ReadStream::launch(
             }
           }
           firstLaunch = false;
-          launchDecode(
-              readStream->programs(), &waveStream->arena(), extra, stream);
+          {
+            PrintTime l("decode");
+            launchDecode(
+                readStream->programs(), &waveStream->arena(), extra, stream);
+          }
           if (extra) {
             readStream->commands_.push_back(std::move(extra));
           }
           readStream->reader_->splitStaging().push_back(
-              std::make_unique<SplitStaging>());
+              std::make_unique<SplitStaging>(readStream->fileInfo_));
           readStream->currentStaging_ =
               readStream->reader_->splitStaging().back().get();
           if (needSync) {
@@ -363,11 +377,14 @@ void ReadStream::launch(
         readStream->setBlockStatusAndTemp();
         readStream->deviceStaging_.makeDeviceBuffer(waveStream->arena());
         WaveBufferPtr extra;
-        launchDecode(
-            readStream->programs(),
-            &readStream->waveStream->arena(),
-            extra,
-            stream);
+        {
+          PrintTime l("decode-f");
+          launchDecode(
+              readStream->programs(),
+              &readStream->waveStream->arena(),
+              extra,
+              stream);
+        }
         if (extra) {
           readStream->commands_.push_back(std::move(extra));
         }

@@ -45,7 +45,8 @@ int TestFormatData::stageNulls(
   }
   Staging staging(
       nulls->values->as<char>(),
-      bits::nwords(column_->numValues) * sizeof(uint64_t));
+      bits::nwords(column_->numValues) * sizeof(uint64_t),
+      column_->region);
   auto id = splitStaging.add(staging);
   splitStaging.registerPointer(id, &grid_.nulls, true);
   return id;
@@ -90,7 +91,8 @@ void TestFormatData::startOp(
   stageNulls(deviceStaging, splitStaging);
   if (!staged_) {
     staged_ = true;
-    Staging staging(column_->values->as<char>(), column_->values->size());
+    Staging staging(
+        column_->values->as<char>(), column_->values->size(), column_->region);
     id = splitStaging.add(staging);
   }
   auto rowsPerBlock = FLAGS_wave_reader_rows_per_tb;

@@ -54,13 +54,18 @@ struct alignas(16) GpuDecodeParams {
 
 void __global__ __launch_bounds__(1024)
     decodeKernel(GpuDecodeParams inlineParams) {
-  // asm volatile (".maxnregs 40;");
-  GpuDecodeParams* params =
-      inlineParams.external ? inlineParams.external : &inlineParams;
-  int32_t programStart = blockIdx.x == 0 ? 0 : params->ends[blockIdx.x - 1];
-  int32_t programEnd = params->ends[blockIdx.x];
-  GpuDecode* ops =
-      reinterpret_cast<GpuDecode*>(&params->ends[0] + roundUp(gridDim.x, 4));
+  __shared__ GpuDecodeParams* params;
+  __shared__ int32_t programStart;
+  __shared__ int32_t programEnd;
+  __shared__ GpuDecode* ops;
+  if (threadIdx.x == 0) {
+    params = inlineParams.external ? inlineParams.external : &inlineParams;
+    programStart = blockIdx.x == 0 ? 0 : params->ends[blockIdx.x - 1];
+    programEnd = params->ends[blockIdx.x];
+    ops =
+        reinterpret_cast<GpuDecode*>(&params->ends[0] + roundUp(gridDim.x, 4));
+  }
+  __syncthreads();
   for (auto i = programStart; i < programEnd; ++i) {
     detail::decodeSwitch<kBlockSize>(ops[i]);
   }
@@ -74,9 +79,15 @@ void launchDecode(
     Stream* stream) {
   int32_t numBlocks = programs.programs.size();
   int32_t numOps = 0;
+  bool allSingle = true;
   int32_t shared = 0;
   for (auto& program : programs.programs) {
-    numOps += program.size();
+    int numSteps = program.size();
+    ;
+    if (numSteps != 1) {
+      allSingle = false;
+    }
+    numOps += numSteps;
     for (auto& step : program) {
       shared = std::max(
           shared, detail::sharedMemorySizeForDecode<kBlockSize>(step->step));
@@ -87,7 +98,8 @@ void launchDecode(
   }
   GpuDecodeParams localParams;
   GpuDecodeParams* params = &localParams;
-  if (numOps > GpuDecodeParams::kMaxInlineOps) {
+
+  if (numOps > GpuDecodeParams::kMaxInlineOps || allSingle) {
     extra = arena->allocate<char>(
         (numOps + 1) * (sizeof(GpuDecode) + sizeof(int32_t)) + 16);
     uintptr_t aligned =
@@ -105,6 +117,14 @@ void launchDecode(
       decodes[fill++] = *op;
     }
   }
+  if (allSingle) {
+    stream->prefetch(getDevice(), extra->as<char>(), extra->size());
+    detail::decodeGlobal<kBlockSize>
+        <<<numBlocks, kBlockSize, shared, stream->stream()->stream>>>(decodes);
+    CUDA_CHECK(cudaGetLastError());
+    programs.result.transfer(*stream);
+    return;
+  }
   if (extra) {
     localParams.external = params;
     stream->prefetch(getDevice(), extra->as<char>(), extra->size());
@@ -117,5 +137,10 @@ void launchDecode(
 }
 
 REGISTER_KERNEL("decode", decodeKernel);
+namespace {
+static bool decSingles_reg = registerKernel(
+    "decodeSingle",
+    reinterpret_cast<const void*>(detail::decodeGlobal<kBlockSize>));
+}
 
 } // namespace facebook::velox::wave
