@@ -19,6 +19,20 @@
 
 namespace facebook::velox::common {
 
+ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
+  auto container = this;
+  auto it = container->childByFieldName_.find(name);
+  if (it != container->childByFieldName_.end()) {
+    container = it->second;
+  } else {
+    container->children_.push_back(std::make_unique<ScanSpec>(name));
+    auto* child = container->children_.back().get();
+    container->childByFieldName_[child->fieldName()] = child;
+    container = child;
+  }
+  return container;
+}
+
 ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
   auto container = this;
   auto& path = subfield.path();
@@ -369,7 +383,7 @@ void ScanSpec::addFilter(const Filter& filter) {
 }
 
 ScanSpec* ScanSpec::addField(const std::string& name, column_index_t channel) {
-  auto child = getOrCreateChild(Subfield(name));
+  auto child = getOrCreateChild(name);
   child->setProjectOut(true);
   child->setChannel(channel);
   return child;
