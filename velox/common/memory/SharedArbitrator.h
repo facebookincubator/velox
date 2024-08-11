@@ -432,7 +432,7 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   const bool checkUsageLeak_;
 
   mutable folly::SharedMutex poolLock_;
-  std::unordered_map<MemoryPool*, std::weak_ptr<MemoryPool>> candidates_;
+  std::unordered_map<std::string, std::shared_ptr<MemoryPool>> candidates_;
 
   // Lock used to protect the arbitrator state.
   mutable std::mutex stateLock_;

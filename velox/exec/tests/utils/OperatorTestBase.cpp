@@ -44,6 +44,7 @@ namespace facebook::velox::exec::test {
 OperatorTestBase::OperatorTestBase() {
   // Overloads the memory pools used by VectorTestBase to work with memory
   // arbitrator.
+  rootPool_->unregisterArbitration();
   rootPool_ = memory::memoryManager()->addRootPool(
       "", memory::kMaxMemory, exec::MemoryReclaimer::create());
   pool_ = rootPool_->addLeafChild("", true, exec::MemoryReclaimer::create());
@@ -134,7 +135,10 @@ void OperatorTestBase::TearDown() {
   // reference to memory pool. We need to make sure they are properly cleaned.
   testingShutdownLocalExchangeSource();
   pool_.reset();
+  rootPool_->unregisterArbitration();
+
   rootPool_.reset();
+
   resetMemory();
 }
 

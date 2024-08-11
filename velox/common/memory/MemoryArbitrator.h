@@ -277,6 +277,8 @@ class MemoryReclaimer {
 
     void reset();
 
+    std::string toString() const;
+
     bool operator==(const Stats& other) const;
     bool operator!=(const Stats& other) const;
     Stats& operator+=(const Stats& other);

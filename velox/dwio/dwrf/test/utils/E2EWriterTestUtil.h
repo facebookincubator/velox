@@ -30,6 +30,7 @@ class E2EWriterTestUtil {
    *                            in-memory or on-disk.
    *    type                    schema of the output data
    *    config                  ORC configs
+   *    pool                    memory pool for the writer
    *    flushPolicyFactory      supplies the policy writer use to determine
    *                            when to flush the current stripe and start a
    *                            new one
@@ -41,6 +42,7 @@ class E2EWriterTestUtil {
       std::unique_ptr<dwio::common::FileSink> sink,
       const std::shared_ptr<const Type>& type,
       const std::shared_ptr<Config>& config,
+      const std::shared_ptr<velox::memory::MemoryPool>& pool,
       std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory =
           nullptr,
       std::function<std::unique_ptr<LayoutPlanner>(

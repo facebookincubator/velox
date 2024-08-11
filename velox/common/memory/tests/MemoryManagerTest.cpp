@@ -45,8 +45,6 @@ class MemoryManagerTest : public testing::Test {
   static void SetUpTestCase() {
     SharedArbitrator::registerFactory();
   }
-
-  inline static const std::string arbitratorKind_{"SHARED"};
 };
 
 TEST_F(MemoryManagerTest, ctor) {
@@ -204,7 +202,7 @@ TEST_F(MemoryManagerTest, addPoolWithArbitrator) {
   MemoryManagerOptions options;
   const auto kCapacity = 32L << 30;
   options.allocatorCapacity = kCapacity;
-  options.arbitratorKind = arbitratorKind_;
+  options.arbitratorKind = "SHARED";
   // The arbitrator capacity will be overridden by the memory manager's
   // capacity.
   const uint64_t initialPoolCapacity = options.allocatorCapacity / 32;
@@ -213,6 +211,9 @@ TEST_F(MemoryManagerTest, addPoolWithArbitrator) {
 
   auto rootPool = manager.addRootPool(
       "addPoolWithArbitrator", kMaxMemory, MemoryReclaimer::create());
+  SCOPE_EXIT {
+    rootPool->unregisterArbitration();
+  };
   ASSERT_EQ(rootPool->capacity(), initialPoolCapacity);
   ASSERT_EQ(rootPool->maxCapacity(), kMaxMemory);
   {
@@ -220,7 +221,11 @@ TEST_F(MemoryManagerTest, addPoolWithArbitrator) {
         "addPoolWithArbitrator", kMaxMemory, MemoryReclaimer::create()));
   }
   {
-    ASSERT_NO_THROW(manager.addRootPool("addPoolWithArbitrator1", kMaxMemory));
+    auto rootPoolWithNoDup =
+        manager.addRootPool("addPoolWithArbitrator1", kMaxMemory);
+    SCOPE_EXIT {
+      rootPoolWithNoDup->unregisterArbitration();
+    };
   }
   auto threadSafeLeafPool = manager.addLeafPool("leafPool", true);
   ASSERT_EQ(threadSafeLeafPool->capacity(), kMaxMemory);
@@ -232,6 +237,9 @@ TEST_F(MemoryManagerTest, addPoolWithArbitrator) {
   const int64_t poolCapacity = 1 << 30;
   auto rootPoolWithMaxCapacity = manager.addRootPool(
       "rootPoolWithCapacity", poolCapacity, MemoryReclaimer::create());
+  SCOPE_EXIT {
+    rootPoolWithMaxCapacity->unregisterArbitration();
+  };
   ASSERT_EQ(rootPoolWithMaxCapacity->maxCapacity(), poolCapacity);
   ASSERT_EQ(rootPoolWithMaxCapacity->capacity(), initialPoolCapacity);
   auto leafPool = rootPoolWithMaxCapacity->addLeafChild("leaf");

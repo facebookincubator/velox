@@ -28,9 +28,7 @@ namespace facebook::velox::core {
 
 class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
  public:
-  ~QueryCtx() {
-    VELOX_CHECK(!underArbitration_);
-  }
+  ~QueryCtx();
 
   /// QueryCtx is used in different places. When used with `Task::start()`, it's
   /// required that the caller supplies the executor and ensure its lifetime
@@ -112,10 +110,6 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// Updates the aggregated spill bytes of this query, and and throws if
   /// exceeds the max spill bytes limit.
   void updateSpilledBytesAndCheckLimit(uint64_t bytes);
-
-  void testingOverrideMemoryPool(std::shared_ptr<memory::MemoryPool> pool) {
-    pool_ = std::move(pool);
-  }
 
   /// Indicates if the query is under memory arbitration or not.
   bool testingUnderArbitration() const {

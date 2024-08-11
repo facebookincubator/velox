@@ -2030,9 +2030,15 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
     SCOPED_TRACE(testData.debugString());
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{{}},
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(
+            "reclaimDuringInputProcessing",
+            kMaxBytes,
+            memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2172,9 +2178,15 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
   }
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig{{}},
+      {},
+      nullptr,
+      memory::memoryManager()->addRootPool(
+          "reclaimDuringReserve",
+          kMaxBytes,
+          memory::MemoryReclaimer::create()));
   auto expectedResult =
       AssertQueryBuilder(PlanBuilder()
                              .values(batches)
@@ -2281,9 +2293,14 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{{}},
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(
+            "reclaimDuringAllocation", kMaxBytes));
+
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2407,9 +2424,15 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{{}},
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(
+            "reclaimDuringOutputProcessing",
+            kMaxBytes,
+            memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2550,9 +2573,13 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringNonReclaimableSection) {
     SCOPED_TRACE(fmt::format("testData {}", testData.debugString()));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{{}},
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(
+            "reclaimDuringNonReclaimableSection", kMaxBytes));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2703,9 +2730,13 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
 
     auto tempDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{{}},
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(
+            "reclaimWithEmptyAggregationTable", kMaxBytes));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -2784,8 +2815,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
           folly::Random::oneIn(2) ? 0 : folly::Random::rand32(rng_),
           0,
           reclaimerStats_);
-      ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{});
       // No reclaim as the operator has started output processing.
+      ASSERT_EQ(reclaimerStats_.reclaimedBytes, 0);
       ASSERT_EQ(usedMemory, op->pool()->usedBytes());
     } else {
       ASSERT_EQ(reclaimableBytes, 0);
@@ -2805,7 +2836,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
     ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 0);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
-  ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{});
+  ASSERT_EQ(reclaimerStats_.reclaimedBytes, 0);
 }
 
 namespace {
@@ -3050,7 +3081,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
         auto* driver = values->testingOperatorCtx()->driver();
         auto task = values->testingOperatorCtx()->task();
         // Shrink all the capacity before reclaim.
-        memory::memoryManager()->arbitrator()->shrinkCapacity(task->pool(), 0);
+        memory::memoryManager()->arbitrator()->shrinkCapacity(
+            task->pool()->root(), 0);
         {
           MemoryReclaimer::Stats stats;
           SuspendedSection suspendedSection(driver);
@@ -3063,9 +3095,13 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
       }));
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig{{}},
+      {},
+      nullptr,
+      memory::memoryManager()->addRootPool(
+          "reclaimEmptyInput", kMaxBytes, memory::MemoryReclaimer::create()));
   core::PlanNodeId aggNodeId;
   auto task =
       AssertQueryBuilder(
@@ -3119,7 +3155,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
         auto* driver = op->testingOperatorCtx()->driver();
         auto task = op->testingOperatorCtx()->task();
         // Shrink all the capacity before reclaim.
-        memory::memoryManager()->arbitrator()->shrinkCapacity(task->pool(), 0);
+        memory::memoryManager()->arbitrator()->shrinkCapacity(
+            task->pool()->root(), 0);
         {
           MemoryReclaimer::Stats stats;
           SuspendedSection suspendedSection(driver);
@@ -3132,9 +3169,13 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
       })));
 
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig{{}},
+      {},
+      nullptr,
+      memory::memoryManager()->addRootPool(
+          "reclaimEmptyOutput", kMaxBytes, memory::MemoryReclaimer::create()));
   core::PlanNodeId aggNodeId;
   auto task =
       AssertQueryBuilder(PlanBuilder()

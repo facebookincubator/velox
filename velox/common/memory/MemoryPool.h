@@ -372,6 +372,21 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Returns the memory reclaimer of this memory pool if not null.
   virtual MemoryReclaimer* reclaimer() const = 0;
 
+  /// Invoked to add a root memory pool to the memory arbitrator to grow/shrink
+  /// the memory pool capacity based on the query memory need through memory
+  /// arbitration.
+  ///
+  /// NOTE: this should be called once on a root memory pool right after its
+  /// creation and before any memory allocations.
+  virtual void registerArbitration() = 0;
+
+  /// Invoked to remove a root memory pool from the memory arbitrator to stop
+  /// any further memory arbitration on it.
+  ///
+  /// NOTE: this should be called once on a root memory pool before its
+  /// destruction.
+  virtual void unregisterArbitration() = 0;
+
   /// Invoked by the memory arbitrator to enter memory arbitration processing.
   /// It is a noop if 'reclaimer' is not set, otherwise invoke the reclaimer's
   /// corresponding method.
@@ -637,6 +652,8 @@ class MemoryPoolImpl : public MemoryPool {
 
   int64_t releasableReservation() const override;
 
+  /// NOTE: this API is not thread-safe and might returns the stale reserved
+  /// bytes under concurrent use case.
   int64_t reservedBytes() const override {
     return reservationBytes_;
   }
@@ -650,6 +667,10 @@ class MemoryPoolImpl : public MemoryPool {
   void setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) override;
 
   MemoryReclaimer* reclaimer() const override;
+
+  void registerArbitration() override;
+
+  void unregisterArbitration() override;
 
   void enterArbitration() override;
 

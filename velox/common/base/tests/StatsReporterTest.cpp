@@ -373,6 +373,10 @@ class TestMemoryPool : public memory::MemoryPool {
     return nullptr;
   }
 
+  void registerArbitration() override {}
+
+  void unregisterArbitration() override {}
+
   void enterArbitration() override {}
 
   void leaveArbitration() noexcept override {}

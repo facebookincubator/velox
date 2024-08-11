@@ -281,6 +281,7 @@ class MockMemoryOperator {
       VELOX_CHECK_EQ(totalBytes_, 0);
       allocationsToFree.swap(allocations_);
     }
+    // LOG(ERROR) << "totalBytes_: " << totalBytes_;
     for (auto entry : allocationsToFree) {
       pool_->free(entry.first, entry.second);
     }
@@ -398,9 +399,14 @@ MockMemoryOperator* MockTask::addMemoryOp(
 }
 
 MockTask::~MockTask() {
+  // LOG(ERROR) << "delete task1: " << root_->name() << " "
+  //             << root_->reservedBytes() << " ops " << ops_.size();
   for (auto op : ops_) {
     op->freeAll();
   }
+  // LOG(ERROR) << "delete task2: " << root_->name() << " "
+  //<< root_->reservedBytes();
+  root_->unregisterArbitration();
 }
 
 class MockSharedArbitrationTest : public testing::Test {
@@ -3379,19 +3385,27 @@ TEST_F(MockSharedArbitrationTest, concurrentArbitrationWithTransientRoots) {
           std::lock_guard<std::mutex> l(mutex);
           const int index = folly::Random::rand32() % tasks.size();
           task = tasks[index];
+          VELOX_CHECK_NOT_NULL(task);
         }
         if (folly::Random::oneIn(4, rng)) {
           if (folly::Random::oneIn(3, rng)) {
+            // LOG(ERROR) << "task free " << task->pool()->name();
             task->memoryOp()->freeAll();
           } else {
+            // LOG(ERROR) << "task free " << task->pool()->name();
             task->memoryOp()->free();
           }
         } else {
           const int allocationPages = AllocationTraits::numPages(
               folly::Random::rand32(rng) % (kMemoryCapacity / 8));
           try {
+            // LOG(ERROR) << "task allocate " << task->pool()->name() << " "
+            //<< task->pool()->reservedBytes();
             task->memoryOp()->allocate(
                 AllocationTraits::pageBytes(allocationPages));
+            // LOG(ERROR) << "task allocate done " << task->pool()->name() << "
+            // "
+            //<< task->pool()->reservedBytes();
           } catch (VeloxException& e) {
             // Ignore memory limit exception and injected error exceptions.
             if ((e.message().find("Exceeded memory") == std::string::npos) &&
@@ -3414,11 +3428,13 @@ TEST_F(MockSharedArbitrationTest, concurrentArbitrationWithTransientRoots) {
     folly::Random::DefaultGenerator rng;
     rng.seed(1000);
     while (!stopped) {
+      std::shared_ptr<MockTask> deletedTask;
       {
         std::lock_guard<std::mutex> l(mutex);
         if ((tasks.size() == 1) ||
             (tasks.size() < maxNumTasks && folly::Random::oneIn(4, rng))) {
           tasks.push_back(addTask());
+          // LOG(ERROR) << "task add " << tasks.back()->pool()->name();
           tasks.back()->addMemoryOp(
               !folly::Random::oneIn(3, rng),
               [&](MemoryPool* /*unused*/, uint64_t /*unused*/) {
@@ -3433,6 +3449,11 @@ TEST_F(MockSharedArbitrationTest, concurrentArbitrationWithTransientRoots) {
               });
         } else {
           const int deleteIndex = folly::Random::rand32(rng) % tasks.size();
+          if (deletedTask.use_count() != 2) {
+            // continue;
+          }
+          deletedTask = std::move(tasks[deleteIndex]);
+          // LOG(ERROR) << "task delete " << deletedTask->pool()->name();
           tasks.erase(tasks.begin() + deleteIndex);
         }
       }
@@ -3447,6 +3468,7 @@ TEST_F(MockSharedArbitrationTest, concurrentArbitrationWithTransientRoots) {
     memThread.join();
   }
   controlThread.join();
+  // LOG(ERROR) << "bad";
 }
 
 } // namespace

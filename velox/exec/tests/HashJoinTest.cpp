@@ -609,10 +609,12 @@ class HashJoinBuilder {
         core::QueryConfig{{}},
         std::unordered_map<std::string, std::shared_ptr<Config>>{},
         cache::AsyncDataCache::getInstance(),
-        memory::MemoryManager::getInstance()->addRootPool(
-            "query_pool",
-            memory::kMaxMemory,
-            memory::MemoryReclaimer::create()));
+        queryPool_ != nullptr
+            ? queryPool_
+            : memory::MemoryManager::getInstance()->addRootPool(
+                  "query_pool",
+                  memory::kMaxMemory,
+                  exec::MemoryReclaimer::create()));
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     int32_t spillPct{0};
     if (injectSpill) {
@@ -645,9 +647,6 @@ class HashJoinBuilder {
     if (!configs_.empty()) {
       auto configCopy = configs_;
       queryCtx->testingOverrideConfigUnsafe(std::move(configCopy));
-    }
-    if (queryPool_ != nullptr) {
-      queryCtx->testingOverrideMemoryPool(queryPool_);
     }
     builder.queryCtx(queryCtx);
 

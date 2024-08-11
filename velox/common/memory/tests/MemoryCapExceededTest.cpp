@@ -17,6 +17,7 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -96,13 +97,18 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
                   .singleAggregation({"c0"}, {"sum(p1)"})
                   .orderBy({"c0"}, false)
                   .planNode();
-  auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-      queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig{{}},
+      {},
+      nullptr,
+      memory::memoryManager()->addRootPool(
+          "singleDriver", kMaxBytes, exec::MemoryReclaimer::create()));
   CursorParameters params;
   params.planNode = plan;
   params.queryCtx = queryCtx;
   params.maxDrivers = 1;
+
   try {
     readCursor(params, [](Task*) {});
     FAIL() << "Expected a MEM_CAP_EXCEEDED RuntimeException.";
@@ -154,9 +160,13 @@ TEST_P(MemoryCapExceededTest, multipleDrivers) {
                   .values(data, true)
                   .singleAggregation({"c0"}, {"sum(c1)"})
                   .planNode();
-  auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-      queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig{{}},
+      {},
+      nullptr,
+      memory::memoryManager()->addRootPool(
+          "multipleDrivers", kMaxBytes, exec::MemoryReclaimer::create()));
 
   const int32_t numDrivers = 10;
   CursorParameters params;
@@ -230,9 +240,12 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
                     .singleAggregation({"c0"}, {"sum(p1)"})
                     .orderBy({"c0"}, false)
                     .planNode();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        manager.addRootPool(queryCtx->queryId(), kMaxBytes));
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{{}},
+        {},
+        nullptr,
+        manager.addRootPool("allocatorCapacityExceededError", kMaxBytes));
     CursorParameters params;
     params.planNode = plan;
     params.queryCtx = queryCtx;

@@ -48,9 +48,14 @@ class MemoryReclaimerTest : public OperatorTestBase {
         Task::ExecutionMode::kParallel);
   }
 
-  void SetUp() override {}
+  void SetUp() override {
+    OperatorTestBase::SetUp();
+  }
 
-  void TearDown() override {}
+  void TearDown() override {
+    fakeTask_.reset();
+    OperatorTestBase::TearDown();
+  }
 
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(4)};
@@ -92,6 +97,9 @@ TEST_F(MemoryReclaimerTest, abortTest) {
     SCOPED_TRACE(testName);
     auto rootPool = memory::memoryManager()->addRootPool(
         testName, kMaxMemory, exec::MemoryReclaimer::create());
+    SCOPE_EXIT {
+      rootPool->unregisterArbitration();
+    };
     ASSERT_FALSE(rootPool->aborted());
     if (leafPool) {
       auto leafPool = rootPool->addLeafChild(
@@ -237,6 +245,9 @@ TEST_F(MemoryReclaimerTest, parallelMemoryReclaimer) {
         kMaxMemory,
         exec::ParallelMemoryReclaimer::create(
             testData.hasExecutor ? executor_.get() : nullptr));
+    SCOPE_EXIT {
+      rootPool->unregisterArbitration();
+    };
     std::vector<MockMemoryReclaimer*> memoryReclaimers;
     std::vector<std::shared_ptr<MemoryPool>> leafPools;
     int reclaimerIdx{0};

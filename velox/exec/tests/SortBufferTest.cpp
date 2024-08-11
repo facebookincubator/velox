@@ -41,8 +41,6 @@ class SortBufferTest : public OperatorTestBase {
   }
 
   void TearDown() override {
-    pool_.reset();
-    rootPool_.reset();
     OperatorTestBase::TearDown();
   }
 

@@ -134,6 +134,9 @@ TEST_F(MemoryArbitrationTest, queryMemoryCapacity) {
     MemoryManager manager(options);
     auto rootPool =
         manager.addRootPool("root-1", 8L << 20, MemoryReclaimer::create());
+    SCOPE_EXIT {
+      rootPool->unregisterArbitration();
+    };
     ASSERT_EQ(rootPool->capacity(), 1 << 20);
     ASSERT_TRUE(manager.arbitrator()->growCapacity(rootPool.get(), 1 << 20));
     ASSERT_EQ(rootPool->capacity(), 1 << 20);
@@ -151,18 +154,24 @@ TEST_F(MemoryArbitrationTest, queryMemoryCapacity) {
         "arbitration. Requestor pool name 'leaf-1.0', request size 7.00MB, "
         "memory pool capacity 4.00MB, memory pool max capacity 8.00MB");
     ASSERT_EQ(manager.arbitrator()->shrinkCapacity(rootPool.get(), 0), 1 << 20);
-    ASSERT_EQ(manager.arbitrator()->shrinkCapacity(leafPool.get(), 0), 0);
-    ASSERT_EQ(manager.arbitrator()->shrinkCapacity(leafPool.get(), 1), 0);
+    VELOX_ASSERT_THROW(
+        manager.arbitrator()->shrinkCapacity(leafPool.get(), 0), "");
+    VELOX_ASSERT_THROW(
+        manager.arbitrator()->shrinkCapacity(leafPool.get(), 0), "");
     ASSERT_EQ(manager.arbitrator()->shrinkCapacity(rootPool.get(), 1), 0);
     ASSERT_EQ(rootPool->capacity(), 3 << 20);
     static_cast<MemoryPoolImpl*>(rootPool.get())->testingSetReservation(0);
+    VELOX_ASSERT_THROW(
+        manager.arbitrator()->shrinkCapacity(leafPool.get(), 1 << 20), "");
     ASSERT_EQ(
-        manager.arbitrator()->shrinkCapacity(leafPool.get(), 1 << 20), 1 << 20);
+        manager.arbitrator()->shrinkCapacity(rootPool.get(), 1 << 20), 1 << 20);
     ASSERT_EQ(
         manager.arbitrator()->shrinkCapacity(rootPool.get(), 1 << 20), 1 << 20);
     ASSERT_EQ(rootPool->capacity(), 1 << 20);
     ASSERT_EQ(leafPool->capacity(), 1 << 20);
-    ASSERT_EQ(manager.arbitrator()->shrinkCapacity(leafPool.get(), 0), 1 << 20);
+    VELOX_ASSERT_THROW(
+        manager.arbitrator()->shrinkCapacity(leafPool.get(), 0), "");
+    ASSERT_EQ(manager.arbitrator()->shrinkCapacity(rootPool.get(), 0), 1 << 20);
     ASSERT_EQ(rootPool->capacity(), 0);
     ASSERT_EQ(leafPool->capacity(), 0);
   }
@@ -219,6 +228,7 @@ TEST_F(MemoryArbitrationTest, memoryPoolCapacityOnCreation) {
     MemoryManager manager(options);
     auto rootPool = manager.addRootPool("root-1", kMaxMemory);
     ASSERT_EQ(rootPool->capacity(), testData.expectedPoolCapacityOnCreation);
+    rootPool->unregisterArbitration();
   }
 }
 
@@ -244,16 +254,25 @@ TEST_F(MemoryArbitrationTest, reservedCapacityFreeByPoolRelease) {
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, 4 << 20);
 
   auto pool3 = manager.addRootPool("root-3", kMaxMemory);
+  SCOPE_EXIT {
+    pool3->unregisterArbitration();
+  };
   ASSERT_EQ(pool3->capacity(), 1 << 20);
   ASSERT_EQ(arbitrator->stats().freeReservedCapacityBytes, 3 << 20);
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, 3 << 20);
 
   auto pool4 = manager.addRootPool("root-4", kMaxMemory);
+  SCOPE_EXIT {
+    pool4->unregisterArbitration();
+  };
   ASSERT_EQ(pool4->capacity(), 1 << 20);
   ASSERT_EQ(arbitrator->stats().freeReservedCapacityBytes, 2 << 20);
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, 2 << 20);
 
   auto pool5 = manager.addRootPool("root-5", kMaxMemory);
+  SCOPE_EXIT {
+    pool5->unregisterArbitration();
+  };
   ASSERT_EQ(pool4->capacity(), 1 << 20);
   ASSERT_EQ(arbitrator->stats().freeReservedCapacityBytes, 1 << 20);
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, 1 << 20);
@@ -268,18 +287,22 @@ TEST_F(MemoryArbitrationTest, reservedCapacityFreeByPoolRelease) {
   ASSERT_EQ(arbitrator->stats().freeReservedCapacityBytes, 0 << 20);
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, 0 << 20);
 
+  pool7->unregisterArbitration();
   pool7.reset();
   ASSERT_EQ(arbitrator->stats().freeReservedCapacityBytes, 0 << 20);
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, 0 << 20);
 
+  pool6->unregisterArbitration();
   pool6.reset();
   ASSERT_EQ(arbitrator->stats().freeReservedCapacityBytes, 1 << 20);
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, 1 << 20);
 
+  pool1->unregisterArbitration();
   pool1.reset();
   ASSERT_EQ(arbitrator->stats().freeReservedCapacityBytes, 4 << 20);
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, 4 << 20);
 
+  pool2->unregisterArbitration();
   pool2.reset();
   ASSERT_EQ(arbitrator->stats().freeReservedCapacityBytes, 4 << 20);
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, 6 << 20);
@@ -307,6 +330,9 @@ TEST_F(MemoryArbitrationTest, reservedCapacityFreeByPoolShrink) {
 
   ASSERT_GE(pools.back()->capacity(), 0);
   ASSERT_EQ(arbitrator->shrinkCapacity(1 << 20), 2 << 20);
+  for (auto& pool : pools) {
+    pool->unregisterArbitration();
+  }
 }
 
 TEST_F(MemoryArbitrationTest, arbitratorStats) {

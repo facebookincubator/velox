@@ -555,9 +555,16 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
     SCOPED_TRACE(testData.debugString());
 
     auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{{}},
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(
+            "reclaimDuringInputProcessing",
+            kMaxBytes,
+            memory::MemoryReclaimer::create()));
+
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -694,9 +701,15 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringReserve) {
   }
 
   auto spillDirectory = exec::test::TempDirectoryPath::create();
-  auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-      queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig{{}},
+      {},
+      nullptr,
+      memory::memoryManager()->addRootPool(
+          "reclaimDuringReserve",
+          kMaxBytes,
+          memory::MemoryReclaimer::create()));
   auto expectedResult =
       AssertQueryBuilder(
           PlanBuilder()
@@ -807,9 +820,15 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringAllocation) {
   for (const auto enableSpilling : enableSpillings) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideMemoryPool(
-        memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{{}},
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(
+            "reclaimDuringAllocation",
+            kMaxBytes,
+            memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -937,9 +956,15 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
   for (const auto enableSpilling : enableSpillings) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
-        queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{{}},
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(
+            "reclaimDuringOutputProcessing",
+            kMaxBytes,
+            memory::MemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()

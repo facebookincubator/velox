@@ -138,6 +138,9 @@ using ApproxMostFrequentTestInt = ApproxMostFrequentTest<int>;
 TEST_F(ApproxMostFrequentTestInt, invalidBuckets) {
   auto rootPool = memory::memoryManager()->addRootPool(
       "test-root", 1 << 21, exec::MemoryReclaimer::create());
+  SCOPE_EXIT {
+    rootPool->unregisterArbitration();
+  };
   auto leafPool = rootPool->addLeafChild("test-leaf");
   auto run = [&](int64_t buckets) {
     auto rows = makeRowVector({

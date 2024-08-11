@@ -3433,6 +3433,9 @@ TEST_P(MemoryPoolTest, maybeReserveFailWithAbort) {
   MemoryManager& manager = *getMemoryManager();
   auto root = manager.addRootPool(
       "maybeReserveFailWithAbort", kMaxSize, MemoryReclaimer::create());
+  SCOPE_EXIT {
+    root->unregisterArbitration();
+  };
   auto child = root->addLeafChild("maybeReserveFailWithAbort");
   // maybeReserve returns false if reservation fails.
   ASSERT_FALSE(child->maybeReserve(2 * kMaxSize));
@@ -3838,6 +3841,9 @@ TEST_P(MemoryPoolTest, overuseUnderArbitration) {
   MemoryManager& manager = *getMemoryManager();
   auto root = manager.addRootPool(
       "overuseUnderArbitration", kMaxSize, MemoryReclaimer::create());
+  SCOPE_EXIT {
+    root->unregisterArbitration();
+  };
   auto child = root->addLeafChild("overuseUnderArbitration");
   // maybeReserve returns false if reservation fails.
   ASSERT_FALSE(child->maybeReserve(2 * kMaxSize));

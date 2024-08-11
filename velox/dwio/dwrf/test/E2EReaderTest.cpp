@@ -138,10 +138,15 @@ TEST_P(E2EReaderTest, SharedDictionaryFlatmapReadAsStruct) {
   RemoveGuard guard(path);
   auto localWriteFile = std::make_unique<LocalWriteFile>(path, true, false);
   auto sink = std::make_unique<WriteFileSink>(std::move(localWriteFile), path);
+  auto writerPool = memory::memoryManager()->addRootPool();
+  SCOPE_EXIT {
+    writerPool->unregisterArbitration();
+  };
   auto writer = E2EWriterTestUtil::createWriter(
       std::move(sink),
       type,
       config,
+      writerPool,
       E2EWriterTestUtil::simpleFlushPolicyFactory(true));
 
   auto seed = folly::Random::secureRand32();

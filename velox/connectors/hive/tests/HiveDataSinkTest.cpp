@@ -62,11 +62,18 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
   }
 
   void TearDown() override {
+    reset();
+    HiveConnectorTestBase::TearDown();
+  }
+
+  void reset() {
     connectorQueryCtx_.reset();
     connectorPool_.reset();
     opPool_.reset();
+    if (root_ != nullptr) {
+      root_->unregisterArbitration();
+    }
     root_.reset();
-    HiveConnectorTestBase::TearDown();
   }
 
   std::vector<RowVectorPtr> createVectors(int vectorSize, int numVectors) {
@@ -102,10 +109,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
   }
 
   void setupMemoryPools() {
-    connectorQueryCtx_.reset();
-    connectorPool_.reset();
-    opPool_.reset();
-    root_.reset();
+    reset();
 
     root_ = memory::memoryManager()->addRootPool(
         "HiveDataSinkTest", 1L << 30, exec::MemoryReclaimer::create());

@@ -97,6 +97,7 @@ class NoopArbitrator : public MemoryArbitrator {
   }
 
   void removePool(MemoryPool* pool) override {
+    LOG(ERROR) << "go here";
     VELOX_CHECK_EQ(pool->reservedBytes(), 0);
   }
 
@@ -163,12 +164,14 @@ void MemoryArbitrator::unregisterFactory(const std::string& kind) {
     MemoryPool* pool,
     uint64_t growBytes,
     uint64_t reservationBytes) {
+  VELOX_CHECK(pool->isRoot());
   return pool->grow(growBytes, reservationBytes);
 }
 
 /*static*/ uint64_t MemoryArbitrator::shrinkPool(
     MemoryPool* pool,
     uint64_t targetBytes) {
+  VELOX_CHECK(pool->isRoot());
   return pool->shrink(targetBytes);
 }
 
@@ -296,6 +299,15 @@ void MemoryReclaimer::Stats::reset() {
   reclaimExecTimeUs = 0;
   reclaimedBytes = 0;
   reclaimWaitTimeUs = 0;
+}
+
+std::string MemoryReclaimer::Stats::toString() const {
+  return fmt::format(
+      "RECLAIMER_STATS[numNonReclaimableAttempts {} reclaimExecTime {} reclaimedBytes {} reclaimWaitTime {}]",
+      numNonReclaimableAttempts,
+      succinctMicros(reclaimExecTimeUs),
+      succinctBytes(reclaimedBytes),
+      succinctMicros(reclaimWaitTimeUs));
 }
 
 bool MemoryReclaimer::Stats::operator==(

@@ -170,8 +170,12 @@ void SharedArbitrator::addPool(const std::shared_ptr<MemoryPool>& pool) {
   VELOX_CHECK_EQ(pool->capacity(), 0);
   {
     std::unique_lock guard{poolLock_};
-    VELOX_CHECK_EQ(candidates_.count(pool.get()), 0);
-    candidates_.emplace(pool.get(), pool);
+    VELOX_CHECK_EQ(
+        candidates_.count(pool->name()),
+        0,
+        "Duplicate memory pool to add: {}",
+        pool->name());
+    candidates_.emplace(pool->name(), pool);
   }
 
   std::lock_guard<std::mutex> l(stateLock_);
@@ -188,12 +192,25 @@ void SharedArbitrator::addPool(const std::shared_ptr<MemoryPool>& pool) {
 }
 
 void SharedArbitrator::removePool(MemoryPool* pool) {
-  VELOX_CHECK_EQ(pool->reservedBytes(), 0);
+#if 1
+  VELOX_CHECK_EQ(
+      pool->reservedBytes(),
+      0,
+      "Unexpected memory usage from pool:{} on remove: ",
+      pool->name());
+#endif
   shrinkCapacity(pool, pool->capacity());
+  VELOX_CHECK_EQ(pool->capacity(), 0);
 
+  std::shared_ptr<MemoryPool> deletedPool;
   std::unique_lock guard{poolLock_};
-  const auto ret = candidates_.erase(pool);
-  VELOX_CHECK_EQ(ret, 1);
+  auto it = candidates_.find(pool->name());
+  VELOX_CHECK(
+      it != candidates_.end(),
+      "Memory pool to remove not found: {}",
+      pool->name());
+  deletedPool.swap(it->second);
+  candidates_.erase(it);
 }
 
 void SharedArbitrator::getCandidates(
@@ -204,12 +221,8 @@ void SharedArbitrator::getCandidates(
   std::shared_lock guard{poolLock_};
   op->candidates.reserve(candidates_.size());
   for (const auto& candidate : candidates_) {
-    const bool selfCandidate = op->requestRoot == candidate.first;
-    std::shared_ptr<MemoryPool> pool = candidate.second.lock();
-    if (pool == nullptr) {
-      VELOX_CHECK(!selfCandidate);
-      continue;
-    }
+    const auto& pool = candidate.second;
+    const bool selfCandidate = op->requestRoot == pool.get();
     op->candidates.push_back(
         {pool,
          freeCapacityOnly ? 0 : reclaimableUsedCapacity(*pool, selfCandidate),
@@ -373,6 +386,7 @@ uint64_t SharedArbitrator::decrementFreeCapacityLocked(
 uint64_t SharedArbitrator::shrinkCapacity(
     MemoryPool* pool,
     uint64_t requestBytes) {
+  VELOX_CHECK(pool->isRoot());
   std::lock_guard<std::mutex> l(stateLock_);
   ++numShrinks_;
   const uint64_t freedBytes = shrinkPool(pool, requestBytes);

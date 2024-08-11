@@ -235,6 +235,9 @@ class MemoryManager {
   /// Creates a root memory pool with specified 'name' and 'maxCapacity'. If
   /// 'name' is missing, the memory manager generates a default name internally
   /// to ensure uniqueness.
+  ///
+  /// NOTE: the user needs to call 'unregisterArbitration' to detech the root
+  /// memory pool from the memory arbitrator before the destruction.
   std::shared_ptr<MemoryPool> addRootPool(
       const std::string& name = "",
       int64_t maxCapacity = kMaxMemory,

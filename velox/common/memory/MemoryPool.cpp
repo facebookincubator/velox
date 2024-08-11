@@ -1039,9 +1039,21 @@ uint64_t MemoryPoolImpl::reclaim(
     uint64_t maxWaitMs,
     memory::MemoryReclaimer::Stats& stats) {
   if (reclaimer() == nullptr) {
+    LOG(ERROR) << "gone";
     return 0;
   }
+  LOG(ERROR) << "continue";
   return reclaimer()->reclaim(this, targetBytes, maxWaitMs, stats);
+}
+
+void MemoryPoolImpl::registerArbitration() {
+  VELOX_CHECK(isRoot());
+  manager_->arbitrator()->addPool(shared_from_this());
+}
+
+void MemoryPoolImpl::unregisterArbitration() {
+  VELOX_CHECK(isRoot());
+  manager_->arbitrator()->removePool(this);
 }
 
 void MemoryPoolImpl::enterArbitration() {

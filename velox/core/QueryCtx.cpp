@@ -58,6 +58,11 @@ QueryCtx::QueryCtx(
   initPool(queryId);
 }
 
+QueryCtx::~QueryCtx() {
+  VELOX_CHECK(!underArbitration_);
+  pool_->unregisterArbitration();
+}
+
 /*static*/ std::string QueryCtx::generatePoolName(const std::string& queryId) {
   // We attach a monotonically increasing sequence number to ensure the pool
   // name is unique.

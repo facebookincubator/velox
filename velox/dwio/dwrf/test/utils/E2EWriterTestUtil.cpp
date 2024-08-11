@@ -33,6 +33,7 @@ namespace facebook::velox::dwrf {
     std::unique_ptr<FileSink> sink,
     const std::shared_ptr<const Type>& type,
     const std::shared_ptr<Config>& config,
+    const std::shared_ptr<MemoryPool>& pool,
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
     std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
@@ -45,8 +46,7 @@ namespace facebook::velox::dwrf {
   options.flushPolicyFactory = flushPolicyFactory;
   options.layoutPlannerFactory = layoutPlannerFactory;
 
-  return std::make_unique<dwrf::Writer>(
-      std::move(sink), options, velox::memory::memoryManager()->addRootPool());
+  return std::make_unique<dwrf::Writer>(std::move(sink), options, pool);
 }
 
 /* static */ std::unique_ptr<Writer> E2EWriterTestUtil::writeData(
@@ -71,10 +71,15 @@ namespace facebook::velox::dwrf {
     std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
     const int64_t writerMemoryCap) {
+  auto pool = velox::memory::memoryManager()->addRootPool();
+  SCOPE_EXIT {
+    pool->unregisterArbitration();
+  };
   auto writer = createWriter(
       std::move(sink),
       type,
       config,
+      pool,
       std::move(flushPolicyFactory),
       std::move(layoutPlannerFactory),
       writerMemoryCap);

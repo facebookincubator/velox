@@ -77,9 +77,11 @@ class ExchangeClientTest : public testing::Test,
           std::to_string(maxOutputBufferSizeInBytes.value());
     }
     auto queryCtx = core::QueryCtx::create(
-        executor_.get(), core::QueryConfig{std::move(config)});
-    queryCtx->testingOverrideMemoryPool(
-        memory::memoryManager()->addRootPool(queryCtx->queryId()));
+        executor_.get(),
+        core::QueryConfig{std::move(config)},
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(taskId));
     auto plan = test::PlanBuilder().values({}).planNode();
     return Task::create(
         taskId,

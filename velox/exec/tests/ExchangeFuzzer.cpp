@@ -485,9 +485,11 @@ class ExchangeFuzzer : public VectorTestBase {
       int64_t maxMemory = kMaxMemory) {
     auto configCopy = configSettings_;
     auto queryCtx = core::QueryCtx::create(
-        executor_.get(), core::QueryConfig(std::move(configCopy)));
-    queryCtx->testingOverrideMemoryPool(
-        memory::memoryManager()->addRootPool(queryCtx->queryId(), maxMemory));
+        executor_.get(),
+        core::QueryConfig(std::move(configCopy)),
+        {},
+        nullptr,
+        memory::memoryManager()->addRootPool(taskId, maxMemory));
     core::PlanFragment planFragment{planNode};
     return Task::create(
         taskId,
