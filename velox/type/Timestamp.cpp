@@ -21,20 +21,6 @@
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
-namespace {
-
-// Assuming tzID is in [1, 1680] range.
-// tzID - PrestoDB time zone ID.
-inline int64_t getPrestoTZOffsetInSeconds(int16_t tzID) {
-  // TODO(spershin): Maybe we need something better if we can (we could use
-  //  precomputed vector for PrestoDB timezones, for instance).
-
-  // PrestoDb time zone ids require some custom code.
-  // Mapping is 1-based and covers [-14:00, +14:00] range without 00:00.
-  return ((tzID <= 840) ? (tzID - 841) : (tzID - 840)) * 60;
-}
-
-} // namespace
 
 // static
 Timestamp Timestamp::fromDaysAndNanos(int32_t days, int64_t nanos) {
@@ -58,19 +44,8 @@ Timestamp Timestamp::now() {
 }
 
 void Timestamp::toGMT(const tz::TimeZone& zone) {
-  // Magic number -2^39 + 24*3600. This number and any number lower than that
-  // will cause time_zone::to_sys() to SIGABRT. We don't want that to happen.
-  VELOX_USER_CHECK_GT(
-      seconds_,
-      -1096193779200l + 86400l,
-      "Timestamp seconds out of range for time zone adjustment");
-
-  VELOX_USER_CHECK_LE(
-      seconds_,
-      kMaxSeconds,
-      "Timestamp seconds out of range for time zone adjustment");
-
   std::chrono::seconds sysSeconds;
+
   try {
     sysSeconds = zone.to_sys(std::chrono::seconds(seconds_));
   } catch (const date::ambiguous_local_time&) {
@@ -85,60 +60,16 @@ void Timestamp::toGMT(const tz::TimeZone& zone) {
   seconds_ = sysSeconds.count();
 }
 
-void Timestamp::toGMT(int16_t tzID) {
-  if (tzID == 0) {
-    // No conversion required for time zone id 0, as it is '+00:00'.
-  } else if (tzID <= 1680) {
-    seconds_ -= getPrestoTZOffsetInSeconds(tzID);
-  } else {
-    // Other ids go this path.
-    toGMT(*tz::locateZone(tz::getTimeZoneName(tzID)));
-  }
-}
-
-namespace {
-void validateTimePoint(const std::chrono::time_point<
-                       std::chrono::system_clock,
-                       std::chrono::milliseconds>& timePoint) {
-  // Due to the limit of std::chrono we can only represent time in
-  // [-32767-01-01, 32767-12-31] date range
-  const auto minTimePoint = date::sys_days{
-      date::year_month_day(date::year::min(), date::month(1), date::day(1))};
-  const auto maxTimePoint = date::sys_days{
-      date::year_month_day(date::year::max(), date::month(12), date::day(31))};
-  if (timePoint < minTimePoint || timePoint > maxTimePoint) {
-    VELOX_USER_FAIL(
-        "Timestamp is outside of supported range of [{}-{}-{}, {}-{}-{}]",
-        (int)date::year::min(),
-        "01",
-        "01",
-        (int)date::year::max(),
-        "12",
-        "31");
-  }
-}
-} // namespace
-
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
 Timestamp::toTimePointMs(bool allowOverflow) const {
   using namespace std::chrono;
   auto tp = time_point<system_clock, milliseconds>(
       milliseconds(allowOverflow ? toMillisAllowOverflow() : toMillis()));
-  validateTimePoint(tp);
-  return tp;
-}
-
-std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>
-Timestamp::toTimePointSec() const {
-  using namespace std::chrono;
-  auto tp = time_point<system_clock, seconds>(seconds(seconds_));
-  validateTimePoint(tp);
+  tz::validateRange(tp);
   return tp;
 }
 
 void Timestamp::toTimezone(const tz::TimeZone& zone) {
-  auto tp = toTimePointSec();
-
   try {
     seconds_ = zone.to_local(std::chrono::seconds(seconds_)).count();
   } catch (const std::invalid_argument& e) {
@@ -146,17 +77,6 @@ void Timestamp::toTimezone(const tz::TimeZone& zone) {
     // external/date. Need to throw a RuntimeError so that try() statements do
     // not suppress it.
     VELOX_FAIL(e.what());
-  }
-}
-
-void Timestamp::toTimezone(int16_t tzID) {
-  if (tzID == 0) {
-    // No conversion required for time zone id 0, as it is '+00:00'.
-  } else if (tzID <= 1680) {
-    seconds_ += getPrestoTZOffsetInSeconds(tzID);
-  } else {
-    // Other ids go this path.
-    toTimezone(*tz::locateZone(tz::getTimeZoneName(tzID)));
   }
 }
 

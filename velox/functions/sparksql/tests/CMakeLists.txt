@@ -37,6 +37,7 @@ add_executable(
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
   MapTest.cpp
+  MaskTest.cpp
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
   RaiseErrorTest.cpp
@@ -63,7 +64,7 @@ target_link_libraries(
   velox_expression_fuzzer_test_utility
   velox_expression_fuzzer
   fmt::fmt
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   gflags::gflags)

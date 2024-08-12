@@ -191,6 +191,12 @@ struct MemoryManagerOptions {
   /// potential deadlock when reclaim memory from the task of the request memory
   /// pool.
   MemoryArbitrationStateCheckCB arbitrationStateCheckCb{nullptr};
+
+  /// TODO(jtan6): [Config Refactor] Remove above shared arbitrator specific
+  /// configs after Prestissimo switch to use extra configs map.
+  ///
+  /// Additional configs that are arbitrator implementation specific.
+  std::unordered_map<std::string, std::string> extraArbitratorConfigs{};
 };
 
 /// 'MemoryManager' is responsible for creating allocator, arbitrator and
@@ -301,10 +307,6 @@ class MemoryManager {
  private:
   void dropPool(MemoryPool* pool);
 
-  // Invoked to grow a memory pool's free capacity with at least
-  // 'incrementBytes'. The function returns true on success, otherwise false.
-  bool growPool(MemoryPool* pool, uint64_t incrementBytes);
-
   //  Returns the shared references to all the alive memory pools in 'pools_'.
   std::vector<std::shared_ptr<MemoryPool>> getAlivePools() const;
 
@@ -322,8 +324,6 @@ class MemoryManager {
   // tracked by 'pools_'. It is invoked on the root pool destruction and removes
   // the pool from 'pools_'.
   const MemoryPoolImpl::DestructionCallback poolDestructionCb_;
-  // Callback invoked by the root memory pool to request memory capacity growth.
-  const MemoryPoolImpl::GrowCapacityCallback poolGrowCb_;
 
   const std::shared_ptr<MemoryPool> sysRoot_;
   const std::shared_ptr<MemoryPool> spillPool_;

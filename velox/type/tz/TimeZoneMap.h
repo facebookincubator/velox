@@ -39,11 +39,17 @@ namespace facebook::velox::tz {
 
 class TimeZone;
 
-/// Looks up a TimeZone pointer based on a time zone name. This makes an hash
+/// Returns a TimeZone pointer based on a time zone name. This makes an hash
 /// map access, and will construct the index on the first access. `failOnError`
 /// controls whether to throw or return nullptr in case the time zone was not
 /// found.
 const TimeZone* locateZone(std::string_view timeZone, bool failOnError = true);
+
+/// Returns a TimeZone pointer based on a time zone ID. This makes a simple
+/// vector access, and will construct the index on the first access.
+/// `failOnError` controls whether to throw or return nullptr in case the time
+/// zone ID was not valid.
+const TimeZone* locateZone(int16_t timeZoneID, bool failOnError = true);
 
 /// Returns the timezone name associated with timeZoneID.
 std::string getTimeZoneName(int64_t timeZoneID);
@@ -56,6 +62,14 @@ int16_t getTimeZoneID(std::string_view timeZone, bool failOnError = true);
 /// Returns the timeZoneID for a given offset in minutes. The offset must be in
 /// [-14:00, +14:00] range.
 int16_t getTimeZoneID(int32_t offsetMinutes);
+
+// Validates that the time point can be safely used by the external date
+// library.
+template <typename T>
+using time_point = std::chrono::time_point<std::chrono::system_clock, T>;
+
+void validateRange(time_point<std::chrono::seconds> timePoint);
+void validateRange(time_point<std::chrono::milliseconds> timePoint);
 
 /// TimeZone is the proxy object for time zone management. It provides access to
 /// time zone names, their IDs (as defined in TimeZoneDatabase.cpp and
@@ -141,13 +155,3 @@ class TimeZone {
 };
 
 } // namespace facebook::velox::tz
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-namespace facebook::velox::util {
-
-inline std::string getTimeZoneName(int64_t timeZoneID) {
-  return tz::getTimeZoneName(timeZoneID);
-}
-
-} // namespace facebook::velox::util
-#endif

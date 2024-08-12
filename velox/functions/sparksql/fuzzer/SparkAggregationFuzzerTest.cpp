@@ -82,6 +82,7 @@ int main(int argc, char** argv) {
           {"skewness", nullptr},
           {"kurtosis", nullptr},
           {"collect_list", makeArrayVerifier()},
+          {"collect_set", makeArrayVerifier()},
           // Nested nulls are handled as values in Spark. But nested nulls
           // comparison always generates null in DuckDB.
           {"min", nullptr},
@@ -112,5 +113,6 @@ int main(int argc, char** argv) {
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
   options.customVerificationFunctions = customVerificationFunctions;
+  options.orderableGroupKeys = true;
   return Runner::run(initialSeed, std::move(duckQueryRunner), options);
 }
