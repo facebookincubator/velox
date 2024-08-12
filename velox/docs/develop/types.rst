@@ -148,7 +148,7 @@ store timezone ID. Supported range of timezone ID is [1, 1680].
 The definition of timezone IDs can be found in ``TimeZoneDatabase.cpp``.
 
 IPADDRESS represents an IPV6 or IPV4 formatted IPV6 address. Its physical
-type is BIGINT. The format that the address is stored in is defined as part of `(RFC 4291#section-2.5.5.2) <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_
+type is HUGEINT. The format that the address is stored in is defined as part of `(RFC 4291#section-2.5.5.2) <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_
 As Velox is run on Little Endian systems and the standard is network byte(Big Endian)
 order, we reverse the bytes to allow for masking and other bit operations
 used in IPADDRESS/IPPREFIX related functions. This type can be used to
