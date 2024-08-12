@@ -40,6 +40,7 @@ class Unnest : public Operator {
 
  private:
   // Generate output for 'size' input rows starting from 'start' input row.
+  // Get the firstRowStartSize from class member `firstRowStartSize_`.
   //
   // @param start First input row to include in the output.
   // @param size Number of input rows to include in the output.
@@ -47,7 +48,9 @@ class Unnest : public Operator {
   RowVectorPtr generateOutput(
       vector_size_t start,
       vector_size_t size,
-      vector_size_t outputSize);
+      vector_size_t outputSize,
+      vector_size_t firstRowEndSize,
+      vector_size_t endRowEndSize);
 
   // Invoked by generateOutput function above to generate the repeated output
   // columns.
@@ -55,7 +58,9 @@ class Unnest : public Operator {
       vector_size_t start,
       vector_size_t size,
       vector_size_t numElements,
-      std::vector<VectorPtr>& outputs);
+      std::vector<VectorPtr>& outputs,
+      vector_size_t firstRowEndSize,
+      vector_size_t endRowEndSize);
 
   struct UnnestChannelEncoding {
     BufferPtr indices;
@@ -71,21 +76,28 @@ class Unnest : public Operator {
       column_index_t channel,
       vector_size_t start,
       vector_size_t size,
-      vector_size_t numElements);
+      vector_size_t numElements,
+      vector_size_t firstRowEndSize,
+      vector_size_t endRowEndSize);
 
   // Invoked by generateOutput for the ordinality column.
   VectorPtr generateOrdinalityVector(
       vector_size_t start,
       vector_size_t size,
-      vector_size_t numElements);
+      vector_size_t numElements,
+      vector_size_t firstRowEndSize,
+      vector_size_t endRowEndSize);
 
   const bool withOrdinality_;
   std::vector<column_index_t> unnestChannels_;
 
   std::vector<DecodedVector> unnestDecoded_;
 
+  const uint32_t maxOutputSize_;
   BufferPtr maxSizes_;
   vector_size_t* rawMaxSizes_{nullptr};
+
+  vector_size_t firstRowStartSize_ = 0;
 
   std::vector<const vector_size_t*> rawSizes_;
   std::vector<const vector_size_t*> rawOffsets_;
