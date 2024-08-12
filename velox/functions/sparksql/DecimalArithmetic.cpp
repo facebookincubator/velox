@@ -195,14 +195,11 @@ inline TResult addLarge(
   }
 }
 
-// Add the value a and b, set the result r.
-// Suppose aScale is more than bScale, then aRescale is 0, bRescale is `aScale -
-// bScale`, when the result precision and scale do not adjust(result precision
-// is less than LongDecimalType::kMaxPrecision), the result scale is
-// max(aScale, bScale), so we rescale the value with small scale to the result
-// scale.
-// The overflow flag will be set to true if an overflow occurs during the
-// addition.
+// Adds the values 'a' and 'b' and stores the result in 'r'. To align the scales
+// of inputs, the value with the smaller scale is rescaled to the larger scale.
+// 'aRescale' and 'bRescale' are the rescale factors needed to rescale 'a' and
+// 'b'. 'rPrecision' and 'rScale' are the precision and scale of the result.
+// The overflow flag is set to true if an overflow occurs during the addition.
 template <typename TResult, typename A, typename B>
 inline void applyAdd(
     TResult& r,
@@ -242,8 +239,11 @@ inline void applyAdd(
   }
 }
 
-// Compute the add and subtract operation result precision and scale following
-// Hive's formulas.
+// Computes the result precision and scale for decimal add and subtract
+// operations following
+// Hive's formulas. If result is representable with long decimal, the result
+// scale is the maximum of 'aScale' and 'bScale'. If not, reduces result scale
+// and caps the result precision at 38.
 std::pair<uint8_t, uint8_t> computeAddSubtractResultPrecisionScale(
     uint8_t aPrecision,
     uint8_t aScale,
@@ -253,6 +253,10 @@ std::pair<uint8_t, uint8_t> computeAddSubtractResultPrecisionScale(
       std::max(aScale, bScale) + 1;
   auto scale = std::max(aScale, bScale);
   return sparksql::DecimalUtil::adjustPrecisionScale(precision, scale);
+}
+
+uint8_t computeAddSubtractRescaleFactor(uint8_t fromScale, uint8_t toScale) {
+  return std::max(0, toScale - fromScale);
 }
 
 template <typename TExec>
@@ -271,8 +275,8 @@ struct DecimalAddFunction {
     uint8_t bPrecision = getDecimalPrecisionScale(*bType).first;
     aScale_ = getDecimalPrecisionScale(*aType).second;
     bScale_ = getDecimalPrecisionScale(*bType).second;
-    aRescale_ = computeRescaleFactor(aScale_, bScale_);
-    bRescale_ = computeRescaleFactor(bScale_, aScale_);
+    aRescale_ = computeAddSubtractRescaleFactor(aScale_, bScale_);
+    bRescale_ = computeAddSubtractRescaleFactor(bScale_, aScale_);
     auto [rPrecision, rScale] = computeAddSubtractResultPrecisionScale(
         aPrecision, aScale_, bPrecision, bScale_);
     rPrecision_ = rPrecision;
@@ -298,12 +302,6 @@ struct DecimalAddFunction {
   }
 
  private:
-  inline static uint8_t computeRescaleFactor(
-      uint8_t fromScale,
-      uint8_t toScale) {
-    return std::max(0, toScale - fromScale);
-  }
-
   uint8_t aScale_;
   uint8_t bScale_;
   uint8_t aRescale_;
@@ -328,8 +326,8 @@ struct DecimalSubtractFunction {
     uint8_t bPrecision = getDecimalPrecisionScale(*bType).first;
     aScale_ = getDecimalPrecisionScale(*aType).second;
     bScale_ = getDecimalPrecisionScale(*bType).second;
-    aRescale_ = computeRescaleFactor(aScale_, bScale_);
-    bRescale_ = computeRescaleFactor(bScale_, aScale_);
+    aRescale_ = computeAddSubtractRescaleFactor(aScale_, bScale_);
+    bRescale_ = computeAddSubtractRescaleFactor(bScale_, aScale_);
     auto [rPrecision, rScale] = computeAddSubtractResultPrecisionScale(
         aPrecision, aScale_, bPrecision, bScale_);
     rPrecision_ = rPrecision;
@@ -355,12 +353,6 @@ struct DecimalSubtractFunction {
   }
 
  private:
-  inline static uint8_t computeRescaleFactor(
-      uint8_t fromScale,
-      uint8_t toScale) {
-    return std::max(0, toScale - fromScale);
-  }
-
   uint8_t aScale_;
   uint8_t bScale_;
   uint8_t aRescale_;
