@@ -41,7 +41,12 @@
             
   <section id="string-functions">
 <h1>String Functions<a class="headerlink" href="#string-functions" title="Link to this heading">¶</a></h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
 <p>Unless specified otherwise, all functions return NULL if at least one of the arguments is NULL.</p>
+<p>These functions assume that input strings contain valid UTF-8 encoded Unicode code points.
+The behavior is undefined if they are not.</p>
+</div>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="ascii">
 <span class="sig-name descname"><span class="pre">ascii</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#ascii" title="Link to this definition">¶</a></dt>
