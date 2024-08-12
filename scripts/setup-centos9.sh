@@ -42,7 +42,7 @@ export CXX=/opt/rh/gcc-toolset-12/root/bin/g++
 FB_OS_VERSION="v2024.05.20.00"
 FMT_VERSION="10.1.1"
 BOOST_VERSION="boost-1.84.0"
-ARROW_VERSION="15.0.0"
+ARROW_VERSION="17.0.0"
 
 function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
@@ -64,7 +64,7 @@ function install_velox_deps_from_dnf {
   dnf_install libevent-devel \
     openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
     libdwarf-devel elfutils-libelf-devel curl-devel libicu-devel bison flex \
-    libsodium-devel zlib-devel
+    libsodium-devel zlib-devel gmock-devel
 
   # install sphinx for doc gen
   pip install sphinx sphinx-tabs breathe sphinx_rtd_theme

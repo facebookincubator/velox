@@ -40,6 +40,7 @@ by Velox. See details on bundling below.
 | libstemmer        | 2.2.0           | Yes      |
 | DuckDB (testing)  | 0.8.1           | Yes      |
 | cpr (testing)     | 1.10.15         | Yes      |
+| arrow             | 17.0.0          | Yes      |
 
 # Bundled Dependency Management
 This module provides a dependency management system that allows us to automatically fetch and build dependencies from source if needed.
