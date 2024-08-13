@@ -1502,9 +1502,9 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFutureAfterTaskTerminated) {
   ASSERT_EQ(task_->numTotalDrivers(), 1);
   ASSERT_EQ(task_->numFinishedDrivers(), 0);
   ASSERT_EQ(task_->numRunningDrivers(), 0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
   ASSERT_FALSE(future.isReady());
   Task::resume(task_->shared_from_this());
-  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
   ASSERT_TRUE(future.isReady());
   future.wait();
   ASSERT_FALSE(task_->pauseRequested());
