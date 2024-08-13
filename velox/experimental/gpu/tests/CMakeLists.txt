@@ -14,4 +14,4 @@
 
 add_executable(velox_gpu_hash_table_test HashTableTest.cu)
 target_link_libraries(
-  velox_gpu_hash_table_test Folly::folly gflags::gflags)
+  velox_gpu_hash_table_test Folly::folly gflags::gflags glog::glog)
