@@ -234,6 +234,9 @@ The table below shows the supported Presto types.</p>
 <tr class="row-odd"><td><p>UUID</p></td>
 <td><p>HUGEINT</p></td>
 </tr>
+<tr class="row-even"><td><p>IPADDRESS</p></td>
+<td><p>HUGEINT</p></td>
+</tr>
 </tbody>
 </table>
 <p>TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
@@ -243,6 +246,13 @@ Supported range of milliseconds is [0xFFF8000000000000L, 0x7FFFFFFFFFFFF]
 (or [-69387-04-22T03:45:14.752, 73326-09-11T20:14:45.247]). The low 12 bits
 store timezone ID. Supported range of timezone ID is [1, 1680].
 The definition of timezone IDs can be found in <code class="docutils literal notranslate"><span class="pre">TimeZoneDatabase.cpp</span></code>.</p>
+<p>IPADDRESS represents an IPV6 or IPV4 formatted IPV6 address. Its physical
+type is HUGEINT. The format that the address is stored in is defined as part of <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2">(RFC 4291#section-2.5.5.2)</a>
+As Velox is run on Little Endian systems and the standard is network byte(Big Endian)
+order, we reverse the bytes to allow for masking and other bit operations
+used in IPADDRESS/IPPREFIX related functions. This type can be used to
+create IPPREFIX networks as well as to check IPADDRESS validity within
+IPPREFIX networks.</p>
 </section>
 <section id="spark-types">
 <h2>Spark Types<a class="headerlink" href="#spark-types" title="Link to this heading">¶</a></h2>

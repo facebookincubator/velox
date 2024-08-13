@@ -71,20 +71,22 @@ are supported if the conversion of their element types are supported. In additio
 supported conversions to/from JSON are listed in <a class="reference internal" href="json.html"><span class="doc">JSON Functions</span></a>.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
-<col style="width: 7.1%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
+<col style="width: 6.2%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"></th>
@@ -96,11 +98,13 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <th class="head"><p>real</p></th>
 <th class="head"><p>double</p></th>
 <th class="head"><p>varchar</p></th>
+<th class="head"><p>varbinary</p></th>
 <th class="head"><p>timestamp</p></th>
 <th class="head"><p>timestamp with time zone</p></th>
 <th class="head"><p>date</p></th>
 <th class="head"><p>interval day to second</p></th>
 <th class="head"><p>decimal</p></th>
+<th class="head"><p>ipaddress</p></th>
 </tr>
 </thead>
 <tbody>
@@ -117,7 +121,9 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>smallint</p></td>
 <td><p>Y</p></td>
@@ -132,7 +138,9 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>integer</p></td>
 <td><p>Y</p></td>
@@ -147,7 +155,9 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>bigint</p></td>
 <td><p>Y</p></td>
@@ -162,7 +172,9 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>boolean</p></td>
 <td><p>Y</p></td>
@@ -177,7 +189,9 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>real</p></td>
 <td><p>Y</p></td>
@@ -192,7 +206,9 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>double</p></td>
 <td><p>Y</p></td>
@@ -207,7 +223,9 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>varchar</p></td>
 <td><p>Y</p></td>
@@ -218,13 +236,32 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-even"><td><p>varbinary</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
 <td></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-even"><td><p>timestamp</p></td>
+<tr class="row-odd"><td><p>timestamp</p></td>
 <td></td>
 <td></td>
 <td></td>
@@ -233,34 +270,6 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td><p>Y</p></td>
-<td><p>Y</p></td>
-<td><p>Y</p></td>
-<td><p>Y</p></td>
-<td></td>
-<td></td>
-</tr>
-<tr class="row-odd"><td><p>timestamp with time zone</p></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
-<td><p>Y</p></td>
-<td><p>Y</p></td>
-<td></td>
-<td><p>Y</p></td>
-<td></td>
-<td></td>
-</tr>
-<tr class="row-even"><td><p>date</p></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
 <td></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
@@ -269,7 +278,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>interval day to second</p></td>
+<tr class="row-even"><td><p>timestamp with time zone</p></td>
 <td></td>
 <td></td>
 <td></td>
@@ -278,13 +287,49 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td><p>Y</p></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>date</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>interval day to second</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
 <td></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>decimal</p></td>
+<tr class="row-odd"><td><p>decimal</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
@@ -297,7 +342,26 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 <td></td>
 <td></td>
+<td></td>
 <td><p>Y</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>ipaddress</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
 </tr>
 </tbody>
 </table>
@@ -604,11 +668,50 @@ is the number of whole days in the interval, HH is then number of hours between 
 </pre></div>
 </div>
 </section>
+<section id="from-ipaddress">
+<h3>From IPADDRESS<a class="headerlink" href="#from-ipaddress" title="Link to this heading">¶</a></h3>
+<p>Casting from IPADDRESS to VARCHAR returns a string formatted as x.x.x.x for IPV4 formatted IPV6 addresses.
+For all other IPV6 addresses it will be formatted in compressed alternate form IPV6 defined in <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2">RFC 4291#section-2.2</a></p>
+<p>IPV4:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">ipaddress</span> <span class="s1">&#39;1.2.3.4&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1.2.3.4&#39;</span>
+</pre></div>
+</div>
+<p>IPV6:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">ipaddress</span> <span class="s1">&#39;2001:0db8:0000:0000:0000:ff00:0042:8329&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2001:db8::ff00:42:8329&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">ipaddress</span> <span class="s1">&#39;0:0:0:0:0:0:13.1.68.3&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;::13.1.68.3&#39;</span>
+</pre></div>
+</div>
+<p>IPV4 mapped IPV6:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">ipaddress</span> <span class="s1">&#39;::ffff:ffff:ffff&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;255.255.255.255&#39;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cast-to-varbinary">
+<h2>Cast to VARBINARY<a class="headerlink" href="#cast-to-varbinary" title="Link to this heading">¶</a></h2>
+<section id="id6">
+<h3>From IPADDRESS<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<p>Returns the IPV6 address as a 16 byte varbinary string in network byte order.</p>
+<p>Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2">(RFC 4291#section-2.5.5.2)</a>.
+When creating an IPADDRESS, IPv4 addresses will be mapped into that range.</p>
+<p>IPV6:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">ipaddress</span> <span class="s1">&#39;2001:0db8:0000:0000:0000:ff00:0042:8329&#39;</span> <span class="k">as</span> <span class="n">varbinary</span><span class="p">);</span> <span class="o">--</span> <span class="mh">0x20010db8000000000000ff0000428329</span>
+</pre></div>
+</div>
+<p>IPV4:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2.3.4&#39;</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="mh">0x00000000000000000000ffff01020304</span>
+</pre></div>
+</div>
+<p>IPV4 mapped IPV6:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;::ffff:ffff:ffff&#39;</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="mh">0x00000000000000000000ffffffffffff</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="cast-to-timestamp">
 <h2>Cast to TIMESTAMP<a class="headerlink" href="#cast-to-timestamp" title="Link to this heading">¶</a></h2>
-<section id="id6">
-<h3>From VARCHAR<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<section id="id7">
+<h3>From VARCHAR<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <p>Casting from a string to timestamp is allowed if the string represents a
 timestamp in the format <cite>YYYY-MM-DD</cite> followed by an optional <cite>hh:mm:ss.MS</cite>.
 Seconds and milliseconds are optional. Casting from invalid input values throws.</p>
@@ -644,8 +747,8 @@ based on the value of <cite>adjust_timestamp_to_session_timezone</cite>, as desc
 </div>
 <p>Are both valid.</p>
 </section>
-<section id="id7">
-<h3>From DATE<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<section id="id8">
+<h3>From DATE<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <p>Casting from date to timestamp is allowed.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">date</span> <span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
@@ -678,8 +781,8 @@ SELECT to_unixtime(cast(from_unixtime(0, &#39;-02:00&#39;) as timestamp)); -- -7
 </section>
 <section id="cast-to-timestamp-with-time-zone">
 <h2>Cast to TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#cast-to-timestamp-with-time-zone" title="Link to this heading">¶</a></h2>
-<section id="id8">
-<h3>From TIMESTAMP<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<section id="id9">
+<h3>From TIMESTAMP<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <p>The results depend on whether configuration property <cite>adjust_timestamp_to_session_timezone</cite> is set or not.</p>
 <p>If set to true, the output is adjusted to be equivalent as the input timestamp in UTC
 based on the user provided <cite>session_timezone</cite> (if any). For example, when user supplies
@@ -699,8 +802,8 @@ SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:0
 </pre></div>
 </div>
 </section>
-<section id="id9">
-<h3>From DATE<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id10">
+<h3>From DATE<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <p>The results depend on <cite>session_timestamp</cite>.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">session_timezone</span> <span class="o">=</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span>
@@ -714,8 +817,8 @@ SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:0
 </section>
 <section id="cast-to-date">
 <h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading">¶</a></h2>
-<section id="id10">
-<h3>From VARCHAR<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<section id="id11">
+<h3>From VARCHAR<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <p>Only ISO 8601 strings are supported: <cite>[+-]YYYY-MM-DD</cite>. Casting from invalid input values throws.</p>
 <p>Valid examples</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>
@@ -733,8 +836,8 @@ SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:0
 </pre></div>
 </div>
 </section>
-<section id="id11">
-<h3>From TIMESTAMP<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>From TIMESTAMP<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <p>Casting from timestamp to date is allowed. If present, the part of <cite>hh:mm:ss</cite>
 in the input is ignored.</p>
 <p>Valid examples</p>
@@ -743,8 +846,8 @@ in the input is ignored.</p>
 </pre></div>
 </div>
 </section>
-<section id="id12">
-<h3>From TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<section id="id13">
+<h3>From TIMESTAMP WITH TIME ZONE<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
 <p>Casting from TIMESTAMP WITH TIME ZONE to DATE is allowed. If present,
 the part of <cite>hh:mm:ss</cite> in the input is ignored.</p>
 <p>Session time zone does not affect the result.</p>
@@ -766,8 +869,8 @@ True value is converted to 1 and false to 0.</p>
 </pre></div>
 </div>
 </section>
-<section id="id13">
-<h3>From integral types<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<section id="id14">
+<h3>From integral types<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <p>Casting an integral number to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. Casting from
 invalid input values throws.</p>
@@ -783,8 +886,8 @@ invalid input values throws.</p>
 </pre></div>
 </div>
 </section>
-<section id="id14">
-<h3>From floating-point types<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<section id="id15">
+<h3>From floating-point types<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
 <p>Casting a floating-point number to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. When the given
 scale is less than the number of decimal places, the floating-point value is rounded.
@@ -805,8 +908,8 @@ throws.</p>
 </pre></div>
 </div>
 </section>
-<section id="id15">
-<h3>From decimal<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<section id="id16">
+<h3>From decimal<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
 <p>Casting one decimal to another is allowed if the input value can be represented
 by the result decimal type. When casting from a larger scale to a smaller one,
 the fraction part is rounded.</p>
@@ -821,8 +924,8 @@ the fraction part is rounded.</p>
 </pre></div>
 </div>
 </section>
-<section id="id16">
-<h3>From varchar<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<section id="id17">
+<h3>From varchar<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
 <p>Casting varchar to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. When casting from
 a larger scale to a smaller one, the fraction part is rounded. Casting from invalid input value throws.</p>
@@ -853,6 +956,77 @@ a larger scale to a smaller one, the fraction part is rounded. Casting from inva
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39; -3E+2&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">Value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">a</span> <span class="n">number</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-3E+2.1&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">Value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">a</span> <span class="n">number</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;3E+&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">Value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">a</span> <span class="n">number</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cast-to-ipaddress">
+<h2>Cast to IPADDRESS<a class="headerlink" href="#cast-to-ipaddress" title="Link to this heading">¶</a></h2>
+<section id="id18">
+<h3>From VARCHAR<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<p>To cast a varchar to IPAddress input string must be in the form of either
+IPV4 or IPV6.</p>
+<p>For IPV4 it must be in the form of:
+x.x.x.x where each x is an integer value between 0-255.</p>
+<p>For IPV6 it must follow any of the forms defined in <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2">RFC 4291#section-2.2</a>.</p>
+<p>Full form:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="mi">2001</span><span class="p">:</span><span class="mi">0</span><span class="n">DB8</span><span class="p">:</span><span class="mi">0000</span><span class="p">:</span><span class="mi">0000</span><span class="p">:</span><span class="mi">0008</span><span class="p">:</span><span class="mi">0800</span><span class="p">:</span><span class="mi">200</span><span class="n">C</span><span class="p">:</span><span class="mi">417</span><span class="n">A</span>
+<span class="mi">2001</span><span class="p">:</span><span class="n">DB8</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">8</span><span class="p">:</span><span class="mi">800</span><span class="p">:</span><span class="mi">200</span><span class="n">C</span><span class="p">:</span><span class="mi">417</span><span class="n">A</span>
+</pre></div>
+</div>
+<p>Compressed form:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="mi">2001</span><span class="p">:</span><span class="n">DB8</span><span class="p">::</span><span class="mi">8</span><span class="p">:</span><span class="mi">800</span><span class="p">:</span><span class="mi">200</span><span class="n">C</span><span class="p">:</span><span class="mi">417</span><span class="n">A</span>
+</pre></div>
+</div>
+<p>Alternate form:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mf">13.1.68.3</span>
+<span class="p">::</span><span class="mf">13.1.68.3</span>
+</pre></div>
+</div>
+<p>Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2">(RFC 4291#section-2.5.5.2)</a>.
+When creating an IPADDRESS, IPv4 addresses will be mapped into that range.</p>
+<p>When formatting an IPADDRESS, any address within the mapped range will be formatted as an IPv4 address.
+Other addresses will be formatted as IPv6 using the canonical format defined in <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc5952.html">RFC 5952</a>.</p>
+<p>Valid examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2001:0db8:0000:0000:0000:ff00:0042:8329&#39;</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="n">ipaddress</span> <span class="s1">&#39;2001:db8::ff00:42:8329&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2.3.4&#39;</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="n">ipaddress</span> <span class="s1">&#39;1.2.3.4&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;::ffff:ffff:ffff&#39;</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="n">ipaddress</span> <span class="s1">&#39;255.255.255.255&#39;</span>
+</pre></div>
+</div>
+<p>Invalid examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2001:db8::1::1&#39;</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">IP</span> <span class="n">address</span> <span class="s1">&#39;2001:db8::1::1&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;789.1.1.1&#39;</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">IP</span> <span class="n">address</span> <span class="s1">&#39;789.1.1.1&#39;</span>
+</pre></div>
+</div>
+</section>
+<section id="from-varbinary">
+<h3>From VARBINARY<a class="headerlink" href="#from-varbinary" title="Link to this heading">¶</a></h3>
+<p>To cast a varbinary to IPAddress it must be either IPV4(4 Bytes)
+or IPV6(16 Bytes) in network byte order.</p>
+<p>IPV4:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[</span><span class="mi">01</span><span class="p">,</span> <span class="mi">02</span><span class="p">,</span> <span class="mi">03</span><span class="p">,</span> <span class="mi">04</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="mf">1.2.3.4</span>
+</pre></div>
+</div>
+<p>IPV6:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[</span><span class="mh">0x20</span><span class="p">,</span> <span class="mh">0x01</span><span class="p">,</span> <span class="mh">0x0d</span><span class="p">,</span> <span class="mh">0xb8</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span> <span class="mh">0x00</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0xff</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x42</span><span class="p">,</span> <span class="mh">0x83</span><span class="p">,</span> <span class="mh">0x29</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="mi">2001</span><span class="p">:</span><span class="n">db8</span><span class="p">::</span><span class="n">ff00</span><span class="p">:</span><span class="mi">42</span><span class="p">:</span><span class="mi">8329</span>
+</pre></div>
+</div>
+<p>Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2">(RFC 4291#section-2.5.5.2)</a>.
+When creating an IPADDRESS, IPv4 addresses will be mapped into that range.</p>
+<p>When formatting an IPADDRESS, any address within the mapped range will be formatted as an IPv4 address.
+Other addresses will be formatted as IPv6 using the canonical format defined in <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc5952.html">RFC 5952</a>.</p>
+<p>IPV6 mapped IPV4 address:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[</span><span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0xff</span><span class="p">,</span> <span class="mh">0xff</span><span class="p">,</span> <span class="mh">0x01</span><span class="p">,</span> <span class="mh">0x02</span><span class="p">,</span> <span class="mh">0x03</span><span class="p">,</span> <span class="mh">0x04</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="mf">1.2.3.4</span>
+</pre></div>
+</div>
+<p>Valid examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">from_hex</span><span class="p">(</span><span class="s1">&#39;20010db8000000000000ff0000428329&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="n">ipaddress</span> <span class="s1">&#39;2001:db8::ff00:42:8329&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">from_hex</span><span class="p">(</span><span class="s1">&#39;01020304&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="n">ipaddress</span> <span class="s1">&#39;1.2.3.4&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">from_hex</span><span class="p">(</span><span class="s1">&#39;00000000000000000000ffff01020304&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="n">ipaddress</span> <span class="s1">&#39;1.2.3.4&#39;</span>
+</pre></div>
+</div>
+<p>Invalid examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">from_hex</span><span class="p">(</span><span class="s1">&#39;f000001100&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">ipaddress</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">IP</span> <span class="n">address</span> <span class="n">binary</span> <span class="n">length</span><span class="p">:</span> <span class="mi">5</span>
 </pre></div>
 </div>
 </section>
@@ -913,31 +1087,41 @@ a larger scale to a smaller one, the fraction part is rounded. Casting from inva
 <li><a class="reference internal" href="#from-date">From DATE</a></li>
 <li><a class="reference internal" href="#from-timestamp">From TIMESTAMP</a></li>
 <li><a class="reference internal" href="#from-interval-day-to-second">From INTERVAL DAY TO SECOND</a></li>
+<li><a class="reference internal" href="#from-ipaddress">From IPADDRESS</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-varbinary">Cast to VARBINARY</a><ul>
+<li><a class="reference internal" href="#id6">From IPADDRESS</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to TIMESTAMP</a><ul>
-<li><a class="reference internal" href="#id6">From VARCHAR</a></li>
-<li><a class="reference internal" href="#id7">From DATE</a></li>
+<li><a class="reference internal" href="#id7">From VARCHAR</a></li>
+<li><a class="reference internal" href="#id8">From DATE</a></li>
 <li><a class="reference internal" href="#from-timestamp-with-time-zone">From TIMESTAMP WITH TIME ZONE</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp-with-time-zone">Cast to TIMESTAMP WITH TIME ZONE</a><ul>
-<li><a class="reference internal" href="#id8">From TIMESTAMP</a></li>
-<li><a class="reference internal" href="#id9">From DATE</a></li>
+<li><a class="reference internal" href="#id9">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id10">From DATE</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
-<li><a class="reference internal" href="#id10">From VARCHAR</a></li>
-<li><a class="reference internal" href="#id11">From TIMESTAMP</a></li>
-<li><a class="reference internal" href="#id12">From TIMESTAMP WITH TIME ZONE</a></li>
+<li><a class="reference internal" href="#id11">From VARCHAR</a></li>
+<li><a class="reference internal" href="#id12">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id13">From TIMESTAMP WITH TIME ZONE</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
 <li><a class="reference internal" href="#from-boolean-type">From boolean type</a></li>
-<li><a class="reference internal" href="#id13">From integral types</a></li>
-<li><a class="reference internal" href="#id14">From floating-point types</a></li>
-<li><a class="reference internal" href="#id15">From decimal</a></li>
-<li><a class="reference internal" href="#id16">From varchar</a></li>
+<li><a class="reference internal" href="#id14">From integral types</a></li>
+<li><a class="reference internal" href="#id15">From floating-point types</a></li>
+<li><a class="reference internal" href="#id16">From decimal</a></li>
+<li><a class="reference internal" href="#id17">From varchar</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-ipaddress">Cast to IPADDRESS</a><ul>
+<li><a class="reference internal" href="#id18">From VARCHAR</a></li>
+<li><a class="reference internal" href="#from-varbinary">From VARBINARY</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#miscellaneous">Miscellaneous</a><ul>
