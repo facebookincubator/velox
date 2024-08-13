@@ -166,4 +166,4 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|cudf"
+          cd _build/debug && ctest -j 4 --output-on-failure --no-tests=error -E "velox_exec_test|cudf"
