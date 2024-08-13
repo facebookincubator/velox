@@ -41,7 +41,6 @@ unset(BUILD_TESTING)
 unset(BUILD_SHARED_LIBS)
 add_dependencies(glog gflags::gflags)
 
-
 # These headers are missing from the include dir but adding the src dir causes
 # issues with folly so we just copy it to the include dir
 file(COPY ${glog_SOURCE_DIR}/src/glog/platform.h
