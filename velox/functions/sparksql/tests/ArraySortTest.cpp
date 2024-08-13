@@ -16,6 +16,7 @@
 
 #include <optional>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/sparksql/tests/ArraySortTestData.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
@@ -104,10 +105,14 @@ TEST_F(ArraySortTest, array) {
   testArraySort(input, expected);
 }
 
-TEST_F(ArraySortTest, map) {
+// Map is unordered, so sorting is not supported.
+TEST_F(ArraySortTest, failOnMapTypeSort) {
   auto input = makeArrayOfMapVector(mapInput());
-  auto expected = makeArrayOfMapVector(mapAscNullLargest());
-  testArraySort(input, expected);
+  const std::string kErrorMessage =
+      "Scalar function signature is not supported"_sv;
+
+  VELOX_ASSERT_THROW(
+      evaluate("array_sort(c0)", makeRowVector({input})), kErrorMessage);
 }
 
 TEST_F(ArraySortTest, row) {
@@ -139,6 +144,67 @@ TEST_F(ArraySortTest, constant) {
   result = evaluateConstant(2, data);
   expected = makeConstantArray<int64_t>(size, {6, 6, 6, 6});
   assertEqualVectors(expected, result);
+}
+
+TEST_F(ArraySortTest, lambda) {
+  auto data = makeRowVector({makeNullableArrayVector<std::string>({
+      {"abc123", "abc", std::nullopt, "abcd"},
+      {std::nullopt, "x", "xyz123", "xyz"},
+  })});
+
+  auto sortedAsc = makeNullableArrayVector<std::string>({
+      {"abc", "abcd", "abc123", std::nullopt},
+      {"x", "xyz", "xyz123", std::nullopt},
+  });
+
+  auto sortedDesc = makeNullableArrayVector<std::string>({
+      {"abc123", "abcd", "abc", std::nullopt},
+      {"xyz123", "xyz", "x", std::nullopt},
+  });
+
+  auto testAsc = [&](const std::string& name, const std::string& lambdaExpr) {
+    SCOPED_TRACE(name);
+    SCOPED_TRACE(lambdaExpr);
+    auto result = evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data);
+    assertEqualVectors(sortedAsc, result);
+
+    SelectivityVector firstRow(1);
+    result =
+        evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data, firstRow);
+    assertEqualVectors(sortedAsc->slice(0, 1), result);
+  };
+
+  auto testDesc = [&](const std::string& name, const std::string& lambdaExpr) {
+    SCOPED_TRACE(name);
+    SCOPED_TRACE(lambdaExpr);
+    auto result = evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data);
+    assertEqualVectors(sortedDesc, result);
+
+    SelectivityVector firstRow(1);
+    result =
+        evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data, firstRow);
+    assertEqualVectors(sortedDesc->slice(0, 1), result);
+  };
+
+  // Different ways to sort by length ascending.
+  testAsc("array_sort", "x -> length(x)");
+  testAsc("array_sort_desc", "x -> length(x) * -1");
+  testAsc(
+      "array_sort",
+      "(x, y) -> if(lessthan(length(x), length(y)), -1, if(greaterthan(length(x), length(y)), 1, 0))");
+  testAsc(
+      "array_sort",
+      "(x, y) -> if(lessthan(length(x), length(y)), -1, if(equalto(length(x), length(y)), 0, 1))");
+
+  // Different ways to sort by length descending.
+  testDesc("array_sort", "x -> length(x) * -1");
+  testDesc("array_sort_desc", "x -> length(x)");
+  testDesc(
+      "array_sort",
+      "(x, y) -> if(lessthan(length(x), length(y)), 1, if(greaterthan(length(x), length(y)), -1, 0))");
+  testDesc(
+      "array_sort",
+      "(x, y) -> if(lessthan(length(x), length(y)), 1, if(equalto(length(x), length(y)), 0, -1))");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
