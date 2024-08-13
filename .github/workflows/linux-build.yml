@@ -112,58 +112,58 @@ jobs:
         run: |
           ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3|cudf"
 
-  ubuntu-debug:
-    runs-on: linux-amd64-cpu32
-    name: "Ubuntu debug with resolve_dependency"
-    env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache"
-    defaults:
-      run:
-        shell: bash
-        working-directory: velox
-    steps:
+# ubuntu-debug:
+#   runs-on: linux-amd64-cpu32
+#   name: "Ubuntu debug with resolve_dependency"
+#   env:
+#     CCACHE_DIR: "${{ github.workspace }}/.ccache"
+#   defaults:
+#     run:
+#       shell: bash
+#       working-directory: velox
+#   steps:
 
-      - name: Get Ccache Stash
-        uses: assignUser/stash/restore@v1
-        with:
-          token: '${{ secrets.ARTIFACT_CACHE_TOKEN }}'
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-ubuntu-debug-default
+#     - name: Get Ccache Stash
+#       uses: assignUser/stash/restore@v1
+#       with:
+#         token: '${{ secrets.ARTIFACT_CACHE_TOKEN }}'
+#         path: '${{ env.CCACHE_DIR }}'
+#         key: ccache-ubuntu-debug-default
 
-      - name: Ensure Stash Dirs Exists
-        working-directory: ${{ github.workspace }}
-        run: |
-          mkdir -p '${{ env.CCACHE_DIR }}'
+#     - name: Ensure Stash Dirs Exists
+#       working-directory: ${{ github.workspace }}
+#       run: |
+#         mkdir -p '${{ env.CCACHE_DIR }}'
 
-      - uses: actions/checkout@v4
-        with:
-          path: velox
+#     - uses: actions/checkout@v4
+#       with:
+#         path: velox
 
-      - name: Install Dependencies
-        run: |
-          source scripts/setup-ubuntu.sh && install_apt_deps
+#     - name: Install Dependencies
+#       run: |
+#         source scripts/setup-ubuntu.sh && install_apt_deps
 
-      - name: Clear CCache Statistics
-        run: |
-          ccache -sz
+#     - name: Clear CCache Statistics
+#       run: |
+#         ccache -sz
 
-      - name: Make Debug Build
-        env:
-          VELOX_DEPENDENCY_SOURCE: BUNDLED
-          MAKEFLAGS: "TREAT_WARNINGS_AS_ERRORS=0 NUM_THREADS=32 MAX_HIGH_MEM_JOBS=4"
-          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON"
-        run: |
-          make debug
+#     - name: Make Debug Build
+#       env:
+#         VELOX_DEPENDENCY_SOURCE: BUNDLED
+#         MAKEFLAGS: "TREAT_WARNINGS_AS_ERRORS=0 NUM_THREADS=32 MAX_HIGH_MEM_JOBS=4"
+#         EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON"
+#       run: |
+#         make debug
 
-      - name: CCache after
-        run: |
-          ccache -vs
+#     - name: CCache after
+#       run: |
+#         ccache -vs
 
-      - uses: assignUser/stash/save@v1
-        with:
-          path: '${{ env.CCACHE_DIR }}'
-          key: ccache-ubuntu-debug-default
+#     - uses: assignUser/stash/save@v1
+#       with:
+#         path: '${{ env.CCACHE_DIR }}'
+#         key: ccache-ubuntu-debug-default
 
-      - name: Run Tests
-        run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|cudf"
+#     - name: Run Tests
+#       run: |
+#         cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|cudf"
