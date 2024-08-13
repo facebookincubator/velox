@@ -74,8 +74,20 @@ option(VELOX_MONO_LIBRARY "Build single unified library." OFF)
 option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
-cmake_dependent_option(VELOX_BUILD_STATIC "Build Velox as static libraries." ON
-                       "NOT VELOX_BUILD_SHARED" OFF)
+cmake_dependent_option(
+  VELOX_BUILD_STATIC
+  "Build Velox as static libraries."
+  ON
+  "NOT VELOX_BUILD_SHARED"
+  OFF)
+
+if(VELOX_BUILD_SHARED AND NOT VELOX_MONO_LIBRARY)
+  # The large number of targets currently in use within Velox make a shared
+  # build when not using the mono library brittle and labor intensive
+  message(
+    FATAL_ERROR
+      "Shared build is only possible when `VELOX_MONO_LIBRARY=ON` is set.")
+endif()
 
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
@@ -226,7 +238,6 @@ endif()
 # At the moment we prefer static linking but by default cmake looks for shared
 # libs first. This will still fallback to shared libs when static ones are not
 # found
-list(INSERT CMAKE_FIND_LIBRARY_SUFFIXES 0 a)
 if(VELOX_ENABLE_S3)
   # Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
   if(AWSSDK_ROOT_DIR)
