@@ -1470,8 +1470,8 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
   std::atomic<bool> taskResumeAllowed{false};
   std::thread observeThread([&]() {
     ContinueFuture future = ContinueFuture::makeEmpty();
-    const bool requested = task_->pauseRequested(&future);
-    ASSERT_TRUE(requested);
+    const bool paused = task_->pauseRequested(&future);
+    ASSERT_TRUE(paused);
     taskResumeAllowed = true;
     taskResumeAllowedWait.notifyAll();
     future.wait();
