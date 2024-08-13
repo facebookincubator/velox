@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_unsafe_row_serialize_benchmark UnsafeRowSerializeBenchmark.cpp)
+add_executable(velox_unsafe_row_serialize_benchmark
+               UnsafeRowSerializeBenchmark.cpp)
 target_link_libraries(
   velox_unsafe_row_serialize_benchmark
   PRIVATE
