@@ -1463,6 +1463,81 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, raceBetweenTaskPauseAndTerminate) {
   taskThread_.join();
 }
 
+DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
+  // Test for trivial wait on Task::pauseRequested future.
+  testPause();
+  folly::EventCount taskResumeAllowedWait;
+  std::atomic<bool> taskResumeAllowed{false};
+  std::thread observeThread([&]() {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    const bool requested = task_->pauseRequested(&future);
+    ASSERT_TRUE(requested);
+    taskResumeAllowed = true;
+    taskResumeAllowedWait.notifyAll();
+    future.wait();
+    ASSERT_FALSE(task_->pauseRequested());
+  });
+
+  taskResumeAllowedWait.await([&]() { return taskResumeAllowed.load(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  Task::resume(task_->shared_from_this());
+
+  taskThread_.join();
+  observeThread.join();
+
+  ASSERT_EQ(task_->numTotalDrivers(), 1);
+  ASSERT_EQ(task_->numFinishedDrivers(), 1);
+  ASSERT_EQ(task_->numRunningDrivers(), 0);
+}
+
+DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFutureAfterTaskTerminated) {
+  testPause();
+  folly::EventCount taskCancelAllowedWait;
+  std::atomic<bool> taskCancelAllowed{false};
+  folly::EventCount taskCanceledWait;
+  std::atomic<bool> taskCanceled{false};
+  folly::EventCount taskResumeAllowedWait;
+  std::atomic<bool> taskResumeAllowed{false};
+  folly::EventCount taskResumedWait;
+  std::atomic<bool> taskResumed{false};
+  std::thread observeThread([&]() {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    const bool requested = task_->pauseRequested(&future);
+    ASSERT_TRUE(requested);
+    taskCancelAllowed = true;
+    taskCancelAllowedWait.notifyAll();
+    taskCanceledWait.await([&]() { return taskCanceled.load(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+    ASSERT_FALSE(future.isReady());
+    taskResumeAllowed = true;
+    taskResumeAllowedWait.notifyAll();
+    taskResumedWait.await([&]() { return taskResumed.load(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+    ASSERT_TRUE(future.isReady());
+    future.wait();
+    ASSERT_FALSE(task_->pauseRequested());
+  });
+  taskCancelAllowedWait.await([&]() { return taskCancelAllowed.load(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  ASSERT_EQ(task_->numTotalDrivers(), 1);
+  ASSERT_EQ(task_->numFinishedDrivers(), 0);
+  ASSERT_EQ(task_->numRunningDrivers(), 1);
+  std::vector<Driver*> drivers{};
+  task_->requestCancel().wait();
+  ASSERT_EQ(task_->numTotalDrivers(), 1);
+  ASSERT_EQ(task_->numFinishedDrivers(), 0);
+  ASSERT_EQ(task_->numRunningDrivers(), 0);
+  taskCanceled = true;
+  taskCanceledWait.notifyAll();
+  taskResumeAllowedWait.await([&]() { return taskResumeAllowed.load(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  Task::resume(task_->shared_from_this());
+  taskResumed = true;
+  taskResumedWait.notifyAll();
+  taskThread_.join();
+  observeThread.join();
+}
+
 DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
@@ -1692,69 +1767,6 @@ TEST_F(TaskTest, spillDirNotCreated) {
   // destructor has not removed the directory if it was created earlier.
   auto fs = filesystems::getFileSystem(tmpDirectoryPath, nullptr);
   ASSERT_FALSE(fs->exists(tmpDirectoryPath));
-}
-
-DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
-  // Test for trivial wait on Task::pauseRequested future.
-  testPause();
-  folly::EventCount taskResumeAllowedWait;
-  std::atomic<bool> taskResumeAllowed{false};
-  std::thread observeThread([&]() {
-    ContinueFuture future = ContinueFuture::makeEmpty();
-    bool requested = task_->pauseRequested(&future);
-    ASSERT_TRUE(requested);
-    taskResumeAllowed = true;
-    taskResumeAllowedWait.notifyAll();
-    future.wait();
-    ASSERT_TRUE(!task_->pauseRequested());
-  });
-
-  taskResumeAllowedWait.await([&]() { return taskResumeAllowed.load(); });
-  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
-  Task::resume(task_->shared_from_this());
-
-  taskThread_.join();
-  observeThread.join();
-
-  ASSERT_EQ(task_->numTotalDrivers(), 1);
-  ASSERT_EQ(task_->numFinishedDrivers(), 1);
-  ASSERT_EQ(task_->numRunningDrivers(), 0);
-}
-
-DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFutureNeverFulfilled) {
-  // Test for Task::pauseRequested future to throw when task is never resumed.
-  testPause();
-  folly::EventCount taskAbortAllowedWait;
-  std::atomic<bool> taskAbortAllowed{false};
-  std::thread observeThread([&]() {
-    ContinueFuture future = ContinueFuture::makeEmpty();
-    bool requested = task_->pauseRequested(&future);
-    ASSERT_TRUE(requested);
-    taskAbortAllowed = true;
-    taskAbortAllowedWait.notifyAll();
-    future.wait();
-    ASSERT_TRUE(future.hasException());
-    ASSERT_EQ(
-        std::string(future.result().exception().what()),
-        "folly::BrokenPromise: Broken promise for type name `folly::Unit`");
-  });
-  taskAbortAllowedWait.await([&]() { return taskAbortAllowed.load(); });
-  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
-  ASSERT_EQ(task_->numTotalDrivers(), 1);
-  ASSERT_EQ(task_->numFinishedDrivers(), 0);
-  ASSERT_EQ(task_->numRunningDrivers(), 1);
-  std::vector<Driver*> drivers{};
-  task_->testingVisitDrivers(
-      [&](Driver* driver) -> void { drivers.push_back(driver); });
-  for (const auto& driver : drivers) {
-    Task::removeDriver(task_->shared_from_this(), driver);
-  }
-  ASSERT_EQ(task_->numTotalDrivers(), 1);
-  ASSERT_EQ(task_->numFinishedDrivers(), 1);
-  ASSERT_EQ(task_->numRunningDrivers(), 0);
-  cursor_.reset();
-  taskThread_.join();
-  observeThread.join();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {

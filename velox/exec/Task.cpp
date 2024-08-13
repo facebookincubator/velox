@@ -896,14 +896,21 @@ void Task::initializePartitionOutput() {
 
 // static
 void Task::resume(std::shared_ptr<Task> self) {
-  std::vector<std::shared_ptr<Driver>> offThreadDrivers;
   {
+    std::vector<std::shared_ptr<Driver>> offThreadDrivers;
     std::vector<ContinuePromise> resumePromises;
-    auto guard = folly::makeGuard([&]() {
+    SCOPE_EXIT {
+      // Get the stats and free the resources of Drivers that were not on
+      // thread.
+      for (auto& driver : offThreadDrivers) {
+        self->driversClosedByTask_.emplace_back(driver);
+        driver->closeByTask();
+      }
+      // Fulfill resume futures.
       for (auto& promise : resumePromises) {
         promise.setValue();
       }
-    });
+    };
     std::lock_guard<std::timed_mutex> l(self->mutex_);
     // Setting pause requested must be atomic with the resuming so that
     // suspended sections do not go back on thread during resume.
@@ -964,12 +971,6 @@ void Task::resume(std::shared_ptr<Task> self) {
       }
     }
     resumePromises.swap(self->resumePromises_);
-  }
-
-  // Get the stats and free the resources of Drivers that were not on thread.
-  for (auto& driver : offThreadDrivers) {
-    self->driversClosedByTask_.emplace_back(driver);
-    driver->closeByTask();
   }
 }
 
@@ -2749,16 +2750,15 @@ ContinueFuture Task::requestPause() {
 
 bool Task::pauseRequested(ContinueFuture* future) {
   if (FOLLY_LIKELY(future == nullptr)) {
-    // Once 'pauseRequested_' is set, it will not be cleared until
-    // task::resume(). It is therefore OK to read it without a mutex
-    // from a thread that this flag concerns.
+    // It is ok to return 'pauseRequested_' without a mutex lock if user doesn't
+    // want to wait for task to resume.
     return pauseRequested_;
   }
 
   std::lock_guard<std::timed_mutex> l(mutex_);
   if (!pauseRequested_) {
-    VELOX_CHECK(resumePromises_.empty())
-    *future = ContinueFuture::makeEmpty();
+    VELOX_CHECK(resumePromises_.empty());
+    VELOX_CHECK(!future->valid());
     return false;
   }
   resumePromises_.emplace_back("Task::isPaused");

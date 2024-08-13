@@ -366,16 +366,15 @@ RowVectorPtr Driver::next(ContinueFuture* future) {
   const auto stop = runInternal(self, blockingState, result);
 
   if (blockingState != nullptr) {
-    VELOX_DCHECK_NULL(result);
+    VELOX_CHECK_NULL(result);
     *future = blockingState->future();
     return nullptr;
   }
 
   if (stop == StopReason::kPause) {
-    VELOX_DCHECK_NULL(result);
-    if (!task()->pauseRequested(future)) {
-      *future = ContinueFuture::makeEmpty();
-    }
+    VELOX_CHECK_NULL(result);
+    const auto paused = task()->pauseRequested(future);
+    VELOX_CHECK_EQ(paused, future->valid());
     return nullptr;
   }
 
