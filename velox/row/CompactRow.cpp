@@ -21,12 +21,12 @@ namespace {
 constexpr size_t kSizeBytes = sizeof(int32_t);
 
 void writeInt32(char* buffer, int32_t n) {
-  memcpy(buffer, &n, sizeof(int32_t));
+  memcpy(buffer, &n, kSizeBytes);
 }
 
 int32_t readInt32(const char* buffer) {
   int32_t n;
-  memcpy(&n, buffer, sizeof(int32_t));
+  memcpy(&n, buffer, kSizeBytes);
   return n;
 }
 
@@ -60,11 +60,11 @@ template <>
 void serializeTyped<TypeKind::UNKNOWN>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
-    DecodedVector& decoded,
-    size_t valueBytes,
+    DecodedVector& /* unused */,
+    size_t /* unused */,
     const raw_vector<uint8_t*>& nulls,
-    char* buffer,
-    std::vector<size_t>& offsets) {
+    char* /* unused */,
+    std::vector<size_t>& /* unused */) {
   for (auto i = 0; i < rows.size(); ++i) {
     bits::setBit(nulls[i], childIdx, true);
   }

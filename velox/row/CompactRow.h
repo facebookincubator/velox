@@ -118,7 +118,7 @@ class CompactRow {
   /// Serializes struct value to buffer. Value must not be null.
   int32_t serializeRow(vector_size_t index, char* buffer);
 
-  /// Serializes struct value to buffer. Value must not be null.
+  // Serializes struct value to buffer. Value must not be null.
   void serializeRow(
       const IndexRange& indexRange,
       char* buffer,
