@@ -28,10 +28,10 @@
 }
 
 %token               LPAREN RPAREN COMMA ARRAY MAP ROW FUNCTION
-%token <std::string> WORD VARIABLE QUOTED_ID DECIMAL
+%token <std::string> WORD VARIABLE QUOTED_ID DECIMAL VARCHAR
 %token YYEOF         0
 
-%nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type row_type array_type map_type
+%nterm <std::shared_ptr<exec::TypeSignature>> special_type function_type decimal_type varchar_type row_type array_type map_type
 %nterm <std::shared_ptr<exec::TypeSignature>> type named_type
 %nterm <std::vector<exec::TypeSignature>> type_list type_list_opt_names
 %nterm <std::vector<std::string>> type_with_spaces
@@ -52,6 +52,7 @@ special_type : array_type                  { $$ = $1; }
              | row_type                    { $$ = $1; }
              | function_type               { $$ = $1; }
              | decimal_type                { $$ = $1; }
+             | varchar_type                { $$ = $1; }
              ;
 
 named_type : QUOTED_ID type          { $1.erase(0, 1); $1.pop_back(); $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($2->baseName(), $2->parameters(), $1)); }  // Remove the quotes.
@@ -64,6 +65,10 @@ type_with_spaces : type_with_spaces WORD { $1.push_back($2); $$ = std::move($1);
                  ;
 
 decimal_type : DECIMAL LPAREN WORD COMMA WORD RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { exec::TypeSignature($3, {}), exec::TypeSignature($5, {}) })); }
+             ;
+
+varchar_type : VARCHAR { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { } )); }
+             | VARCHAR LPAREN WORD RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { exec::TypeSignature($3, {}) } )); }
              ;
 
 type_list : type                   { $$.push_back(*($1)); }
