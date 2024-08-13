@@ -12,30 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
-  velox_dwio_dwrf_common
-  ByteRLE.cpp
-  Common.cpp
-  Config.cpp
-  Decryption.cpp
-  Encryption.cpp
-  EncryptionSpecification.cpp
-  FileMetadata.cpp
-  IntEncoder.cpp
-  RLEv1.cpp
-  RLEv2.cpp
-  Statistics.cpp)
+# These files wrap the generated source and header files from
+# velox_dwio_dwrf_proto with pragamas to disable certain warnings TODO: transfer
+# disabling the warnings to CMake/Buck
+velox_add_library(velox_dwio_dwrf_proto orc-proto-wrapper.cpp
+                  dwrf-proto-wrapper.cpp)
+velox_link_libraries(velox_dwio_dwrf_proto protobuf::libprotobuf)
+velox_include_directories(velox_dwio_dwrf_proto PUBLIC ${PROJECT_BINARY_DIR})
 
-velox_link_libraries(
-  velox_dwio_dwrf_common
-  velox_common_base
-  velox_common_compression
-  velox_common_config
-  velox_dwio_common
-  velox_dwio_common_compression
-  velox_dwio_dwrf_proto
-  velox_caching
-  Snappy::snappy
-  zstd::zstd)
-
-add_subdirectory(wrap)
+if(NOT VELOX_MONO_LIBRARY)
+  add_dependencies(velox_dwio_dwrf_proto dwio_proto)
+endif()
