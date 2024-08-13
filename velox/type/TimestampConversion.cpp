@@ -219,6 +219,7 @@ bool tryParseDateString(
   int32_t month = -1;
   int32_t year = 0;
   bool yearneg = false;
+  int signSize = 0;
   int sep;
   if (mode != ParseMode::kIso8601) {
     skipSpaces(buf, len, pos);
@@ -228,12 +229,14 @@ bool tryParseDateString(
     return false;
   }
   if (buf[pos] == '-') {
+    signSize = 1;
     yearneg = true;
     pos++;
     if (pos >= len) {
       return false;
     }
   } else if (buf[pos] == '+') {
+    signSize = 1;
     pos++;
     if (pos >= len) {
       return false;
@@ -249,6 +252,10 @@ bool tryParseDateString(
     if (year > kMaxYear) {
       break;
     }
+  }
+  // Spark digits of year must >= 4.
+  if (mode == ParseMode::kSparkCast && pos - signSize < 4) {
+    return false;
   }
   if (yearneg) {
     year = checkedNegate(year);
