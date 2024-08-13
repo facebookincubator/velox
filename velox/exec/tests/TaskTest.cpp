@@ -1492,50 +1492,24 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
 
 DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFutureAfterTaskTerminated) {
   testPause();
-  folly::EventCount taskCancelAllowedWait;
-  std::atomic<bool> taskCancelAllowed{false};
-  folly::EventCount taskCanceledWait;
-  std::atomic<bool> taskCanceled{false};
-  folly::EventCount taskResumeAllowedWait;
-  std::atomic<bool> taskResumeAllowed{false};
-  folly::EventCount taskResumedWait;
-  std::atomic<bool> taskResumed{false};
-  std::thread observeThread([&]() {
-    ContinueFuture future = ContinueFuture::makeEmpty();
-    const bool requested = task_->pauseRequested(&future);
-    ASSERT_TRUE(requested);
-    taskCancelAllowed = true;
-    taskCancelAllowedWait.notifyAll();
-    taskCanceledWait.await([&]() { return taskCanceled.load(); });
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
-    ASSERT_FALSE(future.isReady());
-    taskResumeAllowed = true;
-    taskResumeAllowedWait.notifyAll();
-    taskResumedWait.await([&]() { return taskResumed.load(); });
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
-    ASSERT_TRUE(future.isReady());
-    future.wait();
-    ASSERT_FALSE(task_->pauseRequested());
-  });
-  taskCancelAllowedWait.await([&]() { return taskCancelAllowed.load(); });
-  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  const bool paused = task_->pauseRequested(&future);
+  ASSERT_TRUE(paused);
   ASSERT_EQ(task_->numTotalDrivers(), 1);
   ASSERT_EQ(task_->numFinishedDrivers(), 0);
   ASSERT_EQ(task_->numRunningDrivers(), 1);
-  std::vector<Driver*> drivers{};
   task_->requestCancel().wait();
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
   ASSERT_EQ(task_->numTotalDrivers(), 1);
   ASSERT_EQ(task_->numFinishedDrivers(), 0);
   ASSERT_EQ(task_->numRunningDrivers(), 0);
-  taskCanceled = true;
-  taskCanceledWait.notifyAll();
-  taskResumeAllowedWait.await([&]() { return taskResumeAllowed.load(); });
-  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  ASSERT_FALSE(future.isReady());
   Task::resume(task_->shared_from_this());
-  taskResumed = true;
-  taskResumedWait.notifyAll();
+  std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  ASSERT_TRUE(future.isReady());
+  future.wait();
+  ASSERT_FALSE(task_->pauseRequested());
   taskThread_.join();
-  observeThread.join();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
