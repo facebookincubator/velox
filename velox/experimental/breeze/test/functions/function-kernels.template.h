@@ -40,6 +40,7 @@
 #include "functions/load.h"
 #include "functions/reduce.h"
 #include "functions/scan.h"
+#include "functions/sort.h"
 #include "functions/store.h"
 #include "platforms/platform.h"
 
@@ -201,6 +202,62 @@ void BlockScan(const T* in, U* out, int num_items) {
           breeze::utils::make_slice<breeze::utils::SHARED>(scratch), num_items);
   breeze::functions::BlockStore<BLOCK_THREADS, ITEMS_PER_THREAD>(
       p, breeze::utils::make_slice(sums),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, int RADIX_BITS, typename T>
+PLATFORM("p")
+SHARED_MEM(
+    "typename breeze::functions::BlockRadixRank<PlatformT, ITEMS_PER_THREAD, RADIX_BITS>::Scratch",
+    "scratch")
+void BlockRadixRank(const T* in, int* out, int num_items) {
+  T items[ITEMS_PER_THREAD];
+  // initialize invalid items to max value
+  for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
+    items[i] = static_cast<T>((1 << RADIX_BITS) - 1);
+  }
+  breeze::functions::BlockLoad<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+      breeze::utils::make_slice<breeze::utils::THREAD,
+                                breeze::utils::WARP_STRIPED>(items),
+      num_items);
+  int ranks[ITEMS_PER_THREAD];
+  breeze::functions::BlockRadixRank<PlatformT, ITEMS_PER_THREAD, RADIX_BITS>::
+      Rank(p,
+           breeze::utils::make_slice<breeze::utils::THREAD,
+                                     breeze::utils::WARP_STRIPED>(items),
+           breeze::utils::make_slice<breeze::utils::THREAD,
+                                     breeze::utils::WARP_STRIPED>(ranks),
+           breeze::utils::make_slice<breeze::utils::SHARED>(scratch));
+  breeze::functions::BlockStore<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p,
+      breeze::utils::make_slice<breeze::utils::THREAD,
+                                breeze::utils::WARP_STRIPED>(ranks),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, int RADIX_BITS, typename T>
+PLATFORM("p")
+SHARED_MEM(
+    "typename breeze::functions::BlockRadixSort<PlatformT, ITEMS_PER_THREAD, RADIX_BITS, T>::Scratch",
+    "scratch")
+void BlockRadixSort(const T* in, T* out, int num_items) {
+  T items[ITEMS_PER_THREAD];
+  breeze::functions::BlockLoad<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+      breeze::utils::make_slice<breeze::utils::THREAD,
+                                breeze::utils::WARP_STRIPED>(items),
+      num_items);
+  breeze::functions::
+      BlockRadixSort<PlatformT, ITEMS_PER_THREAD, RADIX_BITS, T>::Sort(
+          p,
+          breeze::utils::make_slice<breeze::utils::THREAD,
+                                    breeze::utils::WARP_STRIPED>(items),
+          breeze::utils::make_slice<breeze::utils::SHARED>(scratch), num_items);
+  breeze::functions::BlockStore<BLOCK_THREADS, ITEMS_PER_THREAD>(
+      p,
+      breeze::utils::make_slice<breeze::utils::THREAD,
+                                breeze::utils::WARP_STRIPED>(items),
       breeze::utils::make_slice<breeze::utils::GLOBAL>(out), num_items);
 }
 

@@ -221,3 +221,29 @@ GEN_REDUCE(max)
   GEN_SCAN_T(O, float, 64, 1)
 
 GEN_SCAN(add)
+
+#define GEN_RADIX_RANK(T, BT, IPT, RB)                                 \
+  kernel void NAME(radix_rank, T, BT, IPT##x##RB)(                     \
+      const device T *in [[buffer(0)]], device int *out [[buffer(1)]], \
+      const device int *num_items [[buffer(2)]],                       \
+      uint thread_idx [[thread_index_in_threadgroup]]) {               \
+    MetalPlatform<BT, WARP_THREADS> p{thread_idx, 0};                  \
+    threadgroup BlockRadixRank<decltype(p), IPT, RB>::Scratch scratch; \
+    block_radix_rank<BT, IPT, RB>(p, in, out, &scratch, *num_items);   \
+  }
+
+GEN_RADIX_RANK(int, 64, 2, 6)
+GEN_RADIX_RANK(uint, 64, 2, 6)
+
+#define GEN_RADIX_SORT(T, BT, IPT, RB)                                    \
+  kernel void NAME(radix_sort, T, BT, IPT##x##RB)(                        \
+      const device T *in [[buffer(0)]], device T *out [[buffer(1)]],      \
+      const device int *num_items [[buffer(2)]],                          \
+      uint thread_idx [[thread_index_in_threadgroup]]) {                  \
+    MetalPlatform<BT, WARP_THREADS> p{thread_idx, 0};                     \
+    threadgroup BlockRadixSort<decltype(p), IPT, RB, T>::Scratch scratch; \
+    block_radix_sort<BT, IPT, RB>(p, in, out, &scratch, *num_items);      \
+  }
+
+GEN_RADIX_SORT(int, 64, 2, 6)
+GEN_RADIX_SORT(uint, 64, 2, 6)

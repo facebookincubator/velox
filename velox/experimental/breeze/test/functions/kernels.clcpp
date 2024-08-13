@@ -190,3 +190,25 @@ GEN_REDUCE(max)
   GEN_SCAN_T(O, float, 64, 1)
 
 GEN_SCAN(add)
+
+#define GEN_RADIX_RANK(T, BT, IPT, RB)                                    \
+  kernel void NAME(radix_rank, T, BT, IPT##x##RB)(                        \
+      const global T *in, global int *out, const global int *num_items) { \
+    using PlatformT = OpenCLPlatform<BT, WARP_THREADS>;                   \
+    local BlockRadixRank<PlatformT, IPT, RB>::Scratch scratch;            \
+    block_radix_rank<BT, IPT, RB>(in, out, &scratch, *num_items);         \
+  }
+
+GEN_RADIX_RANK(int, 64, 2, 6)
+GEN_RADIX_RANK(uint, 64, 2, 6)
+
+#define GEN_RADIX_SORT(T, BT, IPT, RB)                                  \
+  kernel void NAME(radix_sort, T, BT, IPT##x##RB)(                      \
+      const global T *in, global T *out, const global int *num_items) { \
+    using PlatformT = OpenCLPlatform<BT, WARP_THREADS>;                 \
+    local BlockRadixSort<PlatformT, IPT, RB, T>::Scratch scratch;       \
+    block_radix_sort<BT, IPT, RB>(in, out, &scratch, *num_items);       \
+  }
+
+GEN_RADIX_SORT(int, 64, 2, 6)
+GEN_RADIX_SORT(uint, 64, 2, 6)
