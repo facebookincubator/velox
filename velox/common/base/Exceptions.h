@@ -174,7 +174,7 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
             decltype(message)>::type>(veloxCheckFailArgs, message);      \
   }                                                                      \
   static_assert(                                                         \
-      true, "") // The assertion is needed to force macro calls end with `;`.
+      true, "") // The assertion is needed to force macro calls to end with `;`.
 
 #define _VELOX_CHECK_AND_THROW_IMPL(                                           \
     expr, exprStr, exception, errorSource, errorCode, isRetriable, ...)        \
@@ -183,7 +183,7 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
         exception, exprStr, errorSource, errorCode, isRetriable, __VA_ARGS__); \
   }                                                                            \
   static_assert(                                                               \
-      true, "") // The assertion is needed to force macro calls end with `;`.
+      true, "") // The assertion is needed to force macro calls to end with `;`.
 
 #define _VELOX_THROW(exception, ...) \
   _VELOX_THROW_IMPL(exception, "", ##__VA_ARGS__)
@@ -229,7 +229,7 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
         expr2);                                                  \
   }                                                              \
   static_assert(                                                 \
-      true, "") // The assertion is needed to force macro calls end with `;`.
+      true, "") // The assertion is needed to force macro calls to end with `;`.
 
 #define _VELOX_CHECK_OP(expr1, expr2, op, ...) \
   _VELOX_CHECK_OP_HELPER(_VELOX_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
