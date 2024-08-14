@@ -42,8 +42,7 @@ unset(BUILD_SHARED_LIBS)
 add_dependencies(glog gflags::gflags)
 
 # Required for folly
-set(glog_INCLUDE_DIR ${glog_BINARY_DIR})
-set(glog_LIBRARY ${glog_BINARY_DIR}/libglog$<$<CONFIG:Debug>:d>.a)
+set(glog_LIBRARY glog::glog)
 
 # These headers are missing from the include dir but adding the src dir causes
 # issues with folly so we just copy it to the include dir
