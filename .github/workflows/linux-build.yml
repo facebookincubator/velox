@@ -59,7 +59,6 @@ jobs:
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
-      GTest_SOURCE: BUNDLED # remove once images have it #10670
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
       Arrow_SOURCE: AUTO
@@ -144,6 +143,7 @@ jobs:
     steps:
 
       - name: Get Ccache Stash
+        if: false
         uses: assignUser/stash/restore@v1
         with:
           path: '${{ env.CCACHE_DIR }}'
