@@ -29,8 +29,7 @@ FetchContent_Declare(
   URL_HASH ${VELOX_GLOG_BUILD_SHA256_CHECKSUM}
   PATCH_COMMAND
     git apply ${CMAKE_CURRENT_LIST_DIR}/glog/glog-no-export.patch && git apply
-    ${CMAKE_CURRENT_LIST_DIR}/glog/glog-config.patch OVERRIDE_FIND_PACKAGE
-    SYSTEM EXCLUDE_FROM_ALL)
+    ${CMAKE_CURRENT_LIST_DIR}/glog/glog-config.patch SYSTEM EXCLUDE_FROM_ALL)
 
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 set(WITH_UNWIND OFF)
@@ -41,11 +40,18 @@ unset(BUILD_TESTING)
 unset(BUILD_SHARED_LIBS)
 add_dependencies(glog gflags::gflags)
 
-# Required for folly
-set(glog_LIBRARY glog::glog)
+# We can't use OVERRIDE_FIND_PACKAGE for folly or use glog::glog in glog_LIBRARY
+# because those include the glog source dir. This dir contains an internal
+# 'demangle.h' which causes issues with folly because it looks for such a file
+# in a feature guard. The existence of the file turns on the feature but the
+# header is only incidentally named the same and leads to compilation errors.
+set(glog_INCLUDE_DIR ${glog_BINARY_DIR})
+set(glog_LIBRARY
+    ${glog_BINARY_DIR}/libglog$<$<CONFIG:Debug>:d>.$<IF:$<BOOL:${VELOX_BUILD_SHARED}>,so,a>
+)
 
 # These headers are missing from the include dir but adding the src dir causes
-# issues with folly so we just copy it to the include dir
+# issues with folly (see above) so we just copy it to the include dir
 file(COPY ${glog_SOURCE_DIR}/src/glog/platform.h
      DESTINATION ${glog_BINARY_DIR}/glog)
 file(COPY ${glog_SOURCE_DIR}/src/glog/log_severity.h
