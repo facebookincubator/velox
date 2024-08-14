@@ -61,7 +61,6 @@ add_test(velox_wave_exec_test velox_wave_exec_test)
 
 if(${VELOX_ENABLE_BENCHMARKS})
   add_executable(velox_wave_benchmark WaveBenchmark.cpp)
-
   target_link_libraries(
     velox_wave_benchmark
     velox_query_benchmark
@@ -102,5 +101,6 @@ if(${VELOX_ENABLE_BENCHMARKS})
     gflags::gflags
     glog::glog
     fmt::fmt
-    ${FILESYSTEM})
+    ${FILESYSTEM}
+    CUDA::cudart)
 endif()

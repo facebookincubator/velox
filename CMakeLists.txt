@@ -381,7 +381,8 @@ if(${VELOX_ENABLE_GPU})
   if(CMAKE_BUILD_TYPE MATCHES Debug)
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
-  include_directories("${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}")
+  # Creates the imported targets 'CUDA::...'
+  include(FindCUDAToolkit)
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
