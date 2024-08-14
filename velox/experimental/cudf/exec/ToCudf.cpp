@@ -18,7 +18,9 @@
 #include <cuda.h>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include "velox/exec/Driver.h"
-#include "velox/exec/Operator.h" // Compilation fails in Driver.h if Operator.h isn't included first!
+#include "velox/exec/HashBuild.h"
+#include "velox/exec/HashProbe.h"
+#include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 
 #include <iostream>
@@ -39,61 +41,42 @@ bool CompileState::compile() {
     std::cout << "  Plan node: ID " << node->id() << ": " << node->toString()
               << std::endl;
   }
-  return false;
 
-  int32_t first = 0;
-  int32_t operatorIndex = 0;
-  int32_t nodeIndex = 0;
-  RowTypePtr outputType;
   // Make sure operator states are initialized.  We will need to inspect some of
   // them during the transformation.
   driver_.initializeOperators();
-  /*
-  for (; operatorIndex < operators.size(); ++operatorIndex) {
-    if (!addOperator(operators[operatorIndex], nodeIndex, outputType)) {
-      break;
+
+  bool replacements_made = false;
+  auto ctx = driver_.driverCtx();
+  // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
+  // CudfHashJoinProbe operators.
+  for (int32_t operatorIndex = 0; operatorIndex < operators.size();
+       ++operatorIndex) {
+    std::vector<std::unique_ptr<exec::Operator>> replace_op;
+
+    exec::Operator* oper = operators[operatorIndex];
+    VELOX_CHECK(oper);
+    if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
+      auto plan_node_id = joinBuildOp->planNodeId();
+      auto id = joinBuildOp->operatorId();
+      replace_op.push_back(
+          std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node_id));
+      replace_op[0]->initialize();
+      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
+          driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+      replacements_made = true;
+    } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
+      auto plan_node_id = joinProbeOp->planNodeId();
+      auto id = joinProbeOp->operatorId();
+      replace_op.push_back(
+          std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node_id));
+      replace_op[0]->initialize();
+      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
+          driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+      replacements_made = true;
     }
-    ++nodeIndex;
-    auto& identity = operators[operatorIndex]->identityProjections();
-    for (auto i = 0; i < outputType->size(); ++i) {
-      Value value = Value(toSubfield(outputType->nameOf(i)));
-      if (isProjectedThrough(identity, i)) {
-        continue;
-      }
-      auto operand = operators_.back()->defines(value);
-      definedBy_[value] = operand;
-    }
   }
-  if (operators_.empty()) {
-    return false;
-  }
-  for (auto& op : operators_) {
-    op->finalize(*this);
-  }
-  std::vector<OperandId> resultOrder;
-  for (auto i = 0; i < outputType->size(); ++i) {
-    auto operand = findCurrentValue(Value(toSubfield(outputType->nameOf(i))));
-    resultOrder.push_back(operand->id);
-  }
-  auto waveOpUnique = std::make_unique<WaveDriver>(
-      driver_.driverCtx(),
-      outputType,
-      operators[first]->planNodeId(),
-      operators[first]->operatorId(),
-      std::move(arena_),
-      std::move(operators_),
-      std::move(resultOrder),
-      std::move(subfields_),
-      std::move(operands_));
-  auto waveOp = waveOpUnique.get();
-  waveOp->initialize();
-  std::vector<std::unique_ptr<exec::Operator>> added;
-  added.push_back(std::move(waveOpUnique));
-  auto replaced = driverFactory_.replaceOperators(
-      driver_, first, operatorIndex, std::move(added));
-  waveOp->setReplaced(std::move(replaced));
-  return true;
-  */
+  return replacements_made;
 }
 
 bool cudfDriverAdapter(

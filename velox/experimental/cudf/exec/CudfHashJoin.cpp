@@ -33,33 +33,6 @@
 
 namespace facebook::velox::cudf_velox {
 
-CudfHashJoinNode::CudfHashJoinNode(
-    const core::PlanNodeId& id,
-    core::JoinType joinType,
-    bool nullAware,
-    const std::vector<core::FieldAccessTypedExprPtr>& leftKeys,
-    const std::vector<core::FieldAccessTypedExprPtr>& rightKeys,
-    core::TypedExprPtr filter,
-    core::PlanNodePtr left,
-    core::PlanNodePtr right,
-    RowTypePtr outputType)
-    : AbstractJoinNode(
-          id,
-          joinType,
-          leftKeys,
-          rightKeys,
-          std::move(filter),
-          std::move(left),
-          std::move(right),
-          std::move(outputType)) {
-  std::cout << "CudfHashJoinNode constructor" << std::endl;
-  // TODO: Check for supported inputs with VELOX_USER_CHECK
-}
-
-std::string_view CudfHashJoinNode::name() const {
-  return "CudfHashJoin";
-}
-
 void CudfHashJoinBridge::setHashTable(
     std::optional<CudfHashJoinBridge::hash_type> hashObject) {
   std::cout << "Calling CudfHashJoinBridge::setHashTable" << std::endl;
@@ -96,16 +69,22 @@ std::optional<CudfHashJoinBridge::hash_type> CudfHashJoinBridge::hashOrFuture(
 CudfHashJoinBuild::CudfHashJoinBuild(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<const CudfHashJoinNode> joinNode)
+    const core::PlanNodeId& joinNodeId)
     // TODO check outputType should be set or not?
     : exec::Operator(
           driverCtx,
           nullptr, // joinNode->sources(),
           operatorId,
-          joinNode->id(),
+          joinNodeId,
           "CudfHashJoinBuild") {
   std::cout << "CudfHashJoinBuild constructor" << std::endl;
 }
+
+CudfHashJoinBuild::CudfHashJoinBuild(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    std::shared_ptr<const core::HashJoinNode> joinNode)
+    : CudfHashJoinBuild(operatorId, driverCtx, joinNode->id()) {}
 
 void CudfHashJoinBuild::addInput(RowVectorPtr input) {
   std::cout << "Calling CudfHashJoinBuild::addInput" << std::endl;
@@ -192,15 +171,21 @@ bool CudfHashJoinBuild::isFinished() {
 CudfHashJoinProbe::CudfHashJoinProbe(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<const CudfHashJoinNode> joinNode)
+    const core::PlanNodeId& joinNodeId)
     : exec::Operator(
           driverCtx,
           nullptr, // joinNode->sources(),
           operatorId,
-          joinNode->id(),
+          joinNodeId,
           "CudfHashJoinProbe") {
   std::cout << "CudfHashJoinProbe constructor" << std::endl;
 }
+
+CudfHashJoinProbe::CudfHashJoinProbe(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    std::shared_ptr<const core::HashJoinNode> joinNode)
+    : CudfHashJoinProbe(operatorId, driverCtx, joinNode->id()) {}
 
 bool CudfHashJoinProbe::needsInput() const {
   std::cout << "Calling CudfHashJoinProbe::needsInput" << std::endl;
@@ -302,7 +287,8 @@ std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
     int32_t id,
     const core::PlanNodePtr& node) {
   std::cout << "Calling CudfHashJoinBridgeTranslator::toOperator" << std::endl;
-  if (auto joinNode = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+  if (auto joinNode =
+          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
     return std::make_unique<CudfHashJoinProbe>(id, ctx, joinNode);
   }
   return nullptr;
@@ -312,7 +298,8 @@ std::unique_ptr<exec::JoinBridge> CudfHashJoinBridgeTranslator::toJoinBridge(
     const core::PlanNodePtr& node) {
   std::cout << "Calling CudfHashJoinBridgeTranslator::toJoinBridge"
             << std::endl;
-  if (auto joinNode = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+  if (auto joinNode =
+          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
     auto joinBridge = std::make_unique<CudfHashJoinBridge>();
     return joinBridge;
   }
@@ -323,7 +310,8 @@ exec::OperatorSupplier CudfHashJoinBridgeTranslator::toOperatorSupplier(
     const core::PlanNodePtr& node) {
   std::cout << "Calling CudfHashJoinBridgeTranslator::toOperatorSupplier"
             << std::endl;
-  if (auto joinNode = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+  if (auto joinNode =
+          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
     return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
       return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, joinNode);
     };

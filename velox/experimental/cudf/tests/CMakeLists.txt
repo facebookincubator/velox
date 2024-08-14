@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(utils)
-
 add_executable(velox_cudf_hash_test HashJoinTest.cpp Main.cpp)
 
 add_test(
@@ -27,7 +25,6 @@ target_link_libraries(
   velox_cudf_hash_test
   velox_aggregates
   velox_cudf_exec
-  velox_cudf_test_lib
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
