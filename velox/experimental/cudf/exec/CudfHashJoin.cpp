@@ -287,7 +287,8 @@ std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
     int32_t id,
     const core::PlanNodePtr& node) {
   std::cout << "Calling CudfHashJoinBridgeTranslator::toOperator" << std::endl;
-  if (auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
+  if (auto joinNode =
+          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
     return std::make_unique<CudfHashJoinProbe>(id, ctx, joinNode);
   }
   return nullptr;
@@ -297,7 +298,8 @@ std::unique_ptr<exec::JoinBridge> CudfHashJoinBridgeTranslator::toJoinBridge(
     const core::PlanNodePtr& node) {
   std::cout << "Calling CudfHashJoinBridgeTranslator::toJoinBridge"
             << std::endl;
-  if (auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
+  if (auto joinNode =
+          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
     auto joinBridge = std::make_unique<CudfHashJoinBridge>();
     return joinBridge;
   }
@@ -308,7 +310,8 @@ exec::OperatorSupplier CudfHashJoinBridgeTranslator::toOperatorSupplier(
     const core::PlanNodePtr& node) {
   std::cout << "Calling CudfHashJoinBridgeTranslator::toOperatorSupplier"
             << std::endl;
-  if (auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
+  if (auto joinNode =
+          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
     return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
       return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, joinNode);
     };

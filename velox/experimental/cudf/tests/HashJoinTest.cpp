@@ -3732,9 +3732,7 @@ TEST_F(HashJoinTest, semiProjectWithFilter) {
         .hashJoin(
             {"t0"},
             {"u0"},
-            PlanBuilder(planNodeIdGenerator)
-                .values(buildVectors)
-                .planNode(),
+            PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
             filter,
             {"t0", "t1", "match"},
             core::JoinType::kLeftSemiProject,
@@ -5150,24 +5148,23 @@ TEST_F(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId joinNodeId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto op = PlanBuilder(planNodeIdGenerator)
-                .startTableScan()
-                .outputType(outputType)
-                .assignments(assignments)
-                .endTableScan()
-                .capturePlanNodeId(probeScanId)
-                .hashJoin(
-                    {"p1"},
-                    {"b0"},
-                    PlanBuilder(planNodeIdGenerator)
-                        .values(buildVectors)
-                        .planNode(),
-                    "",
-                    {"p0"},
-                    core::JoinType::kInner)
-                .capturePlanNodeId(joinNodeId)
-                .project({"p0"})
-                .planNode();
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(outputType)
+          .assignments(assignments)
+          .endTableScan()
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"p1"},
+              {"b0"},
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              "",
+              {"p0"},
+              core::JoinType::kInner)
+          .capturePlanNodeId(joinNodeId)
+          .project({"p0"})
+          .planNode();
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "3")
@@ -5419,23 +5416,22 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
 
   core::PlanNodeId probeScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto op = PlanBuilder(planNodeIdGenerator)
-                .startTableScan()
-                .outputType(outputType)
-                .assignments(assignments)
-                .endTableScan()
-                .capturePlanNodeId(probeScanId)
-                .hashJoin(
-                    {"n1_1"},
-                    {"c0"},
-                    PlanBuilder(planNodeIdGenerator)
-                        .values(buildVectors)
-                        .planNode(),
-                    "",
-                    {"c0"},
-                    core::JoinType::kInner)
-                .project({"c0"})
-                .planNode();
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .startTableScan()
+          .outputType(outputType)
+          .assignments(assignments)
+          .endTableScan()
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              {"n1_1"},
+              {"c0"},
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              "",
+              {"c0"},
+              core::JoinType::kInner)
+          .project({"c0"})
+          .planNode();
   SplitInput splits = {{probeScanId, {exec::Split(split)}}};
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -6473,19 +6469,18 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
     // boilerplate code to re-implement every method from the base PlanBuilder
     // and cast to the derived class type. We need a derived class
     // PlanBuilder& at the point that we call the hashJoin.
-    auto plan =
-        static_cast<PlanBuilder&>(
-            PlanBuilder(planNodeIdGenerator).values(probeVectors, true))
-            .hashJoin(
-                {"t_k1"},
-                {"u_k1"},
-                PlanBuilder(planNodeIdGenerator)
-                    .values(buildVectors, true)
-                    .planNode(),
-                filter,
-                {"t_k1", "u_k1"},
-                core::JoinType::kLeft)
-            .planNode();
+    auto plan = static_cast<PlanBuilder&>(
+                    PlanBuilder(planNodeIdGenerator).values(probeVectors, true))
+                    .hashJoin(
+                        {"t_k1"},
+                        {"u_k1"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors, true)
+                            .planNode(),
+                        filter,
+                        {"t_k1", "u_k1"},
+                        core::JoinType::kLeft)
+                    .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(plan)

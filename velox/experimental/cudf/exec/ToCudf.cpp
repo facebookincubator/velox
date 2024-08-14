@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include <cuda.h>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include "velox/exec/Driver.h"
@@ -21,7 +22,6 @@
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include <iostream>
 
@@ -56,21 +56,20 @@ bool CompileState::compile() {
 
     exec::Operator* oper = operators[operatorIndex];
     VELOX_CHECK(oper);
-    if (auto joinBuildOp =
-            dynamic_cast<exec::HashBuild*>(oper)) {
+    if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
       auto plan_node_id = joinBuildOp->planNodeId();
       auto id = joinBuildOp->operatorId();
-      replace_op.push_back(std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node_id));
+      replace_op.push_back(
+          std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node_id));
       replace_op[0]->initialize();
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
       replacements_made = true;
-    } else if (
-        auto joinProbeOp =
-            dynamic_cast<exec::HashProbe*>(oper)) {
+    } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
       auto plan_node_id = joinProbeOp->planNodeId();
       auto id = joinProbeOp->operatorId();
-      replace_op.push_back(std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node_id));
+      replace_op.push_back(
+          std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node_id));
       replace_op[0]->initialize();
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
