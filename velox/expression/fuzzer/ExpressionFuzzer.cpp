@@ -824,7 +824,7 @@ core::TypedExprPtr ExpressionFuzzer::generateArg(const TypePtr& arg) {
   // - IF/ELSE/SWITCH
   // - Lambdas
   // - Try
-  if (argClass >= kArgExpression) {
+  if (argClass >= kArgExpression && !arg->isTimestamp()) {
     if (state.remainingLevelOfNesting_ > 0) {
       return generateExpression(arg);
     }

@@ -27,7 +27,7 @@ namespace facebook {
 namespace velox {
 
 // Up to # of elements to show as debug string for `toString()`.
-constexpr vector_size_t kMaxElementsInToString = 5;
+constexpr vector_size_t kMaxElementsInToString = 100;
 
 std::string stringifyTruncatedElementList(
     vector_size_t start,

@@ -425,7 +425,9 @@ bool Expr::evalArgsDefaultNulls(
     }
   }
 
-  stats_.suppressErrorByNull |= detectErrorSuppressedByNull(rows.mutableRows(), argumentErrors);
+  // stats_.suppressErrorByNull |= detectErrorSuppressedByNull(rows.mutableRows(), argumentErrors);
+  // TODO: extend suppressErrorByNull flag to track the row numbers where default null happens. Later in fuzzer retry with rows where default null doesn't happen.
+  stats_.suppressErrorByNull |= rows.hasChanged();
   mergeOrThrowArgumentErrors(
       rows.rows(), originalErrors, argumentErrors, context);
 

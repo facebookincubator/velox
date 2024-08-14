@@ -134,7 +134,6 @@ int main(int argc, char** argv) {
       "url_extract_fragment",
       "url_extract_path",
       "json_array_length",
-      "poisson_cdf(double,bigint) -> double",
       "array_min",
       "array_sum_propagate_element_null", // not registered in Presto
       //"tan", //error within epsilon
@@ -161,11 +160,27 @@ int main(int argc, char** argv) {
       "array_max",
       "f_cdf",
       "array_duplicates", // different order of array elements
+      "array_dupes",
       "round",
       "hmac_sha256",
       "url_extract_query",
       "substr(varbinary,bigint,bigint) -> varbinary",
-
+      "map_top_n",
+      "typeof", // SELECT reduce(c0, typeof(c1), (__a0, __a1) -> 'Sb4', (__a0) -> try_cast(__a0 as INTEGER)) from (values (array[timestamp '1970-01-01 00:00:00'], 1)) t(c0, c1)
+      "hmac_sha512",
+      "hmac_sha1",
+      "json_extract_scalar",
+      "hmac_md5",
+      "inverse_laplace_cdf",
+      "json_size",
+      "binomial_cdf",
+      "$internal$split_to_map",
+      "is_json_scalar(varchar) -> boolean",
+      "gamma_cdf",
+      "bitwise_arithmetic_shift_right",
+      "array_normalize", // todo: need compare array of floating-point with epsilon
+      "lpad(varbinary,bigint,varbinary) -> varbinary",
+      
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 

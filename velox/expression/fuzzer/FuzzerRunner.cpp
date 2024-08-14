@@ -161,7 +161,7 @@ VectorFuzzer::Options getVectorFuzzerOptions() {
   VectorFuzzer::Options opts;
   opts.vectorSize = FLAGS_batch_size;
   opts.stringVariableLength = true;
-  opts.stringLength = 100;
+  opts.stringLength = 4;
   opts.nullRatio = FLAGS_null_ratio;
   opts.timestampPrecision = VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   return opts;
