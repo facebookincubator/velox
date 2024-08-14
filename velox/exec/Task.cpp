@@ -895,83 +895,81 @@ void Task::initializePartitionOutput() {
 }
 
 // static
-void Task::resume(std::shared_ptr<Task> self) {
-  {
-    std::vector<std::shared_ptr<Driver>> offThreadDrivers;
-    std::vector<ContinuePromise> resumePromises;
-    SCOPE_EXIT {
-      // Get the stats and free the resources of Drivers that were not on
-      // thread.
-      for (auto& driver : offThreadDrivers) {
-        self->driversClosedByTask_.emplace_back(driver);
-        driver->closeByTask();
-      }
-      // Fulfill resume futures.
-      for (auto& promise : resumePromises) {
-        promise.setValue();
-      }
-    };
-    std::lock_guard<std::timed_mutex> l(self->mutex_);
-    // Setting pause requested must be atomic with the resuming so that
-    // suspended sections do not go back on thread during resume.
-    self->pauseRequested_ = false;
-    if (self->isRunningLocked()) {
-      for (auto& driver : self->drivers_) {
-        if (driver != nullptr) {
-          if (driver->state().suspended()) {
-            // The Driver will come on thread in its own time as long as
-            // the cancel flag is reset. This check needs to be inside 'mutex_'.
-            continue;
-          }
-          if (driver->state().isEnqueued) {
-            // A Driver can wait for a thread and there can be a
-            // pause/resume during the wait. The Driver should not be
-            // enqueued twice.
-            continue;
-          }
-          VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
-          if (!driver->state().hasBlockingFuture &&
-              driver->task()->queryCtx()->isExecutorSupplied()) {
-            if (driver->state().endExecTimeMs != 0) {
-              driver->state().totalPauseTimeMs +=
-                  getCurrentTimeMs() - driver->state().endExecTimeMs;
-            }
-            // Do not continue a Driver that is blocked on external
-            // event. The Driver gets enqueued by the promise realization.
-            //
-            // Do not continue the driver if no executor is supplied,
-            // This usually happens in single-threaded execution.
-            Driver::enqueue(driver);
-          }
-        }
-      }
-    } else {
-      // NOTE: no need to resume task execution if the task has been terminated.
-      // But we need to close the drivers which are off threads as task
-      // terminate code path skips closing the off thread drivers if the task
-      // has been requested pause and leave the task resume path to handle. If
-      // a task has been paused, then there might be concurrent memory
-      // arbitration thread to reclaim the memory resource from the off thread
-      // driver operators.
-      for (auto& driver : self->drivers_) {
-        if (driver == nullptr) {
+void Task::resume(std::shared_ptr<Task> self) noexcept {
+  std::vector<std::shared_ptr<Driver>> offThreadDrivers;
+  std::vector<ContinuePromise> resumePromises;
+  SCOPE_EXIT {
+    // Get the stats and free the resources of Drivers that were not on
+    // thread.
+    for (auto& driver : offThreadDrivers) {
+      self->driversClosedByTask_.emplace_back(driver);
+      driver->closeByTask();
+    }
+    // Fulfill resume futures.
+    for (auto& promise : resumePromises) {
+      promise.setValue();
+    }
+  };
+  std::lock_guard<std::timed_mutex> l(self->mutex_);
+  // Setting pause requested must be atomic with the resuming so that
+  // suspended sections do not go back on thread during resume.
+  self->pauseRequested_ = false;
+  if (self->isRunningLocked()) {
+    for (auto& driver : self->drivers_) {
+      if (driver != nullptr) {
+        if (driver->state().suspended()) {
+          // The Driver will come on thread in its own time as long as
+          // the cancel flag is reset. This check needs to be inside 'mutex_'.
           continue;
         }
-        if (driver->isOnThread()) {
-          VELOX_CHECK(driver->isTerminated());
+        if (driver->state().isEnqueued) {
+          // A Driver can wait for a thread and there can be a
+          // pause/resume during the wait. The Driver should not be
+          // enqueued twice.
           continue;
         }
-        if (driver->isTerminated()) {
-          continue;
+        VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
+        if (!driver->state().hasBlockingFuture &&
+            driver->task()->queryCtx()->isExecutorSupplied()) {
+          if (driver->state().endExecTimeMs != 0) {
+            driver->state().totalPauseTimeMs +=
+                getCurrentTimeMs() - driver->state().endExecTimeMs;
+          }
+          // Do not continue a Driver that is blocked on external
+          // event. The Driver gets enqueued by the promise realization.
+          //
+          // Do not continue the driver if no executor is supplied,
+          // This usually happens in single-threaded execution.
+          Driver::enqueue(driver);
         }
-        driver->state().isTerminated = true;
-        driver->state().setThread();
-        self->driverClosedLocked();
-        offThreadDrivers.push_back(std::move(driver));
       }
     }
-    resumePromises.swap(self->resumePromises_);
+  } else {
+    // NOTE: no need to resume task execution if the task has been terminated.
+    // But we need to close the drivers which are off threads as task
+    // terminate code path skips closing the off thread drivers if the task
+    // has been requested pause and leave the task resume path to handle. If
+    // a task has been paused, then there might be concurrent memory
+    // arbitration thread to reclaim the memory resource from the off thread
+    // driver operators.
+    for (auto& driver : self->drivers_) {
+      if (driver == nullptr) {
+        continue;
+      }
+      if (driver->isOnThread()) {
+        VELOX_CHECK(driver->isTerminated());
+        continue;
+      }
+      if (driver->isTerminated()) {
+        continue;
+      }
+      driver->state().isTerminated = true;
+      driver->state().setThread();
+      self->driverClosedLocked();
+      offThreadDrivers.push_back(std::move(driver));
+    }
   }
+  resumePromises.swap(self->resumePromises_);
 }
 
 void Task::validateGroupedExecutionLeafNodes() {

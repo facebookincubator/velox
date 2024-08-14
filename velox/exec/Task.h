@@ -192,7 +192,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Resumes execution of 'self' after a successful pause. All 'drivers_' must
   /// be off-thread and there must be no 'exception_'
-  static void resume(std::shared_ptr<Task> self);
+  static void resume(std::shared_ptr<Task> self) noexcept;
 
   /// Sets the (so far) max split sequence id, so all splits with sequence id
   /// equal or below that, will be ignored in the 'addSplitWithSequence' call.
