@@ -46,6 +46,7 @@ bool CompileState::compile() {
   // them during the transformation.
   driver_.initializeOperators();
 
+  bool replacements_made = false;
   auto ctx = driver_.driverCtx();
   // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
   // CudfHashJoinProbe operators.
@@ -61,8 +62,9 @@ bool CompileState::compile() {
       auto id = joinBuildOp->operatorId();
       replace_op.push_back(std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node_id));
       replace_op[0]->initialize();
-      auto replaced = driverFactory_.replaceOperators(
+      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+      replacements_made = true;
     } else if (
         auto joinProbeOp =
             dynamic_cast<exec::HashProbe*>(oper)) {
@@ -70,60 +72,12 @@ bool CompileState::compile() {
       auto id = joinProbeOp->operatorId();
       replace_op.push_back(std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node_id));
       replace_op[0]->initialize();
-      auto replaced = driverFactory_.replaceOperators(
+      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+      replacements_made = true;
     }
   }
-  return true;
-
-
-
-  /*
-  for (; operatorIndex < operators.size(); ++operatorIndex) {
-    if (!addOperator(operators[operatorIndex], nodeIndex, outputType)) {
-      break;
-    }
-    ++nodeIndex;
-    auto& identity = operators[operatorIndex]->identityProjections();
-    for (auto i = 0; i < outputType->size(); ++i) {
-      Value value = Value(toSubfield(outputType->nameOf(i)));
-      if (isProjectedThrough(identity, i)) {
-        continue;
-      }
-      auto operand = operators_.back()->defines(value);
-      definedBy_[value] = operand;
-    }
-  }
-  if (operators_.empty()) {
-    return false;
-  }
-  for (auto& op : operators_) {
-    op->finalize(*this);
-  }
-  std::vector<OperandId> resultOrder;
-  for (auto i = 0; i < outputType->size(); ++i) {
-    auto operand = findCurrentValue(Value(toSubfield(outputType->nameOf(i))));
-    resultOrder.push_back(operand->id);
-  }
-  auto waveOpUnique = std::make_unique<WaveDriver>(
-      driver_.driverCtx(),
-      outputType,
-      operators[first]->planNodeId(),
-      operators[first]->operatorId(),
-      std::move(arena_),
-      std::move(operators_),
-      std::move(resultOrder),
-      std::move(subfields_),
-      std::move(operands_));
-  auto waveOp = waveOpUnique.get();
-  waveOp->initialize();
-  std::vector<std::unique_ptr<exec::Operator>> added;
-  added.push_back(std::move(waveOpUnique));
-  auto replaced = driverFactory_.replaceOperators(
-      driver_, first, operatorIndex, std::move(added));
-  waveOp->setReplaced(std::move(replaced));
-  return true;
-  */
+  return replacements_made;
 }
 
 bool cudfDriverAdapter(
