@@ -30,25 +30,6 @@
 
 namespace facebook::velox::cudf_velox {
 
-// Custom hash join operator which uses libcudf
-// Need to define a new PlanNode, JoinBridge, Operators (Build, Probe), and a
-// PlanNodeTranslator and register the PlanNodeTranslator
-class CudfHashJoinNode : public core::AbstractJoinNode {
- public:
-  CudfHashJoinNode(
-      const core::PlanNodeId& id,
-      core::JoinType joinType,
-      bool nullAware,
-      const std::vector<core::FieldAccessTypedExprPtr>& leftKeys,
-      const std::vector<core::FieldAccessTypedExprPtr>& rightKeys,
-      core::TypedExprPtr filter,
-      core::PlanNodePtr left,
-      core::PlanNodePtr right,
-      RowTypePtr outputType);
-
-  std::string_view name() const override;
-};
-
 class CudfHashJoinBridge : public exec::JoinBridge {
  public:
   using hash_type =
@@ -67,7 +48,12 @@ class CudfHashJoinBuild : public exec::Operator {
   CudfHashJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const CudfHashJoinNode> joinNode);
+      const core::PlanNodeId& joinNodeId);
+
+  CudfHashJoinBuild(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const core::HashJoinNode> joinNode);
 
   void addInput(RowVectorPtr input) override;
 
@@ -89,10 +75,16 @@ class CudfHashJoinBuild : public exec::Operator {
 class CudfHashJoinProbe : public exec::Operator {
  public:
   using hash_type = CudfHashJoinBridge::hash_type;
+
   CudfHashJoinProbe(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const CudfHashJoinNode> joinNode);
+      const core::PlanNodeId& joinNodeId);
+
+  CudfHashJoinProbe(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      std::shared_ptr<const core::HashJoinNode> joinNode);
 
   bool needsInput() const override;
 

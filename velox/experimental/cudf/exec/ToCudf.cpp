@@ -18,6 +18,8 @@
 #include <cuda.h>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include "velox/exec/Driver.h"
+#include "velox/exec/HashBuild.h"
+#include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h" // Compilation fails in Driver.h if Operator.h isn't included first!
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 
@@ -39,15 +41,43 @@ bool CompileState::compile() {
     std::cout << "  Plan node: ID " << node->id() << ": " << node->toString()
               << std::endl;
   }
-  return false;
 
-  int32_t first = 0;
-  int32_t operatorIndex = 0;
-  int32_t nodeIndex = 0;
-  RowTypePtr outputType;
   // Make sure operator states are initialized.  We will need to inspect some of
   // them during the transformation.
   driver_.initializeOperators();
+
+  auto ctx = driver_.driverCtx();
+  // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
+  // CudfHashJoinProbe operators.
+  for (int32_t operatorIndex = 0; operatorIndex < operators.size();
+       ++operatorIndex) {
+    std::vector<std::unique_ptr<exec::Operator>> replace_op;
+
+    exec::Operator* oper = operators[operatorIndex];
+    VELOX_CHECK(oper);
+    if (auto joinBuildOp =
+            dynamic_cast<exec::HashBuild*>(oper)) {
+      auto plan_node_id = joinBuildOp->planNodeId();
+      auto id = joinBuildOp->operatorId();
+      replace_op.push_back(std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node_id));
+      replace_op[0]->initialize();
+      auto replaced = driverFactory_.replaceOperators(
+          driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+    } else if (
+        auto joinProbeOp =
+            dynamic_cast<exec::HashProbe*>(oper)) {
+      auto plan_node_id = joinProbeOp->planNodeId();
+      auto id = joinProbeOp->operatorId();
+      replace_op.push_back(std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node_id));
+      replace_op[0]->initialize();
+      auto replaced = driverFactory_.replaceOperators(
+          driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+    }
+  }
+  return true;
+
+
+
   /*
   for (; operatorIndex < operators.size(); ++operatorIndex) {
     if (!addOperator(operators[operatorIndex], nodeIndex, outputType)) {
