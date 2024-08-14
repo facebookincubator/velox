@@ -48,4 +48,9 @@ breeze_add_perftests(
   "reduce"
   "scan"
   "sort")
-breeze_add_perftests("algorithms" "algorithm" "reduce" "scan")
+breeze_add_perftests(
+  "algorithms"
+  "algorithm"
+  "reduce"
+  "scan"
+  "sort")

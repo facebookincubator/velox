@@ -39,6 +39,7 @@
 
 #include "algorithms/reduce.h"
 #include "algorithms/scan.h"
+#include "algorithms/sort.h"
 #include "platforms/platform.h"
 #include "utils/types.h"
 
@@ -68,6 +69,40 @@ void Scan(const T* in, U* out, int* next_block_idx, V* blocks, int num_items) {
                                  LOOKBACK_DISTANCE>::
       template Scan<Op>(
           p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+          breeze::utils::make_slice<breeze::utils::GLOBAL>(out),
+          breeze::utils::make_slice<breeze::utils::GLOBAL>(next_block_idx),
+          breeze::utils::make_slice<breeze::utils::GLOBAL>(blocks),
+          breeze::utils::make_slice<breeze::utils::SHARED>(scratch), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, int TILE_SIZE,
+          int RADIX_BITS, typename T>
+PLATFORM("p")
+SHARED_MEM(
+    "typename breeze::algorithms::DeviceRadixSortHistogram<RADIX_BITS, T>::Scratch",
+    "scratch")
+void RadixSortHistogram(const T* in, unsigned* out, int num_items) {
+  breeze::algorithms::DeviceRadixSortHistogram<RADIX_BITS, T>::template Build<
+      ITEMS_PER_THREAD, TILE_SIZE>(
+      p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+      breeze::utils::make_slice<breeze::utils::GLOBAL>(out),
+      breeze::utils::make_slice<breeze::utils::SHARED>(scratch), num_items);
+}
+
+template <int BLOCK_THREADS, int ITEMS_PER_THREAD, int RADIX_BITS, typename T>
+PLATFORM("p")
+SHARED_MEM(
+    "typename breeze::algorithms::DeviceRadixSort<PlatformT, ITEMS_PER_THREAD, RADIX_BITS, T>::Scratch",
+    "scratch")
+void RadixSort(const T* in, const unsigned* in_offsets, const int* start_bit,
+               const int* num_pass_bits, T* out, int* next_block_idx,
+               unsigned* blocks, int num_items) {
+  breeze::algorithms::DeviceRadixSort<PlatformT, ITEMS_PER_THREAD, RADIX_BITS,
+                                      T>::
+      template Sort<unsigned>(
+          p, breeze::utils::make_slice<breeze::utils::GLOBAL>(in),
+          breeze::utils::make_slice<breeze::utils::GLOBAL>(in_offsets),
+          *start_bit, *num_pass_bits,
           breeze::utils::make_slice<breeze::utils::GLOBAL>(out),
           breeze::utils::make_slice<breeze::utils::GLOBAL>(next_block_idx),
           breeze::utils::make_slice<breeze::utils::GLOBAL>(blocks),

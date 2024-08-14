@@ -77,3 +77,42 @@ GEN_REDUCE(max)
   GEN_SCAN_T(O, uint, 64, 2, 64)
 
 GEN_SCAN(add)
+
+#define GEN_RADIX_SORT_HISTOGRAM_T(T, BT, IPT, TS, RB)                   \
+  kernel void NAME(radix_sort_histogram, T, BT, IPT##x##TS##x##RB)(      \
+      const device T *in [[buffer(0)]], device uint *out [[buffer(1)]],  \
+      const device int *num_items [[buffer(2)]],                         \
+      uint thread_idx [[thread_index_in_threadgroup]],                   \
+      uint block_idx [[threadgroup_position_in_grid]]) {                 \
+    threadgroup DeviceRadixSortHistogram<RB, T>::Scratch scratch;        \
+    radix_sort_histogram<BT, IPT, TS, RB>(                               \
+        MetalPlatform<BT, WARP_THREADS>{thread_idx, block_idx}, in, out, \
+        &scratch, *num_items);                                           \
+  }
+
+#define GEN_RADIX_SORT_HISTOGRAM(T)          \
+  GEN_RADIX_SORT_HISTOGRAM_T(T, 64, 2, 1, 6) \
+  GEN_RADIX_SORT_HISTOGRAM_T(T, 64, 2, 4, 6)
+
+GEN_RADIX_SORT_HISTOGRAM(int)
+GEN_RADIX_SORT_HISTOGRAM(uint)
+
+#define GEN_RADIX_SORT(T, BT, IPT, RB)                                        \
+  kernel void NAME(radix_sort, T, BT, IPT##x##RB)(                            \
+      const device T *in [[buffer(0)]],                                       \
+      const device uint *in_offsets [[buffer(1)]],                            \
+      const device int *start_bit [[buffer(2)]],                              \
+      const device int *num_pass_bits [[buffer(3)]],                          \
+      device T *out [[buffer(4)]], device int *next_block_idx [[buffer(5)]],  \
+      device uint *blocks [[buffer(6)]],                                      \
+      const device int *num_items [[buffer(7)]],                              \
+      uint thread_idx [[thread_index_in_threadgroup]],                        \
+      uint block_idx [[threadgroup_position_in_grid]]) {                      \
+    MetalPlatform<BT, WARP_THREADS> p{thread_idx, block_idx};                 \
+    threadgroup DeviceRadixSort<decltype(p), IPT, RB, T>::Scratch scratch;    \
+    radix_sort<BT, IPT, RB>(p, in, in_offsets, start_bit, num_pass_bits, out, \
+                            next_block_idx, blocks, &scratch, *num_items);    \
+  }
+
+GEN_RADIX_SORT(int, 64, 2, 6)
+GEN_RADIX_SORT(uint, 64, 2, 6)

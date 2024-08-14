@@ -72,3 +72,32 @@ GEN_REDUCE(max)
   GEN_SCAN_T(O, uint, 64, 2, 64)
 
 GEN_SCAN(add)
+
+#define GEN_RADIX_SORT_HISTOGRAM_T(T, BT, IPT, TS, RB)                     \
+  kernel void NAME(radix_sort_histogram, T, BT, IPT##x##TS##x##RB)(        \
+      const global T *in, global uint *out, const global int *num_items) { \
+    local DeviceRadixSortHistogram<RB, T>::Scratch scratch;                \
+    radix_sort_histogram<BT, IPT, TS, RB>(in, out, &scratch, *num_items);  \
+  }
+
+#define GEN_RADIX_SORT_HISTOGRAM(T)          \
+  GEN_RADIX_SORT_HISTOGRAM_T(T, 64, 2, 1, 6) \
+  GEN_RADIX_SORT_HISTOGRAM_T(T, 64, 2, 4, 6)
+
+GEN_RADIX_SORT_HISTOGRAM(int)
+GEN_RADIX_SORT_HISTOGRAM(uint)
+
+#define GEN_RADIX_SORT(T, BT, IPT, RB)                                     \
+  kernel void NAME(radix_sort, T, BT, IPT##x##RB)(                         \
+      const global T *in, const global uint *in_offsets,                   \
+      const global int *start_bit, const global int *num_pass_bits,        \
+      global T *out, global int *next_block_idx, global uint *blocks,      \
+      const global int *num_items) {                                       \
+    using PlatformT = OpenCLPlatform<BT, WARP_THREADS>;                    \
+    local DeviceRadixSort<PlatformT, IPT, RB, T>::Scratch scratch;         \
+    radix_sort<BT, IPT, RB>(in, in_offsets, start_bit, num_pass_bits, out, \
+                            next_block_idx, blocks, &scratch, *num_items); \
+  }
+
+GEN_RADIX_SORT(int, 64, 2, 6)
+GEN_RADIX_SORT(uint, 64, 2, 6)

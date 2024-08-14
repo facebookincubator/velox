@@ -56,4 +56,19 @@ class AlgorithmTest : public ::testing::Test {
   void Scan(USE_AS_SIZE const std::vector<T>& in, std::vector<U>& out,
             int* next_blocks_idx, std::vector<V>& blocks,
             BLOCK_COUNT int num_blocks);
+  template <int BLOCK_THREADS, int ITEMS_PER_THREAD, int TILE_SIZE,
+            int RADIX_BITS>
+  SHARED_MEM_TYPE(
+      "typename breeze::algorithms::DeviceRadixSortHistogram<RADIX_BITS, T>::Scratch")
+  void RadixSortHistogram(USE_AS_SIZE const std::vector<T>& in,
+                          std::vector<unsigned>& out,
+                          BLOCK_COUNT int num_blocks);
+  template <int BLOCK_THREADS, int ITEMS_PER_THREAD, int RADIX_BITS>
+  SHARED_MEM_TYPE(
+      "typename breeze::algorithms::DeviceRadixSort<PlatformT, ITEMS_PER_THREAD, RADIX_BITS, T>::Scratch")
+  void RadixSort(USE_AS_SIZE const std::vector<T>& in,
+                 const std::vector<unsigned>& in_offsets, int start_bit,
+                 int num_pass_bits, std::vector<T>& out,
+                 std::vector<int>& next_block_idx,
+                 std::vector<unsigned>& blocks, BLOCK_COUNT int num_blocks);
 };
