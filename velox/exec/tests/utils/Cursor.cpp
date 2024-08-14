@@ -394,7 +394,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
         return false;
       }
       // Task is blocked for some reason. Wait and try again.
-      VELOX_CHECK_NULL(next)
+      VELOX_CHECK_NULL(next);
       future.wait();
     }
   };
