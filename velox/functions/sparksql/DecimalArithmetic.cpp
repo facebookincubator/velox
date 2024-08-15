@@ -24,284 +24,270 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-// Returns the whole and fraction parts of a decimal value.
-template <typename T>
-inline std::pair<T, T> getWholeAndFraction(T value, uint8_t scale) {
-  const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[scale];
-  const T whole = value / scaleFactor;
-  return {whole, value - whole * scaleFactor};
+// Return precision of `aType` and `bType`, set the `aScale` and `bScale`.
+std::pair<int, int> getDecimalPrecisionScales(
+    const Type& aType,
+    const Type& bType,
+    uint8_t& aScale,
+    uint8_t& bScale) {
+  auto [aPrecision, aScaleTmp] = getDecimalPrecisionScale(aType);
+  auto [bPrecision, bScaleTmp] = getDecimalPrecisionScale(bType);
+  aScale = aScaleTmp;
+  bScale = bScaleTmp;
+  return {aPrecision, bPrecision};
 }
 
-// Increases the scale of input value by 'delta'. Returns the input value if
-// delta is not positive.
-inline int128_t increaseScale(int128_t in, int16_t delta) {
-  // No need to consider overflow as 'delta == higher scale - input scale', so
-  // the scaled value will not exceed the maximum of long decimal.
-  return delta <= 0 ? in : in * velox::DecimalUtil::kPowersOfTen[delta];
-}
-
-// Scales up the whole part to result scale, and combine it with fraction part
-// to produce a full result for decimal add. Checks whether the result
-// overflows.
-template <typename T>
-inline T
-decimalAddResult(T whole, T fraction, uint8_t resultScale, bool& overflow) {
-  T scaledWhole = sparksql::DecimalUtil::multiply<T>(
-      whole, velox::DecimalUtil::kPowersOfTen[resultScale], overflow);
-  if (FOLLY_UNLIKELY(overflow)) {
-    return 0;
-  }
-  const auto result = scaledWhole + fraction;
-  if constexpr (std::is_same_v<T, int64_t>) {
-    overflow = (result > velox::DecimalUtil::kShortDecimalMax) ||
-        (result < velox::DecimalUtil::kShortDecimalMin);
-  } else {
-    overflow = (result > velox::DecimalUtil::kLongDecimalMax) ||
-        (result < velox::DecimalUtil::kLongDecimalMin);
-  }
-  return result;
-}
-
-// Reduces the scale of input value by 'delta'. Returns the input value if delta
-// is not positive.
-template <typename T>
-inline T reduceScale(T in, int32_t delta) {
-  if (delta <= 0) {
-    return in;
-  }
-  T result;
-  bool overflow;
-  const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[delta];
-  if constexpr (std::is_same_v<T, int64_t>) {
-    VELOX_DCHECK_LE(
-        scaleFactor,
-        std::numeric_limits<int64_t>::max(),
-        "Scale factor should not exceed the maximum of int64_t.");
-  }
-  DecimalUtil::divideWithRoundUp<T, T, T>(
-      result, in, T(scaleFactor), 0, overflow);
-  VELOX_DCHECK(!overflow);
-  return result;
-}
-
-// Adds two non-negative values by adding the whole and fraction parts
-// separately.
-template <typename TResult, typename A, typename B>
-inline TResult addLargeNonNegative(
-    A a,
-    B b,
-    uint8_t aScale,
-    uint8_t bScale,
-    uint8_t rScale,
-    bool& overflow) {
-  VELOX_DCHECK_GE(
-      a, 0, "Non-negative value is expected in addLargeNonNegative.");
-  VELOX_DCHECK_GE(
-      b, 0, "Non-negative value is expected in addLargeNonNegative.");
-
-  // Separate whole and fraction parts.
-  const auto [aWhole, aFraction] = getWholeAndFraction<A>(a, aScale);
-  const auto [bWhole, bFraction] = getWholeAndFraction<B>(b, bScale);
-
-  // Adjust fractional parts to higher scale.
-  const auto higherScale = std::max(aScale, bScale);
-  const auto aFractionScaled =
-      increaseScale((int128_t)aFraction, higherScale - aScale);
-  const auto bFractionScaled =
-      increaseScale((int128_t)bFraction, higherScale - bScale);
-
-  int128_t fraction;
-  bool carryToLeft = false;
-  const auto carrier = velox::DecimalUtil::kPowersOfTen[higherScale];
-  if (aFractionScaled >= carrier - bFractionScaled) {
-    fraction = aFractionScaled + bFractionScaled - carrier;
-    carryToLeft = true;
-  } else {
-    fraction = aFractionScaled + bFractionScaled;
-  }
-
-  // Scale up the whole part and scale down the fraction part to combine them.
-  fraction = reduceScale(TResult(fraction), higherScale - rScale);
-  const auto whole = TResult(aWhole) + TResult(bWhole) + TResult(carryToLeft);
-  return decimalAddResult(whole, TResult(fraction), rScale, overflow);
-}
-
-// Adds two opposite values by adding the whole and fraction parts separately.
-template <typename TResult, typename A, typename B>
-inline TResult addLargeOpposite(
-    A a,
-    B b,
-    uint8_t aScale,
-    uint8_t bScale,
-    int32_t rScale,
-    bool& overflow) {
-  VELOX_DCHECK(
-      (a < 0 && b > 0) || (a > 0 && b < 0),
-      "One positve and one negative value are expected in addLargeOpposite.");
-
-  // Separate whole and fraction parts.
-  const auto [aWhole, aFraction] = getWholeAndFraction<A>(a, aScale);
-  const auto [bWhole, bFraction] = getWholeAndFraction<B>(b, bScale);
-
-  // Adjust fractional parts to higher scale.
-  const auto higherScale = std::max(aScale, bScale);
-  const auto aFractionScaled =
-      increaseScale((int128_t)aFraction, higherScale - aScale);
-  const auto bFractionScaled =
-      increaseScale((int128_t)bFraction, higherScale - bScale);
-
-  // No need to consider overflow because two inputs are opposite.
-  int128_t whole = (int128_t)aWhole + (int128_t)bWhole;
-  int128_t fraction = aFractionScaled + bFractionScaled;
-
-  // If the whole and fractional parts have different signs, adjust them to the
-  // same sign.
-  const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[higherScale];
-  if (whole < 0 && fraction > 0) {
-    whole += 1;
-    fraction -= scaleFactor;
-  } else if (whole > 0 && fraction < 0) {
-    whole -= 1;
-    fraction += scaleFactor;
-  }
-
-  // Scale up the whole part and scale down the fraction part to combine them.
-  fraction = reduceScale(TResult(fraction), higherScale - rScale);
-  return decimalAddResult(TResult(whole), TResult(fraction), rScale, overflow);
-}
-
-// Add whole and fraction parts separately, and then combine. The overflow flag
-// will be set to true if an overflow occurs during the addition.
-template <typename TResult, typename A, typename B>
-inline TResult addLarge(
-    A a,
-    B b,
-    uint8_t aScale,
-    uint8_t bScale,
-    int32_t rScale,
-    bool& overflow) {
-  if (a >= 0 && b >= 0) {
-    // Both non-negative.
-    return addLargeNonNegative<TResult, A, B>(
-        a, b, aScale, bScale, rScale, overflow);
-  } else if (a <= 0 && b <= 0) {
-    // Both non-positive.
-    return TResult(-addLargeNonNegative<TResult, A, B>(
-        A(-a), B(-b), aScale, bScale, rScale, overflow));
-  } else {
-    // One positive and the other negative.
-    return addLargeOpposite<TResult, A, B>(
-        a, b, aScale, bScale, rScale, overflow);
-  }
-}
-
-// Adds the values 'a' and 'b' and stores the result in 'r'. To align the scales
-// of inputs, the value with the smaller scale is rescaled to the larger scale.
-// 'aRescale' and 'bRescale' are the rescale factors needed to rescale 'a' and
-// 'b'. 'rPrecision' and 'rScale' are the precision and scale of the result.
-// The overflow flag is set to true if an overflow occurs during the addition.
-template <typename TResult, typename A, typename B>
-inline void applyAdd(
-    TResult& r,
-    A a,
-    B b,
-    uint8_t aRescale,
-    uint8_t bRescale,
-    uint8_t aScale,
-    uint8_t bScale,
-    uint8_t rPrecision,
-    uint8_t rScale,
-    bool& overflow) {
-  if (rPrecision < LongDecimalType::kMaxPrecision) {
-    const int128_t aRescaled = a * velox::DecimalUtil::kPowersOfTen[aRescale];
-    const int128_t bRescaled = b * velox::DecimalUtil::kPowersOfTen[bRescale];
-    r = TResult(aRescaled + bRescaled);
-  } else {
-    const uint32_t minLeadingZeros =
-        sparksql::DecimalUtil::minLeadingZeros<A, B>(a, b, aRescale, bRescale);
-    if (minLeadingZeros >= 3) {
-      // Fast path for no overflow. If both numbers contain at least 3 leading
-      // zeros, they can be added directly without the risk of overflow.
-      // The reason is if a number contains at least 2 leading zeros, it is
-      // ensured that the number fits in the maximum of decimal, because
-      // '2^126 - 1 < 10^38 - 1'. If both numbers contain at least 3 leading
-      // zeros, we are guaranteed that the result will have at least 2 leading
-      // zeros.
-      int128_t aRescaled = a * velox::DecimalUtil::kPowersOfTen[aRescale];
-      int128_t bRescaled = b * velox::DecimalUtil::kPowersOfTen[bRescale];
-      r = reduceScale(
-          TResult(aRescaled + bRescaled), std::max(aScale, bScale) - rScale);
-    } else {
-      // The risk of overflow should be considered. Add whole and fraction
-      // parts separately, and then combine.
-      r = addLarge<TResult, A, B>(a, b, aScale, bScale, rScale, overflow);
-    }
-  }
-}
-
-// Computes the result precision and scale for decimal add and subtract
-// operations following
-// Hive's formulas. If result is representable with long decimal, the result
-// scale is the maximum of 'aScale' and 'bScale'. If not, reduces result scale
-// and caps the result precision at 38.
-std::pair<uint8_t, uint8_t> computeAddSubtractResultPrecisionScale(
-    uint8_t aPrecision,
-    uint8_t aScale,
-    uint8_t bPrecision,
-    uint8_t bScale) {
-  auto precision = std::max(aPrecision - aScale, bPrecision - bScale) +
-      std::max(aScale, bScale) + 1;
-  auto scale = std::max(aScale, bScale);
-  return sparksql::DecimalUtil::adjustPrecisionScale(precision, scale);
-}
-
-uint8_t computeAddSubtractRescaleFactor(uint8_t fromScale, uint8_t toScale) {
-  return std::max(0, toScale - fromScale);
-}
-
-template <typename TExec>
-struct DecimalAddFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A, typename B>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      B* /*b*/) {
+struct DecimalAddSubtractBase {
+ public:
+  void initializeBase(const std::vector<TypePtr>& inputTypes) {
     auto aType = inputTypes[0];
     auto bType = inputTypes[1];
-    uint8_t aPrecision = getDecimalPrecisionScale(*aType).first;
-    uint8_t bPrecision = getDecimalPrecisionScale(*bType).first;
-    aScale_ = getDecimalPrecisionScale(*aType).second;
-    bScale_ = getDecimalPrecisionScale(*bType).second;
-    aRescale_ = computeAddSubtractRescaleFactor(aScale_, bScale_);
-    bRescale_ = computeAddSubtractRescaleFactor(bScale_, aScale_);
-    auto [rPrecision, rScale] = computeAddSubtractResultPrecisionScale(
-        aPrecision, aScale_, bPrecision, bScale_);
+    auto [aPrecision, bPrecision] = getDecimalPrecisionScales(
+        *(inputTypes[0]), *(inputTypes[1]), aScale_, bScale_);
+    aRescale_ = computeRescaleFactor(aScale_, bScale_);
+    bRescale_ = computeRescaleFactor(bScale_, aScale_);
+    auto [rPrecision, rScale] =
+        computeResultPrecisionScale(aPrecision, aScale_, bPrecision, bScale_);
     rPrecision_ = rPrecision;
     rScale_ = rScale;
   }
 
-  template <typename R, typename A, typename B>
-  bool call(R& out, const A& a, const B& b) {
+  // Adds the values 'a' and 'b' and stores the result in 'r'. To align the
+  // scales of inputs, the value with the smaller scale is rescaled to the
+  // larger scale. 'aRescale' and 'bRescale' are the rescale factors needed to
+  // rescale 'a' and 'b'. 'rPrecision' and 'rScale' are the precision and scale
+  // of the result.
+  template <typename TResult, typename A, typename B>
+  inline bool applyAdd(TResult& r, A a, B b) {
+    // The overflow flag is set to true if an overflow occurs
+    // during the addition.
     bool overflow = false;
-    applyAdd<R, A, B>(
-        out,
-        a,
-        b,
-        aRescale_,
-        bRescale_,
-        aScale_,
-        bScale_,
-        rPrecision_,
-        rScale_,
-        overflow);
+    if (rPrecision_ < LongDecimalType::kMaxPrecision) {
+      const int128_t aRescaled =
+          a * velox::DecimalUtil::kPowersOfTen[aRescale_];
+      const int128_t bRescaled =
+          b * velox::DecimalUtil::kPowersOfTen[bRescale_];
+      r = TResult(aRescaled + bRescaled);
+    } else {
+      const uint32_t minLeadingZeros =
+          sparksql::DecimalUtil::minLeadingZeros<A, B>(
+              a, b, aRescale_, bRescale_);
+      if (minLeadingZeros >= 3) {
+        // Fast path for no overflow. If both numbers contain at least 3 leading
+        // zeros, they can be added directly without the risk of overflow.
+        // The reason is if a number contains at least 2 leading zeros, it is
+        // ensured that the number fits in the maximum of decimal, because
+        // '2^126 - 1 < 10^38 - 1'. If both numbers contain at least 3 leading
+        // zeros, we are guaranteed that the result will have at least 2 leading
+        // zeros.
+        int128_t aRescaled = a * velox::DecimalUtil::kPowersOfTen[aRescale_];
+        int128_t bRescaled = b * velox::DecimalUtil::kPowersOfTen[bRescale_];
+        r = reduceScale(
+            TResult(aRescaled + bRescaled),
+            std::max(aScale_, bScale_) - rScale_);
+      } else {
+        // The risk of overflow should be considered. Add whole and fraction
+        // parts separately, and then combine.
+        r = addLarge<TResult, A, B>(a, b, aScale_, bScale_, rScale_, overflow);
+      }
+    }
     return !overflow &&
-        velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_);
+        velox::DecimalUtil::valueInPrecisionRange(r, rPrecision_);
   }
 
  private:
+  // Returns the whole and fraction parts of a decimal value.
+  template <typename T>
+  inline static std::pair<T, T> getWholeAndFraction(T value, uint8_t scale) {
+    const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[scale];
+    const T whole = value / scaleFactor;
+    return {whole, value - whole * scaleFactor};
+  }
+
+  // Increases the scale of input value by 'delta'. Returns the input value if
+  // delta is not positive.
+  inline static int128_t increaseScale(int128_t in, int16_t delta) {
+    // No need to consider overflow as 'delta == higher scale - input scale', so
+    // the scaled value will not exceed the maximum of long decimal.
+    return delta <= 0 ? in : in * velox::DecimalUtil::kPowersOfTen[delta];
+  }
+
+  // Scales up the whole part to result scale, and combine it with fraction part
+  // to produce a full result for decimal add. Checks whether the result
+  // overflows.
+  template <typename T>
+  inline static T
+  decimalAddResult(T whole, T fraction, uint8_t resultScale, bool& overflow) {
+    T scaledWhole = sparksql::DecimalUtil::multiply<T>(
+        whole, velox::DecimalUtil::kPowersOfTen[resultScale], overflow);
+    if (FOLLY_UNLIKELY(overflow)) {
+      return 0;
+    }
+    const auto result = scaledWhole + fraction;
+    if constexpr (std::is_same_v<T, int64_t>) {
+      overflow = (result > velox::DecimalUtil::kShortDecimalMax) ||
+          (result < velox::DecimalUtil::kShortDecimalMin);
+    } else {
+      overflow = (result > velox::DecimalUtil::kLongDecimalMax) ||
+          (result < velox::DecimalUtil::kLongDecimalMin);
+    }
+    return result;
+  }
+
+  // Reduces the scale of input value by 'delta'. Returns the input value if
+  // delta is not positive.
+  template <typename T>
+  inline static T reduceScale(T in, int32_t delta) {
+    if (delta <= 0) {
+      return in;
+    }
+    T result;
+    bool overflow;
+    const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[delta];
+    if constexpr (std::is_same_v<T, int64_t>) {
+      VELOX_DCHECK_LE(
+          scaleFactor,
+          std::numeric_limits<int64_t>::max(),
+          "Scale factor should not exceed the maximum of int64_t.");
+    }
+    DecimalUtil::divideWithRoundUp<T, T, T>(
+        result, in, T(scaleFactor), 0, overflow);
+    VELOX_DCHECK(!overflow);
+    return result;
+  }
+
+  // Adds two non-negative values by adding the whole and fraction parts
+  // separately.
+  template <typename TResult, typename A, typename B>
+  inline static TResult addLargeNonNegative(
+      A a,
+      B b,
+      uint8_t aScale,
+      uint8_t bScale,
+      uint8_t rScale,
+      bool& overflow) {
+    VELOX_DCHECK_GE(
+        a, 0, "Non-negative value is expected in addLargeNonNegative.");
+    VELOX_DCHECK_GE(
+        b, 0, "Non-negative value is expected in addLargeNonNegative.");
+
+    // Separate whole and fraction parts.
+    const auto [aWhole, aFraction] = getWholeAndFraction<A>(a, aScale);
+    const auto [bWhole, bFraction] = getWholeAndFraction<B>(b, bScale);
+
+    // Adjust fractional parts to higher scale.
+    const auto higherScale = std::max(aScale, bScale);
+    const auto aFractionScaled =
+        increaseScale((int128_t)aFraction, higherScale - aScale);
+    const auto bFractionScaled =
+        increaseScale((int128_t)bFraction, higherScale - bScale);
+
+    int128_t fraction;
+    bool carryToLeft = false;
+    const auto carrier = velox::DecimalUtil::kPowersOfTen[higherScale];
+    if (aFractionScaled >= carrier - bFractionScaled) {
+      fraction = aFractionScaled + bFractionScaled - carrier;
+      carryToLeft = true;
+    } else {
+      fraction = aFractionScaled + bFractionScaled;
+    }
+
+    // Scale up the whole part and scale down the fraction part to combine them.
+    fraction = reduceScale(TResult(fraction), higherScale - rScale);
+    const auto whole = TResult(aWhole) + TResult(bWhole) + TResult(carryToLeft);
+    return decimalAddResult(whole, TResult(fraction), rScale, overflow);
+  }
+
+  // Adds two opposite values by adding the whole and fraction parts separately.
+  template <typename TResult, typename A, typename B>
+  inline static TResult addLargeOpposite(
+      A a,
+      B b,
+      uint8_t aScale,
+      uint8_t bScale,
+      int32_t rScale,
+      bool& overflow) {
+    VELOX_DCHECK(
+        (a < 0 && b > 0) || (a > 0 && b < 0),
+        "One positve and one negative value are expected in addLargeOpposite.");
+
+    // Separate whole and fraction parts.
+    const auto [aWhole, aFraction] = getWholeAndFraction<A>(a, aScale);
+    const auto [bWhole, bFraction] = getWholeAndFraction<B>(b, bScale);
+
+    // Adjust fractional parts to higher scale.
+    const auto higherScale = std::max(aScale, bScale);
+    const auto aFractionScaled =
+        increaseScale((int128_t)aFraction, higherScale - aScale);
+    const auto bFractionScaled =
+        increaseScale((int128_t)bFraction, higherScale - bScale);
+
+    // No need to consider overflow because two inputs are opposite.
+    int128_t whole = (int128_t)aWhole + (int128_t)bWhole;
+    int128_t fraction = aFractionScaled + bFractionScaled;
+
+    // If the whole and fractional parts have different signs, adjust them to
+    // the same sign.
+    const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[higherScale];
+    if (whole < 0 && fraction > 0) {
+      whole += 1;
+      fraction -= scaleFactor;
+    } else if (whole > 0 && fraction < 0) {
+      whole -= 1;
+      fraction += scaleFactor;
+    }
+
+    // Scale up the whole part and scale down the fraction part to combine them.
+    fraction = reduceScale(TResult(fraction), higherScale - rScale);
+    return decimalAddResult(
+        TResult(whole), TResult(fraction), rScale, overflow);
+  }
+
+  // Add whole and fraction parts separately, and then combine. The overflow
+  // flag will be set to true if an overflow occurs during the addition.
+  template <typename TResult, typename A, typename B>
+  inline static TResult addLarge(
+      A a,
+      B b,
+      uint8_t aScale,
+      uint8_t bScale,
+      int32_t rScale,
+      bool& overflow) {
+    if (a >= 0 && b >= 0) {
+      // Both non-negative.
+      return addLargeNonNegative<TResult, A, B>(
+          a, b, aScale, bScale, rScale, overflow);
+    } else if (a <= 0 && b <= 0) {
+      // Both non-positive.
+      return TResult(-addLargeNonNegative<TResult, A, B>(
+          A(-a), B(-b), aScale, bScale, rScale, overflow));
+    } else {
+      // One positive and the other negative.
+      return addLargeOpposite<TResult, A, B>(
+          a, b, aScale, bScale, rScale, overflow);
+    }
+  }
+
+  // Computes the result precision and scale for decimal add and subtract
+  // operations following Hive's formulas.
+  // If result is representable with long decimal, the result
+  // scale is the maximum of 'aScale' and 'bScale'. If not, reduces result scale
+  // and caps the result precision at 38.
+  static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+      uint8_t aPrecision,
+      uint8_t aScale,
+      uint8_t bPrecision,
+      uint8_t bScale) {
+    auto precision = std::max(aPrecision - aScale, bPrecision - bScale) +
+        std::max(aScale, bScale) + 1;
+    auto scale = std::max(aScale, bScale);
+    return sparksql::DecimalUtil::adjustPrecisionScale(precision, scale);
+  }
+
+  static uint8_t computeRescaleFactor(uint8_t fromScale, uint8_t toScale) {
+    return std::max(0, toScale - fromScale);
+  }
+
   uint8_t aScale_;
   uint8_t bScale_;
   uint8_t aRescale_;
@@ -311,7 +297,7 @@ struct DecimalAddFunction {
 };
 
 template <typename TExec>
-struct DecimalSubtractFunction {
+struct DecimalAddFunction : DecimalAddSubtractBase {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   template <typename A, typename B>
@@ -320,45 +306,32 @@ struct DecimalSubtractFunction {
       const core::QueryConfig& /*config*/,
       A* /*a*/,
       B* /*b*/) {
-    auto aType = inputTypes[0];
-    auto bType = inputTypes[1];
-    uint8_t aPrecision = getDecimalPrecisionScale(*aType).first;
-    uint8_t bPrecision = getDecimalPrecisionScale(*bType).first;
-    aScale_ = getDecimalPrecisionScale(*aType).second;
-    bScale_ = getDecimalPrecisionScale(*bType).second;
-    aRescale_ = computeAddSubtractRescaleFactor(aScale_, bScale_);
-    bRescale_ = computeAddSubtractRescaleFactor(bScale_, aScale_);
-    auto [rPrecision, rScale] = computeAddSubtractResultPrecisionScale(
-        aPrecision, aScale_, bPrecision, bScale_);
-    rPrecision_ = rPrecision;
-    rScale_ = rScale;
+    initializeBase(inputTypes);
   }
 
   template <typename R, typename A, typename B>
   bool call(R& out, const A& a, const B& b) {
-    bool overflow = false;
-    applyAdd<R, A, B>(
-        out,
-        a,
-        B(-b),
-        aRescale_,
-        bRescale_,
-        aScale_,
-        bScale_,
-        rPrecision_,
-        rScale_,
-        overflow);
-    return !overflow &&
-        velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_);
+    return applyAdd<R, A, B>(out, a, b);
+  }
+};
+
+template <typename TExec>
+struct DecimalSubtractFunction : DecimalAddSubtractBase {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* /*a*/,
+      B* /*b*/) {
+    initializeBase(inputTypes);
   }
 
- private:
-  uint8_t aScale_;
-  uint8_t bScale_;
-  uint8_t aRescale_;
-  uint8_t bRescale_;
-  uint8_t rPrecision_;
-  uint8_t rScale_;
+  template <typename R, typename A, typename B>
+  bool call(R& out, const A& a, const B& b) {
+    return applyAdd<R, A, B>(out, a, B(-b));
+  }
 };
 
 template <typename TExec>
@@ -371,12 +344,8 @@ struct DecimalMultiplyFunction {
       const core::QueryConfig& /*config*/,
       A* /*a*/,
       B* /*b*/) {
-    auto aType = inputTypes[0];
-    auto bType = inputTypes[1];
-    uint8_t aPrecision = getDecimalPrecisionScale(*aType).first;
-    uint8_t bPrecision = getDecimalPrecisionScale(*bType).first;
-    aScale_ = getDecimalPrecisionScale(*aType).second;
-    bScale_ = getDecimalPrecisionScale(*bType).second;
+    auto [aPrecision, bPrecision] = getDecimalPrecisionScales(
+        *(inputTypes[0]), *(inputTypes[1]), aScale_, bScale_);
     auto [rPrecision, rScale] = DecimalUtil::adjustPrecisionScale(
         aPrecision + bPrecision + 1, aScale_ + bScale_);
     rPrecision_ = rPrecision;
