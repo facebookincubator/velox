@@ -201,28 +201,32 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARBINARY(), "z");
 
   // Test default timezone
-  options_.timestampUnit = TimestampUnit::kSecond;
-  testScalarType(TIMESTAMP(), "tss:");
-  options_.timestampUnit = TimestampUnit::kMilli;
-  testScalarType(TIMESTAMP(), "tsm:");
-  options_.timestampUnit = TimestampUnit::kMicro;
-  testScalarType(TIMESTAMP(), "tsu:");
-  options_.timestampUnit = TimestampUnit::kNano;
-  testScalarType(TIMESTAMP(), "tsn:");
+  testScalarType(
+      TIMESTAMP(), "tss:", {.timestampUnit = TimestampUnit::kSecond});
+  testScalarType(TIMESTAMP(), "tsm:", {.timestampUnit = TimestampUnit::kMilli});
+  testScalarType(TIMESTAMP(), "tsu:", {.timestampUnit = TimestampUnit::kMicro});
+  testScalarType(TIMESTAMP(), "tsn:", {.timestampUnit = TimestampUnit::kNano});
 
   testScalarType(VARCHAR(), "vu", {.exportToStringView = true});
   testScalarType(VARBINARY(), "vz", {.exportToStringView = true});
 
   // Test specific timezone
-  options_.timestampTimeZone = "+01:0";
-  options_.timestampUnit = TimestampUnit::kSecond;
-  testScalarType(TIMESTAMP(), "tss:+01:0");
-  options_.timestampUnit = TimestampUnit::kMilli;
-  testScalarType(TIMESTAMP(), "tsm:+01:0");
-  options_.timestampUnit = TimestampUnit::kMicro;
-  testScalarType(TIMESTAMP(), "tsu:+01:0");
-  options_.timestampUnit = TimestampUnit::kNano;
-  testScalarType(TIMESTAMP(), "tsn:+01:0");
+  testScalarType(
+      TIMESTAMP(),
+      "tss:+01:0",
+      {.timestampUnit = TimestampUnit::kSecond, .timestampTimeZone = "+01:0"});
+  testScalarType(
+      TIMESTAMP(),
+      "tsm:+01:0",
+      {.timestampUnit = TimestampUnit::kMilli, .timestampTimeZone = "+01:0"});
+  testScalarType(
+      TIMESTAMP(),
+      "tsu:+01:0",
+      {.timestampUnit = TimestampUnit::kMicro, .timestampTimeZone = "+01:0"});
+  testScalarType(
+      TIMESTAMP(),
+      "tsn:+01:0",
+      {.timestampUnit = TimestampUnit::kNano, .timestampTimeZone = "+01:0"});
 
   testScalarType(DATE(), "tdD");
   testScalarType(INTERVAL_YEAR_MONTH(), "tiM");

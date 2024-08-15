@@ -728,13 +728,32 @@ void exportViews(
     VeloxToArrowBridgeHolder& holder) {
   auto stringBuffers = vec.stringBuffers();
   size_t numStringBuffers = stringBuffers.size();
-  size_t numBuffers = 3 +
-      numStringBuffers; // nulls, values, stringBuffers, variadic_buffer_sizes
+  // Buffers for nulls, values, variadic_buffer_sizes, and all stringBuffers.
+  size_t numBuffers = 3 + numStringBuffers;
 
-  // resize and reassign holder buffers
+  // Resize and reassign holder buffers.
   holder.resizeBuffers(numBuffers);
   out.buffers = holder.getArrowBuffers();
-  // cache for fast [buffer-idx, buffer-offset] calculation
+
+  // Given the difference b/w structures of the non-inline Arrow Utf8View and
+  // Velox::StringView as
+  //
+  // Velox: [4-byte len, 4-byte prefix, 8-byte pointer]
+  // Arrow: [4-byte len, 4-byte prefix, 4-byte buffer_idx, 4-byte buffer_offset]
+  //
+  // Velox::StringView only has a pointer to the buffer but Arrow requires the
+  // exact index to the string buffer for that value the offset from the start
+  // of this buffer. Hence, we must obtain this buffer's index and offset from
+  // stringBuffers_. This is done in two parts:
+  // 1. Create a vector to store stringBuffer indices and sort this vector by
+  //    lowest to highest buffer pointer address to prepare for binary search.
+  // 2. Find the correct string buffer with binary search using the velox
+  //    buffer-pointer as key on the sorted vector of buffer indices.
+  //    We optimize further by caching the previous buffer's address and index
+  //    and only search again if the key pointer does not lie within the cached
+  //    buffer.
+
+  // Vector to store stringBuffer indices.
   std::vector<int32_t> stringBufferVec(numStringBuffers);
 
   BufferPtr variadicBufferSizes =
@@ -743,13 +762,14 @@ void exportViews(
   for (int32_t idx = 0; idx < numStringBuffers; ++idx) {
     rawVariadicBufferSizes[idx] = stringBuffers[idx]->size();
     holder.setBuffer(2 + idx, stringBuffers[idx]);
+    // 1a. Insert index into the vector.
     stringBufferVec[idx] = idx;
   }
   holder.setBuffer(numBuffers - 1, variadicBufferSizes);
   out.n_buffers = numBuffers;
 
-  // Sorting cache for fast binary search of [4-byte buffer-idx, 4-byte
-  // buffer-offset] from stringBufferVec with key [8-byte buffer-ptr]
+  // 1b. Sorting cache for fast binary search of [4-byte buffer-idx, 4-byte
+  // buffer-offset] from stringBufferVec with key [8-byte buffer-ptr].
   std::stable_sort(
       stringBufferVec.begin(),
       stringBufferVec.end(),
@@ -766,6 +786,9 @@ void exportViews(
     auto view = (uint32_t*)&utf8Views[2 * i];
     if (!vec.isNullAt(i) && view[0] > 12) {
       uint64_t currAddr = *(uint64_t*)&view[2];
+      // 2. Search for correct index with the buffer-pointer as key. Cache the
+      // found buffer's address and index in bufferAddrCache and bufferIdxCache
+      // respectively
       if (i == 0 ||
           (currAddr - bufferAddrCache) >
               rawVariadicBufferSizes[bufferIdxCache]) {
