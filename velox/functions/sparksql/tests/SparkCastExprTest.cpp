@@ -195,9 +195,11 @@ TEST_F(SparkCastExprTest, invalidDate) {
       "Unable to parse date value: \"2015-031-8\"",
       VARCHAR());
   testInvalidCast<std::string>(
+      "date", {"-1-1-1"}, "Unable to parse date value: \"-1-1-1\"", VARCHAR());
+  testInvalidCast<std::string>(
       "date",
-      {"-1-1-1"},
-      "Unable to parse date value: \"-1-1-1\"",
+      {"-111-1-1"},
+      "Unable to parse date value: \"-111-1-1\"",
       VARCHAR());
 }
 
