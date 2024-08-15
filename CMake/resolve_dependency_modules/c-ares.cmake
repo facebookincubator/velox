@@ -13,9 +13,9 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_CARES_BUILD_VERSION cares-1_17_2)
+set(VELOX_CARES_BUILD_VERSION cares-1_13_0)
 set(VELOX_CARES_BUILD_SHA256_CHECKSUM
-    444b7dbf33cb6e8a764d069e3485cbaaa28386d60eace6988275c3cb9534d300)
+    7c48c57706a38691041920e705d2a04426ad9c68d40edd600685323f214b2d57)
 string(
   CONCAT VELOX_CARES_SOURCE_URL
          "https://github.com/c-ares/c-ares/archive/refs/tags/"
@@ -29,7 +29,10 @@ FetchContent_Declare(
   c-ares
   URL ${VELOX_CARES_SOURCE_URL}
   URL_HASH ${VELOX_CARES_BUILD_SHA256_CHECKSUM}
-  OVERRIDE_FIND_PACKAGE EXCLUDE_FROM_ALL SYSTEM)
+  PATCH_COMMAND
+    git init && git apply
+    ${CMAKE_CURRENT_LIST_DIR}/c-ares/c-ares-random-file.patch
+    OVERRIDE_FIND_PACKAGE EXCLUDE_FROM_ALL SYSTEM)
 
 set(CARES_STATIC ON)
 set(CARES_INSTALL ON)
