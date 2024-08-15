@@ -30,6 +30,9 @@ int32_t readInt32(const char* buffer) {
   return n;
 }
 
+// Serialize a child vector of a row type within a list of rows.
+// Write the serialized data at offsets of buffer row by row.
+// Update offsets with the actual serialized size.
 template <TypeKind kind>
 void serializeTyped(
     const raw_vector<vector_size_t>& rows,
@@ -117,10 +120,12 @@ void serializeTyped<TypeKind::TIMESTAMP>(
   }
 }
 
-void serializeVarcharAndVarBinary(
+template <>
+void serializeTyped<TypeKind::VARCHAR>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
     DecodedVector& decoded,
+    size_t valueBytes,
     const raw_vector<uint8_t*>& nulls,
     char* buffer,
     std::vector<size_t>& offsets) {
@@ -141,18 +146,6 @@ void serializeVarcharAndVarBinary(
 }
 
 template <>
-void serializeTyped<TypeKind::VARCHAR>(
-    const raw_vector<vector_size_t>& rows,
-    uint32_t childIdx,
-    DecodedVector& decoded,
-    size_t valueBytes,
-    const raw_vector<uint8_t*>& nulls,
-    char* buffer,
-    std::vector<size_t>& offsets) {
-  serializeVarcharAndVarBinary(rows, childIdx, decoded, nulls, buffer, offsets);
-}
-
-template <>
 void serializeTyped<TypeKind::VARBINARY>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
@@ -161,7 +154,8 @@ void serializeTyped<TypeKind::VARBINARY>(
     const raw_vector<uint8_t*>& nulls,
     char* buffer,
     std::vector<size_t>& offsets) {
-  serializeVarcharAndVarBinary(rows, childIdx, decoded, nulls, buffer, offsets);
+  serializeTyped<TypeKind::VARCHAR>(
+      rows, childIdx, decoded, valueBytes, nulls, buffer, offsets);
 }
 } // namespace
 
