@@ -219,6 +219,7 @@ bool tryParseDateString(
   int32_t month = -1;
   int32_t year = 0;
   bool yearneg = false;
+  // Whether a sign is included in the date string.
   bool sign = false;
   int sep;
   if (mode != ParseMode::kIso8601) {
