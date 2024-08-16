@@ -54,3 +54,4 @@ breeze_add_perftests(
   "reduce"
   "scan"
   "sort")
+breeze_add_perftests("queries" "query" "order_by")
