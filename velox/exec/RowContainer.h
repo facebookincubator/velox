@@ -620,6 +620,13 @@ class RowContainer {
     return rowColumns_[index];
   }
 
+  /// Returns the size of a string or complex types value stored in the
+  /// specified row and column.
+  int32_t variableSizeAt(const char* row, column_index_t column);
+
+  /// Returns the per row size of a fixed size column.
+  int32_t fixedSizeAt(column_index_t column);
+
   /// Bit offset of the probed flag for a full or right outer join  payload.
   /// 0 if not applicable.
   int32_t probedFlagOffset() const {
@@ -784,24 +791,20 @@ class RowContainer {
     return *reinterpret_cast<T*>(group + offset);
   }
 
-  /// Returns the size of a string or complex types value stored in the
-  /// specified row and column.
-  int32_t variableSizeAt(const char* row, column_index_t column);
-
-  /// Copies a string or complex type value from the specified row and column
-  /// into provided buffer. Stored the size of the data in the first 4 bytes of
-  /// the buffer. If the value is null, writes zero into the first 4 bytes of
-  /// destination and returns.
-  /// @return The number of bytes written to 'destination' including the 4 bytes
-  /// of the size.
+  // Copies a string or complex type value from the specified row and column
+  // into provided buffer. Stored the size of the data in the first 4 bytes of
+  // the buffer. If the value is null, writes zero into the first 4 bytes of
+  // destination and returns.
+  // @return The number of bytes written to 'destination' including the 4 bytes
+  // of the size.
   int32_t
   extractVariableSizeAt(const char* row, column_index_t column, char* output);
 
-  /// Copies a string or complex type value from 'data' into the specified row
-  /// and column. Expects first 4 bytes in 'data' to contain the size of the
-  /// string or complex value.
-  /// @return The number of bytes read from 'data': 4 bytes for size + that many
-  /// bytes.
+  // Copies a string or complex type value from 'data' into the specified row
+  // and column. Expects first 4 bytes in 'data' to contain the size of the
+  // string or complex value.
+  // @return The number of bytes read from 'data': 4 bytes for size + that many
+  // bytes.
   int32_t
   storeVariableSizeAt(const char* data, char* row, column_index_t column);
 
@@ -926,7 +929,7 @@ class RowContainer {
     BufferPtr& nullBuffer = result->mutableNulls(maxRows);
     auto nulls = nullBuffer->asMutable<uint64_t>();
     BufferPtr valuesBuffer = result->mutableValues(maxRows);
-    auto values = valuesBuffer->asMutableRange<T>();
+    [[maybe_unused]] auto values = valuesBuffer->asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       const char* row;
       if constexpr (useRowNumbers) {
@@ -960,7 +963,7 @@ class RowContainer {
     auto maxRows = numRows + resultOffset;
     VELOX_DCHECK_LE(maxRows, result->size());
     BufferPtr valuesBuffer = result->mutableValues(maxRows);
-    auto values = valuesBuffer->asMutableRange<T>();
+    [[maybe_unused]] auto values = valuesBuffer->asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       const char* row;
       if constexpr (useRowNumbers) {
@@ -983,7 +986,9 @@ class RowContainer {
     }
   }
 
-  static ByteInputStream prepareRead(const char* row, int32_t offset);
+  static std::unique_ptr<ByteInputStream> prepareRead(
+      const char* row,
+      int32_t offset);
 
   template <TypeKind Kind>
   void hashTyped(
@@ -1150,7 +1155,7 @@ class RowContainer {
         result->setNull(resultIndex, true);
       } else {
         auto stream = prepareRead(row, offset);
-        ContainerRowSerde::deserialize(stream, resultIndex, result.get());
+        ContainerRowSerde::deserialize(*stream, resultIndex, result.get());
       }
     }
   }

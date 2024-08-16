@@ -64,6 +64,7 @@ add_executable(
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
   InPredicateTest.cpp
+  IPAddressCastTest.cpp
   JsonCastTest.cpp
   JsonExtractScalarTest.cpp
   JsonFunctionsTest.cpp
@@ -99,7 +100,6 @@ add_executable(
   TrimFunctionsTest.cpp
   TypeOfTest.cpp
   URLFunctionsTest.cpp
-  Utf8Test.cpp
   UuidFunctionsTest.cpp
   WidthBucketArrayTest.cpp
   WordStemTest.cpp

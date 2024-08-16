@@ -16,29 +16,10 @@
 #pragma once
 
 #include "velox/common/config/Config.h"
-#include "velox/core/Config.h"
 
 namespace facebook::velox::core {
-enum class CapacityUnit {
-  BYTE,
-  KILOBYTE,
-  MEGABYTE,
-  GIGABYTE,
-  TERABYTE,
-  PETABYTE
-};
 
-double toBytesPerCapacityUnit(CapacityUnit unit);
-
-CapacityUnit valueOfCapacityUnit(const std::string& unitStr);
-
-/// Convert capacity string with unit to the capacity number in the specified
-/// units
-uint64_t toCapacity(const std::string& from, CapacityUnit to);
-
-std::chrono::duration<double> toDuration(const std::string& str);
-
-/// A simple wrapper around velox::Config. Defines constants for query
+/// A simple wrapper around velox::ConfigBase. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
@@ -683,7 +664,7 @@ class QueryConfig {
   }
 
   bool hashProbeFinishEarlyOnEmptyBuild() const {
-    return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, true);
+    return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, false);
   }
 
   uint32_t minTableRowsForParallelJoinBuild() const {
@@ -745,6 +726,8 @@ class QueryConfig {
       std::unordered_map<std::string, std::string>&& values);
 
  private:
-  std::unique_ptr<velox::Config> config_;
+  void validateConfig();
+
+  std::unique_ptr<velox::config::ConfigBase> config_;
 };
 } // namespace facebook::velox::core

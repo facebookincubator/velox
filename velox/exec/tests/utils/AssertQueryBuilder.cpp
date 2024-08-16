@@ -63,7 +63,13 @@ AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
 }
 
 AssertQueryBuilder& AssertQueryBuilder::singleThreaded(bool singleThreaded) {
-  params_.singleThreaded = singleThreaded;
+  if (singleThreaded) {
+    params_.singleThreaded = true;
+    executor_ = nullptr;
+    return *this;
+  }
+  params_.singleThreaded = false;
+  executor_ = newExecutor();
   return *this;
 }
 
@@ -241,7 +247,8 @@ AssertQueryBuilder::readCursor() {
       params_.queryCtx = core::QueryCtx::create(
           executor_.get(),
           core::QueryConfig({}),
-          std::unordered_map<std::string, std::shared_ptr<Config>>{},
+          std::
+              unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
           cache::AsyncDataCache::getInstance(),
           nullptr,
           nullptr,

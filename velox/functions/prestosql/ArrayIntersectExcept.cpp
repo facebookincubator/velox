@@ -43,10 +43,10 @@ struct SetWithNull {
 // Generates a set based on the elements of an ArrayVector. Note that we take
 // rightSet as a parameter (instead of returning a new one) to reuse the
 // allocated memory.
-template <typename T, typename TVector>
+template <typename T>
 void generateSet(
     const ArrayVector* arrayVector,
-    const TVector* arrayElements,
+    const DecodedVector* arrayElements,
     vector_size_t idx,
     SetWithNull<T>& rightSet) {
   auto size = arrayVector->sizeAt(idx);
@@ -57,13 +57,7 @@ void generateSet(
     if (arrayElements->isNullAt(i)) {
       rightSet.hasNull = true;
     } else {
-      // Function can be called with either FlatVector or DecodedVector, but
-      // their APIs are slightly different.
-      if constexpr (std::is_same_v<TVector, DecodedVector>) {
-        rightSet.set.insert(arrayElements->template valueAt<T>(i));
-      } else {
-        rightSet.set.insert(arrayElements->valueAt(i));
-      }
+      rightSet.set.insert(arrayElements->template valueAt<T>(i));
     }
   }
 }
@@ -117,11 +111,6 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   /// If the rhs values passed to either array_intersect() or array_except()
   /// are constant (array literals) we create a set before instantiating the
   /// object and pass as a constructor parameter (constantSet).
-  ///
-  /// Smallest array optimization:
-  ///
-  /// If the rhs values passed to array_intersect() are not constant we create
-  /// sets from whichever side has the smallest sum of lengths in the batch.
 
   ArrayIntersectExceptFunction() = default;
 
@@ -139,30 +128,6 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
     BaseVector* right = args[1].get();
 
     exec::LocalDecodedVector leftHolder(context, *left, rows);
-    exec::LocalDecodedVector rightHolder(context, *right, rows);
-
-    if (isIntersect && !constantSet_.has_value()) {
-      // Swap left and right if needed so that the right array has the smaller
-      // number of elements since the right will be made into a hash set.
-      vector_size_t leftSize = 0;
-      vector_size_t rightSize = 0;
-      const ArrayVector* leftArrayVector =
-          leftHolder.get()->base()->as<ArrayVector>();
-      const ArrayVector* rightArrayVector =
-          rightHolder.get()->base()->as<ArrayVector>();
-      rows.applyToSelected([&](vector_size_t row) {
-        vector_size_t leftidx = leftHolder.get()->index(row);
-        leftSize += leftArrayVector->sizeAt(leftidx);
-
-        vector_size_t rightidx = rightHolder.get()->index(row);
-        rightSize += rightArrayVector->sizeAt(rightidx);
-      });
-      if (leftSize < rightSize) {
-        std::swap(left, right);
-        std::swap(leftHolder, rightHolder);
-      }
-    }
-
     auto decodedLeftArray = leftHolder.get();
     auto baseLeftArray = decodedLeftArray->base()->as<ArrayVector>();
 
@@ -227,9 +192,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
           // (check outputSet).
           bool addValue = false;
           if constexpr (isIntersect) {
-            addValue = rightSet.set.contains(val);
+            addValue = rightSet.set.count(val) > 0;
           } else {
-            addValue = !rightSet.set.contains(val);
+            addValue = rightSet.set.count(val) == 0;
           }
           if (addValue) {
             auto it = outputSet.set.insert(val);

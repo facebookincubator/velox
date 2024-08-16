@@ -35,9 +35,11 @@ velox_add_library(
   MapConcat.cpp
   Re2Functions.cpp
   Repeat.cpp
+  Slice.cpp
   StringEncodingUtils.cpp
   SubscriptUtil.cpp
-  TimeUtils.cpp)
+  TimeUtils.cpp
+  Utf8Utils.cpp)
 
 velox_link_libraries(
   velox_functions_lib
