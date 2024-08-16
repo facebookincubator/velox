@@ -111,24 +111,26 @@ Status daysSinceEpochFromWeekDate(
 /// align with Spark's SimpleDateFormat behavior, this function offers two
 /// modes: lenient and non-lenient. If `lenient` is false, it returns an error
 /// status if the date is invalid. If `lenient` is true, it accepts a wider
-/// range of arguments. For the month parameter, values greater than 12 wrap
-/// around to the start of the year, and values less than 1 count backward from
-/// December. For example, 13 corresponds to January of the following year and
-/// -1 corresponds to November of the previous year. For the weekOfMonth
-/// parameter, we consider days of the previous or next months as part of the
-/// specified weekOfMonth and dayOfWeek. For example, if weekOfMonth is 5 but
-/// the current month only has 4 weeks (such as February), the first week of
-/// March will be considered as the 5th week of February. For the dayOfWeek
-/// parameter, if weekOfMonth is 1 and dayOfWeek is 1 but the month's first day
-/// is a Saturday, the Monday of the last week of the previous month will be
-/// used.
-/// @param year Year, A value in [1, 292278994] range. e.g: 1996, -2000
-/// @param month Month of year. A value in [1, 12] range. For example, 1 is Jan,
-/// 7 is Jul.
-/// @param weekOfMonth Week of the month. A value in [1, 6] range. For example,
-/// 1 is 1st week, 3 is 3rd week.
-/// @param dayOfWeek Day number of week. A value in [1, 7] range. For example, 1
-/// is Monday, 7 is Sunday.
+/// range of arguments.
+/// @param year Year. For non-lenient mode, it should be in the range [1,
+/// 292278994]. e.g: 1996, -2000
+/// @param month Month of year. For non-lenient mode, it should be in the range
+/// [1, 12]. For example, 1 is Jan, 7 is Jul. For lenient mode, values greater
+/// than 12 wrap around to the start of the year, and values less than 1 count
+/// backward from December. For example, 13 corresponds to January of the
+/// following year and -1 corresponds to November of the previous year.
+/// @param weekOfMonth Week of the month. For non-lenient mode, it should be in
+/// the range [1, 6]. For example, 1 is 1st week, 3 is 3rd week. For lenient
+/// mode, we consider days of the previous or next months as part of the
+/// specified weekOfMonth. For example, if weekOfMonth is 5 but the current
+/// month only has 4 weeks (such as February), the first week of March will be
+/// considered as the 5th week of February.
+/// @param dayOfWeek Day number of week. For non-lenient mode, it should be in
+/// the range [1, 7]. For example, 1 is Monday, 7 is Sunday. For lenient mode,
+/// we consider days of the previous or next months as part of the specified
+/// dayOfWeek.For example, if weekOfMonth is 1 and dayOfWeek is 1 but the
+/// month's first day is Saturday, the Monday of the last week of the previous
+/// month will be used.
 Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
     int32_t year,
     int32_t month,
@@ -152,7 +154,7 @@ inline Expected<int32_t> fromDateString(const StringView& str, ParseMode mode) {
 }
 
 // Extracts the day of the week from the number of days since epoch
-int32_t extractISODayOfTheWeek(int32_t daysSinceEpoch);
+int32_t extractISODayOfTheWeek(int64_t daysSinceEpoch);
 
 /// Time conversions.
 
