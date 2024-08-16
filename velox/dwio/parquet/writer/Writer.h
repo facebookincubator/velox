@@ -24,6 +24,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -99,6 +100,10 @@ struct WriterOptions : public dwio::common::WriterOptions {
 
   arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
 
+  // Default Parquet datapage version is V2.
+  arrow::ParquetDataPageVersion parquetDataPageVersion =
+      arrow::ParquetDataPageVersion::V2;
+
   // The default factory allows the writer to construct the default flush
   // policy with the configs in its ctor.
   std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
@@ -121,6 +126,9 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.timestamp_unit";
   static constexpr const char* kParquetHiveConnectorWriteTimestampUnit =
       "hive.parquet.writer.timestamp-unit";
+
+  static constexpr const char* kParquetSessionDataPageVersion =
+      "parquet_writer_version";
 
   // Process hive connector and session configs.
   void processSessionConfigs(const config::ConfigBase& config) override;
