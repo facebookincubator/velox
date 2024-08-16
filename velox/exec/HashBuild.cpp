@@ -325,6 +325,8 @@ void HashBuild::addInput(RowVectorPtr input) {
   for (auto i = 0; i < hashers.size(); ++i) {
     auto key = input->childAt(hashers[i]->channel())->loadedVector();
     hashers[i]->decode(*key, activeRows_);
+    table_->rows()->updateColumnMayHaveNulls(
+        i, hashers[i]->decodedVector().mayHaveNullsRecursive());
   }
 
   // Update statistics for null keys in join operator.
@@ -363,6 +365,8 @@ void HashBuild::addInput(RowVectorPtr input) {
   for (auto i = 0; i < dependentChannels_.size(); ++i) {
     decoders_[i]->decode(
         *input->childAt(dependentChannels_[i])->loadedVector(), activeRows_);
+    table_->rows()->updateColumnMayHaveNulls(
+        i + hashers.size(), decoders_[i]->mayHaveNullsRecursive());
   }
 
   if (isAntiJoin(joinType_) && joinNode_->filter()) {

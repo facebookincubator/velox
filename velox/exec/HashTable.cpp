@@ -52,6 +52,7 @@ HashTable<ignoreNullKeys>::HashTable(
     bool isJoinBuild,
     bool hasProbedFlag,
     uint32_t minTableSizeForParallelJoinBuild,
+    bool trackColumnsMayHaveNulls,
     memory::MemoryPool* pool,
     const std::shared_ptr<velox::HashStringAllocator>& stringArena)
     : BaseHashTable(std::move(hashers)),
@@ -74,6 +75,7 @@ HashTable<ignoreNullKeys>::HashTable(
       isJoinBuild,
       hasProbedFlag,
       hashMode_ != HashMode::kHash,
+      trackColumnsMayHaveNulls,
       pool,
       stringArena);
   nextOffset_ = rows_->nextOffset();
@@ -1711,6 +1713,11 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
     otherTables_.emplace_back(std::unique_ptr<HashTable<ignoreNullKeys>>(
         dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
   }
+  for (auto& other : otherTables_) {
+    for (int i = 0; i < rows_->columnTypes().size(); ++i) {
+      rows_->updateColumnMayHaveNulls(i, other->rows()->columnMayHaveNulls(i));
+    }
+  }
   bool useValueIds = mayUseValueIds(*this);
   if (useValueIds) {
     for (auto& other : otherTables_) {
@@ -2143,10 +2150,12 @@ void HashTable<ignoreNullKeys>::prepareForGroupProbe(
     int8_t spillInputStartPartitionBit) {
   checkHashBitsOverlap(spillInputStartPartitionBit);
   auto& hashers = lookup.hashers;
-
+  int32_t columnIndex = 0;
   for (auto& hasher : hashers) {
     auto key = input->childAt(hasher->channel())->loadedVector();
     hasher->decode(*key, rows);
+    rows_->updateColumnMayHaveNulls(
+        columnIndex++, hasher->decodedVector().mayHaveNullsRecursive());
   }
 
   if constexpr (ignoreNullKeys) {

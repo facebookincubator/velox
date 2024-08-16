@@ -204,7 +204,8 @@ class RowContainer {
             false, // hasNext
             false, // isJoinBuild
             false, // hasProbedFlag
-            false, // hasNormalizedKey
+            false, // hasNormalizedKey,
+            false, // trackColumnsMayHaveNulls,
             pool) {}
 
   ~RowContainer();
@@ -227,6 +228,8 @@ class RowContainer {
   /// into one word for faster comparison. The bulk allocation is done
   /// from 'allocator'. ContainerRowSerde is used for serializing complex
   /// type values into the container.
+  /// 'trackColumnsMayHaveNulls' specifies whether the 'mayHaveNulls'
+  /// information from the input vectors is collected for the columns.
   /// 'stringAllocator' allows sharing the variable length data arena with
   /// another RowContainer. This is needed for spilling where the same
   /// aggregates are used for reading one container and merging into another.
@@ -239,6 +242,7 @@ class RowContainer {
       bool isJoinBuild,
       bool hasProbedFlag,
       bool hasNormalizedKey,
+      bool trackColumnsMayHaveNulls,
       memory::MemoryPool* pool,
       std::shared_ptr<HashStringAllocator> stringAllocator = nullptr);
 
@@ -302,6 +306,13 @@ class RowContainer {
       char* row,
       int32_t columnIndex);
 
+  /// Stores the 'decoded' into row container at 'column'.
+  void storeVector(
+      const DecodedVector& decoded,
+      vector_size_t size,
+      char* const* rows,
+      int32_t column);
+
   HashStringAllocator& stringAllocator() {
     return *stringAllocator_;
   }
@@ -341,6 +352,7 @@ class RowContainer {
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
+      bool columnMayHaveNulls,
       vector_size_t resultOffset,
       const VectorPtr& result);
 
@@ -351,8 +363,9 @@ class RowContainer {
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
+      bool columnMayHaveNulls,
       const VectorPtr& result) {
-    extractColumn(rows, numRows, col, 0, result);
+    extractColumn(rows, numRows, col, columnMayHaveNulls, 0, result);
   }
 
   /// Copies the values from the array pointed to by 'rows' at 'col' into
@@ -365,6 +378,7 @@ class RowContainer {
       const char* const* rows,
       folly::Range<const vector_size_t*> rowNumbers,
       RowColumn col,
+      bool columnMayHaveNulls,
       vector_size_t resultOffset,
       const VectorPtr& result);
 
@@ -384,7 +398,12 @@ class RowContainer {
       int32_t numRows,
       int32_t columnIndex,
       const VectorPtr& result) {
-    extractColumn(rows, numRows, columnAt(columnIndex), result);
+    extractColumn(
+        rows,
+        numRows,
+        columnAt(columnIndex),
+        columnMayHaveNulls(columnIndex),
+        result);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -396,7 +415,13 @@ class RowContainer {
       int32_t columnIndex,
       int32_t resultOffset,
       const VectorPtr& result) {
-    extractColumn(rows, numRows, columnAt(columnIndex), resultOffset, result);
+    extractColumn(
+        rows,
+        numRows,
+        columnAt(columnIndex),
+        columnMayHaveNulls(columnIndex),
+        resultOffset,
+        result);
   }
 
   /// Copies the values at 'columnIndex' at positions in the 'rowNumbers' array
@@ -413,7 +438,12 @@ class RowContainer {
       const vector_size_t resultOffset,
       const VectorPtr& result) {
     extractColumn(
-        rows, rowNumbers, columnAt(columnIndex), resultOffset, result);
+        rows,
+        rowNumbers,
+        columnAt(columnIndex),
+        columnMayHaveNulls(columnIndex),
+        resultOffset,
+        result);
   }
 
   /// Sets in result all locations with null values in columnIndex for rows.
@@ -718,6 +748,15 @@ class RowContainer {
     return keyTypes_;
   }
 
+  inline void updateColumnMayHaveNulls(int32_t columnIndex, bool mayHaveNulls) {
+    columnsMayHaveNulls_[columnIndex] =
+        columnsMayHaveNulls_[columnIndex] | mayHaveNulls;
+  }
+
+  inline bool columnMayHaveNulls(int32_t columnIndex) const {
+    return columnsMayHaveNulls_[columnIndex];
+  }
+
   const std::vector<Accumulator>& accumulators() const {
     return accumulators_;
   }
@@ -814,14 +853,27 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t numRows,
       RowColumn column,
+      bool columnMayHaveNulls,
       int32_t resultOffset,
       const VectorPtr& result) {
     if (rowNumbers.size() > 0) {
       extractColumnTypedInternal<true, Kind>(
-          rows, rowNumbers, rowNumbers.size(), column, resultOffset, result);
+          rows,
+          rowNumbers,
+          rowNumbers.size(),
+          column,
+          columnMayHaveNulls,
+          resultOffset,
+          result);
     } else {
       extractColumnTypedInternal<false, Kind>(
-          rows, rowNumbers, numRows, column, resultOffset, result);
+          rows,
+          rowNumbers,
+          numRows,
+          column,
+          columnMayHaveNulls,
+          resultOffset,
+          result);
     }
   }
 
@@ -831,6 +883,7 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t numRows,
       RowColumn column,
+      bool columnMayHaveNulls,
       int32_t resultOffset,
       const VectorPtr& result) {
     // Resize the result vector before all copies.
@@ -847,7 +900,7 @@ class RowContainer {
     auto* flatResult = result->as<FlatVector<T>>();
     auto nullMask = column.nullMask();
     auto offset = column.offset();
-    if (!nullMask) {
+    if (!nullMask || !columnMayHaveNulls) {
       extractValuesNoNulls<useRowNumbers, T>(
           rows, rowNumbers, numRows, offset, resultOffset, flatResult);
     } else {
@@ -1248,6 +1301,8 @@ class RowContainer {
   const bool nullableKeys_;
   const bool isJoinBuild_;
 
+  std::vector<bool> columnsMayHaveNulls_;
+
   // Indicates if we can add new row to this row container. It is set to false
   // after user calls 'getRowPartitions()' to create 'rowPartitions' object for
   // parallel join build.
@@ -1412,6 +1467,7 @@ inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
     folly::Range<const vector_size_t*> /*rowNumbers*/,
     int32_t /*numRows*/,
     RowColumn /*column*/,
+    bool /*columnMayHaveNulls*/,
     int32_t /*resultOffset*/,
     const VectorPtr& /*result*/) {
   VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
@@ -1421,6 +1477,7 @@ inline void RowContainer::extractColumn(
     const char* const* rows,
     int32_t numRows,
     RowColumn column,
+    bool columnMayHaveNulls,
     int32_t resultOffset,
     const VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -1430,6 +1487,7 @@ inline void RowContainer::extractColumn(
       {},
       numRows,
       column,
+      columnMayHaveNulls,
       resultOffset,
       result);
 }
@@ -1438,6 +1496,7 @@ inline void RowContainer::extractColumn(
     const char* const* rows,
     folly::Range<const vector_size_t*> rowNumbers,
     RowColumn column,
+    bool columnMayHaveNulls,
     int32_t resultOffset,
     const VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -1447,6 +1506,7 @@ inline void RowContainer::extractColumn(
       rowNumbers,
       rowNumbers.size(),
       column,
+      columnMayHaveNulls,
       resultOffset,
       result);
 }

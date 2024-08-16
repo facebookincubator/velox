@@ -1055,6 +1055,7 @@ bool GroupingSet::getOutputWithSpill(
           false,
           false,
           false,
+          false, // trackColumnsMayHaveNulls
           &pool_,
           table_->rows()->stringAllocatorShared());
 
@@ -1274,6 +1275,7 @@ void GroupingSet::abandonPartialAggregation() {
       false,
       false,
       false,
+      false, // trackColumnsMayHaveNulls
       &pool_,
       table_->rows()->stringAllocatorShared());
   initializeAggregates(aggregates_, *intermediateRows_, true);

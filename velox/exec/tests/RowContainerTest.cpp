@@ -1337,6 +1337,7 @@ TEST_F(RowContainerTest, alignment) {
       false,
       true,
       true,
+      false, // trackColumnsMayHaveNulls
       pool_.get());
   constexpr int kNumRows = 100;
   char* rows[kNumRows];
@@ -1504,6 +1505,7 @@ TEST_F(RowContainerTest, probedFlag) {
       true, // isJoinBuild
       true, // hasProbedFlag
       false, // hasNormalizedKey
+      false, // trackColumnsMayHaveNulls
       pool_.get());
 
   auto input = makeRowVector({
@@ -2062,4 +2064,75 @@ TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
   auto extracted = BaseVector::copy(*source);
   data->extractColumn(rows.data(), kNumRows, kColumnIndex, extracted);
   assertEqualVectors(source, extracted);
+}
+
+TEST_F(RowContainerTest, trackColumnsMayHaveNulls) {
+  // When 'trackColumnsMayHaveNulls' is false, we assume columns data may have
+  // nulls by default.
+  auto rowsDefault = makeRowContainer(
+      {BIGINT(), BIGINT()}, {BIGINT(), BIGINT()}, false, false);
+  for (int i = 0; i < rowsDefault->columnTypes().size(); ++i) {
+    ASSERT_TRUE(rowsDefault->columnMayHaveNulls(i));
+  }
+
+  // When 'trackColumnsMayHaveNulls' is true, when rows are stored, the
+  // vectors' 'mayHaveNulls' info will be tracked by the container.
+  auto rowContainer =
+      makeRowContainer({BIGINT(), BIGINT()}, {BIGINT(), BIGINT()}, false, true);
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    ASSERT_TRUE(!rowContainer->columnMayHaveNulls(i));
+  }
+
+  const uint64_t kNumRows = 1000;
+  VectorFuzzer fuzzer({.vectorSize = kNumRows, .nullRatio = 0}, pool());
+
+  VectorFuzzer fuzzerWithNulls(
+      {.vectorSize = kNumRows, .nullRatio = 0.01}, pool());
+
+  std::vector<VectorPtr> children;
+  const RowTypePtr& rowType = ROW({BIGINT(), BIGINT(), BIGINT(), BIGINT()});
+  children.reserve(rowType->size());
+  for (auto i = 0; i < rowType->size(); ++i) {
+    if (i % 2 == 0) {
+      children.emplace_back(fuzzer.fuzzFlat(rowType->childAt(i), kNumRows));
+    } else {
+      children.emplace_back(
+          fuzzerWithNulls.fuzzFlat(rowType->childAt(i), kNumRows));
+    }
+  }
+
+  auto rowVector = std::make_shared<RowVector>(
+      pool(), rowType, nullptr, kNumRows, std::move(children));
+
+  std::vector<char*> rows;
+  rows.reserve(kNumRows);
+
+  ASSERT_EQ(rowContainer->numRows(), 0);
+  SelectivityVector allRows(kNumRows);
+  for (size_t i = 0; i < kNumRows; i++) {
+    auto row = rowContainer->newRow();
+    rows.push_back(row);
+  }
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    DecodedVector decoded(*rowVector->childAt(i), allRows);
+    rowContainer->storeVector(decoded, kNumRows, rows.data(), i);
+  }
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    if (i % 2 == 0) {
+      ASSERT_TRUE(!rowContainer->columnMayHaveNulls(i));
+    } else {
+      ASSERT_TRUE(rowContainer->columnMayHaveNulls(i));
+    }
+  }
+  // If the column's mayHaveNulls is false, the extracted vector's mayHaveNulls
+  // should be false.
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    auto vector = BaseVector::create(rowType->childAt(i), kNumRows, pool());
+    rowContainer->extractColumn(rows.data(), kNumRows, i, vector);
+    if (i % 2 == 0) {
+      ASSERT_TRUE(!vector->mayHaveNulls());
+    } else {
+      ASSERT_TRUE(vector->mayHaveNulls());
+    }
+  }
 }

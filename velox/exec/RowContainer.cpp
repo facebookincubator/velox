@@ -139,6 +139,7 @@ RowContainer::RowContainer(
     bool isJoinBuild,
     bool hasProbedFlag,
     bool hasNormalizedKeys,
+    bool trackColumnsMayHaveNulls,
     memory::MemoryPool* pool,
     std::shared_ptr<HashStringAllocator> stringAllocator)
     : keyTypes_(keyTypes),
@@ -191,6 +192,7 @@ RowContainer::RowContainer(
     if (nullableKeys_) {
       ++nullOffset;
     }
+    columnsMayHaveNulls_.push_back(!trackColumnsMayHaveNulls);
   }
   // Make offset at least sizeof pointer so that there is space for a
   // free list next pointer below the bit at 'freeFlagOffset_'.
@@ -219,6 +221,7 @@ RowContainer::RowContainer(
     nullOffsets_.push_back(nullOffset);
     ++nullOffset;
     isVariableWidth |= !type->isFixedWidth();
+    columnsMayHaveNulls_.push_back(!trackColumnsMayHaveNulls);
   }
   if (hasProbedFlag) {
     nullOffsets_.push_back(nullOffset);
@@ -535,6 +538,45 @@ void RowContainer::store(
         rowColumn.offset(),
         rowColumn.nullByte(),
         rowColumn.nullMask());
+  }
+}
+
+void RowContainer::storeVector(
+    const DecodedVector& decoded,
+    vector_size_t size,
+    char* const* rows,
+    int32_t column) {
+  auto numKeys = keyTypes_.size();
+  bool isKey = column < numKeys;
+  updateColumnMayHaveNulls(column, decoded.mayHaveNullsRecursive());
+  if ((isKey && !nullableKeys_) || !decoded.mayHaveNullsRecursive()) {
+    for (int i = 0; i < size; ++i) {
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          storeNoNulls,
+          typeKinds_[column],
+          decoded,
+          i,
+          isKey,
+          rows[i],
+          offsets_[column]);
+    }
+  } else {
+    auto rowColumn = rowColumns_[column];
+    auto offset = rowColumn.offset();
+    auto nullByte = rowColumn.nullByte();
+    auto nullMask = rowColumn.nullMask();
+    for (int i = 0; i < size; ++i) {
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          storeWithNulls,
+          typeKinds_[column],
+          decoded,
+          i,
+          isKey,
+          rows[i],
+          offset,
+          nullByte,
+          nullMask);
+    }
   }
 }
 

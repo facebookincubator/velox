@@ -53,7 +53,8 @@ class RowContainerTestBase : public testing::Test,
   std::unique_ptr<RowContainer> makeRowContainer(
       const std::vector<TypePtr>& keyTypes,
       const std::vector<TypePtr>& dependentTypes,
-      bool isJoinBuild = true) {
+      bool isJoinBuild = true,
+      bool trackColumnsMayHaveNulls = false) {
     auto container = std::make_unique<RowContainer>(
         keyTypes,
         !isJoinBuild,
@@ -63,6 +64,7 @@ class RowContainerTestBase : public testing::Test,
         isJoinBuild,
         true,
         true,
+        trackColumnsMayHaveNulls,
         pool_.get());
     VELOX_CHECK(container->testingMutable());
     return container;
