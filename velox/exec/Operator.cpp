@@ -563,15 +563,19 @@ void Operator::MemoryReclaimer::enterArbitration() {
   }
 
   Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
-  if (auto opDriver = ensureDriver()) {
-    // NOTE: the current running driver might not be the driver of the operator
-    // that requests memory arbitration. The reason is that an operator might
-    // extend the buffer allocated from the other operator either from the same
-    // or different drivers. But they must be from the same task.
-    VELOX_CHECK_EQ(
-        runningDriver->task()->taskId(),
-        opDriver->task()->taskId(),
-        "The current running driver and the request driver must be from the same task");
+  if (!FLAGS_transferred_arbitration_allowed) {
+    if (auto opDriver = ensureDriver()) {
+      // NOTE: the current running driver might not be the driver of the
+      // operator that requests memory arbitration. The reason is that an
+      // operator might extend the buffer allocated from the other operator
+      // either from the same or different drivers. But they must be from the
+      // same task by the following check. User could set
+      // FLAGS_transferred_arbitration_allowed=true to bypass this check.
+      VELOX_CHECK_EQ(
+          runningDriver->task()->taskId(),
+          opDriver->task()->taskId(),
+          "The current running driver and the request driver must be from the same task");
+    }
   }
   if (runningDriver->task()->enterSuspended(runningDriver->state()) !=
       StopReason::kNone) {
