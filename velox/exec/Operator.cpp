@@ -593,11 +593,13 @@ void Operator::MemoryReclaimer::leaveArbitration() noexcept {
     return;
   }
   Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
-  if (auto opDriver = ensureDriver()) {
-    VELOX_CHECK_EQ(
-        runningDriver->task()->taskId(),
-        opDriver->task()->taskId(),
-        "The current running driver and the request driver must be from the same task");
+  if (!FLAGS_transferred_arbitration_allowed) {
+    if (auto opDriver = ensureDriver()) {
+      VELOX_CHECK_EQ(
+          runningDriver->task()->taskId(),
+          opDriver->task()->taskId(),
+          "The current running driver and the request driver must be from the same task");
+    }
   }
   runningDriver->task()->leaveSuspended(runningDriver->state());
 }
