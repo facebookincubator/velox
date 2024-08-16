@@ -26,9 +26,10 @@ if(${VELOX_PROTOBUF_BUILD_VERSION} LESS 22.0)
 else()
   set_source(absl)
   resolve_dependency(absl CONFIG REQUIRED)
-  string(CONCAT VELOX_PROTOBUF_SOURCE_URL
-                "https://github.com/protocolbuffers/protobuf/archive/"
-                "v${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz")
+  string(
+    CONCAT VELOX_PROTOBUF_SOURCE_URL
+           "https://github.com/protocolbuffers/protobuf/archive/"
+           "v${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz")
 endif()
 
 resolve_dependency_url(PROTOBUF)
@@ -45,5 +46,12 @@ set(protobuf_BUILD_TESTS OFF)
 set(protobuf_ABSL_PROVIDER
     "package"
     CACHE STRING "Provider of absl library")
+
+set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+set(CMAKE_CXX_FLAGS
+    "${CMAKE_CXX_FLAGS} -Wno-invalid-noreturn -Wno-missing-field-initializers")
+
 FetchContent_MakeAvailable(protobuf)
+
 set(Protobuf_INCLUDE_DIRS ${protobuf_SOURCE_DIR}/src)
+set(CMAKE_CXX_FLAGS ${PREVIOUS_CMAKE_CXX_FLAGS})
