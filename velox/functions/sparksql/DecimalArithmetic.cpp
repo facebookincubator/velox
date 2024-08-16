@@ -24,32 +24,39 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-// Return precision of `aType` and `bType`, set the `aScale` and `bScale`.
-std::pair<int, int> getDecimalPrecisionScales(
-    const Type& aType,
-    const Type& bType,
-    uint8_t& aScale,
-    uint8_t& bScale) {
-  auto [aPrecision, aScaleTmp] = getDecimalPrecisionScale(aType);
-  auto [bPrecision, bScaleTmp] = getDecimalPrecisionScale(bType);
-  aScale = aScaleTmp;
-  bScale = bScaleTmp;
-  return {aPrecision, bPrecision};
+struct BinaryPrecisionScales {
+  uint8_t aPrecision;
+  uint8_t aScale;
+  uint8_t bPrecision;
+  uint8_t bScale;
+};
+
+// Extracts the precisions and scales for two decimal types.
+BinaryPrecisionScales getDecimalPrecisionScales(
+    const TypePtr& aType,
+    const TypePtr& bType) {
+  auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
+  auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
+  BinaryPrecisionScales result{
+      static_cast<uint8_t>(aPrecision),
+      static_cast<uint8_t>(aScale),
+      static_cast<uint8_t>(bPrecision),
+      static_cast<uint8_t>(bScale)};
+  return result;
 }
 
 struct DecimalAddSubtractBase {
  public:
   void initializeBase(const std::vector<TypePtr>& inputTypes) {
-    auto aType = inputTypes[0];
-    auto bType = inputTypes[1];
-    auto [aPrecision, bPrecision] = getDecimalPrecisionScales(
-        *(inputTypes[0]), *(inputTypes[1]), aScale_, bScale_);
-    aRescale_ = computeRescaleFactor(aScale_, bScale_);
-    bRescale_ = computeRescaleFactor(bScale_, aScale_);
-    auto [rPrecision, rScale] =
-        computeResultPrecisionScale(aPrecision, aScale_, bPrecision, bScale_);
+    auto binary = getDecimalPrecisionScales(inputTypes[0], inputTypes[1]);
+    aScale_ = binary.aScale;
+    bScale_ = binary.bScale;
+    auto [rPrecision, rScale] = computeResultPrecisionScale(
+        binary.aPrecision, aScale_, binary.bPrecision, bScale_);
     rPrecision_ = rPrecision;
     rScale_ = rScale;
+    aRescale_ = computeRescaleFactor(aScale_, bScale_);
+    bRescale_ = computeRescaleFactor(bScale_, aScale_);
   }
 
   // Adds the values 'a' and 'b' and stores the result in 'r'. To align the
@@ -58,7 +65,7 @@ struct DecimalAddSubtractBase {
   // rescale 'a' and 'b'. 'rPrecision' and 'rScale' are the precision and scale
   // of the result.
   template <typename TResult, typename A, typename B>
-  inline bool applyAdd(TResult& r, A a, B b) {
+  bool applyAdd(TResult& r, A a, B b) {
     // The overflow flag is set to true if an overflow occurs
     // during the addition.
     bool overflow = false;
@@ -98,7 +105,7 @@ struct DecimalAddSubtractBase {
  private:
   // Returns the whole and fraction parts of a decimal value.
   template <typename T>
-  inline static std::pair<T, T> getWholeAndFraction(T value, uint8_t scale) {
+  static std::pair<T, T> getWholeAndFraction(T value, uint8_t scale) {
     const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[scale];
     const T whole = value / scaleFactor;
     return {whole, value - whole * scaleFactor};
@@ -106,7 +113,7 @@ struct DecimalAddSubtractBase {
 
   // Increases the scale of input value by 'delta'. Returns the input value if
   // delta is not positive.
-  inline static int128_t increaseScale(int128_t in, int16_t delta) {
+  static int128_t increaseScale(int128_t in, int16_t delta) {
     // No need to consider overflow as 'delta == higher scale - input scale', so
     // the scaled value will not exceed the maximum of long decimal.
     return delta <= 0 ? in : in * velox::DecimalUtil::kPowersOfTen[delta];
@@ -116,7 +123,7 @@ struct DecimalAddSubtractBase {
   // to produce a full result for decimal add. Checks whether the result
   // overflows.
   template <typename T>
-  inline static T
+  static T
   decimalAddResult(T whole, T fraction, uint8_t resultScale, bool& overflow) {
     T scaledWhole = sparksql::DecimalUtil::multiply<T>(
         whole, velox::DecimalUtil::kPowersOfTen[resultScale], overflow);
@@ -137,7 +144,7 @@ struct DecimalAddSubtractBase {
   // Reduces the scale of input value by 'delta'. Returns the input value if
   // delta is not positive.
   template <typename T>
-  inline static T reduceScale(T in, int32_t delta) {
+  static T reduceScale(T in, int32_t delta) {
     if (delta <= 0) {
       return in;
     }
@@ -159,7 +166,7 @@ struct DecimalAddSubtractBase {
   // Adds two non-negative values by adding the whole and fraction parts
   // separately.
   template <typename TResult, typename A, typename B>
-  inline static TResult addLargeNonNegative(
+  static TResult addLargeNonNegative(
       A a,
       B b,
       uint8_t aScale,
@@ -200,7 +207,7 @@ struct DecimalAddSubtractBase {
 
   // Adds two opposite values by adding the whole and fraction parts separately.
   template <typename TResult, typename A, typename B>
-  inline static TResult addLargeOpposite(
+  static TResult addLargeOpposite(
       A a,
       B b,
       uint8_t aScale,
@@ -246,7 +253,7 @@ struct DecimalAddSubtractBase {
   // Add whole and fraction parts separately, and then combine. The overflow
   // flag will be set to true if an overflow occurs during the addition.
   template <typename TResult, typename A, typename B>
-  inline static TResult addLarge(
+  static TResult addLarge(
       A a,
       B b,
       uint8_t aScale,
@@ -344,13 +351,12 @@ struct DecimalMultiplyFunction {
       const core::QueryConfig& /*config*/,
       A* /*a*/,
       B* /*b*/) {
-    auto [aPrecision, bPrecision] = getDecimalPrecisionScales(
-        *(inputTypes[0]), *(inputTypes[1]), aScale_, bScale_);
+    auto binary = getDecimalPrecisionScales(inputTypes[0], inputTypes[1]);
     auto [rPrecision, rScale] = DecimalUtil::adjustPrecisionScale(
-        aPrecision + bPrecision + 1, aScale_ + bScale_);
+        binary.aPrecision + binary.bPrecision + 1,
+        binary.aScale + binary.bScale);
     rPrecision_ = rPrecision;
-    rScale_ = rScale;
-    deltaScale_ = aScale_ + bScale_ - rScale_;
+    deltaScale_ = binary.aScale + binary.bScale - rScale;
   }
 
   template <typename R, typename A, typename B>
@@ -423,7 +429,7 @@ struct DecimalMultiplyFunction {
   }
 
  private:
-  inline static int256_t reduceScaleBy(int256_t in, int32_t reduceBy) {
+  static int256_t reduceScaleBy(int256_t in, int32_t reduceBy) {
     if (reduceBy == 0) {
       return in;
     }
@@ -438,10 +444,7 @@ struct DecimalMultiplyFunction {
     return result;
   }
 
-  uint8_t aScale_;
-  uint8_t bScale_;
   uint8_t rPrecision_;
-  uint8_t rScale_;
   // The difference between result scale and the sum of aScale and bScale.
   int32_t deltaScale_;
 };
@@ -456,14 +459,11 @@ struct DecimalDivideFunction {
       const core::QueryConfig& /*config*/,
       A* /*a*/,
       B* /*b*/) {
-    auto aType = inputTypes[0];
-    auto bType = inputTypes[1];
-    auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
-    auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
-    auto [rPrecision, rScale] =
-        computeResultPrecisionScale(aPrecision, aScale, bPrecision, bScale);
+    auto binary = getDecimalPrecisionScales(inputTypes[0], inputTypes[1]);
+    auto [rPrecision, rScale] = computeResultPrecisionScale(
+        binary.aPrecision, binary.aScale, binary.bPrecision, binary.bScale);
     rPrecision_ = rPrecision;
-    aRescale_ = rScale - aScale + bScale;
+    aRescale_ = rScale - binary.aScale + binary.bScale;
   }
 
   template <typename R, typename A, typename B>
