@@ -172,7 +172,7 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
 }
 
 void registerToPrettyStringFunctions(const std::string& prefix) {
-  const std::vector<std::string> aliases = aliases;
+  const std::vector<std::string> aliases = {prefix + "to_pretty_string"};
   registerUnaryIntegralWithTReturn<ToPrettyStringFunction, Varchar>(aliases);
   registerUnaryFloatingPointWithReturn<ToPrettyStringFunction, Varchar>(
       aliases);
