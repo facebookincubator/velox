@@ -20,8 +20,6 @@
 #include <folly/io/Cursor.h>
 #include <stdint.h>
 
-#include "velox/common/base/Exceptions.h"
-
 namespace facebook::velox::encoding {
 
 // Constants defining the size in bytes of binary and encoded blocks for Base64
@@ -326,13 +324,16 @@ void Base64::decode(std::string_view input, size_t size, char* output) {
 
 // static
 uint8_t Base64::base64ReverseLookup(
-    char character,
-    const Base64::ReverseIndex& reverseIndex) {
-  auto lookupValue = reverseIndex[(uint8_t)character];
-  if (lookupValue >= 0x40) {
-    VELOX_USER_FAIL("decode() - invalid input string: invalid characters");
+    char p,
+    const Base64::ReverseIndex& reverseIndex,
+    Status& status) {
+  auto curr = reverseIndex[(uint8_t)p];
+  if (curr >= 0x40) {
+    status = Status::UserError(
+        "Base64::decode() - invalid input string: contains invalid characters.");
+    return 0; // Return 0 or any other error code indicating failure
   }
-  return lookupValue;
+  return curr;
 }
 
 // static
@@ -399,7 +400,7 @@ Status Base64::decodeImpl(
     char* output,
     size_t outputSize,
     const Base64::ReverseIndex& reverseIndex) {
-  if (!inputSize) {
+  if (inputSize == 0) {
     return Status::OK();
   }
 
@@ -415,36 +416,44 @@ Status Base64::decodeImpl(
         "Base64::decode() - invalid output string: output string is too small.");
   }
 
-  // Handle full groups of 4 characters
-  for (; inputSize > 4; inputSize -= 4, input.remove_prefix(4), output += 3) {
-    // Each character of the 4 encodes 6 bits of the original, grab each with
-    // the appropriate shifts to rebuild the original and then split that back
-    // into the original 8-bit bytes.
-    uint32_t currentBlock =
-        (base64ReverseLookup(input[0], reverseIndex) << 18) |
-        (base64ReverseLookup(input[1], reverseIndex) << 12) |
-        (base64ReverseLookup(input[2], reverseIndex) << 6) |
-        base64ReverseLookup(input[3], reverseIndex);
-    output[0] = (currentBlock >> 16) & 0xff;
-    output[1] = (currentBlock >> 8) & 0xff;
-    output[2] = currentBlock & 0xff;
+  const char* inputPtr = input.data();
+  char* outputPtr = output;
+  Status lookupStatus;
+
+  // Process full blocks of 4 characters
+  size_t fullBlockCount = inputSize / 4;
+  for (size_t i = 0; i < fullBlockCount; ++i) {
+    uint8_t val0 = base64ReverseLookup(inputPtr[0], reverseIndex, lookupStatus);
+    uint8_t val1 = base64ReverseLookup(inputPtr[1], reverseIndex, lookupStatus);
+    uint8_t val2 = base64ReverseLookup(inputPtr[2], reverseIndex, lookupStatus);
+    uint8_t val3 = base64ReverseLookup(inputPtr[3], reverseIndex, lookupStatus);
+
+    uint32_t currentBlock = (val0 << 18) | (val1 << 12) | (val2 << 6) | val3;
+    outputPtr[0] = static_cast<char>((currentBlock >> 16) & 0xFF);
+    outputPtr[1] = static_cast<char>((currentBlock >> 8) & 0xFF);
+    outputPtr[2] = static_cast<char>(currentBlock & 0xFF);
+
+    inputPtr += 4;
+    outputPtr += 3;
   }
 
-  // Handle the last 2-4 characters. This is similar to the above, but the
-  // last 2 characters may or may not exist.
-  DCHECK(inputSize >= 2);
-  uint32_t currentBlock = (base64ReverseLookup(input[0], reverseIndex) << 18) |
-      (base64ReverseLookup(input[1], reverseIndex) << 12);
-  output[0] = (currentBlock >> 16) & 0xff;
-  if (inputSize > 2) {
-    currentBlock |= base64ReverseLookup(input[2], reverseIndex) << 6;
-    output[1] = (currentBlock >> 8) & 0xff;
-    if (inputSize > 3) {
-      currentBlock |= base64ReverseLookup(input[3], reverseIndex);
-      output[2] = currentBlock & 0xff;
+  // Handle the last block (2-3 characters)
+  size_t remaining = inputSize % 4;
+  if (remaining > 1) {
+    uint8_t val0 = base64ReverseLookup(inputPtr[0], reverseIndex, lookupStatus);
+    uint8_t val1 = base64ReverseLookup(inputPtr[1], reverseIndex, lookupStatus);
+    uint32_t currentBlock = (val0 << 18) | (val1 << 12);
+    outputPtr[0] = static_cast<char>((currentBlock >> 16) & 0xFF);
+
+    if (remaining == 3) {
+      uint8_t val2 =
+          base64ReverseLookup(inputPtr[2], reverseIndex, lookupStatus);
+      currentBlock |= (val2 << 6);
+      outputPtr[1] = static_cast<char>((currentBlock >> 8) & 0xFF);
     }
   }
-
+  if (!lookupStatus.ok())
+    return lookupStatus;
   return Status::OK();
 }
 

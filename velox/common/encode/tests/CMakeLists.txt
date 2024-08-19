@@ -16,9 +16,4 @@ add_executable(velox_common_encode_test Base64Test.cpp)
 add_test(velox_common_encode_test velox_common_encode_test)
 target_link_libraries(
   velox_common_encode_test
-  PRIVATE
-    velox_encode
-    velox_status
-    velox_exception
-    GTest::gtest
-    GTest::gtest_main)
+  PRIVATE velox_encode velox_status GTest::gtest GTest::gtest_main)

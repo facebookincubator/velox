@@ -121,19 +121,18 @@ class Base64 {
 
   // Counts the number of padding characters in encoded input.
   static inline size_t numPadding(std::string_view input, size_t inputSize) {
-    size_t padding = 0;
+    size_t numPadding{0};
     while (inputSize > 0 && input[inputSize - 1] == kPadding) {
-      padding++;
+      numPadding++;
       inputSize--;
     }
-    return padding;
+    return numPadding;
   }
 
   // Performs a reverse lookup in the reverse index to retrieve the original
   // index of a character in the base.
-  static uint8_t base64ReverseLookup(
-      char character,
-      const ReverseIndex& reverseIndex);
+  static uint8_t
+  base64ReverseLookup(char p, const ReverseIndex& reverseIndex, Status& status);
 
   // Encodes the specified input using the provided charset.
   template <class T>
@@ -158,6 +157,7 @@ class Base64 {
 
   VELOX_FRIEND_TEST(Base64Test, isPadded);
   VELOX_FRIEND_TEST(Base64Test, numPadding);
+  VELOX_FRIEND_TEST(Base64Test, testDecodeImpl);
 };
 
 } // namespace facebook::velox::encoding
