@@ -19,11 +19,6 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Task.h"
 
-DEFINE_bool(
-    transferred_arbitration_allowed,
-    false,
-    "Whether to allow entering memory arbitration on memory pool that is from another task");
-
 namespace facebook::velox::exec {
 std::unique_ptr<memory::MemoryReclaimer> MemoryReclaimer::create() {
   return std::unique_ptr<memory::MemoryReclaimer>(new MemoryReclaimer());

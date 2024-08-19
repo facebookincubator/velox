@@ -18,7 +18,7 @@
 
 #include "velox/common/memory/MemoryArbitrator.h"
 
-DECLARE_bool(transferred_arbitration_allowed);
+DECLARE_bool(memory_pool_capacity_transfer_across_tasks);
 
 namespace facebook::velox::exec {
 /// Provides the default leaf memory reclaimer implementation for velox task
