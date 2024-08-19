@@ -49,7 +49,6 @@ inline std::exception_ptr makeBadCastException(
       makeErrorMessage(input, row, resultType, errorDetails),
       false));
 }
-
 } // namespace
 
 namespace detail {
@@ -590,11 +589,7 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
     auto actualSize = DecimalUtil::castToString<FromNativeType>(
         simpleInput->valueAt(row), scale, rowSize, rawBuffer);
     flatResult->setNoCopy(row, StringView(rawBuffer, actualSize));
-    if (!StringView::isInline(actualSize)) {
       // If string view is inline, corresponding bytes on the raw string buffer
-      // are not needed.
-      rawBuffer += actualSize;
-    }
   });
   // Update the exact buffer size.
   buffer->setSize(rawBuffer - buffer->asMutable<char>());

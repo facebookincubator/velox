@@ -50,6 +50,7 @@
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
+#include "velox/functions/sparksql/ToPrettyString.h"
 #include "velox/functions/sparksql/UnscaledValueFunction.h"
 #include "velox/functions/sparksql/Uuid.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
@@ -169,6 +170,29 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<Timestamp>(prefix);
   registerArrayMinMaxFunctions<Date>(prefix);
 }
+
+void registerToPrettyStringFunctions(const std::string& prefix) {
+  registerUnaryIntegralWithTReturn<ToPrettyStringFunction, Varchar>(
+      {prefix + "toprettystring"});
+  registerUnaryFloatingPointWithReturn<ToPrettyStringFunction, Varchar>(
+      {prefix + "toprettystring"});
+  registerFunction<ToPrettyStringFunction, Varchar, bool>(
+      {prefix + "toprettystring"});
+  registerFunction<ToPrettyStringFunction, Varchar, Varchar>(
+      {prefix + "toprettystring"});
+  registerFunction<ToPrettyStringFunction, Varchar, Date>(
+      {prefix + "toprettystring"});
+  registerFunction<ToPrettyStringVarbinaryFunction, Varchar, Varbinary>(
+      {prefix + "toprettystring"});
+  registerFunction<ToPrettyStringTimeStampFunction, Varchar, Timestamp>(
+      {prefix + "toprettystring"});
+  registerFunction<
+      ToPrettyStringDecimalFunction,
+      Varchar,
+      ShortDecimal<P1, S1>>({prefix + "toprettystring"});
+  registerFunction<ToPrettyStringDecimalFunction, Varchar, LongDecimal<P1, S1>>(
+      {prefix + "toprettystring"});
+}
 } // namespace
 
 void registerFunctions(const std::string& prefix) {
@@ -222,6 +246,7 @@ void registerFunctions(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar>({prefix + "str_to_map"});
+  registerToPrettyStringFunctions(prefix);
 
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
       {prefix + "left"});
