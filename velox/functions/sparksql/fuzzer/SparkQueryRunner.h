@@ -43,6 +43,12 @@ class SparkQueryRunner : public velox::exec::test::ReferenceQueryRunner {
             coordinatorUri,
             grpc::InsecureChannelCredentials()))){};
 
+  RunnerType runnerType() const override {
+    return RunnerType::kSparkQueryRunner;
+  }
+
+  const std::vector<TypePtr>& supportedScalarTypes() const override;
+
   /// Converts Velox query plan to Spark SQL. Supports Values -> Aggregation.
   /// Values node is converted into reading from 'tmp' table.
   /// @return std::nullopt for unsupported cases.

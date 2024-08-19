@@ -24,7 +24,11 @@ namespace facebook::velox::exec::test {
 /// Query runner that uses reference database, i.e. DuckDB, Presto, Spark.
 class ReferenceQueryRunner {
  public:
-  enum class RunnerType { kPrestoQueryRunner, kDuckQueryRunner };
+  enum class RunnerType {
+    kPrestoQueryRunner,
+    kDuckQueryRunner,
+    kSparkQueryRunner
+  };
 
   virtual ~ReferenceQueryRunner() = default;
 
