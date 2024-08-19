@@ -15,7 +15,6 @@
  */
 
 #include "velox/exec/Unnest.h"
-#include <iostream>
 #include "velox/common/base/Nulls.h"
 #include "velox/vector/FlatVector.h"
 
@@ -177,13 +176,8 @@ RowVectorPtr Unnest::getOutput() {
     return nullptr;
   }
 
-  std::cout << "row1 startSize " << firstRowStartSize_ << " endSize "
-            << firstRowEndSize << " end row endSize " << endRowEndSize
-            << std::endl;
-
   auto output = generateOutput(
       nextInputRow_, numInput, numElements, firstRowEndSize, endRowEndSize);
-  std::cout << "generate output" << output->toString(0, 100) << std::endl;
   if (partialProcessRowStartSize != -1) {
     firstRowStartSize_ = partialProcessRowStartSize;
     nextInputRow_ += numInput - 1;
@@ -263,35 +257,32 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
     identityMapping = false;
   }
 
-  auto firstEndRowGenerator =
-      [&](vector_size_t row, vector_size_t startSize, vector_size_t endSize) {
-        if (!currentDecoded.isNullAt(row)) {
-          const auto offset = currentOffsets[currentIndices[row]];
-          const auto unnestSize = currentSizes[currentIndices[row]];
-          if (index != offset || endSize != rawMaxSizes_[row] ||
-              unnestSize < endSize) {
-            identityMapping = false;
-          }
-          auto currentUnnestSize = std::min(endSize, unnestSize);
-          std::cout << "for channel " << channel << " numElements "
-                    << numElements << " for row " << row << "startSize "
-                    << startSize << "endSize " << endSize << " offset "
-                    << offset << " unnestSize " << unnestSize << std::endl;
-          for (auto i = startSize; i < currentUnnestSize; i++) {
-            rawElementIndices[index++] = offset + i;
-          }
+  auto firstEndRowGenerator = [&](vector_size_t row,
+                                  vector_size_t startSize,
+                                  vector_size_t endSize) {
+    if (!currentDecoded.isNullAt(row)) {
+      const auto offset = currentOffsets[currentIndices[row]];
+      const auto unnestSize = currentSizes[currentIndices[row]];
+      if (index != offset || endSize != rawMaxSizes_[row] ||
+          unnestSize < endSize) {
+        identityMapping = false;
+      }
+      auto currentUnnestSize = std::min(endSize, unnestSize);
+      for (auto i = startSize; i < currentUnnestSize; i++) {
+        rawElementIndices[index++] = offset + i;
+      }
 
-          for (auto i = currentUnnestSize; i < endSize; ++i) {
-            bits::setNull(rawNulls, index++, true);
-          }
-        } else if (endSize - startSize > 0) {
-          identityMapping = false;
+      for (auto i = std::max(startSize, currentUnnestSize); i < endSize; ++i) {
+        bits::setNull(rawNulls, index++, true);
+      }
+    } else if (endSize - startSize > 0) {
+      identityMapping = false;
 
-          for (auto i = startSize; i < endSize; ++i) {
-            bits::setNull(rawNulls, index++, true);
-          }
-        }
-      };
+      for (auto i = startSize; i < endSize; ++i) {
+        bits::setNull(rawNulls, index++, true);
+      }
+    }
+  };
 
   if (size > 0) {
     firstEndRowGenerator(start, firstRowStartSize_, firstRowEndSize);
