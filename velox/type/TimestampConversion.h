@@ -113,7 +113,8 @@ Status daysSinceEpochFromWeekDate(
 /// status if the date is invalid. If `lenient` is true, it accepts a wider
 /// range of arguments.
 /// @param year Year. For non-lenient mode, it should be in the range [1,
-/// 292278994]. e.g: 1996, -2000
+/// 292278994]. e.g: 1996, -2000. For lenient mode, values outside this range
+/// could result in overflow.
 /// @param month Month of year. For non-lenient mode, it should be in the range
 /// [1, 12]. For example, 1 is Jan, 7 is Jul. For lenient mode, values greater
 /// than 12 wrap around to the start of the year, and values less than 1 count

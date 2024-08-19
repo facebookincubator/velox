@@ -170,9 +170,9 @@ bool isValidWeekOfMonthDate(
   const int32_t firstWeekLength = 7 - firstDayOfWeek + 1;
   const int32_t monthLength =
       isLeapYear(year) ? kLeapDays[month] : kNormalDays[month];
-  const int32_t maxWeekOfMonth =
+  const int32_t actualNumberOfWeeks =
       1 + ceil((monthLength - firstWeekLength) / 7.0);
-  if (weekOfMonth < 1 || weekOfMonth > maxWeekOfMonth) {
+  if (weekOfMonth < 1 || weekOfMonth > actualNumberOfWeeks) {
     return false;
   }
 
@@ -184,7 +184,7 @@ bool isValidWeekOfMonthDate(
   const int32_t lastWeekLength = (monthLength - firstWeekLength) % 7;
   // If dayOfWeek is after the last day of the last week of the month, it is
   // considered invalid.
-  if (weekOfMonth == maxWeekOfMonth && lastWeekLength != 0 &&
+  if (weekOfMonth == actualNumberOfWeeks && lastWeekLength != 0 &&
       dayOfWeek > lastWeekLength) {
     return false;
   }
