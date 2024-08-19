@@ -348,9 +348,9 @@ String Functions
 
     It has several differences with casting value to string:
 
-    - It prints null values (either from column or struct field) as "NULL".
+    - It prints null values as "NULL".
 
-    - It prints binary values (either from column or struct field) using the hex format.
+    - It prints binary values using the hex format.
 
 .. spark:function:: translate(string, match, replace) -> varchar
 
