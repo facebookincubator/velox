@@ -22,6 +22,7 @@
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
+#include "velox/dwio/parquet/reader/SemanticVersion.h"
 
 namespace facebook::velox::parquet {
 
@@ -70,6 +71,10 @@ class ReaderBase {
     return options_.getSessionTimezone();
   }
 
+  bool shouldIgnoreStatistics() const {
+    return shouldIgnoreStatistics_;
+  }
+
   /// Ensures that streams are enqueued and loading for the row group at
   /// 'currentGroup'. May start loading one or more subsequent groups.
   void scheduleRowGroups(
@@ -92,6 +97,8 @@ class ReaderBase {
   void loadFileMetaData();
 
   void initializeSchema();
+
+  void initializeVersion();
 
   std::unique_ptr<ParquetTypeWithId> getParquetColumnInfo(
       uint32_t maxSchemaElementIdx,
@@ -122,6 +129,10 @@ class ReaderBase {
   RowTypePtr schema_;
   std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
 
+  std::optional<SemanticVersion> version;
+
+  bool shouldIgnoreStatistics_;
+
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
@@ -141,6 +152,7 @@ ReaderBase::ReaderBase(
 
   loadFileMetaData();
   initializeSchema();
+  initializeVersion();
 }
 
 void ReaderBase::loadFileMetaData() {
@@ -230,6 +242,15 @@ void ReaderBase::initializeSchema() {
       options_.fileSchema());
   schema_ = createRowType(
       schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
+}
+
+void ReaderBase::initializeVersion() {
+  version = SemanticVersion::parse(fileMetaData_->created_by);
+  if (version.has_value()) {
+    shouldIgnoreStatistics_ = SemanticVersion::shouldIgnoreStatistics(version.value());
+  } else {
+    shouldIgnoreStatistics_ = true;
+  }
 }
 
 std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
@@ -808,10 +829,6 @@ bool ReaderBase::isRowGroupBuffered(int32_t rowGroupIndex) const {
   return inputs_.count(rowGroupIndex) != 0;
 }
 
-namespace {
-struct ParquetStatsContext : dwio::common::StatsContext {};
-} // namespace
-
 class ParquetRowReader::Impl {
  public:
   Impl(
@@ -872,7 +889,8 @@ class ParquetRowReader::Impl {
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
     ParquetData::FilterRowGroupsResult res;
-    columnReader_->filterRowGroups(0, ParquetStatsContext(), res);
+    ParquetStatsContext parquetStatsContext = ParquetStatsContext(readerBase_->shouldIgnoreStatistics());
+    columnReader_->filterRowGroups(0, parquetStatsContext, res);
     if (auto& metadataFilter = options_.metadataFilter()) {
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);
     }

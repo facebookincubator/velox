@@ -17,6 +17,7 @@
 #include "velox/dwio/parquet/reader/ParquetData.h"
 
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 
 namespace facebook::velox::parquet {
 
@@ -30,8 +31,19 @@ std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
 void ParquetData::filterRowGroups(
     const common::ScanSpec& scanSpec,
     uint64_t /*rowsPerRowGroup*/,
-    const dwio::common::StatsContext& /*writerContext*/,
+    const dwio::common::StatsContext& writerContext,
     FilterRowGroupsResult& result) {
+  auto parquetStatsContext = reinterpret_cast<const ParquetStatsContext*>(&writerContext);
+  bool shouldIgnoreStatistics = false;
+  if (parquetStatsContext->shouldIgnoreStatistics && type_->parquetType_.has_value()) {
+    thrift::Type::type type = type_->parquetType_.value();
+    if (type == thrift::Type::BYTE_ARRAY || type == thrift::Type::FIXED_LEN_BYTE_ARRAY) {
+      shouldIgnoreStatistics = true;
+    }
+  }
+  if (shouldIgnoreStatistics) {
+    return;
+  }
   result.totalCount =
       std::max<int>(result.totalCount, fileMetaDataPtr_.numRowGroups());
   auto nwords = bits::nwords(result.totalCount);
