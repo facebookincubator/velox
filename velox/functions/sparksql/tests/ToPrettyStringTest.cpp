@@ -22,7 +22,7 @@ class ToPrettyStringTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
   std::optional<std::string> toPrettyString(std::optional<T> arg) {
-    return evaluateOnce<std::string>("toprettystring(c0)", arg);
+    return evaluateOnce<std::string>("to_pretty_string(c0)", arg);
   }
 
   template <TypeKind KIND>
@@ -63,13 +63,13 @@ TEST_F(ToPrettyStringTest, toPrettyStringTest) {
 TEST_F(ToPrettyStringTest, date) {
   EXPECT_EQ(
       evaluateOnce<std::string>(
-          "toprettystring(c0)", DATE(), std::optional<int32_t>(18262)),
+          "to_pretty_string(c0)", DATE(), std::optional<int32_t>(18262)),
       "2020-01-01");
 }
 
 TEST_F(ToPrettyStringTest, binary) {
   auto toPrettyStringBinary = [&](const std::optional<std::string>& input) {
-    return evaluateOnce<std::string>("toprettystring(c0)", VARBINARY(), input)
+    return evaluateOnce<std::string>("to_pretty_string(c0)", VARBINARY(), input)
         .value();
   };
 
@@ -94,7 +94,7 @@ TEST_F(ToPrettyStringTest, timestamp) {
 TEST_F(ToPrettyStringTest, decimal) {
   testDecimalExpr<TypeKind::VARCHAR>(
       {makeFlatVector<StringView>({"0.123", "0.552", "0.000"})},
-      "toprettystring(c0)",
+      "to_pretty_string(c0)",
       {makeFlatVector<int64_t>({123, 552, 0}, DECIMAL(3, 3))});
 
   testDecimalExpr<TypeKind::VARCHAR>(
@@ -103,7 +103,7 @@ TEST_F(ToPrettyStringTest, decimal) {
            "55555555555555.55555",
            "0.00000",
            StringView(kNull)})},
-      "toprettystring(c0)",
+      "to_pretty_string(c0)",
       {makeNullableFlatVector<int128_t>(
           {1234567890123456789, 5555555555555555555, 0, std::nullopt},
           DECIMAL(19, 5))});

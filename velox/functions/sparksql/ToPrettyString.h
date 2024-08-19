@@ -24,10 +24,10 @@ namespace detail {
 static const StringView kNull = "NULL";
 }
 
-/// toprettystring(x) -> varchar
+/// to_pretty_string(x) -> varchar
 /// Returns pretty string for int8, int16, int32, int64, bool, Date, Varchar. It
 /// has one difference with casting value to string:
-/// - It prints null values (either from column or struct field) as "NULL".
+/// 1) It prints null values as "NULL".
 template <typename TExec>
 struct ToPrettyStringFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -44,42 +44,44 @@ struct ToPrettyStringFunction {
   }
 
   template <typename TInput>
-  void callNullable(out_type<Varchar>& result, const TInput* input) {
+  Status callNullable(out_type<Varchar>& result, const TInput* input) {
     if (input) {
       if constexpr (std::is_same_v<TInput, StringView>) {
         result.setNoCopy(*input);
-        return;
+        return Status::OK();
       }
       if constexpr (std::is_same_v<TInput, int32_t>) {
         if (inputType_->isDate()) {
-          auto output = DATE()->toString(*input);
-          result.append(output);
-          return;
+          try {
+            auto output = DATE()->toString(*input);
+            result.append(output);
+          } catch (const std::exception& e) {
+            return Status::Invalid(e.what());
+          }
+          return Status::OK();
         }
       }
       const auto castResult =
           util::Converter<TypeKind::VARCHAR, void, util::SparkCastPolicy>::
               tryCast(*input);
-      if (castResult.hasError()) {
-        result.setNoCopy(detail::kNull);
-      } else {
-        result.copy_from(castResult.value());
-      }
+      VELOX_DCHECK(!castResult.hasError());
+      result.copy_from(castResult.value());
     } else {
       result.setNoCopy(detail::kNull);
     }
+    return Status::OK();
   }
 
  private:
   TypePtr inputType_;
 };
 
-/// Returns pretty string for Varbinary. It has several differences with casting
-/// value to string:
-/// - It prints null values (either from column or struct field) as "NULL".
-/// - It prints binary values (either from column or struct field) using the hex
-/// format. Returns a pretty string of the byte array which prints each byte as
-/// a hex digit and add spaces between them. For example, [1A C0].
+/// Returns pretty string for varbinary. It has several differences with
+/// cast(varbinary as string):
+/// 1) It prints null values as "NULL".
+/// 2) It prints binary values using the hex format
+/// The pretty string is composed of the hex digits of bytes and spaces between
+/// them. E.g., the result of to_pretty_string("abc") is "[31 32 33]".
 template <typename TExec>
 struct ToPrettyStringVarbinaryFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -95,9 +97,9 @@ struct ToPrettyStringVarbinaryFunction {
       char* pos = startPosition;
       *pos++ = '[';
       for (auto i = 0; i < input->size(); i++) {
-        auto formated = fmt::format("{:X}", input->data()[i]);
-        *pos++ = formated.data()[0];
-        *pos++ = formated.data()[1];
+        auto formatted = fmt::format("{:X}", input->data()[i]);
+        *pos++ = formatted.data()[0];
+        *pos++ = formatted.data()[1];
         *pos++ = ' ';
       }
       *--pos = ']';
@@ -107,11 +109,11 @@ struct ToPrettyStringVarbinaryFunction {
   }
 };
 
-/// Returns pretty string for Timestamp. It has one difference with casting
-/// value to string:
-/// - It prints null values (either from column or struct field) as "NULL".
+/// Returns pretty string for Timestamp. It has one difference with
+/// cast(timestamp as string):
+/// 1) It prints null values as "NULL".
 template <typename TExec>
-struct ToPrettyStringTimeStampFunction {
+struct ToPrettyStringTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   void initialize(
@@ -120,26 +122,31 @@ struct ToPrettyStringTimeStampFunction {
       const arg_type<Timestamp>* /*timestamp*/) {
     auto timezone = config.sessionTimezone();
     if (!timezone.empty()) {
-      options_.timeZone = date::locate_zone(timezone);
+      options_.timeZone = tz::locateZone(timezone);
     }
     timestampRowSize_ = getMaxStringLength(options_);
   }
 
-  void callNullable(
+  Status callNullable(
       out_type<Varchar>& result,
       const arg_type<Timestamp>* timestamp) {
     if (timestamp) {
       Timestamp inputValue(*timestamp);
-      if (options_.timeZone) {
-        inputValue.toTimezone(*(options_.timeZone));
+      try {
+        if (options_.timeZone) {
+          inputValue.toTimezone(*(options_.timeZone));
+        }
+        result.reserve(timestampRowSize_);
+        const auto stringView =
+            Timestamp::tsToStringView(inputValue, options_, result.data());
+        result.resize(stringView.size());
+      } catch (const std::exception& e) {
+        return Status::Invalid(e.what());
       }
-      result.reserve(timestampRowSize_);
-      const auto stringView =
-          Timestamp::tsToStringView(inputValue, options_, result.data());
-      result.resize(stringView.size());
     } else {
       result.setNoCopy(detail::kNull);
     }
+    return Status::OK();
   }
 
  private:
@@ -154,8 +161,8 @@ struct ToPrettyStringTimeStampFunction {
 };
 
 /// Returns pretty string for short decimal and long decimal. It has one
-/// difference with casting value to string:
-/// - It prints null values (either from column or struct field) as "NULL".
+/// difference with cast(decimal as string):
+/// 1) It prints null values as "NULL".
 template <typename TExec>
 struct ToPrettyStringDecimalFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -165,33 +172,25 @@ struct ToPrettyStringDecimalFunction {
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
       A* /*a*/) {
-    const auto [precision, scale] = getDecimalPrecisionScale(*inputTypes[0]);
+    auto [precision, scale] = getDecimalPrecisionScale(*inputTypes[0]);
     precision_ = precision;
     scale_ = scale;
-    
-    maxRowSize_ = velox::DecimalUtil::getMaxStringLength();
-    if (scale > 0) {
-      ++maxRowSize_; // A dot.
-    }
-    if (precision == scale) {
-      ++maxRowSize_; // Leading zero.
-    }
+    maxRowSize_ = velox::DecimalUtil::maxStringViewSize(precision, scale);
   }
 
   template <typename TInput>
   void callNullable(out_type<Varchar>& result, const TInput* input) {
     if (input) {
       if (StringView::isInline(maxRowSize_)) {
-        auto view = exec::detail::convertToStringView<TInput>(
+        DecimalUtil::castToString<TInput>(
             *input, scale_, maxRowSize_, inlined_);
         result.setNoCopy(inlined_);
       } else {
         result.reserve(maxRowSize_);
-        auto view = exec::detail::convertToStringView<TInput>(
+        auto actualSize = DecimalUtil::castToString<TInput>(
             *input, scale_, maxRowSize_, result.data());
-        result.resize(view.size());
+        result.resize(actualSize);
       }
-
     } else {
       result.setNoCopy(detail::kNull);
     }

@@ -342,15 +342,15 @@ String Functions
         SELECT substring_index('aaaaa', 'aa', 5); -- "aaaaa"
         SELECT substring_index('aaaaa', 'aa', -5); -- "aaaaa"
 
-.. spark:function:: toprettystring(x) -> varchar
+.. spark:function:: to_pretty_string(x) -> varchar
 
-    Returns pretty string for all scalar type. It has several differences with casting value to string:
+    Returns pretty string for all scalar type. Considering the time zone if config ``session_timezone`` is set. 
+
+    It has several differences with casting value to string:
 
     - It prints null values (either from column or struct field) as "NULL".
 
     - It prints binary values (either from column or struct field) using the hex format.
-    
-    Considering the time zone if config ``session_timezone`` is set. ::
 
 .. spark:function:: translate(string, match, replace) -> varchar
 

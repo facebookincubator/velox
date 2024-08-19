@@ -172,26 +172,23 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
 }
 
 void registerToPrettyStringFunctions(const std::string& prefix) {
-  registerUnaryIntegralWithTReturn<ToPrettyStringFunction, Varchar>(
-      {prefix + "toprettystring"});
+  const std::vector<std::string> aliases = aliases;
+  registerUnaryIntegralWithTReturn<ToPrettyStringFunction, Varchar>(aliases);
   registerUnaryFloatingPointWithReturn<ToPrettyStringFunction, Varchar>(
-      {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringFunction, Varchar, bool>(
-      {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringFunction, Varchar, Varchar>(
-      {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringFunction, Varchar, Date>(
-      {prefix + "toprettystring"});
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, bool>(aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, Varchar>(aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, Date>(aliases);
   registerFunction<ToPrettyStringVarbinaryFunction, Varchar, Varbinary>(
-      {prefix + "toprettystring"});
-  registerFunction<ToPrettyStringTimeStampFunction, Varchar, Timestamp>(
-      {prefix + "toprettystring"});
+      aliases);
+  registerFunction<ToPrettyStringTimestampFunction, Varchar, Timestamp>(
+      aliases);
   registerFunction<
       ToPrettyStringDecimalFunction,
       Varchar,
-      ShortDecimal<P1, S1>>({prefix + "toprettystring"});
+      ShortDecimal<P1, S1>>(aliases);
   registerFunction<ToPrettyStringDecimalFunction, Varchar, LongDecimal<P1, S1>>(
-      {prefix + "toprettystring"});
+      aliases);
 }
 } // namespace
 
@@ -246,6 +243,7 @@ void registerFunctions(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar>({prefix + "str_to_map"});
+
   registerToPrettyStringFunctions(prefix);
 
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
