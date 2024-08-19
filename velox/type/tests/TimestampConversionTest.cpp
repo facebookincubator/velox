@@ -157,10 +157,10 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
 
 TEST(DateTimeUtilTest, fromWeekOfMonthDateInvalid) {
   auto daysSinceEpochNonLenient = [](int32_t year,
-                           int32_t month,
-                           int32_t weekOfMonth,
-                           int32_t dayOfWeek,
-                           const std::string& error) {
+                                     int32_t month,
+                                     int32_t weekOfMonth,
+                                     int32_t dayOfWeek,
+                                     const std::string& error) {
     auto result = util::daysSinceEpochFromWeekOfMonthDate(
         year, month, weekOfMonth, dayOfWeek, false);
     EXPECT_TRUE(result.error().isUserError());
@@ -169,10 +169,12 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDateInvalid) {
 
   EXPECT_NO_THROW(
       daysSinceEpochNonLenient(-1, 1, 1, 1, "Date out of range: -1-1-1-1"));
-  EXPECT_NO_THROW(daysSinceEpochNonLenient(292278995, 1, 1, 1, "Date out of range: 292278995-1-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochNonLenient(
+      292278995, 1, 1, 1, "Date out of range: 292278995-1-1-1"));
   EXPECT_NO_THROW(
       daysSinceEpochNonLenient(2024, 0, 1, 1, "Date out of range: 2024-0-1-1"));
-  EXPECT_NO_THROW(daysSinceEpochNonLenient(2024, 13, 1, 1, "Date out of range: 2024-13-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochNonLenient(
+      2024, 13, 1, 1, "Date out of range: 2024-13-1-1"));
   EXPECT_NO_THROW(
       daysSinceEpochNonLenient(2024, 1, 6, 1, "Date out of range: 2024-1-6-1"));
   EXPECT_NO_THROW(
