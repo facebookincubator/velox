@@ -563,7 +563,7 @@ void Operator::MemoryReclaimer::enterArbitration() {
   }
 
   Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
-  if (!FLAGS_transferred_arbitration_allowed) {
+  if (!FLAGS_velox_memory_pool_capacity_transfer_across_tasks) {
     if (auto opDriver = ensureDriver()) {
       // NOTE: the current running driver might not be the driver of the
       // operator that requests memory arbitration. The reason is that an
@@ -593,7 +593,7 @@ void Operator::MemoryReclaimer::leaveArbitration() noexcept {
     return;
   }
   Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
-  if (!FLAGS_transferred_arbitration_allowed) {
+  if (!FLAGS_velox_memory_pool_capacity_transfer_across_tasks) {
     if (auto opDriver = ensureDriver()) {
       VELOX_CHECK_EQ(
           runningDriver->task()->taskId(),
