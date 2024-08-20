@@ -123,18 +123,18 @@ TEST(SpillStatsTest, spillStats) {
       stats2.toString(),
       "spillRuns[100] spilledInputBytes[2.00KB] spilledBytes[1.00KB] "
       "spilledRows[1031] spilledPartitions[1025] spilledFiles[1026] "
-      "spillFillTimeNanos[1.03ns] spillSortTimeNanos[1.03ns] "
-      "spillSerializationTime[1.03ms] spillWrites[1028] spillFlushTimeNanos[1.03ns] "
-      "spillWriteTimeNanos[1.03ns] maxSpillExceededLimitCount[4] "
+      "spillFillTimeNanos[1.03us] spillSortTimeNanos[1.03us] "
+      "spillSerializationTimeNanos[1.03us] spillWrites[1028] spillFlushTimeNanos[1.03us] "
+      "spillWriteTimeNanos[1.03us] maxSpillExceededLimitCount[4] "
       "spillReadBytes[2.00KB] spillReads[10] spillReadTimeNanos[100ns] "
       "spillReadDeserializationTimeNanos[100ns]");
   ASSERT_EQ(
       fmt::format("{}", stats2),
       "spillRuns[100] spilledInputBytes[2.00KB] spilledBytes[1.00KB] "
       "spilledRows[1031] spilledPartitions[1025] spilledFiles[1026] "
-      "spillFillTimeNanos[1.03ns] spillSortTimeNanos[1.03ns] "
-      "spillSerializationTimeNanos[1.03ns] spillWrites[1028] "
-      "spillFlushTimeNanos[1.03ms] spillWriteTimeNanos[1.03ns] "
+      "spillFillTimeNanos[1.03us] spillSortTimeNanos[1.03us] "
+      "spillSerializationTimeNanos[1.03us] spillWrites[1028] "
+      "spillFlushTimeNanos[1.03us] spillWriteTimeNanos[1.03us] "
       "maxSpillExceededLimitCount[4] "
       "spillReadBytes[2.00KB] spillReads[10] spillReadTimeNanos[100ns] "
       "spillReadDeserializationTimeNanos[100ns]");
