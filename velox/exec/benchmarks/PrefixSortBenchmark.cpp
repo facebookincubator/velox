@@ -84,10 +84,7 @@ class TestCase {
     }
     for (auto column = 0; column < data->childrenSize(); ++column) {
       DecodedVector decoded(*data->childAt(column));
-      for (int i = 0; i < numRows; ++i) {
-        char* row = rows_[i];
-        rowContainer()->store(decoded, i, row, column);
-      }
+      rowContainer()->storeVector(decoded, numRows, rows_.data(), column);
     }
   }
 

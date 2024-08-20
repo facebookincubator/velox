@@ -373,7 +373,6 @@ class AggregationTest : public OperatorTestBase {
         false,
         true,
         true,
-        true, // trackColumnsMayHaveNulls
         pool_.get());
   }
 
@@ -3676,7 +3675,6 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
       false, // isJoinBuild
       false, // hasProbedFlag
       false, // hasNormalizedKeys
-      true, // trackColumnsMayHaveNulls
       pool());
   const auto rowColumn = rows.columnAt(0);
   agg.setOffsets(

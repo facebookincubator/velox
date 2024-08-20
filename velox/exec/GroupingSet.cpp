@@ -1055,10 +1055,11 @@ bool GroupingSet::getOutputWithSpill(
           false,
           false,
           false,
-          false, // trackColumnsMayHaveNulls
           &pool_,
           table_->rows()->stringAllocatorShared());
-
+      for (auto i = 0; i < keyChannels_.size(); ++i) {
+        mergeRows_->updateColumnMayHaveNulls(i, true);
+      }
       initializeAggregates(aggregates_, *mergeRows_, false);
     }
 
@@ -1275,9 +1276,11 @@ void GroupingSet::abandonPartialAggregation() {
       false,
       false,
       false,
-      false, // trackColumnsMayHaveNulls
       &pool_,
       table_->rows()->stringAllocatorShared());
+  for (auto i = 0; i < keyChannels_.size(); ++i) {
+    intermediateRows_->updateColumnMayHaveNulls(i, true);
+  }
   initializeAggregates(aggregates_, *intermediateRows_, true);
   table_.reset();
 }

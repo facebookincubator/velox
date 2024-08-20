@@ -449,7 +449,6 @@ class HashTable : public BaseHashTable {
       bool isJoinBuild,
       bool hasProbedFlag,
       uint32_t minTableSizeForParallelJoinBuild,
-      bool trackColumnsMayHaveNulls,
       memory::MemoryPool* pool,
       const std::shared_ptr<velox::HashStringAllocator>& stringArena = nullptr);
 
@@ -476,7 +475,6 @@ class HashTable : public BaseHashTable {
         false, // isJoinBuild
         false, // hasProbedFlag
         0, // minTableSizeForParallelJoinBuild
-        true, // trackColumnsMayHaveNulls
         pool,
         stringArena);
   }
@@ -496,7 +494,6 @@ class HashTable : public BaseHashTable {
         true, // isJoinBuild
         hasProbedFlag,
         minTableSizeForParallelJoinBuild,
-        true, // trackColumnsMayHaveNulls
         pool);
   }
 

@@ -34,6 +34,8 @@ void PartitionStreamingWindowBuild::buildNextPartition() {
 void PartitionStreamingWindowBuild::addInput(RowVectorPtr input) {
   for (auto i = 0; i < inputChannels_.size(); ++i) {
     decodedInputVectors_[i].decode(*input->childAt(inputChannels_[i]));
+    data_->updateColumnMayHaveNulls(
+        i, decodedInputVectors_[i].mayHaveNullsRecursive());
   }
 
   for (auto row = 0; row < input->size(); ++row) {

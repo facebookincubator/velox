@@ -162,7 +162,6 @@ TopNRowNumber::TopNRowNumber(
         false, // isJoinBuild
         false, // hasProbedFlag
         0, // minTableSizeForParallelJoinBuild
-        false, // trackColumnsMayHaveNulls
         pool());
     partitionOffset_ = table_->rows()->columnAt(numKeys).offset();
     lookup_ = std::make_unique<HashLookup>(table_->hashers());
@@ -186,6 +185,8 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
 
   for (auto i = 0; i < inputChannels_.size(); ++i) {
     decodedVectors_[i].decode(*input->childAt(inputChannels_[i]));
+    data_->updateColumnMayHaveNulls(
+        i, decodedVectors_[i].mayHaveNullsRecursive());
   }
 
   if (table_) {

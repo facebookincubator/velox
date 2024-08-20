@@ -205,7 +205,6 @@ class RowContainer {
             false, // isJoinBuild
             false, // hasProbedFlag
             false, // hasNormalizedKey,
-            false, // trackColumnsMayHaveNulls,
             pool) {}
 
   ~RowContainer();
@@ -228,8 +227,6 @@ class RowContainer {
   /// into one word for faster comparison. The bulk allocation is done
   /// from 'allocator'. ContainerRowSerde is used for serializing complex
   /// type values into the container.
-  /// 'trackColumnsMayHaveNulls' specifies whether the 'mayHaveNulls'
-  /// information from the input vectors is collected for the columns.
   /// 'stringAllocator' allows sharing the variable length data arena with
   /// another RowContainer. This is needed for spilling where the same
   /// aggregates are used for reading one container and merging into another.
@@ -242,7 +239,6 @@ class RowContainer {
       bool isJoinBuild,
       bool hasProbedFlag,
       bool hasNormalizedKey,
-      bool trackColumnsMayHaveNulls,
       memory::MemoryPool* pool,
       std::shared_ptr<HashStringAllocator> stringAllocator = nullptr);
 

@@ -63,6 +63,8 @@ SortWindowBuild::SortWindowBuild(
 void SortWindowBuild::addInput(RowVectorPtr input) {
   for (auto i = 0; i < inputChannels_.size(); ++i) {
     decodedInputVectors_[i].decode(*input->childAt(inputChannels_[i]));
+    data_->updateColumnMayHaveNulls(
+        i, decodedInputVectors_[i].mayHaveNullsRecursive());
   }
 
   ensureInputFits(input);

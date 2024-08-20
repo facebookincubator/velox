@@ -139,7 +139,6 @@ RowContainer::RowContainer(
     bool isJoinBuild,
     bool hasProbedFlag,
     bool hasNormalizedKeys,
-    bool trackColumnsMayHaveNulls,
     memory::MemoryPool* pool,
     std::shared_ptr<HashStringAllocator> stringAllocator)
     : keyTypes_(keyTypes),
@@ -192,7 +191,7 @@ RowContainer::RowContainer(
     if (nullableKeys_) {
       ++nullOffset;
     }
-    columnsMayHaveNulls_.push_back(!trackColumnsMayHaveNulls);
+    columnsMayHaveNulls_.push_back(false);
   }
   // Make offset at least sizeof pointer so that there is space for a
   // free list next pointer below the bit at 'freeFlagOffset_'.
@@ -221,7 +220,7 @@ RowContainer::RowContainer(
     nullOffsets_.push_back(nullOffset);
     ++nullOffset;
     isVariableWidth |= !type->isFixedWidth();
-    columnsMayHaveNulls_.push_back(!trackColumnsMayHaveNulls);
+    columnsMayHaveNulls_.push_back(false);
   }
   if (hasProbedFlag) {
     nullOffsets_.push_back(nullOffset);

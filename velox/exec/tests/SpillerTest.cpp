@@ -400,6 +400,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         for (int index = 0; index < numRows; ++index) {
           for (int i = 0; i < keys.size(); ++i) {
             DecodedVector decodedVector(*batch->childAt(i), allRows);
+            rowContainer_->updateColumnMayHaveNulls(
+                i, decodedVector.mayHaveNullsRecursive());
             rowContainer_->store(decodedVector, index, testRow, i);
             // Calculate hashes for this batch of spill candidates.
             rowContainer_->hash(i, testRowSet, i > 0, hashes.data());
@@ -429,6 +431,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
 
     for (auto column = 0; column < containerType_->size(); ++column) {
       DecodedVector decoded(*rowVector_->childAt(column), allRows);
+      rowContainer_->updateColumnMayHaveNulls(
+          column, decoded.mayHaveNullsRecursive());
       for (auto index = 0; index < numRows; ++index) {
         rowContainer_->store(decoded, index, rows_[index], column);
       }
@@ -481,6 +485,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       for (int index = 0; index < batch->size(); ++index, ++nextRow) {
         for (int i = 0; i < rowType_->size(); ++i) {
           DecodedVector decodedVector(*batch->childAt(i), allRows);
+          rowContainer_->updateColumnMayHaveNulls(
+              i, decodedVector.mayHaveNullsRecursive());
           rowContainer_->store(decodedVector, index, rows_[nextRow], i);
         }
       }

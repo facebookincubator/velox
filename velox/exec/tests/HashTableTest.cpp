@@ -444,6 +444,11 @@ class HashTableTest : public testing::TestWithParam<bool>,
       decodedVectors.emplace_back(*vector);
     }
 
+    for (auto i = 0; i < decodedVectors.size(); ++i) {
+      rowContainer.updateColumnMayHaveNulls(
+          i, decodedVectors[i].mayHaveNullsRecursive());
+    }
+
     std::vector<char*> rows;
     for (auto i = 0; i < data->size(); ++i) {
       auto* row = rowContainer.newRow();

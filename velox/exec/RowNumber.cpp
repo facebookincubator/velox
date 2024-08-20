@@ -47,7 +47,6 @@ RowNumber::RowNumber(
         false, // isJoinBuild
         false, // hasProbedFlag
         0, // minTableSizeForParallelJoinBuild
-        false, // trackColumnsMayHaveNulls
         pool());
     lookup_ = std::make_unique<HashLookup>(table_->hashers());
 

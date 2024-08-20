@@ -72,16 +72,7 @@ SortBuffer::SortBuffer(
   }
 
   data_ = std::make_unique<RowContainer>(
-      sortedColumnTypes,
-      true, // nullableKeys
-      std::vector<Accumulator>{},
-      nonSortedColumnTypes,
-      false, // hasNext
-      false, // isJoinBuild
-      false, // hasProbedFlag
-      false, // hasNormalizedKey,
-      true, // trackColumnMayHaveNulls,
-      pool_);
+      sortedColumnTypes, nonSortedColumnTypes, pool_);
   spillerStoreType_ =
       ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
