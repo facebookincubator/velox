@@ -21,5 +21,5 @@ if(${VELOX_BUILD_TESTING})
 endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})
-  add_subdirectory(benchmark)
+  add_subdirectory(benchmarks)
 endif()
