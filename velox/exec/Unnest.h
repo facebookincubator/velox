@@ -40,11 +40,14 @@ class Unnest : public Operator {
 
  private:
   // Generate output for 'size' input rows starting from 'start' input row.
-  // Get the firstRowStartSize from class member `firstRowStartSize_`.
+  // The firstRowStartSize is class member `firstRowStartSize_` and the
+  // endRowStartSize is always 0.
   //
   // @param start First input row to include in the output.
   // @param size Number of input rows to include in the output.
   // @param outputSize Pre-computed number of output rows.
+  // @param firstRowEndSize First input row output end range.
+  // @param endRowEndSize End input row output end range.
   RowVectorPtr generateOutput(
       vector_size_t start,
       vector_size_t size,
@@ -93,10 +96,12 @@ class Unnest : public Operator {
 
   std::vector<DecodedVector> unnestDecoded_;
 
+  // The maxium number of output batch rows.
   const uint32_t maxOutputSize_;
   BufferPtr maxSizes_;
   vector_size_t* rawMaxSizes_{nullptr};
 
+  // The first input row output start range.
   vector_size_t firstRowStartSize_ = 0;
 
   std::vector<const vector_size_t*> rawSizes_;

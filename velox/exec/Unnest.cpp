@@ -134,12 +134,12 @@ RowVectorPtr Unnest::getOutput() {
       numElements = maxOutputSize_;
       partialProcessRowStartSize = firstRowEndSize;
     } else {
-      // Not need to split this row
+      // No need to split this row.
       numElements += remainingSize;
     }
     ++numInput;
   }
-  // Not split middle row.
+  // Not split middle rows.
   // If there is only 1 row, the end row will not take effect, its startSize is
   // always 0.
   vector_size_t endRowEndSize = -1;
@@ -164,7 +164,7 @@ RowVectorPtr Unnest::getOutput() {
       ++numInput;
     }
   }
-  // The end row is not partial, set it to the maxSize.
+  // The end row is not partial and should take effect, set it to the maxSize.
   if (endRowEndSize == -1 && numInput > 1) {
     endRowEndSize = rawMaxSizes_[nextInputRow_ + numInput - 1];
   }
