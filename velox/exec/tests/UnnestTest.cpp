@@ -192,22 +192,6 @@ TEST_P(UnnestTest, mapWithOrdinality) {
   assertQuery(makeCursorParameters(op), expectedInDict);
 }
 
-TEST_P(UnnestTest, offsets) {
-  std::vector<vector_size_t> offsets(100, 0);
-  for (int i = 1; i < 100; ++i) {
-    offsets[i] = offsets[i - 1] + i % 11 + 1;
-  }
-
-  auto vector = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
-      makeArrayVector(offsets, makeConstant<int32_t>(7, 700)),
-  });
-
-  createDuckDbTable({vector});
-  auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
-  assertQuery(makeCursorParameters(op), "SELECT c0, UNNEST(c1) FROM tmp");
-}
-
 TEST_P(UnnestTest, multipleColumns) {
   std::vector<vector_size_t> offsets(100, 0);
   for (int i = 1; i < 100; ++i) {
@@ -448,10 +432,6 @@ TEST_P(UnnestTest, allEmptyOrNullMaps) {
 }
 
 TEST_P(UnnestTest, batchSize) {
-  // Only test once.
-  if (batchSize_ != 2) {
-    return;
-  }
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
@@ -469,22 +449,19 @@ TEST_P(UnnestTest, batchSize) {
       makeFlatVector<int64_t>(1'000 * 3, [](auto row) { return 1 + row % 3; }),
   });
 
-  auto testBatchSize = [&](uint32_t batchSize,
-                           vector_size_t expectedNumVector) {
-    auto task = AssertQueryBuilder(plan)
-                    .config(
-                        core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(batchSize))
-                    .assertResults({expected});
-    auto stats = exec::toPlanStats(task->taskStats());
+  auto task = AssertQueryBuilder(plan)
+                  .config(
+                      core::QueryConfig::kPreferredOutputBatchRows,
+                      std::to_string(batchSize_))
+                  .assertResults({expected});
+  auto stats = exec::toPlanStats(task->taskStats());
 
-    ASSERT_EQ(3'000, stats.at(unnestId).outputRows);
-    ASSERT_EQ(expectedNumVector, stats.at(unnestId).outputVectors);
-  };
-
-  testBatchSize(17, 1 + 3'000 / 17);
-  testBatchSize(2, 3'000 / 2);
-  testBatchSize(100'000, 1);
+  ASSERT_EQ(3'000, stats.at(unnestId).outputRows);
+  int32_t expectedNumVectors = 3'000 / batchSize_;
+  if (3'000 % batchSize_ != 0) {
+    expectedNumVectors++;
+  }
+  ASSERT_EQ(expectedNumVectors, stats.at(unnestId).outputVectors);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
