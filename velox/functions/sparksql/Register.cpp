@@ -33,6 +33,7 @@
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
+#include "velox/functions/sparksql/SplitPart.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
@@ -222,6 +223,13 @@ void registerFunctions(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar>({prefix + "str_to_map"});
+
+  registerFunction<
+      sparksql::SplitPartFunction,
+      Varchar,
+      Varchar,
+      Varchar,
+      int32_t>({prefix + "split_part"});
 
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
       {prefix + "left"});

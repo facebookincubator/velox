@@ -1004,5 +1004,28 @@ TEST_F(StringTest, empty2Null) {
   EXPECT_EQ(empty2Null(""), std::nullopt);
   EXPECT_EQ(empty2Null("abc"), "abc");
 }
+
+TEST_F(StringTest, splitPart) {
+  const auto splitPart = [&](const std::optional<std::string>& c0,
+                             const std::optional<std::string>& c1,
+                             const std::optional<int32_t>& c2) {
+    return evaluateOnce<std::string>("split_part(c0, c1, c2)", c0, c1, c2);
+  };
+
+  VELOX_ASSERT_THROW(
+      splitPart("11.1", ",", 0),
+      "The index 0 is invalid. An index shall be either < 0 or > 0");
+  EXPECT_EQ(splitPart("", ",", 1), "");
+  EXPECT_EQ(splitPart("abc.de.f", "", 1), "abc.de.f");
+  EXPECT_EQ(splitPart("abc.de.f", "", -1), "abc.de.f");
+  EXPECT_EQ(splitPart("abc.de.f", "", 2), "");
+  EXPECT_EQ(splitPart("abc.de.f", ",", 1), "abc.de.f");
+  EXPECT_EQ(splitPart("abc.de.f", ",", -1), "abc.de.f");
+  EXPECT_EQ(splitPart("abc.de.f", ",", 2), "");
+  EXPECT_EQ(splitPart("abc.de.f", ".", 1), "abc");
+  EXPECT_EQ(splitPart("abc.de.f", ".", 2), "de");
+  EXPECT_EQ(splitPart("abc.de.f", ".", -1), "f");
+  EXPECT_EQ(splitPart("abc.de.f", ".", -2), "de");
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
