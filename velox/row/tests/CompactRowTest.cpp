@@ -49,7 +49,6 @@ class CompactRowTest : public ::testing::Test, public VectorTestBase {
 
     auto rowType = asRowType(data->type());
     auto numRows = data->size();
-    IndexRange range{0, numRows};
     std::vector<size_t> offsets(numRows);
 
     CompactRow row(data);
@@ -90,7 +89,7 @@ class CompactRowTest : public ::testing::Test, public VectorTestBase {
     memset(rawBuffer, 0, totalSize);
     {
       std::vector<std::string_view> serialized;
-      row.serialize(range, rawBuffer, offsets);
+      row.serialize(0, numRows, rawBuffer, offsets);
       serialized.push_back(std::string_view(rawBuffer, offsets[0]));
       for (auto i = 1; i < numRows; ++i) {
         serialized.push_back(std::string_view(

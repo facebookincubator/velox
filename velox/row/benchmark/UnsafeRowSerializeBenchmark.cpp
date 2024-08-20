@@ -225,8 +225,7 @@ class SerializeBenchmark {
       BufferPtr& buffer,
       std::vector<size_t>& offsets) {
     auto rawBuffer = buffer->asMutable<char>();
-    IndexRange indexRange{0, numRows};
-    compactRow.serialize(indexRange, rawBuffer, offsets);
+    compactRow.serialize(0, numRows, rawBuffer, offsets);
     VELOX_CHECK_EQ(buffer->size(), offsets.back());
 
     std::vector<std::string_view> serialized;
