@@ -82,6 +82,7 @@ add_executable(
   ThreadDebugInfoTest.cpp
   TopNRowNumberTest.cpp
   TopNTest.cpp
+  QueryTracerTest.cpp
   UnnestTest.cpp
   UnorderedStreamReaderTest.cpp
   ValuesTest.cpp
@@ -131,6 +132,7 @@ target_link_libraries(
   velox_functions_lib
   velox_functions_prestosql
   velox_functions_test_lib
+  velox_query_trace_retrieve
   velox_hive_connector
   velox_memory
   velox_serialization
@@ -327,3 +329,16 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   cpr_http_client_test cpr::cpr GTest::gtest GTest::gtest_main)
+
+add_executable(query_trace_tool QueryTraceTool.cpp)
+target_link_libraries(
+  query_trace_tool
+  velox_query_trace_retrieve
+  velox_aggregates
+  velox_type
+  velox_vector
+  velox_vector_test_lib
+  velox_exec
+  velox_exec_test_lib
+  velox_tpch_connector
+  velox_memory)

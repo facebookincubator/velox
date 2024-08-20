@@ -346,6 +346,18 @@ class QueryConfig {
   /// derived using micro-benchmarking.
   static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
 
+  static constexpr const char* kQueryTraceEnabled = "query_trace_enabled";
+
+  static constexpr const char* kQueryTraceDir = "query_trace_dir";
+
+  /// A comma-separated list of target tracing plan node names.
+  static constexpr const char* kQueryTraceNodes = "query_trace_nodes";
+
+  /// Specifies query trace write buffer size in bytes. If it is set to zero,
+  /// then write buffering is disabled.
+  static constexpr const char* kQueryTraceWriteBufferSize =
+      "query_trace_write_buffer_size";
+
   uint64_t queryMaxMemoryPerNode() const {
     return config::toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"),
@@ -611,6 +623,26 @@ class QueryConfig {
     return get<int32_t>(kSpillableReservationGrowthPct, kDefaultPct);
   }
 
+  /// Returns true if query tracing is enabled.
+  bool queryTraceEnabled() const {
+    return get<bool>(kQueryTraceEnabled, false);
+  }
+
+  uint64_t queryWriteBufferSize() const {
+    // The default query trace write buffer size set to 1MB.
+    return get<uint64_t>(kQueryTraceWriteBufferSize, 1L << 20);
+  }
+
+  std::string queryTraceDir() const {
+    // The default query trace dir, empty by default.
+    return get<std::string>(kQueryTraceDir, "");
+  }
+
+  std::string queryTraceNodes() const {
+    // The default query trace nodes, empty by default.
+    return get<std::string>(kQueryTraceNodes, "");
+  }
+
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
   }
@@ -724,6 +756,8 @@ class QueryConfig {
   /// It is not thread safe.
   void testingOverrideConfigUnsafe(
       std::unordered_map<std::string, std::string>&& values);
+
+  std::unordered_map<std::string, std::string> rawConfigsCopy() const;
 
  private:
   void validateConfig();

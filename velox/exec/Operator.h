@@ -15,12 +15,14 @@
  */
 #pragma once
 #include <folly/Synchronized.h>
+
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/Spiller.h"
+#include "velox/exec/trace/QueryTraceDataWriter.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::exec {
@@ -396,6 +398,7 @@ class Operator : public BaseRuntimeStatWriter {
   /// e.g. the first operator in the pipeline.
   virtual void noMoreInput() {
     noMoreInput_ = true;
+    finishTrace();
   }
 
   /// Returns a RowVector with the result columns. Returns nullptr if
@@ -419,6 +422,11 @@ class Operator : public BaseRuntimeStatWriter {
   /// receives specified number of rows and HashProbe finishes early if the
   /// build side is empty.
   virtual bool isFinished() = 0;
+
+  /// Trace input batch of the operator.
+  virtual void traceInput(RowVectorPtr input);
+
+  virtual void finishTrace();
 
   /// Returns single-column dynamically generated filters to be pushed down to
   /// upstream operators. Used to push down filters on join keys from broadcast
@@ -709,6 +717,10 @@ class Operator : public BaseRuntimeStatWriter {
   /// parent node memory pool has set the reclaimer.
   void maybeSetReclaimer();
 
+  /// Invoked to setup trace writer for this operator if the associated query
+  /// plan node is configured to collect trace.
+  void maybeSetQueryTracer();
+
   /// Returns true if this is a spillable operator and has configured spilling.
   FOLLY_ALWAYS_INLINE bool canSpill() const {
     return spillConfig_.has_value();
@@ -755,6 +767,8 @@ class Operator : public BaseRuntimeStatWriter {
 
   folly::Synchronized<OperatorStats> stats_;
   folly::Synchronized<common::SpillStats> spillStats_;
+
+  std::unique_ptr<TraceWriter> tracer_;
 
   /// Indicates if an operator is under a non-reclaimable execution section.
   /// This prevents the memory arbitrator from reclaiming memory from this

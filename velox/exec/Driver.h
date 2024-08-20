@@ -29,6 +29,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Spiller.h"
+#include "velox/exec/trace/QueryTraceConfig.h"
 
 namespace facebook::velox::exec {
 
@@ -287,6 +288,8 @@ struct DriverCtx {
       uint32_t _partitionId);
 
   const core::QueryConfig& queryConfig() const;
+
+  const std::optional<QueryTraceConfig>& traceConfig() const;
 
   velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,
