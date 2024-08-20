@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Spark Query Runner &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Debugging Tools" href="../debugging.html" />
+    <link rel="prev" title="Writer Fuzzer" href="writer-fuzzer.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../debugging.html" title="Debugging Tools"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="writer-fuzzer.html" title="Writer Fuzzer"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../testing.html" accesskey="U">Testing Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Spark Query Runner</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="spark-query-runner">
+<h1>Spark Query Runner<a class="headerlink" href="#spark-query-runner" title="Link to this heading">¶</a></h1>
+<section id="introduction">
+<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h2>
+<p>The Spark Query Runner is a tool designed to facilitate the testing of Velox.
+It helps ensure the correctness of Velox’s computing against Spark and
+provides a method for identifying potential issues in Velox’s implementation.
+Spark Query Runner is designed to run against Spark-3.5.1.</p>
+</section>
+<section id="how-it-works">
+<h2>How It Works<a class="headerlink" href="#how-it-works" title="Link to this heading">¶</a></h2>
+<p>The Spark Query Runner operates by executing given SQL queries on Spark and
+returning results as Velox data format, which allows the comparison of results
+between Velox and Spark.</p>
+<p>Since Spark 3.4, Spark Connect has introduced a decoupled client-server architecture
+for Spark that allows remote connectivity to Spark clusters. From the client
+perspective, Spark Connect mostly behaves as any other gRPC client, which is polyglot
+and cross-platforms. During execution, the Spark Connect endpoint embedded on the
+Spark Server receives and parses queries into Spark’s logical plan operators.
+From there, the standard Spark execution process kicks in, ensuring that Spark
+Connect leverages all of Spark’s optimizations and enhancements. Results are
+streamed back to the client through gRPC as Arrow-encoded row batches.</p>
+<p>In the Spark Query Runner, we use Spark Connect to submit queries to Spark and fetch
+the results back to Velox. The steps for this process are as follows:</p>
+<ol class="arabic simple">
+<li><p>Provide the Spark SQL query to be executed. The query could be generated from Velox
+plan node or manually written.</p></li>
+<li><p>Create a protobuf message <cite>ExecutePlanRequest</cite> from the SQL query. The protocols
+used by Spark Connect are defined in <a class="reference external" href="https://github.com/apache/spark/tree/v3.5.1/connector/connect/common/src/main/protobuf/spark/connect">Apache Spark</a>.</p></li>
+<li><p>Submit the message to SparkConnectService through gRPC API <cite>ExecutePlan</cite>.</p></li>
+<li><p>Fetch Spark’s results from execution response. Results are in Arrow IPC stream format,
+and can be read as Arrow RecordBatch by <cite>arrow::ipc::RecordBatchReader</cite>.</p></li>
+<li><p>Convert Arrow RecordBatch as Velox vector for the comparison with Velox’s results.</p></li>
+</ol>
+</section>
+<section id="usage">
+<h2>Usage<a class="headerlink" href="#usage" title="Link to this heading">¶</a></h2>
+<p>To use the Spark Query Runner, you will need to deploy an executable Spark and start the
+Spark Connect server with below command.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="s2">&quot;$SPARK_HOME&quot;</span><span class="o">/</span><span class="n">sbin</span><span class="o">/</span><span class="n">start</span><span class="o">-</span><span class="n">connect</span><span class="o">-</span><span class="n">server</span><span class="o">.</span><span class="n">sh</span> <span class="o">--</span><span class="n">jars</span> <span class="s2">&quot;$JAR_PATH&quot;</span><span class="o">/</span><span class="n">spark</span><span class="o">-</span><span class="n">connect_2</span><span class="mf">.12</span><span class="o">-</span><span class="mf">3.5.1</span><span class="o">.</span><span class="n">jar</span>
+</pre></div>
+</div>
+<p>The jar of Spark Connect could be downloaded from <a class="reference external" href="https://repo1.maven.org/maven2/org/apache/spark/spark-connect_2.12/3.5.1/">maven repository</a>.
+If Spark Connect server is started successfully, you can see log as below. The server will
+be started at <cite>localhost:15002</cite>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">INFO</span> <span class="n">SparkConnectServer</span><span class="p">:</span> <span class="n">Spark</span> <span class="n">Connect</span> <span class="n">server</span> <span class="n">started</span> <span class="n">at</span><span class="p">:</span> <span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="p">:</span><span class="mi">0</span><span class="o">%</span><span class="mi">0</span><span class="p">:</span><span class="mi">15002</span>
+</pre></div>
+</div>
+<p>Another option is to use Spark Query Runner in the docker image <cite>ghcr.io/facebookincubator/velox-dev:spark-server</cite>
+provided by Velox. It includes an executable Spark and the start script. You can download
+the image and run below command to start Spark connect server in it.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bash</span> <span class="o">/</span><span class="n">opt</span><span class="o">/</span><span class="n">start</span><span class="o">-</span><span class="n">spark</span><span class="o">.</span><span class="n">sh</span>
+</pre></div>
+</div>
+<p>You can then provide the Spark Query Runner with the SQL query and the data to run the
+query on. The tool will execute the query on Spark and return results as Velox data format.</p>
+<p>Currently to use Spark as reference DB is only supported in aggregate fuzzer test, in which
+the results from Velox and Spark are compared to check for any differences. If the results
+match, it indicates that Velox is producing the correct output. If the results differ, it
+suggests a potential issue in Velox that needs to be investigated. You can trigger its test
+referring to <a class="reference internal" href="fuzzer.html"><span class="doc">Fuzzer</span></a>.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Spark Query Runner</a><ul>
+<li><a class="reference internal" href="#introduction">Introduction</a></li>
+<li><a class="reference internal" href="#how-it-works">How It Works</a></li>
+<li><a class="reference internal" href="#usage">Usage</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="writer-fuzzer.html"
+                          title="previous chapter">Writer Fuzzer</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../debugging.html"
+                          title="next chapter">Debugging Tools</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/develop/testing/spark-query-runner.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../debugging.html" title="Debugging Tools"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="writer-fuzzer.html" title="Writer Fuzzer"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../testing.html" >Testing Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Spark Query Runner</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>
