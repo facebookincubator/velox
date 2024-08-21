@@ -119,7 +119,7 @@ struct SplitPartFunction {
       const std::string_view& delimiter,
       const int32_t& index) {
     int64_t iteration = 1;
-    size_t curPos = inputSv.size() - 1;
+    int64_t curPos = inputSv.size() - 1;
     while (curPos >= 0) {
       size_t end = curPos + 1;
       curPos = inputSv.rfind(delimiter, curPos);
