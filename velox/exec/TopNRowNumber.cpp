@@ -185,8 +185,6 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
 
   for (auto i = 0; i < inputChannels_.size(); ++i) {
     decodedVectors_[i].decode(*input->childAt(inputChannels_[i]));
-    data_->updateColumnMayHaveNulls(
-        i, decodedVectors_[i].mayHaveNullsRecursive());
   }
 
   if (table_) {

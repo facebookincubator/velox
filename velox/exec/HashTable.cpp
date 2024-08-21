@@ -2152,8 +2152,6 @@ void HashTable<ignoreNullKeys>::prepareForGroupProbe(
   for (auto& hasher : hashers) {
     auto key = input->childAt(hasher->channel())->loadedVector();
     hasher->decode(*key, rows);
-    rows_->updateColumnMayHaveNulls(
-        columnIndex++, hasher->decodedVector().mayHaveNullsRecursive());
   }
 
   if constexpr (ignoreNullKeys) {

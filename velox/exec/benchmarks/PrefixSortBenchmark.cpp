@@ -82,9 +82,10 @@ class TestCase {
     for (auto row = 0; row < numRows; ++row) {
       rows_[row] = rowContainer()->newRow();
     }
+    SelectivityVector allRows(numRows);
     for (auto column = 0; column < data->childrenSize(); ++column) {
       DecodedVector decoded(*data->childAt(column));
-      rowContainer()->storeVector(decoded, numRows, rows_.data(), column);
+      rowContainer()->storeVector(decoded, &allRows, rows_.data(), column);
     }
   }
 

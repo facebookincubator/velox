@@ -216,8 +216,6 @@ void SortedAggregations::initializeNewGroups(
 void SortedAggregations::addInput(char** groups, const RowVectorPtr& input) {
   for (auto i = 0; i < inputs_.size(); ++i) {
     decodedInputs_[i].decode(*input->childAt(inputs_[i]));
-    inputData_->updateColumnMayHaveNulls(
-        i, decodedInputs_[i].mayHaveNullsRecursive());
   }
 
   // Add all the rows into the RowContainer.
@@ -243,8 +241,6 @@ void SortedAggregations::addSingleGroupInput(
     const RowVectorPtr& input) {
   for (auto i = 0; i < inputs_.size(); ++i) {
     decodedInputs_[i].decode(*input->childAt(inputs_[i]));
-    inputData_->updateColumnMayHaveNulls(
-        i, decodedInputs_[i].mayHaveNullsRecursive());
   }
 
   // Add all the rows into the RowContainer.

@@ -60,8 +60,6 @@ TopN::TopN(
 void TopN::addInput(RowVectorPtr input) {
   for (const auto col : sortingKeyColumns_) {
     decodedVectors_[col].decode(*input->childAt(col));
-    data_->updateColumnMayHaveNulls(
-        col, decodedVectors_[col].mayHaveNullsRecursive());
   }
 
   const bool hasNonKeyColumn{!nonKeyColumns_.empty()};
@@ -97,8 +95,6 @@ void TopN::addInput(RowVectorPtr input) {
   if (hasNonKeyColumn && !passedRows.empty()) {
     for (const auto col : nonKeyColumns_) {
       decodedVectors_[col].decode(*input->childAt(col));
-      data_->updateColumnMayHaveNulls(
-          col, decodedVectors_[col].mayHaveNullsRecursive());
       for (const auto [dataRow, inputRow] : passedRows) {
         data_->store(
             decodedVectors_[col],

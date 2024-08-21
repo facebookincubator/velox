@@ -200,8 +200,6 @@ void StreamingAggregation::assignGroups() {
   if (index < numInput) {
     for (auto i = 0; i < groupingKeys_.size(); ++i) {
       decodedKeys_[i].decode(*input_->childAt(groupingKeys_[i]), inputRows_);
-      rows_->updateColumnMayHaveNulls(
-          i, decodedKeys_[i].mayHaveNullsRecursive());
     }
 
     auto* newGroup = startNewGroup(index);

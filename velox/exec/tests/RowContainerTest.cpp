@@ -272,10 +272,6 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     for (auto& vector : data->children()) {
       decodedVectors.emplace_back(*vector);
     }
-    for (auto i = 0; i < decodedVectors.size(); ++i) {
-      rowContainer.updateColumnMayHaveNulls(
-          i, decodedVectors[i].mayHaveNullsRecursive());
-    }
     std::vector<char*> rows;
     for (auto i = 0; i < data->size(); ++i) {
       auto* row = rowContainer.newRow();
@@ -294,8 +290,6 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       DecodedVector& decodedVector,
       vector_size_t size) {
     std::vector<char*> rows(size);
-    rowContainer.updateColumnMayHaveNulls(
-        0, decodedVector.mayHaveNullsRecursive());
     for (size_t row = 0; row < size; ++row) {
       rows[row] = rowContainer.newRow();
       rowContainer.store(decodedVector, row, rows[row], 0);
@@ -392,7 +386,6 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       const DecodedVector& decoded,
       vector_size_t numRows,
       RowContainer& rowContainer) {
-    rowContainer.updateColumnMayHaveNulls(0, decoded.mayHaveNullsRecursive());
     std::vector<char*> rows(numRows);
     for (size_t i = 0; i < numRows; ++i) {
       rows[i] = rowContainer.newRow();
@@ -965,7 +958,6 @@ TEST_F(RowContainerTest, types) {
       EXPECT_NE(data->columnAt(column).nullMask(), 0);
     }
     DecodedVector decoded(*batch->childAt(column), allRows);
-    data->updateColumnMayHaveNulls(column, decoded.mayHaveNullsRecursive());
     for (auto index = 0; index < kNumRows; ++index) {
       data->store(decoded, index, rows[index], column);
     }
@@ -1109,7 +1101,6 @@ TEST_F(RowContainerTest, extractNulls) {
   SelectivityVector allRows(kNumRows);
   for (int i = 0; i < batch->childrenSize(); i++) {
     DecodedVector decoded(*batch->childAt(i), allRows);
-    data->updateColumnMayHaveNulls(i, decoded.mayHaveNullsRecursive());
     for (auto j = 0; j < kNumRows; ++j) {
       data->store(decoded, j, rows[j], i);
     }
@@ -1263,14 +1254,6 @@ TEST_F(RowContainerTest, columnSize) {
   DecodedVector decodedKey2(*rowVector->childAt(1), allRows);
   DecodedVector decodedDep1(*rowVector->childAt(2), allRows);
   DecodedVector decodedDep2(*rowVector->childAt(3), allRows);
-  rowContainer->updateColumnMayHaveNulls(
-      0, decodedKey1.mayHaveNullsRecursive());
-  rowContainer->updateColumnMayHaveNulls(
-      1, decodedKey2.mayHaveNullsRecursive());
-  rowContainer->updateColumnMayHaveNulls(
-      2, decodedDep1.mayHaveNullsRecursive());
-  rowContainer->updateColumnMayHaveNulls(
-      3, decodedDep2.mayHaveNullsRecursive());
   for (size_t i = 0; i < kNumRows; i++) {
     auto row = rowContainer->newRow();
     rowContainer->store(decodedKey1, i, row, 0);
@@ -1324,9 +1307,6 @@ TEST_F(RowContainerTest, estimateRowSize) {
   SelectivityVector allRows(numRows);
   DecodedVector decodedKey(*key, allRows);
   DecodedVector decodedDependent(*dependent, allRows);
-  rowContainer->updateColumnMayHaveNulls(0, decodedKey.mayHaveNullsRecursive());
-  rowContainer->updateColumnMayHaveNulls(
-      1, decodedDependent.mayHaveNullsRecursive());
   for (size_t i = 0; i < numRows; i++) {
     auto row = rowContainer->newRow();
     rowContainer->store(decodedKey, i, row, 0);
@@ -1534,9 +1514,6 @@ TEST_F(RowContainerTest, probedFlag) {
   std::vector<char*> rows(size);
   DecodedVector decodedKey(*input->childAt(0));
   DecodedVector decodedValue(*input->childAt(1));
-  rowContainer->updateColumnMayHaveNulls(0, decodedKey.mayHaveNullsRecursive());
-  rowContainer->updateColumnMayHaveNulls(
-      1, decodedValue.mayHaveNullsRecursive());
   for (auto i = 0; i < size; ++i) {
     rows[i] = rowContainer->newRow();
     rowContainer->store(decodedKey, i, rows[i], 0);
@@ -1819,8 +1796,6 @@ TEST_F(RowContainerTest, toString) {
   std::vector<DecodedVector> decoded;
   for (auto i = 0; i < data->childrenSize(); ++i) {
     decoded.emplace_back(*data->childAt(i));
-    rowContainer->updateColumnMayHaveNulls(
-        i, decoded[i].mayHaveNullsRecursive());
   }
 
   const auto numRows = data->size();
@@ -2080,7 +2055,6 @@ TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
   }
   SelectivityVector allRows(kNumRows);
   DecodedVector decoded(*source, allRows);
-  data->updateColumnMayHaveNulls(kColumnIndex, decoded.mayHaveNullsRecursive());
   for (auto i = 0; i < kNumRows; ++i) {
     data->store(decoded, i, rows[i], kColumnIndex);
   }
@@ -2128,7 +2102,7 @@ TEST_F(RowContainerTest, trackColumnsMayHaveNulls) {
   }
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     DecodedVector decoded(*rowVector->childAt(i), allRows);
-    rowContainer->storeVector(decoded, kNumRows, rows.data(), i);
+    rowContainer->storeVector(decoded, &allRows, rows.data(), i);
   }
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     if (i % 2 == 0) {
@@ -2147,5 +2121,10 @@ TEST_F(RowContainerTest, trackColumnsMayHaveNulls) {
     } else {
       ASSERT_TRUE(vector->mayHaveNulls());
     }
+  }
+
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    rowContainer->updateColumnMayHaveNulls(i, true);
+    ASSERT_TRUE(rowContainer->columnMayHaveNulls(i));
   }
 }

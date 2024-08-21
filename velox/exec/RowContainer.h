@@ -204,7 +204,7 @@ class RowContainer {
             false, // hasNext
             false, // isJoinBuild
             false, // hasProbedFlag
-            false, // hasNormalizedKey,
+            false, // hasNormalizedKey
             pool) {}
 
   ~RowContainer();
@@ -305,8 +305,8 @@ class RowContainer {
   /// Stores the 'decoded' into row container at 'column'.
   void storeVector(
       const DecodedVector& decoded,
-      vector_size_t size,
-      char* const* rows,
+      const SelectivityVector* rows,
+      char* const* groups,
       int32_t column);
 
   HashStringAllocator& stringAllocator() {
@@ -744,11 +744,15 @@ class RowContainer {
     return keyTypes_;
   }
 
+  /// Updates the specific column's columnsMayHaveNulls_ flag, if
+  /// 'mayHaveNulls' is true.
+  /// columnsMayHaveNulls_ flag is false by default.
   inline void updateColumnMayHaveNulls(int32_t columnIndex, bool mayHaveNulls) {
     columnsMayHaveNulls_[columnIndex] =
         columnsMayHaveNulls_[columnIndex] | mayHaveNulls;
   }
 
+  /// Returns the specific column's columnsMayHaveNulls_ falg.
   inline bool columnMayHaveNulls(int32_t columnIndex) const {
     return columnsMayHaveNulls_[columnIndex];
   }
@@ -919,6 +923,33 @@ class RowContainer {
   uint32_t& variableRowSize(char* row) {
     VELOX_DCHECK(rowSizeOffset_);
     return *reinterpret_cast<uint32_t*>(row + rowSizeOffset_);
+  }
+
+  template <TypeKind Kind>
+  inline void storeWithNullsBatch(
+      const DecodedVector& decoded,
+      const SelectivityVector* rows,
+      bool isKey,
+      char* const* groups,
+      int32_t offset,
+      int32_t nullByte,
+      uint8_t nullMask) {
+    rows->applyToSelected([&](vector_size_t index) {
+      storeWithNulls<Kind>(
+          decoded, index, isKey, groups[index], offset, nullByte, nullMask);
+    });
+  }
+
+  template <TypeKind Kind>
+  inline void storeNoNullsBatch(
+      const DecodedVector& decoded,
+      const SelectivityVector* rows,
+      bool isKey,
+      char* const* groups,
+      int32_t offset) {
+    rows->applyToSelected([&](vector_size_t index) {
+      storeNoNulls<Kind>(decoded, index, isKey, groups[index], offset);
+    });
   }
 
   template <TypeKind Kind>
