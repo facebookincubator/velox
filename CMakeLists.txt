@@ -61,6 +61,8 @@ option(
   "Enable Velox tests. This will enable all other build options automatically."
   ON)
 option(
+  VELOX_BUILD_FUZZERS  "Enable Velox Presto and Spark Fuzzers." OFF)
+option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
   OFF)
@@ -164,8 +166,6 @@ if(VELOX_ENABLE_BENCHMARKS_BASIC)
 endif()
 
 if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
-  set(cpr_SOURCE BUNDLED)
-  resolve_dependency(cpr)
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_PARSE ON)
 endif()
@@ -461,8 +461,13 @@ add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
 
-if(${VELOX_BUILD_TESTING})
-  # Spark qury runner depends on absl, gRPC.
+if(VELOX_BUILD_FUZZERS)
+  # Fuzzers need query runners.
+  # Presto query runner depends on cpr.
+  set(cpr_SOURCE BUNDLED)
+  resolve_dependency(cpr)
+  
+  # Spark query runner depends on absl, gRPC.
   set_source(absl)
   resolve_dependency(absl)
 

@@ -59,16 +59,19 @@ endif()
 
 add_subdirectory(window)
 
-if(${VELOX_ENABLE_AGGREGATES})
+if(VELOX_ENABLE_AGGREGATES)
   add_subdirectory(aggregates)
 endif()
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-  add_subdirectory(coverage)
+if(VELOX_ENABLE_FUZZERS)
   add_subdirectory(fuzzer)
 endif()
 
-if(${VELOX_ENABLE_BENCHMARKS})
+if(VELOX_BUILD_TESTING)
+  add_subdirectory(tests)
+  add_subdirectory(coverage)
+endif()
+
+if(VELOX_ENABLE_BENCHMARKS)
   add_subdirectory(benchmarks)
 endif()
