@@ -66,7 +66,19 @@ void PartitionIdGenerator::run(
   const auto numRows = input->size();
   result.resize(numRows);
 
-  // TODO Check that there are no nulls in the partition keys.
+  // Check that there are no nulls in the partition keys.
+  for (auto& partitionIdx : partitionChannels_) {
+    auto col = input->childAt(partitionIdx);
+    if (col->mayHaveNulls()) {
+      for (auto i = 0; i < col->size(); ++i) {
+        VELOX_USER_CHECK(
+            !col->isNullAt(i),
+            "Null value found at {} in partition key {}",
+            i,
+            input->type()->asRow().nameOf(partitionIdx))
+      }
+    }
+  }
 
   // Compute value IDs using VectorHashers and store these in 'result'.
   computeValueIds(input, result);
