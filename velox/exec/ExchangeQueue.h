@@ -15,7 +15,8 @@
  */
 #pragma once
 
-#include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/BufferInputStream.h"
+#include "velox/common/memory/OutputStream.h"
 
 namespace facebook::velox::exec {
 

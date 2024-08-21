@@ -19,7 +19,7 @@ velox_add_library(
   velox_memory
   Allocation.cpp
   AllocationPool.cpp
-  ByteStream.cpp
+  BufferInputStream.cpp
   HashStringAllocator.cpp
   MallocAllocator.cpp
   Memory.cpp
@@ -28,6 +28,7 @@ velox_add_library(
   MemoryPool.cpp
   MmapAllocator.cpp
   MmapArena.cpp
+  OutputStream.cpp
   SharedArbitrator.cpp
   StreamArena.cpp)
 

@@ -22,7 +22,7 @@
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/OutputStream.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"

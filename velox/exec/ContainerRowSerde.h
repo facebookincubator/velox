@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/OutputStream.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/DecodedVector.h"
 
