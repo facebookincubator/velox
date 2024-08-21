@@ -324,7 +324,7 @@ class SharedArbitrationTest : public SharedArbitrationTestBase {
 };
 /// A test fixture that runs cases within both serial and
 /// parallel execution modes.
-class SharedArbitrationTestWithThreadingModes
+class SharedArbitrationTestWithExecutionModes
     : public testing::WithParamInterface<TestParam>,
       public SharedArbitrationTestBase {
  public:
@@ -471,7 +471,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, skipNonReclaimableTaskTest) {
   ASSERT_EQ(taskPausedCount, 1);
 }
 
-DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
+DEBUG_ONLY_TEST_P(SharedArbitrationTestWithExecutionModes, reclaimToOrderBy) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -574,7 +574,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
 }
 
 DEBUG_ONLY_TEST_P(
-    SharedArbitrationTestWithThreadingModes,
+    SharedArbitrationTestWithExecutionModes,
     reclaimToAggregation) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
@@ -679,7 +679,7 @@ DEBUG_ONLY_TEST_P(
 }
 
 DEBUG_ONLY_TEST_P(
-    SharedArbitrationTestWithThreadingModes,
+    SharedArbitrationTestWithExecutionModes,
     reclaimToJoinBuilder) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
@@ -1353,10 +1353,10 @@ TEST_F(SharedArbitrationTest, reserveReleaseCounters) {
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
-    SharedArbitrationTestWithThreadingModes,
-    SharedArbitrationTestWithThreadingModes,
+    SharedArbitrationTestWithExecutionModes,
+    SharedArbitrationTestWithExecutionModes,
     testing::ValuesIn(
-        SharedArbitrationTestWithThreadingModes::getTestParams()));
+        SharedArbitrationTestWithExecutionModes::getTestParams()));
 } // namespace facebook::velox::memory
 
 int main(int argc, char** argv) {
