@@ -38,8 +38,11 @@ class CompactRow {
 
   /// Serializes rows in range [offset, offset + size) into 'buffer' at given
   /// 'bufferOffsets'. 'buffer' must have sufficient capacity and set to all
-  /// zeros. The size of 'bufferOffsets' and 'size' must be the same.
-  /// 'bufferOffsets' will be updated by the actual bytes written.
+  /// zeros. 'bufferOffsets' must be pre-filled with the write offsets for each
+  /// row and must have the same number of elements as the 'size' parameter.
+  /// The caller must ensure that the space between each offset in
+  /// 'bufferOffsets' is no less than the 'fixedRowSize' or 'rowSize'.
+  /// 'bufferOffsets' will be updated by the actual bytes written for each row.
   void serialize(
       vector_size_t offset,
       vector_size_t size,
