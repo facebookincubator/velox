@@ -276,7 +276,6 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     for (auto i = 0; i < data->size(); ++i) {
       auto* row = rowContainer.newRow();
       rows.push_back(row);
-
       for (auto j = 0; j < decodedVectors.size(); ++j) {
         rowContainer.store(decodedVectors[j], i, row, j);
       }

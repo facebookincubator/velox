@@ -1059,7 +1059,6 @@ bool GroupingSet::getOutputWithSpill(
           table_->rows()->stringAllocatorShared());
       initializeAggregates(aggregates_, *mergeRows_, false);
     }
-
     VELOX_CHECK_EQ(table_->rows()->numRows(), 0);
 
     VELOX_CHECK_NULL(merge_);

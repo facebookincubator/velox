@@ -2148,7 +2148,6 @@ void HashTable<ignoreNullKeys>::prepareForGroupProbe(
     int8_t spillInputStartPartitionBit) {
   checkHashBitsOverlap(spillInputStartPartitionBit);
   auto& hashers = lookup.hashers;
-  int32_t columnIndex = 0;
   for (auto& hasher : hashers) {
     auto key = input->childAt(hasher->channel())->loadedVector();
     hasher->decode(*key, rows);
