@@ -65,7 +65,7 @@ std::unique_ptr<MemoryArbitrator> createArbitrator(
   // TODO: consider to reserve a small amount of memory to compensate for the
   //  non-reclaimable cache memory which are pinned by query accesses if
   //  enabled.
-
+  //
   // TODO(jtan6): [Config Refactor] clean up the if condition after Prestissimo
   //  switched to use extra configs map.
   if (options.extraArbitratorConfigs.empty()) {
@@ -144,7 +144,6 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
           this,
           std::string(kSysRootName),
           MemoryPool::Kind::kAggregate,
-          nullptr,
           nullptr,
           nullptr,
           // NOTE: the default root memory pool has no capacity limit, and it is
@@ -258,26 +257,27 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
 
   MemoryPool::Options options;
   options.alignment = alignment_;
-  options.maxCapacity = maxCapacity;
+  options.maxCapacity = std::min<int64_t>(maxCapacity, arbitrator_->capacity());
   options.trackUsage = true;
   options.debugEnabled = debugEnabled_;
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
 
-  std::unique_lock guard{mutex_};
-  if (pools_.find(poolName) != pools_.end()) {
-    VELOX_FAIL("Duplicate root pool name found: {}", poolName);
-  }
   auto pool = std::make_shared<MemoryPoolImpl>(
       this,
       poolName,
       MemoryPool::Kind::kAggregate,
       nullptr,
       std::move(reclaimer),
-      poolDestructionCb_,
       options);
-  pools_.emplace(poolName, pool);
+  std::unique_lock guard{mutex_};
+  if (pools_.find(poolName) != pools_.end()) {
+    VELOX_FAIL("Duplicate root pool name found: {}", poolName);
+  }
   VELOX_CHECK_EQ(pool->capacity(), 0);
   arbitrator_->addPool(pool);
+  pools_.emplace(poolName, pool);
+  pool->setDestructionCallback(poolDestructionCb_);
+  // TODO: remove this metric tracking after memory arbitration run performant.
   RECORD_HISTOGRAM_METRIC_VALUE(
       kMetricMemoryPoolInitialCapacityBytes, pool->capacity());
   return pool;

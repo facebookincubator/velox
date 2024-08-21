@@ -159,14 +159,12 @@ TEST_P(MemoryPoolTest, ctor) {
         "fake_root",
         MemoryPool::Kind::kAggregate,
         nullptr,
-        nullptr,
         nullptr);
     // We can't construct an aggregate memory pool with non-thread safe.
     ASSERT_ANY_THROW(std::make_shared<MemoryPoolImpl>(
         &manager,
         "fake_root",
         MemoryPool::Kind::kAggregate,
-        nullptr,
         nullptr,
         nullptr,
         MemoryPool::Options{.threadSafe = false}));

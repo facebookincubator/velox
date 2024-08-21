@@ -24,8 +24,12 @@
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/memory/SharedArbitratorUtil.h"
 
 namespace facebook::velox::memory {
+
+class SharedArbitrator;
+class ArbitrationOperation;
 
 /// Used to achieve dynamic memory sharing among running queries. When a
 /// memory pool exceeds its current memory capacity, the arbitrator tries to
@@ -165,13 +169,13 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   static void unregisterFactory();
 
-  void addPool(const std::shared_ptr<MemoryPool>& pool) final;
+  void addPool(const std::shared_ptr<MemoryPool>& memPool) final;
 
-  void removePool(MemoryPool* pool) final;
+  void removePool(MemoryPool* memPool) final;
 
-  bool growCapacity(MemoryPool* pool, uint64_t requestBytes) final;
+  bool growCapacity(MemoryPool* memPool, uint64_t requestBytes) final;
 
-  uint64_t shrinkCapacity(MemoryPool* pool, uint64_t requestBytes = 0) final;
+  uint64_t shrinkCapacity(MemoryPool* memPool, uint64_t requestBytes = 0) final;
 
   uint64_t shrinkCapacity(
       uint64_t requestBytes,
@@ -194,138 +198,62 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     *const_cast<bool*>(&globalArbitrationEnabled_) = enableGlobalArbitration;
   }
 
-  /// Operator level runtime stats that are reported during a shared arbitration
-  /// attempt.
+  /// Operator level runtime stats reported for an arbitration operation
+  /// execution.
   static inline const std::string kMemoryArbitrationWallNanos{
       "memoryArbitrationWallNanos"};
   static inline const std::string kGlobalArbitrationCount{
       "globalArbitrationCount"};
   static inline const std::string kLocalArbitrationCount{
       "localArbitrationCount"};
-  static inline const std::string kLocalArbitrationQueueWallNanos{
-      "localArbitrationQueueWallNanos"};
-  static inline const std::string kLocalArbitrationLockWaitWallNanos{
-      "localArbitrationLockWaitWallNanos"};
-  static inline const std::string kGlobalArbitrationLockWaitWallNanos{
-      "globalArbitrationLockWaitWallNanos"};
-
-  /// The candidate memory pool stats used by arbitration.
-  struct Candidate {
-    std::shared_ptr<MemoryPool> pool;
-    int64_t reclaimableBytes{0};
-    int64_t freeBytes{0};
-    int64_t reservedBytes{0};
-
-    std::string toString() const;
-  };
+  static inline const std::string kLocalArbitrationWaitWallNanos{
+      "localArbitrationWaitWallNanos"};
+  static inline const std::string kGlobalArbitrationWaitWallNanos{
+      "globalArbitrationWaitWallNanos"};
 
  private:
+  using ArbitrationId = uint64_t;
+
   // The kind string of shared arbitrator.
   inline static const std::string kind_{"SHARED"};
-
-  // Contains the execution state of an arbitration operation.
-  struct ArbitrationOperation {
-    MemoryPool* const requestPool;
-    const uint64_t requestBytes;
-
-    // The adjusted grow bytes based on 'requestBytes'. This 'targetBytes' is a
-    // best effort target, and hence will not be guaranteed. The adjustment is
-    // based on 'SharedArbitrator::fastExponentialGrowthCapacityLimit_'
-    // 'SharedArbitrator::slowCapacityGrowPct_' and
-    // 'MemoryArbitrator::memoryPoolTransferCapacity_'.
-    //
-    // TODO: deprecate 'MemoryArbitrator::memoryPoolTransferCapacity_' once
-    // exponential growth works well in production.
-    const std::optional<uint64_t> targetBytes;
-
-    // The start time of this arbitration operation.
-    const std::chrono::steady_clock::time_point startTime;
-
-    // The candidate memory pools.
-    std::vector<Candidate> candidates;
-
-    // The time that waits in local arbitration queue.
-    uint64_t localArbitrationQueueTimeUs{0};
-
-    // The time that waits to acquire the local arbitration lock.
-    uint64_t localArbitrationLockWaitTimeUs{0};
-
-    // The time that waits to acquire the global arbitration lock.
-    uint64_t globalArbitrationLockWaitTimeUs{0};
-
-    explicit ArbitrationOperation(uint64_t requestBytes)
-        : ArbitrationOperation(nullptr, requestBytes, std::nullopt) {}
-
-    ArbitrationOperation(
-        MemoryPool* _requestor,
-        uint64_t _requestBytes,
-        std::optional<uint64_t> _targetBytes)
-        : requestPool(_requestor),
-          requestBytes(_requestBytes),
-          targetBytes(_targetBytes),
-          startTime(std::chrono::steady_clock::now()) {
-      VELOX_CHECK(requestPool == nullptr || requestPool->isRoot());
-    }
-
-    uint64_t waitTimeUs() const {
-      return localArbitrationQueueTimeUs + localArbitrationLockWaitTimeUs +
-          globalArbitrationLockWaitTimeUs;
-    }
-  };
 
   // Used to start and finish an arbitration operation initiated from a memory
   // pool or memory capacity shrink request sent through shrinkPools() API.
   class ScopedArbitration {
    public:
-    ScopedArbitration(SharedArbitrator* arbitrator, ArbitrationOperation* op);
+    explicit ScopedArbitration(
+        SharedArbitrator* arbitrator,
+        ArbitrationOperation* op);
 
     ~ScopedArbitration();
 
    private:
+    SharedArbitrator* arbitrator_;
     ArbitrationOperation* const operation_;
-    SharedArbitrator* const arbitrator_;
     const ScopedMemoryArbitrationContext arbitrationCtx_;
     const std::chrono::steady_clock::time_point startTime_;
   };
 
-  // The arbitration running queue for arbitration requests from the same query
-  // pool.
-  struct ArbitrationQueue {
-    // Points to the current running arbitration.
-    ArbitrationOperation* current;
+  ScopedArbitrationPool getPool(const std::string& name) const;
 
-    // The promises of the arbitration requests from the same query pool waiting
-    // for the serial execution.
-    std::vector<ContinuePromise> waitPromises;
+  ArbitrationOperation createArbitrationOperation(
+      MemoryPool* memPool,
+      uint64_t requestBytes);
 
-    explicit ArbitrationQueue(ArbitrationOperation* op) : current(op) {
-      VELOX_CHECK_NOT_NULL(current);
-    }
-  };
+  void startArbitration(ArbitrationOperation* op);
+
+  void finishArbitration(ArbitrationOperation* op);
 
   // Invoked to check if the memory growth will exceed the memory pool's max
   // capacity limit or the arbitrator's node capacity limit.
-  bool checkCapacityGrowth(ArbitrationOperation* op) const;
+  bool checkCapacityGrowth(ArbitrationOperation& op) const;
 
   // Invoked to ensure the memory growth request won't exceed the request memory
   // pool's max capacity as well as the arbitrator's node capacity. If it does,
   // then we first need to reclaim the used memory from the request memory pool
   // itself to ensure the memory growth won't exceed the capacity limit, and
   // then proceed with the memory arbitration process across queries.
-  bool ensureCapacity(ArbitrationOperation* op);
-
-  // Invoked to reclaim the memory from the other query memory pools to grow the
-  // request memory pool's capacity.
-  bool arbitrateMemory(ArbitrationOperation* op);
-
-  // Invoked to start next memory arbitration request, and it will wait for
-  // the serialized execution if there is a running or other waiting
-  // arbitration requests.
-  void startArbitration(ArbitrationOperation* op);
-
-  // Invoked by a finished memory arbitration request to kick off the next
-  // arbitration request execution if there are any ones waiting.
-  void finishArbitration(ArbitrationOperation* op);
+  bool ensureCapacity(ArbitrationOperation& op);
 
   // Invoked to run local arbitration on the request memory pool. It first
   // ensures the memory growth is within both memory pool and arbitrator
@@ -339,97 +267,71 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // returns false on failure. Otherwise, it needs to further check if
   // 'needGlobalArbitration' is true or not. If true, needs to proceed with the
   // global arbitration run.
-  bool runLocalArbitration(
-      ArbitrationOperation* op,
-      bool& needGlobalArbitration);
+
+  void startArbitrationThread();
+  void stopArbitrationThread();
+  void wakeupArbitrationThread();
+
+  void arbitrationThreadRun();
+
+  uint64_t getArbitrationTarget();
+
+  uint64_t getArbitrationTargetLocked();
+
+  void runArbitrationLoop();
 
   // Invoked to run global arbitration to reclaim free or used memory from the
   // other queries. The global arbitration run is protected by the exclusive
   // lock of 'arbitrationLock_' for serial execution. The function returns true
   // on success, false on failure.
-  bool runGlobalArbitration(ArbitrationOperation* op);
+  bool startAndWaitArbitration(ArbitrationOperation& op);
 
   // Gets the mim/max memory capacity growth targets for 'op'. The min and max
   // targets are calculated based on memoryPoolReservedCapacity_ requirements
   // and the pool's max capacity.
   void getGrowTargets(
-      ArbitrationOperation* op,
+      ArbitrationOperation& op,
       uint64_t& maxGrowTarget,
       uint64_t& minGrowTarget);
 
   // Invoked to get or refresh the candidate memory pools for arbitration. If
   // 'freeCapacityOnly' is true, then we only get free capacity stats for each
   // candidate memory pool.
-  void getCandidates(ArbitrationOperation* op, bool freeCapacityOnly = false);
+  std::vector<ArbitrationCandidate> getCandidates(
+      bool freeCapacityOnly = false);
 
   // Sorts 'candidates' based on reclaimable free capacity in descending order.
   static void sortCandidatesByReclaimableFreeCapacity(
-      std::vector<Candidate>& candidates);
+      std::vector<ArbitrationCandidate>& candidates);
 
   // Sorts 'candidates' based on reclaimable used capacity in descending order.
   static void sortCandidatesByReclaimableUsedCapacity(
-      std::vector<Candidate>& candidates);
+      std::vector<ArbitrationCandidate>& candidates);
 
   // Sorts 'candidates' based on actual used memory in descending order.
-  static void sortCandidatesByUsage(std::vector<Candidate>& candidates);
+  static void sortCandidatesByUsage(
+      std::vector<ArbitrationCandidate>& candidates);
 
   // Finds the candidate with the largest capacity. For 'requestor', the
   // capacity for comparison including its current capacity and the capacity to
   // grow.
-  static const SharedArbitrator::Candidate& findCandidateWithLargestCapacity(
-      MemoryPool* requestor,
-      uint64_t targetBytes,
-      const std::vector<Candidate>& candidates);
+  ArbitrationCandidate findCandidateWithLargestCapacity();
 
-  // Invoked to reclaim free memory capacity from 'candidates' without
+  ArbitrationCandidate findCandidateWithLargestReclaimableBytes();
+
+  // Invoked to reclaim unused memory capacity from memory pools without
   // actually freeing used memory.
-  //
-  // NOTE: the function might sort 'candidates' based on each candidate's free
-  // capacity internally.
-  uint64_t reclaimFreeMemoryFromCandidates(
-      ArbitrationOperation* op,
-      uint64_t reclaimTargetBytes,
-      bool isLocalArbitration);
+  uint64_t reclaimUnusedCapacity();
 
   // Invoked to reclaim used memory capacity from 'candidates' by spilling.
   //
   // NOTE: the function might sort 'candidates' based on each candidate's
   // reclaimable memory internally.
-  void reclaimUsedMemoryFromCandidatesBySpill(
-      ArbitrationOperation* op,
-      uint64_t& freedBytes);
+  uint64_t reclaimUsedMemoryBySpill(uint64_t targetBytes);
 
-  // Invoked to reclaim used memory capacity from 'candidates' by aborting the
-  // top memory users' queries.
-  void reclaimUsedMemoryFromCandidatesByAbort(
-      ArbitrationOperation* op,
-      uint64_t& freedBytes);
-
-  // Checks if request pool has been aborted or not.
-  void checkIfAborted(ArbitrationOperation* op);
-
-  // Checks if the request pool already has enough free capacity for the growth.
-  // This could happen if there are multiple arbitration operations from the
-  // same query. When the first served operation succeeds, it might have
-  // reserved enough capacity for the followup operations.
-  bool maybeGrowFromSelf(ArbitrationOperation* op);
-
-  // Invoked to grow 'pool' capacity by 'growBytes' and commit used reservation
-  // by 'reservationBytes'. The function throws if the growth fails.
-  void
-  checkedGrow(MemoryPool* pool, uint64_t growBytes, uint64_t reservationBytes);
-
-  // Invoked to reclaim used memory from 'targetPool' with specified
-  // 'targetBytes'. The function returns the actually freed capacity.
-  // 'isLocalArbitration' is true when the reclaim attempt is within a local
-  // arbitration.
-  uint64_t reclaim(
-      MemoryPool* targetPool,
-      uint64_t targetBytes,
-      bool isLocalArbitration) noexcept;
-
-  // Invoked to abort memory 'pool'.
-  void abort(MemoryPool* pool, const std::exception_ptr& error);
+  uint64_t reclaimUsedMemoryBySpill(
+      ScopedArbitrationPool& pool,
+      uint64_t targetBytes);
 
   // Invoked to handle the memory arbitration failure to abort the memory pool
   // with the largest capacity to free up memory. The function returns true on
@@ -437,7 +339,43 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // victim. We don't abort the requestor itself but just fails the
   // arbitration to let the user decide to either proceed with the query or
   // fail it.
-  bool handleOOM(ArbitrationOperation* op);
+  uint64_t reclaimUsedMemoryByAbort();
+
+  uint64_t reclaimUsedMemoryByAbort(ScopedArbitrationPool& pool);
+
+  // Checks if request pool has been aborted or not.
+  void checkIfAborted(ArbitrationOperation& op);
+
+  // Checks if the operation has timed out or not.
+  void checkIfTimeout(ArbitrationOperation& op);
+
+  // Checks if the request pool already has enough free capacity for the growth.
+  // This could happen if there are multiple arbitration operations from the
+  // same query. When the first served operation succeeds, it might have
+  // reserved enough capacity for the followup operations.
+  bool maybeGrowFromSelf(ArbitrationOperation& op);
+
+  bool growWithFreeCapacity(ArbitrationOperation& op);
+
+  // Invoked to grow 'pool' capacity by 'growBytes' and commit used reservation
+  // by 'reservationBytes'. The function throws if the growth fails.
+  void checkedGrow(
+      ScopedArbitrationPool& pool,
+      uint64_t growBytes,
+      uint64_t reservationBytes);
+
+  // Invoked to reclaim used memory from 'targetPool' with specified
+  // 'targetBytes'. The function returns the actually freed capacity.
+  // 'isLocalArbitration' is true when the reclaim attempt is within a local
+  // arbitration.
+  uint64_t reclaim(
+      ScopedArbitrationPool& pool,
+      uint64_t targetBytes,
+      uint64_t timeoutMs,
+      bool selfReclaim) noexcept;
+
+  // Invoked to abort memory 'pool'.
+  uint64_t abort(ScopedArbitrationPool& pool, const std::exception_ptr& error);
 
   // Decrements free capacity from the arbitrator with up to
   // 'maxBytesToReserve'. The arbitrator might have less free available
@@ -445,19 +383,34 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // bytes. If 'minBytesToReserve' is not zero and there is less than
   // 'minBytes' available in non-reserved capacity, then the arbitrator tries
   // to decrement up to 'minBytes' from the reserved capacity.
-  uint64_t decrementFreeCapacity(
-      uint64_t maxBytesToReserve,
-      uint64_t minBytesToReserve);
-  uint64_t decrementFreeCapacityLocked(
-      uint64_t maxBytesToReserve,
-      uint64_t minBytesToReserve);
+  bool allocateCapacity(
+      uint64_t requestPoolId,
+      uint64_t requestBytes,
+      uint64_t maxAllocateBytes,
+      uint64_t minAllocateBytes,
+      uint64_t& allocatedBytes);
+
+  bool allocateCapacityLocked(
+      uint64_t requestPoolId,
+      uint64_t requestBytes,
+      uint64_t maxAllocateBytes,
+      uint64_t minAllocateBytes,
+      uint64_t& allocatedBytes);
 
   // Increment free capacity by 'bytes'.
-  void incrementFreeCapacity(uint64_t bytes);
-  void incrementFreeCapacityLocked(uint64_t bytes);
+  void freeCapacity(uint64_t bytes);
+
+  void freeCapacityLocked(
+      uint64_t bytes,
+      std::vector<ContinuePromise>& resumes);
   // Increments the free reserved capacity up to 'bytes' until reaches to the
   // reserved capacity limit. 'bytes' is updated accordingly.
-  void incrementFreeReservedCapacityLocked(uint64_t& bytes);
+  void freeReservedCapacityLocked(uint64_t& bytes);
+
+  void resumeArbitrationWaiters();
+  void resumeArbitrationWaitersLocked(std::vector<ContinuePromise>& resumes);
+
+  void removeArbitrationWaiter(uint64_t id);
 
   void incrementGlobalArbitrationCount();
   void incrementLocalArbitrationCount();
@@ -466,85 +419,44 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   Stats statsLocked() const;
 
-  // Returns the max reclaimable capacity from 'pool' which includes both used
-  // and free capacities. If 'isSelfReclaim' true, we reclaim memory from the
-  // request pool itself so that we can bypass the reserved free capacity
-  // reclaim restriction.
-  int64_t maxReclaimableCapacity(const MemoryPool& pool, bool isSelfReclaim)
-      const;
-
-  // Returns the free memory capacity that can be reclaimed from 'pool' by
-  // shrink. If 'isSelfReclaim' true, we reclaim memory from the request pool
-  // itself so that we can bypass the reserved free capacity reclaim
-  // restriction.
-  int64_t reclaimableFreeCapacity(const MemoryPool& pool, bool isSelfReclaim)
-      const;
-
-  // Returns the used memory capacity that can be reclaimed from 'pool' by
-  // disk spill. If 'isSelfReclaim' true, we reclaim memory from the request
-  // pool itself so that we can bypass the reserved free capacity reclaim
-  // restriction.
-  int64_t reclaimableUsedCapacity(const MemoryPool& pool, bool isSelfReclaim)
-      const;
-
-  // Returns the minimal amount of memory capacity to grow for 'pool' to have
-  // the reserved capacity as specified by 'memoryPoolReservedCapacity_'.
-  int64_t minGrowCapacity(const MemoryPool& pool) const;
-
-  // The capacity growth target is set to have a coarser granularity. It can
-  // help to reduce the number of future grow calls, and hence reducing the
-  // number of unnecessary memory arbitration requests.
-  uint64_t getCapacityGrowthTarget(
-      const MemoryPool& pool,
-      uint64_t requestBytes) const;
-
-  // The capacity shrink target is adjusted from request shrink bytes to give
-  // the memory pool more headroom free capacity after shrink. It can help to
-  // reduce the number of future grow calls, and hence reducing the number of
-  // unnecessary memory arbitration requests.
-  uint64_t getCapacityShrinkTarget(
-      const MemoryPool& pool,
-      uint64_t requestBytes) const;
-
-  // Returns true if 'pool' is under memory arbitration.
-  bool isUnderArbitrationLocked(MemoryPool* pool) const;
-
   void updateArbitrationRequestStats();
 
   void updateArbitrationFailureStats();
 
   const uint64_t reservedCapacity_;
   const uint64_t memoryPoolInitialCapacity_;
-  const uint64_t memoryPoolReservedCapacity_;
   const uint64_t memoryPoolTransferCapacity_;
-  const uint64_t memoryReclaimWaitMs_;
+  const uint64_t memoryArbitrationTimeMs_;
+  const ArbitrationPool::Config poolConfig_;
   const bool globalArbitrationEnabled_;
   const bool checkUsageLeak_;
 
-  const uint64_t fastExponentialGrowthCapacityLimit_;
-  const double slowCapacityGrowPct_;
-  const uint64_t memoryPoolMinFreeCapacity_;
-  const double memoryPoolMinFreeCapacityPct_;
+  std::atomic_uint64_t nextPoolId_{0};
 
   mutable folly::SharedMutex poolLock_;
-  std::unordered_map<MemoryPool*, std::weak_ptr<MemoryPool>> candidates_;
+  std::unordered_map<std::string, std::shared_ptr<ArbitrationPool>>
+      arbitrationPools_;
 
-  // Lock used to protect the arbitrator state.
+  // Lock used to protect the arbitrator internal state.
   mutable std::mutex stateLock_;
+
+  bool shutdown_{false};
+  std::condition_variable arbitrationThreadCv_;
+  std::unique_ptr<std::thread> arbitrationThread_;
+
   tsan_atomic<uint64_t> freeReservedCapacity_{0};
   tsan_atomic<uint64_t> freeNonReservedCapacity_{0};
 
-  // Contains the arbitration running queues with one per each query memory
-  // pool.
-  std::unordered_map<MemoryPool*, std::unique_ptr<ArbitrationQueue>>
-      arbitrationQueues_;
+  std::unique_ptr<std::thread> globalArbitrationThread_;
 
-  // R/W lock used to control local and global arbitration runs. A local
-  // arbitration run needs to hold a shared lock while the latter needs to hold
-  // an exclusive lock. Hence, multiple local arbitration runs from different
-  // query memory pools can run in parallel but the global ones has to run with
-  // one at a time.
-  mutable std::shared_mutex arbitrationLock_;
+  struct ArbitrationWait {
+    ArbitrationOperation* op;
+    ContinuePromise resumePromise;
+
+    ArbitrationWait(ArbitrationOperation* _op, ContinuePromise _resumePromise)
+        : op(_op), resumePromise(std::move(_resumePromise)) {}
+  };
+  std::map<uint64_t, ArbitrationWait> arbitrationWaiters_;
 
   std::atomic_uint64_t numRequests_{0};
   std::atomic_uint32_t numPending_{0};
@@ -552,10 +464,12 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   std::atomic_uint64_t numFailures_{0};
   std::atomic_uint64_t waitTimeUs_{0};
   tsan_atomic<uint64_t> arbitrationTimeUs_{0};
-  tsan_atomic<uint64_t> reclaimedFreeBytes_{0};
-  tsan_atomic<uint64_t> reclaimedUsedBytes_{0};
-  tsan_atomic<uint64_t> reclaimTimeUs_{0};
+  std::atomic_uint64_t reclaimedFreeBytes_{0};
+  std::atomic_uint64_t reclaimedUsedBytes_{0};
+  std::atomic_uint64_t reclaimTimeUs_{0};
   tsan_atomic<uint64_t> numNonReclaimableAttempts_{0};
   tsan_atomic<uint64_t> numShrinks_{0};
+
+  friend class ArbitrationOperation;
 };
 } // namespace facebook::velox::memory

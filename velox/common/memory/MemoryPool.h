@@ -559,6 +559,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   friend class MemoryManager;
   friend class MemoryArbitrator;
   friend class ScopedMemoryPoolArbitrationCtx;
+  friend class ArbitrationPool;
 
   VELOX_FRIEND_TEST(MemoryPoolTest, shrinkAndGrowAPIs);
   VELOX_FRIEND_TEST(MemoryPoolTest, grow);
@@ -582,10 +583,11 @@ class MemoryPoolImpl : public MemoryPool {
       Kind kind,
       std::shared_ptr<MemoryPool> parent,
       std::unique_ptr<MemoryReclaimer> reclaimer,
-      DestructionCallback destructionCb,
       const Options& options = Options{});
 
   ~MemoryPoolImpl() override;
+
+  void setDestructionCallback(DestructionCallback destructionCb);
 
   void* allocate(int64_t size) override;
 
@@ -1001,7 +1003,6 @@ class MemoryPoolImpl : public MemoryPool {
   MemoryManager* const manager_;
   MemoryAllocator* const allocator_;
   MemoryArbitrator* const arbitrator_;
-  const DestructionCallback destructionCb_;
 
   // Regex for filtering on 'name_' when debug mode is enabled. This allows us
   // to only track the callsites of memory allocations for memory pools whose
@@ -1014,6 +1015,8 @@ class MemoryPoolImpl : public MemoryPool {
   // work based on atomic 'reservationBytes_' without mutex as children updating
   // the same parent do not have to be serialized.
   mutable std::mutex mutex_;
+
+  DestructionCallback destructionCb_;
 
   // Used by memory arbitration to reclaim memory from the associated query
   // object if not null. For example, a memory pool can reclaim the used memory

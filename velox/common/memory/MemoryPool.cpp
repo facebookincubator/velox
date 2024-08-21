@@ -418,23 +418,17 @@ MemoryPoolImpl::MemoryPoolImpl(
     Kind kind,
     std::shared_ptr<MemoryPool> parent,
     std::unique_ptr<MemoryReclaimer> reclaimer,
-    DestructionCallback destructionCb,
     const Options& options)
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
       allocator_{manager_->allocator()},
       arbitrator_{manager_->arbitrator()},
-      destructionCb_(std::move(destructionCb)),
       debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
       reclaimer_(std::move(reclaimer)),
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
       capacity_(parent_ != nullptr ? kMaxMemory : 0) {
   VELOX_CHECK(options.threadSafe || isLeaf());
-  VELOX_CHECK(
-      isRoot() || destructionCb_ == nullptr,
-      "Only root memory pool allows to set destruction callbacks: {}",
-      name_);
 }
 
 MemoryPoolImpl::~MemoryPoolImpl() {
@@ -736,7 +730,6 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
       kind,
       parent,
       std::move(reclaimer),
-      nullptr,
       Options{
           .alignment = alignment_,
           .trackUsage = trackUsage_,
@@ -1298,5 +1291,11 @@ void MemoryPoolImpl::handleAllocationFailure(
   }
 
   VELOX_MEM_ALLOC_ERROR(failureMessage);
+}
+
+void MemoryPoolImpl::setDestructionCallback(DestructionCallback destructionCb) {
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK_NULL(destructionCb_);
+  destructionCb_ = std::move(destructionCb);
 }
 } // namespace facebook::velox::memory
