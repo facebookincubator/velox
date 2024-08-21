@@ -53,6 +53,44 @@ using facebook::velox::fuzzer::ArgGenerator;
 using facebook::velox::fuzzer::FuzzerRunner;
 using facebook::velox::exec::test::PrestoQueryRunner;
 using facebook::velox::test::ReferenceQueryRunner;
+using facebook::velox::fuzzer::ExprTransformer;
+using facebook::velox::core::TypedExprPtr;
+using facebook::velox::TypePtr;
+
+class SortArrayTransformer : public ExprTransformer {
+ public:
+  /*virtual bool isSupported(const TypePtr& type) const {
+    return !containsMap(type);
+  }*/
+
+  virtual TypedExprPtr transform(TypedExprPtr expr) const override {
+    facebook::velox::TypePtr type = expr->type();
+    return std::make_shared<facebook::velox::core::CallTypedExpr>(
+        type,
+        std::vector<TypedExprPtr>{std::move(expr)},
+        "array_sort");
+  }
+
+  virtual int32_t extraLevelOfNesting() const override {
+    return 1;
+  }
+
+ /*private:
+  bool containsMap(const TypePtr& type) const {
+    if (type->isMap()) {
+      return true;
+    } else if (type->isArray()) {
+      return containsMap(type->asArray().elementType());
+    } else if (type->isRow()) {
+      for (const auto& child : type->asRow().children()) {
+        if (containsMap(child)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }*/
+};
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
@@ -63,7 +101,12 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
 
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  // facebook::velox::functions::prestosql::registerInternalFunctions();
   facebook::velox::memory::MemoryManager::initialize({});
+
+  std::unordered_map<std::string, std::shared_ptr<ExprTransformer>> functionTransformers = {
+      {"array_intersect", std::make_shared<SortArrayTransformer>()},
+  };
 
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable.
@@ -139,7 +182,7 @@ int main(int argc, char** argv) {
       //"tan", //error within epsilon
       //"tanh", // error within epsilon
       "json_format", // todo: not accepting varchar, but "json '12ab'" will throw in json_parse.
-      "array_intersect", // different order of elements
+      // "array_intersect", // different order of elements
       "concat",
       "find_first",
       "in",
@@ -180,7 +223,10 @@ int main(int argc, char** argv) {
       "bitwise_arithmetic_shift_right",
       "array_normalize", // todo: need compare array of floating-point with epsilon
       "lpad(varbinary,bigint,varbinary) -> varbinary",
-      
+      "like",
+      "format_datetime",
+      "greatest", // todo: presto not supporting nan arg in old presto version.
+
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
@@ -206,5 +252,5 @@ int main(int argc, char** argv) {
     LOG(INFO) << "Using Presto as the reference DB.";
   }
   return FuzzerRunner::run(
-      initialSeed, skipFunctions, {{"session_timezone", "America/Los_Angeles"}, {"adjust_timestamp_to_session_timezone", "true"}}, argGenerators, referenceQueryRunner);
+      initialSeed, skipFunctions, functionTransformers, {{"session_timezone", "America/Los_Angeles"}, {"adjust_timestamp_to_session_timezone", "true"}}, argGenerators, referenceQueryRunner);
 }

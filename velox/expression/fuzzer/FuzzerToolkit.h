@@ -17,8 +17,18 @@
 
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/core/Expressions.h"
 
 namespace facebook::velox::fuzzer {
+
+class ExprTransformer {
+ public:
+  // virtual bool isSupported(const TypePtr& type) const = 0;
+
+  virtual core::TypedExprPtr transform(core::TypedExprPtr) const = 0;
+
+  virtual int32_t extraLevelOfNesting() const = 0;
+};
 
 // Represents one available function signature.
 struct CallableSignature {

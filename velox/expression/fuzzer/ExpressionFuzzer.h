@@ -96,6 +96,8 @@ class ExpressionFuzzer {
     //   "array_sort(array(T),constant function(T,T,bigint)) -> array(T)"}
     std::unordered_set<std::string> skipFunctions;
 
+    std::unordered_map<std::string, std::shared_ptr<ExprTransformer>> functionTransformers;
+
     // When set, when the input size of the generated expressions reaches
     // maxInputsThreshold, fuzzing input columns will reuse one of the existing
     // columns if any is already generated with the same type.
