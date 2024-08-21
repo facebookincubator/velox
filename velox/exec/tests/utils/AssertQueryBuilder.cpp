@@ -62,13 +62,13 @@ AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
   return *this;
 }
 
-AssertQueryBuilder& AssertQueryBuilder::singleThreaded(bool singleThreaded) {
-  if (singleThreaded) {
-    params_.singleThreaded = true;
+AssertQueryBuilder& AssertQueryBuilder::serial(bool serial) {
+  if (serial) {
+    params_.serial = true;
     executor_ = nullptr;
     return *this;
   }
-  params_.singleThreaded = false;
+  params_.serial = false;
   executor_ = newExecutor();
   return *this;
 }

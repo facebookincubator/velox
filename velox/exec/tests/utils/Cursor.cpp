@@ -204,9 +204,9 @@ class TaskCursorBase : public TaskCursor {
   std::shared_ptr<folly::Executor> executor_;
 };
 
-class MultiThreadedTaskCursor : public TaskCursorBase {
+class ParallelTaskCursor : public TaskCursorBase {
  public:
-  explicit MultiThreadedTaskCursor(const CursorParameters& params)
+  explicit ParallelTaskCursor(const CursorParameters& params)
       : TaskCursorBase(
             params,
             std::make_shared<folly::CPUThreadPoolExecutor>(
@@ -214,10 +214,10 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         maxDrivers_{params.maxDrivers},
         numConcurrentSplitGroups_{params.numConcurrentSplitGroups},
         numSplitGroups_{params.numSplitGroups} {
-    VELOX_CHECK(!params.singleThreaded)
+    VELOX_CHECK(!params.serial)
     VELOX_CHECK(
         queryCtx_->isExecutorSupplied(),
-        "Executor should be set in multi-threaded task cursor")
+        "Executor should be set in parallel task cursor")
 
     queue_ = std::make_shared<TaskQueue>(params.bufferedBytes);
     // Captured as a shared_ptr by the consumer callback of task_.
@@ -255,7 +255,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     }
   }
 
-  ~MultiThreadedTaskCursor() override {
+  ~ParallelTaskCursor() override {
     queue_->close();
     if (task_ && !atEnd_) {
       task_->requestCancel();
@@ -318,14 +318,14 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   bool atEnd_{false};
 };
 
-class SingleThreadedTaskCursor : public TaskCursorBase {
+class SerialTaskCursor : public TaskCursorBase {
  public:
-  explicit SingleThreadedTaskCursor(const CursorParameters& params)
+  explicit SerialTaskCursor(const CursorParameters& params)
       : TaskCursorBase(params, nullptr) {
-    VELOX_CHECK(params.singleThreaded)
+    VELOX_CHECK(params.serial)
     VELOX_CHECK(
         !queryCtx_->isExecutorSupplied(),
-        "Executor should not be set in single-threaded task cursor")
+        "Executor should not be set in serial task cursor")
 
     task_ = Task::create(
         taskId_,
@@ -339,12 +339,12 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     }
 
     VELOX_CHECK(
-        task_->supportsSingleThreadedExecution(),
-        "Plan doesn't support single-threaded execution")
+        task_->supportsSerialExecution(),
+        "Plan doesn't support serial execution")
   }
 
-  ~SingleThreadedTaskCursor() override {
-    if (task_ && !SingleThreadedTaskCursor::hasNext()) {
+  ~SerialTaskCursor() override {
+    if (task_ && !SerialTaskCursor::hasNext()) {
       task_->requestCancel().wait();
     }
   }
@@ -402,10 +402,10 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
 };
 
 std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
-  if (params.singleThreaded) {
-    return std::make_unique<SingleThreadedTaskCursor>(params);
+  if (params.serial) {
+    return std::make_unique<SerialTaskCursor>(params);
   }
-  return std::make_unique<MultiThreadedTaskCursor>(params);
+  return std::make_unique<ParallelTaskCursor>(params);
 }
 
 bool RowCursor::next() {

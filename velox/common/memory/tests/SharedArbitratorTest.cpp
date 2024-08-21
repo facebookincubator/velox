@@ -305,25 +305,25 @@ class SharedArbitrationTestBase : public exec::test::HiveConnectorTestBase {
 };
 
 namespace {
-std::unique_ptr<folly::Executor> newMultiThreadedExecutor() {
+std::unique_ptr<folly::Executor> newParallelExecutor() {
   return std::make_unique<folly::CPUThreadPoolExecutor>(32);
 }
 
 struct TestParam {
-  bool isSingleThreaded{false};
+  bool isSerial{false};
 };
 } // namespace
 
-/// A test fixture that runs cases within multi-threaded execution mode.
+/// A test fixture that runs cases within parallel execution mode.
 class SharedArbitrationTest : public SharedArbitrationTestBase {
  protected:
   void SetUp() override {
     SharedArbitrationTestBase::SetUp();
-    executor_ = newMultiThreadedExecutor();
+    executor_ = newParallelExecutor();
   }
 };
-/// A test fixture that runs cases within both single-threaded and
-/// multi-threaded execution modes.
+/// A test fixture that runs cases within both serial and
+/// parallel execution modes.
 class SharedArbitrationTestWithThreadingModes
     : public testing::WithParamInterface<TestParam>,
       public SharedArbitrationTestBase {
@@ -335,15 +335,15 @@ class SharedArbitrationTestWithThreadingModes
  protected:
   void SetUp() override {
     SharedArbitrationTestBase::SetUp();
-    isSingleThreaded_ = GetParam().isSingleThreaded;
-    if (isSingleThreaded_) {
+    isSerial_ = GetParam().isSerial;
+    if (isSerial_) {
       executor_ = nullptr;
     } else {
-      executor_ = newMultiThreadedExecutor();
+      executor_ = newParallelExecutor();
     }
   }
 
-  bool isSingleThreaded_{false};
+  bool isSerial_{false};
 };
 
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, queryArbitrationStateCheck) {
@@ -536,7 +536,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(orderByQueryCtx)
-              .singleThreaded(isSingleThreaded_)
+              .serial(isSerial_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
@@ -553,7 +553,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
-              .singleThreaded(isSingleThreaded_)
+              .serial(isSerial_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -640,7 +640,7 @@ DEBUG_ONLY_TEST_P(
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(aggregationQueryCtx)
-              .singleThreaded(isSingleThreaded_)
+              .serial(isSerial_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
@@ -658,7 +658,7 @@ DEBUG_ONLY_TEST_P(
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
-              .singleThreaded(isSingleThreaded_)
+              .serial(isSerial_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -746,7 +746,7 @@ DEBUG_ONLY_TEST_P(
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(joinQueryCtx)
-              .singleThreaded(isSingleThreaded_)
+              .serial(isSerial_)
               .plan(PlanBuilder(planNodeIdGenerator)
                         .values(vectors)
                         .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
@@ -774,7 +774,7 @@ DEBUG_ONLY_TEST_P(
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
-              .singleThreaded(isSingleThreaded_)
+              .serial(isSerial_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
