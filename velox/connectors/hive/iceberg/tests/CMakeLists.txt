@@ -45,7 +45,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_test
     velox_dwio_iceberg_reader_benchmark_lib
     velox_hive_connector
-    velox_hive_iceberg_splitreader
+    velox_hive_iceberg_connector
     velox_hive_partition_function
     velox_dwio_common_exception
     velox_dwio_common_test_utils

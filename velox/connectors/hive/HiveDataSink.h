@@ -451,7 +451,7 @@ class HiveDataSink : public DataSink {
 
   bool canReclaim() const;
 
- private:
+ protected:
   enum class State { kRunning = 0, kAborted = 1, kClosed = 2 };
   friend struct fmt::formatter<
       facebook::velox::connector::hive::HiveDataSink::State>;
@@ -528,7 +528,7 @@ class HiveDataSink : public DataSink {
 
   // Get the HiveWriter corresponding to the row
   // from partitionIds and bucketIds.
-  FOLLY_ALWAYS_INLINE HiveWriterId getWriterId(size_t row) const;
+  HiveWriterId getWriterId(size_t row) const;
 
   // Computes the number of input rows as well as the actual input row indices
   // to each corresponding (bucketed) partition based on the partition and
@@ -548,9 +548,17 @@ class HiveDataSink : public DataSink {
   maybeCreateBucketSortWriter(
       std::unique_ptr<facebook::velox::dwio::common::Writer> writer);
 
+  virtual std::string makePartitionDirectory(
+      const std::string& tableDirectory,
+      const std::optional<std::string>& partitionSubdirectory) const;
+
   HiveWriterParameters getWriterParameters(
       const std::optional<std::string>& partition,
       std::optional<uint32_t> bucketId) const;
+
+  virtual std::vector<column_index_t> getDataChannels(
+      const std::vector<column_index_t>& partitionChannels,
+      const column_index_t childrenSize) const;
 
   // Gets write and target file names for a writer based on the table commit
   // strategy as well as table partitioned type. If commit is not required, the
@@ -569,7 +577,7 @@ class HiveDataSink : public DataSink {
   }
 
   // Invoked to write 'input' to the specified file writer.
-  void write(size_t index, RowVectorPtr input);
+  virtual void write(size_t index, RowVectorPtr input);
 
   void closeInternal();
 
@@ -582,13 +590,13 @@ class HiveDataSink : public DataSink {
   const uint32_t maxOpenWriters_;
   const std::vector<column_index_t> partitionChannels_;
   const std::unique_ptr<PartitionIdGenerator> partitionIdGenerator_;
-  // Indices of dataChannel are stored in ascending order
-  const std::vector<column_index_t> dataChannels_;
   const int32_t bucketCount_{0};
   const std::unique_ptr<core::PartitionFunction> bucketFunction_;
   const std::shared_ptr<dwio::common::WriterFactory> writerFactory_;
   const common::SpillConfig* const spillConfig_;
 
+  // Indices of dataChannel are stored in ascending order
+  std::vector<column_index_t> dataChannels_;
   std::vector<column_index_t> sortColumnIndices_;
   std::vector<CompareFlags> sortCompareFlags_;
 
