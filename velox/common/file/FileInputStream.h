@@ -19,8 +19,8 @@
 #include <cstdint>
 
 #include "velox/buffer/Buffer.h"
+#include "velox/common/base/ByteInputStream.h"
 #include "velox/common/file/File.h"
-#include "velox/common/memory/ByteStream.h"
 
 namespace facebook::velox::common {
 

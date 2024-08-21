@@ -17,7 +17,6 @@
 
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/memory/ByteStream.h"
 #include "velox/common/time/Timer.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/serializers/PrestoSerializer.h"

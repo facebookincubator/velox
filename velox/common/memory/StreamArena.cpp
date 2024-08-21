@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/memory/StreamArena.h"
-#include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/OutputStream.h"
 
 namespace facebook::velox {
 

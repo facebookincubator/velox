@@ -15,9 +15,9 @@
  */
 #pragma once
 
+#include "velox/common/base/ByteOutputStream.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/memory/AllocationPool.h"
-#include "velox/common/memory/ByteStream.h"
 #include "velox/common/memory/CompactDoubleList.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/StreamArena.h"

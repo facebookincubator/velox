@@ -13,8 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/memory/ByteStream.h"
-
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/file/FileInputStream.h"
 #include "velox/common/file/FileSystems.h"

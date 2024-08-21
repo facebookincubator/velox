@@ -20,9 +20,9 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/Scratch.h"
 #include "velox/common/compression/Compression.h"
-#include "velox/common/memory/ByteStream.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryAllocator.h"
+#include "velox/common/memory/OutputStream.h"
 #include "velox/common/memory/StreamArena.h"
 #include "velox/vector/ComplexVector.h"
 
