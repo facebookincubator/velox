@@ -1792,9 +1792,7 @@ DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
   waitForAllTasksToBeDeleted();
 }
 
-DEBUG_ONLY_TEST_F(
-    TaskTest,
-    serialLongRunningOperatorInTaskReclaimerAbort) {
+DEBUG_ONLY_TEST_F(TaskTest, serialLongRunningOperatorInTaskReclaimerAbort) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
