@@ -58,6 +58,7 @@ TEST_F(ToPrettyStringTest, toPrettyStringTest) {
   EXPECT_EQ(
       toPrettyString<StringView>("str_is_not_inline"), "str_is_not_inline");
   EXPECT_EQ(toPrettyString<int8_t>(std::nullopt), kNull);
+  EXPECT_EQ(toPrettyString<UnknownValue>(UnknownValue()), kNull);
 }
 
 TEST_F(ToPrettyStringTest, date) {

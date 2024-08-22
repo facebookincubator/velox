@@ -178,11 +178,12 @@ void registerToPrettyStringFunctions(const std::string& prefix) {
       aliases);
   registerFunction<ToPrettyStringFunction, Varchar, bool>(aliases);
   registerFunction<ToPrettyStringFunction, Varchar, Varchar>(aliases);
-  registerFunction<ToPrettyStringFunction, Varchar, Date>(aliases);
   registerFunction<ToPrettyStringVarbinaryFunction, Varchar, Varbinary>(
       aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, Date>(aliases);
   registerFunction<ToPrettyStringTimestampFunction, Varchar, Timestamp>(
       aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, UnknownValue>(aliases);
   registerFunction<
       ToPrettyStringDecimalFunction,
       Varchar,
