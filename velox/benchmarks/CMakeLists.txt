@@ -60,6 +60,6 @@ target_link_libraries(
   velox_type_fbhive
   velox_caching
   velox_vector_test_lib
-  ${FOLLY_BENCHMARK}
   Folly::folly
+  Folly::follybenchmark
   fmt::fmt)

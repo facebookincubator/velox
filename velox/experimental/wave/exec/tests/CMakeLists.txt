@@ -48,13 +48,14 @@ target_link_libraries(
   Boost::regex
   Boost::thread
   Boost::system
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   Folly::folly
   gflags::gflags
   glog::glog
   fmt::fmt
+  CUDA::cudart
   ${FILESYSTEM})
 
 add_test(velox_wave_exec_test velox_wave_exec_test)
@@ -93,11 +94,11 @@ if(${VELOX_ENABLE_BENCHMARKS})
     Boost::regex
     Boost::thread
     Boost::system
-    gtest
-    gtest_main
-    gmock
-    ${FOLLY_BENCHMARK}
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
     Folly::folly
+    Folly::follybenchmark
     gflags::gflags
     glog::glog
     fmt::fmt
