@@ -74,16 +74,17 @@ FOLLY_ALWAYS_INLINE std::string preparePrestoRegexpReplaceReplacement(
       RE2::UNANCHORED,
       groupName,
       2)) {
-    auto groupIter = re.NamedCapturingGroups().find(groupName[1].as_string());
+    std::string groupNameStr(groupName[1]);
+    auto groupIter = re.NamedCapturingGroups().find(groupNameStr);
     if (groupIter == re.NamedCapturingGroups().end()) {
       VELOX_USER_FAIL(
           "Invalid replacement sequence: unknown group {{ {} }}.",
-          groupName[1].as_string());
+          groupNameStr);
     }
 
     RE2::GlobalReplace(
         &newReplacement,
-        fmt::format(R"(\${{{}}})", groupName[1].as_string()),
+        fmt::format(R"(\${{{}}})", groupNameStr),
         fmt::format("${}", groupIter->second));
   }
 
