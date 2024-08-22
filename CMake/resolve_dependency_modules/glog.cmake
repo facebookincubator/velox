@@ -45,7 +45,7 @@ add_dependencies(glog gflags::gflags)
 # 'demangle.h' which causes issues with folly because it looks for such a file
 # in a feature guard. The existence of the file turns on the feature but the
 # header is only incidentally named the same and leads to compilation errors.
-set(glog_INCLUDE_DIR ${glog_BINARY_DIR})
+set(glog_INCLUDE_DIR $<BUILD_INTERFACE:${glog_BINARY_DIR}>)
 set(glog_LIBRARY
     ${glog_BINARY_DIR}/libglog$<$<CONFIG:Debug>:d>.$<IF:$<BOOL:${VELOX_BUILD_SHARED}>,so,a>
 )
