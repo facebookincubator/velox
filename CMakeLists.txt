@@ -89,6 +89,13 @@ if(VELOX_BUILD_SHARED AND NOT VELOX_MONO_LIBRARY)
       "Shared build is only possible when `VELOX_MONO_LIBRARY=ON` is set.")
 endif()
 
+if(VELOX_BUILD_SHARED)
+  message(
+    WARNING
+      "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags."
+      "This is currently NOT being enforced so user discretion is advised.")
+endif()
+
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
 #
@@ -400,14 +407,7 @@ set(BOOST_INCLUDE_LIBRARIES
 set_source(Boost)
 resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 
-if(VELOX_BUILD_SHARED)
-  # We have to enforce the bundled build for now to make sure folly uses the
-  # shared gflags to avoid linking issues
-  set(gflags_SOURCE BUNDLED)
-else()
-  set_source(gflags)
-endif()
-
+set_source(gflags)
 resolve_dependency(gflags COMPONENTS ${VELOX_GFLAGS_TYPE})
 if(NOT TARGET gflags::gflags)
   # This is a bit convoluted, but we want to be able to use gflags::gflags as a
@@ -479,14 +479,7 @@ endif()
 set_source(simdjson)
 resolve_dependency(simdjson 3.9.3)
 
-# Locate or build folly.
-if(VELOX_BUILD_SHARED)
-  # We have to enforce the bundled build for now to avoid linking issues with
-  # gflags
-  set(folly_SOURCE BUNDLED)
-else()
-  set_source(folly)
-endif()
+set_source(folly)
 resolve_dependency(folly)
 
 if(${VELOX_BUILD_TESTING})
@@ -579,7 +572,6 @@ find_package(double-conversion 3.1.5 REQUIRED)
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
 
-# these were previously vendored in third-party/
 if(NOT VELOX_DISABLE_GOOGLETEST)
   set_source(GTest)
   resolve_dependency(GTest)
