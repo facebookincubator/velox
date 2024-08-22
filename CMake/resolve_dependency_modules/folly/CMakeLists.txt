@@ -27,6 +27,11 @@ message(STATUS "Building Folly from source")
 
 if(gflags_SOURCE STREQUAL "BUNDLED")
   set(glog_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-gflags-glog.patch)
+  # Together with the patch applied above prevents folly from test compiling a
+  # snippet to find the right namespace (which would fail because gflags isn't
+  # built yet)
+  set(FOLLY_UNUSUAL_GFLAGS_NAMESPACE OFF)
+  set(FOLLY_GFLAGS_NAMESPACE gflags)
 endif()
 
 FetchContent_Declare(
@@ -42,7 +47,6 @@ if(ON_APPLE_M1)
 endif()
 
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
-
 # Enable INT128 support
 set(FOLLY_HAVE_INT128_T ON)
 FetchContent_MakeAvailable(folly)
@@ -51,6 +55,6 @@ FetchContent_MakeAvailable(folly)
 add_library(Folly::folly ALIAS folly)
 add_library(Folly::follybenchmark ALIAS follybenchmark)
 
-if(${gflags_SOURCE} STREQUAL "BUNDLED")
+if(gflags_SOURCE STREQUAL "BUNDLED")
   add_dependencies(folly glog gflags::gflags fmt::fmt)
 endif()
