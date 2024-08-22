@@ -348,7 +348,7 @@ class RowContainer {
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
-      bool columnMayHaveNulls,
+      bool columnHasNulls,
       vector_size_t resultOffset,
       const VectorPtr& result);
 
@@ -359,9 +359,9 @@ class RowContainer {
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
-      bool columnMayHaveNulls,
+      bool columnHasNulls,
       const VectorPtr& result) {
-    extractColumn(rows, numRows, col, columnMayHaveNulls, 0, result);
+    extractColumn(rows, numRows, col, columnHasNulls, 0, result);
   }
 
   /// Copies the values from the array pointed to by 'rows' at 'col' into
@@ -374,7 +374,7 @@ class RowContainer {
       const char* const* rows,
       folly::Range<const vector_size_t*> rowNumbers,
       RowColumn col,
-      bool columnMayHaveNulls,
+      bool columnHasNulls,
       vector_size_t resultOffset,
       const VectorPtr& result);
 
@@ -398,7 +398,7 @@ class RowContainer {
         rows,
         numRows,
         columnAt(columnIndex),
-        columnMayHaveNulls(columnIndex),
+        columnHasNulls(columnIndex),
         result);
   }
 
@@ -415,7 +415,7 @@ class RowContainer {
         rows,
         numRows,
         columnAt(columnIndex),
-        columnMayHaveNulls(columnIndex),
+        columnHasNulls(columnIndex),
         resultOffset,
         result);
   }
@@ -437,7 +437,7 @@ class RowContainer {
         rows,
         rowNumbers,
         columnAt(columnIndex),
-        columnMayHaveNulls(columnIndex),
+        columnHasNulls(columnIndex),
         resultOffset,
         result);
   }
@@ -744,17 +744,15 @@ class RowContainer {
     return keyTypes_;
   }
 
-  /// Updates the specific column's columnsMayHaveNulls_ flag, if
-  /// 'mayHaveNulls' is true.
-  /// columnsMayHaveNulls_ flag is false by default.
-  inline void updateColumnMayHaveNulls(int32_t columnIndex, bool mayHaveNulls) {
-    columnsMayHaveNulls_[columnIndex] =
-        columnsMayHaveNulls_[columnIndex] | mayHaveNulls;
+  /// Updates the specific column's columnHasNulls_ flag, if 'hasNulls' is true.
+  /// columnHasNulls_ flag is false by default.
+  inline void updateColumnHasNulls(int32_t columnIndex, bool hasNulls) {
+    columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] | hasNulls;
   }
 
-  /// Returns the specific column's columnsMayHaveNulls_ falg.
-  inline bool columnMayHaveNulls(int32_t columnIndex) const {
-    return columnsMayHaveNulls_[columnIndex];
+  /// Returns the specific column's columnHasNulls_ falg.
+  inline bool columnHasNulls(int32_t columnIndex) const {
+    return columnHasNulls_[columnIndex];
   }
 
   const std::vector<Accumulator>& accumulators() const {
@@ -853,7 +851,7 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t numRows,
       RowColumn column,
-      bool columnMayHaveNulls,
+      bool columnHasNulls,
       int32_t resultOffset,
       const VectorPtr& result) {
     if (rowNumbers.size() > 0) {
@@ -862,7 +860,7 @@ class RowContainer {
           rowNumbers,
           rowNumbers.size(),
           column,
-          columnMayHaveNulls,
+          columnHasNulls,
           resultOffset,
           result);
     } else {
@@ -871,7 +869,7 @@ class RowContainer {
           rowNumbers,
           numRows,
           column,
-          columnMayHaveNulls,
+          columnHasNulls,
           resultOffset,
           result);
     }
@@ -883,7 +881,7 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t numRows,
       RowColumn column,
-      bool columnMayHaveNulls,
+      bool columnHasNulls,
       int32_t resultOffset,
       const VectorPtr& result) {
     // Resize the result vector before all copies.
@@ -900,7 +898,7 @@ class RowContainer {
     auto* flatResult = result->as<FlatVector<T>>();
     auto nullMask = column.nullMask();
     auto offset = column.offset();
-    if (!nullMask || !columnMayHaveNulls) {
+    if (!nullMask || !columnHasNulls) {
       extractValuesNoNulls<useRowNumbers, T>(
           rows, rowNumbers, numRows, offset, resultOffset, flatResult);
     } else {
@@ -933,10 +931,18 @@ class RowContainer {
       char* const* groups,
       int32_t offset,
       int32_t nullByte,
-      uint8_t nullMask) {
+      uint8_t nullMask,
+      int32_t column) {
     rows->applyToSelected([&](vector_size_t index) {
       storeWithNulls<Kind>(
-          decoded, index, isKey, groups[index], offset, nullByte, nullMask);
+          decoded,
+          index,
+          isKey,
+          groups[index],
+          offset,
+          nullByte,
+          nullMask,
+          column);
     });
   }
 
@@ -960,13 +966,15 @@ class RowContainer {
       char* row,
       int32_t offset,
       int32_t nullByte,
-      uint8_t nullMask) {
+      uint8_t nullMask,
+      int32_t column) {
     using T = typename TypeTraits<Kind>::NativeType;
     if (decoded.isNullAt(index)) {
       row[nullByte] |= nullMask;
       // Do not leave an uninitialized value in the case of a
       // null. This is an error with valgrind/asan.
       *reinterpret_cast<T*>(row + offset) = T();
+      updateColumnHasNulls(column, true);
       return;
     }
     if constexpr (std::is_same_v<T, StringView>) {
@@ -1207,7 +1215,8 @@ class RowContainer {
       char* row,
       int32_t offset,
       int32_t nullByte = 0,
-      uint8_t nullMask = 0);
+      uint8_t nullMask = 0,
+      int32_t column = 0);
 
   template <bool useRowNumbers>
   static void extractComplexType(
@@ -1328,7 +1337,7 @@ class RowContainer {
   const bool nullableKeys_;
   const bool isJoinBuild_;
 
-  std::vector<bool> columnsMayHaveNulls_;
+  std::vector<bool> columnHasNulls_;
 
   // Indicates if we can add new row to this row container. It is set to false
   // after user calls 'getRowPartitions()' to create 'rowPartitions' object for
@@ -1403,8 +1412,10 @@ inline void RowContainer::storeWithNulls<TypeKind::ROW>(
     char* row,
     int32_t offset,
     int32_t nullByte,
-    uint8_t nullMask) {
-  storeComplexType(decoded, index, isKey, row, offset, nullByte, nullMask);
+    uint8_t nullMask,
+    int32_t column) {
+  storeComplexType(
+      decoded, index, isKey, row, offset, nullByte, nullMask, column);
 }
 
 template <>
@@ -1425,8 +1436,10 @@ inline void RowContainer::storeWithNulls<TypeKind::ARRAY>(
     char* row,
     int32_t offset,
     int32_t nullByte,
-    uint8_t nullMask) {
-  storeComplexType(decoded, index, isKey, row, offset, nullByte, nullMask);
+    uint8_t nullMask,
+    int32_t column) {
+  storeComplexType(
+      decoded, index, isKey, row, offset, nullByte, nullMask, column);
 }
 
 template <>
@@ -1447,8 +1460,10 @@ inline void RowContainer::storeWithNulls<TypeKind::MAP>(
     char* row,
     int32_t offset,
     int32_t nullByte,
-    uint8_t nullMask) {
-  storeComplexType(decoded, index, isKey, row, offset, nullByte, nullMask);
+    uint8_t nullMask,
+    int32_t column) {
+  storeComplexType(
+      decoded, index, isKey, row, offset, nullByte, nullMask, column);
 }
 
 template <>
@@ -1469,10 +1484,12 @@ inline void RowContainer::storeWithNulls<TypeKind::HUGEINT>(
     char* row,
     int32_t offset,
     int32_t nullByte,
-    uint8_t nullMask) {
+    uint8_t nullMask,
+    int32_t column) {
   if (decoded.isNullAt(index)) {
     row[nullByte] |= nullMask;
     memset(row + offset, 0, sizeof(int128_t));
+    updateColumnHasNulls(column, true);
     return;
   }
   HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
@@ -1494,7 +1511,7 @@ inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
     folly::Range<const vector_size_t*> /*rowNumbers*/,
     int32_t /*numRows*/,
     RowColumn /*column*/,
-    bool /*columnMayHaveNulls*/,
+    bool /*columnHasNulls*/,
     int32_t /*resultOffset*/,
     const VectorPtr& /*result*/) {
   VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
@@ -1504,7 +1521,7 @@ inline void RowContainer::extractColumn(
     const char* const* rows,
     int32_t numRows,
     RowColumn column,
-    bool columnMayHaveNulls,
+    bool columnHasNulls,
     int32_t resultOffset,
     const VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -1514,7 +1531,7 @@ inline void RowContainer::extractColumn(
       {},
       numRows,
       column,
-      columnMayHaveNulls,
+      columnHasNulls,
       resultOffset,
       result);
 }
@@ -1523,7 +1540,7 @@ inline void RowContainer::extractColumn(
     const char* const* rows,
     folly::Range<const vector_size_t*> rowNumbers,
     RowColumn column,
-    bool columnMayHaveNulls,
+    bool columnHasNulls,
     int32_t resultOffset,
     const VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -1533,7 +1550,7 @@ inline void RowContainer::extractColumn(
       rowNumbers,
       rowNumbers.size(),
       column,
-      columnMayHaveNulls,
+      columnHasNulls,
       resultOffset,
       result);
 }

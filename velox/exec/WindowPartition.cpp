@@ -97,7 +97,7 @@ void WindowPartition::extractColumn(
       partition_.data(),
       rowNumbers,
       columns_[columnIndex],
-      data_->columnMayHaveNulls(inputMapping_[columnIndex]),
+      data_->columnHasNulls(inputMapping_[columnIndex]),
       resultOffset,
       result);
 }
@@ -113,7 +113,7 @@ void WindowPartition::extractColumn(
       partition_.data() + partitionOffset - startRow_,
       numRows,
       columns_[columnIndex],
-      data_->columnMayHaveNulls(inputMapping_[columnIndex]),
+      data_->columnHasNulls(inputMapping_[columnIndex]),
       resultOffset,
       result);
 }

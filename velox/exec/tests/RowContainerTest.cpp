@@ -2068,7 +2068,7 @@ TEST_F(RowContainerTest, trackColumnsMayHaveNulls) {
   auto rowContainer =
       makeRowContainer({BIGINT(), BIGINT()}, {BIGINT(), BIGINT()}, false);
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
-    ASSERT_TRUE(!rowContainer->columnMayHaveNulls(i));
+    ASSERT_TRUE(!rowContainer->columnHasNulls(i));
   }
 
   const uint64_t kNumRows = 1000;
@@ -2107,9 +2107,9 @@ TEST_F(RowContainerTest, trackColumnsMayHaveNulls) {
   }
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     if (i % 2 == 0) {
-      ASSERT_TRUE(!rowContainer->columnMayHaveNulls(i));
+      ASSERT_TRUE(!rowContainer->columnHasNulls(i));
     } else {
-      ASSERT_TRUE(rowContainer->columnMayHaveNulls(i));
+      ASSERT_TRUE(rowContainer->columnHasNulls(i));
     }
   }
   // If the column's mayHaveNulls is false, the extracted vector's mayHaveNulls
@@ -2125,7 +2125,7 @@ TEST_F(RowContainerTest, trackColumnsMayHaveNulls) {
   }
 
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
-    rowContainer->updateColumnMayHaveNulls(i, true);
-    ASSERT_TRUE(rowContainer->columnMayHaveNulls(i));
+    rowContainer->updateColumnHasNulls(i, true);
+    ASSERT_TRUE(rowContainer->columnHasNulls(i));
   }
 }

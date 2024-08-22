@@ -191,7 +191,7 @@ RowContainer::RowContainer(
     if (nullableKeys_) {
       ++nullOffset;
     }
-    columnsMayHaveNulls_.push_back(false);
+    columnHasNulls_.push_back(false);
   }
   // Make offset at least sizeof pointer so that there is space for a
   // free list next pointer below the bit at 'freeFlagOffset_'.
@@ -220,7 +220,7 @@ RowContainer::RowContainer(
     nullOffsets_.push_back(nullOffset);
     ++nullOffset;
     isVariableWidth |= !type->isFixedWidth();
-    columnsMayHaveNulls_.push_back(false);
+    columnHasNulls_.push_back(false);
   }
   if (hasProbedFlag) {
     nullOffsets_.push_back(nullOffset);
@@ -515,7 +515,6 @@ void RowContainer::store(
     int32_t column) {
   auto numKeys = keyTypes_.size();
   bool isKey = column < numKeys;
-  updateColumnMayHaveNulls(column, decoded.mayHaveNulls());
   if (isKey && !nullableKeys_) {
     VELOX_DYNAMIC_TYPE_DISPATCH(
         storeNoNulls,
@@ -537,7 +536,8 @@ void RowContainer::store(
         row,
         rowColumn.offset(),
         rowColumn.nullByte(),
-        rowColumn.nullMask());
+        rowColumn.nullMask(),
+        column);
   }
 }
 
@@ -548,7 +548,6 @@ void RowContainer::storeVector(
     int32_t column) {
   auto numKeys = keyTypes_.size();
   bool isKey = column < numKeys;
-  updateColumnMayHaveNulls(column, decoded.mayHaveNulls());
   if ((isKey && !nullableKeys_) || !decoded.mayHaveNulls()) {
     VELOX_DYNAMIC_TYPE_DISPATCH(
         storeNoNullsBatch,
@@ -572,7 +571,8 @@ void RowContainer::storeVector(
         groups,
         offset,
         nullByte,
-        nullMask);
+        nullMask,
+        column);
   }
 }
 
@@ -802,10 +802,12 @@ void RowContainer::storeComplexType(
     char* row,
     int32_t offset,
     int32_t nullByte,
-    uint8_t nullMask) {
+    uint8_t nullMask,
+    int32_t column) {
   if (decoded.isNullAt(index)) {
     VELOX_DCHECK(nullMask);
     row[nullByte] |= nullMask;
+    updateColumnHasNulls(column, true);
     return;
   }
   RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);

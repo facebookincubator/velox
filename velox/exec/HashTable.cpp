@@ -1713,7 +1713,7 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
   }
   for (auto& other : otherTables_) {
     for (int i = 0; i < rows_->columnTypes().size(); ++i) {
-      rows_->updateColumnMayHaveNulls(i, other->rows()->columnMayHaveNulls(i));
+      rows_->updateColumnHasNulls(i, other->rows()->columnHasNulls(i));
     }
   }
   bool useValueIds = mayUseValueIds(*this);
