@@ -123,7 +123,6 @@ void CudfHashJoinBuild::noMoreInput() {
     auto op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfHashJoinBuild*>(op);
     VELOX_CHECK(build);
-    // numRows_ += build->numRows_;
     inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
   }
   // TODO build hash table
@@ -171,21 +170,16 @@ bool CudfHashJoinBuild::isFinished() {
 CudfHashJoinProbe::CudfHashJoinProbe(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const core::PlanNodeId& joinNodeId)
+    std::shared_ptr<const core::HashJoinNode> joinNode)
     : exec::Operator(
           driverCtx,
           nullptr, // joinNode->sources(),
           operatorId,
-          joinNodeId,
-          "CudfHashJoinProbe") {
+          joinNode->id(),
+          "CudfHashJoinProbe"),
+      joinNode_(joinNode) {
   std::cout << "CudfHashJoinProbe constructor" << std::endl;
 }
-
-CudfHashJoinProbe::CudfHashJoinProbe(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    std::shared_ptr<const core::HashJoinNode> joinNode)
-    : CudfHashJoinProbe(operatorId, driverCtx, joinNode->id()) {}
 
 bool CudfHashJoinProbe::needsInput() const {
   std::cout << "Calling CudfHashJoinProbe::needsInput" << std::endl;
@@ -206,36 +200,116 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   if (!hashObject_.has_value()) {
     return nullptr;
   }
-  // std::cout<<"here\n\n";
   // TODO convert input to cudf table
   auto tbl = to_cudf_table(input_);
   std::cout << "Probe table number of columns: " << tbl->num_columns()
             << std::endl;
   std::cout << "Probe table number of rows: " << tbl->num_rows() << std::endl;
+
+  auto leftType = joinNode_->sources()[0]->outputType();
+  auto rightType = joinNode_->sources()[1]->outputType();
+  auto leftKeys = joinNode_->leftKeys();
+  auto rightKeys = joinNode_->rightKeys();
+
+  for (int i = 0; i < leftType->names().size(); i++) {
+    std::cout << "Left column " << i << ": " << leftType->names()[i]
+              << std::endl;
+  }
+
+  for (int i = 0; i < rightType->names().size(); i++) {
+    std::cout << "Right column " << i << ": " << rightType->names()[i]
+              << std::endl;
+  }
+
+  for (int i = 0; i < leftKeys.size(); i++) {
+    std::cout << "Left key " << i << ": " << leftKeys[i]->name() << std::endl;
+  }
+
+  for (int i = 0; i < rightKeys.size(); i++) {
+    std::cout << "Right key " << i << ": " << rightKeys[i]->name() << std::endl;
+  }
+
+  auto const num_probe_keys = leftKeys.size();
+  auto probe_key_indices = std::vector<cudf::size_type>(num_probe_keys);
+
+  for (int i = 0; i < num_probe_keys; i++) {
+    probe_key_indices[i] = static_cast<cudf::size_type>(
+        leftType->getChildIdx(leftKeys[i]->name()));
+  }
+
   // TODO pass the input pool !!!
   RowVectorPtr output;
-  // RowVectorPtr output;
   auto const [left_join_indices, right_join_indices] =
-      hashObject_.value().second->inner_join(tbl->view());
+      hashObject_.value().second->inner_join(
+          tbl->view().select(probe_key_indices));
   auto left_indices_span =
       cudf::device_span<cudf::size_type const>{*left_join_indices};
   auto right_indices_span =
       cudf::device_span<cudf::size_type const>{*right_join_indices};
-  auto left_input = tbl->view();
-  auto right_input = hashObject_.value().first->view();
+
+  auto outputType = joinNode_->outputType();
+  auto left_column_indices_to_gather = std::vector<cudf::size_type>();
+  auto right_column_indices_to_gather = std::vector<cudf::size_type>();
+  auto left_column_output_indices = std::vector<size_t>();
+  auto right_column_output_indices = std::vector<size_t>();
+  for (int i = 0; i < outputType->names().size(); i++) {
+    auto const output_name = outputType->names()[i];
+    std::cout << "Output column " << i << ": " << output_name << std::endl;
+    auto channel = leftType->getChildIdxIfExists(output_name);
+    if (channel.has_value()) {
+      left_column_indices_to_gather.push_back(
+          static_cast<cudf::size_type>(channel.value()));
+      left_column_output_indices.push_back(i);
+      continue;
+    }
+    channel = rightType->getChildIdxIfExists(output_name);
+    if (channel.has_value()) {
+      right_column_indices_to_gather.push_back(
+          static_cast<cudf::size_type>(channel.value()));
+      right_column_output_indices.push_back(i);
+      continue;
+    }
+    VELOX_FAIL(
+        "Join field {} not in probe or build input", outputType->children()[i]);
+  }
+
+  for (int i = 0; i < left_column_indices_to_gather.size(); i++) {
+    std::cout << "Left index to gather " << i << ": "
+              << left_column_indices_to_gather[i] << std::endl;
+  }
+
+  for (int i = 0; i < right_column_indices_to_gather.size(); i++) {
+    std::cout << "Right index to gather " << i << ": "
+              << right_column_indices_to_gather[i] << std::endl;
+  }
+
+  auto left_input = tbl->view().select(left_column_indices_to_gather);
+  auto right_input =
+      hashObject_.value().first->view().select(right_column_indices_to_gather);
 
   auto left_indices_col = cudf::column_view{left_indices_span};
   auto right_indices_col = cudf::column_view{right_indices_span};
   auto constexpr oob_policy = cudf::out_of_bounds_policy::DONT_CHECK;
   auto left_result = cudf::gather(left_input, left_indices_col, oob_policy);
   auto right_result = cudf::gather(right_input, right_indices_col, oob_policy);
-  auto joined_cols = left_result->release();
+
+  std::cout << "Left result number of columns: " << left_result->num_columns()
+            << std::endl;
+  std::cout << "Right result number of columns: " << right_result->num_columns()
+            << std::endl;
+
+  auto left_cols = left_result->release();
   auto right_cols = right_result->release();
-  joined_cols.insert(
-      joined_cols.end(),
-      std::make_move_iterator(right_cols.begin()),
-      std::make_move_iterator(right_cols.end()));
+  auto joined_cols =
+      std::vector<std::unique_ptr<cudf::column>>(outputType->names().size());
+  for (int i = 0; i < left_column_output_indices.size(); i++) {
+    joined_cols[left_column_output_indices[i]] = std::move(left_cols[i]);
+  }
+  for (int i = 0; i < right_column_output_indices.size(); i++) {
+    joined_cols[right_column_output_indices[i]] = std::move(right_cols[i]);
+  }
   auto cudf_output = std::make_unique<cudf::table>(std::move(joined_cols));
+
   // TODO convert output to RowVector
   if (cudf_output->num_columns() == 0 or cudf_output->num_rows() == 0) {
     output = nullptr;

@@ -79,11 +79,6 @@ class CudfHashJoinProbe : public exec::Operator {
   CudfHashJoinProbe(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const core::PlanNodeId& joinNodeId);
-
-  CudfHashJoinProbe(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
   bool needsInput() const override;
@@ -97,6 +92,7 @@ class CudfHashJoinProbe : public exec::Operator {
   bool isFinished() override;
 
  private:
+  std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::optional<hash_type> hashObject_;
   bool finished_{false};
 };

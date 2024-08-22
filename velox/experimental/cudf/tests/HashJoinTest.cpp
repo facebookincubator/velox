@@ -6453,10 +6453,9 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
   // Tests some cases where the row at the end of an output batch fails the
   // filter.
   auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
-      {"t_k1"},
-      // {"t_k1", "t_k2"},
-      {makeFlatVector<int32_t>(2000, [](auto row) { return 1 + row % 2; })})};
-  //  makeFlatVector<int32_t>(2000, [](auto row) { return row; })})};
+      {"t_k1", "t_k2"},
+      {makeFlatVector<int32_t>(20, [](auto row) { return 1 + row % 2; }),
+       makeFlatVector<int32_t>(20, [](auto row) { return row; })})};
   auto buildVectors = std::vector<RowVectorPtr>{
       makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2})})};
   createDuckDbTable("t", probeVectors);
@@ -6464,13 +6463,8 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
   auto test = [&](const std::string& filter) {
-    // TODO: We have to insert a static_cast because fluent/builder patterns do
-    // not play well with subclasses. Otherwise we have to implement a lot of
-    // boilerplate code to re-implement every method from the base PlanBuilder
-    // and cast to the derived class type. We need a derived class
-    // PlanBuilder& at the point that we call the hashJoin.
-    auto plan = static_cast<PlanBuilder&>(
-                    PlanBuilder(planNodeIdGenerator).values(probeVectors, true))
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors, true)
                     .hashJoin(
                         {"t_k1"},
                         {"u_k1"},
@@ -6495,6 +6489,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
             filter))
         .run();
   };
+  // TODO: This is a trivial case where the filter is always true.
   test("t_k1>0");
 
   // Alternate rows pass this filter and last row of a batch fails.
