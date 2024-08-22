@@ -34,12 +34,7 @@ BinaryPrecisionScales getDecimalPrecisionScales(
     const TypePtr& bType) {
   auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
   auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
-  BinaryPrecisionScales result{
-      static_cast<uint8_t>(aPrecision),
-      static_cast<uint8_t>(aScale),
-      static_cast<uint8_t>(bPrecision),
-      static_cast<uint8_t>(bScale)};
-  return result;
+  return {aPrecision, aScale, bPrecision, bScale};
 }
 
 struct DecimalAddSubtractBase {
