@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/row/CompactRow.h"
-#include "velox/common/base/RawVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::row {
@@ -79,21 +78,21 @@ void serializeTyped<TypeKind::BOOLEAN>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
     DecodedVector& decoded,
-    size_t valueBytes,
+    size_t /* unused */,
     const raw_vector<uint8_t*>& nulls,
     char* buffer,
     std::vector<size_t>& offsets) {
   const auto mayHaveNulls = decoded.mayHaveNulls();
+  auto* byte = reinterpret_cast<bool*>(buffer);
 
   for (auto i = 0; i < rows.size(); ++i) {
     if (mayHaveNulls && decoded.isNullAt(rows[i])) {
       bits::setBit(nulls[i], childIdx, true);
     } else {
-      // Write fixed-width value.
-      reinterpret_cast<bool*>(buffer)[offsets[i]] =
-          decoded.valueAt<bool>(rows[i]);
+      // Write 1 byte for bool type.
+      byte[offsets[i]] = decoded.valueAt<bool>(rows[i]);
     }
-    offsets[i] += valueBytes;
+    offsets[i] += 1;
   }
 }
 
@@ -102,7 +101,7 @@ void serializeTyped<TypeKind::TIMESTAMP>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
     DecodedVector& decoded,
-    size_t valueBytes,
+    size_t /* unused */,
     const raw_vector<uint8_t*>& nulls,
     char* buffer,
     std::vector<size_t>& offsets) {
@@ -113,11 +112,11 @@ void serializeTyped<TypeKind::TIMESTAMP>(
     if (mayHaveNulls && decoded.isNullAt(rows[i])) {
       bits::setBit(nulls[i], childIdx, true);
     } else {
-      // Write fixed-width value.
+      // Write micros(int64_t) for timestamp value.
       auto micros = rawData[rows[i]].toMicros();
       memcpy(buffer + offsets[i], &micros, sizeof(int64_t));
     }
-    offsets[i] += valueBytes;
+    offsets[i] += sizeof(int64_t);
   }
 }
 
@@ -330,7 +329,7 @@ void CompactRow::serializeRow(
     vector_size_t offset,
     vector_size_t size,
     char* buffer,
-    std::vector<size_t>& bufferOffsets) {
+    const std::vector<size_t>& bufferOffsets) {
   VELOX_CHECK_EQ(bufferOffsets.size(), size);
 
   raw_vector<vector_size_t> rows(size);
@@ -343,10 +342,12 @@ void CompactRow::serializeRow(
     }
   }
 
+  // After serializing each column, the 'offsets' are updated accordingly.
+  std::vector<size_t> offsets = bufferOffsets;
   auto* base = reinterpret_cast<uint8_t*>(buffer);
   for (auto i = 0; i < size; ++i) {
-    nulls[i] = base + bufferOffsets[i];
-    bufferOffsets[i] += rowNullBytes_;
+    nulls[i] = base + offsets[i];
+    offsets[i] += rowNullBytes_;
   }
 
   for (auto childIdx = 0; childIdx < children_.size(); ++childIdx) {
@@ -363,17 +364,17 @@ void CompactRow::serializeRow(
           child.valueBytes_,
           nulls,
           buffer,
-          bufferOffsets);
+          offsets);
     } else {
       auto mayHaveNulls = child.decoded_.mayHaveNulls();
-      for (auto i = 0; i < size; ++i) {
+      for (auto i = 0; i < rows.size(); ++i) {
         if (mayHaveNulls && child.isNullAt(rows[i])) {
           bits::setBit(nulls[i], childIdx, true);
         } else {
           // Write non-null variable-width value.
           auto bytes =
-              child.serializeVariableWidth(rows[i], buffer + bufferOffsets[i]);
-          bufferOffsets[i] += bytes;
+              child.serializeVariableWidth(rows[i], buffer + offsets[i]);
+          offsets[i] += bytes;
         }
       }
     }
@@ -605,7 +606,7 @@ void CompactRow::serialize(
     vector_size_t offset,
     vector_size_t size,
     char* buffer,
-    std::vector<size_t>& bufferOffsets) {
+    const std::vector<size_t>& bufferOffsets) {
   return serializeRow(offset, size, buffer, bufferOffsets);
 }
 

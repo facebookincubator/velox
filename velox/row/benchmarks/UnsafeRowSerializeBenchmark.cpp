@@ -71,12 +71,15 @@ class SerializeBenchmark {
     suspender.dismiss();
 
     auto numRows = data->size();
+    std::vector<size_t> rowSize(numRows);
     std::vector<size_t> offsets(numRows);
 
     CompactRow compact(data);
-    auto totalSize = computeTotalSize(compact, rowType, numRows, offsets);
+    auto totalSize =
+        computeTotalSize(compact, rowType, numRows, rowSize, offsets);
     auto buffer = AlignedBuffer::allocate<char>(totalSize, pool(), 0);
-    auto serialized = serialize(compact, data->size(), buffer, offsets);
+    auto serialized =
+        serialize(compact, data->size(), buffer, rowSize, offsets);
     VELOX_CHECK_EQ(serialized.size(), data->size());
   }
 
@@ -203,17 +206,20 @@ class SerializeBenchmark {
       CompactRow& compactRow,
       const RowTypePtr& rowType,
       vector_size_t numRows,
+      std::vector<size_t>& rowSize,
       std::vector<size_t>& offsets) {
     size_t totalSize = 0;
     if (auto fixedRowSize = CompactRow::fixedRowSize(rowType)) {
       totalSize = fixedRowSize.value() * numRows;
       for (auto i = 0; i < numRows; ++i) {
+        rowSize[i] = fixedRowSize.value();
         offsets[i] = fixedRowSize.value() * i;
       }
     } else {
       for (auto i = 0; i < numRows; ++i) {
+        rowSize[i] = compactRow.rowSize(i);
         offsets[i] = totalSize;
-        totalSize += compactRow.rowSize(i);
+        totalSize += rowSize[i];
       }
     }
     return totalSize;
@@ -223,16 +229,15 @@ class SerializeBenchmark {
       CompactRow& compactRow,
       vector_size_t numRows,
       BufferPtr& buffer,
+      std::vector<size_t>& rowSize,
       std::vector<size_t>& offsets) {
     auto rawBuffer = buffer->asMutable<char>();
     compactRow.serialize(0, numRows, rawBuffer, offsets);
-    VELOX_CHECK_EQ(buffer->size(), offsets.back());
 
     std::vector<std::string_view> serialized;
-    serialized.push_back(std::string_view(rawBuffer, offsets[0]));
-    for (auto i = 1; i < numRows; ++i) {
-      serialized.push_back(std::string_view(
-          rawBuffer + offsets[i - 1], offsets[i] - offsets[i - 1]));
+    for (auto i = 0; i < numRows; ++i) {
+      serialized.push_back(
+          std::string_view(rawBuffer + offsets[i], rowSize[i]));
     }
     return serialized;
   }

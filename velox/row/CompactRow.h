@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/RawVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -42,12 +43,11 @@ class CompactRow {
   /// row and must have the same number of elements as the 'size' parameter.
   /// The caller must ensure that the space between each offset in
   /// 'bufferOffsets' is no less than the 'fixedRowSize' or 'rowSize'.
-  /// 'bufferOffsets' will be updated by the actual bytes written for each row.
   void serialize(
       vector_size_t offset,
       vector_size_t size,
       char* buffer,
-      std::vector<size_t>& bufferOffsets);
+      const std::vector<size_t>& bufferOffsets);
 
   /// Deserializes multiple rows into a RowVector of specified type. The type
   /// must match the contents of the serialized rows.
@@ -127,7 +127,7 @@ class CompactRow {
       vector_size_t offset,
       vector_size_t size,
       char* buffer,
-      std::vector<size_t>& bufferOffsets);
+      const std::vector<size_t>& bufferOffsets);
 
   const TypeKind typeKind_;
   DecodedVector decoded_;
