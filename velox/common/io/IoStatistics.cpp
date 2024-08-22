@@ -46,6 +46,10 @@ uint64_t IoStatistics::totalScanTime() const {
   return totalScanTime_.load(std::memory_order_relaxed);
 }
 
+uint64_t IoStatistics::writeIOTime() const {
+  return writeIOTime_.load(std::memory_order_relaxed);
+}
+
 uint64_t IoStatistics::incRawBytesRead(int64_t v) {
   return rawBytesRead_.fetch_add(v, std::memory_order_relaxed);
 }
@@ -68,6 +72,10 @@ uint64_t IoStatistics::incRawOverreadBytes(int64_t v) {
 
 uint64_t IoStatistics::incTotalScanTime(int64_t v) {
   return totalScanTime_.fetch_add(v, std::memory_order_relaxed);
+}
+
+uint64_t IoStatistics::incWriteIOTime(int64_t v) {
+  return writeIOTime_.fetch_add(v, std::memory_order_relaxed);
 }
 
 void IoStatistics::incOperationCounters(

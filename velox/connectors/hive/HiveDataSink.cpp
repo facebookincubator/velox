@@ -511,10 +511,13 @@ DataSink::Stats HiveDataSink::stats() const {
   }
 
   int64_t numWrittenBytes{0};
+  int64_t writeIOTimeMicro{0};
   for (const auto& ioStats : ioStats_) {
     numWrittenBytes += ioStats->rawBytesWritten();
+    writeIOTimeMicro += ioStats->writeIOTime();
   }
   stats.numWrittenBytes = numWrittenBytes;
+  stats.writeIOTimeMicro = writeIOTimeMicro;
 
   if (state_ != State::kClosed) {
     return stats;
