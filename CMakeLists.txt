@@ -512,7 +512,6 @@ endif()
 
 # GCC needs to link a library to enable std::filesystem.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-  set(FILESYSTEM "stdc++fs")
 
   # Ensure we have gcc at least 9+.
   if(CMAKE_CXX_COMPILER_VERSION LESS 9.0)
@@ -522,8 +521,6 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
 
   # Find Threads library
   find_package(Threads REQUIRED)
-else()
-  set(FILESYSTEM "")
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
