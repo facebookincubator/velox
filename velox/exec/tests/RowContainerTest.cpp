@@ -2122,9 +2122,9 @@ TEST_F(RowContainerTest, store) {
   auto rowVectorWithNulls = makeRowVector({
       makeFlatVector<int64_t>(
           kNumRows, [](auto row) { return row % 5; }, nullEvery(6)),
-      makeFlatVector<StringView>(
+      makeFlatVector<std::string>(
           kNumRows,
-          [](auto row) { return StringView("abcdefg1234" + row); },
+          [](auto row) { return fmt::format("abcdefg123_{}", row); },
           nullEvery(7)),
       makeFlatVector<int64_t>(
           kNumRows, [](auto row) { return row; }, nullEvery(8)),
@@ -2137,8 +2137,8 @@ TEST_F(RowContainerTest, store) {
 
   auto rowVectorNoNulls = makeRowVector({
       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 5; }),
-      makeFlatVector<StringView>(
-          kNumRows, [](auto row) { return StringView("abcdefg1234" + row); }),
+      makeFlatVector<std::string>(
+          kNumRows, [](auto row) { return fmt::format("abcdefg12_{}", row); }),
       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
       makeArrayVector<int64_t>(
           kNumRows,
