@@ -44,6 +44,9 @@ set(GFLAGS_IS_SUBPROJECT ON)
 # Workaround for https://github.com/gflags/gflags/issues/277
 unset(BUILD_SHARED_LIBS)
 FetchContent_MakeAvailable(gflags)
-# this causes find_package(gflags) to search in the build directory and prevents
-# the system gflags from being found set(gflags_LIBRARY gflags::gflags)
-# set(gflags_INCLUDE_DIR ${gflags_BINARY_DIR}/include)
+# This causes find_package(gflags) in other dependencies to search in the build
+# directory and prevents the system gflags from being found when they don't use
+# the target directly (like folly).
+set(gflags_FOUND TRUE)
+set(gflags_LIBRARY gflags::gflags)
+set(gflags_INCLUDE_DIR)
