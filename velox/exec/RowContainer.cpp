@@ -541,6 +541,43 @@ void RowContainer::store(
   }
 }
 
+void RowContainer::storeVector(
+    const DecodedVector& decoded,
+    const std::vector<char*>& rows,
+    int32_t size,
+    int32_t column) {
+  VELOX_CHECK_GE(decoded.size(), size);
+  VELOX_CHECK_GE(rows.size(), size);
+  auto numKeys = keyTypes_.size();
+  bool isKey = column < numKeys;
+  if ((isKey && !nullableKeys_) || !decoded.mayHaveNulls()) {
+    VELOX_DYNAMIC_TYPE_DISPATCH(
+        storeNoNullsBatch,
+        typeKinds_[column],
+        decoded,
+        size,
+        isKey,
+        rows.data(),
+        offsets_[column]);
+  } else {
+    auto rowColumn = rowColumns_[column];
+    auto offset = rowColumn.offset();
+    auto nullByte = rowColumn.nullByte();
+    auto nullMask = rowColumn.nullMask();
+    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+        storeWithNullsBatch,
+        typeKinds_[column],
+        decoded,
+        size,
+        isKey,
+        rows.data(),
+        offset,
+        nullByte,
+        nullMask,
+        column);
+  }
+}
+
 std::unique_ptr<ByteInputStream> RowContainer::prepareRead(
     const char* row,
     int32_t offset) {

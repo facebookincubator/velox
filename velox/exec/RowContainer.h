@@ -302,6 +302,14 @@ class RowContainer {
       char* row,
       int32_t columnIndex);
 
+  /// Stores the first 'size' values from the 'decoded' vector into the
+  /// 'columnIndex' column of 'rows'.
+  void storeVector(
+      const DecodedVector& decoded,
+      const std::vector<char*>& rows,
+      int32_t size,
+      int32_t columnIndex);
+
   HashStringAllocator& stringAllocator() {
     return *stringAllocator_;
   }
@@ -962,6 +970,34 @@ class RowContainer {
       stringAllocator_->copyMultipart(decoded.valueAt<T>(index), group, offset);
     } else {
       *reinterpret_cast<T*>(group + offset) = decoded.valueAt<T>(index);
+    }
+  }
+
+  template <TypeKind Kind>
+  inline void storeWithNullsBatch(
+      const DecodedVector& decoded,
+      int32_t size,
+      bool isKey,
+      char* const* rows,
+      int32_t offset,
+      int32_t nullByte,
+      uint8_t nullMask,
+      int32_t column) {
+    for (int32_t i = 0; i < size; ++i) {
+      storeWithNulls<Kind>(
+          decoded, i, isKey, rows[i], offset, nullByte, nullMask, column);
+    }
+  }
+
+  template <TypeKind Kind>
+  inline void storeNoNullsBatch(
+      const DecodedVector& decoded,
+      int32_t size,
+      bool isKey,
+      char* const* rows,
+      int32_t offset) {
+    for (int32_t i = 0; i < size; ++i) {
+      storeNoNulls<Kind>(decoded, i, isKey, rows[i], offset);
     }
   }
 
