@@ -23,8 +23,7 @@ set(TEST_LINK_LIBS
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
-    glog::glog
-    ${FILESYSTEM})
+    glog::glog)
 
 add_executable(velox_dwio_dwrf_buffered_output_stream_test
                TestBufferedOutputStream.cpp)
