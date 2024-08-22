@@ -2064,7 +2064,7 @@ TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
   assertEqualVectors(source, extracted);
 }
 
-TEST_F(RowContainerTest, trackColumnsMayHaveNulls) {
+TEST_F(RowContainerTest, columnHasNulls) {
   auto rowContainer =
       makeRowContainer({BIGINT(), BIGINT()}, {BIGINT(), BIGINT()}, false);
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
@@ -2103,7 +2103,10 @@ TEST_F(RowContainerTest, trackColumnsMayHaveNulls) {
   }
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     DecodedVector decoded(*rowVector->childAt(i), allRows);
-    rowContainer->storeVector(decoded, &allRows, rows.data(), i);
+    for (int j = 0; j < kNumRows; ++j) {
+      char* row = rows[i];
+      rowContainer->store(decoded, j, row, i);
+    }
   }
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
     if (i % 2 == 0) {

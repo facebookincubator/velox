@@ -302,13 +302,6 @@ class RowContainer {
       char* row,
       int32_t columnIndex);
 
-  /// Stores the 'decoded' into row container at 'column'.
-  void storeVector(
-      const DecodedVector& decoded,
-      const SelectivityVector* rows,
-      char* const* groups,
-      int32_t column);
-
   HashStringAllocator& stringAllocator() {
     return *stringAllocator_;
   }
@@ -750,7 +743,7 @@ class RowContainer {
     columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] | hasNulls;
   }
 
-  /// Returns the specific column's columnHasNulls_ falg.
+  /// Returns the specific column's columnHasNulls_ flag.
   inline bool columnHasNulls(int32_t columnIndex) const {
     return columnHasNulls_[columnIndex];
   }
@@ -921,41 +914,6 @@ class RowContainer {
   uint32_t& variableRowSize(char* row) {
     VELOX_DCHECK(rowSizeOffset_);
     return *reinterpret_cast<uint32_t*>(row + rowSizeOffset_);
-  }
-
-  template <TypeKind Kind>
-  inline void storeWithNullsBatch(
-      const DecodedVector& decoded,
-      const SelectivityVector* rows,
-      bool isKey,
-      char* const* groups,
-      int32_t offset,
-      int32_t nullByte,
-      uint8_t nullMask,
-      int32_t column) {
-    rows->applyToSelected([&](vector_size_t index) {
-      storeWithNulls<Kind>(
-          decoded,
-          index,
-          isKey,
-          groups[index],
-          offset,
-          nullByte,
-          nullMask,
-          column);
-    });
-  }
-
-  template <TypeKind Kind>
-  inline void storeNoNullsBatch(
-      const DecodedVector& decoded,
-      const SelectivityVector* rows,
-      bool isKey,
-      char* const* groups,
-      int32_t offset) {
-    rows->applyToSelected([&](vector_size_t index) {
-      storeNoNulls<Kind>(decoded, index, isKey, groups[index], offset);
-    });
   }
 
   template <TypeKind Kind>

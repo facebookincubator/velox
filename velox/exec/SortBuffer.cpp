@@ -90,8 +90,9 @@ void SortBuffer::addInput(const VectorPtr& input) {
   for (const auto& columnProjection : columnMap_) {
     DecodedVector decoded(
         *inputRow->childAt(columnProjection.outputChannel), allRows);
-    data_->storeVector(
-        decoded, &allRows, rows.data(), columnProjection.inputChannel);
+    for (int i = 0; i < input->size(); ++i) {
+      data_->store(decoded, i, rows[i], columnProjection.inputChannel);
+    }
   }
   numInputRows_ += allRows.size();
 }
