@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/expression/DecodedArgs.h"
-#include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/sparksql/DecimalUtil.h"
-#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -46,7 +43,7 @@ BinaryPrecisionScales getDecimalPrecisionScales(
 }
 
 struct DecimalAddSubtractBase {
- public:
+ protected:
   void initializeBase(const std::vector<TypePtr>& inputTypes) {
     auto binary = getDecimalPrecisionScales(inputTypes[0], inputTypes[1]);
     aScale_ = binary.aScale;
@@ -527,10 +524,6 @@ void registerDecimalBinary(
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
       ShortDecimal<P2, S2>>({name}, constraints);
-}
-
-std::string bounded(const std::string& value) {
-  return fmt::format("({}) <= 38 ? ({}) : 38", value, value);
 }
 
 std::vector<exec::SignatureVariable> makeConstraints(
