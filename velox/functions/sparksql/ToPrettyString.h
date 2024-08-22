@@ -27,7 +27,7 @@ static const StringView kNull = "NULL";
 /// to_pretty_string(x) -> varchar
 /// Returns pretty string for int8, int16, int32, int64, bool, Date, Varchar. It
 /// has one difference with casting value to string:
-/// 1) It prints null values as "NULL".
+/// 1) It prints null input as "NULL" rather than producing null output.
 template <typename TExec>
 struct ToPrettyStringFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -78,8 +78,8 @@ struct ToPrettyStringFunction {
 
 /// Returns pretty string for varbinary. It has several differences with
 /// cast(varbinary as string):
-/// 1) It prints null values as "NULL".
-/// 2) It prints binary values using the hex format
+/// 1) It prints null input as "NULL" rather than producing null output.
+/// 2) It prints binary value as hex string representation rather than UTF-8.
 /// The pretty string is composed of the hex digits of bytes and spaces between
 /// them. E.g., the result of to_pretty_string("abc") is "[31 32 33]".
 template <typename TExec>
@@ -97,9 +97,9 @@ struct ToPrettyStringVarbinaryFunction {
       char* pos = startPosition;
       *pos++ = '[';
       for (auto i = 0; i < input->size(); i++) {
-        auto formatted = fmt::format("{:X}", input->data()[i]);
-        *pos++ = formatted.data()[0];
-        *pos++ = formatted.data()[1];
+        int count = std::sprintf(pos, "%02X", input->data()[i]);
+        VELOX_DCHECK_EQ(count, 2);
+        pos += 2;
         *pos++ = ' ';
       }
       *--pos = ']';
@@ -111,7 +111,7 @@ struct ToPrettyStringVarbinaryFunction {
 
 /// Returns pretty string for Timestamp. It has one difference with
 /// cast(timestamp as string):
-/// 1) It prints null values as "NULL".
+/// 1) It prints null input as "NULL" rather than producing null output.
 template <typename TExec>
 struct ToPrettyStringTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -162,7 +162,7 @@ struct ToPrettyStringTimestampFunction {
 
 /// Returns pretty string for short decimal and long decimal. It has one
 /// difference with cast(decimal as string):
-/// 1) It prints null values as "NULL".
+/// 1) It prints null input as "NULL" rather than producing null output.
 template <typename TExec>
 struct ToPrettyStringDecimalFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);

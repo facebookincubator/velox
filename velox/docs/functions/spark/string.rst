@@ -344,11 +344,11 @@ String Functions
 
 .. spark:function:: to_pretty_string(x) -> varchar
 
-    Returns pretty string for all scalar type. Considering the time zone if config ``session_timezone`` is set. 
+    Returns pretty string for ``x``. All scalar types are supported.
+    Adjusts the timestamp input to the given time zone if set through ``session_timezone`` config.
+    The result is different from that of casting ``x`` as string in the following aspects.
 
-    It has several differences with casting value to string:
-
-    - It prints null values as "NULL".
+    - It prints null input as "NULL" rather than producing null output.
 
     - It prints binary values using the hex format.
 
