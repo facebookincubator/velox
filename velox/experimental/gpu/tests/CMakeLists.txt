@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_DIR}/cmake")
+find_package(CUB REQUIRED)
 
 add_executable(velox_gpu_hash_table_test HashTableTest.cu)
 target_link_libraries(
@@ -18,4 +20,5 @@ target_link_libraries(
   Folly::folly
   gflags::gflags
   glog::glog
+  CUB::CUB
   CUDA::cudart)
