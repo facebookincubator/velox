@@ -55,9 +55,41 @@ struct FunctionEntry {
   const FunctionFactory factory_;
 };
 
+struct SignatureHash {
+  size_t operator()(const FunctionSignature& signature) const {
+    return std::hash<std::vector<TypeSignature>>()(signature.argumentTypes());
+  }
+};
+
+/// Only consider function signature argument types baseName.
+/// E.g. registered map<int, long> as function input argument before, now we
+/// try to register map<long, long>, we will get it from SignatureMap, but its
+/// physical type is not equal, so not overwrite map<int, long>, both map<int,
+/// long> and map<long, long> exist in FunctionEntry.
+struct SignatureCmp {
+  bool operator()(const FunctionSignature& l, const FunctionSignature& r)
+      const {
+    if (l.argumentTypes().size() != r.argumentTypes().size()) {
+      return false;
+    }
+    for (auto i = 0; i < l.argumentTypes().size(); ++i) {
+      // For Map(K, V), we only consider the argument type map, not consider its
+      // element type, so as Decimal, List, Struct.let the metadata
+      // physicalSignatureEquals which will consider the child data type to
+      // decide if overwrite.
+      if (l.argumentTypes()[i].baseName() != r.argumentTypes()[i].baseName()) {
+        return false;
+      }
+    }
+    return true;
+  }
+};
+
 using SignatureMap = std::unordered_map<
     FunctionSignature,
-    std::vector<std::unique_ptr<const FunctionEntry>>>;
+    std::vector<std::unique_ptr<const FunctionEntry>>,
+    SignatureHash,
+    SignatureCmp>;
 using FunctionMap = std::unordered_map<std::string, SignatureMap>;
 
 class SimpleFunctionRegistry {

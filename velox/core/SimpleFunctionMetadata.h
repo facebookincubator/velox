@@ -498,10 +498,6 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
 
   bool physicalSignatureEquals(
       const ISimpleFunctionMetadata& other) const override {
-    if (!resultPhysicalType_->kindEquals(other.resultPhysicalType())) {
-      return false;
-    }
-
     if (argPhysicalTypes_.size() != other.argPhysicalTypes().size()) {
       return false;
     }
