@@ -302,12 +302,11 @@ class RowContainer {
       char* row,
       int32_t columnIndex);
 
-  /// Stores the first 'size' values from the 'decoded' vector into the
+  /// Stores the first 'rows.size' values from the 'decoded' vector into the
   /// 'columnIndex' column of 'rows'.
-  void storeVector(
+  void store(
       const DecodedVector& decoded,
-      const std::vector<char*>& rows,
-      int32_t size,
+      folly::Range<char**> rows,
       int32_t columnIndex);
 
   HashStringAllocator& stringAllocator() {
@@ -976,14 +975,13 @@ class RowContainer {
   template <TypeKind Kind>
   inline void storeWithNullsBatch(
       const DecodedVector& decoded,
-      int32_t size,
+      folly::Range<char**> rows,
       bool isKey,
-      char* const* rows,
       int32_t offset,
       int32_t nullByte,
       uint8_t nullMask,
       int32_t column) {
-    for (int32_t i = 0; i < size; ++i) {
+    for (int32_t i = 0; i < rows.size(); ++i) {
       storeWithNulls<Kind>(
           decoded, i, isKey, rows[i], offset, nullByte, nullMask, column);
     }
@@ -992,11 +990,10 @@ class RowContainer {
   template <TypeKind Kind>
   inline void storeNoNullsBatch(
       const DecodedVector& decoded,
-      int32_t size,
+      folly::Range<char**> rows,
       bool isKey,
-      char* const* rows,
       int32_t offset) {
-    for (int32_t i = 0; i < size; ++i) {
+    for (int32_t i = 0; i < rows.size(); ++i) {
       storeNoNulls<Kind>(decoded, i, isKey, rows[i], offset);
     }
   }

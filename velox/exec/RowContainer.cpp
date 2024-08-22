@@ -541,39 +541,31 @@ void RowContainer::store(
   }
 }
 
-void RowContainer::storeVector(
+void RowContainer::store(
     const DecodedVector& decoded,
-    const std::vector<char*>& rows,
-    int32_t size,
+    folly::Range<char**> rows,
     int32_t column) {
-  VELOX_CHECK_GE(decoded.size(), size);
-  VELOX_CHECK_GE(rows.size(), size);
-  auto numKeys = keyTypes_.size();
-  bool isKey = column < numKeys;
+  VELOX_CHECK_GE(decoded.size(), rows.size());
+  const bool isKey = column < keyTypes_.size();
   if ((isKey && !nullableKeys_) || !decoded.mayHaveNulls()) {
     VELOX_DYNAMIC_TYPE_DISPATCH(
         storeNoNullsBatch,
         typeKinds_[column],
         decoded,
-        size,
+        rows,
         isKey,
-        rows.data(),
         offsets_[column]);
   } else {
-    auto rowColumn = rowColumns_[column];
-    auto offset = rowColumn.offset();
-    auto nullByte = rowColumn.nullByte();
-    auto nullMask = rowColumn.nullMask();
+    const auto rowColumn = rowColumns_[column];
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
         storeWithNullsBatch,
         typeKinds_[column],
         decoded,
-        size,
+        rows,
         isKey,
-        rows.data(),
-        offset,
-        nullByte,
-        nullMask,
+        rowColumn.offset(),
+        rowColumn.nullByte(),
+        rowColumn.nullMask(),
         column);
   }
 }
