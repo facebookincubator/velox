@@ -149,7 +149,7 @@ function install_fizz {
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  cmake_install folly -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  cmake_install folly -DBUILD_SHARED_LIBS=ON -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
 }
 
 function install_wangle {
