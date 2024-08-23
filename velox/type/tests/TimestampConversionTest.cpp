@@ -161,6 +161,10 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
   EXPECT_EQ(result.error().message(), "Date out of range: 292278995-1-1");
 }
 
+TEST(DateTimeUtilTest, extractISODayOfTheWeek) {
+  EXPECT_EQ(6, util::extractISODayOfTheWeek(int64_t(INT_MAX) + 1));
+}
+
 TEST(DateTimeUtilTest, fromWeekOfMonthDateInvalid) {
   auto daysSinceEpochNonLenient = [](int32_t year,
                                      int32_t month,
