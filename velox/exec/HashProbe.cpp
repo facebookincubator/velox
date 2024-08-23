@@ -79,7 +79,11 @@ void extractColumns(
     }
     child->resize(rows.size());
     table->rows()->extractColumn(
-        rows.data(), rows.size(), projection.inputChannel, child);
+        rows.data(),
+        rows.size(),
+        projection.inputChannel,
+        table->columnHasNulls(projection.inputChannel),
+        child);
   }
 }
 
@@ -1232,6 +1236,7 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
           data,
           numRows,
           projection.inputChannel,
+          table_->columnHasNulls(projection.inputChannel),
           filterTableInput_->childAt(projection.outputChannel));
     }
     rows.applyToSelected([&](vector_size_t row) {

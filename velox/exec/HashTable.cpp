@@ -1711,9 +1711,11 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
     otherTables_.emplace_back(std::unique_ptr<HashTable<ignoreNullKeys>>(
         dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
   }
-  for (auto& other : otherTables_) {
-    for (int i = 0; i < rows_->columnTypes().size(); ++i) {
-      rows_->updateColumnHasNulls(i, other->rows()->columnHasNulls(i));
+  for (int i = 0; i < rows_->columnTypes().size(); ++i) {
+    columnHasNulls_.emplace_back(rows_->columnHasNulls(i));
+    for (auto& other : otherTables_) {
+      columnHasNulls_[i] =
+          columnHasNulls_[i] | other->rows()->columnHasNulls(i);
     }
   }
   bool useValueIds = mayUseValueIds(*this);

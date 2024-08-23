@@ -400,6 +400,9 @@ class BaseHashTable {
     return offThreadBuildTiming_;
   }
 
+  /// Returns the specific column's columnHasNulls_ flag.
+  virtual bool columnHasNulls(int32_t columnIndex) const = 0;
+
  protected:
   static FOLLY_ALWAYS_INLINE size_t tableSlotSize() {
     // Each slot is 8 bytes.
@@ -644,6 +647,10 @@ class HashTable : public BaseHashTable {
 
   uint64_t testingRehashSize() const {
     return rehashSize();
+  }
+
+  inline bool columnHasNulls(int32_t columnIndex) const override {
+    return columnHasNulls_[columnIndex];
   }
 
  private:
@@ -1027,6 +1034,10 @@ class HashTable : public BaseHashTable {
   // combined into a single probe hash table.
   std::vector<std::unique_ptr<HashTable<ignoreNullKeys>>> otherTables_;
   // Statistics maintained if kTrackLoads is set.
+
+  // Flags indicate whether the same column in all build-side join hash tables
+  // contains null values.
+  std::vector<bool> columnHasNulls_;
 
   // Number of times a row is looked up or inserted.
   mutable tsan_atomic<int64_t> numProbes_{0};

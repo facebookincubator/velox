@@ -2126,9 +2126,4 @@ TEST_F(RowContainerTest, columnHasNulls) {
       ASSERT_TRUE(vector->mayHaveNulls());
     }
   }
-
-  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
-    rowContainer->updateColumnHasNulls(i, true);
-    ASSERT_TRUE(rowContainer->columnHasNulls(i));
-  }
 }

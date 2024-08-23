@@ -395,6 +395,19 @@ class RowContainer {
         result);
   }
 
+  /// Copies the values at 'columnIndex' into 'result' for the 'numRows' rows
+  /// pointed to by 'rows'. If an entry in 'rows' is null, sets corresponding
+  /// row in 'result' to null. If 'columnHasNulls' is false, null free
+  /// optimization would be applied.
+  void extractColumn(
+      const char* const* rows,
+      int32_t numRows,
+      int32_t columnIndex,
+      bool columnHasNulls,
+      const VectorPtr& result) {
+    extractColumn(rows, numRows, columnAt(columnIndex), columnHasNulls, result);
+  }
+
   /// Copies the values at 'columnIndex' into 'result' (starting at
   /// 'resultOffset') for the 'numRows' rows pointed to by 'rows'. If an
   /// entry in 'rows' is null, sets corresponding row in 'result' to null.
@@ -735,12 +748,6 @@ class RowContainer {
 
   const auto& keyTypes() const {
     return keyTypes_;
-  }
-
-  /// Updates the specific column's columnHasNulls_ flag, if 'hasNulls' is true.
-  /// columnHasNulls_ flag is false by default.
-  inline void updateColumnHasNulls(int32_t columnIndex, bool hasNulls) {
-    columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] | hasNulls;
   }
 
   /// Returns the specific column's columnHasNulls_ flag.
@@ -1288,6 +1295,12 @@ class RowContainer {
   void freeNextRowVectors(folly::Range<char**> rows, bool clear);
 
   void freeRowsExtraMemory(folly::Range<char**> rows, bool clear);
+
+  // Updates the specific column's columnHasNulls_ flag, if 'hasNulls' is true.
+  // columnHasNulls_ flag is false by default.
+  inline void updateColumnHasNulls(int32_t columnIndex, bool hasNulls) {
+    columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] | hasNulls;
+  }
 
   const bool checkFree_ = false;
 
