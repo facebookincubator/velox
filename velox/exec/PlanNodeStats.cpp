@@ -97,7 +97,7 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
   out << "Output: " << outputRows << " rows (" << succinctBytes(outputBytes)
       << ", " << outputVectors << " batches)";
   if (physicalWrittenBytes > 0) {
-    out << ", Physical Written output: " << succinctBytes(physicalWrittenBytes);
+    out << ", Physical written output: " << succinctBytes(physicalWrittenBytes);
   }
   out << ", Cpu time: " << succinctNanos(cpuWallTiming.cpuNanos)
       << ", Blocked wall time: " << succinctNanos(blockedWallNanos)

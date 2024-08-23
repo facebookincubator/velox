@@ -256,7 +256,7 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
     lockedStats->addRuntimeStat(
         "writeIOTime",
         RuntimeCounter(
-            stats.writeIOTimeMicro * 1000, RuntimeCounter::Unit::kNanos));
+            stats.writeIOTimeUs * 1000, RuntimeCounter::Unit::kNanos));
   }
   if (!stats.spillStats.empty()) {
     *spillStats_.wlock() += stats.spillStats;
