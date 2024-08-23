@@ -65,35 +65,27 @@ class ArrayInsertTest : public SparkFunctionBaseTest {
 
   template <typename T>
   void testFloat() {
+    static const T kNaN = std::numeric_limits<T>::quiet_NaN();
+    static const T kInf = std::numeric_limits<T>::infinity();
+
     const auto input = makeRowVector({
         makeNullableArrayVector<T>(
-            {{1.0001, -2.0},
-             {2.0001, std::numeric_limits<T>::infinity()},
-             {std::numeric_limits<T>::quiet_NaN(), 9.0009},
-             {3.0001}}),
-        makeNullableFlatVector<T>(
-            {0,
-             std::nullopt,
-             std::numeric_limits<T>::infinity(),
-             std::numeric_limits<T>::quiet_NaN()}),
+            {{1.0001, -2.0}, {2.0001, kInf}, {kNaN, 9.0009}, {3.0001}}),
+        makeNullableFlatVector<T>({0, std::nullopt, kInf, kNaN}),
     });
 
     auto expected = makeNullableArrayVector<T>(
         {{0, 1.0001, -2.0},
-         {std::nullopt, 2.0001, std::numeric_limits<T>::infinity()},
-         {std::numeric_limits<T>::infinity(),
-          std::numeric_limits<T>::quiet_NaN(),
-          9.0009},
-         {std::numeric_limits<T>::quiet_NaN(), 3.0001}});
+         {std::nullopt, 2.0001, kInf},
+         {kInf, kNaN, 9.0009},
+         {kNaN, 3.0001}});
     testExpression("array_insert(c0, 1, c1, false)", input, expected);
 
     expected = makeNullableArrayVector<T>(
         {{1.0001, 0, -2.0},
-         {2.0001, std::nullopt, std::numeric_limits<T>::infinity()},
-         {std::numeric_limits<T>::quiet_NaN(),
-          std::numeric_limits<T>::infinity(),
-          9.0009},
-         {std::numeric_limits<T>::quiet_NaN(), 3.0001}});
+         {2.0001, std::nullopt, kInf},
+         {kNaN, kInf, 9.0009},
+         {kNaN, 3.0001}});
     testExpression("array_insert(c0, -2, c1, false)", input, expected);
   }
 };
@@ -184,17 +176,94 @@ TEST_F(ArrayInsertTest, varbinary) {
       "array_insert(c0, -2, 'X'::VARBINARY, false)", {arrays}, expected);
 }
 
-TEST_F(ArrayInsertTest, nullSrcArrays) {
-  const auto arrays = makeArrayVectorFromJson<int64_t>({"null"});
-  const auto expected = makeArrayVectorFromJson<int64_t>({"null"});
-  testExpression("array_insert(c0, 1, 1, false)", {arrays}, expected);
+TEST_F(ArrayInsertTest, nestedArrays) {
+  auto arrays = makeNestedArrayVectorFromJson<int64_t>(
+      {"[[1, 1], null, [3, 3]]", "[[5, null], [null, 6], [null, null], []]"});
+  auto expected = makeNestedArrayVectorFromJson<int64_t>(
+      {"[[0, 0], [1, 1], null, [3, 3]]",
+       "[[0, 0], [5, null], [null, 6], [null, null], []]"});
+  testExpression("array_insert(c0, 1, ARRAY[0, 0], false)", {arrays}, expected);
+
+  const auto input = makeRowVector(
+      {arrays, makeArrayVectorFromJson<int64_t>({"null", "null"})});
+  expected = makeNestedArrayVectorFromJson<int64_t>(
+      {"[null, [1, 1], null, [3, 3]]",
+       "[null, [5, null], [null, 6], [null, null], []]"});
+  testExpression("array_insert(c0, 1, c1, false)", input, expected);
+
+  expected = makeNestedArrayVectorFromJson<int64_t>(
+      {"[[1, 1], null, [0, 0], [3, 3]]",
+       "[[5, null], [null, 6], [null, null], [0, 0], []]"});
+  testExpression(
+      "array_insert(c0, -2, ARRAY[0, 0], false)", {arrays}, expected);
 }
 
-TEST_F(ArrayInsertTest, nullPosition) {
-  const auto arrays = makeArrayVectorFromJson<int64_t>({"[1, 1]"});
-  const auto expected = makeArrayVectorFromJson<int64_t>({"null"});
+TEST_F(ArrayInsertTest, mapArrays) {
+  using M = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
+  auto arrays = makeArrayOfMapVector<int32_t, int32_t>(
+      {{M{{1, 10}}}, {M{{2, 20}, {3, 30}}, std::nullopt}});
+  auto expected = makeArrayOfMapVector<int32_t, int32_t>(
+      {{M{{0, 0}}, M{{1, 10}}},
+       {M{{0, 0}}, M{{2, 20}, {3, 30}}, std::nullopt}});
+  testExpression("array_insert(c0, 1, map(0, 0), false)", {arrays}, expected);
+
+  expected = makeArrayOfMapVector<int32_t, int32_t>(
+      {{std::nullopt, M{{1, 10}}},
+       {std::nullopt, M{{2, 20}, {3, 30}}, std::nullopt}});
+  testExpression(
+      "array_insert(c0, 1, null::MAP(INTEGER, INTEGER), false)",
+      {arrays},
+      expected);
+
+  expected = makeArrayOfMapVector<int32_t, int32_t>(
+      {{M{{0, 0}}, M{{1, 10}}},
+       {M{{2, 20}, {3, 30}}, M{{0, 0}}, std::nullopt}});
+  testExpression("array_insert(c0, -2, map(0, 0), false)", {arrays}, expected);
+}
+
+TEST_F(ArrayInsertTest, structArrays) {
+  using ArraysOfRow =
+      std::vector<std::vector<std::optional<std::tuple<int32_t, int32_t>>>>;
+  auto rowType = ROW({{"a", INTEGER()}, {"b", INTEGER()}});
+  auto arrays = makeArrayOfRowVector(
+      ArraysOfRow{{{{1, 1}}}, {{{2, 2}}, {{3, 3}}}}, rowType);
+  auto expected = makeArrayOfRowVector(
+      ArraysOfRow{{{{0, 0}}, {{1, 1}}}, {{{0, 0}}, {{2, 2}}, {{3, 3}}}},
+      rowType);
+  testExpression(
+      "array_insert(c0, 1, row_constructor(0, 0), false)", {arrays}, expected);
+
+  expected = makeArrayOfRowVector(
+      ArraysOfRow{{std::nullopt, {{1, 1}}}, {std::nullopt, {{2, 2}}, {{3, 3}}}},
+      rowType);
+  testExpression(
+      "array_insert(c0, 1, null::STRUCT(a INTEGER, b INTEGER), false)",
+      {arrays},
+      expected);
+
+  expected = makeArrayOfRowVector(
+      ArraysOfRow{{{{0, 0}}, {{1, 1}}}, {{{2, 2}}, {{0, 0}}, {{3, 3}}}},
+      rowType);
+  testExpression(
+      "array_insert(c0, -2, row_constructor(0, 0), false)", {arrays}, expected);
+}
+
+TEST_F(ArrayInsertTest, nullInputs) {
+  // null input array
+  auto arrays = makeArrayVectorFromJson<int64_t>({"null"});
+  auto expected = makeArrayVectorFromJson<int64_t>({"null"});
+  testExpression("array_insert(c0, 1, 1, false)", {arrays}, expected);
+
+  // null postition
+  arrays = makeArrayVectorFromJson<int64_t>({"[1, 1]"});
+  expected = makeArrayVectorFromJson<int64_t>({"null"});
   testExpression(
       "array_insert(c0, null::INTEGER, 1, false)", {arrays}, expected);
+
+  // null element
+  expected = makeArrayVectorFromJson<int64_t>({"[1, null, 1]"});
+  testExpression(
+      "array_insert(c0, 2, null::INTEGER, false)", {arrays}, expected);
 }
 
 TEST_F(ArrayInsertTest, posGTArraySize) {
