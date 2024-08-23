@@ -1715,7 +1715,7 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
     columnHasNulls_.emplace_back(rows_->columnHasNulls(i));
     for (auto& other : otherTables_) {
       columnHasNulls_[i] =
-          columnHasNulls_[i] | other->rows()->columnHasNulls(i);
+          columnHasNulls_[i] || other->rows()->columnHasNulls(i);
     }
   }
   bool useValueIds = mayUseValueIds(*this);

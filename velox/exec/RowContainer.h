@@ -1299,7 +1299,7 @@ class RowContainer {
   // Updates the specific column's columnHasNulls_ flag, if 'hasNulls' is true.
   // columnHasNulls_ flag is false by default.
   inline void updateColumnHasNulls(int32_t columnIndex, bool hasNulls) {
-    columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] | hasNulls;
+    columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] || hasNulls;
   }
 
   const bool checkFree_ = false;
