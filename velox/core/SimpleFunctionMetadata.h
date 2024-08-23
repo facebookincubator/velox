@@ -498,6 +498,11 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
 
   bool physicalSignatureEquals(
       const ISimpleFunctionMetadata& other) const override {
+    // Decimal function registered as (short, short) -> short and
+    // (short, short) -> long.
+    if (!resultPhysicalType_->kindEquals(other.resultPhysicalType())) {
+      return false;
+    }
     if (argPhysicalTypes_.size() != other.argPhysicalTypes().size()) {
       return false;
     }
@@ -514,7 +519,7 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
   std::string helpMessage(const std::string& name) const final {
     // return fmt::format("{}({})", name, signature_->toString());
     std::string s{name};
-    s.append("(");
+    s.append("\nSignature argument types:\n");
     bool first = true;
     for (auto& arg : signature_->argumentTypes()) {
       if (!first) {
@@ -528,7 +533,22 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
       s.append("...");
     }
 
-    s.append(")");
+    first = true;
+    s.append("\nArgument physical types:\n");
+    for (const auto& arg : argPhysicalTypes_) {
+      if (!first) {
+        s.append(", ");
+      }
+      first = false;
+      s.append(arg->toString());
+    }
+    if (isVariadic()) {
+      s.append("...");
+    }
+
+    s.append("\nResult physical types:\n" + resultPhysicalType_->toString());
+    s.append("\nPriority: " + std::to_string(priority_));
+    s.append("\nDefaultNullBehavior_: " + std::to_string(defaultNullBehavior_));
     return s;
   }
 
