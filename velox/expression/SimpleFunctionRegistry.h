@@ -66,6 +66,8 @@ struct SignatureHash {
 /// try to register map<long, long>, we will get it from SignatureMap, but its
 /// physical type is not equal, so not overwrite map<int, long>, both map<int,
 /// long> and map<long, long> exist in FunctionEntry.
+/// Function with Variadic<int64_t> or int64_t should not exist at the same
+/// time, we cannot distinguish which to call for single input.
 struct SignatureCmp {
   bool operator()(const FunctionSignature& l, const FunctionSignature& r)
       const {

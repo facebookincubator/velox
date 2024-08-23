@@ -1071,7 +1071,10 @@ TEST_F(SimpleFunctionTest, variadicReuseNoArgs) {
 }
 
 TEST_F(SimpleFunctionTest, variadicReuseNoArgsDifferentType) {
-  std::string functionName = "function_with_variadic";
+  // Change the function name because we register same name function only diffs
+  // with result type in other tests before, 2 function entry will exist.
+  // Randomly get the entry, if get result type is not int32_t, will core dump.
+  std::string functionName = "function_with_variadic_different_type";
   registerFunction<FunctionWithVariadic, int32_t, Variadic<int64_t>>(
       {functionName});
 

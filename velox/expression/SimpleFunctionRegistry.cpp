@@ -60,6 +60,9 @@ bool SimpleFunctionRegistry::registerFunctionInternal(
           metadata->defaultNullBehavior(), otherMetadata.defaultNullBehavior());
       VELOX_USER_CHECK_EQ(
           metadata->isDeterministic(), otherMetadata.isDeterministic());
+      VELOX_USER_CHECK_EQ(
+          metadata->signature()->variableArity(),
+          otherMetadata.signature()->variableArity());
     }
 
     functions.emplace_back(
