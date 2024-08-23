@@ -112,6 +112,7 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
         EXPECT_TRUE(!result.hasError());
         return result.value();
       };
+
   EXPECT_EQ(4, daysSinceEpochLenient(1970, 1, 2, 1));
   EXPECT_EQ(361, daysSinceEpochLenient(1971, 1, 1, 1));
   EXPECT_EQ(396, daysSinceEpochLenient(1971, 2, 1, 1));
@@ -153,6 +154,11 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
   EXPECT_EQ(-31, daysSinceEpochLenient(1970, 0, 1, 1));
   EXPECT_EQ(-66, daysSinceEpochLenient(1970, -1, 1, 1));
   EXPECT_EQ(-430, daysSinceEpochLenient(1970, -13, 1, 1));
+
+  // Out of range year.
+  auto result = util::daysSinceEpochFromWeekOfMonthDate(
+      292278995, 1, 1, 1, true);
+  EXPECT_EQ(result.error().message(), "Date out of range: 292278995-1-1");
 }
 
 TEST(DateTimeUtilTest, fromWeekOfMonthDateInvalid) {

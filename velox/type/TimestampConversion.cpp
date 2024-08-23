@@ -164,15 +164,16 @@ bool isValidWeekOfMonthDate(
     return false;
   }
 
-  // Calculates the max week of month and validates if it is in the valid range.
+  // Calculates the actual number of week of month and validates if it is in the
+  // valid range.
   const int32_t firstDayOfWeek =
       extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
   const int32_t firstWeekLength = 7 - firstDayOfWeek + 1;
   const int32_t monthLength =
       isLeapYear(year) ? kLeapDays[month] : kNormalDays[month];
-  const int32_t actualNumberOfWeeks =
+  const int32_t actualWeeks =
       1 + ceil((monthLength - firstWeekLength) / 7.0);
-  if (weekOfMonth < 1 || weekOfMonth > actualNumberOfWeeks) {
+  if (weekOfMonth < 1 || weekOfMonth > actualWeeks) {
     return false;
   }
 
@@ -184,7 +185,7 @@ bool isValidWeekOfMonthDate(
   const int32_t lastWeekLength = (monthLength - firstWeekLength) % 7;
   // If dayOfWeek is after the last day of the last week of the month, it is
   // considered invalid.
-  if (weekOfMonth == actualNumberOfWeeks && lastWeekLength != 0 &&
+  if (weekOfMonth == actualWeeks && lastWeekLength != 0 &&
       dayOfWeek > lastWeekLength) {
     return false;
   }
@@ -674,12 +675,16 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
   year += additionYears;
 
   int64_t daysSinceEpochOfFirstDayOfMonth;
-  Status status =
+  const Status status =
       daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth);
   if (!status.ok()) {
-    return folly::makeUnexpected(status);
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    } else {
+      return folly::makeUnexpected(status);
+    }
   }
-  int32_t firstDayOfWeek =
+  const int32_t firstDayOfWeek =
       extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
   int32_t days;
   if (dayOfWeek < 1) {
@@ -689,9 +694,8 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
   } else {
     days = dayOfWeek % 7;
   }
-  int64_t result = daysSinceEpochOfFirstDayOfMonth - (firstDayOfWeek - 1) +
+  return daysSinceEpochOfFirstDayOfMonth - (firstDayOfWeek - 1) +
       7 * (weekOfMonth - 1) + days - 1;
-  return result;
 }
 
 Status
