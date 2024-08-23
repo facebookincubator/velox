@@ -51,7 +51,8 @@ void compareOutputs(
     while (!RE2::FullMatch(line, expectedLine.line)) {
       potentialLines.push_back(expectedLine.line);
       if (!expectedLine.optional) {
-        ASSERT_FALSE(true) << "Output did not match " << "Source:" << testName
+        ASSERT_FALSE(true) << "Output did not match "
+                           << "Source:" << testName
                            << ", Line number:" << lineCount
                            << ", Line: " << line << ", Expected Line one of: "
                            << folly::join(",", potentialLines);
@@ -321,16 +322,15 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
   writeToFile(filePath->getPath(), vectors);
   const auto writeDir = TempDirectoryPath::create();
 
-  auto writePlan =
-      PlanBuilder()
-          .tableScan(rowType)
-          .tableWrite(writeDir->getPath())
-          .planNode();
+  auto writePlan = PlanBuilder()
+                       .tableScan(rowType)
+                       .tableWrite(writeDir->getPath())
+                       .planNode();
 
   std::shared_ptr<exec::Task> task;
-      AssertQueryBuilder(writePlan)
-          .splits(makeHiveConnectorSplits({filePath}))
-          .copyResults(pool(), task);
+  AssertQueryBuilder(writePlan)
+      .splits(makeHiveConnectorSplits({filePath}))
+      .copyResults(pool(), task);
   ensureTaskCompletion(task.get());
   compareOutputs(
       ::testing::UnitTest::GetInstance()->current_test_info()->name(),
