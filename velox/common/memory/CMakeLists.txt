@@ -29,6 +29,7 @@ velox_add_library(
   MmapAllocator.cpp
   MmapArena.cpp
   SharedArbitrator.cpp
+  SharedArbitratorUtil.cpp
   StreamArena.cpp)
 
 velox_link_libraries(
