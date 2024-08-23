@@ -171,8 +171,7 @@ bool isValidWeekOfMonthDate(
   const int32_t firstWeekLength = 7 - firstDayOfWeek + 1;
   const int32_t monthLength =
       isLeapYear(year) ? kLeapDays[month] : kNormalDays[month];
-  const int32_t actualWeeks =
-      1 + ceil((monthLength - firstWeekLength) / 7.0);
+  const int32_t actualWeeks = 1 + ceil((monthLength - firstWeekLength) / 7.0);
   if (weekOfMonth < 1 || weekOfMonth > actualWeeks) {
     return false;
   }

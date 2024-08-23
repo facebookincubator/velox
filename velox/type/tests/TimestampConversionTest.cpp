@@ -156,8 +156,8 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
   EXPECT_EQ(-430, daysSinceEpochLenient(1970, -13, 1, 1));
 
   // Out of range year.
-  auto result = util::daysSinceEpochFromWeekOfMonthDate(
-      292278995, 1, 1, 1, true);
+  auto result =
+      util::daysSinceEpochFromWeekOfMonthDate(292278995, 1, 1, 1, true);
   EXPECT_EQ(result.error().message(), "Date out of range: 292278995-1-1");
 }
 
