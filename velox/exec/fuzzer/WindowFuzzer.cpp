@@ -219,6 +219,12 @@ void WindowFuzzer::go() {
 
     auto signatureWithStats = pickSignature();
     signatureWithStats.second.numRuns++;
+    if (functionDataConstrain.count(signatureWithStats.first.name) > 0) {
+      vectorFuzzer_.setConstraint(
+          functionDataConstrain.at(signatureWithStats.first.name));
+    } else {
+      vectorFuzzer_.resetConstraint();
+    }
 
     const auto signature = signatureWithStats.first;
     stats_.functionNames.insert(signature.name);

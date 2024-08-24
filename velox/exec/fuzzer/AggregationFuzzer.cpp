@@ -357,6 +357,13 @@ void AggregationFuzzer::go() {
     } else {
       // Pick a random signature.
       auto signatureWithStats = pickSignature();
+
+      if (functionDataConstrain.count(signatureWithStats.first.name) > 0) {
+        vectorFuzzer_.setConstraint(
+            functionDataConstrain.at(signatureWithStats.first.name));
+      } else {
+        vectorFuzzer_.resetConstraint();
+      }
       signatureWithStats.second.numRuns++;
 
       auto signature = signatureWithStats.first;

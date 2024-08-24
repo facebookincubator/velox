@@ -53,6 +53,24 @@ using facebook::velox::fuzzer::SignatureTemplate;
 
 constexpr const std::string_view kPlanNodeFileName = "plan_nodes";
 
+// For some functions, velox supports NaN, Infinity better than presto query
+// runner, which makes the comparison impossible.
+// Add data constraint in vector fuzzer to enforce to not generate such data for
+// those functions before they are fixed in presto query runner
+static const std::unordered_map<std::string, Constraint> functionDataConstrain =
+    {
+        {"regr_avgx", Constraint{true, true}},
+        {"regr_avgy", Constraint{true, true}},
+        {"regr_r2", Constraint{true, true}},
+        {"regr_sxx", Constraint{true, true}},
+        {"regr_syy", Constraint{true, true}},
+        {"regr_sxy", Constraint{true, true}},
+        {"regr_slope", Constraint{true, true}},
+        {"regr_replacement", Constraint{true, true}},
+        {"covar_pop", Constraint{false, true}},
+        {"covar_samp", Constraint{false, true}},
+};
+
 class AggregationFuzzerBase {
  public:
   AggregationFuzzerBase(
