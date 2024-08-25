@@ -68,6 +68,7 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(
       hiveConfig.sortWriterMaxOutputBytes(emptySession.get()), 10UL << 20);
   ASSERT_EQ(hiveConfig.isPartitionPathAsLowerCase(emptySession.get()), true);
+  ASSERT_EQ(hiveConfig.rejectNullPartitionKeys(emptySession.get()), false);
   ASSERT_EQ(hiveConfig.orcWriterMinCompressionSize(emptySession.get()), 1024);
   ASSERT_EQ(
       hiveConfig.orcWriterCompressionLevel(emptySession.get()), std::nullopt);
@@ -173,6 +174,7 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kSortWriterMaxOutputRowsSession, "20"},
       {HiveConfig::kSortWriterMaxOutputBytesSession, "20MB"},
       {HiveConfig::kPartitionPathAsLowerCaseSession, "false"},
+      {HiveConfig::kRejectNullPartitionKeys, "true"},
       {HiveConfig::kIgnoreMissingFilesSession, "true"},
       {HiveConfig::kOrcWriterMinCompressionSizeSession, "512"},
       {HiveConfig::kOrcWriterCompressionLevelSession, "1"},
@@ -218,6 +220,7 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(hiveConfig.sortWriterMaxOutputRows(session.get()), 20);
   ASSERT_EQ(hiveConfig.sortWriterMaxOutputBytes(session.get()), 20UL << 20);
   ASSERT_EQ(hiveConfig.isPartitionPathAsLowerCase(session.get()), false);
+  ASSERT_EQ(hiveConfig.rejectNullPartitionKeys(session.get()), true);
   ASSERT_EQ(hiveConfig.ignoreMissingFiles(session.get()), true);
   ASSERT_EQ(
       hiveConfig.orcWriterLinearStripeSizeHeuristics(session.get()), false);

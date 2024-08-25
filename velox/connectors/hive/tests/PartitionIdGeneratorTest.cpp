@@ -85,16 +85,19 @@ TEST_F(PartitionIdGeneratorTest, multipleBoolKeys) {
       ROW({BOOLEAN(), BOOLEAN()}), {0, 1}, 100, pool(), true);
 
   auto input = makeRowVector({
-      makeFlatVector<bool>(1'000, [](vector_size_t row) { return row < 50; }),
       makeFlatVector<bool>(
-          1'000, [](vector_size_t row) { return (row % 2) == 0; }),
+          1'000, [](vector_size_t row) { return row < 50; }, nullEvery(7)),
+      makeFlatVector<bool>(
+          1'000,
+          [](vector_size_t row) { return (row % 2) == 0; },
+          nullEvery(3)),
   });
 
   raw_vector<uint64_t> ids;
   idGenerator.run(input, ids);
 
-  // distinctIds contains 4 ids.
-  const auto numPartitions = 4;
+  // distinctIds contains 9 ids.
+  const auto numPartitions = 9;
 
   std::unordered_set<uint64_t> distinctIds(ids.begin(), ids.end());
   EXPECT_EQ(distinctIds.size(), numPartitions);
@@ -252,13 +255,15 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
         true);
 
     auto input = makeRowVector({
-        makeFlatVector<StringView>({"Left", "Right"}, VARCHAR()),
-        makeFlatVector<bool>({true, false}),
-        makeFlatVector<StringView>({"proton", "neutron"}, VARBINARY()),
-        makeFlatVector<int8_t>({1, 2}),
-        makeFlatVector<int16_t>({1, 2}),
-        makeFlatVector<int32_t>({1, 2}),
-        makeFlatVector<int64_t>({1, 2}),
+        makeNullableFlatVector<StringView>(
+            {"Left", std::nullopt, "Right"}, VARCHAR()),
+        makeNullableFlatVector<bool>({true, false, std::nullopt}),
+        makeFlatVector<StringView>(
+            {"proton", "neutron", "electron"}, VARBINARY()),
+        makeNullableFlatVector<int8_t>({1, 2, std::nullopt}),
+        makeNullableFlatVector<int16_t>({1, 2, std::nullopt}),
+        makeNullableFlatVector<int32_t>({1, std::nullopt, 2}),
+        makeNullableFlatVector<int64_t>({std::nullopt, 1, 2}),
     });
 
     raw_vector<uint64_t> ids;
@@ -266,6 +271,7 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
 
     EXPECT_TRUE(ids[0] == 0);
     EXPECT_TRUE(ids[1] == 1);
+    EXPECT_TRUE(ids[2] == 2);
   }
 
   // Test unsupported partition key types.
@@ -289,41 +295,26 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
   }
 }
 
-TEST_F(PartitionIdGeneratorTest, nullPartitionValue) {
-  // Test single key
-  PartitionIdGenerator sIdGenerator(ROW({INTEGER()}), {0}, 100, pool(), true);
+TEST_F(PartitionIdGeneratorTest, regjectNullPartitionKeys) {
+  PartitionIdGenerator IdGenerator(
+      ROW({INTEGER()}), {0}, 100, pool(), true, true);
 
-  auto sinput = makeRowVector({
+  raw_vector<uint64_t> ids;
+  auto inputWithoutNulls = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+  });
+
+  IdGenerator.run(inputWithoutNulls, ids);
+
+  EXPECT_TRUE(ids[0] == 0);
+  EXPECT_TRUE(ids[1] == 1);
+
+  auto input = makeRowVector({
       makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
   });
 
-  raw_vector<uint64_t> ids;
   VELOX_ASSERT_THROW(
-      sIdGenerator.run(sinput, ids),
-      "Null value found at 2 in partition key c0")
-
-  // Test multiple keys
-  PartitionIdGenerator mIdGenerator(
-      ROW({VARCHAR(), BIGINT()}), {0, 1}, 100, pool(), true);
-  auto m1Input = makeRowVector({
-      makeNullableFlatVector<StringView>(
-          {"Left", "Right", std::nullopt}, VARCHAR()),
-      makeFlatVector<int64_t>({1, 2, 3}),
-  });
-
-  VELOX_ASSERT_THROW(
-      mIdGenerator.run(m1Input, ids),
-      "Null value found at 2 in partition key c0")
-
-  auto m2Input = makeRowVector({
-      makeNullableFlatVector<StringView>(
-          {"Left", "Right", "middle"}, VARCHAR()),
-      makeNullableFlatVector<int64_t>({std::nullopt, 1, 2}),
-  });
-
-  VELOX_ASSERT_THROW(
-      mIdGenerator.run(m2Input, ids),
-      "Null value found at 0 in partition key c1")
+      IdGenerator.run(input, ids), "Null value found at 2 in partition key c0");
 }
 
 } // namespace facebook::velox::connector::hive

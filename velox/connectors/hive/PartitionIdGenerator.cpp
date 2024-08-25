@@ -28,10 +28,12 @@ PartitionIdGenerator::PartitionIdGenerator(
     std::vector<column_index_t> partitionChannels,
     uint32_t maxPartitions,
     memory::MemoryPool* pool,
-    bool partitionPathAsLowerCase)
+    bool partitionPathAsLowerCase,
+    bool rejectNullPartitionKeys)
     : partitionChannels_(std::move(partitionChannels)),
       maxPartitions_(maxPartitions),
-      partitionPathAsLowerCase_(partitionPathAsLowerCase) {
+      partitionPathAsLowerCase_(partitionPathAsLowerCase),
+      rejectNullPartitionKeys_(rejectNullPartitionKeys) {
   VELOX_USER_CHECK(
       !partitionChannels_.empty(), "There must be at least one partition key.");
   for (auto channel : partitionChannels_) {
@@ -66,16 +68,18 @@ void PartitionIdGenerator::run(
   const auto numRows = input->size();
   result.resize(numRows);
 
-  // Check that there are no nulls in the partition keys.
-  for (auto& partitionIdx : partitionChannels_) {
-    auto col = input->childAt(partitionIdx);
-    if (col->mayHaveNulls()) {
-      for (auto i = 0; i < col->size(); ++i) {
-        VELOX_USER_CHECK(
-            !col->isNullAt(i),
-            "Null value found at {} in partition key {}",
-            i,
-            input->type()->asRow().nameOf(partitionIdx))
+  if (rejectNullPartitionKeys_) {
+    // Check that there are no nulls in the partition keys.
+    for (auto& partitionIdx : partitionChannels_) {
+      auto col = input->childAt(partitionIdx);
+      if (col->mayHaveNulls()) {
+        for (auto i = 0; i < col->size(); ++i) {
+          VELOX_USER_CHECK(
+              !col->isNullAt(i),
+              "Null value found at {} in partition key {}",
+              i,
+              input->type()->asRow().nameOf(partitionIdx))
+        }
       }
     }
   }

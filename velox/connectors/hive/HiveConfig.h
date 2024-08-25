@@ -135,6 +135,9 @@ class HiveConfig {
   static constexpr const char* kPartitionPathAsLowerCaseSession =
       "partition_path_as_lower_case";
 
+  static constexpr const char* kRejectNullPartitionKeys =
+      "reject_null_partition_keys";
+
   static constexpr const char* kIgnoreMissingFilesSession =
       "ignore_missing_files";
 
@@ -290,6 +293,8 @@ class HiveConfig {
   bool isFileColumnNamesReadAsLowerCase(const Config* session) const;
 
   bool isPartitionPathAsLowerCase(const Config* session) const;
+
+  bool rejectNullPartitionKeys(const Config* session) const;
 
   bool ignoreMissingFiles(const Config* session) const;
 

@@ -375,6 +375,8 @@ HiveDataSink::HiveDataSink(
                     maxOpenWriters_,
                     connectorQueryCtx_->memoryPool(),
                     hiveConfig_->isPartitionPathAsLowerCase(
+                        connectorQueryCtx->sessionProperties()),
+                    hiveConfig_->rejectNullPartitionKeys(
                         connectorQueryCtx->sessionProperties()))
               : nullptr),
       dataChannels_(
