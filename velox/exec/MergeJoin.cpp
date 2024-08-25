@@ -35,25 +35,9 @@ MergeJoin::MergeJoin(
       numKeys_{joinNode->leftKeys().size()},
       joinNode_(joinNode) {
   VELOX_USER_CHECK(
-      isSupported(joinNode_->joinType()),
+      core::MergeJoinNode::isSupported(joinNode_->joinType()),
       "The join type is not supported by merge join: ",
       joinTypeName(joinNode_->joinType()));
-}
-
-// static
-bool MergeJoin::isSupported(core::JoinType joinType) {
-  switch (joinType) {
-    case core::JoinType::kInner:
-    case core::JoinType::kLeft:
-    case core::JoinType::kRight:
-    case core::JoinType::kLeftSemiFilter:
-    case core::JoinType::kRightSemiFilter:
-    case core::JoinType::kAnti:
-      return true;
-
-    default:
-      return false;
-  }
 }
 
 void MergeJoin::initialize() {
@@ -612,27 +596,26 @@ vector_size_t firstNonNull(
 } // namespace
 
 RowVectorPtr MergeJoin::filterOutputForAntiJoin(const RowVectorPtr& output) {
-  auto numRows = output->size();
+  const auto numRows = output->size();
   const auto& filterRows = joinTracker_->matchingRows(numRows);
-  auto numPassed = 0;
-
-  BufferPtr indices = allocateIndices(numRows, pool());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (auto i = 0; i < numRows; i++) {
-    if (!filterRows.isValid(i)) {
-      rawIndices[numPassed++] = i;
-    }
-  }
-
+  const auto numPassed = numRows - filterRows.countSelected();
   if (numPassed == 0) {
-    // No rows passed.
     return nullptr;
   }
-
   if (numPassed == numRows) {
     // All rows passed.
     return output;
   }
+
+  BufferPtr indices = allocateIndices(numPassed, pool());
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  size_t index{0};
+  for (auto i = 0; i < numRows; ++i) {
+    if (!filterRows.isValid(i)) {
+      rawIndices[index++] = i;
+    }
+  }
+  VELOX_CHECK_EQ(index, numPassed);
 
   // Some, but not all rows passed.
   return wrap(numPassed, indices, output);
@@ -662,7 +645,13 @@ RowVectorPtr MergeJoin::getOutput() {
         // No rows survived the filter. Get more rows.
         continue;
       } else if (isAntiJoin(joinType_)) {
-        return filterOutputForAntiJoin(output);
+        output = filterOutputForAntiJoin(output);
+        if (output) {
+          return output;
+        }
+
+        // No rows survived the filter for anti join. Get more rows.
+        continue;
       } else {
         return output;
       }

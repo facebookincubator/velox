@@ -15,13 +15,13 @@
  */
 
 #ifdef VELOX_ENABLE_S3
-#include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
+#include "velox/connectors/hive/HiveConfig.h" // @manual
+#include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h" // @manual
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h" // @manual
 #include "velox/dwio/common/FileSink.h"
 #endif
 
-#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h" // @manual
 
 namespace facebook::velox::filesystems {
 
@@ -37,7 +37,7 @@ FileSystemMap& fileSystems() {
   return instances;
 }
 
-std::string getS3Identity(const std::shared_ptr<core::MemConfig>& config) {
+std::string getS3Identity(const std::shared_ptr<config::ConfigBase>& config) {
   HiveConfig hiveConfig = HiveConfig(config);
   auto endpoint = hiveConfig.s3Endpoint();
   if (!endpoint.empty()) {
@@ -49,11 +49,13 @@ std::string getS3Identity(const std::shared_ptr<core::MemConfig>& config) {
 }
 
 std::shared_ptr<FileSystem> fileSystemGenerator(
-    std::shared_ptr<const Config> properties,
+    std::shared_ptr<const config::ConfigBase> properties,
     std::string_view /*filePath*/) {
-  std::shared_ptr<core::MemConfig> config = std::make_shared<core::MemConfig>();
+  std::shared_ptr<config::ConfigBase> config =
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>());
   if (properties) {
-    *config = core::MemConfig(properties->values());
+    config = std::make_shared<config::ConfigBase>(properties->rawConfigsCopy());
   }
   const auto s3Identity = getS3Identity(config);
 

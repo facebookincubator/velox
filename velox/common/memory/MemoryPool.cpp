@@ -27,6 +27,11 @@
 
 #include <re2/re2.h>
 
+DEFINE_bool(
+    velox_memory_pool_capacity_transfer_across_tasks,
+    false,
+    "Whether allow to memory capacity transfer between memory pools from different tasks, which might happen in use case like Spark-Gluten");
+
 DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
 
 using facebook::velox::common::testutil::TestValue;
@@ -413,13 +418,12 @@ MemoryPoolImpl::MemoryPoolImpl(
     Kind kind,
     std::shared_ptr<MemoryPool> parent,
     std::unique_ptr<MemoryReclaimer> reclaimer,
-    GrowCapacityCallback growCapacityCb,
     DestructionCallback destructionCb,
     const Options& options)
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
       allocator_{manager_->allocator()},
-      growCapacityCb_(std::move(growCapacityCb)),
+      arbitrator_{manager_->arbitrator()},
       destructionCb_(std::move(destructionCb)),
       debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
       reclaimer_(std::move(reclaimer)),
@@ -428,8 +432,8 @@ MemoryPoolImpl::MemoryPoolImpl(
       capacity_(parent_ != nullptr ? kMaxMemory : 0) {
   VELOX_CHECK(options.threadSafe || isLeaf());
   VELOX_CHECK(
-      isRoot() || (destructionCb_ == nullptr && growCapacityCb_ == nullptr),
-      "Only root memory pool allows to set destruction and capacity grow callbacks: {}",
+      isRoot() || destructionCb_ == nullptr,
+      "Only root memory pool allows to set destruction callbacks: {}",
       name_);
 }
 
@@ -733,7 +737,6 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
       parent,
       std::move(reclaimer),
       nullptr,
-      nullptr,
       Options{
           .alignment = alignment_,
           .trackUsage = trackUsage_,
@@ -842,8 +845,7 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
 
   VELOX_CHECK_NULL(parent_);
 
-  ++numCapacityGrowths_;
-  if (growCapacityCb_(requestor, size)) {
+  if (growCapacity(requestor, size)) {
     TestValue::adjust(
         "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",
         this);
@@ -863,6 +865,14 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
       capacityToString(manager_->capacity()),
       succinctBytes(requestor->usedBytes()),
       treeMemoryUsage()));
+}
+
+bool MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
+  VELOX_CHECK(requestor->isLeaf());
+  ++numCapacityGrowths_;
+
+  ScopedMemoryPoolArbitrationCtx arbitrationCtx(requestor);
+  return arbitrator_->growCapacity(this, size);
 }
 
 bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
@@ -1242,11 +1252,34 @@ void MemoryPoolImpl::leakCheckDbg() {
   std::ostream oss(&buf);
   oss << "Detected total of " << debugAllocRecords_.size()
       << " leaked allocations:\n";
+  struct AllocationStats {
+    uint64_t size{0};
+    uint64_t numAllocations{0};
+  };
+  std::unordered_map<std::string, AllocationStats> sizeAggregatedRecords;
   for (const auto& itr : debugAllocRecords_) {
     const auto& allocationRecord = itr.second;
-    oss << "======== Leaked memory allocation of " << allocationRecord.size
-        << " bytes ========\n"
-        << allocationRecord.callStack.toString();
+    const auto stackStr = allocationRecord.callStack.toString();
+    if (sizeAggregatedRecords.count(stackStr) == 0) {
+      sizeAggregatedRecords[stackStr] = AllocationStats();
+    }
+    sizeAggregatedRecords[stackStr].size += allocationRecord.size;
+    ++sizeAggregatedRecords[stackStr].numAllocations;
+  }
+  std::vector<std::pair<std::string, AllocationStats>> sortedRecords(
+      sizeAggregatedRecords.begin(), sizeAggregatedRecords.end());
+  std::sort(
+      sortedRecords.begin(),
+      sortedRecords.end(),
+      [](const std::pair<std::string, AllocationStats>& a,
+         std::pair<std::string, AllocationStats>& b) {
+        return a.second.size > b.second.size;
+      });
+  for (const auto& pair : sortedRecords) {
+    oss << "======== Leaked memory from " << pair.second.numAllocations
+        << " total allocations of " << succinctBytes(pair.second.size)
+        << " total size ========\n"
+        << pair.first << "\n";
   }
   VELOX_FAIL(buf.str());
 }

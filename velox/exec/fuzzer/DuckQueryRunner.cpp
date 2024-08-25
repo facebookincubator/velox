@@ -53,14 +53,30 @@ std::unordered_set<std::string> getAggregateFunctions() {
 }
 } // namespace
 
-DuckQueryRunner::DuckQueryRunner()
-    : aggregateFunctionNames_{getAggregateFunctions()} {}
+DuckQueryRunner::DuckQueryRunner(memory::MemoryPool* aggregatePool)
+    : ReferenceQueryRunner(aggregatePool),
+      aggregateFunctionNames_{getAggregateFunctions()} {}
 
 void DuckQueryRunner::disableAggregateFunctions(
     const std::vector<std::string>& names) {
   for (const auto& name : names) {
     aggregateFunctionNames_.erase(name);
   }
+}
+
+const std::vector<TypePtr>& DuckQueryRunner::supportedScalarTypes() const {
+  static const std::vector<TypePtr> kScalarTypes{
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      DATE(),
+  };
+  return kScalarTypes;
 }
 
 std::multiset<std::vector<velox::variant>> DuckQueryRunner::execute(

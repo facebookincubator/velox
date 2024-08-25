@@ -16,10 +16,10 @@
 
 #include "velox/connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h"
-#include "velox/core/Config.h"
 #include "velox/core/QueryConfig.h"
 
 #include <fmt/format.h>
@@ -258,9 +258,9 @@ auto constexpr kGCSInvalidPath = "File {} is not a valid gcs file";
 
 class GCSFileSystem::Impl {
  public:
-  Impl(const Config* config)
+  Impl(const config::ConfigBase* config)
       : hiveConfig_(std::make_shared<HiveConfig>(
-            std::make_shared<core::MemConfig>(config->values()))) {}
+            std::make_shared<config::ConfigBase>(config->rawConfigsCopy()))) {}
 
   ~Impl() = default;
 
@@ -285,7 +285,7 @@ class GCSFileSystem::Impl {
     auto max_retry_time = hiveConfig_->gcsMaxRetryTime();
     if (max_retry_time) {
       auto retry_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-          facebook::velox::core::toDuration(max_retry_time.value()));
+          facebook::velox::config::toDuration(max_retry_time.value()));
       options.set<gcs::RetryPolicyOption>(
           gcs::LimitedTimeRetryPolicy(retry_time).clone());
     }
@@ -315,7 +315,7 @@ class GCSFileSystem::Impl {
   std::shared_ptr<gcs::Client> client_;
 };
 
-GCSFileSystem::GCSFileSystem(std::shared_ptr<const Config> config)
+GCSFileSystem::GCSFileSystem(std::shared_ptr<const config::ConfigBase> config)
     : FileSystem(config) {
   impl_ = std::make_shared<Impl>(config.get());
 }

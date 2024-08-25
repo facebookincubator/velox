@@ -32,6 +32,11 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::dwrf {
+
+void WriterOptions::processConfigs(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) {};
+
 namespace {
 
 dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
@@ -798,49 +803,48 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
   std::map<std::string, std::string> configs;
   if (options.compressionKind.has_value()) {
     configs.emplace(
-        Config::COMPRESSION.configKey(),
+        Config::COMPRESSION.key,
         std::to_string(options.compressionKind.value()));
   }
   if (options.orcMinCompressionSize.has_value()) {
     configs.emplace(
-        Config::COMPRESSION_BLOCK_SIZE_MIN.configKey(),
+        Config::COMPRESSION_BLOCK_SIZE_MIN.key,
         std::to_string(options.orcMinCompressionSize.value()));
   }
   if (options.maxStripeSize.has_value()) {
     configs.emplace(
-        Config::STRIPE_SIZE.configKey(),
-        std::to_string(options.maxStripeSize.value()));
+        Config::STRIPE_SIZE.key, std::to_string(options.maxStripeSize.value()));
   }
   if (options.orcLinearStripeSizeHeuristics.has_value()) {
     configs.emplace(
-        Config::LINEAR_STRIPE_SIZE_HEURISTICS.configKey(),
+        Config::LINEAR_STRIPE_SIZE_HEURISTICS.key,
         std::to_string(options.orcLinearStripeSizeHeuristics.value()));
   }
   if (options.maxDictionaryMemory.has_value()) {
     configs.emplace(
-        Config::MAX_DICTIONARY_SIZE.configKey(),
+        Config::MAX_DICTIONARY_SIZE.key,
         std::to_string(options.maxDictionaryMemory.value()));
   }
   if (options.orcWriterIntegerDictionaryEncodingEnabled.has_value()) {
     configs.emplace(
-        Config::INTEGER_DICTIONARY_ENCODING_ENABLED.configKey(),
+        Config::INTEGER_DICTIONARY_ENCODING_ENABLED.key,
         std::to_string(
             options.orcWriterIntegerDictionaryEncodingEnabled.value()));
   }
   if (options.orcWriterStringDictionaryEncodingEnabled.has_value()) {
     configs.emplace(
-        Config::STRING_DICTIONARY_ENCODING_ENABLED.configKey(),
+        Config::STRING_DICTIONARY_ENCODING_ENABLED.key,
         std::to_string(
             options.orcWriterStringDictionaryEncodingEnabled.value()));
   }
   if (options.zlibCompressionLevel.has_value()) {
     configs.emplace(
-        Config::ZLIB_COMPRESSION_LEVEL.configKey(),
+        Config::ZLIB_COMPRESSION_LEVEL.key,
         std::to_string(options.zlibCompressionLevel.value()));
   }
   if (options.zstdCompressionLevel.has_value()) {
     configs.emplace(
-        Config::ZSTD_COMPRESSION_LEVEL.configKey(),
+        Config::ZSTD_COMPRESSION_LEVEL.key,
         std::to_string(options.zstdCompressionLevel.value()));
   }
 

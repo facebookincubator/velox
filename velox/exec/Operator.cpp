@@ -300,55 +300,40 @@ void Operator::recordSpillStats() {
   lockedStats->spilledRows += lockedSpillStats->spilledRows;
   lockedStats->spilledPartitions += lockedSpillStats->spilledPartitions;
   lockedStats->spilledFiles += lockedSpillStats->spilledFiles;
-  if (lockedSpillStats->spillFillTimeUs != 0) {
+  if (lockedSpillStats->spillFillTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillFillTime,
         RuntimeCounter{
-            static_cast<int64_t>(
-                lockedSpillStats->spillFillTimeUs *
-                Timestamp::kNanosecondsInMicrosecond),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(lockedSpillStats->spillFillTimeNanos)});
   }
-  if (lockedSpillStats->spillSortTimeUs != 0) {
+  if (lockedSpillStats->spillSortTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillSortTime,
         RuntimeCounter{
-            static_cast<int64_t>(
-                lockedSpillStats->spillSortTimeUs *
-                Timestamp::kNanosecondsInMicrosecond),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(lockedSpillStats->spillSortTimeNanos)});
   }
-  if (lockedSpillStats->spillSerializationTimeUs != 0) {
+  if (lockedSpillStats->spillSerializationTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillSerializationTime,
-        RuntimeCounter{
-            static_cast<int64_t>(
-                lockedSpillStats->spillSerializationTimeUs *
-                Timestamp::kNanosecondsInMicrosecond),
-            RuntimeCounter::Unit::kNanos});
+        RuntimeCounter{static_cast<int64_t>(
+            lockedSpillStats->spillSerializationTimeNanos)});
   }
-  if (lockedSpillStats->spillFlushTimeUs != 0) {
+  if (lockedSpillStats->spillFlushTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillFlushTime,
         RuntimeCounter{
-            static_cast<int64_t>(
-                lockedSpillStats->spillFlushTimeUs *
-                Timestamp::kNanosecondsInMicrosecond),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(lockedSpillStats->spillFlushTimeNanos)});
   }
   if (lockedSpillStats->spillWrites != 0) {
     lockedStats->addRuntimeStat(
         kSpillWrites,
         RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillWrites)});
   }
-  if (lockedSpillStats->spillWriteTimeUs != 0) {
+  if (lockedSpillStats->spillWriteTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillWriteTime,
         RuntimeCounter{
-            static_cast<int64_t>(
-                lockedSpillStats->spillWriteTimeUs *
-                Timestamp::kNanosecondsInMicrosecond),
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(lockedSpillStats->spillWriteTimeNanos)});
   }
   if (lockedSpillStats->spillRuns != 0) {
     lockedStats->addRuntimeStat(
@@ -380,22 +365,18 @@ void Operator::recordSpillStats() {
         RuntimeCounter{static_cast<int64_t>(lockedSpillStats->spillReads)});
   }
 
-  if (lockedSpillStats->spillReadTimeUs != 0) {
+  if (lockedSpillStats->spillReadTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillReadTime,
         RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillReadTimeUs) *
-                Timestamp::kNanosecondsInMicrosecond,
-            RuntimeCounter::Unit::kNanos});
+            static_cast<int64_t>(lockedSpillStats->spillReadTimeNanos)});
   }
 
-  if (lockedSpillStats->spillDeserializationTimeUs != 0) {
+  if (lockedSpillStats->spillDeserializationTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillDeserializationTime,
-        RuntimeCounter{
-            static_cast<int64_t>(lockedSpillStats->spillDeserializationTimeUs) *
-                Timestamp::kNanosecondsInMicrosecond,
-            RuntimeCounter::Unit::kNanos});
+        RuntimeCounter{static_cast<int64_t>(
+            lockedSpillStats->spillDeserializationTimeNanos)});
   }
   lockedSpillStats->reset();
 }
@@ -563,15 +544,19 @@ void Operator::MemoryReclaimer::enterArbitration() {
   }
 
   Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
-  if (auto opDriver = ensureDriver()) {
-    // NOTE: the current running driver might not be the driver of the operator
-    // that requests memory arbitration. The reason is that an operator might
-    // extend the buffer allocated from the other operator either from the same
-    // or different drivers. But they must be from the same task.
-    VELOX_CHECK_EQ(
-        runningDriver->task()->taskId(),
-        opDriver->task()->taskId(),
-        "The current running driver and the request driver must be from the same task");
+  if (!FLAGS_velox_memory_pool_capacity_transfer_across_tasks) {
+    if (auto opDriver = ensureDriver()) {
+      // NOTE: the current running driver might not be the driver of the
+      // operator that requests memory arbitration. The reason is that an
+      // operator might extend the buffer allocated from the other operator
+      // either from the same or different drivers. But they must be from the
+      // same task as the following check. User could set
+      // FLAGS_transferred_arbitration_allowed=true to bypass this check.
+      VELOX_CHECK_EQ(
+          runningDriver->task()->taskId(),
+          opDriver->task()->taskId(),
+          "The current running driver and the request driver must be from the same task");
+    }
   }
   if (runningDriver->task()->enterSuspended(runningDriver->state()) !=
       StopReason::kNone) {
@@ -589,11 +574,13 @@ void Operator::MemoryReclaimer::leaveArbitration() noexcept {
     return;
   }
   Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
-  if (auto opDriver = ensureDriver()) {
-    VELOX_CHECK_EQ(
-        runningDriver->task()->taskId(),
-        opDriver->task()->taskId(),
-        "The current running driver and the request driver must be from the same task");
+  if (!FLAGS_velox_memory_pool_capacity_transfer_across_tasks) {
+    if (auto opDriver = ensureDriver()) {
+      VELOX_CHECK_EQ(
+          runningDriver->task()->taskId(),
+          opDriver->task()->taskId(),
+          "The current running driver and the request driver must be from the same task");
+    }
   }
   runningDriver->task()->leaveSuspended(runningDriver->state());
 }
@@ -637,8 +624,11 @@ uint64_t Operator::MemoryReclaimer::reclaim(
       "facebook::velox::exec::Operator::MemoryReclaimer::reclaim", pool);
 
   // NOTE: we can't reclaim memory from an operator which is under
+  // non-reclaimable section, except for HashBuild operator. If it is HashBuild
+  // operator, we allow it to enter HashBuild::reclaim because there is a good
+  // chance we can release some unused reserved memory even if it's in
   // non-reclaimable section.
-  if (op_->nonReclaimableSection_) {
+  if (op_->nonReclaimableSection_ && op_->operatorType() != "HashBuild") {
     // TODO: reduce the log frequency if it is too verbose.
     ++stats.numNonReclaimableAttempts;
     RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);

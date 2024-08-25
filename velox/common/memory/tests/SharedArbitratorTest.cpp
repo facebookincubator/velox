@@ -226,7 +226,7 @@ class FakeMemoryOperatorFactory : public Operator::PlanNodeTranslator {
   uint32_t maxDrivers_{1};
 };
 
-class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
+class SharedArbitrationTestBase : public exec::test::HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
     exec::test::HiveConnectorTestBase::SetUpTestCase();
@@ -252,7 +252,6 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     fuzzerOpts_.stringLength = 1024;
     fuzzerOpts_.allowLazyVector = false;
     vector_ = makeRowVector(rowType_, fuzzerOpts_);
-    executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(32);
     numAddedPools_ = 0;
   }
 
@@ -279,7 +278,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
       VELOX_CHECK_EQ(
           stats.customStats.count(SharedArbitrator::kGlobalArbitrationCount),
           1);
-      VELOX_CHECK_EQ(
+      VELOX_CHECK_GE(
           stats.customStats.at(SharedArbitrator::kGlobalArbitrationCount).sum,
           1);
       VELOX_CHECK_EQ(
@@ -298,11 +297,53 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
 
   static inline FakeMemoryOperatorFactory* fakeOperatorFactory_;
   std::unique_ptr<memory::MemoryManager> memoryManager_;
-  SharedArbitrator* arbitrator_;
+  SharedArbitrator* arbitrator_{nullptr};
   RowTypePtr rowType_;
   VectorFuzzer::Options fuzzerOpts_;
   RowVectorPtr vector_;
   std::atomic_uint64_t numAddedPools_{0};
+};
+
+namespace {
+std::unique_ptr<folly::Executor> newMultiThreadedExecutor() {
+  return std::make_unique<folly::CPUThreadPoolExecutor>(32);
+}
+
+struct TestParam {
+  bool isSingleThreaded{false};
+};
+} // namespace
+
+/// A test fixture that runs cases within multi-threaded execution mode.
+class SharedArbitrationTest : public SharedArbitrationTestBase {
+ protected:
+  void SetUp() override {
+    SharedArbitrationTestBase::SetUp();
+    executor_ = newMultiThreadedExecutor();
+  }
+};
+/// A test fixture that runs cases within both single-threaded and
+/// multi-threaded execution modes.
+class SharedArbitrationTestWithThreadingModes
+    : public testing::WithParamInterface<TestParam>,
+      public SharedArbitrationTestBase {
+ public:
+  static std::vector<TestParam> getTestParams() {
+    return std::vector<TestParam>({{false}, {true}});
+  }
+
+ protected:
+  void SetUp() override {
+    SharedArbitrationTestBase::SetUp();
+    isSingleThreaded_ = GetParam().isSingleThreaded;
+    if (isSingleThreaded_) {
+      executor_ = nullptr;
+    } else {
+      executor_ = newMultiThreadedExecutor();
+    }
+  }
+
+  bool isSingleThreaded_{false};
 };
 
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, queryArbitrationStateCheck) {
@@ -430,7 +471,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, skipNonReclaimableTaskTest) {
   ASSERT_EQ(taskPausedCount, 1);
 }
 
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
+DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -495,6 +536,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(orderByQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
@@ -511,6 +553,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -526,12 +569,13 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
     const auto newStats = arbitrator_->stats();
     ASSERT_GT(newStats.numReclaimedBytes, oldStats.numReclaimedBytes);
     ASSERT_GT(newStats.reclaimTimeUs, oldStats.reclaimTimeUs);
-    ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
     ASSERT_GT(orderByQueryCtx->pool()->stats().numCapacityGrowths, 0);
   }
 }
 
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
+DEBUG_ONLY_TEST_P(
+    SharedArbitrationTestWithThreadingModes,
+    reclaimToAggregation) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -596,6 +640,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(aggregationQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
@@ -613,6 +658,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -629,11 +675,12 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
     const auto newStats = arbitrator_->stats();
     ASSERT_GT(newStats.numReclaimedBytes, oldStats.numReclaimedBytes);
     ASSERT_GT(newStats.reclaimTimeUs, oldStats.reclaimTimeUs);
-    ASSERT_EQ(newStats.numReserves, numAddedPools_);
   }
 }
 
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
+DEBUG_ONLY_TEST_P(
+    SharedArbitrationTestWithThreadingModes,
+    reclaimToJoinBuilder) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -699,6 +746,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(joinQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder(planNodeIdGenerator)
                         .values(vectors)
                         .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
@@ -726,6 +774,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
+              .singleThreaded(isSingleThreaded_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -742,7 +791,6 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
     const auto newStats = arbitrator_->stats();
     ASSERT_GT(newStats.numReclaimedBytes, oldStats.numReclaimedBytes);
     ASSERT_GT(newStats.reclaimTimeUs, oldStats.reclaimTimeUs);
-    ASSERT_EQ(arbitrator_->stats().numReserves, numAddedPools_);
   }
 }
 
@@ -1289,10 +1337,8 @@ TEST_F(SharedArbitrationTest, reserveReleaseCounters) {
         threads.emplace_back([&]() {
           {
             std::lock_guard<std::mutex> l(mutex);
-            auto oldNum = arbitrator_->stats().numReserves;
             queries.emplace_back(
                 newQueryCtx(memoryManager_.get(), executor_.get()));
-            ASSERT_EQ(arbitrator_->stats().numReserves, oldNum + 1);
           }
         });
       }
@@ -1300,13 +1346,17 @@ TEST_F(SharedArbitrationTest, reserveReleaseCounters) {
       for (auto& queryThread : threads) {
         queryThread.join();
       }
-      ASSERT_EQ(arbitrator_->stats().numReserves, numRootPools);
-      ASSERT_EQ(arbitrator_->stats().numReleases, 0);
+      ASSERT_EQ(arbitrator_->stats().numShrinks, 0);
     }
-    ASSERT_EQ(arbitrator_->stats().numReserves, numRootPools);
-    ASSERT_EQ(arbitrator_->stats().numReleases, numRootPools);
+    ASSERT_EQ(arbitrator_->stats().numShrinks, numRootPools);
   }
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    SharedArbitrationTestWithThreadingModes,
+    SharedArbitrationTestWithThreadingModes,
+    testing::ValuesIn(
+        SharedArbitrationTestWithThreadingModes::getTestParams()));
 } // namespace facebook::velox::memory
 
 int main(int argc, char** argv) {

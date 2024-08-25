@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/common/compression/Compression.h"
-#include "velox/core/Config.h"
+#include "velox/common/config/Config.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/FlushPolicy.h"
@@ -109,6 +109,8 @@ struct WriterOptions : public dwio::common::WriterOptions {
   /// Timestamp unit for Parquet write through Arrow bridge.
   /// Default if not specified: TimestampUnit::kNano (9).
   std::optional<TimestampUnit> parquetWriteTimestampUnit;
+  /// Timestamp time zone for Parquet write through Arrow bridge.
+  std::optional<std::string> parquetWriteTimestampTimeZone;
   bool writeInt96AsTimestamp = false;
 
   // Parsing session and hive configs.
@@ -121,8 +123,9 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.timestamp-unit";
 
   // Process hive connector and session configs.
-  void processSessionConfigs(const Config& config) override;
-  void processHiveConnectorConfigs(const Config& config) override;
+  void processConfigs(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) override;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.

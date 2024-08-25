@@ -15,11 +15,11 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
-#include "velox/core/Config.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/DataBuffer.h"
 
@@ -377,6 +377,10 @@ class S3WriteFile::Impl {
       request.SetContentLength(part.size());
       request.SetBody(
           std::make_shared<StringViewStream>(part.data(), part.size()));
+      // The default algorithm used is MD5. However, MD5 is not supported with
+      // fips and can cause a SIGSEGV. Set CRC32 instead which is a standard for
+      // checksum computation and is not restricted by fips.
+      request.SetChecksumAlgorithm(Aws::S3::Model::ChecksumAlgorithm::CRC32);
       auto outcome = client_->UploadPart(request);
       VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to upload", bucket_, key_);
       // Append ETag and part number for this uploaded part.
@@ -438,7 +442,7 @@ struct AwsInstance {
   }
 
   // Returns true iff the instance was newly initialized with config.
-  bool initialize(const Config* config) {
+  bool initialize(const config::ConfigBase* config) {
     if (isFinalized_.load()) {
       VELOX_FAIL("Attempt to initialize S3 after it has been finalized.");
     }
@@ -476,9 +480,9 @@ struct AwsInstance {
   }
 
  private:
-  void doInitialize(const Config* config) {
+  void doInitialize(const config::ConfigBase* config) {
     std::shared_ptr<HiveConfig> hiveConfig = std::make_shared<HiveConfig>(
-        std::make_shared<core::MemConfig>(config->values()));
+        std::make_shared<config::ConfigBase>(config->rawConfigsCopy()));
     awsOptions_.loggingOptions.logLevel =
         inferS3LogLevel(hiveConfig->s3GetLogLevel());
     // In some situations, curl triggers a SIGPIPE signal causing the entire
@@ -503,7 +507,7 @@ AwsInstance* getAwsInstance() {
   return instance.get();
 }
 
-bool initializeS3(const Config* config) {
+bool initializeS3(const config::ConfigBase* config) {
   return getAwsInstance()->initialize(config);
 }
 
@@ -516,9 +520,9 @@ void finalizeS3() {
 
 class S3FileSystem::Impl {
  public:
-  Impl(const Config* config) {
+  Impl(const config::ConfigBase* config) {
     hiveConfig_ = std::make_shared<HiveConfig>(
-        std::make_shared<core::MemConfig>(config->values()));
+        std::make_shared<config::ConfigBase>(config->rawConfigsCopy()));
     VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
     Aws::Client::ClientConfiguration clientConfig;
     clientConfig.endpointOverride = hiveConfig_->s3Endpoint();
@@ -546,7 +550,7 @@ class S3FileSystem::Impl {
     if (hiveConfig_->s3ConnectTimeout().has_value()) {
       clientConfig.connectTimeoutMs =
           std::chrono::duration_cast<std::chrono::milliseconds>(
-              facebook::velox::core::toDuration(
+              facebook::velox::config::toDuration(
                   hiveConfig_->s3ConnectTimeout().value()))
               .count();
     }
@@ -554,7 +558,7 @@ class S3FileSystem::Impl {
     if (hiveConfig_->s3SocketTimeout().has_value()) {
       clientConfig.requestTimeoutMs =
           std::chrono::duration_cast<std::chrono::milliseconds>(
-              facebook::velox::core::toDuration(
+              facebook::velox::config::toDuration(
                   hiveConfig_->s3SocketTimeout().value()))
               .count();
     }
@@ -714,7 +718,7 @@ class S3FileSystem::Impl {
   std::shared_ptr<Aws::S3::S3Client> client_;
 };
 
-S3FileSystem::S3FileSystem(std::shared_ptr<const Config> config)
+S3FileSystem::S3FileSystem(std::shared_ptr<const config::ConfigBase> config)
     : FileSystem(config) {
   impl_ = std::make_shared<Impl>(config.get());
 }

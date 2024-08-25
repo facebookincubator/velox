@@ -151,7 +151,7 @@ class SelectiveColumnReader {
   /**
    * Read the next group of values into a RowVector.
    * @param numValues the number of values to read
-   * @param vector to read into
+   * @param result vector to read into
    */
   virtual void
   next(uint64_t /*numValues*/, VectorPtr& /*result*/, const Mutation*) {
@@ -477,11 +477,15 @@ class SelectiveColumnReader {
   template <typename T>
   void filterNulls(RowSet rows, bool isNull, bool extractValues);
 
-  // Temporary method for estimate in-memory row size (number of bits) of this
-  // column for Nimble.  Will be removed once column statistics are added for
-  // Nimble.
-  virtual std::optional<size_t> estimatedRowBitSize() const {
-    return std::nullopt;
+  // Temporary method for estimate total in-memory byte size and row count of
+  // current encoding chunk on this column for Nimble.  Will be removed once
+  // column statistics are added for Nimble.  Note that the estimations are
+  // based on current encoding chunk, so in multi-chunk stripe this is not
+  // accurate.  Other formats should not use this.
+  virtual bool estimateMaterializedSize(
+      size_t& /*byteSize*/,
+      size_t& /*rowCount*/) const {
+    return false;
   }
 
   StringView copyStringValueIfNeed(folly::StringPiece value) {
@@ -544,16 +548,13 @@ class SelectiveColumnReader {
   template <typename T, typename TVector>
   void compactScalarValues(RowSet rows, bool isFinal);
 
-  // Compacts values extracted for a complex type column with
-  // filter. The values for 'rows' are shifted to be consecutive at
-  // indices [0..rows.size() - 1]'. 'move' is a function that takes
-  // two indices source and target and moves the value at source to
-  // target. target is <= source for all calls.
-  template <typename Move>
-  void compactComplexValues(RowSet rows, Move move, bool isFinal);
-
   template <typename T, typename TVector>
   void upcastScalarValues(RowSet rows);
+
+  // For complex type column, we need to compact only nulls if the rows are
+  // shrinked.  Child fields are handled recursively in their own column
+  // readers.
+  void setComplexNulls(RowSet rows, VectorPtr& result) const;
 
   // Return the source null bits if compactScalarValues and upcastScalarValues
   // should move null flags.  Return nullptr if nulls does not need to be moved.
@@ -730,10 +731,19 @@ velox::common::AlwaysTrue& alwaysTrue();
 } // namespace facebook::velox::dwio::common
 
 namespace facebook::velox::dwio::common {
+
 // Template parameter to indicate no hook in fast scan path. This is
 // referenced in decoders, thus needs to be declared in a header.
-struct NoHook : public ValueHook {
-  void addValue(vector_size_t /*row*/, const void* /*value*/) override {}
+struct NoHook final : public ValueHook {
+  void addValue(vector_size_t /*row*/, int64_t /*value*/) final {}
+
+  void addValue(vector_size_t /*row*/, int128_t /*value*/) final {}
+
+  void addValue(vector_size_t /*row*/, float /*value*/) final {}
+
+  void addValue(vector_size_t /*row*/, double /*value*/) final {}
+
+  void addValue(vector_size_t /*row*/, folly::StringPiece /*value*/) final {}
 };
 
 } // namespace facebook::velox::dwio::common

@@ -19,9 +19,9 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveConnector.h" // @manual
 #include "velox/core/QueryCtx.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
@@ -46,7 +46,9 @@ class ParquetWriterTest : public ParquetTestBase {
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                kHiveConnectorId, std::make_shared<core::MemConfig>());
+                kHiveConnectorId,
+                std::make_shared<config::ConfigBase>(
+                    std::unordered_map<std::string, std::string>()));
     connector::registerConnector(hiveConnector);
     parquet::registerParquetWriterFactory();
   }
@@ -150,6 +152,36 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
                 std::dynamic_pointer_cast<::arrow::TimestampType>(
                     arrowSchema->field(0)->type());
             ASSERT_EQ(tsType->unit(), ::arrow::TimeUnit::MICRO);
+            ASSERT_EQ(tsType->timezone(), "America/Los_Angeles");
+          })));
+
+  const auto data = makeRowVector({makeFlatVector<Timestamp>(
+      10'000, [](auto row) { return Timestamp(row, row); })});
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+  writerOptions.parquetWriteTimestampUnit = TimestampUnit::kMicro;
+  writerOptions.parquetWriteTimestampTimeZone = "America/Los_Angeles";
+
+  // Create an in-memory writer.
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, ROW({"c0"}, {TIMESTAMP()}));
+  writer->write(data);
+  writer->close();
+};
+
+TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::parquet::Writer::write",
+      std::function<void(const ::arrow::Schema*)>(
+          ([&](const ::arrow::Schema* arrowSchema) {
+            const auto tsType =
+                std::dynamic_pointer_cast<::arrow::TimestampType>(
+                    arrowSchema->field(0)->type());
+            ASSERT_EQ(tsType->unit(), ::arrow::TimeUnit::MICRO);
+            ASSERT_EQ(tsType->timezone(), "");
           })));
 
   const auto data = makeRowVector({makeFlatVector<Timestamp>(

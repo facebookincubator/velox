@@ -35,6 +35,9 @@ struct ByteRange {
   /// Index of next byte/bit to be read/written in 'buffer'.
   int32_t position;
 
+  /// Returns the available bytes left in this range.
+  uint32_t availableBytes() const;
+
   std::string toString() const;
 };
 
@@ -91,64 +94,29 @@ class OStreamOutputStream : public OutputStream {
   std::ostream* out_;
 };
 
-/// Read-only stream over one or more byte buffers.
+/// Read-only byte input stream interface.
 class ByteInputStream {
- protected:
-  /// TODO Remove after refactoring SpillInput.
-  ByteInputStream() {}
-
  public:
-  explicit ByteInputStream(std::vector<ByteRange> ranges)
-      : ranges_{std::move(ranges)} {
-    VELOX_CHECK(!ranges_.empty());
-    current_ = &ranges_[0];
-  }
-
-  /// Disable copy constructor.
-  ByteInputStream(const ByteInputStream&) = delete;
-
-  /// Disable copy assignment operator.
-  ByteInputStream& operator=(const ByteInputStream& other) = delete;
-
-  /// Enable move constructor.
-  ByteInputStream(ByteInputStream&& other) noexcept
-      : ranges_{std::move(other.ranges_)}, current_{other.current_} {}
-
-  /// Enable move assignment operator.
-  ByteInputStream& operator=(ByteInputStream&& other) noexcept {
-    if (this != &other) {
-      ranges_ = std::move(other.ranges_);
-      current_ = other.current_;
-      other.current_ = nullptr;
-    }
-    return *this;
-  }
-
-  /// TODO Remove after refactoring SpillInput.
   virtual ~ByteInputStream() = default;
 
   /// Returns total number of bytes available in the stream.
-  size_t size() const;
+  virtual size_t size() const = 0;
 
   /// Returns true if all input has been read.
-  ///
-  /// TODO: Remove 'virtual' after refactoring SpillInput.
-  virtual bool atEnd() const;
+  virtual bool atEnd() const = 0;
 
   /// Returns current position (number of bytes from the start) in the stream.
-  std::streampos tellp() const;
+  virtual std::streampos tellp() const = 0;
 
   /// Moves current position to specified one.
-  void seekp(std::streampos pos);
+  virtual void seekp(std::streampos pos) = 0;
 
   /// Returns the remaining size left from current reading position.
-  size_t remainingSize() const;
+  virtual size_t remainingSize() const = 0;
 
-  std::string toString() const;
+  virtual uint8_t readByte() = 0;
 
-  uint8_t readByte();
-
-  void readBytes(uint8_t* bytes, int32_t size);
+  virtual void readBytes(uint8_t* bytes, int32_t size) = 0;
 
   template <typename T>
   T read() {
@@ -157,9 +125,9 @@ class ByteInputStream {
       return *reinterpret_cast<const T*>(
           current_->buffer + current_->position - sizeof(T));
     }
-    // The number straddles two buffers. We read byte by byte and make
-    // a little-endian uint64_t. The bytes can be cast to any integer
-    // or floating point type since the wire format has the machine byte order.
+    // The number straddles two buffers. We read byte by byte and make a
+    // little-endian uint64_t. The bytes can be cast to any integer or floating
+    // point type since the wire format has the machine byte order.
     static_assert(sizeof(T) <= sizeof(uint64_t));
     uint64_t value = 0;
     for (int32_t i = 0; i < sizeof(T); ++i) {
@@ -173,40 +141,79 @@ class ByteInputStream {
     readBytes(reinterpret_cast<uint8_t*>(data), size);
   }
 
-  /// Returns a view over the read buffer for up to 'size' next
-  /// bytes. The size of the value may be less if the current byte
-  /// range ends within 'size' bytes from the current position.  The
-  /// size will be 0 if at end.
-  std::string_view nextView(int32_t size);
+  /// Returns a view over the read buffer for up to 'size' next bytes. The size
+  /// of the value may be less if the current byte range ends within 'size'
+  /// bytes from the current position.  The size will be 0 if at end.
+  virtual std::string_view nextView(int32_t size) = 0;
 
-  void skip(int32_t size);
+  virtual void skip(int32_t size) = 0;
+
+  virtual std::string toString() const = 0;
 
  protected:
-  /// Sets 'current_' to point to the next range of input.  // The
-  /// input is consecutive ByteRanges in 'ranges_' for the base class
-  /// but any view over external buffers can be made by specialization.
-  ///
-  /// TODO: Remove 'virtual' after refactoring SpillInput.
-  virtual void next(bool throwIfPastEnd = true);
+  // Points to the current buffered byte range.
+  ByteRange* current_{nullptr};
+  std::vector<ByteRange> ranges_;
+};
 
-  // TODO: Remove  after refactoring SpillInput.
+/// Read-only input stream backed by a set of buffers.
+class BufferInputStream : public ByteInputStream {
+ public:
+  explicit BufferInputStream(std::vector<ByteRange> ranges) {
+    VELOX_CHECK(!ranges.empty(), "Empty BufferInputStream");
+    ranges_ = std::move(ranges);
+    current_ = &ranges_[0];
+  }
+
+  BufferInputStream(const BufferInputStream&) = delete;
+  BufferInputStream& operator=(const BufferInputStream& other) = delete;
+  BufferInputStream(BufferInputStream&& other) noexcept = delete;
+  BufferInputStream& operator=(BufferInputStream&& other) noexcept = delete;
+
+  size_t size() const override;
+
+  bool atEnd() const override;
+
+  std::streampos tellp() const override;
+
+  void seekp(std::streampos pos) override;
+
+  size_t remainingSize() const override;
+
+  uint8_t readByte() override;
+
+  void readBytes(uint8_t* bytes, int32_t size) override;
+
+  std::string_view nextView(int32_t size) override;
+
+  void skip(int32_t size) override;
+
+  std::string toString() const override;
+
+ private:
+  // Sets 'current_' to the next range of input. The input is consecutive
+  // ByteRanges in 'ranges_' for the base class but any view over external
+  // buffers can be made by specialization.
+  void nextRange();
+
   const std::vector<ByteRange>& ranges() const {
     return ranges_;
   }
-
-  // TODO: Remove  after refactoring SpillInput.
-  void setRange(ByteRange range) {
-    ranges_.resize(1);
-    ranges_[0] = range;
-    current_ = ranges_.data();
-  }
-
- private:
-  std::vector<ByteRange> ranges_;
-
-  // Pointer to the current element of 'ranges_'.
-  ByteRange* current_{nullptr};
 };
+
+template <>
+inline Timestamp ByteInputStream::read<Timestamp>() {
+  Timestamp value;
+  readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
+  return value;
+}
+
+template <>
+inline int128_t ByteInputStream::read<int128_t>() {
+  int128_t value;
+  readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
+  return value;
+}
 
 /// Stream over a chain of ByteRanges. Provides read, write and
 /// comparison for equality between stream contents and memory. Used
@@ -268,9 +275,8 @@ class ByteOutputStream {
 
   void seekp(std::streampos position);
 
-  /// Returns the size written into ranges_. This is the sum of the
-  /// capacities of non-last ranges + the greatest write position of
-  /// the last range.
+  /// Returns the size written into ranges_. This is the sum of the capacities
+  /// of non-last ranges + the greatest write position of the last range.
   size_t size() const;
 
   int32_t lastRangeEnd() const {
@@ -346,7 +352,7 @@ class ByteOutputStream {
 
   /// Returns a ByteInputStream to range over the current content of 'this'. The
   /// result is valid as long as 'this' is live and not changed.
-  ByteInputStream inputStream() const;
+  std::unique_ptr<ByteInputStream> inputStream() const;
 
   std::string toString() const;
 
@@ -448,20 +454,6 @@ class AppendWindow {
   ByteOutputStream& stream_;
   ScratchPtr<T> scratchPtr_;
 };
-
-template <>
-inline Timestamp ByteInputStream::read<Timestamp>() {
-  Timestamp value;
-  readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
-  return value;
-}
-
-template <>
-inline int128_t ByteInputStream::read<int128_t>() {
-  int128_t value;
-  readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
-  return value;
-}
 
 class IOBufOutputStream : public OutputStream {
  public:

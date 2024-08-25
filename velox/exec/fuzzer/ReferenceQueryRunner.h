@@ -15,14 +15,35 @@
  */
 #pragma once
 
+#include <set>
 #include "velox/core/PlanNode.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec::test {
 
 /// Query runner that uses reference database, i.e. DuckDB, Presto, Spark.
 class ReferenceQueryRunner {
  public:
+  enum class RunnerType {
+    kPrestoQueryRunner,
+    kDuckQueryRunner,
+    kSparkQueryRunner
+  };
+
+  // @param aggregatePool Used to allocate memory needed for vectors produced by
+  // 'execute' methods.
+  explicit ReferenceQueryRunner(memory::MemoryPool* aggregatePool)
+      : aggregatePool_(aggregatePool) {}
+
   virtual ~ReferenceQueryRunner() = default;
+
+  virtual RunnerType runnerType() const = 0;
+
+  // Scalar types supported by the reference database, to be used to restrict
+  // candidates when generating random types for fuzzers.
+  virtual const std::vector<TypePtr>& supportedScalarTypes() const {
+    return defaultScalarTypes();
+  }
 
   /// Converts Velox plan into SQL accepted by the reference database.
   /// @return std::nullopt if the plan uses features not supported by the
@@ -78,6 +99,14 @@ class ReferenceQueryRunner {
       const std::string& sessionProperty) {
     VELOX_UNSUPPORTED();
   }
+
+ protected:
+  memory::MemoryPool* aggregatePool() {
+    return aggregatePool_;
+  }
+
+ private:
+  memory::MemoryPool* aggregatePool_;
 };
 
 } // namespace facebook::velox::exec::test

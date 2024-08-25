@@ -36,6 +36,9 @@ struct ArrowOptions {
   bool flattenDictionary{false};
   bool flattenConstant{false};
   TimestampUnit timestampUnit = TimestampUnit::kNano;
+  std::optional<std::string> timestampTimeZone{std::nullopt};
+  // Export VARCHAR and VARBINARY to Arrow 15 StringView format
+  bool exportToStringView = false;
 };
 
 namespace facebook::velox {

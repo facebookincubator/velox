@@ -14,24 +14,24 @@
  * limitations under the License.
  */
 
-#include "velox/exec/StreamingWindowBuild.h"
+#include "velox/exec/PartitionStreamingWindowBuild.h"
 
 namespace facebook::velox::exec {
 
-StreamingWindowBuild::StreamingWindowBuild(
+PartitionStreamingWindowBuild::PartitionStreamingWindowBuild(
     const std::shared_ptr<const core::WindowNode>& windowNode,
     velox::memory::MemoryPool* pool,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection)
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection) {}
 
-void StreamingWindowBuild::buildNextPartition() {
+void PartitionStreamingWindowBuild::buildNextPartition() {
   partitionStartRows_.push_back(sortedRows_.size());
   sortedRows_.insert(sortedRows_.end(), inputRows_.begin(), inputRows_.end());
   inputRows_.clear();
 }
 
-void StreamingWindowBuild::addInput(RowVectorPtr input) {
+void PartitionStreamingWindowBuild::addInput(RowVectorPtr input) {
   for (auto i = 0; i < inputChannels_.size(); ++i) {
     decodedInputVectors_[i].decode(*input->childAt(inputChannels_[i]));
   }
@@ -53,18 +53,19 @@ void StreamingWindowBuild::addInput(RowVectorPtr input) {
   }
 }
 
-void StreamingWindowBuild::noMoreInput() {
+void PartitionStreamingWindowBuild::noMoreInput() {
   buildNextPartition();
 
   // Help for last partition related calculations.
   partitionStartRows_.push_back(sortedRows_.size());
 }
 
-std::unique_ptr<WindowPartition> StreamingWindowBuild::nextPartition() {
+std::shared_ptr<WindowPartition>
+PartitionStreamingWindowBuild::nextPartition() {
   VELOX_CHECK_GT(
       partitionStartRows_.size(), 0, "No window partitions available")
 
-  currentPartition_++;
+  ++currentPartition_;
   VELOX_CHECK_LE(
       currentPartition_,
       partitionStartRows_.size() - 2,
@@ -72,28 +73,30 @@ std::unique_ptr<WindowPartition> StreamingWindowBuild::nextPartition() {
 
   // Erase previous partition.
   if (currentPartition_ > 0) {
-    auto numPreviousPartitionRows = partitionStartRows_[currentPartition_];
+    const auto numPreviousPartitionRows =
+        partitionStartRows_[currentPartition_];
     data_->eraseRows(
         folly::Range<char**>(sortedRows_.data(), numPreviousPartitionRows));
     sortedRows_.erase(
         sortedRows_.begin(), sortedRows_.begin() + numPreviousPartitionRows);
-    for (int i = currentPartition_; i < partitionStartRows_.size(); i++) {
+    sortedRows_.shrink_to_fit();
+    for (int i = currentPartition_; i < partitionStartRows_.size(); ++i) {
       partitionStartRows_[i] =
           partitionStartRows_[i] - numPreviousPartitionRows;
     }
   }
 
-  auto partitionSize = partitionStartRows_[currentPartition_ + 1] -
+  const auto partitionSize = partitionStartRows_[currentPartition_ + 1] -
       partitionStartRows_[currentPartition_];
-  auto partition = folly::Range(
+  const auto partition = folly::Range(
       sortedRows_.data() + partitionStartRows_[currentPartition_],
       partitionSize);
 
-  return std::make_unique<WindowPartition>(
+  return std::make_shared<WindowPartition>(
       data_.get(), partition, inversedInputChannels_, sortKeyInfo_);
 }
 
-bool StreamingWindowBuild::hasNextPartition() {
+bool PartitionStreamingWindowBuild::hasNextPartition() {
   return partitionStartRows_.size() > 0 &&
       currentPartition_ < int(partitionStartRows_.size() - 2);
 }
