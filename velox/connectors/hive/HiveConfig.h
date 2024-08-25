@@ -295,7 +295,7 @@ class HiveConfig {
 
   bool isPartitionPathAsLowerCase(const config::ConfigBase* session) const;
 
-  bool rejectNullPartitionKeys(config::ConfigBase* session) const;
+  bool rejectNullPartitionKeys(const config::ConfigBase* session) const;
 
   bool ignoreMissingFiles(const config::ConfigBase* session) const;
 
