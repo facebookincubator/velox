@@ -48,9 +48,10 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
+  void
+  readWithVisitor(const uint64_t* nulls, Visitor visitor, int32_t numScanned) {
     if (dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
-      fastPath<hasNulls>(nulls, visitor);
+      fastPath<hasNulls>(nulls, visitor, numScanned);
       return;
     }
     int32_t current = visitor.start();
@@ -97,7 +98,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
 
  private:
   template <bool hasNulls, typename Visitor>
-  void fastPath(const uint64_t* nulls, Visitor& visitor) {
+  void fastPath(const uint64_t* nulls, Visitor& visitor, int32_t numScanned) {
     constexpr bool hasFilter =
         !std::is_same_v<typename Visitor::FilterType, common::AlwaysTrue>;
     constexpr bool hasHook =
@@ -112,7 +113,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
       if (Visitor::dense || rowsAsRange.back() == rowsAsRange.size() - 1) {
         dwio::common::nonNullRowsFromDense(nulls, numRows, *outerVector);
         if (outerVector->empty()) {
-          visitor.setAllNull(hasFilter ? 0 : numRows);
+          visitor.setAllNull(hasFilter ? numScanned : numRows + numScanned);
           return;
         }
 
@@ -120,13 +121,14 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
             outerVector->data(),
             newScatterRows,
             outerVector->size(),
-            visitor.reader().numScanned(),
+            numScanned,
             hasHook);
 
         bulkScan<hasFilter, hasHook, true>(
             folly::Range<const int32_t*>(rows, outerVector->size()),
             scatterRows,
-            visitor);
+            visitor,
+            numScanned);
       } else {
         innerVector = &visitor.innerNonNullRows();
         int32_t tailSkip = -1;
@@ -152,14 +154,16 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
             outerVector->data(),
             newScatterRows,
             outerVector->size(),
-            visitor.reader().numScanned(),
+            numScanned,
             hasHook);
 
-        bulkScan<hasFilter, hasHook, true>(*innerVector, scatterRows, visitor);
+        bulkScan<hasFilter, hasHook, true>(
+            *innerVector, scatterRows, visitor, numScanned);
         skip<false>(tailSkip, 0, nullptr);
       }
     } else {
-      bulkScan<hasFilter, hasHook, false>(rowsAsRange, nullptr, visitor);
+      bulkScan<hasFilter, hasHook, false>(
+          rowsAsRange, nullptr, visitor, numScanned);
     }
   }
 
@@ -173,7 +177,8 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
       int32_t* filterHits,
       typename Visitor::DataType* values,
       int32_t& numValues,
-      Visitor& visitor) {
+      Visitor& visitor,
+      int32_t numScanned = 0) {
     auto numBits = bitOffset_ +
         (rows[rowIndex + numRows - 1] + 1 - currentRow) * bitWidth_;
 
@@ -196,7 +201,8 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
         scatterRows,
         filterHits,
         values,
-        numValues);
+        numValues,
+        numScanned);
   }
 
   // Returns 1. how many of 'rows' are in the current run 2. the
@@ -231,7 +237,8 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
   void bulkScan(
       folly::Range<const int32_t*> nonNullRows,
       const int32_t* scatterRows,
-      Visitor& visitor) {
+      Visitor& visitor,
+      int32_t numScanned) {
     auto numAllRows = visitor.numRows();
     visitor.setRows(nonNullRows);
     auto rows = visitor.rows();
@@ -257,7 +264,8 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
               scatterRows,
               filterHits,
               values,
-              numValues);
+              numValues,
+              numScanned);
         } else {
           processRun<hasFilter, hasHook, scatter>(
               rows,
@@ -268,13 +276,15 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
               filterHits,
               values,
               numValues,
-              visitor);
+              visitor,
+              numScanned);
         }
         remainingValues_ -= numAdvanced;
         currentRow += numAdvanced;
         rowIndex += numInRun;
         if (visitor.atEnd()) {
-          visitor.setNumValues(hasFilter ? numValues : numAllRows);
+          visitor.setNumValues(
+              hasFilter ? numValues + numScanned : numAllRows + numScanned);
           return;
         }
         if (remainingValues_) {

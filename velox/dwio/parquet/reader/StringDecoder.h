@@ -41,7 +41,8 @@ class StringDecoder {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
+  void
+  readWithVisitor(const uint64_t* nulls, Visitor visitor, int32_t numScanned) {
     int32_t current = visitor.start();
     int32_t numValues = 0;
     skip<hasNulls>(current, 0, nulls);
@@ -73,7 +74,9 @@ class StringDecoder {
 
         // We are at a non-null value on a row to visit.
         toSkip = visitor.process(
-            fixedLength_ > 0 ? readFixedString() : readString(), atEnd);
+            fixedLength_ > 0 ? readFixedString() : readString(),
+            atEnd,
+            numScanned);
       }
       ++current;
       ++numValues;

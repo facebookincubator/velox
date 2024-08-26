@@ -47,6 +47,14 @@ class TestingHook : public ValueHook {
     }
   }
 
+  void addValue(vector_size_t row, int128_t value) override {
+    if constexpr (std::is_integral_v<T>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
   void addValue(vector_size_t row, float value) override {
     if constexpr (std::is_same_v<T, float>) {
       result_->set(row, value);

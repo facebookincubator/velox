@@ -263,8 +263,11 @@ class PageReader {
           !std::is_same_v<typename Visitor::DataType, folly::StringPiece> &&
               !std::is_same_v<typename Visitor::DataType, int8_t>,
           int>::type = 0>
-  void
-  callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
+  void callDecoder(
+      const uint64_t* nulls,
+      bool& nullsFromFastPath,
+      Visitor visitor,
+      int32_t numScanned) {
     if (nulls) {
       nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor) &&
           (!this->type_->type()->isLongDecimal()) &&
@@ -272,23 +275,25 @@ class PageReader {
 
       if (isDictionary()) {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
-        dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
+        dictionaryIdDecoder_->readWithVisitor<true>(
+            nulls, dictVisitor, numScanned);
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
         nullsFromFastPath = false;
         deltaBpDecoder_->readWithVisitor<true>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<true>(
-            nulls, visitor, nullsFromFastPath);
+            nulls, visitor, nullsFromFastPath, numScanned);
       }
     } else {
       if (isDictionary()) {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
-        dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
+        dictionaryIdDecoder_->readWithVisitor<false>(
+            nullptr, dictVisitor, numScanned);
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
         deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<false>(
-            nulls, visitor, !this->type_->type()->isShortDecimal());
+            nulls, visitor, !this->type_->type()->isShortDecimal(), numScanned);
       }
     }
   }
@@ -298,23 +303,28 @@ class PageReader {
       typename std::enable_if<
           std::is_same_v<typename Visitor::DataType, folly::StringPiece>,
           int>::type = 0>
-  void
-  callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
+  void callDecoder(
+      const uint64_t* nulls,
+      bool& nullsFromFastPath,
+      Visitor visitor,
+      int32_t numScanned) {
     if (nulls) {
       if (isDictionary()) {
         nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor);
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
-        dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
+        dictionaryIdDecoder_->readWithVisitor<true>(
+            nulls, dictVisitor, numScanned);
       } else {
         nullsFromFastPath = false;
-        stringDecoder_->readWithVisitor<true>(nulls, visitor);
+        stringDecoder_->readWithVisitor<true>(nulls, visitor, numScanned);
       }
     } else {
       if (isDictionary()) {
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
-        dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
+        dictionaryIdDecoder_->readWithVisitor<false>(
+            nullptr, dictVisitor, numScanned);
       } else {
-        stringDecoder_->readWithVisitor<false>(nulls, visitor);
+        stringDecoder_->readWithVisitor<false>(nulls, visitor, numScanned);
       }
     }
   }
@@ -324,8 +334,11 @@ class PageReader {
       typename std::enable_if<
           std::is_same_v<typename Visitor::DataType, int8_t>,
           int>::type = 0>
-  void
-  callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
+  void callDecoder(
+      const uint64_t* nulls,
+      bool& nullsFromFastPath,
+      Visitor visitor,
+      int32_t numScanned) {
     VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded")
     if (nulls) {
       nullsFromFastPath = false;
@@ -526,9 +539,8 @@ void PageReader::readWithVisitor(Visitor& visitor) {
   while (rowsForPage(reader, hasFilter, mayProduceNulls, pageRows, nulls)) {
     bool nullsFromFastPath = false;
     int32_t numValuesBeforePage = numRowsInReader<hasFilter>(reader);
-    reader.setNumScanned(numValuesBeforePage);
     visitor.setRows(pageRows);
-    callDecoder(nulls, nullsFromFastPath, visitor);
+    callDecoder(nulls, nullsFromFastPath, visitor, numValuesBeforePage);
     if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED &&
         deltaBpDecoder_->validValuesCount() == 0) {
       VELOX_DCHECK(
