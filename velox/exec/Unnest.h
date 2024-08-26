@@ -39,31 +39,43 @@ class Unnest : public Operator {
   bool isFinished() override;
 
  private:
-  // Generate output for 'size' input rows starting from 'start' input row.
-  // The firstRowStartSize is class member `firstRowStartSize_` and the
-  // endRowStartSize is always 0.
-  //
-  // @param start First input row to include in the output.
-  // @param size Number of input rows to include in the output.
-  // @param outputSize Pre-computed number of output rows.
-  // @param firstRowEndSize First input row output end range.
-  // @param endRowEndSize End input row output end range.
-  RowVectorPtr generateOutput(
-      vector_size_t start,
+  // Represents the range of rows to process and specify that first and last row
+  // may need to be processed partially.
+  struct RowRange {
+    // First input row to include in the output.
+    vector_size_t start;
+    // Number of input rows to include in the output.
+    vector_size_t size;
+    // First input row start processing from `firstRowStart_`end processing.
+    vector_size_t firstRowEnd;
+    // Last input row start processing from 0, end processing at index
+    // `lastRowEnd`.
+    vector_size_t lastRowEnd;
+  };
+
+  // Extract the range of rows to process.
+  // @param size The size of input RowVector.
+  // @param numElements Number of output rows to set.
+  // @param partialProcessRowStart record the next getOutput loop
+  // `firstRowStart`.
+  const RowRange extractRowRange(
       vector_size_t size,
-      vector_size_t outputSize,
-      vector_size_t firstRowEndSize,
-      vector_size_t endRowEndSize);
+      vector_size_t& numElements,
+      vector_size_t& partialProcessRowStart);
+
+  // Generate output for 'rowRange' represented rows.
+  // @param rowRange Range of rows to process.
+  // @param outputSize Pre-computed number of output rows.
+  RowVectorPtr generateOutput(
+      const RowRange& rowRange,
+      vector_size_t outputSize);
 
   // Invoked by generateOutput function above to generate the repeated output
   // columns.
   void generateRepeatedColumns(
-      vector_size_t start,
-      vector_size_t size,
+      const RowRange& rowRange,
       vector_size_t numElements,
-      std::vector<VectorPtr>& outputs,
-      vector_size_t firstRowEndSize,
-      vector_size_t endRowEndSize);
+      std::vector<VectorPtr>& outputs);
 
   struct UnnestChannelEncoding {
     BufferPtr indices;
@@ -77,19 +89,13 @@ class Unnest : public Operator {
   // Array or Map.
   const UnnestChannelEncoding generateEncodingForChannel(
       column_index_t channel,
-      vector_size_t start,
-      vector_size_t size,
-      vector_size_t numElements,
-      vector_size_t firstRowEndSize,
-      vector_size_t endRowEndSize);
+      const RowRange& rowRange,
+      vector_size_t numElements);
 
   // Invoked by generateOutput for the ordinality column.
   VectorPtr generateOrdinalityVector(
-      vector_size_t start,
-      vector_size_t size,
-      vector_size_t numElements,
-      vector_size_t firstRowEndSize,
-      vector_size_t endRowEndSize);
+      const RowRange& rowRange,
+      vector_size_t numElements);
 
   const bool withOrdinality_;
   std::vector<column_index_t> unnestChannels_;
@@ -102,7 +108,7 @@ class Unnest : public Operator {
   vector_size_t* rawMaxSizes_{nullptr};
 
   // The first input row output start range.
-  vector_size_t firstRowStartSize_ = 0;
+  vector_size_t firstRowStart_ = 0;
 
   std::vector<const vector_size_t*> rawSizes_;
   std::vector<const vector_size_t*> rawOffsets_;
