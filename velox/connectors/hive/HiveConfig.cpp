@@ -176,7 +176,7 @@ bool HiveConfig::isPartitionPathAsLowerCase(
 bool HiveConfig::allowNullPartitionKeys(
     const config::ConfigBase* session) const {
   return session->get<bool>(
-      kAllowNullPartitionKeys,
+      kAllowNullPartitionKeysSession,
       config_->get<bool>(kAllowNullPartitionKeys, true));
 }
 

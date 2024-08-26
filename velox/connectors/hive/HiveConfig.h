@@ -137,6 +137,8 @@ class HiveConfig {
 
   static constexpr const char* kAllowNullPartitionKeys =
       "allow_null_partition_keys";
+  static constexpr const char* kAllowNullPartitionKeysSession =
+      "allow_null_partition_keys";
 
   static constexpr const char* kIgnoreMissingFilesSession =
       "ignore_missing_files";
