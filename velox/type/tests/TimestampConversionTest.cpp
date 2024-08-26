@@ -162,7 +162,12 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
 }
 
 TEST(DateTimeUtilTest, extractISODayOfTheWeek) {
-  EXPECT_EQ(4, util::extractISODayOfTheWeek(std::numeric_limits<int64_t>::max()));
+  EXPECT_EQ(
+      4, util::extractISODayOfTheWeek(std::numeric_limits<int64_t>::max()));
+  EXPECT_EQ(
+      3, util::extractISODayOfTheWeek(std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(1, util::extractISODayOfTheWeek(-10));
+  EXPECT_EQ(7, util::extractISODayOfTheWeek(10));
 }
 
 TEST(DateTimeUtilTest, fromWeekOfMonthDateInvalid) {

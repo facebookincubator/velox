@@ -42,9 +42,9 @@
 
 #include "velox/type/TimestampConversion.h"
 #include <folly/Expected.h>
-#include "HugeInt.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/HugeInt.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::util {
