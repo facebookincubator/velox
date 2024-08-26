@@ -295,26 +295,4 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
   }
 }
 
-TEST_F(PartitionIdGeneratorTest, regjectNullPartitionKeys) {
-  PartitionIdGenerator IdGenerator(
-      ROW({INTEGER()}), {0}, 100, pool(), true, true);
-
-  raw_vector<uint64_t> ids;
-  auto inputWithoutNulls = makeRowVector({
-      makeFlatVector<int32_t>({1, 2}),
-  });
-
-  IdGenerator.run(inputWithoutNulls, ids);
-
-  EXPECT_TRUE(ids[0] == 0);
-  EXPECT_TRUE(ids[1] == 1);
-
-  auto input = makeRowVector({
-      makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
-  });
-
-  VELOX_ASSERT_THROW(
-      IdGenerator.run(input, ids), "Null value found at 2 in partition key c0");
-}
-
 } // namespace facebook::velox::connector::hive

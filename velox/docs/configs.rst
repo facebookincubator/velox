@@ -517,6 +517,13 @@ Each query can override the config by setting corresponding query session proper
        and also skip staging to the ssd cache. This helps to prevent the cache space pollution
        from the one-time table scan by large batch query when mixed running with interactive
        query which has high data locality.
+   * - allow_null_partition_keys
+     - allow_null_partition_keys
+     - bool
+     - true
+     - Determines whether the Hive connector allows data containing null values in partition keys.
+       If set to true, data with null partition keys will be permitted. If set to false, any
+       attempt to write data with null partition keys will be blocked.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^

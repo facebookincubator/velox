@@ -36,8 +36,7 @@ class PartitionIdGenerator {
       std::vector<column_index_t> partitionChannels,
       uint32_t maxPartitions,
       memory::MemoryPool* pool,
-      bool partitionPathAsLowerCase,
-      bool rejectNullPartitionKeys = false);
+      bool partitionPathAsLowerCase);
 
   /// Generate sequential partition IDs for input vector.
   /// @param input Input RowVector.
@@ -81,8 +80,6 @@ class PartitionIdGenerator {
   const uint32_t maxPartitions_;
 
   const bool partitionPathAsLowerCase_;
-
-  const bool rejectNullPartitionKeys_;
 
   std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
   bool hasMultiplierSet_ = false;
