@@ -1084,10 +1084,10 @@ struct ThrowsErrorsFunc {
 
 TEST_F(ArrayWriterTest, errorHandlingE2E) {
   registerFunction<ThrowsErrorsFunc, Array<Array<int64_t>>, int64_t>(
-      {"throws_errors"});
+      {"throws_errors_array"});
 
   auto result = evaluate(
-      "try(throws_errors(c0))",
+      "try(throws_errors_array(c0))",
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})}));
 
   assertEqualVectors(

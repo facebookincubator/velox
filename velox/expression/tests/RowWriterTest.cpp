@@ -563,10 +563,10 @@ TEST_F(RowWriterTest, errorHandlingE2E) {
   registerFunction<
       ThrowsErrorsFunc,
       Row<int64_t, Varchar, Array<float>, Map<int32_t, double>>,
-      int64_t>({"throws_errors"});
+      int64_t>({"throws_errors_row"});
 
   auto result = evaluate(
-      "try(throws_errors(c0))",
+      "try(throws_errors_row(c0))",
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})}));
 
   auto field1 = makeFlatVector<int64_t>({1, 0, 3, 0, 5, 0});
