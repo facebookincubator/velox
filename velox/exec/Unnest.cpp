@@ -154,15 +154,16 @@ const Unnest::RowRange Unnest::extractRowRange(
   vector_size_t firstRowEnd = rawMaxSizes_[nextInputRow_];
   vector_size_t lastRowEnd = -1;
   // May split the first row and the last row, not split middle rows.
-  // If there is only 1 row, the end row will not take effect, its start is
-  // always 0.
+  // The end row related variables firstRowEnd and lastRowEnd will not be used
+  // if there is just one row, its start is always 0.
   for (auto row = nextInputRow_; row < size; ++row) {
     bool isFirstRow = (row == nextInputRow_);
     vector_size_t remainingSize =
         isFirstRow ? firstRowEnd - firstRowStart_ : rawMaxSizes_[row];
     if (numElements + remainingSize > maxOutputSize_) {
-      // Single row's output is into multiple batches.
-      // Read the size range from them, not use 0 to rawMaxSizes_[row].
+      // Single row's output is divided into multiple batches.
+      // Computes the row range to process the first and last row
+      // partially instead of 0 to rawMaxSizes_[row].
       if (isFirstRow) {
         firstRowEnd = firstRowStart_ + maxOutputSize_ - numElements;
         partialProcessRowStart = firstRowEnd;
