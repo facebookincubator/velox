@@ -261,10 +261,12 @@ void SplitReader::createReader(
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);
 
   auto& fileType = baseReader_->rowType();
-  auto columnTypes = adaptColumns(fileType, baseReaderOpts_.fileSchema());
+  auto columnTypes =
+      adaptColumns(fileType, baseReaderOpts_.fileSchema(), rowIndexColumn);
   auto columnNames = fileType->names();
   if (rowIndexColumn != nullptr) {
-    setRowIndexColumn(rowIndexColumn);
+    bool isExplicit = scanSpec_->childByName(rowIndexColumn->name()) != nullptr;
+    setRowIndexColumn(rowIndexColumn, isExplicit);
   }
   configureRowReaderOptions(
       hiveTableHandle_->tableParameters(),
@@ -311,17 +313,20 @@ void SplitReader::createRowReader() {
 }
 
 void SplitReader::setRowIndexColumn(
-    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn) {
+    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn,
+    bool isExplicit) {
   dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
   rowNumberColumnInfo.insertPosition =
       readerOutputType_->getChildIdx(rowIndexColumn->name());
   rowNumberColumnInfo.name = rowIndexColumn->name();
+  rowNumberColumnInfo.isExplicit = isExplicit;
   baseRowReaderOpts_.setRowNumberColumnInfo(std::move(rowNumberColumnInfo));
 }
 
 std::vector<TypePtr> SplitReader::adaptColumns(
     const RowTypePtr& fileType,
-    const std::shared_ptr<const velox::RowType>& tableSchema) {
+    const std::shared_ptr<const velox::RowType>& tableSchema,
+    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn) {
   // Keep track of schema types for columns in file, used by ColumnSelector.
   std::vector<TypePtr> columnTypes = fileType->children();
 
@@ -364,6 +369,9 @@ std::vector<TypePtr> SplitReader::adaptColumns(
           1,
           connectorQueryCtx_->memoryPool());
       childSpec->setConstantValue(constant);
+    } else if (
+        rowIndexColumn != nullptr && fieldName == rowIndexColumn->name()) {
+      childSpec->setExplicitRowNumber(true);
     } else {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       if (!fileTypeIdx.has_value()) {

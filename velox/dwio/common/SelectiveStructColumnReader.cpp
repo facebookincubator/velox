@@ -129,8 +129,7 @@ void SelectiveStructColumnReaderBase::next(
     resultRowVector->unsafeResize(numValues);
 
     for (auto& childSpec : scanSpec_->children()) {
-      VELOX_CHECK(childSpec->isConstant());
-      if (childSpec->projectOut()) {
+      if (childSpec->projectOut() && childSpec->isConstant()) {
         const auto channel = childSpec->channel();
         resultRowVector->childAt(channel) = BaseVector::wrapInConstant(
             numValues, 0, childSpec->constantValue());
@@ -201,6 +200,10 @@ void SelectiveStructColumnReaderBase::read(
       continue;
     }
 
+    if (childSpec->isExplicitRowNumber()) {
+      continue;
+    }
+
     const auto fieldIndex = childSpec->subscript();
     auto* reader = children_.at(fieldIndex);
     if (reader->isTopLevel() && childSpec->projectOut() &&
@@ -254,6 +257,10 @@ void SelectiveStructColumnReaderBase::recordParentNullsInChildren(
     if (isChildConstant(*childSpec)) {
       continue;
     }
+    if (childSpec->isExplicitRowNumber()) {
+      continue;
+    }
+
     const auto fieldIndex = childSpec->subscript();
     auto* reader = children_.at(fieldIndex);
     reader->addParentNulls(
@@ -401,6 +408,10 @@ void SelectiveStructColumnReaderBase::getValues(
       continue;
     }
 
+    if (childSpec->isExplicitRowNumber()) {
+      // Row number data is generated after, skip data loading for it.
+      continue;
+    }
     const auto channel = childSpec->channel();
     auto& childResult = resultRow->childAt(channel);
     if (childSpec->isConstant()) {

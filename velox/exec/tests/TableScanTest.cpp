@@ -4802,6 +4802,67 @@ TEST_F(TableScanTest, dynamicFilters) {
       .assertResults(makeRowVector({makeFlatVector<int64_t>(0)}));
 }
 
+TEST_F(TableScanTest, dynamicFilterWithRowIndexColumn) {
+  // This test ensures dynamic filters can be mapped to correct field when there
+  // is row_index column.
+  auto aVector =
+      makeRowVector({"a"}, {makeFlatVector<int64_t>(10, folly::identity)});
+  auto bVector = makeRowVector({"b"}, {makeFlatVector<int64_t>(10, [](auto i) {
+                                 if (i < 5) {
+                                   return i;
+                                 } else {
+                                   return 10 + i;
+                                 }
+                               })});
+  auto resVector = makeRowVector(
+      {"row_index", "a"},
+      {makeFlatVector<int64_t>(5, folly::identity),
+       makeFlatVector<int64_t>(5, folly::identity)});
+  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+      assignments;
+  assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
+      "a",
+      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT());
+  assignments["row_index"] =
+      std::make_shared<connector::hive::HiveColumnHandle>(
+          "row_index",
+          connector::hive::HiveColumnHandle::ColumnType::kRowIndex,
+          BIGINT(),
+          BIGINT());
+  std::shared_ptr<TempFilePath> files[2];
+  files[0] = TempFilePath::create();
+  writeToFile(files[0]->getPath(), {aVector});
+  files[1] = TempFilePath::create();
+  writeToFile(files[1]->getPath(), {bVector});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId aScanId;
+  core::PlanNodeId bScanId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      ROW({"row_index", "a"}, {BIGINT(), BIGINT()}),
+                      {},
+                      "",
+                      nullptr,
+                      assignments)
+                  .capturePlanNodeId(aScanId)
+                  .hashJoin(
+                      {"a"},
+                      {"b"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .tableScan(ROW({"b"}, {BIGINT()}))
+                          .capturePlanNodeId(bScanId)
+                          .planNode(),
+                      "", /*filter*/
+                      {"row_index", "a"})
+                  .planNode();
+  AssertQueryBuilder(plan)
+      .split(aScanId, makeHiveConnectorSplit(files[0]->getPath()))
+      .split(bScanId, makeHiveConnectorSplit(files[1]->getPath()))
+      .assertResults(resVector);
+}
+
 // TODO: re-enable this test once we add back driver suspension support for
 // table scan.
 TEST_F(TableScanTest, DISABLED_memoryArbitrationWithSlowTableScan) {
