@@ -227,6 +227,8 @@ std::string toConstantSql(const core::ConstantTypedExprPtr& constant) {
   } else if (constant->type()->isVarchar()) {
     if (isJsonType(constant->type())) {
       sql << "json ";
+    } else {
+      sql << "varchar ";
     }
     sql << "'" << escape(constant->valueVector()->toString(0)) << "'";
   } else if (constant->type()->isVarbinary()) {

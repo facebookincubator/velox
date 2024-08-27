@@ -1058,7 +1058,10 @@ core::TypedExprPtr ExpressionFuzzer::generateExpression(
       }
     }
     if (functionTransformer != options_.functionTransformers.end()) {
-      expression = functionTransformer->second->transform(std::move(expression));
+      if (expression) {
+        expression =
+            functionTransformer->second->transform(std::move(expression));
+      }
       state.remainingLevelOfNesting_ += functionTransformer->second->extraLevelOfNesting();
     }
   }
@@ -1358,11 +1361,11 @@ void ExpressionFuzzer::ExprBank::insert(const core::TypedExprPtr& expression) {
   auto typeString = expression->type()->toString();
   if (typeToExprsByLevel_.find(typeString) == typeToExprsByLevel_.end()) {
     typeToExprsByLevel_.insert(
-        {typeString, ExprsIndexedByLevel(maxLevelOfNesting_ + 1)});
+        {typeString, ExprsIndexedByLevel(maxLevelOfNesting_ + 2)});
   }
   auto& expressionsByLevel = typeToExprsByLevel_[typeString];
   int nestingLevel = getNestedLevel(expression);
-  VELOX_CHECK_LE(nestingLevel, maxLevelOfNesting_);
+  VELOX_CHECK_LE(nestingLevel, maxLevelOfNesting_ + 1);
   expressionsByLevel[nestingLevel].push_back(expression);
 }
 

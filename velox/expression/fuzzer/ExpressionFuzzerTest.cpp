@@ -59,23 +59,21 @@ using facebook::velox::TypePtr;
 
 class SortArrayTransformer : public ExprTransformer {
  public:
-  /*virtual bool isSupported(const TypePtr& type) const {
-    return !containsMap(type);
-  }*/
-
   virtual TypedExprPtr transform(TypedExprPtr expr) const override {
     facebook::velox::TypePtr type = expr->type();
-    return std::make_shared<facebook::velox::core::CallTypedExpr>(
-        type,
-        std::vector<TypedExprPtr>{std::move(expr)},
-        "array_sort");
+    if (containsMap(type)) {
+      return std::make_shared<facebook::velox::core::ConstantTypedExpr>(type, facebook::velox::variant::null(type->kind()));
+    } else {
+      return std::make_shared<facebook::velox::core::CallTypedExpr>(
+          type, std::vector<TypedExprPtr>{std::move(expr)}, "array_sort");
+    }
   }
 
   virtual int32_t extraLevelOfNesting() const override {
     return 1;
   }
 
- /*private:
+ private:
   bool containsMap(const TypePtr& type) const {
     if (type->isMap()) {
       return true;
@@ -89,7 +87,7 @@ class SortArrayTransformer : public ExprTransformer {
       }
     }
     return false;
-  }*/
+  }
 };
 
 int main(int argc, char** argv) {
@@ -106,6 +104,9 @@ int main(int argc, char** argv) {
 
   std::unordered_map<std::string, std::shared_ptr<ExprTransformer>> functionTransformers = {
       {"array_intersect", std::make_shared<SortArrayTransformer>()},
+      {"array_except", std::make_shared<SortArrayTransformer>()},
+      {"map_keys", std::make_shared<SortArrayTransformer>()},
+      {"map_values", std::make_shared<SortArrayTransformer>()}
   };
 
   // TODO: List of the functions that at some point crash or fail and need to
@@ -226,7 +227,17 @@ int main(int argc, char** argv) {
       "like",
       "format_datetime",
       "greatest", // todo: presto not supporting nan arg in old presto version.
-
+      "least", // todo: double check presto behaves the same as velox in newer version
+      "inverse_normal_cdf",
+      "replace",
+      "split_part",
+      "inverse_cauchy_cdf",
+      "bitwise_right_shift_arithmetic",
+      "slice",
+      "multimap_from_entries",
+      "zip_with",
+      "sin", //todo: newer presto version has the result match Velox, e.g., sin(0.8033705723937601)
+      "reduce",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
