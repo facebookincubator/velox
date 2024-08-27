@@ -23,6 +23,8 @@
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::dwio::common {
+/// Defined in SeekableInputStream.h
+class PositionProvider;
 
 /// Interface base class for format-specific state in common between different
 /// file format readers.
@@ -39,7 +41,7 @@ class FormatData {
   /// data. If there are no nulls, 'nulls' is set to nullptr, else to
   /// a suitable sized and padded Buffer. 'incomingNulls' may be given
   /// if there are enclosing level nulls that should be merged into
-  /// the read reasult. If provided, this has 'numValues' bits and
+  /// the read result. If provided, this has 'numValues' bits and
   /// each zero marks an incoming null for which no bit is read from
   /// the nulls stream of 'this'. For Parquet, 'nulls' is always set
   /// to nullptr because nulls are represented by the data pages
