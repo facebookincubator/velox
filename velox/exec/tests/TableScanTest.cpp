@@ -54,6 +54,17 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::tests::utils;
 
 namespace {
+std::string makeCastSql(const variant& v, const TypePtr& type) {
+  std::ostringstream out;
+  const std::string value = type->isDate()
+      ? folly::parseJson(v.toJson(type)).asString()
+      : v.toJson(type);
+  out << "CAST('" << value << "' AS ";
+  toTypeSql(type, out);
+  out << ")";
+  return out.str();
+}
+
 void verifyCacheStats(
     const FileHandleCacheStats& cacheStats,
     size_t curSize,
@@ -176,10 +187,25 @@ class TableScanTest : public virtual HiveConnectorTestBase {
   void testPartitionedTableImpl(
       const std::string& filePath,
       const TypePtr& partitionType,
-      const std::optional<std::string>& partitionValue) {
-    auto split = HiveConnectorSplitBuilder(filePath)
-                     .partitionKey("pkey", partitionValue)
-                     .build();
+      const variant& partitionValue) {
+    // Create the partition value of a split.
+    std::optional<std::string> value = std::nullopt;
+    if (!partitionValue.isNull()) {
+      auto type = partitionType;
+      if (partitionType->isDecimal()) {
+        const auto [precision, scale] =
+            getDecimalPrecisionScale(*partitionType);
+        // The partition value of decimal should be formatted with unscaled
+        // value.
+        type = DECIMAL(precision, 0);
+      }
+      value = std::optional<std::string>(
+          partitionType->isDate()
+              ? folly::parseJson(partitionValue.toJson(type)).asString()
+              : partitionValue.toJson(type));
+    }
+    auto split =
+        HiveConnectorSplitBuilder(filePath).partitionKey("pkey", value).build();
     auto outputType =
         ROW({"pkey", "c0", "c1"}, {partitionType, BIGINT(), DOUBLE()});
     ColumnHandleMap assignments = {
@@ -194,8 +220,10 @@ class TableScanTest : public virtual HiveConnectorTestBase {
                   .endTableScan()
                   .planNode();
 
-    std::string partitionValueStr =
-        partitionValue.has_value() ? "'" + *partitionValue + "'" : "null";
+    std::string partitionValueStr = partitionValue.isNull()
+        ? "null"
+        : makeCastSql(partitionValue, partitionType);
+
     assertQuery(
         op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
 
@@ -238,9 +266,10 @@ class TableScanTest : public virtual HiveConnectorTestBase {
   void testPartitionedTable(
       const std::string& filePath,
       const TypePtr& partitionType,
-      const std::optional<std::string>& partitionValue) {
+      const variant& partitionValue) {
     testPartitionedTableImpl(filePath, partitionType, partitionValue);
-    testPartitionedTableImpl(filePath, partitionType, std::nullopt);
+    testPartitionedTableImpl(
+        filePath, partitionType, variant::null(partitionType->kind()));
   }
 
   RowTypePtr rowType_{
@@ -1810,7 +1839,7 @@ TEST_F(TableScanTest, partitionedTableVarcharKey) {
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
-  testPartitionedTable(filePath->getPath(), VARCHAR(), "2020-11-01");
+  testPartitionedTable(filePath->getPath(), VARCHAR(), variant("2020-11-01"));
 }
 
 TEST_F(TableScanTest, partitionedTableBigIntKey) {
@@ -1819,7 +1848,10 @@ TEST_F(TableScanTest, partitionedTableBigIntKey) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
-  testPartitionedTable(filePath->getPath(), BIGINT(), "123456789123456789");
+  testPartitionedTable(
+      filePath->getPath(),
+      BIGINT(),
+      variant::create<TypeKind::BIGINT>(123456789123456789));
 }
 
 TEST_F(TableScanTest, partitionedTableIntegerKey) {
@@ -1828,7 +1860,8 @@ TEST_F(TableScanTest, partitionedTableIntegerKey) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
-  testPartitionedTable(filePath->getPath(), INTEGER(), "123456789");
+  testPartitionedTable(
+      filePath->getPath(), INTEGER(), variant::create<TypeKind::INTEGER>(123456789));
 }
 
 TEST_F(TableScanTest, partitionedTableSmallIntKey) {
@@ -1837,7 +1870,8 @@ TEST_F(TableScanTest, partitionedTableSmallIntKey) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
-  testPartitionedTable(filePath->getPath(), SMALLINT(), "1");
+  testPartitionedTable(
+      filePath->getPath(), SMALLINT(), variant::create<TypeKind::SMALLINT>(1));
 }
 
 TEST_F(TableScanTest, partitionedTableTinyIntKey) {
@@ -1846,7 +1880,8 @@ TEST_F(TableScanTest, partitionedTableTinyIntKey) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
-  testPartitionedTable(filePath->getPath(), TINYINT(), "1");
+  testPartitionedTable(
+      filePath->getPath(), TINYINT(), variant::create<TypeKind::TINYINT>(1));
 }
 
 TEST_F(TableScanTest, partitionedTableBooleanKey) {
@@ -1855,7 +1890,8 @@ TEST_F(TableScanTest, partitionedTableBooleanKey) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
-  testPartitionedTable(filePath->getPath(), BOOLEAN(), "0");
+  testPartitionedTable(
+      filePath->getPath(), BOOLEAN(), variant::create<TypeKind::BOOLEAN>(false));
 }
 
 TEST_F(TableScanTest, partitionedTableRealKey) {
@@ -1864,7 +1900,8 @@ TEST_F(TableScanTest, partitionedTableRealKey) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
-  testPartitionedTable(filePath->getPath(), REAL(), "3.5");
+  testPartitionedTable(
+      filePath->getPath(), REAL(), variant::create<TypeKind::REAL>(3.5));
 }
 
 TEST_F(TableScanTest, partitionedTableDoubleKey) {
@@ -1873,7 +1910,35 @@ TEST_F(TableScanTest, partitionedTableDoubleKey) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
-  testPartitionedTable(filePath->getPath(), DOUBLE(), "3.5");
+  testPartitionedTable(
+      filePath->getPath(), DOUBLE(), variant::create<TypeKind::DOUBLE>(3.5));
+}
+
+TEST_F(TableScanTest, partitionedTableDecimalKey) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto vectors = makeVectors(10, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  testPartitionedTable(
+      filePath->getPath(),
+      DECIMAL(12, 3),
+      variant::create<TypeKind::BIGINT>(123456789123));
+  testPartitionedTable(
+      filePath->getPath(),
+      DECIMAL(12, 3),
+      variant::create<TypeKind::BIGINT>(-123456789123));
+  testPartitionedTable(
+      filePath->getPath(),
+      DECIMAL(36, 18),
+      variant::create<TypeKind::HUGEINT>(
+          HugeInt::parse("123456789123456789123456789123456789")));
+  testPartitionedTable(
+      filePath->getPath(),
+      DECIMAL(36, 18),
+      variant::create<TypeKind::HUGEINT>(
+          HugeInt::parse("-123456789123456789123456789123456789")));
 }
 
 TEST_F(TableScanTest, partitionedTableDateKey) {
@@ -1882,6 +1947,7 @@ TEST_F(TableScanTest, partitionedTableDateKey) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
+<<<<<<< HEAD
   const std::string partitionValue = "2023-10-27";
   testPartitionedTable(filePath->getPath(), DATE(), partitionValue);
 
@@ -1913,6 +1979,10 @@ TEST_F(TableScanTest, partitionedTableDateKey) {
     assertQuery(
         op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
   }
+=======
+  testPartitionedTable(
+      filePath->getPath(), DATE(), variant::create<TypeKind::INTEGER>(19657));
+>>>>>>> Add test for partition types
 }
 
 std::vector<StringView> toStringViews(const std::vector<std::string>& values) {
@@ -4561,7 +4631,7 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
   }
 }
 
-TEST_F(TableScanTest, varbinaryPartitionKey) {
+TEST_F(TableScanTest, partitionedTableVarbinaryKey) {
   auto vectors = makeVectors(1, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
@@ -4586,7 +4656,7 @@ TEST_F(TableScanTest, varbinaryPartitionKey) {
   assertQuery(op, split, "SELECT c0, '2021-12-02' FROM tmp");
 }
 
-TEST_F(TableScanTest, timestampPartitionKey) {
+TEST_F(TableScanTest, partitionedTableTimestampKey) {
   const char* inputs[] = {"2023-10-14 07:00:00.0", "2024-01-06 04:00:00.0"};
   auto expected = makeRowVector(
       {"t"},
