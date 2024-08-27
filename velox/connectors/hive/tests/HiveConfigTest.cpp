@@ -98,6 +98,7 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kGCSCredentials, "hey"},
       {HiveConfig::kOrcUseColumnNames, "true"},
       {HiveConfig::kFileColumnNamesReadAsLowerCase, "true"},
+      {HiveConfig::kAllowNullPartitionKeys, "false"},
       {HiveConfig::kMaxCoalescedBytes, "100"},
       {HiveConfig::kMaxCoalescedDistanceBytes, "100"},
       {HiveConfig::kNumCacheFileHandles, "100"},
@@ -137,6 +138,7 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_EQ(hiveConfig.isOrcUseColumnNames(emptySession.get()), true);
   ASSERT_EQ(
       hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()), true);
+  ASSERT_EQ(hiveConfig.allowNullPartitionKeys(emptySession.get()), false);
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(), 100);
   ASSERT_EQ(hiveConfig.maxCoalescedDistanceBytes(), 100);
   ASSERT_EQ(hiveConfig.numCacheFileHandles(), 100);
@@ -179,7 +181,7 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kSortWriterMaxOutputRowsSession, "20"},
       {HiveConfig::kSortWriterMaxOutputBytesSession, "20MB"},
       {HiveConfig::kPartitionPathAsLowerCaseSession, "false"},
-      {HiveConfig::kAllowNullPartitionKeys, "true"},
+      {HiveConfig::kAllowNullPartitionKeysSession, "false"},
       {HiveConfig::kIgnoreMissingFilesSession, "true"},
       {HiveConfig::kOrcWriterMinCompressionSizeSession, "512"},
       {HiveConfig::kOrcWriterCompressionLevelSession, "1"},
