@@ -17,14 +17,13 @@
 #pragma once
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/PositionProvider.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::dwio::common {
-/// Defined in SeekableInputStream.h
-class PositionProvider;
 
 /// Interface base class for format-specific state in common between different
 /// file format readers.
