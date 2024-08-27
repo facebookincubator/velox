@@ -114,9 +114,9 @@ RowVectorPtr Unnest::getOutput() {
   const auto size = input_->size();
 
   // Limit the number of input rows to keep output batch size within
-  // 'maxOutputSize' if possible. Not process each input row fully when
-  // row's output exceeds maxOutputSize. Single row's output maybe into
-  // multiple batches.
+  // 'maxOutputSize' if possible. Not process each input row fully when a
+  // row's output exceeds 'maxOutputSize'. The output of single row may be
+  // divided into multiple batches.
   vector_size_t numElements = 0;
   vector_size_t partialProcessRowStart = -1;
   auto rowRange = extractRowRange(size, numElements, partialProcessRowStart);
@@ -145,7 +145,7 @@ RowVectorPtr Unnest::getOutput() {
 }
 
 const Unnest::RowRange Unnest::extractRowRange(
-  vector_size_t size,
+    vector_size_t size,
     vector_size_t& numElements,
     vector_size_t& partialProcessRowStart) {
   VELOX_DCHECK_LT(nextInputRow_, size);

@@ -39,25 +39,29 @@ class Unnest : public Operator {
   bool isFinished() override;
 
  private:
-  // Represents the range of rows to process and specify that first and last row
-  // may need to be processed partially.
+  // Represents the range of rows to process and indicates that first and last
+  // row may need to be processed partially.
   struct RowRange {
-    // First input row to include in the output.
+    // First input row to be included in the output.
     vector_size_t start;
-    // Number of input rows to include in the output.
+
+    // Number of input rows to be included in the output.
     vector_size_t size;
-    // First input row start processing from `firstRowStart_`end processing.
+
+    // Processing of the first input row begins at index `firstRowStart_` and
+    // ends at 'firstRowEnd'.
     vector_size_t firstRowEnd;
-    // Last input row start processing from 0, end processing at index
-    // `lastRowEnd`.
+
+    // Processing of the last input row begins at index 0 and ends at
+    // 'lastRowEnd'.
     vector_size_t lastRowEnd;
   };
 
   // Extract the range of rows to process.
   // @param size The size of input RowVector.
-  // @param numElements Number of output rows to set.
-  // @param partialProcessRowStart record the next getOutput loop
-  // `firstRowStart`.
+  // @param numElements Records the number of output rows..
+  // @param partialProcessRowStart Records the start index when processing the
+  // first row in the next iteration.
   const RowRange extractRowRange(
       vector_size_t size,
       vector_size_t& numElements,
@@ -102,12 +106,12 @@ class Unnest : public Operator {
 
   std::vector<DecodedVector> unnestDecoded_;
 
-  // The maxium number of output batch rows.
+  // The maximum number of output batch rows.
   const uint32_t maxOutputSize_;
   BufferPtr maxSizes_;
   vector_size_t* rawMaxSizes_{nullptr};
 
-  // The first input row output start range.
+  // Start processing the first row input from `firstRowStart_`.
   vector_size_t firstRowStart_ = 0;
 
   std::vector<const vector_size_t*> rawSizes_;
