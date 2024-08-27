@@ -287,9 +287,10 @@ void SortBuffer::spillOutput() {
 void SortBuffer::prepareOutput(vector_size_t maxOutputRows) {
   VELOX_CHECK_GT(maxOutputRows, 0);
   VELOX_CHECK_GT(numInputRows_, numOutputRows_);
-
+  const uint64_t batchSizeMaybe = numInputRows_ - numOutputRows_;
+  VELOX_CHECK_LE(batchSizeMaybe, std::numeric_limits<vector_size_t>::max());
   const vector_size_t batchSize =
-      std::min<vector_size_t>(numInputRows_ - numOutputRows_, maxOutputRows);
+      std::min<vector_size_t>(batchSizeMaybe, maxOutputRows);
   if (output_ != nullptr) {
     VectorPtr output = std::move(output_);
     BaseVector::prepareForReuse(output, batchSize);
