@@ -46,7 +46,12 @@ int32_t run4x64(const std::vector<int64_t>& data) {
   assert(data.size() % kStep == 0);
   for (auto i = 0; i < data.size(); i += kStep) {
     auto result = filter->testValues(xsimd::load_unaligned(data.data() + i));
+
+#if __ARM_ARCH
+    count += __builtin_popcountll(simd::arm64ToBitMask(result) & 0x8000000080000000);
+#else
     count += __builtin_popcount(simd::toBitMask(result));
+#endif
   }
   return count;
 }

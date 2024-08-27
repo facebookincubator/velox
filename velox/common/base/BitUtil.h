@@ -118,6 +118,18 @@ inline int32_t getAndClearLastSetBit(uint16_t& bits) {
   return trailingZeros;
 }
 
+#if __ARM_ARCH
+inline int32_t arm64_getAndClearLastSetBit(uint64_t& bits) {
+  int32_t trailingZeros = __builtin_ctzll(bits) >> 2;
+  // erase last 4 non-zero bit
+  bits &= bits - 1;
+  bits &= bits - 1;
+  bits &= bits - 1;
+  bits &= bits - 1;
+  return trailingZeros;
+}
+#endif
+
 /**
  * Invokes a function for each batch of bits (partial or full words)
  * in a given range.
