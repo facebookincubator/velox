@@ -136,7 +136,7 @@ class HiveConfig {
       "partition_path_as_lower_case";
 
   static constexpr const char* kAllowNullPartitionKeys =
-      "allow_null_partition_keys";
+      "allow-null-partition-keys";
   static constexpr const char* kAllowNullPartitionKeysSession =
       "allow_null_partition_keys";
 

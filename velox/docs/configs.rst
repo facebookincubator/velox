@@ -517,7 +517,7 @@ Each query can override the config by setting corresponding query session proper
        and also skip staging to the ssd cache. This helps to prevent the cache space pollution
        from the one-time table scan by large batch query when mixed running with interactive
        query which has high data locality.
-   * - allow_null_partition_keys
+   * - allow-null-partition-keys
      - allow_null_partition_keys
      - bool
      - true
