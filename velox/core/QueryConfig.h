@@ -439,12 +439,16 @@ class QueryConfig {
     return get<uint64_t>(kPreferredOutputBatchBytes, kDefault);
   }
 
-  uint32_t preferredOutputBatchRows() const {
-    return get<uint32_t>(kPreferredOutputBatchRows, 1024);
+  int32_t preferredOutputBatchRows() const {
+    uint32_t batchRows = get<uint32_t>(kPreferredOutputBatchRows, 1024);
+    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<int32_t>::max());
+    return batchRows;
   }
 
-  uint32_t maxOutputBatchRows() const {
-    return get<uint32_t>(kMaxOutputBatchRows, 10'000);
+  int32_t maxOutputBatchRows() const {
+    uint32_t maxBatchRows = get<uint32_t>(kMaxOutputBatchRows, 10'000);
+    VELOX_USER_CHECK_LE(maxBatchRows, std::numeric_limits<int32_t>::max());
+    return maxBatchRows;
   }
 
   uint32_t tableScanGetOutputTimeLimitMs() const {
