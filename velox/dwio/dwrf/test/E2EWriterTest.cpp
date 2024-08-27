@@ -103,6 +103,7 @@ class E2EWriterTest : public testing::Test {
     writer.close();
 
     dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    readerOpts.setFileFormat(FileFormat::DWRF);
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -165,6 +166,7 @@ class E2EWriterTest : public testing::Test {
     writer.close();
 
     dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    readerOpts.setFileFormat(FileFormat::DWRF);
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -376,7 +378,6 @@ TEST_F(E2EWriterTest, E2E) {
 }
 
 TEST_F(E2EWriterTest, testTmestampTimezone) {
-  google::InstallFailureSignalHandler();
   const size_t batchCount = 4;
   size_t batchSize = 1100;
 
@@ -633,6 +634,7 @@ TEST_F(E2EWriterTest, PresentStreamIsSuppressedOnFlatMap) {
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(true));
 
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -1015,6 +1017,7 @@ TEST_F(E2EWriterTest, PartialStride) {
   writer.close();
 
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   ASSERT_EQ(
@@ -1227,6 +1230,7 @@ class E2EEncryptionTest : public E2EWriterTest {
 
     // read it back for compare
     dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+    readerOpts.setFileFormat(FileFormat::DWRF);
     readerOpts.setDecrypterFactory(decrypterFactory);
     return createReader(*sink_, readerOpts);
   }

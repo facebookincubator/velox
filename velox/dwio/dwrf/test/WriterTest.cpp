@@ -62,6 +62,7 @@ class WriterTest : public Test {
     auto readFile = std::make_shared<InMemoryReadFile>(std::move(data));
     auto input = std::make_unique<BufferedInput>(std::move(readFile), *pool_);
     dwio::common::ReaderOptions readerOpts{pool_.get()};
+    readerOpts.setFileFormat(FileFormat::DWRF);
     return std::make_unique<ReaderBase>(readerOpts, std::move(input));
   }
 

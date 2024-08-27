@@ -104,6 +104,7 @@ class EncryptedStatsTest : public Test {
         std::make_shared<facebook::velox::InMemoryReadFile>(std::string());
     readerPool_ = pool_->addLeafChild("reader");
     facebook::velox::dwio::common::ReaderOptions readerOpts{readerPool_.get()};
+    readerOpts.setFileFormat(FileFormat::DWRF);
     reader_ = std::make_unique<ReaderBase>(
         readerOpts,
         std::make_unique<BufferedInput>(readFile, *readerPool_),
@@ -214,6 +215,7 @@ std::unique_ptr<ReaderBase> createCorruptedFileReader(
   auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(
       std::string(sink.data(), sink.size()));
   facebook::velox::dwio::common::ReaderOptions readerOpts{pool.get()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   return std::make_unique<ReaderBase>(
       readerOpts, std::make_unique<BufferedInput>(readFile, *pool));
 }

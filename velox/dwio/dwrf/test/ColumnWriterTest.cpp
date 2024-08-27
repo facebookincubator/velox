@@ -1638,6 +1638,7 @@ std::unique_ptr<DwrfReader> getDwrfReader(
 
   std::string data(sinkPtr->data(), sinkPtr->size());
   dwio::common::ReaderOptions readerOpts{&leafPool};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   return std::make_unique<DwrfReader>(
       readerOpts,
       std::make_unique<BufferedInput>(
