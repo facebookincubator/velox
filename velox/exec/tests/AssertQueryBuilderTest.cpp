@@ -34,7 +34,7 @@ TEST_F(AssertQueryBuilderTest, basic) {
       .assertResults(data);
 }
 
-TEST_F(AssertQueryBuilderTest, serial) {
+TEST_F(AssertQueryBuilderTest, serialExecution) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
 
   PlanBuilder builder;
