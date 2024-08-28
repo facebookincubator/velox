@@ -1014,7 +1014,8 @@ TEST_F(HashJoinTest, multipleProbeColumns) {
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
         .referenceQuery(fmt::format(
             "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 {}{}",
-            filter.empty() ? "" : "and ", filter))
+            filter.empty() ? "" : "and ",
+            filter))
         .run();
   };
   test("");
@@ -1040,8 +1041,9 @@ TEST_F(HashJoinTest, multipleBuildColumns) {
       {"t_k1", "t_k2"},
       {makeFlatVector<int32_t>(20, [](auto row) { return 1 + row % 2; }),
        makeFlatVector<int32_t>(20, [](auto row) { return row; })})};
-  auto buildVectors = std::vector<RowVectorPtr>{
-      makeRowVector({"u_k1", "u_k2"}, {makeFlatVector<int32_t>({1, 2}), makeFlatVector<int32_t>({3, 4})})};
+  auto buildVectors = std::vector<RowVectorPtr>{makeRowVector(
+      {"u_k1", "u_k2"},
+      {makeFlatVector<int32_t>({1, 2}), makeFlatVector<int32_t>({3, 4})})};
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1070,7 +1072,8 @@ TEST_F(HashJoinTest, multipleBuildColumns) {
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
         .referenceQuery(fmt::format(
             "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 {}{}",
-            filter.empty() ? "" : "and ", filter))
+            filter.empty() ? "" : "and ",
+            filter))
         .run();
   };
   test("");
