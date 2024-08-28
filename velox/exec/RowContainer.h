@@ -337,9 +337,10 @@ class RowContainer {
   /// Copies the values at 'col' into 'result' (starting at 'resultOffset')
   /// for the 'numRows' rows pointed to by 'rows'. If a 'row' is null, sets
   /// corresponding row in 'result' to null.
-  /// 'columnHasNulls' indicates whether the 'col' column contains null values.
-  /// If 'columnHasNulls' is false, a null-free optimization will be applied.
-  /// It is the caller's responsibility to ensure this flag is set correctly.
+  /// @param columnHasNulls indicates whether the 'col' column contains null
+  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// applied. It is the caller's responsibility to ensure this flag is set
+  /// correctly.
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
@@ -351,9 +352,10 @@ class RowContainer {
   /// Copies the values at 'col' into 'result' for the 'numRows' rows pointed to
   /// by 'rows'. If an entry in 'rows' is null, sets corresponding row in
   /// 'result' to null.
-  /// 'columnHasNulls' indicates whether the 'col' column contains null values.
-  /// If 'columnHasNulls' is false, a null-free optimization will be applied.
-  /// It is the caller's responsibility to ensure this flag is set correctly.
+  /// @param columnHasNulls indicates whether the 'col' column contains null
+  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// applied. It is the caller's responsibility to ensure this flag is set
+  /// correctly.
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
@@ -369,9 +371,10 @@ class RowContainer {
   /// 'result' to null. The positions in 'rowNumbers' array can repeat and also
   /// appear out of order. If rowNumbers has a negative value, then the
   /// corresponding row in 'result' is set to null.
-  /// 'columnHasNulls' indicates whether the 'col' column contains null values.
-  /// If 'columnHasNulls' is false, a null-free optimization will be applied.
-  /// It is the caller's responsibility to ensure this flag is set correctly.
+  /// @param columnHasNulls indicates whether the 'col' column contains null
+  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// applied. It is the caller's responsibility to ensure this flag is set
+  /// correctly.
   static void extractColumn(
       const char* const* rows,
       folly::Range<const vector_size_t*> rowNumbers,

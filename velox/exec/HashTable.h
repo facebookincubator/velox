@@ -400,12 +400,11 @@ class BaseHashTable {
     return offThreadBuildTiming_;
   }
 
-  /// Copies the values at 'columnIndex' into 'result' for the 'numRows' rows
+  /// Copies the values at 'columnIndex' into 'result' for the 'rows.size' rows
   /// pointed to by 'rows'. If an entry in 'rows' is null, sets corresponding
   /// row in 'result' to null.
   virtual void extractColumn(
-      const char* const* rows,
-      int32_t numRows,
+      folly::Range<char**> rows,
       int32_t columnIndex,
       const VectorPtr& result) = 0;
 
@@ -656,13 +655,12 @@ class HashTable : public BaseHashTable {
   }
 
   void extractColumn(
-      const char* const* rows,
-      int32_t numRows,
+      folly::Range<char**> rows,
       int32_t columnIndex,
       const VectorPtr& result) override {
     RowContainer::extractColumn(
-        rows,
-        numRows,
+        rows.data(),
+        rows.size(),
         rows_->columnAt(columnIndex),
         columnHasNulls_[columnIndex],
         result);
