@@ -214,7 +214,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         maxDrivers_{params.maxDrivers},
         numConcurrentSplitGroups_{params.numConcurrentSplitGroups},
         numSplitGroups_{params.numSplitGroups} {
-    VELOX_CHECK(!params.serialExecutionMode)
+    VELOX_CHECK(!params.serialExecution)
     VELOX_CHECK(
         queryCtx_->isExecutorSupplied(),
         "Executor should be set in parallel task cursor")
@@ -322,7 +322,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
  public:
   explicit SingleThreadedTaskCursor(const CursorParameters& params)
       : TaskCursorBase(params, nullptr) {
-    VELOX_CHECK(params.serialExecutionMode)
+    VELOX_CHECK(params.serialExecution)
     VELOX_CHECK(
         !queryCtx_->isExecutorSupplied(),
         "Executor should not be set in serial task cursor")
@@ -402,7 +402,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
 };
 
 std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
-  if (params.serialExecutionMode) {
+  if (params.serialExecution) {
     return std::make_unique<SingleThreadedTaskCursor>(params);
   }
   return std::make_unique<MultiThreadedTaskCursor>(params);
