@@ -78,7 +78,11 @@ class TestingLoader : public VectorLoader {
         }
       } else {
         T value = values->valueAt(row);
-        hook->addValue(i, &value);
+        if constexpr (std::is_same_v<T, Timestamp>) {
+          VELOX_FAIL();
+        } else {
+          hook->addValueTyped(i, value);
+        }
       }
     }
   }
@@ -754,7 +758,7 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     }
   }
 
-  ByteInputStream prepareInput(std::string& string) {
+  std::unique_ptr<ByteInputStream> prepareInput(std::string& string) {
     // Put 'string' in 'input' in many pieces.
     const int32_t size = string.size();
     std::vector<ByteRange> ranges;
@@ -767,7 +771,7 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
       ranges.back().position = 0;
     }
 
-    return ByteInputStream(std::move(ranges));
+    return std::make_unique<BufferInputStream>(std::move(ranges));
   }
 
   void checkSizes(
@@ -874,7 +878,7 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     auto evenInput = prepareInput(evenString);
 
     RowVectorPtr resultRow;
-    VectorStreamGroup::read(&evenInput, pool(), sourceRowType, &resultRow);
+    VectorStreamGroup::read(evenInput.get(), pool(), sourceRowType, &resultRow);
     VectorPtr result = resultRow->childAt(0);
     switch (source->encoding()) {
       case VectorEncoding::Simple::FLAT:
@@ -903,7 +907,7 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     auto oddString = oddStream.str();
     auto oddInput = prepareInput(oddString);
 
-    VectorStreamGroup::read(&oddInput, pool(), sourceRowType, &resultRow);
+    VectorStreamGroup::read(oddInput.get(), pool(), sourceRowType, &resultRow);
     result = resultRow->childAt(0);
     for (int32_t i = 0; i < oddIndices.size(); ++i) {
       EXPECT_TRUE(result->equalValueAt(source.get(), i, oddIndices[i].begin))
@@ -2016,12 +2020,12 @@ class TestingHook : public ValueHook {
     return false;
   }
 
-  void addValue(vector_size_t row, const void* value) override {
+  void addValue(vector_size_t row, int64_t value) override {
     if (values_->isNullAt(rows_[row])) {
       ++errors_;
     } else {
       auto original = values_->valueAt(rows_[row]);
-      if (original != *reinterpret_cast<const int64_t*>(value)) {
+      if (original != value) {
         ++errors_;
       }
     }
@@ -3803,6 +3807,16 @@ TEST_F(VectorTest, arrayCopyTargetNullOffsets) {
       11, [](auto) { return 1; }, [](auto i, auto) { return i; });
   target->copy(source.get(), 0, 0, source->size());
   test::assertEqualVectors(source, target);
+}
+
+TEST_F(VectorTest, testOverSizedArray) {
+  // Verify that flattening an array/map cannot result in a values vector
+  // greater than vector_size_t
+  auto flat = makeFlatVector<int32_t>(1000, [](auto /*row*/) { return 1; });
+  std::vector<vector_size_t> offsets(1, 0);
+  auto array = makeArrayVector(offsets, flat);
+  auto constArray = BaseVector::wrapInConstant(21474830, 0, array);
+  EXPECT_THROW(BaseVector::flattenVector(constArray), VeloxUserError);
 }
 
 } // namespace

@@ -19,7 +19,6 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
-#include "velox/exec/MergeJoin.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
@@ -63,6 +62,10 @@ DEFINE_bool(
 namespace facebook::velox::exec::test {
 
 namespace {
+
+std::string makePercentageString(size_t value, size_t total) {
+  return fmt::format("{} ({:.2f}%)", value, (double)value / total * 100);
+}
 
 class JoinFuzzer {
  public:
@@ -148,7 +151,7 @@ class JoinFuzzer {
       const std::vector<std::string>& outputColumns);
 
   // Returns a PlanWithSplits for NestedLoopJoin with inputs from Values nodes.
-  // If withFilter is true, uses the equiality filter between probeKeys and
+  // If withFilter is true, uses the equality filter between probeKeys and
   // buildKeys as the join filter. Uses empty join filter otherwise.
   JoinFuzzer::PlanWithSplits makeNestedLoopJoinPlan(
       core::JoinType joinType,
@@ -300,6 +303,30 @@ class JoinFuzzer {
 
   VectorFuzzer vectorFuzzer_;
   std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner_;
+
+  struct Stats {
+    // The total number of iterations tested.
+    size_t numIterations{0};
+
+    // The number of iterations verified against reference DB.
+    size_t numVerified{0};
+
+    // The number of iterations that test cross product.
+    size_t numCrossProduct{0};
+
+    std::string toString() const {
+      std::stringstream out;
+      out << "\nTotal iterations tested: " << numIterations << std::endl;
+      out << "Total iterations verified against reference DB: "
+          << makePercentageString(numVerified, numIterations) << std::endl;
+      out << "Total iterations testing cross product: "
+          << makePercentageString(numCrossProduct, numIterations) << std::endl;
+
+      return out.str();
+    }
+  };
+
+  Stats stats_;
 };
 
 JoinFuzzer::JoinFuzzer(
@@ -310,13 +337,14 @@ JoinFuzzer::JoinFuzzer(
   filesystems::registerLocalFileSystem();
 
   // Make sure not to run out of open file descriptors.
-  const std::unordered_map<std::string, std::string> hiveConfig = {
+  std::unordered_map<std::string, std::string> hiveConfig = {
       {connector::hive::HiveConfig::kNumCacheFileHandles, "1000"}};
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
           ->newConnector(
-              kHiveConnectorId, std::make_shared<core::MemConfig>(hiveConfig));
+              kHiveConnectorId,
+              std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
   connector::registerConnector(hiveConnector);
 
   seed(initialSeed);
@@ -351,7 +379,8 @@ std::vector<TypePtr> JoinFuzzer::generateJoinKeyTypes(int32_t numKeys) {
   types.reserve(numKeys);
   for (auto i = 0; i < numKeys; ++i) {
     // Pick random scalar type.
-    types.push_back(vectorFuzzer_.randType(0 /*maxDepth*/));
+    types.push_back(vectorFuzzer_.randType(
+        referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/0));
   }
   return types;
 }
@@ -374,7 +403,8 @@ std::vector<RowVectorPtr> JoinFuzzer::generateProbeInput(
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
     names.push_back(fmt::format("tp{}", i + keyNames.size()));
-    types.push_back(vectorFuzzer_.randType(2 /*maxDepth*/));
+    types.push_back(vectorFuzzer_.randType(
+        referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/2));
   }
 
   const auto inputType = ROW(std::move(names), std::move(types));
@@ -407,7 +437,8 @@ std::vector<RowVectorPtr> JoinFuzzer::generateBuildInput(
   const auto numPayload = randInt(0, 3);
   for (auto i = 0; i < numPayload; ++i) {
     names.push_back(fmt::format("bp{}", i + buildKeys.size()));
-    types.push_back(vectorFuzzer_.randType(2 /*maxDepth*/));
+    types.push_back(vectorFuzzer_.randType(
+        referenceQueryRunner_->supportedScalarTypes(), /*maxDepth=*/2));
   }
 
   const auto rowType = ROW(std::move(names), std::move(types));
@@ -619,12 +650,10 @@ std::optional<MaterializedRowMultiset> JoinFuzzer::computeReferenceResults(
     const core::PlanNodePtr& plan,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput) {
-  if (containsUnsupportedTypes(probeInput[0]->type())) {
-    return std::nullopt;
-  }
-
-  if (containsUnsupportedTypes(buildInput[0]->type())) {
-    return std::nullopt;
+  if (referenceQueryRunner_->runnerType() ==
+      ReferenceQueryRunner::RunnerType::kDuckQueryRunner) {
+    VELOX_CHECK(!containsUnsupportedTypes(probeInput[0]->type()));
+    VELOX_CHECK(!containsUnsupportedTypes(buildInput[0]->type()));
   }
 
   if (auto sql = referenceQueryRunner_->toSql(plan)) {
@@ -860,7 +889,7 @@ void JoinFuzzer::makeAlternativePlans(
           .planNode()});
 
   // Use OrderBy + MergeJoin
-  if (exec::MergeJoin::isSupported(joinNode->joinType())) {
+  if (core::MergeJoinNode::isSupported(joinNode->joinType())) {
     auto planWithSplits = makeMergeJoinPlan(
         joinType, probeKeys, buildKeys, probeInput, buildInput, outputColumns);
     plans.push_back(planWithSplits);
@@ -869,8 +898,7 @@ void JoinFuzzer::makeAlternativePlans(
   }
 
   // Use NestedLoopJoin.
-  if (joinNode->isInnerJoin() || joinNode->isLeftJoin() ||
-      joinNode->isFullJoin()) {
+  if (core::NestedLoopJoinNode::isSupported(joinNode->joinType())) {
     auto planWithSplits = makeNestedLoopJoinPlan(
         joinType, probeKeys, buildKeys, probeInput, buildInput, outputColumns);
     plans.push_back(planWithSplits);
@@ -935,6 +963,9 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
           assertEqualResults(
               referenceResult.value(), plan.plan->outputType(), {expected}),
           "Velox and DuckDB results don't match");
+
+      LOG(INFO) << "Result matches with referenc DB.";
+      stats_.numVerified++;
     }
   }
 
@@ -1008,6 +1039,8 @@ void JoinFuzzer::verify(core::JoinType joinType) {
        core::isFullJoin(joinType)) &&
       FLAGS_batch_size * FLAGS_num_batches <= 500) {
     if (vectorFuzzer_.coinToss(0.1)) {
+      stats_.numCrossProduct++;
+
       auto result = testCrossProduct(
           tableScanDir->getPath(),
           joinType,
@@ -1070,6 +1103,9 @@ void JoinFuzzer::verify(core::JoinType joinType) {
               defaultPlan.plan->outputType(),
               {expected}),
           "Velox and Reference results don't match");
+
+      LOG(INFO) << "Result matches with referenc DB.";
+      stats_.numVerified++;
     }
   }
 
@@ -1285,7 +1321,7 @@ void JoinFuzzer::addPlansWithTableScan(
   }
 
   // Add ungrouped MergeJoin with TableScan.
-  if (joinNode->isInnerJoin() || joinNode->isLeftJoin()) {
+  if (core::MergeJoinNode::isSupported(joinNode->joinType())) {
     auto planWithSplits = makeMergeJoinPlanWithTableScan(
         joinType,
         probeType,
@@ -1307,8 +1343,7 @@ void JoinFuzzer::addPlansWithTableScan(
   }
 
   // Add ungrouped NestedLoopJoin with TableScan.
-  if (joinNode->isInnerJoin() || joinNode->isLeftJoin() ||
-      joinNode->isFullJoin()) {
+  if (core::NestedLoopJoinNode::isSupported(joinNode->joinType())) {
     auto planWithSplits = makeNestedLoopJoinPlanWithTableScan(
         joinType,
         probeType,
@@ -1436,11 +1471,10 @@ void JoinFuzzer::go() {
   VELOX_USER_CHECK_GE(FLAGS_batch_size, 10, "Batch size must be at least 10.");
 
   const auto startTime = std::chrono::system_clock::now();
-  size_t iteration = 0;
 
-  while (!isDone(iteration, startTime)) {
+  while (!isDone(stats_.numIterations, startTime)) {
     LOG(WARNING) << "==============================> Started iteration "
-                 << iteration << " (seed: " << currentSeed_ << ")";
+                 << stats_.numIterations << " (seed: " << currentSeed_ << ")";
 
     // Pick join type.
     const auto joinType = pickJoinType();
@@ -1448,11 +1482,12 @@ void JoinFuzzer::go() {
     verify(joinType);
 
     LOG(WARNING) << "==============================> Done with iteration "
-                 << iteration;
+                 << stats_.numIterations;
 
     reSeed();
-    ++iteration;
+    ++stats_.numIterations;
   }
+  LOG(INFO) << stats_.toString();
 }
 
 } // namespace

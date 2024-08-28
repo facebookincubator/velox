@@ -280,7 +280,10 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     auto curSchemaIdx = schemaIdx;
     for (int32_t i = 0; i < schemaElement.num_children; i++) {
       ++schemaIdx;
-      auto& childName = schema[schemaIdx].name;
+      auto childName = schema[schemaIdx].name;
+      if (isFileColumnNamesReadAsLowerCase()) {
+        folly::toLowerAscii(childName);
+      }
       auto childRequestedType =
           requestedType ? requestedType->asRow().findChild(childName) : nullptr;
       auto child = getParquetColumnInfo(
@@ -297,6 +300,33 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
     if (schemaElement.__isset.converted_type) {
       switch (schemaElement.converted_type) {
+        case thrift::ConvertedType::LIST: {
+          VELOX_CHECK_EQ(children.size(), 1);
+          const auto& child = children[0];
+          isRepeated = true;
+          // In case the child is a MAP or current element is repeated then
+          // wrap child around additional ARRAY
+          if (child->type()->kind() == TypeKind::MAP ||
+              schemaElement.repetition_type ==
+                  thrift::FieldRepetitionType::REPEATED) {
+            return std::make_unique<ParquetTypeWithId>(
+                TypeFactory<TypeKind::ARRAY>::create(child->type()),
+                std::move(children),
+                curSchemaIdx,
+                maxSchemaElementIdx,
+                ParquetTypeWithId::kNonLeaf,
+                std::move(name),
+                std::nullopt,
+                std::nullopt,
+                maxRepeat + 1,
+                maxDefine,
+                isOptional,
+                isRepeated);
+          }
+          // Only special case list of map and list of list is handled here,
+          // other generic case is handled with case MAP
+          [[fallthrough]];
+        }
         case thrift::ConvertedType::MAP_KEY_VALUE:
           // If the MAP_KEY_VALUE annotated group's parent is a MAP, it should
           // be the repeated key_value group that directly contains the key and
@@ -334,7 +364,6 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // a MAP-annotated group.
           [[fallthrough]];
 
-        case thrift::ConvertedType::LIST:
         case thrift::ConvertedType::MAP: {
           VELOX_CHECK_EQ(children.size(), 1);
           const auto& child = children[0];
@@ -452,6 +481,43 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::move(type),
               std::move(children),
               curSchemaIdx, // TODO: there are holes in the ids
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf, // columnIdx,
+              std::move(name),
+              std::nullopt,
+              std::nullopt,
+              maxRepeat,
+              maxDefine,
+              isOptional,
+              isRepeated);
+        } else {
+          // Row type
+          // To support list backward compatibility, need create a new row type
+          // instance and set all the fields as its children.
+          auto childrenRowType =
+              createRowType(children, isFileColumnNamesReadAsLowerCase());
+          std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>>
+              rowChildren;
+          // In this legacy case, there is no middle layer between "array"
+          // node and the children nodes. Below creates this dummy middle
+          // layer to mimic the non-legacy case and fill the gap.
+          rowChildren.emplace_back(std::make_unique<ParquetTypeWithId>(
+              childrenRowType,
+              std::move(children),
+              curSchemaIdx,
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf,
+              "dummy",
+              std::nullopt,
+              std::nullopt,
+              maxRepeat,
+              maxDefine,
+              isOptional,
+              isRepeated));
+          return std::make_unique<ParquetTypeWithId>(
+              TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
+              std::move(rowChildren),
+              curSchemaIdx,
               maxSchemaElementIdx,
               ParquetTypeWithId::kNonLeaf, // columnIdx,
               std::move(name),

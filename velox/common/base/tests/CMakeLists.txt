@@ -21,7 +21,6 @@ add_executable(
   ConcurrentCounterTest.cpp
   ExceptionTest.cpp
   FsTest.cpp
-  GenericAdmissionControllerTest.cpp
   RangeTest.cpp
   RawVectorTest.cpp
   RuntimeMetricsTest.cpp
@@ -52,9 +51,9 @@ target_link_libraries(
     Folly::folly
     fmt::fmt
     gflags::gflags
-    gtest
-    gmock
-    gtest_main)
+    GTest::gtest
+    GTest::gmock
+    GTest::gtest_main)
 
 add_executable(velox_id_map_test IdMapTest.cpp)
 
@@ -68,8 +67,8 @@ target_link_libraries(
   Boost::headers
   gflags::gflags
   glog::glog
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   pthread)
 
 add_executable(velox_memcpy_meter Memcpy.cpp)

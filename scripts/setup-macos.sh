@@ -30,11 +30,12 @@ set -x # Print commands that are executed.
 
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
+PYTHON_VENV=${PYHTON_VENV:-"${SCRIPTDIR}/../.venv"}
 
 NPROC=$(getconf _NPROCESSORS_ONLN)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="flex bison protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl libsodium"
+MACOS_VELOX_DEPS="bison boost double-conversion flex fmt gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 simdjson snappy thrift xz xsimd zstd"
 MACOS_BUILD_DEPS="ninja cmake ccache"
 FB_OS_VERSION="v2024.05.20.00"
 FMT_VERSION="10.1.1"
@@ -71,7 +72,11 @@ function install_build_prerequisites {
   do
     install_from_brew ${pkg}
   done
-  pip3 install --user cmake-format regex pyyaml
+  if [ ! -f ${PYTHON_VENV}/pyvenv.cfg ]; then
+    echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
+    python3 -m venv ${PYTHON_VENV}
+  fi
+  source ${PYTHON_VENV}/bin/activate; pip3 install cmake-format regex pyyaml
 }
 
 function install_velox_deps_from_brew {

@@ -17,6 +17,7 @@
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/Latch.h>
 #include <atomic>
+#include <shared_mutex>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -292,8 +293,8 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
                   .planNode();
 
   std::unordered_map<std::string, std::string> config;
-  std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs =
-      {};
+  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+      connectorConfigs = {};
   auto queryCtx = core::QueryCtx::create(
       executor_.get(),
       core::QueryConfig(std::move(config)),
@@ -3152,6 +3153,31 @@ TEST_F(TableScanTest, mapIsNullFilter) {
       "SELECT * FROM tmp WHERE c0 is null");
 }
 
+TEST_F(TableScanTest, compactComplexNulls) {
+  constexpr int kSize = 10;
+  auto iota = makeFlatVector<int64_t>(kSize, folly::identity);
+  std::vector<vector_size_t> offsets(kSize);
+  for (int i = 0; i < kSize; ++i) {
+    offsets[i] = (i + 1) / 2 * 2;
+  }
+  auto c0 = makeRowVector(
+      {
+          makeArrayVector(offsets, iota, {1, 3, 5, 7, 9}),
+          iota,
+      },
+      [](auto i) { return i == 2; });
+  auto data = makeRowVector({c0});
+  auto schema = asRowType(data->type());
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {data});
+  auto plan = PlanBuilder().tableScan(schema, {"(c0).c1 > 0"}).planNode();
+  auto split = makeHiveConnectorSplit(file->getPath());
+  const vector_size_t indices[] = {1, 3, 4, 5, 6, 7, 8, 9};
+  auto expected = makeRowVector({wrapInDictionary(
+      makeIndices(8, [&](auto i) { return indices[i]; }), c0)});
+  AssertQueryBuilder(plan).split(split).assertResults(expected);
+}
+
 TEST_F(TableScanTest, remainingFilter) {
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {INTEGER(), INTEGER(), DOUBLE(), BOOLEAN()});
@@ -3618,6 +3644,65 @@ TEST_F(TableScanTest, bitwiseAggregationPushdown) {
       op,
       {filePath},
       "SELECT c5, bit_or(c0), bit_or(c1), bit_or(c2), bit_or(c6) FROM tmp group by c5");
+}
+
+TEST_F(TableScanTest, aggregationPushdownSchemaEvolution) {
+  const std::unordered_map<std::string, const char*> duckDbAgg = {
+      {"bitwise_and_agg", "bit_and"},
+      {"bitwise_or_agg", "bit_or"},
+  };
+  auto test = [&](const TypePtr& dataType,
+                  const TypePtr& schemaType,
+                  const std::vector<const char*>& aggs) {
+    SCOPED_TRACE(
+        fmt::format("{} to {}", dataType->toString(), schemaType->toString()));
+    constexpr int kSize = 1000;
+    auto vectors =
+        makeVectors(1, kSize, ROW({"c0", "c1"}, {TINYINT(), dataType}));
+    auto filePath = TempFilePath::create();
+    createDuckDbTable(vectors);
+    writeToFile(filePath->getPath(), vectors);
+    for (const char* agg : aggs) {
+      SCOPED_TRACE(agg);
+      auto plan = PlanBuilder()
+                      .tableScan(ROW({"c0", "c1"}, {TINYINT(), schemaType}))
+                      .singleAggregation({"c0"}, {fmt::format("{}(c1)", agg)})
+                      .planNode();
+      auto it = duckDbAgg.find(agg);
+      auto task = assertQuery(
+          plan,
+          {filePath},
+          fmt::format(
+              "SELECT c0, {}(c1) FROM tmp GROUP BY 1",
+              it == duckDbAgg.end() ? agg : it->second));
+      auto stats = task->taskStats();
+      ASSERT_EQ(
+          stats.pipelineStats[0]
+              .operatorStats[1]
+              .runtimeStats.at("loadedToValueHook")
+              .sum,
+          kSize);
+    }
+  };
+  test(BOOLEAN(), TINYINT(), {"min", "max"});
+  test(BOOLEAN(), BIGINT(), {"min", "max"});
+  test(
+      TINYINT(),
+      INTEGER(),
+      {"min", "max", "sum", "bitwise_and_agg", "bitwise_or_agg"});
+  test(
+      TINYINT(),
+      BIGINT(),
+      {"min", "max", "sum", "bitwise_and_agg", "bitwise_or_agg"});
+  test(
+      SMALLINT(),
+      INTEGER(),
+      {"min", "max", "sum", "bitwise_and_agg", "bitwise_or_agg"});
+  test(
+      INTEGER(),
+      BIGINT(),
+      {"min", "max", "sum", "bitwise_and_agg", "bitwise_or_agg"});
+  test(REAL(), DOUBLE(), {"min", "max", "sum"});
 }
 
 TEST_F(TableScanTest, structLazy) {
@@ -4223,6 +4308,41 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
 
   EXPECT_THROW(
       AssertQueryBuilder(op).split(split).copyResults(pool()), VeloxUserError);
+}
+
+TEST_F(TableScanTest, filterMissingFields) {
+  constexpr int kSize = 10;
+  auto iota = makeFlatVector<int64_t>(kSize, folly::identity);
+  auto data = makeRowVector({makeRowVector({iota})});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {data});
+  auto schema = makeRowType({
+      makeRowType({BIGINT(), BIGINT()}),
+      makeRowType({BIGINT()}),
+      BIGINT(),
+  });
+  auto test = [&](const std::vector<std::string>& subfieldFilters,
+                  int expectedSize) {
+    SCOPED_TRACE(fmt::format("{}", fmt::join(subfieldFilters, " AND ")));
+    auto plan = PlanBuilder()
+                    .tableScan(ROW({}, {}), subfieldFilters, "", schema)
+                    .planNode();
+    auto split = makeHiveConnectorSplit(file->getPath());
+    auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
+    ASSERT_EQ(result->size(), expectedSize);
+  };
+  test({"c0.c1 = 0"}, 0);
+  test({"c0.c1 IS NULL"}, kSize);
+  test({"c1 IS NOT NULL"}, 0);
+  test({"c1 IS NULL"}, kSize);
+  test({"c1.c0 = 0"}, 0);
+  test({"c1.c0 IS NULL"}, kSize);
+  test({"c2 = 0"}, 0);
+  test({"c2 IS NULL"}, kSize);
+  test({"c2 = 0", "c0.c1 IS NULL"}, 0);
+  test({"c2 IS NULL", "c0.c1 = 0"}, 0);
+  test({"c0.c0 = 0", "c1.c0 = 0"}, 0);
+  test({"c0.c0 = 0", "c1.c0 IS NULL"}, 1);
 }
 
 // Tests various projections of top level columns using the output type passed

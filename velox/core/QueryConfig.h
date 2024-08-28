@@ -15,29 +15,11 @@
  */
 #pragma once
 
-#include "velox/core/Config.h"
+#include "velox/common/config/Config.h"
 
 namespace facebook::velox::core {
-enum class CapacityUnit {
-  BYTE,
-  KILOBYTE,
-  MEGABYTE,
-  GIGABYTE,
-  TERABYTE,
-  PETABYTE
-};
 
-double toBytesPerCapacityUnit(CapacityUnit unit);
-
-CapacityUnit valueOfCapacityUnit(const std::string& unitStr);
-
-/// Convert capacity string with unit to the capacity number in the specified
-/// units
-uint64_t toCapacity(const std::string& from, CapacityUnit to);
-
-std::chrono::duration<double> toDuration(const std::string& str);
-
-/// A simple wrapper around velox::Config. Defines constants for query
+/// A simple wrapper around velox::ConfigBase. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
@@ -364,9 +346,20 @@ class QueryConfig {
   /// derived using micro-benchmarking.
   static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
 
+  /// Enable query tracing flag.
+  static constexpr const char* kQueryTraceEnabled = "query_trace_enabled";
+
+  /// Base dir of a query to store tracing data.
+  static constexpr const char* kQueryTraceDir = "query_trace_dir";
+
+  /// A comma-separated list of plan node ids whose input data will be traced.
+  /// Empty string if only want to trace the query metadata.
+  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_ids";
+
   uint64_t queryMaxMemoryPerNode() const {
-    return toCapacity(
-        get<std::string>(kQueryMaxMemoryPerNode, "0B"), CapacityUnit::BYTE);
+    return config::toCapacity(
+        get<std::string>(kQueryMaxMemoryPerNode, "0B"),
+        config::CapacityUnit::BYTE);
   }
 
   uint64_t maxPartialAggregationMemoryUsage() const {
@@ -628,6 +621,21 @@ class QueryConfig {
     return get<int32_t>(kSpillableReservationGrowthPct, kDefaultPct);
   }
 
+  /// Returns true if query tracing is enabled.
+  bool queryTraceEnabled() const {
+    return get<bool>(kQueryTraceEnabled, false);
+  }
+
+  std::string queryTraceDir() const {
+    // The default query trace dir, empty by default.
+    return get<std::string>(kQueryTraceDir, "");
+  }
+
+  std::string queryTraceNodeIds() const {
+    // The default query trace nodes, empty by default.
+    return get<std::string>(kQueryTraceNodeIds, "");
+  }
+
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
   }
@@ -681,7 +689,7 @@ class QueryConfig {
   }
 
   bool hashProbeFinishEarlyOnEmptyBuild() const {
-    return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, true);
+    return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, false);
   }
 
   uint32_t minTableRowsForParallelJoinBuild() const {
@@ -742,7 +750,11 @@ class QueryConfig {
   void testingOverrideConfigUnsafe(
       std::unordered_map<std::string, std::string>&& values);
 
+  std::unordered_map<std::string, std::string> rawConfigsCopy() const;
+
  private:
-  std::unique_ptr<velox::Config> config_;
+  void validateConfig();
+
+  std::unique_ptr<velox::config::ConfigBase> config_;
 };
 } // namespace facebook::velox::core

@@ -511,10 +511,13 @@ DataSink::Stats HiveDataSink::stats() const {
   }
 
   int64_t numWrittenBytes{0};
+  int64_t writeIOTimeUs{0};
   for (const auto& ioStats : ioStats_) {
     numWrittenBytes += ioStats->rawBytesWritten();
+    writeIOTimeUs += ioStats->writeIOTimeUs();
   }
   stats.numWrittenBytes = numWrittenBytes;
+  stats.writeIOTimeUs = writeIOTimeUs;
 
   if (state_ != State::kClosed) {
     return stats;
@@ -693,8 +696,7 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   //    through insertTableHandle)
   // 2. Otherwise, acquire user defined session properties.
   // 3. Lastly, acquire general hive connector configs.
-  options->processSessionConfigs(*connectorSessionProperties);
-  options->processHiveConnectorConfigs(*hiveConfig_->config());
+  options->processConfigs(*hiveConfig_->config(), *connectorSessionProperties);
 
   // Only overwrite options in case they were not already provided.
   if (options->schema == nullptr) {

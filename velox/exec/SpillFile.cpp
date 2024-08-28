@@ -28,96 +28,6 @@ namespace {
 static const bool kDefaultUseLosslessTimestamp = true;
 } // namespace
 
-SpillInputStream::SpillInputStream(
-    std::unique_ptr<ReadFile>&& file,
-    uint64_t bufferSize,
-    memory::MemoryPool* pool,
-    folly::Synchronized<common::SpillStats>* stats)
-    : file_(std::move(file)),
-      fileSize_(file_->size()),
-      bufferSize_(std::min(fileSize_, bufferSize - AlignedBuffer::kPaddedSize)),
-      pool_(pool),
-      readaEnabled_((bufferSize_ < fileSize_) && file_->hasPreadvAsync()),
-      stats_(stats) {
-  VELOX_CHECK_NOT_NULL(pool_);
-  VELOX_CHECK_GT(
-      bufferSize, AlignedBuffer::kPaddedSize, "Buffer size is too small");
-  buffers_.push_back(AlignedBuffer::allocate<char>(bufferSize_, pool_));
-  if (readaEnabled_) {
-    buffers_.push_back(AlignedBuffer::allocate<char>(bufferSize_, pool_));
-  }
-  next(/*throwIfPastEnd=*/true);
-}
-
-SpillInputStream::~SpillInputStream() {
-  if (!readaWait_.valid()) {
-    return;
-  }
-  try {
-    readaWait_.wait();
-  } catch (const std::exception& ex) {
-    // ignore any prefetch error when query has failed.
-    LOG(WARNING) << "Spill read-ahead failed on destruction " << ex.what();
-  }
-}
-
-void SpillInputStream::next(bool /*throwIfPastEnd*/) {
-  int32_t readBytes{0};
-  uint64_t readTimeUs{0};
-  if (readaWait_.valid()) {
-    {
-      MicrosecondTimer timer{&readTimeUs};
-      readBytes = std::move(readaWait_)
-                      .via(&folly::QueuedImmediateExecutor::instance())
-                      .wait()
-                      .value();
-      VELOX_CHECK(!readaWait_.valid());
-    }
-    VELOX_CHECK_LT(0, readBytes, "Reading past end of spill file");
-    advanceBuffer();
-  } else {
-    readBytes = readSize();
-    VELOX_CHECK_LT(0, readBytes, "Reading past end of spill file");
-    {
-      MicrosecondTimer timer{&readTimeUs};
-      file_->pread(offset_, readBytes, buffer()->asMutable<char>());
-    }
-  }
-  setRange({buffer()->asMutable<uint8_t>(), readBytes, 0});
-  updateSpillStats(readBytes, readTimeUs);
-
-  offset_ += readBytes;
-  maybeIssueReadahead();
-}
-
-uint64_t SpillInputStream::readSize() const {
-  return std::min(fileSize_ - offset_, bufferSize_);
-}
-
-void SpillInputStream::maybeIssueReadahead() {
-  VELOX_CHECK(!readaWait_.valid());
-  if (!readaEnabled_) {
-    return;
-  }
-  const auto size = readSize();
-  if (size == 0) {
-    return;
-  }
-  std::vector<folly::Range<char*>> ranges;
-  ranges.emplace_back(nextBuffer()->asMutable<char>(), size);
-  readaWait_ = file_->preadvAsync(offset_, ranges);
-  VELOX_CHECK(readaWait_.valid());
-}
-
-void SpillInputStream::updateSpillStats(uint64_t readBytes, uint64_t readTimeUs)
-    const {
-  auto lockedStats = stats_->wlock();
-  lockedStats->spillReadBytes += readBytes;
-  lockedStats->spillReadTimeUs += readTimeUs;
-  ++(lockedStats->spillReads);
-  common::updateGlobalSpillReadStats(readBytes, readTimeUs);
-}
-
 std::unique_ptr<SpillWriteFile> SpillWriteFile::create(
     uint32_t id,
     const std::string& pathPrefix,
@@ -234,21 +144,21 @@ uint64_t SpillWriter::flush() {
 
   IOBufOutputStream out(
       *pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
-  uint64_t flushTimeUs{0};
+  uint64_t flushTimeNs{0};
   {
-    MicrosecondTimer timer(&flushTimeUs);
+    NanosecondTimer timer(&flushTimeNs);
     batch_->flush(&out);
   }
   batch_.reset();
 
-  uint64_t writeTimeUs{0};
+  uint64_t writeTimeNs{0};
   uint64_t writtenBytes{0};
   auto iobuf = out.getIOBuf();
   {
-    MicrosecondTimer timer(&writeTimeUs);
+    NanosecondTimer timer(&writeTimeNs);
     writtenBytes = file->write(std::move(iobuf));
   }
-  updateWriteStats(writtenBytes, flushTimeUs, writeTimeUs);
+  updateWriteStats(writtenBytes, flushTimeNs, writeTimeNs);
   updateAndCheckSpillLimitCb_(writtenBytes);
   return writtenBytes;
 }
@@ -258,9 +168,9 @@ uint64_t SpillWriter::write(
     const folly::Range<IndexRange*>& indices) {
   checkNotFinished();
 
-  uint64_t timeUs{0};
+  uint64_t timeNs{0};
   {
-    MicrosecondTimer timer(&timeUs);
+    NanosecondTimer timer(&timeNs);
     if (batch_ == nullptr) {
       serializer::presto::PrestoVectorSerde::PrestoOptions options = {
           kDefaultUseLosslessTimestamp, compressionKind_, true /*nullsFirst*/};
@@ -272,7 +182,7 @@ uint64_t SpillWriter::write(
     }
     batch_->append(rows, indices);
   }
-  updateAppendStats(rows->size(), timeUs);
+  updateAppendStats(rows->size(), timeNs);
   if (batch_->size() < writeBufferSize_) {
     return 0;
   }
@@ -281,24 +191,24 @@ uint64_t SpillWriter::write(
 
 void SpillWriter::updateAppendStats(
     uint64_t numRows,
-    uint64_t serializationTimeUs) {
+    uint64_t serializationTimeNs) {
   auto statsLocked = stats_->wlock();
   statsLocked->spilledRows += numRows;
-  statsLocked->spillSerializationTimeUs += serializationTimeUs;
-  common::updateGlobalSpillAppendStats(numRows, serializationTimeUs);
+  statsLocked->spillSerializationTimeNanos += serializationTimeNs;
+  common::updateGlobalSpillAppendStats(numRows, serializationTimeNs);
 }
 
 void SpillWriter::updateWriteStats(
     uint64_t spilledBytes,
-    uint64_t flushTimeUs,
-    uint64_t fileWriteTimeUs) {
+    uint64_t flushTimeNs,
+    uint64_t fileWriteTimeNs) {
   auto statsLocked = stats_->wlock();
   statsLocked->spilledBytes += spilledBytes;
-  statsLocked->spillFlushTimeUs += flushTimeUs;
-  statsLocked->spillWriteTimeUs += fileWriteTimeUs;
+  statsLocked->spillFlushTimeNanos += flushTimeNs;
+  statsLocked->spillWriteTimeNanos += fileWriteTimeNs;
   ++statsLocked->spillWrites;
   common::updateGlobalSpillWriteStats(
-      spilledBytes, flushTimeUs, fileWriteTimeUs);
+      spilledBytes, flushTimeNs, fileWriteTimeNs);
 }
 
 void SpillWriter::updateSpilledFileStats(uint64_t fileSize) {
@@ -393,24 +303,35 @@ SpillReadFile::SpillReadFile(
       stats_(stats) {
   auto fs = filesystems::getFileSystem(path_, nullptr);
   auto file = fs->openFileForRead(path_);
-  input_ = std::make_unique<SpillInputStream>(
-      std::move(file), bufferSize, pool_, stats_);
+  input_ = std::make_unique<common::FileInputStream>(
+      std::move(file), bufferSize, pool_);
 }
 
 bool SpillReadFile::nextBatch(RowVectorPtr& rowVector) {
   if (input_->atEnd()) {
+    recordSpillStats();
     return false;
   }
 
-  uint64_t timeUs{0};
+  uint64_t timeNs{0};
   {
-    MicrosecondTimer timer{&timeUs};
+    NanosecondTimer timer{&timeNs};
     VectorStreamGroup::read(
         input_.get(), pool_, type_, &rowVector, &readOptions_);
   }
-  stats_->wlock()->spillDeserializationTimeUs += timeUs;
-  common::updateGlobalSpillDeserializationTimeUs(timeUs);
-
+  stats_->wlock()->spillDeserializationTimeNanos += timeNs;
+  common::updateGlobalSpillDeserializationTimeNs(timeNs);
   return true;
+}
+
+void SpillReadFile::recordSpillStats() {
+  VELOX_CHECK(input_->atEnd());
+  const auto readStats = input_->stats();
+  common::updateGlobalSpillReadStats(
+      readStats.numReads, readStats.readBytes, readStats.readTimeNs);
+  auto lockedSpillStats = stats_->wlock();
+  lockedSpillStats->spillReads += readStats.numReads;
+  lockedSpillStats->spillReadTimeNanos += readStats.readTimeNs;
+  lockedSpillStats->spillReadBytes += readStats.readBytes;
 }
 } // namespace facebook::velox::exec

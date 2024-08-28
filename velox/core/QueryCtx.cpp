@@ -16,13 +16,16 @@
 
 #include "velox/core/QueryCtx.h"
 #include "velox/common/base/SpillConfig.h"
+#include "velox/common/config/Config.h"
 
 namespace facebook::velox::core {
 
-/*static*/ std::shared_ptr<QueryCtx> QueryCtx::create(
+// static
+std::shared_ptr<QueryCtx> QueryCtx::create(
     folly::Executor* executor,
     QueryConfig&& queryConfig,
-    std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs,
+    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+        connectorConfigs,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
@@ -42,7 +45,7 @@ namespace facebook::velox::core {
 QueryCtx::QueryCtx(
     folly::Executor* executor,
     QueryConfig&& queryConfig,
-    std::unordered_map<std::string, std::shared_ptr<Config>>
+    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
         connectorSessionProperties,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,

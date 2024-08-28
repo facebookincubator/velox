@@ -17,6 +17,7 @@
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include <cpr/cpr.h> // @manual
 #include <folly/json.h>
+#include <velox/dwio/dwrf/writer/Writer.h>
 #include <iostream>
 #include "velox/common/base/Fs.h"
 #include "velox/common/encode/Base64.h"
@@ -44,7 +45,8 @@ void writeToFile(
     memory::MemoryPool* pool) {
   VELOX_CHECK_GT(data.size(), 0);
 
-  auto options = std::make_shared<dwio::common::WriterOptions>();
+  std::shared_ptr<dwio::common::WriterOptions> options =
+      std::make_shared<dwrf::WriterOptions>();
   options->schema = data[0]->type();
   options->memoryPool = pool;
 
@@ -59,13 +61,13 @@ void writeToFile(
   writer->close();
 }
 
-ByteInputStream toByteStream(const std::string& input) {
+std::unique_ptr<ByteInputStream> toByteStream(const std::string& input) {
   std::vector<ByteRange> ranges;
   ranges.push_back(
       {reinterpret_cast<uint8_t*>(const_cast<char*>(input.data())),
        (int32_t)input.length(),
        0});
-  return ByteInputStream(std::move(ranges));
+  return std::make_unique<BufferInputStream>(std::move(ranges));
 }
 
 RowVectorPtr deserialize(
@@ -75,7 +77,7 @@ RowVectorPtr deserialize(
   auto byteStream = toByteStream(input);
   auto serde = std::make_unique<serializer::presto::PrestoVectorSerde>();
   RowVectorPtr result;
-  serde->deserialize(&byteStream, pool, rowType, &result, nullptr);
+  serde->deserialize(byteStream.get(), pool, rowType, &result, nullptr);
   return result;
 }
 
@@ -142,13 +144,16 @@ class ServerResponse {
 } // namespace
 
 PrestoQueryRunner::PrestoQueryRunner(
+    memory::MemoryPool* pool,
     std::string coordinatorUri,
     std::string user,
     std::chrono::milliseconds timeout)
-    : coordinatorUri_{std::move(coordinatorUri)},
+    : ReferenceQueryRunner(pool),
+      coordinatorUri_{std::move(coordinatorUri)},
       user_{std::move(user)},
       timeout_(timeout) {
   eventBaseThread_.start("PrestoQueryRunner");
+  pool_ = aggregatePool()->addLeafChild("leaf");
 }
 
 std::optional<std::string> PrestoQueryRunner::toSql(
@@ -250,6 +255,22 @@ bool isSupportedDwrfType(const TypePtr& type) {
 }
 
 } // namespace
+
+const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
+  static const std::vector<TypePtr> kScalarTypes{
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      VARBINARY(),
+      TIMESTAMP(),
+  };
+  return kScalarTypes;
+}
 
 std::optional<std::string> PrestoQueryRunner::toSql(
     const std::shared_ptr<const core::AggregationNode>& aggregationNode) {
@@ -733,7 +754,7 @@ std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
                            .string()
                            .substr(strlen("file:"));
 
-  auto writerPool = rootPool()->addAggregateChild("writer");
+  auto writerPool = aggregatePool()->addAggregateChild("writer");
   writeToFile(probeFilePath, probeInput, writerPool.get());
   writeToFile(buildFilePath, buildInput, writerPool.get());
 
@@ -759,7 +780,7 @@ std::vector<velox::RowVectorPtr> PrestoQueryRunner::executeVector(
                          .string()
                          .substr(strlen("file:"));
 
-  auto writerPool = rootPool()->addAggregateChild("writer");
+  auto writerPool = aggregatePool()->addAggregateChild("writer");
   writeToFile(newFilePath, input, writerPool.get());
 
   // Run the query.

@@ -18,7 +18,9 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
+#include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
@@ -237,6 +239,7 @@ Writer::Writer(
   }
   options_.timestampUnit =
       options.parquetWriteTimestampUnit.value_or(TimestampUnit::kNano);
+  options_.timestampTimeZone = options.parquetWriteTimestampTimeZone;
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
@@ -408,7 +411,7 @@ void Writer::setMemoryReclaimers() {
 namespace {
 
 std::optional<TimestampUnit> getTimestampUnit(
-    const Config& config,
+    const config::ConfigBase& config,
     const char* configKey) {
   if (const auto unit = config.get<uint8_t>(configKey)) {
     VELOX_CHECK(
@@ -421,19 +424,33 @@ std::optional<TimestampUnit> getTimestampUnit(
   return std::nullopt;
 }
 
-} // namespace
-
-void WriterOptions::processSessionConfigs(const Config& config) {
-  if (!parquetWriteTimestampUnit) {
-    parquetWriteTimestampUnit =
-        getTimestampUnit(config, kParquetSessionWriteTimestampUnit);
+std::optional<std::string> getTimestampTimeZone(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto timezone = config.get<std::string>(configKey)) {
+    return timezone.value();
   }
+  return std::nullopt;
 }
 
-void WriterOptions::processHiveConnectorConfigs(const Config& config) {
+} // namespace
+
+void WriterOptions::processConfigs(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) {
   if (!parquetWriteTimestampUnit) {
     parquetWriteTimestampUnit =
-        getTimestampUnit(config, kParquetHiveConnectorWriteTimestampUnit);
+        getTimestampUnit(session, kParquetSessionWriteTimestampUnit).has_value()
+        ? getTimestampUnit(session, kParquetSessionWriteTimestampUnit)
+        : getTimestampUnit(connectorConfig, kParquetSessionWriteTimestampUnit);
+  }
+  if (!parquetWriteTimestampTimeZone) {
+    parquetWriteTimestampTimeZone =
+        getTimestampTimeZone(session, core::QueryConfig::kSessionTimezone)
+            .has_value()
+        ? getTimestampTimeZone(session, core::QueryConfig::kSessionTimezone)
+        : getTimestampTimeZone(
+              connectorConfig, core::QueryConfig::kSessionTimezone);
   }
 }
 

@@ -23,6 +23,8 @@
 #include "velox/exec/Split.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
+#include "velox/exec/trace/QueryMetadataWriter.h"
+#include "velox/exec/trace/QueryTraceConfig.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec {
@@ -618,12 +620,10 @@ class Task : public std::enable_shared_from_this<Task> {
   /// 'this' at the time of requesting yield. Returns 0 if yield not requested.
   int32_t yieldIfDue(uint64_t startTimeMicros);
 
-  /// Once 'pauseRequested_' is set, it will not be cleared until
-  /// task::resume(). It is therefore OK to read it without a mutex
-  /// from a thread that this flag concerns.
-  bool pauseRequested() const {
-    return pauseRequested_;
-  }
+  /// Check if the task is requested to pause. If it is true and 'future' is not
+  /// null, a task resume future is returned which will be fulfilled once the
+  /// task is resumed.
+  bool pauseRequested(ContinueFuture* future = nullptr);
 
   std::timed_mutex& mutex() {
     return mutex_;
@@ -837,8 +837,13 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  template <class TBridgeType>
+  template <class TBridgeType, typename MemberType>
   std::shared_ptr<TBridgeType> getJoinBridgeInternalLocked(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId,
+      MemberType SplitGroupState::*bridges_member);
+
+  std::shared_ptr<JoinBridge> getCustomJoinBridgeInternal(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
@@ -966,6 +971,13 @@ class Task : public std::enable_shared_from_this<Task> {
   std::shared_ptr<ExchangeClient> getExchangeClientLocked(
       int32_t pipelineId) const;
 
+  // Builds the query trace config.
+  std::optional<trace::QueryTraceConfig> maybeMakeTraceConfig() const;
+
+  // Create a 'QueryMetadtaWriter' to trace the query metadata if the query
+  // trace enabled.
+  void maybeInitQueryTrace();
+
   // The helper class used to maintain 'numCreatedTasks_' and 'numDeletedTasks_'
   // on task construction and destruction.
   class TaskCounter {
@@ -996,6 +1008,7 @@ class Task : public std::enable_shared_from_this<Task> {
   core::PlanFragment planFragment_;
   const int destination_;
   const std::shared_ptr<core::QueryCtx> queryCtx_;
+  const std::optional<trace::QueryTraceConfig> traceConfig_;
 
   // The execution mode of the task. It is enforced that a task can only be
   // executed in a single mode throughout its lifetime
@@ -1155,7 +1168,9 @@ class Task : public std::enable_shared_from_this<Task> {
   // terminate(). They are fulfilled when the last thread stops
   // running for 'this'.
   std::vector<ContinuePromise> threadFinishPromises_;
-
+  // Promises for the futures returned to callers of pauseRequested().
+  // They are fulfilled when `resume()` is called for this task.
+  std::vector<ContinuePromise> resumePromises_;
   // Base spill directory for this task.
   std::string spillDirectory_;
 

@@ -844,10 +844,6 @@ TEST_F(CastExprTest, timestampAdjustToTimezone) {
       });
 }
 
-TEST_F(CastExprTest, timestampAdjustToTimezoneInvalid) {
-  VELOX_ASSERT_USER_THROW(setTimezone("bla"), "Unknown time zone: 'bla'");
-}
-
 TEST_F(CastExprTest, date) {
   testCast<std::string, int32_t>(
       "date",
@@ -1026,6 +1022,12 @@ TEST_F(CastExprTest, primitiveInvalidCornerCases) {
         "bigint", {"infinity"}, "Invalid leading character");
     testInvalidCast<std::string>(
         "bigint", {"nan"}, "Invalid leading character");
+    testInvalidCast<std::string>(
+        "bigint",
+        {"٣"},
+        "Unicode characters are not supported for conversion to integer types",
+        VARCHAR(),
+        true);
   }
 
   // To floating-point.

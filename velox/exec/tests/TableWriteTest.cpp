@@ -2360,6 +2360,8 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
         stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
     ASSERT_EQ(stats[1].runtimeStats["numWrittenFiles"].sum, 1);
     ASSERT_EQ(stats[1].runtimeStats["numWrittenFiles"].count, 1);
+    ASSERT_GE(stats[1].runtimeStats["writeIOTime"].sum, 0);
+    ASSERT_EQ(stats[1].runtimeStats["writeIOTime"].count, 1);
   }
 }
 
@@ -2387,8 +2389,8 @@ TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
     std::unordered_map<std::string, std::string> propFromFile{
         {"hive.immutable-partitions",
          testData.immutablePartitionsEnabled ? "true" : "false"}};
-    std::shared_ptr<const Config> config{
-        std::make_shared<core::MemConfig>(propFromFile)};
+    std::shared_ptr<const config::ConfigBase> config{
+        std::make_shared<config::ConfigBase>(std::move(propFromFile))};
     resetHiveConnector(config);
 
     auto input = makeVectors(10, 10);
@@ -3132,6 +3134,9 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
           ->customStats.at("numWrittenFiles")
           .sum,
       numWrittenFiles);
+  ASSERT_GE(
+      stats.operatorStats.at("TableWrite")->customStats.at("writeIOTime").sum,
+      0);
 }
 
 DEBUG_ONLY_TEST_P(
@@ -3742,8 +3747,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
     ASSERT_GE(arbitrator->stats().numReclaimedBytes, testParam.bytesToReserve);
     waitForAllTasksToBeDeleted(3'000'000);
     queryCtx.reset();
-    ASSERT_EQ(arbitrator->stats().numReserves, 1);
-    ASSERT_EQ(arbitrator->stats().numReleases, 1);
+    ASSERT_EQ(arbitrator->stats().numShrinks, 1);
   }
 }
 
@@ -3823,7 +3827,6 @@ DEBUG_ONLY_TEST_F(
 
   ASSERT_EQ(arbitrator->stats().numFailures, 1);
   ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 1);
-  ASSERT_EQ(arbitrator->stats().numReserves, 1);
   waitForAllTasksToBeDeleted();
 }
 
@@ -3916,7 +3919,6 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 0);
   ASSERT_EQ(arbitrator->stats().numFailures, 0);
   ASSERT_GT(arbitrator->stats().numReclaimedBytes, 0);
-  ASSERT_EQ(arbitrator->stats().numReserves, 1);
   waitForAllTasksToBeDeleted();
 }
 
@@ -4014,7 +4016,6 @@ DEBUG_ONLY_TEST_F(
 
   ASSERT_EQ(arbitrator->stats().numFailures, 1);
   ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 1);
-  ASSERT_EQ(arbitrator->stats().numReserves, 1);
   const auto updatedSpillStats = common::globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
   waitForAllTasksToBeDeleted();

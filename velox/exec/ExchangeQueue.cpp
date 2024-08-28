@@ -41,8 +41,8 @@ SerializedPage::~SerializedPage() {
   }
 }
 
-ByteInputStream SerializedPage::prepareStreamForDeserialize() {
-  return ByteInputStream(std::move(ranges_));
+std::unique_ptr<ByteInputStream> SerializedPage::prepareStreamForDeserialize() {
+  return std::make_unique<BufferInputStream>(std::move(ranges_));
 }
 
 void ExchangeQueue::noMoreSources() {
