@@ -34,12 +34,12 @@ class QueryAssertionsTest : public OperatorTestBase {
       const std::string& duckDbSql) {
     CursorParameters parallelParams{};
     parallelParams.planNode = plan;
-    parallelParams.serial = false;
+    parallelParams.serialExecutionMode = false;
     assertQuery(parallelParams, duckDbSql);
 
     CursorParameters serialParams{};
     serialParams.planNode = plan;
-    serialParams.serial = true;
+    serialParams.serialExecutionMode = true;
     assertQuery(serialParams, duckDbSql);
   }
 };

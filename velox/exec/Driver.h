@@ -241,7 +241,7 @@ class BlockingState {
   }
 
   /// Moves out the blocking future stored inside. Can be called only once.
-  /// Used in serial execution.
+  /// Used in serial execution mode.
   ContinueFuture future() {
     return std::move(future_);
   }

@@ -167,7 +167,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// If this returns true, this Task supports the serial execution API
   /// next().
-  bool supportsSerialExecution() const;
+  bool supportsSerialExecutionMode() const;
 
   /// Single-threaded execution API. Runs the query and returns results one
   /// batch at a time. Returns nullptr if query evaluation is finished and no

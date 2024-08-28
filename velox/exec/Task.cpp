@@ -307,7 +307,7 @@ Task::Task(
   }
 
   maybeInitQueryTrace();
-  // Executor must not be specified for serial execution.
+  // Executor must not be specified for serial execution mode.
   if (mode_ == Task::ExecutionMode::kSerial) {
     VELOX_CHECK_NULL(queryCtx_->executor());
   }
@@ -554,7 +554,7 @@ velox::memory::MemoryPool* Task::addExchangeClientPool(
   return childPools_.back().get();
 }
 
-bool Task::supportsSerialExecution() const {
+bool Task::supportsSerialExecutionMode() const {
   if (consumerSupplier_) {
     return false;
   }
@@ -579,13 +579,13 @@ RowVectorPtr Task::next(ContinueFuture* future) {
   VELOX_CHECK_EQ(
       core::ExecutionStrategy::kUngrouped,
       planFragment_.executionStrategy,
-      "Serial execution supports only ungrouped execution");
+      "Serial execution mode supports only ungrouped execution");
 
   if (!splitsStates_.empty()) {
     for (const auto& it : splitsStates_) {
       VELOX_CHECK(
           it.second.noMoreSplits,
-          "Serial execution requires all splits to be added before "
+          "Serial execution mode requires all splits to be added before "
           "calling Task::next().");
     }
   }
@@ -599,7 +599,7 @@ RowVectorPtr Task::next(ContinueFuture* future) {
   if (driverFactories_.empty()) {
     VELOX_CHECK_NULL(
         consumerSupplier_,
-        "Serial execution doesn't support delivering results to a "
+        "Serial execution mode doesn't support delivering results to a "
         "callback");
 
     taskStats_.executionStartTimeMs = getCurrentTimeMs();
@@ -947,7 +947,7 @@ void Task::resume(std::shared_ptr<Task> self) {
           // event. The Driver gets enqueued by the promise realization.
           //
           // Do not continue the driver if no executor is supplied,
-          // This usually happens in serial execution.
+          // This usually happens in serial execution mode.
           Driver::enqueue(driver);
         }
       }

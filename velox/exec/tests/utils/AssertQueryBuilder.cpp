@@ -62,13 +62,13 @@ AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
   return *this;
 }
 
-AssertQueryBuilder& AssertQueryBuilder::serial(bool serial) {
+AssertQueryBuilder& AssertQueryBuilder::serialExecution(bool serial) {
   if (serial) {
-    params_.serial = true;
+    params_.serialExecutionMode = true;
     executor_ = nullptr;
     return *this;
   }
-  params_.serial = false;
+  params_.serialExecutionMode = false;
   executor_ = newExecutor();
   return *this;
 }

@@ -480,7 +480,7 @@ class TaskTest : public HiveConnectorTestBase {
       task->noMoreSplits(nodeId);
     }
 
-    VELOX_CHECK(task->supportsSerialExecution());
+    VELOX_CHECK(task->supportsSerialExecutionMode());
 
     vector_size_t numRows = 0;
     std::vector<RowVectorPtr> results;
@@ -967,7 +967,7 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
   EXPECT_EQ(3, results.size());
 }
 
-TEST_F(TaskTest, supportsSerialExecution) {
+TEST_F(TaskTest, supportsSerialExecutionMode) {
   auto plan = PlanBuilder()
                   .tableScan(ROW({"c0"}, {BIGINT()}))
                   .project({"c0 % 10"})
@@ -980,9 +980,9 @@ TEST_F(TaskTest, supportsSerialExecution) {
       core::QueryCtx::create(),
       Task::ExecutionMode::kSerial);
 
-  // PartitionedOutput does not support serial execution, therefore the
+  // PartitionedOutput does not support serial execution mode, therefore the
   // task doesn't support it either.
-  ASSERT_FALSE(task->supportsSerialExecution());
+  ASSERT_FALSE(task->supportsSerialExecutionMode());
 }
 
 TEST_F(TaskTest, updateBroadCastOutputBuffers) {
@@ -1286,7 +1286,7 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
 
   {
     // Scenario 2: Serial execution starts first then kicks in Parallel
-    // execution.
+    // execution mode.
 
     auto data = makeRowVector({
         makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),

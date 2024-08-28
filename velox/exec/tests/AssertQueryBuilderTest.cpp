@@ -41,10 +41,10 @@ TEST_F(AssertQueryBuilderTest, serial) {
   const auto& plan = builder.values({data}).planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .serial(true)
+      .serialExecution(true)
       .assertResults("VALUES (1), (2), (3)");
 
-  AssertQueryBuilder(plan).serial(true).assertResults(data);
+  AssertQueryBuilder(plan).serialExecution(true).assertResults(data);
 }
 
 TEST_F(AssertQueryBuilderTest, orderedResults) {

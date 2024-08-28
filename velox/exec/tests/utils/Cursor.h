@@ -63,8 +63,8 @@ struct CursorParameters {
 
   bool copyResult = true;
 
-  /// If true, use serial execution. Use parallel execution otherwise.
-  bool serial = false;
+  /// If true, use serial execution mode. Use parallel execution mode otherwise.
+  bool serialExecutionMode = false;
 
   /// If both 'queryConfigs' and 'queryCtx' are specified, the configurations in
   /// 'queryCtx' will be overridden by 'queryConfig'.
