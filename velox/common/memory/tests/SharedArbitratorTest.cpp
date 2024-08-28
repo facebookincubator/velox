@@ -310,7 +310,7 @@ std::unique_ptr<folly::Executor> newParallelExecutor() {
 }
 
 struct TestParam {
-  bool isSerialExecution{false};
+  bool isSerialExecutionMode{false};
 };
 } // namespace
 
@@ -335,15 +335,15 @@ class SharedArbitrationTestWithExecutionModes
  protected:
   void SetUp() override {
     SharedArbitrationTestBase::SetUp();
-    isSerialExecution_ = GetParam().isSerialExecution;
-    if (isSerialExecution_) {
+    isSerialExecutionMode_ = GetParam().isSerialExecutionMode;
+    if (isSerialExecutionMode_) {
       executor_ = nullptr;
     } else {
       executor_ = newParallelExecutor();
     }
   }
 
-  bool isSerialExecution_{false};
+  bool isSerialExecutionMode_{false};
 };
 
 DEBUG_ONLY_TEST_F(SharedArbitrationTest, queryArbitrationStateCheck) {
@@ -536,7 +536,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithExecutionModes, reclaimToOrderBy) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(orderByQueryCtx)
-              .serialExecution(isSerialExecution_)
+              .serialExecution(isSerialExecutionMode_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
@@ -553,7 +553,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithExecutionModes, reclaimToOrderBy) {
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
-              .serialExecution(isSerialExecution_)
+              .serialExecution(isSerialExecutionMode_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -640,7 +640,7 @@ DEBUG_ONLY_TEST_P(
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(aggregationQueryCtx)
-              .serialExecution(isSerialExecution_)
+              .serialExecution(isSerialExecutionMode_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
@@ -658,7 +658,7 @@ DEBUG_ONLY_TEST_P(
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
-              .serialExecution(isSerialExecution_)
+              .serialExecution(isSerialExecutionMode_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -746,7 +746,7 @@ DEBUG_ONLY_TEST_P(
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(joinQueryCtx)
-              .serialExecution(isSerialExecution_)
+              .serialExecution(isSerialExecutionMode_)
               .plan(PlanBuilder(planNodeIdGenerator)
                         .values(vectors)
                         .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
@@ -774,7 +774,7 @@ DEBUG_ONLY_TEST_P(
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .queryCtx(fakeMemoryQueryCtx)
-              .serialExecution(isSerialExecution_)
+              .serialExecution(isSerialExecutionMode_)
               .plan(PlanBuilder()
                         .values(vectors)
                         .addNode([&](std::string id, core::PlanNodePtr input) {
