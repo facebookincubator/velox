@@ -1058,7 +1058,7 @@ TEST_F(HashJoinTest, multipleBuildColumns) {
                             .values(buildVectors, true)
                             .planNode(),
                         filter,
-                        {"t_k1", "u_k1"},
+                        {"u_k2", "t_k1", "t_k2", "u_k1"},
                         core::JoinType::kLeft)
                     .planNode();
 
@@ -1071,7 +1071,7 @@ TEST_F(HashJoinTest, multipleBuildColumns) {
         .config(
             core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
         .referenceQuery(fmt::format(
-            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 {}{}",
+            "SELECT u_k2, t_k1, t_k2, u_k1 from t left join u on t_k1 = u_k1 {}{}",
             filter.empty() ? "" : "and ",
             filter))
         .run();
