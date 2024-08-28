@@ -316,6 +316,36 @@ DataSetBuilder& DataSetBuilder::makeMapStringValues(
   return *this;
 }
 
+void DataSetBuilder::adjustTimestampToPrecision(
+    VectorPtr batch,
+    TimestampPrecision precision) {
+  auto type = batch->type();
+
+  if (type->kind() == TypeKind::TIMESTAMP) {
+    auto rawValues =
+        batch->asUnchecked<FlatVector<Timestamp>>()->mutableRawValues();
+    for (auto i = 0; i < batch->size(); ++i) {
+      if (batch->isNullAt(i)) {
+        continue;
+      }
+
+      rawValues[i].toPrecision(precision);
+    }
+  } else if (type->kind() == TypeKind::ROW) {
+    for (auto& child : batch->as<RowVector>()->children()) {
+      adjustTimestampToPrecision(child, precision);
+    }
+  }
+}
+
+DataSetBuilder& DataSetBuilder::adjustTimestampToPrecision(
+    TimestampPrecision precision) {
+  for (auto& batch : *batches_) {
+    adjustTimestampToPrecision(batch, precision);
+  }
+  return *this;
+}
+
 std::unique_ptr<std::vector<RowVectorPtr>> DataSetBuilder::build() {
   return std::move(batches_);
 }

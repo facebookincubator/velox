@@ -269,6 +269,82 @@ TEST_F(E2EFilterTest, timestampDictionary) {
       20);
 }
 
+TEST_F(E2EFilterTest, timestampINT64MillisDictionary) {
+  options_.enableDictionary = true;
+  options_.dataPageSize = 4 * 1024;
+  options_.parquetWriteTimestampUnit =
+      static_cast<uint8_t>(TimestampUnit::kMilli);
+  options_.parquetWriteTimestampTimeZone = "utc";
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {
+        dataSetBuilder_->adjustTimestampToPrecision(
+            TimestampPrecision::kMilliseconds);
+      },
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      1);
+}
+
+TEST_F(E2EFilterTest, timestampINT64MillisPlain) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+  options_.parquetWriteTimestampUnit =
+      static_cast<uint8_t>(TimestampUnit::kMilli);
+  options_.parquetWriteTimestampTimeZone = "utc";
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {
+        dataSetBuilder_->adjustTimestampToPrecision(
+            TimestampPrecision::kMilliseconds);
+      },
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      1);
+}
+
+TEST_F(E2EFilterTest, timestampINT64MicrosDictionary) {
+  options_.enableDictionary = true;
+  options_.dataPageSize = 4 * 1024;
+  options_.parquetWriteTimestampUnit =
+      static_cast<uint8_t>(TimestampUnit::kMicro);
+  options_.parquetWriteTimestampTimeZone = "utc";
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {
+        dataSetBuilder_->adjustTimestampToPrecision(
+            TimestampPrecision::kMicroseconds);
+      },
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      1);
+}
+
+TEST_F(E2EFilterTest, timestampINT64MicrosPlain) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+  options_.parquetWriteTimestampUnit =
+      static_cast<uint8_t>(TimestampUnit::kMicro);
+  options_.parquetWriteTimestampTimeZone = "utc";
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {
+        dataSetBuilder_->adjustTimestampToPrecision(
+            TimestampPrecision::kMicroseconds);
+      },
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      1);
+}
+
 TEST_F(E2EFilterTest, floatAndDoubleDirect) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;

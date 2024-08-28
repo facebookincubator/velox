@@ -81,10 +81,10 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
       if (logicalTypeOpt.has_value() &&
           logicalTypeOpt.value().__isset.TIMESTAMP &&
           parquetFileType.parquetType_ == thrift::Type::INT64) {
-        return std::make_unique<TimestampINT64ColumnReader>(
+        return std::make_unique<TimestampInt64ColumnReader>(
             requestedType, fileType, params, scanSpec);
       } else {
-        return std::make_unique<TimestampINT96ColumnReader>(
+        return std::make_unique<TimestampInt96ColumnReader>(
             requestedType, fileType, params, scanSpec);
       }
     }

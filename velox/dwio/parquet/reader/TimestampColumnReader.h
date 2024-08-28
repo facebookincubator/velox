@@ -21,9 +21,9 @@
 
 namespace facebook::velox::parquet {
 
-class TimestampINT96ColumnReader : public IntegerColumnReader {
+class TimestampInt96ColumnReader : public IntegerColumnReader {
  public:
-  TimestampINT96ColumnReader(
+  TimestampInt96ColumnReader(
       const TypePtr& requestedType,
       std::shared_ptr<const dwio::common::TypeWithId> fileType,
       ParquetParams& params,
@@ -49,19 +49,7 @@ class TimestampINT96ColumnReader : public IntegerColumnReader {
       if (resultVector->isNullAt(i)) {
         continue;
       }
-      const auto timestamp = rawValues[i];
-      uint64_t nanos = timestamp.getNanos();
-      switch (timestampPrecision_) {
-        case TimestampPrecision::kMilliseconds:
-          nanos = nanos / 1'000'000 * 1'000'000;
-          break;
-        case TimestampPrecision::kMicroseconds:
-          nanos = nanos / 1'000 * 1'000;
-          break;
-        case TimestampPrecision::kNanoseconds:
-          break;
-      }
-      rawValues[i] = Timestamp(timestamp.getSeconds(), nanos);
+      rawValues[i].toPrecision(timestampPrecision_);
     }
   }
 
@@ -82,9 +70,9 @@ class TimestampINT96ColumnReader : public IntegerColumnReader {
   TimestampPrecision timestampPrecision_;
 };
 
-class TimestampINT64ColumnReader : public IntegerColumnReader {
+class TimestampInt64ColumnReader : public IntegerColumnReader {
  public:
-  TimestampINT64ColumnReader(
+  TimestampInt64ColumnReader(
       const TypePtr& requestedType,
       std::shared_ptr<const dwio::common::TypeWithId> fileType,
       ParquetParams& params,
@@ -112,7 +100,7 @@ class TimestampINT64ColumnReader : public IntegerColumnReader {
   }
 
   bool hasBulkPath() const override {
-    return false;
+    return true;
   }
 
   void
@@ -180,42 +168,23 @@ class TimestampINT64ColumnReader : public IntegerColumnReader {
     getFlatValues<Timestamp, Timestamp>(rows, result, requestedType_);
   }
 
-  Timestamp adjustToPrecision(
-      const Timestamp& timestamp,
-      TimestampPrecision precision) {
-    auto nano = timestamp.getNanos();
-    switch (precision) {
-      case TimestampPrecision::kMilliseconds:
-        nano = nano / 1'000'000 * 1'000'000;
-        break;
-      case TimestampPrecision::kMicroseconds:
-        nano = nano / 1'000 * 1'000;
-        break;
-      case TimestampPrecision::kNanoseconds:
-        break;
-    }
-
-    return Timestamp(timestamp.getSeconds(), nano);
-  }
-
-  void read(
-      vector_size_t offset,
-      RowSet rows,
-      const uint64_t* /*incomingNulls*/) override {
-    auto& data = formatData_->as<ParquetData>();
-    prepareRead<int64_t>(offset, rows, nullptr);
-
-    // Remove filter so that we can do filtering here once data is represented
-    // as timestamp type
-    const auto filter = scanSpec_->filter()->clone();
-    scanSpec_->setFilter(nullptr);
-
-    readCommon<IntegerColumnReader, true>(rows);
+  template <bool isDense>
+  void readHelper(common::Filter* filter, RowSet rows) {
+    dwio::common::ExtractToReader extractValues(this);
+    common::AlwaysTrue alwaysTrue;
+    dwio::common::ColumnVisitor<
+        int64_t,
+        common::AlwaysTrue,
+        decltype(extractValues),
+        isDense>
+        visitor(alwaysTrue, this, rows, extractValues);
+    readWithVisitor(rows, visitor);
 
     auto tsValues =
         AlignedBuffer::allocate<Timestamp>(numValues_, &memoryPool_);
     auto rawTs = tsValues->asMutable<Timestamp>();
     auto rawTsInt64 = values_->asMutable<int64_t>();
+
     const auto rawNulls =
         resultNulls() ? resultNulls()->as<uint64_t>() : nullptr;
 
@@ -227,12 +196,14 @@ class TimestampINT64ColumnReader : public IntegerColumnReader {
         } else {
           timestamp = Timestamp::fromMillis(rawTsInt64[i]);
         }
-
-        rawTs[i] = adjustToPrecision(timestamp, timestampPrecision_);
+        rawTs[i] = timestamp;
+        rawTs[i].toPrecision(timestampPrecision_);
       }
     }
+
     values_ = tsValues;
     rawValues_ = values_->asMutable<char>();
+    outputRows_.clear();
 
     switch (
         !filter ||
@@ -253,10 +224,25 @@ class TimestampINT64ColumnReader : public IntegerColumnReader {
         break;
       case common::FilterKind::kTimestampRange:
       case common::FilterKind::kMultiRange:
-        processFilter(filter.get(), rows, rawNulls);
+        processFilter(filter, rows, rawNulls);
         break;
       default:
         VELOX_UNSUPPORTED("Unsupported filter.");
+    }
+  }
+
+  void read(
+      vector_size_t offset,
+      RowSet rows,
+      const uint64_t* /*incomingNulls*/) override {
+    auto& data = formatData_->as<ParquetData>();
+    prepareRead<int64_t>(offset, rows, nullptr);
+
+    bool isDense = rows.back() == rows.size() - 1;
+    if (isDense) {
+      readHelper<true>(scanSpec_->filter(), rows);
+    } else {
+      readHelper<false>(scanSpec_->filter(), rows);
     }
 
     readOffset_ += rows.back() + 1;

@@ -105,6 +105,11 @@ class ReaderBase {
   TypePtr convertType(
       const thrift::SchemaElement& schemaElement,
       const TypePtr& requestedType) const;
+      
+  thrift::LogicalType getTimestampLogicalType(
+      thrift::ConvertedType::type type) const;
+
+  TypePtr convertType(const thrift::SchemaElement& schemaElement) const;
 
   template <typename T>
   static std::shared_ptr<const RowType> createRowType(
@@ -554,38 +559,14 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     int32_t typeLength =
         schemaElement.__isset.type_length ? schemaElement.type_length : 0;
     std::vector<std::unique_ptr<dwio::common::TypeWithId>> children;
-    std::optional<thrift::LogicalType> logicalType_ =
+    std::optional<thrift::LogicalType> logicalType =
         schemaElement.__isset.logicalType
         ? std::optional<thrift::LogicalType>(schemaElement.logicalType)
         : std::nullopt;
 
     if (veloxType->kind() == TypeKind::TIMESTAMP &&
-        schemaElement.type == thrift::Type::INT64 &&
-        !logicalType_.has_value()) {
-      // Construct logical type from deprecated converted type of Parquet.
-      thrift::TimestampType timestamp;
-      timestamp.__set_isAdjustedToUTC(true);
-      thrift::TimeUnit unit;
-
-      if (schemaElement.converted_type ==
-          thrift::ConvertedType::TIMESTAMP_MICROS) {
-        thrift::MicroSeconds micros;
-        unit.__set_MICROS(micros);
-      } else if (
-          schemaElement.converted_type ==
-          thrift::ConvertedType::TIMESTAMP_MILLIS) {
-        thrift::MilliSeconds millis;
-        unit.__set_MILLIS(millis);
-      } else {
-        VELOX_NYI(
-            "{} Timestamp unit not supported.", schemaElement.converted_type);
-      }
-
-      timestamp.__set_unit(unit);
-      thrift::LogicalType newLogicalType;
-      newLogicalType.__set_TIMESTAMP(timestamp);
-
-      logicalType_ = std::optional<thrift::LogicalType>(newLogicalType);
+        schemaElement.type == thrift::Type::INT64 && !logicalType.has_value()) {
+      logicalType = getTimestampLogicalType(schemaElement.converted_type);
     }
 
     auto leafTypePtr = std::make_unique<ParquetTypeWithId>(
@@ -596,7 +577,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         columnIdx++,
         name,
         schemaElement.type,
-        logicalType_,
+        logicalType,
         maxRepeat,
         maxDefine,
         isOptional,
@@ -630,6 +611,29 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
   VELOX_FAIL("Unable to extract Parquet column info.")
   return nullptr;
+}
+
+thrift::LogicalType ReaderBase::getTimestampLogicalType(
+    thrift::ConvertedType::type convertedType) const {
+  thrift::TimestampType timestamp;
+  timestamp.__set_isAdjustedToUTC(true);
+  thrift::TimeUnit unit;
+
+  if (convertedType == thrift::ConvertedType::TIMESTAMP_MICROS) {
+    thrift::MicroSeconds micros;
+    unit.__set_MICROS(micros);
+  } else if (convertedType == thrift::ConvertedType::TIMESTAMP_MILLIS) {
+    thrift::MilliSeconds millis;
+    unit.__set_MILLIS(millis);
+  } else {
+    VELOX_NYI("{} Timestamp unit not supported.", convertedType);
+  }
+
+  timestamp.__set_unit(unit);
+  thrift::LogicalType logicalType;
+  logicalType.__set_TIMESTAMP(timestamp);
+
+  return logicalType;
 }
 
 TypePtr ReaderBase::convertType(
