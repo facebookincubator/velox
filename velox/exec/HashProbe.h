@@ -72,6 +72,10 @@ class HashProbe : public Operator {
     return inputSpiller_ != nullptr;
   }
 
+  std::shared_ptr<const core::HashJoinNode> getPlanNode() const {
+    return joinNode_;
+  }
+
  private:
   // Indicates if the join type includes misses from the left side in the
   // output.

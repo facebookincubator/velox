@@ -48,11 +48,6 @@ class CudfHashJoinBuild : public exec::Operator {
   CudfHashJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const core::PlanNodeId& joinNodeId);
-
-  CudfHashJoinBuild(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
   void addInput(RowVectorPtr input) override;
@@ -68,6 +63,7 @@ class CudfHashJoinBuild : public exec::Operator {
   bool isFinished() override;
 
  private:
+  std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::vector<RowVectorPtr> inputs_;
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
