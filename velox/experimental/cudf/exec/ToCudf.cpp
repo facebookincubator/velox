@@ -48,20 +48,9 @@ bool CompileState::compile() {
 
   bool replacements_made = false;
   auto ctx = driver_.driverCtx();
+
   // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
   // CudfHashJoinProbe operators.
-
-  auto get_plan_node = [&](const core::PlanNodeId& id) {
-    auto it =
-        std::find_if(nodes.cbegin(), nodes.cend(), [&id](const auto& node) {
-          std::cout << "Comparing " << node->id() << ": " << node->toString()
-                    << " to " << id << std::endl;
-          return node->id() == id;
-        });
-    VELOX_CHECK(it != nodes.end());
-    return *it;
-  };
-
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
     std::vector<std::unique_ptr<exec::Operator>> replace_op;
@@ -69,19 +58,20 @@ bool CompileState::compile() {
     exec::Operator* oper = operators[operatorIndex];
     VELOX_CHECK(oper);
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
-      auto plan_node_id = joinBuildOp->planNodeId();
       auto id = joinBuildOp->operatorId();
+      auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
+          joinBuildOp->getPlanNode());
+      VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
-          std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node_id));
+          std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
       replace_op[0]->initialize();
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
       replacements_made = true;
     } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
-      auto plan_node_id = joinProbeOp->planNodeId();
       auto id = joinProbeOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-          get_plan_node(plan_node_id));
+          joinProbeOp->getPlanNode());
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));

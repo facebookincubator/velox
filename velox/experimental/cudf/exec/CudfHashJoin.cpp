@@ -69,22 +69,17 @@ std::optional<CudfHashJoinBridge::hash_type> CudfHashJoinBridge::hashOrFuture(
 CudfHashJoinBuild::CudfHashJoinBuild(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const core::PlanNodeId& joinNodeId)
+    std::shared_ptr<const core::HashJoinNode> joinNode)
     // TODO check outputType should be set or not?
     : exec::Operator(
           driverCtx,
           nullptr, // joinNode->sources(),
           operatorId,
-          joinNodeId,
-          "CudfHashJoinBuild") {
+          joinNode->id(),
+          "CudfHashJoinBuild"),
+      joinNode_(joinNode) {
   std::cout << "CudfHashJoinBuild constructor" << std::endl;
 }
-
-CudfHashJoinBuild::CudfHashJoinBuild(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    std::shared_ptr<const core::HashJoinNode> joinNode)
-    : CudfHashJoinBuild(operatorId, driverCtx, joinNode->id()) {}
 
 void CudfHashJoinBuild::addInput(RowVectorPtr input) {
   std::cout << "Calling CudfHashJoinBuild::addInput" << std::endl;
@@ -126,16 +121,22 @@ void CudfHashJoinBuild::noMoreInput() {
     inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
   }
   // TODO build hash table
-  auto tbl = to_cudf_table(inputs_[0]); // TODO how to process multiple inputs?
+  auto tbl = to_cudf_table(inputs_[0]);
   std::cout << "Build table number of columns: " << tbl->num_columns()
             << std::endl;
   std::cout << "Build table number of rows: " << tbl->num_rows() << std::endl;
-  // copy host to device table,
-  // CudfHashJoinBridge::hash_type hashObject = 1;
-  // TODO create hash table in device.
-  // CudfHashJoinBridge::hash_type
+
+  auto buildType = joinNode_->sources()[1]->outputType();
+  auto buildKeys = joinNode_->rightKeys();
+
+  auto build_key_indices = std::vector<cudf::size_type>(buildKeys.size());
+  for (size_t i = 0; i < build_key_indices.size(); i++) {
+    build_key_indices[i] = static_cast<cudf::size_type>(
+        buildType->getChildIdx(buildKeys[i]->name()));
+  }
+
   auto hashObject = std::make_shared<cudf::hash_join>(
-      tbl->view(), cudf::null_equality::EQUAL);
+      tbl->view().select(build_key_indices), cudf::null_equality::EQUAL);
 
   // Copied
   peers.clear();
@@ -206,39 +207,38 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
             << std::endl;
   std::cout << "Probe table number of rows: " << tbl->num_rows() << std::endl;
 
-  auto leftType = joinNode_->sources()[0]->outputType();
-  auto rightType = joinNode_->sources()[1]->outputType();
-  auto leftKeys = joinNode_->leftKeys();
-  auto rightKeys = joinNode_->rightKeys();
+  auto probeType = joinNode_->sources()[0]->outputType();
+  auto buildType = joinNode_->sources()[1]->outputType();
+  auto probeKeys = joinNode_->leftKeys();
+  auto buildKeys = joinNode_->rightKeys();
 
-  for (int i = 0; i < leftType->names().size(); i++) {
-    std::cout << "Left column " << i << ": " << leftType->names()[i]
+  for (int i = 0; i < probeType->names().size(); i++) {
+    std::cout << "Left column " << i << ": " << probeType->names()[i]
               << std::endl;
   }
 
-  for (int i = 0; i < rightType->names().size(); i++) {
-    std::cout << "Right column " << i << ": " << rightType->names()[i]
+  for (int i = 0; i < buildType->names().size(); i++) {
+    std::cout << "Right column " << i << ": " << buildType->names()[i]
               << std::endl;
   }
 
-  for (int i = 0; i < leftKeys.size(); i++) {
-    std::cout << "Left key " << i << ": " << leftKeys[i]->name() << std::endl;
+  for (int i = 0; i < probeKeys.size(); i++) {
+    std::cout << "Left key " << i << ": " << probeKeys[i]->name() << std::endl;
   }
 
-  for (int i = 0; i < rightKeys.size(); i++) {
-    std::cout << "Right key " << i << ": " << rightKeys[i]->name() << std::endl;
+  for (int i = 0; i < buildKeys.size(); i++) {
+    std::cout << "Right key " << i << ": " << buildKeys[i]->name() << std::endl;
   }
 
-  auto const num_probe_keys = leftKeys.size();
-  auto probe_key_indices = std::vector<cudf::size_type>(num_probe_keys);
-
-  for (int i = 0; i < num_probe_keys; i++) {
+  auto probe_key_indices = std::vector<cudf::size_type>(probeKeys.size());
+  for (size_t i = 0; i < probe_key_indices.size(); i++) {
     probe_key_indices[i] = static_cast<cudf::size_type>(
-        leftType->getChildIdx(leftKeys[i]->name()));
+        probeType->getChildIdx(probeKeys[i]->name()));
   }
 
   // TODO pass the input pool !!!
-  RowVectorPtr output;
+  // TODO: We should probably subset columns before calling to_cudf_table?
+  // Maybe that isn't a problem if we fuse operators together.
   auto const [left_join_indices, right_join_indices] =
       hashObject_.value().second->inner_join(
           tbl->view().select(probe_key_indices));
@@ -255,14 +255,14 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   for (int i = 0; i < outputType->names().size(); i++) {
     auto const output_name = outputType->names()[i];
     std::cout << "Output column " << i << ": " << output_name << std::endl;
-    auto channel = leftType->getChildIdxIfExists(output_name);
+    auto channel = probeType->getChildIdxIfExists(output_name);
     if (channel.has_value()) {
       left_column_indices_to_gather.push_back(
           static_cast<cudf::size_type>(channel.value()));
       left_column_output_indices.push_back(i);
       continue;
     }
-    channel = rightType->getChildIdxIfExists(output_name);
+    channel = buildType->getChildIdxIfExists(output_name);
     if (channel.has_value()) {
       right_column_indices_to_gather.push_back(
           static_cast<cudf::size_type>(channel.value()));
@@ -310,20 +310,13 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   }
   auto cudf_output = std::make_unique<cudf::table>(std::move(joined_cols));
 
-  // TODO convert output to RowVector
+  RowVectorPtr output;
   if (cudf_output->num_columns() == 0 or cudf_output->num_rows() == 0) {
     output = nullptr;
   } else {
     output = to_velox_column(cudf_output->view(), input_->pool());
   }
-  // auto output = input_;
-  // auto output = std::make_shared<RowVector>(
-  //     input_->pool(),
-  //     input_->type(),
-  //     input_->nulls(),
-  //     std::min(20, inputSize-2),
-  //     input_->children());
-  // std::cout<<"there\n\n";
+
   input_.reset();
   finished_ = true;
   // printResults(output, std::cout);
