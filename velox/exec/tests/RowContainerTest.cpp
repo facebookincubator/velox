@@ -2072,25 +2072,13 @@ TEST_F(RowContainerTest, columnHasNulls) {
   }
 
   const uint64_t kNumRows = 1000;
-  VectorFuzzer fuzzer({.vectorSize = kNumRows, .nullRatio = 0}, pool());
-
-  VectorFuzzer fuzzerWithNulls(
-      {.vectorSize = kNumRows, .nullRatio = 0.01}, pool());
-
-  std::vector<VectorPtr> children;
-  const RowTypePtr& rowType = ROW({BIGINT(), BIGINT(), BIGINT(), BIGINT()});
-  children.reserve(rowType->size());
-  for (auto i = 0; i < rowType->size(); ++i) {
-    if (i % 2 == 0) {
-      children.emplace_back(fuzzer.fuzzFlat(rowType->childAt(i), kNumRows));
-    } else {
-      children.emplace_back(
-          fuzzerWithNulls.fuzzFlat(rowType->childAt(i), kNumRows));
-    }
-  }
-
-  auto rowVector = std::make_shared<RowVector>(
-      pool(), rowType, nullptr, kNumRows, std::move(children));
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 5; }),
+       makeFlatVector<int64_t>(
+           kNumRows, [](auto row) { return row % 5; }, nullEvery(3)),
+       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 7; }),
+       makeFlatVector<int64_t>(
+           kNumRows, [](auto row) { return row % 7; }, nullEvery(999))});
 
   std::vector<char*> rows;
   rows.reserve(kNumRows);
@@ -2118,7 +2106,8 @@ TEST_F(RowContainerTest, columnHasNulls) {
   // If the column's mayHaveNulls is false, the extracted vector's mayHaveNulls
   // should be false.
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
-    auto vector = BaseVector::create(rowType->childAt(i), kNumRows, pool());
+    auto vector =
+        BaseVector::create(rowVector->childAt(i)->type(), kNumRows, pool());
     rowContainer->extractColumn(rows.data(), kNumRows, i, vector);
     if (i % 2 == 0) {
       ASSERT_TRUE(!vector->mayHaveNulls());

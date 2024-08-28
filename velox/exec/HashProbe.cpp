@@ -78,12 +78,8 @@ void extractColumns(
       child = BaseVector::create(resultTypes[resultChannel], rows.size(), pool);
     }
     child->resize(rows.size());
-    table->rows()->extractColumn(
-        rows.data(),
-        rows.size(),
-        projection.inputChannel,
-        table->columnHasNulls(projection.inputChannel),
-        child);
+    table->extractColumn(
+        rows.data(), rows.size(), projection.inputChannel, child);
   }
 }
 
@@ -1232,11 +1228,10 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
     filterTableInput_->resize(numRows);
     filterTableInputRows_.resizeFill(numRows, true);
     for (auto& projection : filterTableProjections_) {
-      tableRows->extractColumn(
+      table_->extractColumn(
           data,
           numRows,
           projection.inputChannel,
-          table_->columnHasNulls(projection.inputChannel),
           filterTableInput_->childAt(projection.outputChannel));
     }
     rows.applyToSelected([&](vector_size_t row) {

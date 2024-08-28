@@ -337,6 +337,9 @@ class RowContainer {
   /// Copies the values at 'col' into 'result' (starting at 'resultOffset')
   /// for the 'numRows' rows pointed to by 'rows'. If a 'row' is null, sets
   /// corresponding row in 'result' to null.
+  /// 'columnHasNulls' indicates whether the 'col' column contains null values.
+  /// If 'columnHasNulls' is false, a null-free optimization will be applied.
+  /// It is the caller's responsibility to ensure this flag is set correctly.
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
@@ -348,6 +351,9 @@ class RowContainer {
   /// Copies the values at 'col' into 'result' for the 'numRows' rows pointed to
   /// by 'rows'. If an entry in 'rows' is null, sets corresponding row in
   /// 'result' to null.
+  /// 'columnHasNulls' indicates whether the 'col' column contains null values.
+  /// If 'columnHasNulls' is false, a null-free optimization will be applied.
+  /// It is the caller's responsibility to ensure this flag is set correctly.
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
@@ -363,6 +369,9 @@ class RowContainer {
   /// 'result' to null. The positions in 'rowNumbers' array can repeat and also
   /// appear out of order. If rowNumbers has a negative value, then the
   /// corresponding row in 'result' is set to null.
+  /// 'columnHasNulls' indicates whether the 'col' column contains null values.
+  /// If 'columnHasNulls' is false, a null-free optimization will be applied.
+  /// It is the caller's responsibility to ensure this flag is set correctly.
   static void extractColumn(
       const char* const* rows,
       folly::Range<const vector_size_t*> rowNumbers,
@@ -393,19 +402,6 @@ class RowContainer {
         columnAt(columnIndex),
         columnHasNulls(columnIndex),
         result);
-  }
-
-  /// Copies the values at 'columnIndex' into 'result' for the 'numRows' rows
-  /// pointed to by 'rows'. If an entry in 'rows' is null, sets corresponding
-  /// row in 'result' to null. If 'columnHasNulls' is false, null free
-  /// optimization would be applied.
-  void extractColumn(
-      const char* const* rows,
-      int32_t numRows,
-      int32_t columnIndex,
-      bool columnHasNulls,
-      const VectorPtr& result) {
-    extractColumn(rows, numRows, columnAt(columnIndex), columnHasNulls, result);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -750,7 +746,7 @@ class RowContainer {
     return keyTypes_;
   }
 
-  /// Returns the specific column's columnHasNulls_ flag.
+  /// Returns true if specified column may have nulls, false otherwise.
   inline bool columnHasNulls(int32_t columnIndex) const {
     return columnHasNulls_[columnIndex];
   }

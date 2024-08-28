@@ -1711,6 +1711,12 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
     otherTables_.emplace_back(std::unique_ptr<HashTable<ignoreNullKeys>>(
         dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
   }
+
+  // If there are multiple tables, we need to merge the 'columnHasNulls' flags
+  // from the containers of each table and store them in the main table. This
+  // is necessary because, when extracting results, 'rows' may contain row
+  // pointers from multiple containers. We need to ensure the correctness of
+  // the 'columnHasNulls' flags.
   for (int i = 0; i < rows_->columnTypes().size(); ++i) {
     columnHasNulls_.emplace_back(rows_->columnHasNulls(i));
     for (auto& other : otherTables_) {
@@ -1718,6 +1724,7 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
           columnHasNulls_[i] || other->rows()->columnHasNulls(i);
     }
   }
+
   bool useValueIds = mayUseValueIds(*this);
   if (useValueIds) {
     for (auto& other : otherTables_) {

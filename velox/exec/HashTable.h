@@ -400,8 +400,14 @@ class BaseHashTable {
     return offThreadBuildTiming_;
   }
 
-  /// Returns the specific column's columnHasNulls_ flag.
-  virtual bool columnHasNulls(int32_t columnIndex) const = 0;
+  /// Copies the values at 'columnIndex' into 'result' for the 'numRows' rows
+  /// pointed to by 'rows'. If an entry in 'rows' is null, sets corresponding
+  /// row in 'result' to null.
+  virtual void extractColumn(
+      const char* const* rows,
+      int32_t numRows,
+      int32_t columnIndex,
+      const VectorPtr& result) = 0;
 
  protected:
   static FOLLY_ALWAYS_INLINE size_t tableSlotSize() {
@@ -649,8 +655,17 @@ class HashTable : public BaseHashTable {
     return rehashSize();
   }
 
-  inline bool columnHasNulls(int32_t columnIndex) const override {
-    return columnHasNulls_[columnIndex];
+  void extractColumn(
+      const char* const* rows,
+      int32_t numRows,
+      int32_t columnIndex,
+      const VectorPtr& result) override {
+    RowContainer::extractColumn(
+        rows,
+        numRows,
+        rows_->columnAt(columnIndex),
+        columnHasNulls_[columnIndex],
+        result);
   }
 
  private:
