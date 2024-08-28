@@ -1,0 +1,20 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check.py
+        name: check.py
+        entry: scripts/check.py format main --fix
+        language: python
+        # Note that pre-commit autoupdate does not update the versions
+        # of dependencies, so we'll have to update this manually.
+        additional_dependencies:
+          - clang-format==18.*
+          - cmakelang==0.6.13
+          - pyyaml
+          - regex
+        pass_filenames: false
+        verbose: true
+        require_serial: true
+
+default_language_version:
+      python: python3
