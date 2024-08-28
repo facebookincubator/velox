@@ -44,7 +44,7 @@ velox_add_library(
 velox_link_libraries(
   velox_common_base
   PUBLIC velox_exception Folly::folly fmt::fmt xsimd
-  PRIVATE velox_common_compression velox_process velox_test_util glog::glog)
+  PRIVATE velox_common_compression velox_process velox_test_util glog::glog velox_s3_metrics_aggregator)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

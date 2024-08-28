@@ -96,3 +96,18 @@ target_link_libraries(
   velox_exec
   GTest::gtest
   GTest::gtest_main)
+
+add_executable(velox_s3metrics_aggregator_test S3MetricsAggregatorTest.cpp)
+add_test(velox_s3metrics_aggregator_test velox_s3metrics_aggregator_test)
+target_link_libraries(
+  velox_s3metrics_aggregator_test
+  velox_file
+  velox_s3fs
+  velox_s3_metrics_aggregator
+  velox_hive_config
+  velox_core
+  velox_exec_test_lib
+  velox_dwio_common_exception
+  velox_exec
+  GTest::gtest
+  GTest::gtest_main)

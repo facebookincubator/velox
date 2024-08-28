@@ -21,6 +21,8 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/dwio/common/DataBuffer.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Metrics.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3MetricsAggregator.h"
 
 #include <fmt/format.h>
 #include <glog/logging.h>
@@ -101,6 +103,10 @@ class S3ReadFile final : public ReadFile {
         outcome, "Failed to get metadata for S3 object", bucket_, key_);
     length_ = outcome.GetResult().GetContentLength();
     VELOX_CHECK_GE(length_, 0);
+
+    // Increment the metadata call metric
+    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
+        filesystems::kMetricS3MetadataCalls);
   }
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buffer)
@@ -181,6 +187,10 @@ class S3ReadFile final : public ReadFile {
         AwsWriteableStreamFactory(position, length));
     auto outcome = client_->GetObject(request);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
+
+    // Increment the get object metric
+    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
+        filesystems::kMetricS3ListObjectsCalls);
   }
 
   Aws::S3::S3Client* client_;
@@ -273,6 +283,10 @@ class S3WriteFile::Impl {
     }
 
     fileSize_ = 0;
+
+    // Increment the started uploads metric
+    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
+        filesystems::kMetricS3StartedUploads);
   }
 
   // Appends data to the end of the file.
@@ -317,6 +331,10 @@ class S3WriteFile::Impl {
           outcome, "Failed to complete multiple part upload", bucket_, key_);
     }
     currentPart_->clear();
+
+    // Increment the successful uploads metric
+    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
+        filesystems::kMetricS3SuccessfulUploads);
   }
 
   // Current file size, i.e. the sum of all previous appends.
@@ -580,11 +598,19 @@ class S3FileSystem::Impl {
         Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
         s3Config.useVirtualAddressing());
     ++fileSystemCount;
+
+    // Increment the active connections metric
+    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
+        filesystems::kMetricS3ActiveConnections);
   }
 
   ~Impl() {
     client_.reset();
     --fileSystemCount;
+
+    // Decrement the active connections metric
+    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
+        filesystems::kMetricS3ActiveConnections);
   }
 
   // Configure and return an AWSCredentialsProvider with access key and secret
