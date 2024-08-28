@@ -610,10 +610,10 @@ class CastTypedExpr : public ITypedExpr {
   std::string toString() const override {
     if (nullOnFailure_) {
       return fmt::format(
-          "try_cast {} as {}", inputs()[0]->toString(), type()->toString());
+          "try_cast ({} as {})", inputs()[0]->toString(), type()->toString());
     } else {
       return fmt::format(
-          "cast {} as {}", inputs()[0]->toString(), type()->toString());
+          "cast ({} as {})", inputs()[0]->toString(), type()->toString());
     }
   }
 
