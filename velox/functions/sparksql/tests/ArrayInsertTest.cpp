@@ -249,18 +249,18 @@ TEST_F(ArrayInsertTest, structArrays) {
 }
 
 TEST_F(ArrayInsertTest, nullInputs) {
-  // null input array
+  // Null input array.
   auto arrays = makeArrayVectorFromJson<int64_t>({"null"});
   auto expected = makeArrayVectorFromJson<int64_t>({"null"});
   testExpression("array_insert(c0, 1, 1, false)", {arrays}, expected);
 
-  // null postition
+  // Null postition.
   arrays = makeArrayVectorFromJson<int64_t>({"[1, 1]"});
   expected = makeArrayVectorFromJson<int64_t>({"null"});
   testExpression(
       "array_insert(c0, null::INTEGER, 1, false)", {arrays}, expected);
 
-  // null element
+  // Null element.
   expected = makeArrayVectorFromJson<int64_t>({"[1, null, 1]"});
   testExpression(
       "array_insert(c0, 2, null::INTEGER, false)", {arrays}, expected);
