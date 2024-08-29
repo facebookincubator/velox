@@ -29,18 +29,16 @@ set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-helper-functions.sh
-NPROC=$(getconf _NPROCESSORS_ONLN)
-export CXXFLAGS=$(get_cxx_flags) # Used by boost. 
-export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
-CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
-BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
-USE_CLANG="${USE_CLANG:-false}"
+source $SCRIPTDIR/setup-common.sh
 
-FB_OS_VERSION="v2024.05.20.00"
-FMT_VERSION="10.1.1"
-BOOST_VERSION="boost-1.84.0"
-ARROW_VERSION="15.0.0"
+# Folly must be built with the same compiler flags so that some low level types
+# are the same size.
+export CXXFLAGS=$(get_cxx_flags) # Used by boost.
+export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
+export COMPILER_FLAGS=${CXXFLAGS}
+
+SUDO="${SUDO:-""}"
+USE_CLANG="${USE_CLANG:-false}"
 
 function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
@@ -71,135 +69,11 @@ function install_velox_deps_from_dnf {
   dnf_install libevent-devel \
     openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
     libdwarf-devel elfutils-libelf-devel curl-devel libicu-devel bison flex \
-    libsodium-devel zlib-devel
-
-  # install sphinx for doc gen
-  pip install sphinx sphinx-tabs breathe sphinx_rtd_theme
+    libsodium-devel zlib-devel gtest-devel gmock-devel gflags-devel
 }
 
 function install_conda {
   dnf_install conda
-}
-
-function install_gflags {
-  # Remove an older version if present.
-  dnf remove -y gflags
-  wget_and_untar https://github.com/gflags/gflags/archive/v2.2.2.tar.gz gflags
-  cmake_install gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
-}
-
-function install_glog {
-  wget_and_untar https://github.com/google/glog/archive/v0.6.0.tar.gz glog
-  cmake_install glog -DBUILD_SHARED_LIBS=ON
-}
-
-function install_lzo {
-  wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz lzo
-  (
-    cd lzo
-    ./configure --prefix=/usr --enable-shared --disable-static --docdir=/usr/share/doc/lzo-2.10
-    make "-j$(nproc)"
-    make install
-  )
-}
-
-function install_boost {
-  wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
-  (
-    cd boost
-    if [[ ${USE_CLANG} != "false" ]]; then
-      ./bootstrap.sh --prefix=/usr/local --with-toolset="clang-15"
-      # Switch the compiler from the clang-15 toolset which doesn't exist (clang-15.jam) to
-      # clang of version 15 when toolset clang-15 is used.
-      # This reconciles the project-config.jam generation with what the b2 build system allows for customization.
-      sed -i 's/using clang-15/using clang : 15/g' project-config.jam
-      ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi toolset=clang-15 --without-python
-    else
-      ./bootstrap.sh --prefix=/usr/local
-      ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
-    fi
-  )
-}
-
-function install_snappy {
-  wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy
-  cmake_install snappy -DSNAPPY_BUILD_TESTS=OFF
-}
-
-function install_fmt {
-  wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
-  cmake_install fmt -DFMT_TEST=OFF
-}
-
-function install_protobuf {
-  wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.8/protobuf-all-21.8.tar.gz protobuf
-  (
-    cd protobuf
-    ./configure --prefix=/usr
-    make "-j${NPROC}"
-    make install
-    ldconfig
-  )
-}
-
-function install_fizz {
-  wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
-  cmake_install fizz/fizz -DBUILD_TESTS=OFF
-}
-
-function install_folly {
-  wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  cmake_install folly -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
-}
-
-function install_wangle {
-  wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
-  cmake_install wangle/wangle -DBUILD_TESTS=OFF
-}
-
-function install_fbthrift {
-  wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
-  cmake_install fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
-}
-
-function install_mvfst {
-  wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
-  cmake_install mvfst -DBUILD_TESTS=OFF
-}
-
-function install_duckdb {
-  if $BUILD_DUCKDB ; then
-    echo 'Building DuckDB'
-    wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/v0.8.1.tar.gz duckdb
-    cmake_install duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
-  fi
-}
-
-function install_arrow {
-  wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
-  (
-    cd arrow/cpp
-    cmake_install \
-      -DARROW_PARQUET=OFF \
-      -DARROW_WITH_THRIFT=ON \
-      -DARROW_WITH_LZ4=ON \
-      -DARROW_WITH_SNAPPY=ON \
-      -DARROW_WITH_ZLIB=ON \
-      -DARROW_WITH_ZSTD=ON \
-      -DARROW_JEMALLOC=OFF \
-      -DARROW_SIMD_LEVEL=NONE \
-      -DARROW_RUNTIME_SIMD_LEVEL=NONE \
-      -DARROW_WITH_UTF8PROC=OFF \
-      -DARROW_TESTING=ON \
-      -DCMAKE_INSTALL_PREFIX=/usr/local \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DARROW_BUILD_STATIC=ON \
-      -DThrift_SOURCE=BUNDLED
-
-    # Install thrift.
-    cd _build/thrift_ep-prefix/src/thrift_ep-build
-    cmake --install ./ --prefix /usr/local/
-  )
 }
 
 function install_cuda {
@@ -208,10 +82,47 @@ function install_cuda {
   dnf install -y cuda-nvcc-$(echo $1 | tr '.' '-') cuda-cudart-devel-$(echo $1 | tr '.' '-')
 }
 
+function install_s3 {
+  install_aws_deps
+
+  local MINIO_OS="linux"
+  install_minio ${MINIO_OS}
+}
+
+function install_gcs {
+  # Dependencies of GCS, probably a workaround until the docker image is rebuilt
+  dnf -y install npm curl-devel c-ares-devel
+  install_gcs-sdk-cpp
+}
+
+function install_abfs {
+  # Dependencies of Azure Storage Blob cpp
+  dnf -y install perl-IPC-Cmd openssl libxml2-devel
+  install_azure-storage-sdk-cpp
+}
+
+function install_hdfs {
+  dnf -y install libxml2-devel libgsasl-devel libuuid-devel krb5-devel
+  github_checkout apache/hawq master
+  libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
+  sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
+  sed -i "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMake/Platform.cmake
+  # Dependencies for Hadoop testing
+  wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz hadoop
+  cp -a hadoop /usr/local/
+  cmake_install ${libhdfs3_dir}
+}
+
+function install_adapters {
+  run_and_time install_s3
+  run_and_time install_gcs
+  run_and_time install_abfs
+  run_and_time install_hdfs
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_dnf
   run_and_time install_conda
-  run_and_time install_gflags
   run_and_time install_glog
   run_and_time install_lzo
   run_and_time install_snappy
@@ -225,6 +136,8 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_duckdb
   run_and_time install_arrow
+  run_and_time install_xsimd
+  run_and_time install_simdjson
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

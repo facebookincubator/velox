@@ -15,15 +15,18 @@
 ARG image=ghcr.io/facebookincubator/velox-dev:centos9
 FROM $image
 
-COPY scripts/setup-adapters.sh /
+COPY scripts/setup-centos9.sh /
+COPY scripts/setup-common.sh /
+COPY scripts/setup-versions.sh /
+COPY scripts/setup-helper-functions.sh /
 RUN mkdir build && ( cd build &&  source /opt/rh/gcc-toolset-12/enable && \
-    bash /setup-adapters.sh ) && rm -rf build && dnf remove -y conda && dnf clean all
+    bash /setup-centos9.sh install_adapters ) && rm -rf build && dnf remove -y conda && dnf clean all
 
 # install miniforge
 RUN curl -L -o /tmp/miniforge.sh https://github.com/conda-forge/miniforge/releases/download/23.11.0-0/Mambaforge-23.11.0-0-Linux-x86_64.sh && \
     bash /tmp/miniforge.sh -b -p /opt/miniforge && \
     rm /tmp/miniforge.sh
-ENV PATH=/opt/miniforge/condabin:${PATH} 
+ENV PATH=/opt/miniforge/condabin:${PATH}
 
 # install test dependencies
 RUN mamba create -y --name adapters python=3.8
