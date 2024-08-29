@@ -900,6 +900,11 @@ TEST_F(StringTest, translate) {
   testTranslate({"abc", std::nullopt, "\u2029"}, std::nullopt);
   testTranslate({"abc", "\u2028", std::nullopt}, std::nullopt);
   testTranslate({std::nullopt, "\u2028", "\u2029"}, std::nullopt);
+  // Special case
+  unsigned char u = 128;
+  std::string data(1, u);
+  testTranslate({data, "1", "a"}, data);
+  testTranslate({data, data, "a"}, "a");
 }
 
 TEST_F(StringTest, translateConstantMatch) {

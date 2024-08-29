@@ -799,10 +799,16 @@ struct TranslateFunction {
       // characters in match will be removed from input string.
       if (j < replace.size()) {
         int replaceCharLength = utf8proc_char_length(replace.data() + j);
+        if (j + replaceCharLength > replace.size()) {
+          replaceCharLength = replace.size() - j;
+        }
         replaceChar = std::string(replace.data() + j, replaceCharLength);
         j += replaceCharLength;
       }
       int matchCharLength = utf8proc_char_length(match.data() + i);
+      if (i + matchCharLength > match.size()) {
+        matchCharLength = match.size() - i;
+      }
       std::string matchChar = std::string(match.data() + i, matchCharLength);
       // Only considers the first occurrence of a character in match.
       dictionary.emplace(matchChar, replaceChar);
@@ -859,6 +865,9 @@ struct TranslateFunction {
     int k = 0;
     while (k < input.size()) {
       int inputCharLength = utf8proc_char_length(input.data() + k);
+      if (k + inputCharLength > input.size()) {
+        inputCharLength = input.size() - k;
+      }
       auto inputChar = std::string(input.data() + k, inputCharLength);
       auto it = unicodeDictionary_->find(inputChar);
       if (it == unicodeDictionary_->end()) {
