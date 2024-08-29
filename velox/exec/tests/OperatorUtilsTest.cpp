@@ -133,7 +133,7 @@ class OperatorUtilsTest : public OperatorTestBase {
     }
   }
 
-  void setBatchConfig(
+  void setTaskOutputBatchConfig(
       uint32_t preferredBatchSize,
       uint32_t maxRows,
       uint64_t preferredBytes) {
@@ -516,7 +516,7 @@ TEST_F(OperatorUtilsTest, dynamicFilterStats) {
 TEST_F(OperatorUtilsTest, outputBatchRows) {
   RowTypePtr rowType = ROW({"c0"}, {INTEGER()});
   {
-    setBatchConfig(10, 20, 234);
+    setTaskOutputBatchConfig(10, 20, 234);
     MockOperator mockOp(driverCtx_.get(), rowType, "MockType1");
     ASSERT_EQ(10, mockOp.outputRows(std::nullopt));
     ASSERT_EQ(20, mockOp.outputRows(1));
@@ -525,7 +525,7 @@ TEST_F(OperatorUtilsTest, outputBatchRows) {
     ASSERT_EQ(234 / 40, mockOp.outputRows(40));
   }
   {
-    setBatchConfig(10, INT32_MAX, 3'000'000'000'000);
+    setTaskOutputBatchConfig(10, INT32_MAX, 3'000'000'000'000);
     MockOperator mockOp(driverCtx_.get(), rowType, "MockType2");
     ASSERT_EQ(1000, mockOp.outputRows(3'000'000'000));
   }
