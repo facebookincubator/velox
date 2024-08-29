@@ -153,6 +153,14 @@ class TestStripeStreams : public StripeStreamsBase {
     return selector_;
   }
 
+  const tz::TimeZone* getSessionTimezone() const override {
+    return context_.getSessionTimezone();
+  }
+
+  bool adjustTimestampToTimezone() const override {
+    return context_.adjustTimestampToTimezone();
+  }
+
   const RowReaderOptions& getRowReaderOptions() const override {
     return options_;
   }
@@ -1630,6 +1638,7 @@ std::unique_ptr<DwrfReader> getDwrfReader(
 
   std::string data(sinkPtr->data(), sinkPtr->size());
   dwio::common::ReaderOptions readerOpts{&leafPool};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   return std::make_unique<DwrfReader>(
       readerOpts,
       std::make_unique<BufferedInput>(

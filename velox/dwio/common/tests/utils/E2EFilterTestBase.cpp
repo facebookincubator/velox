@@ -94,6 +94,7 @@ void E2EFilterTestBase::readWithoutFilter(
     const std::vector<RowVectorPtr>& batches,
     uint64_t& time) {
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   dwio::common::RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
@@ -147,6 +148,7 @@ void E2EFilterTestBase::readWithFilter(
     bool useValueHook,
     bool skipCheck) {
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   dwio::common::RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
@@ -455,6 +457,7 @@ void E2EFilterTestBase::testMetadataFilterImpl(
   specC->setProjectOut(true);
   specC->setChannel(0);
   ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
@@ -651,6 +654,7 @@ void E2EFilterTestBase::testSubfieldsPruning() {
   specD->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(common::createBigintValues({1}, false));
   ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
@@ -716,6 +720,7 @@ void E2EFilterTestBase::testMutationCornerCases() {
   auto& rowType = batches[0]->type();
   writeToMemory(rowType, batches, false);
   ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));

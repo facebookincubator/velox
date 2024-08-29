@@ -62,33 +62,18 @@ class ReaderBase {
  public:
   /// Creates reader base from buffered input.
   ReaderBase(
-      memory::MemoryPool& pool,
-      std::unique_ptr<dwio::common::BufferedInput> input,
-      std::shared_ptr<dwio::common::encryption::DecrypterFactory>
-          decryptorFactory = nullptr,
-      uint64_t footerEstimatedSize =
-          dwio::common::ReaderOptions::kDefaultFooterEstimatedSize,
-      uint64_t filePreloadThreshold =
-          dwio::common::ReaderOptions::kDefaultFilePreloadThreshold,
-      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
-      bool fileColumnNamesReadAsLowerCase = false,
-      std::shared_ptr<random::RandomSkipTracker> randomSkip = nullptr,
-      std::shared_ptr<velox::common::ScanSpec> scanSpec = nullptr);
-
-  ReaderBase(
-      memory::MemoryPool& pool,
-      std::unique_ptr<dwio::common::BufferedInput> input,
-      dwio::common::FileFormat fileFormat);
+      const dwio::common::ReaderOptions& options,
+      std::unique_ptr<dwio::common::BufferedInput> input);
 
   /// Creates reader base from metadata.
   ReaderBase(
-      memory::MemoryPool& pool,
+      const dwio::common::ReaderOptions& options,
       std::unique_ptr<dwio::common::BufferedInput> input,
       std::unique_ptr<PostScript> ps,
       const proto::Footer* footer,
       std::unique_ptr<StripeMetadataCache> cache,
       std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
-      : pool_{pool},
+      : options_{options},
         postScript_{std::move(ps)},
         footer_{std::make_unique<FooterWrapper>(footer)},
         cache_{std::move(cache)},
@@ -105,12 +90,17 @@ class ReaderBase {
   }
 
   // for testing
-  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool}, fileLength_{0} {}
+  explicit ReaderBase(const dwio::common::ReaderOptions& options)
+      : options_{options}, fileLength_{0} {}
 
   virtual ~ReaderBase() = default;
 
+  const dwio::common::ReaderOptions& getReaderOptions() const {
+    return options_;
+  }
+
   memory::MemoryPool& getMemoryPool() const {
-    return pool_;
+    return options_.memoryPool();
   }
 
   const PostScript& getPostScript() const {
@@ -132,8 +122,9 @@ class ReaderBase {
   const std::shared_ptr<const dwio::common::TypeWithId>& getSchemaWithId()
       const {
     if (!schemaWithId_) {
-      if (scanSpec_) {
-        schemaWithId_ = dwio::common::TypeWithId::create(schema_, *scanSpec_);
+      if (options_.scanSpec()) {
+        schemaWithId_ =
+            dwio::common::TypeWithId::create(schema_, *options_.scanSpec());
       } else {
         schemaWithId_ = dwio::common::TypeWithId::create(schema_);
       }
@@ -154,7 +145,7 @@ class ReaderBase {
   }
 
   uint64_t getFooterEstimatedSize() const {
-    return footerEstimatedSize_;
+    return options_.footerEstimatedSize();
   }
 
   uint64_t getFileLength() const {
@@ -214,7 +205,7 @@ class ReaderBase {
         getCompressionKind(),
         std::move(compressed),
         getCompressionBlockSize(),
-        pool_,
+        options_.memoryPool(),
         streamDebugInfo,
         decrypter);
   }
@@ -238,7 +229,7 @@ class ReaderBase {
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
-    return randomSkip_;
+    return options_.randomSkip();
   }
 
  private:
@@ -247,22 +238,14 @@ class ReaderBase {
       uint32_t index = 0,
       bool fileColumnNamesReadAsLowerCase = false);
 
-  memory::MemoryPool& pool_;
+  const dwio::common::ReaderOptions options_;
   std::unique_ptr<google::protobuf::Arena> arena_;
   std::unique_ptr<PostScript> postScript_;
   std::unique_ptr<FooterWrapper> footer_ = nullptr;
   std::unique_ptr<StripeMetadataCache> cache_;
-  // Keeps factory alive for possibly async prefetch.
-  std::shared_ptr<dwio::common::encryption::DecrypterFactory> decryptorFactory_;
   std::unique_ptr<encryption::DecryptionHandler> handler_;
-  const uint64_t footerEstimatedSize_{
-      dwio::common::ReaderOptions::kDefaultFooterEstimatedSize};
-  const uint64_t filePreloadThreshold_{
-      dwio::common::ReaderOptions::kDefaultFilePreloadThreshold};
 
   const std::unique_ptr<dwio::common::BufferedInput> input_;
-  const std::shared_ptr<random::RandomSkipTracker> randomSkip_;
-  const std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const uint64_t fileLength_;
 
   RowTypePtr schema_;

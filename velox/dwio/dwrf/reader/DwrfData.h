@@ -149,6 +149,14 @@ class DwrfParams : public dwio::common::FormatParams {
     return streamLabels_;
   }
 
+  const tz::TimeZone* getSessionTimezone() const {
+    return stripeStreams_.getSessionTimezone();
+  }
+
+  bool adjustTimestampToTimezone() const {
+    return stripeStreams_.adjustTimestampToTimezone();
+  }
+
  private:
   StripeStreams& stripeStreams_;
   FlatMapContext flatMapContext_;

@@ -175,6 +175,7 @@ TEST_P(E2EReaderTest, SharedDictionaryFlatmapReadAsStruct) {
   writer.reset();
 
   dwio::common::ReaderOptions readerOpts{pool.get()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   auto bufferedInput = std::make_unique<BufferedInput>(
       std::make_shared<LocalReadFile>(path), *pool);
   auto reader = DwrfReader::create(std::move(bufferedInput), readerOpts);

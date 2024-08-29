@@ -241,7 +241,7 @@ void verifyFlatMapReading(
     const std::vector<uint32_t>& expectedPrefetchRowSizes = {},
     const std::vector<bool>& shouldTryPrefetch = {}) {
   dwio::common::ReaderOptions readerOpts{pool};
-
+  readerOpts.setFileFormat(FileFormat::DWRF);
   /* If an extra sanity check is desired you can uncomment the 2 below lines and
    * re-run */
   // readerOpts.setFooterEstimatedSize(257);
@@ -361,6 +361,7 @@ TEST_P(TestFlatMapReader, testReadFlatMapEmptyMap) {
   auto returnFlatVector = GetParam();
 
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setReturnFlatVector(returnFlatVector);
   std::shared_ptr<const RowType> emptyFileType =
@@ -391,6 +392,7 @@ TEST_P(TestFlatMapReader, testStringKeyLifeCycle) {
 
   VectorPtr batch;
   dwio::common::ReaderOptions readerOptions{pool()};
+  readerOptions.setFileFormat(FileFormat::DWRF);
 
   {
     RowReaderOptions rowReaderOptions;
@@ -506,6 +508,7 @@ class TestFlatMapReaderFlatLayout
 
 TEST_P(TestFlatMapReaderFlatLayout, testCompare) {
   dwio::common::ReaderOptions readerOptions{pool()};
+  readerOptions.setFileFormat(FileFormat::DWRF);
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOptions.memoryPool()),
       readerOptions);
@@ -539,6 +542,7 @@ TEST_F(TestReader, testReadFlatMapWithKeyFilters) {
   // batch size is set as 1000 in reading
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   // set map key filter for map1 we only need key=1, and map2 only key-1
   auto cs = std::make_shared<ColumnSelector>(
@@ -592,6 +596,7 @@ TEST_F(TestReader, testReadFlatMapWithKeyRejectList) {
   // batch size is set as 1000 in reading
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   auto cs = std::make_shared<ColumnSelector>(
       getFlatmapSchema(), std::vector<std::string>{"map1#[\"!2\",\"!3\"]"});
@@ -647,7 +652,7 @@ TEST_F(TestReader, testStatsCallbackFiredWithFiltering) {
       });
 
   dwio::common::ReaderOptions readerOpts{pool()};
-
+  readerOpts.setFileFormat(FileFormat::DWRF);
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
       readerOpts);
@@ -685,7 +690,7 @@ TEST_F(TestReader, testBlockedIoCallbackFiredBlocking) {
   rowReaderOpts.setEagerFirstStripeLoad(false);
 
   dwio::common::ReaderOptions readerOpts{pool()};
-
+  readerOpts.setFileFormat(FileFormat::DWRF);
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
       readerOpts);
@@ -813,6 +818,7 @@ TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredWithFirstStripeLoad) {
 
 TEST_F(TestReader, testEstimatedSize) {
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   {
     auto reader = DwrfReader::create(
         createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
@@ -858,7 +864,7 @@ TEST_F(TestReader, testStatsCallbackFiredWithoutFiltering) {
       });
 
   dwio::common::ReaderOptions readerOpts{pool()};
-
+  readerOpts.setFileFormat(FileFormat::DWRF);
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
       readerOpts);
@@ -943,6 +949,7 @@ void verifyFlatmapStructEncoding(
     const std::vector<int32_t>& keysToSelect,
     size_t batchSize = 1000) {
   dwio::common::ReaderOptions readerOpts{pool};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   auto reader = DwrfReader::create(
       createFileBufferedInput(filename, readerOpts.memoryPool()), readerOpts);
 
@@ -1049,6 +1056,7 @@ TEST_F(TestReader, testFlatmapAsStructRequiringKeyList) {
 TEST_F(TestReader, testMismatchSchemaMoreFields) {
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1094,6 +1102,7 @@ TEST_F(TestReader, testMismatchSchemaMoreFields) {
 TEST_F(TestReader, testMismatchSchemaFewerFields) {
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1135,6 +1144,7 @@ TEST_F(TestReader, testMismatchSchemaFewerFields) {
 TEST_F(TestReader, testMismatchSchemaNestedMoreFields) {
   // file has schema: a int, b struct<a:int, b:float>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1201,6 +1211,7 @@ TEST_F(TestReader, testMismatchSchemaNestedMoreFields) {
 TEST_F(TestReader, testMismatchSchemaNestedFewerFields) {
   // file has schema: a int, b struct<a:int, b:float>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1258,6 +1269,7 @@ TEST_F(TestReader, testMismatchSchemaNestedFewerFields) {
 TEST_F(TestReader, testMismatchSchemaIncompatibleNotSelected) {
   // file has schema: a int, b struct<a:int, b:float>, c float
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -1339,6 +1351,7 @@ TEST_F(TestReader, testMismatchSchemaIncompatible) {
 TEST_F(TestReader, fileColumnNamesReadAsLowerCase) {
   // upper.orc holds one columns (Bool_Val: BOOLEAN, b: BIGINT)
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   readerOpts.setFileColumnNamesReadAsLowerCase(true);
   auto reader = DwrfReader::create(
       createFileBufferedInput(
@@ -1353,6 +1366,7 @@ TEST_F(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
   // upper_complex.orc holds type
   // Cc:struct<CcLong0:bigint,CcMap1:map<string,struct<CcArray2:array<struct<CcInt3:int>>>>>
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   readerOpts.setFileColumnNamesReadAsLowerCase(true);
   auto reader = DwrfReader::create(
       createFileBufferedInput(
@@ -1391,6 +1405,7 @@ TEST_F(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
 
 TEST_F(TestReader, TestStripeSizeCallback) {
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   readerOpts.setFilePreloadThreshold(0);
   readerOpts.setFooterEstimatedSize(4);
   RowReaderOptions rowReaderOpts;
@@ -1419,6 +1434,7 @@ TEST_F(TestReader, TestStripeSizeCallback) {
 
 TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   readerOpts.setFilePreloadThreshold(0);
   readerOpts.setFooterEstimatedSize(4);
   RowReaderOptions rowReaderOpts;
@@ -1448,6 +1464,7 @@ TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
 
 TEST_F(TestReader, TestStripeSizeCallbackLimitsTwoStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   readerOpts.setFilePreloadThreshold(0);
   readerOpts.setFooterEstimatedSize(4);
   RowReaderOptions rowReaderOpts;
@@ -1843,6 +1860,7 @@ void testBufferLifeCycle(
       std::make_shared<InMemoryReadFile>(std::move(data)), *pool);
 
   dwio::common::ReaderOptions readerOpts{pool};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setReturnFlatVector(true);
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
@@ -1901,6 +1919,7 @@ void testFlatmapAsMapFieldLifeCycle(
       std::make_shared<InMemoryReadFile>(std::move(data)), *pool);
 
   dwio::common::ReaderOptions readerOpts{pool};
+  readerOpts.setFileFormat(FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setReturnFlatVector(true);
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
