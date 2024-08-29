@@ -1069,6 +1069,7 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
 
 template <bool ignoreNullKeys>
 bool HashTable<ignoreNullKeys>::insertBatch(
+    RowContainer* rows,
     char** groups,
     int32_t numGroups,
     raw_vector<uint64_t>& hashes,
@@ -1077,7 +1078,7 @@ bool HashTable<ignoreNullKeys>::insertBatch(
     return false;
   }
   if (isJoinBuild_) {
-    insertForJoin(rows(), groups, hashes.data(), numGroups);
+    insertForJoin(rows, groups, hashes.data(), numGroups);
   } else {
     insertForGroupBy(groups, hashes.data(), numGroups);
   }
@@ -1137,12 +1138,15 @@ void HashTable<ignoreNullKeys>::insertForGroupBy(
 }
 
 template <bool ignoreNullKeys>
-bool HashTable<ignoreNullKeys>::arrayPushRow(char* row, int32_t index) {
+bool HashTable<ignoreNullKeys>::arrayPushRow(
+    RowContainer* rows,
+    char* row,
+    int32_t index) {
   auto* existingRow = table_[index];
   if (existingRow != nullptr) {
     if (nextOffset_ > 0) {
       hasDuplicates_ = true;
-      rows_->appendNextRow(existingRow, row);
+      rows->appendNextRow(existingRow, row, rows_->pool());
     }
     return false;
   }
@@ -1157,7 +1161,7 @@ void HashTable<ignoreNullKeys>::pushNext(
     char* next) {
   VELOX_CHECK_GT(nextOffset_, 0);
   hasDuplicates_ = true;
-  rows->appendNextRow(row, next);
+  rows->appendNextRow(row, next, rows_->pool());
 }
 
 template <bool ignoreNullKeys>
@@ -1268,7 +1272,7 @@ void HashTable<ignoreNullKeys>::insertForJoin(
     for (auto i = 0; i < numGroups; ++i) {
       auto index = hashes[i];
       VELOX_CHECK_LT(index, capacity_);
-      arrayPushRow(groups[i], index);
+      arrayPushRow(rows, groups[i], index);
     }
     return;
   }
@@ -1301,11 +1305,10 @@ void HashTable<ignoreNullKeys>::rehash(
     RowContainerIterator iterator;
     int32_t numGroups;
     do {
-      numGroups = (i == 0 ? this : otherTables_[i - 1].get())
-                      ->rows()
-                      ->listRows(&iterator, kHashBatchSize, groups);
+      auto* rows = (i == 0 ? this : otherTables_[i - 1].get())->rows();
+      numGroups = rows->listRows(&iterator, kHashBatchSize, groups);
       if (!insertBatch(
-              groups, numGroups, hashes, initNormalizedKeys || i != 0)) {
+              rows, groups, numGroups, hashes, initNormalizedKeys || i != 0)) {
         VELOX_CHECK_NE(hashMode_, HashMode::kHash);
         setHashMode(HashMode::kHash, 0, spillInputStartPartitionBit);
         return;

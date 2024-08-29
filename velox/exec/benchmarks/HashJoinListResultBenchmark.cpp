@@ -225,7 +225,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
   }
 
  private:
-  // Generate buiild key based on current key and key repetition distribution.
+  // Generate build key based on current key and key repetition distribution.
   int64_t getBuildKey(int64_t& buildKey, int32_t& iterTimes, int32_t& repeat) {
     if (iterTimes >= repeat) {
       iterTimes = 0;

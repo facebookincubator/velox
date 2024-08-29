@@ -786,6 +786,7 @@ class HashTable : public BaseHashTable {
   // stores these in 'hashes' and inserts the groups using
   // insertForJoin or insertForGroupBy.
   bool insertBatch(
+      RowContainer* rows,
       char** groups,
       int32_t numGroups,
       raw_vector<uint64_t>& hashes,
@@ -886,7 +887,7 @@ class HashTable : public BaseHashTable {
   // Adds a row to a hash join table in kArray hash mode. Returns true
   // if a new entry was made and false if the row was added to an
   // existing set of rows with the same key.
-  bool arrayPushRow(char* row, int32_t index);
+  bool arrayPushRow(RowContainer* rows, char* row, int32_t index);
 
   // Adds a row to a hash join build side entry with multiple rows
   // with the same key.
