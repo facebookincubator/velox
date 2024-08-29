@@ -269,7 +269,7 @@ vector_size_t Operator::outputBatchRows(
   if (batchSize > queryConfig.maxOutputBatchRows()) {
     return queryConfig.maxOutputBatchRows();
   }
-  return std::max<uint64_t>(batchSize, 1);
+  return std::max<vector_size_t>(batchSize, 1);
 }
 
 void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
