@@ -27,18 +27,6 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
-namespace {
-vector_size_t outputBatchRowsByBytes(
-    const core::QueryConfig& queryConfig,
-    uint64_t rowSize) {
-  uint64_t batchSize = queryConfig.preferredOutputBatchBytes() / rowSize;
-  if (UNLIKELY(batchSize > std::numeric_limits<vector_size_t>::max())) {
-    return std::numeric_limits<vector_size_t>::max();
-  }
-  return std::max<vector_size_t>(
-      queryConfig.preferredOutputBatchBytes() / rowSize, 1);
-}
-} // namespace
 
 OperatorCtx::OperatorCtx(
     DriverCtx* driverCtx,
@@ -276,20 +264,12 @@ vector_size_t Operator::outputBatchRows(
     return queryConfig.preferredOutputBatchRows();
   }
 
-  const uint64_t rowSize = averageRowSize.value();
-  uint64_t batchBytes;
-  bool overflow = __builtin_mul_overflow(
-      rowSize,
-      static_cast<uint64_t>(queryConfig.maxOutputBatchRows()),
-      &batchBytes);
-  if (UNLIKELY(overflow)) {
-    return outputBatchRowsByBytes(queryConfig, rowSize);
-  }
-  if (rowSize * queryConfig.maxOutputBatchRows() <=
-      queryConfig.preferredOutputBatchBytes()) {
+  const uint64_t batchSize =
+      queryConfig.preferredOutputBatchBytes() / averageRowSize.value();
+  if (batchSize > queryConfig.maxOutputBatchRows()) {
     return queryConfig.maxOutputBatchRows();
   }
-  return outputBatchRowsByBytes(queryConfig, rowSize);
+  return std::max<uint64_t>(batchSize, 1);
 }
 
 void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {

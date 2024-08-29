@@ -520,7 +520,6 @@ TEST_F(OperatorUtilsTest, outputBatchRows) {
     MockOperator mockOp(driverCtx_.get(), rowType, "MockType1");
     ASSERT_EQ(10, mockOp.outputRows(std::nullopt));
     ASSERT_EQ(20, mockOp.outputRows(1));
-    // Bytes overflow because exceeds bytes uint64_t numeric range.
     ASSERT_EQ(1, mockOp.outputRows(UINT64_MAX));
     ASSERT_EQ(1, mockOp.outputRows(1000));
     ASSERT_EQ(234 / 40, mockOp.outputRows(40));
@@ -528,13 +527,6 @@ TEST_F(OperatorUtilsTest, outputBatchRows) {
   {
     setBatchConfig(10, INT32_MAX, 3'000'000'000'000);
     MockOperator mockOp(driverCtx_.get(), rowType, "MockType2");
-    // Bytes overflow because exceeds bytes uint64_t numeric range.
     ASSERT_EQ(1000, mockOp.outputRows(3'000'000'000));
-  }
-  {
-    setBatchConfig(10, INT32_MAX, UINT64_MAX);
-    MockOperator mockOp(driverCtx_.get(), rowType, "MockType3");
-    const auto maxBatchSize = std::numeric_limits<vector_size_t>::max();
-    ASSERT_EQ(maxBatchSize, mockOp.outputRows(UINT64_MAX / INT32_MAX - 1));
   }
 }
