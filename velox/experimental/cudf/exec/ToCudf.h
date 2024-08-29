@@ -23,8 +23,8 @@ namespace facebook::velox::cudf_velox {
 
 class CompileState {
  public:
-  CompileState(const exec::DriverFactory& driverFactory, exec::Driver& driver)
-      : driverFactory_(driverFactory), driver_(driver) {}
+  CompileState(const exec::DriverFactory& driverFactory, exec::Driver& driver, std::vector<std::shared_ptr<core::PlanNode const>>& planNodes)
+      : driverFactory_(driverFactory), driver_(driver), planNodes_(planNodes) {}
 
   exec::Driver& driver() {
     return driver_;
@@ -36,6 +36,7 @@ class CompileState {
 
   const exec::DriverFactory& driverFactory_;
   exec::Driver& driver_;
+  const std::vector<std::shared_ptr<core::PlanNode const>>& planNodes_;
 };
 
 /// Registers adapter to add cuDF operators to Drivers.

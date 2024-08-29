@@ -84,12 +84,53 @@ bool CompileState::compile() {
   return replacements_made;
 }
 
-bool cudfDriverAdapter(
-    const exec::DriverFactory& factory,
-    exec::Driver& driver) {
-  auto state = CompileState(factory, driver);
-  return state.compile();
-}
+struct cudfDriverAdapter {
+  std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>> planNodes;
+  cudfDriverAdapter() {
+    std::cout<<"cudfDriverAdapter constructor" << std::endl;
+    planNodes = std::make_shared<std::vector<std::shared_ptr<core::PlanNode const>>>();
+  }
+  ~cudfDriverAdapter() {
+    std::cout << "cudfDriverAdapter destructor" << std::endl;
+    printf("cached planNodes %p, %ld\n", planNodes.get(), planNodes.use_count());
+  }
+  // driveradapter
+  bool operator()(
+      const exec::DriverFactory& factory,
+      exec::Driver& driver) {
+    auto state = CompileState(factory, driver, *planNodes);
+    // Stored planNodes from inspect.
+    printf("driver.planNodes=%p\n", planNodes.get());
+    for(auto planNode : *planNodes) {
+      std::cout << "PlanNode: " << (*planNode).toString() << std::endl;
+    }
+    auto res = state.compile();
+    return res;
+  }
+  // Iterate recursively and store them in the planNodes_ptr.
+  void storePlanNodes(const std::shared_ptr<const core::PlanNode>& planNode){
+      const auto& sources = planNode->sources();
+      for (int32_t i = 0; i < sources.size(); ++i) {
+        storePlanNodes(sources[i]);
+      }
+      planNodes->push_back(planNode);
+  }
+
+  // inspect
+  void operator()(const core::PlanFragment& planFragment) {
+    // signature: std::function<void(const core::PlanFragment&)> inspect;
+    // call: adapter.inspect(planFragment);
+    planNodes->clear();
+    std::cout << "Inspecting PlanFragment: "
+              << std::endl;
+    if (planNodes) {
+      printf("inspect.planNodes=%p\n", planNodes.get());
+      storePlanNodes(planFragment.planNode);
+    } else {
+      std::cout << "planNodes_ptr is nullptr" << std::endl;
+    }
+  }
+};
 
 void registerCudf() {
   CUDF_FUNC_RANGE();
@@ -98,7 +139,9 @@ void registerCudf() {
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
   std::cout << "Registering cudfDriverAdapter" << std::endl;
-  exec::DriverAdapter cudfAdapter{"cuDF", {}, cudfDriverAdapter};
+  cudfDriverAdapter cda{};
+  exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
+  std::cout<< "existing adapters: "<<exec::DriverFactory::adapters.size()<<std::endl;
   exec::DriverFactory::registerAdapter(cudfAdapter);
 }
 } // namespace facebook::velox::cudf_velox
