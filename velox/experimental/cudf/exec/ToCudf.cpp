@@ -30,7 +30,8 @@ namespace facebook::velox::cudf_velox {
 bool CompileState::compile() {
   std::cout << "Calling cudfDriverAdapter" << std::endl;
   auto operators = driver_.operators();
-  // auto& nodes = driverFactory_.planNodes; // has only plannodes from this pipeline.
+  // auto& nodes = driverFactory_.planNodes; // has only plannodes from this
+  // pipeline.
   auto& nodes = planNodes_;
   std::cout << "Number of operators: " << operators.size() << std::endl;
   for (auto& op : operators) {
@@ -103,33 +104,33 @@ bool CompileState::compile() {
 struct cudfDriverAdapter {
   std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>> planNodes;
   cudfDriverAdapter() {
-    std::cout<<"cudfDriverAdapter constructor" << std::endl;
-    planNodes = std::make_shared<std::vector<std::shared_ptr<core::PlanNode const>>>();
+    std::cout << "cudfDriverAdapter constructor" << std::endl;
+    planNodes =
+        std::make_shared<std::vector<std::shared_ptr<core::PlanNode const>>>();
   }
   ~cudfDriverAdapter() {
     std::cout << "cudfDriverAdapter destructor" << std::endl;
-    printf("cached planNodes %p, %ld\n", planNodes.get(), planNodes.use_count());
+    printf(
+        "cached planNodes %p, %ld\n", planNodes.get(), planNodes.use_count());
   }
   // driveradapter
-  bool operator()(
-      const exec::DriverFactory& factory,
-      exec::Driver& driver) {
+  bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     auto state = CompileState(factory, driver, *planNodes);
     // Stored planNodes from inspect.
     printf("driver.planNodes=%p\n", planNodes.get());
-    for(auto planNode : *planNodes) {
+    for (auto planNode : *planNodes) {
       std::cout << "PlanNode: " << (*planNode).toString() << std::endl;
     }
     auto res = state.compile();
     return res;
   }
   // Iterate recursively and store them in the planNodes_ptr.
-  void storePlanNodes(const std::shared_ptr<const core::PlanNode>& planNode){
-      const auto& sources = planNode->sources();
-      for (int32_t i = 0; i < sources.size(); ++i) {
-        storePlanNodes(sources[i]);
-      }
-      planNodes->push_back(planNode);
+  void storePlanNodes(const std::shared_ptr<const core::PlanNode>& planNode) {
+    const auto& sources = planNode->sources();
+    for (int32_t i = 0; i < sources.size(); ++i) {
+      storePlanNodes(sources[i]);
+    }
+    planNodes->push_back(planNode);
   }
 
   // inspect
@@ -137,8 +138,7 @@ struct cudfDriverAdapter {
     // signature: std::function<void(const core::PlanFragment&)> inspect;
     // call: adapter.inspect(planFragment);
     planNodes->clear();
-    std::cout << "Inspecting PlanFragment: "
-              << std::endl;
+    std::cout << "Inspecting PlanFragment: " << std::endl;
     if (planNodes) {
       printf("inspect.planNodes=%p\n", planNodes.get());
       storePlanNodes(planFragment.planNode);
@@ -157,12 +157,14 @@ void registerCudf() {
   std::cout << "Registering cudfDriverAdapter" << std::endl;
   cudfDriverAdapter cda{};
   exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
-  std::cout<< "existing adapters: "<<exec::DriverFactory::adapters.size()<<std::endl;
+  std::cout << "existing adapters: " << exec::DriverFactory::adapters.size()
+            << std::endl;
   exec::DriverFactory::registerAdapter(cudfAdapter);
 }
 
 void unregisterCudf() {
-  std::cout<< "existing adapters: "<<exec::DriverFactory::adapters.size()<<std::endl;
+  std::cout << "existing adapters: " << exec::DriverFactory::adapters.size()
+            << std::endl;
   std::cout << "unRegistering cudfDriverAdapter" << std::endl;
   exec::DriverFactory::adapters.clear();
 }

@@ -23,7 +23,10 @@ namespace facebook::velox::cudf_velox {
 
 class CompileState {
  public:
-  CompileState(const exec::DriverFactory& driverFactory, exec::Driver& driver, std::vector<std::shared_ptr<core::PlanNode const>>& planNodes)
+  CompileState(
+      const exec::DriverFactory& driverFactory,
+      exec::Driver& driver,
+      std::vector<std::shared_ptr<core::PlanNode const>>& planNodes)
       : driverFactory_(driverFactory), driver_(driver), planNodes_(planNodes) {}
 
   exec::Driver& driver() {
