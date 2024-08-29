@@ -30,7 +30,8 @@ namespace facebook::velox::cudf_velox {
 bool CompileState::compile() {
   std::cout << "Calling cudfDriverAdapter" << std::endl;
   auto operators = driver_.operators();
-  auto& nodes = driverFactory_.planNodes;
+  // auto& nodes = driverFactory_.planNodes; // has only plannodes from this pipeline.
+  auto& nodes = planNodes_;
   std::cout << "Number of operators: " << operators.size() << std::endl;
   for (auto& op : operators) {
     std::cout << "  Operator: ID " << op->operatorId() << ": " << op->toString()
@@ -49,6 +50,17 @@ bool CompileState::compile() {
   bool replacements_made = false;
   auto ctx = driver_.driverCtx();
 
+  // Get plan node by id lookup.
+  auto get_plan_node = [&](const core::PlanNodeId& id) {
+    auto it =
+        std::find_if(nodes.cbegin(), nodes.cend(), [&id](const auto& node) {
+          std::cout << "Comparing " << node->id() << ": " << node->toString()
+                    << " to " << id << std::endl;
+          return node->id() == id;
+        });
+    VELOX_CHECK(it != nodes.end());
+    return *it;
+  };
   // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
   // CudfHashJoinProbe operators.
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -59,8 +71,10 @@ bool CompileState::compile() {
     VELOX_CHECK(oper);
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
       auto id = joinBuildOp->operatorId();
+      // auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
+      //     joinBuildOp->getPlanNode());
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-          joinBuildOp->getPlanNode());
+          get_plan_node(joinBuildOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
@@ -70,8 +84,10 @@ bool CompileState::compile() {
       replacements_made = true;
     } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
       auto id = joinProbeOp->operatorId();
+      // auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
+      //     joinProbeOp->getPlanNode());
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-          joinProbeOp->getPlanNode());
+          get_plan_node(joinProbeOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
