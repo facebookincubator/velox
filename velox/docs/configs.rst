@@ -414,6 +414,16 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - If true, the partition directory will be converted to lowercase when executing a table write operation.
+   * - allow-null-partition-keys
+     - allow_null_partition_keys
+     - bool
+     - true
+     - Determines whether null values for partition keys are allowed or not. if false, it will threw error message
+       like "Partition key must not be null" when writing data with null partition key.
+       **Important Note:**
+       the check for null partition keys should be applied only when partition keys are generated dynamically at
+       runtime during query execution. For queries that write to fixed partitions, this check should happen much earlier
+       before the Velox execution even starts.
    * - ignore_missing_files
      -
      - bool
@@ -517,13 +527,7 @@ Each query can override the config by setting corresponding query session proper
        and also skip staging to the ssd cache. This helps to prevent the cache space pollution
        from the one-time table scan by large batch query when mixed running with interactive
        query which has high data locality.
-   * - allow-null-partition-keys
-     - allow_null_partition_keys
-     - bool
-     - true
-     - Determines whether the Hive connector allows data containing null values in partition keys.
-       If set to true, data with null partition keys will be permitted. If set to false, any
-       attempt to write data with null partition keys will be blocked.
+
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
