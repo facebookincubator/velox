@@ -238,6 +238,11 @@ int main(int argc, char** argv) {
       "zip_with",
       "sin", //todo: newer presto version has the result match Velox, e.g., sin(0.8033705723937601)
       "reduce",
+      "split",
+      "array_join",
+      "bitwise_shift_left",
+      "map_from_entries",
+      "inverse_beta_cdf",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
