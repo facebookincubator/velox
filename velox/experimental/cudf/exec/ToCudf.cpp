@@ -72,8 +72,6 @@ bool CompileState::compile() {
     VELOX_CHECK(oper);
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
       auto id = joinBuildOp->operatorId();
-      // auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-      //     joinBuildOp->getPlanNode());
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
           get_plan_node(joinBuildOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
@@ -85,8 +83,6 @@ bool CompileState::compile() {
       replacements_made = true;
     } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
       auto id = joinProbeOp->operatorId();
-      // auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-      //     joinProbeOp->getPlanNode());
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
           get_plan_node(joinProbeOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
