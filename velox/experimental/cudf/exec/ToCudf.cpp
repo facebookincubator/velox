@@ -144,4 +144,10 @@ void registerCudf() {
   std::cout<< "existing adapters: "<<exec::DriverFactory::adapters.size()<<std::endl;
   exec::DriverFactory::registerAdapter(cudfAdapter);
 }
+
+void unregisterCudf() {
+  std::cout<< "existing adapters: "<<exec::DriverFactory::adapters.size()<<std::endl;
+  std::cout << "unRegistering cudfDriverAdapter" << std::endl;
+  exec::DriverFactory::adapters.clear();
+}
 } // namespace facebook::velox::cudf_velox

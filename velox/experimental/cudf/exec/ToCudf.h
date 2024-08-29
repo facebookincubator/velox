@@ -41,5 +41,6 @@ class CompileState {
 
 /// Registers adapter to add cuDF operators to Drivers.
 void registerCudf();
+void unregisterCudf();
 
 } // namespace facebook::velox::cudf_velox

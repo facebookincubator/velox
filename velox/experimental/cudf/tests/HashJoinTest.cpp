@@ -800,6 +800,11 @@ class HashJoinTest : public HiveConnectorTestBase {
         .allowLazyVector = false};
   }
 
+  void TearDown() override {
+    cudf_velox::unregisterCudf();
+    HiveConnectorTestBase::TearDown();
+  }
+
   // Make splits with each plan node having a number of source files.
   SplitInput makeSpiltInput(
       const std::vector<core::PlanNodeId>& nodeIds,
