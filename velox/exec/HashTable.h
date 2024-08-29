@@ -404,7 +404,7 @@ class BaseHashTable {
   /// pointed to by 'rows'. If an entry in 'rows' is null, sets corresponding
   /// row in 'result' to null.
   virtual void extractColumn(
-      folly::Range<char**> rows,
+      folly::Range<char* const*> rows,
       int32_t columnIndex,
       const VectorPtr& result) = 0;
 
@@ -655,7 +655,7 @@ class HashTable : public BaseHashTable {
   }
 
   void extractColumn(
-      folly::Range<char**> rows,
+      folly::Range<char* const*> rows,
       int32_t columnIndex,
       const VectorPtr& result) override {
     RowContainer::extractColumn(

@@ -1227,7 +1227,7 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
     filterTableInputRows_.resizeFill(numRows, true);
     for (auto& projection : filterTableProjections_) {
       table_->extractColumn(
-          folly::Range(data, numRows),
+          folly::Range<char* const*>(data, numRows),
           projection.inputChannel,
           filterTableInput_->childAt(projection.outputChannel));
     }
