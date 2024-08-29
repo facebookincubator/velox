@@ -418,12 +418,10 @@ Each query can override the config by setting corresponding query session proper
      - allow_null_partition_keys
      - bool
      - true
-     - Determines whether null values for partition keys are allowed or not. if false, it will threw error message
-       like "Partition key must not be null" when writing data with null partition key.
-       **Important Note:**
-       the check for null partition keys should be applied only when partition keys are generated dynamically at
-       runtime during query execution. For queries that write to fixed partitions, this check should happen much earlier
-       before the Velox execution even starts.
+     - Determines whether null values for partition keys are allowed or not. If not, fails with "Partition key must
+       not be null" error message when writing data with null partition key.
+       Null check for partitioning key should be used only when partitions are generated dynamically during query execution.
+       For queries that write to fixed partitions, this check should happen much earlier before the Velox execution even starts.
    * - ignore_missing_files
      -
      - bool
