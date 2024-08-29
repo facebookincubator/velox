@@ -35,14 +35,6 @@ class ArrayInsertTest : public SparkFunctionBaseTest {
     assertEqualVectors(expected, result);
   }
 
-  void testExpression(
-      const std::string& expression,
-      const RowVectorPtr& input,
-      const VectorPtr& expected) {
-    const auto result = evaluate(expression, input);
-    assertEqualVectors(expected, result);
-  }
-
   void evaluateExpression(
       const std::string& expression,
       const std::vector<VectorPtr>& input) {
@@ -51,10 +43,10 @@ class ArrayInsertTest : public SparkFunctionBaseTest {
 
   template <typename T>
   void testInt() {
-    const auto input = makeRowVector({
+    const std::vector<VectorPtr> input{
         makeArrayVectorFromJson<T>({"[1]", "[2, 2]"}),
         makeNullableFlatVector<T>({0, std::nullopt}),
-    });
+    };
 
     auto expected = makeArrayVectorFromJson<T>({"[0, 1]", "[null, 2, 2]"});
     testExpression("array_insert(c0, 1, c1, false)", input, expected);
@@ -68,11 +60,11 @@ class ArrayInsertTest : public SparkFunctionBaseTest {
     static const T kNaN = std::numeric_limits<T>::quiet_NaN();
     static const T kInf = std::numeric_limits<T>::infinity();
 
-    const auto input = makeRowVector({
+    const std::vector<VectorPtr> input{
         makeNullableArrayVector<T>(
             {{1.0001, -2.0}, {2.0001, kInf}, {kNaN, 9.0009}, {3.0001}}),
         makeNullableFlatVector<T>({0, std::nullopt, kInf, kNaN}),
-    });
+    };
 
     auto expected = makeNullableArrayVector<T>(
         {{0, 1.0001, -2.0},
@@ -184,8 +176,8 @@ TEST_F(ArrayInsertTest, nestedArrays) {
        "[[0, 0], [5, null], [null, 6], [null, null], []]"});
   testExpression("array_insert(c0, 1, ARRAY[0, 0], false)", {arrays}, expected);
 
-  const auto input = makeRowVector(
-      {arrays, makeArrayVectorFromJson<int64_t>({"null", "null"})});
+  const std::vector<VectorPtr> input{
+      arrays, makeArrayVectorFromJson<int64_t>({"null", "null"})};
   expected = makeNestedArrayVectorFromJson<int64_t>(
       {"[null, [1, 1], null, [3, 3]]",
        "[null, [5, null], [null, 6], [null, null], []]"});
