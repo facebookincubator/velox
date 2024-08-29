@@ -70,7 +70,7 @@ class SerializeBenchmark {
     auto data = makeData(rowType);
     suspender.dismiss();
 
-    auto numRows = data->size();
+    const auto numRows = data->size();
     std::vector<size_t> rowSize(numRows);
     std::vector<size_t> offsets(numRows);
 
@@ -78,9 +78,8 @@ class SerializeBenchmark {
     auto totalSize =
         computeTotalSize(compact, rowType, numRows, rowSize, offsets);
     auto buffer = AlignedBuffer::allocate<char>(totalSize, pool(), 0);
-    auto serialized =
-        serialize(compact, data->size(), buffer, rowSize, offsets);
-    VELOX_CHECK_EQ(serialized.size(), data->size());
+    auto serialized = serialize(compact, numRows, buffer, rowSize, offsets);
+    VELOX_CHECK_EQ(serialized.size(), numRows);
   }
 
   void deserializeCompact(const RowTypePtr& rowType) {
