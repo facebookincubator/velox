@@ -104,8 +104,8 @@ TEST(DateTimeUtilTest, fromDateInvalid) {
       1970, 6, 31, "Date out of range: 1970-6-31"));
 }
 
-TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
-  auto daysSinceEpochLenient =
+TEST(DateTimeUtilTest, daysSinceEpochFromWeekOfMonthDateLenient) {
+  auto daysSinceEpoch =
       [](int32_t year, int32_t month, int32_t weekOfMonth, int32_t dayOfWeek) {
         auto result = util::daysSinceEpochFromWeekOfMonthDate(
             year, month, weekOfMonth, dayOfWeek, true);
@@ -113,47 +113,47 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDate) {
         return result.value();
       };
 
-  EXPECT_EQ(4, daysSinceEpochLenient(1970, 1, 2, 1));
-  EXPECT_EQ(361, daysSinceEpochLenient(1971, 1, 1, 1));
-  EXPECT_EQ(396, daysSinceEpochLenient(1971, 2, 1, 1));
+  EXPECT_EQ(4, daysSinceEpoch(1970, 1, 2, 1));
+  EXPECT_EQ(361, daysSinceEpoch(1971, 1, 1, 1));
+  EXPECT_EQ(396, daysSinceEpoch(1971, 2, 1, 1));
 
-  EXPECT_EQ(10952, daysSinceEpochLenient(2000, 1, 1, 1));
-  EXPECT_EQ(19905, daysSinceEpochLenient(2024, 7, 1, 1));
+  EXPECT_EQ(10952, daysSinceEpoch(2000, 1, 1, 1));
+  EXPECT_EQ(19905, daysSinceEpoch(2024, 7, 1, 1));
 
   // Before unix epoch.
-  EXPECT_EQ(-3, daysSinceEpochLenient(1970, 1, 1, 1));
-  EXPECT_EQ(-2, daysSinceEpochLenient(1970, 1, 1, 2));
-  EXPECT_EQ(-31, daysSinceEpochLenient(1969, 12, 1, 1));
-  EXPECT_EQ(-367, daysSinceEpochLenient(1969, 1, 1, 1));
-  EXPECT_EQ(-724, daysSinceEpochLenient(1968, 1, 2, 1));
-  EXPECT_EQ(-719533, daysSinceEpochLenient(0, 1, 1, 1));
+  EXPECT_EQ(-3, daysSinceEpoch(1970, 1, 1, 1));
+  EXPECT_EQ(-2, daysSinceEpoch(1970, 1, 1, 2));
+  EXPECT_EQ(-31, daysSinceEpoch(1969, 12, 1, 1));
+  EXPECT_EQ(-367, daysSinceEpoch(1969, 1, 1, 1));
+  EXPECT_EQ(-724, daysSinceEpoch(1968, 1, 2, 1));
+  EXPECT_EQ(-719533, daysSinceEpoch(0, 1, 1, 1));
 
   // Negative year - BC.
-  EXPECT_EQ(-719561, daysSinceEpochLenient(-1, 12, 1, 1));
-  EXPECT_EQ(-719897, daysSinceEpochLenient(-1, 1, 1, 1));
+  EXPECT_EQ(-719561, daysSinceEpoch(-1, 12, 1, 1));
+  EXPECT_EQ(-719897, daysSinceEpoch(-1, 1, 1, 1));
 
   // Day in the previous month.
-  EXPECT_EQ(19783, daysSinceEpochLenient(2024, 2, 5, 5));
+  EXPECT_EQ(19783, daysSinceEpoch(2024, 2, 5, 5));
   // Day in the next month.
-  EXPECT_EQ(19751, daysSinceEpochLenient(2024, 2, 1, 1));
+  EXPECT_EQ(19751, daysSinceEpoch(2024, 2, 1, 1));
 
   // Out of range day of week.
-  EXPECT_EQ(338, daysSinceEpochLenient(1970, 12, 1, 0));
-  EXPECT_EQ(337, daysSinceEpochLenient(1970, 12, 1, -1));
-  EXPECT_EQ(337, daysSinceEpochLenient(1970, 12, 1, -8));
+  EXPECT_EQ(338, daysSinceEpoch(1970, 12, 1, 0));
+  EXPECT_EQ(337, daysSinceEpoch(1970, 12, 1, -1));
+  EXPECT_EQ(337, daysSinceEpoch(1970, 12, 1, -8));
 
-  EXPECT_EQ(332, daysSinceEpochLenient(1970, 12, 1, 8));
-  EXPECT_EQ(333, daysSinceEpochLenient(1970, 12, 1, 9));
-  EXPECT_EQ(336, daysSinceEpochLenient(1970, 12, 1, 19));
+  EXPECT_EQ(332, daysSinceEpoch(1970, 12, 1, 8));
+  EXPECT_EQ(333, daysSinceEpoch(1970, 12, 1, 9));
+  EXPECT_EQ(336, daysSinceEpoch(1970, 12, 1, 19));
 
   // Out of range month.
-  EXPECT_EQ(-3, daysSinceEpochLenient(1970, 1, 1, 1));
-  EXPECT_EQ(207, daysSinceEpochLenient(1970, 8, 1, 1));
-  EXPECT_EQ(361, daysSinceEpochLenient(1970, 13, 1, 1));
+  EXPECT_EQ(-3, daysSinceEpoch(1970, 1, 1, 1));
+  EXPECT_EQ(207, daysSinceEpoch(1970, 8, 1, 1));
+  EXPECT_EQ(361, daysSinceEpoch(1970, 13, 1, 1));
 
-  EXPECT_EQ(-31, daysSinceEpochLenient(1970, 0, 1, 1));
-  EXPECT_EQ(-66, daysSinceEpochLenient(1970, -1, 1, 1));
-  EXPECT_EQ(-430, daysSinceEpochLenient(1970, -13, 1, 1));
+  EXPECT_EQ(-31, daysSinceEpoch(1970, 0, 1, 1));
+  EXPECT_EQ(-66, daysSinceEpoch(1970, -1, 1, 1));
+  EXPECT_EQ(-430, daysSinceEpoch(1970, -13, 1, 1));
 
   // Out of range year.
   auto result =
@@ -170,8 +170,8 @@ TEST(DateTimeUtilTest, extractISODayOfTheWeek) {
   EXPECT_EQ(7, util::extractISODayOfTheWeek(10));
 }
 
-TEST(DateTimeUtilTest, fromWeekOfMonthDateInvalid) {
-  auto daysSinceEpochNonLenient = [](int32_t year,
+TEST(DateTimeUtilTest, daysSinceEpochFromWeekOfMonthDateNonLenient) {
+  auto daysSinceEpoch = [](int32_t year,
                                      int32_t month,
                                      int32_t weekOfMonth,
                                      int32_t dayOfWeek,
@@ -182,20 +182,22 @@ TEST(DateTimeUtilTest, fromWeekOfMonthDateInvalid) {
     EXPECT_EQ(result.error().message(), error);
   };
 
+  EXPECT_NO_THROW(daysSinceEpoch(-1, 1, 1, 1, "Date out of range: -1-1-1-1"));
   EXPECT_NO_THROW(
-      daysSinceEpochNonLenient(-1, 1, 1, 1, "Date out of range: -1-1-1-1"));
-  EXPECT_NO_THROW(daysSinceEpochNonLenient(
+      daysSinceEpoch(
       292278995, 1, 1, 1, "Date out of range: 292278995-1-1-1"));
   EXPECT_NO_THROW(
-      daysSinceEpochNonLenient(2024, 0, 1, 1, "Date out of range: 2024-0-1-1"));
-  EXPECT_NO_THROW(daysSinceEpochNonLenient(
+      daysSinceEpoch(2024, 0, 1, 1, "Date out of range: 2024-0-1-1"));
+  EXPECT_NO_THROW(
+      daysSinceEpoch(
       2024, 13, 1, 1, "Date out of range: 2024-13-1-1"));
   EXPECT_NO_THROW(
-      daysSinceEpochNonLenient(2024, 1, 6, 1, "Date out of range: 2024-1-6-1"));
+      daysSinceEpoch(2024, 1, 6, 1, "Date out of range: 2024-1-6-1"));
   EXPECT_NO_THROW(
-      daysSinceEpochNonLenient(2024, 2, 1, 1, "Date out of range: 2024-2-1-1"));
+      daysSinceEpoch(2024, 2, 1, 1, "Date out of range: 2024-2-1-1"));
   EXPECT_NO_THROW(
-      daysSinceEpochNonLenient(2024, 2, 5, 5, "Date out of range: 2024-2-5-5"));
+      daysSinceEpoch(2024, 2, 5, 5, "Date out of range: 2024-2-5-5"));
+  EXPECT_EQ(4, daysSinceEpochFromWeekOfMonthDate(1970, 1, 2, 1, false).value());
 }
 
 TEST(DateTimeUtilTest, fromDateString) {

@@ -602,7 +602,11 @@ daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day, int64_t& out) {
   int64_t daysSinceEpoch = 0;
 
   if (!isValidDate(year, month, day)) {
-    return Status::UserError("Date out of range: {}-{}-{}", year, month, day);
+    if (threadSkipErrorDetails()) {
+      return Status::UserError();
+    } else {
+      return Status::UserError("Date out of range: {}-{}-{}", year, month, day);
+    }
   }
   while (year < 1970) {
     year += kYearInterval;
@@ -677,11 +681,7 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
   const Status status =
       daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth);
   if (!status.ok()) {
-    if (threadSkipErrorDetails()) {
-      return folly::makeUnexpected(Status::UserError());
-    } else {
-      return folly::makeUnexpected(status);
-    }
+    return folly::makeUnexpected(status);
   }
   const int32_t firstDayOfWeek =
       extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
