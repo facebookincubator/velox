@@ -137,6 +137,85 @@ class ExtractToGenericHook {
   ValueHook* hook_;
 };
 
+template <typename THook>
+class ExtractToDecimalHook {
+ public:
+  using HookType = THook;
+  static constexpr bool kSkipNulls = THook::kSkipNulls;
+
+  explicit ExtractToDecimalHook(ValueHook* hook, const int64_t* scales, int targetScale)
+      : hook_(*reinterpret_cast<THook*>(hook)),
+        scales_(scales),
+        targetScale_(targetScale),
+        numValues_(0) {}
+
+  bool acceptsNulls() {
+    return hook_.acceptsNulls();
+  }
+
+  template <typename T>
+  void addNull(vector_size_t rowIndex) {
+    hook_.addNull(rowIndex);
+    numValues_++;
+  }
+
+  template <typename V>
+  void addValue(vector_size_t rowIndex, V value) {
+    value = DecimalUtil::convertDecimal<V>(value, scales_[numValues_], targetScale_);
+    hook_.addValueTyped(rowIndex, &value);
+    numValues_++;
+  }
+
+  THook& hook() {
+    return hook_;
+  }
+
+ private:
+  THook hook_;
+  const int64_t* scales_;
+  int64_t targetScale_;
+  vector_size_t numValues_;
+};
+
+class ExtractToGenericDecimalHook {
+ public:
+  using HookType = ValueHook;
+  static constexpr bool kSkipNulls = false;
+
+  explicit ExtractToGenericDecimalHook(ValueHook* hook, const int64_t* scales, int targetScale)
+      : hook_(hook),
+        scales_(scales),
+        targetScale_(targetScale),
+        numValues_(0) {}
+
+  bool acceptsNulls() const {
+    return hook_->acceptsNulls();
+  }
+
+  template <typename T>
+  void addNull(vector_size_t rowIndex) {
+    hook_->addNull(rowIndex);
+    numValues_++;
+  }
+
+  template <typename V>
+  void addValue(vector_size_t rowIndex, V value) {
+    value = DecimalUtil::convertDecimal<V>(value, scales_[numValues_], targetScale_);
+    hook_->addValueTyped(rowIndex, &value);
+    numValues_++;
+  }
+
+  ValueHook& hook() {
+    return *hook_;
+  }
+
+ private:
+  ValueHook* hook_;
+  const int64_t* scales_;
+  int64_t targetScale_;
+  vector_size_t numValues_;
+};
+
 template <typename T, typename TFilter, typename ExtractValues, bool isDense>
 class DictionaryColumnVisitor;
 
@@ -819,7 +898,8 @@ class DictionaryColumnVisitor
                     : velox::iota(super::numRows_, super::innerNonNullRows()) +
                     super::rowIndex_,
             values,
-            numInput);
+            numInput,
+            sizeof(T));
         super::rowIndex_ += numInput;
         return;
       }
@@ -1388,14 +1468,14 @@ class ExtractStringDictionaryToGenericHook {
     // according to the index. Stride dictionary indices are offset up
     // by the stripe dict size.
     if (value < dictionarySize()) {
-      auto* strings =
-          reinterpret_cast<const StringView*>(state_.dictionary.values);
-      hook_->addValue(rowIndex, strings[value]);
+      auto view = folly::StringPiece(
+          reinterpret_cast<const StringView*>(state_.dictionary.values)[value]);
+      hook_->addValue(rowIndex, &view);
     } else {
       VELOX_DCHECK(state_.inDictionary);
-      auto* strings =
-          reinterpret_cast<const StringView*>(state_.dictionary2.values);
-      hook_->addValue(rowIndex, strings[value - dictionarySize()]);
+      auto view = folly::StringPiece(reinterpret_cast<const StringView*>(
+          state_.dictionary2.values)[value - dictionarySize()]);
+      hook_->addValue(rowIndex, &view);
     }
   }
 

@@ -46,6 +46,10 @@ class ValueHook {
     kBigintMin,
     kFloatingPointMax,
     kFloatingPointMin,
+    kHugeintSum,
+    kHugeintSumOverflow,
+    kHugeintMax,
+    kHugeintMin,
   };
 
   static constexpr bool kSkipNulls = true;
