@@ -900,7 +900,9 @@ TEST_F(StringTest, translate) {
   testTranslate({"abc", std::nullopt, "\u2029"}, std::nullopt);
   testTranslate({"abc", "\u2028", std::nullopt}, std::nullopt);
   testTranslate({std::nullopt, "\u2028", "\u2029"}, std::nullopt);
-  // Special case
+  // Test corner case: there is chance the input contains invalid utf8 chars,
+  // which is generate by other functions like url_decode. We need to make sure
+  // they would not cause wrong results or failure. Below is an example.
   unsigned char u = 128;
   std::string data(1, u);
   testTranslate({data, "1", "a"}, data);
