@@ -307,10 +307,6 @@ Task::Task(
   }
 
   maybeInitQueryTrace();
-  // Executor must not be specified for serial execution mode.
-  if (mode_ == Task::ExecutionMode::kSerial) {
-    VELOX_CHECK_NULL(queryCtx_->executor());
-  }
 }
 
 Task::~Task() {
