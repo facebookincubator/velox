@@ -172,22 +172,28 @@ TEST(DateTimeUtilTest, extractISODayOfTheWeek) {
 
 TEST(DateTimeUtilTest, daysSinceEpochFromWeekOfMonthDateNonLenient) {
   auto daysSinceEpochReturnError = [](int32_t year,
-                           int32_t month,
-                           int32_t weekOfMonth,
-                           int32_t dayOfWeek,
-                           const std::string& error) {
+                                      int32_t month,
+                                      int32_t weekOfMonth,
+                                      int32_t dayOfWeek,
+                                      const std::string& error) {
     auto result = util::daysSinceEpochFromWeekOfMonthDate(
         year, month, weekOfMonth, dayOfWeek, false);
     EXPECT_TRUE(result.error().isUserError());
     EXPECT_EQ(result.error().message(), error);
   };
 
-  EXPECT_NO_THROW(daysSinceEpochReturnError(292278995, 1, 1, 1, "Date out of range: 292278995-1-1-1"));
-  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 0, 1, 1, "Date out of range: 2024-0-1-1"));
-  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 13, 1, 1, "Date out of range: 2024-13-1-1"));
-  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 1, 6, 1, "Date out of range: 2024-1-6-1"));
-  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 2, 1, 1, "Date out of range: 2024-2-1-1"));
-  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 2, 5, 5, "Date out of range: 2024-2-5-5"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      292278995, 1, 1, 1, "Date out of range: 292278995-1-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 0, 1, 1, "Date out of range: 2024-0-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 13, 1, 1, "Date out of range: 2024-13-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 1, 6, 1, "Date out of range: 2024-1-6-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 2, 1, 1, "Date out of range: 2024-2-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 2, 5, 5, "Date out of range: 2024-2-5-5"));
 
   auto daysSinceEpochReturnValues =
       [](int32_t year, int32_t month, int32_t weekOfMonth, int32_t dayOfWeek) {
