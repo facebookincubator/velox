@@ -233,7 +233,13 @@ Writer::Writer(
   validateSchemaRecursive(schema_);
 
   if (options.flushPolicyFactory) {
-    flushPolicy_ = options.flushPolicyFactory();
+    auto* flushPolicy = options.flushPolicyFactory().release();
+    try {
+      flushPolicy_.reset(dynamic_cast<DefaultFlushPolicy*>(flushPolicy));
+    } catch (const std::exception& e) {
+      delete flushPolicy;
+      throw;
+    }
   } else {
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }

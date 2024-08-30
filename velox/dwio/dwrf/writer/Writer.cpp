@@ -94,7 +94,13 @@ Writer::Writer(
         context.stripeSizeFlushThreshold(),
         context.dictionarySizeFlushThreshold());
   } else {
-    flushPolicy_ = options.flushPolicyFactory();
+    auto* flushPolicy = options.flushPolicyFactory().release();
+    try {
+      flushPolicy_.reset(dynamic_cast<DWRFFlushPolicy*>(flushPolicy));
+    } catch (const std::exception& e) {
+      delete flushPolicy;
+      throw;
+    }
   }
 
   if (options.layoutPlannerFactory != nullptr) {
@@ -854,6 +860,7 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
   dwrfOptions.memoryPool = options.memoryPool;
   dwrfOptions.spillConfig = options.spillConfig;
   dwrfOptions.nonReclaimableSection = options.nonReclaimableSection;
+  dwrfOptions.flushPolicyFactory = options.flushPolicyFactory;
   return dwrfOptions;
 }
 
