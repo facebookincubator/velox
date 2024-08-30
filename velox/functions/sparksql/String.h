@@ -863,6 +863,8 @@ struct TranslateFunction {
   }
 
  private:
+  // Returns the length of a UTF-8 character starting at 'offset'. Returns 1
+  // for invalid UTF-8 character.
   FOLLY_ALWAYS_INLINE int32_t
   getUtf8CharLength(const arg_type<Varchar>& input, int32_t offset) {
     return std::min<int32_t>(

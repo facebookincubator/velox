@@ -353,7 +353,7 @@ String Functions
     occurrence of a character in ``match`` and uses its corresponding character in
     ``replace`` for translation. 
     Any invalid UTF-8 characters present in the input string will be treated as a 
-    single other character.::
+    single character.::
 
         SELECT translate('spark', 'sa', '12');  -- "1p2rk"
         SELECT translate('spark', 'sa', '1');   -- "1prk"
