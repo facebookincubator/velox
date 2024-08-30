@@ -15,6 +15,7 @@
  */
 
 #include <optional>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -280,20 +281,55 @@ TEST_F(ArrayDistinctTest, stringArrays) {
 }
 
 TEST_F(ArrayDistinctTest, complexTypeArrays) {
-  auto input = makeNestedArrayVectorFromJson<int32_t>({
-      "[[1, 2, 3], [1, 2], [1, 2, 3], [], [1, 2, 3], [1], [1, 2, 3], [2], []]",
-      "[[null, 2, 3], [1, 2], [1, 2, 3], [], [null, 2, 3], [1], [1, 2, 3], [2], null]",
-      "[[1, null, 3], [1, null, 3], [1, null, 3], null, [1, null, 3], [1, null, 3]]",
-  });
+  ArrayVectorPtr input = makeNestedArrayVectorFromJson<int32_t>(
+      {"[[1, 2, 3], [1, 2], [1, 2, 3], [], [1, 2, 3], [1], [1, 2, 3], [2], []]",
+       "[[1, 2, 3], [1, 2, 3], [1, 2, 3], null, [1, 2, 3], [1, 2, 3]]",
+       "[[1, null], [2, null]]",
+       "[[1, 2, null], [1, null]]"});
 
   auto result = evaluate("array_distinct(c0)", makeRowVector({input}));
-  auto expected = makeNestedArrayVectorFromJson<int32_t>({
-      "[[1, 2, 3], [1, 2], [], [1], [2]]",
-      "[[null, 2, 3], [1, 2], [1, 2, 3], [], [1], [2], null]",
-      "[[1, null, 3], null]",
-  });
-
+  auto expected = makeNestedArrayVectorFromJson<int32_t>(
+      {"[[1, 2, 3], [1, 2], [], [1], [2]]",
+       "[[1, 2, 3], null]",
+       "[[1, null], [2, null]]",
+       "[[1, 2, null], [1, null]]"});
   assertEqualVectors(expected, result);
+
+  // Test exception when input arrays contain nested NULL elements.
+  const auto& makeErrorMessage = [](const ArrayVectorPtr& input) {
+    return fmt::format(
+        "Comparison not supported for {} with null elements.",
+        input->elements()->type()->toString());
+  };
+  const auto& testInTry = [&](const ArrayVectorPtr& input) {
+    auto result = evaluate("try(array_distinct(c0))", makeRowVector({input}));
+    EXPECT_EQ(result->size(), 1);
+    EXPECT_TRUE(result->isNullAt(0));
+  };
+
+  input = makeNestedArrayVectorFromJson<int32_t>({
+      "[[null, 2, 3], [1, 2], [null, 2, 3], []]",
+  });
+  VELOX_ASSERT_USER_THROW(
+      evaluate("array_distinct(c0)", makeRowVector({input})),
+      makeErrorMessage(input));
+  testInTry(input);
+
+  input = makeArrayOfMapVector<int64_t, int64_t>(
+      {{{{1, 2}, {1, std::nullopt}}, {{1, 2}, {1, std::nullopt}}}});
+  VELOX_ASSERT_USER_THROW(
+      evaluate("array_distinct(c0)", makeRowVector({input})),
+      makeErrorMessage(input));
+  testInTry(input);
+
+  input = makeArrayOfRowVector(
+      ROW({INTEGER(), INTEGER()}),
+      {{variant::row({1, variant(TypeKind::INTEGER)}),
+        variant::row({1, variant(TypeKind::INTEGER)})}});
+  VELOX_ASSERT_USER_THROW(
+      evaluate("array_distinct(c0)", makeRowVector({input})),
+      makeErrorMessage(input));
+  testInTry(input);
 }
 
 TEST_F(ArrayDistinctTest, nonContiguousRows) {
