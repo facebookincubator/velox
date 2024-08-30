@@ -30,8 +30,6 @@ namespace facebook::velox::cudf_velox {
 bool CompileState::compile() {
   std::cout << "Calling cudfDriverAdapter" << std::endl;
   auto operators = driver_.operators();
-  // auto& nodes = driverFactory_.planNodes; // has only plannodes from this
-  // pipeline.
   auto& nodes = planNodes_;
   std::cout << "Number of operators: " << operators.size() << std::endl;
   for (auto& op : operators) {
@@ -55,8 +53,6 @@ bool CompileState::compile() {
   auto get_plan_node = [&](const core::PlanNodeId& id) {
     auto it =
         std::find_if(nodes.cbegin(), nodes.cend(), [&id](const auto& node) {
-          std::cout << "Comparing " << node->id() << ": " << node->toString()
-                    << " to " << id << std::endl;
           return node->id() == id;
         });
     VELOX_CHECK(it != nodes.end());
@@ -153,14 +149,10 @@ void registerCudf() {
   std::cout << "Registering cudfDriverAdapter" << std::endl;
   cudfDriverAdapter cda{};
   exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
-  std::cout << "existing adapters: " << exec::DriverFactory::adapters.size()
-            << std::endl;
   exec::DriverFactory::registerAdapter(cudfAdapter);
 }
 
 void unregisterCudf() {
-  std::cout << "existing adapters: " << exec::DriverFactory::adapters.size()
-            << std::endl;
   std::cout << "unRegistering cudfDriverAdapter" << std::endl;
   exec::DriverFactory::adapters.clear();
 }
