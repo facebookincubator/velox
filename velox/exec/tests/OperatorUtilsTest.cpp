@@ -520,6 +520,7 @@ TEST_F(OperatorUtilsTest, outputBatchRows) {
     MockOperator mockOp(driverCtx_.get(), rowType, "MockType1");
     ASSERT_EQ(10, mockOp.outputRows(std::nullopt));
     ASSERT_EQ(20, mockOp.outputRows(1));
+    ASSERT_EQ(20, mockOp.outputRows(0));
     ASSERT_EQ(1, mockOp.outputRows(UINT64_MAX));
     ASSERT_EQ(1, mockOp.outputRows(1000));
     ASSERT_EQ(234 / 40, mockOp.outputRows(40));

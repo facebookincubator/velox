@@ -264,6 +264,10 @@ vector_size_t Operator::outputBatchRows(
     return queryConfig.preferredOutputBatchRows();
   }
 
+  if (averageRowSize.value() == 0) {
+    return queryConfig.maxOutputBatchRows();
+  }
+
   const uint64_t batchSize =
       queryConfig.preferredOutputBatchBytes() / averageRowSize.value();
   if (batchSize > queryConfig.maxOutputBatchRows()) {
