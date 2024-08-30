@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveDecimalColumnReader.h"
+#include "velox/dwio/common/ColumnLoader.h"
 
 namespace facebook::velox::dwrf {
 
@@ -67,16 +68,15 @@ void SelectiveDecimalColumnReader<DataT>::seekToRowGroup(uint32_t index) {
 
 template <typename DataT>
 template <bool kDense>
-void SelectiveDecimalColumnReader<DataT>::readHelper(RowSet rows) {
-  vector_size_t numRows = rows.back() + 1;
-  ExtractToReader extractValues(this);
+void SelectiveDecimalColumnReader<DataT>::readScales(RowSet rows) {
+  ExtractToReader extractScales(this);
   common::AlwaysTrue filter;
   DirectRleColumnVisitor<
       int64_t,
       common::AlwaysTrue,
-      decltype(extractValues),
+      decltype(extractScales),
       kDense>
-      visitor(filter, this, rows, extractValues);
+      visitor(filter, this, rows, extractScales);
 
   // decode scale stream
   if (version_ == velox::dwrf::RleVersion_1) {
@@ -92,6 +92,12 @@ void SelectiveDecimalColumnReader<DataT>::readHelper(RowSet rows) {
       scaleBuffer_->asMutable<char>(),
       rawValues_,
       numValues_ * sizeof(int64_t));
+}
+
+template <typename DataT>
+template <bool kDense, typename ExtractValues>
+void SelectiveDecimalColumnReader<DataT>::readHelper(RowSet rows, ExtractValues extractValues) {
+  vector_size_t numRows = rows.back() + 1;
 
   // reset numValues_ before reading values
   numValues_ = 0;
@@ -99,11 +105,62 @@ void SelectiveDecimalColumnReader<DataT>::readHelper(RowSet rows) {
   ensureValuesCapacity<DataT>(numRows);
 
   // decode value stream
+  common::AlwaysTrue filter;
   facebook::velox::dwio::common::
-      ColumnVisitor<DataT, common::AlwaysTrue, decltype(extractValues), kDense>
+      ColumnVisitor<DataT, common::AlwaysTrue, ExtractValues, kDense>
           valueVisitor(filter, this, rows, extractValues);
   decodeWithVisitor<DirectDecoder<true>>(valueDecoder_.get(), valueVisitor);
   readOffset_ += numRows;
+}
+
+template <typename DataT>
+template <bool kDense>
+void SelectiveDecimalColumnReader<DataT>::processValueHook(RowSet rows, ValueHook* hook) {
+  const auto *scales = scaleBuffer_->as<int64_t>();
+  switch (hook->kind()) {
+    case aggregate::AggregationHook::kBigintSum:
+      readHelper<kDense>(
+          rows,
+          ExtractToDecimalHook<aggregate::SumHook<int64_t, false>>(hook, scales, scale_));
+      break;
+    case aggregate::AggregationHook::kBigintSumOverflow:
+      readHelper<kDense>(
+          rows,
+          ExtractToDecimalHook<aggregate::SumHook<int64_t, true>>(hook, scales, scale_));
+      break;
+    case aggregate::AggregationHook::kBigintMax:
+      readHelper<kDense>(
+          rows,
+          ExtractToDecimalHook<aggregate::MinMaxHook<int64_t, false>>(hook, scales, scale_));
+      break;
+    case aggregate::AggregationHook::kBigintMin:
+      readHelper<kDense>(
+          rows,
+          ExtractToDecimalHook<aggregate::MinMaxHook<int64_t, true>>(hook, scales, scale_));
+      break;
+    case aggregate::AggregationHook::kHugeintSum:
+      readHelper<kDense>(
+          rows,
+          ExtractToDecimalHook<aggregate::SumHook<int128_t, false>>(hook, scales, scale_));
+      break;
+    case aggregate::AggregationHook::kHugeintSumOverflow:
+      readHelper<kDense>(
+          rows,
+          ExtractToDecimalHook<aggregate::SumHook<int128_t, true>>(hook, scales, scale_));
+      break;
+    case aggregate::AggregationHook::kHugeintMax:
+      readHelper<kDense>(
+          rows,
+          ExtractToDecimalHook<aggregate::MinMaxHook<int128_t, false>>(hook, scales, scale_));
+      break;
+    case aggregate::AggregationHook::kHugeintMin:
+      readHelper<kDense>(
+          rows,
+          ExtractToDecimalHook<aggregate::MinMaxHook<int128_t, true>>(hook, scales, scale_));
+      break;
+    default:
+      readHelper<kDense>(rows, ExtractToGenericDecimalHook(hook, scales, scale_));
+  }
 }
 
 template <typename DataT>
@@ -112,13 +169,25 @@ void SelectiveDecimalColumnReader<DataT>::read(
     RowSet rows,
     const uint64_t* incomingNulls) {
   VELOX_CHECK(!scanSpec_->filter());
-  VELOX_CHECK(!scanSpec_->valueHook());
   prepareRead<int64_t>(offset, rows, incomingNulls);
   bool isDense = rows.back() == rows.size() - 1;
   if (isDense) {
-    readHelper<true>(rows);
+    readScales<true>(rows);
   } else {
-    readHelper<false>(rows);
+    readScales<false>(rows);
+  }
+  if (scanSpec_->valueHook()) {
+    if (isDense) {
+      processValueHook<true>(rows, scanSpec_->valueHook());
+    } else {
+      processValueHook<false>(rows, scanSpec_->valueHook());
+    }
+  } else {
+    if (isDense) {
+      readHelper<true>(rows, ExtractToReader(this));
+    } else {
+      readHelper<false>(rows, ExtractToReader(this));
+    }
   }
 }
 

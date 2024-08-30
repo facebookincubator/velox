@@ -137,6 +137,85 @@ class ExtractToGenericHook {
   ValueHook* hook_;
 };
 
+template <typename THook>
+class ExtractToDecimalHook {
+ public:
+  using HookType = THook;
+  static constexpr bool kSkipNulls = THook::kSkipNulls;
+
+  explicit ExtractToDecimalHook(ValueHook* hook, const int64_t* scales, int targetScale)
+      : hook_(*reinterpret_cast<THook*>(hook)),
+        scales_(scales),
+        targetScale_(targetScale),
+        numValues_(0) {}
+
+  bool acceptsNulls() {
+    return hook_.acceptsNulls();
+  }
+
+  template <typename T>
+  void addNull(vector_size_t rowIndex) {
+    hook_.addNull(rowIndex);
+    numValues_++;
+  }
+
+  template <typename V>
+  void addValue(vector_size_t rowIndex, V value) {
+    value = DecimalUtil::convertDecimal<V>(value, scales_[numValues_], targetScale_);
+    hook_.addValueTyped(rowIndex, value);
+    numValues_++;
+  }
+
+  THook& hook() {
+    return hook_;
+  }
+
+ private:
+  THook hook_;
+  const int64_t* scales_;
+  int64_t targetScale_;
+  vector_size_t numValues_;
+};
+
+class ExtractToGenericDecimalHook {
+ public:
+  using HookType = ValueHook;
+  static constexpr bool kSkipNulls = false;
+
+  explicit ExtractToGenericDecimalHook(ValueHook* hook, const int64_t* scales, int targetScale)
+      : hook_(hook),
+        scales_(scales),
+        targetScale_(targetScale),
+        numValues_(0) {}
+
+  bool acceptsNulls() const {
+    return hook_->acceptsNulls();
+  }
+
+  template <typename T>
+  void addNull(vector_size_t rowIndex) {
+    hook_->addNull(rowIndex);
+    numValues_++;
+  }
+
+  template <typename V>
+  void addValue(vector_size_t rowIndex, V value) {
+    value = DecimalUtil::convertDecimal<V>(value, scales_[numValues_], targetScale_);
+    hook_->addValueTyped(rowIndex, value);
+    numValues_++;
+  }
+
+  ValueHook& hook() {
+    return *hook_;
+  }
+
+ private:
+  ValueHook* hook_;
+  const int64_t* scales_;
+  int64_t targetScale_;
+  vector_size_t numValues_;
+};
+
 template <typename T, typename TFilter, typename ExtractValues, bool isDense>
 class DictionaryColumnVisitor;
 

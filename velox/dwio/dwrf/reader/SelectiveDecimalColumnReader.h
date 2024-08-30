@@ -42,7 +42,13 @@ class SelectiveDecimalColumnReader : public SelectiveColumnReader {
 
  private:
   template <bool kDense>
-  void readHelper(RowSet rows);
+  void readScales(RowSet rows);
+
+  template <bool kDense, typename ExtractValues>
+  void readHelper(RowSet rows, ExtractValues extractValues);
+
+  template <bool kDense>
+  void processValueHook(RowSet rows, ValueHook* hook);
 
   std::unique_ptr<IntDecoder<true>> valueDecoder_;
   std::unique_ptr<IntDecoder<true>> scaleDecoder_;

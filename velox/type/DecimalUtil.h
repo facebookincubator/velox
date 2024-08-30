@@ -149,6 +149,42 @@ class DecimalUtil {
     }
   }
 
+  template <typename T>
+  inline static T convertDecimal(
+      T value,
+      int64_t currentScale,
+      int32_t targetScale) {
+    if constexpr (std::is_same_v<T, std::int64_t>) { // Short Decimal
+      if (targetScale > currentScale &&
+          targetScale - currentScale <= ShortDecimalType::kMaxPrecision) {
+        value *= static_cast<T>(kPowersOfTen[targetScale - currentScale]);
+      } else if (
+          targetScale < currentScale &&
+          currentScale - targetScale <= ShortDecimalType::kMaxPrecision) {
+        value /= static_cast<T>(kPowersOfTen[currentScale - targetScale]);
+      } else if (targetScale != currentScale) {
+        VELOX_FAIL("Decimal scale out of range");
+      }
+    } else { // Long Decimal
+      if (targetScale > currentScale) {
+        while (targetScale > currentScale) {
+          int32_t scaleAdjust = std::min<int32_t>(
+              ShortDecimalType::kMaxPrecision, targetScale - currentScale);
+          value *= kPowersOfTen[scaleAdjust];
+          currentScale += scaleAdjust;
+        }
+      } else if (targetScale < currentScale) {
+        while (currentScale > targetScale) {
+          int32_t scaleAdjust = std::min<int32_t>(
+              ShortDecimalType::kMaxPrecision, currentScale - targetScale);
+          value /= kPowersOfTen[scaleAdjust];
+          currentScale -= scaleAdjust;
+        }
+      }
+    }
+    return value;
+  }
+
   template <typename TInput, typename TOutput>
   inline static Status rescaleWithRoundUp(
       TInput inputValue,

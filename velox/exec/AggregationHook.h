@@ -19,7 +19,6 @@
 
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Range.h"
-#include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/LazyVector.h"
 
 namespace facebook::velox::aggregate {
@@ -85,6 +84,8 @@ class SumHook final : public AggregationHook {
       return kDoubleSum;
     } else if (std::is_same_v<TAggregate, int64_t>) {
       return Overflow ? kBigintSumOverflow : kBigintSum;
+    } else if (std::is_same_v<TAggregate, int128_t>) {
+      return Overflow ? kHugeintSumOverflow : kHugeintSum;
     }
     return kGeneric;
   }
@@ -201,6 +202,9 @@ class MinMaxHook final : public AggregationHook {
     if (std::is_same_v<TAggregate, float> ||
         std::is_same_v<TAggregate, double>) {
       return isMin ? kFloatingPointMin : kFloatingPointMax;
+    }
+    if (std::is_same_v<TAggregate, int128_t>) {
+      return isMin ? kHugeintMin : kHugeintMax;
     }
     return kGeneric;
   }

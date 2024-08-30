@@ -23,10 +23,13 @@
 #include "velox/dwio/dwrf/reader/SelectiveDwrfReader.h"
 #include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
+#include "velox/exec/AggregationHook.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/LazyVector.h"
 
 #include <folly/Random.h>
 #include <folly/String.h>
@@ -36,7 +39,9 @@
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox;
+using namespace facebook::velox::aggregate;
 using namespace facebook::velox::dwrf;
+using namespace facebook::velox::exec;
 using namespace facebook::velox::test;
 using facebook::velox::type::fbhive::HiveTypeParser;
 
@@ -337,6 +342,47 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
     } else {
       return vector->getNullCount().value();
     }
+  }
+
+  const bool useSelectiveReader_;
+  const bool expectMemoryReuse_;
+  const bool parallelDecoding_;
+
+  bool useSelectiveReader() const override {
+    return useSelectiveReader_;
+  }
+
+  bool returnFlatVector() const override {
+    return false;
+  }
+
+  bool parallelDecoding() const override {
+    return parallelDecoding_;
+  }
+};
+
+class TestDecimalReaderWithHook : public testing::TestWithParam<ReaderTestParams>,
+                                  public ColumnReaderTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
+  TestDecimalReaderWithHook()
+      : useSelectiveReader_{GetParam().useSelectiveReader},
+        expectMemoryReuse_{GetParam().expectMemoryReuse},
+        parallelDecoding_{GetParam().parallelDecoding} {}
+
+  VectorPtr newBatch(const TypePtr& rowType) const {
+    return BaseVector::create(rowType, 0, &streams_.getMemoryPool());
+  }
+
+  vector_size_t getNullCount(const VectorPtr& vector) const {
+    return getNullCount(vector.get());
+  }
+
+  vector_size_t getNullCount(BaseVector* vector) const {
+    return BaseVector::countNulls(vector->nulls(), vector->size());
   }
 
   const bool useSelectiveReader_;
@@ -3982,6 +4028,60 @@ TEST_P(TestColumnReader, testDecimal64WithSkip) {
   EXPECT_EQ(49, intBatch->valueAt(0));
 }
 
+TEST_P(TestDecimalReaderWithHook, testDecimal64WithAggregation) {
+  // set getEncoding
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+
+  // set getStream
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+  // col_0's Data Stream
+  char numBuffer[65];
+  for (int i = 0; i < 65; ++i) {
+    if (i < 32) {
+      numBuffer[i] = static_cast<char>(0x3f - 2 * i);
+    } else {
+      numBuffer[i] = static_cast<char>(2 * (i - 32));
+    }
+  }
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(new SeekableArrayInputStream(
+          numBuffer, VELOX_ARRAY_SIZE(numBuffer), 3)));
+  // col_0's Secondary Stream
+  const unsigned char buffer2[] = {0x3e, 0x00, 0x04}; // [0x02] * 65
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+
+  // create the row type
+  auto rowType = HiveTypeParser().parse("struct<col_0:decimal(12, 2)>");
+  const std::vector<TypePtr> keyTypes{rowType};
+  auto rows = std::make_unique<RowContainer>(keyTypes, &streams_.getMemoryPool());
+  auto group = rows->newRow();
+  uint64_t numNulls = 0;
+  std::vector<char *> groups(64, group);
+  auto maxHook = std::make_unique<MinMaxHook<int64_t, false>>(0, 0, 0, groups.data(), &numNulls);
+  buildReader(rowType);
+  VectorPtr batch = newBatch(rowType);
+  skipAndRead(batch, /* read */ 64);
+  auto child0 = std::dynamic_pointer_cast<RowVector>(batch)->childAt(0);
+  SelectivityVector row(child0->size());
+  DecodedVector decoded(*child0, row, false);
+  decoded.base()->as<const LazyVector>()->load(
+      RowSet(decoded.indices(), child0->size()), maxHook.get());
+  auto intBatch = getOnlyChild<FlatVector<int64_t>>(batch);
+  ASSERT_EQ(64, batch->size());
+  ASSERT_EQ(0, intBatch->size());
+  ASSERT_EQ(0, getNullCount(batch));
+  ASSERT_EQ(0, getNullCount(intBatch));
+  ASSERT_EQ(31, *reinterpret_cast<int64_t *>(group));
+}
+
 TEST_P(TestColumnReader, testDecimal128WithSkip) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
@@ -4056,6 +4156,87 @@ TEST_P(TestColumnReader, testDecimal128WithSkip) {
   ASSERT_EQ(
       "-9.9999999999999999999999999999999999999",
       DecimalUtil::toString(intBatch->valueAt(4), decimalType));
+}
+
+TEST_P(TestDecimalReaderWithHook, testDecimal128WithAggregation) {
+  // set getEncoding
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+
+  // set getStream
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+  const unsigned char presentBuffer[] = {0xfe, 0xff, 0xf8};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(new SeekableArrayInputStream(
+          presentBuffer, VELOX_ARRAY_SIZE(presentBuffer))));
+  const unsigned char numBuffer[] = {
+      0xf8, 0xe8, 0xe2, 0xcf, 0xf4, 0xcb, 0xb6, 0xda, 0x0d, 0x86, 0xc1, 0xcc,
+      0xcd, 0x9e, 0xd5, 0xc5, 0x11, 0xb4, 0xf6, 0xfc, 0xf3, 0xb9, 0xba, 0x16,
+      0xca, 0xe7, 0xa3, 0xa6, 0xdf, 0x1c, 0xea, 0xad, 0xc0, 0xe5, 0x24, 0xf8,
+      0x94, 0x8c, 0x2f, 0x86, 0xa4, 0x3c, 0x94, 0x4d, 0x62, 0xaa, 0xcd, 0xb3,
+      0xf2, 0x9e, 0xf0, 0x99, 0xd6, 0xbe, 0xf8, 0xb6, 0x9e, 0xe4, 0xb7, 0xfd,
+      0xce, 0x8f, 0x34, 0xa9, 0xcd, 0xb3, 0xf2, 0x9e, 0xf0, 0x99, 0xd6, 0xbe,
+      0xf8, 0xb6, 0x9e, 0xe4, 0xb7, 0xfd, 0xce, 0x8f, 0x34, 0xfe, 0xff, 0xff,
+      0xff, 0xff, 0x8f, 0x91, 0x8a, 0x93, 0xe8, 0xa3, 0xec, 0xd0, 0x96, 0xd4,
+      0xcc, 0xf6, 0xac, 0x02, 0xfd, 0xff, 0xff, 0xff, 0xff, 0x8f, 0x91, 0x8a,
+      0x93, 0xe8, 0xa3, 0xec, 0xd0, 0x96, 0xd4, 0xcc, 0xf6, 0xac, 0x02,
+  };
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(new SeekableArrayInputStream(
+          numBuffer, VELOX_ARRAY_SIZE(numBuffer))));
+  const unsigned char buffer1[] = {0x0a, 0x00, 0x4a}; // [0x02] * 13
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
+
+  // create the row type
+  auto rowType = HiveTypeParser().parse("struct<col_0:decimal(38, 37)>");
+  auto decimalType = asRowType(rowType)->childAt(0);
+  const std::vector<TypePtr> keyTypes{rowType};
+  auto rows = std::make_unique<RowContainer>(keyTypes, &streams_.getMemoryPool());
+  buildReader(rowType);
+
+  {
+    auto group = rows->newRow();
+    uint64_t numNulls = 0;
+    std::vector<char *> groups(6, group);
+    auto maxHook = std::make_unique<MinMaxHook<int128_t, false>>(0, 0, 0, groups.data(), &numNulls);
+    VectorPtr batch = newBatch(rowType);
+    skipAndRead(batch, /* read */ 6);
+    auto child0 = std::dynamic_pointer_cast<RowVector>(batch)->childAt(0);
+    SelectivityVector row(child0->size());
+    DecodedVector decoded(*child0, row, false);
+    decoded.base()->as<const LazyVector>()->load(
+        RowSet(decoded.indices(), child0->size()), maxHook.get());
+    ASSERT_EQ(0, getNullCount(batch));
+    ASSERT_EQ(6, batch->size());
+    ASSERT_EQ(493827160549382716, *reinterpret_cast<int128_t *>(group));
+  }
+
+  {
+    auto group = rows->newRow();
+    uint64_t numNulls = 0;
+    std::vector<char *> groups(5, group);
+    auto minHook = std::make_unique<MinMaxHook<int128_t, true>>(0, 0, 0, groups.data(), &numNulls);
+    VectorPtr batch = newBatch(rowType);
+    skip(2);
+    next(5, batch);
+    auto child0 = std::dynamic_pointer_cast<RowVector>(batch)->childAt(0);
+    SelectivityVector row(child0->size());
+    DecodedVector decoded(*child0, row, false);
+    decoded.base()->as<const LazyVector>()->load(
+        RowSet(decoded.indices(), child0->size()), minHook.get());
+    ASSERT_EQ(5, batch->size());
+    ASSERT_EQ(0, getNullCount(batch));
+    ASSERT_EQ(
+        "-9.9999999999999999999999999999999999999",
+        DecimalUtil::toString(*reinterpret_cast<int128_t *>(group), decimalType));
+  }
 }
 
 TEST_P(TestColumnReader, testLargeSkip) {
@@ -5141,6 +5322,11 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TestSelectiveColumnReader,
     TestColumnReader,
+    ::testing::Values(ReaderTestParams{true, false, false}));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TestDecimalReaderWithHook,
+    TestDecimalReaderWithHook,
     ::testing::Values(ReaderTestParams{true, false, false}));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
