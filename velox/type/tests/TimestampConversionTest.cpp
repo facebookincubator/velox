@@ -171,7 +171,7 @@ TEST(DateTimeUtilTest, extractISODayOfTheWeek) {
 }
 
 TEST(DateTimeUtilTest, daysSinceEpochFromWeekOfMonthDateNonLenient) {
-  auto daysSinceEpoch = [](int32_t year,
+  auto daysSinceEpochReturnError = [](int32_t year,
                            int32_t month,
                            int32_t weekOfMonth,
                            int32_t dayOfWeek,
@@ -182,19 +182,25 @@ TEST(DateTimeUtilTest, daysSinceEpochFromWeekOfMonthDateNonLenient) {
     EXPECT_EQ(result.error().message(), error);
   };
 
-  EXPECT_NO_THROW(
-      daysSinceEpoch(292278995, 1, 1, 1, "Date out of range: 292278995-1-1-1"));
-  EXPECT_NO_THROW(
-      daysSinceEpoch(2024, 0, 1, 1, "Date out of range: 2024-0-1-1"));
-  EXPECT_NO_THROW(
-      daysSinceEpoch(2024, 13, 1, 1, "Date out of range: 2024-13-1-1"));
-  EXPECT_NO_THROW(
-      daysSinceEpoch(2024, 1, 6, 1, "Date out of range: 2024-1-6-1"));
-  EXPECT_NO_THROW(
-      daysSinceEpoch(2024, 2, 1, 1, "Date out of range: 2024-2-1-1"));
-  EXPECT_NO_THROW(
-      daysSinceEpoch(2024, 2, 5, 5, "Date out of range: 2024-2-5-5"));
-  EXPECT_EQ(4, daysSinceEpochFromWeekOfMonthDate(1970, 1, 2, 1, false).value());
+  EXPECT_NO_THROW(daysSinceEpochReturnError(292278995, 1, 1, 1, "Date out of range: 292278995-1-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 0, 1, 1, "Date out of range: 2024-0-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 13, 1, 1, "Date out of range: 2024-13-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 1, 6, 1, "Date out of range: 2024-1-6-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 2, 1, 1, "Date out of range: 2024-2-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(2024, 2, 5, 5, "Date out of range: 2024-2-5-5"));
+
+  auto daysSinceEpochReturnValues =
+      [](int32_t year, int32_t month, int32_t weekOfMonth, int32_t dayOfWeek) {
+        auto result = util::daysSinceEpochFromWeekOfMonthDate(
+            year, month, weekOfMonth, dayOfWeek, false);
+        EXPECT_TRUE(!result.hasError());
+        return result.value();
+      };
+
+  EXPECT_EQ(-724, daysSinceEpochReturnValues(1968, 1, 2, 1));
+  EXPECT_EQ(4, daysSinceEpochReturnValues(1970, 1, 2, 1));
+  EXPECT_EQ(396, daysSinceEpochReturnValues(1971, 2, 1, 1));
+  EXPECT_EQ(19905, daysSinceEpochReturnValues(2024, 7, 1, 1));
 }
 
 TEST(DateTimeUtilTest, fromDateString) {

@@ -109,12 +109,12 @@ Status daysSinceEpochFromWeekDate(
 
 /// Computes the signed number of days since the Unix epoch (1970-01-01). To
 /// align with Spark's SimpleDateFormat behavior, this function offers two
-/// modes: lenient and non-lenient. For non-lenient mode, it returns an error
-/// status if the date is invalid. For lenient mode, it accepts a wider range of
-/// arguments.
+/// modes: lenient and non-lenient. For non-lenient mode, dates before Jan 1, 1
+/// are not supported, and it returns an error status if the date is invalid.
+/// For lenient mode, it accepts a wider range of arguments.
 /// @param year Year. For non-lenient mode, it should be in the range [1,
-/// 292278994]. e.g: 1996, -2000. For lenient mode, values outside this range
-/// could result in overflow.
+/// 292278994]. e.g: 1996, 2024. For lenient mode, it should be in the range
+/// [-292275055, 292278994].
 /// @param month Month of year. For non-lenient mode, it should be in the range
 /// [1, 12]. For example, 1 is January, 7 is July. For lenient mode, values
 /// greater than 12 wrap around to the start of the year, and values less than 1
