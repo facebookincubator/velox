@@ -88,10 +88,6 @@ class HashBuild final : public Operator {
 
   void close() override;
 
-  std::shared_ptr<const core::HashJoinNode> getPlanNode() const {
-    return joinNode_;
-  }
-
  private:
   void setState(State state);
   void checkStateTransition(State state);

@@ -30,7 +30,7 @@ namespace facebook::velox::cudf_velox {
 bool CompileState::compile() {
   std::cout << "Calling cudfDriverAdapter" << std::endl;
   auto operators = driver_.operators();
-  auto& nodes = driverFactory_.planNodes;
+  auto& nodes = planNodes_;
   std::cout << "Number of operators: " << operators.size() << std::endl;
   for (auto& op : operators) {
     std::cout << "  Operator: ID " << op->operatorId() << ": " << op->toString()
@@ -49,6 +49,15 @@ bool CompileState::compile() {
   bool replacements_made = false;
   auto ctx = driver_.driverCtx();
 
+  // Get plan node by id lookup.
+  auto get_plan_node = [&](const core::PlanNodeId& id) {
+    auto it =
+        std::find_if(nodes.cbegin(), nodes.cend(), [&id](const auto& node) {
+          return node->id() == id;
+        });
+    VELOX_CHECK(it != nodes.end());
+    return *it;
+  };
   // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
   // CudfHashJoinProbe operators.
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -60,7 +69,7 @@ bool CompileState::compile() {
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
       auto id = joinBuildOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-          joinBuildOp->getPlanNode());
+          get_plan_node(joinBuildOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
@@ -71,7 +80,7 @@ bool CompileState::compile() {
     } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
       auto id = joinProbeOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-          joinProbeOp->getPlanNode());
+          get_plan_node(joinProbeOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
@@ -84,12 +93,52 @@ bool CompileState::compile() {
   return replacements_made;
 }
 
-bool cudfDriverAdapter(
-    const exec::DriverFactory& factory,
-    exec::Driver& driver) {
-  auto state = CompileState(factory, driver);
-  return state.compile();
-}
+struct cudfDriverAdapter {
+  std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>> planNodes;
+  cudfDriverAdapter() {
+    std::cout << "cudfDriverAdapter constructor" << std::endl;
+    planNodes =
+        std::make_shared<std::vector<std::shared_ptr<core::PlanNode const>>>();
+  }
+  ~cudfDriverAdapter() {
+    std::cout << "cudfDriverAdapter destructor" << std::endl;
+    printf(
+        "cached planNodes %p, %ld\n", planNodes.get(), planNodes.use_count());
+  }
+  // driveradapter
+  bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
+    auto state = CompileState(factory, driver, *planNodes);
+    // Stored planNodes from inspect.
+    printf("driver.planNodes=%p\n", planNodes.get());
+    for (auto planNode : *planNodes) {
+      std::cout << "PlanNode: " << (*planNode).toString() << std::endl;
+    }
+    auto res = state.compile();
+    return res;
+  }
+  // Iterate recursively and store them in the planNodes_ptr.
+  void storePlanNodes(const std::shared_ptr<const core::PlanNode>& planNode) {
+    const auto& sources = planNode->sources();
+    for (int32_t i = 0; i < sources.size(); ++i) {
+      storePlanNodes(sources[i]);
+    }
+    planNodes->push_back(planNode);
+  }
+
+  // inspect
+  void operator()(const core::PlanFragment& planFragment) {
+    // signature: std::function<void(const core::PlanFragment&)> inspect;
+    // call: adapter.inspect(planFragment);
+    planNodes->clear();
+    std::cout << "Inspecting PlanFragment: " << std::endl;
+    if (planNodes) {
+      printf("inspect.planNodes=%p\n", planNodes.get());
+      storePlanNodes(planFragment.planNode);
+    } else {
+      std::cout << "planNodes_ptr is nullptr" << std::endl;
+    }
+  }
+};
 
 void registerCudf() {
   CUDF_FUNC_RANGE();
@@ -98,7 +147,13 @@ void registerCudf() {
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
   std::cout << "Registering cudfDriverAdapter" << std::endl;
-  exec::DriverAdapter cudfAdapter{"cuDF", {}, cudfDriverAdapter};
+  cudfDriverAdapter cda{};
+  exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
+}
+
+void unregisterCudf() {
+  std::cout << "unRegistering cudfDriverAdapter" << std::endl;
+  exec::DriverFactory::adapters.clear();
 }
 } // namespace facebook::velox::cudf_velox
