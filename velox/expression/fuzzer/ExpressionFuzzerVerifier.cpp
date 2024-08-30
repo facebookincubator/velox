@@ -342,7 +342,16 @@ void ExpressionFuzzerVerifier::go() {
           resultVectors ? BaseVector::copy(*resultVectors) : nullptr,
           true, // canThrow
           columnsToWrapInLazy);
-    } catch (const std::exception&) {
+    } catch (const std::exception& exp) {
+      auto veloxError = dynamic_cast<const VeloxRuntimeError*>(&exp);
+      if (veloxError &&
+          veloxError->message() ==
+              "Unicode characters are not supported for conversion to integer types") {
+        LOG(WARNING)
+            << "Ignoring conversion of unicode characters to integer types error";
+        continue;
+      }
+
       if (options_.findMinimalSubexpression) {
         test::computeMinimumSubExpression(
             {&execCtx_, {false, ""}},

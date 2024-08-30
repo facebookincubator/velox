@@ -313,8 +313,9 @@ static void filterSignatures(
     for (auto it = input.begin(); it != input.end();) {
       if (!nameSet.count(it->first)) {
         it = input.erase(it);
-      } else
+      } else {
         it++;
+      }
     }
   }
 
