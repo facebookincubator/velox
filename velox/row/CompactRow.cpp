@@ -41,8 +41,9 @@ FOLLY_ALWAYS_INLINE void writeFixeWidth(
 }
 
 FOLLY_ALWAYS_INLINE void
-writeTimeStamp(char* buffer, size_t& offset, int64_t micros) {
+writeTimestamp(char* buffer, size_t& offset, const Timestamp& timestamp) {
   // Write micros(int64_t) for timestamp value.
+  const auto micros = timestamp.toMicros();
   memcpy(buffer + offset, &micros, sizeof(int64_t));
   offset += sizeof(int64_t);
 }
@@ -140,7 +141,7 @@ void serializeTyped<TypeKind::TIMESTAMP>(
   const auto* rawData = decoded.data<Timestamp>();
   if (!decoded.mayHaveNulls()) {
     for (auto i = 0; i < rows.size(); ++i) {
-      writeTimeStamp(buffer, offsets[i], rawData[rows[i]].toMicros());
+      writeTimestamp(buffer, offsets[i], rawData[rows[i]]);
     }
   } else {
     for (auto i = 0; i < rows.size(); ++i) {
@@ -148,7 +149,7 @@ void serializeTyped<TypeKind::TIMESTAMP>(
         bits::setBit(nulls[i], childIdx, true);
         offsets[i] += sizeof(int64_t);
       } else {
-        writeTimeStamp(buffer, offsets[i], rawData[rows[i]].toMicros());
+        writeTimestamp(buffer, offsets[i], rawData[rows[i]]);
       }
     }
   }
@@ -383,6 +384,8 @@ void CompactRow::serializeRow(
     offsets[i] += rowNullBytes_;
   }
 
+  // Fixed-width and varchar/varbinary types are serialized using the vectorized
+  // API 'serializedTyped'. Other data types are serialized row-by-row.
   for (auto childIdx = 0; childIdx < children_.size(); ++childIdx) {
     auto& child = children_[childIdx];
     if (childIsFixedWidth_[childIdx] ||
@@ -399,7 +402,7 @@ void CompactRow::serializeRow(
           buffer,
           offsets);
     } else {
-      auto mayHaveNulls = child.decoded_.mayHaveNulls();
+      const auto mayHaveNulls = child.decoded_.mayHaveNulls();
       for (auto i = 0; i < rows.size(); ++i) {
         if (mayHaveNulls && child.isNullAt(rows[i])) {
           bits::setBit(nulls[i], childIdx, true);
