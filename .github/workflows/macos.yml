@@ -74,7 +74,7 @@ jobs:
         uses: assignUser/stash/restore@v1
         with:
           path: '${{ env.CCACHE_DIR }}'
-          key: ccache-macos-${{ matrix.os }}
+          key: ccache-macos-1-${{ matrix.os }}
 
       - name: Configure Build
         env:
@@ -98,7 +98,7 @@ jobs:
       - uses: assignUser/stash/save@v1
         with:
           path: '${{ env.CCACHE_DIR }}'
-          key: ccache-macos-${{ matrix.os }}
+          key: ccache-macos-1-${{ matrix.os }}
 
       - name: Run Tests
         if: false
