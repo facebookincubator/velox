@@ -641,62 +641,55 @@ StopReason Driver::runInternal(
             uint64_t resultBytes = 0;
             RowVectorPtr intermediateResult;
             {
-              auto timer = createDeltaCpuWallTimer(
-                  [op, this](const CpuWallTiming& elapsedTime) {
-                    auto elapsedSelfTime = processLazyTiming(*op, elapsedTime);
-                    op->stats().wlock()->getOutputTiming.add(elapsedSelfTime);
-                  });
-              TestValue::adjust(
-                  "facebook::velox::exec::Driver::runInternal::getOutput", op);
-              CALL_OPERATOR(
-                  intermediateResult = op->getOutput(),
-                  op,
-                  curOperatorId_,
-                  kOpMethodGetOutput);
-              if (intermediateResult) {
-                VELOX_CHECK(
-                    intermediateResult->size() > 0,
-                    "Operator::getOutput() must return nullptr or "
-                    "a non-empty vector: {}",
-                    op->operatorType());
-                if (ctx_->queryConfig().validateOutputFromOperators()) {
-                  validateOperatorResult(intermediateResult, *op);
+              withDeltaCpuWallTimer(op, &OperatorStats::getOutputTiming, [&]() {
+                TestValue::adjust(
+                    "facebook::velox::exec::Driver::runInternal::getOutput",
+                    op);
+                CALL_OPERATOR(
+                    intermediateResult = op->getOutput(),
+                    op,
+                    curOperatorId_,
+                    kOpMethodGetOutput);
+                if (intermediateResult) {
+                  VELOX_CHECK(
+                      intermediateResult->size() > 0,
+                      "Operator::getOutput() must return nullptr or "
+                      "a non-empty vector: {}",
+                      op->operatorType());
+                  if (ctx_->queryConfig().validateOutputFromOperators()) {
+                    validateOperatorResult(intermediateResult, *op);
+                  }
+                  resultBytes = intermediateResult->estimateFlatSize();
+                  {
+                    auto lockedStats = op->stats().wlock();
+                    lockedStats->addOutputVector(
+                        resultBytes, intermediateResult->size());
+                  }
                 }
-                resultBytes = intermediateResult->estimateFlatSize();
-                {
-                  auto lockedStats = op->stats().wlock();
-                  lockedStats->addOutputVector(
-                      resultBytes, intermediateResult->size());
-                }
-              }
+              });
             }
             pushdownFilters(i);
             if (intermediateResult) {
-              auto timer = createDeltaCpuWallTimer(
-                  [nextOp, this](const CpuWallTiming& elapsedTime) {
-                    auto elapsedSelfTime =
-                        processLazyTiming(*nextOp, elapsedTime);
-                    nextOp->stats().wlock()->addInputTiming.add(
-                        elapsedSelfTime);
-                  });
-              {
-                auto lockedStats = nextOp->stats().wlock();
-                lockedStats->addInputVector(
-                    resultBytes, intermediateResult->size());
-              }
-              TestValue::adjust(
-                  "facebook::velox::exec::Driver::runInternal::addInput",
-                  nextOp);
+              withDeltaCpuWallTimer(op, &OperatorStats::addInputTiming, [&]() {
+                {
+                  auto lockedStats = nextOp->stats().wlock();
+                  lockedStats->addInputVector(
+                      resultBytes, intermediateResult->size());
+                }
+                TestValue::adjust(
+                    "facebook::velox::exec::Driver::runInternal::addInput",
+                    nextOp);
 
-              CALL_OPERATOR(
-                  nextOp->addInput(intermediateResult),
-                  nextOp,
-                  curOperatorId_ + 1,
-                  kOpMethodAddInput);
+                CALL_OPERATOR(
+                    nextOp->addInput(intermediateResult),
+                    nextOp,
+                    curOperatorId_ + 1,
+                    kOpMethodAddInput);
 
-              // The next iteration will see if operators_[i + 1] has
-              // output now that it got input.
-              i += 2;
+                // The next iteration will see if operators_[i + 1] has
+                // output now that it got input.
+                i += 2;
+              });
               continue;
             } else {
               stop = task()->shouldStop();
@@ -730,20 +723,17 @@ StopReason Driver::runInternal(
                   curOperatorId_,
                   kOpMethodIsFinished);
               if (finished) {
-                auto timer = createDeltaCpuWallTimer(
-                    [op, this](const CpuWallTiming& elapsedTime) {
-                      auto elapsedSelfTime =
-                          processLazyTiming(*op, elapsedTime);
-                      op->stats().wlock()->finishTiming.add(elapsedSelfTime);
+                withDeltaCpuWallTimer(
+                    op, &OperatorStats::finishTiming, [this, &nextOp]() {
+                      TestValue::adjust(
+                          "facebook::velox::exec::Driver::runInternal::noMoreInput",
+                          nextOp);
+                      CALL_OPERATOR(
+                          nextOp->noMoreInput(),
+                          nextOp,
+                          curOperatorId_ + 1,
+                          kOpMethodNoMoreInput);
                     });
-                TestValue::adjust(
-                    "facebook::velox::exec::Driver::runInternal::noMoreInput",
-                    nextOp);
-                CALL_OPERATOR(
-                    nextOp->noMoreInput(),
-                    nextOp,
-                    curOperatorId_ + 1,
-                    kOpMethodNoMoreInput);
                 break;
               }
             }
@@ -753,12 +743,7 @@ StopReason Driver::runInternal(
           // control here, so it can advance. If it is again blocked,
           // this will be detected when trying to add input, and we
           // will come back here after this is again on thread.
-          {
-            auto timer = createDeltaCpuWallTimer(
-                [op, this](const CpuWallTiming& elapsedTime) {
-                  auto elapsedSelfTime = processLazyTiming(*op, elapsedTime);
-                  op->stats().wlock()->getOutputTiming.add(elapsedSelfTime);
-                });
+          withDeltaCpuWallTimer(op, &OperatorStats::getOutputTiming, [&]() {
             CALL_OPERATOR(
                 result = op->getOutput(),
                 op,
@@ -778,13 +763,16 @@ StopReason Driver::runInternal(
                 lockedStats->addOutputVector(
                     result->estimateFlatSize(), result->size());
               }
-
-              // This code path is used only in serial execution mode.
-              blockingReason_ = BlockingReason::kWaitForConsumer;
-              guard.notThrown();
-              return StopReason::kBlock;
             }
+          });
+
+          if (result) {
+            // This code path is used only in serial execution mode.
+            blockingReason_ = BlockingReason::kWaitForConsumer;
+            guard.notThrown();
+            return StopReason::kBlock;
           }
+
           bool finished{false};
           CALL_OPERATOR(
               finished = op->isFinished(),
@@ -1088,6 +1076,31 @@ folly::dynamic Driver::toJson() const {
   obj["operators"] = operatorsObj;
 
   return obj;
+}
+
+template <typename Func>
+void Driver::withDeltaCpuWallTimer(
+    Operator* op,
+    TimingMemberPtr opTimingMember,
+    Func&& opFunction) {
+  // If 'trackOperatorCpuUsage_' is true, create and initialize the timer object
+  // to track cpu and wall time of the opFunction.
+  if (!trackOperatorCpuUsage_) {
+    return opFunction();
+  }
+
+  // The delta CpuWallTiming object would be recorded to the corresponding
+  // opTimingMember upon destruction of the timer when withDeltaCpuWallTimer
+  // ends. The timer is created on the stack to avoid heap allocation
+  auto f = [op, opTimingMember, this](const CpuWallTiming& elapsedTime) {
+    auto elapsedSelfTime = processLazyTiming(*op, elapsedTime);
+    op->stats().withWLock([&](auto& lockedStats) {
+      (lockedStats.*opTimingMember).add(elapsedSelfTime);
+    });
+  };
+  DeltaCpuWallTimer<decltype(f)> timer(std::move(f));
+
+  opFunction();
 }
 
 SuspendedSection::SuspendedSection(Driver* driver) : driver_(driver) {
