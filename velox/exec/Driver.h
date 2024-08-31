@@ -14,21 +14,18 @@
  * limitations under the License.
  */
 #pragma once
+
+#include <memory>
+
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
-#include <memory>
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
-#include "velox/common/future/VeloxPromise.h"
-#include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/time/CpuWallTimer.h"
-#include "velox/connectors/Connector.h"
 #include "velox/core/PlanFragment.h"
-#include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/exec/Spiller.h"
 
 namespace facebook::velox::exec {
 
@@ -470,6 +467,34 @@ class Driver : public std::enable_shared_from_this<Driver> {
   }
 
  private:
+  // Ensures that the thread is removed from its Task's thread count on exit.
+  class CancelGuard {
+   public:
+    CancelGuard(
+        const std::shared_ptr<Driver>& driver,
+        Task* task,
+        ThreadState* state,
+        std::function<void(StopReason)> onTerminate)
+        : driver_(driver),
+          task_(task),
+          state_(state),
+          onTerminate_(std::move(onTerminate)) {}
+
+    void notThrown() {
+      isThrow_ = false;
+    }
+
+    ~CancelGuard();
+
+   private:
+    std::shared_ptr<Driver> const driver_;
+    Task* const task_;
+    ThreadState* const state_;
+    const std::function<void(StopReason reason)> onTerminate_;
+
+    bool isThrow_{true};
+  };
+
   Driver() = default;
 
   // Invoked to record the driver cpu yield count.
@@ -510,6 +535,17 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // are left in place to reflect which operator triggered the load
   // but these do not bias the op's timing.
   CpuWallTiming processLazyTiming(Operator& op, const CpuWallTiming& timing);
+
+  inline void validateOperatorOutputResult(
+      const RowVectorPtr& result,
+      const Operator& op);
+
+  inline StopReason blockDriver(
+      const std::shared_ptr<Driver>& self,
+      size_t blockedOperatorId,
+      ContinueFuture&& future,
+      std::shared_ptr<BlockingState>& blockingState,
+      CancelGuard& guard);
 
   std::unique_ptr<DriverCtx> ctx_;
 
