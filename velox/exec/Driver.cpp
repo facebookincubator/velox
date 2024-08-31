@@ -15,10 +15,12 @@
  */
 
 #include "velox/exec/Driver.h"
+
 #include <folly/ScopeGuard.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <gflags/gflags.h>
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/process/TraceContext.h"

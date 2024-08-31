@@ -18,12 +18,13 @@
 
 #pragma once
 
+#include <string>
+#include <utility>
+
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <folly/Expected.h>
 #include <folly/Likely.h>
-#include <string>
-#include <utility>
 
 namespace facebook::velox {
 

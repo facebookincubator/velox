@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 #pragma once
+
 #include <stdint.h>
 #include <string.h>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
+
 #include "velox/common/compression/Compression.h"
 
 namespace facebook::velox::common {

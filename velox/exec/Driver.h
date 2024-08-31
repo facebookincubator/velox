@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 #pragma once
+
+#include <memory>
+
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
-#include <memory>
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
