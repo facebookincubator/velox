@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #pragma once
+
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"

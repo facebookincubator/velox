@@ -19,10 +19,11 @@
 #include <deque>
 
 #include <fmt/format.h>
+#include <folly/GLog.h>
 #include <folly/chrono/Hardware.h>
 #include <folly/container/F14Set.h>
 #include <folly/futures/SharedPromise.h>
-#include "folly/GLog.h"
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CoalesceIo.h"
 #include "velox/common/base/Portability.h"
