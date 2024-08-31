@@ -411,7 +411,7 @@ if(${VELOX_ENABLE_DUCKDB})
 endif()
 
 set_source(fmt)
-resolve_dependency(fmt 9.0.0)
+resolve_dependency(fmt)
 
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   # DWIO needs all sorts of stream compression libraries.

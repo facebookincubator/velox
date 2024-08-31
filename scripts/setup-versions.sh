@@ -18,8 +18,8 @@
 # The versions should match the declared versions in this file.
 
 # Build dependencies versions.
-FB_OS_VERSION="v2024.05.20.00"
-FMT_VERSION="10.1.1"
+FB_OS_VERSION="v2024.08.26.00"
+FMT_VERSION="11.0.2"
 BOOST_VERSION="boost-1.84.0"
 ARROW_VERSION="15.0.0"
 DUCKDB_VERSION="v0.8.1"

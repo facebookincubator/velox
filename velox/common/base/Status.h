@@ -519,7 +519,7 @@ using Expected = folly::Expected<T, Status>;
 
 template <>
 struct fmt::formatter<facebook::velox::Status> : fmt::formatter<std::string> {
-  auto format(const facebook::velox::Status& s, format_context& ctx) {
+  auto format(const facebook::velox::Status& s, format_context& ctx) const {
     return formatter<std::string>::format(s.toString(), ctx);
   }
 };
@@ -527,7 +527,7 @@ struct fmt::formatter<facebook::velox::Status> : fmt::formatter<std::string> {
 template <>
 struct fmt::formatter<facebook::velox::StatusCode>
     : fmt::formatter<std::string_view> {
-  auto format(facebook::velox::StatusCode code, format_context& ctx) {
+  auto format(facebook::velox::StatusCode code, format_context& ctx) const {
     return formatter<std::string_view>::format(
         facebook::velox::toString(code), ctx);
   }

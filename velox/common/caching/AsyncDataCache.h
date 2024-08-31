@@ -978,7 +978,7 @@ struct fmt::formatter<facebook::velox::cache::CoalescedLoad::State>
     : formatter<int> {
   auto format(
       facebook::velox::cache::CoalescedLoad::State s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };
