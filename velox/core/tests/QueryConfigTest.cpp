@@ -202,4 +202,13 @@ TEST_F(QueryConfigTest, expressionEvaluationRelatedConfigs) {
   testConfig(createConfig(false, false, false, true));
 }
 
+TEST_F(QueryConfigTest, partialLimitEagerFlushThresholdConfig) {
+  std::unordered_map<std::string, std::string> configData(
+      {{QueryConfig::kPartialLimitEagerFlushThreshold, "1000"}});
+  auto queryCtx = QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+  const QueryConfig& config = queryCtx->queryConfig();
+
+  ASSERT_EQ(config.partialLimitEagerFlushThreshold(), 1000);
+}
+
 } // namespace facebook::velox::core::test

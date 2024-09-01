@@ -393,15 +393,15 @@ namespace {
 
 // If the upstream is partial limit, downstream is final limit and we want to
 // flush as soon as we can to reach the limit and do as little work as possible.
-bool eagerFlush(const core::PlanNode& node) {
+bool eagerFlush(const core::PlanNode& node, const int64_t& threshold) {
   if (auto* limit = dynamic_cast<const core::LimitNode*>(&node)) {
-    return limit->isPartial() && limit->offset() + limit->count() < 10'000;
+    return limit->isPartial() && limit->offset() + limit->count() < threshold;
   }
   if (node.sources().empty()) {
     return false;
   }
   // Follow the first source, which is driving the output.
-  return eagerFlush(*node.sources()[0]);
+  return eagerFlush(*node.sources()[0], threshold);
 }
 
 } // namespace
@@ -482,7 +482,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
                 planNode)) {
       operators.push_back(std::make_unique<PartitionedOutput>(
-          id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
+          id,
+          ctx.get(),
+          partitionedOutputNode,
+          eagerFlush(
+              *planNode,
+              ctx->queryConfig().partialLimitEagerFlushThreshold())));
     } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {

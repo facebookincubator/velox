@@ -47,6 +47,10 @@ Generic Configuration
      - integer
      - 80
      - Abandons partial TopNRowNumber if number of output rows equals or exceeds this percentage of the number of input rows.
+   * - partial_limit_eager_flush_threshold
+     - integer
+     - 10,000
+     - used to flush eagerly the results when the sum of offset and count for the partial limit node is below the threshold.
    * - session_timezone
      - string
      -

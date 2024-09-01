@@ -131,6 +131,16 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
       "abandon_partial_topn_row_number_min_pct";
 
+  /// the threshold for eager flushing of partial limit nodes.
+  ///
+  /// When the sum of the offset and the count of a partial limit node
+  /// is below this threshold, results are flushed eagerly to improve
+  /// performance by reducing unnecessary data processing.
+  ///
+  /// Default value is 10,000.
+  static constexpr const char* kPartialLimitEagerFlushThreshold =
+      "partial_limit_eager_flush_threshold";
+
   static constexpr const char* kMaxPartitionedOutputBufferSize =
       "max_page_partitioning_buffer_size";
 
@@ -424,6 +434,10 @@ class QueryConfig {
 
   int32_t abandonPartialTopNRowNumberMinPct() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
+  }
+
+  int64_t partialLimitEagerFlushThreshold() const {
+    return get<int64_t>(kPartialLimitEagerFlushThreshold, 10'000);
   }
 
   uint64_t maxSpillRunRows() const {
