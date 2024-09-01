@@ -18,11 +18,43 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
-#include "velox/dwio/parquet/reader/DeltaLengthByteArrayDecoder.h"
 
 namespace facebook::velox::parquet {
 
-using namespace velox::memory;
+// DeltaByteArrayDecoder is adapted from Apache Arrow:
+// https://github.com/apache/arrow/blob/apache-arrow-15.0.0/cpp/src/parquet/encoding.cc#L2758-L2889
+class DeltaLengthByteArrayDecoder {
+ public:
+  explicit DeltaLengthByteArrayDecoder(const char* start) {
+    lengthDecoder_ = std::make_unique<DeltaBpDecoder>(start);
+    decodeLengths();
+    bufferStart_ = lengthDecoder_->bufferStart();
+  }
+
+  folly::StringPiece readString() {
+    int32_t dataSize = 0;
+    const int64_t length = bufferedLength_[lengthIdx_++];
+    VELOX_CHECK_GE(length, 0, "negative string delta length");
+    bufferStart_ += length;
+    return folly::StringPiece(bufferStart_ - length, length);
+  }
+
+ private:
+  void decodeLengths() {
+    int64_t numLength = lengthDecoder_->validValuesCount();
+    bufferedLength_.resize(numLength);
+    lengthDecoder_->readValues<uint32_t>(bufferedLength_.data(), numLength);
+
+    lengthIdx_ = 0;
+    numValidValues_ = numLength;
+  }
+
+  const char* bufferStart_;
+  std::unique_ptr<DeltaBpDecoder> lengthDecoder_;
+  int32_t numValidValues_{0};
+  uint32_t lengthIdx_{0};
+  std::vector<uint32_t> bufferedLength_;
+};
 
 // DeltaByteArrayDecoder is adapted from Apache Arrow:
 // https://github.com/apache/arrow/blob/apache-arrow-15.0.0/cpp/src/parquet/encoding.cc#L3301-L3545
@@ -32,13 +64,15 @@ class DeltaByteArrayDecoder {
     prefixLenDecoder_ = std::make_unique<DeltaBpDecoder>(start);
     int64_t numPrefix = prefixLenDecoder_->validValuesCount();
     bufferedPrefixLength_.resize(numPrefix);
-    prefixLenDecoder_->readValues<uint32_t>(bufferedPrefixLength_, numPrefix);
+    prefixLenDecoder_->readValues<uint32_t>(
+        bufferedPrefixLength_.data(), numPrefix);
     prefixLenOffset_ = 0;
     numValidValues_ = numPrefix;
 
     suffixDecoder_ = std::make_unique<DeltaLengthByteArrayDecoder>(
         prefixLenDecoder_->bufferStart());
     lastValue_.clear();
+    dataBuffer_.clear();
   }
 
   void skip(uint64_t numValues) {
@@ -98,10 +132,9 @@ class DeltaByteArrayDecoder {
     VELOX_CHECK_GE(
         prefixLength, 0, "negative prefix length in DELTA_BYTE_ARRAY");
 
-    std::string_view prefix{lastValue_};
-    std::string tempString;
-    tempString.resize(prefixLength + suffix.size());
-    buildBuffer(isFirstRun, prefixLength, suffix, &prefix, tempString);
+    folly::StringPiece prefix{lastValue_};
+
+    buildBuffer(isFirstRun, prefixLength, suffix, prefix);
 
     numValidValues_--;
     lastValue_ = std::string{prefix};
@@ -112,16 +145,15 @@ class DeltaByteArrayDecoder {
   void buildBuffer(
       bool isFirstRun,
       const int64_t prefixLength,
-      folly::StringPiece& suffix,
-      std::string_view* prefix,
-      std::string data) {
+      folly::StringPiece suffix,
+      folly::StringPiece& prefix) {
     VELOX_CHECK_LE(
         prefixLength,
-        prefix->length(),
+        prefix.size(),
         "prefix length too large in DELTA_BYTE_ARRAY");
     if (prefixLength == 0) {
       // prefix is empty.
-      *prefix = std::string_view{suffix.data(), suffix.size()};
+      prefix = folly::StringPiece{suffix.data(), suffix.size()};
       return;
     }
 
@@ -130,20 +162,22 @@ class DeltaByteArrayDecoder {
         // suffix is empty: suffix can simply point to the prefix.
         // This is not possible for the first run since the prefix
         // would point to the mutable `lastValue_`.
-        *prefix = prefix->substr(0, prefixLength);
-        suffix = folly::StringPiece(std::string{*prefix});
+        prefix = prefix.substr(0, prefixLength);
         return;
       }
     }
+
+    dataBuffer_.clear();
+    dataBuffer_.resize(prefixLength + suffix.size());
+
     // Both prefix and suffix are non-empty, so we need to decode the string
     // into `data`.
     // 1. Copy the prefix.
-    memcpy(data.data(), prefix->data(), prefixLength);
+    memcpy(dataBuffer_.data(), prefix.data(), prefixLength);
     // 2. Copy the suffix.
-    memcpy(data.data() + prefixLength, suffix.data(), suffix.size());
-    // 3. Point the suffix to the decoded string.
-    suffix = folly::StringPiece(data);
-    *prefix = std::string_view{suffix};
+    memcpy(dataBuffer_.data() + prefixLength, suffix.data(), suffix.size());
+    // 3. Make the prefix to the decoded string.
+    prefix = folly::StringPiece{dataBuffer_};
   }
 
   std::unique_ptr<DeltaBpDecoder> prefixLenDecoder_;
@@ -151,6 +185,7 @@ class DeltaByteArrayDecoder {
   std::unique_ptr<DeltaLengthByteArrayDecoder> suffixDecoder_;
 
   std::string lastValue_;
+  std::string dataBuffer_;
   int32_t numValidValues_{0};
   uint32_t prefixLenOffset_{0};
   std::vector<uint32_t> bufferedPrefixLength_;
