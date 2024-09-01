@@ -170,7 +170,7 @@ function cmake_install {
   else
     DIR=$(pwd)
   fi
-  local NAME=$(basename "$(pwd)")
+  local NAME=$(basename "${DIR}")
   local BINARY_DIR=_build
   SUDO="${SUDO:-""}"
   pushd "${DIR}"
