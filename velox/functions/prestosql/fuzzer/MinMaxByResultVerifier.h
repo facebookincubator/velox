@@ -68,7 +68,14 @@ class MinMaxByResultVerifier : public ResultVerifier {
     VELOX_UNSUPPORTED();
   }
 
+  bool compare(const VectorPtr& /*result*/, const VectorPtr& /*altResult*/)
+      override {
+    VELOX_UNSUPPORTED();
+  }
+
   bool verify(const RowVectorPtr& result) override;
+
+  bool verify(const VectorPtr& result) override;
 
   void reset() override {
     expected_.reset();
