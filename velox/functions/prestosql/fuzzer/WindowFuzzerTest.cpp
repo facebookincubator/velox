@@ -140,32 +140,6 @@ int main(int argc, char** argv) {
           {"sum_data_size_for_stats", nullptr},
       };
 
-  static const std::unordered_set<std::string> orderDependentFunctions = {
-      // Window functions.
-      "first_value",
-      "last_value",
-      "nth_value",
-      "ntile",
-      "lag",
-      "lead",
-      "row_number",
-      "cume_dist",
-      "rank",
-      "dense_rank",
-      "percent_rank",
-      // Aggregation functions.
-      "any_value",
-      "arbitrary",
-      "array_agg",
-      "set_agg",
-      "set_union",
-      "map_agg",
-      "map_union",
-      "map_union_sum",
-      "max_by",
-      "min_by",
-      "multimap_agg",
-  };
 
   using Runner = facebook::velox::exec::test::WindowFuzzerRunner;
   using Options = facebook::velox::exec::test::AggregationFuzzerOptions;
@@ -177,7 +151,6 @@ int main(int argc, char** argv) {
   options.customVerificationFunctions = customVerificationFunctions;
   options.customInputGenerators =
       facebook::velox::exec::test::getCustomInputGenerators();
-  options.orderDependentFunctions = orderDependentFunctions;
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{

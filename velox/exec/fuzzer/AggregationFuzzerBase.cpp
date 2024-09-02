@@ -523,9 +523,19 @@ void AggregationFuzzerBase::compare(
     return;
   }
 
+  MaterializedRowMultiset expectedRows(
+      materialize(expected.result).begin(), materialize(expected.result).end());
+  MaterializedRowMultiset actualRows(
+      materialize(actual.result).begin(), materialize(actual.result).end());
+
   if (!customVerification) {
     VELOX_CHECK(
-        assertEqualResults({expected.result}, {actual.result}),
+        assertUnorderedEqualResults(
+            expectedRows,
+            expected.result->type(),
+            actualRows,
+            actual.result->type(),
+            "Logically equivalent plans produced different results"),
         "Logically equivalent plans produced different results");
     return;
   }

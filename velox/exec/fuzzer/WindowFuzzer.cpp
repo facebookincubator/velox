@@ -229,8 +229,6 @@ void WindowFuzzer::go() {
     if (customVerification) {
       customVerifier = customVerificationFunctions_.at(signature.name);
     }
-    const bool requireSortedInput =
-        orderDependentFunctions_.count(signature.name) != 0;
 
     std::vector<TypePtr> argTypes = signature.args;
     std::vector<std::string> argNames = makeNames(argTypes.size());
@@ -252,12 +250,6 @@ void WindowFuzzer::go() {
         generateFrameClause(argNames, argTypes, isRowsFrame);
     const auto input = generateInputDataWithRowNumber(
         argNames, argTypes, partitionKeys, signature);
-    // If the function is order-dependent or uses "rows" frame, sort all input
-    // rows by row_number additionally.
-    if (requireSortedInput || isRowsFrame) {
-      sortingKeysAndOrders.emplace_back("row_number", core::kAscNullsLast);
-      ++stats_.numSortedInputs;
-    }
 
     logVectors(input);
 
@@ -429,11 +421,22 @@ bool WindowFuzzer::verifyWindow(
           ++stats_.numVerified;
           stats_.verifiedFunctionNames.insert(
               retrieveWindowFunctionName(plan)[0]);
+          // Convert expected results from vector to multiset
+          MaterializedRowMultiset expectedMultiset(
+              expectedResult.value().begin(), expectedResult.value().end());
+
+          // Convert actual results from vector to multiset
+          MaterializedRowMultiset actualMultiset(
+              materialize({resultOrError.result}).begin(),
+              materialize({resultOrError.result}).end());
+
+          // Now call the assert function with the correct types
           VELOX_CHECK(
-              assertEqualResults(
-                  expectedResult.value(),
+              assertUnorderedEqualResults(
+                  expectedMultiset,
                   plan->outputType(),
-                  {resultOrError.result}),
+                  actualMultiset,
+                  plan->outputType()),
               "Velox and reference DB results don't match");
           LOG(INFO) << "Verified results against reference DB";
         }
@@ -484,7 +487,6 @@ void windowFuzzer(
         customVerificationFunctions,
     const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
         customInputGenerators,
-    const std::unordered_set<std::string>& orderDependentFunctions,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
     const std::unordered_map<std::string, std::string>& hiveConfigs,
@@ -497,7 +499,6 @@ void windowFuzzer(
       seed,
       customVerificationFunctions,
       customInputGenerators,
-      orderDependentFunctions,
       timestampPrecision,
       queryConfigs,
       hiveConfigs,

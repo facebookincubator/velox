@@ -30,21 +30,19 @@ namespace facebook::velox::exec::test {
 class WindowFuzzer : public AggregationFuzzerBase {
  public:
   WindowFuzzer(
-      AggregateFunctionSignatureMap aggregationSignatureMap,
-      WindowFunctionMap windowSignatureMap,
-      size_t seed,
-      const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>&
-          customVerificationFunctions,
-      const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
-          customInputGenerators,
-      const std::unordered_set<std::string>& orderDependentFunctions,
-      VectorFuzzer::Options::TimestampPrecision timestampPrecision,
-      const std::unordered_map<std::string, std::string>& queryConfigs,
-      const std::unordered_map<std::string, std::string>& hiveConfigs,
-      bool orderableGroupKeys,
-      std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
-      : AggregationFuzzerBase{seed, customVerificationFunctions, customInputGenerators, timestampPrecision, queryConfigs, hiveConfigs, orderableGroupKeys, std::move(referenceQueryRunner)},
-        orderDependentFunctions_{orderDependentFunctions} {
+    AggregateFunctionSignatureMap aggregationSignatureMap,
+    WindowFunctionMap windowSignatureMap,
+    size_t seed,
+    const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>&
+        customVerificationFunctions,
+    const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
+        customInputGenerators,
+    VectorFuzzer::Options::TimestampPrecision timestampPrecision,
+    const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::string>& hiveConfigs,
+    bool orderableGroupKeys,
+    std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
+    : AggregationFuzzerBase{seed, customVerificationFunctions, customInputGenerators, timestampPrecision, queryConfigs, hiveConfigs, orderableGroupKeys, std::move(referenceQueryRunner)} {
     VELOX_CHECK(
         !aggregationSignatureMap.empty() || !windowSignatureMap.empty(),
         "No function signatures available.");
@@ -122,7 +120,6 @@ class WindowFuzzer : public AggregationFuzzerBase {
       const std::shared_ptr<ResultVerifier>& customVerifier,
       const velox::fuzzer::ResultOrError& expected);
 
-  const std::unordered_set<std::string> orderDependentFunctions_;
 
   struct Stats : public AggregationFuzzerBase::Stats {
     std::unordered_set<std::string> verifiedFunctionNames;
@@ -149,7 +146,6 @@ void windowFuzzer(
         customVerificationFunctions,
     const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
         customInputGenerators,
-    const std::unordered_set<std::string>& orderDependentFunctions,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
     const std::unordered_map<std::string, std::string>& hiveConfigs,
