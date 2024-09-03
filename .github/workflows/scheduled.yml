@@ -365,7 +365,7 @@ jobs:
           echo "DURATION=$duration" >> $GITHUB_ENV
 
       - name: Download presto fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: presto
 
@@ -409,12 +409,12 @@ jobs:
     steps:
 
       - name: Download presto expression fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: presto
 
       - name: Download Signatures
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: signatures
           path: /tmp/signatures
@@ -460,7 +460,7 @@ jobs:
     steps:
 
       - name: Download spark aggregation fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: spark_aggregation_fuzzer
 
@@ -496,12 +496,12 @@ jobs:
     steps:
 
       - name: Download spark expression fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: spark_expression_fuzzer
 
       - name: Download Signatures
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: signatures
           path: /tmp/signatures
@@ -540,7 +540,7 @@ jobs:
     steps:
 
       - name: Download spark expression fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: spark_expression_fuzzer
 
@@ -582,7 +582,7 @@ jobs:
     steps:
 
       - name: Download join fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: join
 
@@ -616,7 +616,7 @@ jobs:
     steps:
 
       - name: Download exchange fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: exchange
 
@@ -652,7 +652,7 @@ jobs:
     steps:
 
       - name: Download row number fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: row_number
 
@@ -689,7 +689,7 @@ jobs:
     steps:
 
       - name: Download aggregation fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: aggregation
 
@@ -753,7 +753,7 @@ jobs:
     steps:
 
       - name: Download aggregation fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: aggregation
 
@@ -770,7 +770,7 @@ jobs:
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
 
       - name: Download Signatures
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: signatures
           path: /tmp/signatures
@@ -821,7 +821,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Signatures
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: signatures
           path: /tmp/signatures
@@ -850,7 +850,7 @@ jobs:
     steps:
 
       - name: Download window fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: window
 
@@ -912,7 +912,7 @@ jobs:
     steps:
 
       - name: Download writer fuzzer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.7
         with:
           name: writer
 

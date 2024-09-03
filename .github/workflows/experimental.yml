@@ -183,7 +183,7 @@ jobs:
         run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download spark aggregation fuzzer
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4.1.7
         with:
           name: spark_aggregation_fuzzer
 
@@ -224,7 +224,7 @@ jobs:
         run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download join fuzzer
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4.1.7
         with:
           name: join
 
