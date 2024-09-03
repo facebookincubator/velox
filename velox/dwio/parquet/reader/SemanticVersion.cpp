@@ -95,9 +95,4 @@ bool SemanticVersion::operator<(const SemanticVersion& other) const {
   return patchVersion < other.patchVersion;
 }
 
-SemanticVersion::SemanticVersion(const SemanticVersion& other)
-    : majorVersion(other.majorVersion),
-      minorVersion(other.minorVersion),
-      patchVersion(other.patchVersion) {}
-
 } // namespace facebook::velox::parquet

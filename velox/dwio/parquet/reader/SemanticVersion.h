@@ -32,8 +32,6 @@ class SemanticVersion {
 
   SemanticVersion(std::string application, int major, int minor, int patch);
 
-  SemanticVersion(const SemanticVersion& other);
-
   static std::optional<SemanticVersion> parse(const std::string& input);
 
   bool shouldIgnoreStatistics(thrift::Type::type type) const;
