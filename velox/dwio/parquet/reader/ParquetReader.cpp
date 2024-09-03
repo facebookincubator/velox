@@ -20,9 +20,9 @@
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/SemanticVersion.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
-#include "velox/dwio/parquet/reader/SemanticVersion.h"
 
 namespace facebook::velox::parquet {
 
@@ -882,7 +882,8 @@ class ParquetRowReader::Impl {
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
     ParquetData::FilterRowGroupsResult res;
-    ParquetStatsContext parquetStatsContext = ParquetStatsContext(readerBase_->version());
+    ParquetStatsContext parquetStatsContext =
+        ParquetStatsContext(readerBase_->version());
     columnReader_->filterRowGroups(0, parquetStatsContext, res);
     if (auto& metadataFilter = options_.metadataFilter()) {
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);

@@ -1509,8 +1509,7 @@ TEST_F(ParquetReaderTest, parquet251) {
   auto expected = makeRowVector({
       makeFlatVector<std::string>({"2"}),
   });
-  auto rowType =
-      ROW({"str"}, {VARCHAR()});
+  auto rowType = ROW({"str"}, {VARCHAR()});
   assertReadWithFilters(
       "parquet-251.parquet", rowType, std::move(filters), expected);
 }
