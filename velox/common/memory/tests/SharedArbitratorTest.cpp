@@ -335,8 +335,11 @@ class SharedArbitrationTest : public testing::WithParamInterface<TestParam>,
   bool isSerialExecutionMode_{false};
 };
 
+/// A test fixture that runs cases within parallel execution mode.
 class SharedArbitrationTestWithParallelExecutionModeOnly
     : public SharedArbitrationTest {};
+/// A test fixture that runs cases within both serial and
+/// parallel execution modes.
 class SharedArbitrationTestWithThreadingModes : public SharedArbitrationTest {};
 
 DEBUG_ONLY_TEST_P(
