@@ -316,13 +316,13 @@ class SharedArbitrationTest : public testing::WithParamInterface<TestParam>,
   AssertQueryBuilder newQueryBuilder() {
     AssertQueryBuilder builder = AssertQueryBuilder(duckDbQueryRunner_);
     builder.serialExecution(isSerialExecutionMode_);
-    return std::move(builder);
+    return builder;
   }
 
   AssertQueryBuilder newQueryBuilder(const core::PlanNodePtr& plan) {
     AssertQueryBuilder builder = AssertQueryBuilder(plan);
     builder.serialExecution(isSerialExecutionMode_);
-    return std::move(builder);
+    return builder;
   }
 
   static inline FakeMemoryOperatorFactory* fakeOperatorFactory_;
