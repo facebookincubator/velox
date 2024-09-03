@@ -1238,7 +1238,9 @@ DEBUG_ONLY_TEST_P(
   }
 }
 
-TEST_P(SharedArbitrationTestWithParallelExecutionModeOnly, concurrentArbitration) {
+TEST_P(
+    SharedArbitrationTestWithParallelExecutionModeOnly,
+    concurrentArbitration) {
   // Tries to replicate an actual workload by concurrently running multiple
   // query shapes that support spilling (and hence can be forced to abort or
   // spill by the arbitrator). Also adds an element of randomness by randomly
@@ -1256,18 +1258,31 @@ TEST_P(SharedArbitrationTestWithParallelExecutionModeOnly, concurrentArbitration
     vectors.push_back(makeRowVector(rowType_, fuzzerOpts_));
   }
   const int numDrivers = 4;
-  const auto expectedWriteResult =
-      runWriteTask(
-          vectors, nullptr, isSerialExecutionMode_, numDrivers, pool(), kHiveConnectorId, false)
-          .data;
+  const auto expectedWriteResult = runWriteTask(
+                                       vectors,
+                                       nullptr,
+                                       isSerialExecutionMode_,
+                                       numDrivers,
+                                       pool(),
+                                       kHiveConnectorId,
+                                       false)
+                                       .data;
   const auto expectedJoinResult =
-      runHashJoinTask(vectors, nullptr, isSerialExecutionMode_, numDrivers, pool(), false).data;
+      runHashJoinTask(
+          vectors, nullptr, isSerialExecutionMode_, numDrivers, pool(), false)
+          .data;
   const auto expectedOrderResult =
-      runOrderByTask(vectors, nullptr, isSerialExecutionMode_, numDrivers, pool(), false).data;
+      runOrderByTask(
+          vectors, nullptr, isSerialExecutionMode_, numDrivers, pool(), false)
+          .data;
   const auto expectedRowNumberResult =
-      runRowNumberTask(vectors, nullptr, isSerialExecutionMode_,numDrivers, pool(), false).data;
+      runRowNumberTask(
+          vectors, nullptr, isSerialExecutionMode_, numDrivers, pool(), false)
+          .data;
   const auto expectedTopNResult =
-      runTopNTask(vectors, nullptr, isSerialExecutionMode_,numDrivers, pool(), false).data;
+      runTopNTask(
+          vectors, nullptr, isSerialExecutionMode_, numDrivers, pool(), false)
+          .data;
 
   struct {
     uint64_t totalCapacity;
