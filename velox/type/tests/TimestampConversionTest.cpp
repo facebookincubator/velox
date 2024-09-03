@@ -170,7 +170,7 @@ TEST(DateTimeUtilTest, extractISODayOfTheWeek) {
   EXPECT_EQ(7, util::extractISODayOfTheWeek(10));
 }
 
-TEST(DateTimeUtilTest, daysSinceEpochFromWeekOfMonthDateNonLenient) {
+TEST(DateTimeUtilTest, daysSinceEpochFromWeekOfMonthDateStrict) {
   auto daysSinceEpochReturnError = [](int32_t year,
                                       int32_t month,
                                       int32_t weekOfMonth,

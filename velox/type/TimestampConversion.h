@@ -109,24 +109,24 @@ Status daysSinceEpochFromWeekDate(
 
 /// Computes the signed number of days since the Unix epoch (1970-01-01). To
 /// align with Spark's SimpleDateFormat behavior, this function offers two
-/// modes: lenient and non-lenient. For non-lenient mode, dates before Jan 1, 1
+/// modes: lenient and strict. For strict mode, dates before Jan 1, 1
 /// are not supported, and it returns an error status if the date is invalid.
 /// For lenient mode, it accepts a wider range of arguments.
-/// @param year Year. For non-lenient mode, it should be in the range [1,
+/// @param year Year. For strict mode, it should be in the range [1,
 /// 292278994]. e.g: 1996, 2024. For lenient mode, it should be in the range
 /// [-292275055, 292278994].
-/// @param month Month of year. For non-lenient mode, it should be in the range
+/// @param month Month of year. For strict mode, it should be in the range
 /// [1, 12]. For example, 1 is January, 7 is July. For lenient mode, values
 /// greater than 12 wrap around to the start of the year, and values less than 1
 /// count backward from December. For example, 13 corresponds to January of the
 /// following year and -1 corresponds to November of the previous year.
-/// @param weekOfMonth Week of the month. For non-lenient mode, it should be in
+/// @param weekOfMonth Week of the month. For strict mode, it should be in
 /// the range [1, depends on month]. For example, 1 is 1st week, 3 is 3rd week.
 /// For lenient mode, we consider days of the previous or next months as part of
 /// the specified weekOfMonth. For example, if weekOfMonth is 5 but the current
 /// month only has 4 weeks (such as February), the first week of March will be
 /// considered as the 5th week of February.
-/// @param dayOfWeek Day number of week. For non-lenient mode, it should be in
+/// @param dayOfWeek Day number of week. For strict mode, it should be in
 /// the range [1, depends on month]. For example, 1 is Monday, 7 is Sunday. For
 /// lenient mode, we consider days of the previous or next months as part of the
 /// specified dayOfWeek.For example, if weekOfMonth is 1 and dayOfWeek is 1 but
