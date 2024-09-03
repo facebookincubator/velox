@@ -71,8 +71,8 @@ class ReaderBase {
     return options_.getSessionTimezone();
   }
 
-  bool shouldIgnoreStatistics() const {
-    return shouldIgnoreStatistics_;
+  std::optional<SemanticVersion> version() const {
+    return version_;
   }
 
   /// Ensures that streams are enqueued and loading for the row group at
@@ -129,9 +129,7 @@ class ReaderBase {
   RowTypePtr schema_;
   std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
 
-  std::optional<SemanticVersion> version;
-
-  bool shouldIgnoreStatistics_;
+  std::optional<SemanticVersion> version_;
 
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
@@ -245,12 +243,7 @@ void ReaderBase::initializeSchema() {
 }
 
 void ReaderBase::initializeVersion() {
-  version = SemanticVersion::parse(fileMetaData_->created_by);
-  if (version.has_value()) {
-    shouldIgnoreStatistics_ = SemanticVersion::shouldIgnoreStatistics(version.value());
-  } else {
-    shouldIgnoreStatistics_ = true;
-  }
+  version_ = SemanticVersion::parse(fileMetaData_->created_by);
 }
 
 std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
@@ -889,7 +882,7 @@ class ParquetRowReader::Impl {
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
     ParquetData::FilterRowGroupsResult res;
-    ParquetStatsContext parquetStatsContext = ParquetStatsContext(readerBase_->shouldIgnoreStatistics());
+    ParquetStatsContext parquetStatsContext = ParquetStatsContext(readerBase_->version());
     columnReader_->filterRowGroups(0, parquetStatsContext, res);
     if (auto& metadataFilter = options_.metadataFilter()) {
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);

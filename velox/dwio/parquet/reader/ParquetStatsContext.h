@@ -17,18 +17,27 @@
 #pragma once
 
 #include "velox/dwio/common/Statistics.h"
+#include "velox/dwio/parquet/reader/SemanticVersion.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
 namespace facebook::velox::parquet {
 
 struct ParquetStatsContext : dwio::common::StatsContext {
  public:
-  bool shouldIgnoreStatistics;
+  ParquetStatsContext() = default;
 
-  ParquetStatsContext(const bool shouldIgnoreStatistics)
-      : shouldIgnoreStatistics(shouldIgnoreStatistics) {}
-  ParquetStatsContext()
-      : shouldIgnoreStatistics(false){}
+  ParquetStatsContext(std::optional<SemanticVersion> version)
+      : parquetVersion(std::move(version)) {}
 
+  bool shouldIgnoreStatistics(thrift::Type::type type) {
+    if (!parquetVersion.has_value()) {
+      return true;
+    }
+    return parquetVersion->shouldIgnoreStatistics(thrift::Type::type type);
+  }
+
+ private:
+  std::optional<SemanticVersion> parquetVersion;
 };
 
 } // namespace facebook::velox::parquet

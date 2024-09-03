@@ -34,14 +34,8 @@ void ParquetData::filterRowGroups(
     const dwio::common::StatsContext& writerContext,
     FilterRowGroupsResult& result) {
   auto parquetStatsContext = reinterpret_cast<const ParquetStatsContext*>(&writerContext);
-  bool shouldIgnoreStatistics = false;
-  if (parquetStatsContext->shouldIgnoreStatistics && type_->parquetType_.has_value()) {
-    thrift::Type::type type = type_->parquetType_.value();
-    if (type == thrift::Type::BYTE_ARRAY || type == thrift::Type::FIXED_LEN_BYTE_ARRAY) {
-      shouldIgnoreStatistics = true;
-    }
-  }
-  if (shouldIgnoreStatistics) {
+  if (type_->parquetType_.has_value() &&
+      parquetStatsContext->shouldIgnoreStatistics(type_->parquetType_.value())) {
     return;
   }
   result.totalCount =

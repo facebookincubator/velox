@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+
 #include <string>
 #include <optional>
 #include <re2/re2.h>
@@ -24,18 +26,17 @@ namespace facebook::velox::parquet {
 
 class SemanticVersion {
  public:
-  std::string application;
-  int majorVersion;
-  int minorVersion;
-  int patchVersion;
-
   SemanticVersion();
 
   SemanticVersion(int major, int minor, int patch);
 
+  SemanticVersion(std::string application,int major, int minor, int patch);
+
+  SemanticVersion(const SemanticVersion& other);
+
   static std::optional<SemanticVersion> parse(const std::string& input);
 
-  static bool shouldIgnoreStatistics(const SemanticVersion& version);
+  bool shouldIgnoreStatistics(thrift::Type::type type);
 
   std::string toString() const;
 
@@ -43,9 +44,12 @@ class SemanticVersion {
 
   bool operator<(const SemanticVersion& other) const;
 
-  SemanticVersion(const SemanticVersion& other);
-
  private:
+  std::string application;
+  int majorVersion;
+  int minorVersion;
+  int patchVersion;
+
   static const re2::RE2 pattern;
 };
 

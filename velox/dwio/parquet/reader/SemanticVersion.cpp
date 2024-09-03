@@ -15,7 +15,6 @@
  */
 
 #include "SemanticVersion.h"
-#include <iostream>
 
 namespace facebook::velox::parquet {
 
@@ -42,8 +41,11 @@ std::optional<SemanticVersion> SemanticVersion::parse(const std::string& input) 
   }
 }
 
-bool SemanticVersion::shouldIgnoreStatistics(const SemanticVersion& version) {
-  if (version.application != "parquet-mr") {
+bool SemanticVersion::shouldIgnoreStatistics(thrift::Type::type type) {
+  if (type != thrift::Type::BYTE_ARRAY  && type != thrift::Type::FIXED_LEN_BYTE_ARRAY) {
+    return false;
+  }
+  if (this.application != "parquet-mr") {
     return false;
   }
   static SemanticVersion threshold(1, 8, 1);
