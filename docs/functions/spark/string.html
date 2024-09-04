@@ -481,7 +481,9 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 size is larger than <code class="docutils literal notranslate"><span class="pre">replace's</span></code>, the extra characters in <code class="docutils literal notranslate"><span class="pre">match</span></code> will be
 removed from <code class="docutils literal notranslate"><span class="pre">string</span></code>. In addition, this function only considers the first
 occurrence of a character in <code class="docutils literal notranslate"><span class="pre">match</span></code> and uses its corresponding character in
-<code class="docutils literal notranslate"><span class="pre">replace</span></code> for translation.</p>
+<code class="docutils literal notranslate"><span class="pre">replace</span></code> for translation.
+Any invalid UTF-8 characters present in the input string will be treated as a
+single character.:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">translate</span><span class="p">(</span><span class="s1">&#39;spark&#39;</span><span class="p">,</span> <span class="s1">&#39;sa&#39;</span><span class="p">,</span> <span class="s1">&#39;12&#39;</span><span class="p">);</span>  <span class="o">--</span> <span class="s2">&quot;1p2rk&quot;</span>
 <span class="n">SELECT</span> <span class="n">translate</span><span class="p">(</span><span class="s1">&#39;spark&#39;</span><span class="p">,</span> <span class="s1">&#39;sa&#39;</span><span class="p">,</span> <span class="s1">&#39;1&#39;</span><span class="p">);</span>   <span class="o">--</span> <span class="s2">&quot;1prk&quot;</span>
 <span class="n">SELECT</span> <span class="n">translate</span><span class="p">(</span><span class="s1">&#39;spark&#39;</span><span class="p">,</span> <span class="s1">&#39;ss&#39;</span><span class="p">,</span> <span class="s1">&#39;12&#39;</span><span class="p">);</span>  <span class="o">--</span> <span class="s2">&quot;1park&quot;</span>
