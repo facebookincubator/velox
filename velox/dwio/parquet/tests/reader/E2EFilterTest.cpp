@@ -273,7 +273,7 @@ TEST_F(E2EFilterTest, timestampINT64MillisDictionary) {
   options_.enableDictionary = true;
   options_.dataPageSize = 4 * 1024;
   options_.parquetWriteTimestampUnit =
-      static_cast<uint8_t>(TimestampUnit::kMilli);
+      std::optional<TimestampUnit>(TimestampUnit::kMilli);
   options_.parquetWriteTimestampTimeZone = "utc";
 
   testWithTypes(
@@ -292,7 +292,7 @@ TEST_F(E2EFilterTest, timestampINT64MillisPlain) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
   options_.parquetWriteTimestampUnit =
-      static_cast<uint8_t>(TimestampUnit::kMilli);
+      std::optional<TimestampUnit>(TimestampUnit::kMilli);
   options_.parquetWriteTimestampTimeZone = "utc";
 
   testWithTypes(
@@ -311,7 +311,7 @@ TEST_F(E2EFilterTest, timestampINT64MicrosDictionary) {
   options_.enableDictionary = true;
   options_.dataPageSize = 4 * 1024;
   options_.parquetWriteTimestampUnit =
-      static_cast<uint8_t>(TimestampUnit::kMicro);
+      std::optional<TimestampUnit>(TimestampUnit::kMicro);
   options_.parquetWriteTimestampTimeZone = "utc";
 
   testWithTypes(
@@ -330,7 +330,7 @@ TEST_F(E2EFilterTest, timestampINT64MicrosPlain) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
   options_.parquetWriteTimestampUnit =
-      static_cast<uint8_t>(TimestampUnit::kMicro);
+      std::optional<TimestampUnit>(TimestampUnit::kMicro);
   options_.parquetWriteTimestampTimeZone = "utc";
 
   testWithTypes(
