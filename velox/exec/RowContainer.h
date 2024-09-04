@@ -337,32 +337,32 @@ class RowContainer {
   /// Copies the values at 'col' into 'result' (starting at 'resultOffset')
   /// for the 'numRows' rows pointed to by 'rows'. If a 'row' is null, sets
   /// corresponding row in 'result' to null.
-  /// @param columnHasNulls indicates whether the 'col' column contains null
-  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// @param hasNulls indicates whether the 'col' column contains null
+  /// values. If 'hasNulls' is false, a null-free optimization will be
   /// applied. It is the caller's responsibility to ensure this flag is set
   /// correctly.
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
-      bool columnHasNulls,
+      bool hasNulls,
       vector_size_t resultOffset,
       const VectorPtr& result);
 
   /// Copies the values at 'col' into 'result' for the 'numRows' rows pointed to
   /// by 'rows'. If an entry in 'rows' is null, sets corresponding row in
   /// 'result' to null.
-  /// @param columnHasNulls indicates whether the 'col' column contains null
-  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// @param hasNulls indicates whether the 'col' column contains null
+  /// values. If 'hasNulls' is false, a null-free optimization will be
   /// applied. It is the caller's responsibility to ensure this flag is set
   /// correctly.
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
-      bool columnHasNulls,
+      bool hasNulls,
       const VectorPtr& result) {
-    extractColumn(rows, numRows, col, columnHasNulls, 0, result);
+    extractColumn(rows, numRows, col, hasNulls, 0, result);
   }
 
   /// Copies the values from the array pointed to by 'rows' at 'col' into
@@ -371,15 +371,15 @@ class RowContainer {
   /// 'result' to null. The positions in 'rowNumbers' array can repeat and also
   /// appear out of order. If rowNumbers has a negative value, then the
   /// corresponding row in 'result' is set to null.
-  /// @param columnHasNulls indicates whether the 'col' column contains null
-  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// @param hasNulls indicates whether the 'col' column contains null
+  /// values. If 'hasNulls' is false, a null-free optimization will be
   /// applied. It is the caller's responsibility to ensure this flag is set
   /// correctly.
   static void extractColumn(
       const char* const* rows,
       folly::Range<const vector_size_t*> rowNumbers,
       RowColumn col,
-      bool columnHasNulls,
+      bool hasNulls,
       vector_size_t resultOffset,
       const VectorPtr& result);
 
@@ -850,7 +850,7 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t numRows,
       RowColumn column,
-      bool columnHasNulls,
+      bool hasNulls,
       int32_t resultOffset,
       const VectorPtr& result) {
     if (rowNumbers.size() > 0) {
@@ -859,18 +859,12 @@ class RowContainer {
           rowNumbers,
           rowNumbers.size(),
           column,
-          columnHasNulls,
+          hasNulls,
           resultOffset,
           result);
     } else {
       extractColumnTypedInternal<false, Kind>(
-          rows,
-          rowNumbers,
-          numRows,
-          column,
-          columnHasNulls,
-          resultOffset,
-          result);
+          rows, rowNumbers, numRows, column, hasNulls, resultOffset, result);
     }
   }
 
@@ -880,7 +874,7 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t numRows,
       RowColumn column,
-      bool columnHasNulls,
+      bool hasNulls,
       int32_t resultOffset,
       const VectorPtr& result) {
     // Resize the result vector before all copies.
@@ -897,7 +891,7 @@ class RowContainer {
     auto* flatResult = result->as<FlatVector<T>>();
     auto nullMask = column.nullMask();
     auto offset = column.offset();
-    if (!nullMask || !columnHasNulls) {
+    if (!nullMask || !hasNulls) {
       extractValuesNoNulls<useRowNumbers, T>(
           rows, rowNumbers, numRows, offset, resultOffset, flatResult);
     } else {
@@ -1295,8 +1289,8 @@ class RowContainer {
 
   void freeRowsExtraMemory(folly::Range<char**> rows, bool clear);
 
-  // Updates the specific column's columnHasNulls_ flag, if 'hasNulls' is true.
-  // columnHasNulls_ flag is false by default.
+  // Updates the specific column's columnHasNulls_ flag if 'hasNulls' is true.
+  // 'columnHasNulls_' is false by default.
   inline void updateColumnHasNulls(int32_t columnIndex, bool hasNulls) {
     columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] || hasNulls;
   }
@@ -1481,7 +1475,7 @@ inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
     folly::Range<const vector_size_t*> /*rowNumbers*/,
     int32_t /*numRows*/,
     RowColumn /*column*/,
-    bool /*columnHasNulls*/,
+    bool /*hasNulls*/,
     int32_t /*resultOffset*/,
     const VectorPtr& /*result*/) {
   VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
@@ -1491,7 +1485,7 @@ inline void RowContainer::extractColumn(
     const char* const* rows,
     int32_t numRows,
     RowColumn column,
-    bool columnHasNulls,
+    bool hasNulls,
     int32_t resultOffset,
     const VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -1501,7 +1495,7 @@ inline void RowContainer::extractColumn(
       {},
       numRows,
       column,
-      columnHasNulls,
+      hasNulls,
       resultOffset,
       result);
 }
@@ -1510,7 +1504,7 @@ inline void RowContainer::extractColumn(
     const char* const* rows,
     folly::Range<const vector_size_t*> rowNumbers,
     RowColumn column,
-    bool columnHasNulls,
+    bool hasNulls,
     int32_t resultOffset,
     const VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -1520,7 +1514,7 @@ inline void RowContainer::extractColumn(
       rowNumbers,
       rowNumbers.size(),
       column,
-      columnHasNulls,
+      hasNulls,
       resultOffset,
       result);
 }
