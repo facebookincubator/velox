@@ -109,8 +109,6 @@ class ReaderBase {
   thrift::LogicalType getTimestampLogicalType(
       thrift::ConvertedType::type type) const;
 
-  TypePtr convertType(const thrift::SchemaElement& schemaElement) const;
-
   template <typename T>
   static std::shared_ptr<const RowType> createRowType(
       const std::vector<T>& children,
