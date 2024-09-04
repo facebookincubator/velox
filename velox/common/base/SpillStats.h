@@ -166,9 +166,8 @@ SpillStats globalSpillStats();
 template <>
 struct fmt::formatter<facebook::velox::common::SpillStats>
     : fmt::formatter<std::string> {
-  auto format(
-      const facebook::velox::common::SpillStats& s,
-      format_context& ctx) {
+  auto format(const facebook::velox::common::SpillStats& s, format_context& ctx)
+      const {
     return formatter<std::string>::format(s.toString(), ctx);
   }
 };

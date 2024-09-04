@@ -113,7 +113,8 @@ class RuntimeStatWriterScopeGuard {
 } // namespace facebook::velox
 template <>
 struct fmt::formatter<facebook::velox::RuntimeCounter::Unit> : formatter<int> {
-  auto format(facebook::velox::RuntimeCounter::Unit s, format_context& ctx) {
+  auto format(facebook::velox::RuntimeCounter::Unit s, format_context& ctx)
+      const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };
