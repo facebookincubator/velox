@@ -4310,8 +4310,8 @@ DEBUG_ONLY_TEST_F(
     const auto result = runWriteTask(
         vectors,
         queryCtx,
-        1,
         false,
+        1,
         pool(),
         kHiveConnectorId,
         true,
