@@ -63,6 +63,10 @@ void verifyCacheStats(
   EXPECT_EQ(cacheStats.numHits, numHits);
   EXPECT_EQ(cacheStats.numLookups, numLookups);
 }
+
+std::string zeros(uint32_t numZeros) {
+  return std::string(numZeros, '0');
+}
 } // namespace
 
 class TableScanTest : public virtual HiveConnectorTestBase {
@@ -3086,6 +3090,50 @@ TEST_F(TableScanTest, stringNotEqualFilter) {
       PlanBuilder(pool_.get()).tableScan(rowType, {"c1 != ''"}).planNode(),
       {filePath},
       "SELECT * FROM tmp WHERE c1 != ''");
+}
+
+TEST_F(TableScanTest, decimalORC) {
+  std::vector<std::optional<int64_t>> shortValues = {
+      123456789123456789L,
+      987654321123456L,
+      std::nullopt,
+      2000000000000000L,
+      5000000000000000L,
+      987654321987654321L,
+      100000000000000L,
+      1230000000123456L,
+      120000000123456L,
+      std::nullopt};
+
+  std::vector<std::optional<int128_t>> longValues = {
+      HugeInt::parse("123456789123456789123456789" + zeros(9)),
+      HugeInt::parse("987654321123456789" + zeros(9)),
+      std::nullopt,
+      HugeInt::parse("2" + zeros(37)),
+      HugeInt::parse("5" + zeros(37)),
+      HugeInt::parse("987654321987654321987654321" + zeros(9)),
+      HugeInt::parse("1" + zeros(26)),
+      HugeInt::parse("123000000012345678" + zeros(10)),
+      HugeInt::parse("120000000123456789" + zeros(9)),
+      HugeInt::parse("9" + zeros(37))};
+
+  auto rowVector = makeRowVector({
+      makeNullableFlatVector<int64_t>(shortValues, DECIMAL(18, 6)),
+      makeNullableFlatVector<int128_t>(longValues, DECIMAL(38, 18)),
+  });
+  createDuckDbTable({rowVector});
+
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/decimal.orc");
+  auto split = HiveConnectorSplitBuilder(filePath)
+                   .start(0)
+                   .length(fs::file_size(filePath))
+                   .fileFormat(dwio::common::FileFormat::ORC)
+                   .build();
+
+  auto rowType = ROW({"short", "long"}, {DECIMAL(18, 6), DECIMAL(38, 18)});
+  auto op = PlanBuilder().tableScan(rowType, {}, "", rowType).planNode();
+  assertQuery(op, split, "SELECT * FROM tmp");
 }
 
 TEST_F(TableScanTest, arrayIsNullFilter) {
