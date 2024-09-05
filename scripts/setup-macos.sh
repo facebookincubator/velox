@@ -77,7 +77,7 @@ function install_build_prerequisites {
     python3 -m venv ${PYTHON_VENV}
   fi
   source ${PYTHON_VENV}/bin/activate; pip3 install cmake-format regex pyyaml
-  wget -o ccache.tar.gz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-darwin.tar.gz
+  wget -O ccache.tar.gz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-darwin.tar.gz
   tar -xf ccache.tar.gz
   mv ccache-4.10.2-darwin/ccache /usr/local/bin/
 }
