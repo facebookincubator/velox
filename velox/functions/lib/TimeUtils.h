@@ -20,6 +20,7 @@
 #include "velox/external/date/date.h"
 #include "velox/external/date/iso_week.h"
 #include "velox/functions/Macros.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
@@ -123,4 +124,77 @@ struct InitSessionTimezone {
     timeZone_ = getTimeZoneFromConfig(config);
   }
 };
+
+// Return the first `fisrtDayOfWeek` in the year.
+// getFirstDayOfWeek() use 1-based weekday number:
+//   Sunday - 1, Monday - 2, ..., Saturday - 7
+FOLLY_ALWAYS_INLINE
+uint32_t getFirstDayOfWeek(int32_t y, uint32_t firstDayOfWeek) {
+  auto firstDay =
+      date::year_month_day(date::year(y), date::month(1), date::day(1));
+  auto weekday = date::weekday(firstDay).c_encoding() + 1;
+
+  int32_t delta = firstDayOfWeek - weekday;
+  if (delta < 0)
+    delta += 7;
+
+  return delta + 1;
+}
+
+// Return week-based-year of year month day.
+// The week containing Jan 1 has `minimalDaysInFirstWeek` or more days is
+// week 1. The week is defined via `firstDayOfWeek`. `firstDayOfWeek` is 1-based
+// weekday number starting with Sunday.
+//
+// For ISO 8601, `firstDayOfWeek` is 2 (Monday) and `minimalDaysInFirstWeek`
+// is 4. For Legacy Spark, `firstDayOfWeek` is 1 (Sunday) and
+// `minimalDaysInFisrtWeek` is 1 by default.
+//
+// getWeekYear only works with gregorian calendar due to limitations in the date
+// library. As a result, dates before the gregorian cutover would yield
+// mismatched results.
+//
+// The algorithm refers to the weekyear algorithm in jdk:
+// https://github.com/openjdk/jdk8/blob/6a383433a9f4661a96a90b2a4c7b5b9a85720031/jdk/src/share/classes/java/util/GregorianCalendar.java#L2077
+FOLLY_ALWAYS_INLINE
+int32_t getWeekYear(
+    int32_t y,
+    uint32_t m,
+    uint32_t d,
+    uint32_t firstDayOfWeek,
+    uint32_t minimalDaysInFirstWeek) {
+  auto year = y;
+  auto calDate =
+      date::year_month_day(date::year(y), date::month(m), date::day(d));
+  auto weekday = date::weekday(calDate).c_encoding();
+  auto firstDayOfTheYear =
+      date::year_month_day(calDate.year(), date::month(1), date::day(1));
+  auto dayOfYear =
+      (date::sys_days{calDate} - date::sys_days{firstDayOfTheYear}).count() + 1;
+  auto maxDayOfYear = util::isLeapYear(y) ? 366 : 365;
+
+  if (dayOfYear > minimalDaysInFirstWeek && dayOfYear < (maxDayOfYear - 6)) {
+    return year;
+  }
+
+  auto minDayOfYear = getFirstDayOfWeek(y, firstDayOfWeek);
+  if (dayOfYear < minDayOfYear) {
+    if (minDayOfYear <= minimalDaysInFirstWeek) {
+      --year;
+    }
+  } else {
+    auto minDayOfYear = getFirstDayOfWeek(y + 1, firstDayOfWeek) - 1;
+    if (minDayOfYear == 0) {
+      minDayOfYear = 7;
+    }
+    if (minDayOfYear >= minimalDaysInFirstWeek) {
+      int days = maxDayOfYear - dayOfYear + 1;
+      if (days <= (7 - minDayOfYear)) {
+        ++year;
+      }
+    }
+  }
+
+  return year;
+}
 } // namespace facebook::velox::functions

@@ -3258,8 +3258,6 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
 
   // User format errors or unsupported errors.
   EXPECT_THROW(
-      formatDatetime(parseTimestamp("1970-01-01"), "x"), VeloxUserError);
-  EXPECT_THROW(
       formatDatetime(parseTimestamp("1970-01-01"), "z"), VeloxUserError);
   EXPECT_THROW(
       formatDatetime(parseTimestamp("1970-01-01"), "zz"), VeloxUserError);
@@ -3580,9 +3578,6 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   VELOX_ASSERT_THROW(
       dateFormat(timestamp, "%X"),
       "Date format specifier is not supported: %X");
-  VELOX_ASSERT_THROW(
-      dateFormat(timestamp, "%x"),
-      "Date format specifier is not supported: WEEK_YEAR");
 }
 
 TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
