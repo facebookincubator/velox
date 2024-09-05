@@ -30,7 +30,7 @@ int32_t readInt32(const char* buffer) {
   return n;
 }
 
-FOLLY_ALWAYS_INLINE void writeFixeWidth(
+FOLLY_ALWAYS_INLINE void writeFixedWidth(
     char* buffer,
     size_t& offset,
     const char* rawData,
@@ -72,7 +72,7 @@ void serializeTyped(
   const auto* rawData = decoded.data<char>();
   if (!decoded.mayHaveNulls()) {
     for (auto i = 0; i < rows.size(); ++i) {
-      writeFixeWidth(
+      writeFixedWidth(
           buffer, offsets[i], rawData, decoded.index(rows[i]), valueBytes);
     }
   } else {
@@ -81,7 +81,7 @@ void serializeTyped(
         bits::setBit(nulls[i], childIdx, true);
         offsets[i] += valueBytes;
       } else {
-        writeFixeWidth(
+        writeFixedWidth(
             buffer, offsets[i], rawData, decoded.index(rows[i]), valueBytes);
       }
     }
@@ -141,7 +141,8 @@ void serializeTyped<TypeKind::TIMESTAMP>(
   const auto* rawData = decoded.data<Timestamp>();
   if (!decoded.mayHaveNulls()) {
     for (auto i = 0; i < rows.size(); ++i) {
-      writeTimestamp(buffer, offsets[i], rawData[rows[i]]);
+      auto index = decoded.index(rows[i]);
+      writeTimestamp(buffer, offsets[i], rawData[index]);
     }
   } else {
     for (auto i = 0; i < rows.size(); ++i) {
@@ -149,7 +150,8 @@ void serializeTyped<TypeKind::TIMESTAMP>(
         bits::setBit(nulls[i], childIdx, true);
         offsets[i] += sizeof(int64_t);
       } else {
-        writeTimestamp(buffer, offsets[i], rawData[rows[i]]);
+        auto index = decoded.index(rows[i]);
+        writeTimestamp(buffer, offsets[i], rawData[index]);
       }
     }
   }
