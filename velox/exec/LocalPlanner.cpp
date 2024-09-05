@@ -45,6 +45,7 @@
 #include "velox/exec/Unnest.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/Window.h"
+#include "velox/exec/trace/QueryTraceScan.h"
 
 namespace facebook::velox::exec {
 
@@ -587,6 +588,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
           assignUniqueIdNode,
           assignUniqueIdNode->taskUniqueId(),
           assignUniqueIdNode->uniqueIdCounter()));
+    } else if (
+        const auto queryReplayScanNode =
+            std::dynamic_pointer_cast<const core::QueryTraceScanNode>(
+                planNode)) {
+      operators.push_back(std::make_unique<trace::QueryTraceScan>(
+          id, ctx.get(), queryReplayScanNode));
     } else {
       std::unique_ptr<Operator> extended;
       if (planNode->requiresExchangeClient()) {

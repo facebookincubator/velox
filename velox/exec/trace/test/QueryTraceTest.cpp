@@ -158,7 +158,7 @@ TEST_F(QueryTracerTest, traceData) {
       continue;
     }
 
-    const auto reader = QueryDataReader(outputDir->getPath(), pool());
+    const auto reader = QueryDataReader(outputDir->getPath(), rowType, pool());
     RowVectorPtr actual;
     size_t numOutputVectors{0};
     while (reader.read(actual)) {
@@ -502,7 +502,7 @@ TEST_F(QueryTracerTest, traceTableWriter) {
         obj[QueryTraceTraits::kTraceLimitExceededKey].asBool(),
         testData.limitExceeded);
 
-    const auto reader = trace::QueryDataReader(dataDir, pool());
+    const auto reader = trace::QueryDataReader(dataDir, rowType, pool());
     RowVectorPtr actual;
     size_t numOutputVectors{0};
     while (reader.read(actual)) {

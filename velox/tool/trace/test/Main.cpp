@@ -14,29 +14,16 @@
  * limitations under the License.
  */
 
-#pragma once
+#include "velox/common/process/ThreadDebugInfo.h"
 
-#include <gflags/gflags.h>
+#include <folly/Unit.h>
+#include <folly/init/Init.h>
+#include <gtest/gtest.h>
 
-DECLARE_bool(usage);
-DECLARE_string(root);
-DECLARE_bool(summary);
-DECLARE_bool(short_summary);
-DECLARE_bool(pretty);
-DECLARE_string(task_id);
-
-namespace facebook::velox::tool::trace {
-/// The tool used to print or replay the traced query metadata and operations.
-class QueryTraceReplayer {
- public:
-  QueryTraceReplayer();
-
-  void printSummary() const;
-  static std::string usage();
-
- private:
-  const std::string rootDir_;
-  const std::string taskId_;
-};
-
-} // namespace facebook::velox::tool::trace
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  // Signal handler required for ThreadDebugInfoTest
+  facebook::velox::process::addDefaultFatalSignalHandler();
+  folly::Init init(&argc, &argv, false);
+  return RUN_ALL_TESTS();
+}

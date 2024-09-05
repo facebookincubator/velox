@@ -12,30 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_query_trace_replayer_base OperatorReplayerBase.cpp
-                  TableWriterReplayer.cpp)
-velox_link_libraries(
-  velox_query_trace_replayer_base
-  velox_query_trace_retrieve
-  velox_aggregates
-  velox_type
-  velox_vector
-  velox_vector_test_lib
-  velox_exec
-  velox_exec_test_lib
-  velox_tpch_connector
-  velox_memory
-  Folly::folly
-  glog::glog
-  gflags::gflags)
+add_executable(velox_tool_trace_test TableWriterReplayerTest.cpp Main.cpp)
 
-add_executable(velox_query_replayer QueryReplayer.cpp)
+add_test(
+  NAME velox_tool_trace_test
+  COMMAND velox_tool_trace_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+set_tests_properties(velox_tool_trace_test PROPERTIES TIMEOUT 3000)
 
 target_link_libraries(
-  velox_query_replayer
-  velox_query_trace_replayer_base
+  velox_tool_trace_test
   velox_exec
   velox_exec_test_lib
-  velox_tpch_connector)
-
-add_subdirectory(test)
+  velox_memory
+  velox_query_trace_exec
+  velox_query_trace_retrieve
+  velox_query_trace_replayer_base
+  velox_vector_fuzzer
+  GTest::gtest_main
+  GTest::gmock
+  Folly::folly
+  gflags::gflags
+  glog::glog
+  fmt::fmt
+  ${FILESYSTEM})
