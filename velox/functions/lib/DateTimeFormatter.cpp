@@ -24,6 +24,7 @@
 #include "velox/external/date/iso_week.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatterBuilder.h"
+#include "velox/functions/lib/TimeUtils.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -1013,6 +1014,7 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
         size += 2;
         break;
       case DateTimeFormatSpecifier::YEAR_OF_ERA:
+      case DateTimeFormatSpecifier::WEEK_YEAR:
         // Timestamp is in [-32767-01-01, 32767-12-31] range.
         size += std::max((int)token.pattern.minRepresentDigits, 6);
         break;
@@ -1067,7 +1069,6 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
         size += 9;
         break;
       // Not supported.
-      case DateTimeFormatSpecifier::WEEK_YEAR:
       default:
         VELOX_UNSUPPORTED(
             "Date format specifier is not supported: {}",
@@ -1328,7 +1329,23 @@ int32_t DateTimeFormatter::format(
               result);
           break;
         }
-        case DateTimeFormatSpecifier::WEEK_YEAR:
+        case DateTimeFormatSpecifier::WEEK_YEAR: {
+          auto year = getWeekYear(
+              static_cast<int>(calDate.year()),
+              static_cast<uint32_t>(calDate.month()),
+              static_cast<uint32_t>(calDate.day()),
+              2, // (ISO 8601) Monday = 2
+              4 // At least 4 days in first week
+          );
+
+          result += padContent(
+              static_cast<signed>(year),
+              '0',
+              token.pattern.minRepresentDigits,
+              maxResultEnd,
+              result);
+          break;
+        }
         default:
           VELOX_UNSUPPORTED(
               "format is not supported for specifier {}",
