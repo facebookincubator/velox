@@ -40,17 +40,21 @@ class CompactRowVectorSerializer : public IterativeVectorSerializer {
       const folly::Range<const IndexRange*>& ranges,
       Scratch& scratch) override {
     size_t totalSize = 0;
+    std::vector<std::vector<vector_size_t>> rowSize(ranges.size());
     row::CompactRow row(vector);
     if (auto fixedRowSize =
             row::CompactRow::fixedRowSize(asRowType(vector->type()))) {
-      for (const auto& range : ranges) {
-        totalSize += (fixedRowSize.value() + sizeof(TRowSize)) * range.size;
+      for (auto i = 0; i < ranges.size(); ++i) {
+        totalSize += (fixedRowSize.value() + sizeof(TRowSize)) * ranges[i].size;
+        rowSize[i].resize(ranges[i].size, fixedRowSize.value());
       }
-
     } else {
-      for (const auto& range : ranges) {
-        for (auto i = range.begin; i < range.begin + range.size; ++i) {
-          totalSize += row.rowSize(i) + sizeof(TRowSize);
+      for (auto i = 0; i < ranges.size(); ++i) {
+        const auto& range = ranges[i];
+        rowSize[i].resize(range.size);
+        for (auto j = 0; j < range.size; ++j) {
+          rowSize[i][j] = row.rowSize(range.begin + j);
+          totalSize += rowSize[i][j] + sizeof(TRowSize);
         }
       }
     }
@@ -64,15 +68,17 @@ class CompactRowVectorSerializer : public IterativeVectorSerializer {
     buffers_.push_back(std::move(buffer));
 
     size_t offset = 0;
-    for (auto& range : ranges) {
-      for (auto i = range.begin; i < range.begin + range.size; ++i) {
-        // Write row data.
-        TRowSize size = row.serialize(i, rawBuffer + offset + sizeof(TRowSize));
-
+    for (auto i = 0; i < ranges.size(); ++i) {
+      const auto& range = ranges[i];
+      std::vector<size_t> offsets(range.size);
+      for (auto j = 0; j < range.size; ++j) {
         // Write raw size. Needs to be in big endian order.
-        *(TRowSize*)(rawBuffer + offset) = folly::Endian::big(size);
-        offset += sizeof(TRowSize) + size;
+        *(TRowSize*)(rawBuffer + offset) = folly::Endian::big(rowSize[i][j]);
+        offsets[j] = offset + sizeof(TRowSize);
+        offset += rowSize[i][j] + sizeof(TRowSize);
       }
+      // Write row data for all rows in range.
+      row.serialize(range.begin, range.size, rawBuffer, offsets);
     }
   }
 
