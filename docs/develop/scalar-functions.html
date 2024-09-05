@@ -951,12 +951,11 @@ argument in order.</p>
 </div>
 <p>The concat function takes an arbitrary number of varchar inputs and returns a
 varchar. FunctionSignatureBuilder allows specifying that the last augment may
-appear zero or more times by calling variableArity() method.</p>
+appear zero or more times by calling variableArity(“varchar”) method.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// varchar... -&gt; varchar</span>
 <span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span>
 <span class="w">    </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span>
-<span class="w">    </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span>
-<span class="w">    </span><span class="p">.</span><span class="n">variableArity</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">variableArity</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span>
 <span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">()</span>
 </pre></div>
 </div>
