@@ -21,7 +21,7 @@ set -eufx -o pipefail
 
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
-DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
+DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 MACHINE=$(uname -m)
 
@@ -117,21 +117,21 @@ function install_azure-storage-sdk-cpp {
     sed -i "s/\"version-string\"/\"builtin-baseline\": \"$vcpkg_commit_id\",\"version-string\"/" $azure_core_dir/vcpkg.json
     sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" $azure_core_dir/vcpkg.json
   fi
-  cmake_install $azure_core_dir -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  cmake_install_dir $azure_core_dir -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
   # install azure-storage-common
-  cmake_install sdk/storage/azure-storage-common -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  cmake_install_dir sdk/storage/azure-storage-common -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
   # install azure-storage-blobs
-  cmake_install sdk/storage/azure-storage-blobs -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  cmake_install_dir sdk/storage/azure-storage-blobs -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
   # install azure-storage-files-datalake
-  cmake_install sdk/storage/azure-storage-files-datalake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  cmake_install_dir sdk/storage/azure-storage-files-datalake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_hdfs_deps {
   github_checkout apache/hawq master
-  libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
+  libhdfs3_dir=hawq/depends/libhdfs3
   if [[ "$OSTYPE" == darwin* ]]; then
      sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
      sed -i '' -e "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMakeLists.txt
@@ -148,10 +148,10 @@ function install_hdfs_deps {
     yum install -y java-1.8.0-openjdk-devel
     
   fi
-  cmake_install $libhdfs3_dir
+  cmake_install_dir $libhdfs3_dir
 }
 
-cd "${DEPENDENCY_DIR}" || exit
+(mkdir -p "${DEPENDENCY_DIR}") || exit
 # aws-sdk-cpp missing dependencies
 
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then

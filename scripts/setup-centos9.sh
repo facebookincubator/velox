@@ -36,6 +36,7 @@ export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 USE_CLANG="${USE_CLANG:-false}"
+DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 
 FB_OS_VERSION="v2024.05.20.00"
 FMT_VERSION="10.1.1"
@@ -85,18 +86,18 @@ function install_gflags {
   # Remove an older version if present.
   dnf remove -y gflags
   wget_and_untar https://github.com/gflags/gflags/archive/v2.2.2.tar.gz gflags
-  cmake_install gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
 }
 
 function install_glog {
   wget_and_untar https://github.com/google/glog/archive/v0.6.0.tar.gz glog
-  cmake_install glog -DBUILD_SHARED_LIBS=ON
+  cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
 }
 
 function install_lzo {
   wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz lzo
   (
-    cd lzo
+    cd ${DEPENDENCY_DIR}/lzo
     ./configure --prefix=/usr --enable-shared --disable-static --docdir=/usr/share/doc/lzo-2.10
     make "-j$(nproc)"
     make install
@@ -106,7 +107,7 @@ function install_lzo {
 function install_boost {
   wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
   (
-    cd boost
+    cd ${DEPENDENCY_DIR}/boost
     if [[ ${USE_CLANG} != "false" ]]; then
       ./bootstrap.sh --prefix=/usr/local --with-toolset="clang-15"
       # Switch the compiler from the clang-15 toolset which doesn't exist (clang-15.jam) to
@@ -123,18 +124,18 @@ function install_boost {
 
 function install_snappy {
   wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy
-  cmake_install snappy -DSNAPPY_BUILD_TESTS=OFF
+  cmake_install_dir snappy -DSNAPPY_BUILD_TESTS=OFF
 }
 
 function install_fmt {
   wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
-  cmake_install fmt -DFMT_TEST=OFF
+  cmake_install_dir fmt -DFMT_TEST=OFF
 }
 
 function install_protobuf {
   wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.8/protobuf-all-21.8.tar.gz protobuf
   (
-    cd protobuf
+    cd ${DEPENDENCY_DIR}/protobuf
     ./configure --prefix=/usr
     make "-j${NPROC}"
     make install
@@ -144,60 +145,59 @@ function install_protobuf {
 
 function install_fizz {
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
-  cmake_install fizz/fizz -DBUILD_TESTS=OFF
+  cmake_install_dir fizz/fizz -DBUILD_TESTS=OFF
 }
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  cmake_install folly -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  cmake_install_dir folly -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
 }
 
 function install_wangle {
   wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
-  cmake_install wangle/wangle -DBUILD_TESTS=OFF
+  cmake_install_dir wangle/wangle -DBUILD_TESTS=OFF
 }
 
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
-  cmake_install fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_mvfst {
   wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
-  cmake_install mvfst -DBUILD_TESTS=OFF
+  cmake_install_dir mvfst -DBUILD_TESTS=OFF
 }
 
 function install_duckdb {
   if $BUILD_DUCKDB ; then
     echo 'Building DuckDB'
     wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/v0.8.1.tar.gz duckdb
-    cmake_install duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
+    cmake_install_dir duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
   fi
 }
 
 function install_arrow {
   wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
-  (
-    cd arrow/cpp
-    cmake_install \
-      -DARROW_PARQUET=OFF \
-      -DARROW_WITH_THRIFT=ON \
-      -DARROW_WITH_LZ4=ON \
-      -DARROW_WITH_SNAPPY=ON \
-      -DARROW_WITH_ZLIB=ON \
-      -DARROW_WITH_ZSTD=ON \
-      -DARROW_JEMALLOC=OFF \
-      -DARROW_SIMD_LEVEL=NONE \
-      -DARROW_RUNTIME_SIMD_LEVEL=NONE \
-      -DARROW_WITH_UTF8PROC=OFF \
-      -DARROW_TESTING=ON \
-      -DCMAKE_INSTALL_PREFIX=/usr/local \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DARROW_BUILD_STATIC=ON \
-      -DThrift_SOURCE=BUNDLED
+  cmake_install_dir arrow/cpp \
+    -DARROW_PARQUET=OFF \
+    -DARROW_WITH_THRIFT=ON \
+    -DARROW_WITH_LZ4=ON \
+    -DARROW_WITH_SNAPPY=ON \
+    -DARROW_WITH_ZLIB=ON \
+    -DARROW_WITH_ZSTD=ON \
+    -DARROW_JEMALLOC=OFF \
+    -DARROW_SIMD_LEVEL=NONE \
+    -DARROW_RUNTIME_SIMD_LEVEL=NONE \
+    -DARROW_WITH_UTF8PROC=OFF \
+    -DARROW_TESTING=ON \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DARROW_BUILD_STATIC=ON \
+    -DThrift_SOURCE=BUNDLED
 
+  (
     # Install thrift.
-    cd _build/thrift_ep-prefix/src/thrift_ep-build
+    cd ${DEPENDENCY_DIR}/arrow/cpp/_build/thrift_ep-prefix/src/thrift_ep-build
     cmake --install ./ --prefix /usr/local/
   )
 }
