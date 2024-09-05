@@ -29,16 +29,13 @@ set -e # Exit on error.
 set -x # Print commands that are executed.
 
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-helper-functions.sh
+source $SCRIPTDIR/setup-common.sh
 PYTHON_VENV=${PYHTON_VENV:-"${SCRIPTDIR}/../.venv"}
 
-NPROC=$(getconf _NPROCESSORS_ONLN)
-
-DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="bison boost double-conversion flex fmt gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 simdjson snappy thrift xz xsimd zstd"
+MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 simdjson snappy thrift xz zstd"
 MACOS_BUILD_DEPS="ninja cmake ccache"
-FB_OS_VERSION="v2024.05.20.00"
-FMT_VERSION="10.1.1"
+
+SUDO="${SUDO:-""}"
 
 function update_brew {
   DEFAULT_BREW_PATH=/usr/local/bin/brew
@@ -86,49 +83,35 @@ function install_velox_deps_from_brew {
   done
 }
 
-function install_fmt {
-  wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
-  cmake_install fmt -DFMT_TEST=OFF
+function install_s3 {
+  install_aws_deps
+
+  local MINIO_OS="darwin"
+  install_minio ${MINIO_OS}
 }
 
-function install_folly {
-  wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  cmake_install folly -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+function install_gcs {
+  install_gcs-sdk-cpp
 }
 
-function install_fizz {
-  wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
-  cmake_install fizz/fizz -DBUILD_TESTS=OFF
+function install_abfs {
+  install_azure-storage-sdk-cpp
 }
 
-function install_wangle {
-  wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
-  cmake_install wangle/wangle -DBUILD_TESTS=OFF
+function install_hdfs {
+  brew install libxml2 gsasl
+  github_checkout apache/hawq master
+  libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
+  sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
+  sed -i '' -e "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMakeLists.txt
+  cmake_install ${libhdfs3_dir}
 }
 
-function install_mvfst {
-  wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
-  cmake_install mvfst -DBUILD_TESTS=OFF
-}
-
-function install_fbthrift {
-  wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
-  cmake_install fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
-}
-
-function install_double_conversion {
-  wget_and_untar https://github.com/google/double-conversion/archive/refs/tags/v3.1.5.tar.gz double-conversion
-  cmake_install double-conversion -DBUILD_TESTING=OFF
-}
-
-function install_ranges_v3 {
-  wget_and_untar https://github.com/ericniebler/range-v3/archive/refs/tags/0.12.0.tar.gz ranges_v3
-  cmake_install ranges_v3 -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
-}
-
-function install_re2 {
-  wget_and_untar https://github.com/google/re2/archive/refs/tags/2022-02-01.tar.gz re2
-  cmake_install re2 -DRE2_BUILD_TESTING=OFF
+function install_adapters {
+  run_and_time install_s3
+  run_and_time install_gcs
+  run_and_time install_abfs
+  run_and_time install_hdfs
 }
 
 function install_velox_deps {
@@ -136,12 +119,14 @@ function install_velox_deps {
   run_and_time install_ranges_v3
   run_and_time install_double_conversion
   run_and_time install_re2
+  run_and_time install_boost
   run_and_time install_fmt
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
   run_and_time install_mvfst
   run_and_time install_fbthrift
+  run_and_time install_xsimd
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

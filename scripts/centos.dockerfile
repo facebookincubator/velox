@@ -16,6 +16,8 @@ ARG image=quay.io/centos/centos:stream9
 FROM $image
 
 COPY scripts/setup-helper-functions.sh /
+COPY scripts/setup-versions.sh /
+COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
 # The removal of the build dir has to happen in the same layer as the build
 # to minimize the image size. gh & jq are required for CI
