@@ -19,6 +19,7 @@
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
+using namespace facebook::velox::test;
 
 static constexpr auto kNaNDouble = std::numeric_limits<double>::quiet_NaN();
 static constexpr auto kNaNFloat = std::numeric_limits<float>::quiet_NaN();
@@ -27,53 +28,95 @@ static constexpr auto kMaxFloat = std::numeric_limits<float>::max();
 
 class AtLeastNNonNullsTest : public SparkFunctionBaseTest {
  protected:
-  template <typename... Arguments>
-  std::optional<bool> atLeastNNonNulls(
-      const std::optional<int32_t>& n,
-      const std::optional<Arguments>&... args) {
-    constexpr auto numArgs{sizeof...(Arguments)};
+  VectorPtr atLeastNNonNulls(const std::vector<VectorPtr>& input) {
     std::string func = "at_least_n_non_nulls(c0";
-    for (auto i = 1; i <= numArgs; ++i) {
+    for (auto i = 1; i < input.size(); ++i) {
       func += fmt::format(", c{}", i);
     }
     func += ")";
-    return evaluateOnce<bool>(func, n, args...);
+    return evaluate(func, makeRowVector(input));
+  }
+
+  void testAtLeastNNonNulls(
+      const int32_t n,
+      const std::vector<VectorPtr>& input,
+      const VectorPtr& expected) {
+    std::vector<VectorPtr> data;
+    data.emplace_back(makeConstant<int32_t>(n, 5));
+    for (auto i = 0; i < input.size(); ++i) {
+      data.emplace_back(input[i]);
+    }
+    const auto result = atLeastNNonNulls(data);
+    assertEqualVectors(expected, result);
   }
 };
 
 TEST_F(AtLeastNNonNullsTest, basic) {
-  auto result =
-      atLeastNNonNulls<std::string, std::string, double, double, float>(
-          2, "x", std::nullopt, std::nullopt, kNaNDouble, 0.5f);
-  EXPECT_EQ(result, true);
+  auto stringInput = makeNullableFlatVector<StringView>(
+      {std::nullopt, "1", "", std::nullopt, ""});
+  auto boolInput = makeNullableFlatVector<bool>(
+      {std::nullopt, true, false, std::nullopt, std::nullopt});
+  auto intInput =
+      makeNullableFlatVector<int32_t>({-1, 0, 1, std::nullopt, std::nullopt});
+  auto floatInput = makeNullableFlatVector<float>(
+      {kMaxFloat, kNaNFloat, 0.1f, 0.0f, std::nullopt});
+  auto doubleInput = makeNullableFlatVector<double>(
+      {std::log(-2.0), kMaxDouble, kNaNDouble, std::nullopt, 0.1});
+  auto arrayInput = makeArrayVectorFromJson<int32_t>(
+      {"[1, null, 3]", "[1, 2, 3]", "null", "[null]", "[]"});
+  auto mapInput = makeMapVectorFromJson<int32_t, int32_t>(
+      {"{1: 10, 2: null, 3: null}", "{1: 10, 2: 20}", "{1: 2}", "{}", "null"});
+  auto constInput = makeConstant<int32_t>(2, 5);
+  auto indices = makeIndices(5, [](auto row) { return (row + 1) % 5; });
+  auto dictInput = wrapInDictionary(indices, 5, doubleInput);
 
-  result = atLeastNNonNulls<std::string, std::string, double, double, float>(
-      3, "x", std::nullopt, std::nullopt, kNaNDouble, 0.5f);
-  EXPECT_EQ(result, false);
+  auto expected = makeFlatVector<bool>({false, true, true, false, false});
+  testAtLeastNNonNulls(2, {stringInput, boolInput}, expected);
 
-  result = atLeastNNonNulls<std::string, double, float, double, double>(
-      3, "x", 10.0, kNaNFloat, std::log(-2.0), kMaxDouble);
-  EXPECT_EQ(result, true);
+  expected = makeFlatVector<bool>({false, false, false, false, false});
+  testAtLeastNNonNulls(3, {stringInput, boolInput}, expected);
 
-  result = atLeastNNonNulls<std::string, double, float, double, double>(
-      4, "x", 10.0, kNaNFloat, std::log(-2.0), kMaxDouble);
-  EXPECT_EQ(result, false);
+  expected = makeFlatVector<bool>({true, true, true, true, true});
+  testAtLeastNNonNulls(0, {stringInput, boolInput}, expected);
 
-  result = atLeastNNonNulls<std::string, double, int64_t, float, bool>(
-      3, "x", std::nullopt, std::nullopt, kMaxFloat, false);
-  EXPECT_EQ(result, true);
+  expected = makeFlatVector<bool>({true, false, true, true, false});
+  testAtLeastNNonNulls(1, {floatInput}, expected);
 
-  result = atLeastNNonNulls<std::string, double, int64_t, float, bool>(
-      4, "x", std::nullopt, std::nullopt, kMaxFloat, false);
-  EXPECT_EQ(result, false);
+  expected = makeFlatVector<bool>({false, true, false, false, true});
+  testAtLeastNNonNulls(1, {doubleInput}, expected);
 
-  result = atLeastNNonNulls<std::string, Timestamp, int32_t, float, bool>(
-      4, "x", std::nullopt, std::nullopt, kMaxFloat, false);
-  EXPECT_EQ(result, false);
+  expected = makeFlatVector<bool>({false, true, true, false, false});
+  testAtLeastNNonNulls(2, {stringInput, boolInput, floatInput}, expected);
 
-  result = atLeastNNonNulls<std::string, Timestamp, int8_t, float, bool>(
-      4, "x", std::nullopt, std::nullopt, kMaxFloat, false);
-  EXPECT_EQ(result, false);
+  expected = makeFlatVector<bool>({false, true, true, false, false});
+  testAtLeastNNonNulls(
+      3, {boolInput, intInput, floatInput, doubleInput}, expected);
+
+  expected = makeFlatVector<bool>({false, false, false, false, false});
+  testAtLeastNNonNulls(2, {floatInput, doubleInput}, expected);
+
+  expected = makeFlatVector<bool>({true, false, false, true, false});
+  testAtLeastNNonNulls(
+      4, {mapInput, arrayInput, constInput, dictInput}, expected);
+}
+
+TEST_F(AtLeastNNonNullsTest, error) {
+  auto input =
+      makeNullableFlatVector<int32_t>({-1, 0, 1, std::nullopt, std::nullopt});
+
+  VELOX_ASSERT_USER_THROW(
+      atLeastNNonNulls({makeConstant<float>(1.0f, 5), input}),
+      "The first input type should be INTEGER but Actual REAL");
+  VELOX_ASSERT_USER_THROW(
+      atLeastNNonNulls({makeConstant<int32_t>(1, 5)}),
+      "AtLeastNNonNulls expect to receive at least 2 arguments");
+
+  VELOX_ASSERT_USER_THROW(
+      atLeastNNonNulls({input, input}),
+      "The first input should be constant encoding");
+  VELOX_ASSERT_USER_THROW(
+      atLeastNNonNulls({makeConstant<int32_t>(std::nullopt, 5), input}),
+      "The first parameter should not be null");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
