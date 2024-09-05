@@ -936,6 +936,71 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
       fromUnixTime(getUnixTime("2020-06-30 23:59:59"), "yyyy-MM-dd HH:mm:ss"),
       "2020-07-01 07:59:59");
 
+  // Weekyear cases of ISO-8601 standard.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSparkLegacyDateFormatter, "true"},
+      {core::QueryConfig::kSparkFirstDayOfWeek, std::to_string(2)},
+      {core::QueryConfig::kSparkMinimalDaysInFirstWeek, std::to_string(4)},
+  });
+  EXPECT_EQ(fromUnixTime(getUnixTime("2017-01-01 00:00:00"), "YYYY"), "2016");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2017-12-31 00:00:00"), "YYYY"), "2017");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2018-01-01 00:00:00"), "YYYY"), "2018");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2018-12-31 00:00:00"), "YYYY"), "2019");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2019-01-01 00:00:00"), "YYYY"), "2019");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2019-12-30 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2019-12-31 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2020-01-01 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2020-12-31 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-01-01 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-01-02 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-01-03 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-12-31 00:00:00"), "YYYY"), "2021");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2022-01-01 00:00:00"), "YYYY"), "2021");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2022-01-02 00:00:00"), "YYYY"), "2021");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2022-12-31 00:00:00"), "YYYY"), "2022");
+
+  // Weekyear cases of spark legacy date formatter with default config.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSparkLegacyDateFormatter, "true"},
+      {core::QueryConfig::kSparkFirstDayOfWeek, std::to_string(1)},
+      {core::QueryConfig::kSparkMinimalDaysInFirstWeek, std::to_string(1)},
+  });
+  EXPECT_EQ(fromUnixTime(getUnixTime("2017-01-01 00:00:00"), "YYYY"), "2017");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2017-12-31 00:00:00"), "YYYY"), "2018");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2018-01-01 00:00:00"), "YYYY"), "2018");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2018-12-30 00:00:00"), "YYYY"), "2019");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2018-12-31 00:00:00"), "YYYY"), "2019");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2019-01-01 00:00:00"), "YYYY"), "2019");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2019-12-29 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2019-12-30 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2019-12-31 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2020-01-01 00:00:00"), "YYYY"), "2020");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2020-12-27 00:00:00"), "YYYY"), "2021");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2020-12-28 00:00:00"), "YYYY"), "2021");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2020-12-29 00:00:00"), "YYYY"), "2021");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2020-12-30 00:00:00"), "YYYY"), "2021");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2020-12-31 00:00:00"), "YYYY"), "2021");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-01-01 00:00:00"), "YYYY"), "2021");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-12-26 00:00:00"), "YYYY"), "2022");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-12-27 00:00:00"), "YYYY"), "2022");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-12-28 00:00:00"), "YYYY"), "2022");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-12-29 00:00:00"), "YYYY"), "2022");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-12-30 00:00:00"), "YYYY"), "2022");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2021-12-31 00:00:00"), "YYYY"), "2022");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2022-01-01 00:00:00"), "YYYY"), "2022");
+  EXPECT_EQ(fromUnixTime(getUnixTime("2022-12-31 00:00:00"), "YYYY"), "2022");
+
+  // Week config should only apply to spark legacy date formatter.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSparkLegacyDateFormatter, "false"},
+      {core::QueryConfig::kSparkFirstDayOfWeek, std::to_string(1)},
+      {core::QueryConfig::kSparkMinimalDaysInFirstWeek, std::to_string(1)},
+  });
+  EXPECT_EQ(fromUnixTime(getUnixTime("2017-12-31 00:00:00"), "x"), "2017");
+
+  // Reset config.
+  queryCtx_->testingOverrideConfigUnsafe({});
+
   // Invalid format.
   VELOX_ASSERT_THROW(
       fromUnixTime(0, "yyyy-AA"), "Specifier A is not supported.");
