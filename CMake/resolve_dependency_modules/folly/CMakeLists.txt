@@ -50,7 +50,7 @@ set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 # Enable INT128 support
 set(FOLLY_HAVE_INT128_T ON)
 FetchContent_MakeAvailable(folly)
-
+unset(BUILD_SHARED_LIBS)
 # Folly::folly is not valid for FC but we want to match FindFolly
 add_library(Folly::folly ALIAS folly)
 add_library(Folly::follybenchmark ALIAS follybenchmark)
