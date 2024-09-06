@@ -108,7 +108,7 @@ function get_cxx_flags {
   case $CPU_ARCH in
 
     "arm64")
-      echo -n "-mcpu=apple-m1+crc -fvisibility=hidden"
+      echo -n "-mcpu=apple-m1+crc"
     ;;
 
     "avx")
