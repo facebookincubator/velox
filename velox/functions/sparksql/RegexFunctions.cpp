@@ -41,6 +41,78 @@ void ensureRegexIsConstant(
   }
 }
 
+FOLLY_ALWAYS_INLINE std::string prepareRegexpPattern(
+    const StringView& pattern) {
+  static const RE2 kRegex("[(][?]<([^>]*)>");
+
+  // (?<name>regex) => (?P<name>regex)
+  std::string newPattern = pattern.getString();
+  RE2::GlobalReplace(&newPattern, kRegex, R"((?P<\1>)");
+
+  return newPattern;
+}
+
+FOLLY_ALWAYS_INLINE std::string prepareReplacement(
+    const RE2& re,
+    const StringView& replacement) {
+  if (replacement.size() == 0) {
+    return std::string{};
+  }
+
+  auto newReplacement = replacement.getString();
+
+  // If newReplacement contains a reference to a
+  // named capturing group ${name}, replace the name with its index.
+  static const RE2 kExtractRegex(R"(\${([^}]*)})");
+  VELOX_DCHECK(
+      kExtractRegex.ok(),
+      "Invalid regular expression {}: {}.",
+      R"(\${([^}]*)})",
+      kExtractRegex.error());
+  re2::StringPiece groupName[2];
+  while (kExtractRegex.Match(
+      newReplacement,
+      0,
+      newReplacement.size(),
+      RE2::UNANCHORED,
+      groupName,
+      2)) {
+    auto groupIter = re.NamedCapturingGroups().find(groupName[1].as_string());
+    if (groupIter == re.NamedCapturingGroups().end()) {
+      VELOX_USER_FAIL(
+          "Invalid replacement sequence: unknown group {{ {} }}.",
+          groupName[1].as_string());
+    }
+
+    RE2::GlobalReplace(
+        &newReplacement,
+        fmt::format(R"(\${{{}}})", groupName[1].as_string()),
+        fmt::format("${}", groupIter->second));
+  }
+
+  // Convert references to numbered capturing groups from $g to \g.
+  static const RE2 kConvertRegex(R"(\$(\d+))");
+  VELOX_DCHECK(
+      kConvertRegex.ok(),
+      "Invalid regular expression {}: {}.",
+      R"(\$(\d+))",
+      kConvertRegex.error());
+  RE2::GlobalReplace(&newReplacement, kConvertRegex, R"(\\\1)");
+
+  // Un-escape dollar-sign '$'.
+  static const RE2 kUnescapeRegex(R"(\\\$)");
+  VELOX_DCHECK(
+      kUnescapeRegex.ok(),
+      "Invalid regular expression {}: {}.",
+      R"(\\\$)",
+      kUnescapeRegex.error());
+  RE2::GlobalReplace(&newReplacement, kUnescapeRegex, "$");
+
+  // TODO(zhaokuo03): need to replace \\ in replacement
+
+  return newReplacement;
+}
+
 // REGEXP_REPLACE(string, pattern, overwrite) → string
 // REGEXP_REPLACE(string, pattern, overwrite, position) → string
 //
@@ -56,6 +128,42 @@ struct RegexpReplaceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* str,
+      const arg_type<Varchar>* pattern,
+      const arg_type<Varchar>* replacement) {
+    initialize(inputTypes, config, str, pattern, replacement, nullptr);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*string*/,
+      const arg_type<Varchar>* pattern,
+      const arg_type<Varchar>* replacement,
+      const arg_type<int64_t>* /*position*/) {
+    if (pattern != nullptr) {
+      const auto processedPattern = prepareRegexpPattern(*pattern);
+      re_.emplace(processedPattern, RE2::Quiet);
+      VELOX_USER_CHECK(
+          re_->ok(),
+          "Invalid regular expression {}: {}.",
+          processedPattern,
+          re_->error());
+    }
+
+    if (replacement != nullptr) {
+      // Constant 'replacement' with non-constant 'pattern' needs to be
+      // processed separately for each row.
+      if (pattern != nullptr) {
+        ensureProcessedReplacement(re_.value(), *replacement);
+        constantReplacement_ = true;
+      }
+    }
+  }
 
   void call(
       out_type<Varchar>& result,
@@ -130,35 +238,48 @@ struct RegexpReplaceFunction {
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace,
       const arg_type<int64_t>& position) {
-    re2::RE2* patternRegex = getRegex(pattern.str());
-    re2::StringPiece replaceStringPiece = toStringPiece(replace);
+    auto& re = ensurePattern(pattern);
+    const auto& processedReplacement = ensureProcessedReplacement(re, replace);
 
     std::string prefix(stringInput.data(), position);
     std::string targetString(
         stringInput.data() + position, stringInput.size() - position);
 
-    RE2::GlobalReplace(&targetString, *patternRegex, replaceStringPiece);
+    RE2::GlobalReplace(&targetString, re, processedReplacement);
     result = prefix + targetString;
   }
 
-  re2::RE2* getRegex(const std::string& pattern) {
-    auto it = cache_.find(pattern);
-    if (it != cache_.end()) {
-      return it->second.get();
+  RE2& ensurePattern(const arg_type<Varchar>& pattern) {
+    if (!re_.has_value()) {
+      auto processedPattern = prepareRegexpPattern(pattern);
+      return *cache_.findOrCompile(StringView(processedPattern));
+    } else {
+      return re_.value();
     }
-    VELOX_USER_CHECK_LT(
-        cache_.size(),
-        kMaxCompiledRegexes,
-        "regexp_replace hit the maximum number of unique regexes: {}",
-        kMaxCompiledRegexes);
-    auto patternRegex = std::make_unique<re2::RE2>(pattern, re2::RE2::Quiet);
-    auto* rawPatternRegex = patternRegex.get();
-    checkForBadPattern(*rawPatternRegex);
-    cache_.emplace(pattern, std::move(patternRegex));
-    return rawPatternRegex;
   }
 
-  folly::F14FastMap<std::string, std::unique_ptr<re2::RE2>> cache_;
+  const std::string& ensureProcessedReplacement(
+      RE2& re,
+      const arg_type<Varchar>& replacement) {
+    if (!constantReplacement_) {
+      processedReplacement_ = prepareReplacement(re, replacement);
+    }
+
+    return processedReplacement_;
+  }
+
+  // Used when pattern is constant.
+  std::optional<RE2> re_;
+
+  // True if replacement is constant.
+  bool constantReplacement_{false};
+
+  // Constant replacement if 'constantReplacement_' is true, or 'current'
+  // replacement.
+  std::string processedReplacement_;
+
+  // Used when pattern is not constant.
+  detail::ReCache cache_;
 };
 
 } // namespace
