@@ -634,10 +634,6 @@ int32_t CompactRow::serializeMap(vector_size_t index, char* buffer) {
   return keysSerializedBytes + valuesSerializedBytes;
 }
 
-int32_t CompactRow::serialize(vector_size_t index, char* buffer) {
-  return serializeRow(index, buffer);
-}
-
 void CompactRow::serialize(
     vector_size_t offset,
     vector_size_t size,

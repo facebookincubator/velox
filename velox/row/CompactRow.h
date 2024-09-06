@@ -33,17 +33,12 @@ class CompactRow {
   /// 'fixedRowSize' returned std::nullopt.
   int32_t rowSize(vector_size_t index);
 
-  /// Serializes row at specified index into 'buffer'.
-  /// 'buffer' must have sufficient capacity and set to all zeros.
-  int32_t serialize(vector_size_t index, char* buffer);
-
-  /// Serializes rows in range [offset, offset + size) into 'buffer' at given
-  /// 'bufferOffsets'. 'buffer' must have sufficient capacity and set to all
-  /// zeros for null-bits handling. 'bufferOffsets' must be pre-filled with
-  /// the write offsets for each row and must have the same number of elements
-  /// as the 'size' parameter. The caller must ensure that the space between
-  /// each offset in 'bufferOffsets' is no less than the 'fixedRowSize' or
-  /// 'rowSize'.
+  /// Serializes rows in the range [offset, offset + size) into 'buffer' at
+  /// given 'bufferOffsets'. 'buffer' must have sufficient capacity and set to
+  /// all zeros for null-bits handling. 'bufferOffsets' must be pre-filled with
+  /// the write offsets for each row and must be accessible for 'size' elements.
+  /// The caller must ensure that the space between each offset in
+  /// 'bufferOffsets' is no less than the 'fixedRowSize' or 'rowSize'.
   void serialize(
       vector_size_t offset,
       vector_size_t size,
