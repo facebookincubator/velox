@@ -43,12 +43,12 @@ class SemanticVersion {
   bool operator<(const SemanticVersion& other) const;
 
  private:
-  std::string application;
-  int majorVersion;
-  int minorVersion;
-  int patchVersion;
+  std::string application_;
+  int majorVersion_;
+  int minorVersion_;
+  int patchVersion_;
 
-  static const re2::RE2 pattern;
+  static const re2::RE2 pattern_;
 };
 
 } // namespace facebook::velox::parquet

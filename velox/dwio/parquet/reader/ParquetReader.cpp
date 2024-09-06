@@ -875,6 +875,7 @@ class ParquetRowReader::Impl {
       // table scan.
       advanceToNextRowGroup();
     }
+    parquetStatsContext_ = ParquetStatsContext(readerBase_->version());
   }
 
   void filterRowGroups() {
@@ -882,8 +883,6 @@ class ParquetRowReader::Impl {
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
     ParquetData::FilterRowGroupsResult res;
-    ParquetStatsContext parquetStatsContext =
-        ParquetStatsContext(readerBase_->version());
     columnReader_->filterRowGroups(0, parquetStatsContext, res);
     if (auto& metadataFilter = options_.metadataFilter()) {
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);
@@ -1012,6 +1011,7 @@ class ParquetRowReader::Impl {
   std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
 
   TypePtr requestedType_;
+  ParquetStatsContext parquetStatsContext_;
 
   dwio::common::ColumnReaderStatistics columnReaderStats_;
 };
