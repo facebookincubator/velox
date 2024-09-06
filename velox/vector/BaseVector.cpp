@@ -135,6 +135,10 @@ VectorPtr BaseVector::wrapInDictionary(
     VectorPtr vector) {
   // Dictionary that doesn't add nulls over constant is same as constant. Just
   // make sure to adjust the size.
+  if (vector->encoding() == VectorEncoding::Simple::LAZY &&
+      vector->asUnchecked<LazyVector>()->isLoaded()) {
+    vector = loadedVectorShared(vector);
+  }
   if (vector->encoding() == VectorEncoding::Simple::CONSTANT && !nulls) {
     if (size == vector->size()) {
       return vector;
@@ -142,6 +146,37 @@ VectorPtr BaseVector::wrapInDictionary(
     return BaseVector::wrapInConstant(size, 0, std::move(vector));
   }
 
+  if (vector->encoding() == VectorEncoding::Simple::DICTIONARY) {
+    auto base = vector->valueVector();
+    if (isLazyNotLoaded(*base)) {
+      // It is OK to rewrap a lazy. It is an error to wrap a lazy in multiple
+      // different dictionaries.
+      base->containsLazyAndIsWrapped_ = false;
+    }
+    auto rawNulls = vector->rawNulls();
+    if (indices->refCount() > 1) {
+      indices = AlignedBuffer::copy(vector->pool(), indices);
+    }
+    if (nulls || rawNulls) {
+      auto newNulls = AlignedBuffer::allocate<bool>(size, vector->pool());
+      transposeIndicesWithNulls(
+          vector->wrapInfo()->as<vector_size_t>(),
+          vector->rawNulls(),
+          size,
+          indices->as<vector_size_t>(),
+          nulls ? nulls->as<uint64_t>() : nullptr,
+          indices->asMutable<vector_size_t>(),
+          newNulls->asMutable<uint64_t>());
+      nulls = newNulls;
+    } else {
+      transposeIndices(
+          vector->wrapInfo()->as<vector_size_t>(),
+          size,
+          indices->as<vector_size_t>(),
+          indices->asMutable<vector_size_t>());
+    }
+    vector = base;
+  }
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       addDictionary,
@@ -152,37 +187,28 @@ VectorPtr BaseVector::wrapInDictionary(
       std::move(vector));
 }
 
-template <TypeKind kind>
-static VectorPtr
-addSequence(BufferPtr lengths, vector_size_t size, VectorPtr vector) {
-  auto base = vector.get();
-  auto pool = base->pool();
-  auto lsize = lengths->size();
-  return std::make_shared<
-      SequenceVector<typename KindToFlatVector<kind>::WrapperType>>(
-      pool,
-      size,
-      std::move(vector),
-      std::move(lengths),
-      SimpleVectorStats<typename KindToFlatVector<kind>::WrapperType>{},
-      std::nullopt /*distinctCount*/,
-      std::nullopt,
-      false /*sorted*/,
-      base->representedBytes().has_value()
-          ? std::optional<ByteCount>(
-                base->representedBytes().value() * size /
-                (1 + (lsize / sizeof(vector_size_t))))
-          : std::nullopt);
-}
-
 // static
 VectorPtr BaseVector::wrapInSequence(
     BufferPtr lengths,
     vector_size_t size,
     VectorPtr vector) {
-  auto kind = vector->typeKind();
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      addSequence, kind, std::move(lengths), size, std::move(vector));
+  auto numLengths = lengths->size() / sizeof(vector_size_t);
+  int64_t numIndices = 0;
+  auto rawLengths = lengths->as<vector_size_t>();
+  for (auto i = 0; i < numLengths; ++i) {
+    numIndices += rawLengths[i];
+  }
+  VELOX_CHECK_LT(numIndices, std::numeric_limits<int32_t>::max());
+  BufferPtr indices =
+      AlignedBuffer::allocate<vector_size_t>(numIndices, vector->pool());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  int32_t fill = 0;
+  for (auto i = 0; i < numLengths; ++i) {
+    std::fill(rawIndices + fill, rawIndices + fill + rawLengths[i], i);
+    ;
+    fill += rawLengths[i];
+  }
+  return wrapInDictionary(nullptr, indices, numIndices, vector);
 }
 
 template <TypeKind kind>
@@ -1050,6 +1076,95 @@ std::string printIndices(
   }
 
   return out.str();
+}
+
+// static
+void BaseVector::transposeIndices(
+    const vector_size_t* base,
+    vector_size_t size,
+    const vector_size_t* indices,
+    vector_size_t* result) {
+  constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
+  int32_t i = 0;
+  for (; i + kBatch <= size; i += kBatch) {
+    auto indexBatch = xsimd::load_unaligned(indices + i);
+    simd::gather(base, indexBatch).store_unaligned(result + i);
+  }
+  if (i < size) {
+    auto indexBatch = xsimd::load_unaligned(indices + i);
+    auto mask = simd::leadingMask<int32_t>(size - i);
+    simd::maskGather(
+        xsimd::batch<int32_t>::broadcast(0), mask, base, indexBatch)
+        .store_unaligned(result + i);
+  }
+}
+
+// static
+void BaseVector::transposeIndicesWithNulls(
+    const vector_size_t* base,
+    const uint64_t* nulls,
+    vector_size_t size,
+    const vector_size_t* indices,
+    const uint64_t* extraNulls,
+    vector_size_t* result,
+    uint64_t* resultNulls) {
+  constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
+  for (auto i = 0; i < size; i += kBatch) {
+    auto indexBatch = xsimd::load_unaligned(indices + i);
+    uint8_t extraNullsByte = i + kBatch > size ? bits::lowMask(size - i) : 0xff;
+
+    if (extraNulls) {
+      extraNullsByte &= reinterpret_cast<const uint8_t*>(extraNulls)[i / 8];
+    }
+    if (extraNullsByte != 0xff) {
+      auto mask = simd::fromBitMask<int32_t>(extraNullsByte);
+      indexBatch = indexBatch &
+          xsimd::load_unaligned(reinterpret_cast<const vector_size_t*>(&mask));
+    }
+    if (nulls) {
+      uint8_t flags = simd::gather8Bits(nulls, indexBatch, 8);
+      extraNullsByte &= flags;
+    }
+    reinterpret_cast<uint8_t*>(resultNulls)[i / 8] = extraNullsByte;
+    simd::gather<int32_t>(base, indexBatch).store_unaligned(result + i);
+  }
+}
+
+// static
+void BaseVector::transposeDictionaryValues(
+    vector_size_t size,
+    BufferPtr& nulls,
+    BufferPtr& indices,
+    std::shared_ptr<BaseVector>& dictionaryValues) {
+  if (indices->refCount() > 1) {
+    indices = AlignedBuffer::copy(dictionaryValues->pool(), indices);
+  }
+  auto rawNulls = dictionaryValues->rawNulls();
+  auto baseIndices = dictionaryValues->wrapInfo();
+  if (!rawNulls && !nulls) {
+    transposeIndices(
+        baseIndices->as<vector_size_t>(),
+        size,
+        indices->as<vector_size_t>(),
+        indices->asMutable<vector_size_t>());
+  } else {
+    BufferPtr newNulls;
+    if (!nulls || nulls->refCount() > 1) {
+      newNulls = AlignedBuffer::allocate<bool>(
+          size, dictionaryValues->pool(), bits::kNull);
+    } else {
+      newNulls = nulls;
+    }
+    transposeIndicesWithNulls(
+        baseIndices->as<vector_size_t>(),
+        rawNulls,
+        size,
+        indices->as<vector_size_t>(),
+        nulls ? nulls->as<uint64_t>() : nullptr,
+        indices->asMutable<vector_size_t>(),
+        newNulls->asMutable<uint64_t>());
+  }
+  dictionaryValues = dictionaryValues->valueVector();
 }
 
 template <TypeKind Kind>
