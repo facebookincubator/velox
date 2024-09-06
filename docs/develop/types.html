@@ -151,6 +151,31 @@ Examples:</p>
 <li><p>Timestamp(-5000*24*60*60 - 1000, 123456) represents 1956-04-24 07:43:20.000123456
 (5000 days 1000 seconds before epoch plus 123456 nanoseconds).</p></li>
 </ul>
+<p>Floating point types (REAL, DOUBLE) have special values negative infinity, positive infinity, and
+not-a-number (NaN).</p>
+<p>For NaN the semantics are different than the C++ standard floating point semantics:</p>
+<ul class="simple">
+<li><p>The different types of NaN (+/-, signaling/quiet) are treated as canonical NaN (+, quiet).</p></li>
+<li><p><cite>NaN = NaN</cite> returns true.</p></li>
+<li><p>NaN is treated as a normal numerical value in join and group-by keys.</p></li>
+<li><p>When sorting, NaN values are considered larger than any other value. When sorting in ascending order, NaN values appear last. When sorting in descending order, NaN values appear first.</p></li>
+<li><p>For a number N: <cite>N &gt; NaN</cite> is false and <cite>NaN &gt; N</cite> is true.</p></li>
+</ul>
+<p>For negative infinity and positive infinity the following C++ standard floating point semantics apply:</p>
+<p>Given N is a positive finite number.</p>
+<ul class="simple">
+<li><p>+inf * N = +inf</p></li>
+<li><p>-inf * N = -inf</p></li>
+<li><p>+inf * -N = -inf</p></li>
+<li><p>-inf * -N = +inf</p></li>
+<li><p>+inf * 0 = NaN</p></li>
+<li><p>-inf * 0 = NaN</p></li>
+<li><p>+inf = +inf returns true.</p></li>
+<li><p>-inf = -inf returns true.</p></li>
+<li><p>Positive infinity and negative infinity are treated as normal numerical values in join and group-by keys.</p></li>
+<li><p>Positive infinity sorts lower than NaN and higher than any other value.</p></li>
+<li><p>Negative infinity sorts lower than any other value.</p></li>
+</ul>
 </section>
 <section id="logical-types">
 <h2>Logical Types<a class="headerlink" href="#logical-types" title="Link to this heading">¶</a></h2>
