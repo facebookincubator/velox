@@ -48,7 +48,7 @@ class CompactRow {
       vector_size_t offset,
       vector_size_t size,
       char* buffer,
-      const std::vector<size_t>& bufferOffsets);
+      const size_t* bufferOffsets);
 
   /// Deserializes multiple rows into a RowVector of specified type. The type
   /// must match the contents of the serialized rows.
@@ -128,7 +128,7 @@ class CompactRow {
       vector_size_t offset,
       vector_size_t size,
       char* buffer,
-      const std::vector<size_t>& bufferOffsets);
+      const size_t* bufferOffsets);
 
   const TypeKind typeKind_;
   DecodedVector decoded_;

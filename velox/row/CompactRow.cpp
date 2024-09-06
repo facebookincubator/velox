@@ -365,9 +365,7 @@ void CompactRow::serializeRow(
     vector_size_t offset,
     vector_size_t size,
     char* buffer,
-    const std::vector<size_t>& bufferOffsets) {
-  VELOX_CHECK_EQ(bufferOffsets.size(), size);
-
+    const size_t* bufferOffsets) {
   raw_vector<vector_size_t> rows(size);
   raw_vector<uint8_t*> nulls(size);
   if (decoded_.isIdentityMapping()) {
@@ -379,11 +377,11 @@ void CompactRow::serializeRow(
   }
 
   // After serializing each column, the 'offsets' are updated accordingly.
-  std::vector<size_t> offsets = bufferOffsets;
+  std::vector<size_t> offsets(size);
   auto* base = reinterpret_cast<uint8_t*>(buffer);
   for (auto i = 0; i < size; ++i) {
-    nulls[i] = base + offsets[i];
-    offsets[i] += rowNullBytes_;
+    nulls[i] = base + bufferOffsets[i];
+    offsets[i] = bufferOffsets[i] + rowNullBytes_;
   }
 
   // Fixed-width and varchar/varbinary types are serialized using the vectorized
@@ -644,7 +642,11 @@ void CompactRow::serialize(
     vector_size_t offset,
     vector_size_t size,
     char* buffer,
-    const std::vector<size_t>& bufferOffsets) {
+    const size_t* bufferOffsets) {
+  if (size == 1) {
+    (void)serializeRow(offset, buffer + *bufferOffsets);
+    return;
+  }
   return serializeRow(offset, size, buffer, bufferOffsets);
 }
 

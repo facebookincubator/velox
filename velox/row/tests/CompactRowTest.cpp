@@ -92,7 +92,7 @@ class CompactRowTest : public ::testing::Test, public VectorTestBase {
     memset(rawBuffer, 0, totalSize);
     {
       std::vector<std::string_view> serialized;
-      row.serialize(0, numRows, rawBuffer, offsets);
+      row.serialize(0, numRows, rawBuffer, offsets.data());
       for (auto i = 0; i < numRows; ++i) {
         serialized.push_back(
             std::string_view(rawBuffer + offsets[i], rowSize[i]));

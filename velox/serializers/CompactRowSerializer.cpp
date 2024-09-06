@@ -40,21 +40,25 @@ class CompactRowVectorSerializer : public IterativeVectorSerializer {
       const folly::Range<const IndexRange*>& ranges,
       Scratch& scratch) override {
     size_t totalSize = 0;
-    std::vector<std::vector<vector_size_t>> rowSize(ranges.size());
+    auto totalRows = std::accumulate(
+        ranges.begin(),
+        ranges.end(),
+        0,
+        [](vector_size_t sum, const auto& range) { return sum + range.size; });
+
     row::CompactRow row(vector);
+    std::vector<vector_size_t> rowSize(totalRows);
     if (auto fixedRowSize =
             row::CompactRow::fixedRowSize(asRowType(vector->type()))) {
-      for (auto i = 0; i < ranges.size(); ++i) {
-        totalSize += (fixedRowSize.value() + sizeof(TRowSize)) * ranges[i].size;
-        rowSize[i].resize(ranges[i].size, fixedRowSize.value());
-      }
+      totalSize += (fixedRowSize.value() + sizeof(TRowSize)) * totalRows;
+      std::fill(rowSize.begin(), rowSize.end(), fixedRowSize.value());
     } else {
-      for (auto i = 0; i < ranges.size(); ++i) {
-        const auto& range = ranges[i];
-        rowSize[i].resize(range.size);
-        for (auto j = 0; j < range.size; ++j) {
-          rowSize[i][j] = row.rowSize(range.begin + j);
-          totalSize += rowSize[i][j] + sizeof(TRowSize);
+      vector_size_t index = 0;
+      for (const auto& range : ranges) {
+        for (auto i = 0; i < range.size; ++i) {
+          rowSize[index] = row.rowSize(range.begin + i);
+          totalSize += rowSize[index] + sizeof(TRowSize);
+          index++;
         }
       }
     }
@@ -68,17 +72,24 @@ class CompactRowVectorSerializer : public IterativeVectorSerializer {
     buffers_.push_back(std::move(buffer));
 
     size_t offset = 0;
-    for (auto i = 0; i < ranges.size(); ++i) {
-      const auto& range = ranges[i];
-      std::vector<size_t> offsets(range.size);
-      for (auto j = 0; j < range.size; ++j) {
-        // Write raw size. Needs to be in big endian order.
-        *(TRowSize*)(rawBuffer + offset) = folly::Endian::big(rowSize[i][j]);
-        offsets[j] = offset + sizeof(TRowSize);
-        offset += rowSize[i][j] + sizeof(TRowSize);
+    vector_size_t index = 0;
+    for (const auto& range : ranges) {
+      if (range.size == 1) {
+        *(TRowSize*)(rawBuffer) = folly::Endian::big(rowSize[index++]);
+        static const auto offset = sizeof(TRowSize);
+        row.serialize(range.begin, range.size, rawBuffer, &offset);
+      } else {
+        raw_vector<size_t> offsets(range.size);
+        for (auto i = 0; i < range.size; ++i) {
+          // Write raw size. Needs to be in big endian order.
+          *(TRowSize*)(rawBuffer + offset) = folly::Endian::big(rowSize[index]);
+          offsets[i] = offset + sizeof(TRowSize);
+          offset += rowSize[index] + sizeof(TRowSize);
+          index++;
+        }
+        // Write row data for all rows in range.
+        row.serialize(range.begin, range.size, rawBuffer, offsets.data());
       }
-      // Write row data for all rows in range.
-      row.serialize(range.begin, range.size, rawBuffer, offsets);
     }
   }
 
