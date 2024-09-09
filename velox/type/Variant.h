@@ -31,7 +31,7 @@
 namespace facebook::velox {
 
 // Constant used in comparison of REAL and DOUBLE values.
-constexpr double kEpsilon{0.00001};
+constexpr double kEpsilon{0.0000001};
 
 // note: while this is not intended for use in real critical code paths,
 //       it's probably worthwhile to make it not completely suck
