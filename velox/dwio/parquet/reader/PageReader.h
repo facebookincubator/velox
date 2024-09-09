@@ -24,6 +24,7 @@
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
+#include "velox/dwio/parquet/reader/RleBooleanDecoder.h"
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
 
@@ -329,9 +330,23 @@ class PageReader {
     VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded");
     if (nulls) {
       nullsFromFastPath = false;
-      booleanDecoder_->readWithVisitor<true>(nulls, visitor);
+      switch (encoding_)
+      {
+      case thrift::Encoding::RLE:
+        rleBooleanDecoder_->readWithVisitor<true>(nulls, visitor);
+        break;
+      default:
+        booleanDecoder_->readWithVisitor<true>(nulls, visitor);
+      }
     } else {
-      booleanDecoder_->readWithVisitor<false>(nulls, visitor);
+      switch (encoding_)
+      {
+        case thrift::Encoding::RLE:
+          rleBooleanDecoder_->readWithVisitor<false>(nulls, visitor);
+          break;
+        default:
+          booleanDecoder_->readWithVisitor<false>(nulls, visitor);
+      }
     }
   }
 
@@ -439,6 +454,8 @@ class PageReader {
   // Number of bytes starting at pageData_ for current encoded data.
   int32_t encodedDataSize_{0};
 
+  int32_t numNulls_{0};
+
   // Below members Keep state between calls to readWithVisitor().
 
   // Original rows in Visitor.
@@ -489,6 +506,7 @@ class PageReader {
   std::unique_ptr<StringDecoder> stringDecoder_;
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
   std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
+  std::unique_ptr<RleBooleanDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
 };
 

@@ -108,6 +108,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   /// Timestamp time zone for Parquet write through Arrow bridge.
   std::optional<std::string> parquetWriteTimestampTimeZone;
   bool writeInt96AsTimestamp = false;
+  std::optional<std::string> parquetDataPageVersion = std::nullopt;
 
   // Parsing session and hive configs.
 

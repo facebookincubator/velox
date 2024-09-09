@@ -713,6 +713,44 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
   test(type, newType);
 }
 
+TEST_F(E2EFilterTest, booleanRle) {
+  options_.enableDictionary = false;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::RLE;
+  options_.parquetDataPageVersion = "V2";
+
+
+    // testWithTypes(
+    //   "boolean_null:boolean",
+    //   [&]() { makeAllNulls("boolean_null"); },
+    //   false,
+    //   {},
+    //   20);
+
+    testWithTypes(
+        "boolean_val:boolean",
+        [&]() {},
+        false,
+        {},
+        20);
+
+  //  testWithTypes(
+  //     "boolean_val:boolean,"
+  //     "boolean_null:boolean",
+  //     [&]() { makeAllNulls("boolean_null"); },
+  //     false,
+  //     {"boolean_val"},
+  //     20);
+
+    // testWithTypes(
+    //   "boolean_val:boolean,"
+    //   "boolean_null:boolean",
+    //   [&]() { makeAllNulls("boolean_null"); },
+    //   true,
+    //   {"boolean_val"},
+    //   20);
+}
+
 // Define main so that gflags get processed.
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

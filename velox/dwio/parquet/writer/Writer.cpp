@@ -147,6 +147,10 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
   properties = properties->enable_store_decimal_as_integer();
+  if (options.parquetDataPageVersion == "V2") {
+    properties = properties->data_page_version(
+        facebook::velox::parquet::arrow::ParquetDataPageVersion::V2);
+  }
   return properties->build();
 }
 
