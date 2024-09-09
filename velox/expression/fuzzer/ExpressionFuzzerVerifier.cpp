@@ -313,7 +313,7 @@ void ExpressionFuzzerVerifier::go() {
 
   // TODO: some expression will throw exception for NaN input, eg: IN predicate
   // for floating point. remove this constraint once that are fixed
-  vectorFuzzer_->setConstraint(Constraint{true, true});
+  // vectorFuzzer_->setConstraint(Constraint{true, true});
   while (!isDone(i, startTime)) {
     LOG(INFO) << "==============================> Started iteration " << i
               << " (seed: " << currentSeed_ << ")";
