@@ -86,9 +86,10 @@ dependencies for a given platform.
 
 The following setup scripts use the `DEPENDENCY_DIR` environment variable to set the
 location to download and build packages. This defaults to `deps-download` in the current
-working directory. Use `INSTALL_PREFIX` to set the install directory of the packages.
-This defaults to `deps-install` in the current working directory on macOS and to the
-default install location (eg. `/usr/local`) on linux.
+working directory.
+Use `INSTALL_PREFIX` to set the install directory of the packages. This defaults to
+`deps-install` in the current working directory on macOS and to the default install
+location (eg. `/usr/local`) on linux.
 Using the default install location `/usr/local` on macOS is discouraged since this
 location is used by certain Homebrew versions.
 
