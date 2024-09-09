@@ -133,16 +133,16 @@ function install_hdfs_deps {
   github_checkout apache/hawq master
   libhdfs3_dir=hawq/depends/libhdfs3
   if [[ "$OSTYPE" == darwin* ]]; then
-     sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
-     sed -i '' -e "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMakeLists.txt
+     sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $DEPENDENCY_DIR/$libhdfs3_dir/CMakeLists.txt
+     sed -i '' -e "s/dumpversion/dumpfullversion/" $DEPENDENCY_DIR/$libhdfs3_dir/CMakeLists.txt
   fi
 
   if [[ "$OSTYPE" == linux-gnu* ]]; then
-    sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
-    sed -i "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMake/Platform.cmake
+    sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $DEPENDENCY_DIR/$libhdfs3_dir/CMakeLists.txt
+    sed -i "s/dumpversion/dumpfullversion/" $DEPENDENCY_DIR/$libhdfs3_dir/CMake/Platform.cmake
     # Dependencies for Hadoop testing
     wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-3.3.0/hadoop-3.3.0.tar.gz hadoop
-    cp -a hadoop /usr/local/
+    cp -a ${DEPENDENCY_DIR}/hadoop /usr/local/
     wget -P /usr/local/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
 
     yum install -y java-1.8.0-openjdk-devel
