@@ -848,7 +848,7 @@ TEST_F(ParquetTableScanTest, remainingFilterLazyWithMultiReferences) {
   writeToParquetFile(file->getPath(), {vector});
   CursorParameters params;
   params.copyResult = false;
-  params.singleThreaded = true;
+  params.serialExecution = true;
   params.planNode = PlanBuilder().tableScan(schema, {}, "c0 >= 0").planNode();
   auto cursor = TaskCursor::create(params);
   cursor->task()->addSplit("0", exec::Split(makeSplit(file->getPath())));
