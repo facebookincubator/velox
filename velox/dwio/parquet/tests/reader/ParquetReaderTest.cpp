@@ -69,7 +69,6 @@ TEST_F(ParquetReaderTest, parseSample) {
   // Data is in plain uncompressed format:
   //   a: [1..20]
   //   b: [1.0..20.0]
-  google::InstallFailureSignalHandler();
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
@@ -759,7 +758,8 @@ TEST_F(ParquetReaderTest, parseRowArrayTest) {
 
   ASSERT_TRUE(rowReader->next(1, result));
   // data: 10, 9, <empty>, null, {9}, 2 elements starting at 0 {{9}, {10}}}
-  auto structArray = result->as<RowVector>()->childAt(5)->as<ArrayVector>();
+  auto structArray =
+      result->as<RowVector>()->childAt(5)->loadedVector()->as<ArrayVector>();
   auto structEle = structArray->elements()
                        ->as<RowVector>()
                        ->childAt(0)
