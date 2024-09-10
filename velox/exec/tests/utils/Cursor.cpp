@@ -322,17 +322,10 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
  public:
   explicit SingleThreadedTaskCursor(const CursorParameters& params)
       : TaskCursorBase(params, nullptr) {
-<<<<<<< HEAD
-    VELOX_CHECK(params.serialExecution)
+    VELOX_CHECK(params.serialExecution);
     VELOX_CHECK(
         !queryCtx_->isExecutorSupplied(),
-        "Executor should not be set in serial task cursor")
-=======
-    VELOX_CHECK(params.singleThreaded);
-    VELOX_CHECK(
-        !queryCtx_->isExecutorSupplied(),
-        "Executor should not be set in single-threaded task cursor");
->>>>>>> Strictly require for a semicolon after usages of macros in Exception.h
+        "Executor should not be set in serial task cursor");
 
     task_ = Task::create(
         taskId_,
@@ -346,13 +339,8 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     }
 
     VELOX_CHECK(
-<<<<<<< HEAD
         task_->supportSerialExecutionMode(),
-        "Plan doesn't support serial execution mode")
-=======
-        task_->supportsSingleThreadedExecution(),
-        "Plan doesn't support single-threaded execution");
->>>>>>> Strictly require for a semicolon after usages of macros in Exception.h
+        "Plan doesn't support serial execution mode");
   }
 
   ~SingleThreadedTaskCursor() override {
