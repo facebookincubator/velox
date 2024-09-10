@@ -9,7 +9,8 @@ make contributions to the project and community.
 
 ## Code of Conduct
 
-First and foremost, the Velox project and all its contributors and maintainers
+First and foremost, the Velox project and all its contributors and
+[maintainers]((https://velox-lib.io/docs/community/components-and-maintainers))
 are governed by a [Code of Conduct](CODE_OF_CONDUCT.md). When participating,
 you are expected to uphold this code.
 
@@ -20,6 +21,12 @@ conversations in GitHub [Issues](https://github.com/facebookincubator/velox/issu
 and [Discussions](https://github.com/facebookincubator/velox/discussions), and join the
 [the Velox-OSS Slack workspace](http://velox-oss.slack.com) - please reach out to 
 **velox@meta.com** to get access.
+
+## Components and Maintainers
+
+Velox is logically organized into components, each maintained by a group of
+individuals.  The list of components and their respective maintainers [can be
+found here](https://velox-lib.io/docs/community/components-and-maintainers).
 
 ## Documentation
 
@@ -166,7 +173,8 @@ Velox and the code review process. In addition to the general contribution
 guidelines presented above, here are specific guidelines for contributing
 functions:
 
-1. Read [How to add a scalar function?](https://facebookincubator.github.io/velox/develop/scalar-functions.html) guide.
+1. Read [How to add a scalar function?](https://facebookincubator.github.io/velox/develop/scalar-functions.html) guide. When implementing a function, simple function is preferred unless the implementation of vector function provides a significant performance gain which can be demonstrated
+with a benchmark.
 
 2. Use the following template for the PR title: Add xxx [Presto|Spark] function (replace xxx with the function name).
    * Ensure the PR description contains a link to the function documentation
@@ -174,6 +182,7 @@ functions:
    * Describe the function semantics and edge cases clearly.
 
 3. Use Presto or Spark to check the function semantics. 
+   * When implementing a Spark function, check the function semantics using Spark 3.5 with ANSI OFF.
    * Try different edge cases to check whether the function returns null, or
    throws, etc. 
    * Make sure to replicate the exact semantics.
@@ -197,11 +206,11 @@ functions:
    ```
    # Test the new function in isolation. Use --only flag to restrict the set of functions
    # and run for 60 seconds or longer.
-   velox_expression_fuzzer_test --only <my-new-function-name> --duration_sec 60 --logtostderr=1 --enable_variadic_signatures --velox_fuzzer_enable_complex_types --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse
+   velox_expression_fuzzer_test --only <my-new-function-name> --duration_sec 60 --logtostderr=1 --enable_variadic_signatures --velox_fuzzer_enable_complex_types --velox_fuzzer_enable_decimal_type --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse
 
    # Test the new function in combination with other functions. Do not restrict the set
    # of functions and run for 10 minutes (600 seconds) or longer.
-   velox_expression_fuzzer_test --duration_sec 600 --logtostderr=1 --enable_variadic_signatures --velox_fuzzer_enable_complex_types --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse
+   velox_expression_fuzzer_test --duration_sec 600 --logtostderr=1 --enable_variadic_signatures --velox_fuzzer_enable_complex_types --velox_fuzzer_enable_decimal_type --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse
    ```
 
 Here are example PRs:

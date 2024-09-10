@@ -43,7 +43,8 @@ class DataSetBuilder {
   DataSetBuilder& makeDataset(
       RowTypePtr rowType,
       const size_t batchCount,
-      const size_t numRows);
+      const size_t numRows,
+      const bool withRecursiveNulls = true);
 
   // Adds high values to 'batches_' so that these values occur only in some row
   // groups. Tests skipping row groups based on row group stats.
@@ -136,6 +137,28 @@ class DataSetBuilder {
         }
         numbers->set(row, value);
         --remaining;
+      }
+    }
+    return *this;
+  }
+
+  template <typename T>
+  DataSetBuilder& withIntMainlyConstantForField(const common::Subfield& field) {
+    for (auto& batch : *batches_) {
+      std::optional<T> value;
+      auto* numbers = dwio::common::getChildBySubfield(batch.get(), field)
+                          ->as<FlatVector<T>>();
+      for (auto row = 0; row < numbers->size(); ++row) {
+        if (numbers->isNullAt(row)) {
+          continue;
+        }
+        if (folly::Random::randDouble01(rng_) < 0.95) {
+          if (!value.has_value()) {
+            value = numbers->valueAt(row);
+          } else {
+            numbers->set(row, *value);
+          }
+        }
       }
     }
     return *this;

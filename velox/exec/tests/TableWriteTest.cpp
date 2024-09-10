@@ -1104,6 +1104,33 @@ TEST_F(BasicTableWriteTest, roundTrip) {
   assertEqualResults({data}, {copy});
 }
 
+TEST_F(BasicTableWriteTest, targetFileName) {
+  constexpr const char* kFileName = "test.dwrf";
+  auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto directory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .tableWrite(
+                      directory->getPath(),
+                      dwio::common::FileFormat::DWRF,
+                      {},
+                      nullptr,
+                      kFileName)
+                  .planNode();
+  auto results = AssertQueryBuilder(plan).copyResults(pool());
+  auto* details = results->childAt(TableWriteTraits::kFragmentChannel)
+                      ->asUnchecked<SimpleVector<StringView>>();
+  auto detail = folly::parseJson(details->valueAt(1));
+  auto fileWriteInfos = detail["fileWriteInfos"];
+  ASSERT_EQ(1, fileWriteInfos.size());
+  ASSERT_EQ(fileWriteInfos[0]["writeFileName"].asString(), kFileName);
+  plan = PlanBuilder().tableScan(asRowType(data->type())).planNode();
+  AssertQueryBuilder(plan)
+      .split(makeHiveConnectorSplit(
+          fmt::format("{}/{}", directory->getPath(), kFileName)))
+      .assertResults(data);
+}
+
 class PartitionedTableWriterTest
     : public TableWriteTest,
       public testing::WithParamInterface<uint64_t> {
@@ -2360,6 +2387,8 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
         stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
     ASSERT_EQ(stats[1].runtimeStats["numWrittenFiles"].sum, 1);
     ASSERT_EQ(stats[1].runtimeStats["numWrittenFiles"].count, 1);
+    ASSERT_GE(stats[1].runtimeStats["writeIOTime"].sum, 0);
+    ASSERT_EQ(stats[1].runtimeStats["writeIOTime"].count, 1);
   }
 }
 
@@ -2387,8 +2416,8 @@ TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
     std::unordered_map<std::string, std::string> propFromFile{
         {"hive.immutable-partitions",
          testData.immutablePartitionsEnabled ? "true" : "false"}};
-    std::shared_ptr<const Config> config{
-        std::make_shared<core::MemConfig>(propFromFile)};
+    std::shared_ptr<const config::ConfigBase> config{
+        std::make_shared<config::ConfigBase>(std::move(propFromFile))};
     resetHiveConnector(config);
 
     auto input = makeVectors(10, 10);
@@ -3132,6 +3161,9 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
           ->customStats.at("numWrittenFiles")
           .sum,
       numWrittenFiles);
+  ASSERT_GE(
+      stats.operatorStats.at("TableWrite")->customStats.at("writeIOTime").sum,
+      0);
 }
 
 DEBUG_ONLY_TEST_P(
@@ -3596,7 +3628,15 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
       auto writerPlan =
           PlanBuilder()
               .values(vectors)
-              .tableWrite(outputDirectory->getPath(), {"c0"}, 4, {"c1"}, {"c2"})
+              .tableWrite(
+                  outputDirectory->getPath(),
+                  {"c0"},
+                  4,
+                  {"c1"},
+                  {
+                      std::make_shared<HiveSortingColumn>(
+                          "c2", core::SortOrder{false, false}),
+                  })
               .project({TableWriteTraits::rowCountColumnName()})
               .singleAggregation(
                   {},
@@ -3643,16 +3683,34 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
       createVectors(numBatches, rowType_, options);
   createDuckDbTable(vectors);
 
-  const std::vector<uint64_t> writerFlushThresholds{0, 1UL << 30};
-  for (uint64_t writerFlushThreshold : writerFlushThresholds) {
+  struct TestParam {
+    uint64_t bytesToReserve{0};
+    uint64_t writerFlushThreshold{0};
+  };
+  const std::vector<TestParam> testParams{
+      {0, 0}, {0, 1UL << 30}, {64UL << 20, 1UL << 30}};
+  for (const auto& testParam : testParams) {
     SCOPED_TRACE(fmt::format(
-        "writerFlushThreshold: {}", succinctBytes(writerFlushThreshold)));
+        "bytesToReserve: {}, writerFlushThreshold: {}",
+        succinctBytes(testParam.bytesToReserve),
+        succinctBytes(testParam.writerFlushThreshold)));
 
     auto memoryManager = createMemoryManager();
     auto arbitrator = memoryManager->arbitrator();
     auto queryCtx =
         newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
     ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
+
+    memory::MemoryPool* compressionPool{nullptr};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::dwrf::Writer::write",
+        std::function<void(dwrf::Writer*)>([&](dwrf::Writer* writer) {
+          if (testParam.bytesToReserve == 0 || compressionPool != nullptr) {
+            return;
+          }
+          compressionPool = &(writer->getContext().getMemoryPool(
+              dwrf::MemoryUsageCategory::OUTPUT_STREAM));
+        }));
 
     std::atomic<int> numInputs{0};
     SCOPED_TESTVALUE_SET(
@@ -3665,14 +3723,17 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
             return;
           }
 
+          if (testParam.bytesToReserve > 0) {
+            ASSERT_TRUE(compressionPool != nullptr);
+            compressionPool->maybeReserve(testParam.bytesToReserve);
+          }
+
           const auto fakeAllocationSize = arbitrator->stats().maxCapacityBytes -
-              op->pool()->parent()->reservedBytes();
-          if (writerFlushThreshold == 0) {
+              op->pool()->parent()->usedBytes();
+          if (testParam.writerFlushThreshold == 0) {
             auto* buffer = op->pool()->allocate(fakeAllocationSize);
             op->pool()->free(buffer, fakeAllocationSize);
           } else {
-            // The injected memory allocation fail if we set very high
-            // memory flush threshold.
             VELOX_ASSERT_THROW(
                 op->pool()->allocate(fakeAllocationSize),
                 "Exceeded memory pool");
@@ -3699,20 +3760,21 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
         .config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kWriterSpillEnabled, true)
         .config(
-            core::QueryConfig::kWriterFlushThresholdBytes, writerFlushThreshold)
+            core::QueryConfig::kWriterFlushThresholdBytes,
+            testParam.writerFlushThreshold)
         .plan(std::move(writerPlan))
         .assertResults(fmt::format("SELECT {}", numRows));
 
     ASSERT_EQ(
-
-        arbitrator->stats().numFailures, writerFlushThreshold == 0 ? 0 : 1);
+        arbitrator->stats().numFailures,
+        testParam.writerFlushThreshold == 0 ? 0 : 1);
     // We don't trigger reclaim on a writer if it doesn't meet the writer flush
     // threshold.
     ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 0);
+    ASSERT_GE(arbitrator->stats().numReclaimedBytes, testParam.bytesToReserve);
     waitForAllTasksToBeDeleted(3'000'000);
     queryCtx.reset();
-    ASSERT_EQ(arbitrator->stats().numReserves, 1);
-    ASSERT_EQ(arbitrator->stats().numReleases, 1);
+    ASSERT_EQ(arbitrator->stats().numShrinks, 1);
   }
 }
 
@@ -3792,7 +3854,6 @@ DEBUG_ONLY_TEST_F(
 
   ASSERT_EQ(arbitrator->stats().numFailures, 1);
   ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 1);
-  ASSERT_EQ(arbitrator->stats().numReserves, 1);
   waitForAllTasksToBeDeleted();
 }
 
@@ -3885,7 +3946,6 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 0);
   ASSERT_EQ(arbitrator->stats().numFailures, 0);
   ASSERT_GT(arbitrator->stats().numReclaimedBytes, 0);
-  ASSERT_EQ(arbitrator->stats().numReserves, 1);
   waitForAllTasksToBeDeleted();
 }
 
@@ -3942,7 +4002,15 @@ DEBUG_ONLY_TEST_F(
   auto writerPlan =
       PlanBuilder()
           .values(vectors)
-          .tableWrite(outputDirectory->getPath(), {"c0"}, 4, {"c1"}, {"c2"})
+          .tableWrite(
+              outputDirectory->getPath(),
+              {"c0"},
+              4,
+              {"c1"},
+              {
+                  std::make_shared<HiveSortingColumn>(
+                      "c2", core::SortOrder{false, false}),
+              })
           .project({TableWriteTraits::rowCountColumnName()})
           .singleAggregation(
               {},
@@ -3975,7 +4043,6 @@ DEBUG_ONLY_TEST_F(
 
   ASSERT_EQ(arbitrator->stats().numFailures, 1);
   ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 1);
-  ASSERT_EQ(arbitrator->stats().numReserves, 1);
   const auto updatedSpillStats = common::globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
   waitForAllTasksToBeDeleted();
@@ -4242,7 +4309,8 @@ DEBUG_ONLY_TEST_F(
   std::vector<RowVectorPtr> vectors =
       createVectors(rowType_, memoryCapacity / 8, fuzzerOpts_);
   const auto expectedResult =
-      runWriteTask(vectors, nullptr, 1, pool(), kHiveConnectorId, false).data;
+      runWriteTask(vectors, nullptr, false, 1, pool(), kHiveConnectorId, false)
+          .data;
   auto queryCtx =
       newQueryCtx(memory::memoryManager(), executor_.get(), memoryCapacity);
 
@@ -4267,7 +4335,14 @@ DEBUG_ONLY_TEST_F(
 
   std::thread queryThread([&]() {
     const auto result = runWriteTask(
-        vectors, queryCtx, 1, pool(), kHiveConnectorId, true, expectedResult);
+        vectors,
+        queryCtx,
+        false,
+        1,
+        pool(),
+        kHiveConnectorId,
+        true,
+        expectedResult);
   });
 
   writerCloseWait.await([&]() { return !writerCloseWaitFlag.load(); });

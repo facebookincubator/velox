@@ -17,14 +17,19 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/dwio/common/tests/utils/DataFiles.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/reader/ParquetReader.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h" // @manual
+#include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
+#include "velox/dwio/parquet/reader/PageReader.h" // @manual
+#include "velox/dwio/parquet/reader/ParquetReader.h" // @manual=//velox/connectors/hive:velox_hive_connector_parquet
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h" // @manual
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/external/date/tz.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
-#include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/HiveConfig.h" // @manual=//velox/connectors/hive:velox_hive_connector_parquet
+#include "velox/dwio/parquet/writer/Writer.h" // @manual
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -37,13 +42,16 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   using OperatorTestBase::assertQuery;
 
   void SetUp() {
+    OperatorTestBase::SetUp();
     registerParquetReaderFactory();
 
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                kHiveConnectorId, std::make_shared<core::MemConfig>());
+                kHiveConnectorId,
+                std::make_shared<config::ConfigBase>(
+                    std::unordered_map<std::string, std::string>()));
     connector::registerConnector(hiveConnector);
   }
 
@@ -122,14 +130,34 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     assertQuery(plan, splits_, sql);
   }
 
+  void assertSelectWithTimezone(
+      std::vector<std::string>&& outputColumnNames,
+      const std::string& sql,
+      const std::string& sessionTimezone) {
+    auto rowType = getRowType(std::move(outputColumnNames));
+    auto plan = PlanBuilder().tableScan(rowType).planNode();
+    std::vector<exec::Split> splits;
+    splits.reserve(splits_.size());
+    for (const auto& connectorSplit : splits_) {
+      splits.emplace_back(folly::copy(connectorSplit), -1);
+    }
+
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(core::QueryConfig::kSessionTimezone, sessionTimezone)
+        .splits(splits)
+        .assertResults(sql);
+  }
+
   void loadData(
       const std::string& filePath,
       RowTypePtr rowType,
       RowVectorPtr data,
       const std::optional<
           std::unordered_map<std::string, std::optional<std::string>>>&
-          partitionKeys = std::nullopt) {
-    splits_ = {makeSplit(filePath)};
+          partitionKeys = std::nullopt,
+      const std::optional<std::unordered_map<std::string, std::string>>&
+          infoColumns = std::nullopt) {
+    splits_ = {makeSplit(filePath, partitionKeys, infoColumns)};
     rowType_ = rowType;
     createDuckDbTable({data});
   }
@@ -140,8 +168,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     dwio::common::ReaderOptions readerOpts{pool.get()};
     auto reader = std::make_unique<ParquetReader>(
         std::make_unique<facebook::velox::dwio::common::BufferedInput>(
-            std::make_shared<LocalReadFile>(filePath),
-            readerOpts.getMemoryPool()),
+            std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),
         readerOpts);
     rowType_ = reader->rowType();
     createDuckDbTable({data});
@@ -156,9 +183,42 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
       const std::string& filePath,
       const std::optional<
           std::unordered_map<std::string, std::optional<std::string>>>&
-          partitionKeys = std::nullopt) {
+          partitionKeys = std::nullopt,
+      const std::optional<std::unordered_map<std::string, std::string>>&
+          infoColumns = std::nullopt) {
     return makeHiveConnectorSplits(
-        filePath, 1, dwio::common::FileFormat::PARQUET, partitionKeys)[0];
+        filePath,
+        1,
+        dwio::common::FileFormat::PARQUET,
+        partitionKeys,
+        infoColumns)[0];
+  }
+
+  // Write data to a parquet file on specified path.
+  // @param writeInt96AsTimestamp Write timestamp as Int96 if enabled.
+  void writeToParquetFile(
+      const std::string& path,
+      const std::vector<RowVectorPtr>& data,
+      bool writeInt96AsTimestamp) {
+    VELOX_CHECK_GT(data.size(), 0);
+
+    WriterOptions options;
+    options.writeInt96AsTimestamp = writeInt96AsTimestamp;
+
+    auto writeFile = std::make_unique<LocalWriteFile>(path, true, false);
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::move(writeFile), path);
+    auto childPool =
+        rootPool_->addAggregateChild("ParquetTableScanTest.Writer");
+    options.memoryPool = childPool.get();
+
+    auto writer = std::make_unique<Writer>(
+        std::move(sink), options, asRowType(data[0]->type()));
+
+    for (const auto& vector : data) {
+      writer->write(vector);
+    }
+    writer->close();
   }
 
  private:
@@ -324,6 +384,19 @@ TEST_F(ParquetTableScanTest, map) {
           }));
 
   assertSelectWithFilter({"map"}, {}, "", "SELECT map FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, nullMap) {
+  auto path = getExampleFilePath("null_map.parquet");
+  loadData(
+      path,
+      ROW({"i", "c"}, {VARCHAR(), MAP(VARCHAR(), VARCHAR())}),
+      makeRowVector(
+          {"i", "c"},
+          {makeConstant<std::string>("1", 1),
+           makeNullableMapVector<std::string, std::string>({std::nullopt})}));
+
+  assertSelectWithFilter({"i", "c"}, {}, "", "SELECT i, c FROM tmp");
 }
 
 // Core dump is fixed.
@@ -496,18 +569,24 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
 }
 
 TEST_F(ParquetTableScanTest, rowIndex) {
+  static const char* kPath = "file_path";
   // case 1: file not have `_tmp_metadata_row_index`, scan generate it for user.
+  auto filePath = getExampleFilePath("sample.parquet");
   loadData(
-      getExampleFilePath("sample.parquet"),
-      ROW({"a", "b", "_tmp_metadata_row_index"},
-          {BIGINT(), DOUBLE(), BIGINT()}),
+      filePath,
+      ROW({"a", "b", "_tmp_metadata_row_index", kPath},
+          {BIGINT(), DOUBLE(), BIGINT(), VARCHAR()}),
       makeRowVector(
-          {"a", "b", "_tmp_metadata_row_index"},
+          {"a", "b", "_tmp_metadata_row_index", kPath},
           {
               makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
               makeFlatVector<double>(20, [](auto row) { return row + 1; }),
               makeFlatVector<int64_t>(20, [](auto row) { return row; }),
-          }));
+              makeFlatVector<std::string>(
+                  20, [filePath](auto row) { return filePath; }),
+          }),
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{{kPath, filePath}});
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
       assignments;
   assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
@@ -520,6 +599,7 @@ TEST_F(ParquetTableScanTest, rowIndex) {
       connector::hive::HiveColumnHandle::ColumnType::kRegular,
       DOUBLE(),
       DOUBLE());
+  assignments[kPath] = synthesizedColumn(kPath, VARCHAR());
   assignments["_tmp_metadata_row_index"] =
       std::make_shared<connector::hive::HiveColumnHandle>(
           "_tmp_metadata_row_index",
@@ -540,6 +620,10 @@ TEST_F(ParquetTableScanTest, rowIndex) {
       {"_tmp_metadata_row_index"},
       assignments,
       "SELECT _tmp_metadata_row_index FROM tmp");
+  assertSelectWithAssignments(
+      {kPath, "_tmp_metadata_row_index"},
+      assignments,
+      fmt::format("SELECT {}, _tmp_metadata_row_index FROM tmp", kPath));
 
   // case 2: file has `_tmp_metadata_row_index` column, then use user data
   // insteads of generating it.
@@ -587,9 +671,9 @@ TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
       std::unordered_map<std::string, std::optional<std::string>>{
           {"c1", std::nullopt}});
 
-  auto c0 = makeColumnHandle(
+  std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
       "c0", BIGINT(), BIGINT(), {}, HiveColumnHandle::ColumnType::kRegular);
-  auto c1 = makeColumnHandle(
+  std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
       "c1",
       BIGINT(),
       BIGINT(),
@@ -611,6 +695,145 @@ TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
       "SELECT c0, c1 FROM tmp WHERE c1 IS NULL",
       std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>{
           {"c0", c0}, {"c1", c1}});
+}
+
+TEST_F(ParquetTableScanTest, sessionTimezone) {
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::parquet::PageReader::readPageHeader",
+      std::function<void(PageReader*)>(([&](PageReader* reader) {
+        VELOX_CHECK_EQ(reader->sessionTimezone()->name(), "Asia/Shanghai");
+      })));
+
+  // Read sample.parquet to verify if the sessionTimezone in the PageReader
+  // meets expectations.
+  loadData(
+      getExampleFilePath("sample.parquet"),
+      ROW({"a", "b"}, {BIGINT(), DOUBLE()}),
+      makeRowVector(
+          {"a", "b"},
+          {
+              makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+              makeFlatVector<double>(20, [](auto row) { return row + 1; }),
+          }));
+
+  assertSelectWithTimezone({"a"}, "SELECT a FROM tmp", "Asia/Shanghai");
+}
+
+TEST_F(ParquetTableScanTest, timestampFilter) {
+  // Timestamp-int96.parquet holds one column (t: TIMESTAMP) and
+  // 10 rows in one row group. Data is in SNAPPY compressed format.
+  // The values are:
+  // |t                  |
+  // +-------------------+
+  // |2015-06-01 19:34:56|
+  // |2015-06-02 19:34:56|
+  // |2001-02-03 03:34:06|
+  // |1998-03-01 08:01:06|
+  // |2022-12-23 03:56:01|
+  // |1980-01-24 00:23:07|
+  // |1999-12-08 13:39:26|
+  // |2023-04-21 09:09:34|
+  // |2000-09-12 22:36:29|
+  // |2007-12-12 04:27:56|
+  // +-------------------+
+  auto vector = makeFlatVector<Timestamp>(
+      {Timestamp(1433187296, 0),
+       Timestamp(1433273696, 0),
+       Timestamp(981171246, 0),
+       Timestamp(888739266, 0),
+       Timestamp(1671767761, 0),
+       Timestamp(317521387, 0),
+       Timestamp(944660366, 0),
+       Timestamp(1682068174, 0),
+       Timestamp(968798189, 0),
+       Timestamp(1197433676, 0)});
+
+  loadData(
+      getExampleFilePath("timestamp_int96.parquet"),
+      ROW({"t"}, {TIMESTAMP()}),
+      makeRowVector(
+          {"t"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter({"t"}, {}, "", "SELECT t from tmp");
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t < TIMESTAMP '2000-09-12 22:36:29'",
+      "SELECT t from tmp where t < TIMESTAMP '2000-09-12 22:36:29'");
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t <= TIMESTAMP '2000-09-12 22:36:29'",
+      "SELECT t from tmp where t <= TIMESTAMP '2000-09-12 22:36:29'");
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t > TIMESTAMP '1980-01-24 00:23:07'",
+      "SELECT t from tmp where t > TIMESTAMP '1980-01-24 00:23:07'");
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t >= TIMESTAMP '1980-01-24 00:23:07'",
+      "SELECT t from tmp where t >= TIMESTAMP '1980-01-24 00:23:07'");
+  assertSelectWithFilter(
+      {"t"},
+      {},
+      "t == TIMESTAMP '2022-12-23 03:56:01'",
+      "SELECT t from tmp where t == TIMESTAMP '2022-12-23 03:56:01'");
+}
+
+TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
+  // Write timestamp data into parquet.
+  constexpr int kSize = 10;
+  auto vector = makeRowVector({
+      makeFlatVector<Timestamp>(
+          kSize, [](auto i) { return Timestamp(i, i * 1'001'001); }),
+  });
+  auto schema = asRowType(vector->type());
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, true);
+  auto plan = PlanBuilder().tableScan(schema).planNode();
+
+  // Read timestamp data from parquet with microsecond precision.
+  CursorParameters params;
+  std::shared_ptr<folly::Executor> executor =
+      std::make_shared<folly::CPUThreadPoolExecutor>(
+          std::thread::hardware_concurrency());
+  std::shared_ptr<core::QueryCtx> queryCtx =
+      core::QueryCtx::create(executor.get());
+  std::unordered_map<std::string, std::string> session = {
+      {std::string(connector::hive::HiveConfig::kReadTimestampUnitSession),
+       "6"}};
+  queryCtx->setConnectorSessionOverridesUnsafe(
+      kHiveConnectorId, std::move(session));
+  params.queryCtx = queryCtx;
+  params.planNode = plan;
+  const int numSplitsPerFile = 1;
+
+  bool noMoreSplits = false;
+  auto addSplits = [&](exec::Task* task) {
+    if (!noMoreSplits) {
+      auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
+          {file->getPath()},
+          numSplitsPerFile,
+          dwio::common::FileFormat::PARQUET);
+      for (const auto& split : splits) {
+        task->addSplit("0", exec::Split(split));
+      }
+      task->noMoreSplits("0");
+    }
+    noMoreSplits = true;
+  };
+  auto result = readCursor(params, addSplits);
+  ASSERT_TRUE(waitForTaskCompletion(result.first->task().get()));
+  auto expected = makeRowVector({
+      makeFlatVector<Timestamp>(
+          kSize, [](auto i) { return Timestamp(i, i * 1'001'000); }),
+  });
+  assertEqualResults({expected}, result.second);
 }
 
 int main(int argc, char** argv) {

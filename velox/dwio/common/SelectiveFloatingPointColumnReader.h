@@ -41,11 +41,13 @@ class SelectiveFloatingPointColumnReader : public SelectiveColumnReader {
   }
 
   template <typename Reader, bool kEncodingHasNulls>
-  void
-  readCommon(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls);
+  void readCommon(
+      vector_size_t offset,
+      const RowSet& rows,
+      const uint64_t* incomingNulls);
 
-  void getValues(RowSet rows, VectorPtr* result) override {
-    getFlatValues<TRequested, TRequested>(rows, result, requestedType_);
+  void getValues(const RowSet& rows, VectorPtr* result) override {
+    getFlatValues<TData, TRequested>(rows, result, requestedType_);
   }
 
  protected:
@@ -83,7 +85,7 @@ void SelectiveFloatingPointColumnReader<TData, TRequested>::readHelper(
     ExtractValues extractValues) {
   reinterpret_cast<Reader*>(this)->readWithVisitor(
       rows,
-      ColumnVisitor<TRequested, TFilter, ExtractValues, isDense>(
+      ColumnVisitor<TData, TFilter, ExtractValues, isDense>(
           *reinterpret_cast<TFilter*>(filter), this, rows, extractValues));
 }
 
@@ -145,27 +147,17 @@ void SelectiveFloatingPointColumnReader<TData, TRequested>::processValueHook(
     RowSet rows,
     ValueHook* hook) {
   switch (hook->kind()) {
-    case aggregate::AggregationHook::kSumFloatToDouble:
+    case aggregate::AggregationHook::kDoubleSum:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
-          &alwaysTrue(),
-          rows,
-          ExtractToHook<aggregate::SumHook<float, double>>(hook));
+          &alwaysTrue(), rows, ExtractToHook<aggregate::SumHook<double>>(hook));
       break;
-    case aggregate::AggregationHook::kSumDoubleToDouble:
-      readHelper<Reader, velox::common::AlwaysTrue, isDense>(
-          &alwaysTrue(),
-          rows,
-          ExtractToHook<aggregate::SumHook<double, double>>(hook));
-      break;
-    case aggregate::AggregationHook::kFloatMax:
-    case aggregate::AggregationHook::kDoubleMax:
+    case aggregate::AggregationHook::kFloatingPointMax:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
           &alwaysTrue(),
           rows,
           ExtractToHook<aggregate::MinMaxHook<TRequested, false>>(hook));
       break;
-    case aggregate::AggregationHook::kFloatMin:
-    case aggregate::AggregationHook::kDoubleMin:
+    case aggregate::AggregationHook::kFloatingPointMin:
       readHelper<Reader, velox::common::AlwaysTrue, isDense>(
           &alwaysTrue(),
           rows,
@@ -181,9 +173,9 @@ template <typename TData, typename TRequested>
 template <typename Reader, bool kEncodingHasNulls>
 void SelectiveFloatingPointColumnReader<TData, TRequested>::readCommon(
     vector_size_t offset,
-    RowSet rows,
+    const RowSet& rows,
     const uint64_t* incomingNulls) {
-  prepareRead<TRequested>(offset, rows, incomingNulls);
+  prepareRead<TData>(offset, rows, incomingNulls);
   bool isDense = rows.back() == rows.size() - 1;
   if (scanSpec_->keepValues()) {
     if (scanSpec_->valueHook()) {

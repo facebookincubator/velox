@@ -56,7 +56,7 @@ class RepeatedLengths {
 class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
  public:
   MapColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+      const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec);
@@ -74,7 +74,7 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
 
   void read(
       vector_size_t offset,
-      RowSet rows,
+      const RowSet& rows,
       const uint64_t* /*incomingNulls*/) override;
 
   void setLengths(BufferPtr lengths) {
@@ -112,7 +112,7 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
 class ListColumnReader : public dwio::common::SelectiveListColumnReader {
  public:
   ListColumnReader(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+      const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec);
@@ -130,7 +130,7 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
 
   void read(
       vector_size_t offset,
-      RowSet rows,
+      const RowSet& rows,
       const uint64_t* /*incomingNulls*/) override;
 
   void setLengths(BufferPtr lengths) {

@@ -110,7 +110,7 @@ void ensureRepDefs(
 }
 
 MapColumnReader::MapColumnReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+    const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
     common::ScanSpec& scanSpec)
@@ -164,10 +164,10 @@ void MapColumnReader::setLengthsFromRepDefs(PageReader& pageReader) {
   auto repDefRange = pageReader.repDefRange();
   int32_t numRepDefs = repDefRange.second - repDefRange.first;
   BufferPtr lengths = std::move(lengths_.lengths());
-  dwio::common::ensureCapacity<int32_t>(lengths, numRepDefs, &memoryPool_);
+  dwio::common::ensureCapacity<int32_t>(lengths, numRepDefs, memoryPool_);
   memset(lengths->asMutable<uint64_t>(), 0, lengths->size());
   dwio::common::ensureCapacity<uint64_t>(
-      nullsInReadRange_, bits::nwords(numRepDefs), &memoryPool_);
+      nullsInReadRange_, bits::nwords(numRepDefs), memoryPool_);
   auto numLists = pageReader.getLengthsAndNulls(
       LevelMode::kList,
       levelInfo_,
@@ -184,7 +184,7 @@ void MapColumnReader::setLengthsFromRepDefs(PageReader& pageReader) {
 
 void MapColumnReader::read(
     vector_size_t offset,
-    RowSet rows,
+    const RowSet& rows,
     const uint64_t* incomingNulls) {
   // The topmost list reader reads the repdefs for the left subtree.
   ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
@@ -215,12 +215,11 @@ void MapColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
     const dwio::common::StatsContext& context,
     dwio::common::FormatData::FilterRowGroupsResult& result) const {
-  keyReader_->filterRowGroups(rowGroupSize, context, result);
-  elementReader_->filterRowGroups(rowGroupSize, context, result);
+  // empty placeholder to avoid incorrect calling on parent's impl
 }
 
 ListColumnReader::ListColumnReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+    const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
     common::ScanSpec& scanSpec)
@@ -269,10 +268,10 @@ void ListColumnReader::setLengthsFromRepDefs(PageReader& pageReader) {
   auto repDefRange = pageReader.repDefRange();
   int32_t numRepDefs = repDefRange.second - repDefRange.first;
   BufferPtr lengths = std::move(lengths_.lengths());
-  dwio::common::ensureCapacity<int32_t>(lengths, numRepDefs, &memoryPool_);
+  dwio::common::ensureCapacity<int32_t>(lengths, numRepDefs, memoryPool_);
   memset(lengths->asMutable<uint64_t>(), 0, lengths->size());
   dwio::common::ensureCapacity<uint64_t>(
-      nullsInReadRange_, bits::nwords(numRepDefs), &memoryPool_);
+      nullsInReadRange_, bits::nwords(numRepDefs), memoryPool_);
   auto numLists = pageReader.getLengthsAndNulls(
       LevelMode::kList,
       levelInfo_,
@@ -288,7 +287,8 @@ void ListColumnReader::setLengthsFromRepDefs(PageReader& pageReader) {
 }
 void ListColumnReader::read(
     vector_size_t offset,
-    RowSet rows,
+
+    const RowSet& rows,
     const uint64_t* incomingNulls) {
   // The topmost list reader reads the repdefs for the left subtree.
   ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
@@ -318,7 +318,7 @@ void ListColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
     const dwio::common::StatsContext& context,
     dwio::common::FormatData::FilterRowGroupsResult& result) const {
-  child_->filterRowGroups(rowGroupSize, context, result);
+  // empty placeholder to avoid incorrect calling on parent's impl
 }
 
 } // namespace facebook::velox::parquet

@@ -34,6 +34,7 @@ add_executable(
   ReaderTest.cpp
   RetryTests.cpp
   TestBufferedInput.cpp
+  ThrottlerTest.cpp
   TypeTests.cpp
   UnitLoaderToolsTests.cpp
   WriterTest.cpp
@@ -49,22 +50,31 @@ target_link_libraries(
   Folly::folly
   ${TEST_LINK_LIBS}
   gflags::gflags
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   glog::glog
-  fmt::fmt)
+  fmt::fmt
+  protobuf::libprotobuf)
 
 add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
 
 target_link_libraries(
-  velox_dwio_common_data_buffer_benchmark velox_dwio_common velox_memory
-  velox_dwio_common_exception Folly::folly ${FOLLY_BENCHMARK})
+  velox_dwio_common_data_buffer_benchmark
+  velox_dwio_common
+  velox_memory
+  velox_dwio_common_exception
+  Folly::folly
+  ${FOLLY_BENCHMARK})
 
 add_executable(velox_dwio_common_int_decoder_benchmark IntDecoderBenchmark.cpp)
 target_link_libraries(
-  velox_dwio_common_int_decoder_benchmark velox_dwio_common_exception
-  velox_exception velox_dwio_dwrf_common Folly::folly ${FOLLY_BENCHMARK})
+  velox_dwio_common_int_decoder_benchmark
+  velox_dwio_common_exception
+  velox_exception
+  velox_dwio_dwrf_common
+  Folly::folly
+  ${FOLLY_BENCHMARK})
 
 if(VELOX_ENABLE_ARROW AND VELOX_ENABLE_BENCHMARKS)
   add_subdirectory(Lemire/FastPFor)

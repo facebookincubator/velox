@@ -31,27 +31,28 @@ DECLARE_bool(experimental_enable_legacy_cast);
 
 namespace facebook::velox::util {
 
-struct DefaultCastPolicy {
+struct PrestoCastPolicy {
   static constexpr bool truncate = false;
   static constexpr bool legacyCast = false;
+  // Throws if we encounter unicode when converting to int
+  // See issue : https://github.com/facebookincubator/velox/issues/10803
+  // Remove when unicode support is added.
+  static constexpr bool throwOnUnicode = true;
 };
 
-struct TruncateCastPolicy {
+struct SparkCastPolicy {
   static constexpr bool truncate = true;
   static constexpr bool legacyCast = false;
+  static constexpr bool throwOnUnicode = false;
 };
 
 struct LegacyCastPolicy {
   static constexpr bool truncate = false;
   static constexpr bool legacyCast = true;
+  static constexpr bool throwOnUnicode = false;
 };
 
-struct TruncateLegacyCastPolicy {
-  static constexpr bool truncate = true;
-  static constexpr bool legacyCast = true;
-};
-
-template <TypeKind KIND, typename = void, typename TPolicy = DefaultCastPolicy>
+template <TypeKind KIND, typename = void, typename TPolicy = PrestoCastPolicy>
 struct Converter {
   using TTo = typename TypeTraits<KIND>::NativeType;
 
@@ -64,6 +65,62 @@ struct Converter {
   }
 };
 
+/// Casts a string to a boolean. Allows a fixed set of strings. Casting from
+/// other strings throws.
+/// @tparam TPolicy PrestoCastPolicy and LegacyCastPolicy allow `t, f, 1, 0,
+/// true, false` and their upper case equivalents. SparkCastPolicy additionally
+/// allows 'y, n, yes, no' and their upper case equivalents.
+template <typename TPolicy>
+Expected<bool> castToBoolean(const char* data, size_t len) {
+  const auto& TU = static_cast<int (*)(int)>(std::toupper);
+
+  if (len == 1) {
+    auto character = TU(data[0]);
+    if (character == 'T' || character == '1') {
+      return true;
+    }
+    if (character == 'F' || character == '0') {
+      return false;
+    }
+    if constexpr (std::is_same_v<TPolicy, SparkCastPolicy>) {
+      if (character == 'Y') {
+        return true;
+      }
+      if (character == 'N') {
+        return false;
+      }
+    }
+  }
+
+  // Case-insensitive 'true'.
+  if ((len == 4) && (TU(data[0]) == 'T') && (TU(data[1]) == 'R') &&
+      (TU(data[2]) == 'U') && (TU(data[3]) == 'E')) {
+    return true;
+  }
+
+  // Case-insensitive 'false'.
+  if ((len == 5) && (TU(data[0]) == 'F') && (TU(data[1]) == 'A') &&
+      (TU(data[2]) == 'L') && (TU(data[3]) == 'S') && (TU(data[4]) == 'E')) {
+    return false;
+  }
+
+  if constexpr (std::is_same_v<TPolicy, SparkCastPolicy>) {
+    // Case-insensitive 'yes'.
+    if ((len == 3) && (TU(data[0]) == 'Y') && (TU(data[1]) == 'E') &&
+        (TU(data[2]) == 'S')) {
+      return true;
+    }
+
+    // Case-insensitive 'no'.
+    if ((len == 2) && (TU(data[0]) == 'N') && (TU(data[1]) == 'O')) {
+      return false;
+    }
+  }
+
+  return folly::makeUnexpected(Status::UserError(
+      "Cannot cast {} to BOOLEAN", std::string_view(data, len)));
+}
+
 namespace detail {
 
 template <typename T, typename F>
@@ -71,7 +128,7 @@ Expected<T> callFollyTo(const F& v) {
   const auto result = folly::tryTo<T>(v);
   if (result.hasError()) {
     if (threadSkipErrorDetails()) {
-      return folly::makeUnexpected(Status::UserError(""));
+      return folly::makeUnexpected(Status::UserError());
     }
     return folly::makeUnexpected(Status::UserError(
         "{}", folly::makeConversionError(result.error(), "").what()));
@@ -98,15 +155,15 @@ struct Converter<TypeKind::BOOLEAN, void, TPolicy> {
   }
 
   static Expected<T> tryCast(folly::StringPiece v) {
-    return detail::callFollyTo<T>(v);
+    return castToBoolean<TPolicy>(v.data(), v.size());
   }
 
   static Expected<T> tryCast(const StringView& v) {
-    return detail::callFollyTo<T>(folly::StringPiece(v));
+    return castToBoolean<TPolicy>(v.data(), v.size());
   }
 
   static Expected<T> tryCast(const std::string& v) {
-    return detail::callFollyTo<T>(v);
+    return castToBoolean<TPolicy>(v.data(), v.length());
   }
 
   static Expected<T> tryCast(const bool& v) {
@@ -209,8 +266,8 @@ struct Converter<
     bool decimalPoint = false;
     if (v[0] == '-' || v[0] == '+') {
       if (len == 1) {
-        return folly::makeUnexpected(Status::UserError(fmt::format(
-            "Cannot cast an '{}' string to an integral value.", v[0])));
+        return folly::makeUnexpected(Status::UserError(
+            "Cannot cast an '{}' string to an integral value.", v[0]));
       }
       negative = v[0] == '-';
       index = 1;
@@ -600,15 +657,18 @@ struct Converter<TypeKind::TIMESTAMP, void, TPolicy> {
   }
 
   static Expected<Timestamp> tryCast(folly::StringPiece v) {
-    return fromTimestampString(v.data(), v.size());
+    return fromTimestampString(
+        v.data(), v.size(), TimestampParseMode::kPrestoCast);
   }
 
   static Expected<Timestamp> tryCast(const StringView& v) {
-    return fromTimestampString(v.data(), v.size());
+    return fromTimestampString(
+        v.data(), v.size(), TimestampParseMode::kPrestoCast);
   }
 
   static Expected<Timestamp> tryCast(const std::string& v) {
-    return fromTimestampString(v.data(), v.size());
+    return fromTimestampString(
+        v.data(), v.size(), TimestampParseMode::kPrestoCast);
   }
 };
 

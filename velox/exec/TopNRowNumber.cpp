@@ -192,12 +192,8 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
 
     SelectivityVector rows(numInput);
     table_->prepareForGroupProbe(
-        *lookup_,
-        input,
-        rows,
-        false,
-        BaseHashTable::kNoSpillInputStartPartitionBit);
-    table_->groupProbe(*lookup_);
+        *lookup_, input, rows, BaseHashTable::kNoSpillInputStartPartitionBit);
+    table_->groupProbe(*lookup_, BaseHashTable::kNoSpillInputStartPartitionBit);
 
     // Initialize new partitions.
     initializeNewPartitions();
@@ -286,8 +282,11 @@ void TopNRowNumber::noMoreInput() {
     spill();
 
     VELOX_CHECK_NULL(merge_);
-    auto spillPartition = spiller_->finishSpill();
-    merge_ = spillPartition.createOrderedReader(pool(), &spillStats_);
+    SpillPartitionSet spillPartitionSet;
+    spiller_->finishSpill(spillPartitionSet);
+    VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
+    merge_ = spillPartitionSet.begin()->second->createOrderedReader(
+        spillConfig_->readBufferSize, pool(), &spillStats_);
   } else {
     outputRows_.resize(outputBatchSize_);
   }

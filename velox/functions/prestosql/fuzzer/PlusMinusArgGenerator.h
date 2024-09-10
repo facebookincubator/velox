@@ -19,7 +19,6 @@
 
 namespace facebook::velox::exec::test {
 
-// An argument type generator for decimal plus and minus Presto functions.
 class PlusMinusArgGenerator : public fuzzer::DecimalArgGeneratorBase {
  public:
   PlusMinusArgGenerator() {

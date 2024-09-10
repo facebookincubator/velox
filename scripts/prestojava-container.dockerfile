@@ -13,9 +13,9 @@
 # limitations under the License.
 # Build the test and build container for presto_cpp
 #
-FROM ghcr.io/facebookincubator/velox-dev:centos8 
+FROM ghcr.io/facebookincubator/velox-dev:centos9 
 
-ARG PRESTO_VERSION=0.286
+ARG PRESTO_VERSION=0.288
 
 ADD scripts /velox/scripts/
 RUN wget https://repo1.maven.org/maven2/com/facebook/presto/presto-server/${PRESTO_VERSION}/presto-server-${PRESTO_VERSION}.tar.gz

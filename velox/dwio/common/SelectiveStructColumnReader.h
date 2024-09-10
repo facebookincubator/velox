@@ -40,10 +40,12 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
       const dwio::common::StatsContext& context,
       FormatData::FilterRowGroupsResult&) const override;
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
-      override;
+  void read(
+      vector_size_t offset,
+      const RowSet& rows,
+      const uint64_t* incomingNulls) override;
 
-  void getValues(RowSet rows, VectorPtr* result) override;
+  void getValues(const RowSet& rows, VectorPtr* result) override;
 
   uint64_t numReads() const {
     return numReads_;
@@ -111,22 +113,21 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   static constexpr int32_t kConstantChildSpecSubscript = -1;
 
   SelectiveStructColumnReaderBase(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+      const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       FormatParams& params,
       velox::common::ScanSpec& scanSpec,
       bool isRoot = false)
-      : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
-        requestedType_(requestedType),
+      : SelectiveColumnReader(requestedType, fileType, params, scanSpec),
         debugString_(
             getExceptionContext().message(VeloxException::Type::kSystem)),
         isRoot_(isRoot) {}
 
-  // Records the number of nulls added by 'this' between the end
-  // position of each child reader and the end of the range of
-  // 'read(). This must be done also if a child is not read so that we
-  // know how much to skip when seeking forward within the row group.
-  void recordParentNullsInChildren(vector_size_t offset, RowSet rows);
+  /// Records the number of nulls added by 'this' between the end position of
+  /// each child reader and the end of the range of 'read(). This must be done
+  /// also if a child is not read so that we know how much to skip when seeking
+  /// forward within the row group.
+  void recordParentNullsInChildren(vector_size_t offset, const RowSet& rows);
 
   bool hasDeletion() const final {
     return hasDeletion_;
@@ -138,7 +139,16 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
 
   void fillOutputRowsFromMutation(vector_size_t size);
 
-  const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
+  // Context information obtained from ExceptionContext. Stored here
+  // so that LazyVector readers under this can add this to their
+  // ExceptionContext. Allows contextualizing reader errors to split
+  // and query. Set at construction, which takes place on first
+  // use. If no ExceptionContext is in effect, this is "".
+  const std::string debugString_;
+
+  // Whether or not this is the root Struct that represents entire rows of the
+  // table.
+  const bool isRoot_;
 
   std::vector<SelectiveColumnReader*> children_;
 
@@ -158,20 +168,10 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   bool hasDeletion_ = false;
 
   bool fillMutatedOutputRows_ = false;
-
-  // Context information obtained from ExceptionContext. Stored here
-  // so that LazyVector readers under this can add this to their
-  // ExceptionContext. Allows contextualizing reader errors to split
-  // and query. Set at construction, which takes place on first
-  // use. If no ExceptionContext is in effect, this is "".
-  const std::string debugString_;
-
-  // Whether or not this is the root Struct that represents entire rows of the
-  // table.
-  const bool isRoot_;
 };
 
-struct SelectiveStructColumnReader : SelectiveStructColumnReaderBase {
+class SelectiveStructColumnReader : public SelectiveStructColumnReaderBase {
+ public:
   using SelectiveStructColumnReaderBase::SelectiveStructColumnReaderBase;
 
   void addChild(std::unique_ptr<SelectiveColumnReader> child) {
@@ -210,8 +210,8 @@ class SelectiveFlatMapColumnReaderHelper {
       reader_.children_[i] = keyNodes_[i].reader.get();
       reader_.children_[i]->setIsFlatMapValue(true);
     }
-    if (auto type = reader_.requestedType_->type()->childAt(1); type->isRow()) {
-      childValues_ = BaseVector::create(type, 0, &reader_.memoryPool_);
+    if (auto type = reader_.requestedType_->childAt(1); type->isRow()) {
+      childValues_ = BaseVector::create(type, 0, reader_.memoryPool_);
     }
   }
 
@@ -227,8 +227,8 @@ class SelectiveFlatMapColumnReaderHelper {
       result->resize(size);
     } else {
       VLOG(1) << "Reallocating result MAP vector of size " << size;
-      result = BaseVector::create(
-          reader_.requestedType_->type(), size, &reader_.memoryPool_);
+      result =
+          BaseVector::create(reader_.requestedType_, size, reader_.memoryPool_);
     }
     return *result->asUnchecked<MapVector>();
   }
@@ -393,7 +393,6 @@ SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::calculateOffsets(
   for (vector_size_t i = 0; i < rows.size(); ++i) {
     if (!reader_.returnReaderNulls_ && nulls &&
         bits::isBitNull(nulls, rows[i])) {
-      bits::setNull(reader_.rawResultNulls_, i);
       reader_.anyNulls_ = true;
     }
     offsets[i] = numNestedRows;
@@ -463,8 +462,7 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::copyValues(
       }
     }
     if (strKeySize > 0) {
-      auto buf =
-          AlignedBuffer::allocate<char>(strKeySize, &reader_.memoryPool_);
+      auto buf = AlignedBuffer::allocate<char>(strKeySize, reader_.memoryPool_);
       rawStrKeyBuffer = buf->template asMutable<char>();
       flatKeys->addStringBuffer(buf);
       strKeySize = 0;
@@ -549,7 +547,7 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::getValues(
   std::copy_backward(
       rawOffsets, rawOffsets + rows.size() - 1, rawOffsets + rows.size());
   rawOffsets[0] = 0;
-  result->get()->setNulls(reader_.resultNulls());
+  reader_.setComplexNulls(rows, *result);
 }
 
 } // namespace facebook::velox::dwio::common

@@ -43,15 +43,13 @@ class Aggregation : public WaveOperator {
 
   void flush(bool noMoreInput) override;
 
-  int32_t canAdvance(WaveStream& stream) override;
+  AdvanceResult canAdvance(WaveStream& stream) override;
 
   void schedule(WaveStream& stream, int32_t maxRows) override;
 
   bool isFinished() const override {
     return finished_;
   }
-
-  vector_size_t outputSize(WaveStream&) const override;
 
   std::string toString() const override {
     return "Aggregation";

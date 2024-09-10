@@ -583,12 +583,13 @@ TEST_F(StringImplTest, getByteRange) {
     auto expectedEndByteIndex = strlen(unicodeString);
 
     // Find the byte range of unicodeString[i, end]
-    auto range = getByteRange</*isAscii*/ false>(unicodeString, i, 6 - i + 1);
+    auto range =
+        getByteRange</*isAscii*/ false>(unicodeString, 12, i, 6 - i + 1);
 
     EXPECT_EQ(expectedStartByteIndex, range.first);
     EXPECT_EQ(expectedEndByteIndex, range.second);
 
-    range = getByteRange</*isAscii*/ false>(unicodeString, i, 6 - i + 1);
+    range = getByteRange</*isAscii*/ false>(unicodeString, 12, i, 6 - i + 1);
 
     EXPECT_EQ(expectedStartByteIndex, range.first);
     EXPECT_EQ(expectedEndByteIndex, range.second);
@@ -598,13 +599,14 @@ TEST_F(StringImplTest, getByteRange) {
 
   // This exercises bad unicode byte in determining startByteIndex.
   std::string badUnicode = "aa\xff  ";
-  auto range = getByteRange<false>(badUnicode.data(), 4, 3);
+  auto range =
+      getByteRange<false>(badUnicode.data(), badUnicode.length(), 4, 2);
   EXPECT_EQ(range.first, 3);
-  EXPECT_EQ(range.second, 6);
+  EXPECT_EQ(range.second, 5);
 
   // This exercises bad unicode byte in determining endByteIndex.
   badUnicode = "\xff aa";
-  range = getByteRange<false>(badUnicode.data(), 1, 3);
+  range = getByteRange<false>(badUnicode.data(), badUnicode.length(), 1, 3);
   EXPECT_EQ(range.first, 0);
   EXPECT_EQ(range.second, 3);
 }
@@ -650,10 +652,18 @@ TEST_F(StringImplTest, pad) {
                              const std::string& padString) {
     core::StringWriter output;
 
-    EXPECT_THROW(
-        (facebook::velox::functions::stringImpl::pad<true, true>(
-            output, StringView(string), size, StringView(padString))),
-        VeloxUserError);
+    bool padStringIsAscii = isAscii(padString.c_str(), padString.size());
+    if (padStringIsAscii) {
+      EXPECT_THROW(
+          (facebook::velox::functions::stringImpl::pad<true, true>(
+              output, StringView(string), size, StringView(padString))),
+          VeloxUserError);
+    } else {
+      EXPECT_THROW(
+          (facebook::velox::functions::stringImpl::pad<true, false>(
+              output, StringView(string), size, StringView(padString))),
+          VeloxUserError);
+    }
   };
 
   // ASCII string with various values for size and padString
@@ -710,6 +720,9 @@ TEST_F(StringImplTest, pad) {
   runTest(
       "abcd\xff \xff ef", 11, "0", "0abcd\xff \xff ef", "abcd\xff \xff ef0");
   runTest("abcd\xff ef", 6, "0", "abcd\xff ", "abcd\xff ");
+  // Testcase for when padString is a sequence of unicode continuation bytes
+  // for which effective length is 0.
+  runTestUserError(/*string=*/"\u4FE1", /*size=*/6, /*padString=*/"\xBF\xBF");
 }
 
 // Make sure that utf8proc_codepoint returns invalid codepoint (-1) for
@@ -755,4 +768,14 @@ TEST_F(StringImplTest, utf8proc_codepoint) {
 
 TEST_F(StringImplTest, isUnicodeWhiteSpace) {
   EXPECT_FALSE(isUnicodeWhiteSpace(-1));
+}
+
+TEST_F(StringImplTest, isAscii) {
+  std::string s(101, 'a');
+  ASSERT_TRUE(isAscii(s.data(), 1));
+  ASSERT_TRUE(isAscii(s.data(), s.size()));
+  const char* alpha = "\u03b1";
+  memcpy(&s[0], alpha, strlen(alpha));
+  ASSERT_FALSE(isAscii(s.data(), strlen(alpha)));
+  ASSERT_FALSE(isAscii(s.data(), s.size()));
 }

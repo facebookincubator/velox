@@ -21,30 +21,30 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <glog/logging.h>
 
+#include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
-#include "velox/core/Config.h"
 
 namespace facebook::velox::filesystems::abfs {
 using namespace Azure::Storage::Blobs;
 
 class AbfsConfig {
  public:
-  AbfsConfig(const Config* config) : config_(config) {}
+  AbfsConfig(const config::ConfigBase* config) : config_(config) {}
 
   std::string connectionString(const std::string& path) const {
     auto abfsAccount = AbfsAccount(path);
     auto key = abfsAccount.credKey();
     VELOX_USER_CHECK(
-        config_->isValueExists(key), "Failed to find storage credentials");
+        config_->valueExists(key), "Failed to find storage credentials");
 
-    return abfsAccount.connectionString(config_->get(key).value());
+    return abfsAccount.connectionString(config_->get<std::string>(key).value());
   }
 
  private:
-  const Config* config_;
+  const config::ConfigBase* config_;
 };
 
 class AbfsReadFile::Impl {
@@ -113,9 +113,10 @@ class AbfsReadFile::Impl {
     return length;
   }
 
-  void preadv(
+  uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs) const {
+    size_t length = 0;
     VELOX_CHECK_EQ(regions.size(), iobufs.size());
     for (size_t i = 0; i < regions.size(); ++i) {
       const auto& region = regions[i];
@@ -123,7 +124,10 @@ class AbfsReadFile::Impl {
       output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
       pread(region.offset, region.length, output.writableData());
       output.append(region.length);
+      length += region.length;
     }
+
+    return length;
   }
 
   uint64_t size() const {
@@ -192,7 +196,7 @@ uint64_t AbfsReadFile::preadv(
   return impl_->preadv(offset, buffers);
 }
 
-void AbfsReadFile::preadv(
+uint64_t AbfsReadFile::preadv(
     folly::Range<const common::Region*> regions,
     folly::Range<folly::IOBuf*> iobufs) const {
   return impl_->preadv(regions, iobufs);
@@ -220,7 +224,7 @@ uint64_t AbfsReadFile::getNaturalReadSize() const {
 
 class AbfsFileSystem::Impl {
  public:
-  explicit Impl(const Config* config) : abfsConfig_(config) {
+  explicit Impl(const config::ConfigBase* config) : abfsConfig_(config) {
     LOG(INFO) << "Init Azure Blob file system";
   }
 
@@ -238,7 +242,8 @@ class AbfsFileSystem::Impl {
   std::shared_ptr<folly::Executor> ioExecutor_;
 };
 
-AbfsFileSystem::AbfsFileSystem(const std::shared_ptr<const Config>& config)
+AbfsFileSystem::AbfsFileSystem(
+    const std::shared_ptr<const config::ConfigBase>& config)
     : FileSystem(config) {
   impl_ = std::make_shared<Impl>(config.get());
 }

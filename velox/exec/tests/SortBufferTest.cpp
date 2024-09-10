@@ -35,10 +35,8 @@ namespace facebook::velox::functions::test {
 class SortBufferTest : public OperatorTestBase {
  protected:
   void SetUp() override {
+    OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
-    if (!isRegisteredVectorSerde()) {
-      this->registerVectorSerde();
-    }
     rng_.seed(123);
   }
 
@@ -55,6 +53,7 @@ class SortBufferTest : public OperatorTestBase {
         "0.0.0",
         0,
         0,
+        1 << 20,
         executor_.get(),
         5,
         10,
@@ -65,6 +64,9 @@ class SortBufferTest : public OperatorTestBase {
         0,
         "none");
   }
+
+  const velox::common::PrefixSortConfig prefixSortConfig_ =
+      velox::common::PrefixSortConfig{std::numeric_limits<int32_t>::max(), 130};
 
   const RowTypePtr inputType_ = ROW(
       {{"c0", BIGINT()},
@@ -124,7 +126,8 @@ TEST_F(SortBufferTest, singleKey) {
         sortColumnIndices_,
         testData.sortCompareFlags,
         pool_.get(),
-        &nonReclaimableSection_);
+        &nonReclaimableSection_,
+        prefixSortConfig_);
 
     RowVectorPtr data = makeRowVector(
         {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
@@ -154,7 +157,8 @@ TEST_F(SortBufferTest, multipleKeys) {
       sortColumnIndices_,
       sortCompareFlags_,
       pool_.get(),
-      &nonReclaimableSection_);
+      &nonReclaimableSection_,
+      prefixSortConfig_);
 
   RowVectorPtr data = makeRowVector(
       {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
@@ -234,7 +238,8 @@ TEST_F(SortBufferTest, DISABLED_randomData) {
         testData.sortColumnIndices,
         testData.sortCompareFlags,
         pool_.get(),
-        &nonReclaimableSection_);
+        &nonReclaimableSection_,
+        prefixSortConfig_);
 
     const std::shared_ptr<memory::MemoryPool> fuzzerPool =
         memory::memoryManager()->addLeafPool("VectorFuzzer");
@@ -291,6 +296,7 @@ TEST_F(SortBufferTest, batchOutput) {
         "0.0.0",
         1000,
         0,
+        1 << 20,
         executor_.get(),
         5,
         10,
@@ -307,6 +313,7 @@ TEST_F(SortBufferTest, batchOutput) {
         sortCompareFlags_,
         pool_.get(),
         &nonReclaimableSection_,
+        prefixSortConfig_,
         testData.triggerSpill ? &spillConfig : nullptr,
         &spillStats);
     ASSERT_EQ(sortBuffer->canSpill(), testData.triggerSpill);
@@ -385,6 +392,7 @@ TEST_F(SortBufferTest, spill) {
         "0.0.0",
         1000,
         0,
+        1 << 20,
         executor_.get(),
         100,
         spillableReservationGrowthPct,
@@ -401,6 +409,7 @@ TEST_F(SortBufferTest, spill) {
         sortCompareFlags_,
         pool_.get(),
         &nonReclaimableSection_,
+        prefixSortConfig_,
         testData.spillEnabled ? &spillConfig : nullptr,
         &spillStats);
 
@@ -409,7 +418,7 @@ TEST_F(SortBufferTest, spill) {
     VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool.get());
     uint64_t totalNumInput = 0;
 
-    ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+    ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
     const auto peakSpillMemoryUsage =
         memory::spillMemoryPool()->stats().peakBytes;
 
@@ -437,7 +446,7 @@ TEST_F(SortBufferTest, spill) {
       // spill.
       ASSERT_EQ(spillStats.rlock()->spilledFiles, 3);
       sortBuffer.reset();
-      ASSERT_EQ(memory::spillMemoryPool()->stats().currentBytes, 0);
+      ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
       if (memory::spillMemoryPool()->trackUsage()) {
         ASSERT_GT(memory::spillMemoryPool()->stats().peakBytes, 0);
         ASSERT_GE(
@@ -462,6 +471,7 @@ TEST_F(SortBufferTest, emptySpill) {
         sortCompareFlags_,
         pool_.get(),
         &nonReclaimableSection_,
+        prefixSortConfig_,
         &spillConfig,
         &spillStats);
 

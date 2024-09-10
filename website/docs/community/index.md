@@ -1,5 +1,5 @@
 ---
-slug: /
+slug: /community/
 ---
 
 # Community
@@ -10,4 +10,6 @@ Today, Velox is developed and maintained by a community of 200+ individuals from
 20+ different organizations. This page contains more information about Velox's
 open source community.
 
-* [Velox Design Philosophy, Principles, and Values.](./docs/community/design-philosophy)
+* [Design Philosophy, Principles, and Values](./design-philosophy)
+* [Technical Governance](./technical-governance)
+* [Components and Maintainers](./components-and-maintainers)

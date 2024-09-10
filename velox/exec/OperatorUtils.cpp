@@ -178,11 +178,11 @@ namespace {
 vector_size_t processConstantFilterResults(
     const VectorPtr& filterResult,
     const SelectivityVector& rows) {
-  auto constant = filterResult->as<ConstantVector<bool>>();
+  const auto constant = filterResult->as<ConstantVector<bool>>();
   if (constant->isNullAt(0) || constant->valueAt(0) == false) {
     return 0;
   }
-  return rows.size();
+  return rows.countSelected();
 }
 
 vector_size_t processFlatFilterResults(
@@ -190,15 +190,18 @@ vector_size_t processFlatFilterResults(
     const SelectivityVector& rows,
     FilterEvalCtx& filterEvalCtx,
     memory::MemoryPool* pool) {
-  auto size = rows.size();
+  const auto size = rows.size();
 
-  auto selectedBits = filterEvalCtx.getRawSelectedBits(size, pool);
-  auto nonNullBits =
+  auto* selectedBits = filterEvalCtx.getRawSelectedBits(size, pool);
+  auto* nonNullBits =
       filterResult->as<FlatVector<bool>>()->rawValues<uint64_t>();
   if (filterResult->mayHaveNulls()) {
     bits::andBits(selectedBits, nonNullBits, filterResult->rawNulls(), 0, size);
   } else {
-    memcpy(selectedBits, nonNullBits, bits::nbytes(size));
+    ::memcpy(selectedBits, nonNullBits, bits::nbytes(size));
+  }
+  if (!rows.isAllSelected()) {
+    bits::andBits(selectedBits, rows.allBits(), 0, size);
   }
 
   vector_size_t passed = 0;
@@ -230,7 +233,7 @@ vector_size_t processEncodedFilterResults(
   for (int32_t i = 0; i < size; ++i) {
     auto index = indices[i];
     if ((!nulls || !bits::isBitNull(nulls, i)) &&
-        bits::isBitSet(values, index)) {
+        bits::isBitSet(values, index) && rows.isValid(i)) {
       rawSelected[passed++] = i;
       bits::setBit(rawSelectedBits, i);
     }

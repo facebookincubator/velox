@@ -26,16 +26,18 @@
 
 namespace facebook::velox {
 
-namespace date {
-class time_zone;
+namespace tz {
+class TimeZone;
 }
 
+enum class TimestampPrecision : int8_t {
+  kMilliseconds = 3, // 10^3 milliseconds are equal to one second.
+  kMicroseconds = 6, // 10^6 microseconds are equal to one second.
+  kNanoseconds = 9, // 10^9 nanoseconds are equal to one second.
+};
+
 struct TimestampToStringOptions {
-  enum class Precision : int8_t {
-    kMilliseconds = 3, // 10^3 milliseconds are equal to one second.
-    kMicroseconds = 6, // 10^6 microseconds are equal to one second.
-    kNanoseconds = 9, // 10^9 nanoseconds are equal to one second.
-  };
+  using Precision = TimestampPrecision;
 
   Precision precision = Precision::kNanoseconds;
 
@@ -68,7 +70,7 @@ struct TimestampToStringOptions {
 
   Mode mode = Mode::kFull;
 
-  const date::time_zone* timeZone = nullptr;
+  const tz::TimeZone* timeZone = nullptr;
 };
 
 /// Returns the max length of a converted string from timestamp.
@@ -81,6 +83,11 @@ struct Timestamp {
   static constexpr int64_t kMicrosecondsInMillisecond = 1'000;
   static constexpr int64_t kNanosecondsInMicrosecond = 1'000;
   static constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
+  static constexpr int64_t kNanosInSecond =
+      kNanosecondsInMillisecond * kMillisecondsInSecond;
+  // The number of days between the Julian epoch and the Unix epoch.
+  static constexpr int64_t kJulianToUnixEpochDays = 2440588LL;
+  static constexpr int64_t kSecondsInDay = 86400LL;
 
   // Limit the range of seconds to avoid some problems. Seconds should be
   // in the range [INT64_MIN/1000 - 1, INT64_MAX/1000].
@@ -105,6 +112,10 @@ struct Timestamp {
         seconds, kMaxSeconds, "Timestamp seconds out of range");
     VELOX_USER_DCHECK_LE(nanos, kMaxNanos, "Timestamp nanos out of range");
   }
+
+  /// Creates a timestamp from the number of days since the Julian epoch
+  /// and the number of nanoseconds.
+  static Timestamp fromDaysAndNanos(int32_t days, int64_t nanos);
 
   // Returns the current unix timestamp (ms precision).
   static Timestamp now();
@@ -184,12 +195,17 @@ struct Timestamp {
     }
   }
 
-  /// Due to the limit of std::chrono, throws if timestamp is outside of
+  /// Exports the current timestamp as a std::chrono::time_point of millisecond
+  /// precision. Note that the conversion may overflow since the internal
+  /// `seconds_` value will need to be multiplied by 1000.
+  ///
+  /// If `allowOverflow` is true, integer overflow is allowed in converting
+  /// to milliseconds.
+  ///
+  /// Due to the limit of velox/external/date, throws if timestamp is outside of
   /// [-32767-01-01, 32767-12-31] range.
-  /// If allowOverflow is true, integer overflow is allowed in converting
-  /// timestamp to milliseconds.
   std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-  toTimePoint(bool allowOverflow = false) const;
+  toTimePointMs(bool allowOverflow = false) const;
 
   static Timestamp fromMillis(int64_t millis) {
     if (millis >= 0 || millis % 1'000 == 0) {
@@ -280,7 +296,27 @@ struct Timestamp {
   /// concurrency (71% of time is on __tz_convert for some queries).
   ///
   /// Return whether the epoch second can be converted to a valid std::tm.
-  static bool epochToUtc(int64_t seconds, std::tm& out);
+  static bool epochToCalendarUtc(int64_t seconds, std::tm& out);
+
+  /// Our own version of timegm to avoid expensive calls to __tz_convert.
+  ///
+  /// This function is guaranteed to give same result as std::timegm when it is
+  /// successful.
+  static int64_t calendarUtcToEpoch(const std::tm& tm);
+
+  /// Truncates a Timestamp value to the specified precision.
+  static Timestamp truncate(Timestamp ts, TimestampPrecision precision) {
+    switch (precision) {
+      case TimestampPrecision::kMilliseconds:
+        return Timestamp::fromMillis(ts.toMillis());
+      case TimestampPrecision::kMicroseconds:
+        return Timestamp::fromMicros(ts.toMicros());
+      case TimestampPrecision::kNanoseconds:
+        return ts;
+      default:
+        VELOX_UNREACHABLE();
+    }
+  }
 
   /// Converts a std::tm to a time/date/timestamp string in ISO 8601 format
   /// according to TimestampToStringOptions.
@@ -302,29 +338,23 @@ struct Timestamp {
       char* const startPosition);
 
   // Assuming the timestamp represents a time at zone, converts it to the GMT
-  // time at the same moment.
-  // Example: Timestamp ts{0, 0};
-  // ts.Timezone("America/Los_Angeles");
-  // ts.toString() returns January 1, 1970 08:00:00
-  void toGMT(const date::time_zone& zone);
-
-  // Same as above, but accepts PrestoDB time zone ID.
-  void toGMT(int16_t tzID);
+  // time at the same moment. For example:
+  //
+  //  Timestamp ts{0, 0};
+  //  ts.Timezone("America/Los_Angeles");
+  //  ts.toString(); // returns January 1, 1970 08:00:00
+  void toGMT(const tz::TimeZone& zone);
 
   /// Assuming the timestamp represents a GMT time, converts it to the time at
-  /// the same moment at zone.
-  /// @param allowOverflow If true, integer overflow is allowed when converting
-  /// timestamp to TimePoint. Otherwise, user exception is thrown for overflow.
-  /// Example: Timestamp ts{0, 0};
-  /// ts.Timezone("America/Los_Angeles");
-  /// ts.toString() returns December 31, 1969 16:00:00
-  void toTimezone(const date::time_zone& zone, bool allowOverflow = false);
-
-  // Same as above, but accepts PrestoDB time zone ID.
-  void toTimezone(int16_t tzID);
+  /// the same moment at zone. For example:
+  ///
+  ///  Timestamp ts{0, 0};
+  ///  ts.Timezone("America/Los_Angeles");
+  ///  ts.toString(); // returns December 31, 1969 16:00:00
+  void toTimezone(const tz::TimeZone& zone);
 
   /// A default time zone that is same across the process.
-  static const date::time_zone& defaultTimezone();
+  static const tz::TimeZone& defaultTimezone();
 
   bool operator==(const Timestamp& b) const {
     return seconds_ == b.seconds_ && nanos_ == b.nanos_;
@@ -388,7 +418,7 @@ struct Timestamp {
   std::string toString(const TimestampToStringOptions& options = {}) const {
     std::tm tm;
     VELOX_USER_CHECK(
-        epochToUtc(seconds_, tm),
+        epochToCalendarUtc(seconds_, tm),
         "Can't convert seconds to time: {}",
         seconds_);
     std::string result;

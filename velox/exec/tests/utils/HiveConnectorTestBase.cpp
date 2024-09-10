@@ -18,9 +18,9 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
-#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
@@ -38,7 +38,8 @@ void HiveConnectorTestBase::SetUp() {
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
           ->newConnector(
               kHiveConnectorId,
-              std::make_shared<core::MemConfig>(),
+              std::make_shared<config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>()),
               ioExecutor_.get());
   connector::registerConnector(hiveConnector);
 }
@@ -52,7 +53,7 @@ void HiveConnectorTestBase::TearDown() {
 }
 
 void HiveConnectorTestBase::resetHiveConnector(
-    const std::shared_ptr<const Config>& config) {
+    const std::shared_ptr<const config::ConfigBase>& config) {
   connector::unregisterConnector(kHiveConnectorId);
   auto hiveConnector =
       connector::getConnectorFactory(
@@ -70,15 +71,24 @@ void HiveConnectorTestBase::writeToFile(
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
-    std::shared_ptr<dwrf::Config> config) {
-  writeToFile(filePath, vectors, std::move(config), vectors[0]->type());
+    std::shared_ptr<dwrf::Config> config,
+    const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
+        flushPolicyFactory) {
+  writeToFile(
+      filePath,
+      vectors,
+      std::move(config),
+      vectors[0]->type(),
+      flushPolicyFactory);
 }
 
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
     std::shared_ptr<dwrf::Config> config,
-    const TypePtr& schema) {
+    const TypePtr& schema,
+    const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
+        flushPolicyFactory) {
   velox::dwrf::WriterOptions options;
   options.config = config;
   options.schema = schema;
@@ -87,6 +97,8 @@ void HiveConnectorTestBase::writeToFile(
       std::move(localWriteFile), filePath);
   auto childPool = rootPool_->addAggregateChild("HiveConnectorTestBase.Writer");
   options.memoryPool = childPool.get();
+  options.flushPolicyFactory = flushPolicyFactory;
+
   facebook::velox::dwrf::Writer writer{std::move(sink), options};
   for (size_t i = 0; i < vectors.size(); ++i) {
     writer.write(vectors[i]);
@@ -146,7 +158,9 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
     dwio::common::FileFormat format,
     const std::optional<
         std::unordered_map<std::string, std::optional<std::string>>>&
-        partitionKeys) {
+        partitionKeys,
+    const std::optional<std::unordered_map<std::string, std::string>>&
+        infoColumns) {
   auto file =
       filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
   const int64_t fileSize = file->size();
@@ -159,6 +173,11 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
                             .fileFormat(format)
                             .start(i * splitSize)
                             .length(splitSize);
+    if (infoColumns.has_value()) {
+      for (auto infoColumn : infoColumns.value()) {
+        splitBuilder.infoColumn(infoColumn.first, infoColumn.second);
+      }
+    }
     if (partitionKeys.has_value()) {
       for (auto partitionKey : partitionKeys.value()) {
         splitBuilder.partitionKey(partitionKey.first, partitionKey.second);
@@ -171,7 +190,7 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
   return splits;
 }
 
-std::shared_ptr<connector::hive::HiveColumnHandle>
+std::unique_ptr<connector::hive::HiveColumnHandle>
 HiveConnectorTestBase::makeColumnHandle(
     const std::string& name,
     const TypePtr& type,
@@ -179,7 +198,7 @@ HiveConnectorTestBase::makeColumnHandle(
   return makeColumnHandle(name, type, type, requiredSubfields);
 }
 
-std::shared_ptr<connector::hive::HiveColumnHandle>
+std::unique_ptr<connector::hive::HiveColumnHandle>
 HiveConnectorTestBase::makeColumnHandle(
     const std::string& name,
     const TypePtr& dataType,
@@ -192,7 +211,7 @@ HiveConnectorTestBase::makeColumnHandle(
     subfields.emplace_back(path);
   }
 
-  return std::make_shared<connector::hive::HiveColumnHandle>(
+  return std::make_unique<connector::hive::HiveColumnHandle>(
       name, columnType, dataType, hiveType, std::move(subfields));
 }
 
@@ -211,7 +230,7 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
   return splits;
 }
 
-std::shared_ptr<connector::ConnectorSplit>
+std::shared_ptr<connector::hive::HiveConnectorSplit>
 HiveConnectorTestBase::makeHiveConnectorSplit(
     const std::string& filePath,
     uint64_t start,
@@ -224,7 +243,7 @@ HiveConnectorTestBase::makeHiveConnectorSplit(
       .build();
 }
 
-std::shared_ptr<connector::ConnectorSplit>
+std::shared_ptr<connector::hive::HiveConnectorSplit>
 HiveConnectorTestBase::makeHiveConnectorSplit(
     const std::string& filePath,
     int64_t fileSize,
@@ -247,7 +266,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const std::vector<std::string>& partitionedBy,
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind) {
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
   return makeHiveInsertTableHandle(
       tableColumnNames,
       tableColumnTypes,
@@ -255,7 +275,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       nullptr,
       std::move(locationHandle),
       tableStorageFormat,
-      compressionKind);
+      compressionKind,
+      writerOptions);
 }
 
 // static
@@ -267,7 +288,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::HiveBucketProperty> bucketProperty,
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind) {
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -316,12 +338,15 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   VELOX_CHECK_EQ(numPartitionColumns, partitionedBy.size());
   VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
   VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
+
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
       tableStorageFormat,
       bucketProperty,
-      compressionKind);
+      compressionKind,
+      std::unordered_map<std::string, std::string>{},
+      writerOptions);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>

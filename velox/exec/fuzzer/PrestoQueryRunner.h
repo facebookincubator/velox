@@ -23,6 +23,7 @@
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec::test {
+
 template <typename T>
 T extractSingleValue(const std::vector<RowVectorPtr>& data) {
   auto simpleVector = data[0]->childAt(0)->as<SimpleVector<T>>();
@@ -36,9 +37,16 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
   /// @param user Username to use in X-Presto-User header.
   /// @param timeout Timeout in milliseconds of an HTTP request.
   PrestoQueryRunner(
+      memory::MemoryPool* aggregatePool,
       std::string coordinatorUri,
       std::string user,
       std::chrono::milliseconds timeout);
+
+  RunnerType runnerType() const override {
+    return RunnerType::kPrestoQueryRunner;
+  }
+
+  const std::vector<TypePtr>& supportedScalarTypes() const override;
 
   /// Converts Velox query plan to Presto SQL. Supports Values -> Aggregation or
   /// Window with an optional Project on top.
@@ -63,9 +71,20 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
       const std::vector<velox::RowVectorPtr>& input,
       const velox::RowTypePtr& resultType) override;
 
+  std::multiset<std::vector<velox::variant>> execute(
+      const std::string& sql,
+      const std::vector<RowVectorPtr>& probeInput,
+      const std::vector<RowVectorPtr>& buildInput,
+      const RowTypePtr& resultType) override;
+
   /// Executes Presto SQL query and returns the results. Tables referenced by
   /// the query must already exist.
   std::vector<velox::RowVectorPtr> execute(const std::string& sql) override;
+
+  /// Executes Presto SQL query with extra presto session property.
+  std::vector<velox::RowVectorPtr> execute(
+      const std::string& sql,
+      const std::string& sessionProperty) override;
 
   bool supportsVeloxVectorResults() const override;
 
@@ -74,12 +93,14 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
       const std::vector<RowVectorPtr>& input,
       const RowTypePtr& resultType) override;
 
- private:
-  velox::memory::MemoryPool* rootPool() {
-    return rootPool_.get();
-  }
+  std::vector<RowVectorPtr> executeVector(
+      const std::string& sql,
+      const std::vector<RowVectorPtr>& probeInput,
+      const std::vector<RowVectorPtr>& buildInput,
+      const RowTypePtr& resultType) override;
 
-  velox::memory::MemoryPool* pool() {
+ private:
+  memory::MemoryPool* pool() {
     return pool_.get();
   }
 
@@ -99,18 +120,27 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
   std::optional<std::string> toSql(
       const std::shared_ptr<const core::TableWriteNode>& tableWriteNode);
 
-  std::string startQuery(const std::string& sql);
+  std::optional<std::string> toSql(
+      const std::shared_ptr<const velox::core::HashJoinNode>& joinNode);
+
+  std::optional<std::string> toSql(
+      const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode);
+
+  std::string startQuery(
+      const std::string& sql,
+      const std::string& sessionProperty = "");
 
   std::string fetchNext(const std::string& nextUri);
+
+  // Creates an empty table with given data type and table name. The function
+  // returns the root directory of table files.
+  std::string createTable(const std::string& name, const TypePtr& type);
 
   const std::string coordinatorUri_;
   const std::string user_;
   const std::chrono::milliseconds timeout_;
   folly::EventBaseThread eventBaseThread_{false};
-  std::shared_ptr<velox::memory::MemoryPool> rootPool_{
-      velox::memory::memoryManager()->addRootPool()};
-  std::shared_ptr<velox::memory::MemoryPool> pool_{
-      rootPool_->addLeafChild("leaf")};
+  std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 } // namespace facebook::velox::exec::test

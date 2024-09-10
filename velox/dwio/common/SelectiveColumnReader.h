@@ -19,7 +19,6 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/common/process/TraceHistory.h"
-#include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/FormatData.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/Mutation.h"
@@ -28,20 +27,20 @@
 
 namespace facebook::velox::dwio::common {
 
-// Generalized representation of a set of distinct values for dictionary
-// encodings.
+/// Generalized representation of a set of distinct values for dictionary
+/// encodings.
 struct DictionaryValues {
-  // Array of values for dictionary. StringViews for string values.
+  /// Array of values for dictionary. StringViews for string values.
   BufferPtr values;
 
-  // For a string dictionary, holds the characters that are pointed to by
-  // StringViews in 'values'.
+  /// For a string dictionary, holds the characters that are pointed to by
+  /// StringViews in 'values'.
   BufferPtr strings;
 
-  // Number of valid elements in 'values'.
+  /// Number of valid elements in 'values'.
   int32_t numValues{0};
 
-  // True if values are in ascending order.
+  /// True if values are in ascending order.
   bool sorted{false};
 
   void clear() {
@@ -49,6 +48,17 @@ struct DictionaryValues {
     strings = nullptr;
     numValues = 0;
     sorted = false;
+  }
+
+  /// Whether the dictionary values have filter on it.
+  static bool hasFilter(const velox::common::Filter* filter) {
+    // Dictionary values cannot be null.  It's by design not possible in ORC and
+    // Parquet; in other formats even when it is possible in theory, it should
+    // not be used in a normal file because outside dictionary we only need 1
+    // bit to encode a null, but if we move it inside dictionary, we would need
+    // 1 integer to encode a null.  A sanity check can be added on encoding
+    // metadata for such formats.
+    return filter && filter->kind() != velox::common::FilterKind::kIsNotNull;
   }
 };
 
@@ -68,18 +78,17 @@ struct RawScanState {
   uint8_t* __restrict filterCache;
 };
 
-// Maintains state for encoding between calls to readWithVisitor of
-// individual readers. DWRF sets up encoding information at the
-// start of a stripe and dictionaries at the start of stripes and
-// optionally row groups. Other encodings can set dictionaries and
-// encoding types at any time during processing a stripe.
+// Maintains state for encoding between calls to readWithVisitor of individual
+// readers. DWRF sets up encoding information at the start of a stripe and
+// dictionaries at the start of stripes and optionally row groups. Other
+// encodings can set dictionaries and encoding types at any time during
+// processing a stripe.
 //
-//  This is the union of the state elements that the supported
-//  encodings require for keeping state. This may be augmented when
-//  adding formats. This is however inlined in the reader superclass
-//  ad not for example nodeled as a class hierarchy with virtual
-//  functions because this needs to be trivially and branchlessly
-//  accessible.
+// This is the union of the state elements that the supported encodings require
+// for keeping state. This may be augmented when adding formats. This is however
+// inlined in the reader superclass and not for example modeled as a class
+// hierarchy with virtual functions because this needs to be trivially and
+// branchlessly accessible.
 struct ScanState {
   // Copies the owned values of 'this' into 'rawState'.
   void updateRawState();
@@ -95,14 +104,14 @@ struct ScanState {
   DictionaryValues dictionary;
 
   // If the format, like ORC/DWRF has a base dictionary completed by
-  // local delta dictionaries over the furst one, this represents the
+  // local delta dictionaries over the first one, this represents the
   // local values, e.g. row group dictionary in ORC. TBD: If there is
   // a pattern of dictionaries completed by more dictionaries in other
   // formats, this will be modeled as an vector of n DictionaryValues.
   DictionaryValues dictionary2;
 
   // Bits selecting between dictionary and dictionary2 or dictionary and
-  // literal. OR/DWRFC only.
+  // literal. ORC/DWRF only.
   BufferPtr inDictionary;
 
   // Copy of Visitor::rows_ adjusted to start at the current encoding
@@ -141,7 +150,7 @@ class SelectiveColumnReader {
   /**
    * Read the next group of values into a RowVector.
    * @param numValues the number of values to read
-   * @param vector to read into
+   * @param result vector to read into
    */
   virtual void
   next(uint64_t /*numValues*/, VectorPtr& /*result*/, const Mutation*) {
@@ -158,17 +167,19 @@ class SelectiveColumnReader {
   // relative to 'offset', so that row 0 is the 'offset'th row from
   // start of stripe. 'rows' is expected to stay constant
   // between this and the next call to read.
-  virtual void
-  read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls) = 0;
+  virtual void read(
+      vector_size_t offset,
+      const RowSet& rows,
+      const uint64_t* incomingNulls) = 0;
 
   virtual uint64_t skip(uint64_t numValues) {
     return formatData_->skip(numValues);
   }
 
-  // Extracts the values at 'rows' into '*result'. May rewrite or
-  // reallocate '*result'. 'rows' must be the same set or a subset of
-  // 'rows' passed to the last 'read().
-  virtual void getValues(RowSet rows, VectorPtr* result) = 0;
+  /// Extracts the values at 'rows' into '*result'. May rewrite or reallocate
+  /// '*result'. 'rows' must be the same set or a subset of 'rows' passed to the
+  /// last 'read().
+  virtual void getValues(const RowSet& rows, VectorPtr* result) = 0;
 
   // Returns the rows that were selected/visited by the last
   // read(). If 'this' has no filter, returns 'rows' passed to last
@@ -184,10 +195,10 @@ class SelectiveColumnReader {
   // offset-th from the start of stripe.
   virtual void seekTo(vector_size_t offset, bool readsNullsOnly);
 
-  // Positions this at the start of 'index'th row
-  // group. Interpretation of 'index' depends on format. Clears counts
-  // of skipped enclosing struct nulls for formats where nulls are
-  // recorded at each nesting level, i.e. not rep-def.
+  /// Positions this at the start of 'index'th row group. Interpretation of
+  /// 'index' depends on format. Clears counts of skipped enclosing struct nulls
+  /// for formats where nulls are recorded at each nesting level, i.e. not
+  /// rep-def.
   virtual void seekToRowGroup(uint32_t index) {
     VELOX_TRACE_HISTORY_PUSH("seekToRowGroup %u", index);
     numParentNulls_ = 0;
@@ -202,16 +213,20 @@ class SelectiveColumnReader {
     return *fileType_;
   }
 
-  // The below functions are called from ColumnVisitor to fill the result set.
+  /// The below functions are called from ColumnVisitor to fill the result set.
   inline void addOutputRow(vector_size_t row) {
     outputRows_.push_back(row);
   }
 
   // Returns a pointer to output rows  with at least 'size' elements available.
   vector_size_t* mutableOutputRows(int32_t size) {
-    numOutConfirmed_ = outputRows_.size();
-    outputRows_.resize(numOutConfirmed_ + size);
-    return outputRows_.data() + numOutConfirmed_;
+    auto numOutConfirmed = outputRows_.size();
+    outputRows_.resize(numOutConfirmed + size);
+    return outputRows_.data() + numOutConfirmed;
+  }
+
+  void* rawValues() {
+    return rawValues_;
   }
 
   template <typename T>
@@ -232,7 +247,7 @@ class SelectiveColumnReader {
   uint64_t* mutableNulls(int32_t size) {
     if (!resultNulls_->unique()) {
       resultNulls_ = AlignedBuffer::allocate<bool>(
-          numValues_ + size, &memoryPool_, bits::kNotNull);
+          numValues_ + size, memoryPool_, bits::kNotNull);
       rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
     }
     if (resultNulls_->capacity() * 8 < numValues_ + size) {
@@ -258,7 +273,7 @@ class SelectiveColumnReader {
     return returnReaderNulls_;
   }
 
-  void initReturnReaderNulls(RowSet rows);
+  void initReturnReaderNulls(const RowSet& rows);
 
   void setNumValues(vector_size_t size) {
     numValues_ = size;
@@ -314,12 +329,12 @@ class SelectiveColumnReader {
 
     anyNulls_ = true;
     bits::setNull(rawResultNulls_, numValues_);
-    // Set the default value at the nominal width of the reader but
-    // calculate the index based on the actual width of the
-    // data. These may differ for integer and dictionary readers.
-    auto valuesAsChar = reinterpret_cast<char*>(rawValues_);
+    // Set the default value at the nominal width of the reader but calculate
+    // the index based on the actual width of the data. These may differ for
+    // integer and dictionary readers.
+    auto* valuesAsChar = reinterpret_cast<char*>(rawValues_);
     *reinterpret_cast<T*>(valuesAsChar + valueSize_ * numValues_) = T();
-    numValues_++;
+    ++numValues_;
   }
 
   template <typename T>
@@ -330,7 +345,7 @@ class SelectiveColumnReader {
     VELOX_DCHECK_NOT_NULL(rawValues_);
     VELOX_DCHECK_LE((numValues_ + 1) * sizeof(T), values_->capacity());
     reinterpret_cast<T*>(rawValues_)[numValues_] = value;
-    numValues_++;
+    ++numValues_;
   }
 
   void dropResults(vector_size_t count) {
@@ -354,8 +369,8 @@ class SelectiveColumnReader {
     setReadOffset(readOffset);
   }
 
-  // Recursively sets 'isTopLevel_'. Recurses down non-nullable structs,
-  // otherwise only sets 'isTopLevel_' of 'this'
+  /// Recursively sets 'isTopLevel_'. Recurses down non-nullable structs,
+  /// otherwise only sets 'isTopLevel_' of 'this'
   virtual void setIsTopLevel() {
     isTopLevel_ = true;
   }
@@ -393,12 +408,11 @@ class SelectiveColumnReader {
     return nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
   }
 
-  // Returns true if no filters or deterministic filters/hooks that
-  // discard nulls. This is used at read prepare time. useFastPath()
-  // in DecoderUtil.h is used at read time and is expected to produce
-  // the same result.
+  /// Returns true if no filters or deterministic filters/hooks that discard
+  /// nulls. This is used at read prepare time. useFastPath() in DecoderUtil.h
+  /// is used at read time and is expected to produce the same result.
   bool useBulkPath() const {
-    auto filter = scanSpec_->filter();
+    auto* filter = scanSpec_->filter();
     return hasBulkPath() && process::hasAvx2() &&
         (!filter ||
          (filter->isDeterministic() &&
@@ -426,16 +440,17 @@ class SelectiveColumnReader {
   // converts to direct in mid-read.
   virtual void dedictionarize() {}
 
-  // A reader nested inside nullable containers has fewer rows than
-  // the top level table. addParentNulls records how many parent nulls
-  // there are between the position of 'this' and 'rows.back() + 1',
-  // i.e. the position of the scan in top level rows. 'firstRowInNulls' is
-  // the top level row corresponding to the first bit in
-  // 'nulls'. 'nulls' is in terms of top level rows and represents all
-  // null parents at any enclosing level. 'nulls' is nullptr if there are no
-  // parent nulls.
-  void
-  addParentNulls(int32_t firstRowInNulls, const uint64_t* nulls, RowSet rows);
+  /// A reader nested inside nullable containers has fewer rows than the top
+  /// level table. addParentNulls records how many parent nulls there are
+  /// between the position of 'this' and 'rows.back() + 1', i.e. the position of
+  /// the scan in top level rows. 'firstRowInNulls' is the top level row
+  /// corresponding to the first bit in 'nulls'. 'nulls' is in terms of top
+  /// level rows and represents all null parents at any enclosing level. 'nulls'
+  /// is nullptr if there are no parent nulls.
+  void addParentNulls(
+      int32_t firstRowInNulls,
+      const uint64_t* nulls,
+      const RowSet& rows);
 
   // When skipping rows in a struct, records how many parent nulls at
   // any level there are between top level row 'from' and 'to'. If
@@ -452,22 +467,26 @@ class SelectiveColumnReader {
 
   // Prepares the result buffer for nulls for reading 'rows'. Leaves
   // 'extraSpace' bits worth of space in the nulls buffer.
-  void prepareNulls(RowSet rows, bool hasNulls, int32_t extraRows = 0);
+  void prepareNulls(const RowSet& rows, bool hasNulls, int32_t extraRows = 0);
 
   void setIsFlatMapValue(bool value) {
     isFlatMapValue_ = value;
   }
 
-  // Filters 'rows' according to 'is_null'. Only applies to cases where
-  // scanSpec_->readsNullsOnly() is true.
+  /// Filters 'rows' according to 'isNull'. Only applies to cases where
+  /// scanSpec_->readsNullsOnly() is true.
   template <typename T>
-  void filterNulls(RowSet rows, bool isNull, bool extractValues);
+  void filterNulls(const RowSet& rows, bool isNull, bool extractValues);
 
-  // Temporary method for estimate in-memory row size (number of bits) of this
-  // column for Nimble.  Will be removed once column statistics are added for
-  // Nimble.
-  virtual std::optional<size_t> estimatedRowBitSize() const {
-    return std::nullopt;
+  // Temporary method for estimate total in-memory byte size and row count of
+  // current encoding chunk on this column for Nimble.  Will be removed once
+  // column statistics are added for Nimble.  Note that the estimations are
+  // based on current encoding chunk, so in multi-chunk stripe this is not
+  // accurate.  Other formats should not use this.
+  virtual bool estimateMaterializedSize(
+      size_t& /*byteSize*/,
+      size_t& /*rowCount*/) const {
+    return false;
   }
 
   StringView copyStringValueIfNeed(folly::StringPiece value) {
@@ -488,31 +507,34 @@ class SelectiveColumnReader {
 
  protected:
   template <typename T>
-  void
-  prepareRead(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls);
+  void prepareRead(
+      vector_size_t offset,
+      const RowSet& rows,
+      const uint64_t* incomingNulls);
 
   virtual bool readsNullsOnly() const {
     return scanSpec_->readsNullsOnly();
   }
 
-  void setOutputRows(RowSet rows) {
+  void setOutputRows(const RowSet& rows) {
     outputRows_.resize(rows.size());
-    if (!rows.size()) {
+    if (rows.empty()) {
       return;
     }
-    memcpy(outputRows_.data(), &rows[0], rows.size() * sizeof(vector_size_t));
+    ::memcpy(outputRows_.data(), &rows[0], rows.size() * sizeof(vector_size_t));
   }
 
-  // Returns integer values for 'rows' cast to the width of
-  // 'requestedType' in '*result'.
-  void
-  getIntValues(RowSet rows, const TypePtr& requestedType, VectorPtr* result);
+  /// Returns integer values for 'rows' cast to the width of 'requestedType' in
+  /// '*result'.
+  void getIntValues(
+      const RowSet& rows,
+      const TypePtr& requestedType,
+      VectorPtr* result);
 
-  // Returns integer values for 'rows' cast to the width of
-  // 'requestedType' in '*result', the related fileDataType is unsigned int
-  // type.
+  /// Returns integer values for 'rows' cast to the width of 'requestedType' in
+  /// '*result', the related fileDataType is unsigned int type.
   void getUnsignedIntValues(
-      RowSet rows,
+      const RowSet& rows,
       const TypePtr& requestedType,
       VectorPtr* result);
 
@@ -522,29 +544,26 @@ class SelectiveColumnReader {
   // to rows. TODO: Consider isFinal as template parameter.
   template <typename T, typename TVector>
   void getFlatValues(
-      RowSet rows,
+      const RowSet& rows,
       VectorPtr* result,
       const TypePtr& type,
       bool isFinal = false);
 
   template <typename T, typename TVector>
-  void compactScalarValues(RowSet rows, bool isFinal);
-
-  // Compacts values extracted for a complex type column with
-  // filter. The values for 'rows' are shifted to be consecutive at
-  // indices [0..rows.size() - 1]'. 'move' is a function that takes
-  // two indices source and target and moves the value at source to
-  // target. target is <= source for all calls.
-  template <typename Move>
-  void compactComplexValues(RowSet rows, Move move, bool isFinal);
+  void compactScalarValues(const RowSet& rows, bool isFinal);
 
   template <typename T, typename TVector>
-  void upcastScalarValues(RowSet rows);
+  void upcastScalarValues(const RowSet& rows);
+
+  // For complex type column, we need to compact only nulls if the rows are
+  // shrinked.  Child fields are handled recursively in their own column
+  // readers.
+  void setComplexNulls(const RowSet& rows, VectorPtr& result) const;
 
   // Return the source null bits if compactScalarValues and upcastScalarValues
   // should move null flags.  Return nullptr if nulls does not need to be moved.
   // Checks consistency of nulls-related state.
-  const uint64_t* shouldMoveNulls(RowSet rows);
+  const uint64_t* shouldMoveNulls(const RowSet& rows);
 
   void addStringValue(folly::StringPiece value);
 
@@ -560,8 +579,8 @@ class SelectiveColumnReader {
   void decodeWithVisitor(
       IntDecoder<Decoder::kIsSigned>* intDecoder,
       ColumnVisitor& visitor) {
-    auto decoder = dynamic_cast<Decoder*>(intDecoder);
-    VELOX_CHECK(
+    auto* decoder = dynamic_cast<Decoder*>(intDecoder);
+    VELOX_CHECK_NOT_NULL(
         decoder,
         "Unexpected Decoder type, Expected: {}",
         typeid(Decoder).name());
@@ -581,21 +600,21 @@ class SelectiveColumnReader {
                              : resultNulls_;
   }
 
-  memory::MemoryPool& memoryPool_;
+  memory::MemoryPool* const memoryPool_;
 
   // The requested data type
-  TypePtr requestedType_;
+  const TypePtr requestedType_;
 
   // The file data type
-  std::shared_ptr<const dwio::common::TypeWithId> fileType_;
+  const std::shared_ptr<const dwio::common::TypeWithId> fileType_;
 
   // Format specific state and functions.
-  std::unique_ptr<dwio::common::FormatData> formatData_;
+  const std::unique_ptr<dwio::common::FormatData> formatData_;
 
   // Specification of filters, value extraction, pruning etc. The
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
-  velox::common::ScanSpec* scanSpec_;
+  velox::common::ScanSpec* const scanSpec_;
 
   // Row number after last read row, relative to the ORC stripe or Parquet
   // Rowgroup start.
@@ -613,15 +632,12 @@ class SelectiveColumnReader {
   // The rows to process in read(). References memory supplied by
   // caller. The values must remain live until the next call to read().
   RowSet inputRows_;
-  // Rows passing the filter in readWithVisitor. Must stay
-  // constant between consecutive calls to read().
+  // Rows passing the filter in readWithVisitor. Must stay constant between
+  // consecutive calls to read().
   raw_vector<vector_size_t> outputRows_;
-  // Index of last set value in outputRows. Values between this and
-  // size() can be used as scratchpad inside read().
-  vector_size_t numOutConfirmed_;
-  // The row number
-  // corresponding to each element in 'values_'
+  // The row number corresponding to each element in 'values_'
   raw_vector<vector_size_t> valueRows_;
+
   // The set of all nulls in the range of read(). Created when first
   // needed and then reused. May be referenced by result if all rows are
   // selected.
@@ -643,11 +659,10 @@ class SelectiveColumnReader {
   // true if 'this' is in a state where gatValues can be called.
   bool mayGetValues_ = false;
 
-  // True if row numbers of 'this' correspond 1:1 to row numbers in
-  // the file. This is false inside lists, maps and nullable
-  // structs. If true, a skip of n rows can use row group indices to
-  // skip long distances. Lazy vectors will only be made for results
-  // of top level readers.
+  // True if row numbers of 'this' correspond 1:1 to row numbers in the file.
+  // This is false inside lists, maps and nullable structs. If true, a skip of n
+  // rows can use row group indices to skip long distances. Lazy vectors will
+  // only be made for results of top level readers.
   bool isTopLevel_{false};
 
   // Maps from position in non-null rows to a position in value
@@ -663,8 +678,8 @@ class SelectiveColumnReader {
   // True if a vector can acquire a pin to a stream's buffer and refer
   // to that as its values.
   bool mayUseStreamBuffer_ = false;
-  // True if nulls and everything selected, so that nullsInReadRange
-  // can be returned as the null flags of the vector in getValues().
+  // True if nulls and everything selected, so that nullsInReadRange can be
+  // returned as the null flags of the vector in getValues().
   bool returnReaderNulls_ = false;
   // Total writable bytes in 'rawStringBuffer_'.
   int32_t rawStringSize_ = 0;
@@ -719,10 +734,19 @@ velox::common::AlwaysTrue& alwaysTrue();
 } // namespace facebook::velox::dwio::common
 
 namespace facebook::velox::dwio::common {
+
 // Template parameter to indicate no hook in fast scan path. This is
 // referenced in decoders, thus needs to be declared in a header.
-struct NoHook : public ValueHook {
-  void addValue(vector_size_t /*row*/, const void* /*value*/) override {}
+struct NoHook final : public ValueHook {
+  void addValue(vector_size_t /*row*/, int64_t /*value*/) final {}
+
+  void addValue(vector_size_t /*row*/, int128_t /*value*/) final {}
+
+  void addValue(vector_size_t /*row*/, float /*value*/) final {}
+
+  void addValue(vector_size_t /*row*/, double /*value*/) final {}
+
+  void addValue(vector_size_t /*row*/, folly::StringPiece /*value*/) final {}
 };
 
 } // namespace facebook::velox::dwio::common

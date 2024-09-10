@@ -39,9 +39,9 @@ class AssertQueryBuilder {
   /// Default is 0.
   AssertQueryBuilder& destination(int32_t destination);
 
-  /// Use single-threaded execution to execute the Velox plan.
+  /// Use serial execution mode to execute the Velox plan.
   /// Default is false.
-  AssertQueryBuilder& singleThreaded(bool singleThreaded);
+  AssertQueryBuilder& serialExecution(bool serial);
 
   /// Set configuration property. May be called multiple times to set multiple
   /// properties.
@@ -179,9 +179,13 @@ class AssertQueryBuilder {
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();
 
+  static std::unique_ptr<folly::Executor> newExecutor() {
+    return std::make_unique<folly::CPUThreadPoolExecutor>(
+        std::thread::hardware_concurrency());
+  }
+
   // Used by the created task as the default driver executor.
-  std::unique_ptr<folly::Executor> executor_{
-      new folly::CPUThreadPoolExecutor(std::thread::hardware_concurrency())};
+  std::unique_ptr<folly::Executor> executor_{newExecutor()};
   DuckDbQueryRunner* const duckDbQueryRunner_;
   CursorParameters params_;
   std::unordered_map<std::string, std::string> configs_;

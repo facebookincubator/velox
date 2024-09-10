@@ -14,16 +14,19 @@
  * limitations under the License.
  */
 #include <algorithm>
+#include "math.h"
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
+using namespace facebook::velox::window::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -104,12 +107,36 @@ class ApproxPercentileTest : public AggregationTestBase {
     auto rows =
         weights ? makeRowVector({values, weights}) : makeRowVector({values});
 
-    auto expected = expectedResult.has_value()
-        ? fmt::format("SELECT {}", expectedResult.value())
-        : "SELECT NULL";
-    auto expectedArray = expectedResult.has_value()
-        ? fmt::format("SELECT ARRAY[{0},{0},{0}]", expectedResult.value())
-        : "SELECT NULL";
+    std::string expected;
+    std::string expectedArray;
+    if (!expectedResult.has_value()) {
+      expected = "SELECT NULL";
+      expectedArray = "SELECT NULL";
+    } else if (
+        (std::is_same<T, float>::value && isnan(expectedResult.value())) ||
+        (std::is_same<T, double>::value && isnan(expectedResult.value()))) {
+      expected = "SELECT 'NaN'";
+      expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'NaN'");
+    } else if (
+        (std::is_same<T, float>::value &&
+         expectedResult.value() == std::numeric_limits<float>::infinity()) ||
+        (std::is_same<T, double>::value &&
+         expectedResult.value() == std::numeric_limits<double>::infinity())) {
+      expected = "SELECT 'INFINITY'";
+      expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'INFINITY'");
+    } else if (
+        (std::is_same<T, float>::value &&
+         expectedResult.value() == -std::numeric_limits<float>::infinity()) ||
+        (std::is_same<T, double>::value &&
+         expectedResult.value() == -std::numeric_limits<double>::infinity())) {
+      expected = "SELECT '-INFINITY'";
+      expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'-INFINITY'");
+    } else {
+      expected = fmt::format("SELECT {}", expectedResult.value());
+      expectedArray =
+          fmt::format("SELECT ARRAY[{0},{0},{0}]", expectedResult.value());
+    }
+
     enableTestStreaming();
     testAggregations(
         {rows},
@@ -141,6 +168,30 @@ class ApproxPercentileTest : public AggregationTestBase {
         {getArgTypes(values->type(), weights.get(), accuracy, 3)},
         {},
         expectedArray);
+  }
+
+  template <typename T>
+  void testNaN() {
+    const T nan = std::is_same_v<T, float> ? std::nanf("") : std::nan("");
+    vector_size_t size = 10;
+    auto values = makeFlatVector<T>(size, [nan](auto row) {
+      if (row > 8)
+        return -std::numeric_limits<T>::infinity();
+      else if (row > 7)
+        return std::numeric_limits<T>::infinity();
+      else if (row > 6)
+        return nan;
+      else
+        return (T)row;
+    });
+
+    testGlobalAgg<T>(
+        values, nullptr, 0.05, 0.005, -std::numeric_limits<T>::infinity());
+    testGlobalAgg<T>(values, nullptr, 0.11, 0.005, 0.0);
+    testGlobalAgg<T>(values, nullptr, 0.55, 0.005, 4.0);
+    testGlobalAgg<T>(
+        values, nullptr, 0.85, 0.005, std::numeric_limits<T>::infinity());
+    testGlobalAgg<T>(values, nullptr, 0.95, 0.005, nan);
   }
 
   void testGroupByAgg(
@@ -400,7 +451,7 @@ TEST_F(ApproxPercentileTest, finalAggregateAccuracy) {
   assertQuery(op, "SELECT 5");
 }
 
-TEST_F(ApproxPercentileTest, invalidEncoding) {
+TEST_F(ApproxPercentileTest, nonFlatPercentileArray) {
   auto indices = AlignedBuffer::allocate<vector_size_t>(3, pool());
   auto rawIndices = indices->asMutable<vector_size_t>();
   std::iota(rawIndices, rawIndices + indices->size(), 0);
@@ -421,10 +472,8 @@ TEST_F(ApproxPercentileTest, invalidEncoding) {
                   .values({rows})
                   .singleAggregation({}, {"approx_percentile(c0, c1)"})
                   .planNode();
-  AssertQueryBuilder assertQuery(plan);
-  VELOX_ASSERT_THROW(
-      assertQuery.copyResults(pool()),
-      "Only flat encoding is allowed for percentile array elements");
+  auto expected = makeRowVector({makeArrayVector<int32_t>({{0, 5, 9}})});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(ApproxPercentileTest, invalidWeight) {
@@ -565,6 +614,38 @@ TEST_F(ApproxPercentileTest, nullPercentile) {
       testAggregations(
           {rows}, {}, {"approx_percentile(c0, c1)"}, "SELECT NULL"),
       "Percentile cannot be null");
+}
+
+TEST_F(ApproxPercentileTest, nanPercentile) {
+  testNaN<float>();
+  testNaN<double>();
+}
+
+class ApproxPercentileWindowTest : public WindowTestBase {
+ protected:
+  void SetUp() override {
+    WindowTestBase::SetUp();
+    random::setSeed(0);
+  }
+};
+
+TEST_F(ApproxPercentileWindowTest, window) {
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
+       makeArrayVectorFromJson<double>({"[0.5]", "[0.5]", "[0.5]"})});
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3}),
+      makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
+      makeArrayVectorFromJson<double>({"[0.5]", "[0.5]", "[0.5]"}),
+      makeNullableArrayVector<int32_t>({{{10}}, std::nullopt, {{30}}}),
+  });
+  testWindowFunction(
+      {data},
+      "approx_percentile(c1, c2)",
+      "order by c0",
+      "rows between current row and current row",
+      expected);
 }
 
 } // namespace

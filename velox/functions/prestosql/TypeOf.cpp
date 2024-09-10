@@ -15,8 +15,10 @@
  */
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/UuidType.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -51,6 +53,11 @@ std::string typeName(const TypePtr& type) {
       }
       return "bigint";
     case TypeKind::HUGEINT: {
+      if (isUuidType(type)) {
+        return "uuid";
+      } else if (isIPAddressType(type)) {
+        return "ipaddress";
+      }
       VELOX_USER_CHECK(
           type->isDecimal(),
           "Expected decimal type. Got: {}",

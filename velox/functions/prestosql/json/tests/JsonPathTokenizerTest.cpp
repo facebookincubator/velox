@@ -72,6 +72,7 @@ TEST(JsonPathTokenizerTest, validPaths) {
   assertValidPath("$[\"foo\"]"s, TokenList{"foo"s});
   assertValidPath("$[\"foo.bar\"]"s, TokenList{"foo.bar"s});
   assertValidPath("$[42]"s, TokenList{"42"s});
+  assertValidPath("$[-1]"s, TokenList{"-1"s});
   assertValidPath("$.42"s, TokenList{"42"s});
   assertValidPath("$.42.63"s, TokenList{"42"s, "63"s});
   assertValidPath("$.foo.42.bar.63"s, TokenList{"foo"s, "42"s, "bar"s, "63"s});
@@ -83,6 +84,7 @@ TEST(JsonPathTokenizerTest, validPaths) {
   assertValidPath("$.foo:42.:bar63"s, TokenList{"foo:42"s, ":bar63"s});
   assertValidPath(
       "$[\"foo:42\"][\":bar63\"]"s, TokenList{"foo:42"s, ":bar63"s});
+  assertValidPath("$['foo:42'][':bar63']"s, TokenList{"foo:42"s, ":bar63"s});
   assertValidPath(
       "$.store.fruit[*].weight",
       TokenList{"store"s, "fruit"s, "*"s, "weight"s});
@@ -94,6 +96,9 @@ TEST(JsonPathTokenizerTest, validPaths) {
   assertValidPath("foo", TokenList({"foo"}));
   assertValidPath("foo[12].bar", TokenList({"foo", "12", "bar"}));
   assertValidPath("foo.bar.baz", TokenList({"foo", "bar", "baz"}));
+  assertValidPath(R"(["foo"])", TokenList({"foo"}));
+  assertValidPath(R"(["foo"].bar)", TokenList({"foo", "bar"}));
+  assertValidPath(R"([0][1].foo)", TokenList({"0", "1", "foo"}));
 
   // Paths with redundant '.'s.
   assertValidPath("$.[0].[1].[2]", TokenList({"0", "1", "2"}));
@@ -134,6 +139,12 @@ TEST(JsonPathTokenizerTest, invalidPaths) {
   // Open bracket without close bracket.
   EXPECT_FALSE(getTokens("$.store.book["));
 
+  // Unmatched double quote.
+  EXPECT_FALSE(getTokens(R"($["foo'])"));
+
+  // Unmatched single quote.
+  EXPECT_FALSE(getTokens(R"($['foo"])"));
+
   // Unsupported deep scan operator.
   EXPECT_FALSE(getTokens("$..store"));
   EXPECT_FALSE(getTokens("..store"));
@@ -141,7 +152,6 @@ TEST(JsonPathTokenizerTest, invalidPaths) {
   EXPECT_FALSE(getTokens("..[3].foo"));
 
   // Paths without leading '$'.
-  EXPECT_FALSE(getTokens("[1].foo"));
   EXPECT_FALSE(getTokens(".[1].foo"));
   EXPECT_FALSE(getTokens(".foo.bar.baz"));
 }

@@ -18,6 +18,7 @@
 #include <type_traits>
 
 #include "velox/expression/ComplexViewTypes.h"
+#include "velox/expression/PrestoCastHooks.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/type/Conversions.h"
@@ -160,10 +161,36 @@ template <typename TExecCtx, typename T>
 struct ArrayJoinFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<velox::Array<T>>* /*arr*/,
+      const arg_type<Varchar>* /*delimiter*/) {
+    initialize(inputTypes, config, nullptr, nullptr, nullptr);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<velox::Array<T>>* /*arr*/,
+      const arg_type<Varchar>* /*delimiter*/,
+      const arg_type<Varchar>* /*nullReplacement*/) {
+    const exec::PrestoCastHooks hooks{config};
+    options_ = hooks.timestampToStringOptions();
+  }
+
   template <typename C>
   void writeValue(out_type<velox::Varchar>& result, const C& value) {
     // To VARCHAR converter never throws.
     result += util::Converter<TypeKind::VARCHAR>::tryCast(value).value();
+  }
+
+  void writeValue(out_type<velox::Varchar>& result, const Timestamp& value) {
+    Timestamp inputValue{value};
+    if (options_.timeZone) {
+      inputValue.toTimezone(*(options_.timeZone));
+    }
+    result += inputValue.toString(options_);
   }
 
   template <typename C>
@@ -214,6 +241,9 @@ struct ArrayJoinFunction {
     createOutputString(result, inputArray, delim, nullReplacement.getString());
     return true;
   }
+
+ private:
+  TimestampToStringOptions options_;
 };
 
 /// Function Signature: combinations(array(T), n) -> array(array(T))
@@ -371,6 +401,51 @@ struct ArraySumFunction {
       }
     }
     out = sum;
+    return;
+  }
+};
+
+template <typename TExecCtx, typename T>
+struct ArrayCumSumFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecCtx)
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<velox::Array<T>>& out,
+      const arg_type<velox::Array<T>>& in) {
+    T sum = 0;
+    auto len = in.size();
+
+    for (auto i = 0; i < len; ++i) {
+      if (in[i].has_value()) {
+        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+          sum += in[i].value();
+        } else {
+          sum = checkedPlus<T>(sum, in[i].value());
+        }
+        out.add_item() = sum;
+      } else {
+        for (auto j = i; j < len; ++j) {
+          out.add_null();
+        }
+        break;
+      }
+    }
+    return;
+  }
+
+  FOLLY_ALWAYS_INLINE void callNullFree(
+      out_type<velox::Array<T>>& out,
+      const null_free_arg_type<velox::Array<T>>& in) {
+    T sum = 0;
+
+    for (const auto& item : in) {
+      if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        sum += item;
+      } else {
+        sum = checkedPlus<T>(sum, item);
+      }
+      out.add_item() = sum;
+    }
     return;
   }
 };

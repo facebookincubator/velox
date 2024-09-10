@@ -11,8 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-FROM amd64/ubuntu:22.04
-ARG cpu_target
+FROM amd64/ubuntu:24.04
 COPY scripts/setup-check.sh /root
 COPY scripts/setup-helper-functions.sh /
-RUN CPU_TARGET="$cpu_target" bash /root/setup-check.sh
+RUN bash /root/setup-check.sh

@@ -48,7 +48,7 @@ autoconf/autom4te.cache
 projects/*
 !projects/*.*
 !projects/Makefile
-
+.venv
 
 #==============================================================================#
 # Autotools artifacts
@@ -88,7 +88,7 @@ _build/
 *.pdf
 *.swp
 a.out
-CMake/resolve_dependency_module/boost/FindBoost.cmake
+CMake/resolve_dependency_modules/boost/FindBoost.cmake
 __cmake_systeminformation/
 
 #==============================================================================#

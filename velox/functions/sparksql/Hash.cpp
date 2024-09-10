@@ -76,6 +76,13 @@ typename HashClass::ReturnType hashOne(
   return HashClass::hashBytes(input, seed);
 }
 
+template <typename HashClass>
+typename HashClass::ReturnType hashOne(
+    UnknownValue /*input*/,
+    typename HashClass::SeedType seed) {
+  return seed;
+}
+
 template <typename HashClass, TypeKind kind>
 class PrimitiveVectorHasher;
 
@@ -87,6 +94,9 @@ class MapVectorHasher;
 
 template <typename HashClass>
 class RowVectorHasher;
+
+template <typename HashClass>
+class UnknowTypeVectorHasher;
 
 // Class to compute hashes identical to one produced by Spark.
 // Hashes are computed using the algorithm implemented in HashClass.
@@ -131,6 +141,8 @@ std::shared_ptr<SparkVectorHasher<HashClass>> createVectorHasher(
       return std::make_shared<MapVectorHasher<HashClass>>(decoded);
     case TypeKind::ROW:
       return std::make_shared<RowVectorHasher<HashClass>>(decoded);
+    case TypeKind::UNKNOWN:
+      return std::make_shared<UnknowTypeVectorHasher<HashClass>>(decoded);
     default:
       return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
           createPrimitiveVectorHasher,
@@ -154,6 +166,21 @@ class PrimitiveVectorHasher : public SparkVectorHasher<HashClass> {
         this->decoded_.template valueAt<typename TypeTraits<kind>::NativeType>(
             index),
         seed);
+  }
+};
+
+template <typename HashClass>
+class UnknowTypeVectorHasher : public SparkVectorHasher<HashClass> {
+ public:
+  using SeedType = typename HashClass::SeedType;
+  using ReturnType = typename HashClass::ReturnType;
+
+  explicit UnknowTypeVectorHasher(DecodedVector& decoded)
+      : SparkVectorHasher<HashClass>(decoded) {}
+
+  ReturnType hashNotNullAt(vector_size_t /*index*/, SeedType /*seed*/)
+      override {
+    VELOX_FAIL("hashNotNullAt should not be called for unknown type.");
   }
 };
 
@@ -265,6 +292,50 @@ class RowVectorHasher : public SparkVectorHasher<HashClass> {
   std::vector<std::shared_ptr<SparkVectorHasher<HashClass>>> hashers_;
 };
 
+template <typename HashClass, typename ReturnType, typename ArgType>
+void hashSimdTyped(
+    const SelectivityVector* rows,
+    std::vector<VectorPtr>& args,
+    FlatVector<ReturnType>& result,
+    const int32_t hashIdx) {
+  const ArgType* __restrict rawA =
+      args[hashIdx]->asUnchecked<FlatVector<ArgType>>()->rawValues();
+  auto* __restrict rawResult = result.template mutableRawValues<ReturnType>();
+  rows->applyToSelected([&](auto row) {
+    rawResult[row] = hashOne<HashClass>(rawA[row], rawResult[row]);
+  });
+}
+
+template <typename HashClass, typename ReturnType>
+void hashSimd(
+    const SelectivityVector* rows,
+    std::vector<VectorPtr>& args,
+    FlatVector<ReturnType>& result,
+    const int32_t hashIdx) {
+  switch (args[hashIdx]->typeKind()) {
+#define SCALAR_CASE(kind) \
+  case TypeKind::kind:    \
+    return hashSimdTyped< \
+        HashClass,        \
+        ReturnType,       \
+        TypeTraits<TypeKind::kind>::NativeType>(rows, args, result, hashIdx);
+    SCALAR_CASE(TINYINT)
+    SCALAR_CASE(SMALLINT)
+    SCALAR_CASE(INTEGER)
+    SCALAR_CASE(BIGINT)
+    SCALAR_CASE(HUGEINT)
+    SCALAR_CASE(REAL)
+    SCALAR_CASE(DOUBLE)
+    SCALAR_CASE(VARCHAR)
+    SCALAR_CASE(VARBINARY)
+    SCALAR_CASE(TIMESTAMP)
+    SCALAR_CASE(UNKNOWN)
+#undef SCALAR_CASE
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 // ReturnType can be either int32_t or int64_t
 // HashClass contains the function like hashInt32
 template <
@@ -294,6 +365,18 @@ void applyWithType(
       selectedMinusNulls->deselectNulls(
           decoded->nulls(&rows), rows.begin(), rows.end());
       selected = selectedMinusNulls.get();
+    }
+
+    auto kind = args[i]->typeKind();
+    if ((kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+         kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+         kind == TypeKind::REAL || kind == TypeKind::DOUBLE ||
+         kind == TypeKind::TIMESTAMP || kind == TypeKind::VARCHAR ||
+         kind == TypeKind::VARBINARY || kind == TypeKind::HUGEINT ||
+         kind == TypeKind::UNKNOWN) &&
+        args[i]->isFlatEncoding()) {
+      hashSimd<HashClass, ReturnType>(selected, args, result, i);
+      continue;
     }
 
     auto hasher = createVectorHasher<HashClass>(*decoded);
@@ -600,6 +683,7 @@ bool checkHashElementType(const TypePtr& type) {
     case TypeKind::DOUBLE:
     case TypeKind::HUGEINT:
     case TypeKind::TIMESTAMP:
+    case TypeKind::UNKNOWN:
       return true;
     case TypeKind::ARRAY:
       return checkHashElementType(type->asArray().elementType());
@@ -633,8 +717,7 @@ void checkArgTypes(const std::vector<exec::VectorFunctionArg>& args) {
 std::vector<std::shared_ptr<exec::FunctionSignature>> hashSignatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("integer")
-              .argumentType("any")
-              .variableArity()
+              .variableArity("any")
               .build()};
 }
 
@@ -664,16 +747,14 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> hashWithSeedSignatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("integer")
               .constantArgumentType("integer")
-              .argumentType("any")
-              .variableArity()
+              .variableArity("any")
               .build()};
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("bigint")
-              .argumentType("any")
-              .variableArity()
+              .variableArity("any")
               .build()};
 }
 
@@ -682,8 +763,7 @@ xxhash64WithSeedSignatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("bigint")
               .constantArgumentType("bigint")
-              .argumentType("any")
-              .variableArity()
+              .variableArity("any")
               .build()};
 }
 

@@ -25,6 +25,7 @@
 #include "velox/external/md5/md5.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/ToHex.h"
+#include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::functions {
 
@@ -158,6 +159,7 @@ struct HmacSha1Function {
   template <typename TOutput, typename TInput>
   FOLLY_ALWAYS_INLINE void
   call(TOutput& result, const TInput& data, const TInput& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(20);
     folly::ssl::OpenSSLHash::hmac_sha1(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -174,6 +176,7 @@ struct HmacSha256Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void
   call(TTo& result, const TFrom& data, const TFrom& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(32);
     folly::ssl::OpenSSLHash::hmac_sha256(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -190,6 +193,7 @@ struct HmacSha512Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void
   call(TTo& result, const TFrom& data, const TFrom& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(64);
     folly::ssl::OpenSSLHash::hmac_sha512(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -207,6 +211,7 @@ struct HmacMd5Function {
       out_type<Varbinary>& result,
       const arg_type<Varbinary>& data,
       const arg_type<Varbinary>& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(16);
     folly::ssl::OpenSSLHash::hmac(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -281,21 +286,19 @@ struct ToBase64Function {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct FromBase64Function {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varbinary>& result,
-      const arg_type<Varchar>& input) {
-    try {
-      auto inputSize = input.size();
-      result.resize(
-          encoding::Base64::calculateDecodedSize(input.data(), inputSize));
-      encoding::Base64::decode(
-          input.data(), inputSize, result.data(), result.size());
-    } catch (const encoding::Base64Exception& e) {
-      VELOX_USER_FAIL(e.what());
-    }
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
+  // same, but hard-coding one of them might be confusing.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void call(out_type<Varbinary>& result, const T& input) {
+    auto inputSize = input.size();
+    result.resize(
+        encoding::Base64::calculateDecodedSize(input.data(), inputSize));
+    encoding::Base64::decode(
+        input.data(), inputSize, result.data(), result.size());
   }
 };
 
@@ -435,5 +438,32 @@ struct FromIEEE754Bits32 {
     result = folly::Endian::big(result);
   }
 };
+
+/// lpad(binary, size, padbinary) -> varbinary
+///     Left pads input to size characters with padding.  If size is
+///     less than the length of input, the result is truncated to size
+///     characters.  size must not be negative and padding must be non-empty.
+/// rpad(binary, size, padbinary) -> varbinary
+///     Right pads input to size characters with padding.  If size is
+///     less than the length of input, the result is truncated to size
+///     characters.  size must not be negative and padding must be non-empty.
+template <typename T, bool lpad>
+struct PadFunctionVarbinaryBase {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varbinary>& binary,
+      const arg_type<int64_t>& size,
+      const arg_type<Varbinary>& padbinary) {
+    stringImpl::pad<lpad, false /*isAscii*/>(result, binary, size, padbinary);
+  }
+};
+
+template <typename T>
+struct LPadVarbinaryFunction : public PadFunctionVarbinaryBase<T, true> {};
+
+template <typename T>
+struct RPadVarbinaryFunction : public PadFunctionVarbinaryBase<T, false> {};
 
 } // namespace facebook::velox::functions

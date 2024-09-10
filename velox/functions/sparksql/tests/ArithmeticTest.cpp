@@ -91,6 +91,11 @@ class RemainderTest : public SparkFunctionBaseTest {
   std::optional<T> remainder(std::optional<T> a, std::optional<T> n) {
     return evaluateOnce<T>("remainder(c0, c1)", a, n);
   };
+
+  template <typename T>
+  T remainderValue(std::optional<T> a, std::optional<T> n) {
+    return remainder<T>(a, n).value();
+  }
 };
 
 TEST_F(RemainderTest, int8) {
@@ -133,6 +138,44 @@ TEST_F(RemainderTest, int64) {
   EXPECT_EQ(-1, remainder<int64_t>(INT64_MIN, INT64_MAX));
 }
 
+TEST_F(RemainderTest, double) {
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+  constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+
+  EXPECT_DOUBLE_EQ(0.0, remainderValue<double>(2.0, 1.0));
+  EXPECT_DOUBLE_EQ(1.0, remainderValue<double>(5.0, 2.0));
+  EXPECT_DOUBLE_EQ(-1.0, remainderValue<double>(-5.0, 2.0));
+  EXPECT_DOUBLE_EQ(0.5, remainderValue<double>(1.5, 1.0));
+  EXPECT_DOUBLE_EQ(0.0, remainderValue<double>(0.0, 1.0));
+  EXPECT_DOUBLE_EQ(2.0, remainderValue<double>(2.0, kInf));
+
+  EXPECT_EQ(std::nullopt, remainder<double>(2.0, 0.0));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(kNan, 1.0)));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(1.0, kNan)));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(kInf, 1.0)));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(-kInf, 1.0)));
+  EXPECT_TRUE(std::isnan(remainderValue<double>(kInf, kInf)));
+}
+
+TEST_F(RemainderTest, float) {
+  constexpr float kInf = std::numeric_limits<float>::infinity();
+  constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+
+  EXPECT_FLOAT_EQ(0.0f, remainderValue<float>(2.0f, 1.0f));
+  EXPECT_FLOAT_EQ(1.0f, remainderValue<float>(5.0f, 2.0f));
+  EXPECT_FLOAT_EQ(-1.0f, remainderValue<float>(-5.0f, 2.0f));
+  EXPECT_FLOAT_EQ(0.5f, remainderValue<float>(1.5f, 1.0f));
+  EXPECT_FLOAT_EQ(0.0f, remainderValue<float>(0.0f, 1.0f));
+  EXPECT_FLOAT_EQ(2.0f, remainderValue<float>(2.0f, kInf));
+
+  EXPECT_EQ(std::nullopt, remainder<float>(2.0f, 0.0f));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(kNan, 1.0f)));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(1.0f, kNan)));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(kInf, 1.0f)));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(-kInf, 1.0f)));
+  EXPECT_TRUE(std::isnan(remainderValue<float>(kInf, kInf)));
+}
+
 class ArithmeticTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
@@ -144,6 +187,83 @@ class ArithmeticTest : public SparkFunctionBaseTest {
       std::optional<double> numerator,
       std::optional<double> denominator) {
     return evaluateOnce<double>("divide(c0, c1)", numerator, denominator);
+  }
+
+  template <typename T>
+  std::optional<T> checkedAdd(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>("checked_add(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> checkedDivide(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>("checked_divide(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> checkedMultiply(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>("checked_multiply(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> checkedSubtract(
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>("checked_subtract(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedArithmetic(
+      const std::string& func,
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    auto res = evaluateOnce<T>(fmt::format("try({}(c0, c1))", func), a, b);
+    ASSERT_TRUE(!res.has_value());
+    try {
+      evaluateOnce<T>(fmt::format("{}(c0, c1)", func), a, b);
+      FAIL() << "Expected an error";
+    } catch (const std::exception& e) {
+      ASSERT_TRUE(
+          std::string(e.what()).find(errorMessage) != std::string::npos);
+    }
+  }
+
+  template <typename T>
+  void assertErrorForCheckedAdd(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_add", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedDivide(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_divide", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForCheckedMultiply(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_multiply", a, b, errorMessage);
+  }
+
+  template <typename T>
+  void assertErrorForcheckedSubtract(
+      const std::optional<T> a,
+      const std::optional<T> b,
+      const std::string& errorMessage) {
+    assertErrorForCheckedArithmetic("checked_subtract", a, b, errorMessage);
   }
 
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
@@ -557,9 +677,62 @@ TEST_F(ArithmeticTest, widthBucket) {
   EXPECT_EQ(widthBucket(-kInf, 0, 4, 3), 0);
 }
 
+TEST_F(ArithmeticTest, checkedAdd) {
+  assertErrorForCheckedAdd<int8_t>(INT8_MAX, 1, "Arithmetic overflow: 127 + 1");
+  assertErrorForCheckedAdd<int16_t>(
+      INT16_MAX, 1, "Arithmetic overflow: 32767 + 1");
+  assertErrorForCheckedAdd<int32_t>(
+      INT32_MAX, 1, "Arithmetic overflow: 2147483647 + 1");
+  assertErrorForCheckedAdd<int64_t>(
+      INT64_MAX, 1, "Arithmetic overflow: 9223372036854775807 + 1");
+  EXPECT_EQ(checkedAdd<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedAdd<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, checkedSubtract) {
+  assertErrorForcheckedSubtract<int8_t>(
+      INT8_MIN, 1, "Arithmetic overflow: -128 - 1");
+  assertErrorForcheckedSubtract<int16_t>(
+      INT16_MIN, 1, "Arithmetic overflow: -32768 - 1");
+  assertErrorForcheckedSubtract<int32_t>(
+      INT32_MIN, 1, "Arithmetic overflow: -2147483648 - 1");
+  assertErrorForcheckedSubtract<int64_t>(
+      INT64_MIN, 1, "Arithmetic overflow: -9223372036854775808 - 1");
+  EXPECT_EQ(checkedSubtract<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedSubtract<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, checkedMultiply) {
+  assertErrorForCheckedMultiply<int8_t>(
+      INT8_MAX, 2, "Arithmetic overflow: 127 * 2");
+  assertErrorForCheckedMultiply<int16_t>(
+      INT16_MAX, 2, "Arithmetic overflow: 32767 * 2");
+  assertErrorForCheckedMultiply<int32_t>(
+      INT32_MAX, 2, "Arithmetic overflow: 2147483647 * 2");
+  assertErrorForCheckedMultiply<int64_t>(
+      INT64_MAX, 2, "Arithmetic overflow: 9223372036854775807 * 2");
+  EXPECT_EQ(checkedMultiply<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedMultiply<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, checkedDivide) {
+  assertErrorForCheckedDivide<int32_t>(1, 0, "division by zero");
+  assertErrorForCheckedDivide<int8_t>(
+      INT8_MIN, -1, "Arithmetic overflow: -128 / -1");
+  assertErrorForCheckedDivide<int16_t>(
+      INT16_MIN, -1, "Arithmetic overflow: -32768 / -1");
+  assertErrorForCheckedDivide<int32_t>(
+      INT32_MIN, -1, "Arithmetic overflow: -2147483648 / -1");
+  assertErrorForCheckedDivide<int64_t>(
+      INT64_MIN, -1, "Arithmetic overflow: -9223372036854775808 / -1");
+  EXPECT_EQ(checkedDivide<float>(kInf, 1), kInf);
+  EXPECT_EQ(checkedDivide<double>(kInfDouble, 1), kInfDouble);
+}
+
 class LogNTest : public SparkFunctionBaseTest {
  protected:
-  static constexpr float kInf = std::numeric_limits<double>::infinity();
+  static constexpr double kInf = std::numeric_limits<double>::infinity();
+  static constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 };
 
 TEST_F(LogNTest, log2) {
@@ -580,6 +753,31 @@ TEST_F(LogNTest, log10) {
   EXPECT_EQ(log10(0.0), std::nullopt);
   EXPECT_EQ(log10(-1.0), std::nullopt);
   EXPECT_EQ(log10(kInf), kInf);
+}
+
+TEST_F(LogNTest, log) {
+  const auto log = [&](std::optional<double> a, std::optional<double> b) {
+    return evaluateOnce<double>("log(c0, c1)", a, b);
+  };
+  const auto isNan = [&](std::optional<double> res) {
+    return std::isnan(res.value());
+  };
+  EXPECT_EQ(log(10, 100), 2.0);
+
+  EXPECT_EQ(log(0.0, 1.0), std::nullopt);
+  EXPECT_EQ(log(1.0, 0.0), std::nullopt);
+  EXPECT_EQ(log(-1.0, 1.0), std::nullopt);
+  EXPECT_EQ(log(1.0, -1.0), std::nullopt);
+
+  EXPECT_EQ(log(1.0, 3.0), kInf);
+
+  EXPECT_TRUE(isNan(log(kNan, kNan)));
+  EXPECT_TRUE(isNan(log(kInf, kNan)));
+  EXPECT_TRUE(isNan(log(kNan, kInf)));
+  EXPECT_TRUE(isNan(log(kInf, kInf)));
+
+  EXPECT_EQ(log(kInf, -kInf), std::nullopt);
+  EXPECT_EQ(log(-kInf, kInf), std::nullopt);
 }
 
 } // namespace

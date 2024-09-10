@@ -31,10 +31,11 @@ class HiveConnector : public Connector {
  public:
   HiveConnector(
       const std::string& id,
-      std::shared_ptr<const Config> config,
+      std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* executor);
 
-  const std::shared_ptr<const Config>& connectorConfig() const override {
+  const std::shared_ptr<const config::ConfigBase>& connectorConfig()
+      const override {
     return hiveConfig_->config();
   }
 
@@ -96,7 +97,7 @@ class HiveConnectorFactory : public ConnectorFactory {
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> config,
+      std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* executor = nullptr) override {
     return std::make_shared<HiveConnector>(id, config, executor);
   }

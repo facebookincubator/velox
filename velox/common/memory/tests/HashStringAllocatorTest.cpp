@@ -55,7 +55,8 @@ class HashStringAllocatorTest : public testing::Test {
 
   void initializeContents(HSA::Header* header) {
     auto sequence = ++sequence_;
-    int32_t numWords = header->size() / sizeof(void*);
+    int32_t numWords =
+        header->size() / HashStringAllocator::Header::kContinuedPtrSize;
     void** ptr = reinterpret_cast<void**>(header->begin());
     ptr[0] = reinterpret_cast<void*>(sequence);
     for (int32_t offset = 1; offset < numWords; offset++) {
@@ -99,6 +100,48 @@ class HashStringAllocatorTest : public testing::Test {
   folly::Random::DefaultGenerator rng_;
 };
 
+TEST_F(HashStringAllocatorTest, multipleFree) {
+  ASSERT_NO_THROW(allocator_->toString());
+
+  auto h1 = allocate(123);
+  ASSERT_EQ(h1->toString(), "size: 123");
+
+  allocator_->free(h1);
+  // Running free() multiple times on the same memory block should result in an
+  // error.
+  VELOX_ASSERT_THROW(allocator_->free(h1), "");
+}
+
+TEST_F(HashStringAllocatorTest, multipleFreeAncCheckCurrentBytes) {
+  ASSERT_NO_THROW(allocator_->toString());
+
+  auto h1 = allocate(123);
+  auto h2 = allocate(456);
+  auto h3 = allocate(789);
+
+  ASSERT_EQ(h1->toString(), "size: 123");
+  ASSERT_EQ(h2->toString(), "size: 456");
+  ASSERT_EQ(h3->toString(), "size: 789");
+
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
+
+  allocator_->free(h3);
+  allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
+
+  allocator_->free(h2);
+  allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
+
+  allocator_->free(h1);
+  allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
+
+  // After all blocks execute free(), the allocated bytes should be equal to 0.
+  ASSERT_EQ(allocator_->currentBytes(), 0);
+}
+
 TEST_F(HashStringAllocatorTest, headerToString) {
   ASSERT_NO_THROW(allocator_->toString());
 
@@ -141,7 +184,8 @@ TEST_F(HashStringAllocatorTest, allocate) {
       headers.push_back(allocate((i % 10) * 10));
     }
     EXPECT_FALSE(allocator_->isEmpty());
-    allocator_->checkConsistency();
+    auto allocatedBytes = allocator_->checkConsistency();
+    ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
     for (int32_t step = 7; step >= 1; --step) {
       for (auto i = 0; i < headers.size(); i += step) {
         if (headers[i]) {
@@ -149,7 +193,8 @@ TEST_F(HashStringAllocatorTest, allocate) {
           headers[i] = nullptr;
         }
       }
-      allocator_->checkConsistency();
+      allocatedBytes = allocator_->checkConsistency();
+      ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
     }
   }
   EXPECT_TRUE(allocator_->isEmpty());
@@ -213,14 +258,15 @@ TEST_F(HashStringAllocatorTest, finishWrite) {
 
   std::string copy;
   copy.resize(longString.size());
-  inputStream.readBytes(copy.data(), copy.size());
+  inputStream->readBytes(copy.data(), copy.size());
   ASSERT_EQ(copy, longString);
 
   copy.resize(4);
-  inputStream.readBytes(copy.data(), 4);
+  inputStream->readBytes(copy.data(), 4);
   ASSERT_EQ(copy, "abcd");
 
-  allocator_->checkConsistency();
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 
   std::vector<int32_t> sizes = {
       50000, 100000, 200000, 1000000, 3000000, 5000000};
@@ -234,9 +280,10 @@ TEST_F(HashStringAllocatorTest, finishWrite) {
     auto inStream = HSA::prepareRead(start.header);
     std::string copy;
     copy.resize(largeString.size());
-    inStream.readBytes(copy.data(), copy.size());
+    inStream->readBytes(copy.data(), copy.size());
     ASSERT_EQ(copy, largeString);
-    allocator_->checkConsistency();
+    allocatedBytes = allocator_->checkConsistency();
+    ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
   }
 }
 
@@ -273,7 +320,8 @@ TEST_F(HashStringAllocatorTest, multipart) {
       data[i].reference.insert(
           data[i].reference.end(), chars.begin(), chars.end());
     }
-    allocator_->checkConsistency();
+    auto allocatedBytes = allocator_->checkConsistency();
+    ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
   }
   for (const auto& d : data) {
     if (d.start.isSet()) {
@@ -283,10 +331,12 @@ TEST_F(HashStringAllocatorTest, multipart) {
   for (auto& d : data) {
     if (d.start.isSet()) {
       checkAndFree(d);
-      allocator_->checkConsistency();
+      auto allocatedBytes = allocator_->checkConsistency();
+      ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
     }
   }
-  allocator_->checkConsistency();
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 }
 
 TEST_F(HashStringAllocatorTest, mixedMultipart) {
@@ -317,7 +367,8 @@ TEST_F(HashStringAllocatorTest, mixedMultipart) {
 
   allocator_->free(start.header);
 
-  allocator_->checkConsistency();
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 }
 
 TEST_F(HashStringAllocatorTest, rewrite) {
@@ -346,9 +397,9 @@ TEST_F(HashStringAllocatorTest, rewrite) {
     position = allocator_->finishWrite(stream, 0).second;
     EXPECT_EQ(3 * sizeof(int64_t), HSA::offset(header, position));
     auto inStream = HSA::prepareRead(header);
-    EXPECT_EQ(123456789012345LL, inStream.read<int64_t>());
-    EXPECT_EQ(12345LL, inStream.read<int64_t>());
-    EXPECT_EQ(67890LL, inStream.read<int64_t>());
+    EXPECT_EQ(123456789012345LL, inStream->read<int64_t>());
+    EXPECT_EQ(12345LL, inStream->read<int64_t>());
+    EXPECT_EQ(67890LL, inStream->read<int64_t>());
   }
   // The stream contains 3 int64_t's.
   auto end = HSA::seek(header, 3 * sizeof(int64_t));
@@ -398,7 +449,8 @@ TEST_F(HashStringAllocatorTest, stlAllocator) {
     }
   }
 
-  allocator_->checkConsistency();
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 
   // We allow for some overhead for free lists after all is freed.
   EXPECT_LE(allocator_->retainedSize() - allocator_->freeSpace(), 100);
@@ -433,7 +485,8 @@ TEST_F(HashStringAllocatorTest, stlAllocatorWithSet) {
     }
   }
 
-  allocator_->checkConsistency();
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 
   // We allow for some overhead for free lists after all is freed.
   EXPECT_LE(allocator_->retainedSize() - allocator_->freeSpace(), 220);
@@ -470,7 +523,8 @@ TEST_F(HashStringAllocatorTest, alignedStlAllocatorWithF14Map) {
     }
   }
 
-  allocator_->checkConsistency();
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 
   // We allow for some overhead for free lists after all is freed. Map tends to
   // generate more free blocks at the end, so we loosen the upper bound a bit.
@@ -484,14 +538,16 @@ TEST_F(HashStringAllocatorTest, alignedStlAllocatorLargeAllocation) {
   AlignedStlAllocator<int64_t, 16> alignedAlloc16(allocator_.get());
   int64_t* ptr = alignedAlloc16.allocate(allocateSize);
   alignedAlloc16.deallocate(ptr, allocateSize);
-  allocator_->checkConsistency();
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 
   // Test large allocation + un-aligned pool.
   ASSERT_LT(allocator_->pool()->alignment(), 128);
   AlignedStlAllocator<int64_t, 128> alignedAlloc128(allocator_.get());
   ptr = alignedAlloc128.allocate(allocateSize);
   alignedAlloc128.deallocate(ptr, allocateSize);
-  allocator_->checkConsistency();
+  allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 }
 
 TEST_F(HashStringAllocatorTest, stlAllocatorOverflow) {
@@ -580,7 +636,8 @@ TEST_F(HashStringAllocatorTest, strings) {
     views.push_back(StringView(str.data(), str.size()));
     allocator_->copyMultipart(views[i], reinterpret_cast<char*>(&views[i]), 0);
     if (i % 10 == 0) {
-      allocator_->checkConsistency();
+      auto allocatedBytes = allocator_->checkConsistency();
+      ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
     }
   }
   for (auto i = 0; i < strings.size(); ++i) {
@@ -592,7 +649,8 @@ TEST_F(HashStringAllocatorTest, strings) {
         StringView(strings[i]) ==
         HashStringAllocator::contiguousString(views[i], temp));
   }
-  allocator_->checkConsistency();
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 }
 
 TEST_F(HashStringAllocatorTest, sizeAndPosition) {
@@ -636,20 +694,20 @@ TEST_F(HashStringAllocatorTest, sizeAndPosition) {
     stream.seekp(start);
     EXPECT_EQ(start, stream.tellp());
     EXPECT_EQ(kUnitSize * 10, stream.size());
-    ByteInputStream input = stream.inputStream();
-    input.seekp(start);
-    EXPECT_EQ(kUnitSize * 10 - start, input.remainingSize());
+    auto input = stream.inputStream();
+    input->seekp(start);
+    EXPECT_EQ(kUnitSize * 10 - start, input->remainingSize());
     for (auto c = 0; c < 10; ++c) {
-      uint8_t byte = input.readByte();
+      uint8_t byte = input->readByte();
       EXPECT_EQ(byte, (start + c) % kUnitSize);
     }
     // Overwrite the bytes just read.
     stream.seekp(start);
     stream.appendStringView(std::string_view(allChars.data(), 100));
     input = stream.inputStream();
-    input.seekp(start);
+    input->seekp(start);
     for (auto c = 0; c < 100; ++c) {
-      uint8_t byte = input.readByte();
+      uint8_t byte = input->readByte();
       EXPECT_EQ(byte, c % kUnitSize);
     }
   }
@@ -662,13 +720,50 @@ TEST_F(HashStringAllocatorTest, sizeAndPosition) {
 
 TEST_F(HashStringAllocatorTest, storeStringFast) {
   allocator_->allocate(HashStringAllocator::kMinAlloc);
-  std::string s(allocator_->freeSpace() + sizeof(void*), 'x');
+  std::string s(
+      allocator_->freeSpace() + HashStringAllocator::Header::kContinuedPtrSize,
+      'x');
   StringView sv(s);
   allocator_->copyMultipart(sv, reinterpret_cast<char*>(&sv), 0);
   ASSERT_NE(sv.data(), s.data());
   ASSERT_EQ(sv, StringView(s));
-  allocator_->checkConsistency();
+  auto allocatedBytes = allocator_->checkConsistency();
+  ASSERT_EQ(allocatedBytes, allocator_->currentBytes());
 }
 
+TEST_F(HashStringAllocatorTest, clear) {
+  allocator_->allocate(HashStringAllocator::kMinAlloc);
+  allocator_->allocate(HashStringAllocator::kMaxAlloc + 1);
+  EXPECT_GT(allocator_->retainedSize(), 0);
+  allocator_->clear();
+  EXPECT_EQ(allocator_->retainedSize(), 0);
+}
+
+TEST_F(HashStringAllocatorTest, freezeAndExecute) {
+  std::string str = "abc";
+  StringView view(str.data(), str.size());
+  allocator_->copyMultipart(view, reinterpret_cast<char*>(&view), 0);
+
+  str.clear();
+
+  // Freeing memory requires the HashStringAllocator to be mutable.
+  VELOX_ASSERT_THROW(
+      allocator_->freezeAndExecute([&]() {
+        allocator_->free(HashStringAllocator::headerOf(view.data()));
+      }),
+      "The HashStringAllocator is immutable.");
+
+  HashStringAllocator::Header* header;
+
+  // Allocating memory requires the HashStringAllocator to be mutable.
+  VELOX_ASSERT_THROW(
+      allocator_->freezeAndExecute(
+          [&]() { header = allocator_->allocate(24); }),
+      "The HashStringAllocator is immutable.");
+
+  // Simply fetching state should not require the HashStringAllocator to be
+  // mutable.
+  allocator_->freezeAndExecute([&]() { allocator_->currentBytes(); });
+}
 } // namespace
 } // namespace facebook::velox

@@ -35,14 +35,25 @@ class ParquetParams : public dwio::common::FormatParams {
   ParquetParams(
       memory::MemoryPool& pool,
       dwio::common::ColumnReaderStatistics& stats,
-      const FileMetaDataPtr metaData)
-      : FormatParams(pool, stats), metaData_(metaData) {}
+      const FileMetaDataPtr metaData,
+      const tz::TimeZone* sessionTimezone,
+      TimestampPrecision timestampPrecision)
+      : FormatParams(pool, stats),
+        metaData_(metaData),
+        sessionTimezone_(sessionTimezone),
+        timestampPrecision_(timestampPrecision) {}
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
 
+  TimestampPrecision timestampPrecision() const {
+    return timestampPrecision_;
+  }
+
  private:
   const FileMetaDataPtr metaData_;
+  const tz::TimeZone* sessionTimezone_;
+  const TimestampPrecision timestampPrecision_;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
@@ -51,13 +62,15 @@ class ParquetData : public dwio::common::FormatData {
   ParquetData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const FileMetaDataPtr fileMetadataPtr,
-      memory::MemoryPool& pool)
+      memory::MemoryPool& pool,
+      const tz::TimeZone* sessionTimezone)
       : pool_(pool),
         type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
         fileMetaDataPtr_(fileMetadataPtr),
         maxDefine_(type_->maxDefine_),
         maxRepeat_(type_->maxRepeat_),
-        rowsInRowGroup_(-1) {}
+        rowsInRowGroup_(-1),
+        sessionTimezone_(sessionTimezone) {}
 
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
@@ -202,6 +215,7 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
+  const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
 
   // Nulls derived from leaf repdefs for non-leaf readers.

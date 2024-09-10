@@ -21,20 +21,18 @@
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
-namespace {
 
-// Assuming tzID is in [1, 1680] range.
-// tzID - PrestoDB time zone ID.
-inline int64_t getPrestoTZOffsetInSeconds(int16_t tzID) {
-  // TODO(spershin): Maybe we need something better if we can (we could use
-  //  precomputed vector for PrestoDB timezones, for instance).
-
-  // PrestoDb time zone ids require some custom code.
-  // Mapping is 1-based and covers [-14:00, +14:00] range without 00:00.
-  return ((tzID <= 840) ? (tzID - 841) : (tzID - 840)) * 60;
+// static
+Timestamp Timestamp::fromDaysAndNanos(int32_t days, int64_t nanos) {
+  int64_t seconds =
+      (days - kJulianToUnixEpochDays) * kSecondsInDay + nanos / kNanosInSecond;
+  int64_t remainingNanos = nanos % kNanosInSecond;
+  if (remainingNanos < 0) {
+    remainingNanos += kNanosInSecond;
+    seconds--;
+  }
+  return Timestamp(seconds, remainingNanos);
 }
-
-} // namespace
 
 // static
 Timestamp Timestamp::now() {
@@ -45,105 +43,51 @@ Timestamp Timestamp::now() {
   return fromMillis(epochMs);
 }
 
-void Timestamp::toGMT(const date::time_zone& zone) {
-  // Magic number -2^39 + 24*3600. This number and any number lower than that
-  // will cause time_zone::to_sys() to SIGABRT. We don't want that to happen.
-  VELOX_USER_CHECK_GT(
-      seconds_,
-      -1096193779200l + 86400l,
-      "Timestamp seconds out of range for time zone adjustment");
+void Timestamp::toGMT(const tz::TimeZone& zone) {
+  std::chrono::seconds sysSeconds;
 
-  VELOX_USER_CHECK_LE(
-      seconds_,
-      kMaxSeconds,
-      "Timestamp seconds out of range for time zone adjustment");
-
-  date::local_time<std::chrono::seconds> localTime{
-      std::chrono::seconds(seconds_)};
-  std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>
-      sysTime;
   try {
-    sysTime = zone.to_sys(localTime);
+    sysSeconds = zone.to_sys(std::chrono::seconds(seconds_));
   } catch (const date::ambiguous_local_time&) {
     // If the time is ambiguous, pick the earlier possibility to be consistent
     // with Presto.
-    sysTime = zone.to_sys(localTime, date::choose::earliest);
+    sysSeconds = zone.to_sys(
+        std::chrono::seconds(seconds_), tz::TimeZone::TChoose::kEarliest);
   } catch (const date::nonexistent_local_time& error) {
     // If the time does not exist, fail the conversion.
     VELOX_USER_FAIL(error.what());
   }
-  seconds_ = sysTime.time_since_epoch().count();
+  seconds_ = sysSeconds.count();
 }
-
-void Timestamp::toGMT(int16_t tzID) {
-  if (tzID == 0) {
-    // No conversion required for time zone id 0, as it is '+00:00'.
-  } else if (tzID <= 1680) {
-    seconds_ -= getPrestoTZOffsetInSeconds(tzID);
-  } else {
-    // Other ids go this path.
-    toGMT(*date::locate_zone(util::getTimeZoneName(tzID)));
-  }
-}
-
-namespace {
-void validateTimePoint(const std::chrono::time_point<
-                       std::chrono::system_clock,
-                       std::chrono::milliseconds>& timePoint) {
-  // Due to the limit of std::chrono we can only represent time in
-  // [-32767-01-01, 32767-12-31] date range
-  const auto minTimePoint = date::sys_days{
-      date::year_month_day(date::year::min(), date::month(1), date::day(1))};
-  const auto maxTimePoint = date::sys_days{
-      date::year_month_day(date::year::max(), date::month(12), date::day(31))};
-  if (timePoint < minTimePoint || timePoint > maxTimePoint) {
-    VELOX_USER_FAIL(
-        "Timestamp is outside of supported range of [{}-{}-{}, {}-{}-{}]",
-        (int)date::year::min(),
-        "01",
-        "01",
-        (int)date::year::max(),
-        "12",
-        "31");
-  }
-}
-} // namespace
 
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
-Timestamp::toTimePoint(bool allowOverflow) const {
+Timestamp::toTimePointMs(bool allowOverflow) const {
   using namespace std::chrono;
   auto tp = time_point<system_clock, milliseconds>(
       milliseconds(allowOverflow ? toMillisAllowOverflow() : toMillis()));
-  validateTimePoint(tp);
+  tz::validateRange(tp);
   return tp;
 }
 
-void Timestamp::toTimezone(const date::time_zone& zone, bool allowOverflow) {
-  auto tp = toTimePoint(allowOverflow);
-  auto epoch = zone.to_local(tp).time_since_epoch();
-  // NOTE: Round down to get the seconds of the current time point.
-  seconds_ = std::chrono::floor<std::chrono::seconds>(epoch).count();
-}
-
-void Timestamp::toTimezone(int16_t tzID) {
-  if (tzID == 0) {
-    // No conversion required for time zone id 0, as it is '+00:00'.
-  } else if (tzID <= 1680) {
-    seconds_ += getPrestoTZOffsetInSeconds(tzID);
-  } else {
-    // Other ids go this path.
-    toTimezone(*date::locate_zone(util::getTimeZoneName(tzID)));
+void Timestamp::toTimezone(const tz::TimeZone& zone) {
+  try {
+    seconds_ = zone.to_local(std::chrono::seconds(seconds_)).count();
+  } catch (const std::invalid_argument& e) {
+    // Invalid argument means we hit a conversion not supported by
+    // external/date. Need to throw a RuntimeError so that try() statements do
+    // not suppress it.
+    VELOX_FAIL(e.what());
   }
 }
 
-const date::time_zone& Timestamp::defaultTimezone() {
-  static const date::time_zone* kDefault = ({
+const tz::TimeZone& Timestamp::defaultTimezone() {
+  static const tz::TimeZone* kDefault = ({
     // TODO: We are hard-coding PST/PDT here to be aligned with the current
     // behavior in DWRF reader/writer.  Once they are fixed, we can use
     // date::current_zone() here.
     //
     // See https://github.com/facebookincubator/velox/issues/8127
-    auto* tz = date::locate_zone("America/Los_Angeles");
+    auto* tz = tz::locateZone("America/Los_Angeles");
     VELOX_CHECK_NOT_NULL(tz);
     tz;
   });
@@ -154,6 +98,8 @@ namespace {
 
 constexpr int kTmYearBase = 1900;
 constexpr int64_t kLeapYearOffset = 4000000000ll;
+constexpr int64_t kSecondsPerHour = 3600;
+constexpr int64_t kSecondsPerDay = 24 * kSecondsPerHour;
 
 inline bool isLeap(int64_t y) {
   return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
@@ -166,32 +112,18 @@ inline int64_t leapThroughEndOf(int64_t y) {
   return y / 4 - y / 100 + y / 400;
 }
 
-const int monthLengths[][12] = {
-    {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},
-    {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},
-};
-
-// clang-format off
-const char intToStr[][3] = {
-    "00", "01", "02", "03", "04", "05", "06", "07", "08", "09",
-    "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
-    "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
-    "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
-    "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
-    "50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
-    "60", "61",
-};
-// clang-format on
-
-void appendSmallInt(int n, std::string& out) {
-  VELOX_DCHECK_LE(n, 61);
-  out.append(intToStr[n], 2);
+inline int64_t daysBetweenYears(int64_t y1, int64_t y2) {
+  return 365 * (y2 - y1) + leapThroughEndOf(y2 - 1) - leapThroughEndOf(y1 - 1);
 }
+
+const int16_t daysBeforeFirstDayOfMonth[][12] = {
+    {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334},
+    {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335},
+};
+
 } // namespace
 
-bool Timestamp::epochToUtc(int64_t epoch, std::tm& tm) {
-  constexpr int kSecondsPerHour = 3600;
-  constexpr int kSecondsPerDay = 24 * kSecondsPerHour;
+bool Timestamp::epochToCalendarUtc(int64_t epoch, std::tm& tm) {
   constexpr int kDaysPerYear = 365;
   int64_t days = epoch / kSecondsPerDay;
   int64_t rem = epoch % kSecondsPerDay;
@@ -214,8 +146,7 @@ bool Timestamp::epochToUtc(int64_t epoch, std::tm& tm) {
   bool leapYear;
   while (days < 0 || days >= kDaysPerYear + (leapYear = isLeap(y))) {
     auto newy = y + days / kDaysPerYear - (days < 0);
-    days -= (newy - y) * kDaysPerYear + leapThroughEndOf(newy - 1) -
-        leapThroughEndOf(y - 1);
+    days -= daysBetweenYears(y, newy);
     y = newy;
   }
   y -= kTmYearBase;
@@ -225,13 +156,34 @@ bool Timestamp::epochToUtc(int64_t epoch, std::tm& tm) {
   }
   tm.tm_year = y;
   tm.tm_yday = days;
-  auto* ip = monthLengths[leapYear];
-  for (tm.tm_mon = 0; days >= ip[tm.tm_mon]; ++tm.tm_mon) {
-    days = days - ip[tm.tm_mon];
-  }
-  tm.tm_mday = days + 1;
+  auto* months = daysBeforeFirstDayOfMonth[leapYear];
+  tm.tm_mon = std::upper_bound(months, months + 12, days) - months - 1;
+  tm.tm_mday = days - months[tm.tm_mon] + 1;
   tm.tm_isdst = 0;
   return true;
+}
+
+// static
+int64_t Timestamp::calendarUtcToEpoch(const std::tm& tm) {
+  static_assert(sizeof(decltype(tm.tm_year)) == 4);
+  // tm_year stores number of years since 1900.
+  int64_t year = tm.tm_year + 1900LL;
+  int64_t month = tm.tm_mon;
+  if (FOLLY_UNLIKELY(month > 11)) {
+    year += month / 12;
+    month %= 12;
+  } else if (FOLLY_UNLIKELY(month < 0)) {
+    auto yearsDiff = (-month + 11) / 12;
+    year -= yearsDiff;
+    month += 12 * yearsDiff;
+  }
+  // Getting number of days since beginning of the year.
+  auto dayOfYear =
+      -1ll + daysBeforeFirstDayOfMonth[isLeap(year)][month] + tm.tm_mday;
+  // Number of days since 1970-01-01.
+  auto daysSinceEpoch = daysBetweenYears(1970, year) + dayOfYear;
+  return kSecondsPerDay * daysSinceEpoch + kSecondsPerHour * tm.tm_hour +
+      60ll * tm.tm_min + tm.tm_sec;
 }
 
 StringView Timestamp::tmToStringView(
@@ -361,7 +313,7 @@ StringView Timestamp::tsToStringView(
     char* const startPosition) {
   std::tm tmValue;
   VELOX_USER_CHECK(
-      epochToUtc(ts.getSeconds(), tmValue),
+      epochToCalendarUtc(ts.getSeconds(), tmValue),
       "Can't convert seconds to time: {}",
       ts.getSeconds());
   const uint64_t nanos = ts.getNanos();

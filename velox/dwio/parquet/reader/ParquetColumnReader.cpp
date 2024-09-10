@@ -27,12 +27,13 @@
 #include "velox/dwio/parquet/reader/RepeatedColumnReader.h"
 #include "velox/dwio/parquet/reader/StringColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
+#include "velox/dwio/parquet/reader/TimestampColumnReader.h"
 
 namespace facebook::velox::parquet {
 
 // static
 std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
-    const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+    const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
     common::ScanSpec& scanSpec) {
@@ -49,10 +50,10 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
 
     case TypeKind::REAL:
       return std::make_unique<FloatingPointColumnReader<float, float>>(
-          requestedType->type(), fileType, params, scanSpec);
+          requestedType, fileType, params, scanSpec);
     case TypeKind::DOUBLE:
       return std::make_unique<FloatingPointColumnReader<double, double>>(
-          requestedType->type(), fileType, params, scanSpec);
+          requestedType, fileType, params, scanSpec);
 
     case TypeKind::ROW:
       return std::make_unique<StructColumnReader>(
@@ -72,6 +73,10 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
 
     case TypeKind::BOOLEAN:
       return std::make_unique<BooleanColumnReader>(
+          requestedType, fileType, params, scanSpec);
+
+    case TypeKind::TIMESTAMP:
+      return std::make_unique<TimestampColumnReader>(
           requestedType, fileType, params, scanSpec);
 
     default:

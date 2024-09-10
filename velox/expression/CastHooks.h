@@ -21,9 +21,13 @@
 
 namespace facebook::velox::exec {
 
+enum PolicyType { LegacyCastPolicy = 1, PrestoCastPolicy, SparkCastPolicy };
+
+fmt::underlying_t<PolicyType> format_as(PolicyType f);
+
 /// This class provides cast hooks to allow different behaviors of CastExpr and
-/// SparkCastExpr. The main purpose is crate customized cast implementation by
-/// taking full usage of existing cast expression.
+/// SparkCastExpr. The main purpose is to create customized cast implementation
+/// by taking full usage of existing cast expression.
 class CastHooks {
  public:
   virtual ~CastHooks() = default;
@@ -34,8 +38,13 @@ class CastHooks {
   virtual Expected<int32_t> castStringToDate(
       const StringView& dateString) const = 0;
 
-  // Returns whether legacy cast semantics are enabled.
-  virtual bool legacy() const = 0;
+  // 'data' is guaranteed to be non-empty and has been processed by
+  // removeWhiteSpaces.
+  virtual Expected<float> castStringToReal(const StringView& data) const = 0;
+
+  // 'data' is guaranteed to be non-empty and has been processed by
+  // removeWhiteSpaces.
+  virtual Expected<double> castStringToDouble(const StringView& data) const = 0;
 
   // Trims all leading and trailing UTF8 whitespaces.
   virtual StringView removeWhiteSpaces(const StringView& view) const = 0;
@@ -45,5 +54,7 @@ class CastHooks {
 
   // Returns whether to cast to int by truncate.
   virtual bool truncate() const = 0;
+
+  virtual PolicyType getPolicy() const = 0;
 };
 } // namespace facebook::velox::exec

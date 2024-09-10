@@ -49,7 +49,7 @@ class WaveSplitReader {
  public:
   virtual ~WaveSplitReader() = default;
 
-  static std::unique_ptr<WaveSplitReader> create(
+  static std::shared_ptr<WaveSplitReader> create(
       const std::shared_ptr<velox::connector::ConnectorSplit>& split,
       const SplitReaderParams& params,
       const DefinesMap* defines);
@@ -59,8 +59,6 @@ class WaveSplitReader {
   virtual int32_t canAdvance(WaveStream& stream) = 0;
 
   virtual void schedule(WaveStream& stream, int32_t maxRows) = 0;
-
-  virtual vector_size_t outputSize(WaveStream& stream) const = 0;
 
   virtual bool isFinished() const = 0;
 
@@ -86,7 +84,7 @@ class WaveSplitReaderFactory {
 
   /// Returns a new split reader corresponding to 'split' if 'this' recognizes
   /// the split, otherwise returns nullptr.
-  virtual std::unique_ptr<WaveSplitReader> create(
+  virtual std::shared_ptr<WaveSplitReader> create(
       const std::shared_ptr<connector::ConnectorSplit>& split,
       const SplitReaderParams& params,
       const DefinesMap* defines) = 0;

@@ -87,7 +87,7 @@ void WaveHiveDataSource::addSplit(
   }
 
   splitReader_ = WaveSplitReader::create(split, params_, defines_);
-  ;
+
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions();
@@ -95,15 +95,21 @@ void WaveHiveDataSource::addSplit(
 }
 
 int32_t WaveHiveDataSource::canAdvance(WaveStream& stream) {
-  return splitReader_ != nullptr ? splitReader_->canAdvance(stream) : 0;
+  if (!splitReader_) {
+    return 0;
+  }
+  auto numRows = splitReader_->canAdvance(stream);
+  if (numRows == 0) {
+    split_ = nullptr;
+  }
+  return numRows;
 }
 
 void WaveHiveDataSource::schedule(WaveStream& stream, int32_t maxRows) {
   splitReader_->schedule(stream, maxRows);
-}
-
-vector_size_t WaveHiveDataSource::outputSize(WaveStream& stream) const {
-  return splitReader_->outputSize(stream);
+  // The stream must hold the reader tree. 'this' can initiate many
+  // concurrently running streams over potentially multiple splits.
+  stream.setSplitReader(splitReader_);
 }
 
 bool WaveHiveDataSource::isFinished() {
@@ -150,7 +156,8 @@ void WaveHiveDataSource::registerConnector() {
     return;
   }
   registered = true;
-  auto config = std::make_shared<const core::MemConfig>();
+  auto config = std::make_shared<const config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
 
   // Create hive connector with config...
   auto hiveConnector =

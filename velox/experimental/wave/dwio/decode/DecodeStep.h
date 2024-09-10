@@ -18,6 +18,7 @@
 
 #include "velox/experimental/wave/common/Buffer.h"
 #include "velox/experimental/wave/common/GpuArena.h"
+#include "velox/experimental/wave/common/ResultStaging.h"
 #include "velox/experimental/wave/vector/Operand.h"
 
 namespace facebook::velox::wave {
@@ -117,18 +118,18 @@ struct alignas(16) GpuDecode {
 
   NullMode nullMode;
 
-  // Ordinal number of TB in TBs working on the same column. Each TB does a
-  // multiple of TB width rows. The TBs for different ranges of rows are
-  // launched in the same grid but are independent. The ordinal for non-first
-  // TBs gets the base index for values.
-  uint8_t nthBlock{0};
-
   /// Number of chunks (e.g. Parquet pages). If > 1, different rows row ranges
   /// have different encodings. The first chunk's encoding is in 'data'. The
   /// next chunk's encoding is in the next GpuDecode's 'data'. Each chunk has
   /// its own 'nulls'. The input row numbers and output data/row numbers are
   /// given by the first GpuDecode.
   uint8_t numChunks{1};
+
+  // Ordinal number of TB in TBs working on the same column. Each TB does a
+  // multiple of TB width rows. The TBs for different ranges of rows are
+  // launched in the same grid but are independent. The ordinal for non-first
+  // TBs gets the base index for values.
+  uint16_t nthBlock{0};
 
   uint16_t numRowsPerThread{1};
 
@@ -381,8 +382,7 @@ struct alignas(16) GpuDecode {
 struct DecodePrograms {
   void clear() {
     programs.clear();
-    result = nullptr;
-    hostResult = nullptr;
+    result.clear();
   }
 
   // Set of decode programs submitted as a unit. Each vector<DecodeStep> is run
@@ -395,18 +395,12 @@ struct DecodePrograms {
   /// filter result counts or length sums come to the host via this buffer. If
   /// nullptr, no data transfer is scheduled. 'result' should be nullptr if all
   /// steps are unconditional, like simple decoding.
-  WaveBufferPtr result;
-  /// Host addressable copy of 'result'. If result is unified memory
-  /// this can be nullptr and we just enqueue a prefetch. to host. If
-  /// 'result' is device memory, this should be pinned host memory
-  /// with the same size.
-  WaveBufferPtr hostResult;
+  ResultBuffer result;
 };
 
 void launchDecode(
     const DecodePrograms& programs,
-    GpuArena* arena,
-    WaveBufferPtr& extra,
+    LaunchParams& params,
     Stream* stream);
 
 } // namespace facebook::velox::wave

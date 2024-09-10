@@ -64,7 +64,7 @@ class ParquetTestBase : public testing::Test, public test::VectorTestBase {
       const std::string& path,
       const dwio::common::ReaderOptions& opts) {
     auto input = std::make_unique<dwio::common::BufferedInput>(
-        std::make_shared<LocalReadFile>(path), opts.getMemoryPool());
+        std::make_shared<LocalReadFile>(path), opts.memoryPool());
     return std::make_unique<facebook::velox::parquet::ParquetReader>(
         std::move(input), opts);
   }
@@ -167,7 +167,7 @@ class ParquetTestBase : public testing::Test, public test::VectorTestBase {
     facebook::velox::parquet::WriterOptions options;
     options.memoryPool = rootPool_.get();
     options.flushPolicyFactory = flushPolicy;
-    options.compression = compressionKind;
+    options.compressionKind = compressionKind;
     return std::make_unique<facebook::velox::parquet::Writer>(
         std::move(sink), options, rowType);
   }

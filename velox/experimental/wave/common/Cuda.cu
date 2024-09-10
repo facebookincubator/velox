@@ -68,6 +68,9 @@ class CudaDeviceAllocator : public GpuAllocator {
   void free(void* ptr, size_t /*size*/) override {
     cudaFree(ptr);
   }
+  bool isDevice() const override {
+    return true;
+  }
 };
 
 class CudaHostAllocator : public GpuAllocator {
@@ -81,6 +84,10 @@ class CudaHostAllocator : public GpuAllocator {
   void free(void* ptr, size_t /*size*/) override {
     cudaFreeHost(ptr);
   };
+
+  bool isHost() const override {
+    return true;
+  }
 };
 
 } // namespace
@@ -125,6 +132,10 @@ void Stream::wait() {
 void Stream::prefetch(Device* device, void* ptr, size_t size) {
   CUDA_CHECK(cudaMemPrefetchAsync(
       ptr, size, device ? device->deviceId : cudaCpuDeviceId, stream_->stream));
+}
+
+void Stream::memset(void* ptr, int32_t value, size_t size) {
+  CUDA_CHECK(cudaMemsetAsync(ptr, value, size, stream_->stream));
 }
 
 void Stream::hostToDeviceAsync(
@@ -252,8 +263,8 @@ KernelInfo kernelInfo(const void* func) {
   int max;
   cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max, func, 256, 0);
   info.maxOccupancy0 = max;
-  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max, func, 256, 16);
-  info.maxOccupancy16 = max;
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max, func, 256, 256 * 32);
+  info.maxOccupancy32 = max;
 
   return info;
 }
@@ -263,7 +274,7 @@ std::string KernelInfo::toString() const {
   out << "NumRegs=" << numRegs << " maxThreadsPerBlock= " << maxThreadsPerBlock
       << " sharedMemory=" << sharedMemory
       << " occupancy 256,  0=" << maxOccupancy0
-      << " occupancy 256,16=" << maxOccupancy16;
+      << " occupancy 256,32=" << maxOccupancy32;
   return out.str();
 }
 

@@ -24,10 +24,10 @@
 
 namespace facebook::velox::dwrf {
 
-class Config : public common::ConfigBase<Config> {
+class Config : public config::ConfigBase {
  public:
   template <typename T>
-  using Entry = common::ConfigBase<Config>::Entry<T>;
+  using Entry = config::ConfigBase::Entry<T>;
 
   static Entry<WriterVersion> WRITER_VERSION;
   static Entry<common::CompressionKind> COMPRESSION;
@@ -61,6 +61,8 @@ class Config : public common::ConfigBase<Config> {
       MAP_FLAT_COLS_STRUCT_KEYS;
   static Entry<uint32_t> MAP_FLAT_MAX_KEYS;
   static Entry<uint64_t> MAX_DICTIONARY_SIZE;
+  static Entry<bool> INTEGER_DICTIONARY_ENCODING_ENABLED;
+  static Entry<bool> STRING_DICTIONARY_ENCODING_ENABLED;
   static Entry<uint64_t> STRIPE_SIZE;
   static Entry<bool> LINEAR_STRIPE_SIZE_HEURISTICS;
   /// With this config, we don't even try the more memory intensive encodings on
@@ -78,9 +80,17 @@ class Config : public common::ConfigBase<Config> {
 
   static std::shared_ptr<Config> fromMap(
       const std::map<std::string, std::string>& map) {
-    auto ret = std::make_shared<Config>();
-    ret->configs_.insert(map.cbegin(), map.cend());
-    return ret;
+    auto config = std::make_shared<Config>();
+    for (const auto& pair : map) {
+      config->set(pair.first, pair.second);
+    }
+    return config;
+  }
+
+  Config() : ConfigBase({}, true) {}
+
+  std::map<std::string, std::string> toSerdeParams() {
+    return std::map{configs_.cbegin(), configs_.cend()};
   }
 };
 

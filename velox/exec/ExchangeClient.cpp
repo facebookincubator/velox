@@ -15,6 +15,9 @@
  */
 #include "velox/exec/ExchangeClient.h"
 
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
+
 namespace facebook::velox::exec {
 
 void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
@@ -152,8 +155,26 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
     VELOX_CHECK(future.valid());
     std::move(future)
         .via(executor_)
-        .thenValue([self, spec = std::move(spec)](auto&& response) {
+        .thenValue([self,
+                    spec = std::move(spec),
+                    sendTimeMs = getCurrentTimeMs()](auto&& response) {
+          const auto requestTimeMs = getCurrentTimeMs() - sendTimeMs;
+          if (spec.maxBytes == 0) {
+            RECORD_HISTOGRAM_METRIC_VALUE(
+                kMetricExchangeDataSizeTimeMs, requestTimeMs);
+            RECORD_METRIC_VALUE(kMetricExchangeDataSizeCount);
+          } else {
+            RECORD_HISTOGRAM_METRIC_VALUE(
+                kMetricExchangeDataTimeMs, requestTimeMs);
+            RECORD_METRIC_VALUE(kMetricExchangeDataBytes, response.bytes);
+            RECORD_HISTOGRAM_METRIC_VALUE(
+                kMetricExchangeDataSize, response.bytes);
+            RECORD_METRIC_VALUE(kMetricExchangeDataCount);
+          }
+
+          bool pauseCurrentSource = false;
           std::vector<RequestSpec> requestSpecs;
+          std::shared_ptr<ExchangeSource> currentSource = spec.source;
           {
             std::lock_guard<std::mutex> l(self->queue_->mutex());
             if (self->closed_) {
@@ -173,6 +194,16 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
             }
             self->totalPendingBytes_ -= spec.maxBytes;
             requestSpecs = self->pickSourcesToRequestLocked();
+            pauseCurrentSource =
+                std::find_if(
+                    requestSpecs.begin(),
+                    requestSpecs.end(),
+                    [&currentSource](const RequestSpec& spec) -> bool {
+                      return spec.source.get() == currentSource.get();
+                    }) == requestSpecs.end();
+          }
+          if (pauseCurrentSource) {
+            currentSource->pause();
           }
           self->request(std::move(requestSpecs));
         })

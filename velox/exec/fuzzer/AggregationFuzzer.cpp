@@ -17,6 +17,7 @@
 
 #include <boost/random/uniform_int_distribution.hpp>
 
+#include "velox/common/base/Portability.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 
@@ -25,6 +26,7 @@
 
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/fuzzer/AggregationFuzzerBase.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -59,6 +61,8 @@ class AggregationFuzzer : public AggregationFuzzerBase {
           customInputGenerators,
       VectorFuzzer::Options::TimestampPrecision timestampPrecision,
       const std::unordered_map<std::string, std::string>& queryConfigs,
+      const std::unordered_map<std::string, std::string>& hiveConfigs,
+      bool orderableGroupKeys,
       std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner);
 
   void go();
@@ -209,6 +213,8 @@ void aggregateFuzzer(
         customInputGenerators,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::string>& hiveConfigs,
+    bool orderableGroupKeys,
     const std::optional<std::string>& planPath,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner) {
   auto aggregationFuzzer = AggregationFuzzer(
@@ -218,6 +224,8 @@ void aggregateFuzzer(
       customInputGenerators,
       timestampPrecision,
       queryConfigs,
+      hiveConfigs,
+      orderableGroupKeys,
       std::move(referenceQueryRunner));
   planPath.has_value() ? aggregationFuzzer.go(planPath.value())
                        : aggregationFuzzer.go();
@@ -234,6 +242,8 @@ AggregationFuzzer::AggregationFuzzer(
         customInputGenerators,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::string>& hiveConfigs,
+    bool orderableGroupKeys,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
     : AggregationFuzzerBase{
           seed,
@@ -241,6 +251,8 @@ AggregationFuzzer::AggregationFuzzer(
           customInputGenerators,
           timestampPrecision,
           queryConfigs,
+          hiveConfigs,
+          orderableGroupKeys,
           std::move(referenceQueryRunner)} {
   VELOX_CHECK(!signatureMap.empty(), "No function signatures available.");
 
@@ -301,18 +313,20 @@ bool canSortInputs(const CallableSignature& signature) {
 }
 
 // Returns true if specified aggregate function can be applied to distinct
-// inputs.
-bool supportsDistinctInputs(const CallableSignature& signature) {
+// inputs. If 'orderableGroupKeys' is true the argument type must be orderable,
+// otherwise it must be comparable.
+bool supportsDistinctInputs(
+    const CallableSignature& signature,
+    bool orderableGroupKeys) {
   if (signature.args.empty()) {
     return false;
   }
 
   const auto& arg = signature.args.at(0);
-  if (!arg->isComparable()) {
-    return false;
+  if (orderableGroupKeys) {
+    return arg->isOrderable();
   }
-
-  return true;
+  return arg->isComparable();
 }
 
 void AggregationFuzzer::go() {
@@ -337,6 +351,8 @@ void AggregationFuzzer::go() {
       auto groupingKeys = generateKeys("g", names, types);
       auto input = generateInputData(names, types, std::nullopt);
 
+      logVectors(input);
+
       verifyAggregation(groupingKeys, {}, {}, input, false, {});
     } else {
       // Pick a random signature.
@@ -360,8 +376,10 @@ void AggregationFuzzer::go() {
 
         auto partitionKeys = generateKeys("p", argNames, argTypes);
         auto sortingKeys = generateSortingKeys("s", argNames, argTypes);
-        auto input =
-            generateInputDataWithRowNumber(argNames, argTypes, signature);
+        auto input = generateInputDataWithRowNumber(
+            argNames, argTypes, partitionKeys, signature);
+
+        logVectors(input);
 
         bool failed = verifyWindow(
             partitionKeys,
@@ -385,7 +403,8 @@ void AggregationFuzzer::go() {
         // x).
         const bool distinctInputs = !sortedInputs &&
             (signature.name.find("approx_") == std::string::npos) &&
-            supportsDistinctInputs(signature) && vectorFuzzer_.coinToss(0.2);
+            supportsDistinctInputs(signature, orderableGroupKeys_) &&
+            vectorFuzzer_.coinToss(0.2);
 
         auto call = makeFunctionCall(
             signature.name, argNames, sortedInputs, distinctInputs);
@@ -410,6 +429,9 @@ void AggregationFuzzer::go() {
         }
 
         auto input = generateInputData(argNames, argTypes, signature);
+
+        logVectors(input);
+
         std::shared_ptr<ResultVerifier> customVerifier;
         if (customVerification) {
           customVerifier = customVerificationFunctions_.at(signature.name);
@@ -508,10 +530,18 @@ void makeAlternativePlansWithValues(
                           .partialAggregation(groupingKeys, aggregates, masks)
                           .planNode());
   }
+
+// There is a known issue where LocalPartition will send DictionaryVectors
+// with the same underlying base Vector to multiple threads.  This triggers
+// TSAN to report data races, particularly if that base Vector is from the
+// TableScan and reused.  Don't run these tests when TSAN is enabled to avoid
+// the false negatives.
+#ifndef TSAN_BUILD
   plans.push_back(PlanBuilder(planNodeIdGenerator)
                       .localPartition(groupingKeys, sources)
                       .finalAggregation()
                       .planNode());
+#endif
 }
 
 void makeAlternativePlansWithTableScan(
@@ -520,6 +550,12 @@ void makeAlternativePlansWithTableScan(
     const std::vector<std::string>& masks,
     const RowTypePtr& inputRowType,
     std::vector<core::PlanNodePtr>& plans) {
+// There is a known issue where LocalPartition will send DictionaryVectors
+// with the same underlying base Vector to multiple threads.  This triggers
+// TSAN to report data races, particularly if that base Vector is from the
+// TableScan and reused.  Don't run these tests when TSAN is enabled to avoid
+// the false negatives.
+#ifndef TSAN_BUILD
   // Partial -> final aggregation plan.
   plans.push_back(PlanBuilder()
                       .tableScan(inputRowType)
@@ -536,6 +572,7 @@ void makeAlternativePlansWithTableScan(
                       .intermediateAggregation()
                       .finalAggregation()
                       .planNode());
+#endif
 }
 
 void makeStreamingPlansWithValues(
@@ -676,7 +713,8 @@ bool AggregationFuzzer::verifyWindow(
 
     if (!customVerification && enableWindowVerification) {
       if (resultOrError.result) {
-        auto referenceResult = computeReferenceResults(plan, input);
+        auto referenceResult =
+            computeReferenceResults(plan, input, referenceQueryRunner_.get());
         stats_.updateReferenceQueryStats(referenceResult.second);
         if (auto expectedResult = referenceResult.first) {
           ++stats_.numVerified;
@@ -741,7 +779,7 @@ bool AggregationFuzzer::verifyAggregation(
 
   const auto inputRowType = asRowType(input[0]->type());
   if (isTableScanSupported(inputRowType) && vectorFuzzer_.coinToss(0.5)) {
-    auto splits = makeSplits(input, directory->getPath());
+    auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
     std::vector<core::PlanNodePtr> tableScanPlans;
     makeAlternativePlansWithTableScan(
@@ -856,7 +894,7 @@ bool AggregationFuzzer::verifySortedAggregation(
   const auto inputRowType = asRowType(input[0]->type());
   if (isTableScanSupported(inputRowType)) {
     directory = exec::test::TempDirectoryPath::create();
-    auto splits = makeSplits(input, directory->getPath());
+    auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
     plans.push_back(
         {PlanBuilder()
@@ -971,7 +1009,8 @@ void AggregationFuzzer::verifyAggregation(
 
   std::optional<MaterializedRowMultiset> expectedResult;
   if (!customVerification) {
-    auto referenceResult = computeReferenceResults(plan, input);
+    auto referenceResult =
+        computeReferenceResults(plan, input, referenceQueryRunner_.get());
     stats_.updateReferenceQueryStats(referenceResult.second);
     expectedResult = referenceResult.first;
   }
@@ -1052,7 +1091,8 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
 
     if (resultOrError.result != nullptr) {
       if (!customVerification) {
-        auto referenceResult = computeReferenceResults(firstPlan, input);
+        auto referenceResult = computeReferenceResults(
+            firstPlan, input, referenceQueryRunner_.get());
         stats_.updateReferenceQueryStats(referenceResult.second);
         auto expectedResult = referenceResult.first;
 
@@ -1069,8 +1109,8 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
       } else if (referenceQueryRunner_->supportsVeloxVectorResults()) {
         if (isSupportedType(firstPlan->outputType()) &&
             isSupportedType(input.front()->type())) {
-          auto referenceResult =
-              computeReferenceResultsAsVector(firstPlan, input);
+          auto referenceResult = computeReferenceResultsAsVector(
+              firstPlan, input, referenceQueryRunner_.get());
           stats_.updateReferenceQueryStats(referenceResult.second);
 
           if (referenceResult.first) {
@@ -1160,7 +1200,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
   const auto inputRowType = asRowType(input[0]->type());
   if (isTableScanSupported(inputRowType) && vectorFuzzer_.coinToss(0.5)) {
     directory = exec::test::TempDirectoryPath::create();
-    auto splits = makeSplits(input, directory->getPath());
+    auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
     plans.push_back(
         {PlanBuilder()

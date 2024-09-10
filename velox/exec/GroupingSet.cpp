@@ -228,7 +228,6 @@ void GroupingSet::addInputForActiveRows(
       *lookup_,
       input,
       activeRows_,
-      ignoreNullKeys_,
       BaseHashTable::kNoSpillInputStartPartitionBit);
   if (lookup_->rows.empty()) {
     // No rows to probe. Can happen when ignoreNullKeys_ is true and all rows
@@ -236,7 +235,7 @@ void GroupingSet::addInputForActiveRows(
     return;
   }
 
-  table_->groupProbe(*lookup_);
+  table_->groupProbe(*lookup_, BaseHashTable::kNoSpillInputStartPartitionBit);
   masks_.addInput(input, activeRows_);
 
   auto* groups = lookup_->hits.data();
@@ -400,7 +399,7 @@ void GroupingSet::createHashTable() {
 
   lookup_ = std::make_unique<HashLookup>(table_->hashers());
   if (!isAdaptive_ && table_->hashMode() != BaseHashTable::HashMode::kHash) {
-    table_->forceGenericHashMode();
+    table_->forceGenericHashMode(BaseHashTable::kNoSpillInputStartPartitionBit);
   }
 }
 
@@ -812,7 +811,8 @@ bool GroupingSet::isPartialFull(int64_t maxBytes) {
   // per 32 buckets.
   if (stats.capacity * sizeof(void*) > maxBytes / 16 &&
       stats.numDistinct < stats.capacity / 32) {
-    table_->decideHashMode(0, true);
+    table_->decideHashMode(
+        0, BaseHashTable::kNoSpillInputStartPartitionBit, true);
   }
   return allocatedBytes() > maxBytes;
 }
@@ -962,24 +962,42 @@ void GroupingSet::spill() {
     return;
   }
 
+  auto* rows = table_->rows();
   if (!hasSpilled()) {
-    auto rows = table_->rows();
     VELOX_DCHECK(pool_.trackUsage());
-    VELOX_CHECK_EQ(numDistinctSpilledFiles_, 0);
+    VELOX_CHECK(numDistinctSpillFilesPerPartition_.empty());
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kAggregateInput,
         rows,
         makeSpillType(),
+        HashBitRange(
+            spillConfig_->startPartitionBit,
+            spillConfig_->startPartitionBit + spillConfig_->numPartitionBits),
         rows->keyTypes().size(),
         std::vector<CompareFlags>(),
         spillConfig_,
         spillStats_);
-    VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);
+    VELOX_CHECK_EQ(
+        spiller_->state().maxPartitions(), 1 << spillConfig_->numPartitionBits);
   }
-  spiller_->spill();
-  if (isDistinct() && numDistinctSpilledFiles_ == 0) {
-    numDistinctSpilledFiles_ = spiller_->state().numFinishedFiles(0);
-    VELOX_CHECK_GT(numDistinctSpilledFiles_, 0);
+  // Spilling may execute on multiple partitions in parallel, and
+  // HashStringAllocator is not thread safe. If any aggregations
+  // allocate/deallocate memory during spilling it can lead to concurrency bugs.
+  // Freeze the HashStringAllocator to make it effectively immutable and
+  // guarantee we don't accidentally enter an unsafe situation.
+  rows->stringAllocator().freezeAndExecute([&]() { spiller_->spill(); });
+  if (isDistinct() && numDistinctSpillFilesPerPartition_.empty()) {
+    size_t totalNumDistinctSpilledFiles{0};
+    numDistinctSpillFilesPerPartition_.resize(
+        spiller_->state().maxPartitions(), 0);
+    for (int partition = 0; partition < spiller_->state().maxPartitions();
+         ++partition) {
+      numDistinctSpillFilesPerPartition_[partition] =
+          spiller_->state().numFinishedFiles(partition);
+      totalNumDistinctSpilledFiles +=
+          numDistinctSpillFilesPerPartition_[partition];
+    }
+    VELOX_CHECK_GT(totalNumDistinctSpilledFiles, 0);
   }
   if (sortedAggregations_) {
     sortedAggregations_->clear();
@@ -1003,7 +1021,13 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
       spillConfig_,
       spillStats_);
 
-  spiller_->spill(rowIterator);
+  // Spilling may execute on multiple partitions in parallel, and
+  // HashStringAllocator is not thread safe. If any aggregations
+  // allocate/deallocate memory during spilling it can lead to concurrency bugs.
+  // Freeze the HashStringAllocator to make it effectively immutable and
+  // guarantee we don't accidentally enter an unsafe situation.
+  rows->stringAllocator().freezeAndExecute(
+      [&]() { spiller_->spill(rowIterator); });
   table_->clear();
 }
 
@@ -1011,7 +1035,7 @@ bool GroupingSet::getOutputWithSpill(
     int32_t maxOutputRows,
     int32_t maxOutputBytes,
     const RowVectorPtr& result) {
-  if (merge_ == nullptr) {
+  if (outputSpillPartition_ == -1) {
     VELOX_CHECK_NULL(mergeRows_);
     VELOX_CHECK(mergeArgs_.empty());
 
@@ -1040,14 +1064,31 @@ bool GroupingSet::getOutputWithSpill(
     VELOX_CHECK_EQ(table_->rows()->numRows(), 0);
 
     VELOX_CHECK_NULL(merge_);
-    auto spillPartition = spiller_->finishSpill();
-    merge_ = spillPartition.createOrderedReader(&pool_, spillStats_);
+    spiller_->finishSpill(spillPartitionSet_);
+    removeEmptyPartitions(spillPartitionSet_);
+
+    if (!prepareNextSpillPartitionOutput()) {
+      VELOX_CHECK_NULL(merge_);
+      return false;
+    }
   }
-  VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);
-  if (merge_ == nullptr) {
+  VELOX_CHECK_NOT_NULL(merge_);
+  return mergeNext(maxOutputRows, maxOutputBytes, result);
+}
+
+bool GroupingSet::prepareNextSpillPartitionOutput() {
+  VELOX_CHECK_EQ(merge_ == nullptr, outputSpillPartition_ == -1);
+  merge_ = nullptr;
+  if (spillPartitionSet_.empty()) {
     return false;
   }
-  return mergeNext(maxOutputRows, maxOutputBytes, result);
+  auto it = spillPartitionSet_.begin();
+  VELOX_CHECK_NE(outputSpillPartition_, it->first.partitionNumber());
+  outputSpillPartition_ = it->first.partitionNumber();
+  merge_ = it->second->createOrderedReader(
+      spillConfig_->readBufferSize, &pool_, spillStats_);
+  spillPartitionSet_.erase(it);
+  return true;
 }
 
 bool GroupingSet::mergeNext(
@@ -1072,10 +1113,19 @@ bool GroupingSet::mergeNextWithAggregates(
   // one.
   bool nextKeyIsEqual{false};
   for (;;) {
-    auto next = merge_->nextWithEquals();
+    const auto next = merge_->nextWithEquals();
     if (next.first == nullptr) {
       extractSpillResult(result);
-      return result->size() > 0;
+      if (result->size() > 0) {
+        return true;
+      }
+      VELOX_CHECK(!nextKeyIsEqual);
+      if (!prepareNextSpillPartitionOutput()) {
+        VELOX_CHECK_NULL(merge_);
+        return false;
+      }
+      VELOX_CHECK_NOT_NULL(merge_);
+      continue;
     }
     if (!nextKeyIsEqual) {
       mergeState_ = mergeRows_->newRow();
@@ -1099,7 +1149,9 @@ bool GroupingSet::mergeNextWithoutAggregates(
     const RowVectorPtr& result) {
   VELOX_CHECK_NOT_NULL(merge_);
   VELOX_CHECK(isDistinct());
-  VELOX_CHECK_GT(numDistinctSpilledFiles_, 0);
+  VELOX_CHECK_EQ(
+      numDistinctSpillFilesPerPartition_.size(),
+      spiller_->state().maxPartitions());
 
   // We are looping over sorted rows produced by tree-of-losers. We logically
   // split the stream into runs of duplicate rows. As we process each run we
@@ -1111,16 +1163,25 @@ bool GroupingSet::mergeNextWithoutAggregates(
   // NOTE: the distinct stream refers to the stream that contains the spilled
   // distinct hash table. A distinct stream contains rows which has already
   // been output as distinct before we trigger spilling. A distinct stream id is
-  // less than 'numDistinctSpilledFiles_'.
+  // less than 'numDistinctSpillFilesPerPartition_'.
   bool newDistinct{true};
   int32_t numOutputRows{0};
   while (numOutputRows < maxOutputRows) {
     const auto next = merge_->nextWithEquals();
     auto* stream = next.first;
     if (stream == nullptr) {
-      break;
+      if (numOutputRows > 0) {
+        break;
+      }
+      if (!prepareNextSpillPartitionOutput()) {
+        VELOX_CHECK_NULL(merge_);
+        break;
+      }
+      VELOX_CHECK_NOT_NULL(merge_);
+      continue;
     }
-    if (stream->id() < numDistinctSpilledFiles_) {
+    if (stream->id() <
+        numDistinctSpillFilesPerPartition_[outputSpillPartition_]) {
       newDistinct = false;
     }
     if (next.second) {

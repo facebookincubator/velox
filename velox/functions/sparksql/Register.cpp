@@ -23,27 +23,32 @@
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/Repeat.h"
+#include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/BinaryFunctions.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
+#include "velox/functions/sparksql/ArrayInsert.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
-#include "velox/functions/sparksql/ArraySizeFunction.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
+#include "velox/functions/sparksql/JsonObjectKeys.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
+#include "velox/functions/sparksql/MaskFunction.h"
 #include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/MonotonicallyIncreasingId.h"
+#include "velox/functions/sparksql/RaiseError.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
 #include "velox/functions/sparksql/RegisterArithmetic.h"
 #include "velox/functions/sparksql/RegisterCompare.h"
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/SparkPartitionId.h"
+#include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
 #include "velox/functions/sparksql/UnscaledValueFunction.h"
@@ -101,9 +106,14 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, prefix + "array_distinct");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, prefix + "zip_with");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "forall");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_any_match, prefix + "exists");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "arrays_zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_entries, prefix + "map_entries");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, prefix + "map_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, prefix + "map_values");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_zip_with, prefix + "map_zip_with");
 
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
@@ -165,13 +175,13 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
 void registerFunctions(const std::string& prefix) {
   registerAllSpecialFormGeneralFunctions();
 
-  registerFunction<sparksql::ArraySizeFunction, int32_t, Array<Any>>(
-      {prefix + "array_size"});
-
   // Register size functions
   registerSize(prefix + "size");
 
   registerRegexpReplace(prefix);
+
+  registerFunction<JsonObjectKeysFunction, Array<Varchar>, Varchar>(
+      {prefix + "json_object_keys"});
 
   // Register string functions.
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
@@ -235,6 +245,8 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<Sha2HexStringFunction, Varchar, Varbinary, int32_t>(
       {prefix + "sha2"});
   registerFunction<CRC32Function, int64_t, Varbinary>({prefix + "crc32"});
+  registerFunction<Empty2NullFunction, Varchar, Varchar>(
+      {prefix + "empty2null"});
 
   exec::registerStatefulVectorFunction(
       prefix + "regexp_extract", re2ExtractSignatures(), makeRegexExtract);
@@ -246,7 +258,6 @@ void registerFunctions(const std::string& prefix) {
       prefix + "rlike", re2SearchSignatures(), makeRLike);
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
 
   exec::registerStatefulVectorFunction(
       prefix + "least",
@@ -335,6 +346,8 @@ void registerFunctions(const std::string& prefix) {
       repeatSignatures(),
       makeRepeatAllowNegativeCount,
       repeatMetadata());
+
+  registerIntegerSliceFunction(prefix);
 
   exec::registerStatefulVectorFunction(
       prefix + "shuffle",
@@ -459,7 +472,49 @@ void registerFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Array<Array<Generic<T1>>>>({prefix + "flatten"});
 
+  registerFunction<RepeatFunction, Varchar, Varchar, int32_t>(
+      {prefix + "repeat"});
+
   registerFunction<SoundexFunction, Varchar, Varchar>({prefix + "soundex"});
+
+  registerFunction<RaiseErrorFunction, UnknownValue, Varchar>(
+      {prefix + "raise_error"});
+
+  registerFunction<
+      LevenshteinDistanceFunction,
+      int32_t,
+      Varchar,
+      Varchar,
+      int32_t>({prefix + "levenshtein"});
+  registerFunction<LevenshteinDistanceFunction, int32_t, Varchar, Varchar>(
+      {prefix + "levenshtein"});
+
+  registerFunction<
+      ArrayInsert,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      int32_t,
+      Generic<T1>,
+      bool>({prefix + "array_insert"});
+
+  registerFunction<Split, Array<Varchar>, Varchar, Varchar>({prefix + "split"});
+  registerFunction<Split, Array<Varchar>, Varchar, Varchar, int32_t>(
+      {prefix + "split"});
+
+  registerFunction<MaskFunction, Varchar, Varchar>({prefix + "mask"});
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar>({prefix + "mask"});
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "mask"});
+  registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "mask"});
+  registerFunction<
+      MaskFunction,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar,
+      Varchar>({prefix + "mask"});
 }
 
 } // namespace sparksql

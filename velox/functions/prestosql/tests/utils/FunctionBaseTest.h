@@ -42,6 +42,25 @@ class FunctionBaseTest : public testing::Test,
       DoubleType,
       RealType>;
 
+  void setLegacyCast(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kLegacyCast, std::to_string(value)},
+    });
+  }
+
+  void setCastMatchStructByName(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kCastMatchStructByName, std::to_string(value)},
+    });
+  }
+
+  void setTimezone(const std::string& value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, value},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+  }
+
  protected:
   static void SetUpTestCase();
 
@@ -316,6 +335,22 @@ class FunctionBaseTest : public testing::Test,
       exprSet.eval(defaultRows, context, result);
     }
     return result[0];
+  }
+
+  /// Parses a timestamp string into Timestamp.
+  /// Accepts strings formatted as 'YYYY-MM-DD HH:mm:ss[.nnn]'.
+  static Timestamp parseTimestamp(const std::string& text) {
+    return util::fromTimestampString(
+               text.data(), text.size(), util::TimestampParseMode::kPrestoCast)
+        .thenOrThrow(folly::identity, [&](const Status& status) {
+          VELOX_USER_FAIL("{}", status.message());
+        });
+  }
+
+  /// Parses a date string into days since epoch.
+  /// Accepts strings formatted as 'YYYY-MM-DD'.
+  static int32_t parseDate(const std::string& text) {
+    return DATE()->toDays(text);
   }
 
   /// Returns a vector of signatures for the given function name and return

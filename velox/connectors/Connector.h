@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include "folly/CancellationToken.h"
 #include "velox/common/base/AsyncSource.h"
+#include "velox/common/base/PrefixSortConfig.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/base/SpillStats.h"
@@ -27,15 +29,17 @@
 
 #include <folly/Synchronized.h>
 
+namespace facebook::velox {
+class Config;
+}
 namespace facebook::velox::wave {
 class WaveDataSource;
 }
 namespace facebook::velox::common {
 class Filter;
 }
-
-namespace facebook::velox {
-class Config;
+namespace facebook::velox::config {
+class ConfigBase;
 }
 
 namespace facebook::velox::connector {
@@ -111,6 +115,8 @@ class ConnectorInsertTableHandle : public ISerializable {
     return false;
   }
 
+  virtual std::string toString() const = 0;
+
   folly::dynamic serialize() const override {
     VELOX_NYI();
   }
@@ -145,6 +151,7 @@ class DataSink {
   struct Stats {
     uint64_t numWrittenBytes{0};
     uint32_t numWrittenFiles{0};
+    uint64_t writeIOTimeUs{0};
     common::SpillStats spillStats;
 
     bool empty() const;
@@ -252,25 +259,31 @@ class ConnectorQueryCtx {
   ConnectorQueryCtx(
       memory::MemoryPool* operatorPool,
       memory::MemoryPool* connectorPool,
-      const Config* sessionProperties,
+      const config::ConfigBase* sessionProperties,
       const common::SpillConfig* spillConfig,
+      common::PrefixSortConfig prefixSortConfig,
       std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
       cache::AsyncDataCache* cache,
       const std::string& queryId,
       const std::string& taskId,
       const std::string& planNodeId,
-      int driverId)
+      int driverId,
+      const std::string& sessionTimezone,
+      folly::CancellationToken cancellationToken = {})
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
         sessionProperties_(sessionProperties),
         spillConfig_(spillConfig),
+        prefixSortConfig_(prefixSortConfig),
         expressionEvaluator_(std::move(expressionEvaluator)),
         cache_(cache),
         scanId_(fmt::format("{}.{}", taskId, planNodeId)),
         queryId_(queryId),
         taskId_(taskId),
         driverId_(driverId),
-        planNodeId_(planNodeId) {
+        planNodeId_(planNodeId),
+        sessionTimezone_(sessionTimezone),
+        cancellationToken_(std::move(cancellationToken)) {
     VELOX_CHECK_NOT_NULL(sessionProperties);
   }
 
@@ -287,12 +300,16 @@ class ConnectorQueryCtx {
     return connectorPool_;
   }
 
-  const Config* sessionProperties() const {
+  const config::ConfigBase* sessionProperties() const {
     return sessionProperties_;
   }
 
   const common::SpillConfig* spillConfig() const {
     return spillConfig_;
+  }
+
+  const common::PrefixSortConfig& prefixSortConfig() const {
+    return prefixSortConfig_;
   }
 
   core::ExpressionEvaluator* expressionEvaluator() const {
@@ -327,11 +344,24 @@ class ConnectorQueryCtx {
     return planNodeId_;
   }
 
+  /// Session timezone used for reading Timestamp. Stores a string with the
+  /// actual timezone name. If the session timezone is not set in the
+  /// QueryConfig, it will return an empty string.
+  const std::string& sessionTimezone() const {
+    return sessionTimezone_;
+  }
+
+  /// Returns the cancellation token associated with this task.
+  const folly::CancellationToken& cancellationToken() const {
+    return cancellationToken_;
+  }
+
  private:
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
-  const Config* const sessionProperties_;
+  const config::ConfigBase* const sessionProperties_;
   const common::SpillConfig* const spillConfig_;
+  const common::PrefixSortConfig prefixSortConfig_;
   std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
   cache::AsyncDataCache* cache_;
   const std::string scanId_;
@@ -339,6 +369,8 @@ class ConnectorQueryCtx {
   const std::string taskId_;
   const int driverId_;
   const std::string planNodeId_;
+  const std::string sessionTimezone_;
+  const folly::CancellationToken cancellationToken_;
 };
 
 class Connector {
@@ -351,7 +383,8 @@ class Connector {
     return id_;
   }
 
-  virtual const std::shared_ptr<const Config>& connectorConfig() const {
+  virtual const std::shared_ptr<const config::ConfigBase>& connectorConfig()
+      const {
     VELOX_NYI("connectorConfig is not supported yet");
   }
 
@@ -420,7 +453,7 @@ class ConnectorFactory {
 
   virtual std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> config,
+      std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* executor = nullptr) = 0;
 
  private:
@@ -432,6 +465,15 @@ class ConnectorFactory {
 /// returns true. The return value makes it easy to use with
 /// FB_ANONYMOUS_VARIABLE.
 bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory);
+
+/// Returns true if a connector with the specified name has been registered,
+/// false otherwise.
+bool hasConnectorFactory(const std::string& connectorName);
+
+/// Unregister a connector factory by name.
+/// Returns true if a connector with the specified name has been unregistered,
+/// false otherwise.
+bool unregisterConnectorFactory(const std::string& connectorName);
 
 /// Returns a factory for creating connectors with the specified name. Throws if
 /// factory doesn't exist.

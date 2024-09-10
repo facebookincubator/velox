@@ -21,26 +21,18 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
-// Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_GCS
-#include "velox/connectors/hive/storage_adapters/gcs/RegisterGCSFileSystem.h" // @manual
-#endif
-#ifdef VELOX_ENABLE_HDFS3
-#include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h" // @manual
-#endif
-#ifdef VELOX_ENABLE_S3
-#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h" // @manual
-#endif
-#ifdef VELOX_ENABLE_ABFS
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h" // @manual
-#endif
+#include "velox/connectors/hive/storage_adapters/gcs/RegisterGCSFileSystem.h" // @manual
+#include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h" // @manual
+#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h" // @manual
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-// Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
-#endif
 #include "velox/expression/FieldReference.h"
 
 #include <boost/lexical_cast.hpp>
@@ -53,7 +45,7 @@ namespace facebook::velox::connector::hive {
 
 HiveConnector::HiveConnector(
     const std::string& id,
-    std::shared_ptr<const Config> config,
+    std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* executor)
     : Connector(id),
       hiveConfig_(std::make_shared<HiveConfig>(config)),
@@ -133,24 +125,15 @@ void HiveConnectorFactory::initialize() {
     dwio::common::registerFileSinks();
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
-// Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_PARQUET
+    orc::registerOrcReaderFactory();
+
     parquet::registerParquetReaderFactory();
     parquet::registerParquetWriterFactory();
-#endif
-// Meta's buck build system needs this check.
-#ifdef VELOX_ENABLE_S3
+
     filesystems::registerS3FileSystem();
-#endif
-#ifdef VELOX_ENABLE_HDFS3
     filesystems::registerHdfsFileSystem();
-#endif
-#ifdef VELOX_ENABLE_GCS
     filesystems::registerGCSFileSystem();
-#endif
-#ifdef VELOX_ENABLE_ABFS
     filesystems::abfs::registerAbfsFileSystem();
-#endif
     return true;
   }();
 }

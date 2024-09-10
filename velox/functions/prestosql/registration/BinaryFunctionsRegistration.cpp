@@ -45,8 +45,12 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<FromHexFunction, Varbinary, Varchar>({prefix + "from_hex"});
   registerFunction<ToBase64Function, Varchar, Varbinary>(
       {prefix + "to_base64"});
+
   registerFunction<FromBase64Function, Varbinary, Varchar>(
       {prefix + "from_base64"});
+  registerFunction<FromBase64Function, Varbinary, Varbinary>(
+      {prefix + "from_base64"});
+
   registerFunction<ToBase64UrlFunction, Varchar, Varbinary>(
       {prefix + "to_base64url"});
   registerFunction<FromBase64UrlFunction, Varbinary, Varchar>(
@@ -68,6 +72,18 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "to_ieee754_32"});
   registerFunction<FromIEEE754Bits32, float, Varbinary>(
       {prefix + "from_ieee754_32"});
+  registerFunction<
+      LPadVarbinaryFunction,
+      Varbinary,
+      Varbinary,
+      int64_t,
+      Varbinary>({prefix + "lpad"});
+  registerFunction<
+      RPadVarbinaryFunction,
+      Varbinary,
+      Varbinary,
+      int64_t,
+      Varbinary>({prefix + "rpad"});
 }
 } // namespace
 

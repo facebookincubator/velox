@@ -39,21 +39,41 @@ class TestingHook : public ValueHook {
  public:
   explicit TestingHook(FlatVector<T>* result) : result_(result) {}
 
-  void addValue(vector_size_t row, const void* value) override {
-    result_->set(row, *reinterpret_cast<const T*>(value));
+  void addValue(vector_size_t row, int64_t value) override {
+    if constexpr (std::is_integral_v<T>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
+  void addValue(vector_size_t row, float value) override {
+    if constexpr (std::is_same_v<T, float>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
+  void addValue(vector_size_t row, double value) override {
+    if constexpr (std::is_same_v<T, double>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
+  void addValue(vector_size_t row, folly::StringPiece value) override {
+    if constexpr (std::is_same_v<T, StringView>) {
+      result_->set(row, StringView(value));
+    } else {
+      VELOX_FAIL();
+    }
   }
 
  private:
   FlatVector<T>* result_;
 };
-
-template <>
-inline void TestingHook<StringView>::addValue(
-    vector_size_t row,
-    const void* value) {
-  result_->set(
-      row, StringView(*reinterpret_cast<const folly::StringPiece*>(value)));
-}
 
 // Utility for checking that a subsequent batch of output does not
 // overwrite internals of a possibly retained previous batch.
@@ -105,7 +125,8 @@ class E2EFilterTestBase : public testing::Test {
 
   std::vector<RowVectorPtr> makeDataset(
       std::function<void()> customize,
-      bool forRowGroupSkip);
+      bool forRowGroupSkip,
+      bool withRecursiveNulls);
 
   void makeAllNulls(const std::string& fieldName);
 
@@ -142,6 +163,11 @@ class E2EFilterTestBase : public testing::Test {
   template <typename T>
   void makeIntRle(const std::string& fieldName) {
     dataSetBuilder_->withIntRleForField<T>(Subfield(fieldName));
+  }
+
+  template <typename T>
+  void makeIntMainlyConstant(const std::string& fieldName) {
+    dataSetBuilder_->withIntMainlyConstantForField<T>(Subfield(fieldName));
   }
 
   template <typename T>
@@ -200,6 +226,7 @@ class E2EFilterTestBase : public testing::Test {
       dwio::common::RowReaderOptions& opts,
       const std::shared_ptr<ScanSpec>& spec) {
     opts.setScanSpec(spec);
+    opts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
   }
 
   void readWithoutFilter(
@@ -291,7 +318,8 @@ class E2EFilterTestBase : public testing::Test {
       std::function<void()> customize,
       bool wrapInStruct,
       const std::vector<std::string>& filterable,
-      int32_t numCombinations);
+      int32_t numCombinations,
+      bool withRecursiveNulls = true);
 
  private:
   void testMetadataFilterImpl(
@@ -330,7 +358,7 @@ class E2EFilterTestBase : public testing::Test {
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> leafPool_;
   std::shared_ptr<const RowType> rowType_;
-  std::string_view sinkData_;
+  std::string sinkData_;
   bool useVInts_ = true;
   dwio::common::RuntimeStatistics runtimeStats_;
   // Number of calls to flush policy between starting new stripes.

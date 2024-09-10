@@ -17,10 +17,10 @@
 
 #include <optional>
 #include <string>
-#include "velox/core/Config.h"
+#include "velox/common/base/Exceptions.h"
 
-namespace facebook::velox {
-class Config;
+namespace facebook::velox::config {
+class ConfigBase;
 }
 
 namespace facebook::velox::connector::hive {
@@ -44,8 +44,9 @@ class HiveConfig {
 
   /// Maximum number of (bucketed) partitions per a single table writer
   /// instance.
-  // TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
-  // right now this is only used for testing.
+  ///
+  /// TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
+  /// right now this is only used for testing.
   static constexpr const char* kMaxPartitionsPerWriters =
       "max-partitions-per-writers";
   static constexpr const char* kMaxPartitionsPerWritersSession =
@@ -97,6 +98,12 @@ class HiveConfig {
   /// Maximum concurrent TCP connections for a single http client.
   static constexpr const char* kS3MaxConnections = "hive.s3.max-connections";
 
+  /// Maximum retry attempts for a single http client.
+  static constexpr const char* kS3MaxAttempts = "hive.s3.max-attempts";
+
+  /// Retry mode for a single http client.
+  static constexpr const char* kS3RetryMode = "hive.s3.retry-mode";
+
   /// The GCS storage endpoint server.
   static constexpr const char* kGCSEndpoint = "hive.gcs.endpoint";
 
@@ -128,6 +135,11 @@ class HiveConfig {
   static constexpr const char* kPartitionPathAsLowerCaseSession =
       "partition_path_as_lower_case";
 
+  static constexpr const char* kAllowNullPartitionKeys =
+      "allow-null-partition-keys";
+  static constexpr const char* kAllowNullPartitionKeysSession =
+      "allow_null_partition_keys";
+
   static constexpr const char* kIgnoreMissingFilesSession =
       "ignore_missing_files";
 
@@ -141,7 +153,8 @@ class HiveConfig {
   /// The number of prefetch rowgroups
   static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
 
-  /// The total size in bytes for a direct coalesce request.
+  /// The total size in bytes for a direct coalesce request. Up to 8MB load
+  /// quantum size is supported when SSD cache is enabled.
   static constexpr const char* kLoadQuantum = "load-quantum";
 
   /// Maximum number of entries in the file handle cache.
@@ -172,6 +185,18 @@ class HiveConfig {
   static constexpr const char* kOrcWriterMaxDictionaryMemorySession =
       "orc_optimized_writer_max_dictionary_memory";
 
+  /// Configs to control dictionary encoding.
+  static constexpr const char* kOrcWriterIntegerDictionaryEncodingEnabled =
+      "hive.orc.writer.integer-dictionary-encoding-enabled";
+  static constexpr const char*
+      kOrcWriterIntegerDictionaryEncodingEnabledSession =
+          "orc_optimized_writer_integer_dictionary_encoding_enabled";
+  static constexpr const char* kOrcWriterStringDictionaryEncodingEnabled =
+      "hive.orc.writer.string-dictionary-encoding-enabled";
+  static constexpr const char*
+      kOrcWriterStringDictionaryEncodingEnabledSession =
+          "orc_optimized_writer_string_dictionary_encoding_enabled";
+
   /// Enables historical based stripe size estimation after compression.
   static constexpr const char* kOrcWriterLinearStripeSizeHeuristics =
       "hive.orc.writer.linear-stripe-size-heuristics";
@@ -183,6 +208,12 @@ class HiveConfig {
       "hive.orc.writer.min-compression-size";
   static constexpr const char* kOrcWriterMinCompressionSizeSession =
       "orc_writer_min_compression_size";
+
+  /// The compression level to use with ZLIB and ZSTD.
+  static constexpr const char* kOrcWriterCompressionLevel =
+      "hive.orc.writer.compression-level";
+  static constexpr const char* kOrcWriterCompressionLevelSession =
+      "orc_optimized_writer_compression_level";
 
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
@@ -205,16 +236,19 @@ class HiveConfig {
   static constexpr const char* kS3UseProxyFromEnv =
       "hive.s3.use-proxy-from-env";
 
-  /// Timestamp unit for Parquet write through Arrow bridge.
-  static constexpr const char* kParquetWriteTimestampUnit =
-      "hive.parquet.writer.timestamp-unit";
-  static constexpr const char* kParquetWriteTimestampUnitSession =
-      "hive.parquet.writer.timestamp_unit";
+  // The unit for reading timestamps from files.
+  static constexpr const char* kReadTimestampUnit =
+      "hive.reader.timestamp-unit";
+  static constexpr const char* kReadTimestampUnitSession =
+      "hive.reader.timestamp_unit";
+
+  static constexpr const char* kCacheNoRetention = "cache.no_retention";
+  static constexpr const char* kCacheNoRetentionSession = "cache.no_retention";
 
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
-      const Config* session) const;
+      const config::ConfigBase* session) const;
 
-  uint32_t maxPartitionsPerWriters(const Config* session) const;
+  uint32_t maxPartitionsPerWriters(const config::ConfigBase* session) const;
 
   bool immutablePartitions() const;
 
@@ -242,6 +276,10 @@ class HiveConfig {
 
   std::optional<uint32_t> s3MaxConnections() const;
 
+  std::optional<int32_t> s3MaxAttempts() const;
+
+  std::optional<std::string> s3RetryMode() const;
+
   std::string gcsEndpoint() const;
 
   std::string gcsScheme() const;
@@ -252,13 +290,16 @@ class HiveConfig {
 
   std::optional<std::string> gcsMaxRetryTime() const;
 
-  bool isOrcUseColumnNames(const Config* session) const;
+  bool isOrcUseColumnNames(const config::ConfigBase* session) const;
 
-  bool isFileColumnNamesReadAsLowerCase(const Config* session) const;
+  bool isFileColumnNamesReadAsLowerCase(
+      const config::ConfigBase* session) const;
 
-  bool isPartitionPathAsLowerCase(const Config* session) const;
+  bool isPartitionPathAsLowerCase(const config::ConfigBase* session) const;
 
-  bool ignoreMissingFiles(const Config* session) const;
+  bool allowNullPartitionKeys(const config::ConfigBase* session) const;
+
+  bool ignoreMissingFiles(const config::ConfigBase* session) const;
 
   int64_t maxCoalescedBytes() const;
 
@@ -274,19 +315,36 @@ class HiveConfig {
 
   uint64_t fileWriterFlushThresholdBytes() const;
 
-  uint64_t orcWriterMaxStripeSize(const Config* session) const;
+  uint64_t orcWriterMaxStripeSize(const config::ConfigBase* session) const;
 
-  uint64_t orcWriterMaxDictionaryMemory(const Config* session) const;
+  uint64_t orcWriterMaxDictionaryMemory(
+      const config::ConfigBase* session) const;
 
-  bool orcWriterLinearStripeSizeHeuristics(const Config* session) const;
+  bool isOrcWriterIntegerDictionaryEncodingEnabled(
+      const config::ConfigBase* session) const;
 
-  uint64_t orcWriterMinCompressionSize(const Config* session) const;
+  bool isOrcWriterStringDictionaryEncodingEnabled(
+      const config::ConfigBase* session) const;
+
+  bool orcWriterLinearStripeSizeHeuristics(
+      const config::ConfigBase* session) const;
+
+  uint64_t orcWriterMinCompressionSize(const config::ConfigBase* session) const;
+
+  std::optional<uint8_t> orcWriterCompressionLevel(
+      const config::ConfigBase* session) const;
+
+  uint8_t orcWriterZLIBCompressionLevel(
+      const config::ConfigBase* session) const;
+
+  uint8_t orcWriterZSTDCompressionLevel(
+      const config::ConfigBase* session) const;
 
   std::string writeFileCreateConfig() const;
 
-  uint32_t sortWriterMaxOutputRows(const Config* session) const;
+  uint32_t sortWriterMaxOutputRows(const config::ConfigBase* session) const;
 
-  uint64_t sortWriterMaxOutputBytes(const Config* session) const;
+  uint64_t sortWriterMaxOutputBytes(const config::ConfigBase* session) const;
 
   uint64_t footerEstimatedSize() const;
 
@@ -294,23 +352,29 @@ class HiveConfig {
 
   bool s3UseProxyFromEnv() const;
 
-  /// Returns the timestamp unit used when writing timestamps into Parquet
-  /// through Arrow bridge. 0: second, 3: milli, 6: micro, 9: nano.
-  uint8_t parquetWriteTimestampUnit(const Config* session) const;
+  // Returns the timestamp unit used when reading timestamps from files.
+  uint8_t readTimestampUnit(const config::ConfigBase* session) const;
 
-  HiveConfig(std::shared_ptr<const Config> config) {
+  /// Returns true to evict out a query scanned data out of in-memory cache
+  /// right after the access, and also skip staging to the ssd cache. This helps
+  /// to prevent the cache space pollution from the one-time table scan by large
+  /// batch query when mixed running with interactive query which has high data
+  /// locality.
+  bool cacheNoRetention(const config::ConfigBase* session) const;
+
+  HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for HiveConfig initialization");
     config_ = std::move(config);
     // TODO: add sanity check
   }
 
-  const std::shared_ptr<const Config>& config() const {
+  const std::shared_ptr<const config::ConfigBase>& config() const {
     return config_;
   }
 
  private:
-  std::shared_ptr<const Config> config_;
+  std::shared_ptr<const config::ConfigBase> config_;
 };
 
 } // namespace facebook::velox::connector::hive

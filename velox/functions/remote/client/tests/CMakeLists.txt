@@ -18,12 +18,12 @@ add_test(velox_functions_remote_client_test velox_functions_remote_client_test)
 
 target_link_libraries(
   velox_functions_remote_client_test
-  velox_remote_function_thrift
+  remote_function_thrift
   velox_functions_remote_server
   velox_functions_remote
   velox_function_registry
   velox_functions_test_lib
   velox_exec_test_lib
-  gmock
-  gtest
-  gtest_main)
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main)

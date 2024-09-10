@@ -95,25 +95,52 @@ Date and Time Functions
 .. function:: from_iso8601_date(string) -> date
 
     Parses the ISO 8601 formatted ``string`` into a ``date``.
-    ISO 8601 ``string`` can be formatted as any of the following:
-    ``[+-][Y]Y*``
 
-    ``[+-][Y]Y*-[M]M*``
+    Accepts formats described by the following syntax::
 
-    ``[+-][Y]Y*-[M]M*-[D]D*``
+       date = yyyy ['-' MM ['-' dd]]
 
-    ``[+-][Y]Y*-[M]M*-[D]D* *``
+    Examples of valid input strings:
 
-    Year value must contain at least one digit, and may contain up to six digits.
-    Month and day values are optional and may each contain one or two digits.
+    * '2012'
+    * '2012-4'
+    * '2012-04'
+    * '2012-4-7'
+    * '2012-04-07'
+    * '2012-04-07   '
 
-    Examples of supported input strings:
-    "2012",
-    "2012-4",
-    "2012-04",
-    "2012-4-7",
-    "2012-04-07",
-    "2012-04-07  ”
+.. function:: from_iso8601_timestamp(string) -> timestamp with time zone
+
+    Parses the ISO 8601 formatted string into a timestamp with time zone.
+
+    Accepts formats described by the following syntax::
+
+        datetime          = time | date-opt-time
+        time              = 'T' time-element [offset]
+        date-opt-time     = date-element ['T' [time-element] [offset]]
+        date-element      = yyyy ['-' MM ['-' dd]]
+        time-element      = HH [minute-element] | [fraction]
+        minute-element    = ':' mm [second-element] | [fraction]
+        second-element    = ':' ss [fraction]
+        fraction          = ('.' | ',') digit+
+        offset            = 'Z' | (('+' | '-') HH [':' mm [':' ss [('.' | ',') SSS]]])
+
+    Examples of valid input strings:
+
+    * '2012'
+    * '2012-4'
+    * '2012-04'
+    * '2012-4-7'
+    * '2012-04-07'
+    * '2012-04-07   '
+    * '2012-04T01:02'
+    * 'T01:02:34'
+    * 'T01:02:34,123'
+    * '2012-04-07T01:02:34'
+    * '2012-04-07T01:02:34.123'
+    * '2012-04-07T01:02:34,123'
+    * '2012-04-07T01:02:34.123Z'
+    * '2012-04-07T01:02:34.123-05:00'
 
 .. function:: from_unixtime(unixtime) -> timestamp
 
@@ -125,9 +152,26 @@ Date and Time Functions
     Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
     using ``string`` for the time zone.
 
+.. function:: from_unixtime(unixtime, hours, minutes) -> timestamp with time zone
+
+    Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
+    using ``hours`` and ``minutes`` for the time zone offset.
+    The offset must be in [-14:00, 14:00] range.
+
 .. function:: to_iso8601(x) -> varchar
 
-    Formats ``x`` as an ISO 8601 string. Supported types for ``x`` are: DATE.
+    Formats ``x`` as an ISO 8601 string. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE.
+
+    Example results::
+
+        SELECT to_iso8601(current_date); -- 2024-06-06
+        SELECT to_iso8601(now()); -- 2024-06-06T20:25:46.726-07:00
+        SELECT to_iso8601(now() + interval '6' month); -- 2024-12-06T20:27:11.992-08:00
+
+.. function:: to_milliseconds(interval) -> bigint
+
+    Returns the day-to-second ``interval`` as milliseconds.
 
 .. function:: to_unixtime(timestamp) -> double
 
@@ -170,6 +214,7 @@ Unit            Description
 ``minute``      ``Minutes``
 ``hour``        ``Hours``
 ``day``         ``Days``
+``week``        ``Weeks``
 ``month``       ``Months``
 ``quarter``     ``Quarters of a year``
 ``year``        ``Years``
@@ -257,6 +302,10 @@ specified using the format ``+00``, ``+00:00`` or ``+0000`` (or ``-``). ``Z``
 also accepts ``UTC``,  ``UCT``, ``GMT``, and ``GMT0`` as valid representations
 of GMT.
 
+.. function:: format_datetime(timestamp, format) -> varchar
+
+    Formats ``timestamp`` as a string using ``format``.
+
 .. function:: parse_datetime(string, format) -> timestamp with time zone
 
     Parses string into a timestamp with time zone using ``format``.
@@ -302,6 +351,8 @@ arbitrary large timestamps.
 .. function:: hour(x) -> bigint
 
     Returns the hour of the day from ``x``. The value ranges from 0 to 23.
+    Supported types for ``x`` are: DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE,
+    INTERVAL DAY TO SECOND¶.
 
 .. function:: last_day_of_month(x) -> date
 
@@ -309,15 +360,18 @@ arbitrary large timestamps.
 
 .. function:: millisecond(x) -> int64
 
-    Returns the millisecond of the second from ``x``.
+    Returns the millisecond of the second from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.
 
 .. function:: minute(x) -> bigint
 
-    Returns the minute of the hour from ``x``.
+    Returns the minute of the hour from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.
 
 .. function:: month(x) -> bigint
 
-    Returns the month of the year from ``x``.
+    Returns the month of the year from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL YEAR TO MONTH.
 
 .. function:: quarter(x) -> bigint
 
@@ -325,7 +379,8 @@ arbitrary large timestamps.
 
 .. function:: second(x) -> bigint
 
-    Returns the second of the minute from ``x``.
+    Returns the second of the minute from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.
 
 .. function:: timezone_hour(timestamp) -> bigint
 
@@ -347,7 +402,8 @@ arbitrary large timestamps.
 
 .. function:: year(x) -> bigint
 
-    Returns the year from ``x``.
+    Returns the year from ``x``. Supported types for ``x`` are:
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL YEAR TO MONTH.
 
 .. function:: year_of_week(x) -> bigint
 

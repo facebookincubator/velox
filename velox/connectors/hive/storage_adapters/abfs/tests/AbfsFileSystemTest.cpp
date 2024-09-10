@@ -44,7 +44,7 @@ static const std::string fullFilePath =
 
 class AbfsFileSystemTest : public testing::Test {
  public:
-  static std::shared_ptr<const Config> hiveConfig(
+  static std::shared_ptr<const config::ConfigBase> hiveConfig(
       const std::unordered_map<std::string, std::string> configOverride = {}) {
     std::unordered_map<std::string, std::string> config({});
 
@@ -55,11 +55,15 @@ class AbfsFileSystemTest : public testing::Test {
                 << std::endl;
     }
 
-    return std::make_shared<const core::MemConfig>(std::move(config));
+    return std::make_shared<const config::ConfigBase>(std::move(config));
   }
 
  public:
   std::shared_ptr<filesystems::test::AzuriteServer> azuriteServer;
+
+  static void SetUpTestCase() {
+    registerAbfsFileSystem();
+  }
 
   void SetUp() override {
     auto port = facebook::velox::exec::test::getFreePort();
@@ -154,8 +158,10 @@ void readData(ReadFile* readFile) {
 
   std::vector<folly::IOBuf> iobufs(2);
   std::vector<Region> regions = {{0, 10}, {10, 5}};
-  readFile->preadv(
-      {regions.data(), regions.size()}, {iobufs.data(), iobufs.size()});
+  ASSERT_EQ(
+      10 + 5,
+      readFile->preadv(
+          {regions.data(), regions.size()}, {iobufs.data(), iobufs.size()}));
   ASSERT_EQ(
       std::string_view(
           reinterpret_cast<const char*>(iobufs[0].writableData()),
@@ -198,6 +204,21 @@ TEST_F(AbfsFileSystemTest, openFileForReadWithInvalidOptions) {
   VELOX_ASSERT_THROW(
       abfs.openFileForRead(fullFilePath, options),
       "File size must be non-negative");
+}
+
+TEST_F(AbfsFileSystemTest, fileHandleWithProperties) {
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{"fs.azure.account.key.test.dfs.core.windows.net",
+        azuriteServer->connectionStr()}});
+  FileHandleFactory factory(
+      std::make_unique<SimpleLRUCache<std::string, FileHandle>>(1),
+      std::make_unique<FileHandleGenerator>(hiveConfig));
+  FileProperties properties = {15 + kOneMB, 1};
+  auto fileHandleProperties = factory.generate(fullFilePath, &properties);
+  readData(fileHandleProperties->file.get());
+
+  auto fileHandleWithoutProperties = factory.generate(fullFilePath);
+  readData(fileHandleWithoutProperties->file.get());
 }
 
 TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {

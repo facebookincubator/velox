@@ -403,6 +403,72 @@ TEST_F(DecimalArithmeticTest, decimalDivDifferentTypes) {
        makeFlatVector<int64_t>({100, 200, -300, 400}, DECIMAL(12, 2))});
 }
 
+TEST_F(DecimalArithmeticTest, decimalMod) {
+  // short % short -> short.
+  testDecimalExpr<TypeKind::BIGINT>(
+      makeFlatVector<int64_t>({0, 0}, DECIMAL(2, 1)),
+      "mod(c0, c1)",
+      {makeFlatVector<int64_t>({0, 50}, DECIMAL(2, 1)),
+       makeFlatVector<int64_t>({20, 25}, DECIMAL(2, 1))});
+  testDecimalExpr<TypeKind::BIGINT>(
+      makeFlatVector<int64_t>({3, -3, 3, -3}, DECIMAL(2, 1)),
+      "mod(c0, c1)",
+      {makeFlatVector<int64_t>({13, -13, 13, -13}, DECIMAL(3, 1)),
+       makeFlatVector<int64_t>({5, 5, -5, -5}, DECIMAL(2, 1))});
+  testDecimalExpr<TypeKind::BIGINT>(
+      makeFlatVector<int64_t>({90, -245, 245, -90}, DECIMAL(3, 2)),
+      "mod(c0, c1)",
+      {makeFlatVector<int64_t>({50, -50, 50, -50}, DECIMAL(2, 1)),
+       makeFlatVector<int64_t>({205, 255, -255, -205}, DECIMAL(3, 2))});
+  testDecimalExpr<TypeKind::BIGINT>(
+      makeFlatVector<int64_t>({2500, -12000}, DECIMAL(5, 3)),
+      "mod(c0, c1)",
+      {makeFlatVector<int64_t>({2500, -12000}, DECIMAL(5, 3)),
+       makeFlatVector<int64_t>({600, 5000}, DECIMAL(5, 2))});
+
+  // short % long -> short.
+  testDecimalExpr<TypeKind::BIGINT>(
+      makeFlatVector<int64_t>({1000, -600, 1000, -600}, DECIMAL(17, 15)),
+      "mod(c0, c1)",
+      {makeFlatVector<int64_t>({1000, -600, 1000, -600}, DECIMAL(17, 15)),
+       makeFlatVector<int128_t>({13, 17, -13, -17}, DECIMAL(20, 10))});
+
+  // long % short -> short.
+  testDecimalExpr<TypeKind::BIGINT>(
+      makeFlatVector<int64_t>({8, -11, 8, -11}, DECIMAL(17, 15)),
+      "mod(c0, c1)",
+      {makeFlatVector<int128_t>({500, -4000, 500, -4000}, DECIMAL(20, 10)),
+       makeFlatVector<int64_t>({17, 19, -17, -19}, DECIMAL(17, 15))});
+
+  // short % long -> long.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeFlatVector<int128_t>({0, -16, 0, -16}, DECIMAL(25, 10)),
+      "mod(c0, c1)",
+      {makeFlatVector<int64_t>({1000, -600, 1000, -600}, DECIMAL(17, 2)),
+       makeFlatVector<int128_t>({400, 38, -400, -38}, DECIMAL(30, 10))});
+
+  // long % short -> long.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeFlatVector<int128_t>({500, -4000, 500, -4000}, DECIMAL(25, 10)),
+      "mod(c0, c1)",
+      {makeFlatVector<int128_t>({500, -4000, 500, -4000}, DECIMAL(30, 10)),
+       makeFlatVector<int64_t>({1000, 2000, -1000, -2000}, DECIMAL(17, 2))});
+
+  // long % long -> long.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      makeFlatVector<int128_t>({2500, -12000, 2500, -12000}, DECIMAL(23, 5)),
+      "mod(c0, c1)",
+      {makeFlatVector<int128_t>({2500, -12000, 2500, -12000}, DECIMAL(25, 5)),
+       makeFlatVector<int128_t>({500, 4000, -500, -4000}, DECIMAL(20, 2))});
+
+  VELOX_ASSERT_USER_THROW(
+      testDecimalExpr<TypeKind::BIGINT>(
+          {},
+          "c0 % 0.0",
+          {makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3))}),
+      "Modulus by zero");
+}
+
 TEST_F(DecimalArithmeticTest, round) {
   // Round short decimals.
   testDecimalExpr<TypeKind::BIGINT>(
@@ -569,6 +635,107 @@ TEST_F(DecimalArithmeticTest, floor) {
            -1000000000000000000,
            0},
           DECIMAL(19, 19))});
+}
+
+TEST_F(DecimalArithmeticTest, truncate) {
+  // Truncate short decimals.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({0, 0, 0, 0}, DECIMAL(1, 0))},
+      "truncate(c0)",
+      {makeFlatVector<int64_t>({123, 542, -999, 0}, DECIMAL(3, 3))});
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({1111, 1111, -9998, 9999}, DECIMAL(4, 0))},
+      "truncate(c0)",
+      {makeFlatVector<int64_t>({11112, 11115, -99989, 99999}, DECIMAL(5, 1))});
+
+  // Truncate long decimals.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({0, 0, 0, 0}, DECIMAL(1, 0))},
+      "truncate(c0)",
+      {makeFlatVector<int128_t>(
+          {1234567890123456789, 5000000000000000000, -9000000000000000000, 0},
+          DECIMAL(19, 19))});
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kPowersOfTen[37] - 1,
+           -DecimalUtil::kPowersOfTen[37] + 1},
+          DECIMAL(37, 0))},
+      "truncate(c0)",
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 1))});
+
+  // Min and max short decimals.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>(
+          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
+          DECIMAL(15, 0))},
+      "truncate(c0)",
+      {makeFlatVector<int64_t>(
+          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
+          DECIMAL(15, 0))});
+
+  // Min and max long decimals.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 0))},
+      "truncate(c0)",
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 0))});
+}
+
+TEST_F(DecimalArithmeticTest, truncateN) {
+  // Truncate to 'scale' decimal places.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 3))},
+      "truncate(c0, 3::integer)",
+      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 3))});
+
+  // Truncate to 'scale' - 1 decimal places.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({120, 550, -990, 0}, DECIMAL(3, 3))},
+      "truncate(c0, 2::integer)",
+      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 3))});
+
+  // Truncate to 0 decimal places.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({100, 500, -900, 0}, DECIMAL(3, 2))},
+      "truncate(c0, 0::integer)",
+      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 2))});
+
+  // Truncate to -1 decimal places.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({100, 500, -900, 0}, DECIMAL(3, 1))},
+      "truncate(c0, '-1'::integer)",
+      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 1))});
+
+  // Truncate to -2 decimal places.
+  testDecimalExpr<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({0, 0, 0, 0}, DECIMAL(3, 1))},
+      "truncate(c0, '-2'::integer)",
+      {makeFlatVector<int64_t>({123, 552, -999, 0}, DECIMAL(3, 1))});
+
+  // Truncate long decimals to 'scale' - 5 decimal places.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {makeFlatVector<int128_t>(
+          {1234567890123400000, 5000000000000000000, -999999999999900000, 0},
+          DECIMAL(19, 19))},
+      "truncate(c0, 14::integer)",
+      {makeFlatVector<int128_t>(
+          {1234567890123456789, 5000000000000000000, -999999999999999999, 0},
+          DECIMAL(19, 19))});
+
+  // Truncate long decimals to -9 decimal places.
+  testDecimalExpr<TypeKind::HUGEINT>(
+      {makeFlatVector<int128_t>(
+          {1234500000000000000, 5555500000000000000, -999900000000000000, 0},
+          DECIMAL(19, 5))},
+      "truncate(c0, '-9'::integer)",
+      {makeFlatVector<int128_t>(
+          {1234567890123456789, 5555555555555555555, -999999999999999999, 0},
+          DECIMAL(19, 5))});
 }
 
 TEST_F(DecimalArithmeticTest, abs) {

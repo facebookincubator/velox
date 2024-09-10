@@ -46,12 +46,14 @@ using velox::common::Subfield;
 
 std::vector<RowVectorPtr> E2EFilterTestBase::makeDataset(
     std::function<void()> customize,
-    bool forRowGroupSkip) {
+    bool forRowGroupSkip,
+    bool withRecursiveNulls) {
   if (!dataSetBuilder_) {
     dataSetBuilder_ = std::make_unique<DataSetBuilder>(*leafPool_, 0);
   }
 
-  dataSetBuilder_->makeDataset(rowType_, batchCount_, batchSize_);
+  dataSetBuilder_->makeDataset(
+      rowType_, batchCount_, batchSize_, withRecursiveNulls);
 
   if (forRowGroupSkip) {
     dataSetBuilder_->withRowGroupSpecificData(kRowsInGroup);
@@ -94,8 +96,7 @@ void E2EFilterTestBase::readWithoutFilter(
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   dwio::common::RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_),
-      readerOpts.getMemoryPool());
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
 
   // The spec must stay live over the lifetime of the reader.
@@ -148,8 +149,7 @@ void E2EFilterTestBase::readWithFilter(
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   dwio::common::RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_),
-      readerOpts.getMemoryPool());
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
 
   // The spec must stay live over the lifetime of the reader.
@@ -410,17 +410,18 @@ void E2EFilterTestBase::testScenario(
     std::function<void()> customize,
     bool wrapInStruct,
     const std::vector<std::string>& filterable,
-    int32_t numCombinations) {
+    int32_t numCombinations,
+    bool withRecursiveNulls) {
   rowType_ = DataSetBuilder::makeRowType(columns, wrapInStruct);
   filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
 
-  auto batches = makeDataset(customize, false);
+  auto batches = makeDataset(customize, false, withRecursiveNulls);
   writeToMemory(rowType_, batches, false);
   testNoRowGroupSkip(batches, filterable, numCombinations);
   testPruningWithFilter(batches, filterable);
 
   if (testRowGroupSkip_) {
-    batches = makeDataset(customize, true);
+    batches = makeDataset(customize, true, withRecursiveNulls);
     writeToMemory(rowType_, batches, true);
     testRowGroupSkip(batches, filterable);
   }
@@ -456,8 +457,7 @@ void E2EFilterTestBase::testMetadataFilterImpl(
   ReaderOptions readerOpts{leafPool_.get()};
   RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_),
-      readerOpts.getMemoryPool());
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
   setUpRowReaderOptions(rowReaderOpts, spec);
   rowReaderOpts.setMetadataFilter(metadataFilter);
@@ -653,8 +653,7 @@ void E2EFilterTestBase::testSubfieldsPruning() {
   ReaderOptions readerOpts{leafPool_.get()};
   RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_),
-      readerOpts.getMemoryPool());
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
   setUpRowReaderOptions(rowReaderOpts, spec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -718,8 +717,7 @@ void E2EFilterTestBase::testMutationCornerCases() {
   writeToMemory(rowType, batches, false);
   ReaderOptions readerOpts{leafPool_.get()};
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_),
-      readerOpts.getMemoryPool());
+      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
 
   // 1. Interleave batches with and without deletions.

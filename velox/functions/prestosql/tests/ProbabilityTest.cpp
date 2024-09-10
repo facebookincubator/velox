@@ -398,7 +398,6 @@ TEST_F(ProbabilityTest, gammaCDF) {
 
 TEST_F(ProbabilityTest, poissonCDF) {
   poissonCDFTests<int32_t>();
-  poissonCDFTests<int64_t>();
 }
 
 TEST_F(ProbabilityTest, binomialCDF) {
@@ -451,6 +450,159 @@ TEST_F(ProbabilityTest, weibullCDF) {
       weibullCDF(kNan, kDoubleMin, kDoubleMax), "a must be greater than 0");
   VELOX_ASSERT_THROW(
       weibullCDF(kDoubleMin, kNan, kDoubleMax), "b must be greater than 0");
+}
+
+TEST_F(ProbabilityTest, inverseNormalCDF) {
+  const auto inverseNormalCDF = [&](std::optional<double> mean,
+                                    std::optional<double> sd,
+                                    std::optional<double> p) {
+    return evaluateOnce<double>("inverse_normal_cdf(c0, c1, c2)", mean, sd, p);
+  };
+
+  EXPECT_EQ(inverseNormalCDF(0, 1, 0.3), -0.52440051270804089);
+  EXPECT_EQ(inverseNormalCDF(10, 9, 0.9), 21.533964089901406);
+  EXPECT_EQ(inverseNormalCDF(0.5, 0.25, 0.65), 0.59633011660189195);
+  EXPECT_EQ(inverseNormalCDF(0, 1, 0.00001), -4.2648907939226017);
+
+  EXPECT_EQ(inverseNormalCDF(kDoubleMin, 0.25, 0.65), 0.096330116601891919);
+  EXPECT_EQ(inverseNormalCDF(kDoubleMax, 0.25, 0.65), 1.7976931348623157e+308);
+  EXPECT_EQ(inverseNormalCDF(0.5, kDoubleMin, 0.65), 0.5);
+  EXPECT_THAT(inverseNormalCDF(0.5, kDoubleMax, 0.65), IsInf());
+  EXPECT_THAT(inverseNormalCDF(kNan, 2, 0.1985), IsNan());
+
+  EXPECT_EQ(inverseNormalCDF(std::nullopt, 1, 1), std::nullopt);
+  EXPECT_EQ(inverseNormalCDF(1, 1, std::nullopt), std::nullopt);
+  EXPECT_EQ(inverseNormalCDF(std::nullopt, 1, std::nullopt), std::nullopt);
+  EXPECT_EQ(
+      inverseNormalCDF(std::nullopt, std::nullopt, std::nullopt), std::nullopt);
+
+  EXPECT_THAT(inverseNormalCDF(kInf, 1, 0.1985), IsInf());
+  EXPECT_THAT(inverseNormalCDF(0, kInf, 0.1985), IsInf());
+  EXPECT_THAT(inverseNormalCDF(-kInf, 1, 0.1985), IsInf());
+
+  // Test invalid inputs.
+  VELOX_ASSERT_THROW(
+      inverseNormalCDF(0, -kInf, 0.1985), "standardDeviation must be > 0");
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, kInf), "p must be 0 > p > 1");
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, -kInf), "p must be 0 > p > 1");
+
+  VELOX_ASSERT_THROW(
+      inverseNormalCDF(0, kNan, 0.1985), "standardDeviation must be > 0");
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, kNan), "p must be 0 > p > 1");
+  VELOX_ASSERT_THROW(inverseNormalCDF(kNan, kNan, kNan), "p must be 0 > p > 1");
+
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, kDoubleMax), "p must be 0 > p > 1");
+  VELOX_ASSERT_THROW(
+      inverseNormalCDF(0, 1, kDoubleMin),
+      "Error in function boost::math::erf_inv<double>(double, double): Overflow Error");
+
+  VELOX_ASSERT_THROW(
+      inverseNormalCDF(0, 0, 0.1985), "standardDeviation must be > 0");
+  VELOX_ASSERT_THROW(inverseNormalCDF(0, 1, 1.00001), "p must be 0 > p > 1");
+}
+
+TEST_F(ProbabilityTest, inverseWeibullCDF) {
+  const auto inverseWeibullCDF = [&](std::optional<double> a,
+                                     std::optional<double> b,
+                                     std::optional<double> p) {
+    return evaluateOnce<double>("inverse_weibull_cdf(c0, c1, c2)", a, b, p);
+  };
+
+  const auto roundToTwoDecimals = [](double value) {
+    return round(value * 100) / 100.0;
+  };
+
+  EXPECT_EQ(inverseWeibullCDF(1.0, 1.0, 0.), 0.0);
+  EXPECT_EQ(
+      roundToTwoDecimals(inverseWeibullCDF(1.0, 1.0, 0.632).value()), 1.00);
+  EXPECT_EQ(
+      roundToTwoDecimals(inverseWeibullCDF(1.0, 0.6, 0.91).value()), 1.44);
+
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(1.0, 1.0, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(999999999.9, 999999999.0, kInf),
+      "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(3, 5, -0.1), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(3, 5, 1.1), "p must be in the interval [0, 1]");
+
+  EXPECT_EQ(inverseWeibullCDF(kDoubleMin, 1.0, 0.3), 0.0);
+  EXPECT_EQ(inverseWeibullCDF(kDoubleMax, 1.0, 0.4), 1.0);
+  EXPECT_EQ(inverseWeibullCDF(kInf, 999999999.9, 0.4), 9.999999999E8);
+  EXPECT_EQ(inverseWeibullCDF(kInf, 1.0, 0.1), 1.0);
+  EXPECT_EQ(inverseWeibullCDF(kDoubleMin, kDoubleMin, 0.9), kInf);
+  EXPECT_EQ(inverseWeibullCDF(kDoubleMax, kDoubleMax, 0.8), kDoubleMax);
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(kNan, 1.0, 0.1), "a must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(-1.0, 1.0, 0.1), "a must be greater than 0");
+  VELOX_ASSERT_THROW(inverseWeibullCDF(0, 3, 0.5), "a must be greater than 0");
+
+  EXPECT_EQ(inverseWeibullCDF(1.0, kDoubleMin, 0.5), 1.5423036715619055e-308);
+  EXPECT_EQ(inverseWeibullCDF(1.0, kDoubleMax, 0.7), kInf);
+  EXPECT_THAT(inverseWeibullCDF(1.0, kInf, 0.2), IsInf());
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(1.0, kNan, 0.4), "b must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(1.0, -1.0, 0.4), "b must be greater than 0");
+  VELOX_ASSERT_THROW(inverseWeibullCDF(3, 0, 0.5), "b must be greater than 0");
+}
+
+TEST_F(ProbabilityTest, inverseCauchyCDF) {
+  const auto invCauchyCDF = [&](std::optional<double> median,
+                                std::optional<double> scale,
+                                std::optional<double> p) {
+    return evaluateOnce<double>(
+        "inverse_cauchy_cdf(c0, c1, c2)", median, scale, p);
+  };
+
+  EXPECT_EQ(invCauchyCDF(0.0, 1.0, 0.5), 0.0);
+  EXPECT_EQ(invCauchyCDF(2.5, 1.0, 0.64758361765043326), 3.0);
+
+  EXPECT_EQ(invCauchyCDF(5.0, 2.0, 1.0), kInf);
+  VELOX_ASSERT_THROW(
+      invCauchyCDF(1.0, 1.0, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invCauchyCDF(1.0, 1.0, 9), "p must be in the interval [0, 1]");
+
+  EXPECT_EQ(invCauchyCDF(5.0, kInf, 0.5), 5.0);
+  VELOX_ASSERT_THROW(invCauchyCDF(0, -1, 0.5), "scale must be greater than 0");
+
+  EXPECT_THAT(invCauchyCDF(kNan, 1.0, 0.5), IsNan());
+  EXPECT_EQ(invCauchyCDF(kInf, 2.0, 0.5), kInf);
+  EXPECT_EQ(invCauchyCDF(kDoubleMax, 2.0, 0.5), kDoubleMax);
+  EXPECT_EQ(invCauchyCDF(kDoubleMin, 2.0, 0.5), kDoubleMin);
+}
+
+TEST_F(ProbabilityTest, inverseLaplaceCDF) {
+  const auto inverseLaplaceCDF = [&](std::optional<double> location,
+                                     std::optional<double> scale,
+                                     std::optional<double> p) {
+    return evaluateOnce<double>(
+        "inverse_laplace_cdf(c0, c1, c2)", location, scale, p);
+  };
+
+  EXPECT_EQ(inverseLaplaceCDF(0.0, 1.0, 0.5), 0.0);
+  EXPECT_EQ(inverseLaplaceCDF(5.0, 2.0, 0.5), 5.0);
+
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(1.0, 1.0, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(1.0, 1.0, 2.0), "p must be in the interval [0, 1]");
+
+  EXPECT_EQ(inverseLaplaceCDF(10.0, kDoubleMax, 0.999999999999), kInf);
+  EXPECT_EQ(inverseLaplaceCDF(10.0, kDoubleMin, 0.000000000001), 10.0);
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(1.0, kNan, 0.5), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(1.0, -1.0, 0.5), "scale must be greater than 0");
+
+  EXPECT_THAT(inverseLaplaceCDF(kInf, 1.0, 0.5), IsNan());
+  EXPECT_THAT(inverseLaplaceCDF(kNan, 1.0, 0.5), IsNan());
+  EXPECT_THAT(inverseLaplaceCDF(kDoubleMax, 1.0, 0.5), kDoubleMax);
+  EXPECT_THAT(inverseLaplaceCDF(kDoubleMin, 1.0, 0.5), kDoubleMin);
 }
 
 } // namespace

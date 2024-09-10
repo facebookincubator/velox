@@ -114,6 +114,8 @@ class AggregationFuzzerRunner {
         options.customInputGenerators,
         options.timestampPrecision,
         options.queryConfigs,
+        options.hiveConfigs,
+        options.orderableGroupKeys,
         planPath,
         std::move(referenceQueryRunner));
     // Calling gtest here so that it can be recognized as tests in CI systems.

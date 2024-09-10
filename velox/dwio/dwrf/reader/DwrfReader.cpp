@@ -43,28 +43,30 @@ class DwrfUnit : public LoadUnit {
       dwio::common::ColumnReaderStatistics& columnReaderStatistics,
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
+      const std::shared_ptr<BitSet>& projectedNodes,
       RowReaderOptions options)
       : stripeReaderBase_{stripeReaderBase},
         strideIndexProvider_{strideIndexProvider},
-        columnReaderStatistics_{columnReaderStatistics},
+        columnReaderStatistics_{&columnReaderStatistics},
         stripeIndex_{stripeIndex},
         columnSelector_{std::move(columnSelector)},
+        projectedNodes_{projectedNodes},
         options_{std::move(options)},
         stripeInfo_{
-            stripeReaderBase.getReader().getFooter().stripes(stripeIndex_)} {}
+            stripeReaderBase.getReader().footer().stripes(stripeIndex_)} {}
 
   ~DwrfUnit() override = default;
 
-  // Perform the IO (read)
+  /// Performs the IO (read)
   void load() override;
 
-  // Unload the unit to free memory
+  /// Unloads the unit to free memory
   void unload() override;
 
-  // Number of rows in the unit
+  /// Number of rows in the unit
   uint64_t getNumRows() override;
 
-  // Number of bytes that the IO will read
+  /// Number of bytes that the IO will read
   uint64_t getIoSize() override;
 
   std::unique_ptr<ColumnReader>& getColumnReader() {
@@ -83,9 +85,10 @@ class DwrfUnit : public LoadUnit {
   // Immutables
   const StripeReaderBase& stripeReaderBase_;
   const StrideIndexProvider& strideIndexProvider_;
-  dwio::common::ColumnReaderStatistics& columnReaderStatistics_;
+  dwio::common::ColumnReaderStatistics* const columnReaderStatistics_;
   const uint32_t stripeIndex_;
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
+  const std::shared_ptr<BitSet> projectedNodes_;
   const RowReaderOptions options_;
   const StripeInformationWrapper stripeInfo_;
 
@@ -132,7 +135,7 @@ void DwrfUnit::ensureDecoders() {
     return;
   }
 
-  preloaded_ = options_.getPreloadStripe();
+  preloaded_ = options_.preloadStripe();
 
   stripeReadState_ = std::make_shared<StripeReadState>(
       stripeReaderBase_.readerBaseShared(),
@@ -140,53 +143,60 @@ void DwrfUnit::ensureDecoders() {
 
   stripeStreams_ = std::make_unique<StripeStreamsImpl>(
       stripeReadState_,
-      *columnSelector_,
+      columnSelector_.get(),
+      projectedNodes_,
       options_,
       stripeInfo_.offset(),
       stripeInfo_.numberOfRows(),
       strideIndexProvider_,
       stripeIndex_);
 
-  auto scanSpec = options_.getScanSpec().get();
-  auto requestedType = columnSelector_->getSchemaWithId();
-  auto fileType = stripeReaderBase_.getReader().getSchemaWithId();
+  auto* scanSpec = options_.scanSpec().get();
+  const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
   FlatMapContext flatMapContext;
-  flatMapContext.keySelectionCallback = options_.getKeySelectionCallback();
-  memory::AllocationPool pool(&stripeReaderBase_.getReader().getMemoryPool());
+  flatMapContext.keySelectionCallback = options_.keySelectionCallback();
+  memory::AllocationPool pool(&stripeReaderBase_.getReader().memoryPool());
   StreamLabels streamLabels(pool);
 
   if (scanSpec) {
     selectiveColumnReader_ = SelectiveDwrfReader::build(
-        requestedType,
+        options_.requestedType() ? options_.requestedType() : fileType->type(),
         fileType,
         *stripeStreams_,
         streamLabels,
-        columnReaderStatistics_,
+        *columnReaderStatistics_,
         scanSpec,
         flatMapContext,
-        true); // isRoot
+        /*isRoot=*/true);
     selectiveColumnReader_->setIsTopLevel();
     selectiveColumnReader_->setFillMutatedOutputRows(
-        options_.getRowNumberColumnInfo().has_value());
+        options_.rowNumberColumnInfo().has_value());
   } else {
-    columnReader_ = ColumnReader::build( // enqueue streams
+    auto requestedType = columnSelector_->getSchemaWithId();
+    auto factory = &ColumnReaderFactory::defaultFactory();
+    if (auto formatOptions = std::dynamic_pointer_cast<DwrfOptions>(
+            options_.formatSpecificOptions())) {
+      factory = formatOptions->columnReaderFactory().get();
+    }
+    columnReader_ = factory->build(
         requestedType,
         fileType,
         *stripeStreams_,
         streamLabels,
-        options_.getDecodingExecutor().get(),
-        options_.getDecodingParallelismFactor(),
+        options_.decodingExecutor().get(),
+        options_.decodingParallelismFactor(),
         flatMapContext);
   }
-  DWIO_ENSURE(
-      (columnReader_ != nullptr) != (selectiveColumnReader_ != nullptr),
+
+  VELOX_CHECK_NE(
+      columnReader_ != nullptr,
+      selectiveColumnReader_ != nullptr,
       "ColumnReader was not created");
 }
 
 void DwrfUnit::loadDecoders() {
-  // load data plan according to its updated selector
-  // during column reader construction
-  // if planReads is off which means stripe data loaded as whole
+  // load data plan according to its updated selector during column reader
+  // construction if planReads is off which means stripe data loaded as whole.
   if (!preloaded_) {
     VLOG(1) << "[DWRF] Load read plan for stripe " << stripeIndex_;
     stripeStreams_->loadReadPlan();
@@ -198,10 +208,21 @@ void DwrfUnit::loadDecoders() {
 namespace {
 
 DwrfUnit* castDwrfUnit(LoadUnit* unit) {
-  VELOX_CHECK(unit != nullptr);
+  VELOX_CHECK_NOT_NULL(unit);
   auto* dwrfUnit = dynamic_cast<DwrfUnit*>(unit);
-  VELOX_CHECK(dwrfUnit != nullptr);
+  VELOX_CHECK_NOT_NULL(dwrfUnit);
   return dwrfUnit;
+}
+
+void makeProjectedNodes(
+    const dwio::common::TypeWithId& fileType,
+    BitSet& projectedNodes) {
+  projectedNodes.insert(fileType.id());
+  for (auto& child : fileType.getChildren()) {
+    if (child) {
+      makeProjectedNodes(*child, projectedNodes);
+    }
+  }
 }
 
 } // namespace
@@ -210,33 +231,33 @@ DwrfRowReader::DwrfRowReader(
     const std::shared_ptr<ReaderBase>& reader,
     const RowReaderOptions& opts)
     : StripeReaderBase(reader),
-      strideIndex_{0},
       options_(opts),
-      decodingTimeCallback_{options_.getDecodingTimeCallback()},
-      columnSelector_{std::make_shared<ColumnSelector>(
-          ColumnSelector::apply(opts.getSelector(), reader->getSchema()))},
+      columnSelector_{
+          options_.scanSpec() != nullptr
+              ? nullptr
+              : std::make_shared<ColumnSelector>(ColumnSelector::apply(
+                    options_.selector(),
+                    reader->schema()))},
+      decodingTimeCallback_{options_.decodingTimeCallback()},
+      strideIndex_{0},
       currentUnit_{nullptr} {
-  auto& fileFooter = getReader().getFooter();
-  uint32_t numberOfStripes = fileFooter.stripesSize();
+  const auto& fileFooter = getReader().footer();
+  const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;
   stripeCeiling_ = 0;
   currentRowInStripe_ = 0;
   rowsInCurrentStripe_ = 0;
-  uint64_t rowTotal = 0;
 
+  uint64_t numRows{0};
   firstRowOfStripe_.reserve(numberOfStripes);
   for (uint32_t i = 0; i < numberOfStripes; ++i) {
-    firstRowOfStripe_.push_back(rowTotal);
-    auto stripeInfo = fileFooter.stripes(i);
-    rowTotal += stripeInfo.numberOfRows();
-    if ((stripeInfo.offset() >= opts.getOffset()) &&
-        (stripeInfo.offset() < opts.getLimit())) {
-      if (i < currentStripe_) {
-        currentStripe_ = i;
-      }
-      if (i >= stripeCeiling_) {
-        stripeCeiling_ = i + 1;
-      }
+    firstRowOfStripe_.push_back(numRows);
+    const auto stripeInfo = fileFooter.stripes(i);
+    numRows += stripeInfo.numberOfRows();
+    if ((stripeInfo.offset() >= options_.offset()) &&
+        (stripeInfo.offset() < options_.limit())) {
+      currentStripe_ = std::min(currentStripe_, i);
+      stripeCeiling_ = std::max(stripeCeiling_, i + 1);
     }
   }
   firstStripe_ = currentStripe_;
@@ -248,7 +269,7 @@ DwrfRowReader::DwrfRowReader(
     stripeCeiling_ = firstStripe_;
   }
 
-  auto stripeCountCallback = options_.getStripeCountCallback();
+  const auto stripeCountCallback = options_.stripeCountCallback();
   if (stripeCountCallback) {
     stripeCountCallback(stripeCeiling_ - firstStripe_);
   }
@@ -263,25 +284,29 @@ DwrfRowReader::DwrfRowReader(
 
   // Validate the requested type is compatible with what's in the file
   std::function<std::string()> createExceptionContext = [&]() {
-    std::string exceptionMessageContext = fmt::format(
+    return fmt::format(
         "The schema loaded in the reader does not match the schema in the file footer."
         "Input Name: {},\n"
         "File Footer Schema (without partition columns): {},\n"
         "Input Table Schema (with partition columns): {}\n",
-        getReader().getBufferedInput().getName(),
-        getReader().getSchema()->toString(),
-        getType()->toString());
-    return exceptionMessageContext;
+        getReader().bufferedInput().getName(),
+        getReader().schema()->toString(),
+        type()->toString());
   };
 
-  dwio::common::typeutils::checkTypeCompatibility(
-      *getReader().getSchema(), *columnSelector_, createExceptionContext);
+  if (columnSelector_) {
+    dwio::common::typeutils::checkTypeCompatibility(
+        *getReader().schema(), *columnSelector_, createExceptionContext);
+  } else {
+    projectedNodes_ = std::make_shared<BitSet>(0);
+    makeProjectedNodes(*getReader().schemaWithId(), *projectedNodes_);
+  }
 
   unitLoader_ = getUnitLoader();
 }
 
 std::unique_ptr<ColumnReader>& DwrfRowReader::getColumnReader() {
-  VELOX_DCHECK(currentUnit_ != nullptr);
+  VELOX_DCHECK_NOT_NULL(currentUnit_);
   return currentUnit_->getColumnReader();
 }
 
@@ -294,21 +319,22 @@ DwrfRowReader::getSelectiveColumnReader() {
 std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
   std::vector<std::unique_ptr<LoadUnit>> loadUnits;
   loadUnits.reserve(stripeCeiling_ - firstStripe_);
-  for (auto stripe = firstStripe_; stripe < stripeCeiling_; stripe++) {
+  for (auto stripe = firstStripe_; stripe < stripeCeiling_; ++stripe) {
     loadUnits.emplace_back(std::make_unique<DwrfUnit>(
-        /* stripeReaderBase */ *this,
-        /* strideIndexProvider */ *this,
+        /*stripeReaderBase=*/*this,
+        /*strideIndexProvider=*/*this,
         columnReaderStatistics_,
         stripe,
         columnSelector_,
+        projectedNodes_,
         options_));
   }
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory =
-      options_.getUnitLoaderFactory();
+      options_.unitLoaderFactory();
   if (!unitLoaderFactory) {
     unitLoaderFactory =
         std::make_shared<dwio::common::OnDemandUnitLoaderFactory>(
-            options_.getBlockedOnIoCallback());
+            options_.blockedOnIoCallback());
   }
   return unitLoaderFactory->create(std::move(loadUnits), 0);
 }
@@ -320,23 +346,22 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   }
   nextRowNumber_.reset();
 
-  // If we are reading only a portion of the file
-  // (bounded by firstStripe_ and stripeCeiling_),
-  // seeking before or after the portion of interest should return no data.
-  // Implement this by setting previousRow_ to the number of rows in the file.
+  // If we are reading only a portion of the file (bounded by firstStripe_ and
+  // stripeCeiling_), seeking before or after the portion of interest should
+  // return no data. Implement this by setting previousRow_ to the number of
+  // rows in the file.
 
-  // seeking past stripeCeiling_
-  auto& fileFooter = getReader().getFooter();
-  uint32_t num_stripes = fileFooter.stripesSize();
-  if ((stripeCeiling_ == num_stripes &&
+  // seeking past stripeCeiling_.
+  const auto& fileFooter = getReader().footer();
+  const uint32_t numStripes = fileFooter.stripesSize();
+  if ((stripeCeiling_ == numStripes &&
        rowNumber >= fileFooter.numberOfRows()) ||
-      (stripeCeiling_ < num_stripes &&
+      (stripeCeiling_ < numStripes &&
        rowNumber >= firstRowOfStripe_[stripeCeiling_])) {
     VLOG(1) << "Trying to seek past stripeCeiling_, total rows: "
-            << fileFooter.numberOfRows() << " num_stripes: " << num_stripes;
+            << fileFooter.numberOfRows() << " num_stripes: " << numStripes;
 
-    currentStripe_ = num_stripes;
-
+    currentStripe_ = numStripes;
     previousRow_ = fileFooter.numberOfRows();
     return previousRow_;
   }
@@ -344,12 +369,12 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
   uint32_t seekToStripe = 0;
   while (seekToStripe + 1 < stripeCeiling_ &&
          firstRowOfStripe_[seekToStripe + 1] <= rowNumber) {
-    seekToStripe++;
+    ++seekToStripe;
   }
 
   // seeking before the first stripe
   if (seekToStripe < firstStripe_) {
-    currentStripe_ = num_stripes;
+    currentStripe_ = numStripes;
     previousRow_ = fileFooter.numberOfRows();
     return previousRow_;
   }
@@ -411,7 +436,7 @@ uint64_t DwrfRowReader::skipRows(uint64_t numberOfRowsToSkip) {
   }
 
   // when we skipped or exhausted the whole file we can return 0
-  auto& fileFooter = getReader().getFooter();
+  const auto& fileFooter = getReader().footer();
   if (previousRow_ == fileFooter.numberOfRows()) {
     VLOG(1) << "previousRow_ is beyond EOF, nothing to skip";
     return 0;
@@ -432,7 +457,7 @@ uint64_t DwrfRowReader::skipRows(uint64_t numberOfRowsToSkip) {
   VLOG(1) << "Previous row: " << previousRow_
           << " Skipping: " << numberOfRowsToSkip;
 
-  uint64_t initialRow = previousRow_;
+  const uint64_t initialRow = previousRow_;
   seekToRow(previousRow_ + numberOfRowsToSkip);
 
   VLOG(1) << "After skipping: " << previousRow_
@@ -452,11 +477,10 @@ void DwrfRowReader::checkSkipStrides(uint64_t strideSize) {
   }
 
   if (currentRowInStripe_ == 0 || recomputeStridesToSkip_) {
-    StatsContext context(
-        getReader().getWriterName(), getReader().getWriterVersion());
+    StatsContext context(getReader().writerName(), getReader().writerVersion());
     DwrfData::FilterRowGroupsResult res;
     getSelectiveColumnReader()->filterRowGroups(strideSize, context, res);
-    if (auto& metadataFilter = options_.getMetadataFilter()) {
+    if (auto& metadataFilter = options_.metadataFilter()) {
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);
     }
     stridesToSkip_ = res.filterResult.data();
@@ -472,8 +496,8 @@ void DwrfRowReader::checkSkipStrides(uint64_t strideSize) {
     foundStridesToSkip = true;
     currentRowInStripe_ =
         std::min(currentRowInStripe_ + strideSize, rowsInCurrentStripe_);
-    currentStride++;
-    skippedStrides_++;
+    ++currentStride;
+    ++skippedStrides_;
   }
   if (foundStridesToSkip && currentRowInStripe_ < rowsInCurrentStripe_) {
     getSelectiveColumnReader()->seekToRowGroup(currentStride);
@@ -493,9 +517,8 @@ void DwrfRowReader::readNext(
     }
     // TODO: Move row number appending logic here.  Currently this is done in
     // the wrapper reader.
-    VELOX_CHECK(
-        mutation == nullptr,
-        "Mutation pushdown is only supported in selective reader");
+    VELOX_CHECK_NULL(
+        mutation, "Mutation pushdown is only supported in selective reader");
     getColumnReader()->next(rowsToRead, result);
     if (startTime.has_value()) {
       decodingTimeCallback_(
@@ -503,10 +526,12 @@ void DwrfRowReader::readNext(
     }
     return;
   }
-  if (!options_.getRowNumberColumnInfo().has_value()) {
+
+  if (!options_.rowNumberColumnInfo().has_value()) {
     getSelectiveColumnReader()->next(rowsToRead, result, mutation);
     return;
   }
+
   readWithRowNumber(
       getSelectiveColumnReader(),
       options_,
@@ -528,32 +553,37 @@ int64_t DwrfRowReader::nextRowNumber() {
   if (nextRowNumber_.has_value()) {
     return *nextRowNumber_;
   }
-  auto strideSize = getReader().getFooter().rowIndexStride();
+
+  const auto strideSize = getReader().footer().rowIndexStride();
   while (currentStripe_ < stripeCeiling_) {
     if (currentRowInStripe_ == 0) {
       if (getReader().randomSkip()) {
-        auto numStripeRows =
-            getReader().getFooter().stripes(currentStripe_).numberOfRows();
-        auto skip = getReader().randomSkip()->nextSkip();
-        if (skip >= numStripeRows) {
+        const auto numStripeRows =
+            getReader().footer().stripes(currentStripe_).numberOfRows();
+        const auto skipRows = getReader().randomSkip()->nextSkip();
+        if (skipRows >= numStripeRows) {
           getReader().randomSkip()->consume(numStripeRows);
-          auto numStrides = (numStripeRows + strideSize - 1) / strideSize;
+          const auto numStrides = bits::divRoundUp(numStripeRows, strideSize);
           skippedStrides_ += numStrides;
           goto advanceToNextStripe;
         }
       }
       loadCurrentStripe();
+      VELOX_CHECK_NOT_NULL(currentUnit_);
     }
+
     checkSkipStrides(strideSize);
     if (currentRowInStripe_ < rowsInCurrentStripe_) {
       nextRowNumber_ = firstRowOfStripe_[currentStripe_] + currentRowInStripe_;
       return *nextRowNumber_;
     }
+
   advanceToNextStripe:
     ++currentStripe_;
     currentRowInStripe_ = 0;
     currentUnit_ = nullptr;
   }
+
   nextRowNumber_ = kAtEnd;
   return kAtEnd;
 }
@@ -563,8 +593,9 @@ int64_t DwrfRowReader::nextReadSize(uint64_t size) {
   if (nextRowNumber() == kAtEnd) {
     return kAtEnd;
   }
+
   auto rowsToRead = std::min(size, rowsInCurrentStripe_ - currentRowInStripe_);
-  auto strideSize = getReader().getFooter().rowIndexStride();
+  const auto strideSize = getReader().footer().rowIndexStride();
   if (LIKELY(strideSize > 0)) {
     // Don't allow read to cross stride.
     rowsToRead =
@@ -578,22 +609,23 @@ uint64_t DwrfRowReader::next(
     uint64_t size,
     velox::VectorPtr& result,
     const dwio::common::Mutation* mutation) {
-  auto nextRow = nextRowNumber();
+  const auto nextRow = nextRowNumber();
   if (nextRow == kAtEnd) {
     if (!isEmptyFile()) {
       previousRow_ = firstRowOfStripe_[stripeCeiling_ - 1] +
-          getReader().getFooter().stripes(stripeCeiling_ - 1).numberOfRows();
+          getReader().footer().stripes(stripeCeiling_ - 1).numberOfRows();
     } else {
       previousRow_ = 0;
     }
     return 0;
   }
-  auto rowsToRead = nextReadSize(size);
+
+  const auto rowsToRead = nextReadSize(size);
   nextRowNumber_.reset();
   previousRow_ = nextRow;
   // Record strideIndex for use by the columnReader_ which may delay actual
   // reading of the data.
-  auto strideSize = getReader().getFooter().rowIndexStride();
+  const auto strideSize = getReader().footer().rowIndexStride();
   strideIndex_ = strideSize > 0 ? currentRowInStripe_ / strideSize : 0;
   const auto loadUnitIdx = currentStripe_ - firstStripe_;
   unitLoader_->onRead(loadUnitIdx, currentRowInStripe_, rowsToRead);
@@ -615,6 +647,7 @@ void DwrfRowReader::loadCurrentStripe() {
   if (currentUnit_ || currentStripe_ >= stripeCeiling_) {
     return;
   }
+
   VELOX_CHECK_GE(currentStripe_, firstStripe_);
   strideIndex_ = 0;
   const auto loadUnitIdx = currentStripe_ - firstStripe_;
@@ -623,25 +656,50 @@ void DwrfRowReader::loadCurrentStripe() {
 }
 
 size_t DwrfRowReader::estimatedReaderMemory() const {
+  VELOX_CHECK_NOT_NULL(columnSelector_);
   return 2 * DwrfReader::getMemoryUse(getReader(), -1, *columnSelector_);
 }
+
+bool DwrfRowReader::shouldReadNode(uint32_t nodeId) const {
+  if (columnSelector_) {
+    return columnSelector_->shouldReadNode(nodeId);
+  }
+  return projectedNodes_->contains(nodeId);
+}
+
+namespace {
+
+template <typename T>
+std::optional<uint64_t> getStringOrBinaryColumnSize(
+    const dwio::common::ColumnStatistics& stats) {
+  if (auto* typedStats = dynamic_cast<const T*>(&stats)) {
+    if (typedStats->getTotalLength().has_value()) {
+      return typedStats->getTotalLength();
+    }
+  }
+  // Sometimes the column statistics are not typed and we don't have total
+  // length, use raw size as an estimation.
+  return stats.getRawSize();
+}
+
+} // namespace
 
 std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     const FooterWrapper& fileFooter,
     const dwio::common::Statistics& stats,
     uint32_t nodeId) const {
-  DWIO_ENSURE_LT(nodeId, fileFooter.typesSize(), "Types missing in footer");
+  VELOX_CHECK_LT(nodeId, fileFooter.typesSize(), "Types missing in footer");
 
-  const auto& s = stats.getColumnStatistics(nodeId);
-  const auto& t = fileFooter.types(nodeId);
-  if (!s.getNumberOfValues()) {
+  const auto& nodeStats = stats.getColumnStatistics(nodeId);
+  const auto& nodeType = fileFooter.types(nodeId);
+  if (!nodeStats.getNumberOfValues()) {
     return std::nullopt;
   }
-  auto valueCount = s.getNumberOfValues().value();
+  const auto valueCount = nodeStats.getNumberOfValues().value();
   if (valueCount < 1) {
     return 0;
   }
-  switch (t.kind()) {
+  switch (nodeType.kind()) {
     case TypeKind::BOOLEAN: {
       return valueCount * sizeof(uint8_t);
     }
@@ -666,30 +724,12 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     case TypeKind::DOUBLE: {
       return valueCount * sizeof(double);
     }
-    case TypeKind::VARCHAR: {
-      auto stringStats =
-          dynamic_cast<const dwio::common::StringColumnStatistics*>(&s);
-      if (!stringStats) {
-        return std::nullopt;
-      }
-      auto length = stringStats->getTotalLength();
-      if (!length) {
-        return std::nullopt;
-      }
-      return length.value();
-    }
-    case TypeKind::VARBINARY: {
-      auto binaryStats =
-          dynamic_cast<const dwio::common::BinaryColumnStatistics*>(&s);
-      if (!binaryStats) {
-        return std::nullopt;
-      }
-      auto length = binaryStats->getTotalLength();
-      if (!length) {
-        return std::nullopt;
-      }
-      return length.value();
-    }
+    case TypeKind::VARCHAR:
+      return getStringOrBinaryColumnSize<dwio::common::StringColumnStatistics>(
+          nodeStats);
+    case TypeKind::VARBINARY:
+      return getStringOrBinaryColumnSize<dwio::common::BinaryColumnStatistics>(
+          nodeStats);
     case TypeKind::TIMESTAMP: {
       return valueCount * sizeof(uint64_t) * 2;
     }
@@ -698,12 +738,12 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     case TypeKind::ROW: {
       // start the estimate with the offsets and hasNulls vectors sizes
       size_t totalEstimate = valueCount * (sizeof(uint8_t) + sizeof(uint64_t));
-      for (int32_t i = 0; i < t.subtypesSize(); ++i) {
-        if (!columnSelector_->shouldReadNode(t.subtypes(i))) {
+      for (int32_t i = 0; i < nodeType.subtypesSize(); ++i) {
+        if (!shouldReadNode(nodeType.subtypes(i))) {
           continue;
         }
-        auto subtypeEstimate =
-            estimatedRowSizeHelper(fileFooter, stats, t.subtypes(i));
+        const auto subtypeEstimate =
+            estimatedRowSizeHelper(fileFooter, stats, nodeType.subtypes(i));
         if (subtypeEstimate.has_value()) {
           totalEstimate += subtypeEstimate.value();
         } else {
@@ -718,8 +758,8 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
 }
 
 std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
-  auto& reader = getReader();
-  auto& fileFooter = reader.getFooter();
+  const auto& reader = getReader();
+  const auto& fileFooter = reader.footer();
 
   if (!fileFooter.hasNumberOfRows()) {
     return std::nullopt;
@@ -729,14 +769,14 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
     return 0;
   }
 
-  // Estimate with projections
+  // Estimate with projections.
   constexpr uint32_t ROOT_NODE_ID = 0;
-  auto stats = reader.getStatistics();
-  auto projectedSize = estimatedRowSizeHelper(fileFooter, *stats, ROOT_NODE_ID);
+  const auto stats = reader.statistics();
+  const auto projectedSize =
+      estimatedRowSizeHelper(fileFooter, *stats, ROOT_NODE_ID);
   if (projectedSize.has_value()) {
     return projectedSize.value() / fileFooter.numberOfRows();
   }
-
   return std::nullopt;
 }
 
@@ -744,15 +784,16 @@ DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(
-          options.getMemoryPool(),
+          options.memoryPool(),
           std::move(input),
-          options.getDecrypterFactory(),
-          options.getFooterEstimatedSize(),
-          options.getFilePreloadThreshold(),
-          options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
-                                                     : FileFormat::DWRF,
-          options.isFileColumnNamesReadAsLowerCase(),
-          options.randomSkip())),
+          options.decrypterFactory(),
+          options.footerEstimatedSize(),
+          options.filePreloadThreshold(),
+          options.fileFormat() == FileFormat::ORC ? FileFormat::ORC
+                                                  : FileFormat::DWRF,
+          options.fileColumnNamesReadAsLowerCase(),
+          options.randomSkip(),
+          options.scanSpec())),
       options_(options) {
   // If we are not using column names to map table columns to file columns,
   // then we use indices. In that case we need to ensure the names completely
@@ -760,8 +801,8 @@ DwrfReader::DwrfReader(
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
-  if ((not options_.isUseColumnNamesForColumnMapping()) and
-      (options_.getFileSchema() != nullptr)) {
+  if ((!options_.useColumnNamesForColumnMapping()) &&
+      (options_.fileSchema() != nullptr)) {
     updateColumnNamesFromTableSchema();
   }
 }
@@ -788,24 +829,32 @@ TypePtr updateColumnNames(
 // Non-primitive type tree recursion function.
 template <typename T>
 TypePtr updateColumnNames(const TypePtr& fileType, const TypePtr& tableType) {
-  auto fileRowType = std::dynamic_pointer_cast<const T>(fileType);
-  auto tableRowType = std::dynamic_pointer_cast<const T>(tableType);
+  const auto fileRowType = std::dynamic_pointer_cast<const T>(fileType);
+  const auto tableRowType = std::dynamic_pointer_cast<const T>(tableType);
 
-  std::vector<std::string> newFileFieldNames{fileRowType->names()};
-  std::vector<TypePtr> newFileFieldTypes{fileRowType->children()};
+  std::vector<std::string> newFileFieldNames;
+  newFileFieldNames.reserve(fileRowType->size());
+  std::vector<TypePtr> newFileFieldTypes;
+  newFileFieldTypes.reserve(fileRowType->size());
 
   for (auto childIdx = 0; childIdx < tableRowType->size(); ++childIdx) {
     if (childIdx >= fileRowType->size()) {
       break;
     }
 
-    newFileFieldTypes[childIdx] = updateColumnNames(
+    newFileFieldTypes.push_back(updateColumnNames(
         fileRowType->childAt(childIdx),
         tableRowType->childAt(childIdx),
         fileRowType->nameOf(childIdx),
-        tableRowType->nameOf(childIdx));
+        tableRowType->nameOf(childIdx)));
 
-    newFileFieldNames[childIdx] = tableRowType->nameOf(childIdx);
+    newFileFieldNames.push_back(tableRowType->nameOf(childIdx));
+  }
+
+  for (auto childIdx = tableRowType->size(); childIdx < fileRowType->size();
+       ++childIdx) {
+    newFileFieldTypes.push_back(fileRowType->childAt(childIdx));
+    newFileFieldNames.push_back(fileRowType->nameOf(childIdx));
   }
 
   return std::make_shared<const T>(
@@ -830,9 +879,6 @@ TypePtr updateColumnNames(
     return fileType;
   }
 
-  std::vector<std::string> fileFieldNames{fileType->size()};
-  std::vector<TypePtr> fileFieldTypes{fileType->size()};
-
   if (fileType->isRow()) {
     return updateColumnNames<RowType>(fileType, tableType);
   }
@@ -853,18 +899,17 @@ TypePtr updateColumnNames(
 } // namespace
 
 void DwrfReader::updateColumnNamesFromTableSchema() {
-  const auto& tableSchema = options_.getFileSchema();
-  const auto& fileSchema = readerBase_->getSchema();
-  auto newSchema = std::dynamic_pointer_cast<const RowType>(
-      updateColumnNames(fileSchema, tableSchema, "", ""));
-  readerBase_->setSchema(newSchema);
+  const auto& tableSchema = options_.fileSchema();
+  const auto& fileSchema = readerBase_->schema();
+  readerBase_->setSchema(std::dynamic_pointer_cast<const RowType>(
+      updateColumnNames(fileSchema, tableSchema, "", "")));
 }
 
 std::unique_ptr<StripeInformation> DwrfReader::getStripe(
     uint32_t stripeIndex) const {
-  DWIO_ENSURE_LT(
+  VELOX_CHECK_LT(
       stripeIndex, getNumberOfStripes(), "stripe index out of range");
-  auto stripeInfo = readerBase_->getFooter().stripes(stripeIndex);
+  auto stripeInfo = readerBase_->footer().stripes(stripeIndex);
 
   return std::make_unique<StripeInformationImpl>(
       stripeInfo.offset(),
@@ -876,7 +921,7 @@ std::unique_ptr<StripeInformation> DwrfReader::getStripe(
 
 std::vector<std::string> DwrfReader::getMetadataKeys() const {
   std::vector<std::string> result;
-  auto& fileFooter = readerBase_->getFooter();
+  auto& fileFooter = readerBase_->footer();
   result.reserve(fileFooter.metadataSize());
   for (int32_t i = 0; i < fileFooter.metadataSize(); ++i) {
     result.push_back(fileFooter.metadata(i).name());
@@ -885,17 +930,17 @@ std::vector<std::string> DwrfReader::getMetadataKeys() const {
 }
 
 std::string DwrfReader::getMetadataValue(const std::string& key) const {
-  auto& fileFooter = readerBase_->getFooter();
+  auto& fileFooter = readerBase_->footer();
   for (int32_t i = 0; i < fileFooter.metadataSize(); ++i) {
     if (fileFooter.metadata(i).name() == key) {
       return fileFooter.metadata(i).value();
     }
   }
-  DWIO_RAISE("key not found");
+  VELOX_FAIL("key not found: {}", key);
 }
 
 bool DwrfReader::hasMetadataValue(const std::string& key) const {
-  auto& fileFooter = readerBase_->getFooter();
+  auto& fileFooter = readerBase_->footer();
   for (int32_t i = 0; i < fileFooter.metadataSize(); ++i) {
     if (fileFooter.metadata(i).name() == key) {
       return true;
@@ -955,28 +1000,28 @@ uint64_t maxStreamsForType(const TypeWrapper& type) {
 }
 
 uint64_t DwrfReader::getMemoryUse(int32_t stripeIx) {
-  ColumnSelector cs(readerBase_->getSchema());
+  ColumnSelector cs(readerBase_->schema());
   return getMemoryUse(*readerBase_, stripeIx, cs);
 }
 
 uint64_t DwrfReader::getMemoryUseByFieldId(
     const std::vector<uint64_t>& include,
     int32_t stripeIx) {
-  ColumnSelector cs(readerBase_->getSchema(), include);
+  ColumnSelector cs(readerBase_->schema(), include);
   return getMemoryUse(*readerBase_, stripeIx, cs);
 }
 
 uint64_t DwrfReader::getMemoryUseByName(
     const std::vector<std::string>& names,
     int32_t stripeIx) {
-  ColumnSelector cs(readerBase_->getSchema(), names);
+  ColumnSelector cs(readerBase_->schema(), names);
   return getMemoryUse(*readerBase_, stripeIx, cs);
 }
 
 uint64_t DwrfReader::getMemoryUseByTypeId(
     const std::vector<uint64_t>& include,
     int32_t stripeIx) {
-  ColumnSelector cs(readerBase_->getSchema(), include, true);
+  ColumnSelector cs(readerBase_->schema(), include, true);
   return getMemoryUse(*readerBase_, stripeIx, cs);
 }
 
@@ -985,27 +1030,23 @@ uint64_t DwrfReader::getMemoryUse(
     int32_t stripeIx,
     const ColumnSelector& cs) {
   uint64_t maxDataLength = 0;
-  auto& fileFooter = readerBase.getFooter();
+  const auto& fileFooter = readerBase.footer();
   if (stripeIx >= 0 && stripeIx < fileFooter.stripesSize()) {
-    uint64_t stripe = fileFooter.stripes(stripeIx).dataLength();
-    if (maxDataLength < stripe) {
-      maxDataLength = stripe;
-    }
+    const uint64_t stripeLength = fileFooter.stripes(stripeIx).dataLength();
+    maxDataLength = std::max(maxDataLength, stripeLength);
   } else {
-    for (int32_t i = 0; i < fileFooter.stripesSize(); i++) {
-      uint64_t stripe = fileFooter.stripes(i).dataLength();
-      if (maxDataLength < stripe) {
-        maxDataLength = stripe;
-      }
+    for (int32_t i = 0; i < fileFooter.stripesSize(); ++i) {
+      const uint64_t stripeLength = fileFooter.stripes(i).dataLength();
+      maxDataLength = std::max(maxDataLength, stripeLength);
     }
   }
 
   bool hasStringColumn = false;
-  uint64_t nSelectedStreams = 0;
-  for (int32_t i = 0; !hasStringColumn && i < fileFooter.typesSize(); i++) {
+  uint64_t numSelectedStreams = 0;
+  for (int32_t i = 0; !hasStringColumn && i < fileFooter.typesSize(); ++i) {
     if (cs.shouldReadNode(i)) {
       const auto type = fileFooter.types(i);
-      nSelectedStreams += maxStreamsForType(type);
+      numSelectedStreams += maxStreamsForType(type);
       switch (type.kind()) {
         case TypeKind::VARCHAR:
         case TypeKind::VARBINARY: {
@@ -1019,46 +1060,45 @@ uint64_t DwrfReader::getMemoryUse(
     }
   }
 
-  /* If a string column is read, use stripe datalength as a memory estimate
-   * because we don't know the dictionary size. Multiply by 2 because
-   * a string column requires two buffers:
-   * in the input stream and in the seekable input stream.
-   * If no string column is read, estimate from the number of streams.
-   */
-  uint64_t memory = hasStringColumn ? 2 * maxDataLength
-                                    : std::min(
-                                          uint64_t(maxDataLength),
-                                          nSelectedStreams *
-                                              readerBase.getBufferedInput()
-                                                  .getReadFile()
-                                                  ->getNaturalReadSize());
+  // If a string column is read, use stripe datalength as a memory estimate
+  // because we don't know the dictionary size. Multiply by 2 because a string
+  // column requires two buffers: in the input stream and in the seekable
+  // input stream. If no string column is read, estimate from the number of
+  // streams.
+  uint64_t memoryBytes = hasStringColumn
+      ? 2 * maxDataLength
+      : std::min(
+            uint64_t(maxDataLength),
+            numSelectedStreams *
+                readerBase.bufferedInput().getReadFile()->getNaturalReadSize());
 
   // Do we need even more memory to read the footer or the metadata?
-  auto footerLength = readerBase.getPostScript().footerLength();
-  if (memory < footerLength + readerBase.getFooterEstimatedSize()) {
-    memory = footerLength + readerBase.getFooterEstimatedSize();
+  const auto footerLength = readerBase.postScript().footerLength();
+  if (memoryBytes < footerLength + readerBase.footerEstimatedSize()) {
+    memoryBytes = footerLength + readerBase.footerEstimatedSize();
   }
 
   // Account for firstRowOfStripe.
-  memory += static_cast<uint64_t>(fileFooter.stripesSize()) * sizeof(uint64_t);
+  memoryBytes +=
+      static_cast<uint64_t>(fileFooter.stripesSize()) * sizeof(uint64_t);
 
   // Decompressors need buffers for each stream
-  uint64_t decompressorMemory = 0;
-  auto compression = readerBase.getCompressionKind();
-  if (compression != common::CompressionKind_NONE) {
-    for (int32_t i = 0; i < fileFooter.typesSize(); i++) {
+  uint64_t decompressorMemoryBytes = 0;
+  const auto compressionKind = readerBase.compressionKind();
+  if (compressionKind != common::CompressionKind_NONE) {
+    for (int32_t i = 0; i < fileFooter.typesSize(); ++i) {
       if (cs.shouldReadNode(i)) {
         const auto type = fileFooter.types(i);
-        decompressorMemory +=
-            maxStreamsForType(type) * readerBase.getCompressionBlockSize();
+        decompressorMemoryBytes +=
+            maxStreamsForType(type) * readerBase.compressionBlockSize();
       }
     }
-    if (compression == common::CompressionKind_SNAPPY) {
-      decompressorMemory *= 2; // Snappy decompressor uses a second buffer
+    if (compressionKind == common::CompressionKind_SNAPPY) {
+      decompressorMemoryBytes *= 2; // Snappy decompressor uses a second buffer
     }
   }
 
-  return memory + decompressorMemory;
+  return memoryBytes + decompressorMemoryBytes;
 }
 
 std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
@@ -1069,12 +1109,12 @@ std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
 std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(
     const RowReaderOptions& opts) const {
   auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
-  if (opts.getEagerFirstStripeLoad()) {
+  if (opts.eagerFirstStripeLoad()) {
     // Load the first stripe on construction so that readers created in
     // background have a reader tree and can preload the first
     // stripe. Also the reader tree needs to exist in order to receive
     // adaptation from a previous reader.
-    rowReader->loadCurrentStripe();
+    rowReader->nextRowNumber();
   }
   return rowReader;
 }

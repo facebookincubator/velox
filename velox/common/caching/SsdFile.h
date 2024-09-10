@@ -16,11 +16,12 @@
 
 #pragma once
 
+#include <gflags/gflags.h>
+#include <shared_mutex>
+
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/SsdFileTracker.h"
 #include "velox/common/file/File.h"
-
-#include <gflags/gflags.h>
 
 DECLARE_bool(ssd_odirect);
 DECLARE_bool(ssd_verify_write);
@@ -141,6 +142,7 @@ struct SsdCacheStats {
     bytesWritten = tsanAtomicValue(other.bytesWritten);
     checkpointsWritten = tsanAtomicValue(other.checkpointsWritten);
     entriesRead = tsanAtomicValue(other.entriesRead);
+    entriesRecovered = tsanAtomicValue(other.entriesRecovered);
     bytesRead = tsanAtomicValue(other.bytesRead);
     checkpointsRead = tsanAtomicValue(other.checkpointsRead);
     entriesCached = tsanAtomicValue(other.entriesCached);
@@ -162,6 +164,8 @@ struct SsdCacheStats {
     readSsdErrors = tsanAtomicValue(other.readSsdErrors);
     readCheckpointErrors = tsanAtomicValue(other.readCheckpointErrors);
     readSsdCorruptions = tsanAtomicValue(other.readSsdCorruptions);
+    readWithoutChecksumChecks =
+        tsanAtomicValue(other.readWithoutChecksumChecks);
   }
 
   SsdCacheStats operator-(const SsdCacheStats& other) const {
@@ -170,6 +174,7 @@ struct SsdCacheStats {
     result.bytesWritten = bytesWritten - other.bytesWritten;
     result.checkpointsWritten = checkpointsWritten - other.checkpointsWritten;
     result.entriesRead = entriesRead - other.entriesRead;
+    result.entriesRecovered = entriesRecovered - other.entriesRecovered;
     result.bytesRead = bytesRead - other.bytesRead;
     result.checkpointsRead = checkpointsRead - other.checkpointsRead;
     result.entriesAgedOut = entriesAgedOut - other.entriesAgedOut;
@@ -190,6 +195,8 @@ struct SsdCacheStats {
     result.readSsdErrors = readSsdErrors - other.readSsdErrors;
     result.readCheckpointErrors =
         readCheckpointErrors - other.readCheckpointErrors;
+    result.readWithoutChecksumChecks =
+        readWithoutChecksumChecks - other.readWithoutChecksumChecks;
     return result;
   }
 
@@ -204,6 +211,7 @@ struct SsdCacheStats {
   tsan_atomic<uint64_t> bytesWritten{0};
   tsan_atomic<uint64_t> checkpointsWritten{0};
   tsan_atomic<uint64_t> entriesRead{0};
+  tsan_atomic<uint64_t> entriesRecovered{0};
   tsan_atomic<uint64_t> bytesRead{0};
   tsan_atomic<uint64_t> checkpointsRead{0};
   tsan_atomic<uint64_t> entriesAgedOut{0};
@@ -220,6 +228,7 @@ struct SsdCacheStats {
   tsan_atomic<uint32_t> readSsdErrors{0};
   tsan_atomic<uint32_t> readCheckpointErrors{0};
   tsan_atomic<uint32_t> readSsdCorruptions{0};
+  tsan_atomic<uint32_t> readWithoutChecksumChecks{0};
 };
 
 /// A shard of SsdCache. Corresponds to one file on SSD. The data backed by each
@@ -230,19 +239,57 @@ struct SsdCacheStats {
 /// Otherwise entries are consecutive byte ranges inside their region.
 class SsdFile {
  public:
+  struct Config {
+    Config(
+        const std::string& _fileName,
+        int32_t _shardId,
+        int32_t _maxRegions,
+        uint64_t _checkpointIntervalBytes = 0,
+        bool _disableFileCow = false,
+        bool _checksumEnabled = false,
+        bool _checksumReadVerificationEnabled = false,
+        folly::Executor* _executor = nullptr)
+        : fileName(_fileName),
+          shardId(_shardId),
+          maxRegions(_maxRegions),
+          checkpointIntervalBytes(_checkpointIntervalBytes),
+          disableFileCow(_disableFileCow),
+          checksumEnabled(_checksumEnabled),
+          checksumReadVerificationEnabled(
+              _checksumEnabled && _checksumReadVerificationEnabled),
+          executor(_executor){};
+
+    /// Name of cache file, used as prefix for checkpoint files.
+    const std::string fileName;
+
+    /// Shard index within the SsdCache.
+    const int32_t shardId;
+
+    /// Maximum size of the backing file in kRegionSize units.
+    const int32_t maxRegions;
+
+    /// Checkpoint after every 'checkpointIntervalBytes' written into this
+    /// file. 0 means no checkpointing. This is set to 0 if checkpointing fails.
+    uint64_t checkpointIntervalBytes;
+
+    /// True if copy on write should be disabled.
+    bool disableFileCow;
+
+    /// If true, checksum write to SSD is enabled.
+    bool checksumEnabled;
+
+    /// If true, checksum read verification from SSD is enabled.
+    bool checksumReadVerificationEnabled;
+
+    /// Executor for async fsync in checkpoint.
+    folly::Executor* executor;
+  };
+
   static constexpr uint64_t kRegionSize = 1 << 26; // 64MB
 
   /// Constructs a cache backed by filename. Discards any previous contents of
   /// filename.
-  SsdFile(
-      const std::string& filename,
-      int32_t shardId,
-      int32_t maxRegions,
-      int64_t checkpointInternalBytes = 0,
-      bool disableFileCow = false,
-      bool checksumEnabled = false,
-      bool checksumReadVerificationEnabled = false,
-      folly::Executor* executor = nullptr);
+  SsdFile(const Config& config);
 
   /// Adds entries of 'pins' to this file. 'pins' must be in read mode and
   /// those pins that are successfully added to SSD are marked as being on SSD.
@@ -304,10 +351,10 @@ class SsdFile {
       const folly::F14FastSet<uint64_t>& filesToRemove,
       folly::F14FastSet<uint64_t>& filesRetained);
 
-  /// Writes a checkpoint state that can be recovered from. The
-  /// checkpoint is serialized on 'mutex_'. If 'force' is false,
-  /// rechecks that at least 'checkpointIntervalBytes_' have been
-  /// written since last checkpoint and silently returns if not.
+  /// Writes a checkpoint state that can be recovered from. The checkpoint is
+  /// serialized on 'mutex_'. If 'force' is false, rechecks that at least
+  /// 'checkpointIntervalBytes_' have been written since last checkpoint and
+  /// silently returns if not.
   void checkpoint(bool force = false);
 
   /// Deletes checkpoint files. If 'keepLog' is true, truncates and syncs the
@@ -333,7 +380,9 @@ class SsdFile {
   void testingDeleteFile();
 
   /// Resets this' to a post-construction empty state. See SsdCache::clear().
-  void testingClear();
+  ///
+  /// NOTE: this is only used by test and Prestissimo worker operation.
+  void clear();
 
   /// Returns true if copy on write is disabled for this file. Used in testing.
   bool testingIsCowDisabled() const;
@@ -417,6 +466,11 @@ class SsdFile {
   // the files for making new checkpoints.
   void initializeCheckpoint();
 
+  // Writes 'iovecs' to the SSD file at the 'offset'. Returns true if the write
+  // succeeds; otherwise, log the error and return false.
+  bool
+  write(uint64_t offset, uint64_t length, const std::vector<iovec>& iovecs);
+
   // Synchronously logs that 'regions' are no longer valid in a possibly
   // existing checkpoint.
   void logEviction(const std::vector<int32_t>& regions);
@@ -437,7 +491,9 @@ class SsdFile {
     return force || (bytesAfterCheckpoint_ >= checkpointIntervalBytes_);
   }
 
-  void maybeVerifyChecksum(AsyncDataCacheEntry& entry, SsdRun& ssdRun);
+  void maybeVerifyChecksum(
+      const AsyncDataCacheEntry& entry,
+      const SsdRun& ssdRun);
 
   // Returns true if checksum write is enabled for the given version.
   static bool isChecksumEnabledOnCheckpointVersion(
@@ -463,11 +519,11 @@ class SsdFile {
   // If true, checksum read verification from SSD is enabled.
   const bool checksumReadVerificationEnabled_;
 
+  // Shard index within 'cache_'.
+  const int32_t shardId_;
+
   // Serializes access to all private data members.
   mutable std::shared_mutex mutex_;
-
-  // Shard index within 'cache_'.
-  int32_t shardId_;
 
   // Number of kRegionSize regions in the file.
   int32_t numRegions_{0};

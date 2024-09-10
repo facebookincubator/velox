@@ -272,9 +272,10 @@ class FlatVector final : public SimpleVector<T> {
       const BaseVector* source,
       const folly::Range<const BaseVector::CopyRange*>& ranges) override;
 
-  VectorPtr copyPreserveEncodings() const override {
+  VectorPtr copyPreserveEncodings(
+      velox::memory::MemoryPool* pool = nullptr) const override {
     return std::make_shared<FlatVector<T>>(
-        BaseVector::pool_,
+        pool ? pool : BaseVector::pool_,
         BaseVector::type_,
         AlignedBuffer::copy(BaseVector::pool_, BaseVector::nulls_),
         BaseVector::length_,
@@ -616,13 +617,6 @@ void FlatVector<StringView>::prepareForReuse();
 
 template <typename T>
 using FlatVectorPtr = std::shared_ptr<FlatVector<T>>;
-
-// Error vector uses an opaque flat vector to store std::exception_ptr.
-// Since opaque types are stored as shared_ptr<void>, this ends up being a
-// double pointer in the form of std::shared_ptr<std::exception_ptr>. This is
-// fine since we only need to actually follow the pointer in failure cases.
-using ErrorVector = FlatVector<std::shared_ptr<void>>;
-using ErrorVectorPtr = std::shared_ptr<ErrorVector>;
 
 } // namespace facebook::velox
 

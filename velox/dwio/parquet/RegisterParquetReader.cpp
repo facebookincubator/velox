@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-
 #ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/reader/ParquetReader.h" // @manual
 #endif
 
 namespace facebook::velox::parquet {

@@ -50,6 +50,7 @@ list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
 
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
+include(VeloxUtils)
 
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -68,6 +69,7 @@ option(
   "Build a minimal set of components, including DWIO (file format readers/writers).
    This will override other build options."
   OFF)
+option(VELOX_MONO_LIBRARY "Build single unified library." OFF)
 
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
@@ -94,9 +96,9 @@ option(VELOX_ENABLE_TPCH_CONNECTOR "Build TPC-H connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
-option(VELOX_ENABLE_EXAMPLES
-       "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
-       OFF)
+option(
+  VELOX_ENABLE_EXAMPLES
+  "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically." OFF)
 option(VELOX_ENABLE_SUBSTRAIT "Build Substrait-to-Velox converter." OFF)
 option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
@@ -150,6 +152,7 @@ if(${VELOX_BUILD_TESTING})
   set(VELOX_ENABLE_TPCH_CONNECTOR ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
   set(VELOX_ENABLE_EXAMPLES ON)
+  set(VELOX_ENABLE_PARQUET ON)
 endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})
@@ -209,6 +212,11 @@ if(${VELOX_FORCE_COLORED_OUTPUT})
   endif()
 endif()
 
+if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
+   AND "${CMAKE_CXX_COMPILER_VERSION}" VERSION_GREATER_EQUAL 15)
+  set(CMAKE_EXE_LINKER_FLAGS "-latomic")
+endif()
+
 # At the moment we prefer static linking but by default cmake looks for shared
 # libs first. This will still fallback to shared libs when static ones are not
 # found
@@ -220,15 +228,6 @@ if(VELOX_ENABLE_S3)
   endif()
   find_package(AWSSDK REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
-endif()
-
-if(VELOX_ENABLE_GCS)
-  # Set GCS_ROOT_DIR if you have a custom install location of GCS SDK CPP.
-  if(GCSSDK_ROOT_DIR)
-    list(APPEND CMAKE_PREFIX_PATH ${GCSSDK_ROOT_DIR})
-  endif()
-  find_package(google_cloud_cpp_storage REQUIRED)
-  add_definitions(-DVELOX_ENABLE_GCS)
 endif()
 
 if(VELOX_ENABLE_ABFS)
@@ -442,13 +441,39 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   add_subdirectory(pyvelox)
 endif()
 
+# DWIO (ORC/DWRF) and Substrait depend on protobuf.
+if(${VELOX_BUILD_MINIMAL_WITH_DWIO}
+   OR ${VELOX_ENABLE_HIVE_CONNECTOR}
+   OR ${VELOX_ENABLE_SUBSTRAIT}
+   OR VELOX_ENABLE_GCS)
+
+  # Locate or build protobuf.
+  set_source(Protobuf)
+  resolve_dependency(Protobuf CONFIG 3.21.7 REQUIRED)
+  include_directories(${Protobuf_INCLUDE_DIRS})
+endif()
+
 set_source(simdjson)
-resolve_dependency(simdjson 3.8.0)
+resolve_dependency(simdjson 3.9.3)
 
 # Locate or build folly.
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
+
+if(${VELOX_BUILD_TESTING})
+  # Spark qury runner depends on absl, gRPC.
+  set_source(absl)
+  resolve_dependency(absl)
+
+  # 'gRPC_CARES_PROVIDER' is set as 'package', which means c-ares library needs
+  # to be installed on the system, instead of being built by gRPC.
+  set_source(c-ares)
+  resolve_dependency(c-ares)
+
+  set_source(gRPC)
+  resolve_dependency(gRPC)
+endif()
 
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
@@ -464,14 +489,10 @@ else()
   set(FOLLY_BENCHMARK Folly::follybenchmark)
 endif()
 
-# DWIO (ORC/DWRF) and Substrait depend on protobuf.
-if(${VELOX_BUILD_MINIMAL_WITH_DWIO}
-   OR ${VELOX_ENABLE_HIVE_CONNECTOR}
-   OR ${VELOX_ENABLE_SUBSTRAIT})
-  # Locate or build protobuf.
-  set_source(Protobuf)
-  resolve_dependency(Protobuf 3.21 EXACT)
-  include_directories(${Protobuf_INCLUDE_DIRS})
+if(VELOX_ENABLE_GCS)
+  set_source(google_cloud_cpp_storage)
+  resolve_dependency(google_cloud_cpp_storage CONFIG 2.22.0 REQUIRED)
+  add_definitions(-DVELOX_ENABLE_GCS)
 endif()
 
 # GCC needs to link a library to enable std::filesystem.
@@ -531,14 +552,15 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
 endif()
 find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
+find_package(double-conversion 3.1.5 REQUIRED)
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
 
 # these were previously vendored in third-party/
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  set(gtest_SOURCE AUTO)
-  resolve_dependency(gtest)
+  set(GTest_SOURCE AUTO)
+  resolve_dependency(GTest)
   set(VELOX_GTEST_INCUDE_DIR
       "${gtest_SOURCE_DIR}/googletest/include"
       PARENT_SCOPE)
@@ -567,5 +589,9 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
-add_subdirectory(third_party)
+if(VELOX_ENABLE_ARROW)
+  set_source(Arrow)
+  resolve_dependency(Arrow)
+endif()
+
 add_subdirectory(velox)

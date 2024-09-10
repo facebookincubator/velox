@@ -63,7 +63,6 @@ TEST_F(BinaryFunctionsTest, sha1) {
 
   EXPECT_EQ(hexToDec("DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"), sha1(""));
   EXPECT_EQ(std::nullopt, sha1(std::nullopt));
-
   EXPECT_EQ(hexToDec("86F7E437FAA5A7FCE15D1DDCB9EAEAEA377667B8"), sha1("a"));
   EXPECT_EQ(hexToDec("382758154F5D9F9775B6A9F28B6EDD55773C87E3"), sha1("AB "));
   EXPECT_EQ(hexToDec("B858CB282617FB0956D960215C8E84D1CCF909C6"), sha1(" "));
@@ -174,6 +173,8 @@ TEST_F(BinaryFunctionsTest, HmacSha1) {
     return evaluateOnce<std::string>(
         "hmac_sha1(c0, c1)", {VARBINARY(), VARBINARY()}, arg, key);
   };
+
+  VELOX_ASSERT_THROW(hmacSha1("velox", ""), "Empty key is not allowed");
   // Use python hmac lib results as the expected value.
   // >>> import hmac
   // >>> def sha1(data, key):
@@ -201,9 +202,6 @@ TEST_F(BinaryFunctionsTest, HmacSha1) {
   EXPECT_EQ(
       hexToDec("183054bdaf8c83320fee4376e76ffd7e773a650f"),
       hmacSha1("12345abcde54321", "velox"));
-  EXPECT_EQ(
-      hexToDec("3ec5ea98df0f5ddb139231ecee2c8a9810a82e08"),
-      hmacSha1("velox", ""));
   EXPECT_EQ(std::nullopt, hmacSha1("velox", std::nullopt));
 }
 
@@ -213,6 +211,7 @@ TEST_F(BinaryFunctionsTest, HmacSha256) {
     return evaluateOnce<std::string>(
         "hmac_sha256(c0, c1)", {VARBINARY(), VARBINARY()}, arg, key);
   };
+  VELOX_ASSERT_THROW(hmacSha256("velox", ""), "Empty key is not allowed");
   // Use python hmac lib results as the expected value.
   // >>> import hmac
   // >>> def sha256(data, key):
@@ -244,7 +243,9 @@ TEST_F(BinaryFunctionsTest, HmacSha512) {
     return evaluateOnce<std::string>(
         "hmac_sha512(c0, c1)", {VARBINARY(), VARBINARY()}, arg, key);
   };
+
   // Use the same expected value from TestVarbinaryFunctions of presto java
+  VELOX_ASSERT_THROW(hmacSha512("velox", ""), "Empty key is not allowed");
   EXPECT_EQ(
       hexToDec(
           "84FA5AA0279BBC473267D05A53EA03310A987CECC4C1535FF29B6D76B8F1444A728DF3AADB89D4A9A6709E1998F373566E8F824A8CA93B1821F0B69BC2A2F65E"),
@@ -262,13 +263,16 @@ TEST_F(BinaryFunctionsTest, HmacMd5) {
     return evaluateOnce<std::string>(
         "hmac_md5(c0, c1)", {VARBINARY(), VARBINARY()}, arg, key);
   };
+
   // The result values were obtained from Presto Java hmac_md5 function.
+  VELOX_ASSERT_THROW(hmacMd5("velox", ""), "Empty key is not allowed");
   EXPECT_EQ(
       hexToDec("ff66d72875f01e26fcbe71d973eaf524"), hmacMd5("hashme", "velox"));
   EXPECT_EQ(
       hexToDec("ed706a89f46773b7a478ee5d8f83db86"),
       hmacMd5("Infinity", "velox"));
   EXPECT_EQ(hexToDec("f05e7a0086c6633b496ee411646da51c"), hmacMd5("", "velox"));
+
   EXPECT_EQ(std::nullopt, hmacMd5(std::nullopt, "velox"));
 }
 
@@ -411,7 +415,20 @@ TEST_F(BinaryFunctionsTest, toBase64Url) {
 
 TEST_F(BinaryFunctionsTest, fromBase64) {
   const auto fromBase64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("from_base64(c0)", value);
+    // from_base64 allows VARCHAR and VARBINARY inputs.
+    auto result =
+        evaluateOnce<std::string>("from_base64(c0)", VARCHAR(), value);
+    auto otherResult =
+        evaluateOnce<std::string>("from_base64(c0)", VARBINARY(), value);
+
+    VELOX_CHECK_EQ(result.has_value(), otherResult.has_value());
+
+    if (!result.has_value()) {
+      return result;
+    }
+
+    VELOX_CHECK_EQ(result.value(), otherResult.value());
+    return result;
   };
 
   EXPECT_EQ(std::nullopt, fromBase64(std::nullopt));
@@ -424,8 +441,12 @@ TEST_F(BinaryFunctionsTest, fromBase64) {
       "Hello World from Velox!",
       fromBase64("SGVsbG8gV29ybGQgZnJvbSBWZWxveCE="));
 
-  EXPECT_THROW(fromBase64("YQ="), VeloxUserError);
-  EXPECT_THROW(fromBase64("YQ==="), VeloxUserError);
+  VELOX_ASSERT_USER_THROW(
+      fromBase64("YQ="),
+      "Base64::decode() - invalid input string: string length is not a multiple of 4.");
+  VELOX_ASSERT_USER_THROW(
+      fromBase64("YQ==="),
+      "Base64::decode() - invalid input string: string length is not a multiple of 4.");
 
   // Check encoded strings without padding
   EXPECT_EQ("a", fromBase64("YQ"));
@@ -747,4 +768,67 @@ TEST_F(BinaryFunctionsTest, fromIEEE754Bits32) {
       fromIEEE754Bits32(hexToDec("0000000000000001")),
       "Input floating-point value must be exactly 4 bytes long");
 }
+
+TEST_F(BinaryFunctionsTest, rpad) {
+  const auto rpad = [&](std::optional<StringView> arg,
+                        std::optional<int32_t> size,
+                        std::optional<StringView> key) {
+    return evaluateOnce<std::string, StringView, int32_t, StringView>(
+        "rpad(c0, c1, c2)",
+        {VARBINARY(), INTEGER(), VARBINARY()},
+        {arg},
+        {size},
+        {key});
+  };
+  EXPECT_EQ(rpad("1234", 14, "45"), ("12344545454545"));
+  EXPECT_EQ(
+      rpad("123456789012", 24, "4444555566667777"),
+      ("123456789012444455556666"));
+  EXPECT_EQ(
+      rpad("1234567890", 30, "44445555666677778888"),
+      ("123456789044445555666677778888"));
+  EXPECT_EQ(rpad("1234", 15, "45"), ("123445454545454"));
+  EXPECT_EQ(rpad("1234", 14, "4524"), ("12344524452445"));
+  EXPECT_EQ(rpad("1234", 6, "4524"), ("123445"));
+  EXPECT_EQ(rpad("23", 0, "4524"), (""));
+  EXPECT_EQ(rpad("∆", 2, "˚"), ("∆˚"));
+  EXPECT_EQ(rpad("©", 4, "£"), ("©£££"));
+  EXPECT_EQ(rpad("1234", 2, "4524"), ("12"));
+  EXPECT_EQ(rpad(std::nullopt, 0, std::nullopt), std::nullopt);
+  VELOX_ASSERT_USER_THROW(
+      rpad("2312", -1, "4524"), "pad size must be in the range [0..1048576)");
+  VELOX_ASSERT_USER_THROW(rpad("2312", 1, ""), "padString must not be empty");
+}
+
+TEST_F(BinaryFunctionsTest, lpad) {
+  const auto lpad = [&](std::optional<StringView> arg,
+                        std::optional<int32_t> size,
+                        std::optional<StringView> key) {
+    return evaluateOnce<std::string, StringView, int32_t, StringView>(
+        "lpad(c0, c1, c2)",
+        {VARBINARY(), INTEGER(), VARBINARY()},
+        {arg},
+        {size},
+        {key});
+  };
+  EXPECT_EQ(lpad("1234", 14, "45"), ("45454545451234"));
+  EXPECT_EQ(lpad("1234", 15, "45"), ("454545454541234"));
+  EXPECT_EQ(
+      lpad("123456789012", 24, "4444555566667777"),
+      ("444455556666123456789012"));
+  EXPECT_EQ(
+      lpad("1234567890", 30, "44445555666677778888"),
+      ("444455556666777788881234567890"));
+  EXPECT_EQ(lpad("∆", 2, "˚"), ("˚∆"));
+  EXPECT_EQ(lpad("©", 4, "£"), ("£££©"));
+  EXPECT_EQ(lpad("1234", 14, "4524"), ("45244524451234"));
+  EXPECT_EQ(lpad("1234", 6, "4524"), ("451234"));
+  EXPECT_EQ(lpad("1234", 0, "4524"), (""));
+  EXPECT_EQ(lpad("1234", 2, "4524"), ("12"));
+  EXPECT_EQ(lpad(std::nullopt, 0, std::nullopt), std::nullopt);
+  VELOX_ASSERT_USER_THROW(
+      lpad("2312", -1, "4524"), "pad size must be in the range [0..1048576)");
+  VELOX_ASSERT_USER_THROW(lpad("2312", 1, ""), "padString must not be empty");
+}
+
 } // namespace

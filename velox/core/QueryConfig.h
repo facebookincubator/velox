@@ -15,29 +15,12 @@
  */
 #pragma once
 
-#include "velox/core/Config.h"
+#include "velox/common/config/Config.h"
+#include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::core {
-enum class CapacityUnit {
-  BYTE,
-  KILOBYTE,
-  MEGABYTE,
-  GIGABYTE,
-  TERABYTE,
-  PETABYTE
-};
 
-double toBytesPerCapacityUnit(CapacityUnit unit);
-
-CapacityUnit valueOfCapacityUnit(const std::string& unitStr);
-
-/// Convert capacity string with unit to the capacity number in the specified
-/// units
-uint64_t toCapacity(const std::string& from, CapacityUnit to);
-
-std::chrono::duration<double> toDuration(const std::string& str);
-
-/// A simple wrapper around velox::Config. Defines constants for query
+/// A simple wrapper around velox::ConfigBase. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
 /// Does not allow altering properties on the fly. Only at creation time.
@@ -251,6 +234,11 @@ class QueryConfig {
   static constexpr const char* kSpillWriteBufferSize =
       "spill_write_buffer_size";
 
+  /// Specifies the buffer size in bytes to read from one spilled file. If the
+  /// underlying filesystem supports async read, we do read-ahead with double
+  /// buffering, which doubles the buffer used to read from each spill file.
+  static constexpr const char* kSpillReadBufferSize = "spill_read_buffer_size";
+
   /// Config used to create spill files. This config is provided to underlying
   /// file system and the config is free form. The form should be defined by the
   /// underlying file system.
@@ -283,10 +271,6 @@ class QueryConfig {
   /// If true, array_agg() aggregation function will ignore nulls in the input.
   static constexpr const char* kPrestoArrayAggIgnoreNulls =
       "presto.array_agg.ignore_nulls";
-
-  /// If false, size function returns null for null input.
-  static constexpr const char* kSparkLegacySizeOfNull =
-      "spark.legacy_size_of_null";
 
   // The default number of expected items for the bloomfilter.
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
@@ -354,9 +338,66 @@ class QueryConfig {
   static constexpr const char* kDriverCpuTimeSliceLimitMs =
       "driver_cpu_time_slice_limit_ms";
 
+  /// Maximum number of bytes to use for the normalized key in prefix-sort. Use
+  /// 0 to disable prefix-sort.
+  static constexpr const char* kPrefixSortNormalizedKeyMaxBytes =
+      "prefixsort_normalized_key_max_bytes";
+
+  /// Minimum number of rows to use prefix-sort. The default value has been
+  /// derived using micro-benchmarking.
+  static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
+
+  /// Enable query tracing flag.
+  static constexpr const char* kQueryTraceEnabled = "query_trace_enabled";
+
+  /// Base dir of a query to store tracing data.
+  static constexpr const char* kQueryTraceDir = "query_trace_dir";
+
+  /// A comma-separated list of plan node ids whose input data will be traced.
+  /// Empty string if only want to trace the query metadata.
+  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_ids";
+
+  /// Disable optimization in expression evaluation to peel common dictionary
+  /// layer from inputs.
+  static constexpr const char* kDebugDisableExpressionWithPeeling =
+      "debug_disable_expression_with_peeling";
+
+  /// Disable optimization in expression evaluation to re-use cached results for
+  /// common sub-expressions.
+  static constexpr const char* kDebugDisableCommonSubExpressions =
+      "debug_disable_common_sub_expressions";
+
+  /// Disable optimization in expression evaluation to re-use cached results
+  /// between subsequent input batches that are dictionary encoded and have the
+  /// same alphabet(underlying flat vector).
+  static constexpr const char* kDebugDisableExpressionWithMemoization =
+      "debug_disable_expression_with_memoization";
+
+  /// Disable optimization in expression evaluation to delay loading of lazy
+  /// inputs unless required.
+  static constexpr const char* kDebugDisableExpressionWithLazyInputs =
+      "debug_disable_expression_with_lazy_inputs";
+
+  bool debugDisableExpressionsWithPeeling() const {
+    return get<bool>(kDebugDisableExpressionWithPeeling, false);
+  }
+
+  bool debugDisableCommonSubExpressions() const {
+    return get<bool>(kDebugDisableCommonSubExpressions, false);
+  }
+
+  bool debugDisableExpressionsWithMemoization() const {
+    return get<bool>(kDebugDisableExpressionWithMemoization, false);
+  }
+
+  bool debugDisableExpressionsWithLazyInputs() const {
+    return get<bool>(kDebugDisableExpressionWithLazyInputs, false);
+  }
+
   uint64_t queryMaxMemoryPerNode() const {
-    return toCapacity(
-        get<std::string>(kQueryMaxMemoryPerNode, "0B"), CapacityUnit::BYTE);
+    return config::toCapacity(
+        get<std::string>(kQueryMaxMemoryPerNode, "0B"),
+        config::CapacityUnit::BYTE);
   }
 
   uint64_t maxPartialAggregationMemoryUsage() const {
@@ -436,12 +477,17 @@ class QueryConfig {
     return get<uint64_t>(kPreferredOutputBatchBytes, kDefault);
   }
 
-  uint32_t preferredOutputBatchRows() const {
-    return get<uint32_t>(kPreferredOutputBatchRows, 1024);
+  vector_size_t preferredOutputBatchRows() const {
+    const uint32_t batchRows = get<uint32_t>(kPreferredOutputBatchRows, 1024);
+    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
+    return batchRows;
   }
 
-  uint32_t maxOutputBatchRows() const {
-    return get<uint32_t>(kMaxOutputBatchRows, 10'000);
+  vector_size_t maxOutputBatchRows() const {
+    const uint32_t maxBatchRows = get<uint32_t>(kMaxOutputBatchRows, 10'000);
+    VELOX_USER_CHECK_LE(
+        maxBatchRows, std::numeric_limits<vector_size_t>::max());
+    return maxBatchRows;
   }
 
   uint32_t tableScanGetOutputTimeLimitMs() const {
@@ -588,6 +634,11 @@ class QueryConfig {
     return get<uint64_t>(kSpillWriteBufferSize, 1L << 20);
   }
 
+  uint64_t spillReadBufferSize() const {
+    // The default read buffer size set to 1MB.
+    return get<uint64_t>(kSpillReadBufferSize, 1L << 20);
+  }
+
   std::string spillFileCreateConfig() const {
     return get<std::string>(kSpillFileCreateConfig, "");
   }
@@ -613,9 +664,19 @@ class QueryConfig {
     return get<int32_t>(kSpillableReservationGrowthPct, kDefaultPct);
   }
 
-  bool sparkLegacySizeOfNull() const {
-    constexpr bool kDefault{true};
-    return get<bool>(kSparkLegacySizeOfNull, kDefault);
+  /// Returns true if query tracing is enabled.
+  bool queryTraceEnabled() const {
+    return get<bool>(kQueryTraceEnabled, false);
+  }
+
+  std::string queryTraceDir() const {
+    // The default query trace dir, empty by default.
+    return get<std::string>(kQueryTraceDir, "");
+  }
+
+  std::string queryTraceNodeIds() const {
+    // The default query trace nodes, empty by default.
+    return get<std::string>(kQueryTraceNodeIds, "");
   }
 
   bool prestoArrayAggIgnoreNulls() const {
@@ -671,7 +732,7 @@ class QueryConfig {
   }
 
   bool hashProbeFinishEarlyOnEmptyBuild() const {
-    return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, true);
+    return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, false);
   }
 
   uint32_t minTableRowsForParallelJoinBuild() const {
@@ -710,6 +771,14 @@ class QueryConfig {
     return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
   }
 
+  int64_t prefixSortNormalizedKeyMaxBytes() const {
+    return get<int64_t>(kPrefixSortNormalizedKeyMaxBytes, 128);
+  }
+
+  int32_t prefixSortMinRows() const {
+    return get<int32_t>(kPrefixSortMinRows, 130);
+  }
+
   template <typename T>
   T get(const std::string& key, const T& defaultValue) const {
     return config_->get<T>(key, defaultValue);
@@ -724,7 +793,11 @@ class QueryConfig {
   void testingOverrideConfigUnsafe(
       std::unordered_map<std::string, std::string>&& values);
 
+  std::unordered_map<std::string, std::string> rawConfigsCopy() const;
+
  private:
-  std::unique_ptr<velox::Config> config_;
+  void validateConfig();
+
+  std::unique_ptr<velox::config::ConfigBase> config_;
 };
 } // namespace facebook::velox::core

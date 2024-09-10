@@ -19,6 +19,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Split.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/InputGenerator.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/exec/fuzzer/ResultVerifier.h"
@@ -62,20 +63,25 @@ class AggregationFuzzerBase {
           customInputGenerators,
       VectorFuzzer::Options::TimestampPrecision timestampPrecision,
       const std::unordered_map<std::string, std::string>& queryConfigs,
+      const std::unordered_map<std::string, std::string>& hiveConfigs,
+      bool orderableGroupKeys,
       std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
       : customVerificationFunctions_{customVerificationFunctions},
         customInputGenerators_{customInputGenerators},
         queryConfigs_{queryConfigs},
+        orderableGroupKeys_{orderableGroupKeys},
         persistAndRunOnce_{FLAGS_persist_and_run_once},
         reproPersistPath_{FLAGS_repro_persist_path},
         referenceQueryRunner_{std::move(referenceQueryRunner)},
         vectorFuzzer_{getFuzzerOptions(timestampPrecision), pool_.get()} {
     filesystems::registerLocalFileSystem();
+    auto configs = hiveConfigs;
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                kHiveConnectorId, std::make_shared<core::MemConfig>());
+                kHiveConnectorId,
+                std::make_shared<config::ConfigBase>(std::move(configs)));
     connector::registerConnector(hiveConnector);
 
     seed(initialSeed);
@@ -101,15 +107,7 @@ class AggregationFuzzerBase {
     size_t numFailed{0};
   };
 
-  enum ReferenceQueryErrorCode {
-    kSuccess,
-    kReferenceQueryFail,
-    kReferenceQueryUnsupported
-  };
-
  protected:
-  static inline const std::string kHiveConnectorId = "test-hive";
-
   struct Stats {
     // Names of functions that were tested.
     std::unordered_set<std::string> functionNames;
@@ -137,8 +135,7 @@ class AggregationFuzzerBase {
 
     void print(size_t numIterations) const;
 
-    void updateReferenceQueryStats(
-        AggregationFuzzerBase::ReferenceQueryErrorCode errorCode);
+    void updateReferenceQueryStats(ReferenceQueryErrorCode errorCode);
   };
 
   int32_t randInt(int32_t min, int32_t max);
@@ -152,12 +149,6 @@ class AggregationFuzzerBase {
 
   std::shared_ptr<InputGenerator> findInputGenerator(
       const CallableSignature& signature);
-
-  static exec::Split makeSplit(const std::string& filePath);
-
-  std::vector<exec::Split> makeSplits(
-      const std::vector<RowVectorPtr>& inputs,
-      const std::string& path);
 
   PlanWithSplits deserialize(const folly::dynamic& obj);
 
@@ -212,12 +203,8 @@ class AggregationFuzzerBase {
   std::vector<RowVectorPtr> generateInputDataWithRowNumber(
       std::vector<std::string> names,
       std::vector<TypePtr> types,
+      const std::vector<std::string>& partitionKeys,
       const CallableSignature& signature);
-
-  std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
-  computeReferenceResults(
-      const core::PlanNodePtr& plan,
-      const std::vector<RowVectorPtr>& input);
 
   velox::fuzzer::ResultOrError execute(
       const core::PlanNodePtr& plan,
@@ -225,15 +212,6 @@ class AggregationFuzzerBase {
       bool injectSpill = false,
       bool abandonPartial = false,
       int32_t maxDrivers = 2);
-
-  // Will throw if referenceQueryRunner doesn't support
-  // returning results as a vector.
-  std::pair<
-      std::optional<std::vector<RowVectorPtr>>,
-      AggregationFuzzerBase::ReferenceQueryErrorCode>
-  computeReferenceResultsAsVector(
-      const core::PlanNodePtr& plan,
-      const std::vector<RowVectorPtr>& input);
 
   void compare(
       const velox::fuzzer::ResultOrError& actual,
@@ -263,11 +241,16 @@ class AggregationFuzzerBase {
 
   void printSignatureStats();
 
+  void logVectors(const std::vector<RowVectorPtr>& vectors);
+
   const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>
       customVerificationFunctions_;
   const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>
       customInputGenerators_;
   const std::unordered_map<std::string, std::string> queryConfigs_;
+
+  // Whether group keys must be orderable or be just comparable.
+  bool orderableGroupKeys_;
   const bool persistAndRunOnce_;
   const std::string reproPersistPath_;
 
@@ -288,6 +271,8 @@ class AggregationFuzzerBase {
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
   std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
+  std::shared_ptr<memory::MemoryPool> writerPool_{
+      rootPool_->addAggregateChild("aggregationFuzzerWriter")};
   VectorFuzzer vectorFuzzer_;
 };
 
@@ -303,10 +288,6 @@ bool isDone(size_t i, T startTime) {
   }
   return i >= FLAGS_steps;
 }
-
-// Returns whether type is supported in TableScan. Empty Row type and Unknown
-// type are not supported.
-bool isTableScanSupported(const TypePtr& type);
 
 // Prints statistics about supported and unsupported function signatures.
 void printStats(const AggregationFuzzerBase::FunctionsStats& stats);
@@ -334,6 +315,7 @@ void persistReproInfo(
 // returns a DuckQueryRunner instance and set disabled aggregation functions
 // properly.
 std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
+    memory::MemoryPool* aggregatePool,
     const std::string& prestoUrl,
     const std::string& runnerName,
     const uint32_t& reqTimeoutMs);

@@ -15,14 +15,35 @@
  */
 #pragma once
 
+#include <set>
 #include "velox/core/PlanNode.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec::test {
 
 /// Query runner that uses reference database, i.e. DuckDB, Presto, Spark.
 class ReferenceQueryRunner {
  public:
+  enum class RunnerType {
+    kPrestoQueryRunner,
+    kDuckQueryRunner,
+    kSparkQueryRunner
+  };
+
+  // @param aggregatePool Used to allocate memory needed for vectors produced by
+  // 'execute' methods.
+  explicit ReferenceQueryRunner(memory::MemoryPool* aggregatePool)
+      : aggregatePool_(aggregatePool) {}
+
   virtual ~ReferenceQueryRunner() = default;
+
+  virtual RunnerType runnerType() const = 0;
+
+  // Scalar types supported by the reference database, to be used to restrict
+  // candidates when generating random types for fuzzers.
+  virtual const std::vector<TypePtr>& supportedScalarTypes() const {
+    return defaultScalarTypes();
+  }
 
   /// Converts Velox plan into SQL accepted by the reference database.
   /// @return std::nullopt if the plan uses features not supported by the
@@ -34,6 +55,15 @@ class ReferenceQueryRunner {
   virtual std::multiset<std::vector<velox::variant>> execute(
       const std::string& sql,
       const std::vector<RowVectorPtr>& input,
+      const RowTypePtr& resultType) = 0;
+
+  /// Executes SQL query returned by the 'toSql' method using 'probeInput' and
+  /// 'buildInput' data for join node.
+  /// Converts results using 'resultType' schema.
+  virtual std::multiset<std::vector<velox::variant>> execute(
+      const std::string& sql,
+      const std::vector<RowVectorPtr>& probeInput,
+      const std::vector<RowVectorPtr>& buildInput,
       const RowTypePtr& resultType) = 0;
 
   /// Returns true if 'executeVector' can be called to get results as Velox
@@ -51,9 +81,32 @@ class ReferenceQueryRunner {
     VELOX_UNSUPPORTED();
   }
 
+  /// Similar to above but for join node with 'probeInput' and 'buildInput'.
+  virtual std::vector<RowVectorPtr> executeVector(
+      const std::string& sql,
+      const std::vector<RowVectorPtr>& probeInput,
+      const std::vector<RowVectorPtr>& buildInput,
+      const RowTypePtr& resultType) {
+    VELOX_UNSUPPORTED();
+  }
+
   virtual std::vector<velox::RowVectorPtr> execute(const std::string& sql) {
     VELOX_UNSUPPORTED();
   }
+
+  virtual std::vector<velox::RowVectorPtr> execute(
+      const std::string& sql,
+      const std::string& sessionProperty) {
+    VELOX_UNSUPPORTED();
+  }
+
+ protected:
+  memory::MemoryPool* aggregatePool() {
+    return aggregatePool_;
+  }
+
+ private:
+  memory::MemoryPool* aggregatePool_;
 };
 
 } // namespace facebook::velox::exec::test

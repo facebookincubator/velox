@@ -216,6 +216,20 @@ TEST(TypeTest, intervalYearMonth) {
   testTypeSerde(interval);
 }
 
+TEST(TypeTest, unknown) {
+  auto type = UNKNOWN();
+  EXPECT_EQ(type->toString(), "UNKNOWN");
+  EXPECT_EQ(type->size(), 0);
+  EXPECT_THROW(type->childAt(0), std::invalid_argument);
+  EXPECT_EQ(type->kind(), TypeKind::UNKNOWN);
+  EXPECT_STREQ(type->kindName(), "UNKNOWN");
+  EXPECT_EQ(type->begin(), type->end());
+  EXPECT_TRUE(type->isComparable());
+  EXPECT_TRUE(type->isOrderable());
+
+  testTypeSerde(type);
+}
+
 TEST(TypeTest, shortDecimal) {
   auto shortDecimal = DECIMAL(10, 5);
   EXPECT_EQ(shortDecimal->toString(), "DECIMAL(10, 5)");
@@ -459,6 +473,33 @@ TEST(TypeTest, row) {
 TEST(TypeTest, emptyRow) {
   auto row = ROW({});
   testTypeSerde(row);
+}
+
+TEST(TypeTest, rowParametersMultiThreaded) {
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  for (int i = 0; i < 20'000; ++i) {
+    auto name = fmt::format("c{}", i);
+    names.push_back(name);
+    types.push_back(ROW({name}, {BIGINT()}));
+  }
+  auto type = ROW(std::move(names), std::move(types));
+  constexpr int kNumThreads = 72;
+  const std::vector<TypeParameter>* parameters[kNumThreads];
+  std::vector<std::thread> threads;
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i] { parameters[i] = &type->parameters(); });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  for (int i = 1; i < kNumThreads; ++i) {
+    ASSERT_TRUE(parameters[i] == parameters[0]);
+  }
+  ASSERT_EQ(parameters[0]->size(), type->size());
+  for (int i = 0; i < parameters[0]->size(); ++i) {
+    ASSERT_TRUE((*parameters[0])[i].type.get() == type->childAt(i).get());
+  }
 }
 
 class Foo {};
@@ -793,7 +834,7 @@ TEST(TypeTest, follySformat) {
           "{}", ROW({{"a", BOOLEAN()}, {"b", VARCHAR()}, {"c", BIGINT()}})));
 }
 
-TEST(TypeTest, unknown) {
+TEST(TypeTest, unknownArray) {
   auto unknownArray = ARRAY(UNKNOWN());
   EXPECT_TRUE(unknownArray->containsUnknown());
 

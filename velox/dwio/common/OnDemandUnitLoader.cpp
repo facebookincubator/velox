@@ -40,15 +40,15 @@ class OnDemandUnitLoader : public UnitLoader {
   ~OnDemandUnitLoader() override = default;
 
   LoadUnit& getLoadedUnit(uint32_t unit) override {
-    VELOX_CHECK(unit < loadUnits_.size(), "Unit out of range");
+    VELOX_CHECK_LT(unit, loadUnits_.size(), "Unit out of range");
 
-    if (loadedUnit_) {
-      if (*loadedUnit_ == unit) {
+    if (loadedUnit_.has_value()) {
+      if (loadedUnit_.value() == unit) {
         return *loadUnits_[unit];
-      } else {
-        loadUnits_[*loadedUnit_]->unload();
-        loadedUnit_.reset();
       }
+
+      loadUnits_[*loadedUnit_]->unload();
+      loadedUnit_.reset();
     }
 
     {
@@ -74,8 +74,8 @@ class OnDemandUnitLoader : public UnitLoader {
   }
 
  private:
-  std::vector<std::unique_ptr<LoadUnit>> loadUnits_;
-  std::function<void(std::chrono::high_resolution_clock::duration)>
+  const std::vector<std::unique_ptr<LoadUnit>> loadUnits_;
+  const std::function<void(std::chrono::high_resolution_clock::duration)>
       blockedOnIoCallback_;
   std::optional<uint32_t> loadedUnit_;
 };

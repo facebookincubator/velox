@@ -21,10 +21,15 @@ target_link_libraries(
   velox_vector_test_lib
   velox_exec_test_lib
   velox_aggregates
-  gtest
-  gtest_main)
+  GTest::gtest
+  GTest::gtest_main)
 
 add_executable(velox_tpch_speed_test SpeedTest.cpp)
 
-target_link_libraries(velox_tpch_speed_test velox_tpch_connector velox_exec
-                      velox_exec_test_lib velox_memory fmt::fmt)
+target_link_libraries(
+  velox_tpch_speed_test
+  velox_tpch_connector
+  velox_exec
+  velox_exec_test_lib
+  velox_memory
+  fmt::fmt)

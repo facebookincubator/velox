@@ -27,13 +27,28 @@ namespace facebook::velox::dwrf {
 class ColumnReader;
 class DwrfUnit;
 
+class DwrfOptions : public dwio::common::FormatSpecificOptions {
+ public:
+  void setColumnReaderFactory(
+      std::shared_ptr<ColumnReaderFactory> columnReaderFactory) {
+    columnReaderFactory_ = std::move(columnReaderFactory);
+  }
+
+  const std::shared_ptr<ColumnReaderFactory>& columnReaderFactory() const {
+    return columnReaderFactory_;
+  }
+
+ private:
+  std::shared_ptr<ColumnReaderFactory> columnReaderFactory_;
+};
+
 class DwrfRowReader : public StrideIndexProvider,
                       public StripeReaderBase,
                       public dwio::common::RowReader {
  public:
   /**
    * Constructor that lets the user specify additional options.
-   * @param contents of the file
+   * @param reader contents of the file
    * @param options options for reading
    */
   DwrfRowReader(
@@ -52,11 +67,11 @@ class DwrfRowReader : public StrideIndexProvider,
     return columnSelector_;
   }
 
-  const dwio::common::RowReaderOptions& getRowReaderOptions() const {
+  const dwio::common::RowReaderOptions& rowReaderOptions() const {
     return options_;
   }
 
-  std::shared_ptr<const dwio::common::TypeWithId> getSelectedType() const {
+  std::shared_ptr<const dwio::common::TypeWithId> selectedType() const {
     if (!selectedSchema_) {
       selectedSchema_ = columnSelector_->buildSelected();
     }
@@ -64,7 +79,7 @@ class DwrfRowReader : public StrideIndexProvider,
     return selectedSchema_;
   }
 
-  uint64_t getRowNumber() const {
+  uint64_t rowNumber() const {
     return previousRow_;
   }
 
@@ -72,7 +87,7 @@ class DwrfRowReader : public StrideIndexProvider,
 
   uint64_t skipRows(uint64_t numberOfRowsToSkip);
 
-  uint32_t getCurrentStripe() const {
+  uint32_t currentStripe() const {
     return currentStripe_;
   }
 
@@ -80,13 +95,13 @@ class DwrfRowReader : public StrideIndexProvider,
     return strideIndex_;
   }
 
-  // Estimate the space used by the reader
+  /// Estimates the space used by the reader
   size_t estimatedReaderMemory() const;
 
-  // Estimate the row size for projected columns
+  /// Estimates the row size for projected columns
   std::optional<size_t> estimatedRowSize() const override;
 
-  // Returns number of rows read. Guaranteed to be less then or equal to size.
+  /// Returns number of rows read. Guaranteed to be less then or equal to size.
   uint64_t next(
       uint64_t size,
       VectorPtr& result,
@@ -124,60 +139,23 @@ class DwrfRowReader : public StrideIndexProvider,
 
   int64_t nextReadSize(uint64_t size) override;
 
+  std::shared_ptr<const RowType> type() const {
+    if (columnSelector_) {
+      return columnSelector_->getSchema();
+    }
+    return options_.requestedType();
+  }
+
  private:
-  // footer
-  std::vector<uint64_t> firstRowOfStripe_;
-  mutable std::shared_ptr<const dwio::common::TypeWithId> selectedSchema_;
-
-  // reading state
-  uint64_t previousRow_;
-  uint32_t firstStripe_;
-  uint32_t currentStripe_;
-  // The the stripe AFTER the last one that should be read. e.g. if the highest
-  // stripe in the RowReader's bounds is 3, then stripeCeiling_ is 4.
-  uint32_t stripeCeiling_;
-  uint64_t currentRowInStripe_;
-  uint64_t rowsInCurrentStripe_;
-  uint64_t strideIndex_;
-  dwio::common::RowReaderOptions options_;
-  std::function<void(std::chrono::high_resolution_clock::duration)>
-      decodingTimeCallback_;
-
-  // column selector
-  std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
-
-  const uint64_t* stridesToSkip_;
-  int stridesToSkipSize_;
-  // Record of strides to skip in each visited stripe. Used for diagnostics.
-  std::unordered_map<uint32_t, std::vector<uint64_t>> stripeStridesToSkip_;
-  // Number of skipped strides.
-  int64_t skippedStrides_{0};
-
-  // Set to true after clearing filter caches, i.e. adding a dynamic
-  // filter. Causes filters to be re-evaluated against stride stats on
-  // next stride instead of next stripe.
-  bool recomputeStridesToSkip_{false};
-
-  dwio::common::ColumnReaderStatistics columnReaderStatistics_;
-
-  std::optional<int64_t> nextRowNumber_;
-
-  std::unique_ptr<dwio::common::UnitLoader> unitLoader_;
-  DwrfUnit* currentUnit_;
-
-  // internal methods
+  bool shouldReadNode(uint32_t nodeId) const;
 
   std::optional<size_t> estimatedRowSizeHelper(
       const FooterWrapper& fileFooter,
       const dwio::common::Statistics& stats,
       uint32_t nodeId) const;
 
-  std::shared_ptr<const RowType> getType() const {
-    return columnSelector_->getSchema();
-  }
-
   bool isEmptyFile() const {
-    return (stripeCeiling_ == firstStripe_);
+    return stripeCeiling_ == firstStripe_;
   }
 
   void checkSkipStrides(uint64_t strideSize);
@@ -195,6 +173,48 @@ class DwrfRowReader : public StrideIndexProvider,
   getSelectiveColumnReader();
 
   std::unique_ptr<dwio::common::UnitLoader> getUnitLoader();
+
+  const dwio::common::RowReaderOptions options_;
+  // column selector
+  const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
+  const std::function<void(std::chrono::high_resolution_clock::duration)>
+      decodingTimeCallback_;
+
+  // footer
+  std::vector<uint64_t> firstRowOfStripe_;
+  mutable std::shared_ptr<const dwio::common::TypeWithId> selectedSchema_;
+
+  // reading state
+  uint64_t previousRow_;
+  uint32_t firstStripe_;
+  uint32_t currentStripe_;
+  // The the stripe AFTER the last one that should be read. e.g. if the highest
+  // stripe in the RowReader's bounds is 3, then stripeCeiling_ is 4.
+  uint32_t stripeCeiling_;
+  uint64_t currentRowInStripe_;
+  uint64_t rowsInCurrentStripe_;
+  uint64_t strideIndex_;
+
+  std::shared_ptr<BitSet> projectedNodes_;
+
+  const uint64_t* stridesToSkip_;
+  int stridesToSkipSize_;
+  // Record of strides to skip in each visited stripe. Used for diagnostics.
+  std::unordered_map<uint32_t, std::vector<uint64_t>> stripeStridesToSkip_;
+  // Number of skipped strides.
+  int64_t skippedStrides_{0};
+
+  // Set to true after clearing filter caches, i.e. adding a dynamic filter.
+  // Causes filters to be re-evaluated against stride stats on next stride
+  // instead of next stripe.
+  bool recomputeStridesToSkip_{false};
+
+  dwio::common::ColumnReaderStatistics columnReaderStatistics_;
+
+  std::optional<int64_t> nextRowNumber_;
+
+  std::unique_ptr<dwio::common::UnitLoader> unitLoader_;
+  DwrfUnit* currentUnit_;
 };
 
 class DwrfReader : public dwio::common::Reader {
@@ -209,15 +229,15 @@ class DwrfReader : public dwio::common::Reader {
   ~DwrfReader() override = default;
 
   common::CompressionKind getCompression() const {
-    return readerBase_->getCompressionKind();
+    return readerBase_->compressionKind();
   }
 
   WriterVersion getWriterVersion() const {
-    return readerBase_->getWriterVersion();
+    return readerBase_->writerVersion();
   }
 
   const std::string& getWriterName() const {
-    return readerBase_->getWriterName();
+    return readerBase_->writerName();
   }
 
   std::vector<std::string> getMetadataKeys() const;
@@ -227,54 +247,54 @@ class DwrfReader : public dwio::common::Reader {
   bool hasMetadataValue(const std::string& key) const;
 
   uint64_t getCompressionBlockSize() const {
-    return readerBase_->getCompressionBlockSize();
+    return readerBase_->compressionBlockSize();
   }
 
   uint32_t getNumberOfStripes() const {
-    return readerBase_->getFooter().stripesSize();
+    return readerBase_->footer().stripesSize();
   }
 
   std::vector<uint64_t> getRowsPerStripe() const {
-    return readerBase_->getRowsPerStripe();
+    return readerBase_->rowsPerStripe();
   }
   uint32_t strideSize() const {
-    return readerBase_->getFooter().rowIndexStride();
+    return readerBase_->footer().rowIndexStride();
   }
 
   std::unique_ptr<StripeInformation> getStripe(uint32_t) const;
 
   uint64_t getFileLength() const {
-    return readerBase_->getFileLength();
+    return readerBase_->fileLength();
   }
 
   std::unique_ptr<dwio::common::Statistics> getStatistics() const {
-    return readerBase_->getStatistics();
+    return readerBase_->statistics();
   }
 
   std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
       uint32_t nodeId) const override {
-    return readerBase_->getColumnStatistics(nodeId);
+    return readerBase_->columnStatistics(nodeId);
   }
 
   const std::shared_ptr<const RowType>& rowType() const override {
-    return readerBase_->getSchema();
+    return readerBase_->schema();
   }
 
   const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
       const override {
-    return readerBase_->getSchemaWithId();
+    return readerBase_->schemaWithId();
   }
 
   const PostScript& getPostscript() const {
-    return readerBase_->getPostScript();
+    return readerBase_->postScript();
   }
 
   const FooterWrapper& getFooter() const {
-    return readerBase_->getFooter();
+    return readerBase_->footer();
   }
 
   std::optional<uint64_t> numberOfRows() const override {
-    auto& fileFooter = readerBase_->getFooter();
+    auto& fileFooter = readerBase_->footer();
     if (fileFooter.hasNumberOfRows()) {
       return fileFooter.numberOfRows();
     }
@@ -308,7 +328,7 @@ class DwrfReader : public dwio::common::Reader {
 
   /**
    * Create a reader to the for the dwrf file.
-   * @param stream the stream to read
+   * @param input the stream to read
    * @param options the options for reading the file
    */
   static std::unique_ptr<DwrfReader> create(
@@ -339,9 +359,5 @@ class DwrfReaderFactory : public dwio::common::ReaderFactory {
     return DwrfReader::create(std::move(input), options);
   }
 };
-
-void registerDwrfReaderFactory();
-
-void unregisterDwrfReaderFactory();
 
 } // namespace facebook::velox::dwrf

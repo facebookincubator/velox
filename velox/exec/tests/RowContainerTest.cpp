@@ -261,7 +261,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     for (auto row : rows) {
       sum += data.rowSize(row) - data.fixedRowSize();
     }
-    auto usage = data.stringAllocator().cumulativeBytes();
+    auto usage = data.stringAllocator().currentBytes();
     EXPECT_EQ(usage, sum);
   }
 
@@ -1230,6 +1230,53 @@ TEST_F(RowContainerTest, rowSize) {
   EXPECT_EQ(rows, rowsFromContainer);
 }
 
+TEST_F(RowContainerTest, columnSize) {
+  const uint64_t kNumRows = 1000;
+  auto rowContainer =
+      makeRowContainer({BIGINT(), VARCHAR()}, {BIGINT(), VARCHAR()});
+
+  VectorFuzzer fuzzer(
+      {
+          .vectorSize = kNumRows,
+          .stringLength = 100,
+          .stringVariableLength = true,
+      },
+      pool());
+
+  auto rowVector =
+      fuzzer.fuzzInputFlatRow(ROW({BIGINT(), VARCHAR(), BIGINT(), VARCHAR()}));
+
+  std::vector<char*> rows;
+  rows.reserve(kNumRows);
+
+  ASSERT_EQ(rowContainer->numRows(), 0);
+  SelectivityVector allRows(kNumRows);
+  DecodedVector decodedKey1(*rowVector->childAt(0), allRows);
+  DecodedVector decodedKey2(*rowVector->childAt(1), allRows);
+  DecodedVector decodedDep1(*rowVector->childAt(2), allRows);
+  DecodedVector decodedDep2(*rowVector->childAt(3), allRows);
+  for (size_t i = 0; i < kNumRows; i++) {
+    auto row = rowContainer->newRow();
+    rowContainer->store(decodedKey1, i, row, 0);
+    rowContainer->store(decodedKey2, i, row, 1);
+    rowContainer->store(decodedDep1, i, row, 2);
+    rowContainer->store(decodedDep2, i, row, 3);
+    rows.push_back(row);
+  }
+  ASSERT_EQ(rowContainer->fixedSizeAt(0), 8);
+  ASSERT_EQ(rowContainer->fixedSizeAt(2), 8);
+  const auto key2Vector = rowVector->childAt(1)->asFlatVector<StringView>();
+  const auto dep2Vector = rowVector->childAt(3)->asFlatVector<StringView>();
+  for (size_t i = 0; i < kNumRows; i++) {
+    ASSERT_EQ(
+        rowContainer->variableSizeAt(rows[i], 1),
+        key2Vector->valueAt(i).size());
+    ASSERT_EQ(
+        rowContainer->variableSizeAt(rows[i], 3),
+        dep2Vector->valueAt(i).size());
+  }
+}
+
 TEST_F(RowContainerTest, rowSizeWithNormalizedKey) {
   auto data = makeRowContainer({SMALLINT()}, {VARCHAR()});
   data->newRow();
@@ -1690,6 +1737,45 @@ TEST_F(RowContainerTest, unknown) {
       }));
 }
 
+TEST_F(RowContainerTest, nans) {
+  const static auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  const static auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+  static const auto kNaNHash = folly::hasher<double>{}(kNaN);
+  std::vector<TypePtr> types = {DOUBLE()};
+  auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
+
+  auto data = makeRowVector({
+      makeFlatVector<double>({kNaN, kSNaN}),
+  });
+
+  auto size = data->size();
+  DecodedVector decoded(*data->childAt(0));
+  auto rows = store(*rowContainer, decoded, size);
+
+  // Verify that the hashes are equal.
+  std::vector<uint64_t> hashes(size, 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), false /*mix*/, hashes.data());
+  for (auto hash : hashes) {
+    ASSERT_EQ(kNaNHash, hash);
+  }
+
+  // Fill in hashes with sequential numbers: 0, 1, 2,..
+  std::iota(hashes.begin(), hashes.end(), 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), true /*mix*/, hashes.data());
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_EQ(bits::hashMix(i, kNaNHash), hashes[i]);
+  }
+
+  // Verify that they are considered equal.
+  for (size_t row = 0; row < size; ++row) {
+    ASSERT_TRUE(rowContainer->equals<false>(
+        rows[row], rowContainer->columnAt(0), decoded, row));
+  }
+  ASSERT_EQ(rowContainer->compare(rows[0], rows[1], 0, {}), 0);
+}
+
 TEST_F(RowContainerTest, toString) {
   std::vector<TypePtr> keyTypes = {BIGINT(), VARCHAR()};
   std::vector<TypePtr> dependentTypes = {TINYINT(), REAL(), ARRAY(BIGINT())};
@@ -1928,4 +2014,105 @@ TEST_F(RowContainerTest, nextRowVector) {
       "All rows with the same keys must be present in 'rows'");
 
   dataClear();
+}
+
+TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
+  constexpr int32_t kNumRows = 100;
+  constexpr int32_t kColumnIndex = 0;
+
+  // wrap dictionary vector
+  std::vector<int128_t> rawData;
+  for (auto i = 0; i < kNumRows; ++i) {
+    rawData.push_back(HugeInt::build(i, i));
+  }
+  auto hugeIntVector = makeFlatVector<int128_t>(rawData);
+
+  auto isNullAt = [](vector_size_t i) { return i % 10 == 0; };
+
+  BufferPtr dictNulls = allocateNulls(kNumRows, pool());
+  auto rawDictNulls = dictNulls->asMutable<uint64_t>();
+  for (auto i = 0; i < kNumRows; ++i) {
+    bits::setNull(rawDictNulls, i, isNullAt(i));
+  }
+
+  BufferPtr dictIndices =
+      AlignedBuffer::allocate<vector_size_t>(kNumRows, pool());
+  auto rawDictIndices = dictIndices->asMutable<vector_size_t>();
+  for (auto i = 0; i < kNumRows; ++i) {
+    if (!isNullAt(i)) {
+      rawDictIndices[i] = i;
+    }
+    // indices of null indexes contain garbage values
+  }
+
+  auto source = BaseVector::wrapInDictionary(
+      dictNulls, dictIndices, kNumRows, hugeIntVector);
+
+  std::vector<TypePtr> keys;
+  auto data = makeRowContainer({HUGEINT()}, {}, false);
+  std::vector<char*> rows(kNumRows);
+  for (auto i = 0; i < kNumRows; ++i) {
+    rows[i] = data->newRow();
+  }
+  SelectivityVector allRows(kNumRows);
+  DecodedVector decoded(*source, allRows);
+  for (auto i = 0; i < kNumRows; ++i) {
+    data->store(decoded, i, rows[i], kColumnIndex);
+  }
+  auto extracted = BaseVector::copy(*source);
+  data->extractColumn(rows.data(), kNumRows, kColumnIndex, extracted);
+  assertEqualVectors(source, extracted);
+}
+
+TEST_F(RowContainerTest, columnHasNulls) {
+  auto rowContainer =
+      makeRowContainer({BIGINT(), BIGINT()}, {BIGINT(), BIGINT()}, false);
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    ASSERT_TRUE(!rowContainer->columnHasNulls(i));
+  }
+
+  const uint64_t kNumRows = 1000;
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 5; }),
+       makeFlatVector<int64_t>(
+           kNumRows, [](auto row) { return row % 5; }, nullEvery(3)),
+       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 7; }),
+       makeFlatVector<int64_t>(
+           kNumRows, [](auto row) { return row % 7; }, nullEvery(999))});
+
+  std::vector<char*> rows;
+  rows.reserve(kNumRows);
+
+  ASSERT_EQ(rowContainer->numRows(), 0);
+  SelectivityVector allRows(kNumRows);
+  for (size_t i = 0; i < kNumRows; i++) {
+    auto row = rowContainer->newRow();
+    rows.push_back(row);
+  }
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    DecodedVector decoded(*rowVector->childAt(i), allRows);
+    for (int j = 0; j < kNumRows; ++j) {
+      char* row = rows[i];
+      rowContainer->store(decoded, j, row, i);
+    }
+  }
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    if (i % 2 == 0) {
+      ASSERT_TRUE(!rowContainer->columnHasNulls(i));
+    } else {
+      ASSERT_TRUE(rowContainer->columnHasNulls(i));
+    }
+  }
+  // If the column's mayHaveNulls is false, the extracted vector's mayHaveNulls
+  // should be false.
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    auto vector =
+        BaseVector::create(rowVector->childAt(i)->type(), kNumRows, pool());
+    rowContainer->extractColumn(rows.data(), kNumRows, i, vector);
+    if (i % 2 == 0) {
+      ASSERT_TRUE(!vector->mayHaveNulls());
+    } else {
+      ASSERT_TRUE(vector->mayHaveNulls());
+    }
+  }
 }

@@ -97,6 +97,7 @@ class IoStatistics {
   uint64_t inputBatchSize() const;
   uint64_t outputBatchSize() const;
   uint64_t totalScanTime() const;
+  uint64_t writeIOTimeUs() const;
 
   uint64_t incRawBytesRead(int64_t);
   uint64_t incRawOverreadBytes(int64_t);
@@ -104,6 +105,7 @@ class IoStatistics {
   uint64_t incInputBatchSize(int64_t);
   uint64_t incOutputBatchSize(int64_t);
   uint64_t incTotalScanTime(int64_t);
+  uint64_t incWriteIOTimeUs(int64_t);
 
   IoCounter& prefetch() {
     return prefetch_;
@@ -150,6 +152,7 @@ class IoStatistics {
   std::atomic<uint64_t> outputBatchSize_{0};
   std::atomic<uint64_t> rawOverreadBytes_{0};
   std::atomic<uint64_t> totalScanTime_{0};
+  std::atomic<uint64_t> writeIOTimeUs_{0};
 
   // Planned read from storage or SSD.
   IoCounter prefetch_;
@@ -164,8 +167,8 @@ class IoStatistics {
   // reads.
   IoCounter ssdRead_;
 
-  // Time spent by a query processing thread waiting for synchronously
-  // issued IO or for an in-progress read-ahead to finish.
+  // Time spent by a query processing thread waiting for synchronously issued IO
+  // or for an in-progress read-ahead to finish.
   IoCounter queryThreadIoLatency_;
 
   std::unordered_map<std::string, OperationCounters> operationStats_;

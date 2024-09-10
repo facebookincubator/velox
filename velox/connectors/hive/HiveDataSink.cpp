@@ -21,6 +21,7 @@
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/ITypedExpr.h"
@@ -37,7 +38,6 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::connector::hive {
 
 namespace {
-
 // Returns the type of non-partition data columns.
 RowTypePtr getNonPartitionTypes(
     const std::vector<column_index_t>& dataCols,
@@ -493,6 +493,21 @@ std::string HiveDataSink::stateString(State state) {
 void HiveDataSink::computePartitionAndBucketIds(const RowVectorPtr& input) {
   VELOX_CHECK(isPartitioned() || isBucketed());
   if (isPartitioned()) {
+    if (!hiveConfig_->allowNullPartitionKeys(
+            connectorQueryCtx_->sessionProperties())) {
+      // Check that there are no nulls in the partition keys.
+      for (auto& partitionIdx : partitionChannels_) {
+        auto col = input->childAt(partitionIdx);
+        if (col->mayHaveNulls()) {
+          for (auto i = 0; i < col->size(); ++i) {
+            VELOX_USER_CHECK(
+                !col->isNullAt(i),
+                "Partition key must not be null: {}",
+                input->type()->asRow().nameOf(partitionIdx))
+          }
+        }
+      }
+    }
     partitionIdGenerator_->run(input, partitionIds_);
   }
 
@@ -508,10 +523,13 @@ DataSink::Stats HiveDataSink::stats() const {
   }
 
   int64_t numWrittenBytes{0};
+  int64_t writeIOTimeUs{0};
   for (const auto& ioStats : ioStats_) {
     numWrittenBytes += ioStats->rawBytesWritten();
+    writeIOTimeUs += ioStats->writeIOTimeUs();
   }
   stats.numWrittenBytes = numWrittenBytes;
+  stats.writeIOTimeUs = writeIOTimeUs;
 
   if (state_ != State::kClosed) {
     return stats;
@@ -674,44 +692,70 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
   setMemoryReclaimers(writerInfo_.back().get(), ioStats_.back().get());
 
-  dwio::common::WriterOptions options;
+  // Take the writer options provided by the user as a starting point, or
+  // allocate a new one.
+  auto options = insertTableHandle_->writerOptions();
+  if (!options) {
+    options = writerFactory_->createWriterOptions();
+  }
+
   const auto* connectorSessionProperties =
       connectorQueryCtx_->sessionProperties();
-  options.schema = getNonPartitionTypes(dataChannels_, inputType_);
 
-  options.memoryPool = writerInfo_.back()->writerPool.get();
-  options.compressionKind = insertTableHandle_->compressionKind();
-  if (canReclaim()) {
-    options.spillConfig = spillConfig_;
+  // Only overwrite options in case they were not already provided.
+  if (options->schema == nullptr) {
+    options->schema = getNonPartitionTypes(dataChannels_, inputType_);
   }
-  options.nonReclaimableSection =
-      writerInfo_.back()->nonReclaimableSectionHolder.get();
-  options.maxStripeSize = std::optional(
-      hiveConfig_->orcWriterMaxStripeSize(connectorSessionProperties));
-  options.maxDictionaryMemory = std::optional(
-      hiveConfig_->orcWriterMaxDictionaryMemory(connectorSessionProperties));
-  options.parquetWriteTimestampUnit =
-      hiveConfig_->parquetWriteTimestampUnit(connectorSessionProperties);
-  options.orcMinCompressionSize = std::optional(
-      hiveConfig_->orcWriterMinCompressionSize(connectorSessionProperties));
-  options.orcLinearStripeSizeHeuristics =
-      std::optional(hiveConfig_->orcWriterLinearStripeSizeHeuristics(
-          connectorSessionProperties));
-  options.serdeParameters = std::map<std::string, std::string>(
-      insertTableHandle_->serdeParameters().begin(),
-      insertTableHandle_->serdeParameters().end());
+
+  if (options->memoryPool == nullptr) {
+    options->memoryPool = writerInfo_.back()->writerPool.get();
+  }
+
+  if (!options->compressionKind) {
+    options->compressionKind = insertTableHandle_->compressionKind();
+  }
+
+  if (options->spillConfig == nullptr && canReclaim()) {
+    options->spillConfig = spillConfig_;
+  }
+
+  if (options->nonReclaimableSection == nullptr) {
+    options->nonReclaimableSection =
+        writerInfo_.back()->nonReclaimableSectionHolder.get();
+  }
+
+  if (options->memoryReclaimerFactory == nullptr ||
+      options->memoryReclaimerFactory() == nullptr) {
+    options->memoryReclaimerFactory = []() {
+      return exec::MemoryReclaimer::create();
+    };
+  }
+
+  if (options->serdeParameters.empty()) {
+    options->serdeParameters = std::map<std::string, std::string>(
+        insertTableHandle_->serdeParameters().begin(),
+        insertTableHandle_->serdeParameters().end());
+  }
+
+  updateWriterOptionsFromHiveConfig(
+      insertTableHandle_->tableStorageFormat(),
+      hiveConfig_,
+      connectorSessionProperties,
+      options);
 
   // Prevents the memory allocation during the writer creation.
   WRITER_NON_RECLAIMABLE_SECTION_GUARD(writerInfo_.size() - 1);
   auto writer = writerFactory_->createWriter(
       dwio::common::FileSink::create(
           writePath,
-          {.bufferWrite = false,
-           .connectorProperties = hiveConfig_->config(),
-           .fileCreateConfig = hiveConfig_->writeFileCreateConfig(),
-           .pool = writerInfo_.back()->sinkPool.get(),
-           .metricLogger = dwio::common::MetricsLog::voidLog(),
-           .stats = ioStats_.back().get()}),
+          {
+              .bufferWrite = false,
+              .connectorProperties = hiveConfig_->config(),
+              .fileCreateConfig = hiveConfig_->writeFileCreateConfig(),
+              .pool = writerInfo_.back()->sinkPool.get(),
+              .metricLogger = dwio::common::MetricsLog::voidLog(),
+              .stats = ioStats_.back().get(),
+          }),
       options);
   writer = maybeCreateBucketSortWriter(std::move(writer));
   writers_.emplace_back(std::move(writer));
@@ -738,6 +782,7 @@ HiveDataSink::maybeCreateBucketSortWriter(
       sortCompareFlags_,
       sortPool,
       writerInfo_.back()->nonReclaimableSectionHolder.get(),
+      connectorQueryCtx_->prefixSortConfig(),
       spillConfig_,
       writerInfo_.back()->spillStats.get());
   return std::make_unique<dwio::common::SortingWriter>(
@@ -817,12 +862,14 @@ HiveWriterParameters HiveDataSink::getWriterParameters(
 
 std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
     std::optional<uint32_t> bucketId) const {
-  std::string targetFileName;
+  auto targetFileName = insertTableHandle_->locationHandle()->targetFileName();
+  const bool generateFileName = targetFileName.empty();
   if (bucketId.has_value()) {
+    VELOX_CHECK(generateFileName);
     // TODO: add hive.file_renaming_enabled support.
     targetFileName = computeBucketedFileName(
         connectorQueryCtx_->queryId(), bucketId.value());
-  } else {
+  } else if (generateFileName) {
     // targetFileName includes planNodeId and Uuid. As a result, different
     // table writers run by the same task driver or the same table writer
     // run in different task tries would have different targetFileNames.
@@ -833,11 +880,13 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
         connectorQueryCtx_->planNodeId(),
         makeUuid());
   }
+  VELOX_CHECK(!targetFileName.empty());
   const std::string writeFileName = isCommitRequired()
       ? fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid())
       : targetFileName;
-  if (insertTableHandle_->tableStorageFormat() ==
-      dwio::common::FileFormat::PARQUET) {
+  if (generateFileName &&
+      insertTableHandle_->tableStorageFormat() ==
+          dwio::common::FileFormat::PARQUET) {
     return {
         fmt::format("{}{}", targetFileName, ".parquet"),
         fmt::format("{}{}", writeFileName, ".parquet")};
@@ -923,11 +972,22 @@ void HiveInsertTableHandle::registerSerDe() {
 
 std::string HiveInsertTableHandle::toString() const {
   std::ostringstream out;
-  out << "HiveInsertTableHandle [inputColumns: [";
+  out << "HiveInsertTableHandle ["
+      << dwio::common::toString(tableStorageFormat_);
+  if (compressionKind_.has_value()) {
+    out << " " << common::compressionKindToString(compressionKind_.value());
+  } else {
+    out << " none";
+  }
+  out << "], [inputColumns: [";
   for (const auto& i : inputColumns_) {
     out << " " << i->toString();
   }
-  out << " ], locationHandle: " << locationHandle_->toString() << "]";
+  out << " ], locationHandle: " << locationHandle_->toString();
+  if (bucketProperty_) {
+    out << ", bucketProperty: " << bucketProperty_->toString();
+  }
+  out << "]";
   return out.str();
 }
 

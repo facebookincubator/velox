@@ -33,24 +33,21 @@ function install_aws_deps {
   cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
   # Dependencies for S3 testing
   # We need this specific version of Minio for testing.
-  if [[ "$OSTYPE" == linux-gnu* ]]; then
-    wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio-20220526054841.0.0.x86_64.rpm
-    rpm -i minio-20220526054841.0.0.x86_64.rpm
-    rm minio-20220526054841.0.0.x86_64.rpm
+  local MINIO_ARCH=$MACHINE
+  if [[ $MACHINE == aarch64 ]]; then
+    MINIO_ARCH="arm64"
+  elif [[ $MACHINE == x86_64 ]]; then
+    MINIO_ARCH="amd64"
   fi
-  # minio will have to approved under the Privacy & Security on MacOS on first use.
+  local MINIO_BINARY="minio-2022-05-26"
+  local MINIO_OS="linux"
   if [[ "$OSTYPE" == darwin* ]]; then
-    if [ "$MACHINE" = "x86_64" ]; then
-      wget https://dl.min.io/server/minio/release/darwin-arm64/archive/minio.RELEASE.2022-05-26T05-48-41Z -O minio
-      chmod +x ./minio
-      sudo mv ./minio /usr/local/bin/
-    fi
-    if [ "$MACHINE" = "arm64" ]; then
-      wget https://dl.min.io/server/minio/release/darwin-arm64/archive/minio.RELEASE.2022-05-26T05-48-41Z -O minio
-      chmod +x ./minio
-      sudo mv ./minio /usr/local/bin/
-    fi
+    # minio will have to approved under the Privacy & Security on MacOS on first use.
+    MINIO_OS="darwin"
   fi
+  wget https://dl.min.io/server/minio/release/${MINIO_OS}-${MINIO_ARCH}/archive/minio.RELEASE.2022-05-26T05-48-41Z -O ${MINIO_BINARY}
+  chmod +x ./${MINIO_BINARY}
+  mv ./${MINIO_BINARY} /usr/local/bin/
 }
 
 function install_gcs-sdk-cpp {
@@ -61,14 +58,15 @@ function install_gcs-sdk-cpp {
   github_checkout abseil/abseil-cpp 20240116.2 --depth 1
   cmake_install \
     -DABSL_BUILD_TESTING=OFF \
-    -DCMAKE_CXX_STANDARD=14 \
+    -DCMAKE_CXX_STANDARD=17 \
     -DABSL_PROPAGATE_CXX_STD=ON \
     -DABSL_ENABLE_INSTALL=ON
 
   # protobuf
-  github_checkout protocolbuffers/protobuf v21.4 --depth 1
+  github_checkout protocolbuffers/protobuf v21.8 --depth 1
   cmake_install \
-    -Dprotobuf_BUILD_TESTS=OFF
+    -Dprotobuf_BUILD_TESTS=OFF \
+    -Dprotobuf_ABSL_PROVIDER=package
 
   # grpc
   github_checkout grpc/grpc v1.48.1 --depth 1
@@ -109,50 +107,48 @@ function install_azure-storage-sdk-cpp {
   github_checkout azure/azure-sdk-for-cpp azure-storage-files-datalake_12.8.0
   sed -i "s/set(VCPKG_COMMIT_STRING .*)/set(VCPKG_COMMIT_STRING $vcpkg_commit_id)/" cmake-modules/AzureVcpkg.cmake
 
-  cd sdk/core/azure-core
-  if ! grep -q "baseline" vcpkg.json; then
+  azure_core_dir="sdk/core/azure-core"
+  if ! grep -q "baseline" $azure_core_dir/vcpkg.json; then
     # build and install azure-core with the version compatible with system pre-installed openssl
     openssl_version=$(openssl version -v | awk '{print $2}')
     if [[ "$openssl_version" == 1.1.1* ]]; then
       openssl_version="1.1.1n"
     fi
-    sed -i "s/\"version-string\"/\"builtin-baseline\": \"$vcpkg_commit_id\",\"version-string\"/" vcpkg.json
-    sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" vcpkg.json
+    sed -i "s/\"version-string\"/\"builtin-baseline\": \"$vcpkg_commit_id\",\"version-string\"/" $azure_core_dir/vcpkg.json
+    sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" $azure_core_dir/vcpkg.json
   fi
-  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  cmake_install $azure_core_dir -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
-  cd -
   # install azure-storage-common
-  cd sdk/storage/azure-storage-common
-  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  cmake_install sdk/storage/azure-storage-common -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
-  cd -
   # install azure-storage-blobs
-  cd sdk/storage/azure-storage-blobs
-  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  cmake_install sdk/storage/azure-storage-blobs -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
-  cd -
   # install azure-storage-files-datalake
-  cd sdk/storage/azure-storage-files-datalake
-  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  cmake_install sdk/storage/azure-storage-files-datalake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_hdfs_deps {
   github_checkout apache/hawq master
-  cd $DEPENDENCY_DIR/hawq/depends/libhdfs3
+  libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
   if [[ "$OSTYPE" == darwin* ]]; then
-     sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" ./CMakeLists.txt
-     sed -i '' -e "s/dumpversion/dumpfullversion/" ./CMakeLists.txt
+     sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
+     sed -i '' -e "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMakeLists.txt
   fi
 
   if [[ "$OSTYPE" == linux-gnu* ]]; then
-    sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" ./CMakeLists.txt
-    sed -i "s/dumpversion/dumpfullversion/" ./CMake/Platform.cmake
+    sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
+    sed -i "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMake/Platform.cmake
     # Dependencies for Hadoop testing
-    wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz hadoop
+    wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-3.3.0/hadoop-3.3.0.tar.gz hadoop
     cp -a hadoop /usr/local/
+    wget -P /usr/local/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
+
+    yum install -y java-1.8.0-openjdk-devel
+    
   fi
-  cmake_install
+  cmake_install $libhdfs3_dir
 }
 
 cd "${DEPENDENCY_DIR}" || exit
@@ -169,12 +165,12 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
       # Dependencies of Azure Storage Blob cpp
       apt install -y openssl
    else # Assume Fedora/CentOS
-      yum -y install libxml2-devel libgsasl-devel libuuid-devel
+      dnf -y install libxml2-devel libgsasl-devel libuuid-devel krb5-devel
       # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-      yum -y install curl-devel c-ares-devel
+      dnf -y install npm curl-devel c-ares-devel
       # Dependencies of Azure Storage Blob Cpp
-      yum -y install perl-IPC-Cmd
-      yum -y install openssl
+      dnf -y install perl-IPC-Cmd
+      dnf -y install openssl
    fi
 fi
 

@@ -49,11 +49,11 @@ struct DropValues {
   }
 };
 
-struct ExtractToReader {
+class ExtractToReader {
+ public:
   using HookType = dwio::common::NoHook;
   static constexpr bool kSkipNulls = false;
-  explicit ExtractToReader(SelectiveColumnReader* readerIn)
-      : reader_(readerIn) {}
+  explicit ExtractToReader(SelectiveColumnReader* reader) : reader_(reader) {}
 
   bool acceptsNulls() const {
     return true;
@@ -74,7 +74,7 @@ struct ExtractToReader {
   }
 
  private:
-  SelectiveColumnReader* reader_;
+  SelectiveColumnReader* const reader_;
 };
 
 template <typename THook>
@@ -97,7 +97,7 @@ class ExtractToHook {
 
   template <typename V>
   void addValue(vector_size_t rowIndex, V value) {
-    hook_.addValue(rowIndex, &value);
+    hook_.addValueTyped(rowIndex, value);
   }
 
   auto& hook() {
@@ -126,7 +126,7 @@ class ExtractToGenericHook {
 
   template <typename V>
   void addValue(vector_size_t rowIndex, V value) {
-    hook_->addValue(rowIndex, &value);
+    hook_->addValueTyped(rowIndex, value);
   }
 
   ValueHook& hook() {
@@ -162,7 +162,7 @@ class ColumnVisitor {
       TFilter& filter,
       SelectiveColumnReader* reader,
       const RowSet& rows,
-      ExtractValues values)
+      const ExtractValues& values)
       : filter_(filter),
         reader_(reader),
         allowNulls_(!TFilter::deterministic || filter.testNull()),
@@ -314,7 +314,7 @@ class ColumnVisitor {
 
   FOLLY_ALWAYS_INLINE vector_size_t process(T value, bool& atEnd) {
     if (!TFilter::deterministic) {
-      auto previous = currentRow();
+      const auto previous = currentRow();
       if (velox::common::applyFilter(filter_, value)) {
         filterPassed(value);
       } else {
@@ -326,6 +326,7 @@ class ColumnVisitor {
       }
       return currentRow() - previous - 1;
     }
+
     // The filter passes or fails and we go to the next row if any.
     if (velox::common::applyFilter(filter_, value)) {
       filterPassed(value);
@@ -501,8 +502,8 @@ class ColumnVisitor {
 template <typename T, typename TFilter, typename ExtractValues, bool isDense>
 FOLLY_ALWAYS_INLINE void
 ColumnVisitor<T, TFilter, ExtractValues, isDense>::filterFailed() {
-  auto preceding = filter_.getPrecedingPositionsToFail();
-  auto succeeding = filter_.getSucceedingPositionsToFail();
+  const auto preceding = filter_.getPrecedingPositionsToFail();
+  const auto succeeding = filter_.getSucceedingPositionsToFail();
   if (preceding) {
     reader_->dropResults(preceding);
   }
@@ -717,18 +718,18 @@ class DictionaryColumnVisitor
   DictionaryColumnVisitor(
       TFilter& filter,
       SelectiveColumnReader* reader,
-      RowSet rows,
-      ExtractValues values)
+      const RowSet& rows,
+      const ExtractValues& values)
       : ColumnVisitor<T, TFilter, ExtractValues, isDense>(
             filter,
             reader,
             rows,
             values),
-        state_(reader->scanState().rawState),
         width_(
             reader->fileType().type()->kind() == TypeKind::BIGINT        ? 8
                 : reader->fileType().type()->kind() == TypeKind::INTEGER ? 4
-                                                                         : 2) {}
+                                                                         : 2),
+        state_(reader->scanState().rawState) {}
 
   FOLLY_ALWAYS_INLINE bool isInDict() {
     if (inDict()) {
@@ -753,10 +754,11 @@ class DictionaryColumnVisitor
       }
       return super::process(signedValue, atEnd);
     }
-    vector_size_t previous =
+
+    const vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
-    T valueInDictionary = dict()[value];
-    if (std::is_same_v<TFilter, velox::common::AlwaysTrue>) {
+    const T valueInDictionary = dict()[value];
+    if constexpr (!hasFilter()) {
       super::filterPassed(valueInDictionary);
     } else {
       // check the dictionary cache
@@ -781,6 +783,7 @@ class DictionaryColumnVisitor
         }
       }
     }
+
     if (++super::rowIndex_ >= super::numRows_) {
       atEnd = true;
       return (isDense && TFilter::deterministic)
@@ -811,7 +814,7 @@ class DictionaryColumnVisitor
       T* values,
       int32_t& numValues) {
     DCHECK_EQ(input, values + numValues);
-    if (!hasFilter) {
+    if constexpr (!DictionaryColumnVisitor::hasFilter()) {
       if (hasHook) {
         translateByDict(input, numInput, values);
         super::values_.hook().addValues(
@@ -819,22 +822,32 @@ class DictionaryColumnVisitor
                     : velox::iota(super::numRows_, super::innerNonNullRows()) +
                     super::rowIndex_,
             values,
-            numInput,
-            sizeof(T));
+            numInput);
         super::rowIndex_ += numInput;
         return;
       }
-      if (inDict()) {
-        translateScatter<true, scatter>(
-            input, numInput, scatterRows, numValues, values);
+      if constexpr (std::is_same_v<TFilter, velox::common::IsNotNull>) {
+        auto* begin = (scatter ? scatterRows : super::rows_) + super::rowIndex_;
+        std::copy(begin, begin + numInput, filterHits + numValues);
+        if constexpr (!super::kFilterOnly) {
+          translateByDict(input, numInput, values + numValues);
+        }
+        numValues += numInput;
       } else {
-        translateScatter<false, scatter>(
-            input, numInput, scatterRows, numValues, values);
+        if (inDict()) {
+          translateScatter<true, scatter>(
+              input, numInput, scatterRows, numValues, values);
+        } else {
+          translateScatter<false, scatter>(
+              input, numInput, scatterRows, numValues, values);
+        }
+        numValues = scatter ? scatterRows[super::rowIndex_ + numInput - 1] + 1
+                            : numValues + numInput;
       }
       super::rowIndex_ += numInput;
-      numValues = scatter ? scatterRows[super::rowIndex_ - 1] + 1
-                          : numValues + numInput;
       return;
+    } else {
+      static_assert(hasFilter);
     }
     // The filter path optionally extracts values but always sets
     // filterHits. It first loads a vector of indices. It translates
@@ -1091,8 +1104,15 @@ class DictionaryColumnVisitor
     return state_.filterCache;
   }
 
-  RawScanState state_;
+  static constexpr bool hasFilter() {
+    // Dictionary values cannot be null.  See the explanation in
+    // `DictionaryValues::hasFilter'.
+    return !std::is_same_v<TFilter, velox::common::AlwaysTrue> &&
+        !std::is_same_v<TFilter, velox::common::IsNotNull>;
+  }
+
   const uint8_t width_;
+  RawScanState state_;
 };
 
 template <typename T, typename TFilter, typename ExtractValues, bool isDense>
@@ -1141,7 +1161,7 @@ class StringDictionaryColumnVisitor
     }
     vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
-    if (std::is_same_v<TFilter, velox::common::AlwaysTrue>) {
+    if constexpr (!DictSuper::hasFilter()) {
       super::filterPassed(index);
     } else {
       // check the dictionary cache
@@ -1194,7 +1214,7 @@ class StringDictionaryColumnVisitor
       int32_t& numValues) {
     DCHECK(input == values + numValues);
     setByInDict(values + numValues, numInput);
-    if (!hasFilter) {
+    if constexpr (!DictSuper::hasFilter()) {
       if (hasHook) {
         for (auto i = 0; i < numInput; ++i) {
           auto value = input[i];
@@ -1204,15 +1224,21 @@ class StringDictionaryColumnVisitor
               value);
         }
       }
-      DCHECK_EQ(input, values + numValues);
-      if (scatter) {
+      if constexpr (std::is_same_v<TFilter, velox::common::IsNotNull>) {
+        auto* begin = (scatter ? scatterRows : super::rows_) + super::rowIndex_;
+        std::copy(begin, begin + numInput, filterHits + numValues);
+        numValues += numInput;
+      } else if constexpr (scatter) {
         dwio::common::scatterDense(
             input, scatterRows + super::rowIndex_, numInput, values);
+        numValues = scatterRows[super::rowIndex_ + numInput - 1] + 1;
+      } else {
+        numValues += numInput;
       }
-      numValues = scatter ? scatterRows[super::rowIndex_ + numInput - 1] + 1
-                          : numValues + numInput;
       super::rowIndex_ += numInput;
       return;
+    } else {
+      static_assert(hasFilter);
     }
     constexpr bool filterOnly =
         std::is_same_v<typename super::Extract, DropValues>;
@@ -1365,14 +1391,14 @@ class ExtractStringDictionaryToGenericHook {
     // according to the index. Stride dictionary indices are offset up
     // by the stripe dict size.
     if (value < dictionarySize()) {
-      auto view = folly::StringPiece(
-          reinterpret_cast<const StringView*>(state_.dictionary.values)[value]);
-      hook_->addValue(rowIndex, &view);
+      auto* strings =
+          reinterpret_cast<const StringView*>(state_.dictionary.values);
+      hook_->addValue(rowIndex, strings[value]);
     } else {
       VELOX_DCHECK(state_.inDictionary);
-      auto view = folly::StringPiece(reinterpret_cast<const StringView*>(
-          state_.dictionary2.values)[value - dictionarySize()]);
-      hook_->addValue(rowIndex, &view);
+      auto* strings =
+          reinterpret_cast<const StringView*>(state_.dictionary2.values);
+      hook_->addValue(rowIndex, strings[value - dictionarySize()]);
     }
   }
 

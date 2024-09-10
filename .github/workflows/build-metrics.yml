@@ -18,6 +18,7 @@ on:
   pull_request:
       paths:
         - ".github/workflows/build-metrics.yml"
+        - "script/bm-report/**"
 
   workflow_dispatch:
     inputs:
@@ -58,7 +59,7 @@ jobs:
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
         # it doesn't work
-        run: git config --global --add safe.directory /__w/velox/velox
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
       - name: Make ${{ matrix.type }} Build
         env:
@@ -100,6 +101,8 @@ jobs:
           python3 -m pip install -r scripts/benchmark-requirements.txt
 
       - name: "Upload Metrics"
+        # This disables the upload and report generation on fork PRs but allows it for forks from within the main repo.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'facebookincubator/velox' }}
         env:
           CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
           CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-${{ matrix.runner }}"
@@ -118,6 +121,7 @@ jobs:
             "/tmp/metrics"
 
   upload-report:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'facebookincubator/velox' }}
     permissions:
       contents: write
     runs-on: ubuntu-latest

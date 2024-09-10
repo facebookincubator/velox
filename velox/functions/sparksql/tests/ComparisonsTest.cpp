@@ -66,6 +66,93 @@ class ComparisonsTest : public SparkFunctionBaseTest {
     return evaluateOnce<bool>("greaterthanorequal(c0, c1)", a, b);
   }
 
+  template <TypeKind kind>
+  void runSIMDCompareAndAssert(int size, int unSelectedRows = 0) {
+    using T = typename TypeTraits<kind>::NativeType;
+    auto type = TypeTraits<kind>::ImplType::create();
+    auto expectedResult = std::vector<bool>();
+    expectedResult.resize(size);
+    VectorFuzzer::Options opts;
+    opts.vectorSize = size;
+    VectorFuzzer fuzzer(opts, execCtx_.pool());
+    auto lVector = fuzzer.fuzzFlat(type, size);
+    auto left = lVector->template as<FlatVector<T>>()->rawValues();
+    auto rVector = fuzzer.fuzzFlat(type, size);
+    auto right = rVector->template as<FlatVector<T>>()->rawValues();
+    auto constVector = fuzzer.fuzzConstant(type);
+    auto constant = constVector->template as<ConstantVector<T>>()->value();
+    auto lDictVector = fuzzer.fuzzDictionary(lVector);
+    auto rDictVector = fuzzer.fuzzDictionary(rVector);
+    auto lDictDictVector = fuzzer.fuzzDictionary(lDictVector);
+    SelectivityVector rows(size);
+    rows.setValidRange(0, unSelectedRows, false);
+
+    // Flat, Flat
+    std::vector<VectorPtr> childrenVectors = {lVector, rVector};
+    auto rowVector =
+        fuzzer.fuzzRow(std::move(childrenVectors), {"c0", "c1"}, size);
+    auto result =
+        evaluate<SimpleVector<bool>>("greaterthanorequal(c0, c1)", rowVector);
+    for (auto i = unSelectedRows; i < size; i++) {
+      expectedResult[i] = left[i] >= right[i];
+    }
+    velox::test::assertEqualVectors(
+        makeFlatVector<bool>(expectedResult), result, rows);
+
+    // Flat, Const
+    std::vector<VectorPtr> rConstVectors = {lVector, constVector};
+    rowVector = fuzzer.fuzzRow(std::move(rConstVectors), {"c0", "c1"}, size);
+    result = evaluate<SimpleVector<bool>>("equalto(c0, c1)", rowVector);
+    for (auto i = unSelectedRows; i < size; i++) {
+      expectedResult[i] = left[i] == constant;
+    }
+    velox::test::assertEqualVectors(
+        makeFlatVector<bool>(expectedResult), result, rows);
+
+    // Const, Flat
+    std::vector<VectorPtr> lConstVectors = {constVector, rVector};
+    rowVector = fuzzer.fuzzRow(std::move(lConstVectors), {"c0", "c1"}, size);
+    result = evaluate<SimpleVector<bool>>("lessthan(c0, c1)", rowVector);
+    for (auto i = unSelectedRows; i < size; i++) {
+      expectedResult[i] = constant < right[i];
+    }
+    velox::test::assertEqualVectors(
+        makeFlatVector<bool>(expectedResult), result, rows);
+
+    // Dict(Flat), Flat
+    childrenVectors = {lDictVector, rVector};
+    rowVector = fuzzer.fuzzRow(std::move(childrenVectors), {"c0", "c1"}, size);
+    result = evaluate<SimpleVector<bool>>("lessthanorequal(c0, c1)", rowVector);
+    DecodedVector lDecodedVector(*lDictVector);
+    for (auto i = unSelectedRows; i < size; i++) {
+      expectedResult[i] = lDecodedVector.valueAt<T>(i) <= right[i];
+    }
+    velox::test::assertEqualVectors(
+        makeFlatVector<bool>(expectedResult), result, rows);
+
+    // Flat, Dict(Flat)
+    childrenVectors = {lVector, rDictVector};
+    rowVector = fuzzer.fuzzRow(std::move(childrenVectors), {"c0", "c1"}, size);
+    result = evaluate<SimpleVector<bool>>("greaterthan(c0, c1)", rowVector);
+    DecodedVector rDecodedVector(*rDictVector);
+    for (auto i = unSelectedRows; i < size; i++) {
+      expectedResult[i] = left[i] > rDecodedVector.valueAt<T>(i);
+    }
+    velox::test::assertEqualVectors(
+        makeFlatVector<bool>(expectedResult), result, rows);
+
+    // Dict(Dict(Flat)), Flat
+    childrenVectors = {lDictDictVector, rVector};
+    rowVector = fuzzer.fuzzRow(std::move(childrenVectors), {"c0", "c1"}, size);
+    result = evaluate<SimpleVector<bool>>("lessthanorequal(c0, c1)", rowVector);
+    DecodedVector decodedVector(*lDictDictVector);
+    for (auto i = unSelectedRows; i < size; i++) {
+      expectedResult[i] = decodedVector.valueAt<T>(i) <= right[i];
+    }
+    velox::test::assertEqualVectors(
+        makeFlatVector<bool>(expectedResult), result, rows);
+  }
+
   void runAndCompare(
       const std::string& functionName,
       const std::vector<VectorPtr>& input,
@@ -73,10 +160,58 @@ class ComparisonsTest : public SparkFunctionBaseTest {
     auto actual = evaluate<SimpleVector<bool>>(
         fmt::format("{}(c0, c1)", functionName), makeRowVector(input));
     facebook::velox::test::assertEqualVectors(expectedResult, actual);
-  };
+  }
+
+  RowVectorPtr constructRowVector(
+      const std::optional<int64_t>& value,
+      const bool rowIsNull = false) {
+    auto child = makeNullableFlatVector<int64_t>({value});
+    if (rowIsNull) {
+      return makeRowVector({child}, nullEvery(1));
+    }
+    return makeRowVector({child});
+  }
+
+  void runAndCompareForArrayInput(
+      const std::string& functionName,
+      const std::string& array1,
+      const std::string& array2,
+      std::optional<bool> expectedResult) {
+    auto vector1 = makeArrayVectorFromJson<double>({array1});
+    auto vector2 = makeArrayVectorFromJson<double>({array2});
+    runAndCompare(
+        functionName,
+        {vector1, vector2},
+        makeNullableFlatVector<bool>({expectedResult}));
+  }
+
+  void runAndCompareForRowInput(
+      const std::string& functionName,
+      const RowVectorPtr& vector1,
+      const RowVectorPtr& vector2,
+      const VectorPtr& expectedResult) {
+    runAndCompare(functionName, {vector1, vector2}, expectedResult);
+  }
 };
 
 TEST_F(ComparisonsTest, equaltonullsafe) {
+  const auto funcName = "equalnullsafe";
+  auto testArrayInput = [&](const std::string& array1,
+                            const std::string& array2,
+                            std::optional<bool> expectedResult) {
+    runAndCompareForArrayInput(funcName, array1, array2, expectedResult);
+  };
+
+  auto testRowInput = [&](const std::optional<int64_t>& value1,
+                          const std::optional<int64_t>& value2,
+                          std::optional<bool> expectedResult) {
+    runAndCompareForRowInput(
+        funcName,
+        constructRowVector(value1),
+        constructRowVector(value2),
+        makeNullableFlatVector<bool>({expectedResult}));
+  };
+
   EXPECT_EQ(equaltonullsafe<int64_t>(1, 1), true);
   EXPECT_EQ(equaltonullsafe<int32_t>(1, 2), false);
   EXPECT_EQ(equaltonullsafe<float>(std::nullopt, std::nullopt), true);
@@ -86,9 +221,67 @@ TEST_F(ComparisonsTest, equaltonullsafe) {
   EXPECT_EQ(equaltonullsafe<double>(kNaN, std::nullopt), false);
   EXPECT_EQ(equaltonullsafe<double>(kNaN, 1), false);
   EXPECT_EQ(equaltonullsafe<double>(kNaN, kNaN), true);
+
+  testArrayInput("null", "null", true);
+  testArrayInput("null", "[1.0]", false);
+  testArrayInput("[1.0]", "null", false);
+
+  testArrayInput("[]", "[]", true);
+
+  testArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 3.0]", true);
+  testArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 4.0]", false);
+
+  testArrayInput("[1.0, null]", "[6.0, 2.0]", false);
+  testArrayInput("[1.0, null]", "[1.0, 2.0]", false);
+  testArrayInput("[1.0, NaN]", "[1.0, NaN]", true);
+
+  testArrayInput("[]", "[null, null]", false);
+  testArrayInput("[1.0, 2.0]", "[1.0, 2.0, null]", false);
+  testArrayInput("[null, null]", "[null, null, null]", false);
+
+  testArrayInput("[null, null]", "[null, null]", true);
+
+  testRowInput(std::nullopt, std::nullopt, true);
+  testRowInput(std::nullopt, 1, false);
+  testRowInput(1, std::nullopt, false);
+
+  testRowInput(1, 2, false);
+  testRowInput(1, 1, true);
+
+  runAndCompareForRowInput(
+      funcName,
+      constructRowVector(std::nullopt, true),
+      constructRowVector(std::nullopt, true),
+      makeNullableFlatVector<bool>({true}));
+  runAndCompareForRowInput(
+      funcName,
+      constructRowVector(std::nullopt, true),
+      constructRowVector(1, false),
+      makeNullableFlatVector<bool>({false}));
+  runAndCompareForRowInput(
+      funcName,
+      constructRowVector(1, false),
+      constructRowVector(std::nullopt, true),
+      makeNullableFlatVector<bool>({false}));
 }
 
 TEST_F(ComparisonsTest, equalto) {
+  const auto funcName = "equalto";
+  auto testArrayInput = [&](const std::string& array1,
+                            const std::string& array2,
+                            std::optional<bool> expectedResult) {
+    runAndCompareForArrayInput(funcName, array1, array2, expectedResult);
+  };
+
+  auto testRowInput = [&](const std::optional<int64_t>& value1,
+                          const std::optional<int64_t>& value2,
+                          std::optional<bool> expectedResult) {
+    runAndCompareForRowInput(
+        funcName,
+        constructRowVector(value1),
+        constructRowVector(value2),
+        makeNullableFlatVector<bool>({expectedResult}));
+  };
   EXPECT_EQ(equalto<Timestamp>(Timestamp(2, 2), Timestamp(2, 2)), true);
   EXPECT_EQ(equalto<StringView>("test"_sv, "test"_sv), true);
   EXPECT_EQ(equalto<StringView>("test"_sv, std::nullopt), std::nullopt);
@@ -110,6 +303,48 @@ TEST_F(ComparisonsTest, equalto) {
   EXPECT_EQ(equalto<float>(-kInfF, 1.0), false);
   EXPECT_EQ(equalto<float>(kInfF, -kInfF), false);
   EXPECT_EQ(equalto<double>(kInf, kNaN), false);
+
+  testArrayInput("null", "null", std::nullopt);
+  testArrayInput("null", "[1.0]", std::nullopt);
+  testArrayInput("[1.0]", "null", std::nullopt);
+
+  testArrayInput("[]", "[]", true);
+
+  testArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 3.0]", true);
+  testArrayInput("[1.0, 2.0, 3.0]", "[1.0, 2.0, 4.0]", false);
+
+  testArrayInput("[1.0, null]", "[6.0, 2.0]", false);
+  testArrayInput("[1.0, null]", "[1.0, 2.0]", false);
+  testArrayInput("[1.0, NaN]", "[1.0, NaN]", true);
+
+  testArrayInput("[]", "[null, null]", false);
+  testArrayInput("[1.0, 2.0]", "[1.0, 2.0, null]", false);
+  testArrayInput("[null, null]", "[null, null, null]", false);
+
+  testArrayInput("[null, null]", "[null, null]", true);
+
+  testRowInput(std::nullopt, std::nullopt, true);
+  testRowInput(std::nullopt, 1, false);
+  testRowInput(1, std::nullopt, false);
+
+  testRowInput(1, 2, false);
+  testRowInput(1, 1, true);
+
+  runAndCompareForRowInput(
+      funcName,
+      constructRowVector(std::nullopt, true),
+      constructRowVector(std::nullopt, true),
+      makeNullableFlatVector<bool>({std::nullopt}));
+  runAndCompareForRowInput(
+      funcName,
+      constructRowVector(std::nullopt, true),
+      constructRowVector(1, false),
+      makeNullableFlatVector<bool>({std::nullopt}));
+  runAndCompareForRowInput(
+      funcName,
+      constructRowVector(1, false),
+      constructRowVector(std::nullopt, true),
+      makeNullableFlatVector<bool>({std::nullopt}));
 }
 
 TEST_F(ComparisonsTest, between) {
@@ -238,6 +473,32 @@ TEST_F(ComparisonsTest, testflat) {
   auto actualBoolResult = evaluate<SimpleVector<bool>>(
       "equalto(c0, c1)", makeRowVector({vectorBool0, vectorBool1}));
   facebook::velox::test::assertEqualVectors(vectorBool0, actualBoolResult);
+}
+
+TEST_F(ComparisonsTest, testSIMDComparsion) {
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(64);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(65);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(1001);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(1001, 27);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(1001, 47);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(1001, 56);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(1001, 100);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(4096);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(4096, 30);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(4096, 31);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(4096, 32);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(4096, 33);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(4096, 78);
+
+  runSIMDCompareAndAssert<TypeKind::TINYINT>(675);
+  runSIMDCompareAndAssert<TypeKind::SMALLINT>(10240);
+  runSIMDCompareAndAssert<TypeKind::INTEGER>(7799);
+  runSIMDCompareAndAssert<TypeKind::BIGINT>(8876);
+  runSIMDCompareAndAssert<TypeKind::REAL>(1000);
+  runSIMDCompareAndAssert<TypeKind::DOUBLE>(10000);
+  runSIMDCompareAndAssert<TypeKind::TIMESTAMP>(1024);
+  runSIMDCompareAndAssert<TypeKind::VARCHAR>(686);
+  runSIMDCompareAndAssert<TypeKind::VARBINARY>(777);
 }
 
 TEST_F(ComparisonsTest, lessthan) {
@@ -409,12 +670,7 @@ TEST_F(ComparisonsTest, dateTypes) {
 
 TEST_F(ComparisonsTest, notSupportedTypes) {
   const auto candidataFuncs = {
-      "equalnullsafe",
-      "equalto",
-      "lessthan",
-      "lessthanorequal",
-      "greaterthan",
-      "greaterthanorequal"};
+      "lessthan", "lessthanorequal", "greaterthan", "greaterthanorequal"};
   auto arrayData = makeArrayVectorFromJson<int64_t>({"[1, 2, 3]"});
   auto mapData = makeMapVectorFromJson<int64_t, int64_t>({"{1: 1}"});
   auto rowData = makeRowVector({arrayData});

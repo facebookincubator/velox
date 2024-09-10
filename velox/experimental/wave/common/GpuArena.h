@@ -114,12 +114,26 @@ class GpuSlab {
   GpuAllocator* const allocator_;
 };
 
+struct ArenaStatus {
+  /// Number of allocated Buffers.
+  int32_t numBuffers{0};
+
+  /// Sum of capacity of allocated buffers.
+  int64_t capacity{};
+
+  /// Currently used bytes. Larger than capacity because of padding.
+  int64_t allocatedBytes{0};
+};
+
 /// A class that manages a set of GpuSlabs. It is able to adapt itself by
 /// growing the number of its managed GpuSlab's when extreme memory
 /// fragmentation happens.
 class GpuArena {
  public:
-  GpuArena(uint64_t singleArenaCapacity, GpuAllocator* allocator);
+  GpuArena(
+      uint64_t singleArenaCapacity,
+      GpuAllocator* allocator,
+      uint64_t standbyCapacity = 0);
 
   WaveBufferPtr allocateBytes(uint64_t bytes);
 
@@ -141,6 +155,37 @@ class GpuArena {
     return arenas_;
   }
 
+  uint64_t maxCapacity() const {
+    return maxCapacity_;
+  }
+
+  uint64_t totalAllocated() const {
+    return totalAllocated_;
+  }
+
+  uint64_t numAllocations() const {
+    return numAllocations_;
+  }
+
+  uint64_t retainedSize() const {
+    return capacity_;
+  }
+
+  void setSizes(uint64_t arenaSize, uint64_t standbyCapacity) {
+    singleArenaCapacity_ = arenaSize;
+    standbyCapacity_ = standbyCapacity;
+  }
+
+  bool isDevice() const {
+    return allocator_->isDevice();
+  }
+
+  /// Checks magic numbers and returns the sum of allocated capacity. Actual
+  /// sizes are padded to larger.
+  ArenaStatus checkBuffers();
+
+  std::string toString() const;
+
  private:
   // A preallocated array of Buffer handles for memory of 'this'.
   struct Buffers {
@@ -149,8 +194,9 @@ class GpuArena {
   };
 
   // Returns a new reference counting pointer to a new Buffer initialized to
-  // 'ptr' and 'size'.
-  WaveBufferPtr getBuffer(void* ptr, size_t size);
+  // 'ptr' and 'size'. 'size' is the size to fre, 'capacity' is the usable size
+  // excluding magic numbers and padding.
+  WaveBufferPtr getBuffer(void* ptr, size_t capacity, size_t size);
 
   // Serializes all activity in 'this'.
   std::mutex mutex_;
@@ -162,8 +208,14 @@ class GpuArena {
   // Head of Buffer free list.
   Buffer* firstFreeBuffer_{nullptr};
 
+  // Total capacity in all arenas.
+  uint64_t capacity_{0};
+
   // Capacity in bytes for a single GpuSlab managed by this.
-  const uint64_t singleArenaCapacity_;
+  uint64_t singleArenaCapacity_;
+
+  // Lower bound of capacity to keep around even if usage is below this.
+  uint64_t standbyCapacity_{0};
 
   GpuAllocator* const allocator_;
 
@@ -173,6 +225,10 @@ class GpuArena {
   // All allocations should come from this GpuSlab. When it is no longer able
   // to handle allocations it will be updated to a newly created GpuSlab.
   std::shared_ptr<GpuSlab> currentArena_;
+
+  uint64_t numAllocations_{0};
+  uint64_t totalAllocated_{0};
+  uint64_t maxCapacity_{0};
 };
 
 } // namespace facebook::velox::wave

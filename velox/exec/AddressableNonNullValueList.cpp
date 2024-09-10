@@ -41,16 +41,22 @@ AddressableNonNullValueList::Entry AddressableNonNullValueList::append(
     const DecodedVector& decoded,
     vector_size_t index,
     HashStringAllocator* allocator) {
+  return append(*decoded.base(), decoded.index(index), allocator);
+}
+
+AddressableNonNullValueList::Entry AddressableNonNullValueList::append(
+    const BaseVector& vector,
+    vector_size_t index,
+    HashStringAllocator* allocator) {
   auto stream = initStream(allocator);
 
-  const auto hash = decoded.base()->hashValueAt(decoded.index(index));
+  const auto hash = vector.hashValueAt(index);
 
   const auto originalSize = stream.size();
 
   // Write value.
   exec::ContainerRowSerdeOptions options{};
-  exec::ContainerRowSerde::serialize(
-      *decoded.base(), decoded.index(index), stream, options);
+  exec::ContainerRowSerde::serialize(vector, index, stream, options);
   ++size_;
 
   auto startAndFinish = allocator->finishWrite(stream, 1024);
@@ -78,12 +84,13 @@ HashStringAllocator::Position AddressableNonNullValueList::appendSerialized(
 
 namespace {
 
-ByteInputStream prepareRead(const AddressableNonNullValueList::Entry& entry) {
+std::unique_ptr<ByteInputStream> prepareRead(
+    const AddressableNonNullValueList::Entry& entry) {
   auto header = entry.offset.header;
   auto seek = entry.offset.position - header->begin();
 
   auto stream = HashStringAllocator::prepareRead(header, entry.size + seek);
-  stream.seekp(seek);
+  stream->seekp(seek);
   return stream;
 }
 } // namespace
@@ -103,7 +110,7 @@ bool AddressableNonNullValueList::equalTo(
   CompareFlags compareFlags =
       CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
   return exec::ContainerRowSerde::compare(
-             leftStream, rightStream, type.get(), compareFlags) == 0;
+             *leftStream, *rightStream, type.get(), compareFlags) == 0;
 }
 
 // static
@@ -112,7 +119,7 @@ void AddressableNonNullValueList::read(
     BaseVector& result,
     vector_size_t index) {
   auto stream = prepareRead(position);
-  exec::ContainerRowSerde::deserialize(stream, index, &result);
+  exec::ContainerRowSerde::deserialize(*stream, index, &result);
 }
 
 // static
@@ -120,7 +127,7 @@ void AddressableNonNullValueList::readSerialized(
     const Entry& position,
     char* dest) {
   auto stream = prepareRead(position);
-  stream.readBytes(dest, position.size);
+  stream->readBytes(dest, position.size);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

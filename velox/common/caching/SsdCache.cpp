@@ -29,50 +29,47 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::cache {
 
-SsdCache::SsdCache(
-    std::string_view filePrefix,
-    uint64_t maxBytes,
-    int32_t numShards,
-    folly::Executor* executor,
-    int64_t checkpointIntervalBytes,
-    bool disableFileCow,
-    bool checksumEnabled,
-    bool checksumReadVerificationEnabled)
-    : filePrefix_(filePrefix),
-      numShards_(numShards),
+SsdCache::SsdCache(const Config& config)
+    : filePrefix_(config.filePrefix),
+      numShards_(config.numShards),
       groupStats_(std::make_unique<FileGroupStats>()),
-      executor_(executor) {
+      executor_(config.executor) {
   // Make sure the given path of Ssd files has the prefix for local file system.
   // Local file system would be derived based on the prefix.
   VELOX_CHECK(
-      filePrefix_.find("/") == 0,
+      filePrefix_.find('/') == 0,
       "Ssd path '{}' does not start with '/' that points to local file system.",
       filePrefix_);
+  VELOX_CHECK_NOT_NULL(executor_);
 
-  if (checksumReadVerificationEnabled && !checksumEnabled) {
+  VELOX_SSD_CACHE_LOG(INFO) << "SSD cache config: " << config.toString();
+
+  auto checksumReadVerificationEnabled = config.checksumReadVerificationEnabled;
+  if (config.checksumReadVerificationEnabled && !config.checksumEnabled) {
     VELOX_SSD_CACHE_LOG(WARNING)
         << "Checksum read has been disabled as checksum is not enabled.";
     checksumReadVerificationEnabled = false;
   }
   filesystems::getFileSystem(filePrefix_, nullptr)
-      ->mkdir(std::filesystem::path(filePrefix).parent_path().string());
+      ->mkdir(std::filesystem::path(filePrefix_).parent_path().string());
 
   files_.reserve(numShards_);
   // Cache size must be a multiple of this so that each shard has the same max
   // size.
   const uint64_t sizeQuantum = numShards_ * SsdFile::kRegionSize;
   const int32_t fileMaxRegions =
-      bits::roundUp(maxBytes, sizeQuantum) / sizeQuantum;
+      bits::roundUp(config.maxBytes, sizeQuantum) / sizeQuantum;
   for (auto i = 0; i < numShards_; ++i) {
-    files_.push_back(std::make_unique<SsdFile>(
+    const auto fileConfig = SsdFile::Config(
         fmt::format("{}{}", filePrefix_, i),
         i,
         fileMaxRegions,
-        checkpointIntervalBytes / numShards,
-        disableFileCow,
-        checksumEnabled,
+        config.checkpointIntervalBytes / config.numShards,
+        config.disableFileCow,
+        config.checksumEnabled,
         checksumReadVerificationEnabled,
-        executor_));
+        executor_);
+    files_.push_back(std::make_unique<SsdFile>(fileConfig));
   }
 }
 
@@ -148,6 +145,16 @@ void SsdCache::write(std::vector<CachePin> pins) {
   writesInProgress_.fetch_sub(numNoStore);
 }
 
+void SsdCache::checkpoint() {
+  VELOX_CHECK_EQ(numShards_, writesInProgress_);
+  for (auto i = 0; i < numShards_; ++i) {
+    executor_->add([this, i]() {
+      files_[i]->checkpoint(/*force=*/true);
+      --writesInProgress_;
+    });
+  }
+}
+
 bool SsdCache::removeFileEntries(
     const folly::F14FastSet<uint64_t>& filesToRemove,
     folly::F14FastSet<uint64_t>& filesRetained) {
@@ -209,9 +216,9 @@ void SsdCache::shutdown() {
   VELOX_SSD_CACHE_LOG(INFO) << "SSD cache has been shutdown";
 }
 
-void SsdCache::testingClear() {
+void SsdCache::clear() {
   for (auto& file : files_) {
-    file->testingClear();
+    file->clear();
   }
 }
 
@@ -234,6 +241,12 @@ uint64_t SsdCache::testingTotalLogEvictionFilesSize() {
     size += std::filesystem::file_size(p);
   }
   return size;
+}
+
+void SsdCache::waitForWriteToFinish() {
+  while (writesInProgress_ != 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  }
 }
 
 } // namespace facebook::velox::cache

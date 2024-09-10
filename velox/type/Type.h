@@ -765,7 +765,7 @@ FOLLY_ALWAYS_INLINE bool isDecimalName(const std::string& name) {
   return (name == "DECIMAL");
 }
 
-std::pair<int, int> getDecimalPrecisionScale(const Type& type);
+std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type);
 
 class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
  public:
@@ -785,6 +785,14 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
 
   size_t cppSizeInBytes() const override {
     return 0;
+  }
+
+  bool isOrderable() const override {
+    return true;
+  }
+
+  bool isComparable() const override {
+    return true;
   }
 
   bool equivalent(const Type& other) const override {
@@ -913,6 +921,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
       std::vector<std::string>&& names,
       std::vector<std::shared_ptr<const Type>>&& types);
 
+  ~RowType() override;
+
   uint32_t size() const override;
 
   const std::shared_ptr<const Type>& childAt(uint32_t idx) const override;
@@ -959,13 +969,24 @@ class RowType : public TypeBase<TypeKind::ROW> {
   }
 
   const std::vector<TypeParameter>& parameters() const override {
-    return parameters_;
+    auto* parameters = parameters_.load();
+    if (FOLLY_UNLIKELY(!parameters)) {
+      parameters = makeParameters().release();
+      std::vector<TypeParameter>* oldParameters = nullptr;
+      if (!parameters_.compare_exchange_strong(oldParameters, parameters)) {
+        delete parameters;
+        parameters = oldParameters;
+      }
+    }
+    return *parameters;
   }
 
  private:
+  std::unique_ptr<std::vector<TypeParameter>> makeParameters() const;
+
   const std::vector<std::string> names_;
   const std::vector<std::shared_ptr<const Type>> children_;
-  const std::vector<TypeParameter> parameters_;
+  mutable std::atomic<std::vector<TypeParameter>*> parameters_{nullptr};
 };
 
 using RowTypePtr = std::shared_ptr<const RowType>;
@@ -1479,6 +1500,70 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
         VELOX_FAIL(                                                      \
             "not a scalar type! kind: {}", mapTypeKindToName(typeKind)); \
     }                                                                    \
+  }()
+
+#define VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(TEMPLATE_FUNC, T, typeKind, ...) \
+  [&]() {                                                                     \
+    switch (typeKind) {                                                       \
+      case ::facebook::velox::TypeKind::BOOLEAN: {                            \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::BOOLEAN>(        \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::INTEGER: {                            \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::INTEGER>(        \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::TINYINT: {                            \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::TINYINT>(        \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::SMALLINT: {                           \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::SMALLINT>(       \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::BIGINT: {                             \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::BIGINT>(         \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::HUGEINT: {                            \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::HUGEINT>(        \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::REAL: {                               \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::REAL>(           \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::DOUBLE: {                             \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::DOUBLE>(         \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::VARCHAR: {                            \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::VARCHAR>(        \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::VARBINARY: {                          \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::VARBINARY>(      \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::TIMESTAMP: {                          \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::TIMESTAMP>(      \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::MAP: {                                \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::MAP>(            \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::ARRAY: {                              \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::ARRAY>(          \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::ROW: {                                \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::ROW>(            \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      default:                                                                \
+        VELOX_FAIL("not a known type kind: {}", mapTypeKindToName(typeKind)); \
+    }                                                                         \
   }()
 
 #define VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(TEMPLATE_FUNC, typeKind, ...)   \

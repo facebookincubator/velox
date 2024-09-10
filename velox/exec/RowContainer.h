@@ -72,19 +72,19 @@ using normalized_key_t = uint64_t;
 struct RowContainerIterator {
   int32_t allocationIndex = 0;
   int32_t rowOffset = 0;
-  // Number of unvisited entries that are prefixed by an uint64_t for
-  // normalized key. Set in listRows() on first call.
+  /// Number of unvisited entries that are prefixed by an uint64_t for
+  /// normalized key. Set in listRows() on first call.
   int64_t normalizedKeysLeft = 0;
   int normalizedKeySize = 0;
 
-  // Ordinal position of 'currentRow' in RowContainer.
+  /// Ordinal position of 'currentRow' in RowContainer.
   int32_t rowNumber{0};
   char* rowBegin{nullptr};
-  // First byte after the end of the range containing 'currentRow'.
+  /// First byte after the end of the range containing 'currentRow'.
   char* endOfRun{nullptr};
 
-  // Returns the current row, skipping a possible normalized key below the first
-  // byte of row.
+  /// Returns the current row, skipping a possible normalized key below the
+  /// first byte of row.
   inline char* currentRow() const {
     return (rowBegin && normalizedKeysLeft) ? rowBegin + normalizedKeySize
                                             : rowBegin;
@@ -149,16 +149,16 @@ class RowColumn {
     return packedOffsets_ & 0xff;
   }
 
-  // The null bits and the initialized bits for accumulators start at the
-  // beginning of the first byte following the null bits for the keys.  This
-  // guarantees that they always appear on the same byte for any given
-  // accumulator (since 2 evenly divides 8).
+  /// The null bits and the initialized bits for accumulators start at the
+  /// beginning of the first byte following the null bits for the keys.  This
+  /// guarantees that they always appear on the same byte for any given
+  /// accumulator (since 2 evenly divides 8).
   int32_t initializedByte() const {
     return nullByte();
   }
 
-  // The initialized bit for an accumulator is guaranteed to appear on the same
-  // byte immediately following the null bit for that accumulator.
+  /// The initialized bit for an accumulator is guaranteed to appear on the same
+  /// byte immediately following the null bit for that accumulator.
   int32_t initializedMask() const {
     return nullMask() << 1;
   }
@@ -182,8 +182,8 @@ class RowColumn {
 class RowContainer {
  public:
   static constexpr uint64_t kUnlimited = std::numeric_limits<uint64_t>::max();
-  // The number of flags (bits) per accumulator, one for null and one for
-  // initialized.
+  /// The number of flags (bits) per accumulator, one for null and one for
+  /// initialized.
   static constexpr size_t kNumAccumulatorFlags = 2;
   using Eraser = std::function<void(folly::Range<char**> rows)>;
 
@@ -337,22 +337,32 @@ class RowContainer {
   /// Copies the values at 'col' into 'result' (starting at 'resultOffset')
   /// for the 'numRows' rows pointed to by 'rows'. If a 'row' is null, sets
   /// corresponding row in 'result' to null.
+  /// @param columnHasNulls indicates whether the 'col' column contains null
+  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// applied. It is the caller's responsibility to ensure this flag is set
+  /// correctly.
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
+      bool columnHasNulls,
       vector_size_t resultOffset,
       const VectorPtr& result);
 
   /// Copies the values at 'col' into 'result' for the 'numRows' rows pointed to
   /// by 'rows'. If an entry in 'rows' is null, sets corresponding row in
   /// 'result' to null.
+  /// @param columnHasNulls indicates whether the 'col' column contains null
+  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// applied. It is the caller's responsibility to ensure this flag is set
+  /// correctly.
   static void extractColumn(
       const char* const* rows,
       int32_t numRows,
       RowColumn col,
+      bool columnHasNulls,
       const VectorPtr& result) {
-    extractColumn(rows, numRows, col, 0, result);
+    extractColumn(rows, numRows, col, columnHasNulls, 0, result);
   }
 
   /// Copies the values from the array pointed to by 'rows' at 'col' into
@@ -361,10 +371,15 @@ class RowContainer {
   /// 'result' to null. The positions in 'rowNumbers' array can repeat and also
   /// appear out of order. If rowNumbers has a negative value, then the
   /// corresponding row in 'result' is set to null.
+  /// @param columnHasNulls indicates whether the 'col' column contains null
+  /// values. If 'columnHasNulls' is false, a null-free optimization will be
+  /// applied. It is the caller's responsibility to ensure this flag is set
+  /// correctly.
   static void extractColumn(
       const char* const* rows,
       folly::Range<const vector_size_t*> rowNumbers,
       RowColumn col,
+      bool columnHasNulls,
       vector_size_t resultOffset,
       const VectorPtr& result);
 
@@ -384,7 +399,12 @@ class RowContainer {
       int32_t numRows,
       int32_t columnIndex,
       const VectorPtr& result) {
-    extractColumn(rows, numRows, columnAt(columnIndex), result);
+    extractColumn(
+        rows,
+        numRows,
+        columnAt(columnIndex),
+        columnHasNulls(columnIndex),
+        result);
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
@@ -396,7 +416,13 @@ class RowContainer {
       int32_t columnIndex,
       int32_t resultOffset,
       const VectorPtr& result) {
-    extractColumn(rows, numRows, columnAt(columnIndex), resultOffset, result);
+    extractColumn(
+        rows,
+        numRows,
+        columnAt(columnIndex),
+        columnHasNulls(columnIndex),
+        resultOffset,
+        result);
   }
 
   /// Copies the values at 'columnIndex' at positions in the 'rowNumbers' array
@@ -413,7 +439,12 @@ class RowContainer {
       const vector_size_t resultOffset,
       const VectorPtr& result) {
     extractColumn(
-        rows, rowNumbers, columnAt(columnIndex), resultOffset, result);
+        rows,
+        rowNumbers,
+        columnAt(columnIndex),
+        columnHasNulls(columnIndex),
+        resultOffset,
+        result);
   }
 
   /// Sets in result all locations with null values in columnIndex for rows.
@@ -446,18 +477,18 @@ class RowContainer {
     return 1 << (nullOffset & 7);
   }
 
-  // Only accumulators have initialized flags. accumulatorFlagsOffset is the
-  // offset at which the flags for an accumulator begin. Currently this is the
-  // null flag, followed by the initialized flag.  So it's equivalent to the
-  // nullOffset.
-
-  // It's guaranteed that the flags for an accumulator appear in the same byte.
+  /// Only accumulators have initialized flags. accumulatorFlagsOffset is the
+  /// offset at which the flags for an accumulator begin. Currently this is the
+  /// null flag, followed by the initialized flag. So it's equivalent to the
+  /// nullOffset.
+  ///
+  /// It's guaranteed that the flags for an accumulator appear in the same byte.
   static inline int32_t initializedByte(int32_t accumulatorFlagsOffset) {
     return nullByte(accumulatorFlagsOffset);
   }
 
-  // accumulatorFlagsOffset is the offset at which the flags for an accumulator
-  // begin.
+  /// accumulatorFlagsOffset is the offset at which the flags for an accumulator
+  /// begin.
   static inline int32_t initializedMask(int32_t accumulatorFlagsOffset) {
     return nullMask(accumulatorFlagsOffset) << 1;
   }
@@ -620,6 +651,13 @@ class RowContainer {
     return rowColumns_[index];
   }
 
+  /// Returns the size of a string or complex types value stored in the
+  /// specified row and column.
+  int32_t variableSizeAt(const char* row, column_index_t column);
+
+  /// Returns the per row size of a fixed size column.
+  int32_t fixedSizeAt(column_index_t column);
+
   /// Bit offset of the probed flag for a full or right outer join  payload.
   /// 0 if not applicable.
   int32_t probedFlagOffset() const {
@@ -639,9 +677,9 @@ class RowContainer {
     return nextOffset_;
   }
 
-  // Create a next-row-vector if it doesn't exist. Append the row address to
-  // the next-row-vector, and store the address of the next-row-vector in the
-  // nextOffset_ slot for all duplicate rows.
+  /// Creates a next-row-vector if it doesn't exist. Appends the row address to
+  /// the next-row-vector, and store the address of the next-row-vector in the
+  /// 'nextOffset_' slot for all duplicate rows.
   void appendNextRow(char* current, char* nextRow);
 
   NextRowVector*& getNextRowVector(char* row) const {
@@ -709,6 +747,11 @@ class RowContainer {
 
   const auto& keyTypes() const {
     return keyTypes_;
+  }
+
+  /// Returns true if specified column may have nulls, false otherwise.
+  inline bool columnHasNulls(int32_t columnIndex) const {
+    return columnHasNulls_[columnIndex];
   }
 
   const std::vector<Accumulator>& accumulators() const {
@@ -784,24 +827,20 @@ class RowContainer {
     return *reinterpret_cast<T*>(group + offset);
   }
 
-  /// Returns the size of a string or complex types value stored in the
-  /// specified row and column.
-  int32_t variableSizeAt(const char* row, column_index_t column);
-
-  /// Copies a string or complex type value from the specified row and column
-  /// into provided buffer. Stored the size of the data in the first 4 bytes of
-  /// the buffer. If the value is null, writes zero into the first 4 bytes of
-  /// destination and returns.
-  /// @return The number of bytes written to 'destination' including the 4 bytes
-  /// of the size.
+  // Copies a string or complex type value from the specified row and column
+  // into provided buffer. Stored the size of the data in the first 4 bytes of
+  // the buffer. If the value is null, writes zero into the first 4 bytes of
+  // destination and returns.
+  // @return The number of bytes written to 'destination' including the 4 bytes
+  // of the size.
   int32_t
   extractVariableSizeAt(const char* row, column_index_t column, char* output);
 
-  /// Copies a string or complex type value from 'data' into the specified row
-  /// and column. Expects first 4 bytes in 'data' to contain the size of the
-  /// string or complex value.
-  /// @return The number of bytes read from 'data': 4 bytes for size + that many
-  /// bytes.
+  // Copies a string or complex type value from 'data' into the specified row
+  // and column. Expects first 4 bytes in 'data' to contain the size of the
+  // string or complex value.
+  // @return The number of bytes read from 'data': 4 bytes for size + that many
+  // bytes.
   int32_t
   storeVariableSizeAt(const char* data, char* row, column_index_t column);
 
@@ -811,14 +850,27 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t numRows,
       RowColumn column,
+      bool columnHasNulls,
       int32_t resultOffset,
       const VectorPtr& result) {
     if (rowNumbers.size() > 0) {
       extractColumnTypedInternal<true, Kind>(
-          rows, rowNumbers, rowNumbers.size(), column, resultOffset, result);
+          rows,
+          rowNumbers,
+          rowNumbers.size(),
+          column,
+          columnHasNulls,
+          resultOffset,
+          result);
     } else {
       extractColumnTypedInternal<false, Kind>(
-          rows, rowNumbers, numRows, column, resultOffset, result);
+          rows,
+          rowNumbers,
+          numRows,
+          column,
+          columnHasNulls,
+          resultOffset,
+          result);
     }
   }
 
@@ -828,6 +880,7 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t numRows,
       RowColumn column,
+      bool columnHasNulls,
       int32_t resultOffset,
       const VectorPtr& result) {
     // Resize the result vector before all copies.
@@ -844,7 +897,7 @@ class RowContainer {
     auto* flatResult = result->as<FlatVector<T>>();
     auto nullMask = column.nullMask();
     auto offset = column.offset();
-    if (!nullMask) {
+    if (!nullMask || !columnHasNulls) {
       extractValuesNoNulls<useRowNumbers, T>(
           rows, rowNumbers, numRows, offset, resultOffset, flatResult);
     } else {
@@ -877,13 +930,15 @@ class RowContainer {
       char* row,
       int32_t offset,
       int32_t nullByte,
-      uint8_t nullMask) {
+      uint8_t nullMask,
+      int32_t column) {
     using T = typename TypeTraits<Kind>::NativeType;
     if (decoded.isNullAt(index)) {
       row[nullByte] |= nullMask;
       // Do not leave an uninitialized value in the case of a
       // null. This is an error with valgrind/asan.
       *reinterpret_cast<T*>(row + offset) = T();
+      updateColumnHasNulls(column, true);
       return;
     }
     if constexpr (std::is_same_v<T, StringView>) {
@@ -926,7 +981,7 @@ class RowContainer {
     BufferPtr& nullBuffer = result->mutableNulls(maxRows);
     auto nulls = nullBuffer->asMutable<uint64_t>();
     BufferPtr valuesBuffer = result->mutableValues(maxRows);
-    auto values = valuesBuffer->asMutableRange<T>();
+    [[maybe_unused]] auto values = valuesBuffer->asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       const char* row;
       if constexpr (useRowNumbers) {
@@ -960,7 +1015,7 @@ class RowContainer {
     auto maxRows = numRows + resultOffset;
     VELOX_DCHECK_LE(maxRows, result->size());
     BufferPtr valuesBuffer = result->mutableValues(maxRows);
-    auto values = valuesBuffer->asMutableRange<T>();
+    [[maybe_unused]] auto values = valuesBuffer->asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       const char* row;
       if constexpr (useRowNumbers) {
@@ -983,7 +1038,9 @@ class RowContainer {
     }
   }
 
-  static ByteInputStream prepareRead(const char* row, int32_t offset);
+  static std::unique_ptr<ByteInputStream> prepareRead(
+      const char* row,
+      int32_t offset);
 
   template <TypeKind Kind>
   void hashTyped(
@@ -1122,7 +1179,8 @@ class RowContainer {
       char* row,
       int32_t offset,
       int32_t nullByte = 0,
-      uint8_t nullMask = 0);
+      uint8_t nullMask = 0,
+      int32_t column = 0);
 
   template <bool useRowNumbers>
   static void extractComplexType(
@@ -1150,7 +1208,7 @@ class RowContainer {
         result->setNull(resultIndex, true);
       } else {
         auto stream = prepareRead(row, offset);
-        ContainerRowSerde::deserialize(stream, resultIndex, result.get());
+        ContainerRowSerde::deserialize(*stream, resultIndex, result.get());
       }
     }
   }
@@ -1237,11 +1295,19 @@ class RowContainer {
 
   void freeRowsExtraMemory(folly::Range<char**> rows, bool clear);
 
+  // Updates the specific column's columnHasNulls_ flag, if 'hasNulls' is true.
+  // columnHasNulls_ flag is false by default.
+  inline void updateColumnHasNulls(int32_t columnIndex, bool hasNulls) {
+    columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] || hasNulls;
+  }
+
   const bool checkFree_ = false;
 
   const std::vector<TypePtr> keyTypes_;
   const bool nullableKeys_;
   const bool isJoinBuild_;
+
+  std::vector<bool> columnHasNulls_;
 
   // Indicates if we can add new row to this row container. It is set to false
   // after user calls 'getRowPartitions()' to create 'rowPartitions' object for
@@ -1316,8 +1382,10 @@ inline void RowContainer::storeWithNulls<TypeKind::ROW>(
     char* row,
     int32_t offset,
     int32_t nullByte,
-    uint8_t nullMask) {
-  storeComplexType(decoded, index, isKey, row, offset, nullByte, nullMask);
+    uint8_t nullMask,
+    int32_t column) {
+  storeComplexType(
+      decoded, index, isKey, row, offset, nullByte, nullMask, column);
 }
 
 template <>
@@ -1338,8 +1406,10 @@ inline void RowContainer::storeWithNulls<TypeKind::ARRAY>(
     char* row,
     int32_t offset,
     int32_t nullByte,
-    uint8_t nullMask) {
-  storeComplexType(decoded, index, isKey, row, offset, nullByte, nullMask);
+    uint8_t nullMask,
+    int32_t column) {
+  storeComplexType(
+      decoded, index, isKey, row, offset, nullByte, nullMask, column);
 }
 
 template <>
@@ -1360,8 +1430,10 @@ inline void RowContainer::storeWithNulls<TypeKind::MAP>(
     char* row,
     int32_t offset,
     int32_t nullByte,
-    uint8_t nullMask) {
-  storeComplexType(decoded, index, isKey, row, offset, nullByte, nullMask);
+    uint8_t nullMask,
+    int32_t column) {
+  storeComplexType(
+      decoded, index, isKey, row, offset, nullByte, nullMask, column);
 }
 
 template <>
@@ -1382,11 +1454,15 @@ inline void RowContainer::storeWithNulls<TypeKind::HUGEINT>(
     char* row,
     int32_t offset,
     int32_t nullByte,
-    uint8_t nullMask) {
-  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
+    uint8_t nullMask,
+    int32_t column) {
   if (decoded.isNullAt(index)) {
     row[nullByte] |= nullMask;
+    memset(row + offset, 0, sizeof(int128_t));
+    updateColumnHasNulls(column, true);
+    return;
   }
+  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
 }
 
 template <>
@@ -1405,6 +1481,7 @@ inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
     folly::Range<const vector_size_t*> /*rowNumbers*/,
     int32_t /*numRows*/,
     RowColumn /*column*/,
+    bool /*columnHasNulls*/,
     int32_t /*resultOffset*/,
     const VectorPtr& /*result*/) {
   VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
@@ -1414,6 +1491,7 @@ inline void RowContainer::extractColumn(
     const char* const* rows,
     int32_t numRows,
     RowColumn column,
+    bool columnHasNulls,
     int32_t resultOffset,
     const VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -1423,6 +1501,7 @@ inline void RowContainer::extractColumn(
       {},
       numRows,
       column,
+      columnHasNulls,
       resultOffset,
       result);
 }
@@ -1431,6 +1510,7 @@ inline void RowContainer::extractColumn(
     const char* const* rows,
     folly::Range<const vector_size_t*> rowNumbers,
     RowColumn column,
+    bool columnHasNulls,
     int32_t resultOffset,
     const VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -1440,6 +1520,7 @@ inline void RowContainer::extractColumn(
       rowNumbers,
       rowNumbers.size(),
       column,
+      columnHasNulls,
       resultOffset,
       result);
 }

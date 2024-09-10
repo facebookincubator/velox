@@ -27,11 +27,11 @@
 
 #include "velox/common/caching/CachedFactory.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
+#include "velox/connectors/hive/FileProperties.h"
 
 namespace facebook::velox {
-
-class Config;
 
 // See the file comment.
 struct FileHandle {
@@ -65,18 +65,21 @@ using FileHandleCache = SimpleLRUCache<std::string, FileHandle>;
 class FileHandleGenerator {
  public:
   FileHandleGenerator() {}
-  FileHandleGenerator(std::shared_ptr<const Config> properties)
+  FileHandleGenerator(std::shared_ptr<const config::ConfigBase> properties)
       : properties_(std::move(properties)) {}
-  std::unique_ptr<FileHandle> operator()(const std::string& filename);
+  std::unique_ptr<FileHandle> operator()(
+      const std::string& filename,
+      const FileProperties* properties);
 
  private:
-  const std::shared_ptr<const Config> properties_;
+  const std::shared_ptr<const config::ConfigBase> properties_;
 };
 
 using FileHandleFactory = CachedFactory<
     std::string,
     FileHandle,
     FileHandleGenerator,
+    FileProperties,
     FileHandleSizer>;
 
 using FileHandleCachedPtr = CachedPtr<std::string, FileHandle>;

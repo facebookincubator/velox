@@ -24,6 +24,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/common/base/Range.h"
 #include "velox/vector/TypeAliases.h"
 
@@ -134,6 +135,10 @@ class SelectivityVector {
     return MutableRange<bool>(bits_.data(), begin_, end_);
   }
 
+  const uint64_t* allBits() const {
+    return bits_.data();
+  }
+
   vector_size_t begin() const {
     return begin_;
   }
@@ -156,7 +161,9 @@ class SelectivityVector {
     bits::fillBits(bits_.data(), 0, size_, false);
     begin_ = 0;
     end_ = 0;
+    VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
     allSelected_ = false;
+    VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
   }
 
   /**
@@ -287,7 +294,9 @@ class SelectivityVector {
     if (begin_ == -1) {
       begin_ = 0;
       end_ = 0;
+      VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
       allSelected_ = false;
+      VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
       return;
     }
     end_ = bits::findLastBit(bits_.data(), begin_, size_) + 1;
@@ -433,7 +442,8 @@ class SelectivityIterator {
 template <typename Callable>
 inline void SelectivityVector::applyToSelected(Callable func) const {
   if (isAllSelected()) {
-    for (vector_size_t row = begin_; row < end_; ++row) {
+    const auto end = end_;
+    for (vector_size_t row = begin_; row < end; ++row) {
       func(row);
     }
   } else {

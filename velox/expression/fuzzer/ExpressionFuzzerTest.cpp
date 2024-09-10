@@ -18,7 +18,14 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
+#include "velox/expression/fuzzer/ArgGenerator.h"
 #include "velox/expression/fuzzer/FuzzerRunner.h"
+#include "velox/functions/prestosql/fuzzer/DivideArgGenerator.h"
+#include "velox/functions/prestosql/fuzzer/FloorAndRoundArgGenerator.h"
+#include "velox/functions/prestosql/fuzzer/ModulusArgGenerator.h"
+#include "velox/functions/prestosql/fuzzer/MultiplyArgGenerator.h"
+#include "velox/functions/prestosql/fuzzer/PlusMinusArgGenerator.h"
+#include "velox/functions/prestosql/fuzzer/TruncateArgGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 DEFINE_int64(
@@ -27,6 +34,8 @@ DEFINE_int64(
     "Initial seed for random number generator used to reproduce previous "
     "results (0 means start with random seed).");
 
+using namespace facebook::velox::exec::test;
+using facebook::velox::fuzzer::ArgGenerator;
 using facebook::velox::fuzzer::FuzzerRunner;
 
 int main(int argc, char** argv) {
@@ -54,6 +63,7 @@ int main(int argc, char** argv) {
       "width_bucket",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
+      "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
       // https://github.com/facebookincubator/velox/issues/8919
       "plus(date,interval year to month) -> date",
       "minus(date,interval year to month) -> date",
@@ -64,7 +74,20 @@ int main(int argc, char** argv) {
       "regexp_extract",
       "regexp_extract_all",
       "regexp_like",
+      "regexp_replace",
+      "regexp_split",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return FuzzerRunner::run(initialSeed, skipFunctions, {{}});
+
+  std::unordered_map<std::string, std::shared_ptr<ArgGenerator>> argGenerators =
+      {{"plus", std::make_shared<PlusMinusArgGenerator>()},
+       {"minus", std::make_shared<PlusMinusArgGenerator>()},
+       {"multiply", std::make_shared<MultiplyArgGenerator>()},
+       {"divide", std::make_shared<DivideArgGenerator>()},
+       {"floor", std::make_shared<FloorAndRoundArgGenerator>()},
+       {"round", std::make_shared<FloorAndRoundArgGenerator>()},
+       {"mod", std::make_shared<ModulusArgGenerator>()},
+       {"truncate", std::make_shared<TruncateArgGenerator>()}};
+
+  return FuzzerRunner::run(initialSeed, skipFunctions, {{}}, argGenerators);
 }

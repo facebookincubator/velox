@@ -291,12 +291,14 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(stats.spilledFiles, expectedNumSpilledFiles);
     ASSERT_GT(stats.spilledBytes, 0);
     ASSERT_GT(stats.spillWrites, 0);
-    ASSERT_GT(stats.spillWriteTimeUs, 0);
-    ASSERT_GE(stats.spillFlushTimeUs, 0);
+    // NOTE: On fast machines we might have sub-microsecond in each write,
+    // resulting in 0us total write time.
+    ASSERT_GE(stats.spillWriteTimeNanos, 0);
+    ASSERT_GE(stats.spillFlushTimeNanos, 0);
     ASSERT_GT(stats.spilledRows, 0);
     // NOTE: the following stats are not collected by spill state.
-    ASSERT_EQ(stats.spillFillTimeUs, 0);
-    ASSERT_EQ(stats.spillSortTimeUs, 0);
+    ASSERT_EQ(stats.spillFillTimeNanos, 0);
+    ASSERT_EQ(stats.spillSortTimeNanos, 0);
     const auto newGStats = common::globalSpillStats();
     ASSERT_EQ(
         prevGStats.spilledPartitions + stats.spilledPartitions,
@@ -308,19 +310,19 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(
         prevGStats.spillWrites + stats.spillWrites, newGStats.spillWrites);
     ASSERT_EQ(
-        prevGStats.spillWriteTimeUs + stats.spillWriteTimeUs,
-        newGStats.spillWriteTimeUs);
+        prevGStats.spillWriteTimeNanos + stats.spillWriteTimeNanos,
+        newGStats.spillWriteTimeNanos);
     ASSERT_EQ(
-        prevGStats.spillFlushTimeUs + stats.spillFlushTimeUs,
-        newGStats.spillFlushTimeUs);
+        prevGStats.spillFlushTimeNanos + stats.spillFlushTimeNanos,
+        newGStats.spillFlushTimeNanos);
     ASSERT_EQ(
         prevGStats.spilledRows + stats.spilledRows, newGStats.spilledRows);
     ASSERT_EQ(
-        prevGStats.spillFillTimeUs + stats.spillFillTimeUs,
-        newGStats.spillFillTimeUs);
+        prevGStats.spillFillTimeNanos + stats.spillFillTimeNanos,
+        newGStats.spillFillTimeNanos);
     ASSERT_EQ(
-        prevGStats.spillSortTimeUs + stats.spillSortTimeUs,
-        newGStats.spillSortTimeUs);
+        prevGStats.spillSortTimeNanos + stats.spillSortTimeNanos,
+        newGStats.spillSortTimeNanos);
 
     // Verifies the spill file id
     for (auto& partitionNum : state_->spilledPartitionSet()) {
@@ -352,7 +354,8 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
       ASSERT_EQ(state_->numFinishedFiles(partition), 0);
       auto spillPartition =
           SpillPartition(SpillPartitionId{0, partition}, std::move(spillFiles));
-      auto merge = spillPartition.createOrderedReader(pool(), &spillStats_);
+      auto merge =
+          spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_);
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
@@ -392,35 +395,33 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     const auto finalStats = spillStats_.copy();
     ASSERT_EQ(finalStats.spillReadBytes, finalStats.spilledBytes);
     ASSERT_GT(finalStats.spillReads, 0);
-    ASSERT_GT(finalStats.spillReadTimeUs, 0);
-    ASSERT_GT(finalStats.spillDeserializationTimeUs, 0);
-
+    ASSERT_GT(finalStats.spillReadTimeNanos, 0);
+    ASSERT_GT(finalStats.spillDeserializationTimeNanos, 0);
     ASSERT_EQ(
         finalStats.toString(),
         fmt::format(
-            "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] "
-            "spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] "
-            "spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] "
-            "spillWrites[{}] spillFlushTime[{}] spillWriteTime[{}] "
-            "maxSpillExceededLimitCount[0] spillReadBytes[{}] spillReads[{}] "
-            "spillReadTime[{}] spillReadDeserializationTime[{}]",
+            "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] spilledRows[{}] "
+            "spilledPartitions[{}] spilledFiles[{}] spillFillTimeNanos[{}] "
+            "spillSortTimeNanos[{}] spillSerializationTimeNanos[{}] spillWrites[{}] "
+            "spillFlushTimeNanos[{}] spillWriteTimeNanos[{}] maxSpillExceededLimitCount[0] "
+            "spillReadBytes[{}] spillReads[{}] spillReadTimeNanos[{}] "
+            "spillReadDeserializationTimeNanos[{}]",
             finalStats.spillRuns,
             succinctBytes(finalStats.spilledInputBytes),
             succinctBytes(finalStats.spilledBytes),
             finalStats.spilledRows,
             finalStats.spilledPartitions,
             finalStats.spilledFiles,
-            succinctMicros(finalStats.spillFillTimeUs),
-            succinctMicros(finalStats.spillSortTimeUs),
-            succinctMicros(finalStats.spillSerializationTimeUs),
+            succinctNanos(finalStats.spillFillTimeNanos),
+            succinctNanos(finalStats.spillSortTimeNanos),
+            succinctNanos(finalStats.spillSerializationTimeNanos),
             finalStats.spillWrites,
-            succinctMicros(finalStats.spillFlushTimeUs),
-            succinctMicros(finalStats.spillWriteTimeUs),
+            succinctNanos(finalStats.spillFlushTimeNanos),
+            succinctNanos(finalStats.spillWriteTimeNanos),
             succinctBytes(finalStats.spillReadBytes),
             finalStats.spillReads,
-            succinctMicros(finalStats.spillReadTimeUs),
-            succinctMicros(finalStats.spillDeserializationTimeUs)));
-
+            succinctNanos(finalStats.spillReadTimeNanos),
+            succinctNanos(finalStats.spillDeserializationTimeNanos)));
     // Verify the spilled files are still there after spill state destruction.
     for (const auto& spilledFile : spilledFileSet) {
       ASSERT_TRUE(fs->exists(spilledFile));
@@ -501,10 +502,12 @@ TEST_P(SpillTest, spillTimestamp) {
       state.testingNonEmptySpilledPartitionSet().contains(partitionIndex));
 
   SpillPartition spillPartition(SpillPartitionId{0, 0}, state.finish(0));
-  auto merge = spillPartition.createOrderedReader(pool(), &spillStats_);
+  auto merge =
+      spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_);
   ASSERT_TRUE(merge != nullptr);
   ASSERT_TRUE(
-      spillPartition.createOrderedReader(pool(), &spillStats_) == nullptr);
+      spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_) ==
+      nullptr);
   for (auto i = 0; i < timeValues.size(); ++i) {
     auto* stream = merge->next();
     ASSERT_NE(stream, nullptr);
@@ -606,8 +609,8 @@ TEST_P(SpillTest, spillPartitionSet) {
           fmt::format(
               "SPILLED PARTITION[ID:{} FILES:0 SIZE:0B]", id.toString()));
       // Expect an empty reader.
-      auto reader =
-          spillPartitions.back()->createUnorderedReader(pool(), &spillStats_);
+      auto reader = spillPartitions.back()->createUnorderedReader(
+          1 << 20, pool(), &spillStats_);
       ASSERT_FALSE(reader->nextBatch(output));
     }
 
@@ -679,8 +682,8 @@ TEST_P(SpillTest, spillPartitionSet) {
               i,
               expectedPartitionFiles[i],
               succinctBytes(expectedPartitionSizes[i])));
-      auto reader =
-          spillPartitions[i]->createUnorderedReader(pool(), &spillStats_);
+      auto reader = spillPartitions[i]->createUnorderedReader(
+          1 << 20, pool(), &spillStats_);
       for (int j = 0; j < numBatchesPerPartition; ++j) {
         ASSERT_TRUE(reader->nextBatch(output));
         for (int row = 0; row < numRowsPerBatch; ++row) {
@@ -694,8 +697,8 @@ TEST_P(SpillTest, spillPartitionSet) {
     // Check spill partition state after creating the reader.
     ASSERT_EQ(0, spillPartitions[i]->numFiles());
     {
-      auto reader =
-          spillPartitions[i]->createUnorderedReader(pool(), &spillStats_);
+      auto reader = spillPartitions[i]->createUnorderedReader(
+          1 << 20, pool(), &spillStats_);
       ASSERT_FALSE(reader->nextBatch(output));
     }
   }
@@ -741,8 +744,8 @@ TEST_P(SpillTest, spillPartitionSpilt) {
     // Read verification.
     int batchIdx = 0;
     for (int32_t i = 0; i < numShards; ++i) {
-      auto reader =
-          spillPartitionShards[i]->createUnorderedReader(pool(), &spillStats_);
+      auto reader = spillPartitionShards[i]->createUnorderedReader(
+          1 << 20, pool(), &spillStats_);
       RowVectorPtr output;
       while (reader->nextBatch(output)) {
         for (int row = 0; row < numRowsPerBatch; ++row) {

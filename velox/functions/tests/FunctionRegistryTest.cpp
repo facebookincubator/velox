@@ -24,6 +24,7 @@
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/type/Type.h"
 
@@ -350,8 +351,7 @@ TEST_F(FunctionRegistryTest, getFunctionSignatures) {
       functionSignatures["variadic_func"].at(0)->toString(),
       exec::FunctionSignatureBuilder()
           .returnType("varchar")
-          .argumentType("varchar")
-          .variableArity()
+          .variableArity("varchar")
           .build()
           ->toString());
 
@@ -493,6 +493,20 @@ TEST_F(FunctionRegistryTest, functionNameInMixedCase) {
   ASSERT_EQ(*result, *VARCHAR());
   result = resolveFunction("variadiC_funC", {});
   ASSERT_EQ(*result, *VARCHAR());
+}
+
+TEST_F(FunctionRegistryTest, isDeterministic) {
+  functions::prestosql::registerAllScalarFunctions();
+  ASSERT_TRUE(isDeterministic("plus").value());
+  ASSERT_TRUE(isDeterministic("in").value());
+
+  ASSERT_FALSE(isDeterministic("rand").value());
+  ASSERT_FALSE(isDeterministic("uuid").value());
+  ASSERT_FALSE(isDeterministic("shuffle").value());
+
+  // Not found functions.
+  ASSERT_FALSE(isDeterministic("cast").has_value());
+  ASSERT_FALSE(isDeterministic("not_found_function").has_value());
 }
 
 template <typename T>

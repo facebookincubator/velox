@@ -16,12 +16,7 @@
 
 #include <gflags/gflags.h>
 
-// Used in velox/common/memory/MappedMemory.cpp
-
-DEFINE_int32(
-    velox_memory_pool_mb,
-    4 * 1024,
-    "Size of file cache/operator working memory in MB");
+// Used in velox/common/memory/Memory.cpp
 
 DEFINE_int32(
     velox_memory_num_shared_leaf_pools,

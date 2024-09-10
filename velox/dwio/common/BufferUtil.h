@@ -24,10 +24,30 @@ template <typename T>
 inline void ensureCapacity(
     BufferPtr& data,
     size_t capacity,
-    velox::memory::MemoryPool* pool) {
-  if (!data || !data->isMutable() ||
-      data->capacity() < BaseVector::byteSize<T>(capacity)) {
+    velox::memory::MemoryPool* pool,
+    bool preserveOldData = false,
+    bool clearBits = false) {
+  size_t oldSize = 0;
+  if (!data) {
     data = AlignedBuffer::allocate<T>(capacity, pool);
+  } else {
+    oldSize = data->size();
+    if (!data->isMutable() ||
+        data->capacity() < BaseVector::byteSize<T>(capacity)) {
+      auto newData = AlignedBuffer::allocate<T>(capacity, pool);
+      if (preserveOldData) {
+        std::memcpy(
+            newData->template asMutable<uint8_t>(),
+            data->as<uint8_t>(),
+            oldSize);
+      }
+      data = newData;
+    }
+  }
+
+  if (clearBits) {
+    std::memset(
+        (void*)(data->asMutable<int8_t>() + oldSize), 0L, capacity - oldSize);
   }
 }
 

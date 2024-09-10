@@ -51,34 +51,33 @@ jobs:
     name: Linux release with adapters
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: 8-core
+    runs-on: 8-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
         shell: bash
     env:
-      CCACHE_DIR: "/__w/velox/velox/.ccache"
+      CCACHE_DIR: "${{ github.workspace }}/.ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      Protobuf_SOURCE: BUNDLED # can be removed after #10134 is merged
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
-      CUDA_VERSION: "11.8"
+      Arrow_SOURCE: AUTO
+      CUDA_VERSION: "12.4"
     steps:
       - uses: actions/checkout@v4
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
         # it doesn't work
-        run: git config --global --add safe.directory /__w/velox/velox
-
-      - name: Install cmake
-        run: python3 -m pip install cmake==3.28.3
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
       - name: Install Dependencies
         run: |
           # Allows to install arbitrary cuda-version whithout needing to update
           # docker container before. It simplifies testing new/different versions
           if ! yum list installed cuda-nvcc-$(echo ${CUDA_VERSION} | tr '.' '-') 1>/dev/null; then
-            source scripts/setup-centos8.sh
+            source scripts/setup-centos9.sh
             install_cuda ${CUDA_VERSION}
           fi
 
@@ -96,8 +95,8 @@ jobs:
           MAKEFLAGS: 'NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4'
           CUDA_ARCHITECTURES: 70
           CUDA_COMPILER: /usr/local/cuda-${CUDA_VERSION}/bin/nvcc
-          # Without that, nvcc picks /usr/bin/c++ which is GCC 8
-          CUDA_FLAGS: "-ccbin /opt/rh/gcc-toolset-9/root/usr/bin"
+          # Set compiler to GCC 12
+          CUDA_FLAGS: "-ccbin /opt/rh/gcc-toolset-12/root/usr/bin"
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DVELOX_ENABLE_BENCHMARKS=ON"
@@ -109,9 +108,10 @@ jobs:
             "-DVELOX_ENABLE_ABFS=ON"
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
             "-DVELOX_ENABLE_GPU=ON"
+            "-DVELOX_MONO_LIBRARY=ON"
           )
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
-    
+
       - name: Ccache after
         run: ccache -s
 
@@ -124,13 +124,13 @@ jobs:
         # Some of the adapters dependencies are in the 'adapters' conda env
         shell: mamba run --no-capture-output -n adapters /usr/bin/bash -e {0}
         env:
-          LIBHDFS3_CONF: "/__w/velox/velox/scripts/hdfs-client.xml"
+          LIBHDFS3_CONF: "${{ github.workspace }}/scripts/hdfs-client.xml"
         working-directory: _build/release
         run: |
           ctest -j 8 --output-on-failure --no-tests=error
 
   ubuntu-debug:
-    runs-on: 8-core
+    runs-on: 8-core-ubuntu
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     name: "Ubuntu debug with resolve_dependency"
@@ -168,8 +168,8 @@ jobs:
       - name: Make Debug Build
         env:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
-          MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=4"
-          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON"
+          MAKEFLAGS: "NUM_THREADS=8 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=3"
+          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON"
         run: |
           make debug 
 

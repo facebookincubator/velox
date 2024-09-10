@@ -16,8 +16,14 @@
 
 #include "velox/experimental/wave/dwio/FormatData.h"
 #include "velox/experimental/wave/dwio/ColumnReader.h"
+#include "velox/experimental/wave/exec/Wave.h"
 
 DECLARE_int32(wave_reader_rows_per_tb);
+
+DEFINE_int32(
+    staging_bytes_per_thread,
+    300000,
+    "Make a parallel memcpy shard per this many bytes");
 
 namespace facebook::velox::wave {
 
@@ -38,87 +44,125 @@ void SplitStaging::registerPointerInternal(
   if (clear) {
     *ptr = nullptr;
   }
+#if 0 // ndef NDEBUG
+  for (auto& pair : patch_) {
+    VELOX_CHECK(pair.second != ptr, "Must not register the same pointer twice");
+  }
+#endif
   patch_.push_back(std::make_pair(id, ptr));
+}
+
+void SplitStaging::copyColumns(
+    int32_t begin,
+    int32_t end,
+    char* destination,
+    bool release) {
+  for (auto i = begin; i < end; ++i) {
+    memcpy(destination, staging_[i].hostData, staging_[i].size);
+    destination += staging_[i].size;
+  }
+  if (release) {
+    sem_.release();
+  }
+}
+
+// Shared pool of 1-2GB of pinned host memory for staging. May
+// transiently exceed 2GB but settles to 2GB after the peak.
+GpuArena& getTransferArena() {
+  static std::unique_ptr<GpuArena> arena = std::make_unique<GpuArena>(
+      1UL << 30, getHostAllocator(nullptr), 2UL << 30);
+  return *arena;
 }
 
 // Starts the transfers registered with add(). 'stream' is set to a stream
 // where operations depending on the transfer may be queued.
-void SplitStaging::transfer(WaveStream& waveStream, Stream& stream) {
-  if (fill_ == 0) {
+void SplitStaging::transfer(
+    WaveStream& waveStream,
+    Stream& stream,
+    bool recordEvent,
+    std::function<void(WaveStream&, Stream&)> asyncTail) {
+  if (fill_ == 0 || deviceBuffer_ != nullptr) {
+    if (recordEvent && !event_) {
+      event_ = std::make_unique<Event>();
+      event_->record(stream);
+    }
+    if (asyncTail) {
+      asyncTail(waveStream, stream);
+    }
     return;
   }
-  deviceBuffer_ = waveStream.arena().allocate<char>(fill_);
-  auto universal = deviceBuffer_->as<char>();
-  for (auto i = 0; i < offsets_.size(); ++i) {
-    memcpy(universal + offsets_[i], staging_[i].hostData, staging_[i].size);
+  WaveTime startTime = WaveTime::now();
+  deviceBuffer_ = waveStream.deviceArena().allocate<char>(fill_);
+  hostBuffer_ = getTransferArena().allocate<char>(fill_);
+  auto transferBuffer = hostBuffer_->as<char>();
+  int firstToCopy = 0;
+  int32_t numCopies = staging_.size();
+  int64_t copySize = 0;
+  auto targetCopySize = FLAGS_staging_bytes_per_thread;
+  int32_t numThreads = 0;
+  if (fill_ > 2000000) {
+    for (auto i = 0; i < staging_.size(); ++i) {
+      auto columnSize = staging_[i].size;
+      copySize += columnSize;
+      if (copySize >= targetCopySize && i < staging_.size() - 1) {
+        ++numThreads;
+        WaveStream::copyExecutor()->add(
+            [i, firstToCopy, transferBuffer, this]() {
+              copyColumns(firstToCopy, i + 1, transferBuffer, true);
+            });
+        transferBuffer += copySize;
+        copySize = 0;
+        firstToCopy = i + 1;
+      }
+    }
   }
-  stream.prefetch(
-      getDevice(), deviceBuffer_->as<char>(), deviceBuffer_->size());
+  auto deviceData = deviceBuffer_->as<char>();
   for (auto& pair : patch_) {
     *reinterpret_cast<int64_t*>(pair.second) +=
-        reinterpret_cast<int64_t>(universal) + offsets_[pair.first];
+        reinterpret_cast<int64_t>(deviceData) + offsets_[pair.first];
   }
-}
-
-BufferId ResultStaging::reserve(int32_t bytes) {
-  offsets_.push_back(fill_);
-  fill_ += bits::roundUp(bytes, 8);
-  return offsets_.size() - 1;
-}
-
-void ResultStaging::registerPointerInternal(
-    BufferId id,
-    void** pointer,
-    bool clear) {
-  VELOX_CHECK_LT(id, offsets_.size());
-  VELOX_CHECK_NOT_NULL(pointer);
-#ifndef NDEBUG
-  for (auto& pair : patch_) {
-    VELOX_CHECK(
-        pair.second != pointer, "Must not register the same pointer twice");
+  if (asyncTail) {
+    WaveStream::syncExecutor()->add([firstToCopy,
+                                     numThreads,
+                                     transferBuffer,
+                                     asyncTail,
+                                     &waveStream,
+                                     &stream,
+                                     recordEvent,
+                                     startTime,
+                                     this]() {
+      copyColumns(firstToCopy, staging_.size(), transferBuffer, false);
+      for (auto i = 0; i < numThreads; ++i) {
+        sem_.acquire();
+      }
+      stream.hostToDeviceAsync(
+          deviceBuffer_->as<char>(), hostBuffer_->as<char>(), fill_);
+      waveStream.stats().stagingTime += WaveTime::now() - startTime;
+      if (recordEvent) {
+        event_ = std::make_unique<Event>();
+        event_->record(stream);
+      }
+      fill_ = 0;
+      patch_.clear();
+      offsets_.clear();
+      asyncTail(waveStream, stream);
+    });
+  } else {
+    copyColumns(firstToCopy, staging_.size(), transferBuffer, false);
+    for (auto i = 0; i < numThreads; ++i) {
+      sem_.acquire();
+    }
+    stream.hostToDeviceAsync(
+        deviceBuffer_->as<char>(), hostBuffer_->as<char>(), fill_);
+    waveStream.stats().stagingTime += WaveTime::now() - startTime;
+    if (recordEvent) {
+      event_ = std::make_unique<Event>();
+      event_->record(stream);
+    }
+    fill_ = 0;
+    patch_.clear();
+    offsets_.clear();
   }
-#endif
-  if (clear) {
-    *pointer = nullptr;
-  }
-  patch_.push_back(std::make_pair(id, pointer));
-}
-
-void ResultStaging::makeDeviceBuffer(GpuArena& arena) {
-  if (fill_ == 0) {
-    return;
-  }
-  WaveBufferPtr buffer = arena.allocate<char>(fill_);
-  auto address = reinterpret_cast<int64_t>(buffer->as<char>());
-  // Patch all the registered pointers to point to buffer at offset offset_[id]
-  // + the offset already in the registered pointer.
-  for (auto& pair : patch_) {
-    int64_t* pointer = reinterpret_cast<int64_t*>(pair.second);
-    *pointer += address + offsets_[pair.first];
-  }
-  patch_.clear();
-  offsets_.clear();
-  fill_ = 0;
-  buffers_.push_back(std::move(buffer));
-}
-
-void ResultStaging::setReturnBuffer(GpuArena& arena, DecodePrograms& programs) {
-  if (fill_ == 0) {
-    programs.result = nullptr;
-    programs.hostResult = nullptr;
-    return;
-  }
-  programs.result = arena.allocate<char>(fill_);
-  auto address = reinterpret_cast<int64_t>(programs.result->as<char>());
-  // Patch all the registered pointers to point to buffer at offset offset_[id]
-  // + the offset already in the registered pointer.
-  for (auto& pair : patch_) {
-    int64_t* pointer = reinterpret_cast<int64_t*>(pair.second);
-    *pointer += address + offsets_[pair.first];
-  }
-  patch_.clear();
-  offsets_.clear();
-  fill_ = 0;
 }
 
 namespace {
@@ -154,6 +198,7 @@ std::unique_ptr<GpuDecode> FormatData::makeStep(
     WaveTypeKind columnKind,
     int32_t blockIdx) {
   auto rowsPerBlock = FLAGS_wave_reader_rows_per_tb;
+  auto maxRowsPerThread = (rowsPerBlock / kBlockSize);
   int32_t numBlocks =
       bits::roundUp(op.rows.size(), rowsPerBlock) / rowsPerBlock;
 
@@ -163,8 +208,9 @@ std::unique_ptr<GpuDecode> FormatData::makeStep(
   auto step = std::make_unique<GpuDecode>();
   if (grid_.nulls) {
     step->nonNullBases = grid_.numNonNull;
+    step->nulls = grid_.nulls;
   }
-  step->numRowsPerThread = rowsPerBlock / kBlockSize;
+  step->numRowsPerThread = bits::roundUp(rowsInBlock, kBlockSize) / kBlockSize;
   setFilter(step.get(), op.reader, nullptr);
   bool dense = previousFilter == nullptr &&
       simd::isDense(op.rows.data(), op.rows.size());
@@ -184,7 +230,7 @@ std::unique_ptr<GpuDecode> FormatData::makeStep(
           op.extraRowCountId, &op.extraRowCount, true);
     } else {
       step->filterRowCount = reinterpret_cast<int32_t*>(
-          blockIdx * sizeof(int32_t) * step->numRowsPerThread);
+          blockIdx * sizeof(int32_t) * maxRowsPerThread);
       deviceStaging.registerPointer(
           op.extraRowCountId, &step->filterRowCount, false);
     }
@@ -202,12 +248,12 @@ std::unique_ptr<GpuDecode> FormatData::makeStep(
 
   if (op.waveVector) {
     if (blockIdx == 0) {
-      op.waveVector->resize(op.rows.size(), false);
+      VELOX_CHECK_GE(op.waveVector->size(), op.rows.size());
     }
     step->result =
         op.waveVector->values<char>() + kindSize * blockIdx * rowsPerBlock;
     step->resultNulls = op.waveVector->nulls()
-        ? op.waveVector->nulls() + rowsPerBlock + blockIdx
+        ? op.waveVector->nulls() + blockIdx * rowsPerBlock
         : nullptr;
 
     if (previousFilter) {

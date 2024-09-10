@@ -28,8 +28,47 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
+template <typename T, typename Allocator>
+struct KllSketchTypeTraits {
+  using KllSketchType = functions::kll::KllSketch<T, Allocator, std::less<T>>;
+};
+
+template <>
+struct KllSketchTypeTraits<float, StlAllocator<float>> {
+  using KllSketchType = functions::kll::KllSketch<
+      float,
+      StlAllocator<float>,
+      util::floating_point::NaNAwareLessThan<float>>;
+};
+
+template <>
+struct KllSketchTypeTraits<double, StlAllocator<double>> {
+  using KllSketchType = functions::kll::KllSketch<
+      double,
+      StlAllocator<double>,
+      util::floating_point::NaNAwareLessThan<double>>;
+};
+
+template <>
+struct KllSketchTypeTraits<float, std::allocator<float>> {
+  using KllSketchType = functions::kll::KllSketch<
+      float,
+      std::allocator<float>,
+      util::floating_point::NaNAwareLessThan<float>>;
+};
+
+template <>
+struct KllSketchTypeTraits<double, std::allocator<double>> {
+  using KllSketchType = functions::kll::KllSketch<
+      double,
+      std::allocator<double>,
+      util::floating_point::NaNAwareLessThan<double>>;
+};
+
+template <typename T, typename Allocator = StlAllocator<T>>
+using KllSketch = typename KllSketchTypeTraits<T, Allocator>::KllSketchType;
 template <typename T>
-using KllSketch = functions::kll::KllSketch<T, StlAllocator<T>>;
+using KllView = functions::kll::detail::View<T>;
 
 // Accumulator to buffer large count values in addition to the KLL
 // sketch itself.
@@ -67,42 +106,67 @@ struct KllSketchAccumulator {
     }
   }
 
-  void append(const typename KllSketch<T>::View& view) {
+  void append(const KllView<T>& view) {
     sketch_.mergeViews(folly::Range(&view, 1));
   }
 
-  void append(const std::vector<typename KllSketch<T>::View>& views) {
+  void append(const std::vector<KllView<T>>& views) {
     sketch_.mergeViews(views);
   }
 
-  void finalize() {
-    if (!largeCountValues_.empty()) {
-      flush();
-    }
-    sketch_.compact();
+  // Creates a copy of the KllSketch, merges the largeCountValues_ into it,
+  // compacts it, and returns it.
+  // Makes a copy so that uses std::allocator so that this is safe to call
+  // during spilling which may run in parallel.  HashStringAllocator is not
+  // thread safe, so merging into/compacting the original KllSketch which
+  // depends on it can lead to concurrency bugs.
+  KllSketch<T, std::allocator<T>> compact() const {
+    KllSketch<T, std::allocator<T>> newSketch =
+        KllSketch<T, std::allocator<T>>::fromView(
+            sketch_.toView(), std::allocator<T>(), random::getSeed());
+
+    mergeLargeCountValuesIntoSketch(std::allocator<T>(), newSketch);
+
+    newSketch.compact();
+
+    return newSketch;
   }
 
   const KllSketch<T>& getSketch() const {
     return sketch_;
   }
 
+  // This must be called before the KllSketch can be used for estimateQuantile()
+  // or estimateQuantiles().
+  void flush() {
+    mergeLargeCountValuesIntoSketch(StlAllocator<T>(allocator_), sketch_);
+    largeCountValues_.clear();
+
+    sketch_.finish();
+  }
+
  private:
+  template <typename Allocator, typename Compare>
+  void mergeLargeCountValuesIntoSketch(
+      const Allocator& allocator,
+      functions::kll::KllSketch<T, Allocator, Compare>& sketch) const {
+    if (!largeCountValues_.empty()) {
+      std::vector<functions::kll::KllSketch<T, Allocator, Compare>> sketches;
+      sketches.reserve(largeCountValues_.size());
+      for (auto [x, n] : largeCountValues_) {
+        sketches.push_back(
+            functions::kll::KllSketch<T, Allocator, Compare>::fromRepeatedValue(
+                x, n, k_, allocator, random::getSeed()));
+      }
+      sketch.merge(folly::Range(sketches.begin(), sketches.end()));
+    }
+  }
+
   uint16_t k_;
   HashStringAllocator* allocator_;
   KllSketch<T> sketch_;
   std::vector<std::pair<T, int64_t>, StlAllocator<std::pair<T, int64_t>>>
       largeCountValues_;
-
-  void flush() {
-    std::vector<KllSketch<T>> sketches;
-    sketches.reserve(largeCountValues_.size());
-    for (auto [x, n] : largeCountValues_) {
-      sketches.push_back(KllSketch<T>::fromRepeatedValue(
-          x, n, k_, StlAllocator<T>(allocator_), random::getSeed()));
-    }
-    sketch_.merge(folly::Range(sketches.begin(), sketches.end()));
-    largeCountValues_.clear();
-  }
 };
 
 enum IntermediateTypeChildIndex {
@@ -148,7 +212,9 @@ class ApproxPercentileAggregate : public exec::Aggregate {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    finalize(groups, numGroups);
+    for (auto i = 0; i < numGroups; ++i) {
+      value<KllSketchAccumulator<T>>(groups[i])->flush();
+    }
 
     VELOX_CHECK(result);
     // When all inputs are nulls or masked out, percentiles_ can be
@@ -184,6 +250,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
               vector_size_t index) {
             digest.estimateQuantiles(percentiles, rawValues + elementsCount);
             result->setOffsetAndSize(index, elementsCount, percentiles.size());
+            result->setNull(index, false);
             elementsCount += percentiles.size();
           });
     } else {
@@ -203,7 +270,11 @@ class ApproxPercentileAggregate : public exec::Aggregate {
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    finalize(groups, numGroups);
+    std::vector<KllSketch<T, std::allocator<T>>> sketches;
+    sketches.reserve(numGroups);
+    for (auto i = 0; i < numGroups; ++i) {
+      sketches.push_back(value<KllSketchAccumulator<T>>(groups[i])->compact());
+    }
 
     VELOX_CHECK(result);
     auto rowResult = (*result)->as<RowVector>();
@@ -272,9 +343,8 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto levelsElements = levels->elements()->asFlatVector<int32_t>();
     size_t itemsCount = 0;
     vector_size_t levelsCount = 0;
-    for (int i = 0; i < numGroups; ++i) {
-      auto accumulator = value<const KllSketchAccumulator<T>>(groups[i]);
-      auto v = accumulator->getSketch().toView();
+    for (auto& sketch : sketches) {
+      auto v = sketch.toView();
       itemsCount += v.items.size();
       levelsCount += v.levels.size();
     }
@@ -288,9 +358,8 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto rawLevels = levelsElements->mutableRawValues();
     itemsCount = 0;
     levelsCount = 0;
-    for (int i = 0; i < numGroups; ++i) {
-      auto accumulator = value<const KllSketchAccumulator<T>>(groups[i]);
-      auto v = accumulator->getSketch().toView();
+    for (int i = 0; i < sketches.size(); ++i) {
+      auto v = sketches[i].toView();
       if (v.n == 0) {
         rowResult->setNull(i, true);
       } else {
@@ -422,12 +491,6 @@ class ApproxPercentileAggregate : public exec::Aggregate {
   }
 
  private:
-  void finalize(char** groups, int32_t numGroups) {
-    for (auto i = 0; i < numGroups; ++i) {
-      value<KllSketchAccumulator<T>>(groups[i])->finalize();
-    }
-  }
-
   template <typename VectorType, typename ExtractFunc>
   void extract(
       char** groups,
@@ -473,24 +536,6 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     VELOX_CHECK_EQ(argIndex, args.size());
   }
 
-  /// Extract percentile info: the raw data, the length and the null-ness from
-  /// top-level ArrayVector.
-  static void extractPercentiles(
-      const ArrayVector* arrays,
-      vector_size_t indexInBaseVector,
-      const double*& data,
-      vector_size_t& len,
-      std::vector<bool>& isNull) {
-    auto elements = arrays->elements()->asFlatVector<double>();
-    auto offset = arrays->offsetAt(indexInBaseVector);
-    data = elements->rawValues() + offset;
-    len = arrays->sizeAt(indexInBaseVector);
-    isNull.resize(len);
-    for (auto index = offset; index < offset + len; index++) {
-      isNull[index - offset] = elements->isNullAt(index);
-    }
-  }
-
   void checkSetPercentile(
       const SelectivityVector& rows,
       const BaseVector& vec) {
@@ -511,33 +556,30 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     }
 
     bool isArray;
-    const double* data;
+    vector_size_t offset;
     vector_size_t len;
-    std::vector<bool> isNull;
     if (base->typeKind() == TypeKind::DOUBLE) {
       isArray = false;
-      data = decoded.data<double>() + baseFirstRow;
+      offset = rows.begin();
       len = 1;
-      isNull = {decoded.isNullAt(rows.begin())};
     } else if (base->typeKind() == TypeKind::ARRAY) {
       isArray = true;
       auto arrays = base->asUnchecked<ArrayVector>();
-      VELOX_USER_CHECK(
-          arrays->elements()->isFlatEncoding(),
-          "Only flat encoding is allowed for percentile array elements");
-      extractPercentiles(arrays, baseFirstRow, data, len, isNull);
+      decoded.decode(*arrays->elements());
+      offset = arrays->offsetAt(baseFirstRow);
+      len = arrays->sizeAt(baseFirstRow);
     } else {
       VELOX_USER_FAIL(
           "Incorrect type for percentile: {}", base->type()->toString());
     }
-    checkSetPercentile(isArray, data, len, isNull);
+    checkSetPercentile(isArray, decoded, offset, len);
   }
 
   void checkSetPercentile(
       bool isArray,
-      const double* data,
-      vector_size_t len,
-      const std::vector<bool>& isNull) {
+      const DecodedVector& percentiles,
+      vector_size_t offset,
+      vector_size_t len) {
     if (!percentiles_) {
       VELOX_USER_CHECK_GT(len, 0, "Percentile cannot be empty");
       percentiles_ = {
@@ -545,10 +587,11 @@ class ApproxPercentileAggregate : public exec::Aggregate {
           .isArray = isArray,
       };
       for (vector_size_t i = 0; i < len; ++i) {
-        VELOX_USER_CHECK(!isNull[i], "Percentile cannot be null");
-        VELOX_USER_CHECK_GE(data[i], 0, "Percentile must be between 0 and 1");
-        VELOX_USER_CHECK_LE(data[i], 1, "Percentile must be between 0 and 1");
-        percentiles_->values[i] = data[i];
+        VELOX_USER_CHECK(!percentiles.isNullAt(i), "Percentile cannot be null");
+        auto value = percentiles.valueAt<double>(offset + i);
+        VELOX_USER_CHECK_GE(value, 0, "Percentile must be between 0 and 1");
+        VELOX_USER_CHECK_LE(value, 1, "Percentile must be between 0 and 1");
+        percentiles_->values[i] = value;
       }
     } else {
       VELOX_USER_CHECK_EQ(
@@ -561,7 +604,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
           "Percentile argument must be constant for all input rows");
       for (vector_size_t i = 0; i < len; ++i) {
         VELOX_USER_CHECK_EQ(
-            data[i],
+            percentiles.valueAt<double>(offset + i),
             percentiles_->values[i],
             "Percentile argument must be constant for all input rows");
       }
@@ -704,7 +747,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto rawLevels = levelElements->rawValues<uint32_t>();
 
     KllSketchAccumulator<T>* accumulator = nullptr;
-    std::vector<typename KllSketch<T>::View> views;
+    std::vector<KllView<T>> views;
     if constexpr (kSingleGroup) {
       views.reserve(rows.end());
     }
@@ -727,12 +770,12 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         }
 
         bool isArray = percentileIsArray->valueAt(i);
-        const double* data;
-        vector_size_t len;
-        std::vector<bool> isNull;
-        extractPercentiles(
-            percentilesBase, indexInBaseVector, data, len, isNull);
-        checkSetPercentile(isArray, data, len, isNull);
+        DecodedVector decodedElements(*percentilesBase->elements());
+        checkSetPercentile(
+            isArray,
+            decodedElements,
+            percentilesBase->offsetAt(indexInBaseVector),
+            percentilesBase->sizeAt(indexInBaseVector));
 
         if (!accuracy->isNullAt(i)) {
           checkSetAccuracy(accuracy->valueAt(i));
@@ -752,7 +795,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
               maxValue->isNullAt(i) || items->isNullAt(i) ||
               levels->isNullAt(i)));
       }
-      typename KllSketch<T>::View v{
+      KllView<T> v{
           .k = static_cast<uint32_t>(k->valueAt(i)),
           .n = static_cast<size_t>(n->valueAt(i)),
           .minValue = minValue->valueAt(i),

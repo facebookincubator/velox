@@ -1093,8 +1093,48 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
       outputType);
 }
 
+MergeJoinNode::MergeJoinNode(
+    const PlanNodeId& id,
+    JoinType joinType,
+    const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+    const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+    TypedExprPtr filter,
+    PlanNodePtr left,
+    PlanNodePtr right,
+    RowTypePtr outputType)
+    : AbstractJoinNode(
+          id,
+          joinType,
+          leftKeys,
+          rightKeys,
+          std::move(filter),
+          std::move(left),
+          std::move(right),
+          std::move(outputType)) {
+  VELOX_USER_CHECK(
+      isSupported(joinType_),
+      "The join type is not supported by merge join: ",
+      joinTypeName(joinType_));
+}
+
 folly::dynamic MergeJoinNode::serialize() const {
   return serializeBase();
+}
+
+// static
+bool MergeJoinNode::isSupported(core::JoinType joinType) {
+  switch (joinType) {
+    case core::JoinType::kInner:
+    case core::JoinType::kLeft:
+    case core::JoinType::kRight:
+    case core::JoinType::kLeftSemiFilter:
+    case core::JoinType::kRightSemiFilter:
+    case core::JoinType::kAnti:
+      return true;
+
+    default:
+      return false;
+  }
 }
 
 // static
@@ -1136,9 +1176,8 @@ NestedLoopJoinNode::NestedLoopJoinNode(
       sources_({std::move(left), std::move(right)}),
       outputType_(std::move(outputType)) {
   VELOX_USER_CHECK(
-      core::isInnerJoin(joinType_) || core::isLeftJoin(joinType_) ||
-          core::isRightJoin(joinType_) || core::isFullJoin(joinType_),
-      "{} unsupported, NestedLoopJoin only supports inner and outer join",
+      isSupported(joinType_),
+      "The join type is not supported by nested loop join: ",
       joinTypeName(joinType_));
 
   auto leftType = sources_[0]->outputType();
@@ -1169,6 +1208,20 @@ NestedLoopJoinNode::NestedLoopJoinNode(
           left,
           right,
           outputType) {}
+
+// static
+bool NestedLoopJoinNode::isSupported(core::JoinType joinType) {
+  switch (joinType) {
+    case core::JoinType::kInner:
+    case core::JoinType::kLeft:
+    case core::JoinType::kRight:
+    case core::JoinType::kFull:
+      return true;
+
+    default:
+      return false;
+  }
+}
 
 void NestedLoopJoinNode::addDetails(std::stringstream& stream) const {
   stream << joinTypeName(joinType_);
@@ -1783,7 +1836,9 @@ PlanNodePtr LocalMergeNode::create(const folly::dynamic& obj, void* context) {
       std::move(sources));
 }
 
-void TableWriteNode::addDetails(std::stringstream& /*unused*/) const {}
+void TableWriteNode::addDetails(std::stringstream& stream) const {
+  stream << insertTableHandle_->connectorInsertTableHandle()->toString();
+}
 
 folly::dynamic TableWriteNode::serialize() const {
   auto obj = PlanNode::serialize();
@@ -1822,7 +1877,7 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   auto outputType = deserializeRowType(obj["outputType"]);
   auto commitStrategy =
       connector::stringToCommitStrategy(obj["commitStrategy"].asString());
-  auto source = ISerializable::deserialize<PlanNode>(obj["sources"]);
+  auto source = ISerializable::deserialize<PlanNode>(obj["sources"], context);
   return std::make_shared<TableWriteNode>(
       id,
       columns,
@@ -1853,7 +1908,7 @@ folly::dynamic TableWriteMergeNode::serialize() const {
 // static
 PlanNodePtr TableWriteMergeNode::create(
     const folly::dynamic& obj,
-    void* /*unused*/) {
+    void* context) {
   auto id = obj["id"].asString();
   auto outputType = deserializeRowType(obj["outputType"]);
   std::shared_ptr<AggregationNode> aggregationNode;
@@ -1861,7 +1916,7 @@ PlanNodePtr TableWriteMergeNode::create(
     aggregationNode = std::const_pointer_cast<AggregationNode>(
         ISerializable::deserialize<AggregationNode>(obj["aggregationNode"]));
   }
-  auto source = ISerializable::deserialize<PlanNode>(obj["sources"]);
+  auto source = ISerializable::deserialize<PlanNode>(obj["sources"], context);
   return std::make_shared<TableWriteMergeNode>(
       id, outputType, aggregationNode, source);
 }

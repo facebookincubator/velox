@@ -29,7 +29,7 @@ std::shared_ptr<core::QueryCtx> newQueryCtx(
     folly::Executor* executor,
     int64_t memoryCapacity,
     std::unique_ptr<MemoryReclaimer>&& reclaimer) {
-  std::unordered_map<std::string, std::shared_ptr<Config>> configs;
+  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>> configs;
   std::shared_ptr<MemoryPool> pool =
       memoryManager->addRootPool("", memoryCapacity);
   auto queryCtx = core::QueryCtx::create(
@@ -45,7 +45,9 @@ std::unique_ptr<memory::MemoryManager> createMemoryManager(
     int64_t arbitratorCapacity,
     uint64_t memoryPoolInitCapacity,
     uint64_t memoryPoolTransferCapacity,
-    uint64_t maxReclaimWaitMs) {
+    uint64_t maxReclaimWaitMs,
+    uint64_t fastExponentialGrowthCapacityLimit,
+    double slowCapacityGrowPct) {
   memory::MemoryManagerOptions options;
   options.arbitratorCapacity = arbitratorCapacity;
   options.arbitratorReservedCapacity = 0;
@@ -58,6 +60,9 @@ std::unique_ptr<memory::MemoryManager> createMemoryManager(
   options.memoryReclaimWaitMs = maxReclaimWaitMs;
   options.globalArbitrationEnabled = true;
   options.checkUsageLeak = true;
+  options.fastExponentialGrowthCapacityLimit =
+      fastExponentialGrowthCapacityLimit;
+  options.slowCapacityGrowPct = slowCapacityGrowPct;
   options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
   return std::make_unique<memory::MemoryManager>(options);
 }
@@ -86,6 +91,7 @@ core::PlanNodePtr hashJoinPlan(
 QueryTestResult runHashJoinTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     bool enableSpilling,
@@ -95,6 +101,7 @@ QueryTestResult runHashJoinTask(
   if (enableSpilling) {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, true)
                       .config(core::QueryConfig::kJoinSpillEnabled, true)
@@ -104,6 +111,7 @@ QueryTestResult runHashJoinTask(
                       .copyResults(pool, result.task);
   } else {
     result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -128,6 +136,7 @@ core::PlanNodePtr aggregationPlan(
 QueryTestResult runAggregateTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     bool enableSpilling,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
@@ -138,6 +147,7 @@ QueryTestResult runAggregateTask(
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data =
         AssertQueryBuilder(plan)
+            .serialExecution(serialExecution)
             .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, "true")
             .config(core::QueryConfig::kAggregationSpillEnabled, "true")
@@ -146,6 +156,7 @@ QueryTestResult runAggregateTask(
             .copyResults(pool, result.task);
   } else {
     result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -171,6 +182,7 @@ core::PlanNodePtr orderByPlan(
 QueryTestResult runOrderByTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     bool enableSpilling,
@@ -180,6 +192,7 @@ QueryTestResult runOrderByTask(
   if (enableSpilling) {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, "true")
                       .config(core::QueryConfig::kOrderBySpillEnabled, "true")
@@ -188,6 +201,7 @@ QueryTestResult runOrderByTask(
                       .copyResults(pool, result.task);
   } else {
     result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -213,6 +227,7 @@ core::PlanNodePtr rowNumberPlan(
 QueryTestResult runRowNumberTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     bool enableSpilling,
@@ -222,6 +237,7 @@ QueryTestResult runRowNumberTask(
   if (enableSpilling) {
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
                       .config(core::QueryConfig::kSpillEnabled, "true")
                       .config(core::QueryConfig::kRowNumberSpillEnabled, "true")
@@ -230,6 +246,7 @@ QueryTestResult runRowNumberTask(
                       .copyResults(pool, result.task);
   } else {
     result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -255,6 +272,7 @@ core::PlanNodePtr topNPlan(
 QueryTestResult runTopNTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     bool enableSpilling,
@@ -265,6 +283,7 @@ QueryTestResult runTopNTask(
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data =
         AssertQueryBuilder(plan)
+            .serialExecution(serialExecution)
             .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, "true")
             .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
@@ -273,6 +292,7 @@ QueryTestResult runTopNTask(
             .copyResults(pool, result.task);
   } else {
     result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -300,6 +320,7 @@ core::PlanNodePtr writePlan(
 QueryTestResult runWriteTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     const std::string& kHiveConnectorId,
@@ -312,6 +333,7 @@ QueryTestResult runWriteTask(
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
     result.data =
         AssertQueryBuilder(plan)
+            .serialExecution(serialExecution)
             .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, "true")
             .config(core::QueryConfig::kAggregationSpillEnabled, "false")
@@ -340,6 +362,7 @@ QueryTestResult runWriteTask(
             .copyResults(pool, result.task);
   } else {
     result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);

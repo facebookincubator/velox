@@ -108,6 +108,8 @@ TEST_F(JsonExtractScalarTest, simple) {
   // Paths without leading '$'.
   EXPECT_EQ(jsonExtractScalar(R"({"k1":"v1"})", "k1"), "v1");
   EXPECT_EQ(jsonExtractScalar(R"({"k1":{"k2": 999}})", "k1.k2"), "999");
+  EXPECT_EQ(jsonExtractScalar(R"([1,2])", "[0]"), "1");
+  EXPECT_EQ(jsonExtractScalar(R"({"k1":"v1"})", R"(["k1"])"), "v1");
 
   // Paths with redundant '.'s.
   auto json = "[1, 2, [10, 20, [100, 200, 300]]]";
@@ -180,7 +182,7 @@ TEST_F(JsonExtractScalarTest, invalidPath) {
   VELOX_ASSERT_THROW(
       jsonExtractScalar(R"([0,1,2])", "$[]"), "Invalid JSON path");
   VELOX_ASSERT_THROW(
-      jsonExtractScalar(R"([0,1,2])", "$[-1]"), "Invalid JSON path");
+      jsonExtractScalar(R"([0,1,2])", "$-1"), "Invalid JSON path");
   VELOX_ASSERT_THROW(
       jsonExtractScalar(R"({"k1":"v1"})", "$k1"), "Invalid JSON path");
   VELOX_ASSERT_THROW(
@@ -191,7 +193,6 @@ TEST_F(JsonExtractScalarTest, invalidPath) {
       jsonExtractScalar(R"({"k1":"v1)", "$.k1]"), "Invalid JSON path");
 
   // Paths without leading '$'.
-  VELOX_ASSERT_THROW(jsonExtractScalar(R"([1,2])", "[0]"), "Invalid JSON path");
   VELOX_ASSERT_THROW(
       jsonExtractScalar(R"([1,2])", ".[0]"), "Invalid JSON path");
   VELOX_ASSERT_THROW(

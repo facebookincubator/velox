@@ -28,28 +28,6 @@ namespace {
 static const bool kDefaultUseLosslessTimestamp = true;
 } // namespace
 
-void SpillInputStream::next(bool /*throwIfPastEnd*/) {
-  const int32_t readBytes = std::min(size_ - offset_, buffer_->capacity());
-  VELOX_CHECK_LT(0, readBytes, "Reading past end of spill file");
-  setRange({buffer_->asMutable<uint8_t>(), readBytes, 0});
-  uint64_t readTimeUs{0};
-  {
-    MicrosecondTimer timer{&readTimeUs};
-    file_->pread(offset_, readBytes, buffer_->asMutable<char>());
-  }
-  updateSpillStats(readBytes, readTimeUs);
-  offset_ += readBytes;
-}
-
-void SpillInputStream::updateSpillStats(uint64_t readBytes, uint64_t readTimeUs)
-    const {
-  auto lockedStats = stats_->wlock();
-  lockedStats->spillReadBytes += readBytes;
-  lockedStats->spillReadTimeUs += readTimeUs;
-  ++(lockedStats->spillReads);
-  common::updateGlobalSpillReadStats(readBytes, readTimeUs);
-}
-
 std::unique_ptr<SpillWriteFile> SpillWriteFile::create(
     uint32_t id,
     const std::string& pathPrefix,
@@ -166,21 +144,21 @@ uint64_t SpillWriter::flush() {
 
   IOBufOutputStream out(
       *pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
-  uint64_t flushTimeUs{0};
+  uint64_t flushTimeNs{0};
   {
-    MicrosecondTimer timer(&flushTimeUs);
+    NanosecondTimer timer(&flushTimeNs);
     batch_->flush(&out);
   }
   batch_.reset();
 
-  uint64_t writeTimeUs{0};
+  uint64_t writeTimeNs{0};
   uint64_t writtenBytes{0};
   auto iobuf = out.getIOBuf();
   {
-    MicrosecondTimer timer(&writeTimeUs);
+    NanosecondTimer timer(&writeTimeNs);
     writtenBytes = file->write(std::move(iobuf));
   }
-  updateWriteStats(writtenBytes, flushTimeUs, writeTimeUs);
+  updateWriteStats(writtenBytes, flushTimeNs, writeTimeNs);
   updateAndCheckSpillLimitCb_(writtenBytes);
   return writtenBytes;
 }
@@ -190,9 +168,9 @@ uint64_t SpillWriter::write(
     const folly::Range<IndexRange*>& indices) {
   checkNotFinished();
 
-  uint64_t timeUs{0};
+  uint64_t timeNs{0};
   {
-    MicrosecondTimer timer(&timeUs);
+    NanosecondTimer timer(&timeNs);
     if (batch_ == nullptr) {
       serializer::presto::PrestoVectorSerde::PrestoOptions options = {
           kDefaultUseLosslessTimestamp, compressionKind_, true /*nullsFirst*/};
@@ -204,7 +182,7 @@ uint64_t SpillWriter::write(
     }
     batch_->append(rows, indices);
   }
-  updateAppendStats(rows->size(), timeUs);
+  updateAppendStats(rows->size(), timeNs);
   if (batch_->size() < writeBufferSize_) {
     return 0;
   }
@@ -213,24 +191,24 @@ uint64_t SpillWriter::write(
 
 void SpillWriter::updateAppendStats(
     uint64_t numRows,
-    uint64_t serializationTimeUs) {
+    uint64_t serializationTimeNs) {
   auto statsLocked = stats_->wlock();
   statsLocked->spilledRows += numRows;
-  statsLocked->spillSerializationTimeUs += serializationTimeUs;
-  common::updateGlobalSpillAppendStats(numRows, serializationTimeUs);
+  statsLocked->spillSerializationTimeNanos += serializationTimeNs;
+  common::updateGlobalSpillAppendStats(numRows, serializationTimeNs);
 }
 
 void SpillWriter::updateWriteStats(
     uint64_t spilledBytes,
-    uint64_t flushTimeUs,
-    uint64_t fileWriteTimeUs) {
+    uint64_t flushTimeNs,
+    uint64_t fileWriteTimeNs) {
   auto statsLocked = stats_->wlock();
   statsLocked->spilledBytes += spilledBytes;
-  statsLocked->spillFlushTimeUs += flushTimeUs;
-  statsLocked->spillWriteTimeUs += fileWriteTimeUs;
+  statsLocked->spillFlushTimeNanos += flushTimeNs;
+  statsLocked->spillWriteTimeNanos += fileWriteTimeNs;
   ++statsLocked->spillWrites;
   common::updateGlobalSpillWriteStats(
-      spilledBytes, flushTimeUs, fileWriteTimeUs);
+      spilledBytes, flushTimeNs, fileWriteTimeNs);
 }
 
 void SpillWriter::updateSpilledFileStats(uint64_t fileSize) {
@@ -283,12 +261,14 @@ std::vector<uint32_t> SpillWriter::testingSpilledFileIds() const {
 
 std::unique_ptr<SpillReadFile> SpillReadFile::create(
     const SpillFileInfo& fileInfo,
+    uint64_t bufferSize,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats) {
   return std::unique_ptr<SpillReadFile>(new SpillReadFile(
       fileInfo.id,
       fileInfo.path,
       fileInfo.size,
+      bufferSize,
       fileInfo.type,
       fileInfo.numSortKeys,
       fileInfo.sortFlags,
@@ -301,6 +281,7 @@ SpillReadFile::SpillReadFile(
     uint32_t id,
     const std::string& path,
     uint64_t size,
+    uint64_t bufferSize,
     const RowTypePtr& type,
     uint32_t numSortKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
@@ -317,33 +298,40 @@ SpillReadFile::SpillReadFile(
       readOptions_{
           kDefaultUseLosslessTimestamp,
           compressionKind_,
-          true /*nullsFirst*/},
+          /*nullsFirst=*/true},
       pool_(pool),
       stats_(stats) {
-  constexpr uint64_t kMaxReadBufferSize =
-      (1 << 20) - AlignedBuffer::kPaddedSize; // 1MB - padding.
   auto fs = filesystems::getFileSystem(path_, nullptr);
   auto file = fs->openFileForRead(path_);
-  auto buffer = AlignedBuffer::allocate<char>(
-      std::min<uint64_t>(size_, kMaxReadBufferSize), pool_);
-  input_ = std::make_unique<SpillInputStream>(
-      std::move(file), std::move(buffer), stats_);
+  input_ = std::make_unique<common::FileInputStream>(
+      std::move(file), bufferSize, pool_);
 }
 
 bool SpillReadFile::nextBatch(RowVectorPtr& rowVector) {
   if (input_->atEnd()) {
+    recordSpillStats();
     return false;
   }
 
-  uint64_t timeUs{0};
+  uint64_t timeNs{0};
   {
-    MicrosecondTimer timer{&timeUs};
+    NanosecondTimer timer{&timeNs};
     VectorStreamGroup::read(
         input_.get(), pool_, type_, &rowVector, &readOptions_);
   }
-  stats_->wlock()->spillDeserializationTimeUs += timeUs;
-  common::updateGlobalSpillDeserializationTimeUs(timeUs);
-
+  stats_->wlock()->spillDeserializationTimeNanos += timeNs;
+  common::updateGlobalSpillDeserializationTimeNs(timeNs);
   return true;
+}
+
+void SpillReadFile::recordSpillStats() {
+  VELOX_CHECK(input_->atEnd());
+  const auto readStats = input_->stats();
+  common::updateGlobalSpillReadStats(
+      readStats.numReads, readStats.readBytes, readStats.readTimeNs);
+  auto lockedSpillStats = stats_->wlock();
+  lockedSpillStats->spillReads += readStats.numReads;
+  lockedSpillStats->spillReadTimeNanos += readStats.readTimeNs;
+  lockedSpillStats->spillReadBytes += readStats.readBytes;
 }
 } // namespace facebook::velox::exec

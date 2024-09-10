@@ -623,3 +623,25 @@ TEST_F(LazyVectorTest, reset) {
   lazy.reset(std::make_unique<test::SimpleVectorLoader>(loader), kVectorSize);
   ASSERT_EQ(lazy.nulls(), nullptr);
 }
+
+TEST_F(LazyVectorTest, runtimeStats) {
+  TestRuntimeStatWriter writer;
+  RuntimeStatWriterScopeGuard guard(&writer);
+  auto lazy = std::make_shared<LazyVector>(
+      pool_.get(),
+      INTEGER(),
+      10,
+      std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
+        return makeFlatVector<int32_t>(rows.back() + 1, folly::identity);
+      }));
+  ASSERT_EQ(lazy->loadedVector()->size(), 10);
+  auto stats = writer.stats();
+  std::sort(stats.begin(), stats.end(), [](auto& x, auto& y) {
+    return x.first < y.first;
+  });
+  ASSERT_EQ(stats.size(), 2);
+  ASSERT_EQ(stats[0].first, LazyVector::kCpuNanos);
+  ASSERT_GE(stats[0].second.value, 0);
+  ASSERT_EQ(stats[1].first, LazyVector::kWallNanos);
+  ASSERT_GE(stats[1].second.value, 0);
+}

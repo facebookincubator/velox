@@ -61,6 +61,18 @@ struct NaNAwareLessThan {
 template <
     typename FLOAT,
     std::enable_if_t<std::is_floating_point<FLOAT>::value, bool> = true>
+struct NaNAwareLessThanEqual {
+  bool operator()(const FLOAT& lhs, const FLOAT& rhs) const {
+    if (std::isnan(rhs)) {
+      return true;
+    }
+    return lhs <= rhs;
+  }
+};
+
+template <
+    typename FLOAT,
+    std::enable_if_t<std::is_floating_point<FLOAT>::value, bool> = true>
 struct NaNAwareGreaterThan {
   bool operator()(const FLOAT& lhs, const FLOAT& rhs) const {
     if (std::isnan(lhs) && !std::isnan(rhs)) {
@@ -73,14 +85,26 @@ struct NaNAwareGreaterThan {
 template <
     typename FLOAT,
     std::enable_if_t<std::is_floating_point<FLOAT>::value, bool> = true>
+struct NaNAwareGreaterThanEqual {
+  bool operator()(const FLOAT& lhs, const FLOAT& rhs) const {
+    if (std::isnan(lhs)) {
+      return true;
+    }
+    return lhs >= rhs;
+  }
+};
+
+template <
+    typename FLOAT,
+    std::enable_if_t<std::is_floating_point<FLOAT>::value, bool> = true>
 struct NaNAwareHash {
   std::size_t operator()(const FLOAT& val) const noexcept {
     static const std::size_t kNanHash =
-        std::hash<FLOAT>{}(std::numeric_limits<FLOAT>::quiet_NaN());
+        folly::hasher<FLOAT>{}(std::numeric_limits<FLOAT>::quiet_NaN());
     if (std::isnan(val)) {
       return kNanHash;
     }
-    return std::hash<FLOAT>{}(val);
+    return folly::hasher<FLOAT>{}(val);
   }
 };
 

@@ -32,11 +32,10 @@ target_link_libraries(
   velox_type_test
   velox_type
   velox_common_base
-  velox_external_date
   Folly::folly
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   gflags::gflags
   glog::glog)
 
@@ -48,8 +47,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -62,8 +61,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -76,8 +75,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -90,8 +89,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -104,8 +103,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -116,7 +115,7 @@ target_link_libraries(
   velox_type
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)

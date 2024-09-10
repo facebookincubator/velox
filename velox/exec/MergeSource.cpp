@@ -153,14 +153,14 @@ class MergeExchangeSource : public MergeSource {
         return BlockingReason::kWaitForProducer;
       }
     }
-    if (!inputStream_.has_value()) {
+    if (inputStream_ == nullptr) {
       mergeExchange_->stats().wlock()->rawInputBytes += currentPage_->size();
-      inputStream_.emplace(currentPage_->prepareStreamForDeserialize());
+      inputStream_ = currentPage_->prepareStreamForDeserialize();
     }
 
     if (!inputStream_->atEnd()) {
       VectorStreamGroup::read(
-          &inputStream_.value(),
+          inputStream_.get(),
           mergeExchange_->pool(),
           mergeExchange_->outputType(),
           &data);
@@ -191,7 +191,7 @@ class MergeExchangeSource : public MergeSource {
  private:
   MergeExchange* const mergeExchange_;
   std::shared_ptr<ExchangeClient> client_;
-  std::optional<ByteInputStream> inputStream_;
+  std::unique_ptr<ByteInputStream> inputStream_;
   std::unique_ptr<SerializedPage> currentPage_;
   bool atEnd_ = false;
 
@@ -231,6 +231,8 @@ void notify(std::optional<ContinuePromise>& promise) {
 BlockingReason MergeJoinSource::next(
     ContinueFuture* future,
     RowVectorPtr* data) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::MergeSource::next", this);
   return state_.withWLock([&](auto& state) {
     if (state.data != nullptr) {
       *data = std::move(state.data);
@@ -252,11 +254,18 @@ BlockingReason MergeJoinSource::next(
 BlockingReason MergeJoinSource::enqueue(
     RowVectorPtr data,
     ContinueFuture* future) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::MergeSource::enqueue", this);
   return state_.withWLock([&](auto& state) {
     if (state.atEnd) {
       // This can happen if consumer called close() because it doesn't need any
-      // more data.
-      // TODO Finish the pipeline early and avoid unnecessary computing.
+      // more data, or because the Task failed or was aborted and the Driver is
+      // cleaning up.
+      // TODO: Finish the pipeline early and avoid unnecessary computing.
+
+      // Notify consumerPromise_ so the consumer doesn't hang indefinitely if
+      // this is because the Driver is closing operators.
+      notify(consumerPromise_);
       return BlockingReason::kNotBlocked;
     }
 
@@ -266,13 +275,14 @@ BlockingReason MergeJoinSource::enqueue(
       return BlockingReason::kNotBlocked;
     }
 
-    VELOX_CHECK_NULL(state.data);
+    if (state.data != nullptr) {
+      return waitForConsumer(future);
+    }
+
     state.data = std::move(data);
     notify(consumerPromise_);
 
-    producerPromise_ = ContinuePromise("MergeJoinSource::enqueue");
-    *future = producerPromise_->getSemiFuture();
-    return BlockingReason::kWaitForConsumer;
+    return waitForConsumer(future);
   });
 }
 
@@ -281,6 +291,7 @@ void MergeJoinSource::close() {
     state.data = nullptr;
     state.atEnd = true;
     notify(producerPromise_);
+    notify(consumerPromise_);
   });
 }
 } // namespace facebook::velox::exec

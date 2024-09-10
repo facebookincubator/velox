@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 #include "velox/functions/sparksql/RegisterArithmetic.h"
-#include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/sparksql/Arithmetic.h"
+#include "velox/functions/sparksql/DecimalArithmetic.h"
 #include "velox/functions/sparksql/Rand.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -36,7 +36,7 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerBinaryNumeric<MinusFunction>({prefix + "subtract"});
   registerBinaryNumeric<MultiplyFunction>({prefix + "multiply"});
   registerFunction<DivideFunction, double, double, double>({prefix + "divide"});
-  registerBinaryIntegral<RemainderFunction>({prefix + "remainder"});
+  registerBinaryNumeric<RemainderFunction>({prefix + "remainder"});
   registerUnaryNumeric<UnaryMinusFunction>({prefix + "unaryminus"});
   // Math functions.
   registerUnaryNumeric<AbsFunction>({prefix + "abs"});
@@ -95,6 +95,8 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<HypotFunction, double, double, double>({prefix + "hypot"});
   registerFunction<sparksql::Log2Function, double, double>({prefix + "log2"});
   registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
+  registerFunction<sparksql::LogarithmFunction, double, double, double>(
+      {prefix + "log"});
   registerFunction<
       WidthBucketFunction,
       int64_t,
@@ -104,12 +106,17 @@ void registerArithmeticFunctions(const std::string& prefix) {
       int64_t>({prefix + "width_bucket"});
   registerRandFunctions(prefix);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_add, prefix + "add");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_sub, prefix + "subtract");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_mul, prefix + "multiply");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
+  registerDecimalAdd(prefix);
+  registerDecimalSubtract(prefix);
+  registerDecimalMultiply(prefix);
+  registerDecimalDivide(prefix);
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
+
+  registerBinaryNumeric<CheckedAddFunction>({prefix + "checked_add"});
+  registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
+  registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "checked_multiply"});
+  registerBinaryNumeric<CheckedDivideFunction>({prefix + "checked_divide"});
 }
 
 } // namespace facebook::velox::functions::sparksql

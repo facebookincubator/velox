@@ -57,8 +57,12 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     VELOX_NYI("{} unsupported", __FUNCTION__);
   }
 
-  int64_t reservedBytes() const override {
+  int64_t releasableReservation() const override {
     VELOX_NYI("{} unsupported", __FUNCTION__);
+  }
+
+  int64_t reservedBytes() const override {
+    return localMemoryUsage_;
   }
 
   bool maybeReserve(uint64_t size) override {
@@ -150,10 +154,6 @@ class MockMemoryPool : public velox::memory::MemoryPool {
       velox::memory::MachinePageCount /*unused*/,
       velox::memory::ContiguousAllocation& /*unused*/) override {
     VELOX_UNSUPPORTED("growContiguous unsupported");
-  }
-
-  int64_t currentBytes() const override {
-    return localMemoryUsage_;
   }
 
   int64_t usedBytes() const override {

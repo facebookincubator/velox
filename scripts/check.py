@@ -63,6 +63,15 @@ class CppFormatter(str):
 
 
 class CMakeFormatter(str):
+    def __init__(self, commit) -> None:
+        super().__init__()
+        try:
+            import yaml
+        except ModuleNotFoundError:
+            # We need pyyaml so cmake-format can read '.cmake-format.yml'
+            # otherwise it will run with default
+            raise SystemExit("Please install 'pyyaml' for the CMake formatter.")
+
     def diff(self, commit):
         return get_diff(
             self, util.run(f"cmake-format --first-comment-is-literal True {self}")[1]
@@ -185,7 +194,7 @@ def get_files(commit, path):
 
     if commit != "":
         status, stdout, stderr = util.run(
-            f"git diff --relative --name-only --diff-filter='ACM' {commit}"
+            f"git diff --relative --name-only --diff-filter='ACMR' {commit}"
         )
         filelist = stdout.splitlines()
     else:
@@ -204,6 +213,7 @@ def get_files(commit, path):
         and "build/fbcode_builder" not in file
         and "build/deps" not in file
         and "cmake-build-debug" not in file
+        and "NOTICE.txt" != file
     ]
 
 

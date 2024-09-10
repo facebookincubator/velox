@@ -15,8 +15,6 @@
  */
 #pragma once
 
-#include <charconv>
-
 #include "velox/common/base/CountBits.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
@@ -50,66 +48,6 @@ inline std::exception_ptr makeBadCastException(
       std::current_exception(),
       makeErrorMessage(input, row, resultType, errorDetails),
       false));
-}
-
-/// @brief Convert the unscaled value of a decimal to varchar and write to raw
-/// string buffer from start position.
-/// @tparam T The type of input value.
-/// @param unscaledValue The input unscaled value.
-/// @param scale The scale of decimal.
-/// @param maxVarcharSize The estimated max size of a varchar.
-/// @param startPosition The start position to write from.
-/// @return A string view.
-template <typename T>
-StringView convertToStringView(
-    T unscaledValue,
-    int32_t scale,
-    int32_t maxVarcharSize,
-    char* const startPosition) {
-  char* writePosition = startPosition;
-  if (unscaledValue == 0) {
-    *writePosition++ = '0';
-    if (scale > 0) {
-      *writePosition++ = '.';
-      // Append leading zeros.
-      std::memset(writePosition, '0', scale);
-      writePosition += scale;
-    }
-  } else {
-    if (unscaledValue < 0) {
-      *writePosition++ = '-';
-      unscaledValue = -unscaledValue;
-    }
-    auto [position, errorCode] = std::to_chars(
-        writePosition,
-        writePosition + maxVarcharSize,
-        unscaledValue / DecimalUtil::kPowersOfTen[scale]);
-    VELOX_DCHECK_EQ(
-        errorCode,
-        std::errc(),
-        "Failed to cast decimal to varchar: {}",
-        std::make_error_code(errorCode).message());
-    writePosition = position;
-
-    if (scale > 0) {
-      *writePosition++ = '.';
-      uint128_t fraction = unscaledValue % DecimalUtil::kPowersOfTen[scale];
-      // Append leading zeros.
-      int numLeadingZeros = std::max(scale - countDigits(fraction), 0);
-      std::memset(writePosition, '0', numLeadingZeros);
-      writePosition += numLeadingZeros;
-      // Append remaining fraction digits.
-      auto result = std::to_chars(
-          writePosition, writePosition + maxVarcharSize, fraction);
-      VELOX_DCHECK_EQ(
-          result.ec,
-          std::errc(),
-          "Failed to cast decimal to varchar: {}",
-          std::make_error_code(result.ec).message());
-      writePosition = result.ptr;
-    }
-  }
-  return StringView(startPosition, writePosition - startPosition);
 }
 
 } // namespace
@@ -258,33 +196,6 @@ Status toDecimalValue(
 }
 } // namespace detail
 
-template <bool adjustForTimeZone>
-void CastExpr::castTimestampToDate(
-    const SelectivityVector& rows,
-    const BaseVector& input,
-    exec::EvalCtx& context,
-    VectorPtr& result,
-    const date::time_zone* timeZone) {
-  auto* resultFlatVector = result->as<FlatVector<int32_t>>();
-  static const int32_t kSecsPerDay{86'400};
-  auto inputVector = input.as<SimpleVector<Timestamp>>();
-  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    auto input = inputVector->valueAt(row);
-    if constexpr (adjustForTimeZone) {
-      input.toTimezone(*timeZone);
-    }
-    auto seconds = input.getSeconds();
-    if (seconds >= 0 || seconds % kSecsPerDay == 0) {
-      resultFlatVector->set(row, seconds / kSecsPerDay);
-    } else {
-      // For division with negatives, minus 1 to compensate the discarded
-      // fractional part. e.g. -1/86'400 yields 0, yet it should be
-      // considered as -1 day.
-      resultFlatVector->set(row, seconds / kSecsPerDay - 1);
-    }
-  });
-}
-
 template <typename Func>
 void CastExpr::applyToSelectedNoThrowLocal(
     EvalCtx& context,
@@ -295,7 +206,12 @@ void CastExpr::applyToSelectedNoThrowLocal(
     rows.template applyToSelected([&](auto row) INLINE_LAMBDA {
       try {
         func(row);
-      } catch (...) {
+      } catch (const VeloxException& e) {
+        if (!e.isUserError()) {
+          throw;
+        }
+        result->setNull(row, true);
+      } catch (const std::exception&) {
         result->setNull(row, true);
       }
     });
@@ -330,7 +246,7 @@ void CastExpr::applyCastKernel(
     const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
     FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
   bool wrapException = true;
-  auto setError = [&](const std::string& details) {
+  auto setError = [&](const std::string& details) INLINE_LAMBDA {
     if (setNullInResultAtError()) {
       result->setNull(row, true);
     } else {
@@ -344,6 +260,18 @@ void CastExpr::applyCastKernel(
       }
     }
   };
+
+  // If castResult has an error, set the error in context. Otherwise, set the
+  // value in castResult directly to result. This lambda should be called only
+  // when ToKind is primitive and is not VARCHAR or VARBINARY.
+  auto setResultOrError = [&](const auto& castResult, vector_size_t row)
+                              INLINE_LAMBDA {
+                                if (castResult.hasError()) {
+                                  setError(castResult.error().message());
+                                } else {
+                                  result->set(row, castResult.value());
+                                }
+                              };
 
   try {
     auto inputRowValue = input->valueAt(row);
@@ -362,12 +290,30 @@ void CastExpr::applyCastKernel(
       }
       if constexpr (ToKind == TypeKind::TIMESTAMP) {
         const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
-        if (castResult.hasError()) {
-          setError(castResult.error().message());
-        } else {
-          result->set(row, castResult.value());
-        }
+        setResultOrError(castResult, row);
         return;
+      }
+      if constexpr (ToKind == TypeKind::REAL) {
+        const auto castResult = hooks_->castStringToReal(inputRowValue);
+        setResultOrError(castResult, row);
+        return;
+      }
+      if constexpr (ToKind == TypeKind::DOUBLE) {
+        const auto castResult = hooks_->castStringToDouble(inputRowValue);
+        setResultOrError(castResult, row);
+        return;
+      }
+
+      if constexpr (
+          ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
+          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT ||
+          ToKind == TypeKind::HUGEINT) {
+        if constexpr (TPolicy::throwOnUnicode) {
+          VELOX_CHECK(
+              functions::stringCore::isAscii(
+                  inputRowValue.data(), inputRowValue.size()),
+              "Unicode characters are not supported for conversion to integer types");
+        }
       }
     }
 
@@ -636,24 +582,14 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   int precision = getDecimalPrecisionScale(*fromType).first;
   int scale = getDecimalPrecisionScale(*fromType).second;
-  // A varchar's size is estimated with unscaled value digits, dot, leading
-  // zero, and possible minus sign.
-  int32_t rowSize = precision + 1;
-  if (scale > 0) {
-    ++rowSize; // A dot.
-  }
-  if (precision == scale) {
-    ++rowSize; // Leading zero.
-  }
-
+  auto rowSize = DecimalUtil::maxStringViewSize(precision, scale);
   auto flatResult = result->asFlatVector<StringView>();
   if (StringView::isInline(rowSize)) {
     char inlined[StringView::kInlineSize];
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-      flatResult->setNoCopy(
-          row,
-          convertToStringView<FromNativeType>(
-              simpleInput->valueAt(row), scale, rowSize, inlined));
+      auto actualSize = DecimalUtil::castToString<FromNativeType>(
+          simpleInput->valueAt(row), scale, rowSize, inlined);
+      flatResult->setNoCopy(row, StringView(inlined, actualSize));
     });
     return result;
   }
@@ -663,13 +599,13 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
   char* rawBuffer = buffer->asMutable<char>() + buffer->size();
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    auto stringView = convertToStringView<FromNativeType>(
+    auto actualSize = DecimalUtil::castToString<FromNativeType>(
         simpleInput->valueAt(row), scale, rowSize, rawBuffer);
-    flatResult->setNoCopy(row, stringView);
-    if (!stringView.isInline()) {
+    flatResult->setNoCopy(row, StringView(rawBuffer, actualSize));
+    if (!StringView::isInline(actualSize)) {
       // If string view is inline, corresponding bytes on the raw string buffer
       // are not needed.
-      rawBuffer += stringView.size();
+      rawBuffer += actualSize;
     }
   });
   // Update the exact buffer size.
@@ -724,30 +660,28 @@ void CastExpr::applyCastPrimitives(
   auto* resultFlatVector = result->as<FlatVector<To>>();
   auto* inputSimpleVector = input.as<SimpleVector<From>>();
 
-  if (!hooks_->truncate()) {
-    if (!hooks_->legacy()) {
-      applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-        applyCastKernel<ToKind, FromKind, util::DefaultCastPolicy>(
-            row, context, inputSimpleVector, resultFlatVector);
-      });
-    } else {
+  switch (hooks_->getPolicy()) {
+    case LegacyCastPolicy:
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
         applyCastKernel<ToKind, FromKind, util::LegacyCastPolicy>(
             row, context, inputSimpleVector, resultFlatVector);
       });
-    }
-  } else {
-    if (!hooks_->legacy()) {
+      break;
+    case PrestoCastPolicy:
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-        applyCastKernel<ToKind, FromKind, util::TruncateCastPolicy>(
+        applyCastKernel<ToKind, FromKind, util::PrestoCastPolicy>(
             row, context, inputSimpleVector, resultFlatVector);
       });
-    } else {
+      break;
+    case SparkCastPolicy:
       applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-        applyCastKernel<ToKind, FromKind, util::TruncateLegacyCastPolicy>(
+        applyCastKernel<ToKind, FromKind, util::SparkCastPolicy>(
             row, context, inputSimpleVector, resultFlatVector);
       });
-    }
+      break;
+
+    default:
+      VELOX_NYI("Policy {} not yet implemented.", hooks_->getPolicy());
   }
 }
 

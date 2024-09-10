@@ -30,7 +30,7 @@ are supported if the conversion of their element types are supported. In additio
 supported conversions to/from JSON are listed in :doc:`json`.
 
 .. list-table::
-   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25
+   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25
    :header-rows: 1
 
    * -
@@ -42,11 +42,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - real
      - double
      - varchar
+     - varbinary
      - timestamp
      - timestamp with time zone
      - date
      - interval day to second
      - decimal
+     - ipaddress
    * - tinyint
      - Y
      - Y
@@ -56,11 +58,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - smallint
      - Y
      - Y
@@ -70,11 +74,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - integer
      - Y
      - Y
@@ -84,11 +90,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - bigint
      - Y
      - Y
@@ -98,11 +106,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - boolean
      - Y
      - Y
@@ -112,11 +122,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - real
      - Y
      - Y
@@ -126,11 +138,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - double
      - Y
      - Y
@@ -140,11 +154,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     - 
    * - varchar
      - Y
      - Y
@@ -154,10 +170,28 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
+     - Y
+     - Y
      - Y
      -
      - Y
+     - Y
+   * - varbinary
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
      -
+     - 
      - Y
    * - timestamp
      -
@@ -168,11 +202,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     - 
      - Y
      - Y
      - Y
      -
      -
+     - 
    * - timestamp with time zone
      -
      -
@@ -181,8 +217,10 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
-     -
      - Y
+     - 
+     - Y
+     -
      - Y
      -
      -
@@ -195,6 +233,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     - Y
+     - 
      - Y
      - Y
      -
@@ -210,6 +250,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     - 
+     -
      -
      -
      -
@@ -224,11 +266,29 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - 
      -
      -
      -
      -
      - Y
+     -
+   * - ipaddress
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - Y
+     - Y
+     -
+     -
+     -
+     -
+     - 
+     - 
 
 Cast to Integral Types
 ----------------------
@@ -335,7 +395,7 @@ Valid examples
 Invalid examples
 
 ::
-  
+
   SELECT cast(214748364890 decimal(12, 2) as integer); -- Out of range
 
 Cast to Boolean
@@ -367,7 +427,8 @@ Valid examples
 From VARCHAR
 ^^^^^^^^^^^^
 
-There is a set of strings allowed to be casted to boolean. Casting from other strings to boolean throws.
+The strings `t, f, 1, 0, true, false` and their upper case equivalents are allowed to be casted to boolean.
+Casting from other strings to boolean throws.
 
 Valid examples
 
@@ -379,6 +440,8 @@ Valid examples
   SELECT cast('true' as boolean); -- true (case insensitive)
   SELECT cast('f' as boolean); -- false (case insensitive)
   SELECT cast('false' as boolean); -- false (case insensitive)
+  SELECT cast('F' as boolean); -- false (case insensitive)
+  SELECT cast('T' as boolean); -- true (case insensitive)
 
 Invalid examples
 
@@ -391,6 +454,7 @@ Invalid examples
   SELECT cast('-1' as boolean); -- Invalid argument
   SELECT cast('tr' as boolean); -- Invalid argument
   SELECT cast('tru' as boolean); -- Invalid argument
+  SELECT cast('No' as boolean); -- Invalid argument
 
 Cast to Floating-Point Types
 ----------------------------
@@ -429,9 +493,9 @@ Valid examples
   SELECT cast('1.' as real); -- 1.0
   SELECT cast('1' as real); -- 1.0
   SELECT cast('1.7E308' as real); -- Infinity
-  SELECT cast('Infinity' as real); -- Infinity (case insensitive)
-  SELECT cast('-Infinity' as real); -- -Infinity (case insensitive)
-  SELECT cast('NaN' as real); -- NaN (case insensitive)
+  SELECT cast('Infinity' as real); -- Infinity (case sensitive)
+  SELECT cast('-Infinity' as real); -- -Infinity (case sensitive)
+  SELECT cast('NaN' as real); -- NaN (case sensitive)
 
 Invalid examples
 
@@ -439,21 +503,13 @@ Invalid examples
 
   SELECT cast('1.2a' as real); -- Invalid argument
   SELECT cast('1.2.3' as real); -- Invalid argument
-
-There are a few corner cases where Velox behaves differently from Presto.
-Presto throws INVALID_CAST_ARGUMENT on these queries, while Velox allows these
-conversions. We keep the Velox behaivor by intention because it is more
-consistent with other supported cases of cast.
-
-::
-
-  SELECT cast('infinity' as real); -- Infinity
-  SELECT cast('-infinity' as real); -- -Infinity
-  SELECT cast('inf' as real); -- Infinity
-  SELECT cast('InfiNiTy' as real); -- Infinity
-  SELECT cast('INFINITY' as real); -- Infinity
-  SELECT cast('nAn' as real); -- NaN
-  SELECT cast('nan' as real); -- NaN
+  SELECT cast('infinity' as real); -- Invalid argument
+  SELECT cast('-infinity' as real); -- -Invalid argument
+  SELECT cast('inf' as real); -- Invalid argument
+  SELECT cast('InfiNiTy' as real); -- Invalid argument
+  SELECT cast('INFINITY' as real); -- Invalid argument
+  SELECT cast('nAn' as real); -- Invalid argument
+  SELECT cast('nan' as real); -- Invalid argument
 
 Below cases are supported in Presto, but throw in Velox.
 
@@ -497,6 +553,7 @@ Valid examples
   SELECT cast(infinity() as varchar); -- 'Infinity'
   SELECT cast(true as varchar); -- 'true'
   SELECT cast(timestamp '1970-01-01 00:00:00' as varchar); -- '1970-01-01 00:00:00.000'
+  SELECT cast(timestamp '2024-06-01 11:37:15.123 America/New_York' as varchar); -- '2024-06-01 11:37:15.123 America/New_York'
   SELECT cast(cast(22.51 as DECIMAL(5, 3)) as varchar); -- '22.510'
   SELECT cast(cast(-22.51 as DECIMAL(4, 2)) as varchar); -- '-22.51'
   SELECT cast(cast(0.123 as DECIMAL(3, 3)) as varchar); -- '0.123'
@@ -607,6 +664,60 @@ is the number of whole days in the interval, HH is then number of hours between 
     SELECT cast(now() - date('2024-03-01') as varchar); -- '35 09:15:54.092'
     SELECT cast(date('2024-03-01') - now() as varchar); -- '-35 09:16:20.598'
 
+From IPADDRESS
+^^^^^^^^^^^^^^
+
+Casting from IPADDRESS to VARCHAR returns a string formatted as x.x.x.x for IPV4 formatted IPV6 addresses.
+For all other IPV6 addresses it will be formatted in compressed alternate form IPV6 defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_
+
+IPV4:
+
+::
+
+  SELECT cast(ipaddress '1.2.3.4' as varchar); -- '1.2.3.4'
+
+IPV6:
+
+::
+
+  SELECT cast(ipaddress '2001:0db8:0000:0000:0000:ff00:0042:8329' as varchar); -- '2001:db8::ff00:42:8329'
+  SELECT cast(ipaddress '0:0:0:0:0:0:13.1.68.3' as varchar); -- '::13.1.68.3'
+
+IPV4 mapped IPV6:
+
+::
+
+  SELECT cast(ipaddress '::ffff:ffff:ffff' as varchar); -- '255.255.255.255'
+
+Cast to VARBINARY
+-----------------
+
+From IPADDRESS
+^^^^^^^^^^^^^^
+
+Returns the IPV6 address as a 16 byte varbinary string in network byte order.
+
+Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range `(RFC 4291#section-2.5.5.2) <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+When creating an IPADDRESS, IPv4 addresses will be mapped into that range.
+
+IPV6:
+
+::
+
+  SELECT cast(ipaddress '2001:0db8:0000:0000:0000:ff00:0042:8329' as varbinary); -- 0x20010db8000000000000ff0000428329
+
+IPV4:
+
+::
+
+  SELECT cast('1.2.3.4' as ipaddress); -- 0x00000000000000000000ffff01020304
+
+IPV4 mapped IPV6:
+
+::
+
+  SELECT cast('::ffff:ffff:ffff' as ipaddress); -- 0x00000000000000000000ffffffffffff
+
 Cast to TIMESTAMP
 -----------------
 
@@ -614,7 +725,7 @@ From VARCHAR
 ^^^^^^^^^^^^
 
 Casting from a string to timestamp is allowed if the string represents a
-timestamp in the format `YYYY-MM-DD` followed by an optional `hh:mm:ss.MS`. 
+timestamp in the format `YYYY-MM-DD` followed by an optional `hh:mm:ss.MS`.
 Seconds and milliseconds are optional. Casting from invalid input values throws.
 
 Valid examples:
@@ -727,6 +838,21 @@ Valid examples
   SELECT cast(timestamp '2012-03-09 10:00:00' as timestamp with time zone); -- 2012-03-09 10:00:00.000 America/Los_Angeles
   SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:00.000 America/Los_Angeles
 
+From DATE
+^^^^^^^^^
+
+The results depend on `session_timestamp`.
+
+Valid examples
+
+::
+
+    -- session_timezone = America/Los_Angeles
+    SELECT cast(date '2024-06-01' as timestamp with time zone); -- 2024-06-01 00:00:00.000 America/Los_Angeles
+
+    -- session_timezone = Asia/Shanghai
+    SELECT cast(date '2024-06-01' as timestamp with time zone); -- 2024-06-01 00:00:00.000 Asia/Shanghai
+
 Cast to Date
 ------------
 
@@ -766,6 +892,20 @@ Valid examples
 
   SELECT cast(timestamp '1970-01-01 00:00:00' as date); -- 1970-01-01
   SELECT cast(timestamp '1970-01-01 23:59:59' as date); -- 1970-01-01
+
+From TIMESTAMP WITH TIME ZONE
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Casting from TIMESTAMP WITH TIME ZONE to DATE is allowed. If present,
+the part of `hh:mm:ss` in the input is ignored.
+
+Session time zone does not affect the result.
+
+Valid examples
+
+::
+
+  SELECT CAST(timestamp '2024-06-01 01:38:00 America/New_York' as DATE); -- 2024-06-01
 
 Cast to Decimal
 ---------------
@@ -892,6 +1032,101 @@ Invalid example
   SELECT cast(' -3E+2' as decimal(12, 2)); -- Value is not a number
   SELECT cast('-3E+2.1' as decimal(12, 2)); -- Value is not a number
   SELECT cast('3E+' as decimal(12, 2)); -- Value is not a number
+
+Cast to IPADDRESS
+-----------------
+
+From VARCHAR
+^^^^^^^^^^^^
+
+To cast a varchar to IPAddress input string must be in the form of either
+IPV4 or IPV6.
+
+For IPV4 it must be in the form of:
+x.x.x.x where each x is an integer value between 0-255.
+
+For IPV6 it must follow any of the forms defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_.
+
+Full form:
+
+::
+
+   2001:0DB8:0000:0000:0008:0800:200C:417A
+   2001:DB8:0:0:8:800:200C:417A
+
+Compressed form:
+::
+  2001:DB8::8:800:200C:417A
+
+Alternate form:
+::
+  0:0:0:0:0:0:13.1.68.3
+  ::13.1.68.3
+
+Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range `(RFC 4291#section-2.5.5.2) <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+When creating an IPADDRESS, IPv4 addresses will be mapped into that range.
+
+When formatting an IPADDRESS, any address within the mapped range will be formatted as an IPv4 address.
+Other addresses will be formatted as IPv6 using the canonical format defined in `RFC 5952 <https://datatracker.ietf.org/doc/html/rfc5952.html>`_.
+
+Valid examples:
+
+::
+
+  SELECT cast('2001:0db8:0000:0000:0000:ff00:0042:8329' as ipaddress); -- ipaddress '2001:db8::ff00:42:8329'
+  SELECT cast('1.2.3.4' as ipaddress); -- ipaddress '1.2.3.4'
+  SELECT cast('::ffff:ffff:ffff' as ipaddress); -- ipaddress '255.255.255.255'
+
+Invalid examples:
+
+::
+
+  SELECT cast('2001:db8::1::1' as ipaddress); -- Invalid IP address '2001:db8::1::1'
+  SELECT cast('789.1.1.1' as ipaddress); -- Invalid IP address '789.1.1.1'
+
+From VARBINARY
+^^^^^^^^^^^^^^
+
+To cast a varbinary to IPAddress it must be either IPV4(4 Bytes)
+or IPV6(16 Bytes) in network byte order.
+
+IPV4:
+
+::
+
+[01, 02, 03, 04] -> 1.2.3.4
+
+IPV6:
+
+::
+
+[0x20, 0x01, 0x0d, 0xb8 0x00, 0x00, 0x00, 0x00 0x00 0x00, 0xff, 0x00, 0x00, 0x42, 0x83, 0x29] -> 2001:db8::ff00:42:8329
+
+Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range `(RFC 4291#section-2.5.5.2) <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+When creating an IPADDRESS, IPv4 addresses will be mapped into that range.
+
+When formatting an IPADDRESS, any address within the mapped range will be formatted as an IPv4 address.
+Other addresses will be formatted as IPv6 using the canonical format defined in `RFC 5952 <https://datatracker.ietf.org/doc/html/rfc5952.html>`_.
+
+IPV6 mapped IPV4 address:
+
+::
+
+[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x01, 0x02, 0x03, 0x04] -> 1.2.3.4
+
+Valid examples:
+
+::
+
+  SELECT cast(from_hex('20010db8000000000000ff0000428329') as ipaddress); -- ipaddress '2001:db8::ff00:42:8329'
+  SELECT cast(from_hex('01020304') as ipaddress); -- ipaddress '1.2.3.4'
+  SELECT cast(from_hex('00000000000000000000ffff01020304') as ipaddress); -- ipaddress '1.2.3.4'
+
+Invalid examples:
+
+::
+
+  SELECT cast(from_hex('f000001100') as ipaddress); -- Invalid IP address binary length: 5
 
 Miscellaneous
 -------------

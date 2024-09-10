@@ -21,8 +21,8 @@ set(CMAKE_WINDOW_TEST_LINK_LIBRARIES
     velox_vector_fuzzer
     velox_vector_test_lib
     gflags::gflags
-    gtest
-    gtest_main)
+    GTest::gtest
+    GTest::gtest_main)
 
 set(CMAKE_WINDOW_TEST_MAIN_FILES Main.cpp)
 
@@ -34,5 +34,5 @@ add_test(
   COMMAND velox_spark_windows_test
   WORKING_DIRECTORY .)
 
-target_link_libraries(velox_spark_windows_test
-                      ${CMAKE_WINDOW_TEST_LINK_LIBRARIES})
+target_link_libraries(
+  velox_spark_windows_test ${CMAKE_WINDOW_TEST_LINK_LIBRARIES})

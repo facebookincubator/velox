@@ -129,6 +129,14 @@ Generic Configuration
      - 0
      - If it is not zero, specifies the time limit that a driver can continuously
        run on a thread before yield. If it is zero, then it no limit.
+   * - prefixsort_normalized_key_max_bytes
+     - integer
+     - 128
+     - Maximum number of bytes to use for the normalized key in prefix-sort. Use 0 to disable prefix-sort.
+   * - prefixsort_min_rows
+     - integer
+     - 130
+     - Minimum number of rows to use prefix-sort. The default value has been derived using micro-benchmarking.
 
 .. _expression-evaluation-conf:
 
@@ -160,6 +168,22 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
+   * - debug_disable_expression_with_peeling
+     - bool
+     - false
+     - Disable optimization in expression evaluation to peel common dictionary layer from inputs. Should only be used for debugging.
+   * - debug_disable_common_sub_expressions
+     - bool
+     - false
+     - Disable optimization in expression evaluation to re-use cached results for common sub-expressions. Should only be used for debugging.
+   * - debug_disable_expression_with_memoization
+     - bool
+     - false
+     - Disable optimization in expression evaluation to re-use cached results between subsequent input batches that are dictionary encoded and have the same alphabet(underlying flat vector). Should only be used for debugging.
+   * - debug_disable_expression_with_lazy_inputs
+     - bool
+     - false
+     - Disable optimization in expression evaluation to delay loading of lazy inputs unless required. Should only be used for debugging.
 
 Memory Management
 -----------------
@@ -295,6 +319,11 @@ Spilling
      - 4MB
      - The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
        If set to zero, buffering is disabled.
+   * - spill_read_buffer_size
+     - integer
+     - 1MB
+     - The buffer size in bytes to read from one spilled file. If the underlying filesystem supports async
+       read, we do read-ahead with double buffering, which doubles the buffer used to read from each spill file.
    * - min_spill_run_size
      - integer
      - 256MB
@@ -401,6 +430,14 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - If true, the partition directory will be converted to lowercase when executing a table write operation.
+   * - allow-null-partition-keys
+     - allow_null_partition_keys
+     - bool
+     - true
+     - Determines whether null values for partition keys are allowed or not. If not, fails with "Partition key must
+       not be null" error message when writing data with null partition key.
+       Null check for partitioning key should be used only when partitions are generated dynamically during query execution.
+       For queries that write to fixed partitions, this check should happen much earlier before the Velox execution even starts.
    * - ignore_missing_files
      -
      - bool
@@ -465,6 +502,16 @@ Each query can override the config by setting corresponding query session proper
      - string
      - 16M
      - Maximum dictionary memory that can be used in orc writer.
+   * - hive.orc.writer.integer-dictionary-encoding-enabled
+     - orc_optimized_writer_integer_dictionary_encoding_enabled
+     - bool
+     - true
+     - Whether or not dictionary encoding of integer types should be used by the ORC writer.
+   * - hive.orc.writer.string-dictionary-encoding-enabled
+     - orc_optimized_writer_string_dictionary_encoding_enabled
+     - bool
+     - true
+     - Whether or not dictionary encoding of string types should be used by the ORC writer.
    * - hive.parquet.writer.timestamp-unit
      - hive.parquet.writer.timestamp_unit
      - tinyint
@@ -481,6 +528,20 @@ Each query can override the config by setting corresponding query session proper
      - integer
      - 1024
      - Minimal number of items in an encoded stream.
+   * - hive.orc.writer.compression-level
+     - orc_optimized_writer_compression_level
+     - tinyint
+     - 3 for ZSTD and 4 for ZLIB
+     - The compression level to use with ZLIB and ZSTD.
+   * - cache.no_retention
+     - cache.no_retention
+     - bool
+     - false
+     - If true, evict out a query scanned data out of in-memory cache right after the access,
+       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
+       from the one-time table scan by large batch query when mixed running with interactive
+       query which has high data locality.
+
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -546,7 +607,18 @@ Each query can override the config by setting corresponding query session proper
      - integer
      -
      - Maximum concurrent TCP connections for a single http client.
-
+   * - hive.s3.max-attempts
+     - integer
+     -
+     - Maximum attempts for connections to a single http client, work together with retry-mode. By default, it's 3 for standard/adaptive mode
+       and 10 for legacy mode.
+   * - hive.s3.retry-mode
+     - string
+     -
+     - **Allowed values:** "standard", "adaptive", "legacy". By default it's empty, S3 client will be created with RetryStrategy.
+       Legacy mode only enables throttled retry for transient errors.
+       Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
+       Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate.
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 .. list-table::
@@ -639,4 +711,29 @@ Spark-specific Configuration
        the value of this config can not exceed the default value.
    * - spark.partition_id
      - integer
+     -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+
+Tracing
+--------
+.. list-table::
+   :widths: 30 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - query_trace_enabled
+     - bool
+     - true
+     - If true, enable query tracing.
+   * - query_trace_dir
+     - string
+     -
+     - The root directory to store the tracing data and metadata for a query.
+   * - query_trace_node_ids
+     - string
+     -
+     - A comma-separated list of plan node ids whose input data will be trace. If it is empty, then we only trace the
+       query metadata which includes the query plan and configs etc.

@@ -27,7 +27,7 @@ class ScanSpec;
 namespace facebook::velox::parquet {
 
 StructColumnReader::StructColumnReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+    const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
     common::ScanSpec& scanSpec)
@@ -40,7 +40,7 @@ StructColumnReader::StructColumnReader(
     }
     auto childFileType = fileType_->childByName(childSpec->fieldName());
     auto childRequestedType =
-        requestedType_->childByName(childSpec->fieldName());
+        requestedType_->asRow().findChild(childSpec->fieldName());
     addChild(ParquetColumnReader::build(
         childRequestedType, childFileType, params, *childSpec));
 
@@ -98,7 +98,7 @@ StructColumnReader::findBestLeaf() {
 
 void StructColumnReader::read(
     vector_size_t offset,
-    RowSet rows,
+    const RowSet& rows,
     const uint64_t* /*incomingNulls*/) {
   ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
   SelectiveStructColumnReader::read(offset, rows, nullptr);
@@ -176,7 +176,7 @@ void StructColumnReader::setNullsFromRepDefs(PageReader& pageReader) {
   auto repDefRange = pageReader.repDefRange();
   int32_t numRepDefs = repDefRange.second - repDefRange.first;
   dwio::common::ensureCapacity<uint64_t>(
-      nullsInReadRange_, bits::nwords(numRepDefs), &memoryPool_);
+      nullsInReadRange_, bits::nwords(numRepDefs), memoryPool_);
   auto numStructs = pageReader.getLengthsAndNulls(
       levelMode_,
       levelInfo_,

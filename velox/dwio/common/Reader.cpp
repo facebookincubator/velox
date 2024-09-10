@@ -156,22 +156,27 @@ void RowReader::readWithRowNumber(
     const dwio::common::Mutation* mutation,
     VectorPtr& result) {
   auto* rowVector = result->asUnchecked<RowVector>();
-  column_index_t numChildren = 0;
-  for (auto& column : options.getScanSpec()->children()) {
+  column_index_t numChildren{0};
+  column_index_t numConstChildren{0};
+  for (auto& column : options.scanSpec()->children()) {
     if (column->projectOut()) {
       ++numChildren;
+      if (column->isConstant()) {
+        ++numConstChildren;
+      }
     }
   }
+
   VectorPtr rowNumVector;
-  auto rowNumberColumnInfo = options.getRowNumberColumnInfo();
-  VELOX_CHECK_EQ(rowNumberColumnInfo.has_value(), true);
-  auto& rowNumberColumnIndex = rowNumberColumnInfo->insertPosition;
-  auto& rowNumberColumnName = rowNumberColumnInfo->name;
+  const auto& rowNumberColumnInfo = options.rowNumberColumnInfo();
+  VELOX_CHECK(rowNumberColumnInfo.has_value());
+  const auto rowNumberColumnIndex = rowNumberColumnInfo->insertPosition;
+  const auto& rowNumberColumnName = rowNumberColumnInfo->name;
   VELOX_CHECK_LE(rowNumberColumnIndex, numChildren);
   if (rowVector->childrenSize() != numChildren) {
     VELOX_CHECK_EQ(rowVector->childrenSize(), numChildren + 1);
     rowNumVector = rowVector->childAt(rowNumberColumnIndex);
-    auto& rowType = rowVector->type()->asRow();
+    const auto& rowType = rowVector->type()->asRow();
     auto names = rowType.names();
     auto types = rowType.children();
     auto children = rowVector->children();
@@ -186,8 +191,9 @@ void RowReader::readWithRowNumber(
         rowVector->size(),
         std::move(children));
   }
+
   columnReader->next(rowsToRead, result, mutation);
-  FlatVector<int64_t>* flatRowNum = nullptr;
+  FlatVector<int64_t>* flatRowNum{nullptr};
   if (rowNumVector && BaseVector::isVectorWritable(rowNumVector)) {
     flatRowNum = rowNumVector->asFlatVector<int64_t>();
   }
@@ -205,16 +211,17 @@ void RowReader::readWithRowNumber(
     flatRowNum = rowNumVector->asUnchecked<FlatVector<int64_t>>();
   }
   auto* rawRowNum = flatRowNum->mutableRawValues();
-  if (numChildren == 0 && !hasDeletion(mutation)) {
+  if ((numChildren == numConstChildren) && !hasDeletion(mutation)) {
     VELOX_DCHECK_EQ(rowsToRead, result->size());
     std::iota(rawRowNum, rawRowNum + rowsToRead, previousRow);
   } else {
-    auto rowOffsets = columnReader->outputRows();
+    const auto rowOffsets = columnReader->outputRows();
     VELOX_DCHECK_EQ(rowOffsets.size(), result->size());
     for (int i = 0; i < rowOffsets.size(); ++i) {
       rawRowNum[i] = previousRow + rowOffsets[i];
     }
   }
+
   rowVector = result->asUnchecked<RowVector>();
   auto& rowType = rowVector->type()->asRow();
   auto names = rowType.names();

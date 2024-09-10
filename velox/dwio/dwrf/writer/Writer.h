@@ -30,17 +30,8 @@
 
 namespace facebook::velox::dwrf {
 
-struct WriterOptions {
+struct WriterOptions : public dwio::common::WriterOptions {
   std::shared_ptr<const Config> config = std::make_shared<Config>();
-  std::shared_ptr<const Type> schema;
-  velox::memory::MemoryPool* memoryPool;
-  const velox::common::SpillConfig* spillConfig{nullptr};
-  // If not null, used by memory arbitration to track if a file writer is under
-  // memory reclaimable section or not.
-  tsan_atomic<bool>* nonReclaimableSection{nullptr};
-  /// The default factory allows the writer to construct the default flush
-  /// policy with the configs in its ctor.
-  std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory;
   /// Changes the interface to stream list and encoding iter.
   std::function<std::unique_ptr<LayoutPlanner>(const dwio::common::TypeWithId&)>
       layoutPlannerFactory;
@@ -132,6 +123,10 @@ class Writer : public dwio::common::Writer {
     return writerBase_->getContext();
   }
 
+  const proto::Footer& getFooter() const {
+    return writerBase_->getFooter();
+  }
+
   WriterSink& getSink() {
     return writerBase_->getSink();
   }
@@ -188,8 +183,9 @@ class Writer : public dwio::common::Writer {
       MemoryUsageCategory memoryUsageCategory,
       double estimatedMemoryGrowthRatio);
 
-  // Releases the unused memory reservations after we flush a stripe.
-  void releaseMemory();
+  // Releases the unused memory reservations after we flush a stripe. Returns
+  // the total number of released bytes.
+  int64_t releaseMemory();
 
   // Create a new stripe. No-op if there is no data written.
   void flushInternal(bool close = false);
@@ -218,11 +214,9 @@ class DwrfWriterFactory : public dwio::common::WriterFactory {
 
   std::unique_ptr<dwio::common::Writer> createWriter(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const dwio::common::WriterOptions& options) override;
+      const std::shared_ptr<dwio::common::WriterOptions>& options) override;
+
+  std::unique_ptr<dwio::common::WriterOptions> createWriterOptions() override;
 };
-
-void registerDwrfWriterFactory();
-
-void unregisterDwrfWriterFactory();
 
 } // namespace facebook::velox::dwrf

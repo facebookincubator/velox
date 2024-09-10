@@ -25,12 +25,14 @@ SortBuffer::SortBuffer(
     const std::vector<CompareFlags>& sortCompareFlags,
     velox::memory::MemoryPool* pool,
     tsan_atomic<bool>* nonReclaimableSection,
+    common::PrefixSortConfig prefixSortConfig,
     const common::SpillConfig* spillConfig,
     folly::Synchronized<velox::common::SpillStats>* spillStats)
     : input_(input),
       sortCompareFlags_(sortCompareFlags),
       pool_(pool),
       nonReclaimableSection_(nonReclaimableSection),
+      prefixSortConfig_(prefixSortConfig),
       spillConfig_(spillConfig),
       spillStats_(spillStats) {
   VELOX_CHECK_GE(input_->size(), sortCompareFlags_.size());
@@ -112,19 +114,8 @@ void SortBuffer::noMoreInput() {
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
     data_->listRows(&iter, numInputRows_, sortedRows_.data());
-    std::sort(
-        sortedRows_.begin(),
-        sortedRows_.end(),
-        [this](const char* leftRow, const char* rightRow) {
-          for (vector_size_t index = 0; index < sortCompareFlags_.size();
-               ++index) {
-            if (auto result = data_->compare(
-                    leftRow, rightRow, index, sortCompareFlags_[index])) {
-              return result < 0;
-            }
-          }
-          return false;
-        });
+    PrefixSort::sort(
+        sortedRows_, pool_, data_.get(), sortCompareFlags_, prefixSortConfig_);
   } else {
     // Spill the remaining in-memory state to disk if spilling has been
     // triggered on this sort buffer. This is to simplify query OOM prevention
@@ -139,7 +130,7 @@ void SortBuffer::noMoreInput() {
   pool_->release();
 }
 
-RowVectorPtr SortBuffer::getOutput(uint32_t maxOutputRows) {
+RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
   VELOX_CHECK(noMoreInput_);
 
   if (numOutputRows_ == numInputRows_) {
@@ -293,12 +284,11 @@ void SortBuffer::spillOutput() {
   finishSpill();
 }
 
-void SortBuffer::prepareOutput(uint32_t maxOutputRows) {
+void SortBuffer::prepareOutput(vector_size_t maxOutputRows) {
   VELOX_CHECK_GT(maxOutputRows, 0);
   VELOX_CHECK_GT(numInputRows_, numOutputRows_);
-
   const vector_size_t batchSize =
-      std::min<vector_size_t>(numInputRows_ - numOutputRows_, maxOutputRows);
+      std::min<uint64_t>(numInputRows_ - numOutputRows_, maxOutputRows);
   if (output_ != nullptr) {
     VectorPtr output = std::move(output_);
     BaseVector::prepareForReuse(output, batchSize);
@@ -381,8 +371,11 @@ void SortBuffer::getOutputWithSpill() {
 
 void SortBuffer::finishSpill() {
   VELOX_CHECK_NULL(spillMerger_);
-  auto spillPartition = spiller_->finishSpill();
-  spillMerger_ = spillPartition.createOrderedReader(pool(), spillStats_);
+  SpillPartitionSet spillPartitionSet;
+  spiller_->finishSpill(spillPartitionSet);
+  VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
+  spillMerger_ = spillPartitionSet.begin()->second->createOrderedReader(
+      spillConfig_->readBufferSize, pool(), spillStats_);
 }
 
 } // namespace facebook::velox::exec

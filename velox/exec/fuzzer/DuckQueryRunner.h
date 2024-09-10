@@ -21,7 +21,18 @@ namespace facebook::velox::exec::test {
 
 class DuckQueryRunner : public ReferenceQueryRunner {
  public:
-  DuckQueryRunner();
+  explicit DuckQueryRunner(memory::MemoryPool* aggregatePool);
+
+  RunnerType runnerType() const override {
+    return RunnerType::kDuckQueryRunner;
+  }
+
+  /// Skip Timestamp, Varbinary, Unknown, and IntervalDayTime types. DuckDB
+  /// doesn't support nanosecond precision for timestamps or casting from Bigint
+  /// to Interval.
+  ///
+  /// TODO Investigate mismatches reported when comparing Varbinary.
+  const std::vector<TypePtr>& supportedScalarTypes() const override;
 
   /// Specify names of aggregate function to exclude from the list of supported
   /// functions. Used to exclude functions that are non-determonistic, have bugs
@@ -39,6 +50,12 @@ class DuckQueryRunner : public ReferenceQueryRunner {
       const std::vector<RowVectorPtr>& input,
       const RowTypePtr& resultType) override;
 
+  std::multiset<std::vector<velox::variant>> execute(
+      const std::string& sql,
+      const std::vector<RowVectorPtr>& probeInput,
+      const std::vector<RowVectorPtr>& buildInput,
+      const RowTypePtr& resultType) override;
+
  private:
   std::optional<std::string> toSql(
       const std::shared_ptr<const core::AggregationNode>& aggregationNode);
@@ -51,6 +68,12 @@ class DuckQueryRunner : public ReferenceQueryRunner {
 
   std::optional<std::string> toSql(
       const std::shared_ptr<const core::RowNumberNode>& rowNumberNode);
+
+  std::optional<std::string> toSql(
+      const std::shared_ptr<const core::HashJoinNode>& joinNode);
+
+  std::optional<std::string> toSql(
+      const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode);
 
   std::unordered_set<std::string> aggregateFunctionNames_;
 };

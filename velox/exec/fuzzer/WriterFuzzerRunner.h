@@ -24,6 +24,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/WriterFuzzer.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/parse/TypeResolver.h"
@@ -32,14 +33,12 @@
 
 namespace facebook::velox::exec::test {
 
-static inline const std::string kHiveConnectorId = "test-hive";
-
 /// WriterFuzzerRunner leverages WriterFuzzer and VectorFuzzer to
 /// automatically generate and execute table writer tests.
 /// It works in following steps:
 ///
-///  1. Pick different table write properties. Eg: partitioned.
-///  (TODO: bucketed, sorted).
+///  1. Pick different table write properties. Eg: partitioned, bucketed,
+///  sorted.
 ///  2. Generate corresponding table write query plan.
 ///  3. Generate a random set of input data (vector).
 ///  4. Execute the query plan.
@@ -76,7 +75,9 @@ class WriterFuzzerRunner {
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                kHiveConnectorId, std::make_shared<core::MemConfig>());
+                kHiveConnectorId,
+                std::make_shared<config::ConfigBase>(
+                    std::unordered_map<std::string, std::string>()));
     connector::registerConnector(hiveConnector);
     facebook::velox::exec::test::writerFuzzer(
         seed, std::move(referenceQueryRunner));

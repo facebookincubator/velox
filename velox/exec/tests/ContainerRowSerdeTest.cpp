@@ -82,7 +82,7 @@ class ContainerRowSerdeTest : public testing::Test,
 
     auto in = HashStringAllocator::prepareRead(position.header);
     for (auto i = 0; i < numRows; ++i) {
-      ContainerRowSerde::deserialize(in, i, data.get());
+      ContainerRowSerde::deserialize(*in, i, data.get());
     }
     return data;
   }
@@ -117,13 +117,13 @@ class ContainerRowSerdeTest : public testing::Test,
           !equalsOnly) {
         VELOX_ASSERT_THROW(
             ContainerRowSerde::compareWithNulls(
-                stream, decodedVector, i, compareFlags),
+                *stream, decodedVector, i, compareFlags),
             "Ordering nulls is not supported");
       } else {
         ASSERT_EQ(
             expected.at(i),
             ContainerRowSerde::compareWithNulls(
-                stream, decodedVector, i, compareFlags));
+                *stream, decodedVector, i, compareFlags));
       }
     }
   }
@@ -154,13 +154,13 @@ class ContainerRowSerdeTest : public testing::Test,
           !equalsOnly) {
         VELOX_ASSERT_THROW(
             ContainerRowSerde::compareWithNulls(
-                leftStream, rightStream, type.get(), compareFlags),
+                *leftStream, *rightStream, type.get(), compareFlags),
             "Ordering nulls is not supported");
       } else {
         ASSERT_EQ(
             expected.at(i),
             ContainerRowSerde::compareWithNulls(
-                leftStream, rightStream, type.get(), compareFlags));
+                *leftStream, *rightStream, type.get(), compareFlags));
       }
     }
   }
@@ -176,7 +176,8 @@ class ContainerRowSerdeTest : public testing::Test,
     for (auto i = 0; i < positions.size(); ++i) {
       auto stream = HashStringAllocator::prepareRead(positions.at(i).header);
       ASSERT_EQ(
-          0, ContainerRowSerde::compare(stream, decodedVector, i, compareFlags))
+          0,
+          ContainerRowSerde::compare(*stream, decodedVector, i, compareFlags))
           << "at " << i << ": " << vector->toString(i);
     }
   }
@@ -568,6 +569,39 @@ TEST_F(ContainerRowSerdeTest, fuzzCompare) {
       auto rowVector = makeRowVector(children);
       testCompare(rowVector);
     }
+  }
+}
+
+TEST_F(ContainerRowSerdeTest, nans) {
+  // Verify that the NaNs with different representations are considered equal
+  // and have the same hash value.
+  auto vector = makeNullableFlatVector<double>(
+      {std::nan("1"),
+       std::nan("2"),
+       std::numeric_limits<double>::quiet_NaN(),
+       std::numeric_limits<double>::signaling_NaN()});
+
+  // Compare with the same NaN value
+  auto expected = makeConstant(std::nan("1"), 4, vector->type());
+
+  auto positions = serializeWithPositions(vector);
+
+  CompareFlags compareFlags =
+      CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+
+  DecodedVector decodedVector(*expected);
+
+  for (auto i = 0; i < positions.size(); ++i) {
+    auto stream = HashStringAllocator::prepareRead(positions.at(i).header);
+    ASSERT_EQ(
+        0, ContainerRowSerde::compare(*stream, decodedVector, i, compareFlags))
+        << "at " << i << ": " << vector->toString(i);
+
+    stream = HashStringAllocator::prepareRead(positions.at(i).header);
+    ASSERT_EQ(
+        expected->hashValueAt(i),
+        ContainerRowSerde::hash(*stream, vector->type().get()))
+        << "at " << i << ": " << vector->toString(i);
   }
 }
 

@@ -17,7 +17,6 @@
 #include "velox/dwio/common/WriterFactory.h"
 
 namespace facebook::velox::dwio::common {
-
 namespace {
 
 using WriterFactoriesMap =
@@ -49,10 +48,10 @@ bool unregisterWriterFactory(FileFormat format) {
 
 std::shared_ptr<WriterFactory> getWriterFactory(FileFormat format) {
   auto it = writerFactories().find(format);
-  VELOX_CHECK(
-      it != writerFactories().end(),
-      "WriterFactory is not registered for format {}",
-      toString(format));
+  if (it == writerFactories().end()) {
+    VELOX_UNSUPPORTED(
+        "WriterFactory is not registered for format {}", toString(format));
+  }
   return it->second;
 }
 

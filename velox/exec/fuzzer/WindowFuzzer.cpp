@@ -17,6 +17,7 @@
 #include "velox/exec/fuzzer/WindowFuzzer.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
+#include "velox/common/base/Portability.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -28,15 +29,6 @@ DEFINE_bool(
 namespace facebook::velox::exec::test {
 
 namespace {
-
-void logVectors(const std::vector<RowVectorPtr>& vectors) {
-  for (auto i = 0; i < vectors.size(); ++i) {
-    VLOG(1) << "Input batch " << i << ":";
-    for (auto j = 0; j < vectors[i]->size(); ++j) {
-      VLOG(1) << "\tRow " << j << ": " << vectors[i]->toString(j);
-    }
-  }
-}
 
 bool supportIgnoreNulls(const std::string& name) {
   // Below are all functions that support ignore nulls. Aggregation functions in
@@ -68,7 +60,10 @@ void WindowFuzzer::addWindowFunctionSignatures(
   }
 }
 
-std::tuple<std::string, bool> WindowFuzzer::generateFrameClause() {
+std::string WindowFuzzer::generateFrameClause(
+    std::vector<std::string>& argNames,
+    std::vector<TypePtr>& argTypes,
+    bool& isRowsFrame) {
   auto frameType = [](int value) -> const std::string {
     switch (value) {
       case 0:
@@ -79,8 +74,7 @@ std::tuple<std::string, bool> WindowFuzzer::generateFrameClause() {
         VELOX_UNREACHABLE("Unknown value for frame type generation");
     }
   };
-  auto isRowsFrame =
-      boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
+  isRowsFrame = boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng_);
   auto frameTypeString = frameType(isRowsFrame);
 
   constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
@@ -96,20 +90,33 @@ std::tuple<std::string, bool> WindowFuzzer::generateFrameClause() {
     maxKValue = kMax;
   }
 
-  auto frameBound =
-      [minKValue, maxKValue, this](
-          core::WindowNode::BoundType boundType) -> const std::string {
-    // Generating only constant bounded k PRECEDING/FOLLOWING frames for now.
+  // Generating column bounded frames 50% of the time and constant
+  // bounded the rest of the times. The column bounded frames are of
+  // type INTEGER and only have positive values as Window functions
+  // reject negative values for them.
+  auto frameBound = [this, minKValue, maxKValue, &argNames, &argTypes](
+                        core::WindowNode::BoundType boundType,
+                        const std::string& colName) -> const std::string {
     auto kValue = boost::random::uniform_int_distribution<int64_t>(
         minKValue, maxKValue)(rng_);
     switch (boundType) {
       case core::WindowNode::BoundType::kUnboundedPreceding:
         return "UNBOUNDED PRECEDING";
       case core::WindowNode::BoundType::kPreceding:
+        if (vectorFuzzer_.coinToss(0.5)) {
+          argTypes.push_back(INTEGER());
+          argNames.push_back(colName);
+          return fmt::format("{} PRECEDING", colName);
+        }
         return fmt::format("{} PRECEDING", kValue);
       case core::WindowNode::BoundType::kCurrentRow:
         return "CURRENT ROW";
       case core::WindowNode::BoundType::kFollowing:
+        if (vectorFuzzer_.coinToss(0.5)) {
+          argTypes.push_back(INTEGER());
+          argNames.push_back(colName);
+          return fmt::format("{} FOLLOWING", colName);
+        }
         return fmt::format("{} FOLLOWING", kValue);
       case core::WindowNode::BoundType::kUnboundedFollowing:
         return "UNBOUNDED FOLLOWING";
@@ -149,12 +156,11 @@ std::tuple<std::string, bool> WindowFuzzer::generateFrameClause() {
   auto endBoundMinIdx = std::max(0, static_cast<int>(startBoundIndex) - 1);
   auto endBoundIndex = boost::random::uniform_int_distribution<uint32_t>(
       endBoundMinIdx, endBoundOptions.size() - 1)(rng_);
-  auto frameStart = frameBound(startBoundOptions[startBoundIndex]);
-  auto frameEnd = frameBound(endBoundOptions[endBoundIndex]);
+  auto frameStartBound = frameBound(startBoundOptions[startBoundIndex], "k0");
+  auto frameEndBound = frameBound(endBoundOptions[endBoundIndex], "k1");
 
-  return std::make_tuple(
-      frameTypeString + " BETWEEN " + frameStart + " AND " + frameEnd,
-      isRowsFrame);
+  return frameTypeString + " BETWEEN " + frameStartBound + " AND " +
+      frameEndBound;
 }
 
 std::string WindowFuzzer::generateOrderByClause(
@@ -185,8 +191,7 @@ std::string WindowFuzzer::getFrame(
   return frame.str();
 }
 
-std::vector<WindowFuzzer::SortingKeyAndOrder>
-WindowFuzzer::generateSortingKeysAndOrders(
+std::vector<SortingKeyAndOrder> WindowFuzzer::generateSortingKeysAndOrders(
     const std::string& prefix,
     std::vector<std::string>& names,
     std::vector<TypePtr>& types) {
@@ -242,9 +247,11 @@ void WindowFuzzer::go() {
           generateSortingKeysAndOrders("s", argNames, argTypes);
     }
     const auto partitionKeys = generateSortingKeys("p", argNames, argTypes);
-    const auto [frameClause, isRowsFrame] = generateFrameClause();
-    const auto input =
-        generateInputDataWithRowNumber(argNames, argTypes, signature);
+    bool isRowsFrame = false;
+    const auto frameClause =
+        generateFrameClause(argNames, argTypes, isRowsFrame);
+    const auto input = generateInputDataWithRowNumber(
+        argNames, argTypes, partitionKeys, signature);
     // If the function is order-dependent or uses "rows" frame, sort all input
     // rows by row_number additionally.
     if (requireSortedInput || isRowsFrame) {
@@ -326,8 +333,14 @@ void WindowFuzzer::testAlternativePlans(
   auto directory = exec::test::TempDirectoryPath::create();
   const auto inputRowType = asRowType(input[0]->type());
   if (isTableScanSupported(inputRowType)) {
-    auto splits = makeSplits(input, directory->getPath());
+    auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
+// There is a known issue where LocalPartition will send DictionaryVectors
+// with the same underlying base Vector to multiple threads.  This triggers
+// TSAN to report data races, particularly if that base Vector is from the
+// TableScan and reused.  Don't run these tests when TSAN is enabled to avoid
+// the false negatives.
+#ifndef TSAN_BUILD
     plans.push_back(
         {PlanBuilder()
              .tableScan(inputRowType)
@@ -335,6 +348,7 @@ void WindowFuzzer::testAlternativePlans(
              .window({fmt::format("{} over ({})", functionCall, frame)})
              .planNode(),
          splits});
+#endif
 
     if (!allKeys.empty()) {
       plans.push_back(
@@ -360,11 +374,17 @@ void initializeVerifier(
     const std::shared_ptr<ResultVerifier>& customVerifier,
     const std::vector<RowVectorPtr>& input,
     const std::vector<std::string>& partitionKeys,
+    const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
     const std::string& frame) {
   const auto& windowNode =
       std::dynamic_pointer_cast<const core::WindowNode>(plan);
   customVerifier->initializeWindow(
-      input, partitionKeys, windowNode->windowFunctions()[0], frame, "w0");
+      input,
+      partitionKeys,
+      sortingKeysAndOrders,
+      windowNode->windowFunctions()[0],
+      frame,
+      "w0");
 }
 } // namespace
 
@@ -402,7 +422,8 @@ bool WindowFuzzer::verifyWindow(
 
     if (!customVerification) {
       if (resultOrError.result && enableWindowVerification) {
-        auto referenceResult = computeReferenceResults(plan, input);
+        auto referenceResult =
+            computeReferenceResults(plan, input, referenceQueryRunner_.get());
         stats_.updateReferenceQueryStats(referenceResult.second);
         if (auto expectedResult = referenceResult.first) {
           ++stats_.numVerified;
@@ -425,7 +446,13 @@ bool WindowFuzzer::verifyWindow(
         VELOX_CHECK(
             customVerifier->supportsVerify(),
             "Window fuzzer only uses custom verify() methods.");
-        initializeVerifier(plan, customVerifier, input, partitionKeys, frame);
+        initializeVerifier(
+            plan,
+            customVerifier,
+            input,
+            partitionKeys,
+            sortingKeysAndOrders,
+            frame);
         customVerifier->verify(resultOrError.result);
       }
     }
@@ -460,6 +487,8 @@ void windowFuzzer(
     const std::unordered_set<std::string>& orderDependentFunctions,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::string>& hiveConfigs,
+    bool orderableGroupKeys,
     const std::optional<std::string>& planPath,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner) {
   auto windowFuzzer = WindowFuzzer(
@@ -471,6 +500,8 @@ void windowFuzzer(
       orderDependentFunctions,
       timestampPrecision,
       queryConfigs,
+      hiveConfigs,
+      orderableGroupKeys,
       std::move(referenceQueryRunner));
   planPath.has_value() ? windowFuzzer.go(planPath.value()) : windowFuzzer.go();
 }

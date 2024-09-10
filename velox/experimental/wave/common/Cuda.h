@@ -48,6 +48,9 @@ class Stream {
   /// Waits  until the stream is completed.
   void wait();
 
+  /// Enqueus a memset on 'device'.
+  void memset(void* address, int32_t value, size_t size);
+
   /// Enqueus a prefetch. Prefetches to host if 'device' is nullptr, otherwise
   /// to 'device'.
   void prefetch(Device* device, void* address, size_t size);
@@ -89,7 +92,7 @@ class Event {
 
   ~Event();
 
-  ///  Recirds event on 'stream'. This must be called before other member
+  ///  Records event on 'stream'. This must be called before other member
   ///  functions.
   void record(Stream&);
 
@@ -127,6 +130,16 @@ class GpuAllocator {
   /// Frees a pointer from allocate(). 'size' must correspond to the size given
   /// to allocate(). A Memory must be freed to the same allocator it came from.
   virtual void free(void* ptr, size_t bytes) = 0;
+
+  /// True if allocates host pinned memory.
+  virtual bool isHost() const {
+    return false;
+  }
+
+  /// True if allocates device side memory.
+  virtual bool isDevice() const {
+    return false;
+  }
 
   class Deleter;
 
@@ -191,7 +204,7 @@ struct KernelInfo {
   int32_t maxThreadsPerBlock;
   int32_t sharedMemory{0};
   int32_t maxOccupancy0{0};
-  int32_t maxOccupancy16{0};
+  int32_t maxOccupancy32{0};
 
   std::string toString() const;
 };

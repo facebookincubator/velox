@@ -160,6 +160,8 @@ void PeriodicStatsReporter::reportCacheStats() {
   REPORT_IF_NOT_ZERO(kMetricMemoryCacheNumNew, deltaCacheStats.numNew);
   REPORT_IF_NOT_ZERO(kMetricMemoryCacheNumEvicts, deltaCacheStats.numEvict);
   REPORT_IF_NOT_ZERO(
+      kMetricMemoryCacheNumSavableEvicts, deltaCacheStats.numSavableEvict);
+  REPORT_IF_NOT_ZERO(
       kMetricMemoryCacheNumEvictChecks, deltaCacheStats.numEvictChecks);
   REPORT_IF_NOT_ZERO(
       kMetricMemoryCacheNumWaitExclusive, deltaCacheStats.numWaitExclusive);
@@ -224,6 +226,11 @@ void PeriodicStatsReporter::reportCacheStats() {
         kMetricSsdCacheAgedOutEntries, deltaSsdStats.entriesAgedOut)
     REPORT_IF_NOT_ZERO(
         kMetricSsdCacheAgedOutRegions, deltaSsdStats.regionsAgedOut);
+    REPORT_IF_NOT_ZERO(
+        kMetricSsdCacheReadWithoutChecksum,
+        deltaSsdStats.readWithoutChecksumChecks);
+    REPORT_IF_NOT_ZERO(
+        kMetricSsdCacheRecoveredEntries, deltaSsdStats.entriesRecovered);
   }
 
   // TTL controler snapshot stats.
@@ -243,9 +250,9 @@ void PeriodicStatsReporter::reportSpillStats() {
   }
   const auto spillMemoryStats = spillMemoryPool_->stats();
   LOG(INFO) << "Spill memory usage: current["
-            << velox::succinctBytes(spillMemoryStats.currentBytes) << "] peak["
+            << velox::succinctBytes(spillMemoryStats.usedBytes) << "] peak["
             << velox::succinctBytes(spillMemoryStats.peakBytes) << "]";
-  RECORD_METRIC_VALUE(kMetricSpillMemoryBytes, spillMemoryStats.currentBytes);
+  RECORD_METRIC_VALUE(kMetricSpillMemoryBytes, spillMemoryStats.usedBytes);
   RECORD_METRIC_VALUE(kMetricSpillPeakMemoryBytes, spillMemoryStats.peakBytes);
 }
 

@@ -38,9 +38,9 @@ std::function<bool(std::string_view)> schemeMatcher() {
 folly::once_flag faultFilesystemInitOnceFlag;
 
 std::function<std::shared_ptr<
-    FileSystem>(std::shared_ptr<const Config>, std::string_view)>
+    FileSystem>(std::shared_ptr<const config::ConfigBase>, std::string_view)>
 fileSystemGenerator() {
-  return [](std::shared_ptr<const Config> properties,
+  return [](std::shared_ptr<const config::ConfigBase> properties,
             std::string_view /*unused*/) {
     // One instance of faulty FileSystem is sufficient. Initializes on first
     // access and reuse after that.
@@ -60,9 +60,10 @@ std::unique_ptr<ReadFile> FaultyFileSystem::openFileForRead(
   auto delegatedFile = getFileSystem(delegatedPath, config_)
                            ->openFileForRead(delegatedPath, options);
   return std::make_unique<FaultyReadFile>(
-      std::string(path), std::move(delegatedFile), [&](FaultFileOperation* op) {
-        maybeInjectFileFault(op);
-      });
+      std::string(path),
+      std::move(delegatedFile),
+      [&](FaultFileOperation* op) { maybeInjectFileFault(op); },
+      executor_);
 }
 
 std::unique_ptr<WriteFile> FaultyFileSystem::openFileForWrite(

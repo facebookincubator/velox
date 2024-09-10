@@ -50,20 +50,9 @@ class TableScan : public WaveSourceOperator {
     connector_ = connector::getConnector(tableHandle_->connectorId());
   }
 
-  int32_t canAdvance(WaveStream& stream) override {
-    if (!dataSource_) {
-      return 0;
-    }
-    return waveDataSource_->canAdvance(stream);
-  }
+  AdvanceResult canAdvance(WaveStream& stream) override;
 
-  void schedule(WaveStream& stream, int32_t maxRows = 0) override {
-    waveDataSource_->schedule(stream, maxRows);
-  }
-
-  vector_size_t outputSize(WaveStream& stream) const {
-    return waveDataSource_->outputSize(stream);
-  }
+  void schedule(WaveStream& stream, int32_t maxRows = 0) override;
 
   bool isStreaming() const override {
     return true;
@@ -104,6 +93,15 @@ class TableScan : public WaveSourceOperator {
   // background on the executor of the connector. If the DataSource is
   // needed before prepare is done, it will be made when needed.
   void preload(std::shared_ptr<connector::ConnectorSplit> split);
+
+  // Adds 'stats' to operator stats of the containing WaveDriver. Some
+  // stats come from DataSource, others from SplitReader. If
+  // 'splitReader' is given, the completed rows/bytes from
+  // 'splitReader' are added. These do not come in the runtimeStats()
+  // map.
+  void updateStats(
+      std::unordered_map<std::string, RuntimeCounter> stats,
+      WaveSplitReader* splitReader = nullptr);
 
   // Process-wide IO wait time.
   static std::atomic<uint64_t> ioWaitNanos_;
@@ -147,8 +145,8 @@ class TableScan : public WaveSourceOperator {
   // Count of splits that finished preloading before being read.
   int32_t numReadyPreloadedSplits_{0};
 
-  int32_t readBatchSize_;
-  int32_t maxReadBatchSize_;
+  vector_size_t readBatchSize_;
+  vector_size_t maxReadBatchSize_;
 
   // Exits getOutput() method after this many milliseconds.
   // Zero means 'no limit'.
@@ -162,5 +160,13 @@ class TableScan : public WaveSourceOperator {
   // The last value of the IO wait time of 'this' that has been added to the
   // global static 'ioWaitNanos_'.
   uint64_t lastIoWaitNanos_{0};
+
+  // The value returned by canAdvance() of the WaveDataSource after last
+  // schedule().
+  int32_t nextAvailableRows_{0};
+
+  // True if canAdvance() should do waveDataSource_->canAdvance() instead of
+  // returning 'nextAvailableRows_'.
+  bool isNewSplit_{false};
 };
 } // namespace facebook::velox::wave

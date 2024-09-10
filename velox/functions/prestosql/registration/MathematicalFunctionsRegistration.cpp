@@ -22,6 +22,14 @@
 namespace facebook::velox::functions {
 
 namespace {
+
+void registerTruncate(const std::vector<std::string>& names) {
+  registerFunction<TruncateFunction, double, double>(names);
+  registerFunction<TruncateFunction, float, float>(names);
+  registerFunction<TruncateFunction, double, double, int32_t>(names);
+  registerFunction<TruncateFunction, float, float, int32_t>(names);
+}
+
 void registerMathFunctions(const std::string& prefix) {
   registerUnaryNumeric<CeilFunction>({prefix + "ceil", prefix + "ceiling"});
   registerUnaryNumeric<FloorFunction>({prefix + "floor"});
@@ -92,15 +100,19 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<NanFunction, double>({prefix + "nan"});
   registerFunction<RandFunction, double>({prefix + "rand", prefix + "random"});
   registerUnaryIntegral<RandFunction>({prefix + "rand", prefix + "random"});
+  registerFunction<SecureRandFunction, double>(
+      {prefix + "secure_rand", prefix + "secure_random"});
+  registerBinaryNumeric<SecureRandFunction>(
+      {prefix + "secure_rand", prefix + "secure_random"});
   registerFunction<FromBaseFunction, int64_t, Varchar, int64_t>(
       {prefix + "from_base"});
   registerFunction<ToBaseFunction, Varchar, int64_t, int64_t>(
       {prefix + "to_base"});
   registerFunction<PiFunction, double>({prefix + "pi"});
   registerFunction<EulerConstantFunction, double>({prefix + "e"});
-  registerFunction<TruncateFunction, double, double>({prefix + "truncate"});
-  registerFunction<TruncateFunction, double, double, int32_t>(
-      {prefix + "truncate"});
+
+  registerTruncate({prefix + "truncate"});
+
   registerFunction<
       CosineSimilarityFunction,
       double,
@@ -116,6 +128,7 @@ void registerMathematicalFunctions(const std::string& prefix = "") {
 
   registerDecimalFloor(prefix);
   registerDecimalRound(prefix);
+  registerDecimalTruncate(prefix);
 }
 
 } // namespace facebook::velox::functions
