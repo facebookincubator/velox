@@ -25,6 +25,7 @@ add_executable(
   ArgGeneratorTest.cpp
   BitwiseTest.cpp
   ComparisonsTest.cpp
+  ConcatWsTest.cpp
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
   DecimalCompareTest.cpp
