@@ -69,6 +69,7 @@ TEST_F(ParquetReaderTest, parseSample) {
   // Data is in plain uncompressed format:
   //   a: [1..20]
   //   b: [1.0..20.0]
+  google::InstallFailureSignalHandler();
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
