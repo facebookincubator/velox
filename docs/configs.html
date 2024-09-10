@@ -249,6 +249,26 @@ time (instead of a space), and the year part is not padded.</p></td>
 <td><p>false</p></td>
 <td><p>This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.</p></td>
 </tr>
+<tr class="row-even"><td><p>debug_disable_expression_with_peeling</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Disable optimization in expression evaluation to peel common dictionary layer from inputs. Should only be used for debugging.</p></td>
+</tr>
+<tr class="row-odd"><td><p>debug_disable_common_sub_expressions</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Disable optimization in expression evaluation to re-use cached results for common sub-expressions. Should only be used for debugging.</p></td>
+</tr>
+<tr class="row-even"><td><p>debug_disable_expression_with_memoization</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Disable optimization in expression evaluation to re-use cached results between subsequent input batches that are dictionary encoded and have the same alphabet(underlying flat vector). Should only be used for debugging.</p></td>
+</tr>
+<tr class="row-odd"><td><p>debug_disable_expression_with_lazy_inputs</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Disable optimization in expression evaluation to delay loading of lazy inputs unless required. Should only be used for debugging.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
