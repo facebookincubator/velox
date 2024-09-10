@@ -174,4 +174,4 @@ function install_velox_deps {
 )
 
 echo 'To add cmake-format bin to your $PATH, consider adding this to your ~/.profile:'
-echo 'export PATH=$HOME/bin:$HOME/Library/Python/3.7/bin:$PATH'
+echo 'Please add $INSTALL_PREFIX to your ~/.zshrc'

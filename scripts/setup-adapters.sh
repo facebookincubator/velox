@@ -25,6 +25,10 @@ DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 MACHINE=$(uname -m)
 
+if [[ "$OSTYPE" == darwin* ]]; then
+  export INSTALL_PREFIX=${INSTALL_PREFIX:-"$(pwd)/deps-install"}
+fi
+
 function install_aws_deps {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
   local AWS_SDK_VERSION="1.11.321"
@@ -40,14 +44,16 @@ function install_aws_deps {
     MINIO_ARCH="amd64"
   fi
   local MINIO_BINARY="minio-2022-05-26"
-  local MINIO_OS="linux"
-  if [[ "$OSTYPE" == darwin* ]]; then
-    # minio will have to approved under the Privacy & Security on MacOS on first use.
-    MINIO_OS="darwin"
+  if [[! -f /usr/local/bin/${MINIO_BINARY} ]]; then
+    local MINIO_OS="linux"
+    if [[ "$OSTYPE" == darwin* ]]; then
+      # minio will have to approved under the Privacy & Security on MacOS on first use.
+      MINIO_OS="darwin"
+    fi
+    wget https://dl.min.io/server/minio/release/${MINIO_OS}-${MINIO_ARCH}/archive/minio.RELEASE.2022-05-26T05-48-41Z -O ${MINIO_BINARY}
+    chmod +x ./${MINIO_BINARY}
+    mv ./${MINIO_BINARY} /usr/local/bin/
   fi
-  wget https://dl.min.io/server/minio/release/${MINIO_OS}-${MINIO_ARCH}/archive/minio.RELEASE.2022-05-26T05-48-41Z -O ${MINIO_BINARY}
-  chmod +x ./${MINIO_BINARY}
-  mv ./${MINIO_BINARY} /usr/local/bin/
 }
 
 function install_gcs-sdk-cpp {
@@ -117,16 +123,26 @@ function install_azure-storage-sdk-cpp {
     sed -i "s/\"version-string\"/\"builtin-baseline\": \"$vcpkg_commit_id\",\"version-string\"/" $azure_core_dir/vcpkg.json
     sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" $azure_core_dir/vcpkg.json
   fi
-  cmake_install_dir $azure_core_dir -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
-
+  (
+    cd $azure_core_dir 
+    cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
   # install azure-storage-common
-  cmake_install_dir sdk/storage/azure-storage-common -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  (
+    cd sdk/storage/azure-storage-common
+    cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
 
   # install azure-storage-blobs
-  cmake_install_dir sdk/storage/azure-storage-blobs -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
-
+  (
+    cd sdk/storage/azure-storage-blobs
+    cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
   # install azure-storage-files-datalake
-  cmake_install_dir sdk/storage/azure-storage-files-datalake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  (
+    cd sdk/storage/azure-storage-files-datalake
+    cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
 }
 
 function install_hdfs_deps {

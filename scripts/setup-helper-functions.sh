@@ -180,17 +180,6 @@ function wget_and_untar {
 
 function cmake_install_dir {
   pushd "${DEPENDENCY_DIR}/$1"
-  local NAME=$(basename "$(pwd)")
-  local BINARY_DIR=_build
-  SUDO="${SUDO:-""}"
-  if [ -d "${BINARY_DIR}" ]; then
-    if prompt "Do you want to rebuild ${NAME}?"; then
-      ${SUDO} rm -rf "${BINARY_DIR}"
-    else
-      popd
-      return
-    fi
-  fi
   # remove the directory argument
   shift
   cmake_install $@
@@ -198,7 +187,17 @@ function cmake_install_dir {
 }
 
 function cmake_install {
+  local NAME=$(basename "$(pwd)")
   local BINARY_DIR=_build
+  SUDO="${SUDO:-""}"
+  if [ -d "${BINARY_DIR}" ]; then
+    if prompt "Do you want to rebuild ${NAME}?"; then
+      ${SUDO} rm -rf "${BINARY_DIR}"
+    else
+      return
+    fi
+  fi
+
   mkdir -p "${BINARY_DIR}"
   COMPILER_FLAGS=$(get_cxx_flags)
   # Add platform specific CXX flags if any

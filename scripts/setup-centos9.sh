@@ -36,6 +36,7 @@ export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 USE_CLANG="${USE_CLANG:-false}"
+export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 
 FB_OS_VERSION="v2024.05.20.00"
@@ -98,7 +99,7 @@ function install_lzo {
   wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz lzo
   (
     cd ${DEPENDENCY_DIR}/lzo
-    ./configure --prefix=/usr --enable-shared --disable-static --docdir=/usr/share/doc/lzo-2.10
+    ./configure --prefix=${INSTALL_PREFIX} --enable-shared --disable-static --docdir=/usr/share/doc/lzo-2.10
     make "-j$(nproc)"
     make install
   )
@@ -109,14 +110,14 @@ function install_boost {
   (
     cd ${DEPENDENCY_DIR}/boost
     if [[ ${USE_CLANG} != "false" ]]; then
-      ./bootstrap.sh --prefix=/usr/local --with-toolset="clang-15"
+      ./bootstrap.sh --prefix=${INSTALL_PREFIX} --with-toolset="clang-15"
       # Switch the compiler from the clang-15 toolset which doesn't exist (clang-15.jam) to
       # clang of version 15 when toolset clang-15 is used.
       # This reconciles the project-config.jam generation with what the b2 build system allows for customization.
       sed -i 's/using clang-15/using clang : 15/g' project-config.jam
       ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi toolset=clang-15 --without-python
     else
-      ./bootstrap.sh --prefix=/usr/local
+      ./bootstrap.sh --prefix=${INSTALL_PREFIX}
       ${SUDO} ./b2 "-j$(nproc)" -d0 install threading=multi --without-python
     fi
   )
@@ -136,7 +137,7 @@ function install_protobuf {
   wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.8/protobuf-all-21.8.tar.gz protobuf
   (
     cd ${DEPENDENCY_DIR}/protobuf
-    ./configure --prefix=/usr
+    ./configure --prefix=${INSTALL_PREFIX}
     make "-j${NPROC}"
     make install
     ldconfig
@@ -190,7 +191,7 @@ function install_arrow {
     -DARROW_RUNTIME_SIMD_LEVEL=NONE \
     -DARROW_WITH_UTF8PROC=OFF \
     -DARROW_TESTING=ON \
-    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BUILD_STATIC=ON \
     -DThrift_SOURCE=BUNDLED
@@ -198,7 +199,7 @@ function install_arrow {
   (
     # Install thrift.
     cd ${DEPENDENCY_DIR}/arrow/cpp/_build/thrift_ep-prefix/src/thrift_ep-build
-    cmake --install ./ --prefix /usr/local/
+    cmake --install ./ --prefix ${INSTALL_PREFIX}
   )
 }
 
