@@ -61,7 +61,8 @@ class Unnest : public Operator {
   // @param size The size of input RowVector.
   // @param numElements Records the number of output rows..
   // @param partialProcessRowStart Records the start index when processing the
-  // first row in the next iteration.
+  // first row in the next iteration. It will not be changed when all the input
+  // rows can be fully processed.
   const RowRange extractRowRange(
       vector_size_t size,
       vector_size_t& numElements,

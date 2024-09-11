@@ -114,9 +114,9 @@ RowVectorPtr Unnest::getOutput() {
   const auto size = input_->size();
 
   // Limit the number of input rows to keep output batch size within
-  // 'maxOutputSize' if possible. Not process each input row fully when a
-  // row's output exceeds 'maxOutputSize'. The output of single row may be
-  // divided into multiple batches.
+  // 'maxOutputSize' if possible. the first and last row might not be processed
+  // fully when the output exceeds 'maxOutputSize'. The output of first and last
+  // row may be divided into multiple batches.
   vector_size_t numElements = 0;
   vector_size_t partialProcessRowStart = -1;
   auto rowRange = extractRowRange(size, numElements, partialProcessRowStart);
@@ -160,6 +160,7 @@ const Unnest::RowRange Unnest::extractRowRange(
     bool isFirstRow = (row == nextInputRow_);
     vector_size_t remainingSize =
         isFirstRow ? firstRowEnd - firstRowStart_ : rawMaxSizes_[row];
+    ++numInput;
     if (numElements + remainingSize > maxOutputSize_) {
       // Single row's output is divided into multiple batches.
       // Computes the row range to process the first and last row
@@ -173,12 +174,10 @@ const Unnest::RowRange Unnest::extractRowRange(
       }
       // Process maxOutputSize_ in this getOutput.
       numElements = maxOutputSize_;
-      ++numInput;
       break;
     } else {
       // Not split this row.
       numElements += remainingSize;
-      ++numInput;
     }
     if (numElements >= maxOutputSize_) {
       break;
@@ -201,16 +200,23 @@ void Unnest::generateRepeatedColumns(
   auto* rawRepeatedIndices = repeatedIndices->asMutable<vector_size_t>();
   vector_size_t index = 0;
   VELOX_DCHECK_GT(range.size, 0);
+  // Record the process row number.
+  // Process the first row.
   std::fill(
       rawRepeatedIndices + index,
       rawRepeatedIndices + index + range.firstRowEnd - firstRowStart_,
       range.start);
   index += range.firstRowEnd - firstRowStart_;
+
+  // Process the middle rows.
   for (auto row = range.start + 1; row < range.start + range.size - 1; ++row) {
     for (auto i = 0; i < rawMaxSizes_[row]; i++) {
       rawRepeatedIndices[index++] = row;
     }
   }
+
+  // Process the last row if exists. Not set the `index` because it is the last
+  // row to process.
   if (range.size > 1) {
     std::fill(
         rawRepeatedIndices + index,
@@ -246,16 +252,15 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
   // Make dictionary index for elements column since they may be out of order.
   vector_size_t index = 0;
   bool identityMapping = true;
-  if (firstRowStart_ != 0) {
-    identityMapping = false;
-  }
 
   auto firstLastRowGenerator =
       [&](vector_size_t row, vector_size_t start, vector_size_t end) {
         if (!currentDecoded.isNullAt(row)) {
           const auto offset = currentOffsets[currentIndices[row]];
           const auto unnestSize = currentSizes[currentIndices[row]];
-          if (index != offset || end != rawMaxSizes_[row] || unnestSize < end) {
+          // The identityMapping is false when exists partial processing row.
+          if (index != offset || start != 0 || end != rawMaxSizes_[row] ||
+              unnestSize < end) {
             identityMapping = false;
           }
           auto currentUnnestSize = std::min(end, unnestSize);
