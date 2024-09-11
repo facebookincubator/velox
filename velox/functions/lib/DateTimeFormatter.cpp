@@ -1700,9 +1700,7 @@ std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
 std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
     const std::string_view& format,
     bool lenient) {
-  if (format.empty()) {
-    VELOX_USER_FAIL("Invalid pattern specification");
-  }
+  VELOX_USER_CHECK(!format.empty(), "Format pattern should not be empty.");
 
   DateTimeFormatterBuilder builder(format.size());
   const char* cur = format.data();
@@ -1711,26 +1709,23 @@ std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
   while (cur < end) {
     const char* startTokenPtr = cur;
 
-    // Literal case
+    // Literal case.
     if (*startTokenPtr == '\'') {
-      // Case 1: 2 consecutive single quote
+      // 2 consecutive single quote.
       if (cur + 1 < end && *(cur + 1) == '\'') {
         builder.appendLiteral("'");
         cur += 2;
       } else {
-        // Case 2: find closing single quote
+        // Find closing single quote.
         int64_t count = numLiteralChars(startTokenPtr + 1, end);
-        if (count == -1) {
-          VELOX_USER_FAIL("No closing single quote for literal");
-        } else {
-          for (int64_t i = 1; i <= count; i++) {
-            builder.appendLiteral(startTokenPtr + i, 1);
-            if (*(startTokenPtr + i) == '\'') {
-              i += 1;
-            }
+        VELOX_USER_CHECK_NE(count, -1, "No closing single quote for literal");
+        for (int64_t i = 1; i <= count; i++) {
+          builder.appendLiteral(startTokenPtr + i, 1);
+          if (*(startTokenPtr + i) == '\'') {
+            i += 1;
           }
-          cur += count + 2;
         }
+        cur += count + 2;
       }
     } else {
       int count = 1;

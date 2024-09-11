@@ -287,6 +287,10 @@ class QueryConfig {
   /// The current spark partition id.
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
+  /// If true, simple date formatter is used for time formatting and parsing.
+  static constexpr const char* kSparkLegacyTimeParser =
+      "spark.sql_legacy_timeParserPolicy";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -675,6 +679,10 @@ class QueryConfig {
     auto value = id.value();
     VELOX_CHECK_GE(value, 0, "Invalid Spark partition id.");
     return value;
+  }
+
+  bool sparkLegacyTimeParser() const {
+    return get<bool>(kSparkLegacyTimeParser, false);
   }
 
   bool exprTrackCpuUsage() const {

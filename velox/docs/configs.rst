@@ -697,6 +697,10 @@ Spark-specific Configuration
      - integer
      -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.sql_legacy_timeParserPolicy
+     - bool
+     - false
+     - If true, simple date formatter is used for time formatting and parsing.
 
 Tracing
 --------
