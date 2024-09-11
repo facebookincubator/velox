@@ -72,7 +72,6 @@ class DeltaByteArrayDecoder {
     suffixDecoder_ = std::make_unique<DeltaLengthByteArrayDecoder>(
         prefixLenDecoder_->bufferStart());
     lastValue_.clear();
-    dataBuffer_.clear();
   }
 
   void skip(uint64_t numValues) {
@@ -167,17 +166,15 @@ class DeltaByteArrayDecoder {
       }
     }
 
-    dataBuffer_.clear();
-    dataBuffer_.resize(prefixLength + suffix.size());
+    lastValue_.resize(prefixLength + suffix.size());
 
     // Both prefix and suffix are non-empty, so we need to decode the string
     // into `data`.
-    // 1. Copy the prefix.
-    memcpy(dataBuffer_.data(), prefix.data(), prefixLength);
+    // 1. Just keep the prefix in lastValue_.
     // 2. Copy the suffix.
-    memcpy(dataBuffer_.data() + prefixLength, suffix.data(), suffix.size());
+    memcpy(lastValue_.data() + prefixLength, suffix.data(), suffix.size());
     // 3. Make the prefix to the decoded string.
-    prefix = folly::StringPiece{dataBuffer_};
+    prefix = folly::StringPiece{lastValue_};
   }
 
   std::unique_ptr<DeltaBpDecoder> prefixLenDecoder_;
@@ -185,7 +182,6 @@ class DeltaByteArrayDecoder {
   std::unique_ptr<DeltaLengthByteArrayDecoder> suffixDecoder_;
 
   std::string lastValue_;
-  std::string dataBuffer_;
   int32_t numValidValues_{0};
   uint32_t prefixLenOffset_{0};
   std::vector<uint32_t> bufferedPrefixLength_;

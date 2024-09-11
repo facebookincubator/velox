@@ -88,7 +88,7 @@ class DeltaBpDecoder {
 
   template <typename T>
   void readValues(T* values, int32_t numValues) {
-    VELOX_CHECK_LE(numValues, totalValuesRemaining_);
+    VELOX_DCHECK_LE(numValues, totalValuesRemaining_);
     for (auto i = 0; i < numValues; i++) {
       values[i] = T(readLong());
     }
