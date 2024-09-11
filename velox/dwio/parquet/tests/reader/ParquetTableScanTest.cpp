@@ -1143,11 +1143,7 @@ TEST_F(ParquetTableScanTest, deltaByteArray) {
   loadData(
       getExampleFilePath("delta_byte_array.parquet"),
       ROW({"a"}, {VARCHAR()}),
-      makeRowVector(
-          {"a"},
-          {
-              vector,
-          }));
+      makeRowVector({"a"}, {vector}));
   assertSelect({"a"}, "SELECT a from expected");
 }
 
