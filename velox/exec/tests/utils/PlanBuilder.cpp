@@ -301,6 +301,14 @@ PlanBuilder& PlanBuilder::projectExpressions(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::projectTypedExpressions(
+    const std::vector<std::string>& projectNames,
+    const std::vector<core::TypedExprPtr>& projections) {
+  planNode_ = std::make_shared<core::ProjectNode>(
+      nextPlanNodeId(), projectNames, projections, planNode_);
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
   VELOX_CHECK_NOT_NULL(planNode_, "Project cannot be the source node");
   std::vector<std::shared_ptr<const core::IExpr>> expressions;
