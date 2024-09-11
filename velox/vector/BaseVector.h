@@ -888,6 +888,18 @@ class BaseVector {
     storageByteCount_ = std::nullopt;
   }
 
+  // Slice a buffer with specific type.
+  //
+  // For boolean type and if the offset is not multiple of 8, return a shifted
+  // copy; otherwise return a BufferView into the original buffer (with shared
+  // ownership of original buffer).
+  static BufferPtr sliceBuffer(
+      const Type&,
+      const BufferPtr&,
+      vector_size_t offset,
+      vector_size_t length,
+      memory::MemoryPool*);
+
  protected:
   // Returns a brief summary of the vector. The default implementation includes
   // encoding, type, number of rows and number of nulls.
