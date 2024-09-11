@@ -27,6 +27,7 @@
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/BinaryFunctions.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
+#include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
@@ -180,6 +181,8 @@ void registerFunctions(const std::string& prefix) {
 
   registerRegexpReplace(prefix);
 
+  registerFunction<JsonArrayLengthFunction, int32_t, Varchar>(
+      {prefix + "json_array_length"});
   registerFunction<JsonObjectKeysFunction, Array<Varchar>, Varchar>(
       {prefix + "json_object_keys"});
 
