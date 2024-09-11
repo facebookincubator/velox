@@ -41,38 +41,37 @@ class AtLeastNNonNullsExpr : public SpecialForm {
     context.ensureWritable(rows, type(), result);
     (*result).clearNulls(rows);
     auto flatResult = result->asFlatVector<bool>();
-    auto values = flatResult->mutableValues(rows.end())->asMutable<uint64_t>();
-    // Initialize result to all false.
-    bits::andWithNegatedBits(
-        values, rows.asRange().bits(), rows.begin(), rows.end());
-
     LocalSelectivityVector activeRowsHolder(context, rows);
     auto activeRows = activeRowsHolder.get();
-    VELOX_DCHECK(activeRows != nullptr);
+    VELOX_DCHECK_NOT_NULL(activeRows);
     // Load 'n' from the first input.
     VectorPtr vector;
     inputs_[0]->eval(*activeRows, context, vector);
+    VELOX_CHECK(!context.errors());
     VELOX_USER_CHECK(
         vector->isConstantEncoding(),
         "The first input should be constant encoding.");
     auto constVector = vector->asUnchecked<ConstantVector<int32_t>>();
     VELOX_USER_CHECK(
         !constVector->isNullAt(0), "The first parameter should not be null.");
-    int32_t n = vector->asUnchecked<ConstantVector<int32_t>>()->valueAt(0);
-
-    // If 'n' > inputs_.size() - 1, result should be all false.
-    if (n > inputs_.size() - 1) {
-      return;
-    }
+    const int32_t n = constVector->valueAt(0);
+    auto values = flatResult->mutableValues(rows.end())->asMutable<uint64_t>();
     // If 'n' <= 0, set result to all true.
     if (n <= 0) {
       bits::orBits(values, rows.asRange().bits(), rows.begin(), rows.end());
       return;
+    } else {
+      bits::andWithNegatedBits(
+          values, rows.asRange().bits(), rows.begin(), rows.end());
+      // If 'n' > inputs_.size() - 1, result should be all false.
+      if (n > inputs_.size() - 1) {
+        return;
+      }
     }
     // Create a temp buffer to track count of non null values for active rows.
-    auto tempResult =
+    auto nonNullCounts =
         AlignedBuffer::allocate<int32_t>(activeRows->size(), context.pool(), 0);
-    auto* rawTempResult = tempResult->asMutable<int32_t>();
+    auto* rawNonNullCounts = nonNullCounts->asMutable<int32_t>();
     for (int32_t i = 1; i < inputs_.size(); ++i) {
       VectorPtr input;
       inputs_[i]->eval(*activeRows, context, input);
@@ -85,7 +84,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
           input.get(),
           n,
           context,
-          rawTempResult,
+          rawNonNullCounts,
           flatResult,
           activeRows);
       if (activeRows->countSelected() == 0) {
@@ -102,9 +101,9 @@ class AtLeastNNonNullsExpr : public SpecialForm {
   template <TypeKind Kind>
   void updateResultTyped(
       BaseVector* input,
-      const int32_t n,
+      int32_t n,
       EvalCtx& context,
-      int32_t* tempResult,
+      int32_t* rawNonNullCounts,
       FlatVector<bool>* result,
       SelectivityVector* activeRows) {
     using Type = typename TypeTraits<Kind>::NativeType;
@@ -118,8 +117,8 @@ class AtLeastNNonNullsExpr : public SpecialForm {
         nonNull = nonNull && !std::isnan(decodedVector->valueAt<Type>(row));
       }
       if (nonNull) {
-        tempResult[row]++;
-        if (tempResult[row] >= n) {
+        rawNonNullCounts[row]++;
+        if (rawNonNullCounts[row] >= n) {
           updateBounds = true;
           result->set(row, true);
           // Exclude the 'row' from active rows after finding 'n' non-NULL /

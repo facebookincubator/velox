@@ -5,7 +5,7 @@ Miscellaneous Functions
 .. spark:function:: at_least_n_non_nulls(n, value1, value2, ..., valueN) -> bool
 
     Returns true if there are at least ``n`` non-null and non-NaN values, 
-    or false otherwise.
+    or false otherwise. If ``n <= 0``, the result is true.
 
 .. spark:function:: monotonically_increasing_id() -> bigint
 
