@@ -397,7 +397,7 @@ class S3WriteFile::Impl {
       // Don't add the checksum to the part if the checksum is empty.
       // Some filesystems such as IBM COS require this to be not set.
       if (!result.GetChecksumCRC32().empty()) {
-          part.SetChecksumCRC32(result.GetChecksumCRC32());
+        part.SetChecksumCRC32(result.GetChecksumCRC32());
       }
       uploadState_.completedParts.push_back(std::move(part));
     }
