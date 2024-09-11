@@ -23,7 +23,15 @@
 
 namespace facebook::velox::functions {
 
-enum class DateTimeFormatterType { JODA, MYSQL, UNKNOWN };
+// LENIENT_SIMPLE and STRICT_SIMPLE are respectively aligned with
+// java.text.SimpleDateFormat in lenient and non-lenient modes.
+enum class DateTimeFormatterType {
+  JODA,
+  MYSQL,
+  LENIENT_SIMPLE,
+  STRICT_SIMPLE,
+  UNKNOWN
+};
 
 enum class DateTimeFormatSpecifier : uint8_t {
   // Era, e.g: "AD"
@@ -208,6 +216,9 @@ std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
 
 std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
     const std::string_view& format);
+
+std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
+    const std::string_view& format, bool lenient);
 
 } // namespace facebook::velox::functions
 

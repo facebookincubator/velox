@@ -23,7 +23,20 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
+DECLARE_bool(spark_sql_legacy_timeParserPolicy);
+
 namespace facebook::velox::functions::sparksql {
+
+std::shared_ptr<DateTimeFormatter> getDateTimeFormatter(
+    const std::string_view& format,
+    bool lenient) {
+  if (FLAGS_spark_sql_legacy_timeParserPolicy) {
+    return buildSimpleDateTimeFormatter(format, lenient);
+  } else {
+    return buildJodaDateTimeFormatter(
+        std::string_view(format.data(), format.size()));
+  }
+}
 
 template <typename T>
 struct YearFunction : public InitSessionTimezone<T> {
@@ -156,7 +169,7 @@ struct UnixTimestampParseFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/) {
-    format_ = buildJodaDateTimeFormatter(kDefaultFormat_);
+    format_ = getDateTimeFormatter(kDefaultFormat_, false);
     setTimezone(config);
   }
 
@@ -207,8 +220,8 @@ struct UnixTimestampParseWithFormatFunction
       const arg_type<Varchar>* format) {
     if (format != nullptr) {
       try {
-        this->format_ = buildJodaDateTimeFormatter(
-            std::string_view(format->data(), format->size()));
+        this->format_ = getDateTimeFormatter(
+            std::string_view(format->data(), format->size()), false);
       } catch (const VeloxUserError&) {
         invalidFormat_ = true;
       }
@@ -228,8 +241,8 @@ struct UnixTimestampParseWithFormatFunction
     // Format error returns null.
     try {
       if (!isConstFormat_) {
-        this->format_ = buildJodaDateTimeFormatter(
-            std::string_view(format.data(), format.size()));
+        this->format_ = getDateTimeFormatter(
+            std::string_view(format.data(), format.size()), false);
       }
     } catch (const VeloxUserError&) {
       return false;
@@ -284,8 +297,8 @@ struct FromUnixtimeFunction {
 
  private:
   FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& format) {
-    formatter_ = buildJodaDateTimeFormatter(
-        std::string_view(format.data(), format.size()));
+    formatter_ = getDateTimeFormatter(
+        std::string_view(format.data(), format.size()), false);
     maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
   }
 
@@ -371,7 +384,7 @@ struct GetTimestampFunction {
       sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
     }
     if (format != nullptr) {
-      formatter_ = buildJodaDateTimeFormatter(std::string_view(*format));
+      formatter_ = getDateTimeFormatter(std::string_view(*format), false);
       isConstantTimeFormat_ = true;
     }
   }
@@ -381,7 +394,7 @@ struct GetTimestampFunction {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
     if (!isConstantTimeFormat_) {
-      formatter_ = buildJodaDateTimeFormatter(std::string_view(format));
+      formatter_ = getDateTimeFormatter(std::string_view(format), false);
     }
     auto dateTimeResult = formatter_->parse(std::string_view(input));
     // Null as result for parsing error.

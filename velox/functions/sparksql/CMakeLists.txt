@@ -15,6 +15,7 @@
 add_subdirectory(specialforms)
 velox_add_library(
   velox_functions_spark
+  flags.cpp
   ArrayGetFunction.cpp
   ArraySort.cpp
   Bitwise.cpp
