@@ -218,7 +218,8 @@ std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
     const std::string_view& format);
 
 std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
-    const std::string_view& format, bool lenient);
+    const std::string_view& format,
+    bool lenient);
 
 } // namespace facebook::velox::functions
 
