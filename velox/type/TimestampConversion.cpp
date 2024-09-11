@@ -254,7 +254,13 @@ bool tryParseDateString(
       break;
     }
   }
-  // Spark digits of year must >= 4.
+  // Spark digits of year must >= 4. The following formats are allowed:
+  // `[+-]yyyy*`
+  // `[+-]yyyy*-[m]m`
+  // `[+-]yyyy*-[m]m-[d]d`
+  // `[+-]yyyy*-[m]m-[d]d `
+  // `[+-]yyyy*-[m]m-[d]d *`
+  // `[+-]yyyy*-[m]m-[d]dT*`
   if (mode == ParseMode::kSparkCast && pos - sign < 4) {
     return false;
   }
