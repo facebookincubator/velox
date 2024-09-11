@@ -22,121 +22,25 @@
 
 namespace facebook::velox::exec {
 
-/// Manages spilling data from a RowContainer.
+/// Manages spilling data for an operator.
 class Spiller {
  public:
-  // Define the spiller types.
-  enum class Type : int8_t {
-    // Used for aggregation input processing stage.
-    kAggregateInput = 0,
-    // Used for aggregation output processing stage.
-    kAggregateOutput = 1,
-    // Used for hash join build.
-    kHashJoinBuild = 2,
-    // Used for hash join probe.
-    kHashJoinProbe = 3,
-    // Used for order by input processing stage.
-    kOrderByInput = 4,
-    // Used for order by output processing stage.
-    kOrderByOutput = 5,
-    // Used for row number.
-    kRowNumber = 6,
-    // Number of spiller types.
-    kNumTypes = 7,
-  };
-
-  static std::string typeName(Type);
-
   using SpillRows = std::vector<char*, memory::StlAllocator<char*>>;
-
-  /// The constructor without specifying hash bits which will only use one
-  /// partition by default.
-
-  /// type == Type::kAggregateInput
-  Spiller(
-      Type type,
-      RowContainer* container,
-      RowTypePtr rowType,
-      const HashBitRange& hashBitRange,
-      int32_t numSortingKeys,
-      const std::vector<CompareFlags>& sortCompareFlags,
-      const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
-
-  /// type == Type::kOrderByInput
-  Spiller(
-      Type type,
-      RowContainer* container,
-      RowTypePtr rowType,
-      int32_t numSortingKeys,
-      const std::vector<CompareFlags>& sortCompareFlags,
-      const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
-
-  /// type == Type::kAggregateOutput || type == Type::kOrderByOutput
-  Spiller(
-      Type type,
-      RowContainer* container,
-      RowTypePtr rowType,
-      const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
-
-  /// type == Type::kHashJoinProbe
-  Spiller(
-      Type type,
-      RowTypePtr rowType,
-      HashBitRange bits,
-      const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
-
-  /// type == Type::kHashJoinBuild
-  Spiller(
-      Type type,
-      core::JoinType joinType,
-      RowContainer* container,
-      RowTypePtr rowType,
-      HashBitRange bits,
-      const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
-
-  /// type == Type::kRowNumber
-  Spiller(
-      Type type,
-      RowContainer* container,
-      RowTypePtr rowType,
-      HashBitRange bits,
-      const common::SpillConfig* spillConfig,
-      folly::Synchronized<common::SpillStats>* spillStats);
-
-  Type type() const {
-    return type_;
-  }
 
   /// Spills all the rows from 'this' to disk. The spilled rows stays in the
   /// row container. The caller needs to erase the spilled rows from the row
   /// container.
-  void spill();
+  virtual void spill();
 
-  /// Spill all rows starting from 'startRowIter'. This is only used by
-  /// 'kAggregateOutput' spiller type to spill during the aggregation output
-  /// processing. Similarly, the spilled rows still stays in the row container.
-  /// The caller needs to erase them from the row container.
-  void spill(const RowContainerIterator& startRowIter);
+  /// Finishes spilling and accumulate the spilled partition metadata in
+  /// 'partitionSet' indexed by spill partition id.
+  void finishSpill(SpillPartitionSet& partitionSet);
 
-  /// Invoked to spill all the rows pointed by rows. This is used by
-  /// 'kOrderByOutput' spiller type to spill during the order by
-  /// output processing. Similarly, the spilled rows still stays in the row
-  /// container. The caller needs to erase them from the row container.
-  void spill(std::vector<char*>& rows);
+  common::SpillStats stats() const;
 
-  /// Append 'spillVector' into the spill file of given 'partition'. It is now
-  /// only used by the spilling operator which doesn't need data sort, such as
-  /// hash join build and hash join probe.
-  ///
-  /// NOTE: the spilling operator should first mark 'partition' as spilling and
-  /// spill any data buffered in row container before call this.
-  void spill(uint32_t partition, const RowVectorPtr& spillVector);
+  std::string toString() const;
 
+ protected:
   /// Extracts up to 'maxRows' or 'maxBytes' from 'rows' into 'spillVector'. The
   /// extract starts at nextBatchIndex and updates nextBatchIndex to be the
   /// index of the first non-extracted element of 'rows'. Returns the byte size
@@ -147,10 +51,6 @@ class Spiller {
       int64_t maxBytes,
       RowVectorPtr& spillVector,
       size_t& nextBatchIndex);
-
-  /// Finishes spilling and accumulate the spilled partition metadata in
-  /// 'partitionSet' indexed by spill partition id.
-  void finishSpill(SpillPartitionSet& partitionSet);
 
   const SpillState& state() const {
     return state_;
@@ -179,6 +79,7 @@ class Spiller {
     return state_.spilledPartitionSet();
   }
 
+#if 0
   /// Invokes to set a set of 'partitions' as spilling.
   void setPartitionsSpilled(const SpillPartitionNumSet& partitions) {
     VELOX_CHECK_EQ(
@@ -190,25 +91,20 @@ class Spiller {
       state_.setPartitionSpilled(partition);
     }
   }
+#endif
 
   /// Indicates if this spiller has finalized or not.
   bool finalized() const {
     return finalized_;
   }
 
-  common::SpillStats stats() const;
-
-  std::string toString() const;
-
- private:
   Spiller(
-      Type type,
       RowContainer* container,
       RowTypePtr rowType,
       HashBitRange bits,
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
-      bool spillProbedFlag,
+      bool recordProbedFlag,
       const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
       const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       const std::string& fileNamePrefix,
@@ -311,16 +207,10 @@ class Spiller {
   // written.
   std::unique_ptr<SpillStatus> writeSpill(int32_t partition);
 
-  // Indicates if the spill data needs to be sorted before write to file. It is
-  // based on the spiller type. As for now, we need to sort spill data for any
-  // non hash join types of spilling.
-  bool needSort() const;
-
   void updateSpillFillTime(uint64_t timeUs);
 
   void updateSpillSortTime(uint64_t timeUs);
 
-  const Type type_;
   // NOTE: for hash join probe type, there is no associated row container for
   // the spiller.
   RowContainer* const container_{nullptr};
@@ -329,7 +219,6 @@ class Spiller {
   const RowTypePtr rowType_;
   const bool spillProbedFlag_;
   const uint64_t maxSpillRunRows_;
-
   folly::Synchronized<common::SpillStats>* const spillStats_;
 
   // True if all rows of spilling partitions are in 'spillRuns_', so
@@ -343,11 +232,85 @@ class Spiller {
   // Collects the rows to spill for each partition.
   std::vector<SpillRun> spillRuns_;
 };
-} // namespace facebook::velox::exec
 
-template <>
-struct fmt::formatter<facebook::velox::exec::Spiller::Type> : formatter<int> {
-  auto format(facebook::velox::exec::Spiller::Type s, format_context& ctx) {
-    return formatter<int>::format(static_cast<int>(s), ctx);
+spiller_ = std::make_unique<Spiller>(
+    Spiller::Type::kHashJoinBuild,
+    joinType_,
+    table_->rows(),
+    spillType_,
+    HashBitRange(
+        startPartitionBit, startPartitionBit + config->numPartitionBits),
+    config,
+    &spillStats_);
+
+class SpillerWithoutSort : public Spiller {
+  SpillerWithoutSort(
+      RowContainer* rows,
+      RowTypePtr rowType,
+      const HashBitRange& hashBitRange,
+      bool recordProbedFlag,
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  /// Append 'spillVector' into the spill file of given 'partition'. It is now
+  /// only used by the spilling operator which doesn't need data sort, such as
+  /// hash join build and hash join probe.
+  ///
+  /// NOTE: the spilling operator should first mark 'partition' as spilling and
+  /// spill any data buffered in row container before call this.
+  virtual void spill(uint32_t partition, const RowVectorPtr& spillVector);
+};
+
+class HashProbeSpiller : public SpillerWithoutSort {
+ public:
+  HashProbeSpiller(
+      RowTypePtr rowType,
+      const HashBitRange& hashBitRange,
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  void spill() override {
+    VELOX_UNSUPPORTED("{} for SortOutputSpiller");
   }
 };
+
+class HashTableSpiller : public Spiller {
+ public:
+  RowNumberSpiller(
+      RowTypePtr rowType,
+      const HashBitRange& hashBitRange,
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+};
+
+/// Manages spilling data for an operator which needs to sort the spill data.
+class SortedSpiller : public Spiller {};
+
+/// Manages spilling data during the aggregate output processing .
+class AggregateOutputSpiller : public Spiller {
+  // AggregateOutputSpiller();
+
+  /// Spills all rows starting from 'startRowIter'. The spilled rows still stays
+  /// in the row container. The caller needs to erase them from the row
+  /// container.
+  void spill(const RowContainerIterator& startRowIter);
+};
+
+/// Manages spilling data during sort buffer output processing.
+class SortOutputSpiller : public Spiller {
+ public:
+  SortOutputSpiller(
+      RowContainer* rows,
+      const RowTypePtr& rowType,
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  void spill() override {
+    VELOX_UNSUPPORTED("{} for SortOutputSpiller");
+  }
+
+  /// Spills all the rows pointed by rows. The spilled rows still stays in the
+  /// row container. The caller needs to erase them from the row container.
+  void spill(std::vector<char*>& rows);
+};
+} // namespace facebook::velox::exec
