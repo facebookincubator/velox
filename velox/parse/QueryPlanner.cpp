@@ -465,11 +465,14 @@ static void customScalarFunction(
   VELOX_UNREACHABLE();
 }
 
-static ::duckdb::idx_t customAggregateState() {
+static ::duckdb::idx_t customAggregateState(
+    const ::duckdb::AggregateFunction&) {
   VELOX_UNREACHABLE();
 }
 
-static void customAggregateInitialize(::duckdb::data_ptr_t) {
+static void customAggregateInitialize(
+    const ::duckdb::AggregateFunction&,
+    ::duckdb::data_ptr_t) {
   VELOX_UNREACHABLE();
 }
 
