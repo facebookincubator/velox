@@ -20,6 +20,7 @@
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/expression/SpecialFormRegistry.h"
 
 namespace facebook::velox::exec {
 
@@ -420,40 +421,6 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunction(
       overwrite);
 }
 
-VectorFunctionFactory getVectorFunctionFactory(
-    const std::string& originalName) {
-  return [originalName](
-             const std::string& name,
-             const std::vector<VectorFunctionArg>& inputArgs,
-             const core::QueryConfig& config)
-             -> std::shared_ptr<VectorFunction> {
-    std::vector<TypePtr> argTypes{inputArgs.size()};
-    std::transform(
-        inputArgs.begin(),
-        inputArgs.end(),
-        argTypes.begin(),
-        [](auto inputArg) { return inputArg.type; });
-
-    auto resultType = resolveVectorFunction(name, argTypes);
-    if (!resultType) {
-      // TODO: limitation -- result type must be resolveable given
-      // intermediate type of the original UDAF.
-      VELOX_UNREACHABLE(
-          "Signatures whose result types are not resolvable given intermediate types should have been excluded.");
-    }
-
-    if (auto func = getAggregateFunctionEntry(originalName)) {
-      auto fn = func->factory(
-          core::AggregationNode::Step::kFinal, argTypes, resultType, config);
-      VELOX_CHECK_NOT_NULL(fn);
-      return std::make_shared<AggregateCompanionAdapter::ExtractFunction>(
-          std::move(fn));
-    }
-    VELOX_FAIL(
-        "Original aggregation function {} not found: {}", originalName, name);
-  };
-}
-
 bool CompanionFunctionsRegistrar::registerExtractFunctionWithSuffix(
     const std::string& originalName,
     const std::vector<AggregateFunctionSignaturePtr>& signatures,
@@ -468,15 +435,12 @@ bool CompanionFunctionsRegistrar::registerExtractFunctionWithSuffix(
       continue;
     }
 
-    auto factory = getVectorFunctionFactory(originalName);
-    registered |= exec::registerStatefulVectorFunction(
-        CompanionSignatures::extractFunctionNameWithSuffix(originalName, type),
-        std::move(extractSignatures),
-        std::move(factory),
-        exec::VectorFunctionMetadataBuilder()
-            .defaultNullBehavior(false)
-            .build(),
-        overwrite);
+    auto functionName =
+        CompanionSignatures::extractFunctionNameWithSuffix(originalName, type);
+    registerFunctionCallToSpecialForm(
+        functionName,
+        std::make_unique<ExtractCallToSpecialForm>(originalName, functionName));
+    registered = true;
   }
   return registered;
 }
@@ -497,13 +461,11 @@ bool CompanionFunctionsRegistrar::registerExtractFunction(
     return false;
   }
 
-  auto factory = getVectorFunctionFactory(originalName);
-  return exec::registerStatefulVectorFunction(
-      CompanionSignatures::extractFunctionName(originalName),
-      std::move(extractSignatures),
-      std::move(factory),
-      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
-      overwrite);
+  auto functionName = CompanionSignatures::extractFunctionName(originalName);
+  registerFunctionCallToSpecialForm(
+      functionName,
+      std::make_unique<ExtractCallToSpecialForm>(originalName, functionName));
+  return true;
 }
 
 } // namespace facebook::velox::exec

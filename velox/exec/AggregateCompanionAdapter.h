@@ -17,6 +17,7 @@
 
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::exec {
@@ -167,6 +168,55 @@ struct AggregateCompanionAdapter {
 
     std::unique_ptr<Aggregate> fn_;
   };
+};
+
+class ExtractCallToSpecialForm : public exec::FunctionCallToSpecialForm {
+ public:
+  ExtractCallToSpecialForm(
+      const std::string& originalName,
+      const std::string& functionName)
+      : originalName_{originalName}, functionName_{functionName} {}
+
+  TypePtr resolveType(const std::vector<TypePtr>& /*argTypes*/) override {
+    VELOX_FAIL("Extract function does not support type resolution.");
+  }
+
+  exec::ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<exec::ExprPtr>&& args,
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override {
+    std::vector<TypePtr> argTypes{args.size()};
+    std::transform(args.begin(), args.end(), argTypes.begin(), [](auto arg) {
+      return arg->type();
+    });
+
+    std::shared_ptr<VectorFunction> extractFunction;
+    if (auto func = getAggregateFunctionEntry(originalName_)) {
+      auto fn = func->factory(
+          core::AggregationNode::Step::kFinal, argTypes, type, config);
+      VELOX_CHECK_NOT_NULL(fn);
+      extractFunction =
+          std::make_shared<AggregateCompanionAdapter::ExtractFunction>(
+              std::move(fn));
+    }
+    VELOX_FAIL(
+        "Original aggregation function {} not found: {}",
+        originalName_,
+        functionName_);
+
+    return std::make_shared<exec::Expr>(
+        type,
+        std::move(args),
+        std::move(extractFunction),
+        exec::VectorFunctionMetadata{},
+        functionName_,
+        trackCpuUsage);
+  }
+
+ private:
+  std::string originalName_;
+  std::string functionName_;
 };
 
 class CompanionFunctionsRegistrar {
