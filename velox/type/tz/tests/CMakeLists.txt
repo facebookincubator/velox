@@ -32,6 +32,6 @@ target_link_libraries(
   velox_type_tz
   velox_test_util
   velox_exception
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   pthread)
