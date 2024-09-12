@@ -455,6 +455,7 @@ bool isSupportedSignature(
       useTypeName(signature, "interval year to month") ||
       useTypeName(signature, "hugeint") ||
       useTypeName(signature, "json") ||
+      useTypeName(signature, "hyperloglog") ||
       (enableComplexType && useTypeName(signature, "unknown")));
 }
 

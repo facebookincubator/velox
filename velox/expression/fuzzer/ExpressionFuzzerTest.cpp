@@ -243,6 +243,15 @@ int main(int argc, char** argv) {
       "bitwise_shift_left",
       "map_from_entries",
       "inverse_beta_cdf",
+      "map_zip_with",
+      "date_format",
+      "rtrim",
+      "laplace_cdf",
+      "cauchy_cdf",
+      "weibull_cdf",
+      "pow",
+      "cast(double) -> varchar",
+      "cast(real) -> varchar",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
