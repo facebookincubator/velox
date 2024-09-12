@@ -53,7 +53,8 @@ class OrderByBenchmark {
             uint64_t finishNanos = 0;
             auto start = getCurrentTimeMicro();
             for (auto i = 0; i < iterations; ++i) {
-              auto task = test::AssertQueryBuilder(plan).runQuery();
+              std::shared_ptr<Task> task;
+              test::AssertQueryBuilder(plan).countResults(task);
               auto stats = task->taskStats();
               for (auto& pipeline : stats.pipelineStats) {
                 for (auto& op : pipeline.operatorStats) {

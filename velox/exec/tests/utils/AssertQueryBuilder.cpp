@@ -235,9 +235,14 @@ RowVectorPtr AssertQueryBuilder::copyResults(
   return copy;
 }
 
-std::shared_ptr<Task> AssertQueryBuilder::runQuery() {
+vector_size_t AssertQueryBuilder::countResults(std::shared_ptr<Task>& task) {
   auto [cursor, results] = readCursor();
-  return cursor->task();
+  vector_size_t count = 0;
+  for (const auto& result : results) {
+    count += result->size();
+  }
+  task = cursor->task();
+  return count;
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>

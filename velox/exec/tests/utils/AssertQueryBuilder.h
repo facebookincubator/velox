@@ -175,8 +175,8 @@ class AssertQueryBuilder {
       memory::MemoryPool* pool,
       std::shared_ptr<Task>& task);
 
-  /// Only run the query, no check for the result.
-  std::shared_ptr<Task> runQuery();
+  /// Run the query and return the result number.
+  vector_size_t AssertQueryBuilder::countResults(std::shared_ptr<Task>& task);
 
  private:
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
