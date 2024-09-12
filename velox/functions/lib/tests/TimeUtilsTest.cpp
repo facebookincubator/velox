@@ -24,7 +24,7 @@ class FirstDayOfWeekTest
 
 TEST_P(FirstDayOfWeekTest, getFirstDayOfWeek) {
   auto& [y, firstDayOfWeek, res] = GetParam();
-  ASSERT_EQ(getFirstDayOfWeek(y, firstDayOfWeek), res);
+  ASSERT_EQ(getDayOfFirstDayOfWeek(y, firstDayOfWeek), res);
 }
 
 INSTANTIATE_TEST_CASE_P(
