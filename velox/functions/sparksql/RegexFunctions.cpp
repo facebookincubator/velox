@@ -22,17 +22,6 @@ namespace {
 
 using ::re2::RE2;
 
-template <typename T>
-re2::StringPiece toStringPiece(const T& string) {
-  return re2::StringPiece(string.data(), string.size());
-}
-
-void checkForBadPattern(const RE2& re) {
-  if (UNLIKELY(!re.ok())) {
-    VELOX_USER_FAIL("invalid regular expression:{}", re.error());
-  }
-}
-
 void ensureRegexIsConstant(
     const char* functionName,
     const VectorPtr& patternVector) {
