@@ -99,16 +99,16 @@ FOLLY_ALWAYS_INLINE std::string prepareReplacement(
       kConvertRegex.error());
   RE2::GlobalReplace(&newReplacement, kConvertRegex, R"(\\\1)");
 
-  // Un-escape dollar-sign '$'.
-  static const RE2 kUnescapeRegex(R"(\\\$)");
+  // re2 allow '\' followed by anything other than a digit or '\',
+  // while java.util.regex will ignore '\' in replacement. We should unescape
+  // this character.
+  static const RE2 kUnescapeRegex(R"(\\([^0-9\\]))");
   VELOX_DCHECK(
       kUnescapeRegex.ok(),
       "Invalid regular expression {}: {}.",
-      R"(\\\$)",
+      R"(\\([^0-9\\]))",
       kUnescapeRegex.error());
-  RE2::GlobalReplace(&newReplacement, kUnescapeRegex, "$");
-
-  // TODO(zhaokuo03): need to replace \\ in replacement
+  RE2::GlobalReplace(&newReplacement, kUnescapeRegex, R"(\1)");
 
   return newReplacement;
 }
