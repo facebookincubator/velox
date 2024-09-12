@@ -588,7 +588,7 @@ TEST_F(RegexFunctionsTest, regexpReplaceCacheMissLimit) {
 }
 
 TEST_F(RegexFunctionsTest, regexpReplacePreprocess) {
-  EXPECT_EQ(testRegexpReplace("bdztlszhxz_44", "(.*)(_)([0-9]+$)", "$1$2"), "");
+  EXPECT_EQ(testRegexpReplace("bdztlszhxz_44", "(.*)(_)([0-9]+$)", "$1$2"), "bdztlszhxz_");
   EXPECT_EQ(
       testRegexpReplace("1a 2b 14m", "(\\d+)([ab]) ", "3c$2 "), "3ca 3cb 14m");
   EXPECT_EQ(
@@ -607,8 +607,8 @@ TEST_F(RegexFunctionsTest, regexpReplacePreprocess) {
       ".1.2.3");
   EXPECT_EQ(
       testRegexpReplace("123", "(?<digit>(?<nest>\\d))", ".${nest}"), ".1.2.3");
-  EXPECT_EQ(testRegexpReplace("[{{]", "\\[\\{", "\\{"), "{}]");
-  EXPECT_EQ(testRegexpReplace("[{}]", "\\[\\}", "\\}"), "[{}");
+  EXPECT_EQ(testRegexpReplace("[{}]", "\\[\\{", "\\{"), "{}]");
+  EXPECT_EQ(testRegexpReplace("[{}]", "\\}\\]", "\\}"), "[{}");
 }
 
 } // namespace
