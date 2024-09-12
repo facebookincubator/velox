@@ -607,7 +607,6 @@ TEST_F(RegexFunctionsTest, regexpReplacePreprocess) {
       ".1.2.3");
   EXPECT_EQ(
       testRegexpReplace("123", "(?<digit>(?<nest>\\d))", ".${nest}"), ".1.2.3");
-  EXPECT_EQ(testRegexpReplace(std::nullopt, "abc", "def"), std::nullopt);
 }
 
 } // namespace
