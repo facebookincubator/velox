@@ -45,6 +45,9 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
   outputBytes += stats.outputBytes;
   outputVectors += stats.outputVectors;
 
+  addInputTiming.add(stats.addInputTiming);
+  getOutputTiming.add(stats.getOutputTiming);
+  finishTiming.add(stats.finishTiming);
   cpuWallTiming.add(stats.addInputTiming);
   cpuWallTiming.add(stats.getOutputTiming);
   cpuWallTiming.add(stats.finishTiming);
@@ -100,6 +103,9 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
     out << ", Physical written output: " << succinctBytes(physicalWrittenBytes);
   }
   out << ", Cpu time: " << succinctNanos(cpuWallTiming.cpuNanos)
+      << ", Add input cpu time: " << succinctNanos(addInputTiming.cpuNanos)
+      << ", Get output cpu time: " << succinctNanos(getOutputTiming.cpuNanos)
+      << ", Finish cpu time: " << succinctNanos(finishTiming.cpuNanos)
       << ", Blocked wall time: " << succinctNanos(blockedWallNanos)
       << ", Peak memory: " << succinctBytes(peakMemoryBytes)
       << ", Memory allocations: " << numMemoryAllocations;
@@ -162,6 +168,9 @@ folly::dynamic toPlanStatsJson(const facebook::velox::exec::TaskStats& stats) {
       stat["outputRows"] = operatorStat.second->outputRows;
       stat["outputVectors"] = operatorStat.second->outputVectors;
       stat["outputBytes"] = operatorStat.second->outputBytes;
+      stat["addInputTiming"] = operatorStat.second->addInputTiming.toString();
+      stat["getOutputTiming"] = operatorStat.second->getOutputTiming.toString();
+      stat["finishTiming"] = operatorStat.second->finishTiming.toString();
       stat["cpuWallTiming"] = operatorStat.second->cpuWallTiming.toString();
       stat["blockedWallNanos"] = operatorStat.second->blockedWallNanos;
       stat["peakMemoryBytes"] = operatorStat.second->peakMemoryBytes;
