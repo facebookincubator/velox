@@ -54,12 +54,13 @@ class DirectDecoder : public IntDecoder<isSigned> {
   void readWithVisitor(
       const uint64_t* nulls,
       Visitor visitor,
-      bool useFastPath = true) {
+      bool useFastPath = true,
+      int32_t numScanned = 0) {
     skipPending();
     if constexpr (!std::is_same_v<typename Visitor::DataType, int128_t>) {
       if (useFastPath &&
           dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
-        fastPath<hasNulls>(nulls, visitor);
+        fastPath<hasNulls>(nulls, visitor, numScanned);
         return;
       }
     }
@@ -143,7 +144,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
   }
 
   template <bool hasNulls, typename Visitor>
-  void fastPath(const uint64_t* nulls, Visitor& visitor) {
+  void fastPath(const uint64_t* nulls, Visitor& visitor, int32_t numScanned) {
     using T = typename Visitor::DataType;
     constexpr bool hasFilter =
         !std::
@@ -159,6 +160,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
     auto numNonNull = numRows;
     auto rowsAsRange = folly::Range<const int32_t*>(rows, numRows);
     auto data = visitor.rawValues(numRows);
+    raw_vector<int32_t> newScatterRows;
     if (hasNulls) {
       int32_t tailSkip = 0;
       raw_vector<int32_t>* innerVector = nullptr;
@@ -169,7 +171,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
         dwio::common::nonNullRowsFromDense(nulls, numRows, *outerVector);
         numNonNull = outerVector->size();
         if (!numNonNull) {
-          visitor.setAllNull(hasFilter ? 0 : numRows);
+          visitor.setAllNull(hasFilter ? numScanned : numRows + numScanned);
           return;
         }
       } else {
@@ -188,10 +190,18 @@ class DirectDecoder : public IntDecoder<isSigned> {
         }
         if (innerVector->empty()) {
           this->template skip<false>(tailSkip, 0, nullptr);
-          visitor.setAllNull(hasFilter ? 0 : numRows);
+          visitor.setAllNull(hasFilter ? numScanned : numRows + numScanned);
           return;
         }
       }
+
+      auto scatterRows = shiftRowIndex(
+          outerVector->data(),
+          newScatterRows,
+          outerVector->size(),
+          numScanned,
+          hasHook);
+
       if (super::useVInts) {
         if (Visitor::dense) {
           super::bulkRead(numNonNull, data);
@@ -206,7 +216,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
             dataRows,
             0,
             dataRows.size(),
-            outerVector->data(),
+            scatterRows,
             data,
             hasFilter ? visitor.outputRows(numRows) : nullptr,
             numValues,
@@ -217,7 +227,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
             innerVector
                 ? folly::Range<const int32_t*>(*innerVector)
                 : folly::Range<const int32_t*>(rows, outerVector->size()),
-            outerVector->data(),
+            scatterRows,
             visitor.rawValues(numRows),
             hasFilter ? visitor.outputRows(numRows) : nullptr,
             numValues,
@@ -242,7 +252,11 @@ class DirectDecoder : public IntDecoder<isSigned> {
                 rowsAsRange,
                 0,
                 rowsAsRange.size(),
-                hasHook ? velox::iota(numRows, visitor.innerNonNullRows())
+                hasHook ? shiftRowIndex(
+                              velox::iota(numRows, visitor.innerNonNullRows()),
+                              newScatterRows,
+                              numRows,
+                              numScanned)
                         : nullptr,
                 visitor.rawValues(numRows),
                 hasFilter ? visitor.outputRows(numRows) : nullptr,
@@ -252,7 +266,11 @@ class DirectDecoder : public IntDecoder<isSigned> {
       } else {
         dwio::common::fixedWidthScan<T, filterOnly, false>(
             rowsAsRange,
-            hasHook ? velox::iota(numRows, visitor.innerNonNullRows())
+            hasHook ? shiftRowIndex(
+                          velox::iota(numRows, visitor.innerNonNullRows()),
+                          newScatterRows,
+                          numRows,
+                          numScanned)
                     : nullptr,
             visitor.rawValues(numRows),
             hasFilter ? visitor.outputRows(numRows) : nullptr,
@@ -264,7 +282,8 @@ class DirectDecoder : public IntDecoder<isSigned> {
             visitor.hook());
       }
     }
-    visitor.setNumValues(hasFilter ? numValues : numRows);
+    visitor.setNumValues(
+        hasFilter ? numValues + numScanned : numRows + numScanned);
   }
 };
 

@@ -47,6 +47,14 @@ class TestingHook : public ValueHook {
     }
   }
 
+  void addValue(vector_size_t row, int128_t value) override {
+    if constexpr (std::is_integral_v<T>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
   void addValue(vector_size_t row, float value) override {
     if constexpr (std::is_same_v<T, float>) {
       result_->set(row, value);
@@ -253,11 +261,12 @@ class E2EFilterTestBase : public testing::Test {
       int32_t rowIndex) {
     using T = typename TypeTraits<Kind>::NativeType;
     std::vector<vector_size_t> rows;
-    // The 5 first values are densely read.
+    // The first 5 values are densely read.
     for (int32_t i = 0; i < 5 && i < batch->size(); ++i) {
       rows.push_back(i);
     }
-    for (int32_t i = 5; i < 5 && i < batch->size(); i += 2) {
+    // The last 5 values are sparsely read.
+    for (int32_t i = 5; i < 15 && i < batch->size(); i += 2) {
       rows.push_back(i);
     }
     auto result = std::static_pointer_cast<FlatVector<T>>(

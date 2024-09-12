@@ -288,6 +288,7 @@ class SelectiveColumnReader {
   int32_t numValues() const {
     return numValues_;
   }
+
   void setNumRows(vector_size_t size) {
     outputRows_.resize(size);
   }
@@ -651,6 +652,7 @@ class SelectiveColumnReader {
   // Writable content in 'values'
   void* rawValues_ = nullptr;
   vector_size_t numValues_ = 0;
+
   // Size of fixed width value in 'rawValues'. For integers, values
   // are read at 64 bit width and can be compacted or extracted at a
   // different width.

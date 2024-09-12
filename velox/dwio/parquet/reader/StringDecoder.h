@@ -41,8 +41,10 @@ class StringDecoder {
   }
 
   template <bool hasNulls, typename Visitor>
-  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
+  void
+  readWithVisitor(const uint64_t* nulls, Visitor visitor, int32_t numScanned) {
     int32_t current = visitor.start();
+    int32_t numValues = 0;
     skip<hasNulls>(current, 0, nulls);
     int32_t toSkip;
     bool atEnd = false;
@@ -57,20 +59,39 @@ class StringDecoder {
             skip<false>(toSkip, current, nullptr);
           }
           if (atEnd) {
+            constexpr bool hasHook =
+                !std::
+                    is_same_v<typename Visitor::HookType, dwio::common::NoHook>;
+            constexpr bool hasFilter = !std::is_same_v<
+                typename Visitor::FilterType,
+                common ::AlwaysTrue>;
+            if (hasHook) {
+              visitor.setNumValues(hasFilter ? numValues : visitor.numRows());
+            }
             return;
           }
         }
 
         // We are at a non-null value on a row to visit.
         toSkip = visitor.process(
-            fixedLength_ > 0 ? readFixedString() : readString(), atEnd);
+            fixedLength_ > 0 ? readFixedString() : readString(),
+            atEnd,
+            numScanned);
       }
       ++current;
+      ++numValues;
       if (toSkip) {
         skip<hasNulls>(toSkip, current, nulls);
         current += toSkip;
       }
       if (atEnd) {
+        constexpr bool hasHook =
+            !std::is_same_v<typename Visitor::HookType, dwio::common::NoHook>;
+        constexpr bool hasFilter =
+            !std::is_same_v<typename Visitor::FilterType, common::AlwaysTrue>;
+        if (hasHook) {
+          visitor.setNumValues(hasFilter ? numValues : visitor.numRows());
+        }
         return;
       }
     }

@@ -17,7 +17,6 @@
 #include "velox/dwio/parquet/reader/StringColumnReader.h"
 
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
-
 namespace facebook::velox::parquet {
 
 StringColumnReader::StringColumnReader(
@@ -36,10 +35,19 @@ void StringColumnReader::read(
     const RowSet& rows,
     const uint64_t* incomingNulls) {
   prepareRead<folly::StringPiece>(offset, rows, incomingNulls);
-  dwio::common::StringColumnReadWithVisitorHelper<true>(
-      *this, rows)([&](auto visitor) {
-    formatData_->as<ParquetData>().readWithVisitor(visitor);
-  });
+  auto hasDictionary = formatData_->as<ParquetData>().hasDictionary();
+  if (hasDictionary) {
+    dwio::common::StringColumnReadWithVisitorHelper<true, true>(
+        *this, rows)([&](auto visitor) {
+      formatData_->as<ParquetData>().readWithVisitor(visitor);
+    });
+  } else {
+    dwio::common::StringColumnReadWithVisitorHelper<true, false>(
+        *this, rows)([&](auto visitor) {
+      formatData_->as<ParquetData>().readWithVisitor(visitor);
+    });
+  }
+
   readOffset_ += rows.back() + 1;
 }
 
