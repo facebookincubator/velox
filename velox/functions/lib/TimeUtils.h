@@ -107,37 +107,42 @@ struct InitSessionTimezone {
   }
 };
 
-// Return the first `fisrtDayOfWeek` in the year.
-// getFirstDayOfWeek() use 1-based weekday number:
-//   Sunday - 1, Monday - 2, ..., Saturday - 7
+/// Return day-of-year (DOY) of the first `firstDayOfWeek` in the year.
+/// If the `firstDayOfWeek` is Monday, it returns DOY of first Monday in
+/// the year. The returned DOY is a number from 1 to 7.
+///
+/// `firstDayOfWeek` is a 1-based weekday number starting with Sunday.
+///   (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
 FOLLY_ALWAYS_INLINE
-uint32_t getFirstDayOfWeek(int32_t y, uint32_t firstDayOfWeek) {
+uint32_t getDayOfFirstDayOfWeek(int32_t y, uint32_t firstDayOfWeek) {
   auto firstDay =
       date::year_month_day(date::year(y), date::month(1), date::day(1));
   auto weekday = date::weekday(firstDay).c_encoding() + 1;
 
   int32_t delta = firstDayOfWeek - weekday;
-  if (delta < 0)
+  if (delta < 0) {
     delta += 7;
+  }
 
   return delta + 1;
 }
 
-// Return week-based-year of year month day.
-// The week containing Jan 1 has `minimalDaysInFirstWeek` or more days is
-// week 1. The week is defined via `firstDayOfWeek`. `firstDayOfWeek` is 1-based
-// weekday number starting with Sunday.
-//
-// For ISO 8601, `firstDayOfWeek` is 2 (Monday) and `minimalDaysInFirstWeek`
-// is 4. For Legacy Spark, `firstDayOfWeek` is 1 (Sunday) and
-// `minimalDaysInFisrtWeek` is 1 by default.
-//
-// getWeekYear only works with gregorian calendar due to limitations in the date
-// library. As a result, dates before the gregorian cutover would yield
-// mismatched results.
-//
-// The algorithm refers to the weekyear algorithm in jdk:
-// https://github.com/openjdk/jdk8/blob/6a383433a9f4661a96a90b2a4c7b5b9a85720031/jdk/src/share/classes/java/util/GregorianCalendar.java#L2077
+/// Return week-based-year of year month day.
+/// The week containing Jan 1 has `minimalDaysInFirstWeek` or more days is
+/// week 1. The week is defined via `firstDayOfWeek`. `firstDayOfWeek` is a
+/// 1-based weekday number starting with Sunday.
+///   (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
+///
+/// For ISO 8601, `firstDayOfWeek` is 2 (Monday) and `minimalDaysInFirstWeek`
+/// is 4. For Legacy Spark, `firstDayOfWeek` is 1 (Sunday) and
+/// `minimalDaysInFirstWeek` is 1 by default.
+///
+/// getWeekYear only works with gregorian calendar due to limitations in the
+/// date library. As a result, dates before the gregorian calendar was used
+/// (1582-10-15) would yield mismatched results.
+///
+/// The algorithm refers to the weekyear algorithm in jdk:
+/// https://github.com/openjdk/jdk8/blob/6a383433a9f4661a96a90b2a4c7b5b9a85720031/jdk/src/share/classes/java/util/GregorianCalendar.java#L2077
 FOLLY_ALWAYS_INLINE
 int32_t getWeekYear(
     int32_t y,
@@ -159,13 +164,13 @@ int32_t getWeekYear(
     return year;
   }
 
-  auto minDayOfYear = getFirstDayOfWeek(y, firstDayOfWeek);
+  auto minDayOfYear = getDayOfFirstDayOfWeek(y, firstDayOfWeek);
   if (dayOfYear < minDayOfYear) {
     if (minDayOfYear <= minimalDaysInFirstWeek) {
       --year;
     }
   } else {
-    auto minDayOfYear = getFirstDayOfWeek(y + 1, firstDayOfWeek) - 1;
+    auto minDayOfYear = getDayOfFirstDayOfWeek(y + 1, firstDayOfWeek) - 1;
     if (minDayOfYear == 0) {
       minDayOfYear = 7;
     }
