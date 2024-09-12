@@ -175,6 +175,9 @@ class AssertQueryBuilder {
       memory::MemoryPool* pool,
       std::shared_ptr<Task>& task);
 
+  /// Only run the query, no check for the result.
+  std::shared_ptr<Task> runQuery();
+
  private:
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();

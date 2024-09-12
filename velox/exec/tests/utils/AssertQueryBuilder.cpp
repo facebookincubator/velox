@@ -235,6 +235,11 @@ RowVectorPtr AssertQueryBuilder::copyResults(
   return copy;
 }
 
+std::shared_ptr<Task> AssertQueryBuilder::runQuery() {
+  auto [cursor, results] = readCursor();
+  return cursor->task();
+}
+
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 AssertQueryBuilder::readCursor() {
   VELOX_CHECK_NOT_NULL(params_.planNode);

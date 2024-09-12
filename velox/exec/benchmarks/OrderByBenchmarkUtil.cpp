@@ -168,7 +168,7 @@ void largeVarchar(std::function<void(
 
 RowVectorPtr OrderByBenchmarkUtil::fuzzRows(
     const RowTypePtr& rowType,
-    size_t numRows,
+    vector_size_t numRows,
     int numKeys,
     memory::MemoryPool* pool) {
   VectorFuzzer fuzzer({.vectorSize = numRows}, pool);
@@ -177,17 +177,14 @@ RowVectorPtr OrderByBenchmarkUtil::fuzzRows(
 
   // Fuzz keys: for front keys (column 0 to numKeys -2) use high
   // nullRatio to enforce all columns to be compared.
-  {
-    for (auto i = 0; i < numKeys - 1; ++i) {
-      children.push_back(fuzzerWithNulls.fuzz(rowType->childAt(i)));
-    }
-    children.push_back(fuzzer.fuzz(rowType->childAt(numKeys - 1)));
+  for (auto i = 0; i < numKeys - 1; ++i) {
+    children.push_back(fuzzerWithNulls.fuzz(rowType->childAt(i)));
   }
+  children.push_back(fuzzer.fuzz(rowType->childAt(numKeys - 1)));
+
   // Fuzz payload.
-  {
-    for (auto i = numKeys; i < rowType->size(); ++i) {
-      children.push_back(fuzzer.fuzz(rowType->childAt(i)));
-    }
+  for (auto i = numKeys; i < rowType->size(); ++i) {
+    children.push_back(fuzzer.fuzz(rowType->childAt(i)));
   }
   return std::make_shared<RowVector>(
       pool, rowType, nullptr, numRows, std::move(children));
@@ -195,7 +192,7 @@ RowVectorPtr OrderByBenchmarkUtil::fuzzRows(
 
 void OrderByBenchmarkUtil::addBenchmarks(std::function<void(
                                              const std::string& testName,
-                                             size_t numRows,
+                                             vector_size_t numRows,
                                              const RowTypePtr& rowType,
                                              int iterations,
                                              int numKeys)> benchmark) {

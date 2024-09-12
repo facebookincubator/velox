@@ -28,18 +28,7 @@ using namespace facebook::velox::exec;
 namespace {
 
 struct TestCase {
-  explicit TestCase(
-      const std::string& testName,
-      size_t numRows,
-      const RowTypePtr& rowType,
-      int numKeys)
-      : testName{testName},
-        numRows{numRows},
-        rowType{rowType},
-        numKeys{numKeys} {}
-
-  std::string testName;
-  size_t numRows;
+  vector_size_t numRows;
   RowTypePtr rowType;
   int numKeys;
 };
@@ -48,27 +37,23 @@ class OrderByBenchmark {
  public:
   void addBenchmark(
       const std::string& testName,
-      size_t numRows,
+      vector_size_t numRows,
       const RowTypePtr& rowType,
       int32_t iterations,
       int numKeys) {
-    auto testCase =
-        std::make_unique<TestCase>(testName, numRows, rowType, numKeys);
+    TestCase testCase = {numRows, rowType, numKeys};
     {
       folly::addBenchmark(
           __FILE__,
-          "OrderBy_" + testCase->testName,
-          [test = testCase.get(),
-           iterations = std::max(1, iterations / 10),
-           this]() {
-            auto plan = makeOrderByPlan(*test);
+          "OrderBy_" + testName,
+          [test = testCase, iterations = std::max(1, iterations / 10), this]() {
+            auto plan = makeOrderByPlan(test);
             uint64_t inputNanos = 0;
             uint64_t outputNanos = 0;
             uint64_t finishNanos = 0;
             auto start = getCurrentTimeMicro();
             for (auto i = 0; i < iterations; ++i) {
-              std::shared_ptr<Task> task;
-              test::AssertQueryBuilder(plan).copyResults(pool_.get(), task);
+              auto task = test::AssertQueryBuilder(plan).runQuery();
               auto stats = task->taskStats();
               for (auto& pipeline : stats.pipelineStats) {
                 for (auto& op : pipeline.operatorStats) {
@@ -89,11 +74,10 @@ class OrderByBenchmark {
             return 1;
           });
     }
-    testCases_.push_back(std::move(testCase));
   }
 
  private:
-  core::PlanNodePtr makeOrderByPlan(TestCase& test) {
+  core::PlanNodePtr makeOrderByPlan(const TestCase& test) {
     folly::BenchmarkSuspender suspender;
     std::vector<RowVectorPtr> vectors;
     vectors.emplace_back(OrderByBenchmarkUtil::fuzzRows(
@@ -105,20 +89,13 @@ class OrderByBenchmark {
       keys.emplace_back(fmt::format("c{} ASC NULLS LAST", i));
     }
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId orderNodeId;
-    return test::PlanBuilder(planNodeIdGenerator)
-        .values(vectors)
-        .orderBy(keys, false)
-        .capturePlanNodeId(orderNodeId)
-        .planNode();
+    return test::PlanBuilder().values(vectors).orderBy(keys, false).planNode();
   }
 
   std::shared_ptr<memory::MemoryPool> rootPool_{
       memory::memoryManager()->addRootPool()};
   std::shared_ptr<memory::MemoryPool> pool_{
       rootPool_->addLeafChild("OrderByBenchmark")};
-  std::vector<std::unique_ptr<TestCase>> testCases_;
 };
 } // namespace
 
@@ -128,7 +105,7 @@ int main(int argc, char** argv) {
   memory::MemoryManager::initialize({});
   OrderByBenchmark bm;
   OrderByBenchmarkUtil::addBenchmarks([&](const std::string& testName,
-                                          size_t numRows,
+                                          vector_size_t numRows,
                                           const RowTypePtr& rowType,
                                           int iterations,
                                           int numKeys) {

@@ -25,7 +25,7 @@ class OrderByBenchmarkUtil {
   /// @param benchmark benchmark generator.
   static void addBenchmarks(std::function<void(
                                 const std::string& testName,
-                                size_t numRows,
+                                vector_size_t numRows,
                                 const RowTypePtr& rowType,
                                 int iterations,
                                 int numKeys)> benchmark);
@@ -37,7 +37,7 @@ class OrderByBenchmarkUtil {
   /// columns do not have null values.
   static RowVectorPtr fuzzRows(
       const RowTypePtr& rowType,
-      size_t numRows,
+      vector_size_t numRows,
       int numKeys,
       memory::MemoryPool* pool);
 };
