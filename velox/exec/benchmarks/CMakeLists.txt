@@ -89,8 +89,8 @@ endif()
 
 velox_add_library(velox_orderby_benchmark_util OrderByBenchmarkUtil.cpp)
 
-velox_link_libraries(
-  velox_orderby_benchmark_util velox_vector_fuzzer velox_vector_test_lib)
+velox_link_libraries(velox_orderby_benchmark_util velox_vector_fuzzer
+                     velox_vector_test_lib)
 
 add_executable(velox_prefixsort_benchmark PrefixSortBenchmark.cpp)
 
