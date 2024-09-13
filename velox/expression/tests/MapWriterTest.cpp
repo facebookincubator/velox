@@ -781,10 +781,10 @@ TEST_F(MapWriterTest, errorHandlingE2E) {
   registerFunction<
       ThrowsErrorsFunc,
       Map<int64_t, Map<Varchar, float>>,
-      int64_t>({"throws_errors"});
+      int64_t>({"throws_errors_map"});
 
   auto result = evaluate(
-      "try(throws_errors(c0))",
+      "try(throws_errors_map(c0))",
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6})}));
 
   auto innerKeys = makeFlatVector<StringView>(
