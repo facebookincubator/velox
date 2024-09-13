@@ -136,7 +136,8 @@ class HashProbe : public Operator {
   // for right join and full join.
   RowVectorPtr getBuildSideOutput();
 
-  // Applies 'filter_' to 'outputTableRows_' and updates 'outputRowMapping_'.
+  // Applies 'filter_' to 'outputTableRows_' starting at 'offset' with 'size'
+  // length and updates 'outputRowMapping_'.
   // Returns the number of passing rows.
   vector_size_t evalFilter(vector_size_t numRows, vector_size_t offset);
 
