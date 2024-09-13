@@ -81,10 +81,12 @@ function install_build_prerequisites {
     python3 -m venv ${PYTHON_VENV}
   fi
   source ${PYTHON_VENV}/bin/activate; pip3 install cmake-format regex pyyaml
-  curl -L https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-darwin.tar.gz > ccache.tar.gz
-  tar -xf ccache.tar.gz
-  mv ccache-4.10.2-darwin/ccache /usr/local/bin/
-  rm -rf ccache-4.10.2-darwin ccache.tar.gz
+  if [ ! -f /usr/local/bin/ccache ]; then
+    curl -L https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-darwin.tar.gz > ccache.tar.gz
+    tar -xf ccache.tar.gz
+    mv ccache-4.10.2-darwin/ccache /usr/local/bin/
+    rm -rf ccache-4.10.2-darwin ccache.tar.gz
+  fi
 }
 
 function install_velox_deps_from_brew {
@@ -173,5 +175,5 @@ function install_velox_deps {
   fi
 )
 
-echo 'To add cmake-format bin to your $PATH, consider adding this to your ~/.profile:'
-echo 'Please add $INSTALL_PREFIX to your ~/.zshrc'
+echo "To reuse the installed dependencies for subsequent builds, consider adding this to your ~/.zshrc"
+echo "export INSTALL_PREFIX=$INSTALL_PREFIX"

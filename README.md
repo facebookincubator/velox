@@ -87,17 +87,19 @@ dependencies for a given platform.
 The following setup scripts use the `DEPENDENCY_DIR` environment variable to set the
 location to download and build packages. This defaults to `deps-download` in the current
 working directory.
+
 Use `INSTALL_PREFIX` to set the install directory of the packages. This defaults to
 `deps-install` in the current working directory on macOS and to the default install
 location (eg. `/usr/local`) on linux.
 Using the default install location `/usr/local` on macOS is discouraged since this
 location is used by certain Homebrew versions.
 
-You will have to manually add the `INSTALL_PREFIX` value in the IDE or bash environment,
+Manually add the `INSTALL_PREFIX` value in the IDE or bash environment,
 say `export INSTALL_PREFIX=/Users/$USERNAME/velox/deps-install` to `~/.zshrc` so that
-Velox builds can use the installed packages.
-You can also reuse this install for Velox clients such as Prestissimo by specifying a
-common location.
+subsequent Velox builds can use the installed packages.
+
+*You can reuse `DEPENDENCY_INSTALL` and `INSTALL_PREFIX` for Velox clients such as Prestissimo
+by specifying a common shared directory.`*
 
 ### Setting up on macOS
 
