@@ -288,8 +288,9 @@ class QueryConfig {
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
   /// If true, simple date formatter is used for time formatting and parsing.
+  /// False by default.
   static constexpr const char* kSparkLegacyTimeParser =
-      "spark.sql_legacy_timeParserPolicy";
+      "spark.legacy_time_parser_policy";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";

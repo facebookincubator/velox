@@ -23,12 +23,12 @@
 
 namespace facebook::velox::functions {
 
-// LENIENT_SIMPLE and STRICT_SIMPLE are respectively aligned with
-// java.text.SimpleDateFormat in lenient and non-lenient modes.
 enum class DateTimeFormatterType {
   JODA,
   MYSQL,
+  // Corresponding to java.text.SimpleDateFormat in lenient mode.
   LENIENT_SIMPLE,
+  // Corresponding to java.text.SimpleDateFormat in strict(lenient=false) mode
   STRICT_SIMPLE,
   UNKNOWN
 };

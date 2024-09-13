@@ -1709,14 +1709,17 @@ std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
   while (cur < end) {
     const char* startTokenPtr = cur;
 
-    // Literal case.
+    // For literal case, literal should be quoted using single quotes ('). If
+    // there is no quotes, it is interpreted as pattern letters. If there is
+    // only single quote, a user error will be thrown.
     if (*startTokenPtr == '\'') {
-      // 2 consecutive single quote.
+      // Append single literal quote for 2 consecutive single quote.
       if (cur + 1 < end && *(cur + 1) == '\'') {
         builder.appendLiteral("'");
         cur += 2;
       } else {
-        // Find closing single quote.
+        // Append literal characters from the start until the next closing
+        // literal sequence single quote.
         int64_t count = numLiteralChars(startTokenPtr + 1, end);
         VELOX_USER_CHECK_NE(count, -1, "No closing single quote for literal");
         for (int64_t i = 1; i <= count; i++) {
@@ -1728,6 +1731,8 @@ std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
         cur += count + 2;
       }
     } else {
+      // Append format specifier according to pattern letters. If pattern letter
+      // is not supported, a user error will be thrown.
       int count = 1;
       ++cur;
       while (cur < end && *startTokenPtr == *cur) {
@@ -1735,20 +1740,17 @@ std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
         ++cur;
       }
       switch (*startTokenPtr) {
-        case 'G':
-          builder.appendEra();
+        case 'a':
+          builder.appendHalfDayOfDay();
           break;
         case 'C':
           builder.appendCenturyOfEra(count);
           break;
-        case 'Y':
-          builder.appendYearOfEra(count);
+        case 'd':
+          builder.appendDayOfMonth(count);
           break;
-        case 'x':
-          builder.appendWeekYear(count);
-          break;
-        case 'w':
-          builder.appendWeekOfWeekYear(count);
+        case 'D':
+          builder.appendDayOfYear(count);
           break;
         case 'e':
           builder.appendDayOfWeek1Based(count);
@@ -1756,11 +1758,23 @@ std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
         case 'E':
           builder.appendDayOfWeekText(count);
           break;
-        case 'y':
-          builder.appendYear(count);
+        case 'G':
+          builder.appendEra();
           break;
-        case 'D':
-          builder.appendDayOfYear(count);
+        case 'h':
+          builder.appendClockHourOfHalfDay(count);
+          break;
+        case 'H':
+          builder.appendHourOfDay(count);
+          break;
+        case 'K':
+          builder.appendHourOfHalfDay(count);
+          break;
+        case 'k':
+          builder.appendClockHourOfDay(count);
+          break;
+        case 'm':
+          builder.appendMinuteOfHour(count);
           break;
         case 'M':
           if (count <= 2) {
@@ -1769,32 +1783,23 @@ std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
             builder.appendMonthOfYearText(count);
           }
           break;
-        case 'd':
-          builder.appendDayOfMonth(count);
-          break;
-        case 'a':
-          builder.appendHalfDayOfDay();
-          break;
-        case 'K':
-          builder.appendHourOfHalfDay(count);
-          break;
-        case 'h':
-          builder.appendClockHourOfHalfDay(count);
-          break;
-        case 'H':
-          builder.appendHourOfDay(count);
-          break;
-        case 'k':
-          builder.appendClockHourOfDay(count);
-          break;
-        case 'm':
-          builder.appendMinuteOfHour(count);
-          break;
         case 's':
           builder.appendSecondOfMinute(count);
           break;
         case 'S':
           builder.appendFractionOfSecond(count);
+          break;
+        case 'w':
+          builder.appendWeekOfWeekYear(count);
+          break;
+        case 'x':
+          builder.appendWeekYear(count);
+          break;
+        case 'y':
+          builder.appendYear(count);
+          break;
+        case 'Y':
+          builder.appendYearOfEra(count);
           break;
         case 'z':
           builder.appendTimeZone(count);
