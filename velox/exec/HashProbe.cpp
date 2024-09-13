@@ -1007,14 +1007,21 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       ? inputSize
       : outputBatchSize_;
   outputTableRowsCapacity_ = outputBatchSize;
-  if (filter_ &&
-      (isLeftJoin(joinType_) || isFullJoin(joinType_) ||
-       isAntiJoin(joinType_))) {
-    // If we need non-matching probe side row, there is a possibility that such
-    // row exists at end of an input batch and being carried over in the next
-    // output batch, so we need to make extra room of one row in output.
-    ++outputTableRowsCapacity_;
+  if (filter_) {
+    if (isLeftJoin(joinType_) || isFullJoin(joinType_) ||
+        isAntiJoin(joinType_)) {
+      // If we need non-matching probe side row, there is a possibility that
+      // such row exists at end of an input batch and being carried over in the
+      // next output batch, so we need to make extra room of one row in output.
+      ++outputTableRowsCapacity_;
+    }
+
+    // Intialize 'leftSemiProjectIsNull_' for null aware lft semi join.
+    if (isLeftSemiProjectJoin(joinType_) && nullAware_) {
+      leftSemiProjectIsNull_.clearAll();
+    }
   }
+
   auto mapping = initializeRowNumberMapping(
       outputRowMapping_, outputTableRowsCapacity_, pool());
   auto* outputTableRows =
@@ -1097,11 +1104,15 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
     }
 
     if (accumulatedNumOutput > 0 ||
-        (filter_ != nullptr && numOut < numOutputBeforeFilter / 10 &&
+        (filter_ != nullptr && numOut < numOutputBeforeFilter / 2 &&
          !emptyBuildSide)) {
       accumulatedNumOutput += numOut;
+
+      // To avoid generating low seletivity / small vectors, continue the
+      // current loop to populate more results to 'outputRowMapping_' and
+      // 'outputTableRows_' until all rows in the current input are processed or
+      // the preferred number of rows has been produced.
       if (!resultIter_->atEnd() &&
-          accumulatedNumOutput < outputTableRowsCapacity_ &&
           accumulatedNumOutput < operatorCtx_->driverCtx()
                                      ->queryConfig()
                                      .preferredOutputBatchBytes() &&
@@ -1112,7 +1123,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
             outputTableRowsCapacity_ - accumulatedNumOutput);
         outputTableRows =
             outputTableRows_->asMutable<char*>() + accumulatedNumOutput;
-        outputBatchSize = outputBatchSize - numOut;
+        outputBatchSize -= numOut;
         continue;
       }
     }
@@ -1482,9 +1493,6 @@ int32_t HashProbe::evalFilter(int32_t numRows, int32_t offset) {
 
     if (nullAware_) {
       leftSemiProjectIsNull_.resize(numRows + offset, false);
-      if (offset == 0) {
-        leftSemiProjectIsNull_.clearAll();
-      }
 
       auto addLast = [&](auto row, std::optional<bool> passed) {
         if (passed.has_value()) {
