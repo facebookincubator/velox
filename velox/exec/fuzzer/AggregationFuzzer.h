@@ -25,8 +25,6 @@ namespace facebook::velox::exec::test {
 /// Runs the aggregation fuzzer.
 /// @param signatureMap Map of all aggregate function signatures.
 /// @param seed Random seed - Pass the same seed for reproducibility.
-/// @param orderDependentFunctions Map of functions that depend on order of
-/// input.
 /// @param orderableGroupKeys Whether group keys must be orderable or be just
 /// comparable.
 /// @param planPath Path to persisted plan information. If this is
@@ -36,8 +34,7 @@ namespace facebook::velox::exec::test {
 void aggregateFuzzer(
     AggregateFunctionSignatureMap signatureMap,
     size_t seed,
-    const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>&
-        orderDependentFunctions,
+    const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>& customVerificationFunctions,
     const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
         customInputGenerators,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,

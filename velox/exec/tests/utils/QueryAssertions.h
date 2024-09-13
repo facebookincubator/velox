@@ -308,6 +308,13 @@ void assertEqualTypeAndNumRows(
     vector_size_t expectedNumRows,
     const std::vector<RowVectorPtr>& actual);
 
+bool assertUnorderedEqualResults(
+    const MaterializedRowMultiset& expectedRows,
+    const TypePtr& expectedType,
+    const MaterializedRowMultiset& actualRows,
+    const TypePtr& actualType,
+    const std::string& message = "");
+
 void printResults(const RowVectorPtr& result, std::ostream& out);
 
 /// Aggregates operator stats by operator type. If a task has more than one plan

@@ -48,8 +48,6 @@ struct AggregationFuzzerOptions {
   std::unordered_map<std::string, std::shared_ptr<InputGenerator>>
       customInputGenerators;
 
-  std::unordered_set<std::string> orderDependentFunctions;
-
   /// Timestamp precision to use when generating inputs of type TIMESTAMP.
   VectorFuzzer::Options::TimestampPrecision timestampPrecision{
       VectorFuzzer::Options::TimestampPrecision::kMilliSeconds};

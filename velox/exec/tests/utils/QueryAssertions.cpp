@@ -1068,6 +1068,31 @@ void assertEqualTypeAndNumRows(
   EXPECT_EQ(expectedNumRows, actualNumRows);
 }
 
+bool assertUnorderedEqualResults(
+    const MaterializedRowMultiset& expectedRows,
+    const TypePtr& expectedType,
+    const MaterializedRowMultiset& actualRows,
+    const TypePtr& actualType,
+    const std::string& message) {
+  // Compare type kinds to ensure compatibility.
+  if (!equalTypeKinds(*expectedRows.begin(), *actualRows.begin())) {
+    ADD_FAILURE() << "Types of expected and actual results do not match: "
+                  << toTypeString(*expectedRows.begin()) << " vs. "
+                  << toTypeString(*actualRows.begin());
+    return false;
+  }
+
+  // If no floating-point columns are involved, perform a direct comparison.
+  if (!compareMaterializedRows(expectedRows, actualRows)) {
+    ADD_FAILURE() << generateUserFriendlyDiff(
+                         expectedRows, actualRows, expectedType)
+                  << message;
+    return false;
+  }
+
+  return true;
+}
+
 /// Returns the number of floating-point columns and a list of columns indices
 /// with floating-point columns placed at the end.
 std::tuple<uint32_t, std::vector<velox::column_index_t>>
