@@ -1423,27 +1423,25 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
   }
 
   // Convert the parsed date/time into a timestamp.
-  int64_t daysSinceEpoch;
-  Status status;
+  Expected<int64_t> expected;
   if (date.weekDateFormat) {
-    status = util::daysSinceEpochFromWeekDate(
-        date.year, date.week, date.dayOfWeek, daysSinceEpoch);
+    expected =
+        util::daysSinceEpochFromWeekDate(date.year, date.week, date.dayOfWeek);
   } else if (date.dayOfYearFormat) {
-    status = util::daysSinceEpochFromDayOfYear(
-        date.year, date.dayOfYear, daysSinceEpoch);
+    expected = util::daysSinceEpochFromDayOfYear(date.year, date.dayOfYear);
   } else {
-    status = util::daysSinceEpochFromDate(
-        date.year, date.month, date.day, daysSinceEpoch);
+    expected = util::daysSinceEpochFromDate(date.year, date.month, date.day);
   }
-  if (!status.ok()) {
-    VELOX_DCHECK(status.isUserError());
-    return folly::makeUnexpected(status);
+  if (expected.hasError()) {
+    VELOX_DCHECK(expected.error().isUserError());
+    return folly::makeUnexpected(expected.error());
   }
 
   int64_t microsSinceMidnight =
       util::fromTime(date.hour, date.minute, date.second, date.microsecond);
   return DateTimeResult{
-      util::fromDatetime(daysSinceEpoch, microsSinceMidnight), date.timezoneId};
+      util::fromDatetime(expected.value(), microsSinceMidnight),
+      date.timezoneId};
 }
 
 std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(

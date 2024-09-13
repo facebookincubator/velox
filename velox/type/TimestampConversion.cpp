@@ -158,10 +158,11 @@ bool isValidWeekOfMonthDate(
   }
 
   int64_t daysSinceEpochOfFirstDayOfMonth;
-  const Status status =
-      daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth);
-  if (!status.ok()) {
+  Expected<int64_t> expected = daysSinceEpochFromDate(year, month, 1);
+  if (expected.hasError()) {
     return false;
+  } else {
+    daysSinceEpochOfFirstDayOfMonth = expected.value();
   }
 
   // Calculates the actual number of week of month and validates if it is in the
@@ -260,8 +261,11 @@ bool tryParseDateString(
   // No month or day.
   if ((mode == ParseMode::kSparkCast || mode == ParseMode::kIso8601) &&
       pos == len) {
-    if (!daysSinceEpochFromDate(year, 1, 1, daysSinceEpoch).ok()) {
+    Expected<int64_t> expected = daysSinceEpochFromDate(year, 1, 1);
+    if (expected.hasError()) {
       return false;
+    } else {
+      daysSinceEpoch = expected.value();
     }
     return validDate(daysSinceEpoch);
   }
@@ -293,8 +297,11 @@ bool tryParseDateString(
   // No day.
   if ((mode == ParseMode::kSparkCast || mode == ParseMode::kIso8601) &&
       pos == len) {
-    if (!daysSinceEpochFromDate(year, month, 1, daysSinceEpoch).ok()) {
+    Expected<int64_t> expected = daysSinceEpochFromDate(year, month, 1);
+    if (expected.hasError()) {
       return false;
+    } else {
+      daysSinceEpoch = expected.value();
     }
     return validDate(daysSinceEpoch);
   }
@@ -317,8 +324,11 @@ bool tryParseDateString(
   }
 
   if (mode == ParseMode::kPrestoCast || mode == ParseMode::kIso8601) {
-    if (!daysSinceEpochFromDate(year, month, day, daysSinceEpoch).ok()) {
+    Expected<int64_t> expected = daysSinceEpochFromDate(year, month, day);
+    if (expected.hasError()) {
       return false;
+    } else {
+      daysSinceEpoch = expected.value();
     }
 
     if (mode == ParseMode::kPrestoCast) {
@@ -334,8 +344,11 @@ bool tryParseDateString(
   // In non-standard cast mode, an optional trailing 'T' or space followed
   // by any optional characters are valid patterns.
   if (mode == ParseMode::kSparkCast) {
-    if (!daysSinceEpochFromDate(year, month, day, daysSinceEpoch).ok()) {
+    Expected<int64_t> expected = daysSinceEpochFromDate(year, month, day);
+    if (expected.hasError()) {
       return false;
+    } else {
+      daysSinceEpoch = expected.value();
     }
 
     if (!validDate(daysSinceEpoch)) {
@@ -380,8 +393,13 @@ bool tryParseDateString(
       return false;
     }
   }
-
-  return daysSinceEpochFromDate(year, month, day, daysSinceEpoch).ok();
+  Expected<int64_t> expected = daysSinceEpochFromDate(year, month, day);
+  if (expected.hasError()) {
+    return false;
+  } else {
+    daysSinceEpoch = expected.value();
+    return true;
+  }
 }
 
 void parseTimeSeparator(
@@ -586,26 +604,27 @@ bool isValidDayOfYear(int32_t year, int32_t dayOfYear) {
   return true;
 }
 
-Status lastDayOfMonthSinceEpochFromDate(const std::tm& dateTime, int64_t& out) {
+Expected<int64_t> lastDayOfMonthSinceEpochFromDate(const std::tm& dateTime) {
   auto year = dateTime.tm_year + 1900;
   auto month = dateTime.tm_mon + 1;
   auto day = util::getMaxDayOfMonth(year, month);
-  return util::daysSinceEpochFromDate(year, month, day, out);
+  return util::daysSinceEpochFromDate(year, month, day);
 }
 
 int32_t getMaxDayOfMonth(int32_t year, int32_t month) {
   return isLeapYear(year) ? kLeapDays[month] : kNormalDays[month];
 }
 
-Status
-daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day, int64_t& out) {
+Expected<int64_t>
+daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day) {
   int64_t daysSinceEpoch = 0;
 
   if (!isValidDate(year, month, day)) {
     if (threadSkipErrorDetails()) {
-      return Status::UserError();
+      return folly::makeUnexpected(Status::UserError());
     } else {
-      return Status::UserError("Date out of range: {}-{}-{}", year, month, day);
+      return folly::makeUnexpected(
+          Status::UserError("Date out of range: {}-{}-{}", year, month, day));
     }
   }
   while (year < 1970) {
@@ -620,29 +639,30 @@ daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day, int64_t& out) {
   daysSinceEpoch += isLeapYear(year) ? kCumulativeLeapDays[month - 1]
                                      : kCumulativeDays[month - 1];
   daysSinceEpoch += day - 1;
-  out = daysSinceEpoch;
-  return Status::OK();
+  return daysSinceEpoch;
 }
 
-Status daysSinceEpochFromWeekDate(
+Expected<int64_t> daysSinceEpochFromWeekDate(
     int32_t weekYear,
     int32_t weekOfYear,
-    int32_t dayOfWeek,
-    int64_t& out) {
+    int32_t dayOfWeek) {
   if (!isValidWeekDate(weekYear, weekOfYear, dayOfWeek)) {
-    return Status::UserError(
-        "Date out of range: {}-{}-{}", weekYear, weekOfYear, dayOfWeek);
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    } else {
+      return folly::makeUnexpected(Status::UserError(
+          "Date out of range: {}-{}-{}", weekYear, weekOfYear, dayOfWeek));
+    }
   }
 
-  int64_t daysSinceEpochOfJanFourth;
-  VELOX_RETURN_NOT_OK(
-      daysSinceEpochFromDate(weekYear, 1, 4, daysSinceEpochOfJanFourth));
-  int32_t firstDayOfWeekYear =
-      extractISODayOfTheWeek(daysSinceEpochOfJanFourth);
+  return daysSinceEpochFromDate(weekYear, 1, 4)
+      .then([&weekOfYear, &dayOfWeek](int64_t daysSinceEpochOfJanFourth) {
+        int32_t firstDayOfWeekYear =
+            extractISODayOfTheWeek(daysSinceEpochOfJanFourth);
 
-  out = daysSinceEpochOfJanFourth - (firstDayOfWeekYear - 1) +
-      7 * (weekOfYear - 1) + dayOfWeek - 1;
-  return Status::OK();
+        return daysSinceEpochOfJanFourth - (firstDayOfWeekYear - 1) +
+            7 * (weekOfYear - 1) + dayOfWeek - 1;
+      });
 }
 
 Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
@@ -677,35 +697,37 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
   }
   year += additionYears;
 
-  int64_t daysSinceEpochOfFirstDayOfMonth;
-  const Status status =
-      daysSinceEpochFromDate(year, month, 1, daysSinceEpochOfFirstDayOfMonth);
-  if (!status.ok()) {
-    return folly::makeUnexpected(status);
-  }
-  const int32_t firstDayOfWeek =
-      extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
-  int32_t days;
-  if (dayOfWeek < 1) {
-    days = 7 - abs(dayOfWeek - 1) % 7;
-  } else if (dayOfWeek > 7) {
-    days = (dayOfWeek - 1) % 7;
-  } else {
-    days = dayOfWeek % 7;
-  }
-  return daysSinceEpochOfFirstDayOfMonth - (firstDayOfWeek - 1) +
-      7 * (weekOfMonth - 1) + days - 1;
+  return daysSinceEpochFromDate(year, month, 1)
+      .then(
+          [&dayOfWeek, &weekOfMonth](int64_t daysSinceEpochOfFirstDayOfMonth) {
+            const int32_t firstDayOfWeek =
+                extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
+            int32_t days;
+            if (dayOfWeek < 1) {
+              days = 7 - abs(dayOfWeek - 1) % 7;
+            } else if (dayOfWeek > 7) {
+              days = (dayOfWeek - 1) % 7;
+            } else {
+              days = dayOfWeek % 7;
+            }
+            return daysSinceEpochOfFirstDayOfMonth - (firstDayOfWeek - 1) +
+                7 * (weekOfMonth - 1) + days - 1;
+          });
 }
 
-Status
-daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear, int64_t& out) {
+Expected<int64_t> daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear) {
   if (!isValidDayOfYear(year, dayOfYear)) {
-    return Status::UserError("Day of year out of range: {}", dayOfYear);
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    } else {
+      return folly::makeUnexpected(
+          Status::UserError("Day of year out of range: {}", dayOfYear));
+    }
   }
-  int64_t startOfYear;
-  VELOX_RETURN_NOT_OK(daysSinceEpochFromDate(year, 1, 1, startOfYear));
-  out = startOfYear + (dayOfYear - 1);
-  return Status::OK();
+  return daysSinceEpochFromDate(year, 1, 1)
+      .then([&dayOfYear](int64_t startOfYear) {
+        return startOfYear + (dayOfYear - 1);
+      });
 }
 
 Expected<int32_t> fromDateString(const char* str, size_t len, ParseMode mode) {

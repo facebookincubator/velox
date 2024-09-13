@@ -402,27 +402,24 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
       const arg_type<Timestamp>& timestamp) {
     auto dt = getDateTime(timestamp, this->timeZone_);
     int64_t daysSinceEpochFromDate;
-    auto status =
-        util::lastDayOfMonthSinceEpochFromDate(dt, daysSinceEpochFromDate);
-    if (!status.ok()) {
-      VELOX_DCHECK(status.isUserError());
-      VELOX_USER_FAIL(status.message());
+    Expected<int64_t> expected = util::lastDayOfMonthSinceEpochFromDate(dt);
+    if (expected.hasError()) {
+      VELOX_DCHECK(expected.error().isUserError());
+      VELOX_USER_FAIL(expected.error().message());
     }
-    result = daysSinceEpochFromDate;
+    result = expected.value();
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date) {
     auto dt = getDateTime(date);
-    int64_t daysSinceEpochFromDate;
-    auto status =
-        util::lastDayOfMonthSinceEpochFromDate(dt, daysSinceEpochFromDate);
-    if (!status.ok()) {
-      VELOX_DCHECK(status.isUserError());
-      VELOX_USER_FAIL(status.message());
+    Expected<int64_t> expected = util::lastDayOfMonthSinceEpochFromDate(dt);
+    if (expected.hasError()) {
+      VELOX_DCHECK(expected.error().isUserError());
+      VELOX_USER_FAIL(expected.error().message());
     }
-    result = daysSinceEpochFromDate;
+    result = expected.value();
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -430,14 +427,12 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     auto dt = getDateTime(timestamp, nullptr);
-    int64_t daysSinceEpochFromDate;
-    auto status =
-        util::lastDayOfMonthSinceEpochFromDate(dt, daysSinceEpochFromDate);
-    if (!status.ok()) {
-      VELOX_DCHECK(status.isUserError());
-      VELOX_USER_FAIL(status.message());
+    Expected<int64_t> expected = util::lastDayOfMonthSinceEpochFromDate(dt);
+    if (expected.hasError()) {
+      VELOX_DCHECK(expected.error().isUserError());
+      VELOX_USER_FAIL(expected.error().message());
     }
-    result = daysSinceEpochFromDate;
+    result = expected.value();
   }
 };
 
