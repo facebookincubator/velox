@@ -71,7 +71,6 @@ class DeltaByteArrayDecoder {
 
     suffixDecoder_ = std::make_unique<DeltaLengthByteArrayDecoder>(
         prefixLenDecoder_->bufferStart());
-    lastValue_.clear();
   }
 
   void skip(uint64_t numValues) {
@@ -131,37 +130,34 @@ class DeltaByteArrayDecoder {
     VELOX_CHECK_GE(
         prefixLength, 0, "negative prefix length in DELTA_BYTE_ARRAY");
 
-    folly::StringPiece prefix{lastValue_};
-
-    buildBuffer(isFirstRun, prefixLength, suffix, prefix);
+    buildReadValue(isFirstRun, prefixLength, suffix);
 
     numValidValues_--;
-    lastValue_ = std::string{prefix};
     return {lastValue_};
   }
 
  private:
-  void buildBuffer(
+  void buildReadValue(
       bool isFirstRun,
       const int64_t prefixLength,
-      folly::StringPiece suffix,
-      folly::StringPiece& prefix) {
+      folly::StringPiece suffix) {
     VELOX_CHECK_LE(
         prefixLength,
-        prefix.size(),
+        lastValue_.size(),
         "prefix length too large in DELTA_BYTE_ARRAY");
+
     if (prefixLength == 0) {
       // prefix is empty.
-      prefix = folly::StringPiece{suffix.data(), suffix.size()};
+      lastValue_ = std::string{suffix};
       return;
     }
 
     if (!isFirstRun) {
       if (suffix.empty()) {
-        // suffix is empty: suffix can simply point to the prefix.
-        // This is not possible for the first run since the prefix
-        // would point to the mutable `lastValue_`.
-        prefix = prefix.substr(0, prefixLength);
+        // suffix is empty: read value can simply point to the prefix
+        // of the lastValue_. This is not possible for the first run since
+        // the prefix would point to the mutable `lastValue_`.
+        lastValue_ = lastValue_.substr(0, prefixLength);
         return;
       }
     }
@@ -169,12 +165,9 @@ class DeltaByteArrayDecoder {
     lastValue_.resize(prefixLength + suffix.size());
 
     // Both prefix and suffix are non-empty, so we need to decode the string
-    // into `data`.
-    // 1. Just keep the prefix in lastValue_.
-    // 2. Copy the suffix.
+    // into read value.
+    // Just keep the prefix in lastValue_, and copy the suffix.
     memcpy(lastValue_.data() + prefixLength, suffix.data(), suffix.size());
-    // 3. Make the prefix to the decoded string.
-    prefix = folly::StringPiece{lastValue_};
   }
 
   std::unique_ptr<DeltaBpDecoder> prefixLenDecoder_;
