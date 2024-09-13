@@ -45,6 +45,30 @@ void addBenchmark(
   }
 }
 
+std::vector<RowTypePtr> smallintRowTypes(bool noPayload) {
+  if (noPayload) {
+    return {
+        ROW({SMALLINT()}),
+        ROW({SMALLINT(), SMALLINT()}),
+        ROW({SMALLINT(), SMALLINT(), SMALLINT()}),
+        ROW({SMALLINT(), SMALLINT(), SMALLINT(), SMALLINT()}),
+    };
+  } else {
+    return {
+        ROW({SMALLINT(), VARCHAR(), VARCHAR()}),
+        ROW({SMALLINT(), SMALLINT(), VARCHAR(), VARCHAR()}),
+        ROW({SMALLINT(), SMALLINT(), SMALLINT(), VARCHAR(), VARCHAR()}),
+        ROW(
+            {SMALLINT(),
+             SMALLINT(),
+             SMALLINT(),
+             SMALLINT(),
+             VARCHAR(),
+             VARCHAR()}),
+    };
+  }
+}
+
 std::vector<RowTypePtr> bigintRowTypes(bool noPayload) {
   if (noPayload) {
     return {
@@ -164,6 +188,76 @@ void largeVarchar(std::function<void(
       iterations,
       benchmark);
 }
+
+void smallint(
+    bool noPayload,
+    int numIterations,
+    const std::vector<vector_size_t>& batchSizes,
+    std::function<void(
+        const std::string& testName,
+        size_t numRows,
+        const RowTypePtr& rowType,
+        int iterations,
+        int numKeys)> benchmark) {
+  std::vector<RowTypePtr> rowTypes = smallintRowTypes(noPayload);
+  std::vector<int> numKeys = {1, 2, 3, 4};
+  addBenchmark(
+      noPayload ? "no-payload" : "payload",
+      "smallint",
+      batchSizes,
+      rowTypes,
+      numKeys,
+      numIterations,
+      benchmark);
+}
+
+void smallSmallint(std::function<void(
+                       const std::string& testName,
+                       size_t numRows,
+                       const RowTypePtr& rowType,
+                       int iterations,
+                       int numKeys)> benchmark) {
+  // For small dateset, iterations need to be large enough to ensure that the
+  // benchmark runs for enough time.
+  const auto iterations = 100'000;
+  const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
+  smallint(true, iterations, batchSizes, benchmark);
+}
+
+void smallSmallintWithPayload(std::function<void(
+                                  const std::string& testName,
+                                  size_t numRows,
+                                  const RowTypePtr& rowType,
+                                  int iterations,
+                                  int numKeys)> benchmark) {
+  const auto iterations = 100'000;
+  const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
+  smallint(false, iterations, batchSizes, benchmark);
+}
+
+void largeSmallint(std::function<void(
+                       const std::string& testName,
+                       size_t numRows,
+                       const RowTypePtr& rowType,
+                       int iterations,
+                       int numKeys)> benchmark) {
+  const auto iterations = 10;
+  const std::vector<vector_size_t> batchSizes = {
+      1'000, 10'000, 100'000, 1'000'000};
+  smallint(true, iterations, batchSizes, benchmark);
+}
+
+void largeSmallintWithPayloads(std::function<void(
+                                   const std::string& testName,
+                                   size_t numRows,
+                                   const RowTypePtr& rowType,
+                                   int iterations,
+                                   int numKeys)> benchmark) {
+  const auto iterations = 10;
+  const std::vector<vector_size_t> batchSizes = {
+      1'000, 10'000, 100'000, 1'000'000};
+  smallint(false, iterations, batchSizes, benchmark);
+}
 } // namespace
 
 RowVectorPtr OrderByBenchmarkUtil::fuzzRows(
@@ -201,5 +295,9 @@ void OrderByBenchmarkUtil::addBenchmarks(std::function<void(
   largeBigintWithPayloads(benchmark);
   smallBigintWithPayload(benchmark);
   largeVarchar(benchmark);
+  smallSmallint(benchmark);
+  largeSmallint(benchmark);
+  smallSmallintWithPayload(benchmark);
+  largeSmallintWithPayloads(benchmark);
 }
 } // namespace facebook::velox
