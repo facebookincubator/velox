@@ -8277,60 +8277,50 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(probeVectors[0]->type()))
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"t0"},
-                      {"u0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(buildVectors[0]->type()))
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      "(t1 + u1) % 3 = 0",
-                      {"t0", "t1", "match"},
-                      core::JoinType::kLeftSemiProject)
-                  .planNode();
-  SplitInput splitInput = {
-      {probeScanId,
-       {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
-      {buildScanId,
-       {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+  auto makePlan = [&](bool nullAware) {
+    return PlanBuilder(planNodeIdGenerator)
+        .tableScan(asRowType(probeVectors[0]->type()))
+        .capturePlanNodeId(probeScanId)
+        .hashJoin(
+            {"t0"},
+            {"u0"},
+            PlanBuilder(planNodeIdGenerator)
+                .tableScan(asRowType(buildVectors[0]->type()))
+                .capturePlanNodeId(buildScanId)
+                .planNode(),
+            "(t1 + u1) % 3 = 0",
+            {"t0", "t1", "match"},
+            core::JoinType::kLeftSemiProject,
+            nullAware)
+        .planNode();
   };
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .planNode(plan)
-      .inputSplits(splitInput)
-      .checkSpillStats(false)
-      .referenceQuery(
-          "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t")
-      .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto stats = task->taskStats();
-        for (auto& pipeline : stats.pipelineStats) {
-          for (auto op : pipeline.operatorStats) {
-            if (op.operatorType == "HashProbe") {
-              ASSERT_EQ(op.outputVectors, 1);
-            }
-          }
-        }
-      })
-      .run();
+  for (auto nullAware : {false, true}) {
+    auto plan = makePlan(nullAware);
 
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .planNode(flipJoinSides(plan))
-      .inputSplits(splitInput)
-      .checkSpillStats(false)
-      .referenceQuery(
-          "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t")
-      .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto stats = task->taskStats();
-        for (auto& pipeline : stats.pipelineStats) {
-          for (auto op : pipeline.operatorStats) {
-            if (op.operatorType == "HashProbe") {
-              ASSERT_EQ(op.outputVectors, 1);
+    SplitInput splitInput = {
+        {probeScanId,
+         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+        {buildScanId,
+         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+    };
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .inputSplits(splitInput)
+        .checkSpillStats(false)
+        .referenceQuery(
+            "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t")
+        .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
+          auto stats = task->taskStats();
+          for (auto& pipeline : stats.pipelineStats) {
+            for (auto op : pipeline.operatorStats) {
+              if (op.operatorType == "HashProbe") {
+                ASSERT_EQ(op.outputVectors, 1);
+              }
             }
           }
-        }
-      })
-      .run();
+        })
+        .run();
+  }
 }
 } // namespace
