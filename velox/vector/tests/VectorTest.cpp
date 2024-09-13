@@ -3933,5 +3933,21 @@ TEST_F(VectorTest, hasOverlappingRanges) {
   test(2, {false, false}, {1, 0}, {1, 3}, true);
 }
 
+TEST_F(VectorTest, testSliceBuffer) {
+  auto bufferPtr = AlignedBuffer::allocate<int64_t>(10, pool());
+  auto sliceBufferPtr =
+      BaseVector::sliceBuffer(*BIGINT(), bufferPtr, 1, 5, pool());
+  ASSERT_TRUE(sliceBufferPtr->isView());
+  ASSERT_EQ(sliceBufferPtr->as<int64_t>(), bufferPtr->as<int64_t>() + 1);
+
+  bufferPtr = AlignedBuffer::allocate<bool>(16, pool());
+  sliceBufferPtr = BaseVector::sliceBuffer(*BOOLEAN(), bufferPtr, 8, 8, pool());
+  ASSERT_TRUE(sliceBufferPtr->isView());
+  ASSERT_EQ(sliceBufferPtr->as<bool>(), bufferPtr->as<bool>() + 1);
+
+  sliceBufferPtr = BaseVector::sliceBuffer(*BOOLEAN(), bufferPtr, 5, 5, pool());
+  ASSERT_FALSE(sliceBufferPtr->isView());
+}
+
 } // namespace
 } // namespace facebook::velox
