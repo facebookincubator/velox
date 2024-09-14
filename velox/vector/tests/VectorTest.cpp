@@ -3933,20 +3933,45 @@ TEST_F(VectorTest, hasOverlappingRanges) {
   test(2, {false, false}, {1, 0}, {1, 3}, true);
 }
 
-TEST_F(VectorTest, testSliceBuffer) {
+TEST_F(VectorTest, sliceBigintBuffer) {
   auto bufferPtr = AlignedBuffer::allocate<int64_t>(10, pool());
   auto sliceBufferPtr =
       BaseVector::sliceBuffer(*BIGINT(), bufferPtr, 1, 5, pool());
   ASSERT_TRUE(sliceBufferPtr->isView());
+  ASSERT_EQ(sliceBufferPtr->size(), 40); // 5 * type size of int64_t.
   ASSERT_EQ(sliceBufferPtr->as<int64_t>(), bufferPtr->as<int64_t>() + 1);
 
-  bufferPtr = AlignedBuffer::allocate<bool>(16, pool());
-  sliceBufferPtr = BaseVector::sliceBuffer(*BOOLEAN(), bufferPtr, 8, 8, pool());
+  VELOX_ASSERT_USER_THROW(
+      BaseVector::sliceBuffer(*BIGINT(), bufferPtr, -1, 5, pool()),
+      "Offset must be non-negative.");
+  VELOX_ASSERT_USER_THROW(
+      BaseVector::sliceBuffer(*BIGINT(), bufferPtr, 0, -1, pool()),
+      "Length must be non-negative.");
+  VELOX_ASSERT_USER_THROW(
+      BaseVector::sliceBuffer(*BIGINT(), bufferPtr, 11, 1, pool()),
+      "Offset must be less than or equal to 10.");
+  VELOX_ASSERT_USER_THROW(
+      BaseVector::sliceBuffer(*BIGINT(), bufferPtr, 5, 6, pool()),
+      "Length must be less than or equal to 5.");
+}
+
+TEST_F(VectorTest, sliceBooleanBuffer) {
+  auto bufferPtr = AlignedBuffer::allocate<bool>(16, pool());
+  auto data = bufferPtr->asMutableRange<bool>();
+  for (int i = 0; i < 16; ++i) {
+    data[i] = (i % 2 != 0);
+  }
+  auto sliceBufferPtr =
+      BaseVector::sliceBuffer(*BOOLEAN(), bufferPtr, 8, 8, pool());
   ASSERT_TRUE(sliceBufferPtr->isView());
   ASSERT_EQ(sliceBufferPtr->as<bool>(), bufferPtr->as<bool>() + 1);
 
   sliceBufferPtr = BaseVector::sliceBuffer(*BOOLEAN(), bufferPtr, 5, 5, pool());
   ASSERT_FALSE(sliceBufferPtr->isView());
+  auto sliceData = sliceBufferPtr->asRange<bool>();
+  for (int i = 0; i < 5; ++i) {
+    ASSERT_EQ(sliceData[i], i % 2 == 0);
+  }
 }
 
 } // namespace

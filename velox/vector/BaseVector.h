@@ -868,6 +868,7 @@ class BaseVector {
   /// shifted copy, new buffer is allocated from 'pool'.
   /// Otherwise return a BufferView into the original buffer (with shared
   /// ownership of original buffer).
+  /// @param type Must be primative type.
   static BufferPtr sliceBuffer(
       const Type& type,
       const BufferPtr& buf,
