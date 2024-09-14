@@ -31,7 +31,7 @@ namespace facebook::velox::exec::prefixsort {
 class PrefixSortEncoder {
  public:
   PrefixSortEncoder(bool ascending, bool nullsFirst)
-      : ascending_(ascending), nullsFirst_(nullsFirst){};
+      : ascending_(ascending), nullsFirst_(nullsFirst) {};
 
   /// Encode native primitive types(such as uint64_t, int64_t, uint32_t,
   /// int32_t, float, double, Timestamp). TODO: Add support for strings.
@@ -87,6 +87,9 @@ class PrefixSortEncoder {
         return 9;
       }
       case ::facebook::velox::TypeKind::TIMESTAMP: {
+        return 17;
+      }
+      case ::facebook::velox::TypeKind::HUGEINT: {
         return 17;
       }
       default:
@@ -167,6 +170,14 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     int16_t value,
     char* dest) const {
   encodeNoNulls(static_cast<uint16_t>(value ^ (1u << 15)), dest);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
+    int128_t value,
+    char* dest) const {
+  encodeNoNulls<int64_t>(HugeInt::upper(value), dest);
+  encodeNoNulls<uint64_t>(HugeInt::lower(value), dest + sizeof(int64_t));
 }
 
 namespace detail {

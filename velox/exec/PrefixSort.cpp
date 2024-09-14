@@ -76,6 +76,11 @@ FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
           prefixSortLayout, index, rowColumn, row, prefix);
       return;
     }
+    case TypeKind::HUGEINT: {
+      encodeRowColumn<int128_t>(
+          prefixSortLayout, index, rowColumn, row, prefix);
+      return;
+    }
     default:
       VELOX_UNSUPPORTED(
           "prefix-sort does not support type kind: {}",
