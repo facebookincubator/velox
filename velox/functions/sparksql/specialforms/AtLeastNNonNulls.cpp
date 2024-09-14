@@ -25,6 +25,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
  public:
   AtLeastNNonNullsExpr(
       TypePtr type,
+      bool trackCpuUsage,
       std::vector<ExprPtr>&& inputs,
       bool inputsSupportFlatNoNullsFastPath)
       : SpecialForm(
@@ -32,7 +33,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
             std::move(inputs),
             AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
             inputsSupportFlatNoNullsFastPath,
-            false /* trackCpuUsage */) {}
+            trackCpuUsage) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -60,14 +61,15 @@ class AtLeastNNonNullsExpr : public SpecialForm {
     if (n <= 0) {
       bits::orBits(values, rows.asRange().bits(), rows.begin(), rows.end());
       return;
-    } else {
-      bits::andWithNegatedBits(
-          values, rows.asRange().bits(), rows.begin(), rows.end());
-      // If 'n' > inputs_.size() - 1, result should be all false.
-      if (n > inputs_.size() - 1) {
-        return;
-      }
     }
+
+    bits::andWithNegatedBits(
+        values, rows.asRange().bits(), rows.begin(), rows.end());
+    // If 'n' > inputs_.size() - 1, result should be all false.
+    if (n > inputs_.size() - 1) {
+      return;
+    }
+
     // Create a temp buffer to track count of non null values for active rows.
     auto nonNullCounts =
         AlignedBuffer::allocate<int32_t>(activeRows->size(), context.pool(), 0);
@@ -139,10 +141,10 @@ TypePtr AtLeastNNonNullsCallToSpecialForm::resolveType(
   VELOX_USER_CHECK_GT(
       argTypes.size(),
       1,
-      "AtLeastNNonNulls expect to receive at least 2 arguments.");
+      "AtLeastNNonNulls expects to receive at least 2 arguments.");
   VELOX_USER_CHECK(
       argTypes[0]->isInteger(),
-      "The first input type should be INTEGER but Actual {}.",
+      "The first input type should be INTEGER but got {}.",
       argTypes[0]->toString());
   return BOOLEAN();
 }
@@ -150,10 +152,11 @@ TypePtr AtLeastNNonNullsCallToSpecialForm::resolveType(
 ExprPtr AtLeastNNonNullsCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
-    bool /* trackCpuUsage */,
+    bool trackCpuUsage,
     const core::QueryConfig& /*config*/) {
   return std::make_shared<AtLeastNNonNullsExpr>(
       type,
+      trackCpuUsage,
       std::move(compiledChildren),
       Expr::allSupportFlatNoNullsFastPath(compiledChildren));
 }

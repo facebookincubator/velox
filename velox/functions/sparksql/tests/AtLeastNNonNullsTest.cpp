@@ -106,10 +106,10 @@ TEST_F(AtLeastNNonNullsTest, error) {
 
   VELOX_ASSERT_USER_THROW(
       atLeastNNonNulls({makeConstant<float>(1.0f, 5), input}),
-      "The first input type should be INTEGER but Actual REAL");
+      "The first input type should be INTEGER but got REAL");
   VELOX_ASSERT_USER_THROW(
       atLeastNNonNulls({makeConstant<int32_t>(1, 5)}),
-      "AtLeastNNonNulls expect to receive at least 2 arguments");
+      "AtLeastNNonNulls expects to receive at least 2 arguments");
 
   VELOX_ASSERT_USER_THROW(
       atLeastNNonNulls({input, input}),
