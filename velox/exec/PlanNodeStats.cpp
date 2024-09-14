@@ -126,7 +126,7 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
   }
 
   out << ", CPU breakdown: I/O/F"
-      << folly::format(
+      << fmt::format(
              "({}/{}/{})",
              succinctNanos(addInputTiming.cpuNanos),
              succinctNanos(getOutputTiming.cpuNanos),
