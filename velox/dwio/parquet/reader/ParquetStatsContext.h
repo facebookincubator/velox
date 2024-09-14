@@ -26,8 +26,8 @@ struct ParquetStatsContext : dwio::common::StatsContext {
  public:
   ParquetStatsContext() = default;
 
-  ParquetStatsContext(std::optional<SemanticVersion> version)
-      : parquetVersion(std::move(version)) {}
+  ParquetStatsContext(const std::optional<SemanticVersion>& version)
+      : parquetVersion(version) {}
 
   bool shouldIgnoreStatistics(thrift::Type::type type) const {
     if (!parquetVersion.has_value()) {

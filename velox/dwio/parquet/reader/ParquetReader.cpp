@@ -851,6 +851,7 @@ class ParquetRowReader::Impl {
     if (rowGroups_.empty()) {
       return; // TODO
     }
+    parquetStatsContext_ = ParquetStatsContext(readerBase_->version());
     ParquetParams params(
         pool_,
         columnReaderStats_,
@@ -875,7 +876,6 @@ class ParquetRowReader::Impl {
       // table scan.
       advanceToNextRowGroup();
     }
-    parquetStatsContext_ = ParquetStatsContext(readerBase_->version());
   }
 
   void filterRowGroups() {
@@ -883,7 +883,7 @@ class ParquetRowReader::Impl {
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
     ParquetData::FilterRowGroupsResult res;
-    columnReader_->filterRowGroups(0, parquetStatsContext, res);
+    columnReader_->filterRowGroups(0, parquetStatsContext_, res);
     if (auto& metadataFilter = options_.metadataFilter()) {
       metadataFilter->eval(res.metadataFilterResults, res.filterResult);
     }
