@@ -974,11 +974,11 @@ BufferPtr BaseVector::sliceBuffer(
     vector_size_t offset,
     vector_size_t length,
     memory::MemoryPool* pool) {
+  VELOX_USER_CHECK_GE(offset, 0, "Offset must be non-negative.");
+  VELOX_USER_CHECK_GE(length, 0, "Length must be non-negative.");
   if (!buf) {
     return nullptr;
   }
-  VELOX_USER_CHECK_GE(offset, 0, "Offset must be non-negative.");
-  VELOX_USER_CHECK_GE(length, 0, "Length must be non-negative.");
   if (type.kind() != TypeKind::BOOLEAN) {
     return sliceBufferZeroCopy(
         typeSize(type), type.isPrimitiveType(), buf, offset, length);
@@ -986,7 +986,7 @@ BufferPtr BaseVector::sliceBuffer(
   if (offset % 8 == 0) {
     return sliceBufferZeroCopy(1, true, buf, offset / 8, (length + 7) / 8);
   }
-  VELOX_DCHECK_NOT_NULL(pool);
+  VELOX_CHECK_NOT_NULL(pool, "Pool must not be null.");
   auto ans = AlignedBuffer::allocate<bool>(length, pool);
   bits::copyBits(
       buf->as<uint64_t>(), offset, ans->asMutable<uint64_t>(), 0, length);

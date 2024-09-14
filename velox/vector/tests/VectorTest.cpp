@@ -3972,6 +3972,9 @@ TEST_F(VectorTest, sliceBooleanBuffer) {
   for (int i = 0; i < 5; ++i) {
     ASSERT_EQ(sliceData[i], i % 2 == 0);
   }
+  VELOX_ASSERT_THROW(
+      BaseVector::sliceBuffer(*BOOLEAN(), bufferPtr, 5, 6, nullptr),
+      "Pool must not be null.");
 }
 
 } // namespace
