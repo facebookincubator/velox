@@ -103,9 +103,6 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
     out << ", Physical written output: " << succinctBytes(physicalWrittenBytes);
   }
   out << ", Cpu time: " << succinctNanos(cpuWallTiming.cpuNanos)
-      << ", Add input cpu time: " << succinctNanos(addInputTiming.cpuNanos)
-      << ", Get output cpu time: " << succinctNanos(getOutputTiming.cpuNanos)
-      << ", Finish cpu time: " << succinctNanos(finishTiming.cpuNanos)
       << ", Blocked wall time: " << succinctNanos(blockedWallNanos)
       << ", Peak memory: " << succinctBytes(peakMemoryBytes)
       << ", Memory allocations: " << numMemoryAllocations;
@@ -127,6 +124,13 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
     out << ", DynamicFilter producer plan nodes: "
         << folly::join(',', dynamicFilterStats.producerNodeIds);
   }
+
+  out << ", CPU breakdown: I/O/F"
+      << folly::format(
+             "({}/{}/{})",
+             succinctNanos(addInputTiming.cpuNanos),
+             succinctNanos(getOutputTiming.cpuNanos),
+             succinctNanos(finishTiming.cpuNanos));
 
   return out.str();
 }

@@ -862,6 +862,8 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
           .customStats.at("flushRowCount")
           .sum,
       0);
+  std::cout << toPlanStats(task->taskStats()).at(aggNodeId).toString()
+            << std::endl;
   EXPECT_GT(
       toPlanStats(task->taskStats())
           .at(aggNodeId)
