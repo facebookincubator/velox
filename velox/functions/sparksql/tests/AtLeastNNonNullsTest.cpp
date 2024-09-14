@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "velox/functions/sparksql/specialforms/AtLeastNNonNulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
@@ -28,17 +28,39 @@ static constexpr auto kMaxFloat = std::numeric_limits<float>::max();
 
 class AtLeastNNonNullsTest : public SparkFunctionBaseTest {
  protected:
-  VectorPtr atLeastNNonNulls(const std::vector<VectorPtr>& input) {
-    std::string func = "at_least_n_non_nulls(c0";
-    for (auto i = 1; i < input.size(); ++i) {
-      func += fmt::format(", c{}", i);
+  template <typename T>
+  core::CallTypedExprPtr createAtLeastNNonNulls(
+      const std::vector<VectorPtr>& data) {
+    std::vector<core::TypedExprPtr> inputs;
+
+    for (int i = 0; i < data.size(); ++i) {
+      if (data[i]->isConstantEncoding()) {
+        auto constVector = data[i]->asUnchecked<ConstantVector<T>>();
+        if (constVector->isNullAt(0)) {
+          inputs.emplace_back(std::make_shared<core::ConstantTypedExpr>(
+              data[i]->type(), variant(data[i]->type()->kind())));
+        } else {
+          inputs.emplace_back(std::make_shared<core::ConstantTypedExpr>(
+              data[i]->type(), variant(constVector->valueAt(0))));
+        }
+      } else {
+        inputs.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+            data[i]->type(), fmt::format("c{}", i)));
+      }
     }
-    func += ")";
-    return evaluate(func, makeRowVector(input));
+    return std::make_shared<const core::CallTypedExpr>(
+        BOOLEAN(),
+        std::move(inputs),
+        AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls);
+  }
+
+  template <typename T>
+  VectorPtr atLeastNNonNulls(const std::vector<VectorPtr>& input) {
+    return evaluate(createAtLeastNNonNulls<T>(input), makeRowVector(input));
   }
 
   void testAtLeastNNonNulls(
-      const int32_t n,
+      int32_t n,
       const std::vector<VectorPtr>& input,
       const VectorPtr& expected) {
     std::vector<VectorPtr> data;
@@ -46,7 +68,7 @@ class AtLeastNNonNullsTest : public SparkFunctionBaseTest {
     for (auto i = 0; i < input.size(); ++i) {
       data.emplace_back(input[i]);
     }
-    const auto result = atLeastNNonNulls(data);
+    const auto result = atLeastNNonNulls<int32_t>(data);
     assertEqualVectors(expected, result);
   }
 };
@@ -105,17 +127,17 @@ TEST_F(AtLeastNNonNullsTest, error) {
       makeNullableFlatVector<int32_t>({-1, 0, 1, std::nullopt, std::nullopt});
 
   VELOX_ASSERT_USER_THROW(
-      atLeastNNonNulls({makeConstant<float>(1.0f, 5), input}),
+      atLeastNNonNulls<float>({makeConstant<float>(1.0f, 5), input}),
       "The first input type should be INTEGER but got REAL");
   VELOX_ASSERT_USER_THROW(
-      atLeastNNonNulls({makeConstant<int32_t>(1, 5)}),
+      atLeastNNonNulls<int32_t>({makeConstant<int32_t>(1, 5)}),
       "AtLeastNNonNulls expects to receive at least 2 arguments");
-
   VELOX_ASSERT_USER_THROW(
-      atLeastNNonNulls({input, input}),
-      "The first input should be constant encoding");
+      atLeastNNonNulls<int32_t>({input, input}),
+      "The first parameter should be constant expression");
   VELOX_ASSERT_USER_THROW(
-      atLeastNNonNulls({makeConstant<int32_t>(std::nullopt, 5), input}),
+      atLeastNNonNulls<int32_t>(
+          {makeConstant<int32_t>(std::nullopt, 5), input}),
       "The first parameter should not be null");
 }
 } // namespace

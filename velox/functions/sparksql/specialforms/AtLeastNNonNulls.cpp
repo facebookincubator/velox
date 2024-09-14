@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/sparksql/specialforms/AtLeastNNonNulls.h"
+#include "velox/expression/ConstantExpr.h"
 #include "velox/expression/SpecialForm.h"
 
 using namespace facebook::velox::exec;
@@ -27,13 +28,15 @@ class AtLeastNNonNullsExpr : public SpecialForm {
       TypePtr type,
       bool trackCpuUsage,
       std::vector<ExprPtr>&& inputs,
-      bool inputsSupportFlatNoNullsFastPath)
+      bool inputsSupportFlatNoNullsFastPath,
+      int n)
       : SpecialForm(
             std::move(type),
             std::move(inputs),
             AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
             inputsSupportFlatNoNullsFastPath,
-            trackCpuUsage) {}
+            trackCpuUsage),
+        n_(n) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -45,20 +48,9 @@ class AtLeastNNonNullsExpr : public SpecialForm {
     LocalSelectivityVector activeRowsHolder(context, rows);
     auto activeRows = activeRowsHolder.get();
     VELOX_DCHECK_NOT_NULL(activeRows);
-    // Load 'n' from the first input.
-    VectorPtr vector;
-    inputs_[0]->eval(*activeRows, context, vector);
-    VELOX_CHECK(!context.errors());
-    VELOX_USER_CHECK(
-        vector->isConstantEncoding(),
-        "The first input should be constant encoding.");
-    auto constVector = vector->asUnchecked<ConstantVector<int32_t>>();
-    VELOX_USER_CHECK(
-        !constVector->isNullAt(0), "The first parameter should not be null.");
-    const int32_t n = constVector->valueAt(0);
     auto values = flatResult->mutableValues(rows.end())->asMutable<uint64_t>();
     // If 'n' <= 0, set result to all true.
-    if (n <= 0) {
+    if (n_ <= 0) {
       bits::orBits(values, rows.asRange().bits(), rows.begin(), rows.end());
       return;
     }
@@ -66,7 +58,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
     bits::andWithNegatedBits(
         values, rows.asRange().bits(), rows.begin(), rows.end());
     // If 'n' > inputs_.size() - 1, result should be all false.
-    if (n > inputs_.size() - 1) {
+    if (n_ > inputs_.size() - 1) {
       return;
     }
 
@@ -84,7 +76,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
           updateResultTyped,
           inputs_[i]->type()->kind(),
           input.get(),
-          n,
+          n_,
           context,
           rawNonNullCounts,
           flatResult,
@@ -133,19 +125,13 @@ class AtLeastNNonNullsExpr : public SpecialForm {
       activeRows->updateBounds();
     }
   }
+
+  const int n_;
 };
 } // namespace
 
 TypePtr AtLeastNNonNullsCallToSpecialForm::resolveType(
-    const std::vector<TypePtr>& argTypes) {
-  VELOX_USER_CHECK_GT(
-      argTypes.size(),
-      1,
-      "AtLeastNNonNulls expects to receive at least 2 arguments.");
-  VELOX_USER_CHECK(
-      argTypes[0]->isInteger(),
-      "The first input type should be INTEGER but got {}.",
-      argTypes[0]->toString());
+    const std::vector<TypePtr>& /*argTypes*/) {
   return BOOLEAN();
 }
 
@@ -154,10 +140,31 @@ ExprPtr AtLeastNNonNullsCallToSpecialForm::constructSpecialForm(
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
     const core::QueryConfig& /*config*/) {
+  VELOX_USER_CHECK_GT(
+      compiledChildren.size(),
+      1,
+      "AtLeastNNonNulls expects to receive at least 2 arguments.");
+  VELOX_USER_CHECK(
+      compiledChildren[0]->type()->isInteger(),
+      "The first input type should be INTEGER but got {}.",
+      compiledChildren[0]->type()->toString());
+  auto constantExpr =
+      std::dynamic_pointer_cast<exec::ConstantExpr>(compiledChildren[0]);
+  VELOX_USER_CHECK_NOT_NULL(
+      constantExpr, "The first parameter should be constant expression.");
+  VELOX_USER_CHECK(
+      constantExpr->value()->isConstantEncoding(),
+      "The first parameter should be wrapped in constant vector.");
+  auto constVector =
+      constantExpr->value()->asUnchecked<ConstantVector<int32_t>>();
+  VELOX_USER_CHECK(
+      !constVector->isNullAt(0), "The first parameter should not be null.");
+  const int32_t n = constVector->valueAt(0);
   return std::make_shared<AtLeastNNonNullsExpr>(
       type,
       trackCpuUsage,
       std::move(compiledChildren),
-      Expr::allSupportFlatNoNullsFastPath(compiledChildren));
+      Expr::allSupportFlatNoNullsFastPath(compiledChildren),
+      n);
 }
 } // namespace facebook::velox::functions::sparksql
