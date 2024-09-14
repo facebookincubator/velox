@@ -112,7 +112,8 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
           ->newConnector(
-              "test-hive", std::make_shared<core::MemConfig>());
+              "test-hive", std::make_shared<config::ConfigBase>(
+                               std::unordered_map<std::string, std::string>()));
   connector::registerConnector(hiveConnector);
 
   seed(initialSeed);

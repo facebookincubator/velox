@@ -234,7 +234,7 @@ void FuzzerRunner::runFromGtest(
     const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
         argGenerators,
     std::shared_ptr<test::ReferenceQueryRunner> referenceQueryRunner) {
-  memory::MemoryManager::testingSetInstance({});
+  // memory::MemoryManager::testingSetInstance({});
   auto signatures = facebook::velox::getFunctionSignatures();
   ExpressionFuzzerVerifier(
       signatures,
