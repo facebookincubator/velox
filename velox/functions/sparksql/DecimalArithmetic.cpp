@@ -21,6 +21,8 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+static constexpr const char* kDenyPrecisionLoss = "_deny_precision_loss";
+
 struct DecimalAddSubtractBase {
  protected:
   template <bool allowPrecisionLoss>
@@ -253,12 +255,12 @@ struct DecimalAddSubtractBase {
     }
   }
 
-  // Computes the result precision and scale for decimal add and subtract
-  // operations following Hive's formulas when `allowPrecisionLoss` is true.
-  // If result is representable with long decimal, the result
-  // scale is the maximum of 'aScale' and 'bScale'. If not, reduces result scale
-  // and caps the result precision at 38.
-  // Caps p and s at 38 when when `allowPrecisionLoss` is false.
+  // When `allowPrecisionLoss` is true, computes the result precision and scale
+  // for decimal add and subtract operations following Hive's formulas. If
+  // result is representable with long decimal, the result scale is the maximum
+  // of 'aScale' and 'bScale'. If not, reduces result scale and caps the result
+  // precision at 38.
+  // When `allowPrecisionLoss` is false, caps p and s at 38.
   template <bool allowPrecisionLoss>
   static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
       uint8_t aPrecision,
@@ -337,12 +339,16 @@ struct DecimalMultiplyFunction {
       B* /*b*/) {
     auto [aPrecision, aScale] = getDecimalPrecisionScale(*inputTypes[0]);
     auto [bPrecision, bScale] = getDecimalPrecisionScale(*inputTypes[1]);
-    auto [rPrecision, rScale] = allowPrecisionLoss
-        ? DecimalUtil::adjustPrecisionScale(
-              aPrecision + bPrecision + 1, aScale + bScale)
-        : DecimalUtil::bounded(aPrecision + bPrecision + 1, aScale + bScale);
-    rPrecision_ = rPrecision;
-    deltaScale_ = aScale + bScale - rScale;
+    std::pair<uint8_t, uint8_t> rPrecisionScale;
+    if constexpr (allowPrecisionLoss) {
+      rPrecisionScale = DecimalUtil::adjustPrecisionScale(
+          aPrecision + bPrecision + 1, aScale + bScale);
+    } else {
+      rPrecisionScale =
+          DecimalUtil::bounded(aPrecision + bPrecision + 1, aScale + bScale);
+    }
+    rPrecision_ = rPrecisionScale.first;
+    deltaScale_ = aScale + bScale - rPrecisionScale.second;
   }
 
   template <typename R, typename A, typename B>
@@ -462,6 +468,11 @@ struct DecimalDivideFunction {
   }
 
  private:
+  // When allowing precision loss, computes the result precision and scale
+  // following Hive's formulas. When denying precision loss, calculates the
+  // number of whole digits and fraction digits. If the total number of digits
+  // exceed 38, we reduce both the number of fraction digits and whole digits to
+  // fit within this limit.
   static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
       uint8_t aPrecision,
       uint8_t aScale,
@@ -546,6 +557,7 @@ void registerDecimalBinary(
       ShortDecimal<P2, S2>>({name}, constraints);
 }
 
+// Used in function registration to generate the string to cap value at 38.
 std::string bounded(const std::string& value) {
   return fmt::format("({}) <= 38 ? ({}) : 38", value, value);
 }
@@ -588,8 +600,7 @@ void registerDecimalAddSubtract(const std::string& name) {
   registerDecimalBinary<Func, true>(
       name, makeConstraints(rPrecision, rScale, true));
   registerDecimalBinary<Func, false>(
-      name + "_not_allow_precision_loss",
-      makeConstraints(rPrecision, rScale, false));
+      name + kDenyPrecisionLoss, makeConstraints(rPrecision, rScale, false));
 }
 
 } // namespace
@@ -614,7 +625,7 @@ void registerDecimalMultiply(const std::string& prefix) {
   registerDecimalBinary<DecimalMultiplyFunction, true>(
       prefix + "multiply", makeConstraints(rPrecision, rScale, true));
   registerDecimalBinary<DecimalMultiplyFunction, false>(
-      prefix + "multiply_not_allow_precision_loss",
+      prefix + "multiply" + kDenyPrecisionLoss,
       makeConstraints(rPrecision, rScale, false));
 }
 
@@ -674,7 +685,7 @@ void registerDecimalDivide(const std::string& prefix) {
     constraints = getDivideConstraintsAllowPrecisionLoss();
   } else {
     constraints = getDivideConstraintsNotAllowPrecisionLoss();
-    functionName += "_not_allow_precision_loss";
+    functionName += kDenyPrecisionLoss;
   }
   registerDecimalBinary<DecimalDivideFunction, allowPrecisionLoss>(
       functionName, constraints);

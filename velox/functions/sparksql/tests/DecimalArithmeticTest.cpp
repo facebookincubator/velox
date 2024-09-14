@@ -519,8 +519,9 @@ TEST_F(DecimalArithmeticTest, divide) {
 }
 
 TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
+  const std::string denyPrecisionLoss = "_deny_precision_loss";
   testArithmeticFunction(
-      "add_not_allow_precision_loss",
+      "add" + denyPrecisionLoss,
       makeFlatVector(
           std::vector<int128_t>{21232100, 29998888, 42345678, 42135632},
           DECIMAL(38, 7)),
@@ -531,7 +532,7 @@ TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
 
   // Overflow when scaling up the whole part.
   testArithmeticFunction(
-      "add_not_allow_precision_loss",
+      "add" + denyPrecisionLoss,
       makeNullableLongDecimalVector(
           {"null", "null", "null", "null"}, DECIMAL(38, 7)),
       {makeNullableLongDecimalVector(
@@ -545,7 +546,7 @@ TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
            DECIMAL(38, 7))});
 
   testArithmeticFunction(
-      "subtract_not_allow_precision_loss",
+      "subtract" + denyPrecisionLoss,
       makeFlatVector(
           std::vector<int128_t>{1232100, -10001112, -17654322, -37864368},
           DECIMAL(38, 7)),
@@ -555,21 +556,21 @@ TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
        makeFlatVector(std::vector<int64_t>{1, 2, 3, 4}, DECIMAL(10, 0))});
 
   testArithmeticFunction(
-      "multiply_not_allow_precision_loss",
+      "multiply" + denyPrecisionLoss,
       makeConstant<int128_t>(60501, 1, DECIMAL(38, 10)),
       {makeConstant<int128_t>(201, 1, DECIMAL(20, 5)),
        makeConstant<int128_t>(301, 1, DECIMAL(20, 5))});
 
   // diff > 0
   testArithmeticFunction(
-      "divide_not_allow_precision_loss",
+      "divide" + denyPrecisionLoss,
       makeConstant<int128_t>(
           HugeInt::parse("5" + std::string(18, '0')), 1, DECIMAL(38, 18)),
       {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),
        makeConstant<int64_t>(1000, 1, DECIMAL(17, 3))});
   // diff < 0
   testArithmeticFunction(
-      "divide_not_allow_precision_loss",
+      "divide" + denyPrecisionLoss,
       makeConstant<int128_t>(
           HugeInt::parse("5" + std::string(10, '0')), 1, DECIMAL(31, 10)),
       {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),
