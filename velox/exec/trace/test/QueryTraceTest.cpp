@@ -24,6 +24,7 @@
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/QueryDataDeleter.h"
 #include "velox/exec/trace/QueryDataReader.h"
 #include "velox/exec/trace/QueryDataWriter.h"
 #include "velox/exec/trace/QueryMetadataReader.h"
@@ -129,6 +130,24 @@ TEST_F(QueryTracerTest, traceData) {
     ++numOutputVectors;
   }
   ASSERT_EQ(numOutputVectors, inputVectors.size());
+}
+
+TEST_F(QueryTracerTest, deleteData) {
+  const auto rowType = generateTypes(5);
+  RowVectorPtr inputVector = vectorFuzzer_.fuzzInputRow(rowType);
+
+  const auto dirPath = "/tmp/velox_test_delete_trace_data";
+  bool createRes = std::filesystem::create_directory(dirPath);
+  ASSERT_TRUE(createRes);
+
+  auto writer = trace::QueryDataWriter(dirPath, pool());
+  writer.write(inputVector);
+  writer.finish();
+
+  const auto deleter = trace::QueryDataDeleter::instance();
+  deleter->asyncDeleteDir(dirPath);
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  ASSERT_FALSE(std::filesystem::exists(dirPath));
 }
 
 TEST_F(QueryTracerTest, traceMetadata) {
