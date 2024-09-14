@@ -30,21 +30,34 @@ void ensureRegexIsConstant(
   }
 }
 
+/// Spark uses java.util.regex in regexp_replacement. This function preprocesses
+/// the pattern from Spark to ensure it is compatible with RE2.
+/// 1. java.util.regex supports named capturing groups in the format
+/// (?<name>regex), but in RE2, this is written as (?P<name>regex), so we need
+/// to convert the former format to the latter.
 FOLLY_ALWAYS_INLINE std::string prepareRegexpPattern(
     const StringView& pattern) {
   static const RE2 kRegex("[(][?]<([^>]*)>");
 
-  // (?<name>regex) => (?P<name>regex)
   std::string newPattern = pattern.getString();
   RE2::GlobalReplace(&newPattern, kRegex, R"((?P<\1>)");
 
   return newPattern;
 }
 
+/// Spark uses java.util.regex in regexp_replacement. This function preprocesses
+/// the replacement to ensure it is compatible with RE2.
+/// 1. RE2 replacement only supports group index capture, so we need to convert
+/// group name captures to group index captures.
+/// 2. Group index capture in java.util.regex replacement is $N, while in RE2
+/// replacement it is \N. We need to convert it.
+/// 3. Replacement in RE2 only supports '\' followed by a digit or another '\',
+/// while java.util.regex will ignore '\' in replacements, so we need to
+/// unescape it.
 FOLLY_ALWAYS_INLINE std::string prepareReplacement(
     const RE2& re,
     const StringView& replacement) {
-  if (replacement.size() == 0) {
+  if (replacement.empty()) {
     return std::string{};
   }
 
@@ -134,7 +147,7 @@ struct RegexpReplaceFunction {
       const arg_type<Varchar>* pattern,
       const arg_type<Varchar>* replacement,
       const arg_type<int64_t>* /*position*/) {
-    if (pattern != nullptr) {
+    if (pattern) {
       const auto processedPattern = prepareRegexpPattern(*pattern);
       re_.emplace(processedPattern, RE2::Quiet);
       VELOX_USER_CHECK(
@@ -144,10 +157,10 @@ struct RegexpReplaceFunction {
           re_->error());
     }
 
-    if (replacement != nullptr) {
+    if (replacement) {
       // Constant 'replacement' with non-constant 'pattern' needs to be
       // processed separately for each row.
-      if (pattern != nullptr) {
+      if (pattern) {
         ensureProcessedReplacement(re_.value(), *replacement);
         constantReplacement_ = true;
       }
@@ -239,12 +252,11 @@ struct RegexpReplaceFunction {
   }
 
   RE2& ensurePattern(const arg_type<Varchar>& pattern) {
-    if (!re_.has_value()) {
-      auto processedPattern = prepareRegexpPattern(pattern);
-      return *cache_.findOrCompile(StringView(processedPattern));
-    } else {
+    if (re_.has_value()) {
       return re_.value();
     }
+    auto processedPattern = prepareRegexpPattern(pattern);
+    return *cache_.findOrCompile(StringView(processedPattern));
   }
 
   const std::string& ensureProcessedReplacement(
