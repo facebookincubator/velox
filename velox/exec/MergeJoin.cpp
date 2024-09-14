@@ -1033,8 +1033,10 @@ RowVectorPtr MergeJoin::doGetOutput() {
   VELOX_UNREACHABLE();
 }
 
-RowVectorPtr MergeJoin::applyFilter(RowVectorPtr& output) {
+RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
   const auto numRows = output->size();
+
+  RowVectorPtr fullOuterOutput = nullptr;
 
   BufferPtr indices = allocateIndices(numRows, pool());
   auto rawIndices = indices->asMutable<vector_size_t>();
@@ -1057,39 +1059,57 @@ RowVectorPtr MergeJoin::applyFilter(RowVectorPtr& output) {
         rawIndices[numPassed++] = row;
 
         if (isFullJoin(joinType_)) {
-          // Insert same row in next line and then apply nulls to left and
-          // right.
-          fullOuterOutput_ = BaseVector::create<RowVector>(
+          // For filtered rows, it is necessary to insert additional data
+          // to ensure the result set is complete. Specifically, we
+          // need to generate two records: one record containing the
+          // columns from the left table along with nulls for the
+          // right table, and another record containing the columns
+          // from the right table along with nulls for the left table.
+          // For instance, the current output is filtered based on the condition
+          // t > 1.
+
+          // 1, 1
+          // 2, 2
+          // 3, 3
+
+          // In this scenario, we need to additionally insert a record 1, 1.
+          // Subsequently, we will set the values of the columns on the left to
+          // null and the values of the columns on the right to null as well. By
+          // doing so, we will obtain the final result set.
+
+          // 1,   null
+          // null,  1
+          // 2, 2
+          // 3, 3
+          fullOuterOutput = BaseVector::create<RowVector>(
               output->type(), output->size() + 1, pool());
 
           for (auto i = 0; i < row + 1; i++) {
             for (auto j = 0; j < output->type()->size(); j++) {
-              fullOuterOutput_->childAt(j)->copy(
+              fullOuterOutput->childAt(j)->copy(
                   output->childAt(j).get(), i, i, 1);
             }
           }
 
           for (auto j = 0; j < output->type()->size(); j++) {
-            fullOuterOutput_->childAt(j)->copy(
+            fullOuterOutput->childAt(j)->copy(
                 output->childAt(j).get(), row + 1, row, 1);
           }
 
           for (auto i = row + 1; i < output->size(); i++) {
             for (auto j = 0; j < output->type()->size(); j++) {
-              fullOuterOutput_->childAt(j)->copy(
+              fullOuterOutput->childAt(j)->copy(
                   output->childAt(j).get(), i + 1, i, 1);
             }
           }
 
-          output = std::move(fullOuterOutput_);
-
           for (auto& projection : leftProjections_) {
-            auto target = output->childAt(projection.outputChannel);
+            auto target = fullOuterOutput->childAt(projection.outputChannel);
             target->setNull(row, true);
           }
 
           for (auto& projection : rightProjections_) {
-            auto target = output->childAt(projection.outputChannel);
+            auto target = fullOuterOutput->childAt(projection.outputChannel);
             target->setNull(row + 1, true);
           }
         } else if (!isRightJoin(joinType_)) {
@@ -1172,10 +1192,17 @@ RowVectorPtr MergeJoin::applyFilter(RowVectorPtr& output) {
 
   if (numPassed == numRows) {
     // All rows passed.
+    if (fullOuterOutput) {
+      return fullOuterOutput;
+    }
     return output;
   }
 
   // Some, but not all rows passed.
+  if (fullOuterOutput) {
+    return wrap(numPassed, indices, fullOuterOutput);
+  }
+
   return wrap(numPassed, indices, output);
 }
 
