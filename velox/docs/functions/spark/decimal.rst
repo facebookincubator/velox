@@ -9,7 +9,8 @@ https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_P
 
 https://msdn.microsoft.com/en-us/library/ms190476.aspx
 
-For decimal addition, subtraction, multiplication, the precision and scale computation logic is same.
+Additionally, the computation of decimal division adapts to the allowing precision loss parameter,
+while the decimal addition, subtraction, and multiplication do not.
 
 Addition and Subtraction
 ------------------------
@@ -36,7 +37,8 @@ When allowing precision loss:
     p = p1 - s1 + s2 + max(6, s1 + p2 + 1)
     s = max(6, s1 + p2 + 1)
 
-When not allowing precision loss:
+When denying precision loss:
+
 ::
 
     wholeDigits = min(38, p1 - s1 + s2);
@@ -47,8 +49,8 @@ When not allowing precision loss:
 Decimal Precision and Scale Adjustment
 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-For above arithmetic operators, when the precision of result exceeds 38,
-caps p at 38 and reduces the scale when allowing precision loss, in order to prevent the truncation of
+For above arithmetic operators, when the precision of result exceeds 38 and precision loss is allowed,
+caps p at 38 and reduces the scale, in order to prevent the truncation of
 the integer part of the decimals. Below formula illustrates how the result
 precision and scale are adjusted.
 
@@ -57,14 +59,15 @@ precision and scale are adjusted.
     precision = 38
     scale = max(38 - (p - s), min(s, 6))
 
-Caps p at 38 and the scale should not be reduced when not allowing precision loss.
-For decimal addition, subtraction, multiplication, the adjustment logic is same.
+When precision loss is denied, caps p at 38, and the scale should not be reduced.
+The below formula shows how the precision and scale are adjusted for decimal addition, subtraction, and multiplication..
 
 ::
+
     precision = 38
     scale = min(38, s)
 
-But for decimal division, it is different as following:
+Decimal division uses a different formula, which is as follows:
 
 ::
 
