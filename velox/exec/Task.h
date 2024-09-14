@@ -1030,6 +1030,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // trace enabled.
   void maybeInitTrace();
 
+  // Create a 'OperatorTraceDeleter' to delete all trace data if the query
+  // trace delete enabled.
+  void maybeDeleteTrace();
+
   std::shared_ptr<Driver> getDriver(uint32_t driverId) const;
 
   // Universally unique identifier of the task. Used to identify the task when

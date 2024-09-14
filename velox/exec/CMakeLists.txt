@@ -57,6 +57,7 @@ velox_add_library(
   OrderBy.cpp
   OutputBuffer.cpp
   OutputBufferManager.cpp
+  OperatorTraceDeleter.cpp
   OperatorTraceReader.cpp
   OperatorTraceScan.cpp
   OperatorTraceWriter.cpp

@@ -28,6 +28,7 @@
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
+#include "velox/exec/OperatorTraceDeleter.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
@@ -311,6 +312,7 @@ Task::Task(
   }
 
   maybeInitTrace();
+  maybeDeleteTrace();
 }
 
 Task::~Task() {
@@ -3091,6 +3093,20 @@ void Task::maybeInitTrace() {
   const auto metadataWriter = std::make_unique<trace::TaskTraceMetadataWriter>(
       traceConfig_->queryTraceDir, memory::traceMemoryPool());
   metadataWriter->write(queryCtx_, planFragment_.planNode);
+}
+
+void Task::maybeDeleteTrace() {
+  const auto& queryConfig = queryCtx_->queryConfig();
+  if (!queryConfig.queryTraceDeleteEnabled()) {
+    return;
+  }
+
+  VELOX_USER_CHECK(
+      !queryConfig.queryTraceDir().empty(),
+      "Query trace delete enabled but the trace dir is not set");
+
+  const auto deleter = trace::OperatorTraceDeleter::instance();
+  deleter->asyncDeleteDir(queryConfig.queryTraceDir());
 }
 
 void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {

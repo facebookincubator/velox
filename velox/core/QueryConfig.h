@@ -413,6 +413,10 @@ class QueryConfig {
   static constexpr const char* kOpTraceDirectoryCreateConfig =
       "op_trace_directory_create_config";
 
+  /// Enable delete all query tracing data flag.
+  static constexpr const char* kQueryTraceDeleteEnabled =
+      "query_trace_delete_enabled";
+
   /// Disable optimization in expression evaluation to peel common dictionary
   /// layer from inputs.
   static constexpr const char* kDebugDisableExpressionWithPeeling =
@@ -776,6 +780,10 @@ class QueryConfig {
 
   std::string opTraceDirectoryCreateConfig() const {
     return get<std::string>(kOpTraceDirectoryCreateConfig, "");
+  }
+
+  bool queryTraceDeleteEnabled() const {
+    return get<bool>(kQueryTraceDeleteEnabled, false);
   }
 
   bool prestoArrayAggIgnoreNulls() const {
