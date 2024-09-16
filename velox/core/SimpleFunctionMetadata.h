@@ -24,6 +24,7 @@
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/core/Metaprogramming.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/expression/ComplexViewTypes.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/SimpleFunctionApi.h"
@@ -894,7 +895,7 @@ class UDFHolder {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
-      const typename exec_resolver<TArgs>::in_type*... constantArgs) {
+      const facebook::velox::exec::OptionalAccessor<typename exec_resolver<TArgs>::in_type>*... constantArgs) {
     if constexpr (udf_has_initialize) {
       return instance_.initialize(inputTypes, config, constantArgs...);
     }
