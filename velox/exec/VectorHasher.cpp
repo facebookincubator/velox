@@ -62,10 +62,17 @@ uint64_t hashOne(DecodedVector& decoded, vector_size_t index) {
   }
   // Inlined for scalars.
   using T = typename KindToFlatVector<Kind>::HashRowType;
+  T value = decoded.valueAt<T>(index);
+
+  if (decoded.base()->type()->providesCustomComparison()) {
+    return static_cast<const TypeBase<Kind>*>(decoded.base()->type().get())
+        ->hash(&value);
+  }
+
   if constexpr (std::is_floating_point_v<T>) {
-    return util::floating_point::NaNAwareHash<T>()(decoded.valueAt<T>(index));
+    return util::floating_point::NaNAwareHash<T>()(value);
   } else {
-    return folly::hasher<T>()(decoded.valueAt<T>(index));
+    return folly::hasher<T>()(value);
   }
 }
 } // namespace

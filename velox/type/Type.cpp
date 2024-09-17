@@ -231,7 +231,9 @@ const TypePtr& ArrayType::childAt(uint32_t idx) const {
 }
 
 ArrayType::ArrayType(TypePtr child)
-    : child_{std::move(child)}, parameters_{{TypeParameter(child_)}} {}
+    : TypeBase<TypeKind::ARRAY>(false),
+      child_{std::move(child)},
+      parameters_{{TypeParameter(child_)}} {}
 
 bool ArrayType::equivalent(const Type& other) const {
   if (&other == this) {
@@ -279,7 +281,8 @@ const char* MapType::nameOf(uint32_t idx) const {
 }
 
 MapType::MapType(TypePtr keyType, TypePtr valueType)
-    : keyType_{std::move(keyType)},
+    : TypeBase<TypeKind::MAP>(false),
+      keyType_{std::move(keyType)},
       valueType_{std::move(valueType)},
       parameters_{{TypeParameter(keyType_), TypeParameter(valueType_)}} {}
 
@@ -340,7 +343,9 @@ std::string namesAndTypesToString(
 } // namespace
 
 RowType::RowType(std::vector<std::string>&& names, std::vector<TypePtr>&& types)
-    : names_{std::move(names)}, children_{std::move(types)} {
+    : TypeBase<TypeKind::ROW>(false),
+      names_{std::move(names)},
+      children_{std::move(types)} {
   VELOX_CHECK_EQ(
       names_.size(),
       children_.size(),
@@ -572,7 +577,8 @@ bool MapType::equivalent(const Type& other) const {
 FunctionType::FunctionType(
     std::vector<std::shared_ptr<const Type>>&& argumentTypes,
     std::shared_ptr<const Type> returnType)
-    : children_(allChildren(std::move(argumentTypes), returnType)),
+    : TypeBase<TypeKind::FUNCTION>(false),
+      children_(allChildren(std::move(argumentTypes), returnType)),
       parameters_{createTypeParameters(children_)} {}
 
 bool FunctionType::equivalent(const Type& other) const {
@@ -616,8 +622,11 @@ folly::dynamic FunctionType::serialize() const {
   return obj;
 }
 
-OpaqueType::OpaqueType(const std::type_index& typeIndex)
-    : typeIndex_(typeIndex) {}
+OpaqueType::OpaqueType(
+    const std::type_index& typeIndex,
+    bool providesCustomComparison)
+    : TypeBase<TypeKind::OPAQUE>(providesCustomComparison),
+      typeIndex_(typeIndex) {}
 
 bool OpaqueType::equivalent(const Type& other) const {
   if (&other == this) {

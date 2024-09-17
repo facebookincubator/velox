@@ -160,7 +160,7 @@ class SimpleVector : public BaseVector {
     auto simpleVector = reinterpret_cast<const SimpleVector<T>*>(other);
     auto thisValue = valueAt(index);
     auto otherValue = simpleVector->valueAt(otherIndex);
-    auto result = comparePrimitiveAsc(thisValue, otherValue);
+    auto result = comparePrimitiveAsc(this->type_.get(), thisValue, otherValue);
     return {flags.ascending ? result : result * -1};
   }
 
@@ -168,17 +168,35 @@ class SimpleVector : public BaseVector {
     BaseVector::validate(options);
   }
 
+  template <TypeKind Kind>
+  uint64_t hashValueAt(T value) const {
+    if constexpr (!std::is_same<T, typename TypeTraits<Kind>::NativeType>()) {
+      VELOX_UNSUPPORTED(
+          "Cannot apply custom comparisons when the value type of the Vector {} does not match the NativeType associated with the Type of the Vector {}",
+          typeid(typename TypeTraits<Kind>::NativeType).name(),
+          typeid(T).name())
+    } else {
+      return static_cast<const TypeBase<Kind>*>(type_.get())->hash(&value);
+    }
+  }
+
   /**
    * @return the hash of the value at the given index in this vector
    */
   uint64_t hashValueAt(vector_size_t index) const override {
+    if (isNullAt(index)) {
+      return BaseVector::kNullHash;
+    }
+
+    if (type_->providesCustomComparison()) {
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          hashValueAt, type_->kind(), valueAt(index));
+    }
+
     if constexpr (std::is_floating_point_v<T>) {
-      return isNullAt(index)
-          ? BaseVector::kNullHash
-          : util::floating_point::NaNAwareHash<T>{}(valueAt(index));
+      return util::floating_point::NaNAwareHash<T>{}(valueAt(index));
     } else {
-      return isNullAt(index) ? BaseVector::kNullHash
-                             : folly::hasher<T>{}(valueAt(index));
+      return folly::hasher<T>{}(valueAt(index));
     }
   }
 
@@ -354,20 +372,37 @@ class SimpleVector : public BaseVector {
     return asciiInfo;
   }
 
-  FOLLY_ALWAYS_INLINE static int comparePrimitiveAsc(
-      const T& left,
-      const T& right) {
-    if constexpr (std::is_floating_point<T>::value) {
-      bool isLeftNan = std::isnan(left);
-      bool isRightNan = std::isnan(right);
-      if (isLeftNan) {
-        return isRightNan ? 0 : 1;
-      }
-      if (isRightNan) {
-        return -1;
-      }
+  template <TypeKind Kind>
+  static int
+  comparePrimitiveAsc(const Type* type, const T& left, const T& right) {
+    if constexpr (!std::is_same<T, typename TypeTraits<Kind>::NativeType>()) {
+      VELOX_UNSUPPORTED(
+          "Cannot apply custom comparisons when the value type of the Vector {} does not match the NativeType associated with the Type of the Vector {}",
+          typeid(typename TypeTraits<Kind>::NativeType).name(),
+          typeid(T).name())
+    } else {
+      return static_cast<const TypeBase<Kind>*>(type)->compare(&left, &right);
     }
-    return left < right ? -1 : left == right ? 0 : 1;
+  }
+
+  FOLLY_ALWAYS_INLINE static int
+  comparePrimitiveAsc(const Type* type, const T& left, const T& right) {
+    if (type->providesCustomComparison()) {
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          comparePrimitiveAsc, type->kind(), type, left, right);
+    } else {
+      if constexpr (std::is_floating_point<T>::value) {
+        bool isLeftNan = std::isnan(left);
+        bool isRightNan = std::isnan(right);
+        if (isLeftNan) {
+          return isRightNan ? 0 : 1;
+        }
+        if (isRightNan) {
+          return -1;
+        }
+      }
+      return left < right ? -1 : left == right ? 0 : 1;
+    }
   }
 
  protected:

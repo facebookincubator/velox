@@ -897,10 +897,18 @@ void RowContainer::hashTyped(
           Kind == TypeKind::MAP) {
         auto in = prepareRead(row, offset);
         hash = ContainerRowSerde::hash(*in, type);
-      } else if constexpr (std::is_floating_point_v<T>) {
-        hash = util::floating_point::NaNAwareHash<T>()(valueAt<T>(row, offset));
       } else {
-        hash = folly::hasher<T>()(valueAt<T>(row, offset));
+        if (type->providesCustomComparison()) {
+          T value = valueAt<T>(row, offset);
+          hash = static_cast<const TypeBase<Kind>*>(type)->hash(&value);
+        } else {
+          if constexpr (std::is_floating_point_v<T>) {
+            hash = util::floating_point::NaNAwareHash<T>()(
+                valueAt<T>(row, offset));
+          } else {
+            hash = folly::hasher<T>()(valueAt<T>(row, offset));
+          }
+        }
       }
       result[i] = mix ? bits::hashMix(result[i], hash) : hash;
     }

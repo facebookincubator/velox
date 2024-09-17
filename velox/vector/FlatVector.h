@@ -326,7 +326,8 @@ class FlatVector final : public SimpleVector<T> {
 
     auto thisValue = valueAtFast(index);
     auto otherValue = other->valueAtFast(otherIndex);
-    auto result = SimpleVector<T>::comparePrimitiveAsc(thisValue, otherValue);
+    auto result = SimpleVector<T>::comparePrimitiveAsc(
+        this->type_.get(), thisValue, otherValue);
     return flags.ascending ? result : result * -1;
   }
 
@@ -335,7 +336,8 @@ class FlatVector final : public SimpleVector<T> {
     auto compareNonNull = [&](vector_size_t left, vector_size_t right) {
       auto leftValue = valueAtFast(left);
       auto rightValue = valueAtFast(right);
-      auto result = SimpleVector<T>::comparePrimitiveAsc(leftValue, rightValue);
+      auto result = SimpleVector<T>::comparePrimitiveAsc(
+          this->type_.get(), leftValue, rightValue);
       return (flags.ascending ? result : result * -1) < 0;
     };
 
@@ -365,7 +367,8 @@ class FlatVector final : public SimpleVector<T> {
     auto compareNonNull = [&](vector_size_t left, vector_size_t right) {
       auto leftValue = valueAtFast(mapping[left]);
       auto rightValue = valueAtFast(mapping[right]);
-      auto result = SimpleVector<T>::comparePrimitiveAsc(leftValue, rightValue);
+      auto result = SimpleVector<T>::comparePrimitiveAsc(
+          this->type_.get(), leftValue, rightValue);
       return (flags.ascending ? result : result * -1) < 0;
     };
 

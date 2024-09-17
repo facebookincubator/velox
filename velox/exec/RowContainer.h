@@ -1106,7 +1106,9 @@ class RowContainer {
 
     using T = typename KindToFlatVector<Kind>::HashRowType;
     return SimpleVector<T>::comparePrimitiveAsc(
-               decoded.valueAt<T>(index), valueAt<T>(row, offset)) == 0;
+               decoded.base()->type().get(),
+               decoded.valueAt<T>(index),
+               valueAt<T>(row, offset)) == 0;
   }
 
   template <TypeKind Kind>
@@ -1137,7 +1139,8 @@ class RowContainer {
     }
     auto left = valueAt<T>(row, column.offset());
     auto right = decoded.valueAt<T>(index);
-    auto result = SimpleVector<T>::comparePrimitiveAsc(left, right);
+    auto result = SimpleVector<T>::comparePrimitiveAsc(
+        decoded.base()->type().get(), left, right);
     return flags.ascending ? result : result * -1;
   }
 
@@ -1178,7 +1181,8 @@ class RowContainer {
 
     auto leftValue = valueAt<T>(left, leftOffset);
     auto rightValue = valueAt<T>(right, rightOffset);
-    auto result = SimpleVector<T>::comparePrimitiveAsc(leftValue, rightValue);
+    auto result =
+        SimpleVector<T>::comparePrimitiveAsc(type, leftValue, rightValue);
     return flags.ascending ? result : result * -1;
   }
 

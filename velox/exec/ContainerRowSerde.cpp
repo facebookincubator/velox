@@ -365,7 +365,8 @@ std::optional<int32_t> compare(
   using T = typename TypeTraits<Kind>::NativeType;
   auto rightValue = right.asUnchecked<SimpleVector<T>>()->valueAt(index);
   auto leftValue = left.read<T>();
-  auto result = SimpleVector<T>::comparePrimitiveAsc(leftValue, rightValue);
+  auto result = SimpleVector<T>::comparePrimitiveAsc(
+      right.type().get(), leftValue, rightValue);
   return flags.ascending ? result : result * -1;
 }
 
@@ -592,12 +593,13 @@ template <TypeKind Kind>
 std::optional<int32_t> compare(
     ByteInputStream& left,
     ByteInputStream& right,
-    const Type* /*type*/,
+    const Type* type,
     CompareFlags flags) {
   using T = typename TypeTraits<Kind>::NativeType;
   T leftValue = left.read<T>();
   T rightValue = right.read<T>();
-  auto result = SimpleVector<T>::comparePrimitiveAsc(leftValue, rightValue);
+  auto result =
+      SimpleVector<T>::comparePrimitiveAsc(type, leftValue, rightValue);
   return flags.ascending ? result : result * -1;
 }
 
@@ -727,12 +729,19 @@ std::optional<int32_t> compareSwitch(
 uint64_t hashSwitch(ByteInputStream& stream, const Type* type);
 
 template <TypeKind Kind>
-uint64_t hashOne(ByteInputStream& stream, const Type* /*type*/) {
+uint64_t hashOne(ByteInputStream& stream, const Type* type) {
   using T = typename TypeTraits<Kind>::NativeType;
+
+  T value = stream.read<T>();
+
+  if (type->providesCustomComparison()) {
+    return static_cast<const TypeBase<Kind>*>(type)->hash(&value);
+  }
+
   if constexpr (std::is_floating_point_v<T>) {
-    return util::floating_point::NaNAwareHash<T>()(stream.read<T>());
+    return util::floating_point::NaNAwareHash<T>()(value);
   } else {
-    return folly::hasher<T>()(stream.read<T>());
+    return folly::hasher<T>()(value);
   }
 }
 
