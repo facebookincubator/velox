@@ -5078,3 +5078,37 @@ DEBUG_ONLY_TEST_F(TableScanTest, cancellationToken) {
   }
   queryThread.join();
 }
+
+TEST_F(TableScanTest, rowNumberInRemainingFilter) {
+  constexpr int kSize = 100;
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>(kSize, folly::identity),
+  });
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector});
+  auto outputType = ROW({"c1"}, {BIGINT()});
+  auto schema = ROW({"c1", "r1"}, {BIGINT(), BIGINT()});
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(outputType)
+                  .dataColumns(schema)
+                  .assignments({
+                      {"c1", makeColumnHandle("c1", BIGINT(), {})},
+                      {"r1",
+                       std::make_shared<HiveColumnHandle>(
+                           "r1",
+                           HiveColumnHandle::ColumnType::kRowIndex,
+                           BIGINT(),
+                           BIGINT())},
+                  })
+                  .remainingFilter("r1 % 2 == 0")
+                  .endTableScan()
+                  .planNode();
+  auto expected = makeRowVector(
+      {"c1"}, {makeFlatVector<int64_t>(kSize / 2, [](vector_size_t row) {
+        return row * 2;
+      })});
+  AssertQueryBuilder(plan)
+      .split(makeHiveConnectorSplit(file->getPath()))
+      .assertResults(expected);
+}
