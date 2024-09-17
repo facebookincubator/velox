@@ -48,6 +48,9 @@ endif()
 if(DEFINED ENV{INSTALL_PREFIX})
   message(STATUS "Dependency install directory set to: $ENV{INSTALL_PREFIX}")
   list(APPEND CMAKE_PREFIX_PATH "$ENV{INSTALL_PREFIX}")
+  # Allow installed package headers to be picked up before brew/system package
+  # headers
+  include_directories(BEFORE "$ENV{INSTALL_PREFIX}/include")
 endif()
 
 list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
@@ -417,10 +420,6 @@ endif()
 
 set_source(fmt)
 resolve_dependency(fmt 9.0.0)
-get_target_property(fmt_INCLUDE_DIRS fmt::fmt INTERFACE_INCLUDE_DIRECTORIES)
-message(STATUS "FMT header path: ${fmt_INCLUDE_DIRS}")
-# Prevent brew fmt headers from taking precedence.
-include_directories(BEFORE ${fmt_INCLUDE_DIRS})
 
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   # DWIO needs all sorts of stream compression libraries.
