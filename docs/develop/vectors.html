@@ -339,8 +339,9 @@ ArrayVector, MapVector and RowVector.</p>
 <section id="arrayvector">
 <h3>ArrayVector<a class="headerlink" href="#arrayvector" title="Link to this heading">¶</a></h3>
 <p>ArrayVector stores values of type ARRAY. In addition to nulls buffer, it
-contains offsets and sizes buffers and an elements vector. Offsets and sizes
-are 32-bit integers.</p>
+contains offsets and sizes buffers and an elements vector. Offsets and sizes are
+32-bit integers. The non-null non-empty ranges formed by offsets and sizes in a
+vector is not allowed to overlap with each other.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">offsets_</span><span class="p">;</span>
 <span class="n">BufferPtr</span><span class="w"> </span><span class="n">sizes_</span><span class="p">;</span>
 <span class="n">VectorPtr</span><span class="w"> </span><span class="n">elements_</span><span class="p">;</span>
@@ -380,8 +381,9 @@ null elements. Null array and array of all null elements are not the same.</p>
 <section id="mapvector">
 <h3>MapVector<a class="headerlink" href="#mapvector" title="Link to this heading">¶</a></h3>
 <p>MapVector stores values of type MAP. In addition to nulls buffer, it contains
-offsets and sizes buffers, keys and values vectors. Offsets and sizes are
-32-bit integers.</p>
+offsets and sizes buffers, keys and values vectors. Offsets and sizes are 32-bit
+integers. The non-null non-empty ranges formed by offsets and sizes in a vector
+is not allowed to overlap with each other.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">offsets_</span><span class="p">;</span>
 <span class="n">BufferPtr</span><span class="w"> </span><span class="n">sizes_</span><span class="p">;</span>
 <span class="n">VectorPtr</span><span class="w"> </span><span class="n">keys_</span><span class="p">;</span>
