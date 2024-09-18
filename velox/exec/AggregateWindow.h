@@ -15,9 +15,12 @@
  */
 #pragma once
 #include <string>
+#include "velox/exec/Aggregate.h"
 
 namespace facebook::velox::exec {
 
-void registerAggregateWindowFunction(const std::string& name);
+void registerAggregateWindowFunction(
+    const std::string& name,
+    const AggregateFunctionMetadata& metadata);
 
 } // namespace facebook::velox::exec
