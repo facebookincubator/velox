@@ -387,12 +387,13 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
   for (int i = 0; i < rowType->size(); ++i) {
     auto& name = rowType->nameOf(i);
     auto& type = rowType->childAt(i);
-    if (isRowIndexColumn(name, rowIndexColumn)) {
-      VELOX_CHECK(type->isBigint());
-    }
     auto it = outputSubfields.find(name);
     if (it == outputSubfields.end()) {
       auto* fieldSpec = spec->addFieldRecursively(name, *type, i);
+      if (isRowIndexColumn(name, rowIndexColumn)) {
+        VELOX_CHECK(type->isBigint());
+        fieldSpec->setExplicitRowNumber(true);
+      }
       processFieldSpec(dataColumns, type, *fieldSpec);
       filterSubfields.erase(name);
       continue;

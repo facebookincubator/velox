@@ -135,8 +135,7 @@ class SplitReader {
   /// This function will be used to update the scanSpec for these columns.
   virtual std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
-      const std::shared_ptr<const velox::RowType>& tableSchema,
-      const std::shared_ptr<HiveColumnHandle>& rowIndexColumn);
+      const std::shared_ptr<const velox::RowType>& tableSchema);
 
   void setRowIndexColumn(
       const std::shared_ptr<HiveColumnHandle>& rowIndexColumn,
