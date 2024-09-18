@@ -28,17 +28,17 @@ namespace facebook::velox::encoding {
 /// Padding character used in encoding.
 const static char kPadding = '=';
 
-/// Checks if there is padding in encoded data.
-static inline bool isPadded(const char* data, size_t len) {
-  return (len > 0 && data[len - 1] == kPadding) ? true : false;
+// Checks if there is padding in encoded input.
+static inline bool isPadded(std::string_view input, size_t inputSize) {
+  return (inputSize > 0 && input[inputSize - 1] == kPadding);
 }
 
-/// Counts the number of padding characters in encoded data.
-static inline size_t numPadding(const char* src, size_t len) {
+// Counts the number of padding characters in encoded input.
+static inline size_t numPadding(std::string_view input, size_t inputSize) {
   size_t numPadding{0};
-  while (len > 0 && src[len - 1] == kPadding) {
+  while (inputSize > 0 && input[inputSize - 1] == kPadding) {
     numPadding++;
-    len--;
+    inputSize--;
   }
   return numPadding;
 }
