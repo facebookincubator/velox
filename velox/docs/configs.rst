@@ -700,7 +700,7 @@ Spark-specific Configuration
    * - spark.legacy_time_parser_policy
      - bool
      - false
-     - If true, simple date formatter is used for time formatting and parsing. False by default.
+     - If true, simple date formatter is used for time formatting and parsing. Strict date formatter is used by default.
 
 Tracing
 --------

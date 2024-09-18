@@ -26,15 +26,14 @@
 namespace facebook::velox::functions::sparksql {
 
 std::shared_ptr<DateTimeFormatter> getDateTimeFormatter(
-    const bool legacyTimeParser,
+    bool legacyTimeParser,
     const std::string_view& format,
     bool lenient) {
   if (legacyTimeParser) {
     return buildSimpleDateTimeFormatter(format, lenient);
-  } else {
-    return buildJodaDateTimeFormatter(
-        std::string_view(format.data(), format.size()));
   }
+  return buildJodaDateTimeFormatter(
+      std::string_view(format.data(), format.size()));
 }
 
 template <typename T>
