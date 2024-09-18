@@ -65,11 +65,12 @@ FOLLY_ALWAYS_INLINE std::string prepareReplacement(
 
   // If newReplacement contains a reference to a
   // named capturing group ${name}, replace the name with its index.
-  static const RE2 kExtractRegex(R"(\${([^}]*)})");
+  static constexpr const char* kNamedGroup = R"(\${([^}]*)})";
+  static const RE2 kExtractRegex(kNamedGroup);
   VELOX_DCHECK(
       kExtractRegex.ok(),
       "Invalid regular expression {}: {}.",
-      R"(\${([^}]*)})",
+      kNamedGroup,
       kExtractRegex.error());
   re2::StringPiece groupName[2];
   while (kExtractRegex.Match(
@@ -93,22 +94,24 @@ FOLLY_ALWAYS_INLINE std::string prepareReplacement(
   }
 
   // Convert references to numbered capturing groups from $g to \g.
-  static const RE2 kConvertRegex(R"(\$(\d+))");
+  static constexpr const char* kIndexedGroup = R"(\$(\d+))";
+  static const RE2 kConvertRegex(kIndexedGroup);
   VELOX_DCHECK(
       kConvertRegex.ok(),
       "Invalid regular expression {}: {}.",
-      R"(\$(\d+))",
+      kIndexedGroup,
       kConvertRegex.error());
   RE2::GlobalReplace(&newReplacement, kConvertRegex, R"(\\\1)");
 
   // re2 allow '\' followed by anything other than a digit or '\',
   // while java.util.regex will ignore '\' in replacement. We should unescape
   // this character.
-  static const RE2 kUnescapeRegex(R"(\\([^0-9\\]))");
+  static constexpr const char* kUnescape = R"(\\([^0-9\\]))";
+  static const RE2 kUnescapeRegex(kUnescape);
   VELOX_DCHECK(
       kUnescapeRegex.ok(),
       "Invalid regular expression {}: {}.",
-      R"(\\([^0-9\\]))",
+      kUnescape,
       kUnescapeRegex.error());
   RE2::GlobalReplace(&newReplacement, kUnescapeRegex, R"(\1)");
 
