@@ -344,11 +344,12 @@ template <typename T>
 struct ToBase32Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
-      const arg_type<Varbinary>& input) {
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varchar>& result, const arg_type<Varbinary>& input) {
+    std::string_view inputString(
+        reinterpret_cast<const char*>(input.data()), input.size());
     result.resize(encoding::Base32::calculateEncodedSize(input.size()));
-    encoding::Base32::encode(input.data(), input.size(), result.data());
+    return encoding::Base32::encode(inputString, result.data());
   }
 };
 

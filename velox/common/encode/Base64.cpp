@@ -85,15 +85,6 @@ constexpr const Base64::ReverseIndex kBase64UrlReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255};
 
-// Validate the character in charset with ReverseIndex table
-constexpr bool checkForwardIndex(
-    uint8_t idx,
-    const Base64::Charset& charset,
-    const Base64::ReverseIndex& reverseIndex) {
-  return (reverseIndex[static_cast<uint8_t>(charset[idx])] == idx) &&
-      (idx > 0 ? checkForwardIndex(idx - 1, charset, reverseIndex) : true);
-}
-
 // Verify that for every entry in kBase64Charset, the corresponding entry
 // in kBase64ReverseIndexTable is correct.
 static_assert(
@@ -111,27 +102,6 @@ static_assert(
         kBase64UrlCharset,
         kBase64UrlReverseIndexTable),
     "kBase64UrlCharset has incorrect entries");
-
-// Searches for a character within a charset up to a certain index.
-constexpr bool findCharacterInCharset(
-    const Base64::Charset& charset,
-    uint8_t index,
-    const char character) {
-  return index < charset.size() &&
-      ((charset[index] == character) ||
-       findCharacterInCharset(charset, index + 1, character));
-}
-
-// Checks the consistency of a reverse index mapping for a given character set.
-constexpr bool checkReverseIndex(
-    uint8_t index,
-    const Base64::Charset& charset,
-    const Base64::ReverseIndex& reverseIndex) {
-  return (reverseIndex[index] == 255
-              ? !findCharacterInCharset(charset, 0, static_cast<char>(index))
-              : (charset[reverseIndex[index]] == index)) &&
-      (index > 0 ? checkReverseIndex(index - 1, charset, reverseIndex) : true);
-}
 
 // Verify that for every entry in kBase64ReverseIndexTable, the corresponding
 // entry in kBase64Charset is correct.

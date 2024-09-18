@@ -29,12 +29,12 @@ constexpr static int kBinaryBlockByteSize = 5;
 // Size of an encoded block in bytes (8 bytes = 40 bits)
 constexpr static int kEncodedBlockByteSize = 8;
 
-constexpr Charset kBase32Charset = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
-                                    'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
-                                    'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
-                                    'Y', 'Z', '2', '3', '4', '5', '6', '7'};
+constexpr Base32::Charset kBase32Charset = {
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
+    'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V',
+    'W', 'X', 'Y', 'Z', '2', '3', '4', '5', '6', '7'};
 
-constexpr ReverseIndex kBase32ReverseIndexTable = {
+constexpr Base32::ReverseIndex kBase32ReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -54,21 +54,20 @@ constexpr ReverseIndex kBase32ReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255};
 
-/// Verify that for each 32 entries in kBase32Charset, the corresponding entry
-/// in kBase32ReverseIndexTable is correct.
+// Verify that for every entry in kBase32Charset, the corresponding entry
+// in kBase32everseIndexTable is correct.
 static_assert(
     checkForwardIndex(
-        sizeof(kBase32Charset) / 2 - 1,
+        sizeof(kBase32Charset) - 1,
         kBase32Charset,
         kBase32ReverseIndexTable),
     "kBase32Charset has incorrect entries");
 
-/// Verify that for every entry in kBase32ReverseIndexTable, the corresponding
-/// entry in kBase32Charset is correct.
+// Verify that for every entry in kBase32ReverseIndexTable, the corresponding
+// entry in kBase32Charset is correct.
 static_assert(
     checkReverseIndex(
         sizeof(kBase32ReverseIndexTable) - 1,
-        kBase,
         kBase32Charset,
         kBase32ReverseIndexTable),
     "kBase32ReverseIndexTable has incorrect entries.");
@@ -89,97 +88,95 @@ size_t Base32::calculateEncodedSize(size_t size, bool withPadding) {
 }
 
 // static
-void Base32::encode(const char* data, size_t len, char* output) {
-  encodeImpl(folly::StringPiece(data, len), kBase32Charset, true, output);
+Status Base32::encode(std::string_view input, char* output) {
+  return encodeImpl(input, kBase32Charset, true, output);
 }
 
+// static
 template <class T>
-/* static */ void Base32::encodeImpl(
-    const T& data,
-    const Charset& charset,
-    bool include_pad,
-    char* out) {
-  auto len = data.size();
-  if (len == 0) {
-    return;
+Status Base32::encodeImpl(
+    const T& input,
+    const Base32::Charset& charset,
+    bool includePadding,
+    char* output) {
+  auto inputSize = input.size();
+  if (inputSize == 0) {
+    return Status::OK();
   }
 
-  auto wp = out;
-  auto it = data.begin();
+  auto outputPtr = output;
+  auto dataIterator = input.begin();
 
-  auto append_padding = [include_pad](char* str, int n) -> char* {
-    if (include_pad) {
-      for (int i = 0; i < n; ++i) {
+  auto appendPadding = [includePadding](char* str, int numPadding) -> char* {
+    if (includePadding) {
+      for (int i = 0; i < numPadding; ++i) {
         *str++ = kPadding;
       }
     }
     return str;
   };
 
-  /// For each group of 5 bytes (40 bits) in the input, split that into
-  /// 8 groups of 5 bits and encode that using the supplied charset lookup.
-  for (; len > 4; len -= 5) {
-    uint64_t curr = uint64_t(*it++) << 32;
-    curr |= uint8_t(*it++) << 24;
-    curr |= uint8_t(*it++) << 16;
-    curr |= uint8_t(*it++) << 8;
-    curr |= uint8_t(*it++);
+  // Process 5-byte (40-bit) blocks, split into 8 groups of 5 bits
+  for (; inputSize > 4; inputSize -= 5) {
+    uint64_t currentBlock = uint64_t(*dataIterator++) << 32;
+    currentBlock |= uint8_t(*dataIterator++) << 24;
+    currentBlock |= uint8_t(*dataIterator++) << 16;
+    currentBlock |= uint8_t(*dataIterator++) << 8;
+    currentBlock |= uint8_t(*dataIterator++);
 
-    *wp++ = charset[(curr >> 35) & 0x1f];
-    *wp++ = charset[(curr >> 30) & 0x1f];
-    *wp++ = charset[(curr >> 25) & 0x1f];
-    *wp++ = charset[(curr >> 20) & 0x1f];
-    *wp++ = charset[(curr >> 15) & 0x1f];
-    *wp++ = charset[(curr >> 10) & 0x1f];
-    *wp++ = charset[(curr >> 5) & 0x1f];
-    *wp++ = charset[curr & 0x1f];
+    *outputPtr++ = charset[(currentBlock >> 35) & 0x1f];
+    *outputPtr++ = charset[(currentBlock >> 30) & 0x1f];
+    *outputPtr++ = charset[(currentBlock >> 25) & 0x1f];
+    *outputPtr++ = charset[(currentBlock >> 20) & 0x1f];
+    *outputPtr++ = charset[(currentBlock >> 15) & 0x1f];
+    *outputPtr++ = charset[(currentBlock >> 10) & 0x1f];
+    *outputPtr++ = charset[(currentBlock >> 5) & 0x1f];
+    *outputPtr++ = charset[currentBlock & 0x1f];
   }
 
-  if (len > 0) {
-    /// We have either 1 to 4 input bytes left.  Encode this similar to the
-    /// above (assuming 0 for all other bytes).  Optionally append the '='
-    /// character if it is requested.
-    uint64_t curr = uint64_t(*it++) << 32;
-    *wp++ = charset[(curr >> 35) & 0x1f];
+  // Handle remaining bytes (1 to 4 bytes)
+  if (inputSize > 0) {
+    uint64_t currentBlock = uint64_t(*dataIterator++) << 32;
+    *outputPtr++ = charset[(currentBlock >> 35) & 0x1f];
 
-    if (len > 3) {
-      curr |= uint8_t(*it++) << 24;
-      curr |= uint8_t(*it++) << 16;
-      curr |= uint8_t(*it++) << 8;
+    if (inputSize > 3) {
+      currentBlock |= uint8_t(*dataIterator++) << 24;
+      currentBlock |= uint8_t(*dataIterator++) << 16;
+      currentBlock |= uint8_t(*dataIterator++) << 8;
 
-      *wp++ = charset[(curr >> 30) & 0x1f];
-      *wp++ = charset[(curr >> 25) & 0x1f];
-      *wp++ = charset[(curr >> 20) & 0x1f];
-      *wp++ = charset[(curr >> 15) & 0x1f];
-      *wp++ = charset[(curr >> 10) & 0x1f];
-      *wp++ = charset[(curr >> 5) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 30) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 25) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 20) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 15) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 10) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 5) & 0x1f];
+      appendPadding(outputPtr, 1);
 
-      append_padding(wp, 1);
-    } else if (len > 2) {
-      curr |= uint8_t(*it++) << 24;
-      curr |= uint8_t(*it++) << 16;
+    } else if (inputSize > 2) {
+      currentBlock |= uint8_t(*dataIterator++) << 24;
+      currentBlock |= uint8_t(*dataIterator++) << 16;
 
-      *wp++ = charset[(curr >> 30) & 0x1f];
-      *wp++ = charset[(curr >> 25) & 0x1f];
-      *wp++ = charset[(curr >> 20) & 0x1f];
-      *wp++ = charset[(curr >> 15) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 30) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 25) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 20) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 15) & 0x1f];
+      appendPadding(outputPtr, 3);
 
-      append_padding(wp, 3);
+    } else if (inputSize > 1) {
+      currentBlock |= uint8_t(*dataIterator++) << 24;
 
-    } else if (len > 1) {
-      curr |= uint8_t(*it) << 24;
+      *outputPtr++ = charset[(currentBlock >> 30) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 25) & 0x1f];
+      *outputPtr++ = charset[(currentBlock >> 20) & 0x1f];
+      appendPadding(outputPtr, 4);
 
-      *wp++ = charset[(curr >> 30) & 0x1f];
-      *wp++ = charset[(curr >> 25) & 0x1f];
-      *wp++ = charset[(curr >> 20) & 0x1f];
-
-      append_padding(wp, 4);
     } else {
-      *wp++ = charset[(curr >> 30) & 0x1f];
-
-      append_padding(wp, 6);
+      *outputPtr++ = charset[(currentBlock >> 30) & 0x1f];
+      appendPadding(outputPtr, 6);
     }
   }
+
+  return Status::OK();
 }
 
 } // namespace facebook::velox::encoding

@@ -23,6 +23,7 @@
 
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Status.h"
+#include "velox/common/encode/EncoderUtils.h"
 
 namespace facebook::velox::encoding {
 
@@ -111,24 +112,6 @@ class Base64 {
       size_t outputSize);
 
  private:
-  // Padding character used in encoding.
-  static const char kPadding = '=';
-
-  // Checks if there is padding in encoded input.
-  static inline bool isPadded(std::string_view input, size_t inputSize) {
-    return (inputSize > 0 && input[inputSize - 1] == kPadding);
-  }
-
-  // Counts the number of padding characters in encoded input.
-  static inline size_t numPadding(std::string_view input, size_t inputSize) {
-    size_t numPadding{0};
-    while (inputSize > 0 && input[inputSize - 1] == kPadding) {
-      numPadding++;
-      inputSize--;
-    }
-    return numPadding;
-  }
-
   // Performs a reverse lookup in the reverse index to retrieve the original
   // index of a character in the base.
   static uint8_t
@@ -154,9 +137,6 @@ class Base64 {
       char* output,
       size_t outputSize,
       const ReverseIndex& reverseIndex);
-
-  VELOX_FRIEND_TEST(Base64Test, isPadded);
-  VELOX_FRIEND_TEST(Base64Test, numPadding);
   VELOX_FRIEND_TEST(Base64Test, testDecodeImpl);
 };
 

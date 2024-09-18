@@ -15,32 +15,47 @@
  */
 #pragma once
 
-#include <exception>
-#include <map>
+#include <array>
 #include <string>
 
-#include <folly/Range.h>
+#include "velox/common/base/GTestMacros.h"
+#include "velox/common/base/Status.h"
 #include "velox/common/encode/EncoderUtils.h"
 
 namespace facebook::velox::encoding {
 
 class Base32 {
  public:
-  /// Returns encoded size for the input of the specified size.
-  static size_t calculateEncodedSize(size_t size, bool withPadding = true);
+  static const size_t kCharsetSize = 32;
+  static const size_t kReverseIndexSize = 256;
 
-  /// Encodes the specified number of characters from the 'data' and writes the
-  /// result to the 'output'. The output must have enough space, e.g. as
-  /// returned by the calculateEncodedSize().
-  static void encode(const char* data, size_t size, char* output);
+  /// Character set used for encoding purposes.
+  /// Contains specific characters that form the encoding scheme.
+  using Charset = std::array<char, kCharsetSize>;
+
+  /// Reverse lookup table for decoding purposes.
+  /// Maps each possible encoded character to its corresponding numeric value
+  /// within the encoding base.
+  using ReverseIndex = std::array<uint8_t, kReverseIndexSize>;
+
+  /// Returns encoded size for the input of the specified size.
+  static size_t calculateEncodedSize(
+      size_t inputSize,
+      bool includePadding = true);
+
+  /// Encodes the specified number of characters from the 'input' and writes the
+  /// result to the 'output'. The output must have enough space, e.g., as
+  /// returned by calculateEncodedSize().
+  static Status encode(std::string_view input, char* output);
 
  private:
+  // Encodes the specified input using the provided charset.
   template <class T>
-  static void encodeImpl(
-      const T& data,
+  static Status encodeImpl(
+      const T& input,
       const Charset& charset,
-      bool include_pad,
-      char* out);
+      bool includePadding,
+      char* output);
 };
 
 } // namespace facebook::velox::encoding
