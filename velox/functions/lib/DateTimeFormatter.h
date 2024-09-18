@@ -26,9 +26,12 @@ namespace facebook::velox::functions {
 enum class DateTimeFormatterType {
   JODA,
   MYSQL,
-  // Corresponding to java.text.SimpleDateFormat in lenient mode.
+  // Corresponding to java.text.SimpleDateFormat in lenient mode. It is used by
+  // the 'date_format', 'from_unixtime', 'unix_timestamp' and
+  // 'to_unix_timestamp' Spark functions.
   LENIENT_SIMPLE,
-  // Corresponding to java.text.SimpleDateFormat in strict(lenient=false) mode
+  // Corresponding to java.text.SimpleDateFormat in strict(lenient=false) mode.
+  // It is used by Spark 'cast date to string'.
   STRICT_SIMPLE,
   UNKNOWN
 };
