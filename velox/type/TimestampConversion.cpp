@@ -161,9 +161,8 @@ bool isValidWeekOfMonthDate(
   Expected<int64_t> expected = daysSinceEpochFromDate(year, month, 1);
   if (expected.hasError()) {
     return false;
-  } else {
-    daysSinceEpochOfFirstDayOfMonth = expected.value();
   }
+  daysSinceEpochOfFirstDayOfMonth = expected.value();
 
   // Calculates the actual number of week of month and validates if it is in the
   // valid range.
@@ -264,9 +263,8 @@ bool tryParseDateString(
     Expected<int64_t> expected = daysSinceEpochFromDate(year, 1, 1);
     if (expected.hasError()) {
       return false;
-    } else {
-      daysSinceEpoch = expected.value();
     }
+    daysSinceEpoch = expected.value();
     return validDate(daysSinceEpoch);
   }
 
@@ -300,9 +298,8 @@ bool tryParseDateString(
     Expected<int64_t> expected = daysSinceEpochFromDate(year, month, 1);
     if (expected.hasError()) {
       return false;
-    } else {
-      daysSinceEpoch = expected.value();
     }
+    daysSinceEpoch = expected.value();
     return validDate(daysSinceEpoch);
   }
 
@@ -327,9 +324,8 @@ bool tryParseDateString(
     Expected<int64_t> expected = daysSinceEpochFromDate(year, month, day);
     if (expected.hasError()) {
       return false;
-    } else {
-      daysSinceEpoch = expected.value();
     }
+    daysSinceEpoch = expected.value();
 
     if (mode == ParseMode::kPrestoCast) {
       skipSpaces(buf, len, pos);
@@ -347,9 +343,8 @@ bool tryParseDateString(
     Expected<int64_t> expected = daysSinceEpochFromDate(year, month, day);
     if (expected.hasError()) {
       return false;
-    } else {
-      daysSinceEpoch = expected.value();
     }
+    daysSinceEpoch = expected.value();
 
     if (!validDate(daysSinceEpoch)) {
       return false;
@@ -396,10 +391,9 @@ bool tryParseDateString(
   Expected<int64_t> expected = daysSinceEpochFromDate(year, month, day);
   if (expected.hasError()) {
     return false;
-  } else {
-    daysSinceEpoch = expected.value();
-    return true;
   }
+  daysSinceEpoch = expected.value();
+  return true;
 }
 
 void parseTimeSeparator(
