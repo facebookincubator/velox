@@ -8300,7 +8300,8 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
     return makeRowVector(
         {"t0", "t1"},
         {
-            makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+            makeFlatVector<int32_t>(
+                1'000, [](auto row) { return row; }, nullEvery(400)),
             makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10; }),
         });
   });
@@ -8310,7 +8311,9 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
         {"u0", "u1"},
         {
             makeFlatVector<int32_t>(
-                1'000, [](auto row) { return -100 + (row / 5); }),
+                1'000,
+                [](auto row) { return -100 + (row / 5); },
+                nullEvery(300)),
             makeFlatVector<int64_t>(
                 1'000, [](auto row) { return -1000 + (row / 5) * 10; }),
         });
@@ -8411,7 +8414,7 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
     verifyJoinOutputVectorCount(
         1, // 3 output vectors are merged to 1 vector.
         core::JoinType::kLeftSemiProject,
-        "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t");
+        "SELECT t0, t1, EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0) FROM t");
     verifyJoinOutputVectorCount(
         1, // 3 output vectors are merged to 1 vector.
         core::JoinType::kLeftSemiProject,
@@ -8420,7 +8423,7 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
     verifyJoinOutputVectorCount(
         1, // 3 output vectors are merged to 1 vector.
         core::JoinType::kLeftSemiProject, // Flip join side.
-        "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t",
+        "SELECT t0, t1, EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0) FROM t",
         false,
         true);
   }
@@ -8442,11 +8445,11 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
     verifyJoinOutputVectorCount(
         1, // 3 output vectors are merged to 1 vector.
         core::JoinType::kAnti,
-        "SELECT t0, t1, FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)");
+        "SELECT t0, t1 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)");
     verifyJoinOutputVectorCount(
         1, // 2 output vectors are merged to 1 vector.
         core::JoinType::kAnti,
-        "SELECT t0, t1, FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)",
+        "SELECT t0, t1 FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)",
         true);
   }
 }
