@@ -28,13 +28,12 @@ class AtLeastNNonNullsExpr : public SpecialForm {
       TypePtr type,
       bool trackCpuUsage,
       std::vector<ExprPtr>&& inputs,
-      bool inputsSupportFlatNoNullsFastPath,
       int n)
       : SpecialForm(
             std::move(type),
             std::move(inputs),
             AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
-            inputsSupportFlatNoNullsFastPath,
+            true,
             trackCpuUsage),
         n_(n) {}
 
@@ -49,7 +48,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
     auto activeRows = activeRowsHolder.get();
     VELOX_DCHECK_NOT_NULL(activeRows);
     auto values = flatResult->mutableValues(rows.end())->asMutable<uint64_t>();
-    // If 'n' <= 0, set result to all true.
+    // If 'n_' <= 0, set result to all true.
     if (n_ <= 0) {
       bits::orBits(values, rows.asRange().bits(), rows.begin(), rows.end());
       return;
@@ -57,7 +56,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
 
     bits::andWithNegatedBits(
         values, rows.asRange().bits(), rows.begin(), rows.end());
-    // If 'n' > inputs_.size() - 1, result should be all false.
+    // If 'n_' > inputs_.size() - 1, result should be all false.
     if (n_ > inputs_.size() - 1) {
       return;
     }
@@ -66,7 +65,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
     auto nonNullCounts =
         AlignedBuffer::allocate<int32_t>(activeRows->size(), context.pool(), 0);
     auto* rawNonNullCounts = nonNullCounts->asMutable<int32_t>();
-    for (int32_t i = 1; i < inputs_.size(); ++i) {
+    for (column_index_t i = 1; i < inputs_.size(); ++i) {
       VectorPtr input;
       inputs_[i]->eval(*activeRows, context, input);
       if (context.errors()) {
@@ -126,6 +125,7 @@ class AtLeastNNonNullsExpr : public SpecialForm {
     }
   }
 
+  // Result is true if there are at least `n_` non-null and non-NaN values.
   const int n_;
 };
 } // namespace
@@ -161,10 +161,6 @@ ExprPtr AtLeastNNonNullsCallToSpecialForm::constructSpecialForm(
       !constVector->isNullAt(0), "The first parameter should not be null.");
   const int32_t n = constVector->valueAt(0);
   return std::make_shared<AtLeastNNonNullsExpr>(
-      type,
-      trackCpuUsage,
-      std::move(compiledChildren),
-      Expr::allSupportFlatNoNullsFastPath(compiledChildren),
-      n);
+      type, trackCpuUsage, std::move(compiledChildren), n);
 }
 } // namespace facebook::velox::functions::sparksql

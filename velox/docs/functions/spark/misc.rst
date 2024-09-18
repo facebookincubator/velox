@@ -5,10 +5,12 @@ Miscellaneous Functions
 .. spark:function:: at_least_n_non_nulls(n, value1, value2, ..., valueN) -> bool
 
     Returns true if there are at least ``n`` non-null and non-NaN values, 
-    or false otherwise. If ``n <= 0``, the result is true. ::
+    or false otherwise. If ``n <= 0``, the result is true.
+    Nested nulls in complex type values are handled as non-nulls. ::
 
         SELECT at_least_n_non_nulls(2, 0, NAN, NULL);  -- false
         SELECT at_least_n_non_nulls(2, 0, 1.0, NULL);  -- true
+        SELECT at_least_n_non_nulls(2, 0, array(NULL), NULL);  -- true
 
 .. spark:function:: monotonically_increasing_id() -> bigint
 

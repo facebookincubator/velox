@@ -64,7 +64,7 @@ class AtLeastNNonNullsTest : public SparkFunctionBaseTest {
       const std::vector<VectorPtr>& input,
       const VectorPtr& expected) {
     std::vector<VectorPtr> data;
-    data.emplace_back(makeConstant<int32_t>(n, 5));
+    data.emplace_back(makeConstant<int32_t>(n, input[0]->size()));
     for (auto i = 0; i < input.size(); ++i) {
       data.emplace_back(input[i]);
     }
@@ -100,6 +100,7 @@ TEST_F(AtLeastNNonNullsTest, basic) {
 
   expected = makeFlatVector<bool>({true, true, true, true, true});
   testAtLeastNNonNulls(0, {stringInput, boolInput}, expected);
+  testAtLeastNNonNulls(-1, {stringInput, boolInput}, expected);
 
   expected = makeFlatVector<bool>({true, false, true, true, false});
   testAtLeastNNonNulls(1, {floatInput}, expected);
