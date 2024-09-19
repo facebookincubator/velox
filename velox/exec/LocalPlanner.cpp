@@ -238,11 +238,18 @@ uint32_t maxDrivers(
       if (!connectorInsertHandle->supportsMultiThreading()) {
         return 1;
       } else {
-        if (tableWrite->hasPartitioningScheme()) {
-          return queryConfig.taskPartitionedWriterCount();
-        } else {
-          return queryConfig.taskWriterCount();
+        auto writerCount = tableWrite->hasPartitioningScheme()
+            ? queryConfig.taskPartitionedWriterCount()
+            : queryConfig.taskWriterCount();
+        VELOX_CHECK_GT(
+            writerCount,
+            0,
+            "maxDrivers must be greater than 0. Plan node: {}",
+            node->toString())
+        if (writerCount == 1) {
+          return 1;
         }
+        count = std::min(writerCount, count);
       }
     } else {
       auto result = Operator::maxDrivers(node);
