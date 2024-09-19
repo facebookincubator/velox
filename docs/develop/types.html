@@ -223,6 +223,13 @@ decimal value.</p>
 the existing physical types. For example, Presto Types described below are implemented
 by extending the physical types.
 An OPAQUE type must be used when there is no physical type available to back the logical type.</p>
+<p>When extending an existing physical type, if different compare and/or hash semantics are
+needed instead of those provided by the underlying native C++ type, this can be achieved by
+doing the following:
+* Pass <cite>true</cite> for the <cite>providesCustomComparison</cite> argument in the custom type’s base class’s constructor.
+* Override the <cite>compare</cite> and <cite>hash</cite> functions inherited from the <cite>TypeBase</cite> class (you must implement both).
+Note that this is currently only supported for custom types that extend physical types that
+are primitive and fixed width.</p>
 </section>
 <section id="complex-types">
 <h2>Complex Types<a class="headerlink" href="#complex-types" title="Link to this heading">¶</a></h2>
