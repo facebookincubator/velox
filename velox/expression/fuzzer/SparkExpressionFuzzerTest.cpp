@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "velox/expression/fuzzer/FuzzerRunner.h"
+#include "velox/expression/fuzzer/SparkSpecialFormSignatureGenerator.h"
 #include "velox/functions/sparksql/Register.h"
 #include "velox/functions/sparksql/fuzzer/AddSubtractArgGenerator.h"
 #include "velox/functions/sparksql/fuzzer/DivideArgGenerator.h"
@@ -86,5 +87,10 @@ int main(int argc, char** argv) {
        {"make_timestamp", std::make_shared<MakeTimestampArgGenerator>()}};
 
   return FuzzerRunner::run(
-      FLAGS_seed, skipFunctions, queryConfigs, argGenerators);
+      FLAGS_seed,
+      skipFunctions,
+      queryConfigs,
+      argGenerators,
+      std::make_shared<
+          facebook::velox::fuzzer::SparkSpecialFormSignatureGenerator>());
 }

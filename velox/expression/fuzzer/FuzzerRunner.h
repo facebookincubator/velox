@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "velox/expression/fuzzer/ExpressionFuzzerVerifier.h"
+#include "velox/expression/fuzzer/SpecialFormSignatureGenerator.h"
 #include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::velox::fuzzer {
@@ -30,19 +31,23 @@ namespace facebook::velox::fuzzer {
 /// FuzzerRunner leverages ExpressionFuzzerVerifier to create a gtest unit test.
 class FuzzerRunner {
  public:
+  // @param signatureGenerator Generates valid signatures for special forms.
   static int run(
       size_t seed,
       const std::unordered_set<std::string>& skipFunctions,
       const std::unordered_map<std::string, std::string>& queryConfigs,
       const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
-          argGenerators);
+          argGenerators,
+      const std::shared_ptr<SpecialFormSignatureGenerator>& signatureGenerator);
 
+  // @param signatureGenerator Generates valid signatures for special forms.
   static void runFromGtest(
       size_t seed,
       const std::unordered_set<std::string>& skipFunctions,
       const std::unordered_map<std::string, std::string>& queryConfigs,
       const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
-          argGenerators);
+          argGenerators,
+      const std::shared_ptr<SpecialFormSignatureGenerator>& signatureGenerator);
 };
 
 } // namespace facebook::velox::fuzzer

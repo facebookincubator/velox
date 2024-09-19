@@ -20,6 +20,7 @@
 
 #include "velox/expression/fuzzer/ArgGenerator.h"
 #include "velox/expression/fuzzer/FuzzerRunner.h"
+#include "velox/expression/fuzzer/SpecialFormSignatureGenerator.h"
 #include "velox/functions/prestosql/fuzzer/DivideArgGenerator.h"
 #include "velox/functions/prestosql/fuzzer/FloorAndRoundArgGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ModulusArgGenerator.h"
@@ -96,5 +97,11 @@ int main(int argc, char** argv) {
        {"mod", std::make_shared<ModulusArgGenerator>()},
        {"truncate", std::make_shared<TruncateArgGenerator>()}};
 
-  return FuzzerRunner::run(initialSeed, skipFunctions, {{}}, argGenerators);
+  return FuzzerRunner::run(
+      initialSeed,
+      skipFunctions,
+      {{}},
+      argGenerators,
+      std::make_shared<
+          facebook::velox::fuzzer::SpecialFormSignatureGenerator>());
 }

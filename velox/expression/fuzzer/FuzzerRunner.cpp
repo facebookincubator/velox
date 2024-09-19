@@ -212,8 +212,15 @@ int FuzzerRunner::run(
     const std::unordered_set<std::string>& skipFunctions,
     const std::unordered_map<std::string, std::string>& queryConfigs,
     const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
-        argGenerators) {
-  runFromGtest(seed, skipFunctions, queryConfigs, argGenerators);
+        argGenerators,
+    const std::shared_ptr<SpecialFormSignatureGenerator>&
+        specialFormSignatureGenerator) {
+  runFromGtest(
+      seed,
+      skipFunctions,
+      queryConfigs,
+      argGenerators,
+      specialFormSignatureGenerator);
   return RUN_ALL_TESTS();
 }
 
@@ -223,14 +230,16 @@ void FuzzerRunner::runFromGtest(
     const std::unordered_set<std::string>& skipFunctions,
     const std::unordered_map<std::string, std::string>& queryConfigs,
     const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
-        argGenerators) {
+        argGenerators,
+    const std::shared_ptr<SpecialFormSignatureGenerator>&
+        specialFormSignatureGenerator) {
   memory::MemoryManager::testingSetInstance({});
   auto signatures = facebook::velox::getFunctionSignatures();
-  ExpressionFuzzerVerifier(
-      signatures,
-      seed,
-      getExpressionFuzzerVerifierOptions(skipFunctions, queryConfigs),
-      argGenerators)
-      .go();
+  const auto options =
+      getExpressionFuzzerVerifierOptions(skipFunctions, queryConfigs);
+  // Insert generated signatures of special forms into the signature map.
+  specialFormSignatureGenerator->appendSpecialForms(
+      signatures, options.expressionFuzzerOptions.specialForms);
+  ExpressionFuzzerVerifier(signatures, seed, options, argGenerators).go();
 }
 } // namespace facebook::velox::fuzzer
