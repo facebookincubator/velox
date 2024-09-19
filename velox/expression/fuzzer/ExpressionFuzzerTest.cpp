@@ -252,6 +252,10 @@ int main(int argc, char** argv) {
       "pow",
       "cast(double) -> varchar",
       "cast(real) -> varchar",
+      "array_except", //todo: remove after upgrade to latest presto-java.
+      "array_intersect", //todo: remove after upgrade to latest presto-java.
+      "cast(varchar) -> double",
+      "cast(varchar) -> real",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 

@@ -440,7 +440,7 @@ ExprPtr compileRewrittenExpression(
 
       auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
           inputTypes, getConstantInputs(compiledInputs), config);
-      bool initializeException = func->initializeException();
+      // bool initializeException = func->initializeException();
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
@@ -448,7 +448,7 @@ ExprPtr compileRewrittenExpression(
           simpleFunctionEntry->metadata(),
           call->name(),
           trackCpuUsage);
-      result->mutableStats().suppressErrorByNull = initializeException;
+      // result->mutableStats().suppressErrorByNull = initializeException;
     } else {
       const auto& functionName = call->name();
       auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);

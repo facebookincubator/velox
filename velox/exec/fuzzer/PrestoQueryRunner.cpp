@@ -377,6 +377,7 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     else {
       VELOX_NYI();
     }
+    sql << " as " << projectNode->names()[i];
   }
 
   sql << " FROM (" << sourceSql.value() << ")";

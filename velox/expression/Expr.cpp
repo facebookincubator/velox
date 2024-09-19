@@ -1146,10 +1146,11 @@ bool Expr::removeSureNulls(
   }
   if (result) {
     result->updateBounds();
-    if (result->countSelected() == 0) {
+    if (result->countSelected() < rows.countSelected()) {
       stats_.suppressErrorByNull = true;
+      return true;
     }
-    return result->countSelected() != rows.countSelected();
+    // return result->countSelected() != rows.countSelected();
   }
   return false;
 }
