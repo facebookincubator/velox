@@ -141,8 +141,8 @@ uint32_t getDayOfFirstDayOfWeek(int32_t y, uint32_t firstDayOfWeek) {
 /// date library. As a result, dates before the gregorian calendar was used
 /// (1582-10-15) would yield mismatched results.
 ///
-/// The algorithm refers to the weekyear algorithm in jdk:
-/// https://github.com/openjdk/jdk8/blob/6a383433a9f4661a96a90b2a4c7b5b9a85720031/jdk/src/share/classes/java/util/GregorianCalendar.java#L2077
+/// The algorithm refers to the getWeekYear algorithm in openjdk:
+/// https://github.com/openjdk/jdk/blob/d9c67443f7d7f03efb2837b63ee2acc6113f737f/src/java.base/share/classes/java/util/GregorianCalendar.java#L2058
 FOLLY_ALWAYS_INLINE
 int32_t getWeekYear(
     int32_t y,
