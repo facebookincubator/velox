@@ -32,7 +32,7 @@ void ensureRegexIsConstant(
 
 /// Spark uses java.util.regex in regexp_replacement. This function preprocesses
 /// the pattern from Spark to ensure it is compatible with RE2.
-/// 1. java.util.regex supports named capturing groups in the format
+/// java.util.regex supports named capturing groups in the format
 /// (?<name>regex), but in RE2, this is written as (?P<name>regex), so we need
 /// to convert the former format to the latter.
 FOLLY_ALWAYS_INLINE std::string prepareRegexpPattern(
@@ -49,8 +49,8 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpPattern(
 /// the replacement to ensure it is compatible with RE2.
 /// 1. RE2 replacement only supports group index capture, so we need to convert
 /// group name captures to group index captures.
-/// 2. Group index capture in java.util.regex replacement is $N, while in RE2
-/// replacement it is \N. We need to convert it.
+/// 2. Group index capture in java.util.regex replacement is '$N', while in RE2
+/// replacement it is '\N'. We need to convert it.
 /// 3. Replacement in RE2 only supports '\' followed by a digit or another '\',
 /// while java.util.regex will ignore '\' in replacements, so we need to
 /// unescape it.
@@ -103,7 +103,7 @@ FOLLY_ALWAYS_INLINE std::string prepareReplacement(
       kConvertRegex.error());
   RE2::GlobalReplace(&newReplacement, kConvertRegex, R"(\\\1)");
 
-  // re2 allow '\' followed by anything other than a digit or '\',
+  // RE2 allows '\' followed by anything other than a digit or '\',
   // while java.util.regex will ignore '\' in replacement. We should unescape
   // this character.
   static constexpr const char* kUnescape = R"(\\([^0-9\\]))";
