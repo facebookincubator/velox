@@ -32,7 +32,12 @@ namespace facebook::velox::functions {
 /// (?P<name>regex), so we convert the former format to the latter.
 FOLLY_ALWAYS_INLINE std::string preparePrestoRegexpReplacePattern(
     const StringView& pattern) {
-  return convertGroupNameCapturing(pattern);
+  static const RE2 kRegex("[(][?]<([^>]*)>");
+
+  std::string newPattern = pattern.getString();
+  RE2::GlobalReplace(&newPattern, kRegex, R"((?P<\1>)");
+
+  return newPattern;
 }
 
 /// This function preprocesses an input replacement string to follow RE2 syntax
@@ -52,9 +57,44 @@ FOLLY_ALWAYS_INLINE std::string preparePrestoRegexpReplaceReplacement(
 
   auto newReplacement = replacement.getString();
 
-  adjustNameCaptureGroup(newReplacement);
-  convertNameToIndexCapture(newReplacement);
-  adjustIndexCaptureGroup(newReplacement);
+  static const RE2 kExtractRegex(R"(\${([^}]*)})");
+  VELOX_DCHECK(
+      kExtractRegex.ok(),
+      "Invalid regular expression {}: {}.",
+      R"(\${([^}]*)})",
+      kExtractRegex.error());
+
+  // If newReplacement contains a reference to a
+  // named capturing group ${name}, replace the name with its index.
+  re2::StringPiece groupName[2];
+  while (kExtractRegex.Match(
+      newReplacement,
+      0,
+      newReplacement.size(),
+      RE2::UNANCHORED,
+      groupName,
+      2)) {
+    auto groupIter = re.NamedCapturingGroups().find(groupName[1].as_string());
+    if (groupIter == re.NamedCapturingGroups().end()) {
+      VELOX_USER_FAIL(
+          "Invalid replacement sequence: unknown group {{ {} }}.",
+          groupName[1].as_string());
+    }
+
+    RE2::GlobalReplace(
+        &newReplacement,
+        fmt::format(R"(\${{{}}})", groupName[1].as_string()),
+        fmt::format("${}", groupIter->second));
+  }
+
+  // Convert references to numbered capturing groups from $g to \g.
+  static const RE2 kConvertRegex(R"(\$(\d+))");
+  VELOX_DCHECK(
+      kConvertRegex.ok(),
+      "Invalid regular expression {}: {}.",
+      R"(\$(\d+))",
+      kConvertRegex.error());
+  RE2::GlobalReplace(&newReplacement, kConvertRegex, R"(\\\1)");
 
   // Un-escape dollar-sign '$'.
   static const RE2 kUnescapeRegex(R"(\\\$)");
