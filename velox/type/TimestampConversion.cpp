@@ -616,10 +616,9 @@ daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day) {
   if (!isValidDate(year, month, day)) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
-    } else {
-      return folly::makeUnexpected(
-          Status::UserError("Date out of range: {}-{}-{}", year, month, day));
     }
+    return folly::makeUnexpected(
+        Status::UserError("Date out of range: {}-{}-{}", year, month, day));
   }
   while (year < 1970) {
     year += kYearInterval;
@@ -643,10 +642,9 @@ Expected<int64_t> daysSinceEpochFromWeekDate(
   if (!isValidWeekDate(weekYear, weekOfYear, dayOfWeek)) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
-    } else {
-      return folly::makeUnexpected(Status::UserError(
-          "Date out of range: {}-{}-{}", weekYear, weekOfYear, dayOfWeek));
     }
+    return folly::makeUnexpected(Status::UserError(
+        "Date out of range: {}-{}-{}", weekYear, weekOfYear, dayOfWeek));
   }
 
   return daysSinceEpochFromDate(weekYear, 1, 4)
@@ -669,14 +667,9 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
       !isValidWeekOfMonthDate(year, month, weekOfMonth, dayOfWeek)) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
-    } else {
-      return folly::makeUnexpected(Status::UserError(
-          "Date out of range: {}-{}-{}-{}",
-          year,
-          month,
-          weekOfMonth,
-          dayOfWeek));
     }
+    return folly::makeUnexpected(Status::UserError(
+        "Date out of range: {}-{}-{}-{}", year, month, weekOfMonth, dayOfWeek));
   }
 
   // Adjusts the year and month to ensure month is within the range 1-12,
@@ -713,10 +706,9 @@ Expected<int64_t> daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear) {
   if (!isValidDayOfYear(year, dayOfYear)) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
-    } else {
-      return folly::makeUnexpected(
-          Status::UserError("Day of year out of range: {}", dayOfYear));
     }
+    return folly::makeUnexpected(
+        Status::UserError("Day of year out of range: {}", dayOfYear));
   }
   return daysSinceEpochFromDate(year, 1, 1)
       .then([&dayOfYear](int64_t startOfYear) {
