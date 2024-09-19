@@ -295,11 +295,12 @@ bool tryParseDateString(
   // No day.
   if ((mode == ParseMode::kSparkCast || mode == ParseMode::kIso8601) &&
       pos == len) {
-    Expected<int64_t> daysSinceEpoch = daysSinceEpochFromDate(year, month, 1);
-    if (daysSinceEpoch.hasError()) {
+    Expected<int64_t> expected = daysSinceEpochFromDate(year, month, 1);
+    if (expected.hasError()) {
       return false;
     }
-    return validDate(daysSinceEpoch.value());
+    daysSinceEpoch = expected.value();
+    return validDate(daysSinceEpoch);
   }
 
   if (pos >= len) {
