@@ -55,7 +55,7 @@ struct AggregationFuzzerOptions {
       VectorFuzzer::Options::TimestampPrecision::kMilliSeconds};
 
   /// A set of configuration properties to use when running query plans.
-  /// Could be used to specify timezone or enable/disable settings that
+  /// Could be used to specify time zone or enable/disable settings that
   /// affect semantics of individual aggregate functions.
   std::unordered_map<std::string, std::string> queryConfigs;
 

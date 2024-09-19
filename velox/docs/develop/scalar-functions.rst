@@ -310,7 +310,7 @@ Here is an example of a zero-copy function:
 Access to Session Properties and Constant Inputs
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Some functions require access to session properties such as session’s timezone.
+Some functions require access to session properties such as session’s time zone.
 Some examples are the :func:`day`, :func:`hour`, and :func:`minute` Presto
 functions. Other functions could benefit from pre-processing some of the
 constant inputs, e.g. compile regular expression patterns or parse date and

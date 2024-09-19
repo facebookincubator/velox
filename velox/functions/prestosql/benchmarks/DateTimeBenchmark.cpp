@@ -55,13 +55,13 @@ class HourFunction : public exec::VectorFunction {
     auto rawResults = result->as<FlatVector<int64_t>>()->mutableRawValues();
 
     // Check if we need to adjust the current UTC timestamps to
-    // the user provided session timezone.
+    // the user provided session time zone.
     const auto* timeZone =
         getTimeZoneIfNeeded(context.execCtx()->queryCtx()->queryConfig());
     if (timeZone != nullptr) {
       rows.applyToSelected([&](int row) {
         auto timestamp = timestamps[row];
-        timestamp.toTimezone(*timeZone);
+        timestamp.toTimeZone(*timeZone);
         int64_t seconds = timestamp.getSeconds();
         std::tm dateTime;
         gmtime_r((const time_t*)&seconds, &dateTime);

@@ -390,7 +390,7 @@ TEST_F(PrestoHasherTest, wrongVectorType) {
   ASSERT_ANY_THROW(hasher.hash(vector, rows, hashes));
 }
 
-TEST_F(PrestoHasherTest, timestampWithTimezone) {
+TEST_F(PrestoHasherTest, timestampWithTimeZone) {
   const auto toUnixtimeWithTimeZone =
       [&](const std::vector<std::optional<std::pair<int64_t, std::string>>>&
               timestampWithTimeZones) {
@@ -407,8 +407,9 @@ TEST_F(PrestoHasherTest, timestampWithTimezone) {
             auto timestamp = timestampWithTimeZone.value().first;
             auto tz = timestampWithTimeZone.value().second;
             const int16_t tzid = tz::getTimeZoneID(tz);
-            auto timestampWithTimezone = pack(timestamp, tzid);
-            timestampWithTimeZoneVector.push_back(timestampWithTimezone);
+            auto timestampWithTimeZone =
+                TimestampWithTimeZoneType::pack(timestamp, tzid);
+            timestampWithTimeZoneVector.push_back(timestampWithTimeZone);
             bits::clearNull(rawNulls, i);
           } else {
             timestampWithTimeZoneVector.push_back(std::nullopt);

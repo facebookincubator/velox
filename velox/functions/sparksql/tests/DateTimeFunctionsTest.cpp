@@ -258,7 +258,7 @@ TEST_F(DateTimeFunctionsTest, unixTimestampCurrent) {
   EXPECT_GE(epoch, 500'000'000);
   EXPECT_LT(epoch, 5'000'000'000);
 
-  // Spark doesn't seem to adjust based on timezones.
+  // Spark doesn't seem to adjust based on time zones.
   auto gmtEpoch = evaluateOnce<int64_t>("unix_timestamp()", mockRowVector);
   setQueryTimeZone("America/Los_Angeles");
   auto laEpoch = evaluateOnce<int64_t>("unix_timestamp()", mockRowVector);

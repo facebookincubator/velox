@@ -4684,7 +4684,7 @@ TEST_F(TableScanTest, timestampPartitionKey) {
                                  folly::identity, [&](const Status& status) {
                                    VELOX_USER_FAIL("{}", status.message());
                                  });
-                t.toGMT(Timestamp::defaultTimezone());
+                t.toGMT(Timestamp::defaultTimeZone());
                 return t;
               }),
       });

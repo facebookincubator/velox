@@ -563,8 +563,8 @@ TEST_F(CastExprTest, stringToTimestamp) {
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
 
-  // Try with a different session timezone.
-  setTimezone("America/Los_Angeles");
+  // Try with a different session time zone.
+  setTimeZone("America/Los_Angeles");
   input = {
       "1970-01-01 00:00",
       "1970-01-01 00:00 +00:00",
@@ -683,7 +683,7 @@ TEST_F(CastExprTest, timestampToString) {
       });
 
   setLegacyCast(false);
-  setTimezone("America/Los_Angeles");
+  setTimeZone("America/Los_Angeles");
   testCast<Timestamp, std::string>(
       "string",
       {
@@ -759,7 +759,7 @@ TEST_F(CastExprTest, timestampToDate) {
       TIMESTAMP(),
       DATE());
 
-  setTimezone("America/Los_Angeles");
+  setTimeZone("America/Los_Angeles");
   testCast<Timestamp, int32_t>(
       "date",
       inputTimestamps,
@@ -813,11 +813,11 @@ TEST_F(CastExprTest, timestampInvalid) {
 }
 
 TEST_F(CastExprTest, timestampAdjustToTimezone) {
-  // Empty timezone is assumed to be GMT.
+  // Empty time zone is assumed to be GMT.
   testCast<std::string, Timestamp>(
       "timestamp", {"1970-01-01"}, {Timestamp(0, 0)});
 
-  setTimezone("America/Los_Angeles");
+  setTimeZone("America/Los_Angeles");
 
   // Expect unix epochs to be converted to LA timezone (8h offset).
   testCast<std::string, Timestamp>(

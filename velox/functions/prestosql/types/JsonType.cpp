@@ -86,7 +86,7 @@ void generateJsonTyped(
         Timestamp inputValue = value;
         const auto& options = hooks->timestampToStringOptions();
         if (options.timeZone) {
-          inputValue.toTimezone(*(options.timeZone));
+          inputValue.toTimeZone(*(options.timeZone));
         }
         buffer.resize(getMaxStringLength(options));
         const auto stringView =

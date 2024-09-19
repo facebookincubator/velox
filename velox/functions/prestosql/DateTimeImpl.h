@@ -210,20 +210,23 @@ FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
     return addToTimestamp(timestamp, unit, value);
   } else {
     Timestamp zonedTimestamp = timestamp;
-    zonedTimestamp.toTimezone(*timeZone);
+    zonedTimestamp.toTimeZone(*timeZone);
     auto resultTimestamp = addToTimestamp(zonedTimestamp, unit, value);
     resultTimestamp.toGMT(*timeZone);
     return resultTimestamp;
   }
 }
 
-FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
-    int64_t timestampWithTimezone,
+FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimeZone(
+    int64_t timestampWithTimeZone,
     const DateTimeUnit unit,
     const int32_t value) {
-  auto timestamp = unpackTimestampUtc(timestampWithTimezone);
+  auto timestamp =
+      TimestampWithTimeZoneType::unpackTimestampUtc(timestampWithTimeZone);
   auto finalTimeStamp = addToTimestamp(timestamp, unit, (int32_t)value);
-  return pack(finalTimeStamp, unpackZoneKeyId(timestampWithTimezone));
+  return TimestampWithTimeZoneType::pack(
+      finalTimeStamp,
+      TimestampWithTimeZoneType::unpackTimeZoneId(timestampWithTimeZone));
 }
 
 FOLLY_ALWAYS_INLINE int64_t diffTimestamp(

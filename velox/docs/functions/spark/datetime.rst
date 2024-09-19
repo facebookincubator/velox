@@ -80,7 +80,7 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: from_unixtime(unixTime, format) -> string
 
-    Adjusts ``unixTime`` (elapsed seconds since UNIX epoch) to configured session timezone, then
+    Adjusts ``unixTime`` (elapsed seconds since UNIX epoch) to configured session time zone, then
     converts it to a formatted time string according to ``format``. Only supports BIGINT type for
     ``unixTime``.
     `Valid patterns for date format
@@ -101,7 +101,7 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: from_utc_timestamp(timestamp, string) -> timestamp
 
-    Returns the timestamp value from UTC timezone to the given timezone. ::
+    Returns the timestamp value from UTC time zone to the given time zone. ::
 
         SELECT from_utc_timestamp('2015-07-24 07:00:00', 'America/Los_Angeles'); -- '2015-07-24 00:00:00'
 
@@ -252,7 +252,7 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: to_utc_timestamp(timestamp, string) -> timestamp
 
-    Returns the timestamp value from the given timezone to UTC timezone. ::
+    Returns the timestamp value from the given time zone to UTC time zone. ::
 
         SELECT to_utc_timestamp('2015-07-24 00:00:00', 'America/Los_Angeles'); -- '2015-07-24 07:00:00'
 
@@ -278,7 +278,7 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_millis('1970-01-01 00:00:01'); -- 1000
 
 .. spark:function:: unix_seconds(timestamp) -> bigint
-    
+
     Returns the number of seconds since 1970-01-01 00:00:00 UTC. ::
 
         SELECT unix_seconds('1970-01-01 00:00:01'); -- 1
@@ -290,7 +290,7 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: unix_timestamp(string) -> integer
    :noindex:
 
-    Returns the UNIX timestamp of time specified by ``string``. Assumes the 
+    Returns the UNIX timestamp of time specified by ``string``. Assumes the
     format ``yyyy-MM-dd HH:mm:ss``. Returns null if ``string`` does not match
     ``format``.
 

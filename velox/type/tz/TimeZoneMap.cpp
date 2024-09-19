@@ -49,7 +49,7 @@ const date::time_zone* locateZoneImpl(std::string_view tz_name) {
 }
 
 // Flattens the input vector of pairs into a vector, assuming that the
-// timezoneIDs are (mostly) sequential. Note that since they are "mostly"
+// time zone IDs are (mostly) sequential. Note that since they are "mostly"
 // senquential, the vector can have holes. But it is still more efficient than
 // looking up on a map.
 TTimeZoneDatabase buildTimeZoneDatabase(
@@ -99,7 +99,7 @@ const TTimeZoneDatabase& getTimeZoneDatabase() {
   return timeZoneDatabase;
 }
 
-// Reverses the vector of pairs into a map key'ed by the timezone name for
+// Reverses the vector of pairs into a map key'ed by the time zone name for
 // reverse look ups.
 TTimeZoneIndex buildTimeZoneIndex(const TTimeZoneDatabase& tzDatabase) {
   TTimeZoneIndex reversed;
@@ -137,7 +137,7 @@ inline bool isTimeZoneOffset(std::string_view str) {
   return str.size() >= 3 && (str[0] == '+' || str[0] == '-');
 }
 
-// The timezone parsing logic follows what is defined here:
+// The time zone parsing logic follows what is defined here:
 //   https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 inline bool isUtcEquivalentName(std::string_view zone) {
   static folly::F14FastSet<std::string> utcSet = {
@@ -283,7 +283,7 @@ const TimeZone* locateZone(std::string_view timeZone, bool failOnError) {
     return it->second;
   }
 
-  // If an exact match wasn't found, try to normalize the timezone name.
+  // If an exact match wasn't found, try to normalize the time zone name.
   it = timeZoneIndex.find(normalizeTimeZone(timeZoneLowered));
   if (it != timeZoneIndex.end()) {
     return it->second;
@@ -311,12 +311,12 @@ int16_t getTimeZoneID(int32_t offsetMinutes) {
   VELOX_USER_CHECK_LE(
       kMinOffset,
       offsetMinutes,
-      "Invalid timezone offset minutes: {}",
+      "Invalid time zone offset minutes: {}",
       offsetMinutes);
   VELOX_USER_CHECK_LE(
       offsetMinutes,
       kMaxOffset,
-      "Invalid timezone offset minutes: {}",
+      "Invalid time zone offset minutes: {}",
       offsetMinutes);
 
   if (offsetMinutes < 0) {

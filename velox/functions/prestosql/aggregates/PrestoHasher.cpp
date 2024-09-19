@@ -142,7 +142,8 @@ FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::BIGINT>(
   } else if (isTimestampWithTimeZoneType(vector_->base()->type())) {
     // Hash only timestamp value.
     applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
-      return hashInteger(unpackMillisUtc(vector_->valueAt<int64_t>(row)));
+      return hashInteger(TimestampWithTimeZoneType::unpackMillisUtc(
+          vector_->valueAt<int64_t>(row)));
     });
   } else {
     applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {

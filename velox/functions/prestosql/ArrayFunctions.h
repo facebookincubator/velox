@@ -202,7 +202,7 @@ struct ArrayJoinFunction {
   void writeValue(out_type<velox::Varchar>& result, const Timestamp& value) {
     Timestamp inputValue{value};
     if (options_.timeZone) {
-      inputValue.toTimezone(*(options_.timeZone));
+      inputValue.toTimeZone(*(options_.timeZone));
     }
     result += inputValue.toString(options_);
   }

@@ -45,7 +45,7 @@ class PrestoCastHooks : public CastHooks {
   // Returns the input as is.
   StringView removeWhiteSpaces(const StringView& view) const override;
 
-  // Returns cast options following 'isLegacyCast' and session timezone.
+  // Returns cast options following 'isLegacyCast' and session time zone.
   const TimestampToStringOptions& timestampToStringOptions() const override;
 
   bool truncate() const override {

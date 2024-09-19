@@ -344,7 +344,7 @@ struct MyRegexpMatchFunction {
     }
 
     // Optionally, one could also inspect the session configs in `QueryConfig`.
-    // One common use case is to initialize user supplied session timezone for
+    // One common use case is to initialize user supplied session time zone for
     // date/time manipulation functions.
   }
 

@@ -825,7 +825,7 @@ fromTimestampString(const char* str, size_t len, TimestampParseMode parseMode) {
 }
 
 Expected<std::pair<Timestamp, const tz::TimeZone*>>
-fromTimestampWithTimezoneString(
+fromTimestampWithTimeZoneString(
     const char* str,
     size_t len,
     TimestampParseMode parseMode) {
@@ -842,7 +842,7 @@ fromTimestampWithTimezoneString(
     pos++;
   }
 
-  // If there is anything left to parse, it must be a timezone definition.
+  // If there is anything left to parse, it must be a timeZone definition.
   if (pos < len) {
     if (parseMode == TimestampParseMode::kIso8601) {
       // Only +HH:MM and -HH:MM are supported. Minutes, seconds, etc. in the
@@ -852,20 +852,20 @@ fromTimestampWithTimezoneString(
       }
     }
 
-    size_t timezonePos = pos;
-    while (timezonePos < len && !characterIsSpace(str[timezonePos])) {
-      timezonePos++;
+    size_t timeZonePos = pos;
+    while (timeZonePos < len && !characterIsSpace(str[timeZonePos])) {
+      timeZonePos++;
     }
 
-    std::string_view timeZoneName(str + pos, timezonePos - pos);
+    std::string_view timeZoneName(str + pos, timeZonePos - pos);
 
     if ((timeZone = tz::locateZone(timeZoneName, false)) == nullptr) {
       return folly::makeUnexpected(
-          Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
+          Status::UserError("Unknown time zone value: \"{}\"", timeZoneName));
     }
 
     // Skip any spaces at the end.
-    pos = timezonePos;
+    pos = timeZonePos;
     if (parseMode != TimestampParseMode::kIso8601) {
       skipSpaces(str, len, pos);
     }
@@ -892,7 +892,7 @@ int32_t toDate(const Timestamp& timestamp, const tz::TimeZone* timeZone_) {
 
   if (timeZone_ != nullptr) {
     Timestamp copy = timestamp;
-    copy.toTimezone(*timeZone_);
+    copy.toTimeZone(*timeZone_);
     return convertToDate(copy);
   }
 

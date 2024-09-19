@@ -40,10 +40,10 @@ int32_t parseDate(const StringView& str, ParseMode mode) {
       });
 }
 
-std::pair<Timestamp, const tz::TimeZone*> parseTimestampWithTimezone(
+std::pair<Timestamp, const tz::TimeZone*> parseTimestampWithTimeZone(
     const StringView& str,
     TimestampParseMode parseMode = TimestampParseMode::kPrestoCast) {
-  return fromTimestampWithTimezoneString(str.data(), str.size(), parseMode)
+  return fromTimestampWithTimeZoneString(str.data(), str.size(), parseMode)
       .thenOrThrow(folly::identity, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
@@ -312,7 +312,7 @@ TEST(DateTimeUtilTest, fromTimestampString) {
 TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
   const std::string_view parserError = "Unable to parse timestamp value: ";
   const std::string_view overflowError = "integer overflow: ";
-  const std::string_view timezoneError = "Unknown timezone value: ";
+  const std::string_view timeZoneError = "Unknown time zone value: ";
 
   // Needs at least a date.
   VELOX_ASSERT_THROW(parseTimestamp(""), parserError);
@@ -324,7 +324,7 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
   VELOX_ASSERT_THROW(
       parseTimestamp("-2147483648-01-01 00:00:00-asd"), overflowError);
 
-  // Unexpected timezone definition.
+  // Unexpected time zone definition.
   VELOX_ASSERT_THROW(parseTimestamp("1970-01-01 00:00:00     a"), parserError);
   VELOX_ASSERT_THROW(parseTimestamp("1970-01-01 00:00:00Z"), parserError);
   VELOX_ASSERT_THROW(parseTimestamp("1970-01-01 00:00:00Z"), parserError);
@@ -337,50 +337,50 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
       parseTimestamp("2000-01-01T 12:21:56", TimestampParseMode::kIso8601),
       parserError);
 
-  // Parse timestamp with (broken) timezones.
+  // Parse timestamp with (broken) time zones.
   VELOX_ASSERT_THROW(
-      parseTimestampWithTimezone("1970-01-01 00:00:00-asd"), timezoneError);
+      parseTimestampWithTimeZone("1970-01-01 00:00:00-asd"), timeZoneError);
   VELOX_ASSERT_THROW(
-      parseTimestampWithTimezone("1970-01-01 00:00:00Z UTC"), parserError);
+      parseTimestampWithTimeZone("1970-01-01 00:00:00Z UTC"), parserError);
   VELOX_ASSERT_THROW(
-      parseTimestampWithTimezone("1970-01-01 00:00:00+00:00:00"),
-      timezoneError);
+      parseTimestampWithTimeZone("1970-01-01 00:00:00+00:00:00"),
+      timeZoneError);
 
   // Can't have multiple spaces.
   VELOX_ASSERT_THROW(
-      parseTimestampWithTimezone("1970-01-01 00:00:00  UTC"), timezoneError);
+      parseTimestampWithTimeZone("1970-01-01 00:00:00  UTC"), timeZoneError);
 }
 
-TEST(DateTimeUtilTest, fromTimestampWithTimezoneString) {
-  // -1 means no timezone information.
+TEST(DateTimeUtilTest, fromTimestampWithTimeZoneString) {
+  // -1 means no time zone information.
   auto expected =
       std::make_pair<Timestamp, const tz::TimeZone*>(Timestamp(0, 0), nullptr);
-  EXPECT_EQ(parseTimestampWithTimezone("1970-01-01 00:00:00"), expected);
+  EXPECT_EQ(parseTimestampWithTimeZone("1970-01-01 00:00:00"), expected);
 
-  // Test timezone offsets.
+  // Test time zone offsets.
   EXPECT_EQ(
-      parseTimestampWithTimezone("1970-01-01 00:00:00 -02:00"),
+      parseTimestampWithTimeZone("1970-01-01 00:00:00 -02:00"),
       std::make_pair(Timestamp(0, 0), tz::locateZone("-02:00")));
   EXPECT_EQ(
-      parseTimestampWithTimezone("1970-01-01 00:00:00+13:36"),
+      parseTimestampWithTimeZone("1970-01-01 00:00:00+13:36"),
       std::make_pair(Timestamp(0, 0), tz::locateZone("+13:36")));
   EXPECT_EQ(
-      parseTimestampWithTimezone("1970-01-01 00:00:00 -11"),
+      parseTimestampWithTimeZone("1970-01-01 00:00:00 -11"),
       std::make_pair(Timestamp(0, 0), tz::locateZone("-11:00")));
   EXPECT_EQ(
-      parseTimestampWithTimezone("1970-01-01 00:00:00 +0000"),
+      parseTimestampWithTimeZone("1970-01-01 00:00:00 +0000"),
       std::make_pair(Timestamp(0, 0), tz::locateZone("+00:00")));
 
   EXPECT_EQ(
-      parseTimestampWithTimezone("1970-01-01 00:00:00Z"),
+      parseTimestampWithTimeZone("1970-01-01 00:00:00Z"),
       std::make_pair(Timestamp(0, 0), tz::locateZone("UTC")));
 
   EXPECT_EQ(
-      parseTimestampWithTimezone("1970-01-01 00:01:00 UTC"),
+      parseTimestampWithTimeZone("1970-01-01 00:01:00 UTC"),
       std::make_pair(Timestamp(60, 0), tz::locateZone("UTC")));
 
   EXPECT_EQ(
-      parseTimestampWithTimezone("1970-01-01 00:00:01 America/Los_Angeles"),
+      parseTimestampWithTimeZone("1970-01-01 00:00:01 America/Los_Angeles"),
       std::make_pair(Timestamp(1, 0), tz::locateZone("America/Los_Angeles")));
 }
 
@@ -435,12 +435,12 @@ TEST(DateTimeUtilTest, toGMT) {
   EXPECT_THROW(ts.toGMT(*laZone), VeloxUserError);
 }
 
-TEST(DateTimeUtilTest, toTimezone) {
+TEST(DateTimeUtilTest, toTimeZone) {
   auto* laZone = tz::locateZone("America/Los_Angeles");
 
   // The LA time when GMT gets to "1970-01-01 00:00:00" (8h behind).
   auto ts = parseTimestamp("1970-01-01 00:00:00");
-  ts.toTimezone(*laZone);
+  ts.toTimeZone(*laZone);
   EXPECT_EQ(ts, parseTimestamp("1969-12-31 16:00:00"));
 
   // Set on a random date/time and try some variations.
@@ -448,28 +448,28 @@ TEST(DateTimeUtilTest, toTimezone) {
 
   // To LA:
   auto tsCopy = ts;
-  tsCopy.toTimezone(*laZone);
+  tsCopy.toTimeZone(*laZone);
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-22 21:23:37"));
 
   // To Sao Paulo:
   tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("America/Sao_Paulo"));
+  tsCopy.toTimeZone(*tz::locateZone("America/Sao_Paulo"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 01:23:37"));
 
   // Moscow:
   tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("Europe/Moscow"));
+  tsCopy.toTimeZone(*tz::locateZone("Europe/Moscow"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 07:23:37"));
 
   // Probe LA's daylight savings boundary (starts at 2021-13-14 02:00am).
   // Before it starts, 8h offset:
   ts = parseTimestamp("2021-03-14 00:00:00");
-  ts.toTimezone(*laZone);
+  ts.toTimeZone(*laZone);
   EXPECT_EQ(ts, parseTimestamp("2021-03-13 16:00:00"));
 
   // After it starts, 7h offset:
   ts = parseTimestamp("2021-03-15 00:00:00");
-  ts.toTimezone(*laZone);
+  ts.toTimeZone(*laZone);
   EXPECT_EQ(ts, parseTimestamp("2021-03-14 17:00:00"));
 }
 
@@ -530,10 +530,10 @@ TEST(DateTimeUtilTest, toGMTFromID) {
   EXPECT_EQ(ts, parseTimestamp("2021-03-15 07:00:00"));
 }
 
-TEST(DateTimeUtilTest, toTimezoneFromID) {
+TEST(DateTimeUtilTest, toTimeZoneFromID) {
   // The LA time when GMT gets to "1970-01-01 00:00:00" (8h behind).
   auto ts = parseTimestamp("1970-01-01 00:00:00");
-  ts.toTimezone(*tz::locateZone("America/Los_Angeles"));
+  ts.toTimeZone(*tz::locateZone("America/Los_Angeles"));
   EXPECT_EQ(ts, parseTimestamp("1969-12-31 16:00:00"));
 
   // Set on a random date/time and try some variations.
@@ -541,49 +541,49 @@ TEST(DateTimeUtilTest, toTimezoneFromID) {
 
   // To LA:
   auto tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("America/Los_Angeles"));
+  tsCopy.toTimeZone(*tz::locateZone("America/Los_Angeles"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-22 21:23:37"));
 
   // To Sao Paulo:
   tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("America/Sao_Paulo"));
+  tsCopy.toTimeZone(*tz::locateZone("America/Sao_Paulo"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 01:23:37"));
 
   // Moscow:
   tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("Europe/Moscow"));
+  tsCopy.toTimeZone(*tz::locateZone("Europe/Moscow"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 07:23:37"));
 
   // Numerical time zones: +HH:MM and -HH:MM
   tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("+14:00"));
+  tsCopy.toTimeZone(*tz::locateZone("+14:00"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 18:23:37"));
 
   tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("-14:00"));
+  tsCopy.toTimeZone(*tz::locateZone("-14:00"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-22 14:23:37"));
 
   tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("+00:00"));
+  tsCopy.toTimeZone(*tz::locateZone("+00:00"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 04:23:37"));
 
   tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("-00:01"));
+  tsCopy.toTimeZone(*tz::locateZone("-00:01"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 04:22:37"));
 
   tsCopy = ts;
-  tsCopy.toTimezone(*tz::locateZone("+00:01"));
+  tsCopy.toTimeZone(*tz::locateZone("+00:01"));
   EXPECT_EQ(tsCopy, parseTimestamp("2020-04-23 04:24:37"));
 
   // Probe LA's daylight savings boundary (starts at 2021-13-14 02:00am).
   // Before it starts, 8h offset:
   ts = parseTimestamp("2021-03-14 00:00:00");
-  ts.toTimezone(*tz::locateZone("America/Los_Angeles"));
+  ts.toTimeZone(*tz::locateZone("America/Los_Angeles"));
   EXPECT_EQ(ts, parseTimestamp("2021-03-13 16:00:00"));
 
   // After it starts, 7h offset:
   ts = parseTimestamp("2021-03-15 00:00:00");
-  ts.toTimezone(*tz::locateZone("America/Los_Angeles"));
+  ts.toTimeZone(*tz::locateZone("America/Los_Angeles"));
   EXPECT_EQ(ts, parseTimestamp("2021-03-14 17:00:00"));
 }
 

@@ -877,7 +877,9 @@ TEST_P(PrestoSerializerTest, emptyMap) {
 TEST_P(PrestoSerializerTest, timestampWithTimeZone) {
   auto timestamp = makeFlatVector<int64_t>(
       100,
-      [](auto row) { return pack(10'000 + row, row % 37); },
+      [](auto row) {
+        return TimestampWithTimeZoneType::pack(10'000 + row, row % 37);
+      },
       /* isNullAt */ nullptr,
       TIMESTAMP_WITH_TIME_ZONE());
 

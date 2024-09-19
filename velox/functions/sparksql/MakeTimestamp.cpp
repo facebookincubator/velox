@@ -118,8 +118,8 @@ class MakeTimestampFunction : public exec::VectorFunction {
     auto* micros = decodedArgs.at(5);
 
     if (args.size() == 7) {
-      // If the timezone argument is specified, treat the input timestamp as the
-      // time in that timezone.
+      // If the time zone argument is specified, treat the input timestamp as
+      // the time in that time zone.
       if (args[6]->isConstantEncoding()) {
         auto tz =
             args[6]->asUnchecked<ConstantVector<StringView>>()->valueAt(0);
@@ -145,7 +145,7 @@ class MakeTimestampFunction : public exec::VectorFunction {
         });
       }
     } else {
-      // Otherwise use session timezone.
+      // Otherwise use session time zone.
       rows.applyToSelected([&](vector_size_t row) {
         auto timestamp = makeTimeStampFromDecodedArgs(
             row, year, month, day, hour, minute, micros);

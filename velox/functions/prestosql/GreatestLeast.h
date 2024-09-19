@@ -93,24 +93,26 @@ struct ExtremeValueFunction {
 };
 
 template <typename TExec, bool isLeast>
-struct ExtremeValueFunctionTimestampWithTimezone {
+struct ExtremeValueFunctionTimestampWithTimeZone {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   FOLLY_ALWAYS_INLINE void call(
-      out_type<TimestampWithTimezone>& result,
-      const arg_type<TimestampWithTimezone>& firstElement,
-      const arg_type<Variadic<TimestampWithTimezone>>& remainingElement) {
+      out_type<TimestampWithTimeZone>& result,
+      const arg_type<TimestampWithTimeZone>& firstElement,
+      const arg_type<Variadic<TimestampWithTimeZone>>& remainingElement) {
     auto currentValue = firstElement;
 
     for (auto element : remainingElement) {
       auto candidateValue = element.value();
 
       if constexpr (isLeast) {
-        if (unpackMillisUtc(candidateValue) < unpackMillisUtc(currentValue)) {
+        if (TimestampWithTimeZoneType::unpackMillisUtc(candidateValue) <
+            TimestampWithTimeZoneType::unpackMillisUtc(currentValue)) {
           currentValue = candidateValue;
         }
       } else {
-        if (unpackMillisUtc(candidateValue) > unpackMillisUtc(currentValue)) {
+        if (TimestampWithTimeZoneType::unpackMillisUtc(candidateValue) >
+            TimestampWithTimeZoneType::unpackMillisUtc(currentValue)) {
           currentValue = candidateValue;
         }
       }
@@ -125,14 +127,14 @@ template <typename TExec, typename T>
 using LeastFunction = details::ExtremeValueFunction<TExec, T, true>;
 
 template <typename TExec>
-using LeastFunctionTimestampWithTimezone =
-    details::ExtremeValueFunctionTimestampWithTimezone<TExec, true>;
+using LeastFunctionTimestampWithTimeZone =
+    details::ExtremeValueFunctionTimestampWithTimeZone<TExec, true>;
 
 template <typename TExec, typename T>
 using GreatestFunction = details::ExtremeValueFunction<TExec, T, false>;
 
 template <typename TExec>
-using GreatestFunctionTimestampWithTimezone =
-    details::ExtremeValueFunctionTimestampWithTimezone<TExec, false>;
+using GreatestFunctionTimestampWithTimeZone =
+    details::ExtremeValueFunctionTimestampWithTimeZone<TExec, false>;
 
 } // namespace facebook::velox::functions

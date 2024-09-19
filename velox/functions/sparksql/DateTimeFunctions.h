@@ -26,7 +26,7 @@
 namespace facebook::velox::functions::sparksql {
 
 template <typename T>
-struct YearFunction : public InitSessionTimezone<T> {
+struct YearFunction : public InitSessionTimeZone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE int32_t getYear(const std::tm& time) {
@@ -45,7 +45,7 @@ struct YearFunction : public InitSessionTimezone<T> {
 };
 
 template <typename T>
-struct WeekFunction : public InitSessionTimezone<T> {
+struct WeekFunction : public InitSessionTimeZone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE int32_t getWeek(const std::tm& time) {
@@ -99,7 +99,7 @@ struct WeekFunction : public InitSessionTimezone<T> {
 };
 
 template <typename T>
-struct YearOfWeekFunction : public InitSessionTimezone<T> {
+struct YearOfWeekFunction : public InitSessionTimeZone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
@@ -140,7 +140,7 @@ template <typename T>
 struct UnixTimestampFunction {
   // unix_timestamp();
   // If no parameters, return the current unix timestamp without adjusting
-  // timezones.
+  // time zones.
   FOLLY_ALWAYS_INLINE void call(int64_t& result) {
     result = Timestamp::now().getSeconds();
   }
@@ -157,7 +157,7 @@ struct UnixTimestampParseFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/) {
     format_ = buildJodaDateTimeFormatter(kDefaultFormat_);
-    setTimezone(config);
+    setTimeZone(config);
   }
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -174,7 +174,7 @@ struct UnixTimestampParseFunction {
   }
 
  protected:
-  void setTimezone(const core::QueryConfig& config) {
+  void setTimeZone(const core::QueryConfig& config) {
     auto sessionTzName = config.sessionTimezone();
     if (!sessionTzName.empty()) {
       sessionTimeZone_ = tz::locateZone(sessionTzName);
@@ -182,8 +182,8 @@ struct UnixTimestampParseFunction {
   }
 
   const tz::TimeZone* getTimeZone(const DateTimeResult& result) {
-    // If timezone was not parsed, fallback to the session timezone.
-    return result.timezoneId != -1 ? tz::locateZone(result.timezoneId)
+    // If time zone was not parsed, fallback to the session time zone.
+    return result.timeZoneId != -1 ? tz::locateZone(result.timeZoneId)
                                    : sessionTimeZone_;
   }
 
@@ -214,7 +214,7 @@ struct UnixTimestampParseWithFormatFunction
       }
       isConstFormat_ = true;
     }
-    this->setTimezone(config);
+    this->setTimeZone(config);
   }
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -303,23 +303,23 @@ struct ToUtcTimestampFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* timezone) {
-    if (timezone) {
-      timeZone_ = tz::locateZone(std::string_view(*timezone), false);
+      const arg_type<Varchar>* timeZone) {
+    if (timeZone) {
+      timeZone_ = tz::locateZone(std::string_view(*timeZone), false);
     }
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Timestamp>& timestamp,
-      const arg_type<Varchar>& timezone) {
+      const arg_type<Varchar>& timeZone) {
     result = timestamp;
-    const auto* fromTimezone = timeZone_ != nullptr
+    const auto* fromTimeZone = timeZone_ != nullptr
         ? timeZone_
-        : tz::locateZone(std::string_view(timezone), false);
+        : tz::locateZone(std::string_view(timeZone), false);
     VELOX_USER_CHECK_NOT_NULL(
-        fromTimezone, "Unknown time zone: '{}'", timezone);
-    result.toGMT(*fromTimezone);
+        fromTimeZone, "Unknown time zone: '{}'", timeZone);
+    result.toGMT(*fromTimeZone);
   }
 
  private:
@@ -334,22 +334,22 @@ struct FromUtcTimestampFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* timezone) {
-    if (timezone) {
-      timeZone_ = tz::locateZone(std::string_view(*timezone), false);
+      const arg_type<Varchar>* timeZone) {
+    if (timeZone) {
+      timeZone_ = tz::locateZone(std::string_view(*timeZone), false);
     }
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Timestamp>& result,
       const arg_type<Timestamp>& timestamp,
-      const arg_type<Varchar>& timezone) {
+      const arg_type<Varchar>& timeZone) {
     result = timestamp;
     const auto* toTimeZone = timeZone_ != nullptr
         ? timeZone_
-        : tz::locateZone(std::string_view(timezone), false);
-    VELOX_USER_CHECK_NOT_NULL(toTimeZone, "Unknown time zone: '{}'", timezone);
-    result.toTimezone(*toTimeZone);
+        : tz::locateZone(std::string_view(timeZone), false);
+    VELOX_USER_CHECK_NOT_NULL(toTimeZone, "Unknown time zone: '{}'", timeZone);
+    result.toTimeZone(*toTimeZone);
   }
 
  private:
@@ -366,9 +366,9 @@ struct GetTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    auto sessionTimezoneName = config.sessionTimezone();
-    if (!sessionTimezoneName.empty()) {
-      sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
+    auto sessionTimeZoneName = config.sessionTimezone();
+    if (!sessionTimeZoneName.empty()) {
+      sessionTimeZone_ = tz::locateZone(sessionTimeZoneName);
     }
     if (format != nullptr) {
       formatter_ = buildJodaDateTimeFormatter(std::string_view(*format));
@@ -395,9 +395,9 @@ struct GetTimestampFunction {
 
  private:
   const tz::TimeZone* getTimeZone(const DateTimeResult& result) const {
-    // If timezone was not parsed, fallback to the session timezone. If there's
-    // no session timezone, fallback to 0 (GMT).
-    return result.timezoneId != -1 ? tz::locateZone(result.timezoneId)
+    // If time zone was not parsed, fallback to the session time zone. If
+    // there's no session time zone, fallback to 0 (GMT).
+    return result.timeZoneId != -1 ? tz::locateZone(result.timeZoneId)
                                    : sessionTimeZone_;
   }
 
@@ -693,7 +693,7 @@ struct NextDayFunction {
 };
 
 template <typename T>
-struct HourFunction : public InitSessionTimezone<T> {
+struct HourFunction : public InitSessionTimeZone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
@@ -704,7 +704,7 @@ struct HourFunction : public InitSessionTimezone<T> {
 };
 
 template <typename T>
-struct MinuteFunction : public InitSessionTimezone<T> {
+struct MinuteFunction : public InitSessionTimeZone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(

@@ -137,7 +137,7 @@ struct VeloxToArrowSchemaBridgeHolder {
 
   std::unique_ptr<ArrowSchema> dictionary;
 
-  // Buffer required to generate a decimal format or timestamp with timezone
+  // Buffer required to generate a decimal format or timestamp with time zone
   // format.
   std::string formatBuffer;
 

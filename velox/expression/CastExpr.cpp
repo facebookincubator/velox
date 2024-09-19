@@ -871,10 +871,10 @@ VectorPtr CastExpr::applyTimestampToVarcharCast(
   char* rawBuffer = buffer->asMutable<char>() + buffer->size();
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
-    // Adjust input timestamp according the session timezone.
+    // Adjust input timestamp according the session time zone.
     Timestamp inputValue(simpleInput->valueAt(row));
     if (options.timeZone) {
-      inputValue.toTimezone(*(options.timeZone));
+      inputValue.toTimeZone(*(options.timeZone));
     }
     const auto stringView =
         Timestamp::tsToStringView(inputValue, options, rawBuffer);
