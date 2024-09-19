@@ -157,17 +157,16 @@ bool isValidWeekOfMonthDate(
     return false;
   }
 
-  int64_t daysSinceEpochOfFirstDayOfMonth;
-  Expected<int64_t> expected = daysSinceEpochFromDate(year, month, 1);
-  if (expected.hasError()) {
+  Expected<int64_t> daysSinceEpochOfFirstDayOfMonth = daysSinceEpochFromDate(year, month, 1);
+  if (daysSinceEpochOfFirstDayOfMonth.hasError()) {
     return false;
   }
-  daysSinceEpochOfFirstDayOfMonth = expected.value();
+  daysSinceEpochOfFirstDayOfMonth = daysSinceEpochOfFirstDayOfMonth.value();
 
   // Calculates the actual number of week of month and validates if it is in the
   // valid range.
   const int32_t firstDayOfWeek =
-      extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth);
+      extractISODayOfTheWeek(daysSinceEpochOfFirstDayOfMonth.value());
   const int32_t firstWeekLength = 7 - firstDayOfWeek + 1;
   const int32_t monthLength =
       isLeapYear(year) ? kLeapDays[month] : kNormalDays[month];
@@ -295,12 +294,11 @@ bool tryParseDateString(
   // No day.
   if ((mode == ParseMode::kSparkCast || mode == ParseMode::kIso8601) &&
       pos == len) {
-    Expected<int64_t> expected = daysSinceEpochFromDate(year, month, 1);
-    if (expected.hasError()) {
+    Expected<int64_t> daysSinceEpoch = daysSinceEpochFromDate(year, month, 1);
+    if (daysSinceEpoch.hasError()) {
       return false;
     }
-    daysSinceEpoch = expected.value();
-    return validDate(daysSinceEpoch);
+    return validDate(daysSinceEpoch.value());
   }
 
   if (pos >= len) {

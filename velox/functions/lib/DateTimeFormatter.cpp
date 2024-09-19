@@ -1423,24 +1423,24 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
   }
 
   // Convert the parsed date/time into a timestamp.
-  Expected<int64_t> expected;
+  Expected<int64_t> daysSinceEpoch;
   if (date.weekDateFormat) {
-    expected =
+    daysSinceEpoch =
         util::daysSinceEpochFromWeekDate(date.year, date.week, date.dayOfWeek);
   } else if (date.dayOfYearFormat) {
-    expected = util::daysSinceEpochFromDayOfYear(date.year, date.dayOfYear);
+    daysSinceEpoch = util::daysSinceEpochFromDayOfYear(date.year, date.dayOfYear);
   } else {
-    expected = util::daysSinceEpochFromDate(date.year, date.month, date.day);
+    daysSinceEpoch = util::daysSinceEpochFromDate(date.year, date.month, date.day);
   }
-  if (expected.hasError()) {
-    VELOX_DCHECK(expected.error().isUserError());
-    return folly::makeUnexpected(expected.error());
+  if (daysSinceEpoch.hasError()) {
+    VELOX_DCHECK(daysSinceEpoch.error().isUserError());
+    return folly::makeUnexpected(daysSinceEpoch.error());
   }
 
   int64_t microsSinceMidnight =
       util::fromTime(date.hour, date.minute, date.second, date.microsecond);
   return DateTimeResult{
-      util::fromDatetime(expected.value(), microsSinceMidnight),
+      util::fromDatetime(daysSinceEpoch.value(), microsSinceMidnight),
       date.timezoneId};
 }
 

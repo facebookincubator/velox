@@ -53,9 +53,9 @@ TEST(DateTimeUtilTest, fromDate) {
   auto testDaysSinceEpochFromDate = [](int32_t year,
                                        int32_t month,
                                        int32_t day) {
-    Expected<int64_t> expected = util::daysSinceEpochFromDate(year, month, day);
-    EXPECT_FALSE(expected.hasError());
-    return expected.value();
+    Expected<int64_t> daysSinceEpoch = util::daysSinceEpochFromDate(year, month, day);
+    EXPECT_FALSE(daysSinceEpoch.hasError());
+    return daysSinceEpoch.value();
   };
   EXPECT_EQ(0, testDaysSinceEpochFromDate(1970, 1, 1));
   EXPECT_EQ(1, testDaysSinceEpochFromDate(1970, 1, 2));
