@@ -252,61 +252,6 @@ std::shared_ptr<exec::VectorFunction> makeRe2ExtractAll(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractAllSignatures();
 
-// Adujst name capturing from (?<name>regex) to (?P<name>regex).
-FOLLY_ALWAYS_INLINE std::string adjustNameCaptureGroup(
-    const StringView& pattern) {
-  static const RE2 kRegex("[(][?]<([^>]*)>");
-
-  std::string newPattern = pattern.getString();
-  RE2::GlobalReplace(&newPattern, kRegex, R"((?P<\1>)");
-
-  return newPattern;
-}
-
-FOLLY_ALWAYS_INLINE void convertNameToIndexCapture(
-    std::string& newReplacement) {
-  static const RE2 kExtractRegex(R"(\${([^}]*)})");
-  VELOX_DCHECK(
-      kExtractRegex.ok(),
-      "Invalid regular expression {}: {}.",
-      R"(\${([^}]*)})",
-      kExtractRegex.error());
-
-  // If newReplacement contains a reference to a
-  // named capturing group ${name}, replace the name with its index.
-  re2::StringPiece groupName[2];
-  while (kExtractRegex.Match(
-      newReplacement,
-      0,
-      newReplacement.size(),
-      RE2::UNANCHORED,
-      groupName,
-      2)) {
-    auto groupIter = re.NamedCapturingGroups().find(groupName[1].as_string());
-    if (groupIter == re.NamedCapturingGroups().end()) {
-      VELOX_USER_FAIL(
-          "Invalid replacement sequence: unknown group {{ {} }}.",
-          groupName[1].as_string());
-    }
-
-    RE2::GlobalReplace(
-        &newReplacement,
-        fmt::format(R"(\${{{}}})", groupName[1].as_string()),
-        fmt::format("${}", groupIter->second));
-  }
-}
-
-// Adjust references to numbered capturing groups from $g to \g.
-FOLLY_ALWAYS_INLINE void adjustIndexCaptureGroup(std::string& newReplacement) {
-  static const RE2 kConvertRegex(R"(\$(\d+))");
-  VELOX_DCHECK(
-      kConvertRegex.ok(),
-      "Invalid regular expression {}: {}.",
-      R"(\$(\d+))",
-      kConvertRegex.error());
-  RE2::GlobalReplace(&newReplacement, kConvertRegex, R"(\\\1)");
-}
-
 namespace detail {
 
 // A cache of compiled regular expressions (RE2 instances). Allows up to
