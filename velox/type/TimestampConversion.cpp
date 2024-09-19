@@ -157,7 +157,8 @@ bool isValidWeekOfMonthDate(
     return false;
   }
 
-  Expected<int64_t> daysSinceEpochOfFirstDayOfMonth = daysSinceEpochFromDate(year, month, 1);
+  Expected<int64_t> daysSinceEpochOfFirstDayOfMonth =
+      daysSinceEpochFromDate(year, month, 1);
   if (daysSinceEpochOfFirstDayOfMonth.hasError()) {
     return false;
   }

@@ -401,7 +401,8 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
       out_type<Date>& result,
       const arg_type<Timestamp>& timestamp) {
     auto dt = getDateTime(timestamp, this->timeZone_);
-    Expected<int64_t> daysSinceEpochFromDate = util::lastDayOfMonthSinceEpochFromDate(dt);
+    Expected<int64_t> daysSinceEpochFromDate =
+        util::lastDayOfMonthSinceEpochFromDate(dt);
     if (daysSinceEpochFromDate.hasError()) {
       VELOX_DCHECK(daysSinceEpochFromDate.error().isUserError());
       VELOX_USER_FAIL(daysSinceEpochFromDate.error().message());
@@ -413,7 +414,8 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
       out_type<Date>& result,
       const arg_type<Date>& date) {
     auto dt = getDateTime(date);
-    Expected<int64_t> lastDayOfMonthSinceEpoch = util::lastDayOfMonthSinceEpochFromDate(dt);
+    Expected<int64_t> lastDayOfMonthSinceEpoch =
+        util::lastDayOfMonthSinceEpochFromDate(dt);
     if (lastDayOfMonthSinceEpoch.hasError()) {
       VELOX_DCHECK(lastDayOfMonthSinceEpoch.error().isUserError());
       VELOX_USER_FAIL(lastDayOfMonthSinceEpoch.error().message());
@@ -426,7 +428,8 @@ struct LastDayOfMonthFunction : public InitSessionTimezone<T>,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     auto dt = getDateTime(timestamp, nullptr);
-    Expected<int64_t> lastDayOfMonthSinceEpoch = util::lastDayOfMonthSinceEpochFromDate(dt);
+    Expected<int64_t> lastDayOfMonthSinceEpoch =
+        util::lastDayOfMonthSinceEpochFromDate(dt);
     if (lastDayOfMonthSinceEpoch.hasError()) {
       VELOX_DCHECK(lastDayOfMonthSinceEpoch.error().isUserError());
       VELOX_USER_FAIL(lastDayOfMonthSinceEpoch.error().message());

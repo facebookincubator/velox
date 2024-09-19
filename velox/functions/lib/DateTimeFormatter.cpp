@@ -1428,9 +1428,11 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
     daysSinceEpoch =
         util::daysSinceEpochFromWeekDate(date.year, date.week, date.dayOfWeek);
   } else if (date.dayOfYearFormat) {
-    daysSinceEpoch = util::daysSinceEpochFromDayOfYear(date.year, date.dayOfYear);
+    daysSinceEpoch =
+        util::daysSinceEpochFromDayOfYear(date.year, date.dayOfYear);
   } else {
-    daysSinceEpoch = util::daysSinceEpochFromDate(date.year, date.month, date.day);
+    daysSinceEpoch =
+        util::daysSinceEpochFromDate(date.year, date.month, date.day);
   }
   if (daysSinceEpoch.hasError()) {
     VELOX_DCHECK(daysSinceEpoch.error().isUserError());

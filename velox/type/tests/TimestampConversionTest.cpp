@@ -50,13 +50,13 @@ std::pair<Timestamp, const tz::TimeZone*> parseTimestampWithTimezone(
 }
 
 TEST(DateTimeUtilTest, fromDate) {
-  auto testDaysSinceEpochFromDate = [](int32_t year,
-                                       int32_t month,
-                                       int32_t day) {
-    Expected<int64_t> daysSinceEpoch = util::daysSinceEpochFromDate(year, month, day);
-    EXPECT_FALSE(daysSinceEpoch.hasError());
-    return daysSinceEpoch.value();
-  };
+  auto testDaysSinceEpochFromDate =
+      [](int32_t year, int32_t month, int32_t day) {
+        Expected<int64_t> daysSinceEpoch =
+            util::daysSinceEpochFromDate(year, month, day);
+        EXPECT_FALSE(daysSinceEpoch.hasError());
+        return daysSinceEpoch.value();
+      };
   EXPECT_EQ(0, testDaysSinceEpochFromDate(1970, 1, 1));
   EXPECT_EQ(1, testDaysSinceEpochFromDate(1970, 1, 2));
   EXPECT_EQ(365, testDaysSinceEpochFromDate(1971, 1, 1));
