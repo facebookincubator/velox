@@ -99,15 +99,14 @@ class AtLeastNNonNullsExpr : public SpecialForm {
       int32_t* rawNonNullCounts,
       FlatVector<bool>* result,
       SelectivityVector* activeRows) {
-    using Type = typename TypeTraits<Kind>::NativeType;
+    using T = typename TypeTraits<Kind>::NativeType;
     exec::LocalDecodedVector decodedVector(context);
     decodedVector.get()->decode(*input, *activeRows);
     bool updateBounds = false;
     activeRows->applyToSelected([&](auto row) {
       bool nonNull = !decodedVector->isNullAt(row);
-      if constexpr (
-          std::is_same_v<Type, double> || std::is_same_v<Type, float>) {
-        nonNull = nonNull && !std::isnan(decodedVector->valueAt<Type>(row));
+      if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
+        nonNull = nonNull && !std::isnan(decodedVector->valueAt<T>(row));
       }
       if (nonNull) {
         rawNonNullCounts[row]++;
