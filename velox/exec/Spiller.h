@@ -319,6 +319,8 @@ class Spiller {
   void updateSpillFillTime(uint64_t timeUs);
 
   void updateSpillSortTime(uint64_t timeUs);
+  
+  void updateSpillExtractVectorTime(uint64_t timeUs);
 
   const Type type_;
   // NOTE: for hash join probe type, there is no associated row container for

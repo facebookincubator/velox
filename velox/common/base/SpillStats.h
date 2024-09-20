@@ -42,6 +42,8 @@ struct SpillStats {
   uint64_t spillFillTimeNanos{0};
   /// The time spent on sorting rows for spilling.
   uint64_t spillSortTimeNanos{0};
+  /// The time spent on extracting vector from RowContainer for spilling.
+  uint64_t spillExtractVectorTimeNanos{0};
   /// The time spent on serializing rows for spilling.
   uint64_t spillSerializationTimeNanos{0};
   /// The number of spill writer flushes, equivalent to number of write calls to
@@ -74,6 +76,7 @@ struct SpillStats {
       uint64_t _spilledFiles,
       uint64_t _spillFillTimeNanos,
       uint64_t _spillSortTimeNanos,
+      uint64_t _spillExtractVectorTimeNanos,
       uint64_t _spillSerializationTimeNanos,
       uint64_t _spillWrites,
       uint64_t _spillFlushTimeNanos,
@@ -120,31 +123,34 @@ void updateGlobalSpillRunStats(uint64_t numRuns);
 /// rows and the serializaion time.
 void updateGlobalSpillAppendStats(
     uint64_t numRows,
-    uint64_t serializaionTimeUs);
+    uint64_t serializaionTimeNs);
 
 /// Increments the number of spilled partitions.
 void incrementGlobalSpilledPartitionStats();
 
 /// Updates the time spent on filling rows to spill.
-void updateGlobalSpillFillTime(uint64_t timeUs);
+void updateGlobalSpillFillTime(uint64_t timeNs);
 
 /// Updates the time spent on sorting rows to spill.
-void updateGlobalSpillSortTime(uint64_t timeUs);
+void updateGlobalSpillSortTime(uint64_t timeNs);
+
+/// Updates the time spent on extracting vector from RowContainer to spill.
+void updateGlobalSpillExtractVectorTime(uint64_t timeNs);
 
 /// Updates the stats for disk write including the number of disk writes,
 /// the written bytes, the time spent on copying out (compression) for disk
 /// writes, the time spent on disk writes.
 void updateGlobalSpillWriteStats(
     uint64_t spilledBytes,
-    uint64_t flushTimeUs,
-    uint64_t writeTimeUs);
+    uint64_t flushTimeNs,
+    uint64_t writeTimeNs);
 
 /// Updates the stats for disk read including the number of disk reads, the
 /// amount of data read in bytes, and the time it takes to read from the disk.
 void updateGlobalSpillReadStats(
     uint64_t spillReads,
     uint64_t spillReadBytes,
-    uint64_t spillRadTimeUs);
+    uint64_t spillRadTimeNs);
 
 /// Increments the spill memory bytes.
 void updateGlobalSpillMemoryBytes(uint64_t spilledInputBytes);
@@ -157,7 +163,7 @@ void updateGlobalMaxSpillLevelExceededCount(
     uint64_t maxSpillLevelExceededCount);
 
 /// Increments the spill read deserialization time.
-void updateGlobalSpillDeserializationTimeNs(uint64_t timeUs);
+void updateGlobalSpillDeserializationTimeNs(uint64_t timeNs);
 
 /// Gets the cumulative global spill stats.
 SpillStats globalSpillStats();

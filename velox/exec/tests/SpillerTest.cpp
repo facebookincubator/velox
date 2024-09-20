@@ -296,6 +296,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     } else {
       ASSERT_GT(stats.spillSortTimeNanos, 0);
     }
+    ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
     ASSERT_GT(stats.spillFlushTimeNanos, 0);
     ASSERT_GT(stats.spillFillTimeNanos, 0);
     ASSERT_GT(stats.spillSerializationTimeNanos, 0);
@@ -328,6 +329,10 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     ASSERT_EQ(
         prevGStats.spillSortTimeNanos + stats.spillSortTimeNanos,
         newGStats.spillSortTimeNanos);
+    ASSERT_EQ(
+        prevGStats.spillExtractVectorTimeNanos +
+            stats.spillExtractVectorTimeNanos,
+        newGStats.spillExtractVectorTimeNanos);
     ASSERT_EQ(
         prevGStats.spillFlushTimeNanos + stats.spillFlushTimeNanos,
         newGStats.spillFlushTimeNanos)
@@ -869,6 +874,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       }
       ASSERT_GT(stats.spilledPartitions, 0);
       ASSERT_EQ(stats.spillSortTimeNanos, 0);
+      ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
       if (type_ == Spiller::Type::kHashJoinBuild ||
           type_ == Spiller::Type::kRowNumber) {
         ASSERT_GT(stats.spillFillTimeNanos, 0);
@@ -892,6 +898,10 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       ASSERT_EQ(
           prevGStats.spillSortTimeNanos + stats.spillSortTimeNanos,
           newGStats.spillSortTimeNanos);
+      ASSERT_EQ(
+          prevGStats.spillExtractVectorTimeNanos +
+              stats.spillExtractVectorTimeNanos,
+          newGStats.spillExtractVectorTimeNanos);
       ASSERT_EQ(
           prevGStats.spillFlushTimeNanos + stats.spillFlushTimeNanos,
           newGStats.spillFlushTimeNanos)
@@ -1462,9 +1472,11 @@ TEST_P(AggregationOutputOnly, basic) {
     if (expectedNumSpilledRows == 0) {
       ASSERT_EQ(stats.spilledFiles, 0) << stats.toString();
       ASSERT_EQ(stats.spilledRows, 0) << stats.toString();
+      ASSERT_EQ(stats.spillExtractVectorTimeNanos, 0);
     } else {
       ASSERT_EQ(stats.spilledFiles, 1) << stats.toString();
       ASSERT_EQ(stats.spilledRows, expectedNumSpilledRows) << stats.toString();
+      ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
     }
     ASSERT_EQ(stats.spillSortTimeNanos, 0);
   }
@@ -1569,9 +1581,11 @@ TEST_P(OrderByOutputOnly, basic) {
     if (expectedNumSpilledRows == 0) {
       ASSERT_EQ(stats.spilledFiles, 0) << stats.toString();
       ASSERT_EQ(stats.spilledRows, 0) << stats.toString();
+      ASSERT_EQ(stats.spillExtractVectorTimeNanos, 0);
     } else {
       ASSERT_EQ(stats.spilledFiles, 1) << stats.toString();
       ASSERT_EQ(stats.spilledRows, expectedNumSpilledRows) << stats.toString();
+      ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
     }
     ASSERT_EQ(stats.spillSortTimeNanos, 0);
   }

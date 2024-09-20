@@ -446,15 +446,24 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
     ensureSorted(run);
     int64_t totalBytes = 0;
     size_t written = 0;
-    while (written < run.rows.size()) {
-      extractSpillVector(
-          run.rows, kTargetBatchRows, kTargetBatchBytes, spillVector, written);
-      totalBytes += state_.appendToPartition(partition, spillVector);
-      if (totalBytes > state_.targetFileSize()) {
-        VELOX_CHECK(!needSort());
-        state_.finishFile(partition);
+    uint64_t extractNanos{0};
+    {
+      NanosecondTimer timer(&extractNanos);
+      while (written < run.rows.size()) {
+        extractSpillVector(
+            run.rows,
+            kTargetBatchRows,
+            kTargetBatchBytes,
+            spillVector,
+            written);
+        totalBytes += state_.appendToPartition(partition, spillVector);
+        if (totalBytes > state_.targetFileSize()) {
+          VELOX_CHECK(!needSort());
+          state_.finishFile(partition);
+        }
       }
     }
+    updateSpillExtractVectorTime(extractNanos);
     return std::make_unique<SpillStatus>(partition, written, nullptr);
   } catch (const std::exception&) {
     // The exception is passed to the caller thread which checks this in
@@ -534,6 +543,11 @@ void Spiller::updateSpillFillTime(uint64_t timeNs) {
 void Spiller::updateSpillSortTime(uint64_t timeNs) {
   spillStats_->wlock()->spillSortTimeNanos += timeNs;
   common::updateGlobalSpillSortTime(timeNs);
+}
+
+void Spiller::updateSpillExtractVectorTime(uint64_t timeNs) {
+  spillStats_->wlock()->spillExtractVectorTimeNanos += timeNs;
+  common::updateGlobalSpillExtractVectorTime(timeNs);
 }
 
 bool Spiller::needSort() const {

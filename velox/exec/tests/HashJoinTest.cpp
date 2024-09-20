@@ -107,6 +107,8 @@ void verifyTaskSpilledRuntimeStats(const exec::Task& task, bool expectedSpill) {
           ASSERT_EQ(op.runtimeStats[Operator::kSpillFillTime].count, 0);
           ASSERT_EQ(op.runtimeStats[Operator::kSpillSortTime].count, 0);
           ASSERT_EQ(
+              op.runtimeStats[Operator::kSpillExtractVectorTime].count, 0);
+          ASSERT_EQ(
               op.runtimeStats[Operator::kSpillSerializationTime].count, 0);
           ASSERT_EQ(op.runtimeStats[Operator::kSpillFlushTime].count, 0);
           ASSERT_EQ(op.runtimeStats[Operator::kSpillWrites].count, 0);
@@ -126,6 +128,7 @@ void verifyTaskSpilledRuntimeStats(const exec::Task& task, bool expectedSpill) {
             ASSERT_GE(op.runtimeStats[Operator::kSpillFillTime].sum, 0);
           }
           ASSERT_EQ(op.runtimeStats[Operator::kSpillSortTime].sum, 0);
+          ASSERT_GT(op.runtimeStats[Operator::kSpillExtractVectorTime].sum, 0);
           ASSERT_GT(op.runtimeStats[Operator::kSpillSerializationTime].sum, 0);
           ASSERT_GE(op.runtimeStats[Operator::kSpillFlushTime].sum, 0);
           // NOTE: spill flush might take less than one microsecond.
