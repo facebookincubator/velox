@@ -515,12 +515,49 @@ class BaseVector {
   /// length.
   virtual VectorPtr slice(vector_size_t offset, vector_size_t length) const = 0;
 
-  /// Returns a vector of the type of 'source' where 'indices' contains
-  /// an index into 'source' for each element of 'source'. The
-  /// resulting vector has position i set to source[i]. This is
-  /// equivalent to wrapping 'source' in a dictionary with 'indices'
-  /// but this may reuse structure if said structure is uniquely owned
-  /// or if a copy is more efficient than dictionary wrapping.
+  /// Transposes two sets of dictionary indices into one level of indirection.
+  /// Sets result[i] = base[indices[i]] for i = 0 ... i < size.
+  static void transposeIndices(
+      const vector_size_t* base,
+      vector_size_t size,
+      const vector_size_t* indices,
+      vector_size_t* result);
+
+  /// Transposes two levels of indices into a single level with nulls. sets
+  /// result[i] = base[indices[i]] where i is not null in 'extraNulls' and
+  /// indices[i] is not null in 'nulls'. If indices[i] is null in 'nulls' or i
+  /// is null in 'extraNulls', then 'resultNulls' is null at i. 'extraNulls' may
+  /// be nullptr, meaning that no new nulls are added.
+  static void transposeIndicesWithNulls(
+      const vector_size_t* base,
+      const uint64_t* nulls,
+      vector_size_t size,
+      const vector_size_t* indices,
+      const uint64_t* extraNulls,
+      vector_size_t* result,
+      uint64_t* resultNulls);
+
+  /// Flattens 'dictionaryValues', which is a dictionary and replaces
+  /// it with its base. 'size' is the number of valid elements in
+  /// 'indices' and 'nulls'. Null positions may have an invalid
+  /// index. Rewrites 'indices' from being indices into
+  /// 'dictionaryValues' to being indices into the latter's
+  /// base. Rewrites 'nulls' to be nulls from 'dictionaryValues' and
+  /// its base vector. This is used when a dictionary vector loads a
+  /// lazy values vector and finds out that the loaded is itself a
+  /// dictionary.
+  static void transposeDictionaryValues(
+      vector_size_t size,
+      BufferPtr& nulls,
+      BufferPtr& indices,
+      std::shared_ptr<BaseVector>& dictionaryValues);
+
+  // Returns a vector of the type of 'source' where 'indices' contains
+  // an index into 'source' for each element of 'source'. The
+  // resulting vector has position i set to source[i]. This is
+  // equivalent to wrapping 'source' in a dictionary with 'indices'
+  // but this may reuse structure if said structure is uniquely owned
+  // or if a copy is more efficient than dictionary wrapping.
   static VectorPtr transpose(BufferPtr indices, VectorPtr&& source);
 
   static VectorPtr createConstant(

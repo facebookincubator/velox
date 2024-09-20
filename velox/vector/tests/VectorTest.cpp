@@ -2329,7 +2329,9 @@ TEST_F(VectorTest, dictionaryResize) {
   dict = wrapInDictionary(
       indices, size, wrapInDictionary(indices, size, flatVector));
 
-  ASSERT_TRUE(!indices->unique());
+  // 'indices' is merged with itself and a new copy is made, so there
+  // is no second reference.
+  ASSERT_TRUE(indices->unique());
   dict->resize(size * 2);
   expectedVector = makeFlatVector<int64_t>(
       {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
