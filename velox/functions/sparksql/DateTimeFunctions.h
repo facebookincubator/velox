@@ -175,7 +175,7 @@ struct UnixTimestampParseFunction {
     format_ = detail::getDateTimeFormatter(
         kDefaultFormat_,
         config.sparkLegacyDateFormatter() ? DateTimeFormatterType::STRICT_SIMPLE
-                                       : DateTimeFormatterType::JODA);
+                                          : DateTimeFormatterType::JODA);
     setTimezone(config);
   }
 
@@ -230,7 +230,7 @@ struct UnixTimestampParseWithFormatFunction
         this->format_ = detail::getDateTimeFormatter(
             std::string_view(format->data(), format->size()),
             legacyDateFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                              : DateTimeFormatterType::JODA);
+                                 : DateTimeFormatterType::JODA);
       } catch (const VeloxUserError&) {
         invalidFormat_ = true;
       }
@@ -253,7 +253,7 @@ struct UnixTimestampParseWithFormatFunction
         this->format_ = detail::getDateTimeFormatter(
             std::string_view(format.data(), format.size()),
             legacyDateFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                              : DateTimeFormatterType::JODA);
+                                 : DateTimeFormatterType::JODA);
       }
     } catch (const VeloxUserError&) {
       return false;
@@ -313,7 +313,7 @@ struct FromUnixtimeFunction {
     formatter_ = detail::getDateTimeFormatter(
         std::string_view(format.data(), format.size()),
         legacyDateFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                          : DateTimeFormatterType::JODA);
+                             : DateTimeFormatterType::JODA);
     maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
   }
 
@@ -404,7 +404,7 @@ struct GetTimestampFunction {
       formatter_ = detail::getDateTimeFormatter(
           std::string_view(*format),
           legacyDateFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                            : DateTimeFormatterType::JODA);
+                               : DateTimeFormatterType::JODA);
       isConstantTimeFormat_ = true;
     }
   }
@@ -417,7 +417,7 @@ struct GetTimestampFunction {
       formatter_ = detail::getDateTimeFormatter(
           std::string_view(format),
           legacyDateFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                            : DateTimeFormatterType::JODA);
+                               : DateTimeFormatterType::JODA);
     }
     auto dateTimeResult = formatter_->parse(std::string_view(input));
     // Null as result for parsing error.
