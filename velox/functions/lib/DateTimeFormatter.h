@@ -29,6 +29,7 @@ enum class DateTimeFormatterType {
   // Corresponding to java.text.SimpleDateFormat in lenient mode. It is used by
   // the 'date_format', 'from_unixtime', 'unix_timestamp' and
   // 'to_unix_timestamp' Spark functions.
+  // TODO: this is currently no different from STRICT_SIMPLE.
   LENIENT_SIMPLE,
   // Corresponding to java.text.SimpleDateFormat in strict(lenient=false) mode.
   // It is used by Spark 'cast date to string'.
