@@ -288,7 +288,7 @@ class QueryConfig {
   static constexpr const char* kSparkPartitionId = "spark.partition_id";
 
   /// If true, simple date formatter is used for time formatting and parsing.
-  /// Strict date formatter is used by default.
+  /// Joda date formatter is used by default.
   static constexpr const char* kSparkLegacyTimeParser =
       "spark.legacy_time_parser_policy";
 

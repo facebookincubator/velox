@@ -700,7 +700,10 @@ Spark-specific Configuration
    * - spark.legacy_time_parser_policy
      - bool
      - false
-     - If true, simple date formatter is used for time formatting and parsing. Strict date formatter is used by default.
+     - If true, simple date formatter is used for time formatting and parsing. Joda date formatter is used by default.
+     - Joda date formatter performs strict checking of its input and uses different pattern string.
+     - For example, the 2015-07-22 10:00:00 timestamp cannot be parse if pattern is yyyy-MM-dd because the parser does not consume whole input.
+     - Another example is that the 'W' pattern, which means week in month, is not supported. For more differences, see #10354.
 
 Tracing
 --------

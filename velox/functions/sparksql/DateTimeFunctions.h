@@ -281,7 +281,7 @@ struct FromUnixtimeFunction {
     legacyTimeParser_ = config.sparkLegacyTimeParser();
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
-      setFormatter(*format, legacyTimeParser_);
+      setFormatter(*format);
       isConstantTimeFormat_ = true;
     }
   }
@@ -291,7 +291,7 @@ struct FromUnixtimeFunction {
       const arg_type<int64_t>& second,
       const arg_type<Varchar>& format) {
     if (!isConstantTimeFormat_) {
-      setFormatter(format, legacyTimeParser_);
+      setFormatter(format);
     }
     const Timestamp timestamp{second, 0};
     result.reserve(maxResultSize_);
@@ -302,11 +302,9 @@ struct FromUnixtimeFunction {
   }
 
  private:
-  FOLLY_ALWAYS_INLINE void setFormatter(
-      const arg_type<Varchar>& format,
-      bool legacyTimeParser) {
+  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& format) {
     formatter_ = getDateTimeFormatter(
-        legacyTimeParser,
+        legacyTimeParser_,
         std::string_view(format.data(), format.size()),
         false);
     maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
