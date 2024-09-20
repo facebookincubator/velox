@@ -58,13 +58,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     - 
+     -
      -
      -
      -
      -
      - Y
-     - 
+     -
    * - smallint
      - Y
      - Y
@@ -74,13 +74,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     - 
+     -
      -
      -
      -
      -
      - Y
-     - 
+     -
    * - integer
      - Y
      - Y
@@ -90,13 +90,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     - 
+     -
      -
      -
      -
      -
      - Y
-     - 
+     -
    * - bigint
      - Y
      - Y
@@ -106,13 +106,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     - 
+     -
      -
      -
      -
      -
      - Y
-     - 
+     -
    * - boolean
      - Y
      - Y
@@ -122,13 +122,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     - 
+     -
      -
      -
      -
      -
      - Y
-     - 
+     -
    * - real
      - Y
      - Y
@@ -138,13 +138,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     - 
+     -
      -
      -
      -
      -
      - Y
-     - 
+     -
    * - double
      - Y
      - Y
@@ -154,13 +154,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     - 
+     -
      -
      -
      -
      -
      - Y
-     - 
+     -
    * - varchar
      - Y
      - Y
@@ -170,7 +170,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     - 
+     -
      - Y
      - Y
      - Y
@@ -178,20 +178,20 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
    * - varbinary
-     - 
-     - 
-     - 
-     - 
-     - 
-     - 
-     - 
-     - 
-     - 
-     - 
-     - 
-     - 
      -
-     - 
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
      - Y
    * - timestamp
      -
@@ -202,13 +202,13 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
-     - 
+     -
      - Y
      - Y
      - Y
      -
      -
-     - 
+     -
    * - timestamp with time zone
      -
      -
@@ -218,7 +218,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
-     - 
+     -
      - Y
      -
      - Y
@@ -234,7 +234,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
-     - 
+     -
      - Y
      - Y
      -
@@ -250,7 +250,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
-     - 
+     -
      -
      -
      -
@@ -266,7 +266,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
-     - 
+     -
      -
      -
      -
@@ -274,21 +274,21 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
    * - ipaddress
-     - 
-     - 
-     - 
-     - 
-     - 
-     - 
-     - 
+     -
+     -
+     -
+     -
+     -
+     -
+     -
      - Y
      - Y
      -
      -
      -
      -
-     - 
-     - 
+     -
+     -
 
 Cast to Integral Types
 ----------------------
@@ -743,12 +743,12 @@ Invalid example:
 
   SELECT cast('2012-Oct-23' as timestamp); -- Invalid argument
 
-Optionally, strings may also contain timezone information at the end. Timezone
+Optionally, strings may also contain time zone information at the end. Time zone
 information may be offsets in the format `+01:00` or `-02:00`, for example, or
-timezone names, like `UTC`, `Z`, `America/Los_Angeles` and others,
+time zone names, like `UTC`, `Z`, `America/Los_Angeles` and others,
 `as defined here <https://github.com/facebookincubator/velox/blob/main/velox/type/tz/TimeZoneDatabase.cpp>`_.
 
-For example, these strings contain valid timezone information:
+For example, these strings contain valid time zone information:
 
 ::
 
@@ -756,12 +756,12 @@ For example, these strings contain valid timezone information:
   SELECT cast('1970-01-01 00:00:00 UTC' as timestamp);
   SELECT cast('1970-01-01 00:00:00 America/Sao_Paulo' as timestamp);
 
-If timezone information is specified in the string, the returned timestamp
-is adjusted to the corresponding timezone. Otherwise, the timestamp is
-assumed to be in the client session timezone, and adjusted accordingly
+If time zone information is specified in the string, the returned timestamp
+is adjusted to the corresponding time zone. Otherwise, the timestamp is
+assumed to be in the client session time zone, and adjusted accordingly
 based on the value of `adjust_timestamp_to_session_timezone`, as described below.
 
-The space between the hour and timezone definition is optional.
+The space between the hour and time zone definition is optional.
 
 ::
 
@@ -787,10 +787,10 @@ From TIMESTAMP WITH TIME ZONE
 
 The results depend on whether configuration property `adjust_timestamp_to_session_timezone` is set or not.
 
-If set to true, input timezone is ignored and timestamp is returned as is. For example,
+If set to true, input time zone is ignored and timestamp is returned as is. For example,
 "1970-01-01 00:00:00.000 America/Los_Angeles" becomes "1970-01-01 08:00:00.000".
 
-Otherwise, timestamp is shifted by the offset of the timezone. For example,
+Otherwise, timestamp is shifted by the offset of the time zone. For example,
 "1970-01-01 00:00:00.000 America/Los_Angeles" becomes "1970-01-01 00:00:00.000".
 
 Valid examples

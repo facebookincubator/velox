@@ -54,7 +54,7 @@ class FunctionBaseTest : public testing::Test,
     });
   }
 
-  void setTimezone(const std::string& value) {
+  void setTimeZone(const std::string& value) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, value},
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},

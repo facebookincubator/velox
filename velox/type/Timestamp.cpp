@@ -74,7 +74,7 @@ Timestamp::toTimePointMs(bool allowOverflow) const {
   return tp;
 }
 
-void Timestamp::toTimezone(const tz::TimeZone& zone) {
+void Timestamp::toTimeZone(const tz::TimeZone& zone) {
   try {
     seconds_ = zone.to_local(std::chrono::seconds(seconds_)).count();
   } catch (const std::invalid_argument& e) {
@@ -85,7 +85,7 @@ void Timestamp::toTimezone(const tz::TimeZone& zone) {
   }
 }
 
-const tz::TimeZone& Timestamp::defaultTimezone() {
+const tz::TimeZone& Timestamp::defaultTimeZone() {
   static const tz::TimeZone* kDefault = ({
     // TODO: We are hard-coding PST/PDT here to be aligned with the current
     // behavior in DWRF reader/writer.  Once they are fixed, we can use

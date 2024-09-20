@@ -101,7 +101,7 @@ class DateTimeFormatterTest : public testing::Test {
     return dateTimeResult(dateTimeResultExpected).timestamp;
   }
 
-  // Parses and returns the timezone converted back to string, to ease
+  // Parses and returns the time zone converted back to string, to ease
   // verifiability.
   std::string parseTZ(
       const std::string_view& input,
@@ -109,21 +109,21 @@ class DateTimeFormatterTest : public testing::Test {
     auto dateTimeResultExpected =
         buildJodaDateTimeFormatter(format)->parse(input);
     auto result = dateTimeResult(dateTimeResultExpected);
-    if (result.timezoneId == 0) {
+    if (result.timeZoneId == 0) {
       return "+00:00";
     }
-    return tz::getTimeZoneName(result.timezoneId);
+    return tz::getTimeZoneName(result.timeZoneId);
   }
 
   std::string formatMysqlDateTime(
       const std::string& format,
       const Timestamp& timestamp,
-      const tz::TimeZone* timezone) const {
+      const tz::TimeZone* timeZone) const {
     auto formatter = buildMysqlDateTimeFormatter(format);
-    const auto maxSize = formatter->maxResultSize(timezone);
+    const auto maxSize = formatter->maxResultSize(timeZone);
     std::string result(maxSize, '\0');
     auto resultSize =
-        formatter->format(timestamp, timezone, maxSize, result.data());
+        formatter->format(timestamp, timeZone, maxSize, result.data());
     result.resize(resultSize);
     return result;
   }
@@ -986,8 +986,8 @@ TEST_F(JodaDateTimeFormatterTest, parseSecond) {
   EXPECT_THROW(parseJoda("123456789", "s"), VeloxUserError);
 }
 
-TEST_F(JodaDateTimeFormatterTest, parseTimezoneOffset) {
-  // Broken timezone offfsets; allowed formats are either "+00:00" or "+00".
+TEST_F(JodaDateTimeFormatterTest, parseTimeZoneOffset) {
+  // Broken time zone offfsets; allowed formats are either "+00:00" or "+00".
   EXPECT_THROW(parseJoda("", "ZZ"), VeloxUserError);
   EXPECT_THROW(parseJoda("0", "ZZ"), VeloxUserError);
   EXPECT_THROW(parseJoda("00", "ZZ"), VeloxUserError);
@@ -1048,7 +1048,7 @@ TEST_F(JodaDateTimeFormatterTest, parseTimezoneOffset) {
   EXPECT_THROW(parseTZ("-16", "ZZ"), VeloxUserError);
 }
 
-TEST_F(JodaDateTimeFormatterTest, parseTimezone) {
+TEST_F(JodaDateTimeFormatterTest, parseTimeZone) {
   EXPECT_THROW(parseJoda("", "z"), VeloxUserError);
   EXPECT_THROW(parseJoda("ANY", "z"), VeloxUserError);
   EXPECT_THROW(parseJoda("GM", "z"), VeloxUserError);
@@ -1079,20 +1079,20 @@ TEST_F(JodaDateTimeFormatterTest, parseMixedYMDFormat) {
       fromTimestampString("2019-07-03 11:04:10"),
       parseJoda("10:04:11 03-07-2019", "ss:mm:HH dd-MM-YYYY").timestamp);
 
-  // Include timezone.
+  // Include time zone.
   auto result = parseJoda("2021-11-05+01:00+09:00", "YYYY-MM-dd+HH:mmZZ");
   EXPECT_EQ(fromTimestampString("2021-11-05 01:00:00"), result.timestamp);
-  EXPECT_EQ("+09:00", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+09:00", tz::getTimeZoneName(result.timeZoneId));
 
-  // Timezone offset in -hh:mm format.
+  // Time zone offset in -hh:mm format.
   result = parseJoda("-07:232021-11-05+01:00", "ZZYYYY-MM-dd+HH:mm");
   EXPECT_EQ(fromTimestampString("2021-11-05 01:00:00"), result.timestamp);
-  EXPECT_EQ("-07:23", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("-07:23", tz::getTimeZoneName(result.timeZoneId));
 
-  // Timezone offset in +hhmm format.
+  // Time zone offset in +hhmm format.
   result = parseJoda("+01332022-03-08+13:00", "ZZYYYY-MM-dd+HH:mm");
   EXPECT_EQ(fromTimestampString("2022-03-08 13:00:00"), result.timestamp);
-  EXPECT_EQ("+01:33", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+01:33", tz::getTimeZoneName(result.timeZoneId));
 
   // Z in the input means GMT in Joda.
   EXPECT_EQ(
@@ -1100,10 +1100,10 @@ TEST_F(JodaDateTimeFormatterTest, parseMixedYMDFormat) {
       parseJoda("2022-07-29T20:03:54.667Z", "yyyy-MM-dd'T'HH:mm:ss.SSSZ")
           .timestamp);
 
-  // Timezone in string format.
+  // Time zone in string format.
   result = parseJoda("2021-11-05+01:00 PST", "YYYY-MM-dd+HH:mm zz");
   EXPECT_EQ(fromTimestampString("2021-11-05 01:00:00"), result.timestamp);
-  EXPECT_EQ("America/Los_Angeles", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("America/Los_Angeles", tz::getTimeZoneName(result.timeZoneId));
 }
 
 TEST_F(JodaDateTimeFormatterTest, parseMixedWeekFormat) {
@@ -1221,35 +1221,35 @@ TEST_F(JodaDateTimeFormatterTest, parseMixedWeekFormat) {
       fromTimestampString("2021-05-31 13:29:21.213"),
       parseJoda("213.21:29:13 1 22 2021", "SSS.ss:mm:HH e w x").timestamp);
 
-  // Include timezone.
+  // Include time zone.
   auto result =
       parseJoda("2021 22 1 13:29:21.213+09:00", "x w e HH:mm:ss.SSSZZ");
   EXPECT_EQ(fromTimestampString("2021-05-31 13:29:21.213"), result.timestamp);
-  EXPECT_EQ("+09:00", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+09:00", tz::getTimeZoneName(result.timeZoneId));
 
-  // Timezone offset in -hh:mm format.
+  // Time zone offset in -hh:mm format.
   result = parseJoda("-07:232021 22 1 13:29:21.213", "ZZx w e HH:mm:ss.SSS");
   EXPECT_EQ(fromTimestampString("2021-05-31 13:29:21.213"), result.timestamp);
-  EXPECT_EQ("-07:23", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("-07:23", tz::getTimeZoneName(result.timeZoneId));
 
-  // Timezone offset in +hhmm format.
+  // Time zone offset in +hhmm format.
   result = parseJoda("+01332021 22 1 13:29:21.213", "ZZx w e HH:mm:ss.SSS");
   EXPECT_EQ(fromTimestampString("2021-05-31 13:29:21.213"), result.timestamp);
-  EXPECT_EQ("+01:33", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+01:33", tz::getTimeZoneName(result.timeZoneId));
 }
 
 TEST_F(JodaDateTimeFormatterTest, parseFractionOfSecond) {
-  // Valid milliseconds and timezone with positive offset.
+  // Valid milliseconds and time zone with positive offset.
   auto result =
       parseJoda("2022-02-23T12:15:00.364+04:00", "yyyy-MM-dd'T'HH:mm:ss.SSSZ");
   EXPECT_EQ(fromTimestampString("2022-02-23 12:15:00.364"), result.timestamp);
-  EXPECT_EQ("+04:00", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+04:00", tz::getTimeZoneName(result.timeZoneId));
 
-  // Valid milliseconds and timezone with negative offset.
+  // Valid milliseconds and time zone with negative offset.
   result =
       parseJoda("2022-02-23T12:15:00.776-14:00", "yyyy-MM-dd'T'HH:mm:ss.SSSZ");
   EXPECT_EQ(fromTimestampString("2022-02-23 12:15:00.776"), result.timestamp);
-  EXPECT_EQ("-14:00", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("-14:00", tz::getTimeZoneName(result.timeZoneId));
 
   // Valid milliseconds.
   EXPECT_EQ(
@@ -1314,23 +1314,23 @@ TEST_F(JodaDateTimeFormatterTest, parseConsecutiveSpecifiers) {
 }
 
 TEST_F(JodaDateTimeFormatterTest, formatResultSize) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
-      buildJodaDateTimeFormatter("yyyy-MM-dd")->maxResultSize(timezone), 12);
-  EXPECT_EQ(buildJodaDateTimeFormatter("yyyy-MM")->maxResultSize(timezone), 9);
-  EXPECT_EQ(buildJodaDateTimeFormatter("y")->maxResultSize(timezone), 6);
+      buildJodaDateTimeFormatter("yyyy-MM-dd")->maxResultSize(timeZone), 12);
+  EXPECT_EQ(buildJodaDateTimeFormatter("yyyy-MM")->maxResultSize(timeZone), 9);
+  EXPECT_EQ(buildJodaDateTimeFormatter("y")->maxResultSize(timeZone), 6);
   EXPECT_EQ(
-      buildJodaDateTimeFormatter("yyyy////MM////dd")->maxResultSize(timezone),
+      buildJodaDateTimeFormatter("yyyy////MM////dd")->maxResultSize(timeZone),
       18);
   EXPECT_EQ(
       buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS")
-          ->maxResultSize(timezone),
+          ->maxResultSize(timeZone),
       31);
   // No padding. CENTURY_OF_ERA can be at most 3 digits.
-  EXPECT_EQ(buildJodaDateTimeFormatter("C")->maxResultSize(timezone), 3);
+  EXPECT_EQ(buildJodaDateTimeFormatter("C")->maxResultSize(timeZone), 3);
   // Needs to pad to make result contain 4 digits.
-  EXPECT_EQ(buildJodaDateTimeFormatter("CCCC")->maxResultSize(timezone), 4);
+  EXPECT_EQ(buildJodaDateTimeFormatter("CCCC")->maxResultSize(timeZone), 4);
 }
 
 TEST_F(JodaDateTimeFormatterTest, betterErrorMessaging) {
@@ -1420,354 +1420,354 @@ TEST_F(MysqlDateTimeTest, invalidBuild) {
 }
 
 TEST_F(MysqlDateTimeTest, formatYear) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
   EXPECT_EQ(
-      formatMysqlDateTime("%Y", fromTimestampString("0-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("0-01-01"), timeZone),
       "0000");
   EXPECT_EQ(
-      formatMysqlDateTime("%Y", fromTimestampString("1-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("1-01-01"), timeZone),
       "0001");
   EXPECT_EQ(
-      formatMysqlDateTime("%Y", fromTimestampString("199-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("199-01-01"), timeZone),
       "0199");
   EXPECT_EQ(
-      formatMysqlDateTime("%Y", fromTimestampString("9999-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("9999-01-01"), timeZone),
       "9999");
   EXPECT_EQ(
-      formatMysqlDateTime("%Y", fromTimestampString("-1-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("-1-01-01"), timeZone),
       "-0001");
   EXPECT_EQ(
-      formatMysqlDateTime("%Y", fromTimestampString("19999-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("19999-01-01"), timeZone),
       "19999");
   EXPECT_EQ(
-      formatMysqlDateTime("%Y", fromTimestampString("-19999-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("-19999-01-01"), timeZone),
       "-19999");
   EXPECT_EQ(
-      formatMysqlDateTime("%Y", fromTimestampString("-1-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("-1-01-01"), timeZone),
       "-0001");
   EXPECT_THROW(
-      formatMysqlDateTime("%Y", fromTimestampString("-99999-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("-99999-01-01"), timeZone),
       VeloxRuntimeError);
   EXPECT_THROW(
-      formatMysqlDateTime("%Y", fromTimestampString("99999-01-01"), timezone),
+      formatMysqlDateTime("%Y", fromTimestampString("99999-01-01"), timeZone),
       VeloxRuntimeError);
 }
 
 TEST_F(MysqlDateTimeTest, formatMonthDay) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
-      formatMysqlDateTime("%m~%d", fromTimestampString("0-01-01"), timezone),
+      formatMysqlDateTime("%m~%d", fromTimestampString("0-01-01"), timeZone),
       "01~01");
   EXPECT_EQ(
-      formatMysqlDateTime("%m~%d", fromTimestampString("1-10-24"), timezone),
+      formatMysqlDateTime("%m~%d", fromTimestampString("1-10-24"), timeZone),
       "10~24");
   EXPECT_EQ(
-      formatMysqlDateTime("%m~%d", fromTimestampString("199-09-30"), timezone),
+      formatMysqlDateTime("%m~%d", fromTimestampString("199-09-30"), timeZone),
       "09~30");
   EXPECT_EQ(
-      formatMysqlDateTime("%m~%d", fromTimestampString("9999-01-01"), timezone),
+      formatMysqlDateTime("%m~%d", fromTimestampString("9999-01-01"), timeZone),
       "01~01");
   EXPECT_EQ(
-      formatMysqlDateTime("%m~%d", fromTimestampString("-1-01-01"), timezone),
-      "01~01");
-  EXPECT_EQ(
-      formatMysqlDateTime(
-          "%m~%d", fromTimestampString("19999-01-01"), timezone),
+      formatMysqlDateTime("%m~%d", fromTimestampString("-1-01-01"), timeZone),
       "01~01");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%m~%d", fromTimestampString("-19999-01-01"), timezone),
+          "%m~%d", fromTimestampString("19999-01-01"), timeZone),
       "01~01");
   EXPECT_EQ(
-      formatMysqlDateTime("%m~%d", fromTimestampString("-1-01-01"), timezone),
+      formatMysqlDateTime(
+          "%m~%d", fromTimestampString("-19999-01-01"), timeZone),
       "01~01");
   EXPECT_EQ(
-      formatMysqlDateTime("%m~%d", fromTimestampString("2000-02-29"), timezone),
+      formatMysqlDateTime("%m~%d", fromTimestampString("-1-01-01"), timeZone),
+      "01~01");
+  EXPECT_EQ(
+      formatMysqlDateTime("%m~%d", fromTimestampString("2000-02-29"), timeZone),
       "02~29");
   EXPECT_THROW(
-      formatMysqlDateTime("%m~%d", fromTimestampString("-1-13-01"), timezone),
+      formatMysqlDateTime("%m~%d", fromTimestampString("-1-13-01"), timeZone),
       VeloxUserError);
   EXPECT_THROW(
-      formatMysqlDateTime("%m~%d", fromTimestampString("1999-02-50"), timezone),
+      formatMysqlDateTime("%m~%d", fromTimestampString("1999-02-50"), timeZone),
       VeloxUserError);
   EXPECT_THROW(
-      formatMysqlDateTime("%m~%d", fromTimestampString("1999-02-29"), timezone),
+      formatMysqlDateTime("%m~%d", fromTimestampString("1999-02-29"), timeZone),
       VeloxUserError);
 }
 
 TEST_F(MysqlDateTimeTest, formatWeekday) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%a..->%W", fromTimestampString("1999-01-04"), timezone),
+          "%a..->%W", fromTimestampString("1999-01-04"), timeZone),
       "Mon..->Monday");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%a..->%W", fromTimestampString("1999-01-05"), timezone),
+          "%a..->%W", fromTimestampString("1999-01-05"), timeZone),
       "Tue..->Tuesday");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%a..->%W", fromTimestampString("1999-01-06"), timezone),
+          "%a..->%W", fromTimestampString("1999-01-06"), timeZone),
       "Wed..->Wednesday");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%a..->%W", fromTimestampString("1999-01-07"), timezone),
+          "%a..->%W", fromTimestampString("1999-01-07"), timeZone),
       "Thu..->Thursday");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%a..->%W", fromTimestampString("1999-01-08"), timezone),
+          "%a..->%W", fromTimestampString("1999-01-08"), timeZone),
       "Fri..->Friday");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%a..->%W", fromTimestampString("1999-01-09"), timezone),
+          "%a..->%W", fromTimestampString("1999-01-09"), timeZone),
       "Sat..->Saturday");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%a..->%W", fromTimestampString("1999-01-10"), timezone),
+          "%a..->%W", fromTimestampString("1999-01-10"), timeZone),
       "Sun..->Sunday");
 }
 
 TEST_F(MysqlDateTimeTest, formatMonth) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-01-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-01-04"), timeZone),
       "1-01-January");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-02-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-02-04"), timeZone),
       "2-02-February");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-03-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-03-04"), timeZone),
       "3-03-March");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-04-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-04-04"), timeZone),
       "4-04-April");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-05-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-05-04"), timeZone),
       "5-05-May");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-06-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-06-04"), timeZone),
       "6-06-June");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-07-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-07-04"), timeZone),
       "7-07-July");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-08-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-08-04"), timeZone),
       "8-08-August");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-09-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-09-04"), timeZone),
       "9-09-September");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-10-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-10-04"), timeZone),
       "10-10-October");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-11-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-11-04"), timeZone),
       "11-11-November");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%c-%m-%M", fromTimestampString("1999-12-04"), timezone),
+          "%c-%m-%M", fromTimestampString("1999-12-04"), timeZone),
       "12-12-December");
 }
 
 TEST_F(MysqlDateTimeTest, formatDayOfMonth) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
-      formatMysqlDateTime("%d-%e", fromTimestampString("2000-02-01"), timezone),
+      formatMysqlDateTime("%d-%e", fromTimestampString("2000-02-01"), timeZone),
       "01-1");
   EXPECT_EQ(
-      formatMysqlDateTime("%d-%e", fromTimestampString("2000-02-29"), timezone),
+      formatMysqlDateTime("%d-%e", fromTimestampString("2000-02-29"), timeZone),
       "29-29");
   EXPECT_EQ(
-      formatMysqlDateTime("%d-%e", fromTimestampString("2000-12-31"), timezone),
+      formatMysqlDateTime("%d-%e", fromTimestampString("2000-12-31"), timeZone),
       "31-31");
 }
 
 TEST_F(MysqlDateTimeTest, formatFractionOfSecond) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%f", fromTimestampString("2000-02-01 00:00:00.987"), timezone),
+          "%f", fromTimestampString("2000-02-01 00:00:00.987"), timeZone),
       "987000");
 
   // As our current precision is 3 decimal places.
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%f", fromTimestampString("2000-02-01 00:00:00.987654"), timezone),
+          "%f", fromTimestampString("2000-02-01 00:00:00.987654"), timeZone),
       "987000");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%f", fromTimestampString("2000-02-01 00:00:00.900654"), timezone),
+          "%f", fromTimestampString("2000-02-01 00:00:00.900654"), timeZone),
       "900000");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%f", fromTimestampString("2000-02-01 00:00:00.090654"), timezone),
+          "%f", fromTimestampString("2000-02-01 00:00:00.090654"), timeZone),
       "090000");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%f", fromTimestampString("2000-02-01 00:00:00.009654"), timezone),
+          "%f", fromTimestampString("2000-02-01 00:00:00.009654"), timeZone),
       "009000");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%f", fromTimestampString("2000-02-01 00:00:00.000654"), timezone),
+          "%f", fromTimestampString("2000-02-01 00:00:00.000654"), timeZone),
       "000000");
 }
 
 TEST_F(MysqlDateTimeTest, formatHour) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
       formatMysqlDateTime(
           "%h--%H--%I--%k--%l",
           fromTimestampString("2000-02-01 00:00:00"),
-          timezone),
+          timeZone),
       "12--00--12--0--12");
   EXPECT_EQ(
       formatMysqlDateTime(
           "%h--%H--%I--%k--%l",
           fromTimestampString("2000-02-01 12:12:01"),
-          timezone),
+          timeZone),
       "12--12--12--12--12");
   EXPECT_EQ(
       formatMysqlDateTime(
           "%h--%H--%I--%k--%l",
           fromTimestampString("2000-02-01 23:23:01"),
-          timezone),
+          timeZone),
       "11--23--11--23--11");
 }
 
 TEST_F(MysqlDateTimeTest, formatMinute) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%i", fromTimestampString("2000-02-01 00:00:00"), timezone),
+          "%i", fromTimestampString("2000-02-01 00:00:00"), timeZone),
       "00");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%i", fromTimestampString("2000-02-01 00:09:00"), timezone),
+          "%i", fromTimestampString("2000-02-01 00:09:00"), timeZone),
       "09");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%i", fromTimestampString("2000-02-01 00:31:00"), timezone),
+          "%i", fromTimestampString("2000-02-01 00:31:00"), timeZone),
       "31");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%i", fromTimestampString("2000-02-01 00:59:00"), timezone),
+          "%i", fromTimestampString("2000-02-01 00:59:00"), timeZone),
       "59");
 }
 
 TEST_F(MysqlDateTimeTest, formatDayOfYear) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%j", fromTimestampString("2000-01-01 00:00:00"), timezone),
+          "%j", fromTimestampString("2000-01-01 00:00:00"), timeZone),
       "001");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%j", fromTimestampString("2000-12-31 00:09:00"), timezone),
+          "%j", fromTimestampString("2000-12-31 00:09:00"), timeZone),
       "366");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%j", fromTimestampString("1999-12-31 00:31:00"), timezone),
+          "%j", fromTimestampString("1999-12-31 00:31:00"), timeZone),
       "365");
 }
 
 TEST_F(MysqlDateTimeTest, formatAmPm) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%p", fromTimestampString("2000-01-01 00:00:00"), timezone),
+          "%p", fromTimestampString("2000-01-01 00:00:00"), timeZone),
       "AM");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%p", fromTimestampString("2000-01-01 11:59:59"), timezone),
+          "%p", fromTimestampString("2000-01-01 11:59:59"), timeZone),
       "AM");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%p", fromTimestampString("2000-01-01 12:00:00"), timezone),
+          "%p", fromTimestampString("2000-01-01 12:00:00"), timeZone),
       "PM");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%p", fromTimestampString("2000-01-01 23:59:59"), timezone),
+          "%p", fromTimestampString("2000-01-01 23:59:59"), timeZone),
       "PM");
 }
 
 TEST_F(MysqlDateTimeTest, formatSecond) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%s-%S", fromTimestampString("2000-01-01 00:00:00"), timezone),
+          "%s-%S", fromTimestampString("2000-01-01 00:00:00"), timeZone),
       "00-00");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%s-%S", fromTimestampString("2000-01-01 00:00:30"), timezone),
+          "%s-%S", fromTimestampString("2000-01-01 00:00:30"), timeZone),
       "30-30");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%s-%S", fromTimestampString("2000-01-01 00:00:59"), timezone),
+          "%s-%S", fromTimestampString("2000-01-01 00:00:59"), timeZone),
       "59-59");
 }
 
 TEST_F(MysqlDateTimeTest, formatCompositeTime) {
-  auto* timezone = tz::locateZone("GMT");
+  auto* timeZone = tz::locateZone("GMT");
 
   // 12 hour %r
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%r", fromTimestampString("2000-01-01 00:00:00"), timezone),
+          "%r", fromTimestampString("2000-01-01 00:00:00"), timeZone),
       "12:00:00 AM");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%r", fromTimestampString("2000-01-01 11:59:59"), timezone),
+          "%r", fromTimestampString("2000-01-01 11:59:59"), timeZone),
       "11:59:59 AM");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%r", fromTimestampString("2000-01-01 12:00:00"), timezone),
+          "%r", fromTimestampString("2000-01-01 12:00:00"), timeZone),
       "12:00:00 PM");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%r", fromTimestampString("2000-01-01 23:59:59"), timezone),
+          "%r", fromTimestampString("2000-01-01 23:59:59"), timeZone),
       "11:59:59 PM");
 
   // 24 hour %T
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%T", fromTimestampString("2000-01-01 00:00:00"), timezone),
+          "%T", fromTimestampString("2000-01-01 00:00:00"), timeZone),
 
       "00:00:00");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%T", fromTimestampString("2000-01-01 11:59:59"), timezone),
+          "%T", fromTimestampString("2000-01-01 11:59:59"), timeZone),
       "11:59:59");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%T", fromTimestampString("2000-01-01 12:00:00"), timezone),
+          "%T", fromTimestampString("2000-01-01 12:00:00"), timeZone),
       "12:00:00");
   EXPECT_EQ(
       formatMysqlDateTime(
-          "%T", fromTimestampString("2000-01-01 23:59:59"), timezone),
+          "%T", fromTimestampString("2000-01-01 23:59:59"), timeZone),
       "23:59:59");
 }
 

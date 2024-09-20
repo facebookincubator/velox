@@ -102,35 +102,35 @@ TypePtr buildStructType(
 std::unique_ptr<SimpleCastBenchmark> benchmark;
 
 BENCHMARK(castTimestampDateSmall) {
-  benchmark->setAdjustTimestampToTimezone("false");
+  benchmark->setAdjustTimestampToTimeZone("false");
   benchmark->runSmall(TIMESTAMP(), DATE());
 }
 
 BENCHMARK(castTimestampDateMedium) {
-  benchmark->setAdjustTimestampToTimezone("false");
+  benchmark->setAdjustTimestampToTimeZone("false");
   benchmark->runMedium(TIMESTAMP(), DATE());
 }
 
 BENCHMARK(castTimestampDateLarge) {
-  benchmark->setAdjustTimestampToTimezone("false");
+  benchmark->setAdjustTimestampToTimeZone("false");
   benchmark->runLarge(TIMESTAMP(), DATE());
 }
 
 BENCHMARK(castTimestampDateAdjustTimeZoneSmall) {
-  benchmark->setTimezone("America/Los_Angeles");
-  benchmark->setAdjustTimestampToTimezone("true");
+  benchmark->setTimeZone("America/Los_Angeles");
+  benchmark->setAdjustTimestampToTimeZone("true");
   benchmark->runSmall(TIMESTAMP(), DATE());
 }
 
 BENCHMARK(castTimestampDateAdjustTimeZoneMedium) {
-  benchmark->setTimezone("America/Los_Angeles");
-  benchmark->setAdjustTimestampToTimezone("true");
+  benchmark->setTimeZone("America/Los_Angeles");
+  benchmark->setAdjustTimestampToTimeZone("true");
   benchmark->runMedium(TIMESTAMP(), DATE());
 }
 
 BENCHMARK(castTimestampDateAdjustTimeZoneLarge) {
-  benchmark->setTimezone("America/Los_Angeles");
-  benchmark->setAdjustTimestampToTimezone("true");
+  benchmark->setTimeZone("America/Los_Angeles");
+  benchmark->setAdjustTimestampToTimeZone("true");
   benchmark->runLarge(TIMESTAMP(), DATE());
 }
 

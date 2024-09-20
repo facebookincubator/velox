@@ -93,10 +93,10 @@ enum class DateTimeFormatSpecifier : uint8_t {
   // Decimal fraction of a second, e.g: The fraction of 00:00:01.987 is 987
   FRACTION_OF_SECOND = 20,
 
-  // Timezone, e.g: "Pacific Standard Time" or "PST"
+  // Time zone, e.g: "Pacific Standard Time" or "PST"
   TIMEZONE = 21,
 
-  // Timezone offset/id, e.g: "-0800", "-08:00" or "America/Los_Angeles"
+  // Time zone offset/id, e.g: "-0800", "-08:00" or "America/Los_Angeles"
   TIMEZONE_OFFSET_ID = 22,
 
   // A literal % character
@@ -142,7 +142,7 @@ struct DateTimeToken {
 
 struct DateTimeResult {
   Timestamp timestamp;
-  int64_t timezoneId{-1};
+  int64_t timeZoneId{-1};
 };
 
 /// A user defined formatter that formats/parses time to/from user provided
@@ -175,13 +175,13 @@ class DateTimeFormatter {
   }
 
   // Returns an Expected<DateTimeResult> object containing the parsed
-  // Timestamp and timezone information if parsing succeeded. Otherwise,
+  // Timestamp and time zone information if parsing succeeded. Otherwise,
   // Returns Unexpected with UserError status if parsing failed.
   Expected<DateTimeResult> parse(const std::string_view& input) const;
 
   /// Returns max size of the formatted string. Can be used to preallocate
   /// memory before calling format() to avoid extra copy.
-  uint32_t maxResultSize(const tz::TimeZone* timezone) const;
+  uint32_t maxResultSize(const tz::TimeZone* timeZone) const;
 
   /// Result buffer is pre-allocated according to maxResultSize.
   /// Returns actual size.
@@ -191,7 +191,7 @@ class DateTimeFormatter {
   /// allowed in converting to milliseconds.
   int32_t format(
       const Timestamp& timestamp,
-      const tz::TimeZone* timezone,
+      const tz::TimeZone* timeZone,
       const uint32_t maxResultSize,
       char* result,
       bool allowOverflow = false) const;

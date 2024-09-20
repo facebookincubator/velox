@@ -26,11 +26,12 @@ class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
   VectorPtr makeTimestampWithTimeZoneVector(
       vector_size_t size,
       const std::function<int64_t(int32_t row)>& timestampAt,
-      const std::function<int16_t(int32_t row)>& timezoneAt) {
+      const std::function<int16_t(int32_t row)>& timeZoneAt) {
     return makeFlatVector<int64_t>(
         size,
         [&](int32_t index) {
-          return pack(timestampAt(index), timezoneAt(index));
+          return TimestampWithTimeZoneType::pack(
+              timestampAt(index), timeZoneAt(index));
         },
         nullptr,
         TIMESTAMP_WITH_TIME_ZONE());
@@ -44,7 +45,7 @@ class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
     });
   }
 
-  void disableAdjustTimestampToTimezone() {
+  void disableAdjustTimestampToTimeZone() {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
     });
@@ -56,11 +57,11 @@ TEST_F(TimestampWithTimeZoneCastTest, fromTimestamp) {
       {Timestamp(1996, 0), std::nullopt, Timestamp(19920, 0)});
   auto timestamps =
       std::vector<int64_t>{1996 * kMillisInSecond, 0, 19920 * kMillisInSecond};
-  auto timezones = std::vector<TimeZoneKey>{0, 0, 0};
+  auto timeZones = std::vector<TimestampWithTimeZoneType::TimeZoneId>{0, 0, 0};
   const auto expected = makeTimestampWithTimeZoneVector(
       timestamps.size(),
       [&](int32_t index) { return timestamps[index]; },
-      [&](int32_t index) { return timezones[index]; });
+      [&](int32_t index) { return timeZones[index]; });
   expected->setNull(1, true);
 
   testCast(tsVector, expected);
@@ -79,7 +80,7 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarchar) {
   // zone). For instance, the first string represents a wall-clock displaying
   // '2012-10-31 01:00:47' in Denver. Below, we use UTC representations of the
   // above local wall-clocks, to match the UTC timepoints held in the
-  // TimestampWithTimezone type.
+  // TimestampWithTimeZone type.
   auto denverUTC = parseTimestamp("2012-10-31 07:00:47").toMillis();
   auto viennaUTC = parseTimestamp("1994-05-06 13:49:00").toMillis();
   auto chathamUTC = parseTimestamp("1979-02-23 18:48:31").toMillis();
@@ -87,7 +88,7 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarchar) {
   auto timestamps = std::vector<int64_t>{
       0, denverUTC, denverUTC, viennaUTC, chathamUTC, chathamUTC};
 
-  auto timezones = std::vector<TimeZoneKey>{
+  auto timeZones = std::vector<TimestampWithTimeZoneType::TimeZoneId>{
       {0,
        (int16_t)tz::getTimeZoneID("America/Denver"),
        (int16_t)tz::getTimeZoneID("-06:00"),
@@ -98,7 +99,7 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarchar) {
   const auto expected = makeTimestampWithTimeZoneVector(
       timestamps.size(),
       [&](int32_t index) { return timestamps[index]; },
-      [&](int32_t index) { return timezones[index]; });
+      [&](int32_t index) { return timeZones[index]; });
   expected->setNull(0, true);
 
   testCast(stringVector, expected);
@@ -111,13 +112,17 @@ TEST_F(TimestampWithTimeZoneCastTest, toVarchar) {
   auto input = makeFlatVector<int64_t>(
       {
           // -5 hours.
-          pack(utcMillis, tz::getTimeZoneID("America/New_York")),
+          TimestampWithTimeZoneType::pack(
+              utcMillis, tz::getTimeZoneID("America/New_York")),
           // -8 hours.
-          pack(utcMillis, tz::getTimeZoneID("America/Los_Angeles")),
+          TimestampWithTimeZoneType::pack(
+              utcMillis, tz::getTimeZoneID("America/Los_Angeles")),
           // +8 hours.
-          pack(utcMillis, tz::getTimeZoneID("Asia/Shanghai")),
+          TimestampWithTimeZoneType::pack(
+              utcMillis, tz::getTimeZoneID("Asia/Shanghai")),
           // +5:30 hours.
-          pack(utcMillis, tz::getTimeZoneID("Asia/Calcutta")),
+          TimestampWithTimeZoneType::pack(
+              utcMillis, tz::getTimeZoneID("Asia/Calcutta")),
       },
       TIMESTAMP_WITH_TIME_ZONE());
 
@@ -132,7 +137,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toVarchar) {
   test::assertEqualVectors(expected, result);
 }
 
-TEST_F(TimestampWithTimeZoneCastTest, fromVarcharWithoutTimezone) {
+TEST_F(TimestampWithTimeZoneCastTest, fromVarcharWithoutTimeZone) {
   setQueryTimeZone("America/Denver");
 
   const auto stringVector =
@@ -141,13 +146,13 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarcharWithoutTimezone) {
 
   auto timestamps = std::vector<int64_t>{denverUTC};
 
-  auto timezones =
-      std::vector<TimeZoneKey>{(int16_t)tz::getTimeZoneID("America/Denver")};
+  auto timeZones = std::vector<TimestampWithTimeZoneType::TimeZoneId>{
+      (int16_t)tz::getTimeZoneID("America/Denver")};
 
   const auto expected = makeTimestampWithTimeZoneVector(
       timestamps.size(),
       [&](int32_t index) { return timestamps[index]; },
-      [&](int32_t index) { return timezones[index]; });
+      [&](int32_t index) { return timeZones[index]; });
 
   testCast(stringVector, expected);
 }
@@ -168,20 +173,20 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarcharInvalidInput) {
   auto millis = parseTimestamp("2012-10-31 07:00:47").toMillis();
   auto timestamps = std::vector<int64_t>{millis};
 
-  auto timezones =
-      std::vector<TimeZoneKey>{(int16_t)tz::getTimeZoneID("America/Denver")};
+  auto timeZones = std::vector<TimestampWithTimeZoneType::TimeZoneId>{
+      (int16_t)tz::getTimeZoneID("America/Denver")};
 
   const auto expected = makeTimestampWithTimeZoneVector(
       timestamps.size(),
       [&](int32_t index) { return timestamps[index]; },
-      [&](int32_t index) { return timezones[index]; });
+      [&](int32_t index) { return timeZones[index]; });
 
   VELOX_ASSERT_THROW(
       testCast(invalidStringVector1, expected),
-      "Unknown timezone value: \"fooAmerica/Los_Angeles\"");
+      "Unknown time zone value: \"fooAmerica/Los_Angeles\"");
   VELOX_ASSERT_THROW(
       testCast(invalidStringVector2, expected),
-      "Unknown timezone value: \"America/California\"");
+      "Unknown time zone value: \"America/California\"");
   VELOX_ASSERT_THROW(
       testCast(invalidStringVector3, expected),
       "Unable to parse timestamp value: \"2012-10-31foo01:00:47 America/Los_Angeles\"");
@@ -193,16 +198,17 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarcharInvalidInput) {
 TEST_F(TimestampWithTimeZoneCastTest, toTimestamp) {
   auto timestamps =
       std::vector<int64_t>{1996 * kMillisInSecond, 0, 19920 * kMillisInSecond};
-  auto timezones = std::vector<TimeZoneKey>{0, 0, 1825 /*America/Los_Angeles*/};
+  auto timeZones = std::vector<TimestampWithTimeZoneType::TimeZoneId>{
+      0, 0, 1825 /*America/Los_Angeles*/};
 
   const auto tsWithTZVector = makeTimestampWithTimeZoneVector(
       timestamps.size(),
       [&](int32_t index) { return timestamps[index]; },
-      [&](int32_t index) { return timezones[index]; });
+      [&](int32_t index) { return timeZones[index]; });
   tsWithTZVector->setNull(1, true);
 
-  for (const char* timezone : {"America/Los_Angeles", "America/New_York"}) {
-    setQueryTimeZone(timezone);
+  for (const char* timeZone : {"America/Los_Angeles", "America/New_York"}) {
+    setQueryTimeZone(timeZone);
     auto expected = makeNullableFlatVector<Timestamp>(
         {Timestamp(1996, 0), std::nullopt, Timestamp(19920, 0)});
     testCast(tsWithTZVector, expected);
@@ -215,7 +221,7 @@ TEST_F(TimestampWithTimeZoneCastTest, toTimestamp) {
     EXPECT_EQ(Timestamp(0, 0), result.value());
   }
 
-  disableAdjustTimestampToTimezone();
+  disableAdjustTimestampToTimeZone();
   auto expected = makeNullableFlatVector<Timestamp>(
       {Timestamp(1996, 0), std::nullopt, Timestamp(19920 - 8 * 3600, 0)});
   testCast(tsWithTZVector, expected);
@@ -233,14 +239,20 @@ TEST_F(TimestampWithTimeZoneCastTest, toDate) {
       {
           // 6AM UTC is 1AM EST (same day), 10PM PST (previous day), 2PM CST
           // (same day).
-          pack(6 * kMillisInHour, tz::getTimeZoneID("America/New_York")),
-          pack(6 * kMillisInHour, tz::getTimeZoneID("America/Los_Angeles")),
-          pack(6 * kMillisInHour, tz::getTimeZoneID("Asia/Shanghai")),
+          TimestampWithTimeZoneType::pack(
+              6 * kMillisInHour, tz::getTimeZoneID("America/New_York")),
+          TimestampWithTimeZoneType::pack(
+              6 * kMillisInHour, tz::getTimeZoneID("America/Los_Angeles")),
+          TimestampWithTimeZoneType::pack(
+              6 * kMillisInHour, tz::getTimeZoneID("Asia/Shanghai")),
           // 6PM UTC is 1PM EST (same day), 10AM PST (same day), 2AM CST (next
           // day).
-          pack(18 * kMillisInHour, tz::getTimeZoneID("America/New_York")),
-          pack(18 * kMillisInHour, tz::getTimeZoneID("America/Los_Angeles")),
-          pack(18 * kMillisInHour, tz::getTimeZoneID("Asia/Shanghai")),
+          TimestampWithTimeZoneType::pack(
+              18 * kMillisInHour, tz::getTimeZoneID("America/New_York")),
+          TimestampWithTimeZoneType::pack(
+              18 * kMillisInHour, tz::getTimeZoneID("America/Los_Angeles")),
+          TimestampWithTimeZoneType::pack(
+              18 * kMillisInHour, tz::getTimeZoneID("Asia/Shanghai")),
       },
       TIMESTAMP_WITH_TIME_ZONE());
   auto expected = makeFlatVector<int32_t>({0, -1, 0, 0, 0, 1}, DATE());
@@ -266,9 +278,9 @@ TEST_F(TimestampWithTimeZoneCastTest, fromDate) {
   auto tzOffset = -5 * kMillisInHour;
   auto expected = makeFlatVector<int64_t>(
       {
-          pack(-kMillisInDay - tzOffset, tzId),
-          pack(-tzOffset, tzId),
-          pack(kMillisInDay - tzOffset, tzId),
+          TimestampWithTimeZoneType::pack(-kMillisInDay - tzOffset, tzId),
+          TimestampWithTimeZoneType::pack(-tzOffset, tzId),
+          TimestampWithTimeZoneType::pack(kMillisInDay - tzOffset, tzId),
       },
       TIMESTAMP_WITH_TIME_ZONE());
   auto result =
@@ -281,9 +293,9 @@ TEST_F(TimestampWithTimeZoneCastTest, fromDate) {
   tzOffset = 8 * kMillisInHour;
   expected = makeFlatVector<int64_t>(
       {
-          pack(-kMillisInDay - tzOffset, tzId),
-          pack(-tzOffset, tzId),
-          pack(kMillisInDay - tzOffset, tzId),
+          TimestampWithTimeZoneType::pack(-kMillisInDay - tzOffset, tzId),
+          TimestampWithTimeZoneType::pack(-tzOffset, tzId),
+          TimestampWithTimeZoneType::pack(kMillisInDay - tzOffset, tzId),
       },
       TIMESTAMP_WITH_TIME_ZONE());
 

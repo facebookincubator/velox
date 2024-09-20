@@ -558,10 +558,10 @@ void configureReaderOptions(
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
   readerOptions.setNoCacheRetention(
       hiveConfig->cacheNoRetention(sessionProperties));
-  const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
+  const auto& sessionTzName = connectorQueryCtx->sessionTimeZone();
   if (!sessionTzName.empty()) {
-    const auto timezone = tz::locateZone(sessionTzName);
-    readerOptions.setSessionTimezone(timezone);
+    const auto timeZone = tz::locateZone(sessionTzName);
+    readerOptions.setSessionTimezone(timeZone);
   }
   readerOptions.setSelectiveNimbleReaderEnabled(
       connectorQueryCtx->selectiveNimbleReaderEnabled());
@@ -884,8 +884,8 @@ std::optional<TimestampUnit> getTimestampUnit(
 std::optional<std::string> getTimestampTimeZone(
     const config::ConfigBase& config,
     const char* configKey) {
-  if (const auto timezone = config.get<std::string>(configKey)) {
-    return timezone.value();
+  if (const auto timeZone = config.get<std::string>(configKey)) {
+    return timeZone.value();
   }
   return std::nullopt;
 }

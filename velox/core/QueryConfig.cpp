@@ -35,7 +35,7 @@ QueryConfig::QueryConfig(std::unordered_map<std::string, std::string>&& values)
 }
 
 void QueryConfig::validateConfig() {
-  // Validate if timezone name can be recognized.
+  // Validate if time zone name can be recognized.
   if (config_->valueExists(QueryConfig::kSessionTimezone)) {
     VELOX_USER_CHECK(
         tz::getTimeZoneID(

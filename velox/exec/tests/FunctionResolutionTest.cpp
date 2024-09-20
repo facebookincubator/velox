@@ -306,13 +306,13 @@ TEST_F(FunctionResolutionTest, resolveCustomTypeJson) {
 template <typename T>
 struct FuncTimestampWithTimeZone {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-  bool call(out_type<TimestampWithTimezone>&) {
+  bool call(out_type<TimestampWithTimeZone>&) {
     return false;
   }
 };
 
 TEST_F(FunctionResolutionTest, resolveCustomTypeTimestampWithTimeZone) {
-  registerFunction<FuncTimestampWithTimeZone, TimestampWithTimezone>(
+  registerFunction<FuncTimestampWithTimeZone, TimestampWithTimeZone>(
       {"f_timestampzone"});
 
   auto type =

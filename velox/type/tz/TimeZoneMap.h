@@ -51,11 +51,11 @@ const TimeZone* locateZone(std::string_view timeZone, bool failOnError = true);
 /// zone ID was not valid.
 const TimeZone* locateZone(int16_t timeZoneID, bool failOnError = true);
 
-/// Returns the timezone name associated with timeZoneID.
+/// Returns the time zone name associated with timeZoneID.
 std::string getTimeZoneName(int64_t timeZoneID);
 
-/// Returns the timeZoneID for the timezone name.
-/// If failOnError = true, throws an exception for unrecognized timezone.
+/// Returns the timeZoneID for the time zone name.
+/// If failOnError = true, throws an exception for unrecognized time zone.
 /// Otherwise, returns -1.
 int16_t getTimeZoneID(std::string_view timeZone, bool failOnError = true);
 
@@ -74,7 +74,7 @@ void validateRange(time_point<std::chrono::milliseconds> timePoint);
 /// TimeZone is the proxy object for time zone management. It provides access to
 /// time zone names, their IDs (as defined in TimeZoneDatabase.cpp and
 /// consistent with Presto), and utilities for timestamp conversion across
-/// timezones by leveraging the .to_sys() and .to_local() methods as documented
+/// time zones by leveraging the .to_sys() and .to_local() methods as documented
 /// in:
 ///
 ///   https://howardhinnant.github.io/date/tz.html

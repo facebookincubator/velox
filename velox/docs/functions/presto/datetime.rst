@@ -297,7 +297,7 @@ a format string compatible with JodaTime’s `DateTimeFormat
 pattern format. The symbols currently supported are ``y``, ``Y``, ``M`` , ``d``,
 ``H``, ``m``, ``s``, ``S``, ``z`` and ``Z``.
 
-``z`` represents a timezone name (3-letter format), and ``Z`` a timezone offset
+``z`` represents a time zone name (3-letter format), and ``Z`` a time zone offset
 specified using the format ``+00``, ``+00:00`` or ``+0000`` (or ``-``). ``Z``
 also accepts ``UTC``,  ``UCT``, ``GMT``, and ``GMT0`` as valid representations
 of GMT.
@@ -458,11 +458,11 @@ It can be interpreted as `2014-11-02 01:30:00 PDT`, or `2014-11-02 01:30:00 PST`
 `2014-11-02 08:30:00 UTC` or `2014-11-02 09:30:00 UTC` respectively. The former one is
 picked to be consistent with Presto.
 
-**Timezone Name Parsing**: When parsing strings that contain timezone names, the
-list of supported timezones follow the definition `here
+**Time Zone Name Parsing**: When parsing strings that contain time zone names, the
+list of supported time zones follow the definition `here
 <https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>`_.
 
-**Timezone Conversion**: The ``AT TIME ZONE`` operator sets the time zone of a timestamp: ::
+**Time Zone Conversion**: The ``AT TIME ZONE`` operator sets the time zone of a timestamp: ::
 
         SELECT timestamp '2012-10-31 01:00 UTC';
         -- 2012-10-31 01:00:00.000 UTC

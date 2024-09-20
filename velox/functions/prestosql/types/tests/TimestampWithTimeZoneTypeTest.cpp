@@ -59,9 +59,14 @@ TEST_F(TimestampWithTimeZoneTypeTest, pack) {
     SCOPED_TRACE(
         fmt::format("millisUtc={}, timeZoneKey={}", millisUtc, timeZoneKey));
 
-    auto packedTimeMillis = pack(millisUtc, timeZoneKey);
-    ASSERT_EQ(unpackMillisUtc(packedTimeMillis), millisUtc);
-    ASSERT_EQ(unpackZoneKeyId(packedTimeMillis), timeZoneKey);
+    auto packedTimeMillis =
+        TimestampWithTimeZoneType::pack(millisUtc, timeZoneKey);
+    ASSERT_EQ(
+        TimestampWithTimeZoneType::unpackMillisUtc(packedTimeMillis),
+        millisUtc);
+    ASSERT_EQ(
+        TimestampWithTimeZoneType::unpackTimeZoneId(packedTimeMillis),
+        timeZoneKey);
   }
 }
 

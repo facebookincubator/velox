@@ -225,7 +225,7 @@ TEST_F(GreatestLeastTest, leastTimeStamp) {
       {Timestamp(0, 0), Timestamp(10, 1), Timestamp(1, 10)});
 }
 
-TEST_F(GreatestLeastTest, greatestTimestampWithTimezone) {
+TEST_F(GreatestLeastTest, greatestTimestampWithTimeZone) {
   auto greatest = [&](const std::string& a,
                       const std::string& b,
                       const std::string& c) {

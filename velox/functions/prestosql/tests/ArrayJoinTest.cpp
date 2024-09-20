@@ -135,7 +135,7 @@ TEST_F(ArrayJoinTest, timestampTest) {
       "1970-01-04T20:33:03.000~<missing>~1970-02-03T20:33:03.000"_sv);
 
   setLegacyCast(false);
-  setTimezone("America/Los_Angeles");
+  setTimeZone("America/Los_Angeles");
   testArrayJoinNoReplacement<Timestamp>(
       {Timestamp{333183, 0}, std::nullopt, Timestamp{2925183, 0}},
       "~"_sv,

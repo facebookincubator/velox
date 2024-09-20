@@ -55,7 +55,7 @@ VectorPtr newConstantFromString(
                       VELOX_USER_FAIL("{}", status.message());
                     });
     if constexpr (kind == TypeKind::TIMESTAMP) {
-      copy.toGMT(Timestamp::defaultTimezone());
+      copy.toGMT(Timestamp::defaultTimeZone());
     }
     return std::make_shared<ConstantVector<T>>(
         pool, size, false, type, std::move(copy));

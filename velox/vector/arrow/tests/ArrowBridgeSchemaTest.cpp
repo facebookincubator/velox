@@ -200,7 +200,7 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARCHAR(), "u");
   testScalarType(VARBINARY(), "z");
 
-  // Test default timezone
+  // Test default time zone
   testScalarType(
       TIMESTAMP(), "tss:", {.timestampUnit = TimestampUnit::kSecond});
   testScalarType(TIMESTAMP(), "tsm:", {.timestampUnit = TimestampUnit::kMilli});
@@ -210,7 +210,7 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARCHAR(), "vu", {.exportToStringView = true});
   testScalarType(VARBINARY(), "vz", {.exportToStringView = true});
 
-  // Test specific timezone
+  // Test specific time zone
   testScalarType(
       TIMESTAMP(),
       "tss:+01:0",

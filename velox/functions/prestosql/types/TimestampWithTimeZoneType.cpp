@@ -41,17 +41,18 @@ void castFromTimestamp(
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
   const auto* sessionTimeZone = getTimeZoneFromConfig(config);
 
-  const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
+  const auto adjustTimestampToTimeZone = config.adjustTimestampToTimezone();
 
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     auto ts = inputVector.valueAt(row);
-    if (!adjustTimestampToTimezone) {
+    if (!adjustTimestampToTimeZone) {
       // Treat TIMESTAMP as wall time in session time zone. This means that in
       // order to get its UTC representation we need to shift the value by the
       // offset of the time zone.
       ts.toGMT(*sessionTimeZone);
     }
-    rawResults[row] = pack(ts.toMillis(), sessionTimeZone->id());
+    rawResults[row] =
+        TimestampWithTimeZoneType::pack(ts.toMillis(), sessionTimeZone->id());
   });
 }
 
@@ -71,7 +72,8 @@ void castFromDate(
     if (sessionTimeZone != nullptr) {
       ts.toGMT(*sessionTimeZone);
     }
-    rawResults[row] = pack(ts.toMillis(), sessionTimeZone->id());
+    rawResults[row] =
+        TimestampWithTimeZoneType::pack(ts.toMillis(), sessionTimeZone->id());
   });
 }
 
@@ -81,7 +83,7 @@ void castFromString(
     const SelectivityVector& rows,
     int64_t* rawResults) {
   context.applyToSelectedNoThrow(rows, [&](auto row) {
-    const auto castResult = util::fromTimestampWithTimezoneString(
+    const auto castResult = util::fromTimestampWithTimeZoneString(
         inputVector.valueAt(row).data(),
         inputVector.valueAt(row).size(),
         util::TimestampParseMode::kPrestoCast);
@@ -89,14 +91,15 @@ void castFromString(
       context.setStatus(row, castResult.error());
     } else {
       auto [ts, timeZone] = castResult.value();
-      // Input string may not contain a timezone - if so, it is interpreted in
-      // session timezone.
+      // Input string may not contain a time zone - if so, it is interpreted in
+      // session time zone.
       if (timeZone == nullptr) {
         const auto& config = context.execCtx()->queryCtx()->queryConfig();
         timeZone = getTimeZoneFromConfig(config);
       }
       ts.toGMT(*timeZone);
-      rawResults[row] = pack(ts.toMillis(), timeZone->id());
+      rawResults[row] =
+          TimestampWithTimeZoneType::pack(ts.toMillis(), timeZone->id());
     }
   });
 }
@@ -113,18 +116,20 @@ void castToString(
       functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS zzzz");
 
   context.applyToSelectedNoThrow(rows, [&](auto row) {
-    const auto timestampWithTimezone = timestamps->valueAt(row);
+    const auto timestampWithTimeZone = timestamps->valueAt(row);
 
-    const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-    const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
-    const auto* timezonePtr = tz::locateZone(tz::getTimeZoneName(timeZoneId));
+    const auto timestamp =
+        TimestampWithTimeZoneType::unpackTimestampUtc(timestampWithTimeZone);
+    const auto timeZoneId =
+        TimestampWithTimeZoneType::unpackTimeZoneId(timestampWithTimeZone);
+    const auto* timeZonePtr = tz::locateZone(tz::getTimeZoneName(timeZoneId));
 
     exec::StringWriter<false> result(flatResult, row);
 
-    const auto maxResultSize = formatter->maxResultSize(timezonePtr);
+    const auto maxResultSize = formatter->maxResultSize(timeZonePtr);
     result.reserve(maxResultSize);
     const auto resultSize =
-        formatter->format(timestamp, timezonePtr, maxResultSize, result.data());
+        formatter->format(timestamp, timeZonePtr, maxResultSize, result.data());
     result.resize(resultSize);
 
     result.finalize();
@@ -137,16 +142,18 @@ void castToTimestamp(
     const SelectivityVector& rows,
     BaseVector& result) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
-  const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
+  const auto adjustTimestampToTimeZone = config.adjustTimestampToTimezone();
   auto* flatResult = result.as<FlatVector<Timestamp>>();
   const auto* timestamps = input.as<SimpleVector<int64_t>>();
 
   context.applyToSelectedNoThrow(rows, [&](auto row) {
-    auto timestampWithTimezone = timestamps->valueAt(row);
-    auto ts = unpackTimestampUtc(timestampWithTimezone);
-    if (!adjustTimestampToTimezone) {
+    auto timestampWithTimeZone = timestamps->valueAt(row);
+    auto ts =
+        TimestampWithTimeZoneType::unpackTimestampUtc(timestampWithTimeZone);
+    if (!adjustTimestampToTimeZone) {
       // Convert UTC to the given time zone.
-      ts.toTimezone(*tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
+      ts.toTimeZone(*tz::locateZone(
+          TimestampWithTimeZoneType::unpackTimeZoneId(timestampWithTimeZone)));
     }
     flatResult->set(row, ts);
   });
@@ -161,10 +168,11 @@ void castToDate(
   const auto* timestampVector = input.as<SimpleVector<int64_t>>();
 
   context.applyToSelectedNoThrow(rows, [&](auto row) {
-    auto timestampWithTimezone = timestampVector->valueAt(row);
-    auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-    timestamp.toTimezone(
-        *tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
+    auto timestampWithTimeZone = timestampVector->valueAt(row);
+    auto timestamp =
+        TimestampWithTimeZoneType::unpackTimestampUtc(timestampWithTimeZone);
+    timestamp.toTimeZone(*tz::locateZone(
+        TimestampWithTimeZoneType::unpackTimeZoneId(timestampWithTimeZone)));
 
     const auto days = util::toDate(timestamp, nullptr);
     flatResult->set(row, days);

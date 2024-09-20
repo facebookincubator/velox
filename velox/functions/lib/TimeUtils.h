@@ -40,7 +40,7 @@ FOLLY_ALWAYS_INLINE const tz::TimeZone* getTimeZoneFromConfig(
 FOLLY_ALWAYS_INLINE int64_t
 getSeconds(Timestamp timestamp, const tz::TimeZone* timeZone) {
   if (timeZone != nullptr) {
-    timestamp.toTimezone(*timeZone);
+    timestamp.toTimeZone(*timeZone);
     return timestamp.getSeconds();
   } else {
     return timestamp.getSeconds();
@@ -93,7 +93,7 @@ FOLLY_ALWAYS_INLINE int32_t getDayOfYear(const std::tm& time) {
 }
 
 template <typename T>
-struct InitSessionTimezone {
+struct InitSessionTimeZone {
   VELOX_DEFINE_FUNCTION_TYPES(T);
   const tz::TimeZone* timeZone_{nullptr};
 

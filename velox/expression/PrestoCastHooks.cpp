@@ -40,7 +40,7 @@ PrestoCastHooks::PrestoCastHooks(const core::QueryConfig& config)
 
 Expected<Timestamp> PrestoCastHooks::castStringToTimestamp(
     const StringView& view) const {
-  const auto conversionResult = util::fromTimestampWithTimezoneString(
+  const auto conversionResult = util::fromTimestampWithTimeZoneString(
       view.data(),
       view.size(),
       legacyCast_ ? util::TimestampParseMode::kLegacyCast
@@ -51,15 +51,15 @@ Expected<Timestamp> PrestoCastHooks::castStringToTimestamp(
 
   auto result = conversionResult.value();
 
-  // If the parsed string has timezone information, convert the timestamp at
+  // If the parsed string has time zone information, convert the timestamp at
   // GMT at that time. For example, "1970-01-01 00:00:00 -00:01" is 60 seconds
   // at GMT.
   if (result.second != nullptr) {
     result.first.toGMT(*result.second);
 
   }
-  // If no timezone information is available in the input string, check if we
-  // should understand it as being at the session timezone, and if so, convert
+  // If no time zone information is available in the input string, check if we
+  // should understand it as being at the session time zone, and if so, convert
   // to GMT.
   else if (options_.timeZone != nullptr) {
     result.first.toGMT(*options_.timeZone);

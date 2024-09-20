@@ -209,15 +209,15 @@ enum class TimestampParseMode {
 
 /// Parses a timestamp string using specified TimestampParseMode.
 ///
-/// This function does not accept any timezone information in the string (e.g.
-/// UTC, Z, or a timezone offsets). This is because the returned timestamp does
-/// not contain timezone information; therefore, it would either be required for
-/// this function to convert the parsed timestamp (but we don't know the
-/// original timezone), or ignore the timezone information, which would be
+/// This function does not accept any time zone information in the string (e.g.
+/// UTC, Z, or a time zone offsets). This is because the returned timestamp does
+/// not contain time zone information; therefore, it would either be required
+/// for this function to convert the parsed timestamp (but we don't know the
+/// original time zone), or ignore the time zone information, which would be
 /// incorecct.
 ///
-/// For a timezone-aware version of this function, check
-/// `fromTimestampWithTimezoneString()` below.
+/// For a time-zone-aware version of this function, check
+/// `fromTimestampWithTimeZoneString()` below.
 Expected<Timestamp>
 fromTimestampString(const char* buf, size_t len, TimestampParseMode parseMode);
 
@@ -229,29 +229,29 @@ inline Expected<Timestamp> fromTimestampString(
 
 /// Parses a timestamp string using specified TimestampParseMode.
 ///
-/// This is a timezone-aware version of the function above
+/// This is a time-zone-aware version of the function above
 /// `fromTimestampString()` which returns both the parsed timestamp and the
 /// TimeZone pointer. It is up to the client to do the expected conversion based
 /// on these two values.
 ///
-/// The timezone information at the end of the string may contain a timezone
+/// The time zone information at the end of the string may contain a time zone
 /// name (as defined in velox/type/tz/*), such as "UTC" or
-/// "America/Los_Angeles", or a timezone offset, like "+06:00" or "-09:30". The
+/// "America/Los_Angeles", or a time zone offset, like "+06:00" or "-09:30". The
 /// white space between the hour definition and timestamp is optional.
 ///
-/// `nullptr` means no timezone information was found. Returns Unexpected with
+/// `nullptr` means no time zone information was found. Returns Unexpected with
 /// UserError status in case of parsing errors.
 Expected<std::pair<Timestamp, const tz::TimeZone*>>
-fromTimestampWithTimezoneString(
+fromTimestampWithTimeZoneString(
     const char* buf,
     size_t len,
     TimestampParseMode parseMode);
 
 inline Expected<std::pair<Timestamp, const tz::TimeZone*>>
-fromTimestampWithTimezoneString(
+fromTimestampWithTimeZoneString(
     const StringView& str,
     TimestampParseMode parseMode) {
-  return fromTimestampWithTimezoneString(str.data(), str.size(), parseMode);
+  return fromTimestampWithTimeZoneString(str.data(), str.size(), parseMode);
 }
 
 Timestamp fromDatetime(int64_t daysSinceEpoch, int64_t microsSinceMidnight);

@@ -29,7 +29,7 @@
 
 namespace facebook::velox::functions {
 
-static thread_local std::string timezoneBuffer = "+00:00";
+static thread_local std::string timeZoneBuffer = "+00:00";
 static const char* defaultTrailingOffset = "00";
 
 namespace {
@@ -57,7 +57,7 @@ struct Date {
   int32_t second = 0;
   int32_t microsecond = 0;
   bool isAm = true; // AM -> true, PM -> false
-  int64_t timezoneId = -1;
+  int64_t timeZoneId = -1;
 
   bool isClockHour = false; // Whether most recent hour specifier is clockhour
   bool isHourOfHalfDay =
@@ -312,9 +312,9 @@ parseFail(const std::string_view& input, const char* cur, const char* end) {
 //
 //  https://github.com/JodaOrg/joda-time/blob/main/src/main/java/org/joda/time/DateTimeUtils.java#L437
 //
-// Full timezone names (e.g. "America/Los_Angeles") are not supported by Joda
+// Full time zone names (e.g. "America/Los_Angeles") are not supported by Joda
 // when parsing, so we don't implement them here.
-int64_t parseTimezone(const char* cur, const char* end, Date& date) {
+int64_t parseTimeZone(const char* cur, const char* end, Date& date) {
   if (cur < end) {
     // If there are at least 3 letters left.
     if (end - cur >= 3) {
@@ -333,21 +333,21 @@ int64_t parseTimezone(const char* cur, const char* end, Date& date) {
 
       auto it = defaultTzNames.find(std::string_view(cur, 3));
       if (it != defaultTzNames.end()) {
-        date.timezoneId = it->second;
+        date.timeZoneId = it->second;
         return 3;
       }
     }
     // The format 'UT' is also accepted for UTC.
     else if ((end - cur == 2) && (*cur == 'U') && (*(cur + 1) == 'T')) {
-      date.timezoneId = 0;
+      date.timeZoneId = 0;
       return 2;
     }
   }
   return -1;
 }
 
-int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
-  // For timezone offset ids, there are three formats allowed by Joda:
+int64_t parseTimeZoneOffset(const char* cur, const char* end, Date& date) {
+  // For time zone offset ids, there are three formats allowed by Joda:
   //
   // 1. '+' or '-' followed by two digits: "+00"
   // 2. '+' or '-' followed by two digits, ":", then two more digits:
@@ -361,10 +361,10 @@ int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
         // Fast path for the common case ("+00:00" or "-00:00"), to prevent
         // calling getTimeZoneID(), which does a map lookup.
         if (std::strncmp(cur + 1, "00:00", 5) == 0) {
-          date.timezoneId = 0;
+          date.timeZoneId = 0;
         } else {
-          date.timezoneId = tz::getTimeZoneID(std::string_view(cur, 6), false);
-          if (date.timezoneId == -1) {
+          date.timeZoneId = tz::getTimeZoneID(std::string_view(cur, 6), false);
+          if (date.timeZoneId == -1) {
             return -1;
           }
         }
@@ -374,15 +374,15 @@ int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
       else if ((end - cur) >= 5 && *(cur + 3) != ':') {
         // Same fast path described above.
         if (std::strncmp(cur + 1, "0000", 4) == 0) {
-          date.timezoneId = 0;
+          date.timeZoneId = 0;
         } else {
           // We need to concatenate the 3 first chars with ":" followed by the
           // last 2 chars before calling getTimeZoneID, so we use a static
           // thread_local buffer to prevent extra allocations.
-          std::memcpy(&timezoneBuffer[0], cur, 3);
-          std::memcpy(&timezoneBuffer[4], cur + 3, 2);
-          date.timezoneId = tz::getTimeZoneID(timezoneBuffer, false);
-          if (date.timezoneId == -1) {
+          std::memcpy(&timeZoneBuffer[0], cur, 3);
+          std::memcpy(&timeZoneBuffer[4], cur + 3, 2);
+          date.timeZoneId = tz::getTimeZoneID(timeZoneBuffer, false);
+          if (date.timeZoneId == -1) {
             return -1;
           }
         }
@@ -392,15 +392,15 @@ int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
       else if ((end - cur) >= 3) {
         // Same fast path described above.
         if (std::strncmp(cur + 1, "00", 2) == 0) {
-          date.timezoneId = 0;
+          date.timeZoneId = 0;
         } else {
           // We need to concatenate the 3 first chars with a trailing ":00"
           // before calling getTimeZoneID, so we use a static thread_local
           // buffer to prevent extra allocations.
-          std::memcpy(&timezoneBuffer[0], cur, 3);
-          std::memcpy(&timezoneBuffer[4], defaultTrailingOffset, 2);
-          date.timezoneId = tz::getTimeZoneID(timezoneBuffer, false);
-          if (date.timezoneId == -1) {
+          std::memcpy(&timeZoneBuffer[0], cur, 3);
+          std::memcpy(&timeZoneBuffer[4], defaultTrailingOffset, 2);
+          date.timeZoneId = tz::getTimeZoneID(timeZoneBuffer, false);
+          if (date.timeZoneId == -1) {
             return -1;
           }
         }
@@ -409,17 +409,17 @@ int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
     }
     // Single 'Z' character maps to GMT.
     else if (*cur == 'Z') {
-      date.timezoneId = 0;
+      date.timeZoneId = 0;
       return 1;
     }
     // "UTC", "UCT", "GMT" and "GMT0" are also acceptable by joda.
     else if ((end - cur) >= 3) {
       if (std::strncmp(cur, "UTC", 3) == 0 ||
           std::strncmp(cur, "UCT", 3) == 0) {
-        date.timezoneId = 0;
+        date.timeZoneId = 0;
         return 3;
       } else if (std::strncmp(cur, "GMT", 3) == 0) {
-        date.timezoneId = 0;
+        date.timeZoneId = 0;
         if ((end - cur) >= 4 && *(cur + 3) == '0') {
           return 4;
         }
@@ -528,7 +528,7 @@ std::string formatFractionOfSecond(
   return toAdd;
 }
 
-int32_t appendTimezoneOffset(int64_t offset, char* result) {
+int32_t appendTimeZoneOffset(int64_t offset, char* result) {
   int pos = 0;
   if (offset >= 0) {
     result[pos++] = '+';
@@ -694,13 +694,13 @@ int32_t parseFromPattern(
     bool specifierNext,
     DateTimeFormatterType type) {
   if (curPattern.specifier == DateTimeFormatSpecifier::TIMEZONE_OFFSET_ID) {
-    auto size = parseTimezoneOffset(cur, end, date);
+    auto size = parseTimeZoneOffset(cur, end, date);
     if (size == -1) {
       return -1;
     }
     cur += size;
   } else if (curPattern.specifier == DateTimeFormatSpecifier::TIMEZONE) {
-    auto size = parseTimezone(cur, end, date);
+    auto size = parseTimeZone(cur, end, date);
     if (size == -1) {
       return -1;
     }
@@ -999,7 +999,7 @@ int32_t parseFromPattern(
 
 } // namespace
 
-uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
+uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timeZone) const {
   uint32_t size = 0;
   for (const auto& token : tokens_) {
     if (token.type == DateTimeToken::Type::kLiteral) {
@@ -1051,11 +1051,11 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
         size += std::max((int)token.pattern.minRepresentDigits, 9);
         break;
       case DateTimeFormatSpecifier::TIMEZONE:
-        if (timezone == nullptr) {
-          VELOX_USER_FAIL("Timezone unknown");
+        if (timeZone == nullptr) {
+          VELOX_USER_FAIL("Time zone unknown");
         }
         size += std::max(
-            token.pattern.minRepresentDigits, timezone->name().length());
+            token.pattern.minRepresentDigits, timeZone->name().length());
         break;
       case DateTimeFormatSpecifier::TIMEZONE_OFFSET_ID:
         if (token.pattern.minRepresentDigits != 2) {
@@ -1079,15 +1079,15 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
 
 int32_t DateTimeFormatter::format(
     const Timestamp& timestamp,
-    const tz::TimeZone* timezone,
+    const tz::TimeZone* timeZone,
     const uint32_t maxResultSize,
     char* result,
     bool allowOverflow) const {
   int64_t offset = 0;
   Timestamp t = timestamp;
-  if (timezone != nullptr) {
+  if (timeZone != nullptr) {
     const auto utcSeconds = timestamp.getSeconds();
-    t.toTimezone(*timezone);
+    t.toTimeZone(*timeZone);
 
     offset = t.getSeconds() - utcSeconds;
   }
@@ -1297,10 +1297,10 @@ int32_t DateTimeFormatter::format(
           if (token.pattern.minRepresentDigits <= 3) {
             VELOX_UNSUPPORTED("short name time zone is not yet supported");
           }
-          if (timezone == nullptr) {
-            VELOX_USER_FAIL("Timezone unknown");
+          if (timeZone == nullptr) {
+            VELOX_USER_FAIL("Time zone unknown");
           }
-          const auto& piece = timezone->name();
+          const auto& piece = timeZone->name();
           std::memcpy(result, piece.data(), piece.length());
           result += piece.length();
         } break;
@@ -1315,7 +1315,7 @@ int32_t DateTimeFormatter::format(
                 getSpecifierName(token.pattern.specifier),
                 token.pattern.minRepresentDigits);
           }
-          result += appendTimezoneOffset(offset, result);
+          result += appendTimeZoneOffset(offset, result);
           break;
         }
         case DateTimeFormatSpecifier::WEEK_OF_WEEK_YEAR: {
@@ -1443,7 +1443,7 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
   int64_t microsSinceMidnight =
       util::fromTime(date.hour, date.minute, date.second, date.microsecond);
   return DateTimeResult{
-      util::fromDatetime(daysSinceEpoch, microsSinceMidnight), date.timezoneId};
+      util::fromDatetime(daysSinceEpoch, microsSinceMidnight), date.timeZoneId};
 }
 
 std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(

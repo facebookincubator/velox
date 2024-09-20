@@ -218,8 +218,8 @@ TEST(TimeZoneMapTest, getTimeZoneIDFromOffset) {
   EXPECT_EQ("-08:00", nameFromOffset(-8 * 60));
   EXPECT_EQ("+02:17", nameFromOffset(2 * 60 + 17));
 
-  VELOX_ASSERT_THROW(getTimeZoneID(15'000), "Invalid timezone offset");
-  VELOX_ASSERT_THROW(getTimeZoneID(-15'000), "Invalid timezone offset");
+  VELOX_ASSERT_THROW(getTimeZoneID(15'000), "Invalid time zone offset");
+  VELOX_ASSERT_THROW(getTimeZoneID(-15'000), "Invalid time zone offset");
 }
 
 TEST(TimeZoneMapTest, invalid) {

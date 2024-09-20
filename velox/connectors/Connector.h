@@ -282,7 +282,7 @@ class ConnectorQueryCtx {
         taskId_(taskId),
         driverId_(driverId),
         planNodeId_(planNodeId),
-        sessionTimezone_(sessionTimezone),
+        sessionTimeZone_(sessionTimezone),
         cancellationToken_(std::move(cancellationToken)) {
     VELOX_CHECK_NOT_NULL(sessionProperties);
   }
@@ -344,11 +344,11 @@ class ConnectorQueryCtx {
     return planNodeId_;
   }
 
-  /// Session timezone used for reading Timestamp. Stores a string with the
-  /// actual timezone name. If the session timezone is not set in the
+  /// Session time zone used for reading Timestamp. Stores a string with the
+  /// actual time zone name. If the session time zone is not set in the
   /// QueryConfig, it will return an empty string.
-  const std::string& sessionTimezone() const {
-    return sessionTimezone_;
+  const std::string& sessionTimeZone() const {
+    return sessionTimeZone_;
   }
 
   /// Returns the cancellation token associated with this task.
@@ -377,7 +377,7 @@ class ConnectorQueryCtx {
   const std::string taskId_;
   const int driverId_;
   const std::string planNodeId_;
-  const std::string sessionTimezone_;
+  const std::string sessionTimeZone_;
   const folly::CancellationToken cancellationToken_;
   bool selectiveNimbleReaderEnabled_{false};
 };

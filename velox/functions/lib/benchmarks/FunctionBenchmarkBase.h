@@ -31,13 +31,13 @@ class FunctionBenchmarkBase {
     exec::registerFunctionCallToSpecialForms();
   }
 
-  void setTimezone(const std::string& value) {
+  void setTimeZone(const std::string& value) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, value},
     });
   }
 
-  void setAdjustTimestampToTimezone(const std::string& value) {
+  void setAdjustTimestampToTimeZone(const std::string& value) {
     queryCtx_->testingOverrideConfigUnsafe(
         {{core::QueryConfig::kAdjustTimestampToTimezone, value}});
   }

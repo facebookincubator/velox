@@ -59,12 +59,34 @@ class TimestampWithTimeZoneType : public BigintType {
   TimestampWithTimeZoneType() = default;
 
  public:
+  using TimeZoneId = int16_t;
+
   static const std::shared_ptr<const TimestampWithTimeZoneType>& get() {
     static const std::shared_ptr<const TimestampWithTimeZoneType> instance =
         std::shared_ptr<TimestampWithTimeZoneType>(
             new TimestampWithTimeZoneType());
 
     return instance;
+  }
+
+  static inline int64_t unpackMillisUtc(int64_t dateTimeWithTimeZone) {
+    return dateTimeWithTimeZone >> kMillisShift;
+  }
+
+  static inline TimeZoneId unpackTimeZoneId(int64_t dateTimeWithTimeZone) {
+    return dateTimeWithTimeZone & kTimeZoneMask;
+  }
+
+  static inline int64_t pack(int64_t millisUtc, int16_t timeZoneId) {
+    return (millisUtc << kMillisShift) | (timeZoneId & kTimeZoneMask);
+  }
+
+  static inline int64_t pack(const Timestamp& timestamp, int16_t timeZoneId) {
+    return pack(timestamp.toMillis(), timeZoneId);
+  }
+
+  static inline Timestamp unpackTimestampUtc(int64_t dateTimeWithTimeZone) {
+    return Timestamp::fromMillis(unpackMillisUtc(dateTimeWithTimeZone));
   }
 
   bool equivalent(const Type& other) const override {
@@ -91,6 +113,10 @@ class TimestampWithTimeZoneType : public BigintType {
     obj["type"] = name();
     return obj;
   }
+
+ private:
+  static constexpr int32_t kTimeZoneMask = 0xFFF;
+  static constexpr int32_t kMillisShift = 12;
 };
 
 inline bool isTimestampWithTimeZoneType(const TypePtr& type) {
@@ -104,12 +130,12 @@ TIMESTAMP_WITH_TIME_ZONE() {
 }
 
 // Type used for function registration.
-struct TimestampWithTimezoneT {
+struct TimestampWithTimeZoneT {
   using type = int64_t;
   static constexpr const char* typeName = "timestamp with time zone";
 };
 
-using TimestampWithTimezone = CustomType<TimestampWithTimezoneT>;
+using TimestampWithTimeZone = CustomType<TimestampWithTimeZoneT>;
 
 class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
  public:
@@ -117,7 +143,7 @@ class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
     return TIMESTAMP_WITH_TIME_ZONE();
   }
 
-  // Type casting from and to TimestampWithTimezone is not supported yet.
+  // Type casting from and to TimestampWithTimeZone is not supported yet.
   exec::CastOperatorPtr getCastOperator() const override {
     return TimestampWithTimeZoneCastOperator::get();
   }
@@ -125,29 +151,15 @@ class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
 
 void registerTimestampWithTimeZoneType();
 
-using TimeZoneKey = int16_t;
-
-constexpr int32_t kTimezoneMask = 0xFFF;
-constexpr int32_t kMillisShift = 12;
-
-inline int64_t unpackMillisUtc(int64_t dateTimeWithTimeZone) {
-  return dateTimeWithTimeZone >> kMillisShift;
+// TODO: Remove these once Presto's tests have been updated to use the static
+// functions in TimestampWithTimeZoneType directly.
+static inline int64_t unpackMillisUtc(int64_t dateTimeWithTimeZone) {
+  return TimestampWithTimeZoneType::unpackTimeZoneId(dateTimeWithTimeZone);
 }
 
-inline TimeZoneKey unpackZoneKeyId(int64_t dateTimeWithTimeZone) {
-  return dateTimeWithTimeZone & kTimezoneMask;
-}
-
-inline int64_t pack(int64_t millisUtc, int16_t timeZoneKey) {
-  return (millisUtc << kMillisShift) | (timeZoneKey & kTimezoneMask);
-}
-
-inline int64_t pack(const Timestamp& timestamp, int16_t timeZoneKey) {
-  return pack(timestamp.toMillis(), timeZoneKey);
-}
-
-inline Timestamp unpackTimestampUtc(int64_t dateTimeWithTimeZone) {
-  return Timestamp::fromMillis(unpackMillisUtc(dateTimeWithTimeZone));
+static inline TimestampWithTimeZoneType::TimeZoneId unpackZoneKeyId(
+    int64_t dateTimeWithTimeZone) {
+  return TimestampWithTimeZoneType::unpackTimeZoneId(dateTimeWithTimeZone);
 }
 
 } // namespace facebook::velox

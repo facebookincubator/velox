@@ -39,12 +39,12 @@ namespace facebook::velox::functions {
 
 #define VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(Name, tsExpr, TResult) \
   template <typename T>                                                       \
-  struct Name##TimestampWithTimezone {                                        \
+  struct Name##TimestampWithTimeZone {                                        \
     VELOX_DEFINE_FUNCTION_TYPES(T);                                           \
     FOLLY_ALWAYS_INLINE void call(                                            \
         bool& result,                                                         \
-        const arg_type<TimestampWithTimezone>& lhs,                           \
-        const arg_type<TimestampWithTimezone>& rhs) {                         \
+        const arg_type<TimestampWithTimeZone>& lhs,                           \
+        const arg_type<TimestampWithTimeZone>& rhs) {                         \
       result = (tsExpr);                                                      \
     }                                                                         \
   };
@@ -68,19 +68,23 @@ VELOX_GEN_BINARY_EXPR(
 
 VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(
     LtFunction,
-    unpackMillisUtc(lhs) < unpackMillisUtc(rhs),
+    TimestampWithTimeZoneType::unpackMillisUtc(lhs) <
+        TimestampWithTimeZoneType::unpackMillisUtc(rhs),
     bool);
 VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(
     GtFunction,
-    unpackMillisUtc(lhs) > unpackMillisUtc(rhs),
+    TimestampWithTimeZoneType::unpackMillisUtc(lhs) >
+        TimestampWithTimeZoneType::unpackMillisUtc(rhs),
     bool);
 VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(
     LteFunction,
-    unpackMillisUtc(lhs) <= unpackMillisUtc(rhs),
+    TimestampWithTimeZoneType::unpackMillisUtc(lhs) <=
+        TimestampWithTimeZoneType::unpackMillisUtc(rhs),
     bool);
 VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(
     GteFunction,
-    unpackMillisUtc(lhs) >= unpackMillisUtc(rhs),
+    TimestampWithTimeZoneType::unpackMillisUtc(lhs) >=
+        TimestampWithTimeZoneType::unpackMillisUtc(rhs),
     bool);
 
 #undef VELOX_GEN_BINARY_EXPR
@@ -141,14 +145,15 @@ struct EqFunction {
 };
 
 template <typename T>
-struct EqFunctionTimestampWithTimezone {
+struct EqFunctionTimestampWithTimeZone {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   void call(
       bool& result,
-      const arg_type<TimestampWithTimezone>& lhs,
-      const arg_type<TimestampWithTimezone>& rhs) {
-    result = unpackMillisUtc(lhs) == unpackMillisUtc(rhs);
+      const arg_type<TimestampWithTimeZone>& lhs,
+      const arg_type<TimestampWithTimeZone>& rhs) {
+    result = TimestampWithTimeZoneType::unpackMillisUtc(lhs) ==
+        TimestampWithTimeZoneType::unpackMillisUtc(rhs);
   }
 };
 
@@ -181,14 +186,15 @@ struct NeqFunction {
 };
 
 template <typename T>
-struct NeqFunctionTimestampWithTimezone {
+struct NeqFunctionTimestampWithTimeZone {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   void call(
       bool& result,
-      const arg_type<TimestampWithTimezone>& lhs,
-      const arg_type<TimestampWithTimezone>& rhs) {
-    result = unpackMillisUtc(lhs) != unpackMillisUtc(rhs);
+      const arg_type<TimestampWithTimeZone>& lhs,
+      const arg_type<TimestampWithTimeZone>& rhs) {
+    result = TimestampWithTimeZoneType::unpackMillisUtc(lhs) !=
+        TimestampWithTimeZoneType::unpackMillisUtc(rhs);
   }
 };
 
@@ -208,17 +214,17 @@ struct BetweenFunction {
 };
 
 template <typename TExec>
-struct BetweenFunctionTimestampWithTimezone {
+struct BetweenFunctionTimestampWithTimeZone {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   void call(
       bool& result,
-      const arg_type<TimestampWithTimezone>& value,
-      const arg_type<TimestampWithTimezone>& low,
-      const arg_type<TimestampWithTimezone>& high) {
-    const auto millis = unpackMillisUtc(value);
-    result =
-        (millis >= unpackMillisUtc(low)) && (millis <= unpackMillisUtc(high));
+      const arg_type<TimestampWithTimeZone>& value,
+      const arg_type<TimestampWithTimeZone>& low,
+      const arg_type<TimestampWithTimeZone>& high) {
+    const auto millis = TimestampWithTimeZoneType::unpackMillisUtc(value);
+    result = (millis >= TimestampWithTimeZoneType::unpackMillisUtc(low)) &&
+        (millis <= TimestampWithTimeZoneType::unpackMillisUtc(high));
   }
 };
 

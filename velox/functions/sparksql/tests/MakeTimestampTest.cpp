@@ -41,11 +41,11 @@ TEST_F(MakeTimestampTest, basic) {
         : evaluate("make_timestamp(c0, c1, c2, c3, c4, c5)", data);
     facebook::velox::test::assertEqualVectors(expected, result);
   };
-  const auto testConstantTimezone = [&](const RowVectorPtr& data,
-                                        const std::string& timezone,
+  const auto testConstantTimeZone = [&](const RowVectorPtr& data,
+                                        const std::string& timeZone,
                                         const VectorPtr& expected) {
     auto result = evaluate(
-        fmt::format("make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timezone),
+        fmt::format("make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timeZone),
         data);
     facebook::velox::test::assertEqualVectors(expected, result);
   };
@@ -69,18 +69,18 @@ TEST_F(MakeTimestampTest, basic) {
          parseTimestamp("2021-07-11 06:30:59.999999"),
          std::nullopt});
     testMakeTimestamp(data, expectedGMT, false);
-    testConstantTimezone(data, "GMT", expectedGMT);
+    testConstantTimeZone(data, "GMT", expectedGMT);
 
     setQueryTimeZone("Asia/Shanghai");
-    auto expectedSessionTimezone = makeNullableFlatVector<Timestamp>(
+    auto expectedSessionTimeZone = makeNullableFlatVector<Timestamp>(
         {parseTimestamp("2021-07-10 22:30:45.678"),
          parseTimestamp("2021-07-10 22:30:01"),
          parseTimestamp("2021-07-10 22:31:00"),
          parseTimestamp("2021-07-10 22:30:59.999999"),
          std::nullopt});
-    testMakeTimestamp(data, expectedSessionTimezone, false);
+    testMakeTimestamp(data, expectedSessionTimeZone, false);
     // Session time zone will be ignored if time zone is specified in argument.
-    testConstantTimezone(data, "GMT", expectedGMT);
+    testConstantTimeZone(data, "GMT", expectedGMT);
   }
 
   // Valid cases w/ time zone argument.
@@ -184,7 +184,7 @@ TEST_F(MakeTimestampTest, errors) {
       "DECIMAL(16, 8)).");
 }
 
-TEST_F(MakeTimestampTest, invalidTimezone) {
+TEST_F(MakeTimestampTest, invalidTimeZone) {
   const auto microsType = DECIMAL(16, 6);
   const auto year = makeFlatVector<int32_t>({2021, 2021, 2021, 2021, 2021});
   const auto month = makeFlatVector<int32_t>({7, 7, 7, 7, 7});
@@ -203,7 +203,7 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
   // Invalid constant time zone.
   setQueryTimeZone("GMT");
   for (auto timeZone : {"Invalid", ""}) {
-    SCOPED_TRACE(fmt::format("timezone: {}", timeZone));
+    SCOPED_TRACE(fmt::format("timeZone: {}", timeZone));
     VELOX_ASSERT_USER_THROW(
         evaluate(
             fmt::format(
@@ -212,7 +212,7 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
         fmt::format("Unknown time zone: '{}'", timeZone));
   }
 
-  // Invalid timezone from vector.
+  // Invalid time zone from vector.
   auto timeZones = makeFlatVector<StringView>(
       {"GMT", "CET", "Asia/Shanghai", "Invalid", "GMT"});
   data = makeRowVector({year, month, day, hour, minute, micros, timeZones});

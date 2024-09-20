@@ -369,14 +369,16 @@ TEST_F(ChecksumAggregateTest, globalAggregationNoData) {
   assertQuery(agg, "VALUES (CAST(NULL AS VARCHAR))");
 }
 
-TEST_F(ChecksumAggregateTest, timestampWithTimezone) {
-  auto timestampWithTimezone = makeFlatVector<int64_t>(
+TEST_F(ChecksumAggregateTest, timestampWithTimeZone) {
+  auto timestampWithTimeZone = makeFlatVector<int64_t>(
       5,
-      [](auto /* row */) { return pack(1639426440000, 0); },
+      [](auto /* row */) {
+        return TimestampWithTimeZoneType::pack(1639426440000, 0);
+      },
       /* isNullAt */ nullptr,
       TIMESTAMP_WITH_TIME_ZONE());
 
-  assertChecksum(timestampWithTimezone, "jwqENA0VLZY=");
+  assertChecksum(timestampWithTimeZone, "jwqENA0VLZY=");
 }
 
 TEST_F(ChecksumAggregateTest, unknown) {

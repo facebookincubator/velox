@@ -341,7 +341,7 @@ struct Timestamp {
   // time at the same moment. For example:
   //
   //  Timestamp ts{0, 0};
-  //  ts.Timezone("America/Los_Angeles");
+  //  ts.toGMT("America/Los_Angeles");
   //  ts.toString(); // returns January 1, 1970 08:00:00
   void toGMT(const tz::TimeZone& zone);
 
@@ -349,12 +349,12 @@ struct Timestamp {
   /// the same moment at zone. For example:
   ///
   ///  Timestamp ts{0, 0};
-  ///  ts.Timezone("America/Los_Angeles");
+  ///  ts.toTimeZone("America/Los_Angeles");
   ///  ts.toString(); // returns December 31, 1969 16:00:00
-  void toTimezone(const tz::TimeZone& zone);
+  void toTimeZone(const tz::TimeZone& zone);
 
   /// A default time zone that is same across the process.
-  static const tz::TimeZone& defaultTimezone();
+  static const tz::TimeZone& defaultTimeZone();
 
   bool operator==(const Timestamp& b) const {
     return seconds_ == b.seconds_ && nanos_ == b.nanos_;

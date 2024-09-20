@@ -175,12 +175,12 @@ IPADDRESS                 HUGEINT
 ========================  =====================
 
 TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
-from UNIX epoch with timezone information. Its physical type is BIGINT.
+from UNIX epoch with time zone information. Its physical type is BIGINT.
 The high 52 bits of bigint store signed integer for milliseconds in UTC.
 Supported range of milliseconds is [0xFFF8000000000000L, 0x7FFFFFFFFFFFF]
 (or [-69387-04-22T03:45:14.752, 73326-09-11T20:14:45.247]). The low 12 bits
-store timezone ID. Supported range of timezone ID is [1, 1680].
-The definition of timezone IDs can be found in ``TimeZoneDatabase.cpp``.
+store time zone ID. Supported range of time zone ID is [1, 1680].
+The definition of time zone IDs can be found in ``TimeZoneDatabase.cpp``.
 
 IPADDRESS represents an IPV6 or IPV4 formatted IPV6 address. Its physical
 type is HUGEINT. The format that the address is stored in is defined as part of `(RFC 4291#section-2.5.5.2) <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_
