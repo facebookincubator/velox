@@ -3941,16 +3941,16 @@ TEST_F(VectorTest, sliceBigintBuffer) {
   ASSERT_EQ(sliceBufferPtr->size(), 40); // 5 * type size of int64_t.
   ASSERT_EQ(sliceBufferPtr->as<int64_t>(), bufferPtr->as<int64_t>() + 1);
 
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_THROW(
       BaseVector::sliceBuffer(*BIGINT(), bufferPtr, -1, 5, pool()),
       "Offset must be non-negative.");
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_THROW(
       BaseVector::sliceBuffer(*BIGINT(), bufferPtr, 0, -1, pool()),
       "Length must be non-negative.");
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_THROW(
       BaseVector::sliceBuffer(*BIGINT(), bufferPtr, 11, 1, pool()),
       "Offset must be less than or equal to 10.");
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_THROW(
       BaseVector::sliceBuffer(*BIGINT(), bufferPtr, 5, 6, pool()),
       "Length must be less than or equal to 5.");
 }
@@ -3975,6 +3975,16 @@ TEST_F(VectorTest, sliceBooleanBuffer) {
   VELOX_ASSERT_THROW(
       BaseVector::sliceBuffer(*BOOLEAN(), bufferPtr, 5, 6, nullptr),
       "Pool must not be null.");
+}
+
+TEST_F(VectorTest, sliceArrayBuffer) {
+  auto bufferPtr = AlignedBuffer::allocate<int64_t>(10, pool());
+  try {
+    BaseVector::sliceBuffer(*ARRAY(BIGINT()), bufferPtr, 1, 1, pool());
+    FAIL() << "Expected an exception";
+  } catch (const std::invalid_argument& e) {
+    ASSERT_TRUE(strstr(e.what(), "Not a fixed width type: ARRAY") != nullptr);
+  }
 }
 
 } // namespace

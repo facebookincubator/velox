@@ -947,12 +947,12 @@ BufferPtr sliceBufferZeroCopy(
     const BufferPtr& buf,
     vector_size_t offset,
     vector_size_t length) {
-  VELOX_USER_CHECK_LE(
+  VELOX_CHECK_LE(
       offset * typeSize,
       buf->size(),
       "Offset must be less than or equal to {}.",
       buf->size() / typeSize);
-  VELOX_USER_CHECK_LE(
+  VELOX_CHECK_LE(
       (offset + length) * typeSize,
       buf->size(),
       "Length must be less than or equal to {}.",
@@ -974,8 +974,8 @@ BufferPtr BaseVector::sliceBuffer(
     vector_size_t offset,
     vector_size_t length,
     memory::MemoryPool* pool) {
-  VELOX_USER_CHECK_GE(offset, 0, "Offset must be non-negative.");
-  VELOX_USER_CHECK_GE(length, 0, "Length must be non-negative.");
+  VELOX_CHECK_GE(offset, 0, "Offset must be non-negative.");
+  VELOX_CHECK_GE(length, 0, "Length must be non-negative.");
   if (!buf) {
     return nullptr;
   }
