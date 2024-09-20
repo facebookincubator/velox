@@ -863,29 +863,6 @@ class BaseVector {
     storageByteCount_ = std::nullopt;
   }
 
-  /// Slice a buffer with specific type.
-  /// For boolean type and if the 'offset' is not multiple of 8, return a
-  /// shifted copy, new buffer is allocated from 'pool'.
-  /// Otherwise return a BufferView into the original buffer (with shared
-  /// ownership of original buffer).
-  ///
-  /// @param type The data type of the elements in new buffer. Must be primitive
-  /// type or OPAQUE type.
-  /// @param buf A pointer to the buffer to be sliced. If this is null, the
-  /// function returns a null pointer.
-  /// @param offset The starting point in the buffer from which the slice
-  /// begins. Must be non-negative.
-  /// @param length The number of elements to include in the slice. Must be
-  /// non-negative.
-  /// @param pool A pointer to a memory pool for allocating new buffers,
-  /// required if a new buffer needs to be created.
-  static BufferPtr sliceBuffer(
-      const Type& type,
-      const BufferPtr& buf,
-      vector_size_t offset,
-      vector_size_t length,
-      memory::MemoryPool* pool);
-
  protected:
   // Returns a brief summary of the vector. The default implementation includes
   // encoding, type, number of rows and number of nulls.
@@ -906,7 +883,7 @@ class BaseVector {
   }
 
   BufferPtr sliceNulls(vector_size_t offset, vector_size_t length) const {
-    return sliceBuffer(*BOOLEAN(), nulls_, offset, length, pool_);
+    return Buffer::slice<bool>(nulls_, offset, length, pool_);
   }
 
   TypePtr type_;

@@ -423,8 +423,7 @@ VectorPtr FlatVector<T>::slice(vector_size_t offset, vector_size_t length)
       this->type_,
       this->sliceNulls(offset, length),
       length,
-      BaseVector::sliceBuffer(
-          *this->type_, values_, offset, length, this->pool_),
+      Buffer::slice<T>(values_, offset, length, this->pool_),
       std::vector<BufferPtr>(stringBuffers_));
 }
 

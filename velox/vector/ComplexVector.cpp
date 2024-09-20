@@ -1186,8 +1186,8 @@ VectorPtr ArrayVector::slice(vector_size_t offset, vector_size_t length) const {
       type_,
       sliceNulls(offset, length),
       length,
-      sliceBuffer(*INTEGER(), offsets_, offset, length, pool_),
-      sliceBuffer(*INTEGER(), sizes_, offset, length, pool_),
+      Buffer::slice<int32_t>(offsets_, offset, length, pool_),
+      Buffer::slice<int32_t>(sizes_, offset, length, pool_),
       elements_);
 }
 
@@ -1485,8 +1485,8 @@ VectorPtr MapVector::slice(vector_size_t offset, vector_size_t length) const {
       type_,
       sliceNulls(offset, length),
       length,
-      sliceBuffer(*INTEGER(), offsets_, offset, length, pool_),
-      sliceBuffer(*INTEGER(), sizes_, offset, length, pool_),
+      Buffer::slice<int32_t>(offsets_, offset, length, pool_),
+      Buffer::slice<int32_t>(sizes_, offset, length, pool_),
       keys_,
       values_);
 }
