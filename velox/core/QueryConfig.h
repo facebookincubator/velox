@@ -289,8 +289,8 @@ class QueryConfig {
 
   /// If true, simple date formatter is used for time formatting and parsing.
   /// Joda date formatter is used by default.
-  static constexpr const char* kSparkLegacyTimeParser =
-      "spark.legacy_time_parser_policy";
+  static constexpr const char* kSparkLegacyDateFormatter =
+      "spark.legacy_date_formatter";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
@@ -682,8 +682,8 @@ class QueryConfig {
     return value;
   }
 
-  bool sparkLegacyTimeParser() const {
-    return get<bool>(kSparkLegacyTimeParser, false);
+  bool sparkLegacyDateFormatter() const {
+    return get<bool>(kSparkLegacyDateFormatter, false);
   }
 
   bool exprTrackCpuUsage() const {

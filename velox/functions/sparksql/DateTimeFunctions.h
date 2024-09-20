@@ -25,16 +25,21 @@
 
 namespace facebook::velox::functions::sparksql {
 
+namespace detail {
 std::shared_ptr<DateTimeFormatter> getDateTimeFormatter(
-    bool legacyTimeParser,
     const std::string_view& format,
-    bool lenient) {
-  if (legacyTimeParser) {
-    return buildSimpleDateTimeFormatter(format, lenient);
+    DateTimeFormatterType type) {
+  switch (type) {
+    case DateTimeFormatterType::STRICT_SIMPLE:
+      return buildSimpleDateTimeFormatter(format, /*lenient=*/false);
+    case DateTimeFormatterType::LENIENT_SIMPLE:
+      return buildSimpleDateTimeFormatter(format, /*lenient=*/true);
+    default:
+      return buildJodaDateTimeFormatter(
+          std::string_view(format.data(), format.size()));
   }
-  return buildJodaDateTimeFormatter(
-      std::string_view(format.data(), format.size()));
 }
+} // namespace detail
 
 template <typename T>
 struct YearFunction : public InitSessionTimezone<T> {
@@ -167,8 +172,10 @@ struct UnixTimestampParseFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/) {
-    format_ = getDateTimeFormatter(
-        config.sparkLegacyTimeParser(), kDefaultFormat_, false);
+    format_ = detail::getDateTimeFormatter(
+        kDefaultFormat_,
+        config.sparkLegacyDateFormatter() ? DateTimeFormatterType::STRICT_SIMPLE
+                                       : DateTimeFormatterType::JODA);
     setTimezone(config);
   }
 
@@ -217,13 +224,13 @@ struct UnixTimestampParseWithFormatFunction
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    legacyTimeParser_ = config.sparkLegacyTimeParser();
+    legacyTimeParser_ = config.sparkLegacyDateFormatter();
     if (format != nullptr) {
       try {
-        this->format_ = getDateTimeFormatter(
-            legacyTimeParser_,
+        this->format_ = detail::getDateTimeFormatter(
             std::string_view(format->data(), format->size()),
-            false);
+            legacyTimeParser_ ? DateTimeFormatterType::STRICT_SIMPLE
+                              : DateTimeFormatterType::JODA);
       } catch (const VeloxUserError&) {
         invalidFormat_ = true;
       }
@@ -243,10 +250,10 @@ struct UnixTimestampParseWithFormatFunction
     // Format error returns null.
     try {
       if (!isConstFormat_) {
-        this->format_ = getDateTimeFormatter(
-            legacyTimeParser_,
+        this->format_ = detail::getDateTimeFormatter(
             std::string_view(format.data(), format.size()),
-            false);
+            legacyTimeParser_ ? DateTimeFormatterType::STRICT_SIMPLE
+                              : DateTimeFormatterType::JODA);
       }
     } catch (const VeloxUserError&) {
       return false;
@@ -278,7 +285,7 @@ struct FromUnixtimeFunction {
       const core::QueryConfig& config,
       const arg_type<int64_t>* /*unixtime*/,
       const arg_type<Varchar>* format) {
-    legacyTimeParser_ = config.sparkLegacyTimeParser();
+    legacyTimeParser_ = config.sparkLegacyDateFormatter();
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
       setFormatter(*format);
@@ -303,10 +310,10 @@ struct FromUnixtimeFunction {
 
  private:
   FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& format) {
-    formatter_ = getDateTimeFormatter(
-        legacyTimeParser_,
+    formatter_ = detail::getDateTimeFormatter(
         std::string_view(format.data(), format.size()),
-        false);
+        legacyTimeParser_ ? DateTimeFormatterType::STRICT_SIMPLE
+                          : DateTimeFormatterType::JODA);
     maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
   }
 
@@ -388,14 +395,16 @@ struct GetTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    legacyTimeParser_ = config.sparkLegacyTimeParser();
+    legacyTimeParser_ = config.sparkLegacyDateFormatter();
     auto sessionTimezoneName = config.sessionTimezone();
     if (!sessionTimezoneName.empty()) {
       sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
     }
     if (format != nullptr) {
-      formatter_ = getDateTimeFormatter(
-          legacyTimeParser_, std::string_view(*format), false);
+      formatter_ = detail::getDateTimeFormatter(
+          std::string_view(*format),
+          legacyTimeParser_ ? DateTimeFormatterType::STRICT_SIMPLE
+                            : DateTimeFormatterType::JODA);
       isConstantTimeFormat_ = true;
     }
   }
@@ -405,8 +414,10 @@ struct GetTimestampFunction {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
     if (!isConstantTimeFormat_) {
-      formatter_ = getDateTimeFormatter(
-          legacyTimeParser_, std::string_view(format), false);
+      formatter_ = detail::getDateTimeFormatter(
+          std::string_view(format),
+          legacyTimeParser_ ? DateTimeFormatterType::STRICT_SIMPLE
+                            : DateTimeFormatterType::JODA);
     }
     auto dateTimeResult = formatter_->parse(std::string_view(input));
     // Null as result for parsing error.
