@@ -33,6 +33,11 @@ enum UTF8CharList {
   MATHEMATICAL_SYMBOLS = 3 // Mathematical Symbols.
 };
 
+struct Constraint {
+  bool excludeNaN;
+  bool excludeInfinity;
+};
+
 /// VectorFuzzer is a helper class that generates randomized vectors and their
 /// data for testing, with a high degree of entropy.
 ///
@@ -289,6 +294,14 @@ class VectorFuzzer {
     rng_.seed(seed);
   }
 
+  void setConstraint(Constraint constraint) {
+    constraint_ = constraint;
+  }
+
+  void resetConstraint() {
+    constraint_ = {false, false};
+  }
+
   /// Returns true n% of times (`n` is a double between 0 and 1).
   bool coinToss(double n) {
     return boost::random::uniform_01<double>()(rng_) < n;
@@ -353,6 +366,7 @@ class VectorFuzzer {
       BufferPtr& sizes);
 
   VectorFuzzer::Options opts_;
+  Constraint constraint_;
 
   memory::MemoryPool* pool_;
 

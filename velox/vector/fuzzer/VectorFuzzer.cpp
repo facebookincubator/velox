@@ -64,57 +64,73 @@ struct ScopedOptions {
 
 // Generate random values for the different supported types.
 template <typename T>
-T rand(FuzzerGenerator&) {
+T rand(FuzzerGenerator& rng, Constraint constraint = {false, false}) {
   VELOX_NYI();
 }
 
 template <>
-int8_t rand(FuzzerGenerator& rng) {
+int8_t rand(FuzzerGenerator& rng, Constraint constraint) {
   return boost::random::uniform_int_distribution<int8_t>()(rng);
 }
 
 template <>
-int16_t rand(FuzzerGenerator& rng) {
+int16_t rand(FuzzerGenerator& rng, Constraint constraint) {
   return boost::random::uniform_int_distribution<int16_t>()(rng);
 }
 
 template <>
-int32_t rand(FuzzerGenerator& rng) {
+int32_t rand(FuzzerGenerator& rng, Constraint constraint) {
   return boost::random::uniform_int_distribution<int32_t>()(rng);
 }
 
 template <>
-int64_t rand(FuzzerGenerator& rng) {
+int64_t rand(FuzzerGenerator& rng, Constraint constraint) {
   return boost::random::uniform_int_distribution<int64_t>()(rng);
 }
 
 template <>
-double rand(FuzzerGenerator& rng) {
+double rand(FuzzerGenerator& rng, Constraint constraint) {
+  if (!constraint.excludeNaN && coinToss(rng, 0.05)) {
+    return std::nan("");
+  }
+
+  if (!constraint.excludeInfinity && coinToss(rng, 0.05)) {
+    return std::numeric_limits<double>::infinity();
+  }
+
   return boost::random::uniform_01<double>()(rng);
 }
 
 template <>
-float rand(FuzzerGenerator& rng) {
+float rand(FuzzerGenerator& rng, Constraint constraint) {
+  if (!constraint.excludeNaN && coinToss(rng, 0.05)) {
+    return std::nanf("");
+  }
+
+  if (!constraint.excludeInfinity && coinToss(rng, 0.05)) {
+    return std::numeric_limits<float>::infinity();
+  }
+
   return boost::random::uniform_01<float>()(rng);
 }
 
 template <>
-bool rand(FuzzerGenerator& rng) {
+bool rand(FuzzerGenerator& rng, Constraint constraint) {
   return boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng);
 }
 
 template <>
-uint32_t rand(FuzzerGenerator& rng) {
+uint32_t rand(FuzzerGenerator& rng, Constraint constraint) {
   return boost::random::uniform_int_distribution<uint32_t>()(rng);
 }
 
 template <>
-uint64_t rand(FuzzerGenerator& rng) {
+uint64_t rand(FuzzerGenerator& rng, Constraint constraint) {
   return boost::random::uniform_int_distribution<uint64_t>()(rng);
 }
 
 template <>
-int128_t rand(FuzzerGenerator& rng) {
+int128_t rand(FuzzerGenerator& rng, Constraint constraint) {
   return HugeInt::build(rand<int64_t>(rng), rand<uint64_t>(rng));
 }
 
@@ -262,7 +278,8 @@ VectorPtr fuzzConstantPrimitiveImpl(
     const TypePtr& type,
     vector_size_t size,
     FuzzerGenerator& rng,
-    const VectorFuzzer::Options& opts) {
+    const VectorFuzzer::Options& opts,
+    const Constraint& constraint) {
   using TCpp = typename TypeTraits<kind>::NativeType;
   if constexpr (std::is_same_v<TCpp, StringView>) {
     std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
@@ -286,7 +303,7 @@ VectorPtr fuzzConstantPrimitiveImpl(
         pool, size, false, type, randLongDecimal(type, rng));
   } else {
     return std::make_shared<ConstantVector<TCpp>>(
-        pool, size, false, type, rand<TCpp>(rng));
+        pool, size, false, type, rand<TCpp>(rng, constraint));
   }
 }
 
@@ -294,7 +311,8 @@ template <TypeKind kind>
 void fuzzFlatPrimitiveImpl(
     const VectorPtr& vector,
     FuzzerGenerator& rng,
-    const VectorFuzzer::Options& opts) {
+    const VectorFuzzer::Options& opts,
+    const Constraint& constraint) {
   using TFlat = typename KindToFlatVector<kind>::type;
   using TCpp = typename TypeTraits<kind>::NativeType;
 
@@ -311,13 +329,13 @@ void fuzzFlatPrimitiveImpl(
       if (vector->type()->isShortDecimal()) {
         flatVector->set(i, randShortDecimal(vector->type(), rng));
       } else {
-        flatVector->set(i, rand<TCpp>(rng));
+        flatVector->set(i, rand<TCpp>(rng, constraint));
       }
     } else if constexpr (std::is_same_v<TCpp, int128_t>) {
       if (vector->type()->isLongDecimal()) {
         flatVector->set(i, randLongDecimal(vector->type(), rng));
       } else if (vector->type()->isHugeint()) {
-        flatVector->set(i, rand<int128_t>(rng));
+        flatVector->set(i, rand<int128_t>(rng, constraint));
       } else {
         VELOX_NYI();
       }
@@ -328,7 +346,7 @@ void fuzzFlatPrimitiveImpl(
         flatVector->set(i, rand<TCpp>(rng));
       }
     } else {
-      flatVector->set(i, rand<TCpp>(rng));
+      flatVector->set(i, rand<TCpp>(rng, constraint));
     }
   }
 }
@@ -456,7 +474,8 @@ VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
           type,
           size,
           rng_,
-          opts_);
+          opts_,
+          constraint_);
     }
   }
 
@@ -561,7 +580,7 @@ VectorPtr VectorFuzzer::fuzzFlatPrimitive(
     // TODO: We should bias towards edge cases (min, max, Nan, etc).
     auto kind = vector->typeKind();
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-        fuzzFlatPrimitiveImpl, kind, vector, rng_, opts_);
+        fuzzFlatPrimitiveImpl, kind, vector, rng_, opts_, constraint_);
 
     // Second, generate a random null vector.
     for (size_t i = 0; i < vector->size(); ++i) {
