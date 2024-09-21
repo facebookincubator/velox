@@ -32,46 +32,47 @@ struct BufferReleaser {
 BufferPtr Buffer::sliceBufferZeroCopy(
     size_t typeSize,
     bool podType,
-    const BufferPtr& buf,
+    const BufferPtr& buffer,
     size_t offset,
     size_t length) {
   auto bytesOffset = checkedMultiply(offset, typeSize);
   auto bytesLength = checkedMultiply(length, typeSize);
   VELOX_CHECK_LE(
       bytesOffset,
-      buf->size(),
+      buffer->size(),
       "Offset must be less than or equal to {}.",
-      buf->size() / typeSize);
+      buffer->size() / typeSize);
   VELOX_CHECK_LE(
       bytesLength,
-      buf->size() - bytesOffset,
+      buffer->size() - bytesOffset,
       "Length must be less than or equal to {}.",
-      buf->size() / typeSize - offset);
+      buffer->size() / typeSize - offset);
   // Cannot use `Buffer::as<uint8_t>()` here because Buffer::podType_ is false
   // when type is OPAQUE.
-  auto data = reinterpret_cast<const uint8_t*>(buf->as<void>()) + bytesOffset;
+  auto data =
+      reinterpret_cast<const uint8_t*>(buffer->as<void>()) + bytesOffset;
   return BufferView<BufferReleaser>::create(
-      data, bytesLength, BufferReleaser(buf), podType);
+      data, bytesLength, BufferReleaser(buffer), podType);
 }
 
 template <>
 BufferPtr Buffer::slice<bool>(
-    const BufferPtr& buf,
+    const BufferPtr& buffer,
     size_t offset,
     size_t length,
     memory::MemoryPool* pool) {
-  if (!buf) {
+  if (!buffer) {
     return nullptr;
   }
 
   if (offset % 8 == 0) {
     return sliceBufferZeroCopy(
-        1, true, buf, bits::nbytes(offset), bits::nbytes(length));
+        1, true, buffer, bits::nbytes(offset), bits::nbytes(length));
   }
   VELOX_CHECK_NOT_NULL(pool, "Pool must not be null.");
   auto ans = AlignedBuffer::allocate<bool>(length, pool);
   bits::copyBits(
-      buf->as<uint64_t>(), offset, ans->asMutable<uint64_t>(), 0, length);
+      buffer->as<uint64_t>(), offset, ans->asMutable<uint64_t>(), 0, length);
   return ans;
 }
 } // namespace facebook::velox

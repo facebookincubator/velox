@@ -181,24 +181,25 @@ class Buffer {
   /// Otherwise return a BufferView into the original buffer (with shared
   /// ownership of original buffer).
   ///
-  /// @param buf A pointer to the buffer to be sliced. If this is null, the
+  /// @param buffer A pointer to the buffer to be sliced. If this is null, the
   /// function returns a null pointer.
-  /// @param offset The starting point in the buffer from which the slice
-  /// begins.
-  /// @param length The number of elements to include in the slice.
+  /// @param offset The element position in the buffer where the slice begins.
+  /// Must be less or equal than the buffer size.
+  /// @param length The number of elements to include in the slice. Must be
+  /// less or equal than the buffer size - 'offset'.
   /// @param pool A pointer to a memory pool for allocating new buffers,
   /// required if a new buffer needs to be created.
   template <typename T>
   static BufferPtr slice(
-      const BufferPtr& buf,
+      const BufferPtr& buffer,
       size_t offset,
       size_t length,
       memory::MemoryPool* pool) {
-    if (!buf) {
+    if (!buffer) {
       return nullptr;
     }
     return sliceBufferZeroCopy(
-        sizeof(T), is_pod_like_v<T>, buf, offset, length);
+        sizeof(T), is_pod_like_v<T>, buffer, offset, length);
   }
 
  protected:
@@ -280,7 +281,7 @@ class Buffer {
   static BufferPtr sliceBufferZeroCopy(
       size_t typeSize,
       bool podType,
-      const BufferPtr& buf,
+      const BufferPtr& buffer,
       size_t offset,
       size_t length);
 };
@@ -301,7 +302,7 @@ inline MutableRange<bool> Buffer::asMutableRange<bool>() {
 
 template <>
 BufferPtr Buffer::slice<bool>(
-    const BufferPtr& buf,
+    const BufferPtr& buffer,
     size_t offset,
     size_t length,
     memory::MemoryPool* pool);
