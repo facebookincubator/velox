@@ -19,12 +19,11 @@
 
 namespace facebook::velox::test {
 
-class FloatConstants {
- public:
-  static constexpr auto kNaNDouble = std::numeric_limits<double>::quiet_NaN();
-  static constexpr auto kNaNFloat = std::numeric_limits<float>::quiet_NaN();
+struct FloatConstants {
+  static constexpr auto kNaND = std::numeric_limits<double>::quiet_NaN();
+  static constexpr auto kNaNF = std::numeric_limits<float>::quiet_NaN();
 
-  static constexpr auto kMaxDouble = std::numeric_limits<double>::max();
-  static constexpr auto kMaxFloat = std::numeric_limits<float>::max();
+  static constexpr auto kMaxD = std::numeric_limits<double>::max();
+  static constexpr auto kMaxF = std::numeric_limits<float>::max();
 };
 } // namespace facebook::velox::test

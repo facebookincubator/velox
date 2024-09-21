@@ -29,41 +29,20 @@ class AtLeastNNonNullsTest : public SparkFunctionBaseTest {
     // Allow for parsing literal integers as INTEGER, not BIGINT.
     options_.parseIntegerAsBigint = false;
   }
-
- protected:
-  template <typename T>
-  VectorPtr atLeastNNonNulls(
-      std::optional<T> n,
-      const std::vector<VectorPtr>& input,
-      bool useNullForN = false) {
-    std::string func = "at_least_n_non_nulls(";
-    if (n.has_value()) {
-      func += std::to_string(n.value());
-    } else if (useNullForN) {
-      func += "cast(null as int)";
-    }
-
-    for (auto i = 0; i < input.size(); ++i) {
-      if (i == 0 && !n.has_value() && !useNullForN) {
-        func += fmt::format("c{}", i);
-      } else {
-        func += fmt::format(", c{}", i);
-      }
-    }
-    func += ")";
-    return evaluate(func, makeRowVector(input));
-  }
-
-  void testAtLeastNNonNulls(
-      int32_t n,
-      const std::vector<VectorPtr>& input,
-      const VectorPtr& expected) {
-    const auto result = atLeastNNonNulls<int32_t>(n, input);
-    assertEqualVectors(expected, result);
-  }
 };
 
 TEST_F(AtLeastNNonNullsTest, basic) {
+  auto testAtLeastNNonNulls = [&](int32_t n,
+                                  const std::vector<VectorPtr>& input,
+                                  const VectorPtr& expected) {
+    std::string func = fmt::format("at_least_n_non_nulls({}", n);
+    for (auto i = 0; i < input.size(); ++i) {
+      func += fmt::format(", c{}", i);
+    }
+    func += ")";
+    const auto result = evaluate(func, makeRowVector(input));
+    assertEqualVectors(expected, result);
+  };
   auto stringInput = makeNullableFlatVector<StringView>(
       {std::nullopt, "1", "", std::nullopt, ""});
   auto boolInput = makeNullableFlatVector<bool>(
@@ -71,15 +50,11 @@ TEST_F(AtLeastNNonNullsTest, basic) {
   auto intInput =
       makeNullableFlatVector<int32_t>({-1, 0, 1, std::nullopt, std::nullopt});
   auto floatInput = makeNullableFlatVector<float>(
-      {FloatConstants::kMaxFloat,
-       FloatConstants::kNaNFloat,
-       0.1f,
-       0.0f,
-       std::nullopt});
+      {FloatConstants::kMaxF, FloatConstants::kNaNF, 0.1f, 0.0f, std::nullopt});
   auto doubleInput = makeNullableFlatVector<double>(
       {std::log(-2.0),
-       FloatConstants::kMaxDouble,
-       FloatConstants::kNaNDouble,
+       FloatConstants::kMaxD,
+       FloatConstants::kNaND,
        std::nullopt,
        0.1});
   auto arrayInput = makeArrayVectorFromJson<int32_t>(
@@ -126,16 +101,18 @@ TEST_F(AtLeastNNonNullsTest, error) {
       makeNullableFlatVector<int32_t>({-1, 0, 1, std::nullopt, std::nullopt});
 
   VELOX_ASSERT_USER_THROW(
-      atLeastNNonNulls<double>(1.0, {input}),
+      evaluate("at_least_n_non_nulls(1.0, c0)", makeRowVector({input})),
       "The first input type should be INTEGER but got DOUBLE");
   VELOX_ASSERT_USER_THROW(
-      atLeastNNonNulls<int32_t>(1, {}),
+      evaluate("at_least_n_non_nulls(1)", makeRowVector({})),
       "AtLeastNNonNulls expects to receive at least 2 arguments");
   VELOX_ASSERT_USER_THROW(
-      atLeastNNonNulls<int32_t>(std::nullopt, {input, input}),
+      evaluate("at_least_n_non_nulls(c0, c1)", makeRowVector({input, input})),
       "The first parameter should be constant expression");
   VELOX_ASSERT_USER_THROW(
-      atLeastNNonNulls<int32_t>(std::nullopt, {input}, true),
+      evaluate(
+          "at_least_n_non_nulls(cast(null as int), c0)",
+          makeRowVector({input})),
       "The first parameter should not be null");
 }
 } // namespace

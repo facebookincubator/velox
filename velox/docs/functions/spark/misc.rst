@@ -7,7 +7,8 @@ Miscellaneous Functions
     Returns true if there are at least ``n`` non-null and non-NaN values, 
     or false otherwise. ``value1, value2, ..., valueN`` are evaluated lazily.
     If ``n`` non-null and non-NaN values are found, the function will stop
-    evaluating the remaining arguments. If ``n <= 0``, the result is true.
+    evaluating the remaining arguments. If ``n <= 0``, the result is true. null
+    ``n`` is not allowed.
     Nested nulls in complex type values are handled as non-nulls. ::
 
         SELECT at_least_n_non_nulls(2, 0, NAN, NULL);  -- false
