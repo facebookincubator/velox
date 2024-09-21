@@ -43,62 +43,59 @@ TEST_F(AtLeastNNonNullsTest, basic) {
     const auto result = evaluate(func, makeRowVector(input));
     assertEqualVectors(expected, result);
   };
-  auto stringInput = makeNullableFlatVector<StringView>(
+  auto strings = makeNullableFlatVector<StringView>(
       {std::nullopt, "1", "", std::nullopt, ""});
-  auto boolInput = makeNullableFlatVector<bool>(
+  auto bools = makeNullableFlatVector<bool>(
       {std::nullopt, true, false, std::nullopt, std::nullopt});
-  auto intInput =
+  auto ints =
       makeNullableFlatVector<int32_t>({-1, 0, 1, std::nullopt, std::nullopt});
-  auto floatInput = makeNullableFlatVector<float>(
+  auto floats = makeNullableFlatVector<float>(
       {FloatConstants::kMaxF, FloatConstants::kNaNF, 0.1f, 0.0f, std::nullopt});
-  auto doubleInput = makeNullableFlatVector<double>(
+  auto doubles = makeNullableFlatVector<double>(
       {std::log(-2.0),
        FloatConstants::kMaxD,
        FloatConstants::kNaND,
        std::nullopt,
        0.1});
-  auto arrayInput = makeArrayVectorFromJson<int32_t>(
+  auto arraies = makeArrayVectorFromJson<int32_t>(
       {"[1, null, 3]", "[1, 2, 3]", "null", "[null]", "[]"});
   auto mapInput = makeMapVectorFromJson<int32_t, int32_t>(
       {"{1: 10, 2: null, 3: null}", "{1: 10, 2: 20}", "{1: 2}", "{}", "null"});
-  auto constInput = makeConstant<int32_t>(2, 5);
-  auto indices = makeIndices(5, [](auto row) { return (row + 1) % 5; });
-  auto dictInput = wrapInDictionary(indices, 5, doubleInput);
+  auto consts = makeConstant<int32_t>(2, 5);
+  auto indices = makeIndices({1, 2, 3, 4, 0});
+  auto dicts = wrapInDictionary(indices, 5, doubles);
 
   auto expected = makeFlatVector<bool>({false, true, true, false, false});
-  testAtLeastNNonNulls(2, {stringInput, boolInput}, expected);
+  testAtLeastNNonNulls(2, {strings, bools}, expected);
 
   expected = makeFlatVector<bool>({false, false, false, false, false});
-  testAtLeastNNonNulls(3, {stringInput, boolInput}, expected);
+  testAtLeastNNonNulls(3, {strings, bools}, expected);
 
   expected = makeFlatVector<bool>({true, true, true, true, true});
-  testAtLeastNNonNulls(0, {stringInput, boolInput}, expected);
-  testAtLeastNNonNulls(-1, {stringInput, boolInput}, expected);
+  testAtLeastNNonNulls(0, {strings, bools}, expected);
+  testAtLeastNNonNulls(-1, {strings, bools}, expected);
 
   expected = makeFlatVector<bool>({true, false, true, true, false});
-  testAtLeastNNonNulls(1, {floatInput}, expected);
+  testAtLeastNNonNulls(1, {floats}, expected);
 
   expected = makeFlatVector<bool>({false, true, false, false, true});
-  testAtLeastNNonNulls(1, {doubleInput}, expected);
+  testAtLeastNNonNulls(1, {doubles}, expected);
 
   expected = makeFlatVector<bool>({false, true, true, false, false});
-  testAtLeastNNonNulls(2, {stringInput, boolInput, floatInput}, expected);
+  testAtLeastNNonNulls(2, {strings, bools, floats}, expected);
 
   expected = makeFlatVector<bool>({false, true, true, false, false});
-  testAtLeastNNonNulls(
-      3, {boolInput, intInput, floatInput, doubleInput}, expected);
+  testAtLeastNNonNulls(3, {bools, ints, floats, doubles}, expected);
 
   expected = makeFlatVector<bool>({false, false, false, false, false});
-  testAtLeastNNonNulls(2, {floatInput, doubleInput}, expected);
+  testAtLeastNNonNulls(2, {floats, doubles}, expected);
 
   expected = makeFlatVector<bool>({true, false, false, true, false});
-  testAtLeastNNonNulls(
-      4, {mapInput, arrayInput, constInput, dictInput}, expected);
+  testAtLeastNNonNulls(4, {mapInput, arraies, consts, dicts}, expected);
 }
 
 TEST_F(AtLeastNNonNullsTest, error) {
-  auto input =
-      makeNullableFlatVector<int32_t>({-1, 0, 1, std::nullopt, std::nullopt});
+  auto input = makeFlatVector<int32_t>({1, 2, 3});
 
   VELOX_ASSERT_USER_THROW(
       evaluate("at_least_n_non_nulls(1.0, c0)", makeRowVector({input})),
