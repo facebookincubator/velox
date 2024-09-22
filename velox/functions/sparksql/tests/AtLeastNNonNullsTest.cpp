@@ -57,9 +57,9 @@ TEST_F(AtLeastNNonNullsTest, basic) {
        FloatConstants::kNaND,
        std::nullopt,
        0.1});
-  auto arraies = makeArrayVectorFromJson<int32_t>(
+  auto arrays = makeArrayVectorFromJson<int32_t>(
       {"[1, null, 3]", "[1, 2, 3]", "null", "[null]", "[]"});
-  auto mapInput = makeMapVectorFromJson<int32_t, int32_t>(
+  auto maps = makeMapVectorFromJson<int32_t, int32_t>(
       {"{1: 10, 2: null, 3: null}", "{1: 10, 2: 20}", "{1: 2}", "{}", "null"});
   auto consts = makeConstant<int32_t>(2, 5);
   auto indices = makeIndices({1, 2, 3, 4, 0});
@@ -91,7 +91,7 @@ TEST_F(AtLeastNNonNullsTest, basic) {
   testAtLeastNNonNulls(2, {floats, doubles}, expected);
 
   expected = makeFlatVector<bool>({true, false, false, true, false});
-  testAtLeastNNonNulls(4, {mapInput, arraies, consts, dicts}, expected);
+  testAtLeastNNonNulls(4, {maps, arrays, consts, dicts}, expected);
 }
 
 TEST_F(AtLeastNNonNullsTest, error) {
