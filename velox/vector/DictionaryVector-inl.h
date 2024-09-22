@@ -185,7 +185,9 @@ VectorPtr DictionaryVector<T>::slice(vector_size_t offset, vector_size_t length)
       this->sliceNulls(offset, length),
       length,
       valueVector(),
-      Buffer::slice<vector_size_t>(indices_, offset, length, this->pool_));
+      indices_
+          ? Buffer::slice<vector_size_t>(indices_, offset, length, this->pool_)
+          : indices_);
 }
 
 template <typename T>

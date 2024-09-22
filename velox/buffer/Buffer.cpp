@@ -61,9 +61,7 @@ BufferPtr Buffer::slice<bool>(
     size_t offset,
     size_t length,
     memory::MemoryPool* pool) {
-  if (!buffer) {
-    return nullptr;
-  }
+  VELOX_CHECK_NOT_NULL(buffer, "Buffer must not be null.");
 
   if (offset % 8 == 0) {
     return sliceBufferZeroCopy(

@@ -883,7 +883,7 @@ class BaseVector {
   }
 
   BufferPtr sliceNulls(vector_size_t offset, vector_size_t length) const {
-    return Buffer::slice<bool>(nulls_, offset, length, pool_);
+    return nulls_ ? Buffer::slice<bool>(nulls_, offset, length, pool_) : nulls_;
   }
 
   TypePtr type_;

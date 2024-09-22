@@ -466,6 +466,9 @@ TEST_F(BufferTest, sliceBigintBuffer) {
   VELOX_ASSERT_THROW(
       Buffer::slice<int64_t>(bufferPtr, 5, 6, pool_.get()),
       "Length must be less than or equal to 5.");
+  VELOX_ASSERT_THROW(
+      Buffer::slice<int64_t>(nullptr, 5, 6, pool_.get()),
+      "Buffer must not be null.");
 }
 
 TEST_F(BufferTest, sliceBooleanBuffer) {

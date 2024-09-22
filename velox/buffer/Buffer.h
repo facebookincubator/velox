@@ -181,8 +181,7 @@ class Buffer {
   /// Otherwise return a BufferView into the original buffer (with shared
   /// ownership of original buffer).
   ///
-  /// @param buffer A pointer to the buffer to be sliced. If this is null, the
-  /// function returns a null pointer.
+  /// @param buffer A pointer to the buffer to be sliced. Must not be null.
   /// @param offset The element position in the buffer where the slice begins.
   /// Must be less or equal than the buffer size.
   /// @param length The number of elements to include in the slice. Must be
@@ -195,9 +194,7 @@ class Buffer {
       size_t offset,
       size_t length,
       memory::MemoryPool* pool) {
-    if (!buffer) {
-      return nullptr;
-    }
+    VELOX_CHECK_NOT_NULL(buffer, "Buffer must not be null.");
     return sliceBufferZeroCopy(
         sizeof(T), is_pod_like_v<T>, buffer, offset, length);
   }
@@ -698,5 +695,6 @@ class BufferView : public Buffer {
 
   Releaser const releaser_;
 };
+
 } // namespace velox
 } // namespace facebook
