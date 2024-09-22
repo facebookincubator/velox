@@ -112,6 +112,7 @@ class AggregationFuzzerRunner {
         seed,
         options.customVerificationFunctions,
         options.customInputGenerators,
+        options.prestoFunctionDataSpec,
         options.timestampPrecision,
         options.queryConfigs,
         options.hiveConfigs,

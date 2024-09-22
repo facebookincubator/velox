@@ -29,6 +29,8 @@ namespace facebook::velox::exec::test {
 /// input.
 /// @param orderableGroupKeys Whether group keys must be orderable or be just
 /// comparable.
+/// @param prestoFunctionDataSpec Mapping of function and their input data
+/// boundary.
 /// @param planPath Path to persisted plan information. If this is
 /// supplied, fuzzer will only verify the plans.
 /// @param referenceQueryRunner Reference query runner for results
@@ -40,6 +42,7 @@ void aggregateFuzzer(
         orderDependentFunctions,
     const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
         customInputGenerators,
+    const std::unordered_map<std::string, DataSpec>& prestoFunctionDataSpec,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
     const std::unordered_map<std::string, std::string>& hiveConfigs,

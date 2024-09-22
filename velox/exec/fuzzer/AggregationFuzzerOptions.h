@@ -50,6 +50,8 @@ struct AggregationFuzzerOptions {
 
   std::unordered_set<std::string> orderDependentFunctions;
 
+  std::unordered_map<std::string, DataSpec> prestoFunctionDataSpec;
+
   /// Timestamp precision to use when generating inputs of type TIMESTAMP.
   VectorFuzzer::Options::TimestampPrecision timestampPrecision{
       VectorFuzzer::Options::TimestampPrecision::kMilliSeconds};
