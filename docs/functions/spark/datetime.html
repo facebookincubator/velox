@@ -140,7 +140,9 @@ SELECT dayofweek(‘2023-08-22’); – 3</p>
 <span class="sig-name descname"><span class="pre">from_unixtime</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unixTime</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#from_unixtime" title="Link to this definition">¶</a></dt>
 <dd><p>Adjusts <code class="docutils literal notranslate"><span class="pre">unixTime</span></code> (elapsed seconds since UNIX epoch) to configured session timezone, then
 converts it to a formatted time string according to <code class="docutils literal notranslate"><span class="pre">format</span></code>. Only supports BIGINT type for
-<code class="docutils literal notranslate"><span class="pre">unixTime</span></code>.
+<code class="docutils literal notranslate"><span class="pre">unixTime</span></code>. Using <cite>Simple &lt;https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html&gt;</cite>
+date formatter in lenient mode that is align with Spark legacy date parser behavior or
+<cite>Joda &lt;https://www.joda.org/joda-time/&gt;</cite> date formatter depends on <code class="docutils literal notranslate"><span class="pre">spark.legacy_date_formatter</span></code> configuration.
 <a class="reference external" href="https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html">Valid patterns for date format</a>. Throws exception for
 invalid <code class="docutils literal notranslate"><span class="pre">format</span></code>. This function will convert input to milliseconds, and integer overflow is
 allowed in the conversion, which aligns with Spark. See the below third example where INT64_MAX
@@ -405,7 +407,10 @@ higher levels of precision.:</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="unix_timestamp">
 <span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#unix_timestamp" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the current UNIX timestamp in seconds.</p>
+<dd><p>Returns the current UNIX timestamp in seconds. Using
+<cite>Simple &lt;https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html&gt;</cite> date formatter in lenient mode
+that is align with Spark legacy date parser behavior or <cite>Joda &lt;https://www.joda.org/joda-time/&gt;</cite> date formatter
+depends on the <code class="docutils literal notranslate"><span class="pre">spark.legacy_date_formatter</span></code> configuration.</p>
 </dd></dl>
 
 <dl class="spark function">
