@@ -447,20 +447,20 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
     int64_t totalBytes = 0;
     size_t written = 0;
     uint64_t extractNanos{0};
-    {
-      NanosecondTimer timer(&extractNanos);
-      while (written < run.rows.size()) {
+    while (written < run.rows.size()) {
+      {
+        NanosecondTimer timer(&extractNanos);
         extractSpillVector(
             run.rows,
             kTargetBatchRows,
             kTargetBatchBytes,
             spillVector,
             written);
-        totalBytes += state_.appendToPartition(partition, spillVector);
-        if (totalBytes > state_.targetFileSize()) {
-          VELOX_CHECK(!needSort());
-          state_.finishFile(partition);
-        }
+      }
+      totalBytes += state_.appendToPartition(partition, spillVector);
+      if (totalBytes > state_.targetFileSize()) {
+        VELOX_CHECK(!needSort());
+        state_.finishFile(partition);
       }
     }
     updateSpillExtractVectorTime(extractNanos);
