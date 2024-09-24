@@ -80,17 +80,17 @@ memory usage for each plan node.
 .. code-block::
 
    -- Project[4][expressions: (c0:INTEGER, ROW["c0"]), (p1:BIGINT, plus(ROW["c1"],1)), (p2:BIGINT, plus(ROW["c1"],ROW["u_c1"]))] -> c0:INTEGER, p1:BIGINT, p2:BIGINT
-      Output: 2000 rows (154.34KB, 20 batches), Cpu time: 907.80us, Blocked wall time: 0ns, Peak memory: 2.00KB, Memory allocations: 40, Threads: 1, CPU breakdown: I/O/F(27.24us/872.82us/7.74us)
+      Output: 2000 rows (154.34KB, 20 batches), Cpu time: 907.80us, Blocked wall time: 0ns, Peak memory: 2.00KB, Memory allocations: 40, Threads: 1, CPU breakdown: I/O/F (27.24us/872.82us/7.74us)
    -- HashJoin[3][INNER c0=u_c0] -> c0:INTEGER, c1:BIGINT, u_c1:BIGINT
-      Output: 2000 rows (136.23KB, 20 batches), Cpu time: 508.74us, Blocked wall time: 0ns, Peak memory: 88.50KB, Memory allocations: 7, CPU breakdown: I/O/F(177.87us/329.20us/1.66us)
-      HashBuild: Input: 100 rows (1.31KB, 1 batches), Output: 0 rows (0B, 0 batches), Cpu time: 41.77us, Blocked wall time: 0ns, Peak memory: 68.00KB, Memory allocations: 2, Threads: 1, CPU breakdown: I/O/F(40.18us/1.59us/0ns)
-      HashProbe: Input: 2000 rows (118.12KB, 20 batches), Output: 2000 rows (136.23KB, 20 batches), Cpu time: 466.97us, Blocked wall time: 0ns, Peak memory: 20.50KB, Memory allocations: 5, Threads: 1, CPU breakdown: I/O/F(137.69us/327.61us/1.66us)
+      Output: 2000 rows (136.23KB, 20 batches), Cpu time: 508.74us, Blocked wall time: 0ns, Peak memory: 88.50KB, Memory allocations: 7, CPU breakdown: I/O/F (177.87us/329.20us/1.66us)
+      HashBuild: Input: 100 rows (1.31KB, 1 batches), Output: 0 rows (0B, 0 batches), Cpu time: 41.77us, Blocked wall time: 0ns, Peak memory: 68.00KB, Memory allocations: 2, Threads: 1, CPU breakdown: I/O/F (40.18us/1.59us/0ns)
+      HashProbe: Input: 2000 rows (118.12KB, 20 batches), Output: 2000 rows (136.23KB, 20 batches), Cpu time: 466.97us, Blocked wall time: 0ns, Peak memory: 20.50KB, Memory allocations: 5, Threads: 1, CPU breakdown: I/O/F (137.69us/327.61us/1.66us)
       -- TableScan[2][table: hive_table] -> c0:INTEGER, c1:BIGINT
-         Input: 2000 rows (118.12KB, 20 batches), Raw Input: 20480 rows (72.79KB), Output: 2000 rows (118.12KB, 20 batches), Cpu time: 8.89ms, Blocked wall time: 10.00us, Peak memory: 80.38KB, Memory allocations: 262, Threads: 1, Splits: 20, DynamicFilter producer plan nodes: 3, CPU breakdown: I/O/F(0ns/8.88ms/4.93us)
+         Input: 2000 rows (118.12KB, 20 batches), Raw Input: 20480 rows (72.79KB), Output: 2000 rows (118.12KB, 20 batches), Cpu time: 8.89ms, Blocked wall time: 10.00us, Peak memory: 80.38KB, Memory allocations: 262, Threads: 1, Splits: 20, DynamicFilter producer plan nodes: 3, CPU breakdown: I/O/F (0ns/8.88ms/4.93us)
       -- Project[1][expressions: (u_c0:INTEGER, ROW["c0"]), (u_c1:BIGINT, ROW["c1"])] -> u_c0:INTEGER, u_c1:BIGINT
-         Output: 100 rows (1.31KB, 1 batches), Cpu time: 43.22us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: I/O/F(691ns/5.54us/36.98us)
+         Output: 100 rows (1.31KB, 1 batches), Cpu time: 43.22us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: I/O/F (691ns/5.54us/36.98us)
          -- Values[0][100 rows in 1 vectors] -> c0:INTEGER, c1:BIGINT
-            Input: 0 rows (0B, 0 batches), Output: 100 rows (1.31KB, 1 batches), Cpu time: 3.05us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: I/O/F(0ns/2.48us/568ns)
+            Input: 0 rows (0B, 0 batches), Output: 100 rows (1.31KB, 1 batches), Cpu time: 3.05us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: I/O/F (0ns/2.48us/568ns)
 
 With includeCustomStats flag enabled, printPlanWithStats adds operator-specific
 statistics for each plan node, e.g. number of distinct values for the join key,
@@ -105,15 +105,15 @@ Here is the output for the join query from above.
 .. code-block::
 
    -- Project[4][expressions: (c0:INTEGER, ROW["c0"]), (p1:BIGINT, plus(ROW["c1"],1)), (p2:BIGINT, plus(ROW["c1"],ROW["u_c1"]))] -> c0:INTEGER, p1:BIGINT, p2:BIGINT
-      Output: 2000 rows (154.34KB, 20 batches), Cpu time: 907.80us, Blocked wall time: 0ns, Peak memory: 2.00KB, Memory allocations: 40, Threads: 1, CPU breakdown: I/O/F(27.24us/872.82us/7.74us)
+      Output: 2000 rows (154.34KB, 20 batches), Cpu time: 907.80us, Blocked wall time: 0ns, Peak memory: 2.00KB, Memory allocations: 40, Threads: 1, CPU breakdown: I/O/F (27.24us/872.82us/7.74us)
          dataSourceLazyCpuNanos       sum: 745.18us, count: 20, min: 28.42us, max: 57.84us
          dataSourceLazyWallNanos      sum: 765.26us, count: 1, min: 765.26us, max: 765.26us
          runningAddInputWallNanos     sum: 41.22us, count: 1, min: 41.22us, max: 41.22us
          runningFinishWallNanos       sum: 8.42us, count: 1, min: 8.42us, max: 8.42us
          runningGetOutputWallNanos    sum: 888.74us, count: 1, min: 888.74us, max: 888.74us
    -- HashJoin[3][INNER c0=u_c0] -> c0:INTEGER, c1:BIGINT, u_c1:BIGINT
-      Output: 2000 rows (136.23KB, 20 batches), Cpu time: 508.74us, Blocked wall time: 0ns, Peak memory: 88.50KB, Memory allocations: 7, CPU breakdown: I/O/F(177.87us/329.20us/1.66us)
-      HashBuild: Input: 100 rows (1.31KB, 1 batches), Output: 0 rows (0B, 0 batches), Cpu time: 41.77us, Blocked wall time: 0ns, Peak memory: 68.00KB, Memory allocations: 2, Threads: 1, CPU breakdown: I/O/F(40.18us/1.59us/0ns)
+      Output: 2000 rows (136.23KB, 20 batches), Cpu time: 508.74us, Blocked wall time: 0ns, Peak memory: 88.50KB, Memory allocations: 7, CPU breakdown: I/O/F (177.87us/329.20us/1.66us)
+      HashBuild: Input: 100 rows (1.31KB, 1 batches), Output: 0 rows (0B, 0 batches), Cpu time: 41.77us, Blocked wall time: 0ns, Peak memory: 68.00KB, Memory allocations: 2, Threads: 1, CPU breakdown: I/O/F (40.18us/1.59us/0ns)
          distinctKey0                 sum: 101, count: 1, min: 101, max: 101
          hashtable.buildWallNanos     sum: 28.77us, count: 1, min: 28.77us, max: 28.77us
          hashtable.capacity           sum: 200, count: 1, min: 200, max: 200
@@ -124,13 +124,13 @@ Here is the output for the join query from above.
          runningAddInputWallNanos     sum: 40.41us, count: 1, min: 40.41us, max: 40.41us
          runningFinishWallNanos       sum: 0ns, count: 1, min: 0ns, max: 0ns
          runningGetOutputWallNanos    sum: 2.80us, count: 1, min: 2.80us, max: 2.80us
-      HashProbe: Input: 2000 rows (118.12KB, 20 batches), Output: 2000 rows (136.23KB, 20 batches), Cpu time: 466.97us, Blocked wall time: 0ns, Peak memory: 20.50KB, Memory allocations: 5, Threads: 1, CPU breakdown: I/O/F(137.69us/327.61us/1.66us)
+      HashProbe: Input: 2000 rows (118.12KB, 20 batches), Output: 2000 rows (136.23KB, 20 batches), Cpu time: 466.97us, Blocked wall time: 0ns, Peak memory: 20.50KB, Memory allocations: 5, Threads: 1, CPU breakdown: I/O/F (137.69us/327.61us/1.66us)
          dynamicFiltersProduced       sum: 1, count: 1, min: 1, max: 1
          runningAddInputWallNanos     sum: 154.36us, count: 1, min: 154.36us, max: 154.36us
          runningFinishWallNanos       sum: 2.35us, count: 1, min: 2.35us, max: 2.35us
          runningGetOutputWallNanos    sum: 361.26us, count: 1, min: 361.26us, max: 361.26us
       -- TableScan[2][table: hive_table] -> c0:INTEGER, c1:BIGINT
-         Input: 2000 rows (118.12KB, 20 batches), Raw Input: 20480 rows (72.79KB), Output: 2000 rows (118.12KB, 20 batches), Cpu time: 8.89ms, Blocked wall time: 0ns, Peak memory: 80.38KB, Memory allocations: 262, Threads: 1, Splits: 20, DynamicFilter producer plan nodes: 3, CPU breakdown: I/O/F(0ns/8.88ms/4.93us)
+         Input: 2000 rows (118.12KB, 20 batches), Raw Input: 20480 rows (72.79KB), Output: 2000 rows (118.12KB, 20 batches), Cpu time: 8.89ms, Blocked wall time: 0ns, Peak memory: 80.38KB, Memory allocations: 262, Threads: 1, Splits: 20, DynamicFilter producer plan nodes: 3, CPU breakdown: I/O/F (0ns/8.88ms/4.93us)
             dataSourceAddSplitWallNanos      sum: 464.00us, count: 1, min: 464.00us, max: 464.00us
             dataSourceReadWallNanos          sum: 1.88ms, count: 1, min: 1.88ms, max: 1.88ms
             dynamicFiltersAccepted           sum: 1, count: 1, min: 1, max: 1
@@ -157,12 +157,12 @@ Here is the output for the join query from above.
             totalRemainingFilterTime         sum: 0ns, count: 1, min: 0ns, max: 0ns
             totalScanTime                    sum: 309.00us, count: 1, min: 309.00us, max: 309.00us
       -- Project[1][expressions: (u_c0:INTEGER, ROW["c0"]), (u_c1:BIGINT, ROW["c1"])] -> u_c0:INTEGER, u_c1:BIGINT
-         Output: 100 rows (1.31KB, 1 batches), Cpu time: 43.22us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: I/O/F(691ns/5.54us/36.98us)
+         Output: 100 rows (1.31KB, 1 batches), Cpu time: 43.22us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: I/O/F (691ns/5.54us/36.98us)
             runningAddInputWallNanos     sum: 982ns, count: 1, min: 982ns, max: 982ns
             runningFinishWallNanos       sum: 37.20us, count: 1, min: 37.20us, max: 37.20us
             runningGetOutputWallNanos    sum: 6.34us, count: 1, min: 6.34us, max: 6.34us
          -- Values[0][100 rows in 1 vectors] -> c0:INTEGER, c1:BIGINT
-            Input: 0 rows (0B, 0 batches), Output: 100 rows (1.31KB, 1 batches), Cpu time: 3.05us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: I/O/F(0ns/2.48us/568ns)
+            Input: 0 rows (0B, 0 batches), Output: 100 rows (1.31KB, 1 batches), Cpu time: 3.05us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: I/O/F (0ns/2.48us/568ns)
                runningAddInputWallNanos     sum: 0ns, count: 1, min: 0ns, max: 0ns
                runningFinishWallNanos       sum: 782ns, count: 1, min: 782ns, max: 782ns
                runningGetOutputWallNanos    sum: 2.87us, count: 1, min: 2.87us, max: 2.87us
@@ -174,16 +174,16 @@ And this is the output for the aggregation query from above.
 .. code-block::
 
    -- Aggregation[1][PARTIAL [c5] a0 := max(ROW["c0"]), a1 := sum(ROW["c1"]), a2 := sum(ROW["c2"]), a3 := sum(ROW["c3"]), a4 := sum(ROW["c4"])] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE
-      Output: 835 rows (672.38KB, 1 batches), Cpu time: 1.96ms, Blocked wall time: 0ns, Peak memory: 757.25KB, Memory allocations: 20, Threads: 1, CPU breakdown: I/O/F(1.38ms/579.12us/6.82us)
+      Output: 835 rows (672.38KB, 1 batches), Cpu time: 1.96ms, Blocked wall time: 0ns, Peak memory: 757.25KB, Memory allocations: 20, Threads: 1, CPU breakdown: I/O/F (1.38ms/579.12us/6.82us)
    -- TableScan[0][table: hive_table] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR
-      Input: 10000 rows (0B, 1 batches), Output: 10000 rows (0B, 1 batches), Cpu time: 2.89ms, Blocked wall time: 0ns, Peak memory: 539.88KB, Memory allocations: 69, Threads: 1, Splits: 1, CPU breakdown: I/O/F(0ns/2.89ms/3.35us)
+      Input: 10000 rows (0B, 1 batches), Output: 10000 rows (0B, 1 batches), Cpu time: 2.89ms, Blocked wall time: 0ns, Peak memory: 539.88KB, Memory allocations: 69, Threads: 1, Splits: 1, CPU breakdown: I/O/F (0ns/2.89ms/3.35us)
 
 `printPlanWithStats(*plan, task->taskStats(), true)` includes custom statistics:
 
 .. code-block::
 
    -- Aggregation[1][PARTIAL [c5] a0 := max(ROW["c0"]), a1 := sum(ROW["c1"]), a2 := sum(ROW["c2"]), a3 := sum(ROW["c3"]), a4 := sum(ROW["c4"])] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE
-      Output: 835 rows (672.38KB, 1 batches), Cpu time: 1.96ms, Blocked wall time: 0ns, Peak memory: 757.25KB, Memory allocations: 20, Threads: 1, CPU breakdown: I/O/F(1.38ms/579.12us/6.82us)
+      Output: 835 rows (672.38KB, 1 batches), Cpu time: 1.96ms, Blocked wall time: 0ns, Peak memory: 757.25KB, Memory allocations: 20, Threads: 1, CPU breakdown: I/O/F (1.38ms/579.12us/6.82us)
          dataSourceLazyCpuNanos       sum: 2.10ms, count: 6, min: 245.71us, max: 554.09us
          dataSourceLazyWallNanos      sum: 2.10ms, count: 1, min: 2.10ms, max: 2.10ms
          distinctKey0                 sum: 835, count: 1, min: 835, max: 835
@@ -196,7 +196,7 @@ And this is the output for the aggregation query from above.
          runningFinishWallNanos       sum: 7.57us, count: 1, min: 7.57us, max: 7.57us
          runningGetOutputWallNanos    sum: 582.59us, count: 1, min: 582.59us, max: 582.59us
    -- TableScan[0][table: hive_table] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR
-      Input: 10000 rows (0B, 1 batches), Output: 10000 rows (0B, 1 batches), Cpu time: 2.89ms, Blocked wall time: 0ns, Peak memory: 539.88KB, Memory allocations: 69, Threads: 1, Splits: 1, CPU breakdown: I/O/F(0ns/2.89ms/3.35us)
+      Input: 10000 rows (0B, 1 batches), Output: 10000 rows (0B, 1 batches), Cpu time: 2.89ms, Blocked wall time: 0ns, Peak memory: 539.88KB, Memory allocations: 69, Threads: 1, Splits: 1, CPU breakdown: I/O/F (0ns/2.89ms/3.35us)
          dataSourceAddSplitWallNanos      sum: 513.00us, count: 1, min: 513.00us, max: 513.00us
          dataSourceReadWallNanos          sum: 180.00us, count: 1, min: 180.00us, max: 180.00us
          flattenStringDictionaryValues    sum: 0, count: 1, min: 0, max: 0
@@ -231,7 +231,7 @@ their estimated sizes, cpu time, blocked wall time, and the number of threads us
 .. code-block::
 
    -- TableScan[2][table: hive_table] -> c0:INTEGER, c1:BIGINT
-         Input: 2000 rows (118.12KB, 20 batches), Raw Input: 20480 rows (72.79KB), Output: 2000 rows (118.12KB, 20 batches), Cpu time: 8.89ms, Blocked wall time: 10.00us, Peak memory: 80.38KB, Memory allocations: 262, Threads: 1, Splits: 20, DynamicFilter producer plan nodes: 3, CPU breakdown: I/O/F(0ns/8.88ms/4.93us)
+         Input: 2000 rows (118.12KB, 20 batches), Raw Input: 20480 rows (72.79KB), Output: 2000 rows (118.12KB, 20 batches), Cpu time: 8.89ms, Blocked wall time: 10.00us, Peak memory: 80.38KB, Memory allocations: 262, Threads: 1, Splits: 20, DynamicFilter producer plan nodes: 3, CPU breakdown: I/O/F (0ns/8.88ms/4.93us)
 
 printPlanWithStats shows output rows and
 sizes for each plan node and shows input rows and sizes for leaf nodes and nodes
@@ -256,7 +256,7 @@ Velox also measures CPU time and the breakdown of CPU time which including addIn
 
 .. code-block::
 
-	Cpu time: 8.89ms, Peak memory: 80.38KB, Memory allocations: 262, CPU breakdown: I/O/F(0ns/8.88ms/4.93us)
+	Cpu time: 8.89ms, Peak memory: 80.38KB, Memory allocations: 262, CPU breakdown: I/O/F (0ns/8.88ms/4.93us)
 
 Some operators like TableScan and HashProbe may be blocked waiting for splits or
 hash tables. Velox records the total wall time an operator was blocked and

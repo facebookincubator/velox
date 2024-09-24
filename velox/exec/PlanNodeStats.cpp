@@ -125,7 +125,7 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
         << folly::join(',', dynamicFilterStats.producerNodeIds);
   }
 
-  out << ", CPU breakdown: I/O/F"
+  out << ", CPU breakdown: I/O/F "
       << fmt::format(
              "({}/{}/{})",
              succinctNanos(addInputTiming.cpuNanos),
