@@ -1011,6 +1011,16 @@ the value of this config can not exceed the default value.</p></td>
 <td><p>A comma-separated list of plan node ids whose input data will be trace. If it is empty, then we only trace the
 query metadata which includes the query plan and configs etc.</p></td>
 </tr>
+<tr class="row-odd"><td><p>query_trace_task_reg_exp</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>The regexp of traced task id. We only enable trace on a task if its id matches.</p></td>
+</tr>
+<tr class="row-even"><td><p>query_trace_max_bytes</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>The max trace bytes limit. Tracing is disabled if zero.</p></td>
+</tr>
 </tbody>
 </table>
 </section>

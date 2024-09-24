@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Tracing &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="I/O Optimizations and the TpchBenchmark" href="../TpchBenchmark.html" />
+    <link rel="prev" title="Metrics" href="metrics.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../TpchBenchmark.html" title="I/O Optimizations and the TpchBenchmark"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="metrics.html" title="Metrics"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" accesskey="U">Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Tracing</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="tracing">
+<h1>Tracing<a class="headerlink" href="#tracing" title="Link to this heading">¶</a></h1>
+<section id="background">
+<h2>Background<a class="headerlink" href="#background" title="Link to this heading">¶</a></h2>
+<p>The query trace tool helps analyze and debug query performance and correctness
+issues. It helps prevent interference from the test noises in a production
+environment (such as storage, network etc) by allowing replay of a part of the
+query plan and data set in an isolated environment such as a local machine.
+This is useful for debugging query performance debugging as we don’t have to
+replay the whole query in a production environment.</p>
+</section>
+<section id="how-tracing-tool-works">
+<h2>How Tracing Tool Works<a class="headerlink" href="#how-tracing-tool-works" title="Link to this heading">¶</a></h2>
+<p>The tracing process consists of two phases: tracing and replaying.</p>
+<p><strong>Tracing Phase</strong></p>
+<ul class="simple">
+<li><p>When the query starts, the task records the metadata including query plan fragment,
+query configuration, and connector properties.</p></li>
+<li><p>During the query execution, each traced operator records the input vectors and saves
+in the specified storage location.</p></li>
+<li><p>The metadata are serialized using json format and operator data inputs are serialized
+using <a class="reference external" href="https://prestodb.io/docs/current/develop/serialized-page.html">Presto serializer</a>.</p></li>
+</ul>
+<p><strong>Replaying Phase</strong></p>
+<ol class="arabic simple">
+<li><p>Read and deserialize the recorded query plan in tracing phase, extract the target plan
+node, and assemble a plan fragment with a customized source and sink nodes. The source
+node reads the input from the serialized operator inputs on storage and sink operator
+prints or logs out the execution stats.</p></li>
+<li><p>Build a task with the assembled plan fragment in step 1.</p></li>
+<li><p>Apply the recorded query configuration and connector properties to replay the task with
+the same input and configuration as in production.</p></li>
+</ol>
+<p><strong>NOTE</strong>: The Presto serialization doesn’t always preserve vector encoding (lazy vectors are
+loaded, nested dictionaries are flattened). Hence, replay may differ from the original run.</p>
+<a class="reference internal image-reference" href="../../_images/trace-arch.png"><img alt="../../_images/trace-arch.png" class="align-center" src="../../_images/trace-arch.png" style="width: 600px;" /></a>
+</section>
+<section id="tracing-framework">
+<h2>Tracing Framework<a class="headerlink" href="#tracing-framework" title="Link to this heading">¶</a></h2>
+<p>The tracing framework consists of three components:</p>
+<ol class="arabic simple">
+<li><p><strong>Metadata and Data Writer</strong>: metadata writer and the data writer.</p></li>
+<li><p><strong>Metadata and Data Reader</strong>: metadata reader and the data reader.</p></li>
+<li><p><strong>Query Trace Replayer</strong>: display query summaries or replay the
+execution of the target operator.</p></li>
+</ol>
+<section id="query-trace-writer">
+<h3>Query Trace Writer<a class="headerlink" href="#query-trace-writer" title="Link to this heading">¶</a></h3>
+<p><strong>QueryMetadataWriter</strong> records the query metadata during task creation,
+serializes, and writes them into a file in JSON format. There are two kinds
+of metadata:</p>
+<ul class="simple">
+<li><p>Query configurations and connector properties are specified by the user per query.
+They can be serialized as JSON map objects (key-value pairs).</p></li>
+<li><p>Plan fragment of the task (also known as a plan node tree). It can be serialized
+as a JSON object, which is already supported in Velox.</p></li>
+</ul>
+<p><strong>QueryDataWriter</strong> records the input vectors from the target operator, which are
+serialized and written as a binary file.</p>
+</section>
+<section id="query-trace-reader">
+<h3>Query Trace Reader<a class="headerlink" href="#query-trace-reader" title="Link to this heading">¶</a></h3>
+<p><strong>QueryMetadataReader</strong> can load the query metadata JSON file, and extract the query
+configurations, connector properties, and the plan fragment.</p>
+<p><strong>QueryDataReader</strong> can read and deserialize the input vectors of the target operator.
+It is used as the utility to replay the input data as a source operator in the target
+operator replay.</p>
+<p><strong>NOTE</strong>: <cite>QueryDataWriter</cite> serializes and flushes the input vectors in batches,
+allowing it to replay the input process using the same sequence of batches.</p>
+</section>
+<section id="query-trace-util">
+<h3>Query Trace Util<a class="headerlink" href="#query-trace-util" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>Create tracing directories.</p></li>
+<li><p>Get query summaries.</p></li>
+<li><p>Provide utilities to extract the target plan node, and assemble a plan fragment with
+customized trace source and sink node with it.</p></li>
+</ul>
+</section>
+</section>
+<section id="query-trace-tool">
+<h2>Query Trace Tool<a class="headerlink" href="#query-trace-tool" title="Link to this heading">¶</a></h2>
+<p>The query trace tool leverages the trace reader to display query summaries and replay the
+execution of specific operators (TBD).</p>
+<section id="tracing-tools-usage">
+<h3>Tracing tools Usage<a class="headerlink" href="#tracing-tools-usage" title="Link to this heading">¶</a></h3>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">query_replayer</span><span class="w"> </span><span class="o">--</span><span class="n">root</span><span class="w"> </span><span class="n">$root_dir</span><span class="w"> </span><span class="o">--</span><span class="n">summary</span><span class="w"> </span><span class="o">--</span><span class="n">pretty</span>
+</pre></div>
+</div>
+<p>It would show something as the follows</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="o">++++++</span><span class="n">Query</span><span class="w"> </span><span class="n">trace</span><span class="w"> </span><span class="n">summary</span><span class="o">++++++</span>
+<span class="n">Number</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">tasks</span><span class="o">:</span><span class="w"> </span><span class="mi">1</span>
+<span class="n">Task</span><span class="w"> </span><span class="n">ids</span><span class="o">:</span><span class="w"> </span><span class="n">task</span><span class="mi">-1</span>
+<span class="o">++++++</span><span class="n">Query</span><span class="w"> </span><span class="n">configs</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="n">plan</span><span class="o">:++++++</span>
+<span class="p">{</span>
+<span class="s">&quot;planNode&quot;</span><span class="o">:</span><span class="p">{</span>
+<span class="s">&quot;filter&quot;</span><span class="o">:</span><span class="p">{},</span>
+<span class="s">&quot;outputType&quot;</span><span class="o">:</span><span class="p">{...},</span>
+<span class="s">&quot;nullAware&quot;</span><span class="o">:</span><span class="nb">false</span><span class="p">,</span>
+<span class="s">&quot;sources&quot;</span><span class="o">:</span><span class="p">[{...},</span><span class="w"> </span><span class="p">{...}],</span>
+<span class="s">&quot;leftKeys&quot;</span><span class="o">:</span><span class="p">[],</span>
+<span class="s">&quot;joinType&quot;</span><span class="o">:</span><span class="s">&quot;INNER&quot;</span><span class="p">,</span>
+<span class="s">&quot;id&quot;</span><span class="o">:</span><span class="s">&quot;5&quot;</span><span class="p">,</span>
+<span class="s">&quot;name&quot;</span><span class="o">:</span><span class="s">&quot;HashJoinNode&quot;</span>
+<span class="p">},</span>
+<span class="s">&quot;connectorProperties&quot;</span><span class="o">:</span><span class="p">{...},</span>
+<span class="s">&quot;queryConfig&quot;</span><span class="o">:</span><span class="p">{...}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Here is a full list of supported command line arguments.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--usage</span></code>: Show the usage.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--root</span></code>: Root dir of the query tracing.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--summary</span></code>: Show the summary of the tracing including number of tasks and task ids.
+It also print the query metadata including query configs, connectors properties, and query plan in JSON format.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--short_summary</span></code>: Only show number of tasks and task ids.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--task_id</span></code>: Specify the target task id, if empty, show the summary of all the traced query tasks.</p></li>
+</ul>
+</section>
+</section>
+<section id="future-work">
+<h2>Future Work<a class="headerlink" href="#future-work" title="Link to this heading">¶</a></h2>
+<p><a class="reference external" href="https://github.com/facebookincubator/velox/issues/9668">https://github.com/facebookincubator/velox/issues/9668</a></p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Tracing</a><ul>
+<li><a class="reference internal" href="#background">Background</a></li>
+<li><a class="reference internal" href="#how-tracing-tool-works">How Tracing Tool Works</a></li>
+<li><a class="reference internal" href="#tracing-framework">Tracing Framework</a><ul>
+<li><a class="reference internal" href="#query-trace-writer">Query Trace Writer</a></li>
+<li><a class="reference internal" href="#query-trace-reader">Query Trace Reader</a></li>
+<li><a class="reference internal" href="#query-trace-util">Query Trace Util</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#query-trace-tool">Query Trace Tool</a><ul>
+<li><a class="reference internal" href="#tracing-tools-usage">Tracing tools Usage</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#future-work">Future Work</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="metrics.html"
+                          title="previous chapter">Metrics</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../TpchBenchmark.html"
+                          title="next chapter">I/O Optimizations and the TpchBenchmark</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/develop/debugging/tracing.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../TpchBenchmark.html" title="I/O Optimizations and the TpchBenchmark"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="metrics.html" title="Metrics"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" >Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Tracing</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>
