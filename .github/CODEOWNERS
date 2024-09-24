@@ -27,5 +27,5 @@ CMake/ @assignUser
 *.cmake @assignUser
 **/CMakeLists.txt @assignUser
 scripts/ @assignUser
-.github @assignUser
+.github/ @assignUser
 
