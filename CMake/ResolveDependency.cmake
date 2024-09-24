@@ -139,7 +139,7 @@ macro(resolve_dependency_url dependency_name)
   set_with_default(
     VELOX_${dependency_name}_SOURCE_URL VELOX_${dependency_name}_URL
     ${VELOX_${dependency_name}_SOURCE_URL})
-  message(STATUS "Set VELOX_${dependency_name}_SOURCE_URL to "
+  message(VERBOSE "Set VELOX_${dependency_name}_SOURCE_URL to "
                  "${VELOX_${dependency_name}_SOURCE_URL}")
   if(DEFINED ENV{VELOX_${dependency_name}_URL})
     set_with_default(VELOX_${dependency_name}_BUILD_SHA256_CHECKSUM
