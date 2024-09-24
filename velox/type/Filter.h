@@ -59,6 +59,7 @@ enum class FilterKind {
 };
 
 class Filter;
+class AbstractBloomFilter;
 using FilterPtr = std::unique_ptr<Filter>;
 
 /**
@@ -79,6 +80,12 @@ class Filter : public velox::ISerializable {
   // time. If this is false, deterministic() will be consulted at
   // runtime.
   static constexpr bool deterministic = true;
+
+  virtual bool testBloomFilter(
+      const AbstractBloomFilter& bloomFilter,
+      const velox::Type& type) const {
+    return true;
+  }
 
   FilterKind kind() const {
     return kind_;
@@ -286,6 +293,14 @@ class Filter : public velox::ISerializable {
     }
     return xsimd::broadcast<T>(0) != xsimd::load_aligned(res);
   }
+};
+
+class AbstractBloomFilter {
+ public:
+  virtual bool mightContain(int32_t value) const = 0;
+  virtual bool mightContain(int64_t value) const = 0;
+  virtual bool mightContain(const std::string& value) const = 0;
+  virtual ~AbstractBloomFilter() = default;
 };
 
 /// TODO Check if this filter is needed. This should not be passed down.
@@ -741,6 +756,10 @@ class BigintRange final : public Filter {
     return !(min > upper_ || max < lower_);
   }
 
+  bool testBloomFilter(
+      const AbstractBloomFilter& bloomFilter,
+      const velox::Type& type) const override;
+
   int64_t lower() const {
     return lower_;
   }
@@ -943,6 +962,30 @@ class BigintValuesUsingHashTable final : public Filter {
     }
   }
 
+  bool testBloomFilter(
+      const AbstractBloomFilter& bloomFilter,
+      const velox::Type& type) const override {
+    // Limit checks to IN-list with upto 10 values.
+    if (values_.size() > 10) {
+      return true;
+    }
+    // For IN-list, if any value matches, return true.
+    for (auto i = 0; i < values_.size() && i < 10; ++i) {
+      if (type.kind() == TypeKind::INTEGER) {
+        int32_t val = values_[i];
+        if (bloomFilter.mightContain(val)) {
+          return true;
+        }
+      } else if (
+          type.kind() == TypeKind::BIGINT &&
+          bloomFilter.mightContain(values_[i])) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   bool testInt64(int64_t value) const final;
   xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t>) const final;
   xsimd::batch_bool<int32_t> testValues(xsimd::batch<int32_t>) const final;
@@ -1082,6 +1125,30 @@ class BigintValuesUsingBitmask final : public Filter {
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
+
+  bool testBloomFilter(
+      const AbstractBloomFilter& bloomFilter,
+      const velox::Type& type) const override {
+    // Limit checks to only 50 values
+    if (bitmask_.size() > 50) {
+      return true;
+    }
+
+    for (int i = 0; i < bitmask_.size(); i++) {
+      if (bitmask_[i]) {
+        int64_t val = min_ + i;
+        // For IN-list, if any value matches, return true.
+        if (type.kind() == TypeKind::INTEGER &&
+            bloomFilter.mightContain((int32_t)val)) {
+          return true;
+        } else if (
+            type.kind() == TypeKind::BIGINT && bloomFilter.mightContain(val)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 
  private:
   std::unique_ptr<Filter>
@@ -1620,6 +1687,15 @@ class BytesRange final : public AbstractRange {
     }
   }
 
+  bool testBloomFilter(
+      const AbstractBloomFilter& bloomFilter,
+      const velox::Type& type) const override {
+    if (!singleValue_) {
+      return true;
+    }
+    return bloomFilter.mightContain(lower_);
+  }
+
   std::string toString() const final {
     return fmt::format(
         "BytesRange: {}{}, {}{} {}",
@@ -1903,6 +1979,23 @@ class BytesValues final : public Filter {
     }
   }
 
+  bool testBloomFilter(
+      const AbstractBloomFilter& bloomFilter,
+      const velox::Type& type) const override {
+    // For IN-list, if any value matches, return true.
+    // Limit checks to IN-list with only 10 values.
+    if (values_.size() > 10) {
+      return true;
+    }
+
+    for (auto it = values_.begin(); it != values_.end(); ++it) {
+      if (bloomFilter.mightContain(*it)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   bool testLength(int32_t length) const final {
     return lengths_.contains(length);
   }
@@ -1952,6 +2045,22 @@ class BigintMultiRange final : public Filter {
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
+
+  bool testBloomFilter(
+      const AbstractBloomFilter& bloomFilter,
+      const velox::Type& type) const override {
+    // Limit number of ranges to check to 5.
+    if (ranges_.size() > 5) {
+      return true;
+    }
+
+    for (auto& range : ranges_) {
+      if (range->testBloomFilter(bloomFilter, type)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   bool testInt64(int64_t value) const final;
 
