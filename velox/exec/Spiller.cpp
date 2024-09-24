@@ -306,13 +306,13 @@ int64_t Spiller::extractSpillVector(
     RowVectorPtr& spillVector,
     size_t& nextBatchIndex) {
   VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
-  uint64_t extractNanos{0};
+  uint64_t extractNs{0};
   auto limit = std::min<size_t>(rows.size() - nextBatchIndex, maxRows);
   VELOX_CHECK(!rows.empty());
   int32_t numRows = 0;
   int64_t bytes = 0;
   {
-    NanosecondTimer timer(&extractNanos);
+    NanosecondTimer timer(&extractNs);
     for (; numRows < limit; ++numRows) {
       bytes += container_->rowSize(rows[nextBatchIndex + numRows]);
       if (bytes > maxBytes) {
@@ -325,7 +325,7 @@ int64_t Spiller::extractSpillVector(
     extractSpill(folly::Range(&rows[nextBatchIndex], numRows), spillVector);
     nextBatchIndex += numRows;
   }
-  updateSpillExtractVectorTime(extractNanos);
+  updateSpillExtractVectorTime(extractNs);
   return bytes;
 }
 

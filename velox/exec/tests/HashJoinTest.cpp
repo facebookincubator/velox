@@ -122,14 +122,16 @@ void verifyTaskSpilledRuntimeStats(const exec::Task& task, bool expectedSpill) {
           if (op.operatorType == "HashBuild") {
             ASSERT_GT(op.runtimeStats[Operator::kSpillRuns].count, 0);
             ASSERT_GT(op.runtimeStats[Operator::kSpillFillTime].sum, 0);
+            ASSERT_GT(
+                op.runtimeStats[Operator::kSpillExtractVectorTime].sum, 0);
           } else {
             // The table spilling might also be triggered from hash probe side.
             ASSERT_GE(op.runtimeStats[Operator::kSpillRuns].count, 0);
             ASSERT_GE(op.runtimeStats[Operator::kSpillFillTime].sum, 0);
+            ASSERT_GE(
+                op.runtimeStats[Operator::kSpillExtractVectorTime].sum, 0);
           }
           ASSERT_EQ(op.runtimeStats[Operator::kSpillSortTime].sum, 0);
-          // NOTE: spill extract vector might take less than one nanosecond.
-          ASSERT_GT(op.runtimeStats[Operator::kSpillExtractVectorTime].sum, 0);
           ASSERT_GT(op.runtimeStats[Operator::kSpillSerializationTime].sum, 0);
           ASSERT_GE(op.runtimeStats[Operator::kSpillFlushTime].sum, 0);
           // NOTE: spill flush might take less than one microsecond.
