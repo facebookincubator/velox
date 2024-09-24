@@ -43,12 +43,13 @@ class UnsafeRowFuzzTests : public ::testing::Test {
     for (auto& buffer : buffers_) {
       std::memset(buffer, 0, kBufferSize);
     }
+    std::memset(buffer_, 0, kBufferSize * kNumBuffers);
+    offsets_.clear();
   }
 
   void doTest(
       const RowTypePtr& rowType,
-      std::function<std::vector<std::optional<std::string_view>>(
-          const RowVectorPtr& data)> serializeFunc) {
+      std::function<VectorPtr(const RowVectorPtr& data)> serializeFunc) {
     VectorFuzzer::Options opts;
     opts.vectorSize = kNumBuffers;
     opts.nullRatio = 0.1;
@@ -77,13 +78,7 @@ class UnsafeRowFuzzTests : public ::testing::Test {
       fuzzer.reSeed(seed);
       const auto& inputVector = fuzzer.fuzzInputRow(rowType);
 
-      // Serialize rowVector into bytes.
-      auto serialized = serializeFunc(inputVector);
-
-      // Deserialize previous bytes back to row vector
-      VectorPtr outputVector =
-          UnsafeRowDeserializer::deserialize(serialized, rowType, pool_.get());
-
+      auto outputVector = serializeFunc(inputVector);
       assertEqualVectors(inputVector, outputVector);
     }
   }
@@ -92,6 +87,8 @@ class UnsafeRowFuzzTests : public ::testing::Test {
   static constexpr uint64_t kNumBuffers = 100;
 
   std::array<char[kBufferSize], kNumBuffers> buffers_{};
+  char buffer_[kBufferSize * kNumBuffers];
+  std::vector<size_t> offsets_;
 
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::memoryManager()->addLeafPool();
@@ -172,10 +169,30 @@ TEST_F(UnsafeRowFuzzTests, fast) {
       VELOX_CHECK_LE(rowSize, kBufferSize);
 
       EXPECT_EQ(rowSize, fast.rowSize(i)) << i << ", " << data->toString(i);
-
       serialized.push_back(std::string_view(buffers_[i], rowSize));
     }
-    return serialized;
+
+    return UnsafeRowDeserializer::deserialize(serialized, rowType, pool_.get());
+  });
+
+  doTest(rowType, [&](const RowVectorPtr& data) {
+    UnsafeRowFast fast(data);
+    size_t offset = 0;
+    const auto numRows = data->size();
+    offsets_.resize(numRows);
+    for (auto i = 0; i < numRows; ++i) {
+      auto rowSize = fast.serialize(i, (char*)buffer_ + offset);
+      offsets_[i] = offset;
+      offset += rowSize;
+    }
+    VELOX_CHECK_LE(offset, kBufferSize * kNumBuffers);
+
+    // Deserialize previous bytes back to row vector
+    return UnsafeRowDeserializer::deserialize(
+        reinterpret_cast<const uint8_t*>(buffer_),
+        rowType,
+        offsets_,
+        pool_.get());
   });
 }
 
