@@ -126,6 +126,13 @@ class HiveConfig {
   static constexpr const char* kOrcUseColumnNamesSession =
       "hive_orc_use_column_names";
 
+  // Read bloom filters from parquet files to filter row groups.
+  static constexpr const char* kParquetReadBloomFilter =
+      "hive.parquet.read-bloom-filter";
+
+  static constexpr const char* kParquetReadBloomFilterSession =
+      "hive_parquet_read_bloom_filter";
+
   /// Reads the source file column name as lower case.
   static constexpr const char* kFileColumnNamesReadAsLowerCase =
       "file-column-names-read-as-lower-case";
@@ -294,6 +301,8 @@ class HiveConfig {
 
   bool isFileColumnNamesReadAsLowerCase(
       const config::ConfigBase* session) const;
+
+  bool isParquetReadBloomFilter(const config::ConfigBase* session) const;
 
   bool isPartitionPathAsLowerCase(const config::ConfigBase* session) const;
 
