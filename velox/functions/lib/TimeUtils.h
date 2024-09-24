@@ -152,8 +152,7 @@ int32_t getWeekYear(
     uint32_t d,
     uint32_t firstDayOfWeek,
     uint32_t minimalDaysInFirstWeek) {
-  auto ymd =
-      date::year_month_day(date::year(y), date::month(m), date::day(d));
+  auto ymd = date::year_month_day(date::year(y), date::month(m), date::day(d));
   auto weekday = date::weekday(ymd).c_encoding();
   auto firstDayOfTheYear =
       date::year_month_day(ymd.year(), date::month(1), date::day(1));
