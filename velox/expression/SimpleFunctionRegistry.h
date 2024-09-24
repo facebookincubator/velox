@@ -132,6 +132,10 @@ class SimpleFunctionRegistry {
       return functionEntry_.getMetadata().helpMessage(name);
     }
 
+    std::string toString(const std::string& name) const {
+      return functionEntry_.getMetadata().toString(name);
+    }
+
     VectorFunctionMetadata metadata() const {
       return VectorFunctionMetadata{
           false,

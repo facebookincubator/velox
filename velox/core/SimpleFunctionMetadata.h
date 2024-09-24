@@ -394,6 +394,7 @@ class ISimpleFunctionMetadata {
   virtual bool physicalSignatureEquals(
       const ISimpleFunctionMetadata& other) const = 0;
   virtual std::string helpMessage(const std::string& name) const = 0;
+  virtual std::string toString(const std::string& name) const = 0;
 };
 
 template <typename T, typename = int32_t>
@@ -534,6 +535,44 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
 
     s.append(")");
     return s;
+  }
+
+  std::string toString(const std::string& name) const final {
+    std::stringstream sig;
+    bool first = true;
+    for (auto& arg : signature_->argumentTypes()) {
+      if (!first) {
+        sig << ", ";
+      }
+      first = false;
+      sig << boost::algorithm::to_upper_copy(arg.toString());
+    }
+
+    if (isVariadic()) {
+      sig << "...";
+    }
+
+    std::stringstream ss;
+    first = true;
+    for (const auto& arg : argPhysicalTypes_) {
+      if (!first) {
+        ss << ", ";
+      }
+      first = false;
+      ss << arg->toString();
+    }
+    if (isVariadic()) {
+      ss << "...";
+    }
+    return fmt::format(
+        "FunctionName: {}\nSignature argument types:\n{}\nPhysical argument types:\n{}"
+        "\nPhysical result types:\n{}\nPriority:{}\nDefaultNullBehavior:{}",
+        name,
+        sig.str(),
+        ss.str(),
+        resultPhysicalType_,
+        priority_,
+        defaultNullBehavior_);
   }
 
  private:

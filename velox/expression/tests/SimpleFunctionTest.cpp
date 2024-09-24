@@ -1609,4 +1609,43 @@ TEST_F(SimpleFunctionTest, callNullFreeNoThrow) {
   EXPECT_EQ(2, result);
 }
 
+template <typename TExec>
+struct DecimalPlusValueFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      const A* /*a*/,
+      const B* /*b*/) {
+    scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
+  }
+
+  template <typename R, typename A, typename B>
+  void call(R& out, A a, B b) {
+    out = a + b * DecimalUtil::kPowersOfTen[scale_];
+  }
+
+ private:
+  int8_t scale_;
+};
+
+TEST_F(SimpleFunctionTest, toString) {
+  const std::string functionName = "decimal_plus_value";
+  registerFunction<
+      DecimalPlusValueFunction,
+      LongDecimal<P1, S1>,
+      LongDecimal<P1, S1>,
+      int64_t>({functionName});
+  auto function = exec::simpleFunctions().resolveFunction(
+      functionName, {DECIMAL(20, 2), BIGINT()});
+  EXPECT_TRUE(function.has_value());
+  EXPECT_EQ(
+      function.value().toString(functionName),
+      "FunctionName: decimal_plus_value\nSignature argument types:\nDECIMAL(I1,I5), BIGINT\n"
+      "Physical argument types:\nHUGEINT, BIGINT\nPhysical result types:\nHUGEINT\n"
+      "Priority:999997\nDefaultNullBehavior:true");
+}
+
 } // namespace
