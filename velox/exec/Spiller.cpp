@@ -306,22 +306,26 @@ int64_t Spiller::extractSpillVector(
     RowVectorPtr& spillVector,
     size_t& nextBatchIndex) {
   VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
-
+  uint64_t extractNanos{0};
   auto limit = std::min<size_t>(rows.size() - nextBatchIndex, maxRows);
   VELOX_CHECK(!rows.empty());
   int32_t numRows = 0;
   int64_t bytes = 0;
-  for (; numRows < limit; ++numRows) {
-    bytes += container_->rowSize(rows[nextBatchIndex + numRows]);
-    if (bytes > maxBytes) {
-      // Increment because the row that went over the limit is part
-      // of the result. We must spill at least one row.
-      ++numRows;
-      break;
+  {
+    NanosecondTimer timer(&extractNanos);
+    for (; numRows < limit; ++numRows) {
+      bytes += container_->rowSize(rows[nextBatchIndex + numRows]);
+      if (bytes > maxBytes) {
+        // Increment because the row that went over the limit is part
+        // of the result. We must spill at least one row.
+        ++numRows;
+        break;
+      }
     }
+    extractSpill(folly::Range(&rows[nextBatchIndex], numRows), spillVector);
+    nextBatchIndex += numRows;
   }
-  extractSpill(folly::Range(&rows[nextBatchIndex], numRows), spillVector);
-  nextBatchIndex += numRows;
+  updateSpillExtractVectorTime(extractNanos);
   return bytes;
 }
 
@@ -446,24 +450,15 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
     ensureSorted(run);
     int64_t totalBytes = 0;
     size_t written = 0;
-    uint64_t extractNanos{0};
     while (written < run.rows.size()) {
-      {
-        NanosecondTimer timer(&extractNanos);
-        extractSpillVector(
-            run.rows,
-            kTargetBatchRows,
-            kTargetBatchBytes,
-            spillVector,
-            written);
-      }
+      extractSpillVector(
+          run.rows, kTargetBatchRows, kTargetBatchBytes, spillVector, written);
       totalBytes += state_.appendToPartition(partition, spillVector);
       if (totalBytes > state_.targetFileSize()) {
         VELOX_CHECK(!needSort());
         state_.finishFile(partition);
       }
     }
-    updateSpillExtractVectorTime(extractNanos);
     return std::make_unique<SpillStatus>(partition, written, nullptr);
   } catch (const std::exception&) {
     // The exception is passed to the caller thread which checks this in

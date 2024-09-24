@@ -864,9 +864,12 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           ASSERT_GT(stats.spillSerializationTimeNanos, 0);
           ASSERT_GT(stats.spillWrites, 0);
         }
+        // kHashJoinProbe throws before extract vector.
+        ASSERT_EQ(stats.spillExtractVectorTimeNanos, 0);
       } else {
         ASSERT_GT(stats.spilledRows, 0);
         ASSERT_GT(stats.spilledBytes, 0);
+        ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
         ASSERT_GT(stats.spillWriteTimeNanos, 0);
         ASSERT_GT(stats.spillFlushTimeNanos, 0);
         ASSERT_GT(stats.spillSerializationTimeNanos, 0);
@@ -874,7 +877,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       }
       ASSERT_GT(stats.spilledPartitions, 0);
       ASSERT_EQ(stats.spillSortTimeNanos, 0);
-      ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
       if (type_ == Spiller::Type::kHashJoinBuild ||
           type_ == Spiller::Type::kRowNumber) {
         ASSERT_GT(stats.spillFillTimeNanos, 0);
