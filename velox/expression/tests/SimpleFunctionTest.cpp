@@ -1631,21 +1631,28 @@ struct DecimalPlusValueFunction {
   int8_t scale_;
 };
 
-TEST_F(SimpleFunctionTest, toString) {
-  const std::string functionName = "decimal_plus_value";
+TEST_F(SimpleFunctionTest, toDebugString) {
+  const std::string functionName = "decimal_plus_value_debug_string";
   registerFunction<
       DecimalPlusValueFunction,
+      LongDecimal<P2, S1>,
       LongDecimal<P1, S1>,
-      LongDecimal<P1, S1>,
-      int64_t>({functionName});
-  auto function = exec::simpleFunctions().resolveFunction(
-      functionName, {DECIMAL(20, 2), BIGINT()});
-  EXPECT_TRUE(function.has_value());
+      int32_t>(
+      {functionName},
+      {exec::SignatureVariable(
+          P2::name(),
+          fmt::format("{a_precision} + 1", fmt::arg("a_precision", P1::name())),
+          exec::ParameterType::kIntegerParameter)});
+
+  auto resolved = exec::simpleFunctions().resolveFunction(
+      functionName, {DECIMAL(20, 2), INTEGER()});
+
+  ASSERT_TRUE(resolved.has_value());
   EXPECT_EQ(
-      function.value().toString(functionName),
-      "FunctionName: decimal_plus_value\nSignature argument types:\nDECIMAL(I1,I5), BIGINT\n"
-      "Physical argument types:\nHUGEINT, BIGINT\nPhysical result types:\nHUGEINT\n"
-      "Priority:999997\nDefaultNullBehavior:true");
+      resolved.value().toDebugString(),
+      "Logical signature: (decimal(i1,i5), integer) -> decimal(i2,i5)\n"
+      "Physical signature: (HUGEINT, INTEGER) -> HUGEINT\n"
+      "Priority: 999997\nDefaultNullBehavior: true");
 }
 
 } // namespace
