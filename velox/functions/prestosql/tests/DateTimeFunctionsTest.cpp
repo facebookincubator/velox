@@ -3367,6 +3367,28 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
       dateFormat(
           parseTimestamp("-2000-02-29 00:00:00.987"), "%Y-%m-%d %H:%i:%s.%f"));
 
+  const std::vector<std::pair<std::string, std::string>> weekyears = {
+    {"2017-01-01","2016"},
+    {"2017-12-31","2017"},
+    {"2018-01-01","2018"},
+    {"2018-12-31","2019"},
+    {"2019-01-01","2019"},
+    {"2019-12-30","2020"},
+    {"2019-12-31","2020"},
+    {"2020-01-01","2020"},
+    {"2020-12-31","2020"},
+    {"2021-01-01","2020"},
+    {"2021-01-02","2020"},
+    {"2021-01-03","2020"},
+    {"2021-12-31","2021"},
+    {"2022-01-01","2021"},
+    {"2022-01-02","2021"},
+    {"2022-12-31","2022"}
+  };
+  for (const auto & [date, weekyear] : weekyears) {
+    EXPECT_EQ(weekyear, dateFormat(parseTimestamp(date), "%x"));
+  }
+
   // Varying digit year cases.
   EXPECT_EQ("06", dateFormat(parseTimestamp("-6-06-20"), "%y"));
   EXPECT_EQ("-0006", dateFormat(parseTimestamp("-6-06-20"), "%Y"));
