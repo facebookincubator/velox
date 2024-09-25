@@ -1116,7 +1116,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           accumulatedNumOutput < operatorCtx_->driverCtx()
                                      ->queryConfig()
                                      .preferredOutputBatchBytes() &&
-          outputBatchSize - numOut > 0) {
+          outputBatchSize > numOut) {
         mapping = folly::Range(
             outputRowMapping_->asMutable<vector_size_t>() +
                 accumulatedNumOutput,
@@ -1160,13 +1160,9 @@ RowVectorPtr HashProbe::createFilterInput(
     vector_size_t size,
     vector_size_t offset) {
   BufferPtr outputRowMapping = outputRowMapping_;
-  if (offset > 0) {
-    outputRowMapping = BaseVector::sliceBuffer(
-        *INTEGER(),
-        outputRowMapping_,
-        offset,
-        outputTableRowsCapacity_ - offset,
-        pool());
+  if (offset > 0 && outputRowMapping_) {
+    outputRowMapping = Buffer::slice<vector_size_t>(
+        outputRowMapping_, offset, outputTableRowsCapacity_ - offset, pool());
   }
   std::vector<VectorPtr> filterColumns(filterInputType_->size());
   for (auto projection : filterInputProjections_) {
