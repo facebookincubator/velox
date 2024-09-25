@@ -126,11 +126,12 @@ struct InitSessionTimezone {
 };
 
 /// Return day-of-year (DOY) of the first `dayOfWeek` in the year.
-/// If the `dayOfWeek` is Monday, it returns DOY of first Monday in
-/// the year. The returned DOY is a number from 1 to 7.
 ///
 /// `dayOfWeek` is a 1-based weekday number starting with Sunday.
 ///   (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
+///
+/// If the `dayOfWeek` is Monday, it returns DOY of first Monday in
+/// the year. The returned DOY is a number from 1 to 7.
 FOLLY_ALWAYS_INLINE
 uint32_t getDayOfFirstDayOfWeek(int32_t y, uint32_t dayOfWeek) {
   auto firstDay =
@@ -148,8 +149,8 @@ uint32_t getDayOfFirstDayOfWeek(int32_t y, uint32_t dayOfWeek) {
 /// Return the week year represented by Gregorian calendar for the given year,
 /// month and day.
 ///
-/// getWeekYear only works with gregorian calendar due to limitations in the
-/// date library. As a result, dates before the gregorian calendar was used
+/// getWeekYear only works with Gregorian calendar due to limitations in the
+/// date library. As a result, dates before the Gregorian calendar was used
 /// (1582-10-15) would yield mismatched results.
 ///
 /// The week that includes January 1st and has 'minimalDaysInFirstWeek' or more
@@ -184,11 +185,7 @@ int32_t getWeekYear(
 
   auto year = y;
   auto minDayOfYear = getDayOfFirstDayOfWeek(y, firstDayOfWeek);
-  if (dayOfYear < minDayOfYear) {
-    if (minDayOfYear <= minimalDaysInFirstWeek) {
-      --year;
-    }
-  } else {
+  if (dayOfYear >= minDayOfYear) {
     auto minDayOfYear = getDayOfFirstDayOfWeek(y + 1, firstDayOfWeek) - 1;
     if (minDayOfYear == 0) {
       minDayOfYear = 7;
@@ -199,6 +196,8 @@ int32_t getWeekYear(
         ++year;
       }
     }
+  } else if (minDayOfYear <= minimalDaysInFirstWeek) {
+    --year;
   }
 
   return year;
