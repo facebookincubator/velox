@@ -518,7 +518,7 @@ TEST_F(DecimalArithmeticTest, divide) {
        makeConstant<int64_t>(1, 1, DECIMAL(3, 2))});
 }
 
-TEST_F(DecimalArithmeticTest, notAllowPrecisionLoss) {
+TEST_F(DecimalArithmeticTest, denyPrecisionLoss) {
   const std::string denyPrecisionLoss = "_deny_precision_loss";
   testArithmeticFunction(
       "add" + denyPrecisionLoss,
