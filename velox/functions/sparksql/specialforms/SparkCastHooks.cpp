@@ -26,6 +26,17 @@ Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
       view.data(), view.size(), util::TimestampParseMode::kSparkCast);
 }
 
+Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
+  // Spark internally use microsecond precision for timestamp.
+  static constexpr int64_t maxSeconds = 9223372036854L;
+  if (seconds > maxSeconds) {
+    return Timestamp::fromMicros(std::numeric_limits<int64_t>::max());
+  } else if (seconds < -maxSeconds) {
+    return Timestamp::fromMicros(std::numeric_limits<int64_t>::min());
+  }
+  return Timestamp::fromMillis(seconds * kMillisInSecond);
+}
+
 Expected<int32_t> SparkCastHooks::castStringToDate(
     const StringView& dateString) const {
   // Allows all patterns supported by Spark:
