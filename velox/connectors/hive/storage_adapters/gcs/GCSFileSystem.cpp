@@ -295,9 +295,13 @@ class GCSFileSystem::Impl {
       options.set<gcs::RestEndpointOption>(scheme + "://" + endpointOverride);
     }
 
-    auto cred = hiveConfig_->gcsCredentials();
-    if (!cred.empty()) {
-      auto credentials = gc::MakeServiceAccountCredentials(cred);
+    auto credFile = hiveConfig_->gcsCredentialsPath();
+    if (!credFile.empty()) {
+      std::ifstream jsonFile(credFile);
+      std::stringstream credsBuffer;
+      credsBuffer << jsonFile.rdbuf();
+      auto creds = credsBuffer.str();
+      auto credentials = gc::MakeServiceAccountCredentials(std::move(creds));
       options.set<gc::UnifiedCredentialsOption>(credentials);
     } else {
       LOG(WARNING) << "Config::gcsCredentials is empty";
