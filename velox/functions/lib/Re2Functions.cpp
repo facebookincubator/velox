@@ -2202,7 +2202,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
   PatternMetadata patternMetadata = PatternMetadata::generic();
   try {
     // Fast path for substrings search.
-    if (escapeChar.has_value()) {
+    if (!escapeChar.has_value()) {
       auto substrings =
           PatternMetadata::parseSubstrings(std::string_view(pattern));
       if (substrings.size() > 0) {
