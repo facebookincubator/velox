@@ -53,20 +53,20 @@ class Unnest : public Operator {
     vector_size_t firstRowEnd;
 
     // Processing of the last input row begins at index 0 and ends at
-    // 'lastRowEnd'.
-    vector_size_t lastRowEnd;
+    // 'lastRowEnd'. It is nullopt when there is only one row to process.
+    std::optional<vector_size_t> lastRowEnd;
   };
 
   // Extract the range of rows to process.
   // @param size The size of input RowVector.
-  // @param numElements Records the number of output rows..
+  // @param numElements Records the number of output rows.
   // @param partialProcessRowStart Records the start index when processing the
   // first row in the next iteration. It will not be changed when all the input
   // rows can be fully processed.
   const RowRange extractRowRange(
       vector_size_t size,
       vector_size_t& numElements,
-      vector_size_t& partialProcessRowStart);
+      std::optional<vector_size_t>& partialProcessRowStart);
 
   // Generate output for 'rowRange' represented rows.
   // @param rowRange Range of rows to process.

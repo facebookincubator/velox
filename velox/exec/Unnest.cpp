@@ -118,7 +118,7 @@ RowVectorPtr Unnest::getOutput() {
   // fully when the output exceeds 'maxOutputSize'. The output of first and last
   // row may be divided into multiple batches.
   vector_size_t numElements = 0;
-  vector_size_t partialProcessRowStart = -1;
+  std::optional<vector_size_t> partialProcessRowStart;
   auto rowRange = extractRowRange(size, numElements, partialProcessRowStart);
   if (numElements == 0) {
     // All arrays/maps are null or empty.
@@ -128,8 +128,8 @@ RowVectorPtr Unnest::getOutput() {
   }
 
   auto output = generateOutput(rowRange, numElements);
-  if (partialProcessRowStart != -1) {
-    firstRowStart_ = partialProcessRowStart;
+  if (partialProcessRowStart.has_value()) {
+    firstRowStart_ = partialProcessRowStart.value();
     nextInputRow_ += rowRange.size - 1;
   } else {
     firstRowStart_ = 0;
@@ -147,12 +147,12 @@ RowVectorPtr Unnest::getOutput() {
 const Unnest::RowRange Unnest::extractRowRange(
     vector_size_t size,
     vector_size_t& numElements,
-    vector_size_t& partialProcessRowStart) {
+    std::optional<vector_size_t>& partialProcessRowStart) {
   VELOX_DCHECK_LT(nextInputRow_, size);
 
   vector_size_t numInput = 0;
   vector_size_t firstRowEnd = rawMaxSizes_[nextInputRow_];
-  vector_size_t lastRowEnd = -1;
+  std::optional<vector_size_t> lastRowEnd;
   // May split the first row and the last row, not split middle rows.
   // The end row related variables firstRowEnd and lastRowEnd will not be used
   // if there is just one row, its start is always 0.
@@ -218,9 +218,10 @@ void Unnest::generateRepeatedColumns(
   // Process the last row if exists. Not set the `index` because it is the last
   // row to process.
   if (range.size > 1) {
+    VELOX_DCHECK(range.lastRowEnd.has_value());
     std::fill(
         rawRepeatedIndices + index,
-        rawRepeatedIndices + index + range.lastRowEnd,
+        rawRepeatedIndices + index + range.lastRowEnd.value(),
         range.start + range.size - 1);
   }
 
@@ -312,7 +313,9 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
   }
 
   if (range.size > 1) {
-    firstLastRowGenerator(range.start + range.size - 1, 0, range.lastRowEnd);
+    VELOX_DCHECK(range.lastRowEnd.has_value());
+    firstLastRowGenerator(
+        range.start + range.size - 1, 0, range.lastRowEnd.value());
   }
 
   return {elementIndices, nulls, identityMapping};
@@ -338,8 +341,9 @@ VectorPtr Unnest::generateOrdinalityVector(
     rawOrdinality += maxSize;
   }
   if (range.size > 1) {
-    std::iota(rawOrdinality, rawOrdinality + range.lastRowEnd, 1);
-    rawOrdinality += range.lastRowEnd;
+    VELOX_DCHECK(range.lastRowEnd.has_value());
+    std::iota(rawOrdinality, rawOrdinality + range.lastRowEnd.value(), 1);
+    rawOrdinality += range.lastRowEnd.value();
   }
 
   return ordinalityVector;
