@@ -18,7 +18,8 @@
 
 #include <boost/algorithm/string.hpp>
 #include <thrift/protocol/TCompactProtocol.h> //@manual
-
+#include "velox/dwio/common/MetricsLog.h"
+#include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
@@ -68,6 +69,10 @@ class ReaderBase {
 
   const tz::TimeZone* sessionTimezone() const {
     return options_.getSessionTimezone();
+  }
+
+  bool isReadBloomFilter() const {
+    return options_.readBloomFilter();
   }
 
   /// Ensures that streams are enqueued and loading for the row group at
@@ -846,7 +851,8 @@ class ParquetRowReader::Impl {
         columnReaderStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
-        options_.timestampPrecision());
+        options_.timestampPrecision(),
+        readerBase_->isReadBloomFilter());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(
@@ -867,9 +873,20 @@ class ParquetRowReader::Impl {
     }
   }
 
+  const thrift::FileMetaData& fileMetaData() const {
+    return readerBase_->thriftFileMetaData();
+  }
+
   void filterRowGroups() {
     rowGroupIds_.reserve(rowGroups_.size());
     firstRowOfRowGroup_.reserve(rowGroups_.size());
+
+    for (auto child : columnReader_->children()) {
+      auto& parquetData = child->formatData().as<ParquetData>();
+      for (auto i = 0; i < rowGroups_.size(); ++i) {
+        parquetData.setBloomFilterInputStream(i, readerBase_->bufferedInput());
+      }
+    }
 
     ParquetData::FilterRowGroupsResult res;
     columnReader_->filterRowGroups(0, ParquetStatsContext(), res);
@@ -964,6 +981,20 @@ class ParquetRowReader::Impl {
     return readerBase_->isRowGroupBuffered(rowGroupIndex);
   }
 
+  std::shared_ptr<BloomFilter> getBloomFilter(
+      const uint32_t rowGroupId,
+      const uint32_t column) {
+    VELOX_CHECK_LT(
+        column,
+        columnReader_->children().size(),
+        "Invalid column index at column ordinal : {}",
+        column);
+    return columnReader_->children()[column]
+        ->formatData()
+        .as<ParquetData>()
+        .getBloomFilter(rowGroupId);
+  }
+
  private:
   bool advanceToNextRowGroup() {
     if (nextRowGroupIdsIdx_ == rowGroupIds_.size()) {
@@ -1044,6 +1075,16 @@ bool ParquetRowReader::isRowGroupBuffered(int32_t rowGroupIndex) const {
 
 std::optional<size_t> ParquetRowReader::estimatedRowSize() const {
   return impl_->estimatedRowSize();
+}
+
+const thrift::FileMetaData& ParquetRowReader::fileMetaData() const {
+  return impl_->fileMetaData();
+}
+
+std::shared_ptr<BloomFilter> ParquetRowReader::getBloomFilter(
+    const uint32_t rowGroupId,
+    const uint32_t column) {
+  return impl_->getBloomFilter(rowGroupId, column);
 }
 
 ParquetReader::ParquetReader(

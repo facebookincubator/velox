@@ -18,7 +18,9 @@
 
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/parquet/common/BloomFilter.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -34,6 +36,8 @@ enum class ParquetMetricsType { HEADER, FILE_METADATA, FILE, BLOCK, TEST };
 class StructColumnReader;
 
 class ReaderBase;
+
+class BloomFilterReader;
 
 /// Implements the RowReader interface for Parquet.
 class ParquetRowReader : public dwio::common::RowReader {
@@ -59,6 +63,8 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   std::optional<size_t> estimatedRowSize() const override;
 
+  const thrift::FileMetaData& fileMetaData() const;
+
   bool allPrefetchIssued() const override {
     //  Allow opening the next split while this is reading.
     return true;
@@ -68,6 +74,10 @@ class ParquetRowReader : public dwio::common::RowReader {
   // Returns false if the row group is not loaded into buffer
   // or the buffered data has been evicted.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
+
+  std::shared_ptr<BloomFilter> getBloomFilter(
+      const uint32_t rowGroupId,
+      const uint32_t column);
 
  private:
   // Compares row group  metadata to filters in ScanSpec in options of

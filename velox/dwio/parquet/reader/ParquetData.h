@@ -17,6 +17,9 @@
 #pragma once
 
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/ScanSpec.h"
+#include "velox/dwio/parquet/common/BloomFilter.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
 
@@ -37,11 +40,14 @@ class ParquetParams : public dwio::common::FormatParams {
       dwio::common::ColumnReaderStatistics& stats,
       const FileMetaDataPtr metaData,
       const tz::TimeZone* sessionTimezone,
-      TimestampPrecision timestampPrecision)
+      TimestampPrecision timestampPrecision,
+      bool parquetReadBloomFilter)
       : FormatParams(pool, stats),
         metaData_(metaData),
         sessionTimezone_(sessionTimezone),
-        timestampPrecision_(timestampPrecision) {}
+        timestampPrecision_(timestampPrecision),
+        parquetReadBloomFilter_(parquetReadBloomFilter) {}
+
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& scanSpec) override;
@@ -54,6 +60,7 @@ class ParquetParams : public dwio::common::FormatParams {
   const FileMetaDataPtr metaData_;
   const tz::TimeZone* sessionTimezone_;
   const TimestampPrecision timestampPrecision_;
+  bool parquetReadBloomFilter_;
 };
 
 /// Format-specific data created for each leaf column of a Parquet rowgroup.
@@ -63,14 +70,16 @@ class ParquetData : public dwio::common::FormatData {
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const FileMetaDataPtr fileMetadataPtr,
       memory::MemoryPool& pool,
-      const tz::TimeZone* sessionTimezone)
+      const tz::TimeZone* sessionTimezone,
+      bool parquetReadBloomFilter)
       : pool_(pool),
         type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
         fileMetaDataPtr_(fileMetadataPtr),
         maxDefine_(type_->maxDefine_),
         maxRepeat_(type_->maxRepeat_),
         rowsInRowGroup_(-1),
-        sessionTimezone_(sessionTimezone) {}
+        sessionTimezone_(sessionTimezone),
+        parquetReadBloomFilter_(parquetReadBloomFilter) {}
 
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
@@ -89,6 +98,8 @@ class ParquetData : public dwio::common::FormatData {
   PageReader* reader() const {
     return reader_.get();
   }
+
+  std::shared_ptr<BloomFilter> getBloomFilter(const uint32_t rowGroupId);
 
   // Reads null flags for 'numValues' next top level rows. The first 'numValues'
   // bits of 'nulls' are set and the reader is advanced by numValues'.
@@ -196,6 +207,38 @@ class ParquetData : public dwio::common::FormatData {
     return true;
   }
 
+  void setBloomFilterInputStream(
+      uint32_t rowGroupId,
+      dwio::common::BufferedInput& bufferedInput) {
+    if (bloomFilterInputStream_ != nullptr) {
+      return;
+    }
+    auto rowGroup = fileMetaDataPtr_.rowGroup(rowGroupId);
+    auto colChunk = rowGroup.columnChunk(type_->column());
+
+    if (!colChunk.hasBloomFilterOffset()) {
+      return;
+    }
+
+    VELOX_CHECK(
+        !colChunk.hasCryptoMetadata(),
+        "Cannot read encrypted bloom filter yet");
+
+    auto bloomFilterOffset = colChunk.bloomFilterOffset();
+    auto fileSize = bufferedInput.getInputStream()->getLength();
+    VELOX_CHECK_GT(
+        fileSize,
+        bloomFilterOffset,
+        "file size {} less or equal than bloom offset {}",
+        fileSize,
+        bloomFilterOffset);
+
+    bloomFilterInputStream_ = bufferedInput.read(
+        bloomFilterOffset,
+        fileSize - bloomFilterOffset,
+        dwio::common::LogType::FOOTER);
+  }
+
   // Returns the <offset, length> of the row group.
   std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
 
@@ -218,6 +261,12 @@ class ParquetData : public dwio::common::FormatData {
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
 
+  std::unique_ptr<dwio::common::SeekableInputStream> bloomFilterInputStream_;
+  bool parquetReadBloomFilter_;
+  // RowGroup+Column to BloomFilter map
+  std::unordered_map<uint32_t, std::shared_ptr<BloomFilter>>
+      columnBloomFilterMap_;
+
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;
 
@@ -227,5 +276,4 @@ class ParquetData : public dwio::common::FormatData {
   // Count of leading skipped positions in 'presetNulls_'
   int32_t presetNullsConsumed_{0};
 };
-
 } // namespace facebook::velox::parquet
