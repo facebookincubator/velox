@@ -50,6 +50,11 @@ class DataSetBuilder {
   // groups. Tests skipping row groups based on row group stats.
   DataSetBuilder& withRowGroupSpecificData(int32_t numRowsPerGroup);
 
+  DataSetBuilder& adjustTimestampToPrecision(TimestampPrecision precision);
+  void adjustTimestampToPrecision(
+      VectorPtr batch,
+      TimestampPrecision precision);
+
   // Makes all data in 'batches_' after firstRow non-null. This finds a sampling
   // of non-null values from each column and replaces nulls in the column in
   // question with one of these. A column where only nulls are found in sampling

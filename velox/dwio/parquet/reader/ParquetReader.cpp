@@ -105,6 +105,9 @@ class ReaderBase {
   TypePtr convertType(
       const thrift::SchemaElement& schemaElement,
       const TypePtr& requestedType) const;
+      
+  thrift::LogicalType getTimestampLogicalType(
+      thrift::ConvertedType::type type) const;
 
   template <typename T>
   static std::shared_ptr<const RowType> createRowType(
@@ -551,13 +554,19 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     int32_t precision =
         schemaElement.__isset.precision ? schemaElement.precision : 0;
     int32_t scale = schemaElement.__isset.scale ? schemaElement.scale : 0;
-    int32_t type_length =
+    int32_t typeLength =
         schemaElement.__isset.type_length ? schemaElement.type_length : 0;
     std::vector<std::unique_ptr<dwio::common::TypeWithId>> children;
-    const std::optional<thrift::LogicalType> logicalType_ =
+    std::optional<thrift::LogicalType> logicalType =
         schemaElement.__isset.logicalType
         ? std::optional<thrift::LogicalType>(schemaElement.logicalType)
         : std::nullopt;
+
+    if (veloxType->kind() == TypeKind::TIMESTAMP &&
+        schemaElement.type == thrift::Type::INT64 && !logicalType.has_value()) {
+      logicalType = getTimestampLogicalType(schemaElement.converted_type);
+    }
+
     auto leafTypePtr = std::make_unique<ParquetTypeWithId>(
         veloxType,
         std::move(children),
@@ -566,14 +575,14 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         columnIdx++,
         name,
         schemaElement.type,
-        logicalType_,
+        logicalType,
         maxRepeat,
         maxDefine,
         isOptional,
         isRepeated,
         precision,
         scale,
-        type_length);
+        typeLength);
 
     if (schemaElement.repetition_type ==
         thrift::FieldRepetitionType::REPEATED) {
@@ -600,6 +609,29 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
   VELOX_FAIL("Unable to extract Parquet column info.");
   return nullptr;
+}
+
+thrift::LogicalType ReaderBase::getTimestampLogicalType(
+    thrift::ConvertedType::type convertedType) const {
+  thrift::TimestampType timestamp;
+  timestamp.__set_isAdjustedToUTC(true);
+  thrift::TimeUnit unit;
+
+  if (convertedType == thrift::ConvertedType::TIMESTAMP_MICROS) {
+    thrift::MicroSeconds micros;
+    unit.__set_MICROS(micros);
+  } else if (convertedType == thrift::ConvertedType::TIMESTAMP_MILLIS) {
+    thrift::MilliSeconds millis;
+    unit.__set_MILLIS(millis);
+  } else {
+    VELOX_NYI("{} Timestamp unit not supported.", convertedType);
+  }
+
+  timestamp.__set_unit(unit);
+  thrift::LogicalType logicalType;
+  logicalType.__set_TIMESTAMP(timestamp);
+
+  return logicalType;
 }
 
 TypePtr ReaderBase::convertType(
