@@ -355,7 +355,6 @@ TEST_F(GCSFileSystemTest, credentialsConfig) {
       std::make_shared<const config::ConfigBase>(std::move(configOverride));
 
   filesystems::GCSFileSystem gcfs(conf);
-
   gcfs.initializeClient();
   try {
     const std::string gcsFile =
