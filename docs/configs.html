@@ -539,6 +539,11 @@ value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 <tr class="row-odd"><td><p>task_partitioned_writer_count</p></td>
 <td><p>integer</p></td>
 <td><p>task_writer_count</p></td>
+<td><p>The number of parallel table writer threads per task for partitioned table writes. If not set, use ‘task_writer_count’ as default.</p></td>
+</tr>
+<tr class="row-even"><td><p>task_bucketed_writer_count</p></td>
+<td><p>integer</p></td>
+<td><p>task_writer_count</p></td>
 <td><p>The number of parallel table writer threads per task for bucketed table writes. If not set, use ‘task_writer_count’ as default.</p></td>
 </tr>
 </tbody>
