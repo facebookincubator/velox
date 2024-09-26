@@ -17,11 +17,11 @@
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include <folly/IPAddress.h>
 #include "velox/expression/CastExpr.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 
 static constexpr int kIPV4AddressBytes = 4;
 static constexpr int kIPV4ToV6FFIndex = 10;
 static constexpr int kIPV4ToV6Index = 12;
-static constexpr int kIPAddressBytes = 16;
 
 namespace facebook::velox {
 
@@ -60,10 +60,14 @@ class IPAddressCastOperator : public exec::CastOperator {
     if (input.typeKind() == TypeKind::VARCHAR) {
       castFromString(input, context, rows, *result);
     } else if (input.typeKind() == TypeKind::VARBINARY) {
-      castFromVarbinary(input, context, rows, *result);
+      if (isIPPrefixType(input.type())) {
+        castFromIPPrefix(input, context, rows, *result);
+      } else {
+        castFromVarbinary(input, context, rows, *result);
+      }
     } else {
       VELOX_UNSUPPORTED(
-          "Cast from {} to IPAddress not supported", resultType->toString());
+          "Cast from {} to IPAddress not supported", input.type()->toString());
     }
   }
 
@@ -78,7 +82,11 @@ class IPAddressCastOperator : public exec::CastOperator {
     if (resultType->kind() == TypeKind::VARCHAR) {
       castToString(input, context, rows, *result);
     } else if (resultType->kind() == TypeKind::VARBINARY) {
-      castToVarbinary(input, context, rows, *result);
+      if (isIPPrefixType(resultType)) {
+        castToIPPrefix(input, context, rows, *result);
+      } else {
+        castToVarbinary(input, context, rows, *result);
+      }
     } else {
       VELOX_UNSUPPORTED(
           "Cast from IPAddress to {} not supported", resultType->toString());
@@ -204,6 +212,57 @@ class IPAddressCastOperator : public exec::CastOperator {
       std::reverse(addrBytes.begin(), addrBytes.end());
       memcpy(&intAddr, &addrBytes, kIPAddressBytes);
       flatResult->set(row, intAddr);
+    });
+  }
+
+  static void castFromIPPrefix(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* flatResult = result.as<FlatVector<int128_t>>();
+    const auto* prefixes = input.as<SimpleVector<StringView>>();
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      const auto prefix = prefixes->valueAt(row);
+      int128_t addrResult = 0;
+      folly::ByteArray16 addrBytes;
+
+      memcpy(&addrBytes, prefix.data(), kIPAddressBytes);
+      std::reverse(addrBytes.begin(), addrBytes.end());
+
+      memcpy(&addrResult, &addrBytes, kIPAddressBytes);
+      flatResult->set(row, addrResult);
+    });
+  }
+
+  static void castToIPPrefix(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* flatResult = result.as<FlatVector<StringView>>();
+    const auto* ipAddresses = input.as<SimpleVector<int128_t>>();
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      auto ipAddress = ipAddresses->valueAt(row);
+      folly::ByteArray16 addrBytes;
+
+      exec::StringWriter<false> result(flatResult, row);
+      result.resize(kIPPrefixBytes);
+
+      memcpy(&addrBytes, &ipAddress, kIPAddressBytes);
+      std::reverse(addrBytes.begin(), addrBytes.end());
+      memcpy(result.data(), &addrBytes, kIPAddressBytes);
+
+      folly::IPAddressV6 v6Addr(addrBytes);
+      if (v6Addr.isIPv4Mapped()) {
+        result.data()[kIPAddressBytes] = kIPV4Bits;
+      } else {
+        result.data()[kIPAddressBytes] = kIPV6Bits;
+      }
+
+      result.finalize();
     });
   }
 };
