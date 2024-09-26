@@ -21,7 +21,7 @@
 
 #include "velox/common/base/Crc.h"
 #include "velox/common/base/RawVector.h"
-#include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/OutputStream.h"
 #include "velox/vector/BiasVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
