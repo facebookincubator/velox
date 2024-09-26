@@ -63,11 +63,29 @@ PeriodicStatsReporter::PeriodicStatsReporter(const Options& options)
       cache_(options.cache),
       arbitrator_(options.arbitrator),
       spillMemoryPool_(options.spillMemoryPool),
-      options_(options) {}
+      options_(options),
+      lastCacheStats_(), 
+#ifdef VELOX_ENABLE_S3
+      s3FileSystem_(options.s3FileSystem)  // Initialize s3FileSystem_ last
+#endif
+{
+#ifdef VELOX_ENABLE_S3
+  VELOX_CHECK(
+      s3FileSystem_ || options.s3MetricsIntervalMs == 0,
+      "S3FileSystem must be provided when VELOX_ENABLE_S3 is enabled and s3MetricsIntervalMs is greater than 0");
+#endif
+}
 
 void PeriodicStatsReporter::start() {
   LOG(INFO) << "Starting PeriodicStatsReporter with options "
             << options_.toString();
+
+#ifdef VELOX_ENABLE_S3
+  if (s3FileSystem_ && options_.s3MetricsIntervalMs > 0) {
+    addS3MetricsTask(options_.s3MetricsIntervalMs);
+  }
+#endif
+
   addTask(
       "report_allocator_stats",
       [this]() { reportAllocatorStats(); },
@@ -254,6 +272,60 @@ void PeriodicStatsReporter::reportSpillStats() {
             << velox::succinctBytes(spillMemoryStats.peakBytes) << "]";
   RECORD_METRIC_VALUE(kMetricSpillMemoryBytes, spillMemoryStats.usedBytes);
   RECORD_METRIC_VALUE(kMetricSpillPeakMemoryBytes, spillMemoryStats.peakBytes);
+}
+
+void PeriodicStatsReporter::addS3MetricsTask(uint64_t intervalMs) {
+  addTask(
+      "report_s3_metrics",
+      [this]() {
+        auto& s3Metrics = s3FileSystem_->getMetrics();
+
+        // Log and record metrics
+        LOG(INFO) << "Updating S3 metrics: "
+                  << "ActiveConnections=" << s3Metrics.activeConnections << ", "
+                  << "StartedUploads=" << s3Metrics.startedUploads << ", "
+                  << "FailedUploads=" << s3Metrics.failedUploads << ", "
+                  << "SuccessfulUploads=" << s3Metrics.successfulUploads;
+
+        // Record COUNT metrics.
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3ActiveConnections, s3Metrics.activeConnections);
+        RECORD_METRIC_VALUE(filesystems::kMetricS3MetadataCalls, s3Metrics.metadataCalls);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3ListStatusCalls, s3Metrics.listStatusCalls);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3ListLocatedStatusCalls, s3Metrics.listLocatedStatusCalls);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3ListObjectsCalls, s3Metrics.listObjectsCalls);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3OtherReadErrors, s3Metrics.otherReadErrors);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3AwsAbortedExceptions, s3Metrics.awsAbortedExceptions);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3SocketExceptions, s3Metrics.socketExceptions);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3GetObjectErrors, s3Metrics.getObjectErrors);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3GetMetadataErrors, s3Metrics.getMetadataErrors);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3GetObjectRetries, s3Metrics.getObjectRetries);
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3GetMetadataRetries, s3Metrics.getMetadataRetries);
+        RECORD_METRIC_VALUE(filesystems::kMetricS3ReadRetries, s3Metrics.readRetries);
+
+        // Record SUM metrics using delta values.
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3StartedUploads, s3Metrics.getDelta("startedUploads"));
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3FailedUploads, s3Metrics.getDelta("failedUploads"));
+        RECORD_METRIC_VALUE(
+            filesystems::kMetricS3SuccessfulUploads,
+            s3Metrics.getDelta("successfulUploads"));
+
+        // Reset deltas after reporting.
+        s3Metrics.resetDeltas();
+      },
+      intervalMs);
 }
 
 } // namespace facebook::velox

@@ -17,9 +17,15 @@
 #pragma once
 
 #include <folly/experimental/ThreadedRepeatingFunctionRunner.h>
+#include <memory>
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/SsdFile.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+
+#ifdef VELOX_ENABLE_S3
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Metrics.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3MetricsAggregator.h"
+#endif
 
 namespace folly {
 class CPUThreadPoolExecutor;
@@ -52,6 +58,10 @@ class PeriodicStatsReporter {
 
     const memory::MemoryPool* spillMemoryPool{nullptr};
     uint64_t spillStatsIntervalMs{60'000};
+
+#ifdef VELOX_ENABLE_S3
+    uint64_t s3MetricsIntervalMs{60'000};
+#endif
 
     std::string toString() const {
       return fmt::format(
@@ -95,6 +105,8 @@ class PeriodicStatsReporter {
   void reportAllocatorStats();
   void reportArbitratorStats();
   void reportSpillStats();
+  // Method for adding the S3 metrics aggregator task.
+  void addS3MetricsAggregatorTask(uint64_t intervalMs);
 
   const velox::memory::MemoryAllocator* const allocator_{nullptr};
   const velox::cache::AsyncDataCache* const cache_{nullptr};
@@ -105,6 +117,11 @@ class PeriodicStatsReporter {
   cache::CacheStats lastCacheStats_;
 
   folly::ThreadedRepeatingFunctionRunner scheduler_;
+
+  // Add the s3FileSystem_ member here.
+#ifdef VELOX_ENABLE_S3
+  std::shared_ptr<filesystems::S3FileSystem> s3FileSystem_;
+#endif
 };
 
 /// Initializes and starts the process-wide periodic stats reporter. Before

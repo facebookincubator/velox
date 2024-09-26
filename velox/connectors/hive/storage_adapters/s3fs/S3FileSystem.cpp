@@ -15,9 +15,11 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Metrics.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/core/QueryConfig.h"
@@ -102,6 +104,9 @@ class S3ReadFile final : public ReadFile {
         outcome, "Failed to get metadata for S3 object", bucket_, key_);
     length_ = outcome.GetResult().GetContentLength();
     VELOX_CHECK_GE(length_, 0);
+
+    // Increment the metadata call metric
+   impl_->getMetrics().increment("metadataCalls");
   }
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buffer)
@@ -182,6 +187,8 @@ class S3ReadFile final : public ReadFile {
         AwsWriteableStreamFactory(position, length));
     auto outcome = client_->GetObject(request);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
+
+    impl_->getMetrics().increment("listObjectsCalls");
   }
 
   Aws::S3::S3Client* client_;
@@ -271,6 +278,8 @@ class S3WriteFile::Impl {
     }
 
     fileSize_ = 0;
+
+    impl_->getMetrics().increment("startedUploads");
   }
 
   // Appends data to the end of the file.
@@ -315,6 +324,8 @@ class S3WriteFile::Impl {
           outcome, "Failed to complete multiple part upload", bucket_, key_);
     }
     currentPart_->clear();
+
+    impl_->getMetrics().increment("successfulUploads");
   }
 
   // Current file size, i.e. the sum of all previous appends.
@@ -520,12 +531,13 @@ void finalizeS3() {
 
 class S3FileSystem::Impl {
  public:
-  Impl(const config::ConfigBase* config) {
-    hiveConfig_ = std::make_shared<HiveConfig>(
-        std::make_shared<config::ConfigBase>(config->rawConfigsCopy()));
-    VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
-    Aws::Client::ClientConfiguration clientConfig;
-    clientConfig.endpointOverride = hiveConfig_->s3Endpoint();
+  Impl(const config::ConfigBase* config) 
+        : client_(), metrics_() {  // Initialize metrics_ here
+        hiveConfig_ = std::make_shared<HiveConfig>(
+            std::make_shared<config::ConfigBase>(config->rawConfigsCopy()));
+        VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
+        Aws::Client::ClientConfiguration clientConfig;
+        clientConfig.endpointOverride = hiveConfig_->s3Endpoint();
 
     if (hiveConfig_->s3UseProxyFromEnv()) {
       auto proxyConfig = S3ProxyConfigurationBuilder(hiveConfig_->s3Endpoint())
@@ -580,12 +592,18 @@ class S3FileSystem::Impl {
         Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
         hiveConfig_->s3UseVirtualAddressing());
     ++fileSystemCount;
-  }
+
+        // Increment active connections metric.
+        metrics_.increment("activeConnections");
+      }
 
   ~Impl() {
     client_.reset();
     --fileSystemCount;
-  }
+
+        // decrement active connections metric.
+        metrics_.increment("activeConnections");
+      }
 
   // Configure and return an AWSCredentialsProvider with access key and secret
   // key.
@@ -716,6 +734,7 @@ class S3FileSystem::Impl {
  private:
   std::shared_ptr<HiveConfig> hiveConfig_;
   std::shared_ptr<Aws::S3::S3Client> client_;
+  S3Metrics metrics_; 
 };
 
 S3FileSystem::S3FileSystem(std::shared_ptr<const config::ConfigBase> config)
@@ -725,6 +744,13 @@ S3FileSystem::S3FileSystem(std::shared_ptr<const config::ConfigBase> config)
 
 std::string S3FileSystem::getLogLevelName() const {
   return impl_->getLogLevelName();
+}
+
+S3Metrics& S3FileSystem::getMetrics() {
+  return metrics_;
+}
+void S3FileSystem::resetMetricsDeltas() {
+  metrics_.resetDeltas(); // Reset SUM metric deltas after reporting.
 }
 
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(
