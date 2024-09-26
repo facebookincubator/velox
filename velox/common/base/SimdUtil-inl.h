@@ -1470,18 +1470,16 @@ size_t FOLLY_ALWAYS_INLINE smidStrstrMemcmp(
   auto first = CharVector::broadcast(needle[0]);
   auto last = CharVector::broadcast(needle[needleSize - 1]);
   size_t i = 0;
-  // Fast path for page-safe data.
-  // It`s safe to over-read CharVector if all-data are in same page.
-  // see: https://mudongliang.github.io/x86/html/file_module_x86_id_208.html
-  // While executing in 16-bit addressing mode, a linear address for a 128-bit
-  // data access that overlaps the end of a 16-bit segment is not allowed and is
-  // defined as reserved behavior. A specific processor implementation may or
-  // may not generate a general-protection exception (#GP) in this situation,
-  // and the address that spans the end of the segment may or may not wrap
-  // around to the beginning of the segment.
-  for (; i <= n - needleSize && pageSafe(s + i) &&
-       pageSafe(s + i + needleSize - 1);
-       i += CharVector::size) {
+
+  for (; i <= n - needleSize; i += CharVector::size) {
+    // Assume that the input string is allocated on virtual pages : VP1, VP2,
+    // VP3 and VP4 has not been allocated yet, we need to check the end of input
+    // string is page-safe to over-read CharVector.
+    const auto lastPos = i + needleSize - 1;
+
+    if (lastPos + CharVector::size > n && !pageSafe(s + lastPos)) {
+      break;
+    }
     auto blockFirst = CharVector::load_unaligned(s + i);
     const auto eqFirst = (first == blockFirst);
     /// std:find handle the fast-path for first-char-unmatch, so we also need
@@ -1489,7 +1487,7 @@ size_t FOLLY_ALWAYS_INLINE smidStrstrMemcmp(
     if (eqFirst.mask() == 0) {
       continue;
     }
-    auto blockLast = CharVector::load_unaligned(s + i + needleSize - 1);
+    auto blockLast = CharVector::load_unaligned(s + lastPos);
     const auto eqLast = (last == blockLast);
     auto mask = (eqFirst && eqLast).mask();
     while (mask != 0) {
