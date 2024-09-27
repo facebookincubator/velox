@@ -42,6 +42,7 @@
 
 #include "velox/type/TimestampConversion.h"
 #include <folly/Expected.h>
+#include <re2/re2.h>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/HugeInt.h"
@@ -543,7 +544,8 @@ bool tryParseTimestampString(
                  len,
                  pos,
                  daysSinceEpoch,
-                 parseMode == TimestampParseMode::kIso8601
+                 parseMode == TimestampParseMode::kIso8601 ||
+                         parseMode == TimestampParseMode::kSparkCast
                      ? ParseMode::kSparkCast
                      : ParseMode::kNonStrict)) {
     return false;
@@ -643,8 +645,9 @@ Expected<int64_t> daysSinceEpochFromWeekDate(
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
     }
-    return folly::makeUnexpected(Status::UserError(
-        "Date out of range: {}-{}-{}", weekYear, weekOfYear, dayOfWeek));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Date out of range: {}-{}-{}", weekYear, weekOfYear, dayOfWeek));
   }
 
   return daysSinceEpochFromDate(weekYear, 1, 4)
@@ -668,8 +671,13 @@ Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
     }
-    return folly::makeUnexpected(Status::UserError(
-        "Date out of range: {}-{}-{}-{}", year, month, weekOfMonth, dayOfWeek));
+    return folly::makeUnexpected(
+        Status::UserError(
+            "Date out of range: {}-{}-{}-{}",
+            year,
+            month,
+            weekOfMonth,
+            dayOfWeek));
   }
 
   // Adjusts the year and month to ensure month is within the range 1-12,
@@ -727,27 +735,30 @@ Expected<int32_t> fromDateString(const char* str, size_t len, ParseMode mode) {
 
     switch (mode) {
       case ParseMode::kPrestoCast:
-        return folly::makeUnexpected(Status::UserError(
-            "Unable to parse date value: \"{}\". "
-            "Valid date string pattern is (YYYY-MM-DD), "
-            "and can be prefixed with [+-]",
-            std::string(str, len)));
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Unable to parse date value: \"{}\". "
+                "Valid date string pattern is (YYYY-MM-DD), "
+                "and can be prefixed with [+-]",
+                std::string(str, len)));
       case ParseMode::kSparkCast:
-        return folly::makeUnexpected(Status::UserError(
-            "Unable to parse date value: \"{}\". "
-            "Valid date string patterns include "
-            "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
-            "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
-            "and any pattern prefixed with [+-]",
-            std::string(str, len)));
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Unable to parse date value: \"{}\". "
+                "Valid date string patterns include "
+                "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
+                "[y]y*-[m]m*-[d]d* *, [y]y*-[m]m*-[d]d*T*), "
+                "and any pattern prefixed with [+-]",
+                std::string(str, len)));
       case ParseMode::kIso8601:
-        return folly::makeUnexpected(Status::UserError(
-            "Unable to parse date value: \"{}\". "
-            "Valid date string patterns include "
-            "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
-            "[y]y*-[m]m*-[d]d* *), "
-            "and any pattern prefixed with [+-]",
-            std::string(str, len)));
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Unable to parse date value: \"{}\". "
+                "Valid date string patterns include "
+                "([y]y*, [y]y*-[m]m*, [y]y*-[m]m*-[d]d*, "
+                "[y]y*-[m]m*-[d]d* *), "
+                "and any pattern prefixed with [+-]",
+                std::string(str, len)));
       default:
         VELOX_UNREACHABLE();
     }
@@ -812,6 +823,83 @@ Status parserError(const char* str, size_t len) {
       std::string(str, len));
 }
 
+inline bool startsWith(std::string_view str, const char* prefix) {
+  return str.rfind(prefix, 0) == 0;
+}
+
+bool parseSparkTzWithPrefix(
+    std::string& timeZoneName,
+    Timestamp& ts,
+    size_t start) {
+  VELOX_DCHECK_GT(timeZoneName.length(), start + 2);
+  auto sign = timeZoneName[start];
+  auto offset = timeZoneName.substr(start + 1);
+  std::string hm, h, m, s;
+  RE2 hhPattern(R"((\d?\d))");
+  RE2 hhmmPattern(R"((\d\d):?(\d\d))");
+  RE2 hhmmssPattern(R"((\d\d:\d\d):(\d\d))");
+  RE2 hhmmssCompactPattern(R"((\d\d)(\d\d)(\d\d))");
+  if (RE2::FullMatch(offset, hhPattern, &hm)) {
+    hm += ":00";
+  } else if (RE2::FullMatch(offset, hhmmPattern, &h, &m)) {
+    hm = h + ":" + m;
+  } else if (RE2::FullMatch(offset, hhmmssPattern, &hm, &s)) {
+    // hm and second already captured
+  } else if (RE2::FullMatch(offset, hhmmssCompactPattern, &h, &m, &s)) {
+    hm = h + ":" + m;
+  } else {
+    return false;
+  }
+  int32_t sec = 0;
+  size_t pos = 0;
+  if (!s.empty() && !parseDoubleDigit(s.c_str(), s.length(), pos, sec)) {
+    return false;
+  }
+  if (sec < 0 || sec > 60) {
+    return false;
+  }
+  if (sec != 0) {
+    // Seconds timezone offset is not support, need to be applied to timestamp.
+    if (sign == '+') {
+      if (ts.getSeconds() - sec < Timestamp::kMinSeconds) {
+        return false;
+      }
+      ts = Timestamp(ts.getSeconds() - sec, ts.getNanos());
+    } else if (sign == '-') {
+      if (ts.getSeconds() + sec > Timestamp::kMaxSeconds) {
+        return false;
+      }
+      ts = Timestamp(ts.getSeconds() + sec, ts.getNanos());
+    } else {
+      return false;
+    }
+  }
+  timeZoneName = sign + hm;
+  return true;
+}
+
+bool normalizeSparkTimezone(std::string& timeZoneName, Timestamp& ts) {
+  // Spark support an id with one of the prefixes UTC+, UTC-, GMT+, GMT-, UT+ or
+  // UT-, and a suffix in the formats: h[h], hh[:]mm, hh:mm:ss, hhmmss
+  if (timeZoneName.length() > 5 &&
+      (startsWith(timeZoneName, "UTC") || startsWith(timeZoneName, "GMT"))) {
+    if (!parseSparkTzWithPrefix(timeZoneName, ts, 3)) {
+      return false;
+    }
+  }
+  if (timeZoneName.length() > 4 && startsWith(timeZoneName, "UT")) {
+    if (!parseSparkTzWithPrefix(timeZoneName, ts, 2)) {
+      return false;
+    }
+  }
+  RE2 singleHourTz(R"((\+|\-)(\d):)");
+  RE2 singleMinuteTz(R"((\+|\-)(\d\d):(\d)$)");
+  // To support the (+|-)h:mm format because it was supported before Spark 3.0.
+  RE2::Replace(&timeZoneName, singleHourTz, R"(\10\2:)");
+  // To support the (+|-)hh:m format because it was supported before Spark 3.0.
+  RE2::Replace(&timeZoneName, singleMinuteTz, R"(\1\2:0\3)");
+  return true;
+}
 } // namespace
 
 Expected<Timestamp>
@@ -865,9 +953,17 @@ fromTimestampWithTimezoneString(
       timezonePos++;
     }
 
-    std::string_view timeZoneName(str + pos, timezonePos - pos);
+    std::string timeZoneName(str + pos, timezonePos - pos);
+    std::string normalizeTzName = timeZoneName;
+    if (parseMode == TimestampParseMode::kSparkCast &&
+        !normalizeSparkTimezone(normalizeTzName, resultTimestamp)) {
+      return folly::makeUnexpected(
+          Status::UserError(
+              "Failed to normalize spark timezone value: \"{}\"",
+              timeZoneName));
+    }
 
-    if ((timeZone = tz::locateZone(timeZoneName, false)) == nullptr) {
+    if ((timeZone = tz::locateZone(normalizeTzName, false)) == nullptr) {
       return folly::makeUnexpected(
           Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
     }

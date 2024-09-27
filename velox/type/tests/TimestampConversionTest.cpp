@@ -586,5 +586,80 @@ TEST(DateTimeUtilTest, toTimezoneFromID) {
   EXPECT_EQ(ts, parseTimestamp("2021-03-14 17:00:00"));
 }
 
+TEST(DateTimeUtilTest, normalizeSparkTimezone) {
+  std::string tz = "1582-06-01 11:33:33.123UTC+080000";
+  auto result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("+08:00"));
+
+  tz = "1582-06-01 11:33:33.123GMT+081010";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("+08:10"));
+
+  tz = "1582-06-01 11:33:33.123UT+120000";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("+12:00"));
+
+  tz = "1582-06-01 11:33:33.123UT+880000";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_TRUE(result.hasError());
+
+  tz = "1582-06-01 11:33:33.123UT+080061";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_TRUE(result.hasError());
+
+  tz = "1582-06-01 11:33:33.123UT+086100";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_TRUE(result.hasError());
+
+  tz = "1582-06-01 11:33:33.123UT+0800000";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_TRUE(result.hasError());
+
+  tz = "1582-06-01 11:33:33.123ut+080000";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_TRUE(result.hasError());
+
+  tz = "2015-03-18T12:03:17-1:0";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("-01:00"));
+
+  tz = "2015-03-18T12:03:17-10:7";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("-10:07"));
+
+  tz = "2015-03-18T12:03:17EST";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("-05:00"));
+
+  tz = "2015-03-18T12:03:17IST";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("Asia/Kolkata"));
+
+  tz = "2015-03-18T12:03:17";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, nullptr);
+}
+
 } // namespace
 } // namespace facebook::velox::util
