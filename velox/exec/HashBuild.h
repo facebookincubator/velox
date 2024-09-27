@@ -315,8 +315,7 @@ class HashBuild final : public Operator {
   // Maps key channel in 'input_' to channel in key.
   folly::F14FastMap<column_index_t, column_index_t> keyChannelMap_;
 
-  // Count the number of input rows. It is reset on partial aggregation output
-  // flush.
+  // Count the number of input rows.
   int64_t numInputRows_ = 0;
 
   // Minimum number of rows to see before deciding to give up build no
