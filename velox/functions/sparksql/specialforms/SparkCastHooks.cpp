@@ -34,7 +34,7 @@ Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
   } else if (seconds < -maxSeconds) {
     return Timestamp::fromMicros(std::numeric_limits<int64_t>::min());
   }
-  return Timestamp::fromMillis(seconds * kMillisInSecond);
+  return Timestamp(seconds, 0);
 }
 
 Expected<int32_t> SparkCastHooks::castStringToDate(

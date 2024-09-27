@@ -105,12 +105,8 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         makeNullableFlatVector<Timestamp>(
             {Timestamp(0, 0),
              Timestamp(1, 0),
-             Timestamp::fromMillis(
-                 std::numeric_limits<T>::max() *
-                 Timestamp::kMillisecondsInSecond),
-             Timestamp::fromMillis(
-                 std::numeric_limits<T>::min() *
-                 Timestamp::kMillisecondsInSecond),
+             Timestamp(std::numeric_limits<T>::max(), 0),
+             Timestamp(std::numeric_limits<T>::min(), 0),
              std::nullopt}));
   }
 };
