@@ -71,6 +71,19 @@ void Timestamp::toGMT(const tz::TimeZone& zone) {
   seconds_ = sysSeconds.count();
 }
 
+void Timestamp::toGMT(const tz::TimeZone& zone, int32_t secondsOffset) {
+  toGMT(zone);
+  if (seconds_ + secondsOffset < kMinSeconds ||
+      seconds_ + secondsOffset > kMaxSeconds) {
+    VELOX_USER_FAIL(
+        "The seconds offset in timezone will get invalid timestamp, "
+        "timestamp is {}, seconds offset is {}",
+        toString(),
+        secondsOffset);
+  }
+  seconds_ += secondsOffset;
+}
+
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
 Timestamp::toTimePointMs(bool allowOverflow) const {
   using namespace std::chrono;

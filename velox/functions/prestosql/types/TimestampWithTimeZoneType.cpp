@@ -88,7 +88,8 @@ void castFromString(
     if (castResult.hasError()) {
       context.setStatus(row, castResult.error());
     } else {
-      auto [ts, timeZone] = castResult.value();
+      auto ts = castResult.value().timestamp;
+      auto timeZone = castResult.value().tz;
       // Input string may not contain a timezone - if so, it is interpreted in
       // session timezone.
       if (timeZone == nullptr) {

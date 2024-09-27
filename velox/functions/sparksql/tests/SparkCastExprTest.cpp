@@ -233,6 +233,10 @@ TEST_F(SparkCastExprTest, invalidDate) {
 
 TEST_F(SparkCastExprTest, stringToTimestamp) {
   std::vector<std::optional<std::string>> input{
+      "2015",
+      "-2015",
+      "2015-03",
+      "-2015-03",
       "1970-01-01",
       "2000-01-01",
       "1970-01-01 00:00:00",
@@ -241,12 +245,37 @@ TEST_F(SparkCastExprTest, stringToTimestamp) {
       "2015-03-18T12:03:17",
       "2015-03-18 12:03:17",
       "2015-03-18T12:03:17",
+      "2015-03-18T12:03:17Z",
+      "2015-03-18 12:03:17Z",
       "2015-03-18 12:03:17.123",
       "2015-03-18T12:03:17.123",
       "2015-03-18T12:03:17.456",
       "2015-03-18 12:03:17.456",
+      "2015-03-18T12:03:17.456Z",
+      "2015-03-18 12:03:17.456Z",
+      "2015-03-18T12:03:17-1:0",
+      "2015-03-18T12:03:17-01:00",
+      "2015-03-18T12:03:17+07:30",
+      "2015-03-18T12:03:17+7:3",
+      "2015-03-18T12:03:17.123-1:0",
+      "2015-03-18T12:03:17.123-01:00",
+      "2015-03-18T12:03:17.123+07:30",
+      "2015-03-18T12:03:17.123+7:3",
+      "2015-03-18 12:03:17.123UTC+8",
+      "2015-03-18 12:03:17.123UTC+8:1",
+      "2015-03-18T12:03:17.123GMT+081010",
+      "2015-03-18T12:03:17.123GMT+8:10:10",
+      "2015-03-18T12:03:17.123GMT+8:10",
+      "2015-03-18T12:03:17.123UT+00:00:10",
+      "2015-03-18 12:03:17.123456789",
+      "2015-03-18 12:03:17.123Etc/GMT+1",
+      "2015-03-18 12:03:17.123CTT",
   };
   std::vector<std::optional<Timestamp>> expected{
+      Timestamp(1420070400, 0),
+      Timestamp(-125754422400, 0),
+      Timestamp(1425168000, 0),
+      Timestamp(-125749324800, 0),
       Timestamp(0, 0),
       Timestamp(946684800, 0),
       Timestamp(0, 0),
@@ -255,12 +284,61 @@ TEST_F(SparkCastExprTest, stringToTimestamp) {
       Timestamp(1426680197, 0),
       Timestamp(1426680197, 0),
       Timestamp(1426680197, 0),
+      Timestamp(1426680197, 0),
+      Timestamp(1426680197, 0),
       Timestamp(1426680197, 123000000),
       Timestamp(1426680197, 123000000),
       Timestamp(1426680197, 456000000),
       Timestamp(1426680197, 456000000),
+      Timestamp(1426680197, 456000000),
+      Timestamp(1426680197, 456000000),
+      Timestamp(1426680197 + 1 * 60 * 60, 0),
+      Timestamp(1426680197 + 1 * 60 * 60, 0),
+      Timestamp(1426680197 - (7 * 60 * 60 + 30 * 60), 0),
+      Timestamp(1426680197 - (7 * 60 * 60 + 3 * 60), 0),
+      Timestamp(1426680197 + 1 * 60 * 60, 123000000),
+      Timestamp(1426680197 + 1 * 60 * 60, 123000000),
+      Timestamp(1426680197 - (7 * 60 * 60 + 30 * 60), 123000000),
+      Timestamp(1426680197 - (7 * 60 * 60 + 3 * 60), 123000000),
+      Timestamp(1426680197 - 8 * 60 * 60, 123000000),
+      Timestamp(1426680197 - (8 * 60 * 60 + 1 * 60), 123000000),
+      Timestamp(1426680197 - (8 * 60 * 60 + 10 * 60 + 10), 123000000),
+      Timestamp(1426680197 - (8 * 60 * 60 + 10 * 60 + 10), 123000000),
+      Timestamp(1426680197 - (8 * 60 * 60 + 10 * 60), 123000000),
+      Timestamp(1426680197 - 10, 123000000),
+      Timestamp(1426680197, 123456000),
+      // Etc/GMT+1 and GMT-1 are equivalent.
+      Timestamp(1426680197 + 1 * 60 * 60, 123000000),
+      Timestamp(1426680197 - 8 * 60 * 60, 123000000),
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
+}
+
+TEST_F(SparkCastExprTest, invalidStringToTimestamp) {
+  testInvalidCast<StringView>(
+      "timestamp",
+      {"2015-"},
+      "Cannot cast VARCHAR '2015-' to TIMESTAMP. Unable to parse timestamp value: \"2015-\"");
+  testInvalidCast<StringView>(
+      "timestamp",
+      {"2015-13"},
+      "Cannot cast VARCHAR '2015-13' to TIMESTAMP. Unable to parse timestamp value: \"2015-13\"");
+  testInvalidCast<StringView>(
+      "timestamp",
+      {"2015-03-18 12:03:17.123utc+080000"},
+      "Unknown timezone value: \"utc+080000\"");
+  testInvalidCast<StringView>(
+      "timestamp",
+      {"2015-03-18 12:03:17.123UTC+08000012"},
+      "Failed to normalize spark timezone value: \"UTC+08000012\"");
+  testInvalidCast<StringView>(
+      "timestamp",
+      {"2015-03-18 12:03:17.123UTC+080061"},
+      "Failed to normalize spark timezone value: \"UTC+080061\"");
+  testInvalidCast<StringView>(
+      "timestamp",
+      {"2015-03-18 12:03:17.123UTC+8:6:10"},
+      "Failed to normalize spark timezone value: \"UTC+8:6:10\"");
 }
 
 TEST_F(SparkCastExprTest, intToTimestamp) {

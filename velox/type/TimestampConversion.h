@@ -26,6 +26,17 @@ class TimeZone;
 
 namespace facebook::velox::util {
 
+struct TimestampConversionResult {
+  Timestamp timestamp;
+  const tz::TimeZone* tz;
+  int32_t secondsOffset{0};
+
+  bool operator==(const TimestampConversionResult& other) const {
+    return (timestamp == other.timestamp) && (tz == other.tz) &&
+        (secondsOffset == other.secondsOffset);
+  }
+};
+
 constexpr const int32_t kHoursPerDay{24};
 constexpr const int32_t kMinsPerHour{60};
 constexpr const int32_t kSecsPerMinute{60};
@@ -239,14 +250,12 @@ inline Expected<Timestamp> fromTimestampString(
 ///
 /// `nullptr` means no timezone information was found. Returns Unexpected with
 /// UserError status in case of parsing errors.
-Expected<std::pair<Timestamp, const tz::TimeZone*>>
-fromTimestampWithTimezoneString(
+Expected<TimestampConversionResult> fromTimestampWithTimezoneString(
     const char* buf,
     size_t len,
     TimestampParseMode parseMode);
 
-inline Expected<std::pair<Timestamp, const tz::TimeZone*>>
-fromTimestampWithTimezoneString(
+inline Expected<TimestampConversionResult> fromTimestampWithTimezoneString(
     const StringView& str,
     TimestampParseMode parseMode) {
   return fromTimestampWithTimezoneString(str.data(), str.size(), parseMode);
