@@ -24,7 +24,7 @@ namespace {
 
 class PrefixSortTest : public exec::test::OperatorTestBase {
  protected:
-  std::vector<char*>
+  std::vector<char*, memory::StlAllocator<char*>>
   storeRows(int numRows, const RowVectorPtr& sortedRows, RowContainer* data);
 
   static constexpr CompareFlags kAsc{
@@ -57,7 +57,7 @@ class PrefixSortTest : public exec::test::OperatorTestBase {
         rowType->children().end()};
 
     RowContainer rowContainer(keyTypes, payloadTypes, pool_.get());
-    std::vector<char*> rows = storeRows(numRows, data, &rowContainer);
+    auto rows = storeRows(numRows, data, &rowContainer);
 
     // Use PrefixSort to sort rows.
     PrefixSort::sort(
@@ -89,11 +89,11 @@ class PrefixSortTest : public exec::test::OperatorTestBase {
       const RowVectorPtr& sortedRows);
 };
 
-std::vector<char*> PrefixSortTest::storeRows(
+std::vector<char*, memory::StlAllocator<char*>> PrefixSortTest::storeRows(
     int numRows,
     const RowVectorPtr& sortedRows,
     RowContainer* data) {
-  std::vector<char*> rows;
+  std::vector<char*, memory::StlAllocator<char*>> rows(*pool());
   SelectivityVector allRows(numRows);
   rows.resize(numRows);
   for (int row = 0; row < numRows; ++row) {
@@ -116,7 +116,7 @@ const RowVectorPtr PrefixSortTest::generateExpectedResult(
   const auto rowType = asRowType(sortedRows->type());
   const int numKeys = compareFlags.size();
   RowContainer rowContainer(rowType->children(), pool_.get());
-  std::vector<char*> rows = storeRows(numRows, sortedRows, &rowContainer);
+  auto rows = storeRows(numRows, sortedRows, &rowContainer);
 
   std::sort(
       rows.begin(), rows.end(), [&](const char* leftRow, const char* rightRow) {

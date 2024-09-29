@@ -34,7 +34,8 @@ SortBuffer::SortBuffer(
       nonReclaimableSection_(nonReclaimableSection),
       prefixSortConfig_(prefixSortConfig),
       spillConfig_(spillConfig),
-      spillStats_(spillStats) {
+      spillStats_(spillStats),
+      sortedRows_(0, memory::StlAllocator<char*>(*pool)) {
   VELOX_CHECK_GE(input_->size(), sortCompareFlags_.size());
   VELOX_CHECK_GT(sortCompareFlags_.size(), 0);
   VELOX_CHECK_EQ(sortColumnIndices.size(), sortCompareFlags_.size());
@@ -109,6 +110,13 @@ void SortBuffer::noMoreInput() {
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::SortBuffer::noMoreInput", this);
   VELOX_CHECK(!noMoreInput_);
+
+  // It may trigger spill, make sure it's triggered before noMoreInput_ is set.
+  if (spiller_ == nullptr) {
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
+    pool_->maybeReserve(1 * 1024 * 1024 * 1024L);
+  }
+
   noMoreInput_ = true;
 
   // No data.
@@ -320,11 +328,14 @@ void SortBuffer::spillOutput() {
       spillerStoreType_,
       spillConfig_,
       spillStats_);
-  auto spillRows = std::vector<char*>(
-      sortedRows_.begin() + numOutputRows_, sortedRows_.end());
+  auto spillRows = std::vector<char*, memory::StlAllocator<char*>>(
+      sortedRows_.begin() + numOutputRows_,
+      sortedRows_.end(),
+      *memory::spillMemoryPool());
   spiller_->spill(spillRows);
   data_->clear();
   sortedRows_.clear();
+  sortedRows_.shrink_to_fit();
   // Finish right after spilling as the output spiller only spills at most
   // once.
   finishSpill();
