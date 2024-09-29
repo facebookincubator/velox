@@ -591,10 +591,7 @@ fails. Otherwise proceed to step-6-c.</p></li>
 memory reservations from the candidate query pools without actually
 freeing the used memory. It first tries to reclaim from itself and then
 from the candidate pools which have the most free capacity
-(<em>MemoryPool::freeBytes</em>) until it reaches the memory reclaim target. Note
-that we set the memory reclaim target to a large value
-(<em>MemoryManagerOptions::memoryPoolTransferCapacity</em>) which could be more
-than the actual needed size, to avoid the frequent memory arbitrations.</p></li>
+(<em>MemoryPool::freeBytes</em>) until it reaches the memory reclaim target.</p></li>
 <li><p>If the memory arbitrator hasn’t reclaimed enough free memory on fast
 path, it runs the slow path
 (<em>SharedArbitrator::reclaimUsedMemoryFromCandidates</em>) to reclaim the used
