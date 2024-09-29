@@ -177,8 +177,9 @@ template <typename TInputType>
 class DecimalSumAggregate
     : public functions::aggregate::DecimalAggregate<int128_t, TInputType> {
  public:
-  explicit DecimalSumAggregate(TypePtr resultType)
+  explicit DecimalSumAggregate(TypePtr inputType, TypePtr resultType)
       : functions::aggregate::DecimalAggregate<int128_t, TInputType>(
+            inputType,
             resultType) {}
 
   virtual int128_t computeFinalValue(
