@@ -446,7 +446,7 @@ struct LastDayFunction {
     auto dateTime = getDateTime(date);
     int32_t year = getYear(dateTime);
     int32_t month = getMonth(dateTime);
-    int32_t day = getMonth(dateTime);
+    int32_t day = getDay(dateTime);
     auto lastDay = util::getMaxDayOfMonth(year, month);
     Expected<int64_t> expected =
         util::daysSinceEpochFromDate(year, month, lastDay);
