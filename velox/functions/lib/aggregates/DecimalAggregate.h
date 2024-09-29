@@ -71,7 +71,26 @@ struct LongDecimalWithOverflowState {
 template <typename TResultType, typename TInputType = TResultType>
 class DecimalAggregate : public exec::Aggregate {
  public:
-  explicit DecimalAggregate(TypePtr resultType) : exec::Aggregate(resultType) {}
+  explicit DecimalAggregate(TypePtr inputType, TypePtr resultType)
+      : exec::Aggregate(resultType) {
+    // If input's precision is much less than 38, we can skip the overflow check
+    // for first skipOverflowCheckCount_ rows. For exmaple, Decimal(7, 2), the
+    // max value is 99999.99, the overflow happens when there are more than
+    // pow(10, 31) rows.
+    if (inputType->isShortDecimal()) {
+      auto precision = 38 - inputType->asShortDecimal().precision();
+      if (precision > 19) {
+        skipOverflowCheckCount_ = std::numeric_limits<uint64_t>::max();
+      } else {
+        skipOverflowCheckCount_ = std::pow(10L, precision);
+      }
+    } else if (inputType->isLongDecimal()) {
+      auto precision = 38 - inputType->asLongDecimal().precision();
+      if (precision > 0) {
+        skipOverflowCheckCount_ = std::pow(10L, precision);
+      }
+    }
+  }
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(LongDecimalWithOverflowState);
@@ -87,31 +106,62 @@ class DecimalAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodedRaw_.decode(*args[0], rows);
+    accumlateRowCount_ += decodedRaw_.size();
+    bool skipOverFlowCheck = skipOverflowCheckCount_ > accumlateRowCount_;
     if (decodedRaw_.isConstantMapping()) {
       if (!decodedRaw_.isNullAt(0)) {
         auto value = decodedRaw_.valueAt<TInputType>(0);
-        rows.applyToSelected([&](vector_size_t i) {
-          updateNonNullValue(groups[i], TResultType(value));
-        });
+        if (skipOverFlowCheck) {
+          rows.applyToSelected([&](vector_size_t i) {
+            updateNonNullValue<true>(groups[i], TResultType(value));
+          });
+        } else {
+          rows.applyToSelected([&](vector_size_t i) {
+            updateNonNullValue<false>(groups[i], TResultType(value));
+          });
+        }
       }
     } else if (decodedRaw_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (decodedRaw_.isNullAt(i)) {
-          return;
-        }
-        updateNonNullValue(
-            groups[i], TResultType(decodedRaw_.valueAt<TInputType>(i)));
-      });
+      if (skipOverFlowCheck) {
+        rows.applyToSelected([&](vector_size_t i) {
+          if (decodedRaw_.isNullAt(i)) {
+            return;
+          }
+          updateNonNullValue<true>(
+              groups[i], TResultType(decodedRaw_.valueAt<TInputType>(i)));
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          if (decodedRaw_.isNullAt(i)) {
+            return;
+          }
+          updateNonNullValue<false>(
+              groups[i], TResultType(decodedRaw_.valueAt<TInputType>(i)));
+        });
+      }
     } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
       auto data = decodedRaw_.data<TInputType>();
-      rows.applyToSelected([&](vector_size_t i) {
-        updateNonNullValue<false>(groups[i], TResultType(data[i]));
-      });
+      if (skipOverFlowCheck) {
+        rows.applyToSelected([&](vector_size_t i) {
+          updateNonNullValue<true, false>(groups[i], TResultType(data[i]));
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          updateNonNullValue<false, false>(groups[i], TResultType(data[i]));
+        });
+      }
     } else {
-      rows.applyToSelected([&](vector_size_t i) {
-        updateNonNullValue(
-            groups[i], TResultType(decodedRaw_.valueAt<TInputType>(i)));
-      });
+      if (skipOverFlowCheck) {
+        rows.applyToSelected([&](vector_size_t i) {
+          updateNonNullValue<true>(
+              groups[i], TResultType(decodedRaw_.valueAt<TInputType>(i)));
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          updateNonNullValue<false>(
+              groups[i], TResultType(decodedRaw_.valueAt<TInputType>(i)));
+        });
+      }
     }
   }
 
@@ -121,28 +171,51 @@ class DecimalAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodedRaw_.decode(*args[0], rows);
+    accumlateRowCount_ += decodedRaw_.size();
+    bool skipOverFlowCheck = skipOverflowCheckCount_ > accumlateRowCount_;
     if (decodedRaw_.isConstantMapping()) {
       if (!decodedRaw_.isNullAt(0)) {
         auto value = decodedRaw_.valueAt<TInputType>(0);
-        rows.template applyToSelected([&](vector_size_t i) {
-          updateNonNullValue(group, TResultType(value));
-        });
+        if (skipOverFlowCheck) {
+          rows.template applyToSelected([&](vector_size_t i) {
+            updateNonNullValue<true>(group, TResultType(value));
+          });
+        } else {
+          rows.template applyToSelected([&](vector_size_t i) {
+            updateNonNullValue<false>(group, TResultType(value));
+          });
+        }
       }
     } else if (decodedRaw_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (!decodedRaw_.isNullAt(i)) {
-          updateNonNullValue(
-              group, TResultType(decodedRaw_.valueAt<TInputType>(i)));
-        }
-      });
+      if (skipOverFlowCheck) {
+        rows.applyToSelected([&](vector_size_t i) {
+          if (!decodedRaw_.isNullAt(i)) {
+            updateNonNullValue<true>(
+                group, TResultType(decodedRaw_.valueAt<TInputType>(i)));
+          }
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          if (!decodedRaw_.isNullAt(i)) {
+            updateNonNullValue<false>(
+                group, TResultType(decodedRaw_.valueAt<TInputType>(i)));
+          }
+        });
+      }
     } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
       const TInputType* data = decodedRaw_.data<TInputType>();
       LongDecimalWithOverflowState accumulator;
-      rows.applyToSelected([&](vector_size_t i) {
-        accumulator.overflow += DecimalUtil::addWithOverflow(
-            accumulator.sum, data[i], accumulator.sum);
-      });
       accumulator.count = rows.countSelected();
+      if (skipOverflowCheckCount_ > accumulator.count) {
+        rows.applyToSelected([&](vector_size_t i) {
+          accumulator.sum = data[i] + accumulator.sum;
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          accumulator.overflow += DecimalUtil::addWithOverflow(
+              accumulator.sum, data[i], accumulator.sum);
+        });
+      }
       char rawData[LongDecimalWithOverflowState::serializedSize()];
       StringView serialized(
           rawData, LongDecimalWithOverflowState::serializedSize());
@@ -150,13 +223,20 @@ class DecimalAggregate : public exec::Aggregate {
       mergeAccumulators<false>(group, serialized);
     } else {
       LongDecimalWithOverflowState accumulator;
-      rows.applyToSelected([&](vector_size_t i) {
-        accumulator.overflow += DecimalUtil::addWithOverflow(
-            accumulator.sum,
-            decodedRaw_.valueAt<TInputType>(i),
-            accumulator.sum);
-      });
       accumulator.count = rows.countSelected();
+      if (skipOverflowCheckCount_ > accumulator.count) {
+        rows.applyToSelected([&](vector_size_t i) {
+          accumulator.sum =
+              decodedRaw_.valueAt<TInputType>(i) + accumulator.sum;
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          accumulator.overflow += DecimalUtil::addWithOverflow(
+              accumulator.sum,
+              decodedRaw_.valueAt<TInputType>(i),
+              accumulator.sum);
+        });
+      }
       char rawData[LongDecimalWithOverflowState::serializedSize()];
       StringView serialized(
           rawData, LongDecimalWithOverflowState::serializedSize());
@@ -306,14 +386,18 @@ class DecimalAggregate : public exec::Aggregate {
     accumulator->mergeWith(serialized);
   }
 
-  template <bool tableHasNulls = true>
+  template <bool skipOverflowCheck, bool tableHasNulls = true>
   void updateNonNullValue(char* group, TResultType value) {
     if constexpr (tableHasNulls) {
       exec::Aggregate::clearNull(group);
     }
     auto accumulator = decimalAccumulator(group);
-    accumulator->overflow +=
-        DecimalUtil::addWithOverflow(accumulator->sum, value, accumulator->sum);
+    if constexpr (skipOverflowCheck) {
+      accumulator->sum = value + accumulator->sum;
+    } else {
+      accumulator->overflow += DecimalUtil::addWithOverflow(
+          accumulator->sum, value, accumulator->sum);
+    }
     accumulator->count += 1;
   }
 
@@ -334,6 +418,8 @@ class DecimalAggregate : public exec::Aggregate {
 
   DecodedVector decodedRaw_;
   DecodedVector decodedPartial_;
+  uint64_t accumlateRowCount_ = 0;
+  uint64_t skipOverflowCheckCount_ = 0;
 };
 
 } // namespace facebook::velox::functions::aggregate
