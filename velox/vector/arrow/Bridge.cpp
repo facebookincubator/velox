@@ -942,7 +942,8 @@ void exportOffsets(
     memory::MemoryPool* pool,
     VeloxToArrowBridgeHolder& holder,
     Selection& childRows) {
-  VELOX_CHECK_GE(vec.size(), rows.count());
+  VELOX_CHECK_GE(
+      vec.size(), rows.count(), "Overlapping ARRAY/MAP is not allowed");
 
   auto offsets = AlignedBuffer::allocate<vector_size_t>(
       checkedPlus<size_t>(out.length, 1), pool);
