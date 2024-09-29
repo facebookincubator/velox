@@ -222,6 +222,14 @@ struct UnixTimestampParseWithFormatFunction
     this->setTimezone(config);
   }
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Date>* /*input*/,
+      const arg_type<Varchar>* /*format*/) {
+    this->setTimezone(config);
+  }
+
   FOLLY_ALWAYS_INLINE bool call(
       int64_t& result,
       const arg_type<Varchar>& input,
@@ -249,6 +257,25 @@ struct UnixTimestampParseWithFormatFunction
     }
     (*dateTimeResult).timestamp.toGMT(*this->getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp.getSeconds();
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<Timestamp>& input,
+      const arg_type<Varchar>& format) {
+    result = input.getSeconds();
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<Date>& input,
+      const arg_type<Varchar>& format) {
+    auto seconds = input * kSecondsInDay;
+    Timestamp timestamp{seconds, 0};
+    timestamp.toGMT(*this->sessionTimeZone_);
+    result = timestamp.getSeconds();
     return true;
   }
 
