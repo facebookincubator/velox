@@ -90,6 +90,10 @@ struct BitMask<T, A, 1> {
     uint8x16_t vmask = vshlq_u8(vandq_u8(mask, vdupq_n_u8(0x80)), vshift);
     return (vaddv_u8(vget_high_u8(vmask)) << 8) | vaddv_u8(vget_low_u8(vmask));
   }
+
+  static uint64_t arm64ToBitMask(xsimd::batch_bool<T, A> mask, const xsimd::neon&) {
+    return vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(mask), 4)), 0);
+  }
 #endif
 };
 
@@ -114,6 +118,12 @@ struct BitMask<T, A, 2> {
   }
 #endif
 
+#if XSIMD_WITH_NEON
+  static uint64_t arm64ToBitMask(xsimd::batch_bool<T, A> mask, const xsimd::neon&) {
+    return vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(mask, 4)), 0);
+  }
+#endif
+
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::generic&) {
     return genericToBitMask(mask);
   }
@@ -132,6 +142,12 @@ struct BitMask<T, A, 4> {
 #if XSIMD_WITH_SSE2
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::sse2&) {
     return _mm_movemask_ps(reinterpret_cast<__m128>(mask.data));
+  }
+#endif
+
+#if XSIMD_WITH_NEON
+  static uint64_t arm64ToBitMask(xsimd::batch_bool<T, A> mask, const xsimd::neon&) {
+    return vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u32(mask), 4)), 0);
   }
 #endif
 
@@ -159,6 +175,12 @@ struct BitMask<T, A, 8> {
 #if XSIMD_WITH_SSE2
   static int toBitMask(xsimd::batch_bool<T, A> mask, const xsimd::sse2&) {
     return _mm_movemask_pd(reinterpret_cast<__m128d>(mask.data));
+  }
+#endif
+
+#if XSIMD_WITH_NEON
+  static uint64_t arm64ToBitMask(xsimd::batch_bool<T, A> mask, const xsimd::neon&) {
+    return vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u64(mask), 4)), 0);
   }
 #endif
 
