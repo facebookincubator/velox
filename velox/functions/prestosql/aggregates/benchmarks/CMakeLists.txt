@@ -58,3 +58,19 @@ target_link_libraries(
   Folly::folly
   ${FOLLY_BENCHMARK}
   gflags::gflags)
+
+add_executable(velox_aggregates_decimal_agg_bm DecimalAgg.cpp)
+
+target_link_libraries(
+  velox_aggregates_decimal_agg_bm
+  velox_aggregates
+  velox_functions_aggregates_test_lib
+  velox_functions_lib
+  velox_exec_test_lib
+  velox_functions_prestosql
+  velox_dwio_common_exception
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  Folly::folly
+  ${FOLLY_BENCHMARK}
+  gflags::gflags)

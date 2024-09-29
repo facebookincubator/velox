@@ -509,6 +509,27 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {},
       {makeRowVector({underFlowTestResult})});
 
+  // The total sum overflows with type DECIMAL(36, 0). skipOverflowCheckSize_ is
+  // 100, the first vector size is < 100, the overflow add is used for the
+  // second vector only.
+  std::vector<int128_t> firstRawVector;
+  std::vector<int128_t> secondRawVector;
+  for (int i = 0; i < 99; ++i) {
+    firstRawVector.push_back(DecimalUtil::kLongDecimalMax / 100 + 1);
+  }
+  secondRawVector.push_back(DecimalUtil::kLongDecimalMax / 100 + 1);
+  testAggregations(
+      {makeRowVector(
+           {makeFlatVector<int128_t>(firstRawVector, DECIMAL(36, 0))}),
+       makeRowVector(
+           {makeFlatVector<int128_t>(secondRawVector, DECIMAL(36, 0))})},
+      {},
+      {"avg(c0)"},
+      {},
+      {makeRowVector({makeFlatVector(
+          std::vector<int128_t>{DecimalUtil::kLongDecimalMax / 100 + 1},
+          DECIMAL(36, 0))})});
+
   // Add more rows to show that average result is still accurate.
   for (int i = 0; i < 10; ++i) {
     rawVector.push_back(DecimalUtil::kLongDecimalMin);

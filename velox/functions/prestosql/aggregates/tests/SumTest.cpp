@@ -185,8 +185,8 @@ TEST_F(SumTest, sumDecimalOverflow) {
 
   auto decimalSumOverflow = [this](
                                 const std::vector<int128_t>& input,
-                                const std::vector<int128_t>& output) {
-    const TypePtr type = DECIMAL(38, 0);
+                                const std::vector<int128_t>& output,
+                                const TypePtr& type = DECIMAL(38, 0)) {
     auto in = makeRowVector({makeFlatVector<int128_t>({input}, type)});
     auto expected = makeRowVector({makeFlatVector<int128_t>({output}, type)});
     PlanBuilder builder(pool());
@@ -247,6 +247,14 @@ TEST_F(SumTest, sumDecimalOverflow) {
   VELOX_ASSERT_THROW(
       decimalSumOverflow(longDecimalInput, longDecimalOutput),
       "Value '-100000000000000000000000000000000000000' is not in the range of Decimal Type");
+
+  longDecimalInput.clear();
+  for (int i = 0; i < 100; ++i) {
+    longDecimalInput.push_back(DecimalUtil::kLongDecimalMax / 100 + 1);
+  }
+  VELOX_ASSERT_THROW(
+      decimalSumOverflow(longDecimalInput, longDecimalOutput, DECIMAL(36, 0)),
+      "Decimal overflow");
 
   AggregationTestBase::enableTestIncremental();
 }
