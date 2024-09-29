@@ -110,7 +110,7 @@ class SortBuffer {
   uint64_t numInputRows_ = 0;
   // Used to store the input data in row format.
   std::unique_ptr<RowContainer> data_;
-  std::vector<char*> sortedRows_;
+  std::vector<char*,  memory::StlAllocator<char*>> sortedRows_;
 
   // The data type of the rows stored in 'data_' and spilled on disk. The
   // sort key columns are stored first then the non-sorted data columns.
