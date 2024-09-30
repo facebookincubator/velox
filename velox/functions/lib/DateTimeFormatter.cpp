@@ -1697,10 +1697,16 @@ std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
   return builder.setType(DateTimeFormatterType::JODA).build();
 }
 
-std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
+Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
     const std::string_view& format,
     bool lenient) {
-  VELOX_USER_CHECK(!format.empty(), "Format pattern should not be empty.");
+  if (format.empty()) {
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    }
+    return folly::makeUnexpected(
+        Status::UserError("Format pattern should not be empty."));
+  }
 
   DateTimeFormatterBuilder builder(format.size());
   const char* cur = format.data();
@@ -1809,7 +1815,11 @@ std::shared_ptr<DateTimeFormatter> buildSimpleDateTimeFormatter(
           break;
         default:
           if (isalpha(*startTokenPtr)) {
-            VELOX_UNSUPPORTED("Specifier {} is not supported.", *startTokenPtr);
+            if (threadSkipErrorDetails()) {
+              return folly::makeUnexpected(Status::UserError());
+            }
+            return folly::makeUnexpected(Status::UserError(
+                "Specifier {} is not supported.", *startTokenPtr));
           } else {
             builder.appendLiteral(startTokenPtr, cur - startTokenPtr);
           }
