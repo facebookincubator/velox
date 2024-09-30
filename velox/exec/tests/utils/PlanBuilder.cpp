@@ -2281,7 +2281,8 @@ PlanBuilder& PlanBuilder::rowNumber(
   return *this;
 }
 
-PlanBuilder& PlanBuilder::topNRowNumber(
+PlanBuilder& PlanBuilder::topNRowNumberBase(
+    core::TopNRowNumberNode::RankFunction function,
     const std::vector<std::string>& partitionKeys,
     const std::vector<std::string>& sortingKeys,
     int32_t limit,
@@ -2295,6 +2296,7 @@ PlanBuilder& PlanBuilder::topNRowNumber(
   }
   planNode_ = std::make_shared<core::TopNRowNumberNode>(
       nextPlanNodeId(),
+      function,
       fields(partitionKeys),
       sortingFields,
       sortingOrders,
@@ -2303,6 +2305,45 @@ PlanBuilder& PlanBuilder::topNRowNumber(
       planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
+}
+
+PlanBuilder& PlanBuilder::topNRowNumber(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    bool generateRowNumber) {
+  return topNRowNumberBase(
+      core::TopNRowNumberNode::RankFunction::kRowNumber,
+      partitionKeys,
+      sortingKeys,
+      limit,
+      generateRowNumber);
+}
+
+PlanBuilder& PlanBuilder::topNRank(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    bool generateRank) {
+  return topNRowNumberBase(
+      core::TopNRowNumberNode::RankFunction::kRank,
+      partitionKeys,
+      sortingKeys,
+      limit,
+      generateRank);
+}
+
+PlanBuilder& PlanBuilder::topNDenseRank(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    bool generateRank) {
+  return topNRowNumberBase(
+      core::TopNRowNumberNode::RankFunction::kDenseRank,
+      partitionKeys,
+      sortingKeys,
+      limit,
+      generateRank);
 }
 
 PlanBuilder& PlanBuilder::markDistinct(
