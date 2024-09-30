@@ -21,10 +21,10 @@
 
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
-#include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/functions/sparksql/fuzzer/SparkQueryRunner.h"
 
 DEFINE_int64(
     seed,
@@ -53,10 +53,13 @@ int main(int argc, char** argv) {
   facebook::velox::functions::prestosql::registerInternalFunctions();
   facebook::velox::memory::MemoryManager::initialize({});
 
-  // TODO: List of the functions that at some point crash or fail and need to
-  // be fixed before we can enable. Constant argument of bloom_filter_agg cause
-  // fuzzer test fail.
-  std::unordered_set<std::string> skipFunctions = {"bloom_filter_agg"};
+  // Spark does not provide user-accessible aggregate functions with the
+  // following names.
+  std::unordered_set<std::string> skipFunctions = {
+      "bloom_filter_agg",
+      "first_ignore_null",
+      "last_ignore_null",
+      "regr_replacement"};
 
   using facebook::velox::exec::test::TransformResultVerifier;
 
@@ -95,21 +98,9 @@ int main(int argc, char** argv) {
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
-  auto duckQueryRunner =
-      std::make_unique<facebook::velox::exec::test::DuckQueryRunner>(
-          rootPool.get());
-  duckQueryRunner->disableAggregateFunctions(
-      {// https://github.com/facebookincubator/velox/issues/7677
-       "max_by",
-       "min_by",
-       // The skewness functions of Velox and DuckDB use different
-       // algorithms.
-       // https://github.com/facebookincubator/velox/issues/4845
-       "skewness",
-       // Spark's kurtosis uses Pearson's formula for calculating the kurtosis
-       // coefficient. Meanwhile, DuckDB employs the sample kurtosis calculation
-       // formula. The results from the two methods are completely different.
-       "kurtosis"});
+  auto sparkQueryRunner = std::make_unique<
+      facebook::velox::functions::sparksql::fuzzer::SparkQueryRunner>(
+      rootPool.get(), "localhost:15002", "fuzzer", "aggregate");
 
   using facebook::velox::DataSpec;
   // For some functions, velox supports NaN, Infinity better than presto query
@@ -138,5 +129,9 @@ int main(int argc, char** argv) {
   options.customVerificationFunctions = customVerificationFunctions;
   options.orderableGroupKeys = true;
   options.functionDataSpec = functionDataSpec;
-  return Runner::run(initialSeed, std::move(duckQueryRunner), options);
+  options.timestampPrecision =
+      facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;
+  options.hiveConfigs = {
+      {facebook::velox::connector::hive::HiveConfig::kReadTimestampUnit, "6"}};
+  return Runner::run(initialSeed, std::move(sparkQueryRunner), options);
 }

@@ -76,6 +76,8 @@ class AggregationFuzzerBase {
         vectorFuzzer_{getFuzzerOptions(timestampPrecision), pool_.get()} {
     filesystems::registerLocalFileSystem();
     auto configs = hiveConfigs;
+    // Make sure not to run out of open file descriptors.
+    configs[connector::hive::HiveConfig::kNumCacheFileHandles] = "1000";
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
