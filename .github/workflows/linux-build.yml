@@ -87,25 +87,43 @@ jobs:
             chmod +x ./${MINIO_BINARY}
             mv ./${MINIO_BINARY} /usr/local/bin/
           fi
+
       - name: Install Proxygen
         run: |
           FB_OS_VERSION="v2024.05.20.00"
           PROXYGEN_BINARY="proxygen.tar.gz"
-          if [ ! -f /usr/local/bin/${PROXYGEN_BINARY} ]; then
+          if [ ! -f /usr/local/bin/proxygen ]; then
             wget https://github.com/facebook/proxygen/archive/refs/tags/${FB_OS_VERSION}.tar.gz -O ${PROXYGEN_BINARY}
+            
+            # Extract the archive
             tar -xzf ${PROXYGEN_BINARY}
             
             # Check the actual directory name after extraction
             DIR_NAME=$(tar -tf ${PROXYGEN_BINARY} | head -1 | cut -f1 -d"/")
             
-            cd ${DIR_NAME} || { echo "Directory ${DIR_NAME} not found"; exit 1; }
-            
-            ./build.sh   # Replace this with the correct build command if necessary
-            chmod +x ./proxygen
-            mv ./proxygen /usr/local/bin/
-            
-            cd ..
-            rm -rf ${DIR_NAME} ${PROXYGEN_BINARY}
+            # Verify that the directory exists before proceeding
+            if [ -d "${DIR_NAME}" ]; then
+              cd ${DIR_NAME}
+              
+              # Build the project (adjust the build command as necessary)
+              if [ -f "./build.sh" ]; then
+                ./build.sh
+              else
+                echo "build.sh not found, adjust the build command as needed."
+                exit 1
+              fi
+              
+              # Make the binary executable and move to /usr/local/bin
+              chmod +x ./proxygen
+              mv ./proxygen /usr/local/bin/
+              
+              # Clean up
+              cd ..
+              rm -rf ${DIR_NAME} ${PROXYGEN_BINARY}
+            else
+              echo "Directory ${DIR_NAME} not found after extraction."
+              exit 1
+            fi
           fi
 
       - uses: assignUser/stash/restore@v1
