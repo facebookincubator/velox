@@ -88,6 +88,22 @@ jobs:
             mv ./${MINIO_BINARY} /usr/local/bin/
           fi
 
+      - name: Install Proxygen
+        run: |
+          FB_OS_VERSION="v2024.05.20.00"
+          PROXYGEN_BINARY="proxygen-${FB_OS_VERSION}.tar.gz"
+          if [ ! -f /usr/local/bin/${PROXYGEN_BINARY} ]; then
+            wget https://github.com/facebook/proxygen/archive/refs/tags/${FB_OS_VERSION}.tar.gz -O ${PROXYGEN_BINARY}
+            tar -xzf ${PROXYGEN_BINARY}
+            cd proxygen-${FB_OS_VERSION}
+            ./build.sh   # Assumes there's a build script or replace with the appropriate build command
+            chmod +x ./proxygen-${FB_OS_VERSION}
+            mv ./proxygen-${FB_OS_VERSION} /usr/local/bin/
+            cd ..
+            rm -rf proxygen-${FB_OS_VERSION} ${PROXYGEN_BINARY}
+          fi
+
+
       - uses: assignUser/stash/restore@v1
         with:
           path: '${{ env.CCACHE_DIR }}'
