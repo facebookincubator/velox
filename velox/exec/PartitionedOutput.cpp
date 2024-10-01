@@ -54,7 +54,7 @@ BlockingReason Destination::advance(
   if (!current_) {
     current_ = std::make_unique<VectorStreamGroup>(pool_);
     auto rowType = asRowType(output->type());
-    serializer::presto::PrestoVectorSerde::PrestoOptions options;
+    serializer::presto::PrestoOptions options;
     options.compressionKind =
         OutputBufferManager::getInstance().lock()->compressionKind();
     options.minCompressionRatio = PartitionedOutput::minCompressionRatio();

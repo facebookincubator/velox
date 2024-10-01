@@ -110,7 +110,7 @@ class Exchange : public SourceOperator {
   std::vector<std::unique_ptr<SerializedPage>> currentPages_;
   bool atEnd_{false};
   std::default_random_engine rng_{std::random_device{}()};
-  serializer::presto::PrestoVectorSerde::PrestoOptions options_;
+  serializer::presto::PrestoOptions options_;
 };
 
 } // namespace facebook::velox::exec
