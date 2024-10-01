@@ -776,6 +776,7 @@ void Expr::eval(
   if (supportsFlatNoNullsFastPath_ && context.throwOnError() &&
       context.inputFlatNoNulls() && rows.countSelected() < 1'000) {
     evalFlatNoNulls(rows, context, result, parentExprSet);
+    VELOX_CHECK(rows.size() == result->size());
     checkResultInternalState(result);
     return;
   }
@@ -790,6 +791,7 @@ void Expr::eval(
 
   if (!rows.hasSelections()) {
     checkOrSetEmptyResult(type(), context.pool(), result);
+    VELOX_CHECK(rows.size() == result->size());
     checkResultInternalState(result);
     return;
   }
@@ -838,11 +840,13 @@ void Expr::eval(
 
   if (inputs_.empty()) {
     evalAll(rows, context, result);
+    VELOX_CHECK(rows.size() == result->size());
     checkResultInternalState(result);
     return;
   }
 
   evalEncodings(rows, context, result);
+  VELOX_CHECK(rows.size() == result->size());
   checkResultInternalState(result);
 }
 
