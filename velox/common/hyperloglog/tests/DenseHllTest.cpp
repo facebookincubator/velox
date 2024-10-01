@@ -180,7 +180,7 @@ TEST_P(DenseHllTest, canDeserialize) {
       "AwkLD8BYTA9BXyg="};
 
   for (folly::StringPiece& invalidString : invalidStrings) {
-    auto invalidHll = Base64::decode(invalidString);
+    auto invalidHll = Base64::decode(std::string_view(invalidString.data()));
     EXPECT_TRUE(DenseHll::canDeserialize(invalidHll.c_str()));
     EXPECT_FALSE(
         DenseHll::canDeserialize(invalidHll.c_str(), invalidHll.length()));
@@ -191,7 +191,7 @@ TEST_P(DenseHllTest, canDeserialize) {
   };
 
   for (folly::StringPiece& validString : validStrings) {
-    auto validHll = Base64::decode(validString);
+    auto validHll = Base64::decode(std::string_view(validString.data()));
     EXPECT_TRUE(DenseHll::canDeserialize(validHll.c_str()));
     EXPECT_TRUE(DenseHll::canDeserialize(validHll.c_str(), validHll.length()));
   }

@@ -129,10 +129,10 @@ class ServerResponse {
     // contains base64-encoded PrestoPage of results.
 
     std::vector<RowVectorPtr> vectors;
-    for (auto& encodedData : response_["binaryData"]) {
-      const std::string data =
-          encoding::Base64::decode(encodedData.stringPiece());
-      vectors.push_back(deserialize(rowType, data, pool));
+    for (const auto& encodedData : response_["binaryData"]) {
+      const std::string decodedData =
+          encoding::Base64::decode(std::string_view(encodedData.stringPiece()));
+      vectors.push_back(deserialize(rowType, decodedData, pool));
     }
     return vectors;
   }
