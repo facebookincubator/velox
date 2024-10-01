@@ -95,9 +95,7 @@ folly::dynamic ConstantTypedExpr::serialize() const {
   if (valueVector_) {
     std::ostringstream out;
     saveVector(*valueVector_, out);
-    auto serializedValue = out.str();
-    obj["valueVector"] = encoding::Base64::encode(
-        serializedValue.data(), serializedValue.size());
+    obj["valueVector"] = encoding::Base64::encode(std::string_view(out.str()));
   } else {
     obj["value"] = value_.serialize();
   }
@@ -117,7 +115,7 @@ TypedExprPtr ConstantTypedExpr::create(
   }
 
   auto encodedData = obj["valueVector"].asString();
-  auto serializedData = encoding::Base64::decode(encodedData);
+  auto serializedData = encoding::Base64::decode(std::string_view(encodedData));
   std::istringstream dataStream(serializedData);
 
   auto* pool = static_cast<memory::MemoryPool*>(context);

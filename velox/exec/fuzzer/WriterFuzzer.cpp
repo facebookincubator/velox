@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <unordered_set>
 #include "velox/common/base/Fs.h"
-#include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
