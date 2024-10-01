@@ -15,14 +15,14 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Metrics.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/dwio/common/DataBuffer.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3Metrics.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3MetricsAggregator.h"
 
 #include <fmt/format.h>
 #include <glog/logging.h>
@@ -49,6 +49,7 @@
 #include <aws/s3/model/UploadPartRequest.h>
 
 namespace facebook::velox::filesystems {
+
 namespace {
 // Reference: https://issues.apache.org/jira/browse/ARROW-8692
 // https://github.com/apache/arrow/blob/master/cpp/src/arrow/filesystem/s3fs.cc#L843
@@ -104,9 +105,7 @@ class S3ReadFile final : public ReadFile {
     length_ = outcome.GetResult().GetContentLength();
     VELOX_CHECK_GE(length_, 0);
 
-    // Increment the metadata call metric
-    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
-        filesystems::kMetricS3MetadataCalls);
+    filesystems::globalS3Metrics.incrementMetadataCalls();
   }
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buffer)
@@ -188,9 +187,7 @@ class S3ReadFile final : public ReadFile {
     auto outcome = client_->GetObject(request);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
 
-    // Increment the get object metric
-    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
-        filesystems::kMetricS3ListObjectsCalls);
+    filesystems::globalS3Metrics.incrementListObjectsCalls();
   }
 
   Aws::S3::S3Client* client_;
@@ -284,9 +281,7 @@ class S3WriteFile::Impl {
 
     fileSize_ = 0;
 
-    // Increment the started uploads metric
-    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
-        filesystems::kMetricS3StartedUploads);
+    filesystems::globalS3Metrics.incrementStartedUploads();
   }
 
   // Appends data to the end of the file.
@@ -332,9 +327,7 @@ class S3WriteFile::Impl {
     }
     currentPart_->clear();
 
-    // Increment the successful uploads metric
-    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
-        filesystems::kMetricS3SuccessfulUploads);
+    filesystems::globalS3Metrics.incrementSuccessfulUploads();
   }
 
   // Current file size, i.e. the sum of all previous appends.
@@ -599,18 +592,16 @@ class S3FileSystem::Impl {
         s3Config.useVirtualAddressing());
     ++fileSystemCount;
 
-    // Increment the active connections metric
-    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
-        filesystems::kMetricS3ActiveConnections);
+    // Increment active connections metric.
+    filesystems::globalS3Metrics.incrementActiveConnections();
   }
 
   ~Impl() {
     client_.reset();
     --fileSystemCount;
 
-    // Decrement the active connections metric
-    filesystems::S3MetricsAggregator::getInstance()->incrementMetric(
-        filesystems::kMetricS3ActiveConnections);
+    // decrement active connections metric.
+    filesystems::globalS3Metrics.decrementActiveConnections();
   }
 
   // Configure and return an AWSCredentialsProvider with access key and secret
@@ -753,6 +744,14 @@ S3FileSystem::S3FileSystem(
 
 std::string S3FileSystem::getLogLevelName() const {
   return impl_->getLogLevelName();
+}
+
+const FileSystemMetrics& S3FileSystem::metrics() const {
+  return globalS3Metrics;
+}
+
+void S3FileSystem::resetMetricsDeltas() {
+  globalS3Metrics.resetDeltas();
 }
 
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(

@@ -26,6 +26,31 @@
 namespace facebook::velox::tests::utils {
 
 using namespace filesystems;
+
+// Dummy implementation of FileSystemMetrics
+class DummyFileSystemMetrics final : public FileSystemMetrics {
+ public:
+   uint64_t getActiveConnections() const override {
+     return 0;  // Dummy implementation
+   }
+
+   uint64_t getMetadataCalls() const override {
+     return 0;  // Dummy implementation
+   }
+
+   uint64_t getStartedUploads() const override {
+     return 0;  // Dummy implementation
+   }
+
+   uint64_t getFailedUploads() const override {
+     return 0;  // Dummy implementation
+   }
+
+   uint64_t getSuccessfulUploads() const override {
+     return 0;  // Dummy implementation
+   }
+};
+
 /// Implements faulty filesystem for io fault injection in unit test. It is a
 /// wrapper on top of a real file system, and by default it delegates the the
 /// file operation to the real file system underneath.
@@ -112,8 +137,8 @@ class FaultyFileSystem : public FileSystem {
   /// Clears the file fault injections.
   void clearFileFaultInjections();
 
-  /// Clears the filesystem fault injections.
-  void clearFileSystemInjections();
+  // Implement the metrics() method to resolve the build error.
+  const FileSystemMetrics& metrics() const override;
 
  private:
   // Defines the per filesystem fault injection setup. Only one type of can be
@@ -178,6 +203,13 @@ class FaultyFileSystem : public FileSystem {
   std::optional<FileSystemInjections> fsInjections_;
   folly::Executor* executor_;
 };
+
+// Implementation of the metrics() method
+inline const FileSystemMetrics& FaultyFileSystem::metrics() const {
+    static DummyFileSystemMetrics dummyMetrics;
+    return dummyMetrics;
+}
+
 
 /// Registers the faulty filesystem.
 void registerFaultyFileSystem();

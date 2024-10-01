@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <string_view>
+#include <atomic>
 
 namespace facebook::velox {
 namespace config {
@@ -79,6 +80,16 @@ struct DirectoryOptions : FileOptions {
       "make-directory-config"};
 };
 
+// Metrics structure to support file system metrics.
+struct FileSystemMetrics {
+    virtual uint64_t getActiveConnections() const = 0;
+    virtual uint64_t getMetadataCalls() const = 0;
+    virtual uint64_t getStartedUploads() const = 0;
+    virtual uint64_t getFailedUploads() const = 0;
+    virtual uint64_t getSuccessfulUploads() const = 0;
+    virtual ~FileSystemMetrics() = default;
+};
+
 /// An abstract FileSystem
 class FileSystem {
  public:
@@ -88,6 +99,9 @@ class FileSystem {
 
   /// Returns the name of the File System
   virtual std::string name() const = 0;
+
+  /// Returns metrics for this file system.
+  virtual const FileSystemMetrics& metrics() const = 0;
 
   /// Returns the file path without the fs scheme prefix such as "local:" prefix
   /// for local file system.

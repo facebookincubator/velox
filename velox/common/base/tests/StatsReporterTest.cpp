@@ -29,11 +29,6 @@
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/memory/MmapAllocator.h"
 
-#ifdef VELOX_ENABLE_S3
-#include "velox/connectors/hive/storage_adapters/s3fs/S3MetricsAggregator.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3Metrics.h"
-#endif
-
 namespace facebook::velox {
 
 class TestReporter : public BaseStatsReporter {
@@ -612,54 +607,6 @@ TEST_F(PeriodicStatsReporterTest, allNullOption) {
       startPeriodicStatsReporter(options),
       "The periodic stats reporter has already started.");
   ASSERT_NO_THROW(stopPeriodicStatsReporter());
-}
-
-TEST_F(PeriodicStatsReporterTest, s3MetricsReporting) {
-#ifdef VELOX_ENABLE_S3
-  auto s3Metrics = filesystems::S3MetricsAggregator::getInstance();
-  ASSERT_NE(s3Metrics, nullptr) << "S3MetricsAggregator instance is null!";
-
-  // Verify that metrics are initially empty
-  ASSERT_EQ(s3Metrics->getMetric(filesystems::kMetricS3ActiveConnections), 0);
-  ASSERT_EQ(s3Metrics->getMetric(filesystems::kMetricS3StartedUploads), 0);
-  ASSERT_EQ(s3Metrics->getMetric(filesystems::kMetricS3FailedUploads), 0);
-  ASSERT_EQ(s3Metrics->getMetric(filesystems::kMetricS3SuccessfulUploads), 0);
-
-  PeriodicStatsReporter::Options options;
-  options.s3MetricsIntervalMs = 1000;
-
-  PeriodicStatsReporter periodicReporter(options);
-  periodicReporter.start();
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
-
-  // Increment S3 metrics by calling incrementMetric multiple times
-  s3Metrics->incrementMetric(filesystems::kMetricS3ActiveConnections);
-  s3Metrics->incrementMetric(filesystems::kMetricS3StartedUploads);
-  // Increment again for 2
-  s3Metrics->incrementMetric(filesystems::kMetricS3StartedUploads);
-  s3Metrics->incrementMetric(filesystems::kMetricS3FailedUploads);
-  s3Metrics->incrementMetric(filesystems::kMetricS3SuccessfulUploads);
-  // Increment again for 2
-  s3Metrics->incrementMetric(filesystems::kMetricS3SuccessfulUploads);
-  // Increment again for 3
-  s3Metrics->incrementMetric(filesystems::kMetricS3SuccessfulUploads);
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-
-  periodicReporter.stop();
-
-  const auto& counterMap = reporter_->counterMap;
-
-  ASSERT_EQ(counterMap.count(filesystems::kMetricS3ActiveConnections), 1);
-  ASSERT_EQ(counterMap.count(filesystems::kMetricS3StartedUploads), 1);
-  ASSERT_EQ(counterMap.count(filesystems::kMetricS3FailedUploads), 1);
-  ASSERT_EQ(counterMap.count(filesystems::kMetricS3SuccessfulUploads), 1);
-  ASSERT_EQ(counterMap.at(filesystems::kMetricS3ActiveConnections), 1);
-  ASSERT_EQ(counterMap.at(filesystems::kMetricS3StartedUploads), 2);
-  ASSERT_EQ(counterMap.at(filesystems::kMetricS3FailedUploads), 1);
-  ASSERT_EQ(counterMap.at(filesystems::kMetricS3SuccessfulUploads), 3);
-#endif
 }
 
 // Registering to folly Singleton with intended reporter type

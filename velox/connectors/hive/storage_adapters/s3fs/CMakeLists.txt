@@ -14,11 +14,11 @@
 
 # for generated headers
 
-velox_add_library(velox_s3_metrics_aggregator STATIC
-  S3MetricsAggregator.cpp
+velox_add_library(velox_s3_metrics STATIC
+  S3Metrics.cpp
 )
 
-target_link_libraries(velox_s3_metrics_aggregator
+target_link_libraries(velox_s3_metrics
   PUBLIC Folly::folly
   PRIVATE glog::glog
 )
@@ -34,7 +34,7 @@ if(VELOX_ENABLE_S3)
 
   velox_include_directories(velox_s3fs PUBLIC ${AWSSDK_INCLUDE_DIRS})
   velox_link_libraries(velox_s3fs velox_dwio_common Folly::folly
-                       ${AWSSDK_LIBRARIES} velox_s3_metrics_aggregator)
+                       ${AWSSDK_LIBRARIES} velox_s3_metrics)
 
   if(${VELOX_BUILD_TESTING})
     add_subdirectory(tests)

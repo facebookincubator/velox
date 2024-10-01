@@ -15,42 +15,76 @@
  */
 
 #pragma once
+#include <cstdint>
 
 namespace facebook::velox::filesystems {
 
-/// Metric names for S3 FileSystem.
-/// These metrics are used for monitoring and reporting various S3 operations.
-constexpr auto kMetricS3ActiveConnections =
-    "presto_cpp_s3_active_connections_total_count";
-constexpr auto kMetricS3StartedUploads =
-    "presto_cpp_s3_started_uploads_one_minute_count";
-constexpr auto kMetricS3FailedUploads =
-    "presto_cpp_s3_failed_uploads_one_minute_count";
-constexpr auto kMetricS3SuccessfulUploads =
-    "presto_cpp_s3_successful_uploads_one_minute_count";
-constexpr auto kMetricS3MetadataCalls =
-    "presto_cpp_s3_metadata_calls_one_minute_count";
-constexpr auto kMetricS3ListStatusCalls =
-    "presto_cpp_s3_list_status_calls_one_minute_count";
-constexpr auto kMetricS3ListLocatedStatusCalls =
-    "presto_cpp_s3_list_located_status_calls_one_minute_count";
-constexpr auto kMetricS3ListObjectsCalls =
-    "presto_cpp_s3_list_objects_calls_one_minute_count";
-constexpr auto kMetricS3OtherReadErrors =
-    "presto_cpp_s3_other_read_errors_one_minute_count";
-constexpr auto kMetricS3AwsAbortedExceptions =
-    "presto_cpp_s3_aws_aborted_exceptions_one_minute_count";
-constexpr auto kMetricS3SocketExceptions =
-    "presto_cpp_s3_socket_exceptions_one_minute_count";
-constexpr auto kMetricS3GetObjectErrors =
-    "presto_cpp_s3_get_object_errors_one_minute_count";
-constexpr auto kMetricS3GetMetadataErrors =
-    "presto_cpp_s3_get_metadata_errors_one_minute_count";
-constexpr auto kMetricS3GetObjectRetries =
-    "presto_cpp_s3_get_object_retries_one_minute_count";
-constexpr auto kMetricS3GetMetadataRetries =
-    "presto_cpp_s3_get_metadata_retries_one_minute_count";
-constexpr auto kMetricS3ReadRetries =
-    "presto_cpp_s3_read_retries_one_minute_count";
+// S3 Metric names
+constexpr auto kMetricS3ActiveConnections = "S3ActiveConnections";
+constexpr auto kMetricS3MetadataCalls = "S3MetadataCalls";
+constexpr auto kMetricS3ListStatusCalls = "S3ListStatusCalls";
+constexpr auto kMetricS3ListLocatedStatusCalls = "S3ListLocatedStatusCalls";
+constexpr auto kMetricS3ListObjectsCalls = "S3ListObjectsCalls";
+constexpr auto kMetricS3OtherReadErrors = "S3OtherReadErrors";
+constexpr auto kMetricS3AwsAbortedExceptions = "S3AwsAbortedExceptions";
+constexpr auto kMetricS3SocketExceptions = "S3SocketExceptions";
+constexpr auto kMetricS3GetObjectErrors = "S3GetObjectErrors";
+constexpr auto kMetricS3GetMetadataErrors = "S3GetMetadataErrors";
+constexpr auto kMetricS3GetObjectRetries = "S3GetObjectRetries";
+constexpr auto kMetricS3GetMetadataRetries = "S3GetMetadataRetries";
+constexpr auto kMetricS3ReadRetries = "S3ReadRetries";
+constexpr auto kMetricS3StartedUploads = "S3StartedUploads";
+constexpr auto kMetricS3FailedUploads = "S3FailedUploads";
+constexpr auto kMetricS3SuccessfulUploads = "S3SuccessfulUploads";
+
+// Struct to hold S3-related metrics with delta tracking.
+struct S3Metrics {
+    uint64_t activeConnections{0};
+    uint64_t startedUploads{0}, prevStartedUploads{0};
+    uint64_t failedUploads{0}, prevFailedUploads{0};
+    uint64_t successfulUploads{0}, prevSuccessfulUploads{0};
+    uint64_t metadataCalls{0};
+    uint64_t listStatusCalls{0};
+    uint64_t listLocatedStatusCalls{0};
+    uint64_t listObjectsCalls{0};
+    uint64_t otherReadErrors{0};
+    uint64_t awsAbortedExceptions{0};
+    uint64_t socketExceptions{0};
+    uint64_t getObjectErrors{0};
+    uint64_t getMetadataErrors{0};
+    uint64_t getObjectRetries{0};
+    uint64_t getMetadataRetries{0};
+    uint64_t readRetries{0};
+
+  // Method to increment each metric based on its name
+  void incrementActiveConnections();
+  void incrementStartedUploads();
+  void incrementFailedUploads();
+  void incrementSuccessfulUploads();
+  void incrementMetadataCalls();
+  void incrementListStatusCalls();
+  void incrementListLocatedStatusCalls();
+  void incrementListObjectsCalls();
+  void incrementOtherReadErrors();
+  void incrementAwsAbortedExceptions();
+  void incrementSocketExceptions();
+  void incrementGetObjectErrors();
+  void incrementGetMetadataErrors();
+  void incrementGetObjectRetries();
+  void incrementGetMetadataRetries();
+  void incrementReadRetries();
+  void decrementActiveConnections();
+
+  // Get the delta (change) between two consecutive metric updates.
+  uint64_t getDeltaStartedUploads();
+  uint64_t getDeltaFailedUploads();
+  uint64_t getDeltaSuccessfulUploads();
+
+  // Reset the deltas after reporting.
+  void resetDeltas();
+};
+
+// Global instance of S3Metrics
+extern S3Metrics globalS3Metrics;
 
 } // namespace facebook::velox::filesystems
