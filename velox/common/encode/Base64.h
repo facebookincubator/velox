@@ -16,11 +16,12 @@
 
 #pragma once
 
-#include <array>
-#include <string>
 #include <folly/Range.h>
 #include <folly/io/IOBuf.h>
+#include <array>
+#include <string>
 #include "velox/common/base/GTestMacros.h"
+#include "velox/common/base/Status.h"
 
 namespace facebook::velox::encoding {
 
@@ -43,13 +44,13 @@ class Base64 {
   static std::string encode(const char* input, size_t inputSize);
   static std::string encode(folly::StringPiece text);
   static std::string encode(const folly::IOBuf* inputBuffer);
-  static void encode(const char* input, size_t inputSize, char* outputBuffer);
+  static Status encode(const char* input, size_t inputSize, char* outputBuffer);
 
   /// Encodes the input data using Base64 URL encoding.
   static std::string encodeUrl(const char* input, size_t inputSize);
   static std::string encodeUrl(folly::StringPiece text);
   static std::string encodeUrl(const folly::IOBuf* inputBuffer);
-  static void
+  static Status
   encodeUrl(const char* input, size_t inputSize, char* outputBuffer);
 
   // Decoding Functions
@@ -59,7 +60,7 @@ class Base64 {
       const std::pair<const char*, int32_t>& payload,
       std::string& output);
   static void decode(const char* input, size_t inputSize, char* outputBuffer);
-  static size_t decode(
+  static Status decode(
       const char* input,
       size_t inputSize,
       char* outputBuffer,
@@ -70,7 +71,7 @@ class Base64 {
   static void decodeUrl(
       const std::pair<const char*, int32_t>& payload,
       std::string& output);
-  static void decodeUrl(
+  static Status decodeUrl(
       const char* input,
       size_t inputSize,
       char* outputBuffer,
@@ -82,7 +83,10 @@ class Base64 {
 
   /// Calculates the decoded size based on encoded input and adjusts the input
   /// size for padding.
-  static size_t calculateDecodedSize(const char* input, size_t& inputSize);
+  static Status calculateDecodedSize(
+      const char* input,
+      size_t& inputSize,
+      size_t& decodedSize);
 
  private:
   // Checks if the input Base64 string is padded.
@@ -104,20 +108,21 @@ class Base64 {
   // character.
   static uint8_t base64ReverseLookup(
       char encodedChar,
-      const ReverseIndex& reverseIndex);
+      const ReverseIndex& reverseIndex,
+      Status& status);
 
   template <class T>
   static std::string
   encodeImpl(const T& input, const Charset& charset, bool includePadding);
 
   template <class T>
-  static void encodeImpl(
+  static Status encodeImpl(
       const T& input,
       const Charset& charset,
       bool includePadding,
       char* outputBuffer);
 
-  static size_t decodeImpl(
+  static Status decodeImpl(
       const char* input,
       size_t inputSize,
       char* outputBuffer,
