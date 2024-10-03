@@ -17,7 +17,8 @@ velox_add_library(
   QueryMetadataWriter.cpp
   QueryTraceConfig.cpp
   QueryDataWriter.cpp
-  QueryTraceUtil.cpp)
+  QueryTraceUtil.cpp
+  QueryDataDeleter.cpp)
 
 velox_link_libraries(
   velox_query_trace_exec
