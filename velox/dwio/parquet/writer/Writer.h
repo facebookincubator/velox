@@ -24,6 +24,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -108,6 +109,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   /// Timestamp time zone for Parquet write through Arrow bridge.
   std::optional<std::string> parquetWriteTimestampTimeZone;
   bool writeInt96AsTimestamp = false;
+  std::optional<std::string> parquetDataPageVersion = std::nullopt;
 
   // Parsing session and hive configs.
 
@@ -117,6 +119,9 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.timestamp_unit";
   static constexpr const char* kParquetHiveConnectorWriteTimestampUnit =
       "hive.parquet.writer.timestamp-unit";
+  /// Parquet datapage version to be used (V1 or V2). Defaults to V2.
+  static constexpr const char* kParquetSessionDataPageVersion =
+      "parquet_writer_version";
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
