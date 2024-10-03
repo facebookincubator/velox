@@ -31,12 +31,12 @@ class DeltaLengthByteArrayDecoder {
     bufferStart_ = lengthDecoder_->bufferStart();
   }
 
-  folly::StringPiece readString() {
+  std::string_view readString() {
     int32_t dataSize = 0;
     const int64_t length = bufferedLength_[lengthIdx_++];
     VELOX_CHECK_GE(length, 0, "negative string delta length");
     bufferStart_ += length;
-    return folly::StringPiece(bufferStart_ - length, length);
+    return std::string_view(bufferStart_ - length, length);
   }
 
  private:
@@ -122,7 +122,7 @@ class DeltaByteArrayDecoder {
     }
   }
 
-  folly::StringPiece readString() {
+  std::string_view readString() {
     auto suffix = suffixDecoder_->readString();
     bool isFirstRun = (prefixLenOffset_ == 0);
     const int64_t prefixLength = bufferedPrefixLength_[prefixLenOffset_++];
@@ -140,7 +140,7 @@ class DeltaByteArrayDecoder {
   void buildReadValue(
       bool isFirstRun,
       const int64_t prefixLength,
-      folly::StringPiece suffix) {
+      std::string_view suffix) {
     VELOX_CHECK_LE(
         prefixLength,
         lastValue_.size(),
