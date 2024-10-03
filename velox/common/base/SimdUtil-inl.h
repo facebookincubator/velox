@@ -416,7 +416,8 @@ void memset(void* to, char data, int32_t bytes, const A& arch) {
       return;
     }
   }
-  int64_t data64 = *reinterpret_cast<int64_t*>(&v);
+
+  int64_t data64 = *std::launder(reinterpret_cast<int64_t*>(&v));
   while (bytes >= sizeof(int64_t)) {
     if (!detail::setNextWord<int64_t>(to, data64, bytes, arch)) {
       return;
