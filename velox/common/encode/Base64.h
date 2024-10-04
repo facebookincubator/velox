@@ -42,16 +42,15 @@ class Base64 {
   // Encoding Functions
   /// Encodes the input data using Base64 encoding.
   static std::string encode(const char* input, size_t inputSize);
-  static std::string encode(folly::StringPiece text);
+  static std::string encode(folly::StringPiece input);
   static std::string encode(const folly::IOBuf* inputBuffer);
-  static Status encode(const char* input, size_t inputSize, char* outputBuffer);
+  static Status encode(std::string_view input, std::string& outputBuffer);
 
   /// Encodes the input data using Base64 URL encoding.
   static std::string encodeUrl(const char* input, size_t inputSize);
   static std::string encodeUrl(folly::StringPiece text);
   static std::string encodeUrl(const folly::IOBuf* inputBuffer);
-  static Status
-  encodeUrl(const char* input, size_t inputSize, char* outputBuffer);
+  static Status encodeUrl(std::string_view input, std::string& output);
 
   // Decoding Functions
   /// Decodes the input Base64 encoded string.
@@ -68,10 +67,6 @@ class Base64 {
       const std::pair<const char*, int32_t>& payload,
       std::string& output);
   static Status decodeUrl(std::string_view input, std::string& output);
-
-  // Helper Functions
-  /// Calculates the encoded size based on input size.
-  static size_t calculateEncodedSize(size_t inputSize, bool withPadding = true);
 
  private:
   // Checks if the input Base64 string is padded.
@@ -107,7 +102,7 @@ class Base64 {
       const T& input,
       const Charset& charset,
       bool includePadding,
-      char* outputBuffer);
+      std::string& output);
 
   static Status decodeImpl(
       std::string_view input,
@@ -120,6 +115,9 @@ class Base64 {
       std::string_view input,
       size_t& inputSize,
       size_t& decodedSize);
+
+  // Calculates the encoded size based on input size.
+  static size_t calculateEncodedSize(size_t inputSize, bool withPadding = true);
 
   VELOX_FRIEND_TEST(Base64Test, isPadded);
   VELOX_FRIEND_TEST(Base64Test, numPadding);

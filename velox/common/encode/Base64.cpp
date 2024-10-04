@@ -161,10 +161,8 @@ std::string Base64::encodeImpl(
     const T& input,
     const Charset& charset,
     bool includePadding) {
-  const size_t encodedSize{calculateEncodedSize(input.size(), includePadding)};
   std::string encodedResult;
-  encodedResult.resize(encodedSize);
-  (void)encodeImpl(input, charset, includePadding, encodedResult.data());
+  (void)encodeImpl(input, charset, includePadding, encodedResult);
   return encodedResult;
 }
 
@@ -184,42 +182,41 @@ size_t Base64::calculateEncodedSize(size_t inputSize, bool includePadding) {
 }
 
 // static
-Status Base64::encode(const char* input, size_t inputSize, char* output) {
-  return encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64Charset, true, output);
+Status Base64::encode(std::string_view input, std::string& output) {
+  return encodeImpl(input, kBase64Charset, true, output);
 }
 
 // static
-Status
-Base64::encodeUrl(const char* input, size_t inputSize, char* outputBuffer) {
-  return encodeImpl(
-      folly::StringPiece(input, inputSize),
-      kBase64UrlCharset,
-      true,
-      outputBuffer);
+Status Base64::encodeUrl(std::string_view input, std::string& output) {
+  return encodeImpl(input, kBase64UrlCharset, true, output);
 }
 
 // static
 template <class T>
 Status Base64::encodeImpl(
     const T& input,
-    const Base64::Charset& charset,
+    const Charset& charset,
     bool includePadding,
-    char* outputBuffer) {
+    std::string& output) {
   auto inputSize = input.size();
   if (inputSize == 0) {
+    output.clear();
     return Status::OK();
   }
 
-  auto outputPointer = outputBuffer;
+  // Calculate the output size and resize the string beforehand
+  size_t outputSize = calculateEncodedSize(inputSize, includePadding);
+  output.resize(outputSize); // Resize the output string to the required size
+
+  // Use a pointer to write into the pre-allocated buffer
+  auto outputPointer = output.data();
   auto inputIterator = input.begin();
 
-  // For each group of 3 bytes (24 bits) in the input, split that into
-  // 4 groups of 6 bits and encode that using the supplied charset lookup
+  // Encode input in chunks of 3 bytes
   for (; inputSize > 2; inputSize -= 3) {
-    uint32_t inputBlock = static_cast<uint8_t>(*inputIterator++) << 16;
-    inputBlock |= static_cast<uint8_t>(*inputIterator++) << 8;
-    inputBlock |= static_cast<uint8_t>(*inputIterator++);
+    uint32_t inputBlock = uint8_t(*inputIterator++) << 16;
+    inputBlock |= uint8_t(*inputIterator++) << 8;
+    inputBlock |= uint8_t(*inputIterator++);
 
     *outputPointer++ = charset[(inputBlock >> 18) & 0x3f];
     *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
@@ -227,24 +224,22 @@ Status Base64::encodeImpl(
     *outputPointer++ = charset[inputBlock & 0x3f];
   }
 
+  // Handle remaining bytes (1 or 2 bytes)
   if (inputSize > 0) {
-    // We have either 1 or 2 input bytes left.  Encode this similar to the
-    // above (assuming 0 for all other bytes).  Optionally append the '='
-    // character if it is requested.
-    uint32_t inputBlock = static_cast<uint8_t>(*inputIterator++) << 16;
+    uint32_t inputBlock = uint8_t(*inputIterator++) << 16;
     *outputPointer++ = charset[(inputBlock >> 18) & 0x3f];
     if (inputSize > 1) {
-      inputBlock |= static_cast<uint8_t>(*inputIterator) << 8;
+      inputBlock |= uint8_t(*inputIterator) << 8;
       *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
       *outputPointer++ = charset[(inputBlock >> 6) & 0x3f];
       if (includePadding) {
-        *outputPointer = kPadding;
+        *outputPointer++ = kPadding;
       }
     } else {
       *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
       if (includePadding) {
         *outputPointer++ = kPadding;
-        *outputPointer = kPadding;
+        *outputPointer++ = kPadding;
       }
     }
   }
@@ -253,8 +248,8 @@ Status Base64::encodeImpl(
 }
 
 // static
-std::string Base64::encode(folly::StringPiece text) {
-  return encodeImpl(text, kBase64Charset, true);
+std::string Base64::encode(folly::StringPiece input) {
+  return encodeImpl(input, kBase64Charset, true);
 }
 
 // static
@@ -426,7 +421,7 @@ Status Base64::decodeImpl(
 
   // Set up input and output pointers
   const char* inputPtr = input.data();
-  char* outputPtr = output.data();
+  char* outputPointer = output.data();
   Status lookupStatus;
 
   // Process full blocks of 4 characters
@@ -441,13 +436,13 @@ Status Base64::decodeImpl(
       return lookupStatus;
     }
 
-    uint32_t currentBlock = (val0 << 18) | (val1 << 12) | (val2 << 6) | val3;
-    outputPtr[0] = static_cast<char>((currentBlock >> 16) & 0xFF);
-    outputPtr[1] = static_cast<char>((currentBlock >> 8) & 0xFF);
-    outputPtr[2] = static_cast<char>(currentBlock & 0xFF);
+    uint32_t inputBlock = (val0 << 18) | (val1 << 12) | (val2 << 6) | val3;
+    outputPointer[0] = static_cast<char>((inputBlock >> 16) & 0xFF);
+    outputPointer[1] = static_cast<char>((inputBlock >> 8) & 0xFF);
+    outputPointer[2] = static_cast<char>(inputBlock & 0xFF);
 
     inputPtr += 4;
-    outputPtr += 3;
+    outputPointer += 3;
   }
 
   // Handle remaining characters (2 or 3 characters at the end)
@@ -455,14 +450,14 @@ Status Base64::decodeImpl(
   if (remaining > 1) {
     uint8_t val0 = base64ReverseLookup(inputPtr[0], reverseIndex, lookupStatus);
     uint8_t val1 = base64ReverseLookup(inputPtr[1], reverseIndex, lookupStatus);
-    uint32_t currentBlock = (val0 << 18) | (val1 << 12);
-    outputPtr[0] = static_cast<char>((currentBlock >> 16) & 0xFF);
+    uint32_t inputBlock = (val0 << 18) | (val1 << 12);
+    outputPointer[0] = static_cast<char>((inputBlock >> 16) & 0xFF);
 
     if (remaining == 3) {
       uint8_t val2 =
           base64ReverseLookup(inputPtr[2], reverseIndex, lookupStatus);
-      currentBlock |= (val2 << 6);
-      outputPtr[1] = static_cast<char>((currentBlock >> 8) & 0xFF);
+      inputBlock |= (val2 << 6);
+      outputPointer[1] = static_cast<char>((inputBlock >> 8) & 0xFF);
     }
   }
 
