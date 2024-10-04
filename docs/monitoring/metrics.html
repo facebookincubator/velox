@@ -139,42 +139,57 @@ memory pressure.</p></td>
 buckets. It is configured to report the latency at P50, P90, P99, and
 P100 percentiles.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_reclaim_count</p></td>
+<tr class="row-even"><td><p>op_memory_reclaim_count</p></td>
 <td><p>Count</p></td>
 <td><p>The count of operator memory reclaims.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_reclaim_exec_ms</p></td>
+<tr class="row-odd"><td><p>op_memory_reclaim_time_ms</p></td>
 <td><p>Histogram</p></td>
-<td><p>The distribution of memory reclaim execution time in range of [0, 600s]
+<td><p>The distribution of operator memory reclaim execution time in range of
+[0, 600s] with 20 buckets. It is configured to report latency at P50, P90,
+P99, and P100 percentiles.</p></td>
+</tr>
+<tr class="row-even"><td><p>op_memory_reclaim_bytes</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of operator reclaimed bytes in range of [0, 4GB] with 64 buckets
+and reports P50, P90, P99, and P100.</p></td>
+</tr>
+<tr class="row-odd"><td><p>query_memory_reclaim_count</p></td>
+<td><p>Count</p></td>
+<td><p>The count of query memory reclaims.</p></td>
+</tr>
+<tr class="row-even"><td><p>query_memory_reclaim_time_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The distribution of query memory reclaim execution time in range of [0, 600s]
 with 20 buckets. It is configured to report latency at P50, P90, P99, and
 P100 percentiles.</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_reclaim_bytes</p></td>
+<tr class="row-odd"><td><p>query_memory_reclaim_bytes</p></td>
 <td><p>Histogram</p></td>
-<td><p>The distribution of reclaimed bytes in range of [0, 4GB] with 64 buckets
+<td><p>The distribution of query reclaimed bytes in range of [0, 4GB] with 64 buckets
 and reports P50, P90, P99, and P100.</p></td>
 </tr>
-<tr class="row-odd"><td><p>task_memory_reclaim_count</p></td>
+<tr class="row-even"><td><p>task_memory_reclaim_count</p></td>
 <td><p>Count</p></td>
 <td><p>The count of task memory reclaims.</p></td>
 </tr>
-<tr class="row-even"><td><p>task_memory_reclaim_wait_ms</p></td>
+<tr class="row-odd"><td><p>task_memory_reclaim_wait_ms</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of task memory reclaim wait time in range of [0, 60s]
 with 60 buckets. It is configured to report latency at P50, P90, P99,
 and P100 percentiles.</p></td>
 </tr>
-<tr class="row-odd"><td><p>task_memory_reclaim_exec_ms</p></td>
+<tr class="row-even"><td><p>task_memory_reclaim_exec_ms</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of task memory execution time in range of [0, 240s]
 with 60 buckets. It is configured to report latency at P50, P90, P99,
 and P100 percentiles.</p></td>
 </tr>
-<tr class="row-even"><td><p>task_memory_reclaim_wait_timeout_count</p></td>
+<tr class="row-odd"><td><p>task_memory_reclaim_wait_timeout_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of times that the task memory reclaim wait timeouts.</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_non_reclaimable_count</p></td>
+<tr class="row-even"><td><p>memory_non_reclaimable_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of times that the memory reclaim fails because the operator is executing a
 non-reclaimable section where it is expected to have reserved enough memory to execute
@@ -183,28 +198,24 @@ is not sufficient. It excludes counting instances where the operator is in a
 non-reclaimable state due to currently being on-thread and running or being already
 cancelled.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_requests_count</p></td>
+<tr class="row-odd"><td><p>arbitrator_requests_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of times a memory arbitration request was initiated by a
 memory pool attempting to grow its capacity.</p></td>
 </tr>
-<tr class="row-odd"><td><p>arbitrator_local_arbitration_count</p></td>
+<tr class="row-even"><td><p>arbitrator_local_arbitration_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of arbitration that reclaims the used memory from the query which initiates
 the memory arbitration request itself. It ensures the memory arbitration request won’t
 exceed its per-query memory capacity limit.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_global_arbitration_count</p></td>
+<tr class="row-odd"><td><p>arbitrator_global_arbitration_count</p></td>
 <td><p>Count</p></td>
 <td><p>The number of arbitration which ensures the total allocated query capacity won’t exceed
 the arbitrator capacity limit. It may or may not reclaim memory from the query which
 initiate the memory arbitration request. This indicates the velox runtime doesn’t have
 enough memory to run all the queries at their peak memory usage. We have to trigger
 spilling to let them run through completion.</p></td>
-</tr>
-<tr class="row-odd"><td><p>arbitrator_slow_global_arbitration_count</p></td>
-<td><p>Count</p></td>
-<td><p>The number of global arbitration that reclaims used memory by slow disk spilling.</p></td>
 </tr>
 <tr class="row-even"><td><p>arbitrator_aborted_count</p></td>
 <td><p>Count</p></td>
@@ -220,19 +231,27 @@ its request, the arbitration request would surpass the maximum allowed
 capacity for the requester, or the arbitration process couldn’t release
 the requested amount of memory.</p></td>
 </tr>
-<tr class="row-even"><td><p>arbitrator_wait_time_ms</p></td>
+<tr class="row-even"><td><p>arbitrator_global_arbitration_time_ms</p></td>
 <td><p>Histogram</p></td>
-<td><p>The distribution of the amount of time an arbitration request stays in
-arbitration queues and waits the arbitration r/w locks in range of [0, 600s]
-with 20 buckets. It is configured to report the latency at P50, P90, P99,
-and P100 percentiles.</p></td>
+<td><p>The time distribution of a global arbitration run [0, 600s] with 20 buckets.
+It is configured to report the latency at P50, P90, P99, and P100 percentiles.</p></td>
 </tr>
-<tr class="row-odd"><td><p>arbitrator_arbitration_time_ms</p></td>
+<tr class="row-odd"><td><p>arbitrator_global_arbitration_wait_count</p></td>
+<td><p>Count</p></td>
+<td><p>The number of times that an arbitration operation wait for global
+arbitration to free up memory.</p></td>
+</tr>
+<tr class="row-even"><td><p>arbitrator_global_arbitration_wait_time_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The time distribution of a global arbitration wait [0, 300s] with 20
+buckets. It is configured to report the latency at P50, P90, P99, and P100
+percentiles.</p></td>
+</tr>
+<tr class="row-odd"><td><p>arbitrator_op_exec_time_ms</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of the amount of time it take to complete a single
-arbitration request stays queued in range of [0, 600s] with 20
-buckets. It is configured to report the latency at P50, P90, P99,
-and P100 percentiles.</p></td>
+arbitration operation in range of [0, 600s] with 20 buckets. It is configured
+to report the latency at P50, P90, P99 and P100 percentiles.</p></td>
 </tr>
 <tr class="row-even"><td><p>arbitrator_free_capacity_bytes</p></td>
 <td><p>Average</p></td>
