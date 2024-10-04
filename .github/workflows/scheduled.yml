@@ -25,6 +25,7 @@ on:
       - "scripts/setup-ubuntu.sh"
       - "scripts/setup-helper-functions.sh"
       - ".github/workflows/scheduled.yml"
+      - ".github/workflows/linux-build-base.yml"
 
   push:
     branches:
@@ -38,6 +39,7 @@ on:
       - "scripts/setup-ubuntu.sh"
       - "scripts/setup-helper-functions.sh"
       - ".github/workflows/scheduled.yml"
+      - ".github/workflows/linux-build-base.yml"
 
   schedule:
     - cron: '0 3 * * *'
@@ -990,3 +992,9 @@ jobs:
             /tmp/writer_fuzzer_repro
             /tmp/server.log
             /var/log
+
+  linux-clang:
+    name: Build with Clang
+    uses: ./.github/workflows/linux-build-base.yml
+    with:
+      use-clang: true
