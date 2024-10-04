@@ -60,43 +60,30 @@ class Base64 {
       const std::pair<const char*, int32_t>& payload,
       std::string& output);
   static void decode(const char* input, size_t inputSize, char* outputBuffer);
-  static Status decode(
-      const char* input,
-      size_t inputSize,
-      char* outputBuffer,
-      size_t outputSize);
+  static Status decode(std::string_view input, std::string& output);
 
   /// Decodes the input Base64 URL encoded string.
   static std::string decodeUrl(folly::StringPiece encodedText);
   static void decodeUrl(
       const std::pair<const char*, int32_t>& payload,
       std::string& output);
-  static Status decodeUrl(
-      const char* input,
-      size_t inputSize,
-      char* outputBuffer,
-      size_t outputSize);
+  static Status decodeUrl(std::string_view input, std::string& output);
 
   // Helper Functions
   /// Calculates the encoded size based on input size.
   static size_t calculateEncodedSize(size_t inputSize, bool withPadding = true);
 
-  /// Calculates the decoded size based on encoded input and adjusts the input
-  /// size for padding.
-  static Status calculateDecodedSize(
-      const char* input,
-      size_t& inputSize,
-      size_t& decodedSize);
-
  private:
   // Checks if the input Base64 string is padded.
-  static inline bool isPadded(const char* input, size_t inputSize) {
+  static inline bool isPadded(std::string_view input) {
+    size_t inputSize{input.size()};
     return (inputSize > 0 && input[inputSize - 1] == kPadding);
   }
 
   // Counts the number of padding characters in encoded input.
-  static inline size_t numPadding(const char* input, size_t inputSize) {
+  static inline size_t numPadding(std::string_view input) {
     size_t numPadding{0};
+    size_t inputSize{input.size()};
     while (inputSize > 0 && input[inputSize - 1] == kPadding) {
       numPadding++;
       inputSize--;
@@ -123,14 +110,20 @@ class Base64 {
       char* outputBuffer);
 
   static Status decodeImpl(
-      const char* input,
-      size_t inputSize,
-      char* outputBuffer,
-      size_t outputSize,
+      std::string_view input,
+      std::string& output,
       const ReverseIndex& reverseIndex);
 
-  VELOX_FRIEND_TEST(Base64Test, checksPadding);
-  VELOX_FRIEND_TEST(Base64Test, countsPaddingCorrectly);
+  // Returns the actual size of the decoded data. Will also remove the padding
+  // length from the 'inputSize'.
+  static Status calculateDecodedSize(
+      std::string_view input,
+      size_t& inputSize,
+      size_t& decodedSize);
+
+  VELOX_FRIEND_TEST(Base64Test, isPadded);
+  VELOX_FRIEND_TEST(Base64Test, numPadding);
+  VELOX_FRIEND_TEST(Base64Test, calculateDecodedSize);
 };
 
 } // namespace facebook::velox::encoding
