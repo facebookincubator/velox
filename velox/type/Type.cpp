@@ -233,6 +233,17 @@ const TypePtr& ArrayType::childAt(uint32_t idx) const {
 ArrayType::ArrayType(TypePtr child)
     : child_{std::move(child)}, parameters_{{TypeParameter(child_)}} {}
 
+bool ArrayType::equals(const Type& other) const {
+  if (&other == this) {
+    return true;
+  }
+  if (!Type::hasSameTypeId(other)) {
+    return false;
+  }
+  auto& otherArray = other.asArray();
+  return child_->equals(*otherArray.child_);
+}
+
 bool ArrayType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
@@ -469,7 +480,7 @@ bool RowType::equals(const Type& other) const {
   for (size_t i = 0; i < size(); ++i) {
     // todo: case sensitivity
     if (nameOf(i) != otherTyped.nameOf(i) ||
-        *childAt(i) != *otherTyped.childAt(i)) {
+        (*childAt(i)).equals((*otherTyped.childAt(i)))) {
       return false;
     }
   }
@@ -557,6 +568,18 @@ bool Type::kindEquals(const TypePtr& other) const {
   return true;
 }
 
+bool MapType::equals(const Type& other) const {
+  if (&other == this) {
+    return true;
+  }
+  if (!Type::hasSameTypeId(other)) {
+    return false;
+  }
+  auto& otherMap = other.asMap();
+  return keyType_->equals(*otherMap.keyType_) &&
+      valueType_->equals(*otherMap.valueType_);
+}
+
 bool MapType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
@@ -627,6 +650,17 @@ bool OpaqueType::equivalent(const Type& other) const {
     return false;
   }
   return true;
+}
+
+bool OpaqueType::equals(const Type& other) const {
+  if (&other == this) {
+    return true;
+  }
+  if (!this->equals(other)) {
+    return false;
+  }
+  auto& otherTyped = *reinterpret_cast<const OpaqueType*>(&other);
+  return typeIndex_ == otherTyped.typeIndex_;
 }
 
 bool OpaqueType::operator==(const Type& other) const {

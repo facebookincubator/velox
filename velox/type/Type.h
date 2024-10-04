@@ -492,11 +492,18 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// equivalent if the typeKind matches, but the typeIndex could be different.
   virtual bool equivalent(const Type& other) const = 0;
 
-  /// Types are strongly matched.
+  /// For Row, Opaque: types are strongly matched.
   /// Examples: Two RowTypes are == if the children types and the children names
   /// are same. Two OpaqueTypes are == if the typeKind and the typeIndex are
-  /// same. Same as equivalent for most types except for Row, Opaque types.
+  /// same.
+  /// For the rest of types, Same as equivalent.
   virtual bool operator==(const Type& other) const {
+    return this->equivalent(other);
+  }
+
+  /// For Row, Array, Map, Opaque: types are strongly matched.
+  /// For the rest of types, Same as equivalent.
+  virtual bool equals(const Type& other) const {
     return this->equivalent(other);
   }
 
@@ -907,6 +914,8 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
 
   bool equivalent(const Type& other) const override;
 
+  bool equals(const Type& other) const override;
+
   folly::dynamic serialize() const override;
 
   const std::vector<TypeParameter>& parameters() const override {
@@ -959,6 +968,8 @@ class MapType : public TypeBase<TypeKind::MAP> {
 
   bool equivalent(const Type& other) const override;
 
+  bool equals(const Type& other) const override;
+
   folly::dynamic serialize() const override;
 
   const std::vector<TypeParameter>& parameters() const override {
@@ -1005,7 +1016,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
   bool equivalent(const Type& other) const override;
 
-  bool equals(const Type& other) const;
+  bool equals(const Type& other) const override;
   bool operator==(const Type& other) const override;
   bool operator==(const RowType& other) const;
 
@@ -1123,6 +1134,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   std::string toString() const override;
 
   bool equivalent(const Type& other) const override;
+
+  bool equals(const Type& other) const override;
 
   bool operator==(const Type& other) const override;
 
