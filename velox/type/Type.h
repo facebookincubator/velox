@@ -93,6 +93,7 @@ std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
 
 template <TypeKind KIND>
 class ScalarType;
+class VarcharType;
 class ShortDecimalType;
 class LongDecimalType;
 class ArrayType;
@@ -231,7 +232,7 @@ struct TypeTraits<TypeKind::DOUBLE> {
 
 template <>
 struct TypeTraits<TypeKind::VARCHAR> {
-  using ImplType = ScalarType<TypeKind::VARCHAR>;
+  using ImplType = VarcharType;
   using NativeType = velox::StringView;
   using DeepCopiedType = std::string;
   static constexpr uint32_t minSubTypes = 0;
@@ -538,7 +539,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   VELOX_FLUENT_CAST(Hugeint, HUGEINT)
   VELOX_FLUENT_CAST(Real, REAL)
   VELOX_FLUENT_CAST(Double, DOUBLE)
-  VELOX_FLUENT_CAST(Varchar, VARCHAR)
+
   VELOX_FLUENT_CAST(Varbinary, VARBINARY)
   VELOX_FLUENT_CAST(Timestamp, TIMESTAMP)
   VELOX_FLUENT_CAST(Array, ARRAY)
@@ -548,8 +549,10 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   VELOX_FLUENT_CAST(UnKnown, UNKNOWN)
   VELOX_FLUENT_CAST(Function, FUNCTION)
 
+  const VarcharType& asVarchar() const;
   const ShortDecimalType& asShortDecimal() const;
   const LongDecimalType& asLongDecimal() const;
+  bool isVarchar() const;
   bool isShortDecimal() const;
   bool isLongDecimal() const;
   bool isDecimal() const;
@@ -862,6 +865,80 @@ class UnknownType : public CanProvideCustomComparisonType<TypeKind::UNKNOWN> {
     return obj;
   }
 };
+
+class VarcharType : public ScalarType<TypeKind::VARCHAR> {
+ public:
+  static const size_t kUnboundedLength = -1;
+
+  explicit VarcharType(const std::optional<size_t> length = std::nullopt) {
+    if (length.has_value()) {
+      if (length.value() != kUnboundedLength) {
+        VELOX_CHECK_GT(
+            length.value(),
+            0,
+            "Maximum length of varchar type must be greater than 0");
+      }
+      parameters_.emplace_back(TypeParameter(length.value()));
+    }
+  }
+
+  FOLLY_NOINLINE static const std::shared_ptr<const VarcharType> create();
+
+  FOLLY_NOINLINE static const std::shared_ptr<const VarcharType> create(
+      size_t length);
+
+  inline size_t length() const {
+    return parameters_.size() > 0 ? parameters_[0].longLiteral.value()
+                                  : kUnboundedLength;
+  }
+
+  inline bool equivalent(const Type& other) const override {
+    if (!Type::hasSameTypeId(other)) {
+      return false;
+    }
+    const auto& otherVarchar = static_cast<const VarcharType&>(other);
+    return (otherVarchar.length() == length());
+  }
+
+  const char* name() const override {
+    return "VARCHAR";
+  }
+
+  std::string toString() const override {
+    if (length() == kUnboundedLength) {
+      return std::string(name());
+    }
+    return fmt::format("VARCHAR({})", length());
+  }
+
+  folly::dynamic serialize() const override {
+    auto obj = ScalarType<TypeKind::VARCHAR>::serialize();
+    obj["type"] = name();
+    obj["length"] = length();
+    return obj;
+  }
+
+  const std::vector<TypeParameter>& parameters() const override {
+    return parameters_;
+  }
+
+ private:
+  std::vector<TypeParameter> parameters_;
+};
+
+FOLLY_ALWAYS_INLINE const VarcharType& Type::asVarchar() const {
+  return dynamic_cast<const VarcharType&>(*this);
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isVarchar() const {
+  return dynamic_cast<const VarcharType*>(this) != nullptr;
+}
+
+FOLLY_ALWAYS_INLINE bool isVarcharName(const std::string& name) {
+  return (name == "VARCHAR");
+}
+
+size_t getVarcharLength(const Type& type);
 
 class ArrayType : public TypeBase<TypeKind::ARRAY> {
  public:
@@ -1205,7 +1282,6 @@ using HugeintType = ScalarType<TypeKind::HUGEINT>;
 using RealType = ScalarType<TypeKind::REAL>;
 using DoubleType = ScalarType<TypeKind::DOUBLE>;
 using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
-using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 
 constexpr long kMillisInSecond = 1000;
@@ -1819,8 +1895,10 @@ VELOX_SCALAR_ACCESSOR(HUGEINT);
 VELOX_SCALAR_ACCESSOR(REAL);
 VELOX_SCALAR_ACCESSOR(DOUBLE);
 VELOX_SCALAR_ACCESSOR(TIMESTAMP);
-VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
+
+TypePtr VARCHAR();
+TypePtr VARCHAR(size_t length);
 
 TypePtr UNKNOWN();
 
@@ -1828,6 +1906,9 @@ template <TypeKind KIND>
 std::shared_ptr<const Type> createScalarType() {
   return ScalarType<KIND>::create();
 }
+
+template <>
+std::shared_ptr<const Type> createScalarType<TypeKind::VARCHAR>();
 
 std::shared_ptr<const Type> createScalarType(TypeKind kind);
 
@@ -1855,6 +1936,10 @@ std::shared_ptr<const Type> createType(
   static_assert(TypeTraits<KIND>::isPrimitiveType);
   return ScalarType<KIND>::create();
 }
+
+template <>
+std::shared_ptr<const Type> createType<TypeKind::VARCHAR>(
+    std::vector<std::shared_ptr<const Type>>&& children);
 
 template <>
 std::shared_ptr<const Type> createType<TypeKind::ROW>(

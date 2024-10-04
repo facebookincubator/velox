@@ -46,6 +46,7 @@ ROW               (ROW|STRUCT)
 (MAP)              return Parser::token::MAP;
 (FUNCTION)         return Parser::token::FUNCTION;
 (DECIMAL)          yylval->build<std::string>(YYText()); return Parser::token::DECIMAL;
+(VARCHAR)          yylval->build<std::string>(YYText()); return Parser::token::VARCHAR;
 {ROW}              return Parser::token::ROW;
 {WORD}             yylval->build<std::string>(YYText()); return Parser::token::WORD;
 {QUOTED_ID}        yylval->build<std::string>(YYText()); return Parser::token::QUOTED_ID;
