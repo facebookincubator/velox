@@ -159,6 +159,8 @@ void WaveHiveDataSource::registerConnector() {
   auto config = std::make_shared<const config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
 
+  connector::registerConnectorFactory(
+      std::make_shared<connector::hive::HiveConnectorFactory>());
   // Create hive connector with config...
   auto hiveConnector =
       connector::getConnectorFactory(
