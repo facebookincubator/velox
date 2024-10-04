@@ -315,35 +315,32 @@ std::string Base64::encode(const folly::IOBuf* inputBuffer) {
 
 // static
 std::string Base64::decode(folly::StringPiece encodedText) {
-  std::string decodedResult;
-  Base64::decode(
-      std::make_pair(encodedText.data(), encodedText.size()), decodedResult);
-  return decodedResult;
+  std::string decodedOutput;
+  std::string_view input(encodedText.data(), encodedText.size());
+  (void)decodeImpl(input, decodedOutput, kBase64ReverseIndexTable);
+  return decodedOutput;
 }
 
 // static
 void Base64::decode(
     const std::pair<const char*, int32_t>& payload,
     std::string& decodedOutput) {
-  size_t inputSize = payload.second;
-  size_t decodedSize;
-  (void)calculateDecodedSize(payload.first, inputSize, decodedSize);
-  decodedOutput.resize(decodedSize);
-  (void)decode(
-      payload.first, inputSize, decodedOutput.data(), decodedOutput.size());
+  std::string_view input(payload.first, payload.second);
+  (void)decodeImpl(input, decodedOutput, kBase64ReverseIndexTable);
 }
 
 // static
 void Base64::decode(const char* input, size_t inputSize, char* outputBuffer) {
-  size_t outputSize;
-  (void)calculateDecodedSize(input, inputSize, outputSize);
-  (void)Base64::decode(input, inputSize, outputBuffer, outputSize);
+  std::string_view inputView(input, inputSize);
+  std::string output;
+  (void)decodeImpl(inputView, output, kBase64ReverseIndexTable);
+  memcpy(outputBuffer, output.data(), output.size());
 }
 
 // static
 uint8_t Base64::base64ReverseLookup(
     char encodedChar,
-    const Base64::ReverseIndex& reverseIndex,
+    const ReverseIndex& reverseIndex,
     Status& status) {
   auto reverseLookupValue = reverseIndex[static_cast<uint8_t>(encodedChar)];
   if (reverseLookupValue >= 0x40) {
@@ -354,18 +351,13 @@ uint8_t Base64::base64ReverseLookup(
 }
 
 // static
-Status Base64::decode(
-    const char* input,
-    size_t inputSize,
-    char* output,
-    size_t outputSize) {
-  return decodeImpl(
-      input, inputSize, output, outputSize, kBase64ReverseIndexTable);
+Status Base64::decode(std::string_view input, std::string& output) {
+  return decodeImpl(input, output, kBase64ReverseIndexTable);
 }
 
 // static
 Status Base64::calculateDecodedSize(
-    const char* input,
+    std::string_view input,
     size_t& inputSize,
     size_t& decodedSize) {
   if (inputSize == 0) {
@@ -374,7 +366,7 @@ Status Base64::calculateDecodedSize(
   }
 
   // Check if the input string is padded
-  if (isPadded(input, inputSize)) {
+  if (isPadded(input)) {
     // If padded, ensure that the string length is a multiple of the encoded
     // block size
     if (inputSize % kEncodedBlockByteSize != 0) {
@@ -384,7 +376,7 @@ Status Base64::calculateDecodedSize(
     }
 
     decodedSize = (inputSize * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-    auto paddingCount = numPadding(input, inputSize);
+    auto paddingCount = numPadding(input);
     inputSize -= paddingCount;
 
     // Adjust the needed size by deducting the bytes corresponding to the
@@ -394,7 +386,7 @@ Status Base64::calculateDecodedSize(
         kEncodedBlockByteSize;
     return Status::OK();
   }
-  // If not padded, Calculate extra bytes, if any
+  // If not padded, calculate extra bytes, if any
   auto extraBytes = inputSize % kEncodedBlockByteSize;
   decodedSize = (inputSize / kEncodedBlockByteSize) * kBinaryBlockByteSize;
 
@@ -413,68 +405,70 @@ Status Base64::calculateDecodedSize(
 
 // static
 Status Base64::decodeImpl(
-    const char* input,
-    size_t inputSize,
-    char* outputBuffer,
-    size_t outputSize,
-    const Base64::ReverseIndex& reverseIndex) {
+    std::string_view input,
+    std::string& output,
+    const ReverseIndex& reverseIndex) {
+  size_t inputSize = input.size();
   if (inputSize == 0) {
+    output.clear();
     return Status::OK();
   }
 
+  // Calculate the decoded size based on the input size
   size_t decodedSize;
   auto status = calculateDecodedSize(input, inputSize, decodedSize);
   if (!status.ok()) {
     return status;
   }
-  if (outputSize < decodedSize) {
-    return Status::UserError(
-        "Base64::decode() - invalid output string: output string is too small.");
-  }
 
+  // Resize the output string to fit the decoded data
+  output.resize(decodedSize);
+
+  // Set up input and output pointers
+  const char* inputPtr = input.data();
+  char* outputPtr = output.data();
   Status lookupStatus;
-  // Handle full groups of 4 characters
-  for (; inputSize > 4; inputSize -= 4, input += 4, outputBuffer += 3) {
-    // Each character of the 4 encodes 6 bits of the original, grab each with
-    // the appropriate shifts to rebuild the original and then split that back
-    // into the original 8-bit bytes.
-    uint32_t decodedBlock =
-        (base64ReverseLookup(input[0], reverseIndex, lookupStatus) << 18) |
-        (base64ReverseLookup(input[1], reverseIndex, lookupStatus) << 12) |
-        (base64ReverseLookup(input[2], reverseIndex, lookupStatus) << 6) |
-        base64ReverseLookup(input[3], reverseIndex, lookupStatus);
+
+  // Process full blocks of 4 characters
+  size_t fullBlockCount = inputSize / 4;
+  for (size_t i = 0; i < fullBlockCount; ++i) {
+    uint8_t val0 = base64ReverseLookup(inputPtr[0], reverseIndex, lookupStatus);
+    uint8_t val1 = base64ReverseLookup(inputPtr[1], reverseIndex, lookupStatus);
+    uint8_t val2 = base64ReverseLookup(inputPtr[2], reverseIndex, lookupStatus);
+    uint8_t val3 = base64ReverseLookup(inputPtr[3], reverseIndex, lookupStatus);
+
     if (!lookupStatus.ok()) {
       return lookupStatus;
     }
-    outputBuffer[0] = static_cast<char>((decodedBlock >> 16) & 0xff);
-    outputBuffer[1] = static_cast<char>((decodedBlock >> 8) & 0xff);
-    outputBuffer[2] = static_cast<char>(decodedBlock & 0xff);
+
+    uint32_t currentBlock = (val0 << 18) | (val1 << 12) | (val2 << 6) | val3;
+    outputPtr[0] = static_cast<char>((currentBlock >> 16) & 0xFF);
+    outputPtr[1] = static_cast<char>((currentBlock >> 8) & 0xFF);
+    outputPtr[2] = static_cast<char>(currentBlock & 0xFF);
+
+    inputPtr += 4;
+    outputPtr += 3;
   }
 
-  // Handle the last 2-4 characters. This is similar to the above, but the
-  // last 2 characters may or may not exist.
-  DCHECK(inputSize >= 2);
-  uint32_t decodedBlock =
-      (base64ReverseLookup(input[0], reverseIndex, lookupStatus) << 18) |
-      (base64ReverseLookup(input[1], reverseIndex, lookupStatus) << 12);
+  // Handle remaining characters (2 or 3 characters at the end)
+  size_t remaining = inputSize % 4;
+  if (remaining > 1) {
+    uint8_t val0 = base64ReverseLookup(inputPtr[0], reverseIndex, lookupStatus);
+    uint8_t val1 = base64ReverseLookup(inputPtr[1], reverseIndex, lookupStatus);
+    uint32_t currentBlock = (val0 << 18) | (val1 << 12);
+    outputPtr[0] = static_cast<char>((currentBlock >> 16) & 0xFF);
+
+    if (remaining == 3) {
+      uint8_t val2 =
+          base64ReverseLookup(inputPtr[2], reverseIndex, lookupStatus);
+      currentBlock |= (val2 << 6);
+      outputPtr[1] = static_cast<char>((currentBlock >> 8) & 0xFF);
+    }
+  }
+
+  // Check for any lookup errors
   if (!lookupStatus.ok()) {
     return lookupStatus;
-  }
-  outputBuffer[0] = static_cast<char>((decodedBlock >> 16) & 0xff);
-  if (inputSize > 2) {
-    decodedBlock |= base64ReverseLookup(input[2], reverseIndex, lookupStatus)
-        << 6;
-    if (!lookupStatus.ok()) {
-      return lookupStatus;
-    }
-    outputBuffer[1] = static_cast<char>((decodedBlock >> 8) & 0xff);
-    if (inputSize > 3) {
-      decodedBlock |= base64ReverseLookup(input[3], reverseIndex, lookupStatus);
-      if (!lookupStatus.ok()) {
-        return lookupStatus;
-      }
-      outputBuffer[2] = static_cast<char>(decodedBlock & 0xff);
-    }
   }
 
   return Status::OK();
@@ -496,20 +490,15 @@ std::string Base64::encodeUrl(const folly::IOBuf* inputBuffer) {
 }
 
 // static
-Status Base64::decodeUrl(
-    const char* input,
-    size_t inputSize,
-    char* outputBuffer,
-    size_t outputSize) {
-  return decodeImpl(
-      input, inputSize, outputBuffer, outputSize, kBase64UrlReverseIndexTable);
+Status Base64::decodeUrl(std::string_view input, std::string& output) {
+  return decodeImpl(input, output, kBase64UrlReverseIndexTable);
 }
 
 // static
 std::string Base64::decodeUrl(folly::StringPiece encodedText) {
   std::string decodedOutput;
-  Base64::decodeUrl(
-      std::make_pair(encodedText.data(), encodedText.size()), decodedOutput);
+  std::string_view input(encodedText.data(), encodedText.size());
+  (void)decodeImpl(input, decodedOutput, kBase64UrlReverseIndexTable);
   return decodedOutput;
 }
 
@@ -517,16 +506,8 @@ std::string Base64::decodeUrl(folly::StringPiece encodedText) {
 void Base64::decodeUrl(
     const std::pair<const char*, int32_t>& payload,
     std::string& decodedOutput) {
-  size_t inputSize = payload.second;
-  size_t decodedSize;
-  (void)calculateDecodedSize(payload.first, inputSize, decodedSize);
-  decodedOutput.resize(decodedSize);
-  (void)Base64::decodeImpl(
-      payload.first,
-      payload.second,
-      &decodedOutput[0],
-      decodedOutput.size(),
-      kBase64UrlReverseIndexTable);
+  std::string_view inputView(payload.first, payload.second);
+  (void)decodeImpl(inputView, decodedOutput, kBase64UrlReverseIndexTable);
 }
 
 } // namespace facebook::velox::encoding
