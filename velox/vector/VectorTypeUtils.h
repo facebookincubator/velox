@@ -19,8 +19,7 @@
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 // Maps TypeKind to the corresponding writable vector.
 template <TypeKind K>
@@ -84,5 +83,4 @@ struct TypeToFlatVector {
   using type = typename KindToFlatVector<SimpleTypeTrait<T>::typeKind>::type;
 };
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox
