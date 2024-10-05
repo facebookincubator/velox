@@ -194,8 +194,9 @@ std::string WindowFuzzer::getFrame(
 std::vector<SortingKeyAndOrder> WindowFuzzer::generateSortingKeysAndOrders(
     const std::string& prefix,
     std::vector<std::string>& names,
-    std::vector<TypePtr>& types) {
-  auto keys = generateSortingKeys(prefix, names, types);
+    std::vector<TypePtr>& types,
+    std::optional<uint32_t> numKeys) {
+  auto keys = generateSortingKeys(prefix, names, types, numKeys);
   std::vector<SortingKeyAndOrder> results;
   for (auto i = 0; i < keys.size(); ++i) {
     auto asc = vectorFuzzer_.coinToss(0.5);
@@ -248,13 +249,16 @@ void WindowFuzzer::go() {
     const auto call =
         makeFunctionCall(signature.name, argNames, false, false, ignoreNulls);
 
+    uint32_t numKeys =
+        boost::random::uniform_int_distribution<uint32_t>(1, 15)(rng_);
     std::vector<SortingKeyAndOrder> sortingKeysAndOrders;
     // 50% chance without order-by clause.
     if (vectorFuzzer_.coinToss(0.5)) {
       sortingKeysAndOrders =
-          generateSortingKeysAndOrders("s", argNames, argTypes);
+          generateSortingKeysAndOrders("s", argNames, argTypes, numKeys);
     }
-    const auto partitionKeys = generateSortingKeys("p", argNames, argTypes);
+    const auto partitionKeys =
+        generateSortingKeys("p", argNames, argTypes, numKeys);
     bool isRowsFrame = false;
     const auto frameClause =
         generateFrameClause(argNames, argTypes, isRowsFrame);

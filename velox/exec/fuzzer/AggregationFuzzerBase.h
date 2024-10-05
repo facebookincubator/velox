@@ -187,7 +187,8 @@ class AggregationFuzzerBase {
   std::vector<std::string> generateSortingKeys(
       const std::string& prefix,
       std::vector<std::string>& names,
-      std::vector<TypePtr>& types);
+      std::vector<TypePtr>& types,
+      std::optional<uint32_t> numKeys = std::nullopt);
 
   std::pair<CallableSignature, SignatureStats&> pickSignature();
 

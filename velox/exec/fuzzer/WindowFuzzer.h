@@ -101,7 +101,8 @@ class WindowFuzzer : public AggregationFuzzerBase {
   std::vector<SortingKeyAndOrder> generateSortingKeysAndOrders(
       const std::string& prefix,
       std::vector<std::string>& names,
-      std::vector<TypePtr>& types);
+      std::vector<TypePtr>& types,
+      std::optional<uint32_t> numKeys = std::nullopt);
 
   // Return 'true' if query plans failed.
   bool verifyWindow(

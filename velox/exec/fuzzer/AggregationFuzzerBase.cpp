@@ -241,10 +241,14 @@ std::vector<std::string> AggregationFuzzerBase::generateKeys(
 std::vector<std::string> AggregationFuzzerBase::generateSortingKeys(
     const std::string& prefix,
     std::vector<std::string>& names,
-    std::vector<TypePtr>& types) {
+    std::vector<TypePtr>& types,
+    std::optional<uint32_t> numKeys) {
   std::vector<std::string> keys;
-  auto numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
-  for (auto i = 0; i < numKeys; ++i) {
+  if (!numKeys.has_value()) {
+    numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
+  }
+
+  for (auto i = 0; i < numKeys.value(); ++i) {
     keys.push_back(fmt::format("{}{}", prefix, i));
 
     // Pick random, possibly complex, type.
