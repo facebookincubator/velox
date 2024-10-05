@@ -106,6 +106,7 @@ static Status calculateDecodedSize(
     // If padded, ensure that the string length is a multiple of the encoded
     // block size
     if (inputSize % encodedBlockByteSize != 0) {
+      return Status::UserError("decode() - invalid input string length.");
     }
 
     decodedSize = (inputSize * binaryBlockByteSize) / encodedBlockByteSize;
@@ -124,6 +125,7 @@ static Status calculateDecodedSize(
     // Adjust the needed size for extra bytes, if present
     if (extraBytes) {
       if (extraBytes == 1) {
+        return Status::UserError("decode() - invalid input string length.");
       }
       decodedSize += (extraBytes * binaryBlockByteSize) / encodedBlockByteSize;
     }
