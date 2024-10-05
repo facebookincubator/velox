@@ -476,6 +476,77 @@ TEST_F(BinaryFunctionsTest, fromBase64Url) {
   EXPECT_THROW(fromBase64Url("YQ=/"), VeloxUserError);
 }
 
+TEST_F(BinaryFunctionsTest, toBase32) {
+  const auto toBase32 = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("to_base32(cast(c0 as varbinary))", value);
+  };
+
+  EXPECT_EQ(std::nullopt, toBase32(std::nullopt));
+  EXPECT_EQ("", toBase32(""));
+  EXPECT_EQ("ME======", toBase32("a"));
+  EXPECT_EQ("MFRGG===", toBase32("abc"));
+  EXPECT_EQ("NZXQ====", toBase32("no"));
+  EXPECT_EQ("O5SQ====", toBase32("we"));
+  EXPECT_EQ("MRRDE===", toBase32("db2"));
+  EXPECT_EQ("MNQWWZI=", toBase32("cake"));
+  EXPECT_EQ("NNSWK3Q=", toBase32("keen"));
+  EXPECT_EQ("GEZDGNA=", toBase32("1234"));
+  EXPECT_EQ("NBSWY3DPEB3W64TMMQ======", toBase32("hello world"));
+  EXPECT_EQ(
+      "JBSWY3DPEBLW64TMMQQGM4TPNUQFMZLMN54CC===",
+      toBase32("Hello World from Velox!"));
+}
+
+TEST_F(BinaryFunctionsTest, fromBase32) {
+  const auto fromBase32 = [&](std::optional<std::string> value) {
+    // from_base32 allows VARCHAR and VARBINARY inputs.
+    auto result =
+        evaluateOnce<std::string>("from_base32(c0)", VARCHAR(), value);
+    auto otherResult =
+        evaluateOnce<std::string>("from_base32(c0)", VARBINARY(), value);
+
+    VELOX_CHECK_EQ(result.has_value(), otherResult.has_value());
+
+    if (!result.has_value()) {
+      return result;
+    }
+
+    VELOX_CHECK_EQ(result.value(), otherResult.value());
+    return result;
+  };
+
+  EXPECT_EQ(std::nullopt, fromBase32(std::nullopt));
+  EXPECT_EQ("", fromBase32(""));
+  EXPECT_EQ("a", fromBase32("ME======"));
+  EXPECT_EQ("ab", fromBase32("MFRA===="));
+  EXPECT_EQ("abc", fromBase32("MFRGG==="));
+  EXPECT_EQ("db2", fromBase32("MRRDE==="));
+  EXPECT_EQ("abcd", fromBase32("MFRGGZA="));
+  EXPECT_EQ("hello world", fromBase32("NBSWY3DPEB3W64TMMQ======"));
+  EXPECT_EQ(
+      "Hello World from Velox!",
+      fromBase32("JBSWY3DPEBLW64TMMQQGM4TPNUQFMZLMN54CC==="));
+
+  // Try encoded strings without padding
+  EXPECT_EQ("a", fromBase32("ME"));
+  EXPECT_EQ("ab", fromBase32("MFRA"));
+  EXPECT_EQ("abc", fromBase32("MFRGG"));
+  EXPECT_EQ("db2", fromBase32("MRRDE"));
+  EXPECT_EQ("abcd", fromBase32("MFRGGZA"));
+  EXPECT_EQ("1234", fromBase32("GEZDGNA"));
+  EXPECT_EQ("abcde", fromBase32("MFRGGZDF"));
+  EXPECT_EQ("abcdef", fromBase32("MFRGGZDFMY"));
+
+  VELOX_ASSERT_USER_THROW(
+      fromBase32("1="), "decode() - invalid input string length.");
+  VELOX_ASSERT_USER_THROW(
+      fromBase32("M1======"),
+      "invalid input string: contains invalid characters.");
+  VELOX_ASSERT_USER_THROW(
+      fromBase32("J$======"),
+      "invalid input string: contains invalid characters.");
+}
+
 TEST_F(BinaryFunctionsTest, fromBigEndian32) {
   const auto fromBigEndian32 = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t>("from_big_endian_32(c0)", VARBINARY(), arg);
