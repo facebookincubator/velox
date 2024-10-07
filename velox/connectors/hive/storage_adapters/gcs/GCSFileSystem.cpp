@@ -28,6 +28,8 @@
 #include <stdexcept>
 
 #include <google/cloud/storage/client.h>
+#include "TokenProvider.h"
+#include "OutOfBandOAuth2Credentials.h"
 
 namespace facebook::velox {
 namespace {
@@ -65,10 +67,13 @@ inline void checkGCSStatus(
 
 class GCSReadFile final : public ReadFile {
  public:
-  GCSReadFile(const std::string& path, std::shared_ptr<gcs::Client> client)
-      : client_(std::move(client)) {
+  GCSReadFile(const std::string& path,
+              std::shared_ptr<gcs::Client> client,
+              std::function<void(std::shared_ptr<gcs::Client>&, const std::optional<std::string>&, const std::optional<std::vector<std::string>>&)> refreshTokenFn)
+      : client_(std::move(client)), refreshTokenFn_(std::move(refreshTokenFn)) {
     // assumption it's a proper path
     setBucketAndKeyFromGCSPath(path, bucket_, key_);
+    refreshTokenFn_(client_, std::optional<std::string>(path), std::nullopt);
   }
 
   // Gets the length of the file.
@@ -175,6 +180,7 @@ class GCSReadFile final : public ReadFile {
   }
 
   std::shared_ptr<gcs::Client> client_;
+  std::function<void(std::shared_ptr<gcs::Client>&, const std::optional<std::string>&, const std::optional<std::vector<std::string>>&)> refreshTokenFn_;
   std::string bucket_;
   std::string key_;
   std::atomic<int64_t> length_ = -1;
@@ -184,9 +190,11 @@ class GCSWriteFile final : public WriteFile {
  public:
   explicit GCSWriteFile(
       const std::string& path,
-      std::shared_ptr<gcs::Client> client)
-      : client_(client) {
+      std::shared_ptr<gcs::Client> client,
+      std::function<void(std::shared_ptr<gcs::Client>&, const std::optional<std::string>&, const std::optional<std::vector<std::string>>&)> refreshTokenFn)
+        : client_(client), refreshTokenFn_(std::move(refreshTokenFn)) {
     setBucketAndKeyFromGCSPath(path, bucket_, key_);
+    refreshTokenFn_(client_, std::optional<std::string>(path), std::nullopt);
   }
 
   ~GCSWriteFile() {
@@ -244,6 +252,7 @@ class GCSWriteFile final : public WriteFile {
 
   gcs::ObjectWriteStream stream_;
   std::shared_ptr<gcs::Client> client_;
+  std::function<void(std::shared_ptr<gcs::Client>&, const std::optional<std::string>&, const std::optional<std::vector<std::string>>&)> refreshTokenFn_;
   std::string bucket_;
   std::string key_;
   std::atomic<int64_t> size_{-1};
@@ -267,8 +276,12 @@ class GCSFileSystem::Impl {
   // Use the input Config parameters and initialize the GCSClient.
   void initializeClient() {
     auto options = gc::Options{};
+
+    std::string accessTokenEnabled =
+      hiveConfig_->config()->get<std::string>("gcs.access_token_enabled", "false");
+
     auto scheme = hiveConfig_->gcsScheme();
-    if (scheme == "https") {
+    if (scheme == "https" && && accessTokenEnabled == "false") {
       options.set<gc::UnifiedCredentialsOption>(
           gc::MakeGoogleDefaultCredentials());
     } else {
@@ -312,12 +325,28 @@ class GCSFileSystem::Impl {
           << "Config hive.gcs.json-key-file-path is empty or key file path not found";
     }
 
+    if (accessTokenEnabled == "true") {
+      std::string providerClassName =
+          hiveConfig_->config()->get<std::string>("gcs.access_token_provider", "");
+        throw std::runtime_error("AccessTokenProvider not configured. Please implement an out of band access token provider.");
+        // Out of band access token provider can implement custom/internal integrations.
+        // Callers must provide their own provider to use the access tokens with this client.
+    }
+
     client_ = std::make_shared<gcs::Client>(options);
   }
 
   std::shared_ptr<gcs::Client> getClient() const {
     return client_;
   }
+
+  std::shared_ptr<OutOfBandOAuth2Credentials> credentials_;
+  void setCredentialsContext(const std::string& path, const std::optional<std::vector<std::string>>& permissions) {
+    if (credentials_) {
+      credentials_->SetContext(path, permissions);
+    }
+  }
+
 
  private:
   const std::shared_ptr<HiveConfig> hiveConfig_;
@@ -337,7 +366,11 @@ std::unique_ptr<ReadFile> GCSFileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& options) {
   const auto gcspath = gcsPath(path);
-  auto gcsfile = std::make_unique<GCSReadFile>(gcspath, impl_->getClient());
+  auto refreshTokenLambda = [impl_ = this->impl_](std::shared_ptr<gcs::Client>& client, const std::optional<std::string>& path, const std::optional<std::vector<std::string>>& permissions) -> void {
+    impl_->setCredentialsContext(path.value_or(""), "READ");
+  };
+
+  auto gcsfile = std::make_unique<GCSReadFile>(gcspath, impl_->getClient(), refreshTokenLambda);
   gcsfile->initialize(options);
   return gcsfile;
 }
@@ -346,7 +379,11 @@ std::unique_ptr<WriteFile> GCSFileSystem::openFileForWrite(
     std::string_view path,
     const FileOptions& /*unused*/) {
   const auto gcspath = gcsPath(path);
-  auto gcsfile = std::make_unique<GCSWriteFile>(gcspath, impl_->getClient());
+  auto refreshTokenLambda = [impl_ = this->impl_](std::shared_ptr<gcs::Client>& client, const std::optional<std::string>& path, const std::optional<std::vector<std::string>>& permissions) -> void {
+    impl_->setCredentialsContext(path.value_or(""), "WRITE");
+  };
+
+  auto gcsfile = std::make_unique<GCSWriteFile>(gcspath, impl_->getClient(), refreshTokenLambda);
   gcsfile->initialize();
   return gcsfile;
 }
@@ -363,6 +400,7 @@ void GCSFileSystem::remove(std::string_view path) {
   setBucketAndKeyFromGCSPath(file, bucket, object);
 
   if (!object.empty()) {
+    impl_->setCredentialsContext(file, "DELETE");
     auto stat = impl_->getClient()->GetObjectMetadata(bucket, object);
     if (!stat.ok()) {
       checkGCSStatus(
@@ -390,6 +428,8 @@ bool GCSFileSystem::exists(std::string_view path) {
   std::string object;
   setBucketAndKeyFromGCSPath(file, bucket, object);
   using ::google::cloud::StatusOr;
+
+  impl_->setCredentialsContext(file, "LIST");
   StatusOr<gcs::BucketMetadata> metadata =
       impl_->getClient()->GetBucketMetadata(bucket);
 
@@ -406,6 +446,8 @@ std::vector<std::string> GCSFileSystem::list(std::string_view path) {
   std::string bucket;
   std::string object;
   setBucketAndKeyFromGCSPath(file, bucket, object);
+
+  impl_->setCredentialsContext(file, "LIST");
   for (auto&& metadata : impl_->getClient()->ListObjects(bucket)) {
     if (!metadata.ok()) {
       checkGCSStatus(
