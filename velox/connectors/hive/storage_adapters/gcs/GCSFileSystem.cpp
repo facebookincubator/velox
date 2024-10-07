@@ -281,7 +281,7 @@ class GCSFileSystem::Impl {
       hiveConfig_->config()->get<std::string>("gcs.access_token_enabled", "false");
 
     auto scheme = hiveConfig_->gcsScheme();
-    if (scheme == "https" && && accessTokenEnabled == "false") {
+    if (scheme == "https" && accessTokenEnabled == "false") {
       options.set<gc::UnifiedCredentialsOption>(
           gc::MakeGoogleDefaultCredentials());
     } else {
