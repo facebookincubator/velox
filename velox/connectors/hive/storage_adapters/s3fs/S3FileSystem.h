@@ -16,11 +16,94 @@
 
 #pragma once
 
+#include <memory>
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConfig.h"
 
 namespace facebook::velox::filesystems {
 using namespace facebook::velox::connector::hive;
+
+// Struct to hold S3-related metrics with delta tracking.
+// COUNT metrics track current state; SUM metrics track deltas for one-minute count reporting.
+struct S3Metrics {
+  // COUNT metric: Tracks the current number of active S3 connections.
+  uint64_t activeConnections{0};
+
+  // SUM metrics with delta tracking for one-minute count reporting.
+  uint64_t startedUploads{0}, prevStartedUploads{0};
+  uint64_t failedUploads{0}, prevFailedUploads{0};
+  uint64_t successfulUploads{0}, prevSuccessfulUploads{0};
+
+  // COUNT metrics track call or error occurrences.
+  uint64_t metadataCalls{0};
+  uint64_t listStatusCalls{0};
+  uint64_t listLocatedStatusCalls{0};
+  uint64_t listObjectsCalls{0};
+  uint64_t otherReadErrors{0};
+  uint64_t awsAbortedExceptions{0};
+  uint64_t socketExceptions{0};
+  uint64_t getObjectErrors{0};
+  uint64_t getMetadataErrors{0};
+  uint64_t getObjectRetries{0};
+  uint64_t getMetadataRetries{0};
+  uint64_t readRetries{0};
+
+  // Increment a metric.
+  void increment(const std::string& metricName) {
+    if (metricName == "activeConnections") {
+      ++activeConnections;
+    } else if (metricName == "startedUploads") {
+      ++startedUploads;
+    } else if (metricName == "failedUploads") {
+      ++failedUploads;
+    } else if (metricName == "successfulUploads") {
+      ++successfulUploads;
+    } else if (metricName == "metadataCalls") {
+      ++metadataCalls;
+    } else if (metricName == "listStatusCalls") {
+      ++listStatusCalls;
+    } else if (metricName == "listLocatedStatusCalls") {
+      ++listLocatedStatusCalls;
+    } else if (metricName == "listObjectsCalls") {
+      ++listObjectsCalls;
+    } else if (metricName == "otherReadErrors") {
+      ++otherReadErrors;
+    } else if (metricName == "awsAbortedExceptions") {
+      ++awsAbortedExceptions;
+    } else if (metricName == "socketExceptions") {
+      ++socketExceptions;
+    } else if (metricName == "getObjectErrors") {
+      ++getObjectErrors;
+    } else if (metricName == "getMetadataErrors") {
+      ++getMetadataErrors;
+    } else if (metricName == "getObjectRetries") {
+      ++getObjectRetries;
+    } else if (metricName == "getMetadataRetries") {
+      ++getMetadataRetries;
+    } else if (metricName == "readRetries") {
+      ++readRetries;
+    }
+  }
+
+  // Get the delta value for SUM-type metrics.
+  uint64_t getDelta(const std::string& metricName) {
+    if (metricName == "startedUploads") {
+      return startedUploads - prevStartedUploads;
+    } else if (metricName == "failedUploads") {
+      return failedUploads - prevFailedUploads;
+    } else if (metricName == "successfulUploads") {
+      return successfulUploads - prevSuccessfulUploads;
+    }
+    return 0; // COUNT metrics do not track deltas.
+  }
+
+  // Reset previous SUM metric values to current values for delta tracking.
+  void resetDeltas() {
+    prevStartedUploads = startedUploads;
+    prevFailedUploads = failedUploads;
+    prevSuccessfulUploads = successfulUploads;
+  }
+};
 
 bool initializeS3(const config::ConfigBase* config);
 
@@ -72,9 +155,17 @@ class S3FileSystem : public FileSystem {
 
   std::string getLogLevelName() const;
 
- protected:
+  // Access the metrics struct.
+  S3Metrics& getMetrics();
+
+  // Reset the delta values for SUM-type metrics.
+  void resetMetricsDeltas();
+  S3Metrics metrics_; // Struct for tracking S3 metrics.
+
+protected:
   class Impl;
   std::shared_ptr<Impl> impl_;
+
 };
 
 } // namespace facebook::velox::filesystems
