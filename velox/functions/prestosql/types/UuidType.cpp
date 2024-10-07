@@ -75,7 +75,8 @@ class UuidCastOperator : public exec::CastOperator {
     const auto* uuids = input.as<SimpleVector<int128_t>>();
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      const auto uuid = uuids->valueAt(row);
+      // Make sure UUID bytes are big endian when building string
+      const auto uuid = DecimalUtil::big(uuids->valueAt(row));
 
       const uint8_t* uuidBytes = reinterpret_cast<const uint8_t*>(&uuid);
 
@@ -126,6 +127,9 @@ class UuidCastOperator : public exec::CastOperator {
 
       int128_t u;
       memcpy(&u, &uuid, 16);
+
+      // Value is big endian from boost, store as native byte-order
+      u = DecimalUtil::big(u);
 
       flatResult->set(row, u);
     });

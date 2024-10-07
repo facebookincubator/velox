@@ -125,4 +125,14 @@ int32_t DecimalUtil::maxStringViewSize(int precision, int scale) {
   return rowSize;
 }
 
+int128_t DecimalUtil::big(int128_t value) {
+  if (folly::kIsLittleEndian) {
+    auto upper = folly::Endian::big(HugeInt::upper(value));
+    auto lower = folly::Endian::big(HugeInt::lower(value));
+    return HugeInt::build(lower, upper);
+  } else {
+    return value;
+  }
+}
+
 } // namespace facebook::velox
