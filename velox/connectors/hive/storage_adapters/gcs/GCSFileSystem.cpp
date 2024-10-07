@@ -331,6 +331,8 @@ class GCSFileSystem::Impl {
         throw std::runtime_error("AccessTokenProvider not configured. Please implement an out of band access token provider.");
         // Out of band access token provider can implement custom/internal integrations.
         // Callers must provide their own provider to use the access tokens with this client.
+        // Set credentials using: options.set<google::cloud::storage::Oauth2CredentialsOption>(credentials_);
+
     }
 
     client_ = std::make_shared<gcs::Client>(options);
