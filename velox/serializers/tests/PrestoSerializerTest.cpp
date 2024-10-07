@@ -15,6 +15,7 @@
  */
 #include "velox/serializers/PrestoSerializer.h"
 #include <folly/Random.h>
+#include <functions/prestosql/types/UuidType.h>
 #include <gtest/gtest.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1049,6 +1050,23 @@ TEST_P(PrestoSerializerTest, longDecimal) {
 
   // Add some nulls.
   for (auto i = 0; i < 102; i += 7) {
+    vector->setNull(i, true);
+  }
+  testRoundTrip(vector);
+}
+
+TEST_P(PrestoSerializerTest, uuid) {
+  std::vector<int128_t> uuidValues(200);
+
+  for (int row = 0; row < uuidValues.size(); row++) {
+    uuidValues[row] = (int128_t) 0xD1 << row % 120;
+  }
+  auto vector = makeFlatVector<int128_t>(uuidValues, UUID());
+
+  testRoundTrip(vector);
+
+  // Add some nulls.
+  for (auto i = 0; i < uuidValues.size(); i += 7) {
     vector->setNull(i, true);
   }
   testRoundTrip(vector);
