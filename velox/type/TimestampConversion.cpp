@@ -42,7 +42,6 @@
 
 #include "velox/type/TimestampConversion.h"
 #include <folly/Expected.h>
-#include <re2/re2.h>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/HugeInt.h"
@@ -116,6 +115,20 @@ inline bool characterIsSpace(char c) {
 
 inline bool characterIsDigit(char c) {
   return c >= '0' && c <= '9';
+}
+
+inline bool
+allCharactersIsDigit(std::string_view str, size_t start, size_t end) {
+  for (auto i = start; i <= end; i++) {
+    if (!characterIsDigit(str[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool allCharactersIsDigit(std::string_view str) {
+  return allCharactersIsDigit(str, 0, str.length() - 1);
 }
 
 bool parseDoubleDigit(
@@ -818,26 +831,49 @@ inline bool startsWith(std::string_view str, const char* prefix) {
   return str.rfind(prefix, 0) == 0;
 }
 
+// Spark support an id with one of the prefixes UTC+, UTC-, GMT+, GMT-, UT+ or
+// UT-, and a suffix in the formats: h[h], hh[:]mm, hh:mm:ss, hhmmss. This func
+// will validate the format of the suffix.
+// Additionally, IANA does not support seconds in the offset, so this func will
+// add the seconds offset to the input Timestamp.
 bool parseSparkTzWithPrefix(
     std::string& timeZoneName,
     Timestamp& ts,
     size_t start) {
-  VELOX_DCHECK_GT(timeZoneName.length(), start + 2);
+  VELOX_DCHECK_GE(timeZoneName.length(), start + 2);
   auto sign = timeZoneName[start];
   auto offset = timeZoneName.substr(start + 1);
-  std::string hm, h, m, s;
-  RE2 hhPattern(R"((\d?\d))");
-  RE2 hhmmPattern(R"((\d\d):?(\d\d))");
-  RE2 hhmmssPattern(R"((\d\d:\d\d):(\d\d))");
-  RE2 hhmmssCompactPattern(R"((\d\d)(\d\d)(\d\d))");
-  if (RE2::FullMatch(offset, hhPattern, &hm)) {
-    hm += ":00";
-  } else if (RE2::FullMatch(offset, hhmmPattern, &h, &m)) {
-    hm = h + ":" + m;
-  } else if (RE2::FullMatch(offset, hhmmssPattern, &hm, &s)) {
-    // hm and second already captured
-  } else if (RE2::FullMatch(offset, hhmmssCompactPattern, &h, &m, &s)) {
-    hm = h + ":" + m;
+  std::string hm, s;
+  if ((offset.length() == 1 && characterIsDigit(offset[0])) ||
+      (offset.length() == 2 && allCharactersIsDigit(offset))) {
+    // h[h]
+    hm = offset + ":00";
+  } else if (
+      (offset.length() == 4 && allCharactersIsDigit(offset)) ||
+      (offset.length() == 5 && allCharactersIsDigit(offset, 0, 1) &&
+       allCharactersIsDigit(offset, 3, 4))) {
+    // hh[:]mm
+    // TimeZoneMap::normalizeTimeZoneOffset will normalize hhmm to hh:mm
+    hm = offset;
+  } else if (
+      (offset.length() == 6 && allCharactersIsDigit(offset)) ||
+      (offset.length() == 8 && allCharactersIsDigit(offset, 0, 1) &&
+       allCharactersIsDigit(offset, 3, 4) &&
+       allCharactersIsDigit(offset, 6, 7))) {
+    // hh:mm:ss, hhmmss
+    auto lastSep = offset.rfind(':');
+    if (lastSep == std::string::npos && offset.length() == 6) {
+      // hhmmss
+      // TimeZoneMap::normalizeTimeZoneOffset will normalize hhmm to hh:mm
+      hm = offset.substr(0, 4);
+      s = offset.substr(4);
+    } else if (lastSep == 5 && offset.find(':') == 2 && offset.length() == 8) {
+      // hh:mm:ss
+      hm = offset.substr(0, 5);
+      s = offset.substr(6);
+    } else {
+      return false;
+    }
   } else {
     return false;
   }
@@ -872,23 +908,38 @@ bool parseSparkTzWithPrefix(
 bool normalizeSparkTimezone(std::string& timeZoneName, Timestamp& ts) {
   // Spark support an id with one of the prefixes UTC+, UTC-, GMT+, GMT-, UT+ or
   // UT-, and a suffix in the formats: h[h], hh[:]mm, hh:mm:ss, hhmmss
-  if (timeZoneName.length() > 5 &&
-      (startsWith(timeZoneName, "UTC") || startsWith(timeZoneName, "GMT"))) {
+  if (startsWith(timeZoneName, "UTC") || startsWith(timeZoneName, "GMT")) {
     if (!parseSparkTzWithPrefix(timeZoneName, ts, 3)) {
       return false;
     }
   }
-  if (timeZoneName.length() > 4 && startsWith(timeZoneName, "UT")) {
+  if (startsWith(timeZoneName, "UT")) {
     if (!parseSparkTzWithPrefix(timeZoneName, ts, 2)) {
       return false;
     }
   }
-  RE2 singleHourTz(R"((\+|\-)(\d):)");
-  RE2 singleMinuteTz(R"((\+|\-)(\d\d):(\d)$)");
-  // To support the (+|-)h:mm format because it was supported before Spark 3.0.
-  RE2::Replace(&timeZoneName, singleHourTz, R"(\10\2:)");
-  // To support the (+|-)hh:m format because it was supported before Spark 3.0.
-  RE2::Replace(&timeZoneName, singleMinuteTz, R"(\1\2:0\3)");
+
+  // Only normalize the timezone offset in the format of (+|-)h[h]:m[m];
+  // for other cases, no processing will be done.
+  auto sign = timeZoneName[0];
+  if (sign == '+' || sign == '-') {
+    std::string_view timeZoneNameView{timeZoneName};
+    auto sep = timeZoneNameView.find(':');
+    if (sep != std::string::npos) {
+      auto hour = timeZoneNameView.substr(1, sep - 1);
+      auto minute = timeZoneNameView.substr(sep + 1);
+      if (allCharactersIsDigit(hour) && allCharactersIsDigit(minute) &&
+          (hour.length() == 1 || minute.length() == 1)) {
+        std::ostringstream oss;
+        oss << sign;
+        hour.length() == 1 ? oss << "0" << hour : oss << hour;
+        oss << ":";
+        minute.length() == 1 ? oss << "0" << minute : oss << minute;
+        timeZoneName = oss.str();
+      }
+    }
+  }
+
   return true;
 }
 } // namespace
