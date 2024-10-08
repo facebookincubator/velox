@@ -607,6 +607,21 @@ TEST(DateTimeUtilTest, normalizeSparkTimezone) {
   EXPECT_FALSE(result.hasError());
   EXPECT_EQ(result->second, nullptr);
 
+  // Timezone with seconds offset.
+  tz = "1970-01-01 00:00:00 UTC-00:00:01";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("-00:00"));
+  EXPECT_EQ(result->first, Timestamp(1, 0));
+
+  tz = "1970-01-01 00:00:00 UTC+00:00:01";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("-00:00"));
+  EXPECT_EQ(result->first, Timestamp(-1, 0));
+
   testSparkTzNormalization("1582-06-01 11:33:33.123UTC+08", "+08:00");
   testSparkTzNormalization("1582-06-01 11:33:33.123UTC+8", "+08:00");
   testSparkTzNormalization("1582-06-01 11:33:33.123UTC-12:12", "-12:12");
