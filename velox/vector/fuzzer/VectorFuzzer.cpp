@@ -558,6 +558,8 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
     }
 
     return fuzzRow(std::move(childrenVectors), rowType.names(), size);
+  } else if (type->isOpaque()) {
+    return fuzzFlatOpaque(type, size);
   } else {
     VELOX_UNREACHABLE();
   }
@@ -627,6 +629,27 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
       VELOX_UNREACHABLE("Unexpected type: {}", type->toString());
   }
   return nullptr; // no-op.
+}
+
+VectorPtr VectorFuzzer::fuzzFlatOpaque(
+    const TypePtr& type,
+    vector_size_t size) {
+  auto vector = BaseVector::create(type, size, pool_);
+  using TFlat = typename KindToFlatVector<TypeKind::OPAQUE>::type;
+
+  auto& opaqueType = type->asOpaque();
+  auto flatVector = vector->as<TFlat>();
+  auto& opaqueTypeGenerator = opaqueTypeGenerators_[opaqueType.typeIndex()];
+  for (size_t i = 0; i < vector->size(); ++i) {
+    flatVector->set(i, opaqueTypeGenerator(rng_));
+  }
+
+  for (size_t i = 0; i < vector->size(); ++i) {
+    if (coinToss(opts_.nullRatio)) {
+      flatVector->setNull(i, true);
+    }
+  }
+  return vector;
 }
 
 VectorPtr VectorFuzzer::fuzzDictionary(const VectorPtr& vector) {
