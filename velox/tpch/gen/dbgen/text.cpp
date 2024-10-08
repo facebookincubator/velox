@@ -245,6 +245,8 @@ void init_text_pool(long bSize, DBGenContext* ctx) {
 
   txtBufferSize = bSize;
   szTextPool = (char*)malloc(bSize + 1 + 100);
+  MALLOC_CHECK(szTextPool);
+  memset(szTextPool, 0, bSize + 1 + 100);
 
   char* ptr = szTextPool;
   char* endptr = szTextPool + bSize + 1;

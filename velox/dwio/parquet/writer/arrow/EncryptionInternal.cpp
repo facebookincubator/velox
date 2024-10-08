@@ -233,7 +233,7 @@ int AesEncryptor::AesEncryptorImpl::GcmEncrypt(
     const uint8_t* aad,
     int aad_len,
     uint8_t* ciphertext) {
-  int len;
+  int len = 0;
   int ciphertext_len;
 
   uint8_t tag[kGcmTagLength];
@@ -304,7 +304,7 @@ int AesEncryptor::AesEncryptorImpl::CtrEncrypt(
     int key_len,
     const uint8_t* nonce,
     uint8_t* ciphertext) {
-  int len;
+  int len = 0;
   int ciphertext_len;
 
   // Parquet CTR IVs are comprised of a 12-byte nonce and a 4-byte initial
@@ -593,7 +593,7 @@ int AesDecryptor::AesDecryptorImpl::GcmDecrypt(
     const uint8_t* aad,
     int aad_len,
     uint8_t* plaintext) {
-  int len;
+  int len = 0;
   int plaintext_len;
 
   uint8_t tag[kGcmTagLength];
