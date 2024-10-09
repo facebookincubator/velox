@@ -215,7 +215,8 @@ void PrefixSort::extractRowToPrefix(char* row, char* prefix) {
   getAddressFromPrefix(prefix) = row;
 }
 
-void PrefixSort::sortInternal(std::vector<char*>& rows) {
+void PrefixSort::sortInternal(
+    std::vector<char*, memory::StlAllocator<char*>>& rows) {
   const auto numRows = rows.size();
   const auto entrySize = sortLayout_.entrySize;
   memory::ContiguousAllocation prefixAllocation;
