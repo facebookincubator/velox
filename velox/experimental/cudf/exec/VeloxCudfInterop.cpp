@@ -28,6 +28,7 @@
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
+#include <cudf/interop.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
