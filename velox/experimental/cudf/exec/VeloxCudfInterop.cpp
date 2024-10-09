@@ -19,6 +19,7 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/arrow/Bridge.h"
 
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -40,6 +41,10 @@
 
 #include "VeloxCudfInterop.h"
 
+#include "velox/dwio/parquet/writer/Writer.h"
+#include <arrow/c/bridge.h>
+#include <arrow/io/interfaces.h>
+#include <arrow/table.h>
 namespace facebook::velox::cudf_velox {
 
 // Velox type to CUDF type
@@ -279,7 +284,7 @@ std::unique_ptr<cudf::table> to_cudf_table(
 const facebook::velox::RowVectorPtr& veloxTable,
 facebook::velox::memory::MemoryPool* pool)
 {
-ArrowOptions arrowOptions{false, true}
+ArrowOptions arrowOptions{false, true};
   ArrowArray arrowArray;
   exportToArrow(
     veloxTable,
@@ -303,13 +308,13 @@ facebook::velox::RowVectorPtr to_velox_column(
      auto arrowDeviceArray =  cudf::to_arrow_host(table);
      auto arrowArray = arrowDeviceArray->array;
 
-     std::vector<column_metadata> metadata;
+     std::vector<cudf::column_metadata> metadata;
      for(auto i = 0; i < table.num_columns(); i++) {
        metadata.push_back(column_metadata(name_prefix + std::to_string(i)));
      }
-     auto arrowSchema = cudf::to_arrow_schema (table, metadata);
+     auto arrowSchema = cudf::to_arrow_schema(table, metadata);
   return importFromArrowAsOwner(
-    arrowSchema,
+    *arrowSchema,
     arrowArray,
     pool);
     }
