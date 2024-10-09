@@ -133,7 +133,8 @@ present. Null flags are bit-packed into an array of 64-bit unsigned integers.
 Zero indicates a null value. One indicates a non-null value.
 (This counterintuitive choice is motivated by compatibility with Arrow.)</p>
 <p>In the following diagram positions 2, 7 and 11 are null.</p>
-<a class="reference internal image-reference" href="../_images/nulls.png"><img alt="../_images/nulls.png" class="align-center" src="../_images/nulls.png" style="width: 100px;" /></a>
+<a class="reference internal image-reference" href="../_images/nulls.png"><img alt="../_images/nulls.png" class="align-center" src="../_images/nulls.png" style="width: 100px;" />
+</a>
 <p>BaseVector is a base class for all kinds of vectors. It contains the type of
 values stored in the vector, e.g. INTEGER vs. VARCHAR, nulls buffer, and number
 of rows in the vector.</p>
@@ -186,7 +187,8 @@ at least 12 consecutive entries of 4 bytes each. Nulls buffer has space for at
 least 12 consecutive entries of 1 bit each.  Values in positions 2,7, 11 are
 null, e.g. bits 2, 7, 11 in <cite>nulls_</cite> buffer are 0. The rest of the bits in the
 <cite>nulls_</cite> buffer are 1. Entries 2, 7, 11 in <cite>values_</cite> buffer contain garbage.</p>
-<a class="reference internal image-reference" href="../_images/flat-vector.png"><img alt="../_images/flat-vector.png" class="align-center" src="../_images/flat-vector.png" style="width: 300px;" /></a>
+<a class="reference internal image-reference" href="../_images/flat-vector.png"><img alt="../_images/flat-vector.png" class="align-center" src="../_images/flat-vector.png" style="width: 300px;" />
+</a>
 <p>All scalar values including strings are fixed-width, e.g. each value is stored
 in a fixed number of bytes. Since strings can be of variable length, the actual
 strings are stored in a set of string buffers that are separate from the values
@@ -195,7 +197,8 @@ string size, 4-byte prefix and 8 byte pointer to the full string in one of the
 string buffers. Short strings, up to 12 characters, are stored completely
 within the StringView struct. They occupy the space that’s overwise is taken by
 the prefix and the pointer.</p>
-<a class="reference internal image-reference" href="../_images/string-view-layout.png"><img alt="../_images/string-view-layout.png" class="align-center" src="../_images/string-view-layout.png" style="width: 300px;" /></a>
+<a class="reference internal image-reference" href="../_images/string-view-layout.png"><img alt="../_images/string-view-layout.png" class="align-center" src="../_images/string-view-layout.png" style="width: 300px;" />
+</a>
 <p>The following diagram illustrates the difference in in-memory representation of
 a long and short string. “Yellowstone national park” is a 25-characters long
 string which is too long to be inlined. Hence, StringView stores a 4-byte
@@ -203,7 +206,8 @@ prefix “Yell” and a pointer to the whole string in a string buffer. The “h
 rain” string is only 10-characters long and therefore stored inlined in the
 StringView. Having prefixes of long strings stored in the StringView allows
 optimizing comparison operations.</p>
-<a class="reference internal image-reference" href="../_images/string-views.png"><img alt="../_images/string-views.png" class="align-center" src="../_images/string-views.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/string-views.png"><img alt="../_images/string-views.png" class="align-center" src="../_images/string-views.png" style="width: 600px;" />
+</a>
 <p>Strings in the string buffers appear not necessarily in order and there can be
 gaps between individual strings. A single vector may use one or more string
 buffers.</p>
@@ -212,7 +216,8 @@ is represented as FlatVector&lt;StringView&gt;. <cite>values_</cite> buffer has 
 8 entries 16 bytes each. <cite>stringBuffers_</cite> array has one entry containing a
 concatenation of non-inlined strings. Each entry in <cite>values_</cite> buffer uses 4 bytes
 to store the size of the string.</p>
-<a class="reference internal image-reference" href="../_images/string-vector.png"><img alt="../_images/string-vector.png" class="align-center" src="../_images/string-vector.png" style="width: 700px;" /></a>
+<a class="reference internal image-reference" href="../_images/string-vector.png"><img alt="../_images/string-vector.png" class="align-center" src="../_images/string-vector.png" style="width: 700px;" />
+</a>
 <p>Fixed-width values allow for populating vectors out of order, e.g. writing value
 for row 5 before writing value for row 2. This is useful when evaluating
 conditional expressions.</p>
@@ -228,7 +233,8 @@ the original strings and therefore can use StringViews which point to the same
 string buffers as the input vectors.</p>
 <p>A result of applying substr(s, 2) function to a vector shown above looks like
 this:</p>
-<a class="reference internal image-reference" href="../_images/substr-result.png"><img alt="../_images/substr-result.png" class="align-center" src="../_images/substr-result.png" style="width: 700px;" /></a>
+<a class="reference internal image-reference" href="../_images/substr-result.png"><img alt="../_images/substr-result.png" class="align-center" src="../_images/substr-result.png" style="width: 700px;" />
+</a>
 <p>This vector is using the same string buffer as the original one. It simply
 references it using std::shared_ptr. The individual StringView entries either
 contain strings inline or refer to positions in the original strings buffer.
@@ -286,7 +292,8 @@ entry in the base vector. Entries 0 and 2 both point to entry 0 in the base
 vector which contains “red”. Entries 1, 4, 5, 10 point to the same but
 different entry 1 which contains “blue”. This encoding avoids copying the
 duplicate strings.</p>
-<a class="reference internal image-reference" href="../_images/dictionary-repeated2.png"><img alt="../_images/dictionary-repeated2.png" class="align-center" src="../_images/dictionary-repeated2.png" style="width: 500px;" /></a>
+<a class="reference internal image-reference" href="../_images/dictionary-repeated2.png"><img alt="../_images/dictionary-repeated2.png" class="align-center" src="../_images/dictionary-repeated2.png" style="width: 500px;" />
+</a>
 <p>Multiple dictionary vectors can refer to the same base vector. We are saying
 that the dictionary vector wraps the base vector.</p>
 <p>Here is a dictionary of type INTEGER that represents a result of a filter: n % 2
@@ -294,7 +301,8 @@ that the dictionary vector wraps the base vector.</p>
 filter, hence, the size of the dictionary vector is 6. The indices buffer
 contains 6 entries referring to positions in the original vector that passed
 the filter.</p>
-<a class="reference internal image-reference" href="../_images/dictionary-subset2.png"><img alt="../_images/dictionary-subset2.png" class="align-center" src="../_images/dictionary-subset2.png" style="width: 500px;" /></a>
+<a class="reference internal image-reference" href="../_images/dictionary-subset2.png"><img alt="../_images/dictionary-subset2.png" class="align-center" src="../_images/dictionary-subset2.png" style="width: 500px;" />
+</a>
 <p>When filter or filter-like operation applies to multiple columns, the results
 can be represented as multiple dictionary vectors all sharing the same indices
 buffer. This allows to reduce the amount of memory needed for the indices
@@ -330,7 +338,8 @@ if the base vector has no nulls. We say that “dictionary wrapping adds nulls�
 to the base vector.</p>
 <p>Here is an example. Entry #4 in the dictionary is marked as null. Corresponding
 entry in the indices buffer contains garbage and should not be accessed.</p>
-<a class="reference internal image-reference" href="../_images/dictionary-with-nulls.png"><img alt="../_images/dictionary-with-nulls.png" class="align-center" src="../_images/dictionary-with-nulls.png" style="width: 500px;" /></a>
+<a class="reference internal image-reference" href="../_images/dictionary-with-nulls.png"><img alt="../_images/dictionary-with-nulls.png" class="align-center" src="../_images/dictionary-with-nulls.png" style="width: 500px;" />
+</a>
 </section>
 <section id="flat-vectors-complex-types">
 <h2>Flat Vectors - Complex Types<a class="headerlink" href="#flat-vectors-complex-types" title="Link to this heading">¶</a></h2>
@@ -352,7 +361,8 @@ from a specific array appear next to each other in order. Each array entry
 contains an offset and size. Offset points to the first element of the array in
 the elements vector. Size specifies the number of elements in the array.</p>
 <p>Here is an example.</p>
-<a class="reference internal image-reference" href="../_images/array-vector.png"><img alt="../_images/array-vector.png" class="align-center" src="../_images/array-vector.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/array-vector.png"><img alt="../_images/array-vector.png" class="align-center" src="../_images/array-vector.png" style="width: 400px;" />
+</a>
 <p>We refer to the array vector as a top-level vector and elements vector as a
 nested or inner vector. In the example above, the top-level array has 4
 top-level rows and the elements array has 11 nested rows. First 3 nested rows
@@ -367,7 +377,8 @@ elements of the 2nd top-level row, followed by the elements of the 1st
 top-level rows, followed by the element of the 3rd top-level row. The offsets
 are adjusted to point to the right entry in the elements array. The sizes are
 unchanged.</p>
-<a class="reference internal image-reference" href="../_images/array-out-of-order.png"><img alt="../_images/array-out-of-order.png" class="align-center" src="../_images/array-out-of-order.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/array-out-of-order.png"><img alt="../_images/array-out-of-order.png" class="align-center" src="../_images/array-out-of-order.png" style="width: 400px;" />
+</a>
 <p>Having both offsets and sizes allows to write array vectors out of order, e.g.
 write entry 5 before writing entry 3.</p>
 <p>Empty arrays are specified by setting size to zero. The offset for empty arrays
@@ -391,7 +402,8 @@ is not allowed to overlap with each other.</p>
 </pre></div>
 </div>
 <p>Here is an example.</p>
-<a class="reference internal image-reference" href="../_images/map-vector.png"><img alt="../_images/map-vector.png" class="align-center" src="../_images/map-vector.png" style="width: 700px;" /></a>
+<a class="reference internal image-reference" href="../_images/map-vector.png"><img alt="../_images/map-vector.png" class="align-center" src="../_images/map-vector.png" style="width: 700px;" />
+</a>
 <p>Similarly to the array vector, individual map entries appear in the keys and
 values vector together in order. However, map entries for the top-level map #4
 do not need to appear just before the map entries for the top-level map #5.</p>
@@ -416,7 +428,8 @@ nulls buffer, it contains a list of child vectors.</p>
 </pre></div>
 </div>
 <p>Here is an example.</p>
-<a class="reference internal image-reference" href="../_images/row-vector.png"><img alt="../_images/row-vector.png" class="align-center" src="../_images/row-vector.png" style="width: 700px;" /></a>
+<a class="reference internal image-reference" href="../_images/row-vector.png"><img alt="../_images/row-vector.png" class="align-center" src="../_images/row-vector.png" style="width: 700px;" />
+</a>
 <p>ROW vectors can have any number of child vectors, including zero.</p>
 <p>For each top-level row in the ROW vector there is exactly one row in each of the
 child vectors.</p>
@@ -446,7 +459,8 @@ to a particular row in another vector.</p>
 <p>The following diagram shows a complex vector of type ARRAY(INTEGER) representing
 an array of 4 integers: [10, 12, -1, 0]. It is defined as a pointer to row 2 in
 some other ArrayVector.</p>
-<a class="reference internal image-reference" href="../_images/constant-array-vector.png"><img alt="../_images/constant-array-vector.png" class="align-center" src="../_images/constant-array-vector.png" style="width: 800px;" /></a>
+<a class="reference internal image-reference" href="../_images/constant-array-vector.png"><img alt="../_images/constant-array-vector.png" class="align-center" src="../_images/constant-array-vector.png" style="width: 800px;" />
+</a>
 <p>Use BaseVector::wrapInConstant() static method to create a constant vector of
 complex type. Any vector can be wrapped in a constant vector. When you use
 wrapInConstant() with a non-flat vector, the resulting constant vector ends up
@@ -555,7 +569,7 @@ complex types are no different than dictionary vectors of scalar types.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

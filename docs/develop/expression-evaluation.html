@@ -184,14 +184,16 @@ performed in the following order and the search stops on the first match:</p>
 (a), ‘FOO’) &gt; 0 OR strpos(upper(a), ‘BAR’) &gt; 0</strong> expression. Here, <strong>upper
 (a)</strong> is a common subexpression. It is represented by a single instance of Expr
 class which appears twice in the tree.</p>
-<a class="reference internal image-reference" href="../_images/cse.png"><img alt="../_images/cse.png" class="align-center" src="../_images/cse.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/cse.png"><img alt="../_images/cse.png" class="align-center" src="../_images/cse.png" style="width: 600px;" />
+</a>
 </section>
 <section id="flatten-ands-and-ors">
 <h4>Flatten ANDs and ORs<a class="headerlink" href="#flatten-ands-and-ors" title="Link to this heading">¶</a></h4>
 <p>Adjacent AND nodes are consolidated into one. Similarly, adjacent OR nodes are
 consolidated into one. This maximizes the effect of adaptive conjunct
 reordering during execution of the AND and OR expressions.</p>
-<a class="reference internal image-reference" href="../_images/flatten-and.png"><img alt="../_images/flatten-and.png" class="align-center" src="../_images/flatten-and.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/flatten-and.png"><img alt="../_images/flatten-and.png" class="align-center" src="../_images/flatten-and.png" style="width: 600px;" />
+</a>
 </section>
 <section id="flatten-concat-like-functions">
 <span id="expr-flatten-concat"></span><h4>Flatten concat-like functions<a class="headerlink" href="#flatten-concat-like-functions" title="Link to this heading">¶</a></h4>
@@ -237,7 +239,8 @@ called constant folding.</p>
 (‘Foo’)</strong> is deterministic and doesn’t depend on any columns. It will be
 evaluated during compilation time and replaced by a single ConstantExpr
 node <strong>FOO</strong>.</p>
-<a class="reference internal image-reference" href="../_images/constant-folding.png"><img alt="../_images/constant-folding.png" class="align-center" src="../_images/constant-folding.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/constant-folding.png"><img alt="../_images/constant-folding.png" class="align-center" src="../_images/constant-folding.png" style="width: 600px;" />
+</a>
 </section>
 <section id="expression-metadata">
 <h4>Expression Metadata<a class="headerlink" href="#expression-metadata" title="Link to this heading">¶</a></h4>
@@ -261,7 +264,8 @@ b. Nodes evaluating strpos and upper functions have an empty list of distinct
 fields because they depend on exactly the same columns as their parent nodes.
 The distinct fields metadata triggers peeling of encodings for the input data
 and allows to run whole subexpressions on a subset of unique values.</p>
-<a class="reference internal image-reference" href="../_images/distinct-fields.png"><img alt="../_images/distinct-fields.png" class="align-center" src="../_images/distinct-fields.png" style="width: 300px;" /></a>
+<a class="reference internal image-reference" href="../_images/distinct-fields.png"><img alt="../_images/distinct-fields.png" class="align-center" src="../_images/distinct-fields.png" style="width: 300px;" />
+</a>
 </section>
 </section>
 <section id="evaluation">
@@ -345,7 +349,8 @@ expression evaluation are flat or dictionary encoded.</p>
 <h4>Evaluation Algorithm<a class="headerlink" href="#evaluation-algorithm" title="Link to this heading">¶</a></h4>
 <p>Expression evaluation traverses the expression tree starting at the root in the
 depth-first order. For each node a sequence of operations is performed.</p>
-<a class="reference internal image-reference" href="../_images/expression-evaluation.png"><img alt="../_images/expression-evaluation.png" class="align-center" src="../_images/expression-evaluation.png" style="width: 800px;" /></a>
+<a class="reference internal image-reference" href="../_images/expression-evaluation.png"><img alt="../_images/expression-evaluation.png" class="align-center" src="../_images/expression-evaluation.png" style="width: 800px;" />
+</a>
 <ol class="arabic simple">
 <li><p><strong>Expr::eval</strong> - entry point into the node evaluation. Check if the expression is a shared subexpression that has already been evaluated. If so, check if it was evaluated for all the necessary rows. If so, produce the result and terminate evaluation early. Otherwise, set the rows for evaluation to a subset of rows for which results are missing and proceed to next steps.</p></li>
 <li><p><strong>Expr::evalEncodings</strong> - If expression is deterministic and depends on fewer columns than its parent, try to peel off shared encodings of the input columns. If peeling is successful, replace input columns with corresponding inner vectors, update the set of rows for evaluation to corresponding rows in the inner vectors and store the peeled off wrappings for later use.</p></li>
@@ -525,7 +530,7 @@ vector must be preserved or can be overwritten.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

@@ -78,7 +78,8 @@ contains a HashProbe operator. Another pipeline contains a HashBuild operator.
 HashBuild operator is the last operator in the pipeline. The number of threads
 processing HashBuild pipeline can be different from the number of threads
 processing HashProbe pipeline.</p>
-<a class="reference internal image-reference" href="../_images/task-join-plan.png"><img alt="../_images/task-join-plan.png" class="align-center" src="../_images/task-join-plan.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/task-join-plan.png"><img alt="../_images/task-join-plan.png" class="align-center" src="../_images/task-join-plan.png" style="width: 400px;" />
+</a>
 <p>LocalPartitionNode is used to (1) repartition the data, or (2) gather data from
 multiple threads into a single thread, or (3) split the data produced by a
 single thread to allow for multi-threaded processing. A query plan with a
@@ -86,7 +87,8 @@ LocalPartitionNode is converted into two pipelines: a producer pipeline that
 ends with LocalPartition operator and a consumer pipeline that starts with a
 LocalExchange. These pipelines may run with same or different
 parallelism allowing for N:1, 1:N and N:M local exchange.</p>
-<a class="reference internal image-reference" href="../_images/task-local-exchange-plan.png"><img alt="../_images/task-local-exchange-plan.png" class="align-center" src="../_images/task-local-exchange-plan.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/task-local-exchange-plan.png"><img alt="../_images/task-local-exchange-plan.png" class="align-center" src="../_images/task-local-exchange-plan.png" style="width: 400px;" />
+</a>
 <p>LocalMergeNode is used to combine multiple sorted inputs while preserving
 sortedness. A query plan with a LocalMergeNode with two sources is translated
 into three pipelines: one producer pipeline per source node and one consumer
@@ -94,7 +96,8 @@ pipeline. Producer pipelines end with a CallbackSink operator. Consumer
 pipeline starts with a LocalMerge operator. A pipeline with a LocalMerge
 operator always runs single-threaded. Consumer pipelines produce sorted output
 and typically run single-threaded as well.</p>
-<a class="reference internal image-reference" href="../_images/task-local-merge-plan.png"><img alt="../_images/task-local-merge-plan.png" class="align-center" src="../_images/task-local-merge-plan.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/task-local-merge-plan.png"><img alt="../_images/task-local-merge-plan.png" class="align-center" src="../_images/task-local-merge-plan.png" style="width: 400px;" />
+</a>
 <p>To summarize, a query plan is converted into multiple pipelines and each
 pipeline is executed using multiple Drivers. A given plan node is converted
 into one or more operators. Some plan nodes are converted into multiple
@@ -132,7 +135,8 @@ the corresponding queue for processing. This API returns a split if one is
 available or Future if the queue is empty, but no-more-splits signal hasn’t
 arrived yet. The Future completes when a split or no-more-splits message is
 received.</p>
-<a class="reference internal image-reference" href="../_images/task-splits.png"><img alt="../_images/task-splits.png" class="align-center" src="../_images/task-splits.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/task-splits.png"><img alt="../_images/task-splits.png" class="align-center" src="../_images/task-splits.png" style="width: 400px;" />
+</a>
 </section>
 <section id="join-bridges-and-barriers">
 <h2>Join Bridges and Barriers<a class="headerlink" href="#join-bridges-and-barriers" title="Link to this heading">¶</a></h2>
@@ -158,7 +162,8 @@ and send them over the bridge to the probe side.</p>
 <p>In addition, in case of RIGHT and FULL OUTER join, HashProbe operators use
 Task::allPeersFinished() API to choose a single operator that would emit
 build-side rows with no match after all probe rows have been processed.</p>
-<a class="reference internal image-reference" href="../_images/task-join-bridges.png"><img alt="../_images/task-join-bridges.png" class="align-center" src="../_images/task-join-bridges.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/task-join-bridges.png"><img alt="../_images/task-join-bridges.png" class="align-center" src="../_images/task-join-bridges.png" style="width: 400px;" />
+</a>
 </section>
 <section id="exchange-clients">
 <h2>Exchange Clients<a class="headerlink" href="#exchange-clients" title="Link to this heading">¶</a></h2>
@@ -189,7 +194,8 @@ pull data for the same partition, but from different upstream tasks. The queue
 in ExchangeClient is used to accumulate the data for partition #15 from all the
 upstream tasks and distribute it among multiple Exchange operators allowing for
 parallel processing.</p>
-<a class="reference internal image-reference" href="../_images/task-exchange.png"><img alt="../_images/task-exchange.png" class="align-center" src="../_images/task-exchange.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/task-exchange.png"><img alt="../_images/task-exchange.png" class="align-center" src="../_images/task-exchange.png" style="width: 400px;" />
+</a>
 <p>MergeExchange operator is similar to Exchange operator, but it receives sorted
 data from multiple workers and must merge the data to preserve sortedness. This
 operator must run single-threaded and therefore doesn’t require any shared
@@ -209,7 +215,8 @@ LocalExchangeQueues operators use Task::getLocalExchangeQueue() API to get
 access to shared queues to read and write data to. LocalPartition operator
 partitions the data and puts it into LocalExchangeQueues. LocalExchange reads
 data from a single LocalExchangeQueue.</p>
-<a class="reference internal image-reference" href="../_images/task-local-exchange.png"><img alt="../_images/task-local-exchange.png" class="align-center" src="../_images/task-local-exchange.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/task-local-exchange.png"><img alt="../_images/task-local-exchange.png" class="align-center" src="../_images/task-local-exchange.png" style="width: 400px;" />
+</a>
 </section>
 <section id="local-merge-sources">
 <h2>Local Merge Sources<a class="headerlink" href="#local-merge-sources" title="Link to this heading">¶</a></h2>
@@ -332,7 +339,7 @@ operators.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

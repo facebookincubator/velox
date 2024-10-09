@@ -47,7 +47,8 @@ Each pipeline is made of a linear sequence of operators that corresponds to a
 linear sub-tree of the plan. The plan tree is broken down into a set of linear
 sub-trees by disconnecting all but one child node from each node that has two
 or more children.</p>
-<a class="reference internal image-reference" href="../_images/local-planner.png"><img alt="../_images/local-planner.png" class="align-center" src="../_images/local-planner.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/local-planner.png"><img alt="../_images/local-planner.png" class="align-center" src="../_images/local-planner.png" style="width: 400px;" />
+</a>
 <p>The conversion of plan nodes to operators is mostly one-to-one. Some exceptions are:</p>
 <ul class="simple">
 <li><p>Filter node followed by Project node is converted into a single operator FilterProject</p></li>
@@ -1246,7 +1247,8 @@ publishing the final table to the JoinBridge. When the probe pipeline for the
 right outer join runs multi-threaded, the last pipeline to finish processing is
 responsible for emitting rows from the build side that didn’t match the join
 condition.</p>
-<a class="reference internal image-reference" href="../_images/join.png"><img alt="../_images/join.png" class="align-center" src="../_images/join.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/join.png"><img alt="../_images/join.png" class="align-center" src="../_images/join.png" style="width: 400px;" />
+</a>
 </section>
 <section id="local-exchange">
 <h3>Local Exchange<a class="headerlink" href="#local-exchange" title="Link to this heading">¶</a></h3>
@@ -1259,13 +1261,16 @@ pipelines. For example to combine multiple inputs of the UNION or UNION ALL.</p>
 <p>Here are some examples.</p>
 <p>N-to-1 local exchange that could be used for combining partially sorted results
 for final merge sort.</p>
-<a class="reference internal image-reference" href="../_images/local-exchange-N-to-1.png"><img alt="../_images/local-exchange-N-to-1.png" class="align-center" src="../_images/local-exchange-N-to-1.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/local-exchange-N-to-1.png"><img alt="../_images/local-exchange-N-to-1.png" class="align-center" src="../_images/local-exchange-N-to-1.png" style="width: 400px;" />
+</a>
 <p>1-to-N local exchange to increase parallelism after an operation that must run
 single-threaded.</p>
-<a class="reference internal image-reference" href="../_images/local-exchange-1-to-N.png"><img alt="../_images/local-exchange-1-to-N.png" class="align-center" src="../_images/local-exchange-1-to-N.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/local-exchange-1-to-N.png"><img alt="../_images/local-exchange-1-to-N.png" class="align-center" src="../_images/local-exchange-1-to-N.png" style="width: 400px;" />
+</a>
 <p>Local exchange used to combine data from multiple pipelines, e.g. for UNION
 ALL.</p>
-<a class="reference internal image-reference" href="../_images/local-exchange.png"><img alt="../_images/local-exchange.png" class="align-center" src="../_images/local-exchange.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/local-exchange.png"><img alt="../_images/local-exchange.png" class="align-center" src="../_images/local-exchange.png" style="width: 400px;" />
+</a>
 </section>
 </section>
 </section>
@@ -1371,7 +1376,7 @@ ALL.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

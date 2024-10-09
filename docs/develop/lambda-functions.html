@@ -138,7 +138,8 @@ this case, “rows” represents the rows of the elements vector and “args”
 contains a single elements vector. The “result” is a boolean vector which
 has “true” value for the elements which pass the predicate and “false” value
 for the elements which do not.</p>
-<a class="reference internal image-reference" href="../_images/lambda-apply.png"><img alt="../_images/lambda-apply.png" src="../_images/lambda-apply.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/lambda-apply.png"><img alt="../_images/lambda-apply.png" src="../_images/lambda-apply.png" style="width: 600px;" />
+</a>
 <p>In addition to “rows” and “args”, Callable::apply() method takes an
 optional “wrapCapture” buffer parameter. This parameter must be specified if
 the lambda expression uses a capture, e.g. if Callable::hasCapture() returns
@@ -149,7 +150,8 @@ two inputs: “x” and “b”. Here, “x” is an element of the array with a
 rows, while “b” is a top-level column with just 2 rows. To align “x” and “b” we
 need to repeat “b” as many times as there are elements in the corresponding
 array.</p>
-<a class="reference internal image-reference" href="../_images/lambda-apply-with-capture.png"><img alt="../_images/lambda-apply-with-capture.png" src="../_images/lambda-apply-with-capture.png" style="width: 500px;" /></a>
+<a class="reference internal image-reference" href="../_images/lambda-apply-with-capture.png"><img alt="../_images/lambda-apply-with-capture.png" src="../_images/lambda-apply-with-capture.png" style="width: 500px;" />
+</a>
 <p>If there are multiple captures, all of them need to be aligned in the same way,
 e.g. their values need to be repeated as many times as there are elements in
 the corresponding array or map. The “wrapCapture” parameter in Callable::apply
@@ -180,7 +182,8 @@ parameter to VectorFunction::apply() method.</p>
 <p>A lambda function call in an expression tree is represented by a CallTypedExpr
 node with a LambdaTypedExpr child. The “filter(a, x -&gt; x % 2 = 0)” would be
 represented like this:</p>
-<a class="reference internal image-reference" href="../_images/lambda-end-to-end.png"><img alt="../_images/lambda-end-to-end.png" src="../_images/lambda-end-to-end.png" style="width: 800px;" /></a>
+<a class="reference internal image-reference" href="../_images/lambda-end-to-end.png"><img alt="../_images/lambda-end-to-end.png" src="../_images/lambda-end-to-end.png" style="width: 800px;" />
+</a>
 <p>Note that LambdaTypedExpr node doesn’t have any children. The expression that
 represents the body of the lambda is contained inside the LambdaTypedExpr
 node.</p>
@@ -293,7 +296,7 @@ an array(integer) and “b” an integer.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

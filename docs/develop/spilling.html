@@ -70,7 +70,8 @@ operators built on top of it. The spilling framework provides the common
 spilling functions which includes spill data collection, partition, sort,
 serialization/deserialization and the storage read and write. Each spillable
 operator uses these functions to implement its own spilling algorithm.</p>
-<a class="reference internal image-reference" href="../_images/spill-arch.png"><img alt="../_images/spill-arch.png" class="align-center" src="../_images/spill-arch.png" style="width: 300px;" /></a>
+<a class="reference internal image-reference" href="../_images/spill-arch.png"><img alt="../_images/spill-arch.png" class="align-center" src="../_images/spill-arch.png" style="width: 300px;" />
+</a>
 </section>
 <section id="spill-objects">
 <h2>Spill Objects<a class="headerlink" href="#spill-objects" title="Link to this heading">¶</a></h2>
@@ -289,8 +290,10 @@ to build a lightweight garbage collection (GC) service running out of band.</p>
 <section id="hash-aggregation">
 <h3>Hash Aggregation<a class="headerlink" href="#hash-aggregation" title="Link to this heading">¶</a></h3>
 <blockquote>
-<div><a class="reference internal image-reference" href="../_images/spill-aggregation-spill.png"><img alt="../_images/spill-aggregation-spill.png" class="align-left" src="../_images/spill-aggregation-spill.png" style="width: 300px;" /></a>
-<a class="reference internal image-reference" href="../_images/spill-aggregation-restore.png"><img alt="../_images/spill-aggregation-restore.png" class="align-right" src="../_images/spill-aggregation-restore.png" style="width: 300px;" /></a>
+<div><a class="reference internal image-reference" href="../_images/spill-aggregation-spill.png"><img alt="../_images/spill-aggregation-spill.png" class="align-left" src="../_images/spill-aggregation-spill.png" style="width: 300px;" />
+</a>
+<a class="reference internal image-reference" href="../_images/spill-aggregation-restore.png"><img alt="../_images/spill-aggregation-restore.png" class="align-right" src="../_images/spill-aggregation-restore.png" style="width: 300px;" />
+</a>
 </div></blockquote>
 <p>The hash aggregation operator stores the intermediate aggregation state in a
 hash table with one table entry per group. When spilling is triggered, the
@@ -345,7 +348,8 @@ keep it in the memory for the entire hash join processing. Similar to the order
 by processing, each hash build operator stores the build side inputs into a row
 container, and after all the hash build operators have processed the inputs,
 one of them builds a single aggregated hash table with the rows collected from all the hash build operators.</p>
-<a class="reference internal image-reference" href="../_images/spill-hash-join-build.png"><img alt="../_images/spill-hash-join-build.png" class="align-center" src="../_images/spill-hash-join-build.png" style="width: 800px;" /></a>
+<a class="reference internal image-reference" href="../_images/spill-hash-join-build.png"><img alt="../_images/spill-hash-join-build.png" class="align-center" src="../_images/spill-hash-join-build.png" style="width: 800px;" />
+</a>
 <p>To prevent hash join from running out of memory, the hash build operators need
 to spill part of the build side inputs to disk if the row container grows too
 large during the processing. Hash build operators coordinate spilling with each
@@ -354,7 +358,8 @@ spill independently, it is possible to end up with all partitions being
 spilled. To build a hash table, we need all rows from one or more partitions.
 Unlike hash aggregation and order by, the hash join spilling is explicitly
 controlled by the hash build operators.</p>
-<a class="reference internal image-reference" href="../_images/spill-hash-join-probe.png"><img alt="../_images/spill-hash-join-probe.png" class="align-center" src="../_images/spill-hash-join-probe.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/spill-hash-join-probe.png"><img alt="../_images/spill-hash-join-probe.png" class="align-center" src="../_images/spill-hash-join-probe.png" style="width: 400px;" />
+</a>
 <p>The hash probe operator itself is not spillable but we need to extend it to
 support the spilling happened at the build side. If the hash build operators
 have spilled partition <em>N</em>, then the hash probe operators have to spill all the
@@ -671,7 +676,7 @@ ahead.</p></li>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

@@ -82,11 +82,13 @@ vector. First, we make a flat base vector containing only distinct colors:
 0 - red, 1 - blue, 2 - green. Using this mapping, we convert the original values
 into an array of indices: [0, 1, 0, 0, 1, 2]. Finally, we combine the indices and
 a base vector to make a dictionary vector.</p>
-<a class="reference internal image-reference" href="../_images/dictionary-repeated.png"><img alt="../_images/dictionary-repeated.png" src="../_images/dictionary-repeated.png" style="width: 300px;" /></a>
+<a class="reference internal image-reference" href="../_images/dictionary-repeated.png"><img alt="../_images/dictionary-repeated.png" src="../_images/dictionary-repeated.png" style="width: 300px;" />
+</a>
 <p>Now, let’s say we want to represent a subset of the people whose favourite color
 is red. We can take the original flat vector of names and wrap it in a dictionary
 vector with indices pointing only to rows where color = “red”, e.g. rows 0, 2 and 3.</p>
-<a class="reference internal image-reference" href="../_images/dictionary-subset.png"><img alt="../_images/dictionary-subset.png" src="../_images/dictionary-subset.png" style="width: 300px;" /></a>
+<a class="reference internal image-reference" href="../_images/dictionary-subset.png"><img alt="../_images/dictionary-subset.png" src="../_images/dictionary-subset.png" style="width: 300px;" />
+</a>
 <p>As you can see, dictionary vectors can be used to represent both cardinality increase
 and cardinality reduction. The array of indices can be smaller or larger than the size
 of the base vector. Indices may or may not repeat.</p>
@@ -441,7 +443,7 @@ the rows of interest.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

@@ -54,7 +54,8 @@ are not supported yet.</p>
 <p>Use HashJoinNode plan node to insert a join into a query plan. Specify the join
 type, an equi-clause, e.g. pairs of columns on the left and right side whose
 values need to match, and an optional filter to apply to join results.</p>
-<a class="reference internal image-reference" href="../_images/hash-join-node.png"><img alt="../_images/hash-join-node.png" class="align-center" src="../_images/hash-join-node.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/hash-join-node.png"><img alt="../_images/hash-join-node.png" class="align-center" src="../_images/hash-join-node.png" style="width: 400px;" />
+</a>
 <p>The join type can be one of kInner, kLeft, kRight, kFull, kLeftSemiFilter,
 kLeftSemiProject, kRightSemiFilter, kRightSemiProject, or kAnti.</p>
 <p>kLeftSemiProject, kRightSemiProject and kAnti joins support an additional
@@ -217,7 +218,8 @@ pipeline. HashBuild operator is installed as the last operator of the
 build-side pipeline. The output of the HashBuild operator is a
 <a class="reference external" href="hash-table.html">hash table</a> which
 HashProbe operator gets access to via a special mechanism: JoinBridge.</p>
-<a class="reference internal image-reference" href="../_images/join-pipelines.png"><img alt="../_images/join-pipelines.png" class="align-center" src="../_images/join-pipelines.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/join-pipelines.png"><img alt="../_images/join-pipelines.png" class="align-center" src="../_images/join-pipelines.png" style="width: 400px;" />
+</a>
 <p>Both HashBuild and HashAggregation operators use the same data structure for the
 hash table: <a class="reference external" href="hash-table.html">velox::exec::HashTable</a>. The payload, the non-join key columns
 referred to as dependent columns, are stored row-wise in the RowContainer.</p>
@@ -245,7 +247,8 @@ these scenarios, it is often the case that only a small fraction of the join
 keys on the probe side match the build side and it is beneficial to filter out
 probe rows during table scan. This optimization is referred to as dynamic
 filtering or dynamic filter pushdown.</p>
-<a class="reference internal image-reference" href="../_images/join-plan-translation.png"><img alt="../_images/join-plan-translation.png" class="align-center" src="../_images/join-plan-translation.png" style="width: 800px;" /></a>
+<a class="reference internal image-reference" href="../_images/join-plan-translation.png"><img alt="../_images/join-plan-translation.png" class="align-center" src="../_images/join-plan-translation.png" style="width: 800px;" />
+</a>
 <p>Velox implements this optimization by leveraging VectorHashers that contain full
 knowledge about the join key values on the build side. For each join key
 with not too many distinct values, an in-list filter is constructed using the set
@@ -255,7 +258,8 @@ HiveConnector which uses them to (1) prune files and row groups based on
 statistics and (2) filter out rows when reading the data.</p>
 <p>It is worth noting that the biggest wins come from using the dynamic filters to
 prune whole file and row groups during table scan.</p>
-<a class="reference internal image-reference" href="../_images/join-dynamic-filters.png"><img alt="../_images/join-dynamic-filters.png" class="align-center" src="../_images/join-dynamic-filters.png" style="width: 400px;" /></a>
+<a class="reference internal image-reference" href="../_images/join-dynamic-filters.png"><img alt="../_images/join-dynamic-filters.png" class="align-center" src="../_images/join-dynamic-filters.png" style="width: 400px;" />
+</a>
 <p>Dynamic filter pushdown is possible only if the join key column comes from a
 collocated TableScan operator unmodified. HashProbe asks the Driver which
 columns support filter pushdown (e.g. which columns come unmodified from an
@@ -433,7 +437,8 @@ side data and continues execution as specified by downstream plan nodes.
 MergeJoinNode is translated into MergeJoin operator and a CallbackSink backed
 by MergeJoinSource. MergeJoin operator becomes part of the left-side
 pipeline. CallbackSink is installed at the end of the right-side pipeline.</p>
-<a class="reference internal image-reference" href="../_images/merge-join-pipelines.png"><img alt="../_images/merge-join-pipelines.png" class="align-center" src="../_images/merge-join-pipelines.png" style="width: 800px;" /></a>
+<a class="reference internal image-reference" href="../_images/merge-join-pipelines.png"><img alt="../_images/merge-join-pipelines.png" class="align-center" src="../_images/merge-join-pipelines.png" style="width: 800px;" />
+</a>
 </section>
 <section id="usage-examples">
 <h2>Usage Examples<a class="headerlink" href="#usage-examples" title="Link to this heading">¶</a></h2>
@@ -523,7 +528,7 @@ of how to build and execute a plan with a hash or merge join.</p>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

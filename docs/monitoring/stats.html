@@ -194,57 +194,63 @@ hash build operators. This stat is only reported by the HashBuild operator.</p><
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>spillFillWallNanos</p></td>
+<tr class="row-even"><td><p>spillNotSupported</p></td>
+<td><p>nanos</p></td>
+<td><p>The number of a spillable operators that don’t support spill because of
+spill limitation. For instance, a window operator do not support spill
+if there is no partitioning.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spillFillWallNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The time spent on filling rows for spilling.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spillSortWallNanos</p></td>
+<tr class="row-even"><td><p>spillSortWallNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The time spent on sorting rows for spilling.</p></td>
 </tr>
-<tr class="row-even"><td><p>spillExtractVectorWallNanos</p></td>
+<tr class="row-odd"><td><p>spillExtractVectorWallNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The time spent on extracting Vector from RowContainer for spilling.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spillSerializationWallNanos</p></td>
+<tr class="row-even"><td><p>spillSerializationWallNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The time spent on serializing rows for spilling.</p></td>
 </tr>
-<tr class="row-even"><td><p>spillFlushWallNanos</p></td>
+<tr class="row-odd"><td><p>spillFlushWallNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The time spent on copy out serialized rows for disk write. If compression
 is enabled, this includes the compression time.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spillWrites</p></td>
+<tr class="row-even"><td><p>spillWrites</p></td>
 <td></td>
 <td><p>The number of spill writer flushes, equivalent to number of write calls to
 underlying filesystem.</p></td>
 </tr>
-<tr class="row-even"><td><p>spillWriteWallNanos</p></td>
+<tr class="row-odd"><td><p>spillWriteWallNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The time spent on writing spilled rows to disk.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spillRuns</p></td>
+<tr class="row-even"><td><p>spillRuns</p></td>
 <td></td>
 <td><p>The number of times that spilling runs on an operator.</p></td>
 </tr>
-<tr class="row-even"><td><p>exceededMaxSpillLevel</p></td>
+<tr class="row-odd"><td><p>exceededMaxSpillLevel</p></td>
 <td></td>
 <td><p>The number of times that an operator exceeds the max spill limit.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spillReadBytes</p></td>
+<tr class="row-even"><td><p>spillReadBytes</p></td>
 <td><p>bytes</p></td>
 <td><p>The number of bytes read from spilled files.</p></td>
 </tr>
-<tr class="row-even"><td><p>spillReads</p></td>
+<tr class="row-odd"><td><p>spillReads</p></td>
 <td></td>
 <td><p>The number of spill reader reads, equivalent to the number of read calls to the underlying filesystem.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spillReadWallNanos</p></td>
+<tr class="row-even"><td><p>spillReadWallNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The time spent on read data from spilled files.</p></td>
 </tr>
-<tr class="row-even"><td><p>spillDeserializationWallNanos</p></td>
+<tr class="row-odd"><td><p>spillDeserializationWallNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The time spent on deserializing rows read from spilled files.</p></td>
 </tr>
@@ -323,7 +329,7 @@ underlying filesystem.</p></td>
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

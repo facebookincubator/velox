@@ -56,21 +56,24 @@ it would be helpful to understand the HashStringAllocator.</p>
 <p>Memory is allocated in standard size contiguous runs of 4KB pages. The available
 sizes are: 4, 8, 16, 32, 64, 128, 256 pages. The minimum run is 16KB = 4 pages
 of 4KB each. Individual blocks are then allocated from the page runs.</p>
-<a class="reference internal image-reference" href="../_images/arena-page-runs.png"><img alt="../_images/arena-page-runs.png" src="../_images/arena-page-runs.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/arena-page-runs.png"><img alt="../_images/arena-page-runs.png" src="../_images/arena-page-runs.png" style="width: 600px;" />
+</a>
 <p>exec::HashStringAllocator writes a 4 bytes end marker (kArenaEnd) at the end of
 each page run. Blocks are allocated one after another. Each block starts with a
 4 bytes header which contains 1-bit flags and size. kFree bit indicates whether
 a block is free. kContinued indicates a block in a multi-part non-contiguous
 allocation. kPreviousFree indicates that a block immediately before this block
 is free,</p>
-<a class="reference internal image-reference" href="../_images/arena-block.png"><img alt="../_images/arena-block.png" src="../_images/arena-block.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/arena-block.png"><img alt="../_images/arena-block.png" src="../_images/arena-block.png" style="width: 600px;" />
+</a>
 <p>When blocks are freed, adjacent free blocks are coalesced into larger free
 blocks.</p>
 <p>Free blocks are organized into a circular doubly linked list. 6-byte pointers to
 next and previous free blocks are stored in 12 bytes immediately following the
 header. The size of the free block is stored in the header and also in the last
 4 bytes of the block.</p>
-<a class="reference internal image-reference" href="../_images/arena-free-block.png"><img alt="../_images/arena-free-block.png" src="../_images/arena-free-block.png" style="width: 800px;" /></a>
+<a class="reference internal image-reference" href="../_images/arena-free-block.png"><img alt="../_images/arena-free-block.png" src="../_images/arena-free-block.png" style="width: 800px;" />
+</a>
 <p>The size of the free block written at the end of the block is used to coalesce
 adjacent free blocks. When a block is freed, we check if the block immediately
 before is free using kPreviousFree bit. We find the size of the preceding free
@@ -84,7 +87,8 @@ updating.</p>
 <p>Blocks in multi-part non-contiguous allocations use kContinued bit to indicate
 the presence of the “next” block and store the pointer to that block in the last
 8 bytes.</p>
-<a class="reference internal image-reference" href="../_images/arena-multipart-block.png"><img alt="../_images/arena-multipart-block.png" src="../_images/arena-multipart-block.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/arena-multipart-block.png"><img alt="../_images/arena-multipart-block.png" src="../_images/arena-multipart-block.png" style="width: 600px;" />
+</a>
 </section>
 <section id="api">
 <h2>API<a class="headerlink" href="#api" title="Link to this heading">¶</a></h2>
@@ -278,7 +282,7 @@ and <a class="reference internal" href="../functions/presto/aggregate.html#appro
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>

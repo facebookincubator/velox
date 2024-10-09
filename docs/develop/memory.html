@@ -92,7 +92,8 @@ manager (<em>MemoryManager</em>), memory allocator (<em>MemoryAllocator</em>), f
 pools (<em>MemoryPool</em>). The memory manager creates all the other components. It
 creates the memory allocator and memory arbitrator when initializing the memory
 system, and creates the memory pool on-demand for query execution.</p>
-<a class="reference internal image-reference" href="../_images/memory-system.png"><img alt="../_images/memory-system.png" class="align-center" src="../_images/memory-system.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/memory-system.png"><img alt="../_images/memory-system.png" class="align-center" src="../_images/memory-system.png" style="width: 600px;" />
+</a>
 <p>When a query starts execution, it first creates a root memory pool (query pool)
 from the memory manager, and then creates a tree of child memory pools from the
 root according to the query plan: a child memory pool for each query task
@@ -125,7 +126,8 @@ prevent the memory allocation failure because of excessive file cache memory
 usage, the file cache retries the allocation failure by shrinking the file
 cache. This achieves dynamic memory sharing between file cache and query memory
 in response to the user query workload changes.</p>
-<a class="reference internal image-reference" href="../_images/memory-function.png"><img alt="Memory Management Functions" class="align-center" src="../_images/memory-function.png" style="width: 800px;" /></a>
+<a class="reference internal image-reference" href="../_images/memory-function.png"><img alt="Memory Management Functions" class="align-center" src="../_images/memory-function.png" style="width: 800px;" />
+</a>
 <p>To summarize, the memory manager manages the memory pools and coordinates the
 accesses between different memory components. The memory pool tracks a query’s
 memory usage and interacts with the memory arbitrator to adjust the memory
@@ -137,7 +139,8 @@ document describes each memory component in detail.</p>
 </section>
 <section id="memory-manager">
 <h2>Memory Manager<a class="headerlink" href="#memory-manager" title="Link to this heading">¶</a></h2>
-<a class="reference internal image-reference" href="../_images/memory-manager.png"><img alt="Memory Manager" class="align-center" src="../_images/memory-manager.png" style="width: 600px;" /></a>
+<a class="reference internal image-reference" href="../_images/memory-manager.png"><img alt="Memory Manager" class="align-center" src="../_images/memory-manager.png" style="width: 600px;" />
+</a>
 <p>The memory manager is created on server startup with the provided
 <em>MemoryManagerOption</em>. It creates a memory allocator instance to manage the
 physical memory allocations for both query memory allocated through memory pool
@@ -250,7 +253,8 @@ in parallel. Each driver instance consists of a pipeline of query operators,
 and an operator is an instantiation of a query plan node in a driver. Hence
 each operator creates a child operator pool from the node pool
 (<em>Task::addOperatorPool</em>).</p>
-<a class="reference internal image-reference" href="../_images/memory-pool.png"><img alt="Memory Pool" class="align-center" src="../_images/memory-pool.png" style="width: 500px;" /></a>
+<a class="reference internal image-reference" href="../_images/memory-pool.png"><img alt="Memory Pool" class="align-center" src="../_images/memory-pool.png" style="width: 500px;" />
+</a>
 <p>Query allocates memory from the operator pool at the leaf of the tree and
 propagates the memory usage all the way up to the query pool at the root of the
 tree to check if the memory usage has exceeded the per-query memory limit or
@@ -539,7 +543,8 @@ or increases its capacity by reclaiming used memory from the other queries with
 the largest memory capacity in the system.</p>
 <section id="memory-arbitration-process">
 <h3>Memory Arbitration Process<a class="headerlink" href="#memory-arbitration-process" title="Link to this heading">¶</a></h3>
-<a class="reference internal image-reference" href="../_images/memory-arbitration.png"><img alt="Memory Arbitration Process" class="align-center" src="../_images/memory-arbitration.png" style="width: 800px;" /></a>
+<a class="reference internal image-reference" href="../_images/memory-arbitration.png"><img alt="Memory Arbitration Process" class="align-center" src="../_images/memory-arbitration.png" style="width: 800px;" />
+</a>
 <p>The end-to-end memory arbitration process in <em>SharedArbitrator</em> works as follows:</p>
 <ol class="arabic simple">
 <li><p>The query operator A allocates memory from its leaf operator pool (operator
@@ -680,7 +685,8 @@ application by setting <em>MemoryManagerOptions::useMmapAllocator</em> (see
 <a class="reference external" href="#memory-system-setup">memory system setup section</a> for example).</p>
 <section id="non-contiguous-allocation">
 <h3>Non-Contiguous Allocation<a class="headerlink" href="#non-contiguous-allocation" title="Link to this heading">¶</a></h3>
-<a class="reference internal image-reference" href="../_images/size-class.png"><img alt="Size Class" class="align-center" src="../_images/size-class.png" style="width: 500px;" /></a>
+<a class="reference internal image-reference" href="../_images/size-class.png"><img alt="Size Class" class="align-center" src="../_images/size-class.png" style="width: 500px;" />
+</a>
 <p>A non-contiguous allocation is defined as an <em>Allocation</em> object which consists
 of a number of PageRun(s). Each page run contains a contiguous buffer and the
 buffers from different page runs don’t have to be contiguous. <em>MMapAllocator</em>
@@ -953,7 +959,7 @@ to the transient spiky memory usage from non-Velox components in a query system.
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
     </div>
   </body>
 </html>
