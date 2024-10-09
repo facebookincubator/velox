@@ -744,7 +744,9 @@ int32_t parseFromPattern(
       return -1;
     }
     cur += size;
-    date.weekDateFormat = true;
+    if (!date.weekOfMonthDateFormat) {
+      date.weekDateFormat = true;
+    }
     date.dayOfYearFormat = false;
     if (!date.hasYear) {
       date.hasYear = true;
@@ -997,7 +999,9 @@ int32_t parseFromPattern(
           }
         }
         date.dayOfWeek = number;
-        date.weekDateFormat = true;
+        if (!date.weekOfMonthDateFormat) {
+          date.weekDateFormat = true;
+        }
         date.hasDayOfWeek = true;
         date.dayOfYearFormat = false;
         if (!date.hasYear) {
