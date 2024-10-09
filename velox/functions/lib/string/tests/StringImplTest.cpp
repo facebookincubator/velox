@@ -399,99 +399,117 @@ TEST_F(StringImplTest, overlappedStringPosition) {
   auto testValidInputAsciiLpos = [](const std::string& string,
                                     const std::string& substr,
                                     const int64_t instance,
+                                    const int64_t start,
                                     const int64_t expectedPosition) {
     auto result = stringPosition</*isAscii*/ true, true>(
-        StringView(string), StringView(substr), instance);
+        StringView(string), StringView(substr), instance, start);
     ASSERT_EQ(result, expectedPosition);
   };
   auto testValidInputAsciiRpos = [](const std::string& string,
                                     const std::string& substr,
                                     const int64_t instance,
+                                    const int64_t start,
                                     const int64_t expectedPosition) {
     auto result = stringPosition</*isAscii*/ true, false>(
-        StringView(string), StringView(substr), instance);
+        StringView(string), StringView(substr), instance, start);
     ASSERT_EQ(result, expectedPosition);
   };
 
   auto testValidInputUnicodeLpos = [](const std::string& string,
                                       const std::string& substr,
                                       const int64_t instance,
+                                      const int64_t start,
                                       const int64_t expectedPosition) {
     auto result = stringPosition</*isAscii*/ false, true>(
-        StringView(string), StringView(substr), instance);
+        StringView(string), StringView(substr), instance, start);
     ASSERT_EQ(result, expectedPosition);
   };
 
   auto testValidInputUnicodeRpos = [](const std::string& string,
                                       const std::string& substr,
                                       const int64_t instance,
+                                      const int64_t start,
                                       const int64_t expectedPosition) {
     auto result = stringPosition</*isAscii*/ false, false>(
-        StringView(string), StringView(substr), instance);
+        StringView(string), StringView(substr), instance, start);
     ASSERT_EQ(result, expectedPosition);
   };
 
-  testValidInputAsciiLpos("aaa", "aa", 2, 2L);
-  testValidInputAsciiRpos("aaa", "aa", 2, 1L);
+  testValidInputAsciiLpos("aaa", "aa", 2, 1, 2L);
+  testValidInputAsciiLpos("aaaaaaa", "aa", 2, 3, 4L);
+  testValidInputAsciiRpos("aaa", "aa", 2, 1, 1L);
+  testValidInputAsciiRpos("aaaaaaa", "aa", 2, 2, 5L);
 
-  testValidInputAsciiLpos("|||", "||", 2, 2L);
-  testValidInputAsciiRpos("|||", "||", 2, 1L);
+  testValidInputAsciiLpos("|||", "||", 2, 1, 2L);
+  testValidInputAsciiLpos("|||||||", "||", 2, 4, 5L);
+  testValidInputAsciiRpos("|||", "||", 2, 1, 1L);
+  testValidInputAsciiRpos("|||||||", "||", 2, 4, 5L);
 
-  testValidInputUnicodeLpos("😋😋😋", "😋😋", 2, 2L);
-  testValidInputUnicodeRpos("😋😋😋", "😋😋", 2, 1L);
+  testValidInputUnicodeLpos("😋😋😋", "😋😋", 2, 1, 2L);
+  testValidInputUnicodeLpos("😋😋😋😋😋", "😋😋", 2, 4, 0L);
+  testValidInputUnicodeRpos("😋😋😋", "😋😋", 2, 2, 0L);
+  testValidInputUnicodeRpos("😋😋😋😋😋", "😋😋", 2, 4, 0L);
 
-  testValidInputUnicodeLpos("你你你", "你你", 2, 2L);
-  testValidInputUnicodeRpos("你你你", "你你", 2, 1L);
+  testValidInputUnicodeLpos("你你你", "你你", 2, 1, 2L);
+  testValidInputUnicodeLpos("你你你你你你", "你你", 2, 4, 5L);
+  testValidInputUnicodeRpos("你你你", "你你", 2, 1, 1L);
+  testValidInputUnicodeRpos("你你你你你你", "你你", 2, 4, 4L);
 }
 
 TEST_F(StringImplTest, stringPosition) {
   auto testValidInputAscii = [](const std::string& string,
                                 const std::string& substr,
                                 const int64_t instance,
+                                const int64_t start,
                                 const int64_t expectedPosition) {
     ASSERT_EQ(
         stringPosition</*isAscii*/ true>(
-            StringView(string), StringView(substr), instance),
+            StringView(string), StringView(substr), instance, start),
         expectedPosition);
     ASSERT_EQ(
         stringPosition</*isAscii*/ false>(
-            StringView(string), StringView(substr), instance),
+            StringView(string), StringView(substr), instance, start),
         expectedPosition);
   };
 
   auto testValidInputUnicode = [](const std::string& string,
                                   const std::string& substr,
                                   const int64_t instance,
+                                  const int64_t start,
                                   const int64_t expectedPosition) {
     ASSERT_EQ(
         stringPosition</*isAscii*/ false>(
-            StringView(string), StringView(substr), instance),
+            StringView(string), StringView(substr), instance, start),
         expectedPosition);
     ASSERT_EQ(
         stringPosition</*isAscii*/ false>(
-            StringView(string), StringView(substr), instance),
+            StringView(string), StringView(substr), instance, start),
         expectedPosition);
   };
 
-  testValidInputAscii("high", "ig", 1, 2L);
-  testValidInputAscii("high", "igx", 1, 0L);
-  testValidInputAscii("Quadratically", "a", 1, 3L);
-  testValidInputAscii("foobar", "foobar", 1, 1L);
-  testValidInputAscii("foobar", "obar", 1, 3L);
-  testValidInputAscii("zoo!", "!", 1, 4L);
-  testValidInputAscii("x", "", 1, 1L);
-  testValidInputAscii("", "", 1, 1L);
-  testValidInputAscii("abc/xyz/foo/bar", "/", 3, 12L);
+  testValidInputAscii("high", "ig", 1, 1, 2L);
+  testValidInputAscii("high", "igx", 1, 1, 0L);
+  testValidInputAscii("Quadratically", "a", 1, 1, 3L);
+  testValidInputAscii("foobar", "foobar", 1, 1, 1L);
+  testValidInputAscii("foobar", "obar", 1, 1, 3L);
+  testValidInputAscii("zoo!", "!", 1, 1, 4L);
+  testValidInputAscii("x", "", 1, 1, 1L);
+  testValidInputAscii("", "", 1, 1, 1L);
+  testValidInputAscii("abc/xyz/foo/bar", "/", 3, 1, 12L);
+  testValidInputAscii("abc/xyz/foo/bar", "/", 2, 5, 12L);
 
-  testValidInputUnicode("\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u7231", 1, 4L);
+  testValidInputUnicode("\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u7231", 1, 1, 4L);
   testValidInputUnicode(
-      "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u5E0C\u671B", 1, 6L);
-  testValidInputUnicode("\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "nice", 1, 0L);
+      "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u5E0C\u671B", 1, 1, 6L);
+  testValidInputUnicode("\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "nice", 1, 1, 0L);
+  testValidInputUnicode(
+      "\u4FE1\u5FF5,\u7231,\u5E0C\u671B,\u7231", "\u7231", 1, 6, 9L);
 
-  testValidInputUnicode("abc/xyz/foo/bar", "/", 1, 4L);
-  testValidInputUnicode("abc/xyz/foo/bar", "/", 2, 8L);
-  testValidInputUnicode("abc/xyz/foo/bar", "/", 3, 12L);
-  testValidInputUnicode("abc/xyz/foo/bar", "/", 4, 0L);
+  testValidInputUnicode("abc/xyz/foo/bar", "/", 1, 1, 4L);
+  testValidInputUnicode("abc/xyz/foo/bar", "/", 2, 1, 8L);
+  testValidInputUnicode("abc/xyz/foo/bar", "/", 3, 1, 12L);
+  testValidInputUnicode("abc/xyz/foo/bar", "/", 4, 1, 0L);
+  testValidInputAscii("abc/xyz/foo/bar", "/", 1, 13, 0L);
 
   EXPECT_THROW(
       stringPosition</*isAscii*/ false>(
