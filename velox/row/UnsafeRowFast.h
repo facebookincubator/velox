@@ -43,6 +43,18 @@ class UnsafeRowFast {
   /// 'buffer' must have sufficient capacity and set to all zeros.
   int32_t serialize(vector_size_t index, char* buffer) const;
 
+  /// Serializes rows in the range [offset, offset + size) into 'buffer' at
+  /// given 'bufferOffsets'. 'buffer' must have sufficient capacity and set to
+  /// all zeros for null-bits handling. 'bufferOffsets' must be pre-filled with
+  /// the write offsets for each row and must be accessible for 'size' elements.
+  /// The caller must ensure that the space between each offset in
+  /// 'bufferOffsets' is no less than the 'fixedRowSize' or 'rowSize'.
+  void serialize(
+      vector_size_t offset,
+      vector_size_t size,
+      char* buffer,
+      const size_t* bufferOffsets);
+
  protected:
   explicit UnsafeRowFast(const VectorPtr& vector);
 
@@ -110,6 +122,14 @@ class UnsafeRowFast {
   /// Serializes struct value to buffer. Value must not be null.
   int32_t serializeRow(vector_size_t index, char* buffer) const;
 
+  /// Serializes struct values in range [offset, offset + size) to buffer.
+  /// Value must not be null.
+  void serializeRow(
+      vector_size_t offset,
+      vector_size_t size,
+      char* buffer,
+      const size_t* bufferOffsets);
+
   const TypeKind typeKind_;
   DecodedVector decoded_;
 
@@ -129,5 +149,8 @@ class UnsafeRowFast {
 
   // Fixed-width types only. Number of bytes used for a single value.
   size_t valueBytes_;
+
+  // ROW type only. True if children have variable-width type.
+  bool hasVariableWidth_{false};
 };
 } // namespace facebook::velox::row
