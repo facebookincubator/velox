@@ -24,7 +24,6 @@
 
 #ifdef VELOX_ENABLE_S3
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Metrics.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #endif
 
 namespace folly {
@@ -59,11 +58,9 @@ class PeriodicStatsReporter {
     const memory::MemoryPool* spillMemoryPool{nullptr};
     uint64_t spillStatsIntervalMs{60'000};
 
-    std::shared_ptr<filesystems::S3FileSystem> s3FileSystem;
+    std::shared_ptr<filesystems::S3Metrics> s3Metrics;
 
-#ifdef VELOX_ENABLE_S3
     uint64_t s3MetricsIntervalMs{60'000};  // Reporting interval for S3 metrics.
-#endif
 
     std::string toString() const {
       std::string result = fmt::format(
@@ -73,10 +70,7 @@ class PeriodicStatsReporter {
           cacheStatsIntervalMs,
           arbitratorStatsIntervalMs,
           spillStatsIntervalMs);
-
-#ifdef VELOX_ENABLE_S3
       result += fmt::format(", s3MetricsIntervalMs:{}", s3MetricsIntervalMs);
-#endif
 
       return result;
     }
@@ -126,9 +120,8 @@ class PeriodicStatsReporter {
 
   folly::ThreadedRepeatingFunctionRunner scheduler_;
 
-  // Add the s3FileSystem_ member here.
 #ifdef VELOX_ENABLE_S3
-  std::shared_ptr<filesystems::S3FileSystem> s3FileSystem_;
+  std::shared_ptr<filesystems::S3Metrics> s3Metrics_;
 #endif
 };
 

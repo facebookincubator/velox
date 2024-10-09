@@ -51,9 +51,6 @@
 
 namespace facebook::velox {
 
-// Global instance of S3Metrics
-filesystems::S3Metrics globalS3Metrics;
-
 namespace {
 // Reference: https://issues.apache.org/jira/browse/ARROW-8692
 // https://github.com/apache/arrow/blob/master/cpp/src/arrow/filesystem/s3fs.cc#L843
@@ -109,8 +106,7 @@ class S3ReadFile final : public ReadFile {
     length_ = outcome.GetResult().GetContentLength();
     VELOX_CHECK_GE(length_, 0);
 
-    // Increment the started uploads metric
-    globalS3Metrics.increment("S3MetadataCalls");
+    filesystems::globalS3Metrics.incrementMetadataCalls();
   }
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buffer)
@@ -192,8 +188,7 @@ class S3ReadFile final : public ReadFile {
     auto outcome = client_->GetObject(request);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
 
-    // Increment the started uploads metric
-    globalS3Metrics.increment("S3ListObjectsCalls");
+    filesystems::globalS3Metrics.incrementListObjectsCalls();
   }
 
   Aws::S3::S3Client* client_;
@@ -284,8 +279,7 @@ class S3WriteFile::Impl {
 
     fileSize_ = 0;
 
-    // Increment the started uploads metric
-    globalS3Metrics.increment("startedUploads");
+    filesystems::globalS3Metrics.incrementStartedUploads();
   }
 
   // Appends data to the end of the file.
@@ -331,7 +325,7 @@ class S3WriteFile::Impl {
     }
     currentPart_->clear();
 
-    globalS3Metrics.increment("successfulUploads");
+    filesystems::globalS3Metrics.incrementSuccessfulUploads();
   }
 
   // Current file size, i.e. the sum of all previous appends.
@@ -599,7 +593,7 @@ class S3FileSystem::Impl {
     ++fileSystemCount;
 
     // Increment active connections metric.
-    globalS3Metrics.increment("activeConnections");
+    filesystems::globalS3Metrics.incrementActiveConnections();
   }
 
   ~Impl() {
@@ -607,7 +601,7 @@ class S3FileSystem::Impl {
     --fileSystemCount;
 
     // decrement active connections metric.
-    globalS3Metrics.increment("activeConnections");
+    filesystems::globalS3Metrics.decrementActiveConnections();
   }
 
   // Configure and return an AWSCredentialsProvider with access key and secret

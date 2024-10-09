@@ -64,17 +64,9 @@ PeriodicStatsReporter::PeriodicStatsReporter(const Options& options)
       arbitrator_(options.arbitrator),
       spillMemoryPool_(options.spillMemoryPool),
       options_(options),
-      lastCacheStats_()
-#ifdef VELOX_ENABLE_S3
-      ,
-      s3FileSystem_(options.s3FileSystem)
-#endif
+      lastCacheStats_(),
+      s3Metrics_(options.s3Metrics)  // Initialize S3Metrics
 {
-#ifdef VELOX_ENABLE_S3
-  VELOX_CHECK(
-      s3FileSystem_ || options.s3MetricsIntervalMs == 0,
-      "S3FileSystem must be provided when VELOX_ENABLE_S3 is enabled and s3MetricsIntervalMs is greater than 0");
-#endif
 }
 
 void PeriodicStatsReporter::start() {
@@ -82,7 +74,7 @@ void PeriodicStatsReporter::start() {
             << options_.toString();
 
 #ifdef VELOX_ENABLE_S3
-  if (s3FileSystem_ && options_.s3MetricsIntervalMs > 0) {
+  if (options_.s3MetricsIntervalMs > 0) {
     addS3MetricsTask(options_.s3MetricsIntervalMs);
   }
 #endif
@@ -276,10 +268,10 @@ void PeriodicStatsReporter::reportSpillStats() {
 }
 
 void PeriodicStatsReporter::addS3MetricsTask(uint64_t intervalMs) {
-  addTask(
+ addTask(
       "report_s3_metrics",
       [this]() {
-        auto& s3Metrics = s3FileSystem_->getMetrics();
+        auto& s3Metrics = *s3Metrics_;
 
         LOG(INFO) << "Updating S3 metrics: "
                   << "ActiveConnections=" << s3Metrics.activeConnections << ", "
@@ -323,13 +315,13 @@ void PeriodicStatsReporter::addS3MetricsTask(uint64_t intervalMs) {
         // Record SUM metrics using delta values.
         RECORD_METRIC_VALUE(
             filesystems::kMetricS3StartedUploads,
-            s3Metrics.getDelta("startedUploads"));
+            s3Metrics.getDeltaStartedUploads());
         RECORD_METRIC_VALUE(
             filesystems::kMetricS3FailedUploads,
-            s3Metrics.getDelta("failedUploads"));
+            s3Metrics.getDeltaFailedUploads());
         RECORD_METRIC_VALUE(
             filesystems::kMetricS3SuccessfulUploads,
-            s3Metrics.getDelta("successfulUploads"));
+            s3Metrics.getDeltaSuccessfulUploads());
 
         // Reset deltas after reporting.
         s3Metrics.resetDeltas();
