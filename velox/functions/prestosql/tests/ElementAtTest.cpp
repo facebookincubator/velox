@@ -133,7 +133,7 @@ class ElementAtTest : public FunctionBaseTest {
       test::assertEqualVectors(expected, result);
     }
     // case 4: Verify NaNs are identified when employing caching.
-    exec::ExprSet exprSet({}, &execCtx_);
+    exec::ExprSet exprSet(std::vector<core::TypedExprPtr>{}, &execCtx_);
     auto inputs = makeRowVector({});
     exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputs.get());
 
@@ -1059,7 +1059,7 @@ TEST_F(ElementAtTest, testCachingOptimization) {
   }
 
   // Make a dummy eval context.
-  exec::ExprSet exprSet({}, &execCtx_);
+  exec::ExprSet exprSet(std::vector<core::TypedExprPtr>{}, &execCtx_);
   auto inputs = makeRowVector({});
   exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputs.get());
 
@@ -1196,7 +1196,7 @@ TEST_F(ElementAtTest, testCachingOptimizationComplexKey) {
   }
 
   // Make a dummy eval context.
-  exec::ExprSet exprSet({}, &execCtx_);
+  exec::ExprSet exprSet(std::vector<core::TypedExprPtr>{}, &execCtx_);
   auto inputs = makeRowVector({});
   exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputs.get());
 
