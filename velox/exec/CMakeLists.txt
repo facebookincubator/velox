@@ -61,6 +61,8 @@ velox_add_library(
   QueryDataWriter.cpp
   QueryMetadataReader.cpp
   QueryMetadataWriter.cpp
+  QuerySplitReader.cpp
+  QuerySplitWriter.cpp
   QueryTraceConfig.cpp
   QueryTraceScan.cpp
   QueryTraceUtil.cpp
