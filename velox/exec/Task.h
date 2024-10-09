@@ -992,9 +992,12 @@ class Task : public std::enable_shared_from_this<Task> {
   // Application specific task ID specified at construction time. May not be
   // unique or universally unique.
   const std::string taskId_;
+  // QueryContext should be declared before planFragment as
+  // planFragment may allocate memory in query mempool held by queryContext
+  std::shared_ptr<core::QueryCtx> queryCtx_;
   core::PlanFragment planFragment_;
   const int destination_;
-  const std::shared_ptr<core::QueryCtx> queryCtx_;
+
   const std::optional<trace::QueryTraceConfig> traceConfig_;
 
   // The execution mode of the task. It is enforced that a task can only be
