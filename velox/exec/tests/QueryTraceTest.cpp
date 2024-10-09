@@ -15,16 +15,20 @@
  */
 
 #include <folly/init/Init.h>
+#include <folly/io/Cursor.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <memory>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/QueryDataReader.h"
 #include "velox/exec/QueryDataWriter.h"
 #include "velox/exec/QueryMetadataReader.h"
 #include "velox/exec/QueryMetadataWriter.h"
+#include "velox/exec/QuerySplitReader.h"
+#include "velox/exec/QuerySplitWriter.h"
 #include "velox/exec/QueryTraceUtil.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -50,6 +54,7 @@ class QueryTracerTest : public HiveConnectorTestBase {
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::HiveConnectorSplit::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
@@ -259,6 +264,91 @@ TEST_F(QueryTracerTest, traceMetadata) {
       actualConnectorProperties.at("test_trace");
   for (const auto& [key, value] : actualConnectorConfigs) {
     ASSERT_EQ(actualConnectorConfigs.at(key), expectedConnectorConfigs.at(key));
+  }
+}
+
+TEST_F(QueryTracerTest, traceSplit) {
+  constexpr auto numSplits = 13;
+  std::vector<exec::Split> splits;
+  for (int i = 0; i < numSplits; ++i) {
+    auto builder = HiveConnectorSplitBuilder(fmt::format("path-{}-{}", i, i));
+    const auto key = fmt::format("k{}", i);
+    const auto value = fmt::format("v{}", i);
+    splits.emplace_back(
+        builder.start(i)
+            .length(i)
+            .connectorId(fmt::format("{}", i))
+            .fileFormat(dwio::common::FileFormat(i + 1))
+            .infoColumn(key, value)
+            .partitionKey(
+                key, i > 1 ? std::nullopt : std::optional<std::string>(value))
+            .tableBucketNumber(i)
+            .build(),
+        -1);
+  }
+
+  enum class TestMode { kNormal = 0, kPartial = 1, kChecksum = 2 };
+
+  const auto testDir = TempDirectoryPath::create();
+  const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
+  const std::unordered_map<TestMode, std::string> traceDirs{
+      {TestMode::kNormal, fmt::format("{}/normal", testDir->getPath())},
+      {TestMode::kPartial, fmt::format("{}/partial", testDir->getPath())},
+      {TestMode::kChecksum, fmt::format("{}/checksum", testDir->getPath())}};
+  const std::string split = "deadbeaf";
+  const uint32_t length = split.length();
+  const uint32_t crc32 = folly::crc32(
+      reinterpret_cast<const uint8_t*>(split.data()), split.size());
+  struct {
+    TestMode testMode;
+    uint32_t ioBufSize;
+    std::string debugString() const {
+      return fmt::format(
+          "Test mode: {}, ioBufSize: {}",
+          static_cast<int>(testMode),
+          ioBufSize);
+    }
+  } testSettings[]{
+      {TestMode::kNormal, 0},
+      {TestMode::kPartial, 4 + length},
+      {TestMode::kChecksum, 4 + length + 4}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    fs->mkdir(traceDirs.at(testData.testMode));
+    const auto& traceDir = traceDirs.at(testData.testMode);
+    auto writer = exec::trace::QuerySplitWriter(traceDir);
+    for (int i = 0; i < numSplits; ++i) {
+      writer.write(splits.at(i));
+    }
+    writer.finish();
+
+    if (testData.testMode != TestMode::kNormal) {
+      const auto splitInfoFile = fs->openFileForWrite(
+          fmt::format("{}/{}", traceDir, QueryTraceTraits::kSplitInfoFileName),
+          filesystems::FileOptions{.shouldThrowOnFileAlreadyExists = false});
+      auto ioBuf = folly::IOBuf::create(testData.ioBufSize);
+      folly::io::Appender appender(ioBuf.get(), 0);
+      appender.writeLE(length);
+      appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
+      if (testData.testMode == TestMode::kChecksum) {
+        appender.writeLE(crc32 - 1);
+      }
+      splitInfoFile->append(std::move(ioBuf));
+      splitInfoFile->close();
+    }
+
+    const auto reader = exec::trace::QuerySplitReader(
+        traceDir, memory::MemoryManager::getInstance()->tracePool());
+    auto actualSplits = reader.read();
+    for (int i = 0; i < numSplits; ++i) {
+      ASSERT_FALSE(actualSplits[i].hasGroup());
+      ASSERT_TRUE(actualSplits[i].hasConnectorSplit());
+      const auto actualConnectorSplit = actualSplits[i].connectorSplit;
+      const auto expectedConnectorSplit = splits[i].connectorSplit;
+      ASSERT_EQ(
+          actualConnectorSplit->toString(), expectedConnectorSplit->toString());
+    }
   }
 }
 
