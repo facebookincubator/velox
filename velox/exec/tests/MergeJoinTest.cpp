@@ -756,6 +756,60 @@ TEST_F(MergeJoinTest, semiJoin) {
       core::JoinType::kRightSemiFilter);
 }
 
+TEST_F(MergeJoinTest, semiJoinProjection) {
+  auto left = makeRowVector(
+      {"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 6, std::nullopt})});
+
+  auto right = makeRowVector(
+      {"u0"},
+      {makeNullableFlatVector<int64_t>(
+          {1, 2, 2, 7, std::nullopt, std::nullopt})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto testSemiJoin = [&](const std::string& filter,
+                          const std::string& sql,
+                          const std::vector<std::string>& outputLayout,
+                          core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .mergeJoin(
+                {"t0"},
+                {"u0"},
+                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+                filter,
+                outputLayout,
+                joinType)
+            .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults(sql);
+  };
+
+  testSemiJoin(
+      "",
+      "SELECT t.t0, EXISTS (SELECT * FROM u WHERE t.t0 = u.u0) FROM t",
+      {"t0", "match"},
+      core::JoinType::kLeftSemiProject);
+  testSemiJoin(
+      "",
+      "SELECT u0, u0 IN (SELECT * FROM t where t.t0 = u.u0) FROM u",
+      {"u0", "match"},
+      core::JoinType::kRightSemiProject);
+
+  testSemiJoin(
+      "t0 > 1",
+      "SELECT t.t0, EXISTS (SELECT * FROM u WHERE t0 = u0 and t.t0 > 1) FROM t",
+      {"t0", "match"},
+      core::JoinType::kLeftSemiProject);
+  testSemiJoin(
+      "u0 > 1",
+      "SELECT u0, u0 IN (SELECT * FROM t where t0 = u0 and u0 > 1) FROM u",
+      {"u0", "match"},
+      core::JoinType::kRightSemiProject);
+}
+
 TEST_F(MergeJoinTest, rightJoin) {
   auto left = makeRowVector(
       {"t0"},

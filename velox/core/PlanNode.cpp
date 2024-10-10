@@ -1142,6 +1142,8 @@ bool MergeJoinNode::isSupported(core::JoinType joinType) {
     case core::JoinType::kRightSemiFilter:
     case core::JoinType::kAnti:
     case core::JoinType::kFull:
+    case core::JoinType::kLeftSemiProject:
+    case core::JoinType::kRightSemiProject:
       return true;
 
     default:
