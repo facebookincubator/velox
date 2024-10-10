@@ -57,6 +57,9 @@ list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
 include(ResolveDependency)
 include(VeloxUtils)
 
+# Include our global warning settings
+include(Warnings)
+
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -594,12 +597,6 @@ include_directories(.)
 # TODO: Include all other installation files. For now just making sure this
 # generates an installable makefile.
 install(FILES velox/type/Type.h DESTINATION "include/velox")
-
-# Adding this down here prevents warnings in dependencies from stopping the
-# build
-if("${TREAT_WARNINGS_AS_ERRORS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
-endif()
 
 if(VELOX_ENABLE_ARROW)
   set_source(Arrow)
