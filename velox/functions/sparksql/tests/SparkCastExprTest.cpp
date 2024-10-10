@@ -264,7 +264,7 @@ TEST_F(SparkCastExprTest, stringToTimestamp) {
 }
 
 TEST_F(SparkCastExprTest, intToTimestamp) {
-  // int64_t
+  // Cast bigint as timestamp.
   testCast(
       makeNullableFlatVector<int64_t>({
           0,
@@ -285,7 +285,7 @@ TEST_F(SparkCastExprTest, intToTimestamp) {
           Timestamp(-9223372036855, 224'192'000),
       }));
 
-  // Ensure that other integral types cast to int64 work as well.
+  // Cast tinyint/smallint/integer as timestamp.
   testIntegralToTimestampCast<int8_t>();
   testIntegralToTimestampCast<int16_t>();
   testIntegralToTimestampCast<int32_t>();
