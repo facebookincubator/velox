@@ -76,7 +76,6 @@ add_executable(
   MapTopNKeysTest.cpp
   MapKeysAndValuesTest.cpp
   MapMatchTest.cpp
-  MapTest.cpp
   MapZipWithTest.cpp
   MultimapFromEntriesTest.cpp
   NotTest.cpp
