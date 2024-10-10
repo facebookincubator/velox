@@ -16,8 +16,10 @@ velox_add_library(
   velox_wave_common
   GpuArena.cpp
   Buffer.cpp
+  Compile.cu
   Cuda.cu
   Exception.cpp
+  KernelCache.cpp
   Type.cpp
   ResultStaging.cpp)
 
