@@ -57,6 +57,9 @@ list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
 include(ResolveDependency)
 include(VeloxUtils)
 
+# Include our global warning settings
+include(Warnings)
+
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
