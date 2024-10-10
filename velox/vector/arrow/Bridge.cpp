@@ -34,6 +34,10 @@ namespace {
 // and one for offsets (2).
 static constexpr size_t kMaxBuffers{3};
 
+int64_t clearArrowNullableFlag(int64_t flags) {
+  return flags & (~ARROW_FLAG_NULLABLE);
+}
+
 // Structure that will hold the buffers needed by ArrowArray. This is opaquely
 // carried by ArrowArray.private_data
 class VeloxToArrowBridgeHolder {
@@ -1384,7 +1388,7 @@ void exportToArrow(
   // No additional metadata for now.
   arrowSchema.metadata = nullptr;
 
-  // All supported types are semantically nullable.
+  // All supported types except map are semantically nullable.
   arrowSchema.flags = ARROW_FLAG_NULLABLE;
 
   // Allocate private data buffer holder and recurse down to children types.
@@ -1447,6 +1451,11 @@ void exportToArrow(
           maps.getNullCount());
       exportToArrow(rows, *child, options);
       child->name = "entries";
+      // Map data should be a non-nullable struct type
+      child->flags = clearArrowNullableFlag(child->flags);
+      // Map data key type should be a non-nullable
+      child->children[0]->flags =
+          clearArrowNullableFlag(child->children[0]->flags);
       bridgeHolder->setChildAtIndex(0, std::move(child), arrowSchema);
 
     } else if (type->kind() == TypeKind::ARRAY) {
