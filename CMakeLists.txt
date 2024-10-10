@@ -488,6 +488,12 @@ if(${VELOX_BUILD_TESTING})
 endif()
 
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+  find_package(fizz CONFIG REQUIRED)
+  find_package(wangle CONFIG REQUIRED)
+  find_package(proxygen CONFIG REQUIRED)
+endif()
+
+if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
   # requires clients to explicitly install fizz and wangle.
   find_package(fizz CONFIG REQUIRED)
