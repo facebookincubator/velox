@@ -7,9 +7,9 @@
 
     <title>Expression, Aggregation, and Window Fuzzer &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=279e0f84" />
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -205,6 +205,11 @@ also allows to provide custom input generators for individual functions.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">--null_ratio</span></code>: Chance of adding a null constant to the plan, or null value in a vector (expressed as double from 0 to 1). Default is 0.1.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--max_num_varargs</span></code>: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.</p></li>
 </ul>
+<p>For fuzzers that allows using Presto as the source of truth, two command line arguments can be used to specify the url and timeout of Presto:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--presto_url</span></code>: Presto coordinator URI along with port.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--req_timeout_ms</span></code>: Timeout in milliseconds for HTTP requests made to the reference DB, such as Presto.</p></li>
+</ul>
 <p>Below are arguments that toggle certain fuzzer features in Expression Fuzzer:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--retry_with_try</span></code>: Retry failed expressions by wrapping it using a try() statement. Default is false.</p></li>
@@ -241,6 +246,18 @@ also allows to provide custom input generators for individual functions.</p>
 <span class="pre">--special_forms=&quot;and,or,cast,coalesce,if,switch&quot;</span>
 <span class="pre">--max_expression_trees_per_step=2</span>
 <span class="pre">--repro_persist_path=&lt;a_valid_local_path&gt;</span>
+<span class="pre">--logtostderr=1</span></code></p>
+<p>Expression fuzzer with Presto as the source of truth currently only supports a subset of features:
+<code class="docutils literal notranslate"><span class="pre">--duration_sec</span> <span class="pre">60</span>
+<span class="pre">--presto_url=http://127.0.0.1:8080</span>
+<span class="pre">--req_timeout_ms</span> <span class="pre">10000</span>
+<span class="pre">--enable_variadic_signatures</span>
+<span class="pre">--velox_fuzzer_enable_complex_types</span>
+<span class="pre">--special_forms=&quot;cast,coalesce,if,switch&quot;</span>
+<span class="pre">--lazy_vector_generation_ratio</span> <span class="pre">0.2</span>
+<span class="pre">--velox_fuzzer_enable_column_reuse</span>
+<span class="pre">--velox_fuzzer_enable_expression_reuse</span>
+<span class="pre">--max_expression_trees_per_step</span> <span class="pre">2</span>
 <span class="pre">--logtostderr=1</span></code></p>
 <p><a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/functions/prestosql/fuzzer/WindowFuzzerTest.cpp">WindowFuzzerTest.cpp</a> and <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/functions/prestosql/fuzzer/AggregationFuzzerTest.cpp">AggregationFuzzerTest.cpp</a> allow results to be
 verified against Presto. To setup Presto as a reference DB, please follow these
@@ -441,7 +458,7 @@ Result: ROW&lt;_col0:ARRAY&lt;INTEGER&gt;,_col1:ARRAY&lt;INTEGER&gt;&gt;
     </div>
     <div class="footer" role="contentinfo">
     &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.0.2.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.1.0.
     </div>
   </body>
 </html>
