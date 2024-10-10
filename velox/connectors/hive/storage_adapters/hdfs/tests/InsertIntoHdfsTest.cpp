@@ -104,7 +104,7 @@ TEST_F(InsertIntoHdfsTest, insertIntoHdfsTest) {
   plan = PlanBuilder().tableScan(rowType_).planNode();
 
   auto splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-      fmt::format("{}/{}", outputDirectory, writeFileName),
+      fmt::format("{}{}", outputDirectory, writeFileName),
       1,
       dwio::common::FileFormat::DWRF);
   auto copy = AssertQueryBuilder(plan).split(splits[0]).copyResults(pool());
