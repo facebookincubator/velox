@@ -31,6 +31,12 @@ macro (no_warning flag)
     add_warning(no-${flag})
 endmacro ()
 
+# Adding this down here prevents warnings in dependencies from stopping the
+# build
+if("${TREAT_WARNINGS_AS_ERRORS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+endif()
+
 string(TOLOWER "${CMAKE_CXX_COMPILER_ID}" COMPILER_ID_LOWER)
 
 if(COMPILER_ID_LOWER STREQUAL "gnu")
