@@ -32,6 +32,7 @@
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -245,7 +246,7 @@ class HashJoinBuilder {
         planNode.get(), [](const core::PlanNode* node) {
           return dynamic_cast<const core::HashJoinNode*>(node) != nullptr;
         });
-    if (hash_node_ptr != nullptr) {
+    if (cudf_velox::cudfDebugEnabled() && hash_node_ptr != nullptr) {
       std::cout << "Found a HashJoinNode" << std::endl;
     }
     return *this;
@@ -1043,9 +1044,13 @@ TEST_F(HashJoinTest, multipleProbeColumns) {
 TEST_F(HashJoinTest, multipleBuildColumns) {
   // Test hash join with multiple probe columns.
   auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
-      {"t_k1", "t_k2"},
+      {"t_k1", "t_k2", "t_k3"},
       {makeFlatVector<int32_t>(20, [](auto row) { return 1 + row % 2; }),
-       makeFlatVector<int32_t>(20, [](auto row) { return row; })})};
+       makeFlatVector<int32_t>(20, [](auto row) { return row; }),
+       makeFlatVector<StringView>(20, [&](auto row) {
+         auto temp = std::to_string(row % 3 + 1);
+         return StringView(temp);
+       })})};
   auto buildVectors = std::vector<RowVectorPtr>{makeRowVector(
       {"u_k1", "u_k2"},
       {makeFlatVector<int32_t>({1, 2}), makeFlatVector<int32_t>({3, 4})})};

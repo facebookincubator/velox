@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_cudf_exec CudfHashJoin.cpp ToCudf.cpp VeloxCudfInterop.cpp)
+add_library(velox_cudf_exec CudfHashJoin.cpp ToCudf.cpp Utilities.cpp
+                            VeloxCudfInterop.cpp)
 
 set_target_properties(
   velox_cudf_exec

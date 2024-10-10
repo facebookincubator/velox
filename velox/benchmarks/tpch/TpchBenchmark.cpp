@@ -35,6 +35,7 @@
 #include "velox/exec/Split.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
@@ -274,9 +275,13 @@ class TpchBenchmark {
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(kHiveConnectorId, properties, ioExecutor_.get());
     connector::registerConnector(hiveConnector);
+
+    // Enable cuDF operators
+    cudf_velox::registerCudf();
   }
 
   void shutdown() {
+    cudf_velox::unregisterCudf();
     cache_->shutdown();
   }
 
@@ -290,6 +295,14 @@ class TpchBenchmark {
         params.planNode = tpchPlan.plan;
         params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
             std::to_string(FLAGS_split_preload_per_driver);
+        if (cudf_velox::cudfIsRegistered()) {
+          params.queryConfigs[core::QueryConfig::kPreferredOutputBatchBytes] =
+              "536870912"; // 512 MB
+          params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] =
+              "500000";
+          params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] =
+              "500000";
+        }
         const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
         bool noMoreSplits = false;

@@ -25,8 +25,29 @@ set -euo pipefail
 # Run a GPU build and test
 pushd "$(dirname ${0})"
 
-#CUDA_ARCHITECTURES="native" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_BENCHMARKS_BASIC=ON" make gpu
+mkdir -p benchmark_results
 
-./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark --data_path=velox-tpch-sf10-data --data_format=parquet --run_query_verbose=5 --num_repeats=6
+queries=${1:-$(seq 1 20)}
+devices=${2:-"cpu gpu"}
+
+
+for query_number in ${queries}; do
+    printf -v query_number '%02d' "${query_number}"
+    for device in ${devices}; do
+        case "${device}" in
+            "cpu")
+                num_drivers=40
+                export VELOX_CUDF_DISABLED=1;;
+            "gpu")
+                num_drivers=1
+                export VELOX_CUDF_DISABLED=0;;
+        esac
+        echo "Running query ${query_number} on ${device} with ${num_drivers} drivers."
+        # The benchmarks segfault after reporting results, so we disable errors
+        set +e
+        ./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark --data_path=velox-tpch-sf10-data --data_format=parquet --run_query_verbose=${query_number} --num_repeats=1 --num_drivers ${num_drivers} 2>&1 | tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers
+        set -e
+    done
+done
 
 popd
