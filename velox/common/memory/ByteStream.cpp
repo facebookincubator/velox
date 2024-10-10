@@ -350,6 +350,9 @@ void ByteOutputStream::extend(int32_t bytes) {
   ranges_.emplace_back();
   current_ = &ranges_.back();
   lastRangeEnd_ = 0;
+  if (bytes == 0) {
+    return;
+  }
   arena_->newRange(
       newRangeSize(bytes),
       ranges_.size() == 1 ? nullptr : &ranges_[ranges_.size() - 2],
