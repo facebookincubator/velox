@@ -15,6 +15,7 @@
  */
 #include "velox/serializers/PrestoSerializer.h"
 
+#include <iostream>
 #include <optional>
 
 #include <folly/lang/Bits.h>
@@ -23,6 +24,7 @@
 #include "velox/common/base/IOUtils.h"
 #include "velox/common/base/RawVector.h"
 #include "velox/common/memory/ByteStream.h"
+#include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/vector/BiasVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
@@ -443,6 +445,42 @@ void readDecimalValues(
   }
 }
 
+int128_t readUuidValue(ByteInputStream* source) {
+  // ByteInputStream does not support reading int128_t values.
+  // UUIDs are serialized as 2 int64 values with msb int64 value first.
+  auto high = source->read<uint64_t>();
+  auto low = source->read<uint64_t>();
+  return HugeInt::build(high, low);
+}
+
+void readUuidValues(
+    ByteInputStream* source,
+    vector_size_t size,
+    vector_size_t offset,
+    const BufferPtr& nulls,
+    vector_size_t nullCount,
+    const BufferPtr& values) {
+  auto rawValues = values->asMutable<int128_t>();
+  if (nullCount) {
+    checkValuesSize<int128_t>(values, nulls, size, offset);
+
+    int32_t toClear = offset;
+    bits::forEachSetBit(
+        nulls->as<uint64_t>(), offset, offset + size, [&](int32_t row) {
+          // Set the values between the last non-null and this to type default.
+          for (; toClear < row; ++toClear) {
+            rawValues[toClear] = 0;
+          }
+          rawValues[row] = readUuidValue(source);
+          toClear = row + 1;
+        });
+  } else {
+    for (int32_t row = 0; row < size; ++row) {
+      rawValues[offset + row] = readUuidValue(source);
+    }
+  }
+}
+
 /// When deserializing vectors under row vectors that introduce
 /// nulls, the child vector must have a gap at the place where a
 /// parent RowVector has a null. So, if there is a parent RowVector
@@ -564,6 +602,16 @@ void read(
         flatResult->nulls(),
         nullCount,
         values);
+    return;
+  }
+  if (isUuidType(type)) {
+    readUuidValues(
+      source,
+      numNewValues,
+      resultOffset,
+      flatResult->nulls(),
+      nullCount,
+      values);
     return;
   }
   readValues<T>(
@@ -1365,6 +1413,7 @@ class VectorStream {
         useLosslessTimestamp_(opts.useLosslessTimestamp),
         nullsFirst_(opts.nullsFirst),
         isLongDecimal_(type_->isLongDecimal()),
+        isUuid_(isUuidType(type_)),
         opts_(opts),
         encoding_(getEncoding(encoding, vector)),
         nulls_(streamArena, true, true),
@@ -1710,6 +1759,10 @@ class VectorStream {
     return isLongDecimal_;
   }
 
+  bool isUuid() const {
+    return isUuid_;
+  }
+
   void clear() {
     encoding_ = std::nullopt;
     initializeHeader(typeToEncodingName(type_), *streamArena_);
@@ -1785,6 +1838,7 @@ class VectorStream {
   const bool useLosslessTimestamp_;
   const bool nullsFirst_;
   const bool isLongDecimal_;
+  const bool isUuid_;
   const SerdeOpts opts_;
   std::optional<VectorEncoding::Simple> encoding_;
   int32_t nonNullCount_{0};
@@ -1842,12 +1896,23 @@ FOLLY_ALWAYS_INLINE int128_t toJavaDecimalValue(int128_t value) {
   return value;
 }
 
+FOLLY_ALWAYS_INLINE int128_t toJavaUuidValue(int128_t value) {
+  // Presto Java UuidType uses java.util.UUID that expects 2 long values
+  // with most significant bits first, swap upper and lower to adjust.
+  auto low = HugeInt::upper(value);
+  auto high = HugeInt::lower(value);
+  return HugeInt::build(high, low);
+}
+
 template <>
 void VectorStream::append(folly::Range<const int128_t*> values) {
   for (auto& value : values) {
     int128_t val = value;
     if (isLongDecimal_) {
       val = toJavaDecimalValue(value);
+    }
+    else if (isUuid_) {
+      val = toJavaUuidValue(value);
     }
     values_.append<int128_t>(folly::Range(&val, 1));
   }
@@ -2393,10 +2458,18 @@ void copyWords(
     const int32_t* indices,
     int32_t numIndices,
     const T* values,
-    bool isLongDecimal = false) {
+    bool isLongDecimal = false,
+    bool isUuid = false) {
   if (std::is_same_v<T, int128_t> && isLongDecimal) {
     for (auto i = 0; i < numIndices; ++i) {
       reinterpret_cast<int128_t*>(destination)[i] = toJavaDecimalValue(
+          reinterpret_cast<const int128_t*>(values)[indices[i]]);
+    }
+    return;
+  }
+  if (std::is_same_v<T, int128_t> && isUuid) {
+    for (auto i = 0; i < numIndices; ++i) {
+      reinterpret_cast<int128_t*>(destination)[i] = toJavaUuidValue(
           reinterpret_cast<const int128_t*>(values)[indices[i]]);
     }
     return;
@@ -2413,14 +2486,22 @@ void copyWordsWithRows(
     const int32_t* indices,
     int32_t numIndices,
     const T* values,
-    bool isLongDecimal = false) {
+    bool isLongDecimal = false,
+    bool isUuid = false) {
   if (!indices) {
-    copyWords(destination, rows, numIndices, values, isLongDecimal);
+    copyWords(destination, rows, numIndices, values, isLongDecimal, isUuid);
     return;
   }
   if (std::is_same_v<T, int128_t> && isLongDecimal) {
     for (auto i = 0; i < numIndices; ++i) {
       reinterpret_cast<int128_t*>(destination)[i] = toJavaDecimalValue(
+          reinterpret_cast<const int128_t*>(values)[rows[indices[i]]]);
+    }
+    return;
+  }
+  else if (std::is_same_v<T, int128_t> && isUuid) {
+    for (auto i = 0; i < numIndices; ++i) {
+      reinterpret_cast<int128_t*>(destination)[i] = toJavaUuidValue(
           reinterpret_cast<const int128_t*>(values)[rows[indices[i]]]);
     }
     return;
@@ -2485,7 +2566,8 @@ void appendNonNull(
         nonNullIndices,
         numNonNull,
         values,
-        stream->isLongDecimal());
+        stream->isLongDecimal(),
+        stream->isUuid());
   }
 }
 
@@ -2578,7 +2660,7 @@ void serializeFlatVector(
     AppendWindow<T> window(stream->values(), scratch);
     T* output = window.get(rows.size());
     copyWords(
-        output, rows.data(), rows.size(), rawValues, stream->isLongDecimal());
+        output, rows.data(), rows.size(), rawValues, stream->isLongDecimal(), stream->isUuid());
     return;
   }
 
