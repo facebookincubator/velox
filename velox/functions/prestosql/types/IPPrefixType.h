@@ -18,20 +18,15 @@
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
-static constexpr int kIPAddressBytes = 16;
-static constexpr int kIPPrefixBytes = 17;
-static constexpr uint8_t kIPV4Bits = 32;
-static constexpr uint8_t kIPV6Bits = 128;
-
 namespace facebook::velox {
 
-class IPAddressType : public HugeintType {
-  IPAddressType() = default;
+class IPPrefixType : public VarbinaryType {
+  IPPrefixType() = default;
 
  public:
-  static const std::shared_ptr<const IPAddressType>& get() {
-    static const std::shared_ptr<const IPAddressType> instance{
-        new IPAddressType()};
+  static const std::shared_ptr<const IPPrefixType>& get() {
+    static const std::shared_ptr<const IPPrefixType> instance{
+        new IPPrefixType()};
 
     return instance;
   }
@@ -42,7 +37,7 @@ class IPAddressType : public HugeintType {
   }
 
   const char* name() const override {
-    return "IPADDRESS";
+    return "IPPREFIX";
   }
 
   std::string toString() const override {
@@ -57,23 +52,22 @@ class IPAddressType : public HugeintType {
   }
 };
 
-FOLLY_ALWAYS_INLINE bool isIPAddressType(const TypePtr& type) {
+FOLLY_ALWAYS_INLINE bool isIPPrefixType(const TypePtr& type) {
   // Pointer comparison works since this type is a singleton.
-  return IPAddressType::get() == type;
+  return IPPrefixType::get() == type;
 }
 
-FOLLY_ALWAYS_INLINE std::shared_ptr<const IPAddressType> IPADDRESS() {
-  return IPAddressType::get();
+FOLLY_ALWAYS_INLINE std::shared_ptr<const IPPrefixType> IPPREFIX() {
+  return IPPrefixType::get();
 }
 
-// Type used for function registration.
-struct IPAddressT {
-  using type = int128_t;
-  static constexpr const char* typeName = "ipaddress";
+struct IPPrefixT {
+  using type = Varbinary;
+  static constexpr const char* typeName = "ipprefix";
 };
 
-using IPAddress = CustomType<IPAddressT>;
+using IPPrefix = CustomType<IPPrefixT>;
 
-void registerIPAddressType();
+void registerIPPrefixType();
 
 } // namespace facebook::velox
