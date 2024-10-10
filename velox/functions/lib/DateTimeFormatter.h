@@ -218,7 +218,7 @@ class DateTimeFormatter {
 std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
     const std::string_view& format);
 
-std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
+Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
     const std::string_view& format);
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(

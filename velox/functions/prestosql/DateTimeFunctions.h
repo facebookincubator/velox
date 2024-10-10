@@ -1643,9 +1643,12 @@ struct FormatDateTimeFunction {
   }
 
   FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& formatString) {
-    jodaDateTime_ = buildJodaDateTimeFormatter(
-        std::string_view(formatString.data(), formatString.size()));
-    maxResultSize_ = jodaDateTime_->maxResultSize(sessionTimeZone_);
+    buildJodaDateTimeFormatter(
+        std::string_view(formatString.data(), formatString.size()))
+        .thenOrThrow([this](auto formatter) {
+          jodaDateTime_ = formatter;
+          maxResultSize_ = jodaDateTime_->maxResultSize(sessionTimeZone_);
+        });
   }
 
   void format(
@@ -1679,9 +1682,11 @@ struct ParseDateTimeFunction {
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
     if (format != nullptr) {
-      format_ = buildJodaDateTimeFormatter(
-          std::string_view(format->data(), format->size()));
-      isConstFormat_ = true;
+      buildJodaDateTimeFormatter(
+          std::string_view(format->data(), format->size())).thenOrThrow([this](auto formatter) {
+        format_ = formatter;
+        isConstFormat_ = true;
+      }
     }
 
     auto sessionTzName = config.sessionTimezone();
@@ -1695,8 +1700,8 @@ struct ParseDateTimeFunction {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
     if (!isConstFormat_) {
-      format_ = buildJodaDateTimeFormatter(
-          std::string_view(format.data(), format.size()));
+      buildJodaDateTimeFormatter(std::string_view(format.data(), format.size()))
+          .thenOrThrow([this](auto formatter) { format_ = formatter; });
     }
     auto dateTimeResult =
         format_->parse(std::string_view(input.data(), input.size()));
@@ -1777,6 +1782,8 @@ struct ToISO8601Function {
     if (inputTypes[0]->isTimestamp()) {
       timeZone_ = getTimeZoneFromConfig(config);
     }
+    functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ")
+        .thenOrThrow([this](auto formatter) { formatter_ = formatter; });
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -1814,8 +1821,7 @@ struct ToISO8601Function {
   }
 
   const tz::TimeZone* timeZone_{nullptr};
-  std::shared_ptr<DateTimeFormatter> formatter_ =
-      functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ");
+  std::shared_ptr<DateTimeFormatter> formatter_;
 };
 
 template <typename T>

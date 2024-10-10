@@ -74,7 +74,8 @@ class DateTimeFormatterTest : public testing::Test {
       std::string pattern(i, specifier);
       std::vector<DateTimeToken> expected;
       expected = {DateTimeToken(FormatPattern{token, i})};
-      EXPECT_EQ(expected, buildJodaDateTimeFormatter(pattern)->tokens());
+      EXPECT_EQ(
+          expected, buildJodaDateTimeFormatter(pattern).value()->tokens());
     }
   }
 
@@ -89,7 +90,7 @@ class DateTimeFormatterTest : public testing::Test {
       const std::string_view& input,
       const std::string_view& format) {
     auto dateTimeResultExpected =
-        buildJodaDateTimeFormatter(format)->parse(input);
+        buildJodaDateTimeFormatter(format).value()->parse(input);
     return dateTimeResult(dateTimeResultExpected);
   }
 
@@ -107,7 +108,7 @@ class DateTimeFormatterTest : public testing::Test {
       const std::string_view& input,
       const std::string_view& format) {
     auto dateTimeResultExpected =
-        buildJodaDateTimeFormatter(format)->parse(input);
+        buildJodaDateTimeFormatter(format).value()->parse(input);
     auto result = dateTimeResult(dateTimeResultExpected);
     if (result.timezoneId == 0) {
       return "+00:00";
@@ -241,11 +242,11 @@ TEST_F(JodaDateTimeFormatterTest, validJodaBuild) {
 
   // G specifier case
   expected = {DateTimeToken(FormatPattern{DateTimeFormatSpecifier::ERA, 2})};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("G")->tokens());
+  EXPECT_EQ(expected, buildJodaDateTimeFormatter("G").value()->tokens());
   // minRepresentDigits should be unchanged with higher number of specifier for
   // ERA
   expected = {DateTimeToken(FormatPattern{DateTimeFormatSpecifier::ERA, 2})};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("GGGG")->tokens());
+  EXPECT_EQ(expected, buildJodaDateTimeFormatter("GGGG").value()->tokens());
 
   // C specifier case
   testTokenRange('C', 1, 3, DateTimeFormatSpecifier::CENTURY_OF_ERA);
@@ -281,12 +282,12 @@ TEST_F(JodaDateTimeFormatterTest, validJodaBuild) {
   // a specifier case
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::HALFDAY_OF_DAY, 2})};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("a")->tokens());
+  EXPECT_EQ(expected, buildJodaDateTimeFormatter("a").value()->tokens());
   // minRepresentDigits should be unchanged with higher number of specifier for
   // HALFDAY_OF_DAY
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::HALFDAY_OF_DAY, 2})};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("aa")->tokens());
+  EXPECT_EQ(expected, buildJodaDateTimeFormatter("aa").value()->tokens());
 
   // K specifier case
   testTokenRange('K', 1, 4, DateTimeFormatSpecifier::HOUR_OF_HALFDAY);
@@ -317,22 +318,27 @@ TEST_F(JodaDateTimeFormatterTest, validJodaBuild) {
 
   // Literal case
   expected = {DateTimeToken(" ")};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter(" ")->tokens());
+  EXPECT_EQ(expected, buildJodaDateTimeFormatter(" ").value()->tokens());
   expected = {DateTimeToken("1234567890")};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("1234567890")->tokens());
+  EXPECT_EQ(
+      expected, buildJodaDateTimeFormatter("1234567890").value()->tokens());
   expected = {DateTimeToken("'")};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("''")->tokens());
+  EXPECT_EQ(expected, buildJodaDateTimeFormatter("''").value()->tokens());
   expected = {DateTimeToken("abcdefghijklmnopqrstuvwxyz")};
   EXPECT_EQ(
       expected,
-      buildJodaDateTimeFormatter("'abcdefghijklmnopqrstuvwxyz'")->tokens());
+      buildJodaDateTimeFormatter("'abcdefghijklmnopqrstuvwxyz'")
+          .value()
+          ->tokens());
   expected = {DateTimeToken("'abcdefg'hijklmnop'qrstuv'wxyz'")};
   EXPECT_EQ(
       expected,
       buildJodaDateTimeFormatter("'''abcdefg''hijklmnop''qrstuv''wxyz'''")
+          .value()
           ->tokens());
   expected = {DateTimeToken("'1234abcd")};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("''1234'abcd'")->tokens());
+  EXPECT_EQ(
+      expected, buildJodaDateTimeFormatter("''1234'abcd'").value()->tokens());
 
   // Specifier combinations
   expected = {
@@ -383,20 +389,21 @@ TEST_F(JodaDateTimeFormatterTest, validJodaBuild) {
       expected,
       buildJodaDateTimeFormatter(
           "''CCC-YYYY/xxx//www-00-eeee--EEEEEE---yyyyy///DDDDMM-MMMMddddKKhhhkkHHmmsSSSSSSzzzZZZGGGG'abcdefghijklmnopqrstuvwxyz'aaa")
+          .value()
           ->tokens());
 }
 
 TEST_F(JodaDateTimeFormatterTest, invalidJodaBuild) {
   // Invalid specifiers
-  EXPECT_THROW(buildJodaDateTimeFormatter("q"), VeloxUserError);
-  EXPECT_THROW(buildJodaDateTimeFormatter("r"), VeloxUserError);
-  EXPECT_THROW(buildJodaDateTimeFormatter("g"), VeloxUserError);
+  EXPECT_TRUE(buildJodaDateTimeFormatter("q").hasError());
+  EXPECT_TRUE(buildJodaDateTimeFormatter("r").hasError());
+  EXPECT_TRUE(buildJodaDateTimeFormatter("g").hasError());
 
   // Unclosed literal sequence
-  EXPECT_THROW(buildJodaDateTimeFormatter("'abcd"), VeloxUserError);
+  EXPECT_TRUE(buildJodaDateTimeFormatter("'abcd").hasError());
 
   // Empty format string
-  EXPECT_THROW(buildJodaDateTimeFormatter(""), VeloxUserError);
+  EXPECT_TRUE(buildJodaDateTimeFormatter("").hasError());
 }
 
 TEST_F(JodaDateTimeFormatterTest, invalid) {
@@ -1317,20 +1324,29 @@ TEST_F(JodaDateTimeFormatterTest, formatResultSize) {
   auto* timezone = tz::locateZone("GMT");
 
   EXPECT_EQ(
-      buildJodaDateTimeFormatter("yyyy-MM-dd")->maxResultSize(timezone), 12);
-  EXPECT_EQ(buildJodaDateTimeFormatter("yyyy-MM")->maxResultSize(timezone), 9);
-  EXPECT_EQ(buildJodaDateTimeFormatter("y")->maxResultSize(timezone), 6);
+      buildJodaDateTimeFormatter("yyyy-MM-dd").value()->maxResultSize(timezone),
+      12);
   EXPECT_EQ(
-      buildJodaDateTimeFormatter("yyyy////MM////dd")->maxResultSize(timezone),
+      buildJodaDateTimeFormatter("yyyy-MM").value()->maxResultSize(timezone),
+      9);
+  EXPECT_EQ(
+      buildJodaDateTimeFormatter("y").value()->maxResultSize(timezone), 6);
+  EXPECT_EQ(
+      buildJodaDateTimeFormatter("yyyy////MM////dd")
+          .value()
+          ->maxResultSize(timezone),
       18);
   EXPECT_EQ(
       buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS")
+          .value()
           ->maxResultSize(timezone),
       31);
   // No padding. CENTURY_OF_ERA can be at most 3 digits.
-  EXPECT_EQ(buildJodaDateTimeFormatter("C")->maxResultSize(timezone), 3);
+  EXPECT_EQ(
+      buildJodaDateTimeFormatter("C").value()->maxResultSize(timezone), 3);
   // Needs to pad to make result contain 4 digits.
-  EXPECT_EQ(buildJodaDateTimeFormatter("CCCC")->maxResultSize(timezone), 4);
+  EXPECT_EQ(
+      buildJodaDateTimeFormatter("CCCC").value()->maxResultSize(timezone), 4);
 }
 
 TEST_F(JodaDateTimeFormatterTest, betterErrorMessaging) {

@@ -109,26 +109,27 @@ void castToString(
   auto* flatResult = result.as<FlatVector<StringView>>();
   const auto* timestamps = input.as<SimpleVector<int64_t>>();
 
-  auto formatter =
-      functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS zzzz");
+  functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS zzzz")
+      .thenOrThrow([&](auto formatter) {
+        context.applyToSelectedNoThrow(rows, [&](auto row) {
+          const auto timestampWithTimezone = timestamps->valueAt(row);
 
-  context.applyToSelectedNoThrow(rows, [&](auto row) {
-    const auto timestampWithTimezone = timestamps->valueAt(row);
+          const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
+          const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
+          const auto* timezonePtr =
+              tz::locateZone(tz::getTimeZoneName(timeZoneId));
 
-    const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-    const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
-    const auto* timezonePtr = tz::locateZone(tz::getTimeZoneName(timeZoneId));
+          exec::StringWriter<false> result(flatResult, row);
 
-    exec::StringWriter<false> result(flatResult, row);
+          const auto maxResultSize = formatter->maxResultSize(timezonePtr);
+          result.reserve(maxResultSize);
+          const auto resultSize = formatter->format(
+              timestamp, timezonePtr, maxResultSize, result.data());
+          result.resize(resultSize);
 
-    const auto maxResultSize = formatter->maxResultSize(timezonePtr);
-    result.reserve(maxResultSize);
-    const auto resultSize =
-        formatter->format(timestamp, timezonePtr, maxResultSize, result.data());
-    result.resize(resultSize);
-
-    result.finalize();
-  });
+          result.finalize();
+        });
+      });
 }
 
 void castToTimestamp(

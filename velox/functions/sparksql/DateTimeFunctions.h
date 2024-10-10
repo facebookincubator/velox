@@ -177,7 +177,7 @@ struct UnixTimestampParseFunction {
         config.sparkLegacyDateFormatter() ? DateTimeFormatterType::STRICT_SIMPLE
                                           : DateTimeFormatterType::JODA);
     // Default format should always be valid.
-    VELOX_CHECK_EQ(formatter.hasError(), false);
+    VELOX_CHECK(!formatter.hasError());
     format_ = formatter.value();
     setTimezone(config);
   }
@@ -229,18 +229,14 @@ struct UnixTimestampParseWithFormatFunction
       const arg_type<Varchar>* format) {
     legacyFormatter_ = config.sparkLegacyDateFormatter();
     if (format != nullptr) {
-      try {
-        auto formatter = detail::getDateTimeFormatter(
-            std::string_view(format->data(), format->size()),
-            legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                             : DateTimeFormatterType::JODA);
-        if (formatter.hasError()) {
-          invalidFormat_ = true;
-        } else {
-          this->format_ = formatter.value();
-        }
-      } catch (const VeloxUserError&) {
+      auto formatter = detail::getDateTimeFormatter(
+          std::string_view(format->data(), format->size()),
+          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                           : DateTimeFormatterType::JODA);
+      if (formatter.hasError()) {
         invalidFormat_ = true;
+      } else {
+        this->format_ = formatter.value();
       }
       isConstFormat_ = true;
     }
@@ -256,19 +252,15 @@ struct UnixTimestampParseWithFormatFunction
     }
 
     // Format error returns null.
-    try {
-      if (!isConstFormat_) {
-        auto formatter = detail::getDateTimeFormatter(
-            std::string_view(format.data(), format.size()),
-            legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                             : DateTimeFormatterType::JODA);
-        if (formatter.hasError()) {
-          return false;
-        }
-        this->format_ = formatter.value();
+    if (!isConstFormat_) {
+      auto formatter = detail::getDateTimeFormatter(
+          std::string_view(format.data(), format.size()),
+          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                           : DateTimeFormatterType::JODA);
+      if (formatter.hasError()) {
+        return false;
       }
-    } catch (const VeloxUserError&) {
-      return false;
+      this->format_ = formatter.value();
     }
     auto dateTimeResult =
         this->format_->parse(std::string_view(input.data(), input.size()));
