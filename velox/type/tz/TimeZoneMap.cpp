@@ -30,6 +30,7 @@ namespace facebook::velox::tz {
 
 using TTimeZoneDatabase = std::vector<std::unique_ptr<TimeZone>>;
 using TTimeZoneIndex = folly::F14FastMap<std::string, const TimeZone*>;
+using TJavaShortIdIndex = folly::F14FastMap<std::string, std::string>;
 
 // Defined in TimeZoneDatabase.cpp
 extern const std::vector<std::pair<int16_t, std::string>>& getTimeZoneEntries();
@@ -123,6 +124,51 @@ const TTimeZoneIndex& getTimeZoneIndex() {
   static TTimeZoneIndex timeZoneIndex =
       buildTimeZoneIndex(getTimeZoneDatabase());
   return timeZoneIndex;
+}
+
+TJavaShortIdIndex buildJavaShortIdIndex() {
+  static TJavaShortIdIndex javaShortIdMap = {
+      {"EST", "-05:00"},
+      {"HST", "-10:00"},
+      {"MST", "-07:00"},
+      {"ACT", "Australia/Darwin"},
+      {"AET", "Australia/Sydney"},
+      {"AGT", "America/Argentina/Buenos_Aires"},
+      {"ART", "Africa/Cairo"},
+      {"AST", "America/Anchorage"},
+      {"BET", "America/Sao_Paulo"},
+      {"BST", "Asia/Dhaka"},
+      {"CAT", "Africa/Harare"},
+      {"CNT", "America/St_Johns"},
+      {"CST", "America/Chicago"},
+      {"CTT", "Asia/Shanghai"},
+      {"EAT", "Africa/Addis_Ababa"},
+      {"ECT", "Europe/Paris"},
+      {"IET", "America/Indiana/Indianapolis"},
+      {"IST", "Asia/Kolkata"},
+      {"JST", "Asia/Tokyo"},
+      {"MIT", "Pacific/Apia"},
+      {"NET", "Asia/Yerevan"},
+      {"NST", "Pacific/Auckland"},
+      {"PLT", "Asia/Karachi"},
+      {"PNT", "America/Phoenix"},
+      {"PRT", "America/Puerto_Rico"},
+      {"PST", "America/Los_Angeles"},
+      {"SST", "Pacific/Guadalcanal"},
+      {"VST", "Asia/Ho_Chi_Minh"},
+  };
+  TJavaShortIdIndex lower;
+  lower.reserve(javaShortIdMap.size());
+  for (auto& it : javaShortIdMap) {
+    lower[boost::algorithm::to_lower_copy(it.first)] =
+        boost::algorithm::to_lower_copy(it.second);
+  }
+  return lower;
+}
+
+const TJavaShortIdIndex& getJavaShortIdIndex() {
+  static TJavaShortIdIndex shortIdIndex = buildJavaShortIdIndex();
+  return shortIdIndex;
 }
 
 inline bool isDigit(char c) {
@@ -220,6 +266,16 @@ std::string normalizeTimeZone(const std::string& originalZoneId) {
       }
     }
   }
+
+  // Check for Java SHORT_IDS.
+  // See
+  // https://docs.oracle.com/javase/8/docs/api/java/time/ZoneId.html#SHORT_IDS
+  auto shortIdMap = getJavaShortIdIndex();
+  auto it = shortIdMap.find(originalZoneId);
+  if (it != shortIdMap.end()) {
+    return it->second;
+  }
+
   return originalZoneId;
 }
 
