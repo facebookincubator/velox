@@ -22,24 +22,33 @@
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <iostream>
 
 namespace facebook::velox::cudf_velox {
 
+static bool _cudfIsRegistered = false;
+
 bool CompileState::compile() {
-  std::cout << "Calling cudfDriverAdapter" << std::endl;
+  if (cudfDebugEnabled()) {
+    std::cout << "Calling cudfDriverAdapter" << std::endl;
+  }
+
   auto operators = driver_.operators();
   auto& nodes = planNodes_;
-  std::cout << "Number of operators: " << operators.size() << std::endl;
-  for (auto& op : operators) {
-    std::cout << "  Operator: ID " << op->operatorId() << ": " << op->toString()
-              << std::endl;
-  }
-  std::cout << "Number of plan nodes: " << nodes.size() << std::endl;
-  for (auto& node : nodes) {
-    std::cout << "  Plan node: ID " << node->id() << ": " << node->toString()
-              << std::endl;
+
+  if (cudfDebugEnabled()) {
+    std::cout << "Number of operators: " << operators.size() << std::endl;
+    for (auto& op : operators) {
+      std::cout << "  Operator: ID " << op->operatorId() << ": "
+                << op->toString() << std::endl;
+    }
+    std::cout << "Number of plan nodes: " << nodes.size() << std::endl;
+    for (auto& node : nodes) {
+      std::cout << "  Plan node: ID " << node->id() << ": " << node->toString()
+                << std::endl;
+    }
   }
 
   // Make sure operator states are initialized.  We will need to inspect some of
@@ -96,22 +105,28 @@ bool CompileState::compile() {
 struct cudfDriverAdapter {
   std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>> planNodes;
   cudfDriverAdapter() {
-    std::cout << "cudfDriverAdapter constructor" << std::endl;
+    if (cudfDebugEnabled()) {
+      std::cout << "cudfDriverAdapter constructor" << std::endl;
+    }
     planNodes =
         std::make_shared<std::vector<std::shared_ptr<core::PlanNode const>>>();
   }
   ~cudfDriverAdapter() {
-    std::cout << "cudfDriverAdapter destructor" << std::endl;
-    printf(
-        "cached planNodes %p, %ld\n", planNodes.get(), planNodes.use_count());
+    if (cudfDebugEnabled()) {
+      std::cout << "cudfDriverAdapter destructor" << std::endl;
+      printf(
+          "cached planNodes %p, %ld\n", planNodes.get(), planNodes.use_count());
+    }
   }
   // driveradapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     auto state = CompileState(factory, driver, *planNodes);
     // Stored planNodes from inspect.
-    printf("driver.planNodes=%p\n", planNodes.get());
-    for (auto planNode : *planNodes) {
-      std::cout << "PlanNode: " << (*planNode).toString() << std::endl;
+    if (cudfDebugEnabled()) {
+      printf("driver.planNodes=%p\n", planNodes.get());
+      for (auto planNode : *planNodes) {
+        std::cout << "PlanNode: " << (*planNode).toString() << std::endl;
+      }
     }
     auto res = state.compile();
     return res;
@@ -130,30 +145,47 @@ struct cudfDriverAdapter {
     // signature: std::function<void(const core::PlanFragment&)> inspect;
     // call: adapter.inspect(planFragment);
     planNodes->clear();
-    std::cout << "Inspecting PlanFragment: " << std::endl;
+    if (cudfDebugEnabled()) {
+      std::cout << "Inspecting PlanFragment" << std::endl;
+    }
     if (planNodes) {
-      printf("inspect.planNodes=%p\n", planNodes.get());
       storePlanNodes(planFragment.planNode);
-    } else {
-      std::cout << "planNodes_ptr is nullptr" << std::endl;
     }
   }
 };
 
 void registerCudf() {
+  const char* env_cudf_disabled = std::getenv("VELOX_CUDF_DISABLED");
+  if (env_cudf_disabled != nullptr && std::stoi(env_cudf_disabled)) {
+    return;
+  }
+
   CUDF_FUNC_RANGE();
   cudaFree(0); // to init context.
-  std::cout << "Registering CudfHashJoinBridgeTranslator" << std::endl;
+  if (cudfDebugEnabled()) {
+    std::cout << "Registering CudfHashJoinBridgeTranslator" << std::endl;
+  }
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-  std::cout << "Registering cudfDriverAdapter" << std::endl;
+  if (cudfDebugEnabled()) {
+    std::cout << "Registering cudfDriverAdapter" << std::endl;
+  }
   cudfDriverAdapter cda{};
   exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
+  _cudfIsRegistered = true;
 }
 
 void unregisterCudf() {
-  std::cout << "unRegistering cudfDriverAdapter" << std::endl;
+  if (cudfDebugEnabled()) {
+    std::cout << "Unregistering cudfDriverAdapter" << std::endl;
+  }
   exec::DriverFactory::adapters.clear();
+  _cudfIsRegistered = false;
 }
+
+bool cudfIsRegistered() {
+  return _cudfIsRegistered;
+}
+
 } // namespace facebook::velox::cudf_velox

@@ -46,4 +46,7 @@ class CompileState {
 void registerCudf();
 void unregisterCudf();
 
+/// Returns true if cuDF is registered.
+bool cudfIsRegistered();
+
 } // namespace facebook::velox::cudf_velox
