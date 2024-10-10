@@ -53,9 +53,8 @@ struct Date {
   bool centuryFormat = false;
 
   bool isYearOfEra = false; // Year of era cannot be zero or negative.
-  bool hasYear = false;
-  // Whether dayOfWeek was explicitly specified.
-  bool hasDayOfWeek = false;
+  bool hasYear = false; // Whether year was explicitly specified.
+  bool hasDayOfWeek = false; // Whether dayOfWeek was explicitly specified.
 
   int32_t hour = 0;
   int32_t minute = 0;
@@ -999,10 +998,10 @@ int32_t parseFromPattern(
           }
         }
         date.dayOfWeek = number;
+        date.hasDayOfWeek = true;
         if (!date.weekOfMonthDateFormat) {
           date.weekDateFormat = true;
         }
-        date.hasDayOfWeek = true;
         date.dayOfYearFormat = false;
         if (!date.hasYear) {
           date.hasYear = true;
