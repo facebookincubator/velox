@@ -260,15 +260,14 @@ struct UnixTimestampParseWithFormatFunction
     return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& input,
       const arg_type<Varchar>& format) {
     result = input.getSeconds();
-    return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Date>& input,
       const arg_type<Varchar>& format) {
@@ -276,7 +275,6 @@ struct UnixTimestampParseWithFormatFunction
     Timestamp timestamp{seconds, 0};
     timestamp.toGMT(*this->sessionTimeZone_);
     result = timestamp.getSeconds();
-    return true;
   }
 
  private:
