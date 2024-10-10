@@ -277,6 +277,8 @@ struct DriverCtx {
   std::shared_ptr<Task> task;
   Driver* driver{nullptr};
   facebook::velox::process::ThreadDebugInfo threadDebugInfo;
+  folly::Synchronized<std::unordered_map<std::string, std::string>>
+      tracedNodeMap_;
 
   DriverCtx(
       std::shared_ptr<Task> _task,

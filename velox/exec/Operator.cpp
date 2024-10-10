@@ -115,8 +115,30 @@ void Operator::maybeSetTracer() {
     return;
   }
 
-  if (queryTraceConfig->queryNodes.count(planNodeId()) == 0) {
+  const auto nodeId = planNodeId();
+  if (queryTraceConfig->queryNodes.count(nodeId) == 0) {
     return;
+  }
+
+  {
+    const auto& tracedNodeMap =
+        operatorCtx_->driverCtx()->tracedNodeMap_.rlock();
+    if (const auto iter = tracedNodeMap->find(nodeId);
+        iter != tracedNodeMap->end()) {
+      LOG(INFO)
+          << "Plan node id " << nodeId << " has already created operator "
+          << iter->second << " in this driver "
+          << operatorCtx_->driverCtx()->driverId << " of pipeline "
+          << operatorCtx_->driverCtx()->pipelineId
+          << ". Skips setting tracer for this operator " << operatorType()
+          << " as it may be a auxiliary operator, say Aggregation in TableWriter.";
+      return;
+    }
+  }
+
+  {
+    operatorCtx_->driverCtx()->tracedNodeMap_.wlock()->emplace(
+        nodeId, operatorType());
   }
 
   const auto pipelineId = operatorCtx_->driverCtx()->pipelineId;
