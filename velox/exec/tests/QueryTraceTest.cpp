@@ -20,11 +20,13 @@
 #include <memory>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/QueryDataReader.h"
 #include "velox/exec/QueryDataWriter.h"
 #include "velox/exec/QueryMetadataReader.h"
 #include "velox/exec/QueryMetadataWriter.h"
+#include "velox/exec/QuerySplitTracer.h"
 #include "velox/exec/QueryTraceUtil.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -50,6 +52,7 @@ class QueryTracerTest : public HiveConnectorTestBase {
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::HiveConnectorSplit::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
@@ -244,6 +247,47 @@ TEST_F(QueryTracerTest, traceMetadata) {
       actualConnectorProperties.at("test_trace");
   for (const auto& [key, value] : actualConnectorConfigs) {
     ASSERT_EQ(actualConnectorConfigs.at(key), expectedConnectorConfigs.at(key));
+  }
+}
+
+TEST_F(QueryTracerTest, traceSplit) {
+  const auto numSplits = 13;
+  std::vector<exec::Split> splits;
+  for (int i = 0; i < numSplits; ++i) {
+    auto builder = HiveConnectorSplitBuilder(fmt::format("path-{}-{}", i, i));
+    const auto key = fmt::format("k{}", i);
+    const auto value = fmt::format("v{}", i);
+    splits.emplace_back(
+        builder.start(i)
+            .length(i)
+            .connectorId(fmt::format("{}", i))
+            .fileFormat(dwio::common::FileFormat(i + 1))
+            .infoColumn(key, value)
+            .partitionKey(
+                key, i > 1 ? std::nullopt : std::optional<std::string>(value))
+            .tableBucketNumber(i)
+            .build(),
+        -1);
+  }
+
+  const auto traceDir = TempDirectoryPath::create();
+  auto writer = exec::trace::QuerySplitTracer(traceDir->getPath());
+  for (int i = 0; i < numSplits; ++i) {
+    writer.write(splits.at(i));
+  }
+  const auto fs = filesystems::getFileSystem(traceDir->getPath(), nullptr);
+  const auto splitInfoFiles = fs->list(traceDir->getPath());
+  ASSERT_EQ(splitInfoFiles.size(), numSplits);
+
+  const auto reader = exec::trace::QuerySplitTracer(traceDir->getPath());
+  auto actualSplits = reader.read();
+  for (int i = 0; i < numSplits; ++i) {
+    ASSERT_FALSE(actualSplits[i].hasGroup());
+    ASSERT_TRUE(actualSplits[i].hasConnectorSplit());
+    const auto actualConnectorSplit = actualSplits[i].connectorSplit;
+    const auto expectedConnectorSplit = splits[i].connectorSplit;
+    ASSERT_EQ(
+        actualConnectorSplit->toString(), expectedConnectorSplit->toString());
   }
 }
 

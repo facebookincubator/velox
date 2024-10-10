@@ -61,7 +61,8 @@ folly::dynamic HiveConnectorSplit::serialize() const {
     customSplitInfoObj[key] = value;
   }
   obj["customSplitInfo"] = customSplitInfoObj;
-  obj["extraFileInfo"] = *extraFileInfo;
+  obj["extraFileInfo"] =
+      extraFileInfo == nullptr ? nullptr : folly::dynamic(*extraFileInfo);
 
   folly::dynamic serdeParametersObj = folly::dynamic::object;
   for (const auto& [key, value] : serdeParameters) {
@@ -118,8 +119,9 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
     customSplitInfo[key.asString()] = value.asString();
   }
 
-  std::shared_ptr<std::string> extraFileInfo =
-      std::make_shared<std::string>(obj["extraFileInfo"].asString());
+  std::shared_ptr<std::string> extraFileInfo = obj["extraFileInfo"].isNull()
+      ? nullptr
+      : std::make_shared<std::string>(obj["extraFileInfo"].asString());
   std::unordered_map<std::string, std::string> serdeParameters;
   for (const auto& [key, value] : obj["serdeParameters"].items()) {
     serdeParameters[key.asString()] = value.asString();

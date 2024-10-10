@@ -30,11 +30,14 @@ namespace facebook::velox::exec::trace {
 class QueryDataWriter {
  public:
   explicit QueryDataWriter(
-      std::string path,
+      std::string traceDir,
       memory::MemoryPool* pool,
       UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB);
 
-  /// Serializes rows and writes out each batch.
+  /// Serializes and writes out each batch, enabling us to replay the execution
+  /// with the same batch numbers and order. Each serialized batch is flushed
+  /// immediately, ensuring that the traced operator can be replayed even if a
+  /// crash occurs during execution.
   void write(const RowVectorPtr& rows);
 
   /// Closes the data file and writes out the data summary.
@@ -49,7 +52,7 @@ class QueryDataWriter {
   // TODO: add more summaries such as number of rows etc.
   void writeSummary(bool limitExceeded = false) const;
 
-  const std::string dirPath_;
+  const std::string traceDir_;
   // TODO: make 'useLosslessTimestamp' configuerable.
   const serializer::presto::PrestoVectorSerde::PrestoOptions options_ = {
       true,
