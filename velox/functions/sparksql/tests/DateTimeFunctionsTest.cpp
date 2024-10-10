@@ -301,6 +301,25 @@ TEST_F(DateTimeFunctionsTest, unixTimestampCustomFormat) {
   EXPECT_EQ(
       std::nullopt,
       unixTimestamp("2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"));
+
+  const auto unixTimestamp1 = [&](std::optional<Timestamp> timestamp,
+                                  std::optional<StringView> formatStr) {
+    return evaluateOnce<int64_t>(
+        "unix_timestamp(c0, c1)", timestamp, formatStr);
+  };
+  EXPECT_EQ(0, unixTimestamp1(Timestamp(0, 0), "yyyy-MM-dd"));
+  EXPECT_EQ(1, unixTimestamp1(Timestamp(1, 990), "yyyy-MM-dd"));
+  EXPECT_EQ(61, unixTimestamp1(Timestamp(61, 0), "yyyy-MM-dd"));
+
+  const auto unixTimestamp2 = [&](std::optional<int32_t> date,
+                                  std::optional<StringView> formatStr) {
+    return evaluateOnce<int64_t>(
+        "unix_timestamp(c0, c1)", {DATE(), VARCHAR()}, date, formatStr);
+  };
+  EXPECT_EQ(0, unixTimestamp2(parseDate("1970-01-01"), "yyyy-MM-dd"));
+  EXPECT_EQ(1727740800, unixTimestamp2(parseDate("2024-10-01"), "yyyy-MM-dd"));
+  setQueryTimeZone("America/Los_Angeles");
+  EXPECT_EQ(1727766000, unixTimestamp2(parseDate("2024-10-01"), "yyyy-MM-dd"));
 }
 
 // unix_timestamp and to_unix_timestamp are aliases.
