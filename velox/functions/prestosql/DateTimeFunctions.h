@@ -1683,10 +1683,11 @@ struct ParseDateTimeFunction {
       const arg_type<Varchar>* format) {
     if (format != nullptr) {
       buildJodaDateTimeFormatter(
-          std::string_view(format->data(), format->size())).thenOrThrow([this](auto formatter) {
-        format_ = formatter;
-        isConstFormat_ = true;
-      }
+          std::string_view(format->data(), format->size()))
+          .thenOrThrow([this](auto formatter) {
+            format_ = formatter;
+            isConstFormat_ = true;
+          });
     }
 
     auto sessionTzName = config.sessionTimezone();
