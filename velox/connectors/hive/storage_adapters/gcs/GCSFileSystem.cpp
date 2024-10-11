@@ -269,7 +269,7 @@ class GCSFileSystem::Impl {
     constexpr std::string_view kHttpsScheme{"https://"};
     auto options = gc::Options{};
     auto endpointOverride = hiveConfig_->gcsEndpoint();
-    // Use insecure credentials by default.
+    // Use secure credentials by default.
     if (!endpointOverride.empty()) {
       options.set<gcs::RestEndpointOption>(endpointOverride);
       // Use Google default credentials if endpoint has https scheme.
@@ -281,7 +281,8 @@ class GCSFileSystem::Impl {
             gc::MakeInsecureCredentials());
       }
     } else {
-      options.set<gc::UnifiedCredentialsOption>(gc::MakeInsecureCredentials());
+      options.set<gc::UnifiedCredentialsOption>(
+          gc::MakeGoogleDefaultCredentials());
     }
     options.set<gcs::UploadBufferSizeOption>(kUploadBufferSize);
 
