@@ -158,15 +158,16 @@ The operator first calls Spiller::finishSpill() to mark the completion of
 spilling. The Spiller collects rows from unspilled partitions and returns these
 to the operator. The operator processes the unspilled partitions, emits the
 results and frees up space in the RowContainer. Then, it loads spilled
-partitions one at a time. It calls Spiller::startMerge() for each spilled
-partition to create a sorted reader to restore the spilled partition state.
+partitions one at a time. It calls SpillPartition::createOrderedReader() for
+each spilled partition to create a sorted reader to restore the spilled
+partition state.
 
 .. code-block:: c++
 
     void Spiller::finishSpill(SpillPartitionSet& partitionSet);
 
-    std::unique_ptr<UnorderedStreamReader<BatchStream>>
-    SpillPartition::createReader();
+    std::unique_ptr<TreeOfLosers<SpillMergeStream>>
+    SpillPartition::createOrderedReader();
 
 **unsorted spill restore**: Used by hash build and hash probe
 operators. The operator first calls Spiller::finishSpill() to mark the
