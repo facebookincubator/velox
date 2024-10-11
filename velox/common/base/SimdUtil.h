@@ -294,6 +294,13 @@ auto toBitMask(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
   return detail::BitMask<T, A>::toBitMask(mask, arch);
 }
 
+#if __ARM_ARCH
+template <typename T, typename A = xsimd::default_arch>
+auto arm64ToBitMask(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
+  return detail::BitMask<T, A>::arm64ToBitMask(mask, arch);
+}
+#endif
+
 // Get a vector mask from bit mask.
 template <typename T, typename BitMaskType, typename A = xsimd::default_arch>
 xsimd::batch_bool<T, A> fromBitMask(BitMaskType bitMask, const A& arch = {}) {
