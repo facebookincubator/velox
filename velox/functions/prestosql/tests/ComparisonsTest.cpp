@@ -532,6 +532,116 @@ TEST_F(ComparisonsTest, eqRow) {
   test({1, 2}, {std::nullopt, 2}, std::nullopt);
 }
 
+TEST_F(ComparisonsTest, gtLtRow) {
+  auto test =
+      [&](const std::tuple<std::optional<int64_t>, std::optional<int64_t>>&
+              row1,
+          const std::tuple<std::optional<int64_t>, std::optional<int64_t>>&
+              row2,
+          std::optional<std::vector<std::optional<bool>>> expected) {
+        auto vector1 = vectorMaker_.rowVector(
+            {vectorMaker_.flatVectorNullable<int64_t>({std::get<0>(row1)}),
+             vectorMaker_.flatVectorNullable<int64_t>({std::get<1>(row1)})});
+        auto vector2 = vectorMaker_.rowVector(
+            {vectorMaker_.flatVectorNullable<int64_t>({std::get<0>(row2)}),
+             vectorMaker_.flatVectorNullable<int64_t>({std::get<1>(row2)})});
+        std::string comparisonExpressions[4] = {">", ">=", "<", "<="};
+
+        if (expected.has_value()) {
+          std::vector<std::optional<bool>> results;
+          for (auto expression : comparisonExpressions) {
+            results.push_back(
+                evaluate<SimpleVector<bool>>(
+                    "c0" + expression + "c1", makeRowVector({vector1, vector2}))
+                    ->valueAt(0));
+          }
+          ASSERT_EQ(results, expected);
+        } else {
+          for (auto expression : comparisonExpressions) {
+            VELOX_ASSERT_THROW(
+                evaluate<SimpleVector<bool>>(
+                    "c0" + expression + "c1",
+                    makeRowVector({vector1, vector2})),
+                "Ordering nulls is not supported");
+          }
+        }
+      };
+  std::vector<std::optional<bool>> expected = {false, false, true, true};
+  test({1, 2}, {2, 3}, expected);
+  expected = {false, true, false, true};
+  test({1, 2}, {1, 2}, expected);
+  test({1, std::nullopt}, {1, 2}, std::nullopt);
+}
+
+TEST_F(ComparisonsTest, gtLtArray) {
+  auto test = [&](const std::vector<std::optional<int64_t>>& array1,
+                  const std::vector<std::optional<int64_t>>& array2,
+                  std::optional<std::vector<std::optional<bool>>> expected) {
+    auto input = makeRowVector(
+        {vectorMaker_.arrayVectorNullable<int64_t>({array1}),
+         vectorMaker_.arrayVectorNullable<int64_t>({array2})});
+    std::vector<std::optional<bool>> results;
+    std::string comparisonExpressions[4] = {">", ">=", "<", "<="};
+    if (expected.has_value()) {
+      for (auto expression : comparisonExpressions) {
+        results.push_back(
+            evaluate<SimpleVector<bool>>("c0" + expression + "c1", input)
+                ->valueAt(0));
+      }
+      ASSERT_EQ(results, expected);
+    } else {
+      for (auto expression : comparisonExpressions) {
+        VELOX_ASSERT_THROW(
+            evaluate<SimpleVector<bool>>("c0" + expression + "c1", input),
+            "Ordering nulls is not supported");
+      }
+    }
+  };
+  std::vector<std::optional<bool>> expected = {false, true, false, true};
+  test({1, 2}, {1, 2}, expected);
+
+  expected = {false, false, true, true};
+  test({1, 2}, {1, 3}, expected);
+
+  // Different sized arrays
+  expected = {false, false, true, true};
+  test({1, 2}, {1, 2, 3}, expected);
+
+  expected = {true, true, false, false};
+  test({1, 3}, {1, 2, 3}, expected);
+
+  // When nulls present, compare based on CompareFlag rules.
+  expected = {true, true, false, false};
+  test({1, std::nullopt}, {1}, expected);
+
+  expected = {false, false, true, true};
+  test({1, std::nullopt}, {2, std::nullopt}, expected);
+
+  // User Exception thrown when nulls encountered before result is determined.
+  test({1, std::nullopt, std::nullopt}, {1, 2, 3}, std::nullopt);
+}
+
+TEST_F(ComparisonsTest, gtLtMap) {
+  auto vector1 = makeNullableMapVector<int64_t, int64_t>({{{{1, 2}, {3, 4}}}});
+  auto vector2 = makeNullableMapVector<int64_t, int64_t>({{{{1, 2}, {3, 4}}}});
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "c0 > c1", makeRowVector({vector1, vector2})),
+      "Map is not orderable type");
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "c0 >= c1", makeRowVector({vector1, vector2})),
+      "Map is not orderable type");
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "c0 < c1", makeRowVector({vector1, vector2})),
+      "Map is not orderable type");
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "c0 <= c1", makeRowVector({vector1, vector2})),
+      "Map is not orderable type");
+}
+
 TEST_F(ComparisonsTest, distinctFrom) {
   auto input = makeRowVector({
       makeNullableFlatVector<int64_t>({3, 1, 1, std::nullopt, std::nullopt}),

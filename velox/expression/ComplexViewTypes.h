@@ -1097,6 +1097,30 @@ class GenericView {
         other.decoded_.base(), decodedIndex(), other.decodedIndex());
   }
 
+  int64_t compareOrThrow(const GenericView& other) const {
+    static constexpr CompareFlags kFlags = {
+        .nullHandlingMode =
+            CompareFlags::NullHandlingMode::kNullAsIndeterminate};
+    // Will throw if it encounters null elements before result is determined.
+    return this->compare(other, kFlags).value();
+  }
+
+  bool operator<(const GenericView& other) const {
+    return compareOrThrow(other) < 0;
+  }
+
+  bool operator<=(const GenericView& other) const {
+    return compareOrThrow(other) <= 0;
+  }
+
+  bool operator>(const GenericView& other) const {
+    return compareOrThrow(other) > 0;
+  }
+
+  bool operator>=(const GenericView& other) const {
+    return compareOrThrow(other) >= 0;
+  }
+
   vector_size_t decodedIndex() const {
     return decoded_.index(index_);
   }
