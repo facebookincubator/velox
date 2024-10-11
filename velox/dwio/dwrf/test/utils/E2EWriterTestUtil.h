@@ -23,71 +23,75 @@ namespace facebook::velox::dwrf {
 
 class E2EWriterTestUtil {
  public:
-  /**
-   * Creates and returns the writer so that the caller can control
-   * its life cycle. The writer is constructed with the supplied parameters.
-   *    sink                    the container for writer output, could be
-   *                            in-memory or on-disk.
-   *    type                    schema of the output data
-   *    config                  ORC configs
-   *    flushPolicyFactory      supplies the policy writer use to determine
-   *                            when to flush the current stripe and start a
-   *                            new one
-   *    layoutPlannerFactory    supplies the layout planner and determine how
-   *                            order of the data streams prior to flush
-   *    writerMemoryCap         total memory budget for the writer
-   */
+  /// Creates and returns the writer so that the caller can control
+  /// its life cycle. The writer is constructed with the supplied parameters.
+  ///    sink                        the container for writer output, could be
+  ///                                in-memory or on-disk.
+  ///    type                        schema of the output data
+  ///    config                      ORC configs
+  ///    sessionTimezone             Session timezone used for writing Timestamp
+  ///    adjustTimestampToTimezone   Whether to adjust Timestamp to the timeZone
+  ///                                obtained through sessionTimezone
+  ///    flushPolicyFactory          supplies the policy writer use to determine
+  ///                                when to flush the current stripe and start
+  ///                                a new one
+  ///    layoutPlannerFactory        supplies the layout planner and determine
+  ///                                how order of the data streams prior to
+  ///                                flush
+  ///    writerMemoryCap             total memory budget for the writer
   static std::unique_ptr<Writer> createWriter(
       std::unique_ptr<dwio::common::FileSink> sink,
       const std::shared_ptr<const Type>& type,
       const std::shared_ptr<Config>& config,
+      const tz::TimeZone* sessionTimezone,
+      bool adjustTimestampToTimezone = false,
       std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory =
           nullptr,
       std::function<std::unique_ptr<LayoutPlanner>(
           const dwio::common::TypeWithId&)> layoutPlannerFactory = nullptr,
       const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max());
 
-  /**
-   * Writes data and returns the same writer so that the caller can control
-   * its life cycle. Parameters:
-   *    writer                  the writer to write data into
-   *    batches                 generated data
-   */
+  /// Writes data and returns the same writer so that the caller can control
+  /// its life cycle. Parameters:
+  ///    writer                  the writer to write data into
+  ///    batches                 generated data
   static std::unique_ptr<Writer> writeData(
       std::unique_ptr<Writer> writer,
       const std::vector<VectorPtr>& batches);
 
-  /*
-   * Combines createWriter and writeData.
-   * The writer is constructed with the supplied parameters.
-   *    sink                    the container for writer output, could be
-   *                            in-memory or on-disk.
-   *    type                    schema of the output data
-   *    batches                 generated data
-   *    config                  ORC configs
-   *    flushPolicyFactory      supplies the policy writer use to determine
-   *                            when to flush the current stripe and start a
-   *                            new one
-   *    layoutPlannerFactory    supplies the layout planner and determine how
-   *                            order of the data streams prior to flush
-   *    writerMemoryCap         total memory budget for the writer
-   */
+  /// Combines createWriter and writeData.
+  /// The writer is constructed with the supplied parameters.
+  ///    sink                        the container for writer output, could be
+  ///                                in-memory or on-disk.
+  ///    type                        schema of the output data
+  ///    batches                     generated data
+  ///    config                      ORC configs
+  ///    sessionTimezone             Session timezone used for writing Timestamp
+  ///    adjustTimestampToTimezone   Whether to adjust Timestamp to the timeZone
+  ///                                obtained through sessionTimezone
+  ///    flushPolicyFactory          supplies the policy writer use to determine
+  ///                                when to flush the current stripe and start
+  ///                                a new one
+  ///    layoutPlannerFactory        supplies the layout planner and determine
+  ///                                how order of the data streams prior to
+  ///                                flush
+  ///    writerMemoryCap             total memory budget for the writer
   static std::unique_ptr<Writer> writeData(
       std::unique_ptr<dwio::common::FileSink> sink,
       const std::shared_ptr<const Type>& type,
       const std::vector<VectorPtr>& batches,
       const std::shared_ptr<Config>& config,
+      const tz::TimeZone* sessionTimezone = nullptr,
+      bool adjustTimestampToTimezone = false,
       std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory =
           nullptr,
       std::function<std::unique_ptr<LayoutPlanner>(
           const dwio::common::TypeWithId&)> layoutPlannerFactory = nullptr,
       const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max());
 
-  /**
-   * Creates a writer with the supplied configuration and check the IO
-   * characteristics and the content of its output. Uses writeData to perform
-   * the data write and pass through most of the parameters.
-   */
+  /// Creates a writer with the supplied configuration and check the IO
+  /// characteristics and the content of its output. Uses writeData to perform
+  /// the data write and pass through most of the parameters.
   static void testWriter(
       memory::MemoryPool& pool,
       const std::shared_ptr<const Type>& type,
@@ -97,6 +101,9 @@ class E2EWriterTestUtil {
       size_t numStripesLower,
       size_t numStripesUpper,
       const std::shared_ptr<Config>& config,
+      const std::string& sessionTimezoneName = "",
+      bool useSelectiveColumnReader = false,
+      bool adjustTimestampToTimezone = false,
       std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory =
           nullptr,
       std::function<std::unique_ptr<LayoutPlanner>(
