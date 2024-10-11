@@ -33,6 +33,8 @@ namespace facebook::velox::dwrf {
     std::unique_ptr<FileSink> sink,
     const std::shared_ptr<const Type>& type,
     const std::shared_ptr<Config>& config,
+    const tz::TimeZone* sessionTimezone,
+    bool adjustTimestampToTimezone,
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
     std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
@@ -40,6 +42,8 @@ namespace facebook::velox::dwrf {
   // write file to memory
   dwrf::WriterOptions options;
   options.config = config;
+  options.sessionTimezone = sessionTimezone;
+  options.adjustTimestampToTimezone = adjustTimestampToTimezone;
   options.schema = type;
   options.memoryBudget = writerMemoryCap;
   options.flushPolicyFactory = flushPolicyFactory;
@@ -67,6 +71,8 @@ namespace facebook::velox::dwrf {
     const std::shared_ptr<const Type>& type,
     const std::vector<VectorPtr>& batches,
     const std::shared_ptr<Config>& config,
+    const tz::TimeZone* sessionTimezone,
+    bool adjustTimestampToTimezone,
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
     std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
@@ -75,6 +81,8 @@ namespace facebook::velox::dwrf {
       std::move(sink),
       type,
       config,
+      sessionTimezone,
+      adjustTimestampToTimezone,
       std::move(flushPolicyFactory),
       std::move(layoutPlannerFactory),
       writerMemoryCap);
@@ -90,6 +98,9 @@ namespace facebook::velox::dwrf {
     size_t numStripesLower,
     size_t numStripesUpper,
     const std::shared_ptr<Config>& config,
+    const std::string& sessionTimezoneName,
+    bool useSelectiveColumnReader,
+    bool adjustTimestampToTimezone,
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
     std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
@@ -100,14 +111,21 @@ namespace facebook::velox::dwrf {
       200 * 1024 * 1024, FileSink::Options{.pool = &pool});
   auto sinkPtr = sink.get();
 
+  const tz::TimeZone* sessionTimezone = nullptr;
+  if (!sessionTimezoneName.empty()) {
+    sessionTimezone = tz::locateZone(sessionTimezoneName);
+  }
+
   // Writer owns sink. Keeping writer alive to avoid deleting the sink.
   auto writer = writeData(
       std::move(sink),
       type,
       batches,
       config,
-      flushPolicyFactory,
-      layoutPlannerFactory,
+      sessionTimezone,
+      adjustTimestampToTimezone,
+      std::move(flushPolicyFactory),
+      std::move(layoutPlannerFactory),
       writerMemoryCap);
   // read it back and compare
   auto readFile = std::make_shared<InMemoryReadFile>(
@@ -115,7 +133,17 @@ namespace facebook::velox::dwrf {
   auto input = std::make_unique<BufferedInput>(readFile, pool);
 
   dwio::common::ReaderOptions readerOpts{&pool};
+  readerOpts.setSessionTimezone(sessionTimezone);
+  readerOpts.setAdjustTimestampToTimezone(adjustTimestampToTimezone);
+  readerOpts.setFileFormat(dwio::common::FileFormat::DWRF);
   RowReaderOptions rowReaderOpts;
+
+  if (useSelectiveColumnReader) {
+    auto spec = std::make_shared<common::ScanSpec>("<root>");
+    spec->addAllChildFields(*type);
+    rowReaderOpts.setScanSpec(spec);
+    rowReaderOpts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
+  }
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());
   EXPECT_LE(numStripesLower, reader->getNumberOfStripes());
@@ -147,7 +175,7 @@ namespace facebook::velox::dwrf {
 
   auto batchIndex = 0;
   auto rowIndex = 0;
-  VectorPtr batch;
+  auto batch = BaseVector::create(type, 0, &pool);
   while (dwrfRowReader->next(1000, batch)) {
     for (int32_t i = 0; i < batch->size(); ++i) {
       ASSERT_TRUE(batches[batchIndex]->equalValueAt(batch.get(), rowIndex, i))

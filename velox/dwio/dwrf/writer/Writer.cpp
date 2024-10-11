@@ -81,6 +81,8 @@ Writer::Writer(
       options.sessionTimezone,
       options.adjustTimestampToTimezone,
       std::move(handler));
+  common::testutil::TestValue::adjust(
+      "facebook::velox::dwrf::Writer::Writer", writerBase_.get());
   auto& context = writerBase_->getContext();
   VELOX_CHECK_EQ(
       context.getTotalMemoryUsage(),

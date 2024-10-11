@@ -117,10 +117,10 @@ struct Timestamp {
   /// and the number of nanoseconds.
   static Timestamp fromDaysAndNanos(int32_t days, int64_t nanos);
 
-  // date is the number of days since unix epoch.
+  /// date is the number of days since unix epoch.
   static Timestamp fromDate(int32_t date);
 
-  // Returns the current unix timestamp (ms precision).
+  /// Returns the current unix timestamp (ms precision).
   static Timestamp now();
 
   static Timestamp create(const folly::dynamic& obj) {
@@ -137,7 +137,7 @@ struct Timestamp {
     return nanos_;
   }
 
-  // Keep it in header for getting inlined.
+  /// Keep it in header for getting inlined.
   int64_t toNanos() const {
     // int64 can store around 292 years in nanos ~ till 2262-04-12.
     // When an integer overflow occurs in the calculation,
@@ -173,7 +173,7 @@ struct Timestamp {
     return result;
   }
 
-  // Keep it in header for getting inlined.
+  /// Keep it in header for getting inlined.
   int64_t toMillisAllowOverflow() const {
     // Similar to the above toMillis() except that overflowed integer is allowed
     // as result.
@@ -340,12 +340,12 @@ struct Timestamp {
       const TimestampToStringOptions& options,
       char* const startPosition);
 
-  // Assuming the timestamp represents a time at zone, converts it to the GMT
-  // time at the same moment. For example:
-  //
-  //  Timestamp ts{0, 0};
-  //  ts.Timezone("America/Los_Angeles");
-  //  ts.toString(); // returns January 1, 1970 08:00:00
+  /// Assuming the timestamp represents a time at zone, converts it to the GMT
+  /// time at the same moment. For example:
+  ///
+  ///  Timestamp ts{0, 0};
+  ///  ts.Timezone("America/Los_Angeles");
+  ///  ts.toString(); // returns January 1, 1970 08:00:00
   void toGMT(const tz::TimeZone& zone);
 
   /// Assuming the timestamp represents a GMT time, converts it to the time at
@@ -413,7 +413,7 @@ struct Timestamp {
     VELOX_USER_FAIL("Timestamp nanos out of range");
   }
 
-  // Needed for serialization of FlatVector<Timestamp>
+  /// Needed for serialization of FlatVector<Timestamp>
   operator StringView() const {
     return StringView("TODO: Implement");
   }
@@ -446,7 +446,7 @@ struct Timestamp {
     return obj;
   }
 
-  // Pretty printer for gtest.
+  /// Pretty printer for gtest.
   friend void PrintTo(const Timestamp& timestamp, std::ostream* os) {
     *os << "sec: " << timestamp.seconds_ << ", ns: " << timestamp.nanos_;
   }
