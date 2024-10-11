@@ -90,32 +90,6 @@ std::vector<column_index_t> getPartitionChannels(
   return channels;
 }
 
-// Returns the column indices of non-partition data columns.
-std::vector<column_index_t> getNonPartitionChannels(
-    const std::vector<column_index_t>& partitionChannels,
-    const column_index_t childrenSize) {
-  std::vector<column_index_t> dataChannels;
-  dataChannels.reserve(childrenSize - partitionChannels.size());
-
-  for (column_index_t i = 0; i < childrenSize; i++) {
-    if (std::find(partitionChannels.cbegin(), partitionChannels.cend(), i) ==
-        partitionChannels.cend()) {
-      dataChannels.push_back(i);
-    }
-  }
-
-  return dataChannels;
-}
-
-std::string makePartitionDirectory(
-    const std::string& tableDirectory,
-    const std::optional<std::string>& partitionSubdirectory) {
-  if (partitionSubdirectory.has_value()) {
-    return fs::path(tableDirectory) / partitionSubdirectory.value();
-  }
-  return tableDirectory;
-}
-
 std::string makeUuid() {
   return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
 }
@@ -375,8 +349,7 @@ HiveDataSink::HiveDataSink(
                     hiveConfig_->isPartitionPathAsLowerCase(
                         connectorQueryCtx->sessionProperties()))
               : nullptr),
-      dataChannels_(
-          getNonPartitionChannels(partitionChannels_, inputType_->size())),
+      dataChannels_(getDataChannels(partitionChannels_, inputType_->size())),
       bucketCount_(
           insertTableHandle_->bucketProperty() == nullptr
               ? 0
@@ -850,6 +823,32 @@ void HiveDataSink::splitInputRowsAndEnsureWriters() {
       partitionRows_[i]->setSize(partitionSizes_[i] * sizeof(vector_size_t));
     }
   }
+}
+
+// Returns the column indices of non-partition data columns.
+std::vector<column_index_t> HiveDataSink::getDataChannels(
+    const std::vector<column_index_t>& partitionChannels,
+    const column_index_t childrenSize) const {
+  std::vector<column_index_t> dataChannels;
+  dataChannels.reserve(childrenSize - partitionChannels.size());
+
+  for (column_index_t i = 0; i < childrenSize; i++) {
+    if (std::find(partitionChannels.cbegin(), partitionChannels.cend(), i) ==
+        partitionChannels.cend()) {
+      dataChannels.push_back(i);
+    }
+  }
+
+  return dataChannels;
+}
+
+std::string HiveDataSink::makePartitionDirectory(
+    const std::string& tableDirectory,
+    const std::optional<std::string>& partitionSubdirectory) const {
+  if (partitionSubdirectory.has_value()) {
+    return fs::path(tableDirectory) / partitionSubdirectory.value();
+  }
+  return tableDirectory;
 }
 
 HiveWriterParameters HiveDataSink::getWriterParameters(
