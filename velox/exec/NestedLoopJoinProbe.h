@@ -134,6 +134,12 @@ class NestedLoopJoinProbe : public Operator {
   // receive rows. Batches have space for `outputBatchSize_`.
   void prepareOutput();
 
+  // After matches are enumerated, wraps the probe side rows that are
+  // projected out in a dictionary selecting the probe side
+  // matches. This is done after the matching because wrapping may
+  // involve combining dictionaries.
+  void fillInIdentityProjections();
+
   // Evaluates the joinCondition for a given build vector. This method sets
   // `filterOutput_` and `decodedFilterResult_`, which will be ready to be used
   // by `isJoinConditionMatch(buildRow)` below.

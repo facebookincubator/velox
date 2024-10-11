@@ -770,6 +770,7 @@ void HashProbe::fillLeftSemiProjectMatchColumn(vector_size_t size) {
 
 void HashProbe::fillOutput(vector_size_t size) {
   prepareOutput(size);
+  WrapState state;
 
   for (auto projection : identityProjections_) {
     // Load input vector if it is being split into multiple batches. It is not
@@ -778,7 +779,7 @@ void HashProbe::fillOutput(vector_size_t size) {
     auto inputChild = input_->childAt(projection.inputChannel);
 
     output_->childAt(projection.outputChannel) =
-        wrapChild(size, outputRowMapping_, inputChild);
+        wrapOne(size, outputRowMapping_, inputChild, nullptr, state);
   }
 
   if (isLeftSemiProjectJoin(joinType_)) {
@@ -1115,6 +1116,7 @@ bool HashProbe::maybeReadSpillOutput() {
 
 RowVectorPtr HashProbe::createFilterInput(vector_size_t size) {
   std::vector<VectorPtr> filterColumns(filterInputType_->size());
+  WrapState state;
   for (auto projection : filterInputProjections_) {
     if (projectedInputColumns_.find(projection.inputChannel) !=
         projectedInputColumns_.end()) {
@@ -1129,8 +1131,12 @@ RowVectorPtr HashProbe::createFilterInput(vector_size_t size) {
       ensureLoadedIfNotAtEnd(projection.inputChannel);
     }
 
-    filterColumns[projection.outputChannel] = wrapChild(
-        size, outputRowMapping_, input_->childAt(projection.inputChannel));
+    filterColumns[projection.outputChannel] = wrapOne(
+        size,
+        outputRowMapping_,
+        input_->childAt(projection.inputChannel),
+        nullptr,
+        state);
   }
 
   extractColumns(
