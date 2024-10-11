@@ -263,16 +263,15 @@ struct UnixTimestampParseWithFormatFunction
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Timestamp>& input,
-      const arg_type<Varchar>& format) {
+      const arg_type<Varchar>& /*format*/) {
     result = input.getSeconds();
   }
 
   FOLLY_ALWAYS_INLINE void call(
       int64_t& result,
       const arg_type<Date>& input,
-      const arg_type<Varchar>& format) {
-    auto seconds = input * kSecondsInDay;
-    Timestamp timestamp{seconds, 0};
+      const arg_type<Varchar>& /*format*/) {
+    auto timestamp = Timestamp::fromDate(input);
     timestamp.toGMT(*this->sessionTimeZone_);
     result = timestamp.getSeconds();
   }
