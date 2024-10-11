@@ -150,8 +150,8 @@ uint32_t getDayOfFirstDayOfWeek(int32_t y, uint32_t dayOfWeek) {
 /// month and day.
 ///
 /// getWeekYear only works with Gregorian calendar due to limitations in the
-/// date library. As a result, dates before the Gregorian calendar was used
-/// (1582-10-15) would yield mismatched results.
+/// date library. As a result, dates before the Gregorian calendar
+/// (1582-10-15) yields mismatched results.
 ///
 /// The week that includes January 1st and has 'minimalDaysInFirstWeek' or more
 /// days is referred to as week 1. The starting day of the week is decided by
