@@ -1430,7 +1430,7 @@ TEST_F(MysqlDateTimeTest, invalidBuild) {
   EXPECT_TRUE(buildMysqlDateTimeFormatter("%w").hasError());
 
   // Empty format string
-  EXPECT_THROW(buildMysqlDateTimeFormatter(""), VeloxUserError);
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("").hasError());
 }
 
 TEST_F(MysqlDateTimeTest, formatYear) {
