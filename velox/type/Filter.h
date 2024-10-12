@@ -1788,7 +1788,7 @@ class NegatedBytesRange final : public Filter {
 /// Open ranges can be implemented by using the value to the left
 /// or right of the end of the range, e.g. a < timestamp '2023-07-19
 /// 17:00:00.777' is equivalent to a <= timestamp '2023-07-19 17:00:00.776'.
-class TimestampRange final : public Filter {
+class TimestampRange : public Filter {
  public:
   /// @param lower Lower end of the range, inclusive.
   /// @param upper Upper end of the range, inclusive.
@@ -1824,14 +1824,6 @@ class TimestampRange final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool testInt128(int128_t value) const final {
-    // Convert int128_t to Timestamp by extracting days and nanos.
-    const int32_t days = static_cast<int32_t>(value >> 64);
-    const uint64_t nanos = value & ((((1ULL << 63) - 1ULL) << 1) + 1);
-    const auto ts = Timestamp::fromDaysAndNanos(days, nanos);
-    return ts >= lower_ && ts <= upper_;
-  }
-
   bool testTimestamp(Timestamp value) const override {
     return value >= lower_ && value <= upper_;
   }
@@ -1857,6 +1849,10 @@ class TimestampRange final : public Filter {
 
   const Timestamp upper() const {
     return upper_;
+  }
+
+  const bool nullAllowed() const {
+    return nullAllowed_;
   }
 
   bool testingEquals(const Filter& other) const final;
