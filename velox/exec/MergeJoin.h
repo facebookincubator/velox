@@ -190,7 +190,12 @@ class MergeJoin : public Operator {
   bool addToOutput();
 
   // Appends the current set of matching rows, leftMatch_ x rightMatch_ for
-  // left.
+  // left. Full outer join is matched according to left join, so when there are
+  // multiple matched rows, it is easy to lose rows from the right table that do
+  // not have matches. Therefore, after all matches on the left side are
+  // completed, we call the filter function to check if there are any rows on
+  // the right side that do not have matches. If there are, a new row needs to
+  // be added, with the left side of this new row set to null.
   bool addToOutputForLeftJoin();
 
   // Appends the current set of matching rows, rightMatch_ x leftMatch_ for
