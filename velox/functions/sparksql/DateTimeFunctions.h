@@ -176,8 +176,7 @@ struct UnixTimestampParseFunction {
         kDefaultFormat_,
         config.sparkLegacyDateFormatter() ? DateTimeFormatterType::STRICT_SIMPLE
                                           : DateTimeFormatterType::JODA);
-    // Default format should always be valid.
-    VELOX_CHECK(!formatter.hasError());
+    VELOX_CHECK(!formatter.hasError(), "Default format should always be valid");
     format_ = formatter.value();
     setTimezone(config);
   }
