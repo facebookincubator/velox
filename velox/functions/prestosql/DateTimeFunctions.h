@@ -1482,8 +1482,12 @@ struct DateFormatFunction : public TimestampWithTimezoneSupport<T> {
 
  private:
   FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar> formatString) {
-    mysqlDateTime_ = buildMysqlDateTimeFormatter(
-        std::string_view(formatString.data(), formatString.size()));
+    mysqlDateTime_ =
+        buildMysqlDateTimeFormatter(
+            std::string_view(formatString.data(), formatString.size()))
+            .thenOrThrow(folly::identity, [&](const Status& status) {
+              VELOX_USER_FAIL("{}", status.message());
+            });
     maxResultSize_ = mysqlDateTime_->maxResultSize(sessionTimeZone_);
   }
 
@@ -1564,8 +1568,12 @@ struct DateParseFunction {
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* formatString) {
     if (formatString != nullptr) {
-      format_ = buildMysqlDateTimeFormatter(
-          std::string_view(formatString->data(), formatString->size()));
+      format_ =
+          buildMysqlDateTimeFormatter(
+              std::string_view(formatString->data(), formatString->size()))
+              .thenOrThrow(folly::identity, [&](const Status& status) {
+                VELOX_USER_FAIL("{}", status.message());
+              });
       isConstFormat_ = true;
     }
 
@@ -1581,7 +1589,10 @@ struct DateParseFunction {
       const arg_type<Varchar>& format) {
     if (!isConstFormat_) {
       format_ = buildMysqlDateTimeFormatter(
-          std::string_view(format.data(), format.size()));
+                    std::string_view(format.data(), format.size()))
+                    .thenOrThrow(folly::identity, [&](const Status& status) {
+                      VELOX_USER_FAIL("{}", status.message());
+                    });
     }
 
     auto dateTimeResult = format_->parse((std::string_view)(input));

@@ -66,8 +66,15 @@ class DateTimeFormatterTest : public testing::Test {
   }
 
   std::shared_ptr<DateTimeFormatter> getJodaDateTimeFormatter(
-      const std::string_view& format) {
+      const std::string_view& format) const {
     return buildJodaDateTimeFormatter(format).thenOrThrow(
+        folly::identity,
+        [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
+  }
+
+  std::shared_ptr<DateTimeFormatter> getMysqlDateTimeFormatter(
+      const std::string_view& format) const {
+    return buildMysqlDateTimeFormatter(format).thenOrThrow(
         folly::identity,
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
   }
@@ -104,7 +111,7 @@ class DateTimeFormatterTest : public testing::Test {
       const std::string_view& input,
       const std::string_view& format) {
     auto dateTimeResultExpected =
-        buildMysqlDateTimeFormatter(format)->parse(input);
+        getMysqlDateTimeFormatter(format)->parse(input);
     return dateTimeResult(dateTimeResultExpected).timestamp;
   }
 
@@ -126,7 +133,7 @@ class DateTimeFormatterTest : public testing::Test {
       const std::string& format,
       const Timestamp& timestamp,
       const tz::TimeZone* timezone) const {
-    auto formatter = buildMysqlDateTimeFormatter(format);
+    auto formatter = getMysqlDateTimeFormatter(format);
     const auto maxSize = formatter->maxResultSize(timezone);
     std::string result(maxSize, '\0');
     auto resultSize =
@@ -1356,31 +1363,31 @@ TEST_F(MysqlDateTimeTest, validBuild) {
   std::vector<DateTimeToken> expected;
 
   expected = {DateTimeToken(" ")};
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter(" ")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter(" ")->tokens());
 
   expected = {
       DateTimeToken(" "),
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter(" %Y")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter(" %Y")->tokens());
 
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 2}),
       DateTimeToken(" "),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("%y ")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("%y ")->tokens());
 
   expected = {DateTimeToken(" 132&2618*673 *--+= }{[]\\:")};
   EXPECT_EQ(
       expected,
-      buildMysqlDateTimeFormatter(" 132&2618*673 *--+= }{[]\\:")->tokens());
+      getMysqlDateTimeFormatter(" 132&2618*673 *--+= }{[]\\:")->tokens());
 
   expected = {
       DateTimeToken("   "),
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
       DateTimeToken(" &^  "),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("   %Y &^  ")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("   %Y &^  ")->tokens());
 
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 2}),
@@ -1389,16 +1396,16 @@ TEST_F(MysqlDateTimeTest, validBuild) {
       DateTimeToken(" "),
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("%y  % & %Y %Y%")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("%y  % & %Y %Y%")->tokens());
 
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
       DateTimeToken(" 'T'"),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("%Y 'T'")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("%Y 'T'")->tokens());
 
   expected = {DateTimeToken("1''2")};
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("1''2")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("1''2")->tokens());
 
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
@@ -1411,16 +1418,16 @@ TEST_F(MysqlDateTimeTest, validBuild) {
       DateTimeToken(" "),
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 2}),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("%Y-%m-%d %i %y")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("%Y-%m-%d %i %y")->tokens());
 }
 
 TEST_F(MysqlDateTimeTest, invalidBuild) {
   // Unsupported specifiers
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%D"), VeloxUserError);
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%U"), VeloxUserError);
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%u"), VeloxUserError);
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%V"), VeloxUserError);
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%w"), VeloxUserError);
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%D").hasError());
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%U").hasError());
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%u").hasError());
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%V").hasError());
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%w").hasError());
 
   // Empty format string
   EXPECT_THROW(buildMysqlDateTimeFormatter(""), VeloxUserError);

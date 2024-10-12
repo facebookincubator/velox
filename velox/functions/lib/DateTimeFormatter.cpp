@@ -1446,10 +1446,14 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
       date.timezoneId};
 }
 
-std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
+Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
     const std::string_view& format) {
   if (format.empty()) {
-    VELOX_USER_FAIL("Both printing and parsing not supported");
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    }
+    return folly::makeUnexpected(
+        Status::UserError("Both printing and parsing not supported"));
   }
 
   // For %r we should reserve 1 extra space because it has 3 literals ':' ':'
@@ -1557,8 +1561,11 @@ std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
         case 'V':
         case 'w':
         case 'X':
-          VELOX_UNSUPPORTED(
-              "Date format specifier is not supported: %{}", *tokenEnd);
+          if (threadSkipErrorDetails()) {
+            return folly::makeUnexpected(Status::UserError());
+          }
+          return folly::makeUnexpected(Status::UserError(
+              "Date format specifier is not supported: %{}", *tokenEnd));
         default:
           builder.appendLiteral(tokenEnd, 1);
           break;
