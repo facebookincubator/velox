@@ -110,12 +110,8 @@ void SortBuffer::noMoreInput() {
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::SortBuffer::noMoreInput", this);
   VELOX_CHECK(!noMoreInput_);
-
   // It may trigger spill, make sure it's triggered before noMoreInput_ is set.
-  if (spiller_ == nullptr) {
-    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
-    pool_->maybeReserve(1 * 1024 * 1024 * 1024L);
-  }
+  ensureSortFits();
 
   noMoreInput_ = true;
 
@@ -282,6 +278,40 @@ void SortBuffer::ensureOutputFits() {
                << ", reservation: " << succinctBytes(pool_->reservedBytes());
 }
 
+void SortBuffer::ensureSortFits() {
+  // Check if spilling is enabled or not.
+  if (spillConfig_ == nullptr) {
+    return;
+  }
+
+  // Test-only spill path.
+  if (testingTriggerSpill(pool_->name())) {
+    spill();
+    return;
+  }
+
+  if (numInputRows_ == 0 || spiller_ == nullptr) {
+    return;
+  }
+
+  // The memory for std::vector sorted rows and prefix sort required buffer.
+  uint64_t sortBufferToReserve =
+      numInputRows_ * sizeof(char*) +
+      PrefixSort::maxRequiredBytes(
+          pool_, data_.get(), sortCompareFlags_, prefixSortConfig_);
+  {
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
+    if (pool_->maybeReserve(sortBufferToReserve)) {
+      return;
+    }
+  }
+
+  LOG(WARNING) << "Failed to reserve " << succinctBytes(sortBufferToReserve)
+               << " for memory pool " << pool_->name()
+               << ", usage: " << succinctBytes(pool_->usedBytes())
+               << ", reservation: " << succinctBytes(pool_->reservedBytes());
+}
+
 void SortBuffer::updateEstimatedOutputRowSize() {
   const auto optionalRowSize = data_->estimateRowSize();
   if (!optionalRowSize.has_value() || optionalRowSize.value() == 0) {
@@ -328,7 +358,7 @@ void SortBuffer::spillOutput() {
       spillerStoreType_,
       spillConfig_,
       spillStats_);
-  auto spillRows = std::vector<char*, memory::StlAllocator<char*>>(
+  auto spillRows = Spiller::SpillRows(
       sortedRows_.begin() + numOutputRows_,
       sortedRows_.end(),
       *memory::spillMemoryPool());

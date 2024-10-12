@@ -1548,11 +1548,11 @@ TEST_P(OrderByOutputOnly, basic) {
           "Unexpected spiller type: ORDER_BY_OUTPUT");
     }
     {
-      std::vector<char*, memory::StlAllocator<char*>> emptyRows(*pool_);
+      Spiller::SpillRows emptyRows(*pool_);
       VELOX_ASSERT_THROW(spiller_->spill(emptyRows), "");
     }
-    auto spillRows = std::vector<char*, memory::StlAllocator<char*>>(
-        rows.begin(), rows.begin() + numListedRows, *pool_);
+    auto spillRows =
+        Spiller::SpillRows(rows.begin(), rows.begin() + numListedRows, *pool_);
     spiller_->spill(spillRows);
     ASSERT_EQ(rowContainer_->numRows(), numRows);
     rowContainer_->clear();
@@ -1630,7 +1630,7 @@ TEST_P(MaxSpillRunTest, basic) {
         testData.maxSpillRunRows);
     if (type_ == Spiller::Type::kOrderByOutput) {
       RowContainerIterator rowIter;
-      std::vector<char*, memory::StlAllocator<char*>> rows(numRows, *pool_);
+      Spiller::SpillRows rows(numRows, *pool_);
       int numListedRows{0};
       numListedRows = rowContainer_->listRows(&rowIter, numRows, rows.data());
       ASSERT_EQ(numListedRows, numRows);

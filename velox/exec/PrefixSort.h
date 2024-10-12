@@ -143,7 +143,32 @@ class PrefixSort {
     prefixSort.sortInternal(rows);
   }
 
+  /// The stdsort won't require bytes while prefixsort may require buffers
+  /// such as prefix data. The logic is similar to the above function
+  /// PrefixSort::sort but returns the maxmium buffer the sort may need.
+  static uint32_t maxRequiredBytes(
+      memory::MemoryPool* pool,
+      RowContainer* rowContainer,
+      const std::vector<CompareFlags>& compareFlags,
+      const velox::common::PrefixSortConfig& config) {
+    if (rowContainer->numRows() < config.threshold) {
+      return 0;
+    }
+    VELOX_DCHECK_EQ(rowContainer->keyTypes().size(), compareFlags.size());
+    const auto sortLayout = PrefixSortLayout::makeSortLayout(
+        rowContainer->keyTypes(), compareFlags, config.maxNormalizedKeySize);
+    if (sortLayout.noNormalizedKeys) {
+      return 0;
+    }
+
+    PrefixSort prefixSort(pool, rowContainer, sortLayout);
+    return prefixSort.maxRequiredBytes();
+  }
+
  private:
+  // The bytes to allocate in the prefix sort process such as prefix buffer and
+  // swap buffer.
+  uint32_t maxRequiredBytes();
   void sortInternal(std::vector<char*, memory::StlAllocator<char*>>& rows);
 
   int compareAllNormalizedKeys(char* left, char* right);

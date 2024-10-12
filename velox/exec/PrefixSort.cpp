@@ -215,6 +215,17 @@ void PrefixSort::extractRowToPrefix(char* row, char* prefix) {
   getAddressFromPrefix(prefix) = row;
 }
 
+uint32_t PrefixSort::maxRequiredBytes() {
+  const auto numRows = rowContainer_->numRows();
+  const auto numPages =
+      memory::AllocationTraits::numPages(numRows * sortLayout_.entrySize);
+  // Prefix data size + swap buffer size.
+  return memory::AllocationTraits::pageBytes(numPages) +
+      pool_->preferredSize(checkedPlus<size_t>(
+          sortLayout_.entrySize, AlignedBuffer::kPaddedSize)) +
+      2 * pool_->alignment();
+}
+
 void PrefixSort::sortInternal(
     std::vector<char*, memory::StlAllocator<char*>>& rows) {
   const auto numRows = rows.size();
