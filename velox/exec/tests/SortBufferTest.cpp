@@ -618,6 +618,40 @@ DEBUG_ONLY_TEST_F(SortBufferTest, reserveMemoryGetOutput) {
   }
 }
 
+DEBUG_ONLY_TEST_F(SortBufferTest, reserveMemorySort) {
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillConfig = getSpillConfig(spillDirectory->getPath());
+  folly::Synchronized<common::SpillStats> spillStats;
+  auto sortBuffer = std::make_unique<SortBuffer>(
+      inputType_,
+      sortColumnIndices_,
+      sortCompareFlags_,
+      pool_.get(),
+      &nonReclaimableSection_,
+      prefixSortConfig_,
+      &spillConfig,
+      &spillStats);
+
+  const std::shared_ptr<memory::MemoryPool> fuzzerPool =
+      memory::memoryManager()->addLeafPool("spillSource");
+  VectorFuzzer fuzzer({.vectorSize = 100}, fuzzerPool.get());
+
+  TestScopedSpillInjection scopedSpillInjection(0);
+  sortBuffer->addInput(fuzzer.fuzzRow(inputType_));
+
+  std::atomic_bool hasReserveMemory = false;
+  // Reserve memory for input and sort.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
+      std::function<void(memory::MemoryPoolImpl*)>(
+          ([&](memory::MemoryPoolImpl* pool) {
+            hasReserveMemory.store(true);
+          })));
+
+  sortBuffer->noMoreInput();
+  ASSERT_TRUE(hasReserveMemory);
+}
+
 TEST_F(SortBufferTest, emptySpill) {
   const std::shared_ptr<memory::MemoryPool> fuzzerPool =
       memory::memoryManager()->addLeafPool("emptySpillSource");

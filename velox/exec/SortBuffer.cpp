@@ -290,7 +290,7 @@ void SortBuffer::ensureSortFits() {
     return;
   }
 
-  if (numInputRows_ == 0 || spiller_ == nullptr) {
+  if (numInputRows_ == 0 || spiller_ != nullptr) {
     return;
   }
 
