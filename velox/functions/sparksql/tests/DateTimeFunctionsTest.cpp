@@ -312,7 +312,7 @@ TEST_F(DateTimeFunctionsTest, unixTimestampCustomFormat) {
       unixTimestamp("2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"));
 }
 
-TEST_F(DateTimeFunctionsTest, unixTimestampTimestampFormat) {
+TEST_F(DateTimeFunctionsTest, unixTimestampTimestampInput) {
   const auto unixTimestamp = [&](std::optional<Timestamp> timestamp,
                                  std::optional<StringView> formatStr) {
     return evaluateOnce<int64_t>(
@@ -323,7 +323,7 @@ TEST_F(DateTimeFunctionsTest, unixTimestampTimestampFormat) {
   EXPECT_EQ(61, unixTimestamp(Timestamp(61, 0), "yyyy-MM-dd"));
 }
 
-TEST_F(DateTimeFunctionsTest, unixTimestampDateFormat) {
+TEST_F(DateTimeFunctionsTest, unixTimestampDateInput) {
   const auto unixTimestamp = [&](std::optional<int32_t> date,
                                  std::optional<StringView> formatStr) {
     return evaluateOnce<int64_t>(
