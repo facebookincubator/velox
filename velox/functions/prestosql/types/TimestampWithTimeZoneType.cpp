@@ -109,27 +109,30 @@ void castToString(
   auto* flatResult = result.as<FlatVector<StringView>>();
   const auto* timestamps = input.as<SimpleVector<int64_t>>();
 
-  functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS zzzz")
-      .thenOrThrow([&](auto formatter) {
-        context.applyToSelectedNoThrow(rows, [&](auto row) {
-          const auto timestampWithTimezone = timestamps->valueAt(row);
+  auto expectedFormatter =
+      functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS zzzz");
+  VELOX_CHECK(
+      !expectedFormatter.hasError(),
+      "Default format should always be valid, error: " +
+          expectedFormatter.error().message());
+  auto formatter = expectedFormatter.value();
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
+    const auto timestampWithTimezone = timestamps->valueAt(row);
 
-          const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-          const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
-          const auto* timezonePtr =
-              tz::locateZone(tz::getTimeZoneName(timeZoneId));
+    const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
+    const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
+    const auto* timezonePtr = tz::locateZone(tz::getTimeZoneName(timeZoneId));
 
-          exec::StringWriter<false> result(flatResult, row);
+    exec::StringWriter<false> result(flatResult, row);
 
-          const auto maxResultSize = formatter->maxResultSize(timezonePtr);
-          result.reserve(maxResultSize);
-          const auto resultSize = formatter->format(
-              timestamp, timezonePtr, maxResultSize, result.data());
-          result.resize(resultSize);
+    const auto maxResultSize = formatter->maxResultSize(timezonePtr);
+    result.reserve(maxResultSize);
+    const auto resultSize =
+        formatter->format(timestamp, timezonePtr, maxResultSize, result.data());
+    result.resize(resultSize);
 
-          result.finalize();
-        });
-      });
+    result.finalize();
+  });
 }
 
 void castToTimestamp(
