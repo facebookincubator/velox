@@ -108,6 +108,25 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
       constValues_);
 }
 
+  [[maybe_unused]] static bool once = []() {
+    dwio::common::registerFileSinks();
+    dwrf::registerDwrfReaderFactory();
+    dwrf::registerDwrfWriterFactory();
+    orc::registerOrcReaderFactory();
+
+    pagefile::registerPageFileReaderFactory();
+
+    parquet::registerParquetReaderFactory();
+    parquet::registerParquetWriterFactory();
+
+    filesystems::registerS3FileSystem();
+    filesystems::registerHdfsFileSystem();
+    filesystems::registerGCSFileSystem();
+    filesystems::abfs::registerAbfsFileSystem();
+    return true;
+  }();
+}
+
 std::string HivePartitionFunctionSpec::toString() const {
   std::ostringstream keys;
   size_t constIndex = 0;
