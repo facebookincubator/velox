@@ -72,4 +72,9 @@ folly::dynamic getMetadata(
 /// given plan node, which is $traceRoot/$taskId/$nodeId.
 std::string
 getDataDir(const std::string& traceDir, int pipelineId, int driverId);
+
+/// Gets the traced split directory. 'traceaDir' is the trace directory for a
+/// given plan node, which is $traceRoot/$taskId/$nodeId.
+std::string
+getSplitDir(const std::string& traceDir, int pipelineId, int driverId);
 } // namespace facebook::velox::exec::trace

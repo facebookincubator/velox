@@ -46,7 +46,7 @@ void QuerySplitWriter::write(const exec::Split& split) const {
   VELOX_CHECK(split.hasConnectorSplit());
   const auto splitObj = split.connectorSplit->serialize();
   const auto splitJson = folly::toJson(splitObj);
-  auto ioBuf = appendToBuffer(splitJson);
+  auto ioBuf = serialize(splitJson);
   splitInfoFile_->append(std::move(ioBuf));
 }
 
@@ -63,7 +63,7 @@ void QuerySplitWriter::finish() {
 }
 
 // static
-std::unique_ptr<folly::IOBuf> QuerySplitWriter::appendToBuffer(
+std::unique_ptr<folly::IOBuf> QuerySplitWriter::serialize(
     const std::string& split) {
   const uint32_t length = split.length();
   const uint32_t crc32 = folly::crc32(
