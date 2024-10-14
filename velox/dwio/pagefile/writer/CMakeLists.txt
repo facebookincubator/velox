@@ -15,7 +15,7 @@ velox_link_libraries(
         velox_dwio_pagefile_writer
 #        velox_dwio_arrow_parquet_writer_lib
 #        velox_dwio_arrow_parquet_writer_util_lib
-        Arrow::arrow_shared
+        arrow
         velox_dwio_common
         velox_arrow_bridge
 #        arrow

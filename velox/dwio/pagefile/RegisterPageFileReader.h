@@ -16,7 +16,7 @@
 
 #pragma once
 
-namespace facebook::velox::PAGEILFE {
+namespace facebook::velox::pagefile {
 
 void registerPageFileReaderFactory();
 

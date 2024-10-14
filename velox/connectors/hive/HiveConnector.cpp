@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/dwio/pagefile/RegisterPageFileReader.h"
 
 #include <boost/lexical_cast.hpp>
 #include <memory>

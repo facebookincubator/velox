@@ -27,28 +27,39 @@
 
 namespace facebook::velox::pagefile {
 
+void registerPageFileReaderFactory() {
+  dwio::common::registerReaderFactory(std::make_shared<PageFileReaderFactory>());
+}
+
+
+
+ReaderBase::ReaderBase(
+    std::unique_ptr<dwio::common::BufferedInput> input,
+    const dwio::common::ReaderOptions& options)
+    : pool_{options.memoryPool()},
+      footerEstimatedSize_{options.footerEstimatedSize()},
+      filePreloadThreshold_{options.filePreloadThreshold()},
+      options_{options},
+      input_{std::move(input)},
+      fileLength_{input_->getReadFile()->size()} {
+}
 
 PageFileReader::PageFileReader(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options
    )
-  : options_(options),
-    input_(std::move(input))// assuming 'input_' is a member variable
-{
-  // Constructor body, if needed
-}
+  :readerBase_(std::make_shared<ReaderBase>(std::move(input), options)) {}
 
 
 std::unique_ptr<dwio::common::RowReader> PageFileReader::createRowReader(
-    const dwio::common::RowReaderOptions& options) const override {
-  return std::make_unique<PageFileRowReader>(input_, options_.memoryPool(), options);
+    const dwio::common::RowReaderOptions& options) const {
+  return std::make_unique<PageFileRowReader>(readerBase_, options);
 }
 
 PageFileRowReader::PageFileRowReader(
-   std::unique_ptr<dwio::common::BufferedInput> input_,
-   velox::memory::MemoryPool& pool_,
+    const std::shared_ptr<ReaderBase> readerBase,
     const dwio::common::RowReaderOptions& options):
-arrowRandomFile_(std::make_unique<ArrowRandomAccessFile>(std::move(input_))),
+arrowRandomFile_(std::make_shared<ArrowRandomAccessFile>(readerBase->bufferedInput())),
 pool_(pool_),
 options_(options) {
   initializeIpcReader();
@@ -63,6 +74,12 @@ void PageFileRowReader::initializeIpcReader() {
   }
 
   ipcReader_ = result.ValueOrDie();
+}
+
+std::unique_ptr<dwio::common::Reader> PageFileReader::create(
+     std::unique_ptr<dwio::common::BufferedInput> input,
+     const dwio::common::ReaderOptions& options) {
+  return std::make_unique<PageFileReader>(std::move(input), options);
 }
 
 uint64_t PageFileRowReader::next(

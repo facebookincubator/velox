@@ -16,11 +16,8 @@
 
 #pragma once
 
-#include "folly/Executor.h"
-#include "folly/synchronization/Baton.h"
+
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/dwio/common/UnitLoader.h"
-#include "velox/dwio/dwrf/reader/SelectiveDwrfReader.h"
 #include "velox/vector/arrow/Bridge.h"
 #include <arrow/io/api.h>
 #include <arrow/ipc/api.h>
@@ -82,11 +79,85 @@ namespace facebook::velox::pagefile {
 //  int64_t bytesRead_;
 // };
 
+class ReaderBase {
+ public:
+  ReaderBase(
+      std::unique_ptr<dwio::common::BufferedInput>,
+      const dwio::common::ReaderOptions& options);
+
+  virtual ~ReaderBase() = default;
+
+  memory::MemoryPool& getMemoryPool() const {
+    return pool_;
+  }
+
+  std::shared_ptr<velox::dwio::common::BufferedInput> bufferedInput() const {
+    return input_;
+  }
+
+  uint64_t fileLength() const {
+    return fileLength_;
+  }
+
+  const std::shared_ptr<const RowType>& schema() const {
+    return schema_;
+  }
+
+  const std::shared_ptr<const dwio::common::TypeWithId>& schemaWithId() {
+    return schemaWithId_;
+  }
+
+  bool isFileColumnNamesReadAsLowerCase() const {
+    return options_.fileColumnNamesReadAsLowerCase();
+  }
+
+  const tz::TimeZone* sessionTimezone() const {
+    return options_.getSessionTimezone();
+  }
+
+  /// Returns the uncompressed size for columns in 'type' and its children in
+  /// row group.
+  int64_t rowGroupUncompressedSize(
+      int32_t rowGroupIndex,
+      const dwio::common::TypeWithId& type) const;
+
+  /// Checks whether the specific row group has been loaded and
+  /// the data still exists in the buffered inputs.
+  bool isRowGroupBuffered(int32_t rowGroupIndex) const;
+
+ private:
+  // Reads and parses file footer.
+  void loadFileMetaData();
+
+  void initializeSchema();
+
+  template <typename T>
+  static std::shared_ptr<const RowType> createRowType(
+      const std::vector<T>& children,
+      bool fileColumnNamesReadAsLowerCase);
+
+  memory::MemoryPool& pool_;
+  const uint64_t footerEstimatedSize_;
+  const uint64_t filePreloadThreshold_;
+  // Copy of options. Must be owned by 'this'.
+  const dwio::common::ReaderOptions options_;
+  std::shared_ptr<velox::dwio::common::BufferedInput> input_;
+  uint64_t fileLength_;
+  RowTypePtr schema_;
+  std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
+
+  const bool binaryAsString = false;
+
+  // Map from row group index to pre-created loading BufferedInput.
+  std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
+      inputs_;
+};
+
 class ArrowRandomAccessFile : public arrow::io::RandomAccessFile {
 public:
     // Constructor to initialize with BufferedInput and Velox ReadFile
-    ArrowRandomAccessFile(std::shared_ptr<dwio::common::BufferedInput> bufferedInput)
-        : bufferedInput_(std::move(bufferedInput)), bytesRead_(0) {
+    ArrowRandomAccessFile(std::shared_ptr<velox::dwio::common::BufferedInput> bufferedInput)
+        : bufferedInput_(bufferedInput), bytesRead_(0) {
         // Get the velox::ReadFile from the BufferedInput's stream
         veloxFile_ = bufferedInput_->getInputStream()->getReadFile();
     }
@@ -114,6 +185,26 @@ public:
         return static_cast<int64_t>(result.size());
     }
 
+  arrow::Result<std::shared_ptr<arrow::Buffer>> Read(int64_t nbytes) override {
+      // // Allocate a buffer to hold the data
+      // ARROW_ASSIGN_OR_RAISE(auto buffer, arrow::AllocateBuffer(nbytes));
+      //
+      // // Read data into the buffer using pread
+      // std::string_view result = veloxFile_->pread(currentPosition_, nbytes, buffer->mutable_data());
+      //
+      // // Check if the read was successful
+      // if (result.size() != nbytes) {
+      //   return arrow::Status::IOError("Failed to read the requested number of bytes");
+      // }
+      //
+      // // Update the current position after the read
+      // currentPosition_ += result.size();
+      // bytesRead_ += result.size();
+      //
+      // // Return the buffer
+      // return buffer;
+      return nullptr;
+    }
     // Implement Seek method
     arrow::Status Seek(int64_t position) override {
         currentPosition_ = position;  // Track current seek position
@@ -137,7 +228,7 @@ public:
     }
 
 private:
-    std::shared_ptr<dwio::common::BufferedInput> bufferedInput_;  // Reference to BufferedInput
+    std::shared_ptr<velox::dwio::common::BufferedInput> bufferedInput_;  // Reference to BufferedInput
     std::shared_ptr<velox::ReadFile> veloxFile_;  // Velox file that we read from
     int64_t bytesRead_;  // Track bytes read
     int64_t currentPosition_;  // Track current file position
@@ -147,9 +238,8 @@ private:
 class PageFileRowReader :public dwio::common::RowReader {
  public:
 
- PageFileRowReader::PageFileRowReader(
-  std::unique_ptr<dwio::common::BufferedInput> input_,
-   velox::memory::MemoryPool& pool_,
+ PageFileRowReader(
+    const std::shared_ptr<ReaderBase> readerBase_,
    const dwio::common::RowReaderOptions& options);
 
  ~PageFileRowReader() override = default;
@@ -159,20 +249,21 @@ class PageFileRowReader :public dwio::common::RowReader {
       velox::VectorPtr& result,
       const dwio::common::Mutation* mutation) override;
   void updateRuntimeStats(
-      dwio::common::RuntimeStatistics& stats) const override;
-  void resetFilterCaches() override;
-  std::optional<size_t> estimatedRowSize() const override;
-  bool allPrefetchIssued() const override;
-  std::optional<std::vector<PrefetchUnit>> prefetchUnits() override;
-  int64_t nextRowNumber() override;
-  int64_t nextReadSize(uint64_t size) override;
+      dwio::common::RuntimeStatistics& stats) const override{};
+  void resetFilterCaches() override{};
+  std::optional<size_t> estimatedRowSize() const override{};
+  bool allPrefetchIssued() const override{};
+  std::optional<std::vector<PrefetchUnit>> prefetchUnits() override{};
+  int64_t nextRowNumber() override{};
+  int64_t nextReadSize(uint64_t size) override{};
 
  void initializeIpcReader();
  void initializeReadRange();
  bool loadNextPage();
 
 
-  private:
+    private:
+    const std::shared_ptr<ReaderBase> readerBase_;
     velox::memory::MemoryPool& pool_;
     const dwio::common::RowReaderOptions options_;
     std::shared_ptr<::arrow::io::RandomAccessFile> arrowRandomFile_;  // Source for reading Arrow IPC data
@@ -192,28 +283,26 @@ class PageFileReader : public dwio::common::Reader {
   std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options);
 
-static std::unique_ptr<PageFileReader> PageFileReader::create(
+  static std::unique_ptr<Reader> create(
     std::unique_ptr<dwio::common::BufferedInput> input,
-    const  dwio::common::ReaderOptions& options) {
-  return std::make_unique<PageFileReader>(std::move(input), options);
- }
+    const  dwio::common::ReaderOptions& options);
 
   ~PageFileReader() override = default;
 
 
-  // std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
-  //     uint32_t nodeId) const override {
-  //   return readerBase_->getColumnStatistics(nodeId);
-  // }
+  std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
+      uint32_t nodeId) const override {
+    return nullptr;
+  }
   //
-  // const std::shared_ptr<const RowType>& rowType() const override {
-  //   return readerBase_->getSchema();
-  // }
-  //
-  // const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
-  //     const override {
-  //   return readerBase_->getSchemaWithId();
-  // }
+  const std::shared_ptr<const RowType>& rowType() const override {
+    return nullptr;
+  }
+
+  const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
+      const override {
+    return nullptr;
+  }
 
 
   std::optional<uint64_t> numberOfRows() const override {
@@ -221,7 +310,7 @@ static std::unique_ptr<PageFileReader> PageFileReader::create(
     // if (fileFooter.hasNumberOfRows()) {
     //   return fileFooter.numberOfRows();
     // }
-    // return std::nullopt;
+    return std::nullopt;
   }
 
   // static uint64_t getMemoryUse(
@@ -268,9 +357,7 @@ static std::unique_ptr<PageFileReader> PageFileReader::create(
   void updateColumnNamesFromTableSchema();
 
  private:
-  // std::shared_ptr<ReaderBase> readerBase_;
-  const std::unique_ptr<dwio::common::BufferedInput> input_;
-  const dwio::common::ReaderOptions options_;
+  std::shared_ptr<ReaderBase> readerBase_;
 };
 
 class PageFileReaderFactory : public dwio::common::ReaderFactory {

@@ -602,9 +602,9 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
-#if(VELOX_ENABLE_ARROW)
-#  set_source(Arrow)
-#  resolve_dependency(Arrow)
-#endif()
+if(VELOX_ENABLE_ARROW)
+  set_source(Arrow)
+  resolve_dependency(Arrow)
+endif()
 
 add_subdirectory(velox)
