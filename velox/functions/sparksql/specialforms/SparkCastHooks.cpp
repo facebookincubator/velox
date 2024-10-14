@@ -30,25 +30,27 @@ SparkCastHooks::SparkCastHooks(const core::QueryConfig& config) : CastHooks() {
 Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
     const StringView& view) const {
   // Allows all patterns supported by Spark:
-  // `[+-]yyyy*` `[+-]yyyy*-[m]m` `[+-]yyyy*-[m]m-[d]d` `[+-]yyyy*-[m]m-[d]d `
+  // `[+-]yyyy*`
+  // `[+-]yyyy*-[m]m`
+  // `[+-]yyyy*-[m]m-[d]d`
+  // `[+-]yyyy*-[m]m-[d]d `
   // `[+-]yyyy*-[m]m-[d]d [h]h:[m]m:[s]s.[ms][ms][ms][us][us][us][zone_id]`
   // `[+-]yyyy*-[m]m-[d]dT[h]h:[m]m:[s]s.[ms][ms][ms][us][us][us][zone_id]`
   // `[h]h:[m]m:[s]s.[ms][ms][ms][us][us][us][zone_id]`
   // `T[h]h:[m]m:[s]s.[ms][ms][ms][us][us][us][zone_id]`
   //
   // where `zone_id` should have one of the forms:
-  //   - Z - Zulu time zone UTC+0
-  //   - +|-[h]h:[m]m
-  //   - A short id, see
-  //   https://docs.oracle.com/javase/8/docs/api/java/time/ZoneId.html#SHORT_IDS
-  //   - An id with one of the prefixes
-  //   UTC+, UTC-, GMT+, GMT-, UT+ or UT-, and a suffix in the
-  //     formats:
-  //     - +|-h[h]
-  //     - +|-hh[:]mm
-  //     - +|-hh:mm:ss
-  //     - +|-hhmmss
-  //   - Region-based zone IDs in the form `area/city`, such as `Europe/Paris`
+  //   1. Z - Zulu time zone UTC+0
+  //   2. +|-[h]h:[m]m
+  //   3. A short id, see
+  //     https://docs.oracle.com/javase/8/docs/api/java/time/ZoneId.html#SHORT_IDS
+  //   4. An id with one of the prefixes UTC+, UTC-, GMT+, GMT-, UT+ or UT-,
+  //   and a suffix in the following formats:
+  //     a. +|-h[h]
+  //     b. +|-hh[:]mm
+  //     c. +|-hh:mm:ss
+  //     d. +|-hhmmss
+  //   5. Region-based zone IDs in the form `area/city`, such as `Europe/Paris`
   const auto conversionResult = util::fromTimestampWithTimezoneString(
       view.data(), view.size(), util::TimestampParseMode::kSparkCast);
   if (conversionResult.hasError()) {
@@ -62,9 +64,9 @@ Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
     // GMT at that time.
     result.first.toGMT(*result.second);
   } else if (options_.timeZone != nullptr) {
-    // If no timezone information is available in the input string, check if we
-    // should understand it as being at the session timezone, and if so, convert
-    // to GMT.
+    // If the input string contains no timezone information, determine whether
+    // it should be interpreted as being in the session timezone and, if so,
+    // convert it to GMT.
     result.first.toGMT(*options_.timeZone);
   }
   return result.first;

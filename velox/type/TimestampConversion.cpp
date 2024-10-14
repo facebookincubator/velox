@@ -827,15 +827,11 @@ Status parserError(const char* str, size_t len) {
       std::string(str, len));
 }
 
-inline bool startsWith(std::string_view str, const char* prefix) {
-  return str.rfind(prefix, 0) == 0;
-}
-
 // Spark support an id with one of the prefixes UTC+, UTC-, GMT+, GMT-, UT+ or
-// UT-, and a suffix in the formats: h[h], hh[:]mm, hh:mm:ss, hhmmss. This func
-// will validate the format of the suffix.
-// Additionally, IANA does not support seconds in the offset, so this func will
-// add the seconds offset to the input Timestamp.
+// UT-, and a suffix in the following formats: h[h], hh[:]mm, hh:mm:ss, hhmmss.
+// This func will check that the suffix format is correct. Furthermore, this
+// function adds the seconds offset to the input timestamp because
+// IANA(https://www.iana.org/time-zones) does not support seconds in the offset.
 bool parseSparkTzWithPrefix(
     std::string& timeZoneName,
     Timestamp& ts,
@@ -906,8 +902,12 @@ bool parseSparkTzWithPrefix(
 }
 
 bool normalizeSparkTimezone(std::string& timeZoneName, Timestamp& ts) {
-  // Spark support an id with one of the prefixes UTC+, UTC-, GMT+, GMT-, UT+ or
-  // UT-, and a suffix in the formats: h[h], hh[:]mm, hh:mm:ss, hhmmss
+  auto startsWith = [](std::string_view str, const char* prefix) {
+    return str.rfind(prefix, 0) == 0;
+  };
+  // Spark supports a timezone id with one of the prefixes UTC+, UTC-, GMT+,
+  // GMT-, UT+ or UT-, and a suffix in the following formats: h[h], hh[:]mm,
+  // hh:mm:ss, hhmmss.
   if (startsWith(timeZoneName, "UTC") || startsWith(timeZoneName, "GMT")) {
     if (!parseSparkTzWithPrefix(timeZoneName, ts, 3)) {
       return false;
@@ -995,8 +995,8 @@ fromTimestampWithTimezoneString(
       timezonePos++;
     }
 
-    std::string timeZoneName(str + pos, timezonePos - pos);
-    std::string normalizeTzName = timeZoneName;
+    std::string_view timeZoneName(str + pos, timezonePos - pos);
+    std::string normalizeTzName = std::string{timeZoneName};
     if (parseMode == TimestampParseMode::kSparkCast &&
         !normalizeSparkTimezone(normalizeTzName, resultTimestamp)) {
       return folly::makeUnexpected(Status::UserError(
