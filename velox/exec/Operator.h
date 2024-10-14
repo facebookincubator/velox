@@ -740,9 +740,11 @@ class Operator : public BaseRuntimeStatWriter {
     return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   }
 
-  /// Invoked to setup query data writer for this operator if the associated
-  /// query plan node is configured to collect trace.
+  /// Invoked to setup query data/split writer for this operator if the
+  /// associated query plan node is configured to collect trace.
   void maybeSetTracer();
+
+  virtual void setupTracer(const std::string& traceDir);
 
   /// Creates output vector from 'input_' and 'results' according to
   /// 'identityProjections_' and 'resultProjections_'. If 'mapping' is set to

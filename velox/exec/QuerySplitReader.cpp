@@ -28,47 +28,53 @@ using namespace facebook::velox::connector::hive;
 namespace facebook::velox::exec::trace {
 
 QuerySplitReader::QuerySplitReader(
-    std::string traceDir,
+    std::vector<std::string> traceDir,
     memory::MemoryPool* pool)
-    : traceDir_(std::move(traceDir)),
-      fs_(filesystems::getFileSystem(traceDir_, nullptr)),
-      pool_(pool),
-      splitInfoStream_(getSplitInputStream()) {
+    : traceDirs_(std::move(traceDir)),
+      fs_(filesystems::getFileSystem(traceDirs_[0], nullptr)),
+      pool_(pool) {
   VELOX_CHECK_NOT_NULL(fs_);
-  VELOX_CHECK_NOT_NULL(splitInfoStream_);
 }
 
 std::vector<exec::Split> QuerySplitReader::read() const {
-  const auto splitStrings = getSplitInfos(splitInfoStream_.get());
   std::vector<exec::Split> splits;
-  for (const auto& splitString : splitStrings) {
-    folly::dynamic splitInfoObj = folly::parseJson(splitString);
-    const auto split =
-        ISerializable::deserialize<HiveConnectorSplit>(splitInfoObj);
-    splits.emplace_back(
-        std::make_shared<HiveConnectorSplit>(
-            split->connectorId,
-            split->filePath,
-            split->fileFormat,
-            split->start,
-            split->length,
-            split->partitionKeys,
-            split->tableBucketNumber,
-            split->customSplitInfo,
-            split->extraFileInfo,
-            split->serdeParameters,
-            split->splitWeight,
-            split->infoColumns,
-            split->properties),
-        -1);
+  for (const auto& traceDir : traceDirs_) {
+    auto splitInfoStream = getSplitInputStream(traceDir);
+    if (splitInfoStream == nullptr) {
+      continue;
+    }
+    const auto splitStrs = getSplitInfos(splitInfoStream.get());
+    for (const auto& splitStr : splitStrs) {
+      folly::dynamic splitInfoObj = folly::parseJson(splitStr);
+      const auto split =
+          ISerializable::deserialize<HiveConnectorSplit>(splitInfoObj);
+      splits.emplace_back(std::make_shared<HiveConnectorSplit>(
+          split->connectorId,
+          split->filePath,
+          split->fileFormat,
+          split->start,
+          split->length,
+          split->partitionKeys,
+          split->tableBucketNumber,
+          split->customSplitInfo,
+          split->extraFileInfo,
+          split->serdeParameters,
+          split->splitWeight,
+          split->infoColumns,
+          split->properties));
+    }
   }
   return splits;
 }
 
-std::unique_ptr<common::FileInputStream> QuerySplitReader::getSplitInputStream()
-    const {
+std::unique_ptr<common::FileInputStream> QuerySplitReader::getSplitInputStream(
+    const std::string& traceDir) const {
   auto splitInfoFile = fs_->openFileForRead(
-      fmt::format("{}/{}", traceDir_, QueryTraceTraits::kSplitInfoFileName));
+      fmt::format("{}/{}", traceDir, QueryTraceTraits::kSplitInfoFileName));
+  if (splitInfoFile->size() == 0) {
+    LOG(ERROR) << "Split info is empty in " << traceDir;
+    return nullptr;
+  }
   // TODO: Make the buffer size configurable.
   return std::make_unique<common::FileInputStream>(
       std::move(splitInfoFile), 1 << 20, pool_);
