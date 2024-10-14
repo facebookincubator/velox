@@ -213,35 +213,7 @@ class ParquetData : public dwio::common::FormatData {
 
   void setBloomFilterInputStream(
       uint32_t rowGroupId,
-      dwio::common::BufferedInput& bufferedInput) {
-    if (bloomFilterInputStream_ != nullptr) {
-      return;
-    }
-    auto rowGroup = fileMetaDataPtr_.rowGroup(rowGroupId);
-    auto colChunk = rowGroup.columnChunk(type_->column());
-
-    if (!colChunk.hasBloomFilterOffset()) {
-      return;
-    }
-
-    VELOX_CHECK(
-        !colChunk.hasCryptoMetadata(),
-        "Cannot read encrypted bloom filter yet");
-
-    auto bloomFilterOffset = colChunk.bloomFilterOffset();
-    auto fileSize = bufferedInput.getInputStream()->getLength();
-    VELOX_CHECK_GT(
-        fileSize,
-        bloomFilterOffset,
-        "file size {} less or equal than bloom offset {}",
-        fileSize,
-        bloomFilterOffset);
-
-    bloomFilterInputStream_ = bufferedInput.read(
-        bloomFilterOffset,
-        fileSize - bloomFilterOffset,
-        dwio::common::LogType::FOOTER);
-  }
+      dwio::common::BufferedInput& bufferedInput);
 
   // Returns the <offset, length> of the row group.
   std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
@@ -265,8 +237,10 @@ class ParquetData : public dwio::common::FormatData {
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
 
-  std::unique_ptr<dwio::common::SeekableInputStream> bloomFilterInputStream_;
   bool parquetReadBloomFilter_;
+  std::vector<std::unique_ptr<dwio::common::SeekableInputStream>>
+      bloomFilterInputStreams_;
+
   // RowGroup+Column to BloomFilter map
   std::unordered_map<uint32_t, std::shared_ptr<BloomFilter>>
       columnBloomFilterMap_;

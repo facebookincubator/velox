@@ -76,32 +76,32 @@ TEST_F(BloomFilterTest, BasicTest) {
 
     // Empty bloom filter deterministically returns false
     for (const auto v : kIntInserts) {
-      EXPECT_FALSE(bloomFilter.findHash(bloomFilter.hash(v)));
+      EXPECT_FALSE(bloomFilter.findHash(bloomFilter.hashInt64(v)));
     }
     for (const auto v : kFloatInserts) {
-      EXPECT_FALSE(bloomFilter.findHash(bloomFilter.hash(v)));
+      EXPECT_FALSE(bloomFilter.findHash(bloomFilter.hashFloat(v)));
     }
 
     // Insert all values
     for (const auto v : kIntInserts) {
-      bloomFilter.insertHash(bloomFilter.hash(v));
+      bloomFilter.insertHash(bloomFilter.hashInt64(v));
     }
     for (const auto v : kFloatInserts) {
-      bloomFilter.insertHash(bloomFilter.hash(v));
+      bloomFilter.insertHash(bloomFilter.hashFloat(v));
     }
 
     // They should always lookup successfully
     for (const auto v : kIntInserts) {
-      EXPECT_TRUE(bloomFilter.findHash(bloomFilter.hash(v)));
+      EXPECT_TRUE(bloomFilter.findHash(bloomFilter.hashInt64(v)));
     }
     for (const auto v : kFloatInserts) {
-      EXPECT_TRUE(bloomFilter.findHash(bloomFilter.hash(v)));
+      EXPECT_TRUE(bloomFilter.findHash(bloomFilter.hashFloat(v)));
     }
 
     // Values not inserted in the filter should only rarely lookup successfully
     int falsePositives = 0;
     for (const auto v : kNegativeIntLookups) {
-      falsePositives += bloomFilter.findHash(bloomFilter.hash(v));
+      falsePositives += bloomFilter.findHash(bloomFilter.hashInt64(v));
     }
     // (this is a crude check, see FPPTest below for a more rigorous formula)
     EXPECT_LE(falsePositives, 2);
@@ -130,14 +130,14 @@ TEST_F(BloomFilterTest, BasicTest) {
 
     // Lookup previously inserted values
     for (const auto v : kIntInserts) {
-      EXPECT_TRUE(deBloom.findHash(deBloom.hash(v)));
+      EXPECT_TRUE(deBloom.findHash(deBloom.hashInt64(v)));
     }
     for (const auto v : kFloatInserts) {
-      EXPECT_TRUE(deBloom.findHash(deBloom.hash(v)));
+      EXPECT_TRUE(deBloom.findHash(deBloom.hashFloat(v)));
     }
     falsePositives = 0;
     for (const auto v : kNegativeIntLookups) {
-      falsePositives += deBloom.findHash(deBloom.hash(v));
+      falsePositives += deBloom.findHash(deBloom.hashInt64(v));
     }
     EXPECT_LE(falsePositives, 2);
   }
@@ -185,18 +185,18 @@ TEST_F(BloomFilterTest, FPPTest) {
     const ByteArray byte_array(
         8, reinterpret_cast<const uint8_t*>(tmp.c_str()));
     members.push_back(tmp);
-    bloomFilter.insertHash(bloomFilter.hash(&byte_array));
+    bloomFilter.insertHash(bloomFilter.hashByteArray(&byte_array));
   }
 
   for (int i = 0; i < totalCount; i++) {
     const ByteArray byte_array1(
         8, reinterpret_cast<const uint8_t*>(members[i].c_str()));
-    ASSERT_TRUE(bloomFilter.findHash(bloomFilter.hash(&byte_array1)));
+    ASSERT_TRUE(bloomFilter.findHash(bloomFilter.hashByteArray(&byte_array1)));
     std::string tmp = GetRandomString(7);
     const ByteArray byte_array2(
         7, reinterpret_cast<const uint8_t*>(tmp.c_str()));
 
-    if (bloomFilter.findHash(bloomFilter.hash(&byte_array2))) {
+    if (bloomFilter.findHash(bloomFilter.hashByteArray(&byte_array2))) {
       exist++;
     }
   }
@@ -368,7 +368,8 @@ TEST_F(BloomFilterTest, XxHashTest) {
 
     auto hasherSeed0 = std::make_unique<XxHasher>();
     EXPECT_EQ(
-        HASHES_OF_LOOPING_BYTES_WITH_SEED_0[i], hasherSeed0->hash(&byteArray))
+        HASHES_OF_LOOPING_BYTES_WITH_SEED_0[i],
+        hasherSeed0->hashByteArray(&byteArray))
         << "Hash with seed 0 Error: " << i;
   }
 }
@@ -386,7 +387,7 @@ TEST_F(BloomFilterTest, TestBloomFilterHashes) {
   auto hasherSeed0 = std::make_unique<XxHasher>();
   std::vector<uint64_t> hashes;
   hashes.resize(kNumValues);
-  hasherSeed0->hashes(
+  hasherSeed0->hashesByteArray(
       byteArrayVector.data(),
       static_cast<int>(byteArrayVector.size()),
       hashes.data());

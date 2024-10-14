@@ -27,17 +27,17 @@ class ParquetBloomFilter final : public common::AbstractBloomFilter {
       std::shared_ptr<facebook::velox::parquet::BloomFilter> bloomFilter)
       : bloomFilter_(bloomFilter) {}
 
-  bool mightContain(int32_t value) const override {
-    return bloomFilter_->findHash(bloomFilter_->hash(value));
+  bool mightContainInt32(int32_t value) const override {
+    return bloomFilter_->findHash(bloomFilter_->hashInt32(value));
   }
 
-  bool mightContain(int64_t value) const override {
-    return bloomFilter_->findHash(bloomFilter_->hash(value));
+  bool mightContainInt64(int64_t value) const override {
+    return bloomFilter_->findHash(bloomFilter_->hashInt64(value));
   }
 
-  bool mightContain(const std::string& value) const override {
+  bool mightContainString(const std::string& value) const override {
     ByteArray byteArray{value};
-    return bloomFilter_->findHash(bloomFilter_->hash(&byteArray));
+    return bloomFilter_->findHash(bloomFilter_->hashByteArray(&byteArray));
   }
 
  private:
