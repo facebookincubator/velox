@@ -46,7 +46,6 @@ std::unique_ptr<exec::Aggregate> constructDecimalSumAgg(
     const TypePtr& inputType,
     const TypePtr& sumType,
     const TypePtr& resultType) {
-  VELOX_CHECK(sumType->isDecimal());
   uint8_t precision = getDecimalPrecisionScale(*sumType).first;
   switch (precision) {
     // The sum precision is calculated from the input precision with the formula

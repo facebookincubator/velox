@@ -23,6 +23,8 @@ namespace facebook::velox::functions::aggregate::sparksql {
 /// @tparam TInputType The raw input data type.
 /// @tparam TSumType The type of sum in the output of partial aggregation or the
 /// final output type of final aggregation.
+/// @tparam ResultPrecision The precision of the result type, used for checking
+/// overflow.
 template <typename TInputType, typename TSumType, uint8_t ResultPrecision>
 class DecimalSumAggregate {
  public:
