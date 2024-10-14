@@ -30,21 +30,23 @@ namespace facebook::velox::exec::trace {
 /// 'IcebergHiveConnectorSplit'.
 class QuerySplitReader {
  public:
-  explicit QuerySplitReader(std::string traceDir, memory::MemoryPool* pool);
+  explicit QuerySplitReader(
+      std::vector<std::string> traceDir,
+      memory::MemoryPool* pool);
 
   /// Reads from 'splitInfoStream_' and deserializes to 'splitInfos'. Returns
-  /// all the correctly traced splits.
+  /// all the collected tracing splits.
   std::vector<exec::Split> read() const;
 
  private:
   static std::vector<std::string> getSplitInfos(
       common::FileInputStream* stream);
 
-  std::unique_ptr<common::FileInputStream> getSplitInputStream() const;
+  std::unique_ptr<common::FileInputStream> getSplitInputStream(
+      const std::string& traceDir) const;
 
-  const std::string traceDir_;
+  const std::vector<std::string> traceDirs_;
   const std::shared_ptr<filesystems::FileSystem> fs_;
   memory::MemoryPool* const pool_;
-  const std::unique_ptr<common::FileInputStream> splitInfoStream_;
 };
 } // namespace facebook::velox::exec::trace

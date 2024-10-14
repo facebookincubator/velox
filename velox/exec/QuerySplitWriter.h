@@ -39,7 +39,8 @@ class QuerySplitWriter {
 
   void finish();
 
-  static std::unique_ptr<folly::IOBuf> appendToBuffer(const std::string& split);
+ private:
+  static std::unique_ptr<folly::IOBuf> serialize(const std::string& split);
 
   const std::string traceDir_;
   const std::shared_ptr<filesystems::FileSystem> fs_;

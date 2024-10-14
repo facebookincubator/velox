@@ -14,12 +14,17 @@
  * limitations under the License.
  */
 
+#include <dwio/dwrf/RegisterDwrfReader.h>
+#include <dwio/dwrf/RegisterDwrfWriter.h>
+#include <dwio/parquet/RegisterParquetReader.h>
+#include <dwio/parquet/RegisterParquetWriter.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <gflags/gflags.h>
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
@@ -29,9 +34,16 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/QueryTraceUtil.h"
+#include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/Expressions.h"
+#include "velox/parse/ExpressionsParser.h"
+#include "velox/parse/TypeResolver.h"
 #include "velox/tool/trace/AggregationReplayer.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
+#include "velox/tool/trace/TableScanReplayer.h"
 #include "velox/tool/trace/TableWriterReplayer.h"
 #include "velox/type/Type.h"
 
@@ -54,6 +66,7 @@ DEFINE_string(
     "query task.");
 DEFINE_string(node_id, "", "Specify the target node id.");
 DEFINE_int32(pipeline_id, 0, "Specify the target pipeline id.");
+DEFINE_int32(driver_id, -1, "Specify the target driver id.");
 DEFINE_string(operator_type, "", "Specify the target operator type.");
 DEFINE_string(
     table_writer_output_dir,
@@ -74,6 +87,11 @@ void init() {
   filesystems::registerHdfsFileSystem();
   filesystems::registerGCSFileSystem();
   filesystems::abfs::registerAbfsFileSystem();
+  dwio::common::registerFileSinks();
+  dwrf::registerDwrfReaderFactory();
+  dwrf::registerDwrfWriterFactory();
+  parquet::registerParquetReaderFactory();
+  parquet::registerParquetWriterFactory();
   Type::registerSerDe();
   core::PlanNode::registerSerDe();
   core::ITypedExpr::registerSerDe();
@@ -83,6 +101,13 @@ void init() {
   connector::hive::LocationHandle::registerSerDe();
   connector::hive::HiveColumnHandle::registerSerDe();
   connector::hive::HiveInsertTableHandle::registerSerDe();
+  connector::hive::HiveConnectorSplit::registerSerDe();
+  // Register Presto scalar functions.
+  functions::prestosql::registerAllScalarFunctions();
+  // Register Presto aggregate functions.
+  aggregate::prestosql::registerAllAggregateFunctions();
+  // Register type resolver with DuckDB SQL parser.
+  parse::registerTypeResolver();
   if (!isRegisteredVectorSerde()) {
     serializer::presto::PrestoVectorSerde::registerVectorSerde();
   }
@@ -125,6 +150,14 @@ std::unique_ptr<tool::trace::OperatorReplayerBase> createReplayer() {
         FLAGS_node_id,
         FLAGS_pipeline_id,
         FLAGS_operator_type);
+  } else if (FLAGS_operator_type == "TableScan") {
+    replayer = std::make_unique<tool::trace::TableScanReplayer>(
+        FLAGS_root_dir,
+        FLAGS_task_id,
+        FLAGS_node_id,
+        FLAGS_pipeline_id,
+        FLAGS_operator_type,
+        FLAGS_driver_id);
   } else {
     VELOX_UNSUPPORTED("Unsupported operator type: {}", FLAGS_operator_type);
   }
@@ -179,12 +212,12 @@ void printSummary(
 } // namespace
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-
   if (argc == 1) {
     gflags::ShowUsageWithFlags(argv[0]);
     return -1;
   }
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+
   if (FLAGS_root_dir.empty()) {
     gflags::SetUsageMessage("--root_dir must be provided.");
     gflags::ShowUsageWithFlags(argv[0]);
