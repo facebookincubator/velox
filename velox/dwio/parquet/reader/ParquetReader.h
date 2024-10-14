@@ -76,10 +76,6 @@ class ParquetRowReader : public dwio::common::RowReader {
   // or the buffered data has been evicted.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
-  std::shared_ptr<BloomFilter> getBloomFilter(
-      const uint32_t rowGroupId,
-      const uint32_t column);
-
  private:
   // Compares row group  metadata to filters in ScanSpec in options of
   // ReaderBase and determines the set of row groups to scan.

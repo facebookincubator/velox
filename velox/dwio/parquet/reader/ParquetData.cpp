@@ -146,7 +146,7 @@ bool ParquetData::rowGroupMatches(uint32_t rowGroupId, common::Filter* filter) {
         !isFilterRangeCoversStatsRange(filter, columnStats.get(), type);
   }
 
-  if (needsToCheckBloomFilter && rowGroup.columnChunk(column).hasMetadata() &&
+  if (needsToCheckBloomFilter &&
       rowGroup.columnChunk(column).hasBloomFilterOffset()) {
     std::unique_ptr<common::AbstractBloomFilter> parquetBloomFilter =
         std::make_unique<ParquetBloomFilter>(getBloomFilter(rowGroupId));
@@ -215,6 +215,38 @@ std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
   return {fileOffset, length};
 }
 
+void ParquetData::setBloomFilterInputStream(
+    uint32_t rowGroupId,
+    dwio::common::BufferedInput& bufferedInput) {
+  bloomFilterInputStreams_.resize(fileMetaDataPtr_.numRowGroups());
+  if (bloomFilterInputStreams_[rowGroupId] != nullptr) {
+    return;
+  }
+  auto rowGroup = fileMetaDataPtr_.rowGroup(rowGroupId);
+  auto colChunk = rowGroup.columnChunk(type_->column());
+
+  if (!colChunk.hasBloomFilterOffset()) {
+    return;
+  }
+
+  VELOX_CHECK(
+      !colChunk.hasCryptoMetadata(), "Cannot read encrypted bloom filter yet");
+
+  auto bloomFilterOffset = colChunk.bloomFilterOffset();
+  auto fileSize = bufferedInput.getInputStream()->getLength();
+  VELOX_CHECK_GT(
+      fileSize,
+      bloomFilterOffset,
+      "file size {} less or equal than bloom offset {}",
+      fileSize,
+      bloomFilterOffset);
+
+  auto id = dwio::common::StreamIdentifier(type_->column());
+  bloomFilterInputStreams_[rowGroupId] = bufferedInput.enqueue(
+      {static_cast<uint64_t>(bloomFilterOffset), fileSize - bloomFilterOffset},
+      &id);
+}
+
 std::shared_ptr<BloomFilter> ParquetData::getBloomFilter(
     const uint32_t rowGroupId) {
   auto columnBloomFilterIter = columnBloomFilterMap_.find(rowGroupId);
@@ -228,12 +260,12 @@ std::shared_ptr<BloomFilter> ParquetData::getBloomFilter(
       "Invalid row group ordinal: {}",
       rowGroupId);
 
-  if (bloomFilterInputStream_ == nullptr) {
+  if (bloomFilterInputStreams_[rowGroupId] == nullptr) {
     return nullptr;
   }
 
-  auto bloomFilter =
-      BlockSplitBloomFilter::deserialize(bloomFilterInputStream_.get(), pool_);
+  auto bloomFilter = BlockSplitBloomFilter::deserialize(
+      bloomFilterInputStreams_[rowGroupId].get(), pool_);
 
   auto blockSplitBloomFilter =
       std::make_shared<BlockSplitBloomFilter>(std::move(bloomFilter));

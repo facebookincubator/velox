@@ -71,6 +71,8 @@ class Filter : public velox::ISerializable {
   Filter(bool deterministic, bool nullAllowed, FilterKind kind)
       : nullAllowed_(nullAllowed), deterministic_(deterministic), kind_(kind) {}
 
+  static constexpr int kMaxBloomFilterChecks = 10;
+
  public:
   virtual ~Filter() = default;
 
@@ -297,9 +299,9 @@ class Filter : public velox::ISerializable {
 
 class AbstractBloomFilter {
  public:
-  virtual bool mightContain(int32_t value) const = 0;
-  virtual bool mightContain(int64_t value) const = 0;
-  virtual bool mightContain(const std::string& value) const = 0;
+  virtual bool mightContainInt32(int32_t value) const = 0;
+  virtual bool mightContainInt64(int64_t value) const = 0;
+  virtual bool mightContainString(const std::string& value) const = 0;
   virtual ~AbstractBloomFilter() = default;
 };
 
@@ -966,19 +968,19 @@ class BigintValuesUsingHashTable final : public Filter {
       const AbstractBloomFilter& bloomFilter,
       const velox::Type& type) const override {
     // Limit checks to IN-list with upto 10 values.
-    if (values_.size() > 10) {
+    if (values_.size() > kMaxBloomFilterChecks) {
       return true;
     }
     // For IN-list, if any value matches, return true.
     for (auto i = 0; i < values_.size() && i < 10; ++i) {
       if (type.kind() == TypeKind::INTEGER) {
         int32_t val = values_[i];
-        if (bloomFilter.mightContain(val)) {
+        if (bloomFilter.mightContainInt32(val)) {
           return true;
         }
       } else if (
           type.kind() == TypeKind::BIGINT &&
-          bloomFilter.mightContain(values_[i])) {
+          bloomFilter.mightContainInt64(values_[i])) {
         return true;
       }
     }
@@ -1129,8 +1131,8 @@ class BigintValuesUsingBitmask final : public Filter {
   bool testBloomFilter(
       const AbstractBloomFilter& bloomFilter,
       const velox::Type& type) const override {
-    // Limit checks to only 50 values
-    if (bitmask_.size() > 50) {
+    // Limit checks to only maxBloomFilterChecks values
+    if (bitmask_.size() > kMaxBloomFilterChecks) {
       return true;
     }
 
@@ -1139,10 +1141,11 @@ class BigintValuesUsingBitmask final : public Filter {
         int64_t val = min_ + i;
         // For IN-list, if any value matches, return true.
         if (type.kind() == TypeKind::INTEGER &&
-            bloomFilter.mightContain((int32_t)val)) {
+            bloomFilter.mightContainInt32((int32_t)val)) {
           return true;
         } else if (
-            type.kind() == TypeKind::BIGINT && bloomFilter.mightContain(val)) {
+            type.kind() == TypeKind::BIGINT &&
+            bloomFilter.mightContainInt64(val)) {
           return true;
         }
       }
@@ -1693,7 +1696,7 @@ class BytesRange final : public AbstractRange {
     if (!singleValue_) {
       return true;
     }
-    return bloomFilter.mightContain(lower_);
+    return bloomFilter.mightContainString(lower_);
   }
 
   std::string toString() const final {
@@ -1984,12 +1987,12 @@ class BytesValues final : public Filter {
       const velox::Type& type) const override {
     // For IN-list, if any value matches, return true.
     // Limit checks to IN-list with only 10 values.
-    if (values_.size() > 10) {
+    if (values_.size() > kMaxBloomFilterChecks) {
       return true;
     }
 
     for (auto it = values_.begin(); it != values_.end(); ++it) {
-      if (bloomFilter.mightContain(*it)) {
+      if (bloomFilter.mightContainString(*it)) {
         return true;
       }
     }
@@ -2049,8 +2052,15 @@ class BigintMultiRange final : public Filter {
   bool testBloomFilter(
       const AbstractBloomFilter& bloomFilter,
       const velox::Type& type) const override {
-    // Limit number of ranges to check to 5.
-    if (ranges_.size() > 5) {
+    int numRange = 0;
+    // Limit number of values to check to maxBloomFilterChecks.
+    std::for_each(
+        ranges_.begin(),
+        ranges_.end(),
+        [this, &numRange](const std::unique_ptr<BigintRange>& range) {
+          numRange = numRange + range->upper() - range->lower() + 1;
+        });
+    if (numRange > kMaxBloomFilterChecks) {
       return true;
     }
 

@@ -284,20 +284,20 @@ bool BigintRange::testBloomFilter(
     const AbstractBloomFilter& bloomFilter,
     const velox::Type& type) const {
   // Don't test bloom filter for a wider range
-  if ((upper_ - lower_) > 50)
+  if ((upper_ - lower_) > kMaxBloomFilterChecks)
     return true;
 
   switch (type.kind()) {
     case TypeKind::INTEGER:
       for (int32_t val = lower32_; val <= upper32_; ++val) {
-        if (bloomFilter.mightContain(val)) {
+        if (bloomFilter.mightContainInt32(val)) {
           return true;
         }
       }
       break;
     case TypeKind::BIGINT:
       for (int64_t val = lower_; val <= upper_; ++val) {
-        if (bloomFilter.mightContain(val)) {
+        if (bloomFilter.mightContainInt64(val)) {
           return true;
         }
       }
