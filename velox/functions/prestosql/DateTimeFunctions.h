@@ -1795,8 +1795,8 @@ struct ToISO8601Function {
         functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ");
     VELOX_CHECK(
         !formatter.hasError(),
-        "Default format should always be valid, error: " +
-            formatter.error().message());
+        "Default format should always be valid, error: {}",
+        formatter.error().message());
     formatter_ = formatter.value();
   }
 
