@@ -210,7 +210,8 @@ TableScan also reports the number of splits assigned.
 
 	Raw Input: 20480 rows (72.31KB), Splits: 20
 
-Velox also measures CPU time, peak memory usage and total number of memory allocations for each operator. 
+Velox also measures CPU time and peak memory usage for each operator. This
+information is shown for all plan nodes.
 
 .. code-block::
 
