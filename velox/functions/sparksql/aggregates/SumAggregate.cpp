@@ -47,13 +47,10 @@ std::unique_ptr<exec::Aggregate> constructDecimalSumAgg(
     const TypePtr& sumType,
     const TypePtr& resultType) {
   VELOX_CHECK(sumType->isDecimal());
-  uint8_t precision = 0;
-  if (sumType->isShortDecimal()) {
-    precision = sumType->asShortDecimal().precision();
-  } else {
-    precision = sumType->asLongDecimal().precision();
-  }
+  uint8_t precision = getDecimalPrecisionScale(*sumType).first;
   switch (precision) {
+    // The sum precision is calculated from the input precision with the formula
+    // min(p + 10, 38). Therefore, the sum precision must >= 11.
 #define PRECISION_CASE(precision)                                           \
   case precision:                                                           \
     if (inputType->isShortDecimal() && sumType->isShortDecimal()) {         \
