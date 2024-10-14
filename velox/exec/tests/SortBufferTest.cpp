@@ -565,7 +565,7 @@ DEBUG_ONLY_TEST_F(SortBufferTest, spillDuringOutput) {
   }
 }
 
-DEBUG_ONLY_TEST_F(SortBufferTest, reserveMemoryGetOutput) {
+DEBUG_ONLY_TEST_F(SortBufferTest, reserveMemorySortGetOutput) {
   for (bool spillEnabled : {false, true}) {
     SCOPED_TRACE(fmt::format("spillEnabled {}", spillEnabled));
 
@@ -611,7 +611,8 @@ DEBUG_ONLY_TEST_F(SortBufferTest, reserveMemoryGetOutput) {
     // Sets an extreme large value to get output once to avoid test flakiness.
     sortBuffer->getOutput(1'000'000);
     if (spillEnabled) {
-      ASSERT_EQ(numReserves, 1);
+      // Reserve memory for sort and getOutput.
+      ASSERT_EQ(numReserves, 2);
     } else {
       ASSERT_EQ(numReserves, 0);
     }
