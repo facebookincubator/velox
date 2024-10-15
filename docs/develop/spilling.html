@@ -178,12 +178,13 @@ The operator first calls Spiller::finishSpill() to mark the completion of
 spilling. The Spiller collects rows from unspilled partitions and returns these
 to the operator. The operator processes the unspilled partitions, emits the
 results and frees up space in the RowContainer. Then, it loads spilled
-partitions one at a time. It calls Spiller::startMerge() for each spilled
-partition to create a sorted reader to restore the spilled partition state.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">SpillRows</span><span class="w"> </span><span class="nf">finishSpill</span><span class="p">();</span>
+partitions one at a time. It calls SpillPartition::createOrderedReader() for
+each spilled partition to create a sorted reader to restore the spilled
+partition state.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">Spiller::finishSpill</span><span class="p">(</span><span class="n">SpillPartitionSet</span><span class="o">&amp;</span><span class="w"> </span><span class="n">partitionSet</span><span class="p">);</span>
 
-<span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">TreeOfLosers</span><span class="o">&lt;</span><span class="n">SpillMergeStream</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">Spiller</span><span class="o">::</span><span class="n">startMerge</span><span class="p">(</span>
-<span class="w">    </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">partition</span><span class="p">);</span>
+<span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">TreeOfLosers</span><span class="o">&lt;</span><span class="n">SpillMergeStream</span><span class="o">&gt;&gt;</span>
+<span class="n">SpillPartition</span><span class="o">::</span><span class="n">createOrderedReader</span><span class="p">();</span>
 </pre></div>
 </div>
 <p><strong>unsorted spill restore</strong>: Used by hash build and hash probe
@@ -262,6 +263,13 @@ small files. If too large, operator execution slows down by spilling lots of
 data to disk. Configuration property <a class="reference internal" href="../configs.html"><span class="doc">spillable_reservation_growth_pct</span></a> sets the
 spill target size as a factor of the query memory limit. We might need to tune
 this parameter a bit in practice to see its impact on performance.</p>
+</section>
+<section id="spill-compression">
+<h3>Spill Compression<a class="headerlink" href="#spill-compression" title="Link to this heading">¶</a></h3>
+<p>To reduce the spill file size when the size might exceed the disk space,
+we can enable spill compression. The Spiller compresses the serialized byte
+stream before writing it to disk. Configuration property <a class="reference internal" href="../configs.html"><span class="doc">spill_compression_codec</span></a> sets the
+compression codec to use.</p>
 </section>
 </section>
 <section id="data-storage">
@@ -601,6 +609,7 @@ ahead.</p></li>
 <li><a class="reference internal" href="#spill-parameters">Spill Parameters</a><ul>
 <li><a class="reference internal" href="#spill-file-size">Spill File Size</a></li>
 <li><a class="reference internal" href="#spill-target-size">Spill Target Size</a></li>
+<li><a class="reference internal" href="#spill-compression">Spill Compression</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#data-storage">Data Storage</a></li>
