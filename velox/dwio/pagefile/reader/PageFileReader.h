@@ -21,6 +21,7 @@
 #include "velox/vector/arrow/Bridge.h"
 #include <arrow/io/api.h>
 #include <arrow/ipc/api.h>
+#include <arrow/buffer.h>
 
 
 
@@ -186,24 +187,29 @@ public:
     }
 
   arrow::Result<std::shared_ptr<arrow::Buffer>> Read(int64_t nbytes) override {
-      // // Allocate a buffer to hold the data
-      // ARROW_ASSIGN_OR_RAISE(auto buffer, arrow::AllocateBuffer(nbytes));
-      //
-      // // Read data into the buffer using pread
-      // std::string_view result = veloxFile_->pread(currentPosition_, nbytes, buffer->mutable_data());
-      //
-      // // Check if the read was successful
-      // if (result.size() != nbytes) {
-      //   return arrow::Status::IOError("Failed to read the requested number of bytes");
-      // }
-      //
-      // // Update the current position after the read
-      // currentPosition_ += result.size();
-      // bytesRead_ += result.size();
-      //
-      // // Return the buffer
-      // return buffer;
-      return nullptr;
+      // Allocate the buffer manually
+      std::shared_ptr<arrow::Buffer> buffer;
+      auto result = arrow::AllocateBuffer(nbytes).ValueOrDie();
+
+      if (!result) {
+        return arrow::Status::OutOfMemory("Failed to allocate buffer for reading");
+      }
+      buffer.reset(result.release());
+
+      // Read data into the buffer using pread
+      std::string_view read_result = veloxFile_->pread(currentPosition_, nbytes, buffer->mutable_data());
+
+      // Check if the read was successful
+      if (read_result.size() != nbytes) {
+        return arrow::Status::IOError("Failed to read the requested number of bytes");
+      }
+
+      // Update the current position after the read
+      currentPosition_ += read_result.size();
+      bytesRead_ += read_result.size();
+
+      // Return the buffer
+      return buffer;
     }
     // Implement Seek method
     arrow::Status Seek(int64_t position) override {
@@ -264,13 +270,12 @@ class PageFileRowReader :public dwio::common::RowReader {
 
     private:
     const std::shared_ptr<ReaderBase> readerBase_;
-    velox::memory::MemoryPool& pool_;
     const dwio::common::RowReaderOptions options_;
     std::shared_ptr<::arrow::io::RandomAccessFile> arrowRandomFile_;  // Source for reading Arrow IPC data
     std::shared_ptr<::arrow::ipc::RecordBatchFileReader> ipcReader_;
     std::shared_ptr<::arrow::RecordBatch> currentBatch_;  // Currently loaded batch
-    int64_t currentPageIndex_;
-    int64_t currentRowIndex_;
+    int64_t currentPageIndex_ = 0;
+    int64_t currentRowIndex_ = 0;
 
 };
 

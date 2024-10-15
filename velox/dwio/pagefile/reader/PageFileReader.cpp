@@ -42,6 +42,7 @@ ReaderBase::ReaderBase(
       options_{options},
       input_{std::move(input)},
       fileLength_{input_->getReadFile()->size()} {
+  VLOG(0)<<"Initialize";
 }
 
 PageFileReader::PageFileReader(
@@ -60,8 +61,8 @@ PageFileRowReader::PageFileRowReader(
     const std::shared_ptr<ReaderBase> readerBase,
     const dwio::common::RowReaderOptions& options):
 arrowRandomFile_(std::make_shared<ArrowRandomAccessFile>(readerBase->bufferedInput())),
-pool_(pool_),
-options_(options) {
+options_(options),
+readerBase_(readerBase) {
   initializeIpcReader();
   initializeReadRange();
 }
@@ -87,7 +88,7 @@ uint64_t PageFileRowReader::next(
       velox::VectorPtr& result,
       const dwio::common::Mutation* mutation) {
   // Implement the row-reading logic using RecordBatchFileReader
-  if (currentRowIndex_ >= currentBatch_->num_rows()) {
+  if (currentBatch_ == nullptr || currentRowIndex_ >= currentBatch_->num_rows()) {
     if (!loadNextPage()) {
       return 0;  // No more rows to read
     }
@@ -102,9 +103,9 @@ uint64_t PageFileRowReader::next(
     return false;
   }
   result = std::dynamic_pointer_cast<RowVector>(
-            importFromArrowAsOwner(c_schema, c_array,  &pool_));
+            importFromArrowAsOwner(c_schema, c_array,  &readerBase_->getMemoryPool()));
 
-  currentRowIndex_++;
+  currentRowIndex_+=currentBatch_->num_rows();
   return currentBatch_->num_rows();  // Return number of rows read
 }
 
@@ -116,16 +117,20 @@ void  PageFileRowReader::initializeReadRange() {
 }
 
 bool PageFileRowReader::loadNextPage() {
+  VLOG(0) << "ee " << ipcReader_->num_record_batches();
+  auto result = ipcReader_->CountRows();
+  VLOG(0) << "ff " << static_cast<int>(result.ValueOrDie());
+  // auto& test = *ipcReader_;
   if (currentPageIndex_ >= ipcReader_->num_record_batches()) {
     return false;  // No more pages
   }
 
-  auto result = ipcReader_->ReadRecordBatch(currentPageIndex_);
-  if (!result.ok()) {
+  auto result1 = ipcReader_->ReadRecordBatch(currentPageIndex_);
+  if (!result1.ok()) {
     throw std::runtime_error("Failed to read record batch");
   }
 
-  currentBatch_ = result.ValueOrDie();
+  currentBatch_ = result1.ValueOrDie();
   currentRowIndex_ = 0;
   ++currentPageIndex_;
   return true;
