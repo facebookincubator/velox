@@ -251,7 +251,7 @@ this parameter a bit in practice to see its impact on performance.
 
 Spill Compression
 ^^^^^^^^^^^^^^^^^
-To reduce the spill file size when the size might exceeds the disk space,
+To reduce the spill file size when the size might exceed the disk space,
 we can enable spill compression. The Spiller compresses the serialized byte
 stream before writing it to disk. Configuration property :doc:`spill_compression_codec <../configs>` sets the
 compression codec to use.
