@@ -144,7 +144,9 @@ of rows in the vector.</p>
 </pre></div>
 </div>
 <p>Vectors are always held by std::shared_ptr using the VectorPtr alias.</p>
-<p>using VectorPtr = std::shared_ptr&lt;BaseVector&gt;;</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">using</span><span class="w"> </span><span class="n">VectorPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="p">;</span>
+</pre></div>
+</div>
 <p>The “bits” namespace contains a number of convenience functions for working with
 a nulls buffer.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Check if position #12 is null.</span>
