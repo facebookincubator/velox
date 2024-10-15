@@ -226,7 +226,7 @@ class RemoteFunction : public exec::VectorFunction {
 
     if (auto errorPayload = remoteResponse.get_result().errorPayload()) {
       auto errorsRowVector = IOBufToRowVector(
-          *errorPayload, ROW({VARCHAR()}), *context.pool(), serde_.get());
+          *errorPayload, ROW({VARCHAR()}), *context.pool(), getSerde(metadata_.serdeFormat).get());
       auto errorsVector =
           errorsRowVector->childAt(0)->asFlatVector<StringView>();
       VELOX_CHECK(errorsVector, "Should be convertible to flat vector");
