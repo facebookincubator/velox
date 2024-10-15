@@ -704,8 +704,6 @@ void PageReader::makeDecoder() {
         deltaByteArrDecoder_ =
             std::make_unique<DeltaByteArrayDecoder>(pageData_);
         break;
-      } else {
-        VELOX_UNSUPPORTED("DELTA_BYTE_ARRAY decoder only supports BYTE_ARRAY");
       }
     default:
       VELOX_UNSUPPORTED("Encoding not supported yet: {}", encoding_);
