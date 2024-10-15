@@ -838,12 +838,18 @@ bool parseSparkTzWithPrefix(
     size_t start) {
   VELOX_DCHECK_GE(timeZoneName.length(), start + 2);
   auto sign = timeZoneName[start];
-  auto offset = timeZoneName.substr(start + 1);
-  std::string hm, s;
+  std::string_view tzView = timeZoneName;
+  std::string_view offset = tzView.substr(start + 1);
+  std::string_view hm, s;
+  bool appendZeroMinutes = false;
   if ((offset.length() == 1 && characterIsDigit(offset[0])) ||
       (offset.length() == 2 && allCharactersIsDigit(offset))) {
     // h[h]
-    hm = offset + ":00";
+    hm = offset;
+    // Use appendZeroMinutes to indicate that we need to append :00 to the end
+    // of timeZoneName. By appending only when assigning to timeZoneName, hm can
+    // be defined as a string_view to minimize multiple string copies.
+    appendZeroMinutes = true;
   } else if (
       (offset.length() == 4 && allCharactersIsDigit(offset)) ||
       (offset.length() == 5 && allCharactersIsDigit(offset, 0, 1) &&
@@ -875,7 +881,7 @@ bool parseSparkTzWithPrefix(
   }
   int32_t sec = 0;
   size_t pos = 0;
-  if (!s.empty() && !parseDoubleDigit(s.c_str(), s.length(), pos, sec)) {
+  if (!s.empty() && !parseDoubleDigit(s.data(), s.length(), pos, sec)) {
     return false;
   }
   if (sec < 0 || sec > 60) {
@@ -897,7 +903,7 @@ bool parseSparkTzWithPrefix(
       return false;
     }
   }
-  timeZoneName = sign + hm;
+  timeZoneName = sign + std::string{hm} + (appendZeroMinutes ? ":00" : "");
   return true;
 }
 
