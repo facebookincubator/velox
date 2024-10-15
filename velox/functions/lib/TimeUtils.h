@@ -178,24 +178,39 @@ int32_t getWeekYear(
       (date::sys_days{ymd} - date::sys_days{firstDayOfTheYear}).count() + 1;
   auto maxDayOfYear = util::isLeapYear(y) ? 366 : 365;
 
+  // If this week does not cross the years (`7 < dayOfYear && dayOfYear <
+  // (maxDayOfYear - 6)`), the weekyear must be equal to the year.
+  //
+  // If some days of this week fall in the last year and `minimalDaysInFirstWeek
+  // < dayOfYear`, the number of days in this week in this year must be greater
+  // than minimalDaysInFirstWeek, so the weekyear must be equal to the year.
+  //
+  // Since minimalDaysInFirstWeek always no more than 7, these two conditions
+  // can be reduced to the following code.
   if (dayOfYear > minimalDaysInFirstWeek && dayOfYear < (maxDayOfYear - 6)) {
     return y;
   }
 
   auto year = y;
+  // Day of begining of first complete week of this year.
   auto minDayOfYear = getDayOfFirstDayOfWeek(y, firstDayOfWeek);
   if (dayOfYear >= minDayOfYear) {
+    // Day of ending of first week of the last year.
     auto minDayOfYear = getDayOfFirstDayOfWeek(y + 1, firstDayOfWeek) - 1;
     if (minDayOfYear == 0) {
       minDayOfYear = 7;
     }
+
+    // If that week belongs to the next weekyear.
     if (minDayOfYear >= minimalDaysInFirstWeek) {
+      // If dayOfYear is in that week.
       int days = maxDayOfYear - dayOfYear + 1;
       if (days <= (7 - minDayOfYear)) {
         ++year;
       }
     }
   } else if (minDayOfYear <= minimalDaysInFirstWeek) {
+    // Days of the first week in this year less then minimalDaysInFirstWeek
     --year;
   }
 
