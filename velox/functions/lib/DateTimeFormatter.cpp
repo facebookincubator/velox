@@ -1334,9 +1334,8 @@ int32_t DateTimeFormatter::format(
               static_cast<int>(calDate.year()),
               static_cast<uint32_t>(calDate.month()),
               static_cast<uint32_t>(calDate.day()),
-              2, // (ISO 8601) Monday = 2
-              4 // At least 4 days in first week
-          );
+              firstDayOfWeek_,
+              minimalDaysInFirstWeek_);
 
           result += padContent(
               static_cast<signed>(year),
@@ -1839,14 +1838,11 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
         case 'w':
           builder.appendWeekOfWeekYear(count);
           break;
-        case 'x':
-          builder.appendWeekYear(count);
-          break;
         case 'y':
           builder.appendYear(count);
           break;
         case 'Y':
-          builder.appendYearOfEra(count);
+          builder.appendWeekYear(count);
           break;
         case 'z':
           builder.appendTimeZone(count);
