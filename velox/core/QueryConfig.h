@@ -787,7 +787,7 @@ class QueryConfig {
     auto value = get<uint32_t>(kSparkMinimalDaysInFirstWeek, 1);
     VELOX_CHECK(
         1 <= value && value <= 7,
-        "minimalDaysInFirstWee must be a number between 1 and 7");
+        "minimalDaysInFirstWeek must be a number between 1 and 7");
     return static_cast<uint8_t>(value);
   }
 
