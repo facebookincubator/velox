@@ -1004,23 +1004,41 @@ core::TypedExprPtr ExpressionFuzzer::generateExpression(
       chosenFunctionName = templateList[chosenExprIndex];
     }
 
-    if (chosenFunctionName == "cast") {
-      expression = generateCastExpression(returnType);
-    } else if (chosenFunctionName == "row_constructor") {
-      // Avoid generating deeply nested types that is rarely used in practice.
-      if (levelOfNesting(returnType) < 3) {
-        expression = generateRowConstructorExpression(returnType);
-      }
-    } else if (chosenFunctionName == "dereference") {
-      expression = generateDereferenceExpression(returnType);
-    } else {
-      expression = generateExpressionFromConcreteSignatures(
-          returnType, chosenFunctionName);
-      if (!expression &&
-          (options_.enableComplexTypes || options_.enableDecimalType)) {
-        expression = generateExpressionFromSignatureTemplate(
+    auto functionTransformer =
+        options_.functionTransformers.find(chosenFunctionName);
+    if (functionTransformer != options_.functionTransformers.end()) {
+      state.remainingLevelOfNesting_ -=
+          functionTransformer->second->extraLevelOfNesting();
+    }
+
+    if (state.remainingLevelOfNesting_ >= 0) {
+      if (chosenFunctionName == "cast") {
+        expression = generateCastExpression(returnType);
+      } else if (chosenFunctionName == "row_constructor") {
+        // Avoid generating deeply nested types that is rarely used in practice.
+        if (levelOfNesting(returnType) < 3) {
+          expression = generateRowConstructorExpression(returnType);
+        }
+      } else if (chosenFunctionName == "dereference") {
+        expression = generateDereferenceExpression(returnType);
+      } else {
+        expression = generateExpressionFromConcreteSignatures(
             returnType, chosenFunctionName);
+        if (!expression &&
+            (options_.enableComplexTypes || options_.enableDecimalType)) {
+          expression = generateExpressionFromSignatureTemplate(
+              returnType, chosenFunctionName);
+        }
       }
+    }
+
+    if (functionTransformer != options_.functionTransformers.end()) {
+      if (expression) {
+        expression =
+            functionTransformer->second->transform(std::move(expression));
+      }
+      state.remainingLevelOfNesting_ +=
+          functionTransformer->second->extraLevelOfNesting();
     }
   }
   if (!expression) {
