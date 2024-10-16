@@ -120,9 +120,9 @@ class PrefixEncoderTest : public testing::Test,
       char* expectedDesc) {
     std::optional<StringView> nullValue = std::nullopt;
     std::optional<StringView> value = testValue;
-    char encoded[13];
-    char nullFirst[13];
-    char nullLast[13];
+    char encoded[16];
+    char nullFirst[16];
+    char nullLast[16];
     auto encodeSize = testValue.size() + 1;
     memset(nullFirst, 0, encodeSize);
     memset(nullLast, 1, 1);
