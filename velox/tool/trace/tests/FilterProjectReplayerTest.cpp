@@ -183,7 +183,7 @@ TEST_F(FilterProjectReplayerTest, filterProject) {
                              task->taskId(),
                              projectNodeId_,
                              0,
-                             "HashJoin")
+                             "FilterProject")
                              .run();
   assertEqualResults({result}, {replayingResult});
 }
@@ -217,7 +217,7 @@ TEST_F(FilterProjectReplayerTest, filterOnly) {
                              task->taskId(),
                              filterNodeId_,
                              0,
-                             "HashJoin")
+                             "FilterProject")
                              .run();
   assertEqualResults({result}, {replayingResult});
 }
@@ -251,7 +251,7 @@ TEST_F(FilterProjectReplayerTest, projectOnly) {
                              task->taskId(),
                              projectNodeId_,
                              0,
-                             "HashJoin")
+                             "FilterProject")
                              .run();
   assertEqualResults({result}, {replayingResult});
 }
