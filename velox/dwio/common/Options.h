@@ -280,6 +280,19 @@ class RowReaderOptions {
     return flatmapNodeIdAsStruct_;
   }
 
+  const std::string mapColumnIdAsStructToString() const {
+    std::ostringstream ss;
+    ss << "Flatmap columns:";
+    for (const auto& [key, valueVec] : flatmapNodeIdAsStruct_) {
+      ss << "ordinal: " << key << " -> [";
+      for (const auto& value : valueVec) {
+        ss << value << " ";
+      }
+      ss << "]";
+    }
+    return ss.str();
+  }
+
   void setDecodingExecutor(std::shared_ptr<folly::Executor> executor) {
     decodingExecutor_ = executor;
   }
