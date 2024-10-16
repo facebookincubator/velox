@@ -27,11 +27,29 @@ namespace {
 class IPPrefixCastOperator : public exec::CastOperator {
  public:
   bool isSupportedFromType(const TypePtr& other) const override {
-    return false;
+    switch (other->kind()) {
+      case TypeKind::VARCHAR:
+        return true;
+      case TypeKind::HUGEINT:
+        if (isIPAddressType(other)) {
+          return true;
+        }
+      default:
+        return false;
+    }
   }
 
   bool isSupportedToType(const TypePtr& other) const override {
-    return false;
+    switch (other->kind()) {
+      case TypeKind::VARCHAR:
+        return true;
+      case TypeKind::HUGEINT:
+        if (isIPAddressType(other)) {
+          return true;
+        }
+      default:
+        return false;
+    }
   }
 
   void castTo(

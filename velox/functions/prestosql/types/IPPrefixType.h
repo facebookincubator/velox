@@ -57,6 +57,10 @@ class IPPrefixType : public RowType {
   }
 };
 
+FOLLY_ALWAYS_INLINE bool isIPPrefixName(const std::string& name) {
+  return (name == IPPrefixType::get()->name());
+}
+
 FOLLY_ALWAYS_INLINE bool isIPPrefixType(const TypePtr& type) {
   // Pointer comparison works since this type is a singleton.
   return IPPrefixType::get() == type;
