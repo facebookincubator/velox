@@ -90,6 +90,24 @@ class RemoteFunction : public exec::VectorFunction {
   }
 
  private:
+    const std::string urlEncode(const std::string& value) const {
+      std::ostringstream escaped;
+      escaped.fill('0');
+      escaped << std::hex;
+
+      for (char c : value) {
+          // Keep alphanumeric characters and some reserved characters unchanged
+          if (isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
+              escaped << c;
+          } else {
+              // Convert non-alphanumeric characters to %hex representation
+              escaped << '%' << std::setw(2) << int(static_cast<unsigned char>(c));
+          }
+      }
+
+      return escaped.str();
+  }
+
   void applyRestRemote(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -131,13 +149,16 @@ class RemoteFunction : public exec::VectorFunction {
       jsonObject["inputs"] = inputs;
       jsonObject["throwOnError"] = context.throwOnError();
 
+      std::string functionid = metadata_.functionId.value_or("default_function_id");
+      std::string encodedFunctionId = urlEncode(functionid);
+
       // Construct the full URL for the REST request
       std::string fullUrl = fmt::format(
           "{}/v1/functions/{}/{}/{}/{}",
           url_.getUrl(),
           metadata_.schema.value_or("default_schema"),
           functionName_,
-          metadata_.functionId.value_or("default_function_id"),
+          encodedFunctionId,
           metadata_.version.value_or("default_version"));
 
       // Invoke the remote function using RestClient
