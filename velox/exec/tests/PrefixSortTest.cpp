@@ -155,7 +155,8 @@ TEST_F(PrefixSortTest, singleKey) {
            Timestamp(3, 3),
            Timestamp(2, 2),
            Timestamp(1, 1)}),
-      makeFlatVector<std::string_view>({"eee", "ddd", "ccc", "bbb", "aaa"})};
+      makeFlatVector<std::string_view>({"eee", "ddd", "ccc", "bbb", "aaa"}),
+      makeFlatVector<std::string_view>({"e", "dddddd", "ddddd", "bbb", "aaa"})};
   for (int i = 5; i < columnsSize; ++i) {
     const auto data = makeRowVector({testData[i]});
 
@@ -183,7 +184,9 @@ TEST_F(PrefixSortTest, singleKeyWithNulls) {
            Timestamp(2, 2),
            Timestamp(1, 1)}),
       makeNullableFlatVector<std::string_view>(
-          {"eee", "ddd", std::nullopt, "bbb", "aaa"})};
+          {"eee", "ddd", std::nullopt, "bbb", "aaa"}),
+      makeNullableFlatVector<std::string_view>(
+          {"ee", "aaa", std::nullopt, "d", "aaaaaaaaaaaaaa"})};
 
   for (int i = 5; i < columnsSize; ++i) {
     const auto data = makeRowVector({testData[i]});
@@ -210,7 +213,7 @@ TEST_F(PrefixSortTest, multipleKeys) {
     const auto data = makeRowVector({
         makeNullableFlatVector<int64_t>({5, 2, std::nullopt, 2, 1}),
         makeNullableFlatVector<std::string_view>(
-            {"eee", "ddd", std::nullopt, "bbb", "aaa"}),
+            {"eee", "aaa", std::nullopt, "bbb", "aaaa"}),
     });
 
     testPrefixSort({kAsc, kAsc}, data);
