@@ -60,7 +60,8 @@ Window::Window(
         pool(),
         common::PrefixSortConfig{
             driverCtx->queryConfig().prefixSortNormalizedKeyMaxBytes(),
-            driverCtx->queryConfig().prefixSortMinRows()},
+            driverCtx->queryConfig().prefixSortMinRows(),
+            driverCtx->queryConfig().prefixSortMinAvgMaxLenRatio()},
         spillConfig,
         &nonReclaimableSection_,
         &spillStats_);

@@ -92,7 +92,7 @@ class TestCase {
   RowVectorPtr fuzzRows(size_t numRows, int numKeys) {
     VectorFuzzer fuzzer({.vectorSize = numRows}, pool_);
     VectorFuzzer fuzzerWithNulls(
-        {.vectorSize = numRows, .nullRatio = 0.7}, pool_);
+        {.vectorSize = numRows, .nullRatio = 0.1}, pool_);
     std::vector<VectorPtr> children;
 
     // Fuzz keys: for front keys (column 0 to numKeys -2) use high
@@ -125,15 +125,14 @@ class TestCase {
 
 // You could config threshold, e.i. 0, to test prefix-sort for small
 // dateset.
-static const common::PrefixSortConfig kDefaultSortConfig(1024, 100);
+static const common::PrefixSortConfig kDefaultSortConfig(1024, 100, 0.3);
 
 // For small dataset, in some test environments, if std-sort is defined in the
 // benchmark file, the test results may be strangely regressed. When the
 // threshold is particularly large, PrefixSort is actually std-sort, hence, we
 // can use this as std-sort benchmark base.
-static const common::PrefixSortConfig kStdSortConfig(
-    1024,
-    std::numeric_limits<int>::max());
+static const common::PrefixSortConfig
+    kStdSortConfig(1024, std::numeric_limits<int>::max(), 0.3);
 
 class PrefixSortBenchmark {
  public:

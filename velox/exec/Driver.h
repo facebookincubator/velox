@@ -303,7 +303,8 @@ struct DriverCtx {
   common::PrefixSortConfig prefixSortConfig() const {
     return common::PrefixSortConfig{
         queryConfig().prefixSortNormalizedKeyMaxBytes(),
-        queryConfig().prefixSortMinRows()};
+        queryConfig().prefixSortMinRows(),
+        queryConfig().prefixSortMinAvgMaxLenRatio()};
   }
 };
 

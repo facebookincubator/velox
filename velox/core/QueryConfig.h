@@ -399,6 +399,11 @@ class QueryConfig {
   /// derived using micro-benchmarking.
   static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
 
+  /// Minimum allowed ratio between the average and maximum length for a
+  /// variable-length column in prefix-sort.
+  static constexpr const char* kPrefixSortMinAvgMaxLenRatio =
+      "prefixsort_min_avg_to_max_column_len_ratio";
+
   /// Enable query tracing flag.
   static constexpr const char* kQueryTraceEnabled = "query_trace_enabled";
 
@@ -815,6 +820,10 @@ class QueryConfig {
 
   int32_t prefixSortMinRows() const {
     return get<int32_t>(kPrefixSortMinRows, 130);
+  }
+
+  double prefixSortMinAvgMaxLenRatio() const {
+    return get<double>(kPrefixSortMinAvgMaxLenRatio, 0.3);
   }
 
   template <typename T>

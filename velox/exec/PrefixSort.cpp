@@ -39,8 +39,15 @@ FOLLY_ALWAYS_INLINE void encodeRowColumn(
   } else {
     value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
   }
-  prefixSortLayout.encoders[index].encode(
-      value, prefixBuffer + prefixSortLayout.prefixOffsets[index]);
+  if constexpr (std::is_same_v<T, StringView>) {
+    prefixSortLayout.encoders[index].encode(
+        value,
+        prefixBuffer + prefixSortLayout.prefixOffsets[index],
+        prefixSortLayout.encodeSizes[index]);
+  } else {
+    prefixSortLayout.encoders[index].encode(
+        value, prefixBuffer + prefixSortLayout.prefixOffsets[index]);
+  }
 }
 
 FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
@@ -78,6 +85,16 @@ FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
     }
     case TypeKind::TIMESTAMP: {
       encodeRowColumn<Timestamp>(
+          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      return;
+    }
+    case TypeKind::VARCHAR: {
+      encodeRowColumn<StringView>(
+          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      return;
+    }
+    case TypeKind::VARBINARY: {
+      encodeRowColumn<StringView>(
           prefixSortLayout, index, rowColumn, row, prefixBuffer);
       return;
     }
@@ -123,11 +140,17 @@ compareByWord(uint64_t* left, uint64_t* right, int32_t bytes) {
 
 PrefixSortLayout PrefixSortLayout::makeSortLayout(
     const std::vector<TypePtr>& types,
+    const std::vector<int32_t>& maxVarcharLengths,
+    const std::vector<int64_t>& totalVarcharLengths,
+    int64_t rowNum,
     const std::vector<CompareFlags>& compareFlags,
-    uint32_t maxNormalizedKeySize) {
+    uint32_t maxNormalizedKeySize,
+    double minAllowedAvgToMaxLenRatio) {
   const uint32_t numKeys = types.size();
   std::vector<uint32_t> prefixOffsets;
   prefixOffsets.reserve(numKeys);
+  std::vector<uint32_t> encodeSizes;
+  encodeSizes.reserve(numKeys);
   std::vector<PrefixSortEncoder> encoders;
   encoders.reserve(numKeys);
 
@@ -136,18 +159,23 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
   uint32_t normalizedKeySize{0};
   uint32_t numNormalizedKeys{0};
   for (auto i = 0; i < numKeys; ++i) {
-    if (normalizedKeySize > maxNormalizedKeySize) {
+    const std::optional<uint32_t> encodedSize = PrefixSortEncoder::encodedSize(
+        types[i]->kind(),
+        maxVarcharLengths[i],
+        totalVarcharLengths[i],
+        rowNum,
+        minAllowedAvgToMaxLenRatio);
+    if (encodedSize.has_value() &&
+        normalizedKeySize + encodedSize.value() <= maxNormalizedKeySize) {
+      prefixOffsets.push_back(normalizedKeySize);
+      encoders.push_back(
+          {compareFlags[i].ascending, compareFlags[i].nullsFirst});
+      normalizedKeySize += encodedSize.value();
+      encodeSizes.push_back(encodedSize.value());
+      numNormalizedKeys++;
+    } else {
       break;
     }
-    const std::optional<uint32_t> encodedSize =
-        PrefixSortEncoder::encodedSize(types[i]->kind());
-    if (!encodedSize.has_value()) {
-      break;
-    }
-    prefixOffsets.push_back(normalizedKeySize);
-    encoders.push_back({compareFlags[i].ascending, compareFlags[i].nullsFirst});
-    normalizedKeySize += encodedSize.value();
-    ++numNormalizedKeys;
   }
 
   const auto numPaddingBytes = alignmentPadding(normalizedKeySize, kAlignment);
@@ -162,6 +190,7 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
       numNormalizedKeys != 0,
       numNormalizedKeys < numKeys,
       std::move(prefixOffsets),
+      std::move(encodeSizes),
       std::move(encoders),
       numPaddingBytes};
 }
@@ -238,7 +267,13 @@ uint32_t PrefixSort::maxRequiredBytes(
   }
   VELOX_CHECK_EQ(rowContainer->keyTypes().size(), compareFlags.size());
   const auto sortLayout = PrefixSortLayout::makeSortLayout(
-      rowContainer->keyTypes(), compareFlags, config.maxNormalizedKeySize);
+      rowContainer->keyTypes(),
+      rowContainer->variableWidthColumnsMaxSize(),
+      rowContainer->variableWidthColumnsTotalSize(),
+      rowContainer->numRows(),
+      compareFlags,
+      config.maxNormalizedKeySize,
+      config.minAllowedAvgToMaxLenRatio);
   if (!sortLayout.hasNormalizedKeys) {
     return 0;
   }

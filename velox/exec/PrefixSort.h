@@ -56,6 +56,9 @@ struct PrefixSortLayout {
   /// extracting columns
   const std::vector<uint32_t> prefixOffsets;
 
+  /// Sizes of normalized keys.
+  const std::vector<uint32_t> encodeSizes;
+
   /// The encoders for normalized keys.
   const std::vector<prefixsort::PrefixSortEncoder> encoders;
 
@@ -65,8 +68,12 @@ struct PrefixSortLayout {
 
   static PrefixSortLayout makeSortLayout(
       const std::vector<TypePtr>& types,
+      const std::vector<int32_t>& maxVarcharLengths,
+      const std::vector<int64_t>& totalVarcharLengths,
+      int64_t rowNum,
       const std::vector<CompareFlags>& compareFlags,
-      uint32_t maxNormalizedKeySize);
+      uint32_t maxNormalizedKeySize,
+      double minAllowedAvgToMaxLenRatio);
 };
 
 class PrefixSort {
@@ -112,7 +119,13 @@ class PrefixSort {
 
     VELOX_CHECK_EQ(rowContainer->keyTypes().size(), compareFlags.size());
     const auto sortLayout = PrefixSortLayout::makeSortLayout(
-        rowContainer->keyTypes(), compareFlags, config.maxNormalizedKeySize);
+        rowContainer->keyTypes(),
+        rowContainer->variableWidthColumnsMaxSize(),
+        rowContainer->variableWidthColumnsTotalSize(),
+        rowContainer->numRows(),
+        compareFlags,
+        config.maxNormalizedKeySize,
+        config.minAllowedAvgToMaxLenRatio);
     // All keys can not normalize, skip the binary string compare opt.
     // Putting this outside sort-internal helps with stdSort.
     if (!sortLayout.hasNormalizedKeys) {

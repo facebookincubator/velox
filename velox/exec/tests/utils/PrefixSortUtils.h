@@ -23,7 +23,7 @@ namespace facebook::velox::exec::test {
 /// UTs etc. HiveConnector`s UT, there is no QueryConfig. This method returns a
 /// default PrefixSortConfig for these cases.
 inline velox::common::PrefixSortConfig defaultPrefixSortConfig() {
-  return velox::common::PrefixSortConfig{128, 130};
+  return velox::common::PrefixSortConfig{128, 130, 0.3};
 }
 
 } // namespace facebook::velox::exec::test

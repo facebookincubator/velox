@@ -296,14 +296,14 @@ class RowContainer {
       const DecodedVector& decoded,
       vector_size_t index,
       char* row,
-      int32_t columnIndex);
+      column_index_t columnIndex);
 
   /// Stores the first 'rows.size' values from the 'decoded' vector into the
   /// 'columnIndex' column of 'rows'.
   void store(
       const DecodedVector& decoded,
       folly::Range<char**> rows,
-      int32_t columnIndex);
+      column_index_t columnIndex);
 
   HashStringAllocator& stringAllocator() {
     return *stringAllocator_;
@@ -752,6 +752,18 @@ class RowContainer {
     return columnHasNulls_[columnIndex];
   }
 
+  /// Returns max size for each variable width column. If a column is
+  /// fixed-size, the value is 0.
+  const auto& variableWidthColumnsMaxSize() const {
+    return variableWidthColumnsMaxSize_;
+  }
+
+  /// Returns total size for each variable width column. If a column is
+  /// fixed-size, the value is 0.
+  const auto& variableWidthColumnsTotalSize() const {
+    return variableWidthColumnsTotalSize_;
+  }
+
   const std::vector<Accumulator>& accumulators() const {
     return accumulators_;
   }
@@ -925,7 +937,7 @@ class RowContainer {
       int32_t offset,
       int32_t nullByte,
       uint8_t nullMask,
-      int32_t column) {
+      column_index_t column) {
     using T = typename TypeTraits<Kind>::NativeType;
     if (decoded.isNullAt(index)) {
       row[nullByte] |= nullMask;
@@ -937,7 +949,11 @@ class RowContainer {
     }
     if constexpr (std::is_same_v<T, StringView>) {
       RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
-      stringAllocator_->copyMultipart(decoded.valueAt<T>(index), row, offset);
+      const auto str = decoded.valueAt<T>(index);
+      variableWidthColumnsMaxSize_[column] =
+          std::max<int32_t>(variableWidthColumnsMaxSize_[column], str.size());
+      variableWidthColumnsTotalSize_[column] += str.size();
+      stringAllocator_->copyMultipart(str, row, offset);
     } else {
       *reinterpret_cast<T*>(row + offset) = decoded.valueAt<T>(index);
     }
@@ -949,11 +965,16 @@ class RowContainer {
       vector_size_t index,
       bool isKey,
       char* group,
-      int32_t offset) {
+      int32_t offset,
+      column_index_t column) {
     using T = typename TypeTraits<Kind>::NativeType;
     if constexpr (std::is_same_v<T, StringView>) {
       RowSizeTracker tracker(group[rowSizeOffset_], *stringAllocator_);
-      stringAllocator_->copyMultipart(decoded.valueAt<T>(index), group, offset);
+      const auto str = decoded.valueAt<T>(index);
+      variableWidthColumnsMaxSize_[column] =
+          std::max<int32_t>(variableWidthColumnsMaxSize_[column], str.size());
+      variableWidthColumnsTotalSize_[column] += str.size();
+      stringAllocator_->copyMultipart(str, group, offset);
     } else {
       *reinterpret_cast<T*>(group + offset) = decoded.valueAt<T>(index);
     }
@@ -967,7 +988,7 @@ class RowContainer {
       int32_t offset,
       int32_t nullByte,
       uint8_t nullMask,
-      int32_t column) {
+      column_index_t column) {
     for (int32_t i = 0; i < rows.size(); ++i) {
       storeWithNulls<Kind>(
           decoded, i, isKey, rows[i], offset, nullByte, nullMask, column);
@@ -979,9 +1000,10 @@ class RowContainer {
       const DecodedVector& decoded,
       folly::Range<char**> rows,
       bool isKey,
-      int32_t offset) {
+      int32_t offset,
+      column_index_t column) {
     for (int32_t i = 0; i < rows.size(); ++i) {
-      storeNoNulls<Kind>(decoded, i, isKey, rows[i], offset);
+      storeNoNulls<Kind>(decoded, i, isKey, rows[i], offset, column);
     }
   }
 
@@ -1259,9 +1281,9 @@ class RowContainer {
       bool isKey,
       char* row,
       int32_t offset,
+      column_index_t column = 0,
       int32_t nullByte = 0,
-      uint8_t nullMask = 0,
-      int32_t column = 0);
+      uint8_t nullMask = 0);
 
   template <bool useRowNumbers>
   static void extractComplexType(
@@ -1415,6 +1437,14 @@ class RowContainer {
   // not applicable.
   int32_t probedFlagOffset_ = 0;
 
+  // Maximum size for each variable width column. If a column is fixed-size,
+  // the value is 0.
+  std::vector<int32_t> variableWidthColumnsMaxSize_;
+
+  // Total size for each variable width column. If a column is fixed-size,
+  // the value is 0.
+  std::vector<int64_t> variableWidthColumnsTotalSize_;
+
   // Bit position of free bit.
   int32_t freeFlagOffset_ = 0;
   int32_t rowSizeOffset_ = 0;
@@ -1460,9 +1490,9 @@ inline void RowContainer::storeWithNulls<TypeKind::ROW>(
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask,
-    int32_t column) {
+    column_index_t column) {
   storeComplexType(
-      decoded, index, isKey, row, offset, nullByte, nullMask, column);
+      decoded, index, isKey, row, offset, column, nullByte, nullMask);
 }
 
 template <>
@@ -1471,8 +1501,9 @@ inline void RowContainer::storeNoNulls<TypeKind::ROW>(
     vector_size_t index,
     bool isKey,
     char* row,
-    int32_t offset) {
-  storeComplexType(decoded, index, isKey, row, offset);
+    int32_t offset,
+    column_index_t column) {
+  storeComplexType(decoded, index, isKey, row, offset, column);
 }
 
 template <>
@@ -1484,9 +1515,9 @@ inline void RowContainer::storeWithNulls<TypeKind::ARRAY>(
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask,
-    int32_t column) {
+    column_index_t column) {
   storeComplexType(
-      decoded, index, isKey, row, offset, nullByte, nullMask, column);
+      decoded, index, isKey, row, offset, column, nullByte, nullMask);
 }
 
 template <>
@@ -1495,8 +1526,9 @@ inline void RowContainer::storeNoNulls<TypeKind::ARRAY>(
     vector_size_t index,
     bool isKey,
     char* row,
-    int32_t offset) {
-  storeComplexType(decoded, index, isKey, row, offset);
+    int32_t offset,
+    column_index_t column) {
+  storeComplexType(decoded, index, isKey, row, offset, column);
 }
 
 template <>
@@ -1508,9 +1540,9 @@ inline void RowContainer::storeWithNulls<TypeKind::MAP>(
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask,
-    int32_t column) {
+    column_index_t column) {
   storeComplexType(
-      decoded, index, isKey, row, offset, nullByte, nullMask, column);
+      decoded, index, isKey, row, offset, column, nullByte, nullMask);
 }
 
 template <>
@@ -1519,8 +1551,9 @@ inline void RowContainer::storeNoNulls<TypeKind::MAP>(
     vector_size_t index,
     bool isKey,
     char* row,
-    int32_t offset) {
-  storeComplexType(decoded, index, isKey, row, offset);
+    int32_t offset,
+    column_index_t column) {
+  storeComplexType(decoded, index, isKey, row, offset, column);
 }
 
 template <>
@@ -1532,7 +1565,7 @@ inline void RowContainer::storeWithNulls<TypeKind::HUGEINT>(
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask,
-    int32_t column) {
+    column_index_t column) {
   if (decoded.isNullAt(index)) {
     row[nullByte] |= nullMask;
     memset(row + offset, 0, sizeof(int128_t));
@@ -1548,7 +1581,8 @@ inline void RowContainer::storeNoNulls<TypeKind::HUGEINT>(
     vector_size_t index,
     bool /*isKey*/,
     char* row,
-    int32_t offset) {
+    int32_t offset,
+    column_index_t /*column*/) {
   HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
 }
 

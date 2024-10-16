@@ -144,6 +144,10 @@ Generic Configuration
      - integer
      - 130
      - Minimum number of rows to use prefix-sort. The default value has been derived using micro-benchmarking.
+   * - prefixsort_min_avg_to_max_column_len_ratio
+     - double
+     - 0.3
+     - Minimum allowed ratio between the average and maximum length for a variable-length column in prefix-sort.
 
 .. _expression-evaluation-conf:
 

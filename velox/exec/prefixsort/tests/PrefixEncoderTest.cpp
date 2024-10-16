@@ -225,7 +225,9 @@ class PrefixEncoderTest : public testing::Test,
 
     auto test = [&](const PrefixSortEncoder& encoder) {
       TypePtr type = TypeTraits<Kind>::ImplType::create();
-      VectorFuzzer fuzzer({.vectorSize = vectorSize, .nullRatio = 0.1}, pool());
+      VectorFuzzer fuzzer(
+          {.vectorSize = vectorSize, .nullRatio = 0.1, .stringLength = 16},
+          pool());
 
       CompareFlags compareFlag = {
           encoder.isNullsFirst(),
@@ -250,8 +252,13 @@ class PrefixEncoderTest : public testing::Test,
         const auto rightValue = rightVector->isNullAt(i)
             ? std::nullopt
             : std::optional<ValueDataType>(rightVector->valueAt(i));
-        encoder.encode(leftValue, leftEncoded);
-        encoder.encode(rightValue, rightEncoded);
+        if constexpr (Kind == TypeKind::VARCHAR) {
+          encoder.encode(leftValue, leftEncoded, 17);
+          encoder.encode(rightValue, rightEncoded, 17);
+        } else {
+          encoder.encode(leftValue, leftEncoded);
+          encoder.encode(rightValue, rightEncoded);
+        }
 
         const auto result = compare(leftEncoded, rightEncoded);
         const auto expected =
@@ -264,7 +271,23 @@ class PrefixEncoderTest : public testing::Test,
     test(ascNullsLastEncoder_);
     test(descNullsFirstEncoder_);
     test(descNullsLastEncoder_);
-  };
+  }
+
+  const PrefixSortEncoder& ascNullsFirstEncoder() const {
+    return ascNullsFirstEncoder_;
+  }
+
+  const PrefixSortEncoder ascNullsLastEncoder() const {
+    return ascNullsLastEncoder_;
+  }
+
+  const PrefixSortEncoder descNullsFirstEncoder() const {
+    return descNullsFirstEncoder_;
+  }
+
+  const PrefixSortEncoder descNullsLastEncoder() const {
+    return descNullsLastEncoder_;
+  }
 
  protected:
   static void SetUpTestCase() {
@@ -338,6 +361,46 @@ TEST_F(PrefixEncoderTest, encode) {
   }
 }
 
+TEST_F(PrefixEncoderTest, encodeString) {
+  constexpr int32_t encodeSize = 13;
+  StringView testValue = StringView("aaaaaabbbbbb");
+  char expectedAsc[encodeSize] = "aaaaaabbbbbb";
+  char expectedDesc[encodeSize];
+  for (int i = 0; i < encodeSize - 1; ++i) {
+    expectedDesc[i] = ~expectedAsc[i];
+  }
+  std::optional<StringView> nullValue = std::nullopt;
+  std::optional<StringView> value = testValue;
+  char encoded[encodeSize + 1];
+  char nullFirst[encodeSize + 1];
+  char nullLast[encodeSize + 1];
+  memset(nullFirst, 0, encodeSize);
+  memset(nullLast, 1, 1);
+  memset(nullLast + 1, 0, encodeSize - 1);
+
+  auto compare = [&](char* left, char* right) {
+    return std::memcmp(left, right, encodeSize);
+  };
+
+  ascNullsFirstEncoder().encode(nullValue, encoded, encodeSize);
+  ASSERT_EQ(compare(nullFirst, encoded), 0);
+  ascNullsLastEncoder().encode(nullValue, encoded, encodeSize);
+  ASSERT_EQ(compare(nullLast, encoded), 0);
+
+  ascNullsFirstEncoder().encode(value, encoded, encodeSize);
+  ASSERT_EQ(encoded[0], 1);
+  ASSERT_EQ(std::memcmp(encoded + 1, expectedAsc, encodeSize - 1), 0);
+  ascNullsLastEncoder().encode(value, encoded, encodeSize);
+  ASSERT_EQ(encoded[0], 0);
+  ASSERT_EQ(std::memcmp(encoded + 1, expectedAsc, encodeSize - 1), 0);
+  descNullsFirstEncoder().encode(value, encoded, encodeSize);
+  ASSERT_EQ(encoded[0], 1);
+  ASSERT_EQ(std::memcmp(encoded + 1, expectedDesc, encodeSize - 1), 0);
+  descNullsLastEncoder().encode(value, encoded, encodeSize);
+  ASSERT_EQ(encoded[0], 0);
+  ASSERT_EQ(std::memcmp(encoded + 1, expectedDesc, encodeSize - 1), 0);
+}
+
 TEST_F(PrefixEncoderTest, compare) {
   testCompare<uint64_t>();
   testCompare<uint32_t>();
@@ -372,6 +435,10 @@ TEST_F(PrefixEncoderTest, fuzzyDouble) {
 
 TEST_F(PrefixEncoderTest, fuzzyTimestamp) {
   testFuzz<TypeKind::TIMESTAMP>();
+}
+
+TEST_F(PrefixEncoderTest, fuzzyStringView) {
+  testFuzz<TypeKind::VARCHAR>();
 }
 
 } // namespace facebook::velox::exec::prefixsort::test

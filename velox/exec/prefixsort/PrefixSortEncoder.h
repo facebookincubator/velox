@@ -18,6 +18,7 @@
 #include <cstdint>
 
 #include "velox/common/base/SimdUtil.h"
+#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 
@@ -51,6 +52,31 @@ class PrefixSortEncoder {
     }
   }
 
+  /// Encodes String types.
+  /// The string prefix is formatted as 'null byte + string content + padding
+  /// zeros'. If `!ascending_`, the bits for both the content and padding zeros
+  /// need to be inverted.
+  FOLLY_ALWAYS_INLINE void encode(
+      std::optional<StringView> value,
+      char* dest,
+      int32_t encodeSize) const {
+    if (value.has_value()) {
+      dest[0] = nullsFirst_ ? 1 : 0;
+      std::string storage;
+      auto data = HashStringAllocator::contiguousString(value.value(), storage);
+      std::memcpy(dest + 1, data.data(), data.size());
+      std::memset(dest + 1 + data.size(), 0, encodeSize - 1 - data.size());
+      if (!ascending_) {
+        for (auto i = 1; i < encodeSize; ++i) {
+          dest[i] = ~dest[i];
+        }
+      }
+    } else {
+      dest[0] = nullsFirst_ ? 0 : 1;
+      std::memset(dest + 1, 0, encodeSize - 1);
+    }
+  }
+
   /// @tparam T Type of value. Supported type are: uint64_t, int64_t, uint32_t,
   /// int32_t, int16_t, uint16_t, float, double, Timestamp.
   template <typename T>
@@ -67,7 +93,11 @@ class PrefixSortEncoder {
   /// @return For supported types, returns the encoded size, assume nullable.
   ///         For not supported types, returns 'std::nullopt'.
   FOLLY_ALWAYS_INLINE static std::optional<uint32_t> encodedSize(
-      TypeKind typeKind) {
+      TypeKind typeKind,
+      int32_t varLength,
+      int64_t totalSize,
+      int64_t rowNum,
+      double minAvgToMaxRatio) {
     // NOTE: one byte is reserved for nullable comparison.
     switch ((typeKind)) {
       case ::facebook::velox::TypeKind::SMALLINT: {
@@ -87,6 +117,14 @@ class PrefixSortEncoder {
       }
       case ::facebook::velox::TypeKind::TIMESTAMP: {
         return 17;
+      }
+      case ::facebook::velox::TypeKind::VARBINARY:
+      case ::facebook::velox::TypeKind::VARCHAR: {
+        if (totalSize / rowNum >= minAvgToMaxRatio * varLength) {
+          return 1 + varLength;
+        } else {
+          return std::nullopt;
+        }
       }
       default:
         return std::nullopt;
@@ -247,6 +285,13 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     char* dest) const {
   encodeNoNulls(value.getSeconds(), dest);
   encodeNoNulls(value.getNanos(), dest + 8);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
+    StringView value,
+    char* dest) const {
+  VELOX_NYI();
 }
 
 } // namespace facebook::velox::exec::prefixsort

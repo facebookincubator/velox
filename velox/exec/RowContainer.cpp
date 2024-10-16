@@ -189,6 +189,8 @@ RowContainer::RowContainer(
       ++nullOffset;
     }
     columnHasNulls_.push_back(false);
+    variableWidthColumnsMaxSize_.push_back(0);
+    variableWidthColumnsTotalSize_.push_back(0);
   }
   // Make offset at least sizeof pointer so that there is space for a
   // free list next pointer below the bit at 'freeFlagOffset_'.
@@ -218,6 +220,8 @@ RowContainer::RowContainer(
     ++nullOffset;
     isVariableWidth |= !type->isFixedWidth();
     columnHasNulls_.push_back(false);
+    variableWidthColumnsMaxSize_.push_back(0);
+    variableWidthColumnsTotalSize_.push_back(0);
   }
   if (hasProbedFlag) {
     nullOffsets_.push_back(nullOffset);
@@ -495,7 +499,7 @@ void RowContainer::store(
     const DecodedVector& decoded,
     vector_size_t index,
     char* row,
-    int32_t column) {
+    column_index_t column) {
   auto numKeys = keyTypes_.size();
   bool isKey = column < numKeys;
   if (isKey && !nullableKeys_) {
@@ -506,7 +510,8 @@ void RowContainer::store(
         index,
         isKey,
         row,
-        offsets_[column]);
+        offsets_[column],
+        column);
   } else {
     VELOX_DCHECK(isKey || accumulators_.empty());
     auto rowColumn = rowColumns_[column];
@@ -527,7 +532,7 @@ void RowContainer::store(
 void RowContainer::store(
     const DecodedVector& decoded,
     folly::Range<char**> rows,
-    int32_t column) {
+    column_index_t column) {
   VELOX_CHECK_GE(decoded.size(), rows.size());
   const bool isKey = column < keyTypes_.size();
   if ((isKey && !nullableKeys_) || !decoded.mayHaveNulls()) {
@@ -537,7 +542,8 @@ void RowContainer::store(
         decoded,
         rows,
         isKey,
-        offsets_[column]);
+        offsets_[column],
+        column);
   } else {
     const auto rowColumn = rowColumns_[column];
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -778,9 +784,9 @@ void RowContainer::storeComplexType(
     bool isKey,
     char* row,
     int32_t offset,
+    column_index_t column,
     int32_t nullByte,
-    uint8_t nullMask,
-    int32_t column) {
+    uint8_t nullMask) {
   if (decoded.isNullAt(index)) {
     VELOX_DCHECK(nullMask);
     row[nullByte] |= nullMask;
@@ -794,7 +800,9 @@ void RowContainer::storeComplexType(
   ContainerRowSerde::serialize(
       *decoded.base(), decoded.index(index), stream, options);
   stringAllocator_->finishWrite(stream, 0);
-
+  variableWidthColumnsMaxSize_[column] =
+      std::max<int32_t>(variableWidthColumnsMaxSize_[column], stream.size());
+  variableWidthColumnsTotalSize_[column] += stream.size();
   valueAt<std::string_view>(row, offset) = std::string_view(
       reinterpret_cast<char*>(position.position), stream.size());
 }
