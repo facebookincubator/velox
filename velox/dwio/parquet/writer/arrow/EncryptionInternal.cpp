@@ -672,7 +672,7 @@ int AesDecryptor::AesDecryptorImpl::CtrDecrypt(
     const uint8_t* key,
     int key_len,
     uint8_t* plaintext) {
-  int len;
+  int len = 0;
   int plaintext_len;
 
   uint8_t iv[kCtrIvLength];
