@@ -190,12 +190,96 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   explicit ArrayIntersectExceptFunction(SetWithNull<T> constantSet)
       : constantSet_(std::move(constantSet)) {}
 
+  void intersectSingle(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
+    memory::MemoryPool* pool = context.pool();
+    BaseVector* data = args[0].get();
+
+    exec::LocalDecodedVector dataDecoder(context, *data, rows);
+    auto decodedArray = dataDecoder.get();
+    auto baseArray = decodedArray->base()->as<ArrayVector>();
+
+    // Decode and acquire array elements vector.
+    exec::LocalDecodedVector elementsDecoder(context);
+    auto decodedElements =
+        decodeArrayElements(dataDecoder, elementsDecoder, rows);
+
+    auto elementsCount = countElements<ArrayVector>(rows, *decodedArray);
+    vector_size_t rowCount = decodedArray->size();
+
+    // Allocate new vectors for indices, nulls, length and offsets.
+    BufferPtr newIndices = allocateIndices(elementsCount, pool);
+    BufferPtr newElementNulls =
+        AlignedBuffer::allocate<bool>(elementsCount, pool, bits::kNotNull);
+    BufferPtr newLengths = allocateSizes(rowCount, pool);
+    BufferPtr newOffsets = allocateOffsets(rowCount, pool);
+
+    // Pointers and cursors to the raw data.
+    auto rawNewIndices = newIndices->asMutable<vector_size_t>();
+    auto rawNewElementNulls = newElementNulls->asMutable<uint64_t>();
+    auto rawNewLengths = newLengths->asMutable<vector_size_t>();
+    auto rawNewOffsets = newOffsets->asMutable<vector_size_t>();
+
+    vector_size_t indicesCursor = 0;
+
+    // Lambda that process each row. This is detached from the code so we can
+    // apply it differently based on whether the right-hand side set is constant
+    // or not.
+    auto processRow = [&](vector_size_t row) {
+      auto idx = decodedArray->index(row);
+      auto size = baseArray->sizeAt(idx);
+      auto offset = baseArray->offsetAt(idx);
+
+      for (vector_size_t i = offset; i < (offset + size); ++i) {
+        if (decodedElements->isNullAt(i)) {
+          continue;
+        }
+        auto arrayVector = decodedElements->base()->as<ArrayVector>();
+        auto arrIdx = decodedElements->index(i);
+        auto arrSize = arrayVector->sizeAt(idx);
+        auto arrOffset = arrayVector->offsetAt(idx);
+        arrayVector->elements();
+
+        exec::LocalDecodedVector arrayDecoder(context, *right, rows);
+        // Decode and acquire array elements vector.
+        exec::LocalDecodedVector elementsDecoder(context);
+        auto decodedRightElements =
+            decodeArrayElements(arrayDecoder, elementsDecoder, rows);
+
+
+      }
+      rawNewLengths[row] = indicesCursor - rawNewOffsets[row];
+    };
+
+    rows.applyToSelected([&](vector_size_t row) { processRow(row); });
+
+    auto newElements = BaseVector::wrapInDictionary(
+        newElementNulls, newIndices, indicesCursor, baseArray->elements());
+    auto resultArray = std::make_shared<ArrayVector>(
+        pool,
+        outputType,
+        nullptr,
+        rowCount,
+        newOffsets,
+        newLengths,
+        newElements);
+    context.moveOrCopyResult(resultArray, rows, result);
+  }
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
+    if (isIntersect && args.size() == 1) {
+      intersectSingle(rows, args, outputType, context, result);
+    }
+
     memory::MemoryPool* pool = context.pool();
     BaseVector* left = args[0].get();
     BaseVector* right = args[1].get();
@@ -489,8 +573,7 @@ template <bool isIntersect, TypeKind kind>
 std::shared_ptr<exec::VectorFunction> createTypedArraysIntersectExcept(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const TypePtr& elementType) {
-  VELOX_CHECK_EQ(inputArgs.size(), 2);
-  const BaseVector* rhs = inputArgs[1].constantValue.get();
+  const BaseVector* rhs = inputArgs.size() == 1 ? nullptr : inputArgs[1].constantValue.get();
 
   if (elementType->providesCustomComparison()) {
     return createTypedArraysIntersectExcept<isIntersect, WrappedVectorEntry>(
@@ -508,8 +591,10 @@ std::shared_ptr<exec::VectorFunction> createArrayIntersect(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
-  validateMatchingArrayTypes(inputArgs, name, 2);
-  auto elementType = inputArgs.front().type->childAt(0);
+  validateMatchingArrayTypes(inputArgs, name, inputArgs.size());
+  auto elementType = inputArgs.size() == 1
+      ? inputArgs.front().type->childAt(0)->childAt(0)
+      : inputArgs.front().type->childAt(0);
 
   return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
       createTypedArraysIntersectExcept,
@@ -532,6 +617,23 @@ std::shared_ptr<exec::VectorFunction> createArrayExcept(
       elementType->kind(),
       inputArgs,
       elementType);
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+arrayIntersectSignatures() {
+  return {// array(T), array(T) -> array(T)
+          (exec::FunctionSignatureBuilder()
+               .typeVariable("T")
+               .returnType("array(T)")
+               .argumentType("array(T)")
+               .argumentType("array(T)")
+               .build()),
+          // array(array(T)) -> array(T)
+          (exec::FunctionSignatureBuilder()
+               .typeVariable("T")
+               .returnType("array(T)")
+               .argumentType("array(array(T))")
+               .build())};
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
@@ -600,7 +702,7 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_array_intersect,
-    signatures("array(T)"),
+    arrayIntersectSignatures(),
     createArrayIntersect);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
