@@ -42,7 +42,7 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(hiveConfig.s3SecretKey(), std::nullopt);
   ASSERT_EQ(hiveConfig.s3IAMRole(), std::nullopt);
   ASSERT_EQ(hiveConfig.s3IAMRoleSessionName(), "velox-session");
-  ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
+  ASSERT_EQ(hiveConfig.gcsEndpoint(), "https://storage.googleapis.com");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
   ASSERT_EQ(hiveConfig.isOrcUseColumnNames(emptySession.get()), false);
   ASSERT_EQ(
@@ -207,7 +207,7 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(hiveConfig.s3SecretKey(), std::nullopt);
   ASSERT_EQ(hiveConfig.s3IAMRole(), std::nullopt);
   ASSERT_EQ(hiveConfig.s3IAMRoleSessionName(), "velox-session");
-  ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
+  ASSERT_EQ(hiveConfig.gcsEndpoint(), "https://storage.googleapis.com");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
   ASSERT_EQ(hiveConfig.isOrcUseColumnNames(session.get()), true);
   ASSERT_EQ(hiveConfig.isFileColumnNamesReadAsLowerCase(session.get()), true);

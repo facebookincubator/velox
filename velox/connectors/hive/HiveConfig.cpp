@@ -136,7 +136,8 @@ std::optional<std::string> HiveConfig::s3RetryMode() const {
 }
 
 std::string HiveConfig::gcsEndpoint() const {
-  return config_->get<std::string>(kGCSEndpoint, std::string(""));
+  return config_->get<std::string>(
+      kGCSEndpoint, std::string("https://storage.googleapis.com"));
 }
 
 std::string HiveConfig::gcsCredentialsPath() const {

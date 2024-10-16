@@ -636,8 +636,8 @@ Each query can override the config by setting corresponding query session proper
      - Description
    * - hive.gcs.endpoint
      - string
-     -
-     - The GCS storage endpoint server.
+     - https://storage.googleapis.com
+     - The GCS storage URI.
    * - hive.gcs.json-key-file-path
      - string
      -
