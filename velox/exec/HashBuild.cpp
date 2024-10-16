@@ -312,6 +312,7 @@ void HashBuild::removeInputRowsForAntiJoinFilter() {
 }
 
 void HashBuild::addInput(RowVectorPtr input) {
+  traceInput(input);
   checkRunning();
   ensureInputFits(input);
 

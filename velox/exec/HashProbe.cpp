@@ -600,6 +600,9 @@ void HashProbe::decodeAndDetectNonNullKeys() {
 }
 
 void HashProbe::addInput(RowVectorPtr input) {
+  if (!isSpillInput()) {
+    traceInput(input);
+  }
   if (skipInput_) {
     VELOX_CHECK_NULL(input_);
     return;

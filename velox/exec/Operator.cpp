@@ -121,6 +121,10 @@ void Operator::maybeSetTracer() {
     return;
   }
 
+  if (!trace::QueryTraceTraits::canTrace(operatorType())) {
+    VELOX_UNSUPPORTED("{} does not support tracing", operatorType());
+  }
+
   auto& tracedOpMap = operatorCtx_->driverCtx()->tracedOperatorMap;
   if (const auto iter = tracedOpMap.find(operatorId());
       iter != tracedOpMap.end()) {
