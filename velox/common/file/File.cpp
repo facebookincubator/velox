@@ -367,9 +367,12 @@ void LocalWriteFile::write(
   VELOX_CHECK_EQ(
       bytesWritten,
       length,
-      "Failure in LocalWriteFile::write, {} vs {}",
+      "Failure in LocalWriteFile::write, {} vs {}, error: {}, offset: {}, count: {}",
       bytesWritten,
-      length);
+      length,
+      strerror(errno),
+      offset,
+      static_cast<ssize_t>(iovecs.size()));
   size_ = std::max<uint64_t>(size_, offset + bytesWritten);
 }
 

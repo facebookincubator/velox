@@ -22,6 +22,7 @@
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/SsdFileTracker.h"
 #include "velox/common/file/File.h"
+#include "velox/common/file/FileSystems.h"
 
 DECLARE_bool(ssd_odirect);
 DECLARE_bool(ssd_verify_write);
@@ -461,7 +462,7 @@ class SsdFile {
 
   // Logs an error message, deletes the checkpoint and stop making new
   // checkpoints.
-  void checkpointError(int32_t rc, const std::string& error);
+  void checkpointError(uint64_t rc, const std::string& error);
 
   // Looks for a checkpointed state and sets the state of 'this' by
   // the checkpointed state iif the state is complete and
@@ -472,12 +473,11 @@ class SsdFile {
 
   // Writes 'iovecs' to the SSD file at the 'offset'. Returns true if the write
   // succeeds; otherwise, log the error and return false.
-  bool
-  write(uint64_t offset, uint64_t length, const std::vector<iovec>& iovecs);
+  bool write(int64_t offset, int64_t length, const std::vector<iovec>& iovecs);
 
   // Synchronously logs that 'regions' are no longer valid in a possibly
   // existing checkpoint.
-  void logEviction(const std::vector<int32_t>& regions);
+  void logEviction(std::vector<int32_t>& regions);
 
   // Computes the checksum of data in cache 'entry'.
   uint32_t checksumEntry(const AsyncDataCacheEntry& entry) const;
@@ -489,7 +489,7 @@ class SsdFile {
 
   // Returns true if checkpoint is needed.
   bool needCheckpoint(bool force) const {
-    if (!checkpointEnabled()) {
+    if (!checkpointEnabled() || checkpointWriteFile_ == nullptr) {
       return false;
     }
     return force || (bytesAfterCheckpoint_ >= checkpointIntervalBytes_);
@@ -556,14 +556,23 @@ class SsdFile {
   // Map of file number and offset to location in file.
   folly::F14FastMap<FileCacheKey, SsdRun> entries_;
 
-  // File descriptor. 0 (stdin) means file not open.
-  int32_t fd_{0};
+  // File system.
+  std::shared_ptr<filesystems::FileSystem> fs_;
 
   // Size of the backing file in bytes. Must be multiple of kRegionSize.
   uint64_t fileSize_{0};
 
   // ReadFile made from 'fd_'.
   std::unique_ptr<ReadFile> readFile_;
+
+  // WriteFile made from 'fd_'.
+  std::unique_ptr<WriteFile> writeFile_;
+
+  // WriteFile for logging evictions.
+  std::unique_ptr<WriteFile> evictLogWriteFile_;
+
+  // WriteFile for checkpoint.
+  std::unique_ptr<WriteFile> checkpointWriteFile_;
 
   // Counters.
   SsdCacheStats stats_;
@@ -577,9 +586,6 @@ class SsdFile {
 
   // Count of bytes written after last checkpoint.
   std::atomic<uint64_t> bytesAfterCheckpoint_{0};
-
-  // fd for logging evictions.
-  int32_t evictLogFd_{-1};
 
   // True if there was an error with checkpoint and the checkpoint was deleted.
   bool checkpointDeleted_{false};
