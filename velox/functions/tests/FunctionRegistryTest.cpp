@@ -26,8 +26,8 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/functions/tests/RegistryTestUtil.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/tests/RegistryTestUtil.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
