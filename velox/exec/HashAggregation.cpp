@@ -81,10 +81,8 @@ void HashAggregation::initialize() {
         core::AggregationNode::stepName(aggregationNode_->step()));
   }
 
-  if (isDistinct_) {
-    for (auto i = 0; i < hashers.size(); ++i) {
-      identityProjections_.emplace_back(hashers[i]->channel(), i);
-    }
+  for (auto i = 0; i < hashers.size(); ++i) {
+    identityProjections_.emplace_back(hashers[i]->channel(), i);
   }
 
   std::optional<column_index_t> groupIdChannel;
@@ -119,6 +117,7 @@ bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
 }
 
 void HashAggregation::addInput(RowVectorPtr input) {
+  traceInput(input);
   if (!pushdownChecked_) {
     mayPushdown_ = operatorCtx_->driver()->mayPushdownAggregation(this);
     pushdownChecked_ = true;
@@ -216,7 +215,7 @@ void HashAggregation::resetPartialOutputIfNeed() {
     lockedStats->addRuntimeStat(
         "partialAggregationPct", RuntimeCounter(aggregationPct));
   }
-  groupingSet_->resetTable();
+  groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;
   if (!finished_) {
     maybeIncreasePartialAggregationMemoryUsage(aggregationPct);
@@ -414,7 +413,7 @@ void HashAggregation::reclaim(
     }
     if (isDistinct_) {
       // Since we have seen all the input, we can safely reset the hash table.
-      groupingSet_->resetTable();
+      groupingSet_->resetTable(/*freeTable=*/true);
       // Release the minimum reserved memory.
       pool()->release();
       return;

@@ -21,13 +21,13 @@ namespace facebook::velox::exec::test {
 
 namespace {
 
-bool isSupported(const TypePtr& type) {
+bool isSupportedType(const TypePtr& type) {
   // DuckDB doesn't support nanosecond precision for timestamps.
   if (type->kind() == TypeKind::TIMESTAMP) {
     return false;
   }
   for (auto i = 0; i < type->size(); ++i) {
-    if (!isSupported(type->childAt(i))) {
+    if (!isSupportedType(type->childAt(i))) {
       return false;
     }
   }
@@ -79,6 +79,29 @@ const std::vector<TypePtr>& DuckQueryRunner::supportedScalarTypes() const {
   return kScalarTypes;
 }
 
+const std::unordered_map<std::string, DataSpec>&
+DuckQueryRunner::aggregationFunctionDataSpecs() const {
+  // There are some functions for which DuckDB and Velox have inconsistent
+  // behavior with Nan and Infinity, so we exclude those.
+  static const std::unordered_map<std::string, DataSpec>
+      kAggregationFunctionDataSpecs{
+          {"covar_pop", DataSpec{true, false}},
+          {"covar_samp", DataSpec{true, false}},
+          {"histogram", DataSpec{false, false}},
+          {"regr_avgx", DataSpec{true, false}},
+          {"regr_avgy", DataSpec{true, false}},
+          {"regr_intercept", DataSpec{false, false}},
+          {"regr_r2", DataSpec{false, false}},
+          {"regr_replacement", DataSpec{false, false}},
+          {"regr_slope", DataSpec{false, false}},
+          {"regr_sxx", DataSpec{false, false}},
+          {"regr_sxy", DataSpec{false, false}},
+          {"regr_syy", DataSpec{false, false}},
+          {"var_pop", DataSpec{false, false}}};
+
+  return kAggregationFunctionDataSpecs;
+}
+
 std::multiset<std::vector<velox::variant>> DuckQueryRunner::execute(
     const std::string& sql,
     const std::vector<RowVectorPtr>& input,
@@ -101,12 +124,12 @@ std::multiset<std::vector<velox::variant>> DuckQueryRunner::execute(
 
 std::optional<std::string> DuckQueryRunner::toSql(
     const core::PlanNodePtr& plan) {
-  if (!isSupported(plan->outputType())) {
+  if (!isSupportedType(plan->outputType())) {
     return std::nullopt;
   }
 
   for (const auto& source : plan->sources()) {
-    if (!isSupported(source->outputType())) {
+    if (!isSupportedType(source->outputType())) {
       return std::nullopt;
     }
   }

@@ -227,9 +227,6 @@ class RowContainer {
   /// into one word for faster comparison. The bulk allocation is done
   /// from 'allocator'. ContainerRowSerde is used for serializing complex
   /// type values into the container.
-  /// 'stringAllocator' allows sharing the variable length data arena with
-  /// another RowContainer. This is needed for spilling where the same
-  /// aggregates are used for reading one container and merging into another.
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
       bool nullableKeys,
@@ -239,8 +236,7 @@ class RowContainer {
       bool isJoinBuild,
       bool hasProbedFlag,
       bool hasNormalizedKey,
-      memory::MemoryPool* pool,
-      std::shared_ptr<HashStringAllocator> stringAllocator = nullptr);
+      memory::MemoryPool* pool);
 
   /// Allocates a new row and initializes possible aggregates to null.
   char* newRow();
@@ -302,12 +298,15 @@ class RowContainer {
       char* row,
       int32_t columnIndex);
 
+  /// Stores the first 'rows.size' values from the 'decoded' vector into the
+  /// 'columnIndex' column of 'rows'.
+  void store(
+      const DecodedVector& decoded,
+      folly::Range<char**> rows,
+      int32_t columnIndex);
+
   HashStringAllocator& stringAllocator() {
     return *stringAllocator_;
-  }
-
-  const std::shared_ptr<HashStringAllocator>& stringAllocatorShared() {
-    return stringAllocator_;
   }
 
   /// Returns the number of used rows in 'this'. This is the number of rows a
@@ -679,8 +678,10 @@ class RowContainer {
 
   /// Creates a next-row-vector if it doesn't exist. Appends the row address to
   /// the next-row-vector, and store the address of the next-row-vector in the
-  /// 'nextOffset_' slot for all duplicate rows.
-  void appendNextRow(char* current, char* nextRow);
+  /// 'nextOffset_' slot for all duplicate rows. 'allocator' is provided for the
+  /// duplicate row vector allocations.
+  void
+  appendNextRow(char* current, char* nextRow, HashStringAllocator* allocator);
 
   NextRowVector*& getNextRowVector(char* row) const {
     return *reinterpret_cast<NextRowVector**>(row + nextOffset_);
@@ -717,9 +718,6 @@ class RowContainer {
 
   /// Resets the state to be as after construction. Frees memory for payload.
   void clear();
-
-  /// Frees memory for next row vectors.
-  void clearNextRowVectors();
 
   int32_t compareRows(
       const char* left,
@@ -799,10 +797,6 @@ class RowContainer {
 
   bool testingMutable() const {
     return mutable_;
-  }
-
-  bool checkFree() const {
-    return checkFree_;
   }
 
   /// Returns a summary of the container: key types, dependent types, number of
@@ -965,6 +959,32 @@ class RowContainer {
     }
   }
 
+  template <TypeKind Kind>
+  inline void storeWithNullsBatch(
+      const DecodedVector& decoded,
+      folly::Range<char**> rows,
+      bool isKey,
+      int32_t offset,
+      int32_t nullByte,
+      uint8_t nullMask,
+      int32_t column) {
+    for (int32_t i = 0; i < rows.size(); ++i) {
+      storeWithNulls<Kind>(
+          decoded, i, isKey, rows[i], offset, nullByte, nullMask, column);
+    }
+  }
+
+  template <TypeKind Kind>
+  inline void storeNoNullsBatch(
+      const DecodedVector& decoded,
+      folly::Range<char**> rows,
+      bool isKey,
+      int32_t offset) {
+    for (int32_t i = 0; i < rows.size(); ++i) {
+      storeNoNulls<Kind>(decoded, i, isKey, rows[i], offset);
+    }
+  }
+
   template <bool useRowNumbers, typename T>
   static void extractValuesWithNulls(
       const char* const* rows,
@@ -1042,7 +1062,7 @@ class RowContainer {
       const char* row,
       int32_t offset);
 
-  template <TypeKind Kind>
+  template <bool typeProvidesCustomComparison, TypeKind Kind>
   void hashTyped(
       const Type* type,
       RowColumn column,
@@ -1051,7 +1071,7 @@ class RowContainer {
       bool mix,
       uint64_t* result);
 
-  template <TypeKind Kind>
+  template <bool typeProvidesCustomComparison, TypeKind Kind>
   inline bool equalsWithNulls(
       const char* row,
       int32_t offset,
@@ -1065,31 +1085,42 @@ class RowContainer {
       return rowIsNull == indexIsNull;
     }
 
-    return equalsNoNulls<Kind>(row, offset, decoded, index);
+    return equalsNoNulls<typeProvidesCustomComparison, Kind>(
+        row, offset, decoded, index);
   }
 
-  template <TypeKind Kind>
+  template <bool typeProvidesCustomComparison, TypeKind Kind>
   inline bool equalsNoNulls(
       const char* row,
       int32_t offset,
       const DecodedVector& decoded,
       vector_size_t index) {
+    using T = typename KindToFlatVector<Kind>::HashRowType;
+
     if constexpr (
         Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
       return compareComplexType(row, offset, decoded, index) == 0;
-    }
-    if constexpr (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+    } else if constexpr (
+        Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
       return compareStringAsc(
                  valueAt<StringView>(row, offset), decoded, index) == 0;
+    } else if constexpr (typeProvidesCustomComparison) {
+      return SimpleVector<T>::template comparePrimitiveAscWithCustomComparison<
+                 Kind>(
+                 decoded.base()->type().get(),
+                 decoded.valueAt<T>(index),
+                 valueAt<T>(row, offset)) == 0;
+    } else {
+      return SimpleVector<T>::comparePrimitiveAsc(
+                 decoded.valueAt<T>(index), valueAt<T>(row, offset)) == 0;
     }
-
-    using T = typename KindToFlatVector<Kind>::HashRowType;
-    return SimpleVector<T>::comparePrimitiveAsc(
-               decoded.valueAt<T>(index), valueAt<T>(row, offset)) == 0;
   }
 
-  template <TypeKind Kind>
+  template <
+      bool typeProvidesCustomComparison,
+      TypeKind Kind,
+      std::enable_if_t<Kind != TypeKind::OPAQUE, int32_t> = 0>
   inline int compare(
       const char* row,
       RowColumn column,
@@ -1109,19 +1140,45 @@ class RowContainer {
         Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
       return compareComplexType(row, column.offset(), decoded, index, flags);
-    }
-    if constexpr (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+    } else if constexpr (
+        Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
       auto result = compareStringAsc(
           valueAt<StringView>(row, column.offset()), decoded, index);
       return flags.ascending ? result : result * -1;
+    } else {
+      auto left = valueAt<T>(row, column.offset());
+      auto right = decoded.valueAt<T>(index);
+
+      int result;
+      if constexpr (typeProvidesCustomComparison) {
+        result =
+            SimpleVector<T>::template comparePrimitiveAscWithCustomComparison<
+                Kind>(decoded.base()->type().get(), left, right);
+      } else {
+        result = SimpleVector<T>::comparePrimitiveAsc(left, right);
+      }
+
+      return flags.ascending ? result : result * -1;
     }
-    auto left = valueAt<T>(row, column.offset());
-    auto right = decoded.valueAt<T>(index);
-    auto result = SimpleVector<T>::comparePrimitiveAsc(left, right);
-    return flags.ascending ? result : result * -1;
   }
 
-  template <TypeKind Kind>
+  template <
+      bool typeProvidesCustomComparison,
+      TypeKind Kind,
+      std::enable_if_t<Kind == TypeKind::OPAQUE, int32_t> = 0>
+  inline int compare(
+      const char* /*row*/,
+      RowColumn /*column*/,
+      const DecodedVector& /*decoded*/,
+      vector_size_t /*index*/,
+      CompareFlags /*flags*/) {
+    VELOX_UNSUPPORTED("Comparing Opaque types is not supported.");
+  }
+
+  template <
+      bool typeProvidesCustomComparison,
+      TypeKind Kind,
+      std::enable_if_t<Kind != TypeKind::OPAQUE, int32_t> = 0>
   inline int compare(
       const char* left,
       const char* right,
@@ -1148,28 +1205,52 @@ class RowContainer {
         Kind == TypeKind::MAP) {
       return compareComplexType(
           left, right, type, leftOffset, rightOffset, flags);
-    }
-    if constexpr (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+    } else if constexpr (
+        Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
       auto leftValue = valueAt<StringView>(left, leftOffset);
       auto rightValue = valueAt<StringView>(right, rightOffset);
       auto result = compareStringAsc(leftValue, rightValue);
       return flags.ascending ? result : result * -1;
-    }
+    } else {
+      auto leftValue = valueAt<T>(left, leftOffset);
+      auto rightValue = valueAt<T>(right, rightOffset);
 
-    auto leftValue = valueAt<T>(left, leftOffset);
-    auto rightValue = valueAt<T>(right, rightOffset);
-    auto result = SimpleVector<T>::comparePrimitiveAsc(leftValue, rightValue);
-    return flags.ascending ? result : result * -1;
+      int result;
+      if constexpr (typeProvidesCustomComparison) {
+        result =
+            SimpleVector<T>::template comparePrimitiveAscWithCustomComparison<
+                Kind>(type, leftValue, rightValue);
+      } else {
+        result = SimpleVector<T>::comparePrimitiveAsc(leftValue, rightValue);
+      }
+
+      return flags.ascending ? result : result * -1;
+    }
   }
 
-  template <TypeKind Kind>
+  template <
+      bool typeProvidesCustomComparison,
+      TypeKind Kind,
+      std::enable_if_t<Kind == TypeKind::OPAQUE, int32_t> = 0>
+  inline int compare(
+      const char* /*left*/,
+      const char* /*right*/,
+      const Type* /*type*/,
+      RowColumn /*leftColumn*/,
+      RowColumn /*rightColumn*/,
+      CompareFlags /*flags*/) {
+    VELOX_UNSUPPORTED("Comparing Opaque types is not supported.");
+  }
+
+  template <bool typeProvidesCustomComparison, TypeKind Kind>
   inline int compare(
       const char* left,
       const char* right,
       const Type* type,
       RowColumn column,
       CompareFlags flags) {
-    return compare<Kind>(left, right, type, column, column, flags);
+    return compare<typeProvidesCustomComparison, Kind>(
+        left, right, type, column, column, flags);
   }
 
   void storeComplexType(
@@ -1248,7 +1329,6 @@ class RowContainer {
       CompareFlags flags = CompareFlags());
 
   // Free variable-width fields at column `column_index` associated with the
-  // 'rows', and if 'checkFree_' is true, zero out complex-typed field in
   // 'rows'. `FieldType` is the type of data representation of the fields in
   // row, and can be one of StringView(represents VARCHAR) and
   // std::string_view(represents ARRAY, MAP or ROW).
@@ -1277,9 +1357,6 @@ class RowContainer {
         }
       }
       stringAllocator_->free(HashStringAllocator::headerOf(view.data()));
-      if (checkFree_) {
-        view = FieldType();
-      }
     }
   }
 
@@ -1291,9 +1368,9 @@ class RowContainer {
   void freeAggregates(folly::Range<char**> rows);
 
   // Free next row vectors associated with the 'rows'.
-  void freeNextRowVectors(folly::Range<char**> rows, bool clear);
+  void freeNextRowVectors(folly::Range<char**> rows);
 
-  void freeRowsExtraMemory(folly::Range<char**> rows, bool clear);
+  void freeRowsExtraMemory(folly::Range<char**> rows, bool freeNextRowVector);
 
   // Updates the specific column's columnHasNulls_ flag, if 'hasNulls' is true.
   // columnHasNulls_ flag is false by default.
@@ -1301,11 +1378,12 @@ class RowContainer {
     columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] || hasNulls;
   }
 
-  const bool checkFree_ = false;
-
   const std::vector<TypePtr> keyTypes_;
   const bool nullableKeys_;
   const bool isJoinBuild_;
+  // True if normalized keys are enabled in initial state.
+  const bool hasNormalizedKeys_;
+  const std::unique_ptr<HashStringAllocator> stringAllocator_;
 
   std::vector<bool> columnHasNulls_;
 
@@ -1322,7 +1400,9 @@ class RowContainer {
   std::vector<TypePtr> types_;
   std::vector<TypeKind> typeKinds_;
   int32_t nextOffset_ = 0;
-  bool hasDuplicateRows_{false};
+  // Indicates if this row container has rows with duplicate keys. This only
+  // applies if 'nextOffset_' is set.
+  tsan_atomic<bool> hasDuplicateRows_{false};
   // Bit position of null bit  in the row. 0 if no null flag. Order is keys,
   // accumulators, dependent.
   std::vector<int32_t> nullOffsets_;
@@ -1342,8 +1422,6 @@ class RowContainer {
   int32_t fixedRowSize_;
   // How many bytes do the flags (null, probed, free) occupy.
   int32_t flagBytes_;
-  // True if normalized keys are enabled in initial state.
-  const bool hasNormalizedKeys_;
   // The count of entries that have an extra normalized_key_t before the
   // start.
   int64_t numRowsWithNormalizedKey_ = 0;
@@ -1362,7 +1440,6 @@ class RowContainer {
   uint64_t numFreeRows_ = 0;
 
   memory::AllocationPool rows_;
-  std::shared_ptr<HashStringAllocator> stringAllocator_;
 
   int alignment_ = 1;
 };
@@ -1560,11 +1637,12 @@ inline bool RowContainer::equals(
   }
 
   if constexpr (!mayHaveNulls) {
-    return VELOX_DYNAMIC_TYPE_DISPATCH(
-        equalsNoNulls, typeKind, row, column.offset(), decoded, index);
+    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+        equalsNoNulls, false, typeKind, row, column.offset(), decoded, index);
   } else {
-    return VELOX_DYNAMIC_TYPE_DISPATCH(
+    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
         equalsWithNulls,
+        false,
         typeKind,
         row,
         column.offset(),
@@ -1575,35 +1653,33 @@ inline bool RowContainer::equals(
   }
 }
 
-template <>
-inline int RowContainer::compare<TypeKind::OPAQUE>(
-    const char* /*row*/,
-    RowColumn /*column*/,
-    const DecodedVector& /*decoded*/,
-    vector_size_t /*index*/,
-    CompareFlags /*flags*/) {
-  VELOX_UNSUPPORTED("Comparing Opaque types is not supported.");
-}
-
-template <>
-inline int RowContainer::compare<TypeKind::OPAQUE>(
-    const char* /*left*/,
-    const char* /*right*/,
-    const Type* /*type*/,
-    RowColumn /*leftColumn*/,
-    RowColumn /*rightColumn*/,
-    CompareFlags /*flags*/) {
-  VELOX_UNSUPPORTED("Comparing Opaque types is not supported.");
-}
-
 inline int RowContainer::compare(
     const char* row,
     RowColumn column,
     const DecodedVector& decoded,
     vector_size_t index,
     CompareFlags flags) {
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      compare, decoded.base()->typeKind(), row, column, decoded, index, flags);
+  if (decoded.base()->typeUsesCustomComparison()) {
+    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
+        compare,
+        true,
+        decoded.base()->typeKind(),
+        row,
+        column,
+        decoded,
+        index,
+        flags);
+  } else {
+    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
+        compare,
+        false,
+        decoded.base()->typeKind(),
+        row,
+        column,
+        decoded,
+        index,
+        flags);
+  }
 }
 
 inline int RowContainer::compare(
@@ -1612,8 +1688,27 @@ inline int RowContainer::compare(
     int columnIndex,
     CompareFlags flags) {
   auto type = types_[columnIndex].get();
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      compare, type->kind(), left, right, type, columnAt(columnIndex), flags);
+  if (type->providesCustomComparison()) {
+    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
+        compare,
+        true,
+        type->kind(),
+        left,
+        right,
+        type,
+        columnAt(columnIndex),
+        flags);
+  } else {
+    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
+        compare,
+        false,
+        type->kind(),
+        left,
+        right,
+        type,
+        columnAt(columnIndex),
+        flags);
+  }
 }
 
 inline int RowContainer::compare(
@@ -1625,15 +1720,30 @@ inline int RowContainer::compare(
   auto leftType = types_[leftColumnIndex].get();
   auto rightType = types_[rightColumnIndex].get();
   VELOX_CHECK(leftType->equivalent(*rightType));
-  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      compare,
-      leftType->kind(),
-      left,
-      right,
-      leftType,
-      columnAt(leftColumnIndex),
-      columnAt(rightColumnIndex),
-      flags);
+
+  if (leftType->providesCustomComparison()) {
+    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
+        compare,
+        true,
+        leftType->kind(),
+        left,
+        right,
+        leftType,
+        columnAt(leftColumnIndex),
+        columnAt(rightColumnIndex),
+        flags);
+  } else {
+    return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
+        compare,
+        false,
+        leftType->kind(),
+        left,
+        right,
+        leftType,
+        columnAt(leftColumnIndex),
+        columnAt(rightColumnIndex),
+        flags);
+  }
 }
 
 /// A comparator of rows stored in the RowContainer compatible with

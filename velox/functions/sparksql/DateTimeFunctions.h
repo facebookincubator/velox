@@ -25,6 +25,22 @@
 
 namespace facebook::velox::functions::sparksql {
 
+namespace detail {
+Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
+    const std::string_view& format,
+    DateTimeFormatterType type) {
+  switch (type) {
+    case DateTimeFormatterType::STRICT_SIMPLE:
+      return buildSimpleDateTimeFormatter(format, /*lenient=*/false);
+    case DateTimeFormatterType::LENIENT_SIMPLE:
+      return buildSimpleDateTimeFormatter(format, /*lenient=*/true);
+    default:
+      return buildJodaDateTimeFormatter(
+          std::string_view(format.data(), format.size()));
+  }
+}
+} // namespace detail
+
 template <typename T>
 struct YearFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -48,53 +64,8 @@ template <typename T>
 struct WeekFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE int32_t getWeek(const std::tm& time) {
-    // The computation of ISO week from date follows the algorithm here:
-    // https://en.wikipedia.org/wiki/ISO_week_date
-    int32_t week = floor(
-                       10 + (time.tm_yday + 1) -
-                       (time.tm_wday ? time.tm_wday : kDaysInWeek)) /
-        kDaysInWeek;
-
-    if (week == 0) {
-      // Distance in days between the first day of the current year and the
-      // Monday of the current week.
-      auto mondayOfWeek =
-          time.tm_yday + 1 - (time.tm_wday + kDaysInWeek - 1) % kDaysInWeek;
-      // Distance in days between the first day and the first Monday of the
-      // current year.
-      auto firstMondayOfYear =
-          1 + (mondayOfWeek + kDaysInWeek - 1) % kDaysInWeek;
-
-      if ((util::isLeapYear(time.tm_year + 1900 - 1) &&
-           firstMondayOfYear == 2) ||
-          firstMondayOfYear == 3 || firstMondayOfYear == 4) {
-        week = 53;
-      } else {
-        week = 52;
-      }
-    } else if (week == 53) {
-      // Distance in days between the first day of the current year and the
-      // Monday of the current week.
-      auto mondayOfWeek =
-          time.tm_yday + 1 - (time.tm_wday + kDaysInWeek - 1) % kDaysInWeek;
-      auto daysInYear = util::isLeapYear(time.tm_year + 1900) ? 366 : 365;
-      if (daysInYear - mondayOfWeek < 3) {
-        week = 1;
-      }
-    }
-
-    return week;
-  }
-
-  FOLLY_ALWAYS_INLINE void call(
-      int32_t& result,
-      const arg_type<Timestamp>& timestamp) {
-    result = getWeek(getDateTime(timestamp, this->timeZone_));
-  }
-
   FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
-    result = getWeek(getDateTime(date));
+    result = getWeek(Timestamp::fromDate(date), nullptr, false);
   }
 };
 
@@ -156,7 +127,12 @@ struct UnixTimestampParseFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/) {
-    format_ = buildJodaDateTimeFormatter(kDefaultFormat_);
+    auto formatter = detail::getDateTimeFormatter(
+        kDefaultFormat_,
+        config.sparkLegacyDateFormatter() ? DateTimeFormatterType::STRICT_SIMPLE
+                                          : DateTimeFormatterType::JODA);
+    VELOX_CHECK(!formatter.hasError(), "Default format should always be valid");
+    format_ = formatter.value();
     setTimezone(config);
   }
 
@@ -205,12 +181,16 @@ struct UnixTimestampParseWithFormatFunction
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
+    legacyFormatter_ = config.sparkLegacyDateFormatter();
     if (format != nullptr) {
-      try {
-        this->format_ = buildJodaDateTimeFormatter(
-            std::string_view(format->data(), format->size()));
-      } catch (const VeloxUserError&) {
+      auto formatter = detail::getDateTimeFormatter(
+          std::string_view(format->data(), format->size()),
+          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                           : DateTimeFormatterType::JODA);
+      if (formatter.hasError()) {
         invalidFormat_ = true;
+      } else {
+        this->format_ = formatter.value();
       }
       isConstFormat_ = true;
     }
@@ -226,13 +206,15 @@ struct UnixTimestampParseWithFormatFunction
     }
 
     // Format error returns null.
-    try {
-      if (!isConstFormat_) {
-        this->format_ = buildJodaDateTimeFormatter(
-            std::string_view(format.data(), format.size()));
+    if (!isConstFormat_) {
+      auto formatter = detail::getDateTimeFormatter(
+          std::string_view(format.data(), format.size()),
+          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                           : DateTimeFormatterType::JODA);
+      if (formatter.hasError()) {
+        return false;
       }
-    } catch (const VeloxUserError&) {
-      return false;
+      this->format_ = formatter.value();
     }
     auto dateTimeResult =
         this->format_->parse(std::string_view(input.data(), input.size()));
@@ -248,6 +230,7 @@ struct UnixTimestampParseWithFormatFunction
  private:
   bool isConstFormat_{false};
   bool invalidFormat_{false};
+  bool legacyFormatter_{false};
 };
 
 // Parses unix time in seconds to a formatted string.
@@ -260,6 +243,7 @@ struct FromUnixtimeFunction {
       const core::QueryConfig& config,
       const arg_type<int64_t>* /*unixtime*/,
       const arg_type<Varchar>* format) {
+    legacyFormatter_ = config.sparkLegacyDateFormatter();
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
       setFormatter(*format);
@@ -284,8 +268,13 @@ struct FromUnixtimeFunction {
 
  private:
   FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& format) {
-    formatter_ = buildJodaDateTimeFormatter(
-        std::string_view(format.data(), format.size()));
+    formatter_ = detail::getDateTimeFormatter(
+                     std::string_view(format.data(), format.size()),
+                     legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                                      : DateTimeFormatterType::JODA)
+                     .thenOrThrow(folly::identity, [&](const Status& status) {
+                       VELOX_USER_FAIL("{}", status.message());
+                     });
     maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
   }
 
@@ -293,6 +282,7 @@ struct FromUnixtimeFunction {
   std::shared_ptr<DateTimeFormatter> formatter_;
   uint32_t maxResultSize_;
   bool isConstantTimeFormat_{false};
+  bool legacyFormatter_{false};
 };
 
 template <typename T>
@@ -366,12 +356,19 @@ struct GetTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
+    legacyFormatter_ = config.sparkLegacyDateFormatter();
     auto sessionTimezoneName = config.sessionTimezone();
     if (!sessionTimezoneName.empty()) {
       sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
     }
     if (format != nullptr) {
-      formatter_ = buildJodaDateTimeFormatter(std::string_view(*format));
+      formatter_ = detail::getDateTimeFormatter(
+                       std::string_view(*format),
+                       legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                                        : DateTimeFormatterType::JODA)
+                       .thenOrThrow(folly::identity, [&](const Status& status) {
+                         VELOX_USER_FAIL("{}", status.message());
+                       });
       isConstantTimeFormat_ = true;
     }
   }
@@ -381,7 +378,13 @@ struct GetTimestampFunction {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
     if (!isConstantTimeFormat_) {
-      formatter_ = buildJodaDateTimeFormatter(std::string_view(format));
+      formatter_ = detail::getDateTimeFormatter(
+                       std::string_view(format),
+                       legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                                        : DateTimeFormatterType::JODA)
+                       .thenOrThrow(folly::identity, [&](const Status& status) {
+                         VELOX_USER_FAIL("{}", status.message());
+                       });
     }
     auto dateTimeResult = formatter_->parse(std::string_view(input));
     // Null as result for parsing error.
@@ -404,6 +407,7 @@ struct GetTimestampFunction {
   std::shared_ptr<DateTimeFormatter> formatter_{nullptr};
   bool isConstantTimeFormat_{false};
   const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // default to GMT.
+  bool legacyFormatter_{false};
 };
 
 template <typename T>
@@ -415,13 +419,12 @@ struct MakeDateFunction {
       const int32_t year,
       const int32_t month,
       const int32_t day) {
-    int64_t daysSinceEpoch;
-    auto status =
-        util::daysSinceEpochFromDate(year, month, day, daysSinceEpoch);
-    if (!status.ok()) {
-      VELOX_DCHECK(status.isUserError());
-      VELOX_USER_FAIL(status.message());
+    Expected<int64_t> expected = util::daysSinceEpochFromDate(year, month, day);
+    if (expected.hasError()) {
+      VELOX_DCHECK(expected.error().isUserError());
+      VELOX_USER_FAIL(expected.error().message());
     }
+    int64_t daysSinceEpoch = expected.value();
     VELOX_USER_CHECK_EQ(
         daysSinceEpoch,
         (int32_t)daysSinceEpoch,
@@ -457,13 +460,13 @@ struct LastDayFunction {
     int32_t month = getMonth(dateTime);
     int32_t day = getMonth(dateTime);
     auto lastDay = util::getMaxDayOfMonth(year, month);
-    int64_t daysSinceEpoch;
-    auto status =
-        util::daysSinceEpochFromDate(year, month, lastDay, daysSinceEpoch);
-    if (!status.ok()) {
-      VELOX_DCHECK(status.isUserError());
-      VELOX_USER_FAIL(status.message());
+    Expected<int64_t> expected =
+        util::daysSinceEpochFromDate(year, month, lastDay);
+    if (expected.hasError()) {
+      VELOX_DCHECK(expected.error().isUserError());
+      VELOX_USER_FAIL(expected.error().message());
     }
+    int64_t daysSinceEpoch = expected.value();
     VELOX_USER_CHECK_EQ(
         daysSinceEpoch,
         (int32_t)daysSinceEpoch,
@@ -567,13 +570,13 @@ struct AddMonthsFunction {
     // Adjusts day to valid one.
     auto dayResult = lastDayOfMonth < day ? lastDayOfMonth : day;
 
-    int64_t daysSinceEpoch;
-    auto status = util::daysSinceEpochFromDate(
-        yearResult, monthResult, dayResult, daysSinceEpoch);
-    if (!status.ok()) {
-      VELOX_DCHECK(status.isUserError());
-      VELOX_USER_FAIL(status.message());
+    Expected<int64_t> expected =
+        util::daysSinceEpochFromDate(yearResult, monthResult, dayResult);
+    if (expected.hasError()) {
+      VELOX_DCHECK(expected.error().isUserError());
+      VELOX_USER_FAIL(expected.error().message());
     }
+    int64_t daysSinceEpoch = expected.value();
     VELOX_USER_CHECK_EQ(
         daysSinceEpoch,
         (int32_t)daysSinceEpoch,

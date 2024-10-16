@@ -28,7 +28,7 @@
 #include "velox/dwio/dwrf/writer/Writer.h"
 
 #ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/dwio/parquet/writer/Writer.h" // @manual
 #endif
 
 #include "velox/expression/Expr.h"
@@ -257,7 +257,7 @@ inline bool isSynthesizedColumn(
     const std::string& name,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         infoColumns) {
-  return name == kPath || name == kBucket || infoColumns.count(name) != 0;
+  return infoColumns.count(name) != 0;
 }
 
 inline bool isRowIndexColumn(
@@ -383,18 +383,17 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     }
   }
 
-  int numChildren = 0;
   // Process columns that will be projected out.
   for (int i = 0; i < rowType->size(); ++i) {
     auto& name = rowType->nameOf(i);
     auto& type = rowType->childAt(i);
-    if (isRowIndexColumn(name, rowIndexColumn)) {
-      VELOX_CHECK(type->isBigint());
-      continue;
-    }
     auto it = outputSubfields.find(name);
     if (it == outputSubfields.end()) {
-      auto* fieldSpec = spec->addFieldRecursively(name, *type, numChildren++);
+      auto* fieldSpec = spec->addFieldRecursively(name, *type, i);
+      if (isRowIndexColumn(name, rowIndexColumn)) {
+        VELOX_CHECK(type->isBigint());
+        fieldSpec->setExplicitRowNumber(true);
+      }
       processFieldSpec(dataColumns, type, *fieldSpec);
       filterSubfields.erase(name);
       continue;
@@ -409,7 +408,13 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       }
       filterSubfields.erase(it);
     }
-    auto* fieldSpec = spec->addField(name, numChildren++);
+    auto* fieldSpec = spec->addField(name, i);
+    if (isRowIndexColumn(name, rowIndexColumn)) {
+      VELOX_CHECK(type->isBigint());
+      // Set the flag for the case that the row index column only exists in
+      // remaining filters.
+      fieldSpec->setExplicitRowNumber(true);
+    }
     addSubfields(*type, subfieldSpecs, 1, pool, *fieldSpec);
     processFieldSpec(dataColumns, type, *fieldSpec);
     subfieldSpecs.clear();
@@ -552,7 +557,13 @@ void configureReaderOptions(
   readerOptions.setFileColumnNamesReadAsLowerCase(
       hiveConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setUseColumnNamesForColumnMapping(
-      hiveConfig->isOrcUseColumnNames(sessionProperties));
+      (hiveSplit->fileFormat == dwio::common::FileFormat::DWRF ||
+       hiveSplit->fileFormat == dwio::common::FileFormat::ORC)
+          ? hiveConfig->isOrcUseColumnNames(sessionProperties)
+          : (hiveSplit->fileFormat == dwio::common::FileFormat::PARQUET)
+          ? hiveConfig->isParquetUseColumnNames(sessionProperties)
+          : false // or some default value if none of the conditions are met
+  );
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
@@ -564,6 +575,10 @@ void configureReaderOptions(
     const auto timezone = tz::locateZone(sessionTzName);
     readerOptions.setSessionTimezone(timezone);
   }
+  readerOptions.setAdjustTimestampToTimezone(
+      connectorQueryCtx->adjustTimestampToTimezone());
+  readerOptions.setSelectiveNimbleReaderEnabled(
+      connectorQueryCtx->selectiveNimbleReaderEnabled());
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
@@ -993,12 +1008,20 @@ void updateWriterOptionsFromHiveConfig(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const config::ConfigBase* sessionProperties,
     std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
-  if (fileFormat == dwio::common::FileFormat::PARQUET) {
+  switch (fileFormat) {
+    case dwio::common::FileFormat::DWRF:
+      updateDWRFWriterOptions(hiveConfig, sessionProperties, writerOptions);
+      break;
+    case dwio::common::FileFormat::PARQUET:
 #ifdef VELOX_ENABLE_PARQUET
-    updateParquetWriterOptions(hiveConfig, sessionProperties, writerOptions);
+      updateParquetWriterOptions(hiveConfig, sessionProperties, writerOptions);
 #endif
-  } else {
-    updateDWRFWriterOptions(hiveConfig, sessionProperties, writerOptions);
+      break;
+    case dwio::common::FileFormat::NIMBLE:
+      // No-op for now.
+      break;
+    default:
+      VELOX_UNSUPPORTED("{}", fileFormat);
   }
 }
 

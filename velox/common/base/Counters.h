@@ -34,14 +34,14 @@ constexpr folly::StringPiece kMetricCacheShrinkTimeMs{"velox.cache_shrink_ms"};
 constexpr folly::StringPiece kMetricMaxSpillLevelExceededCount{
     "velox.spill_max_level_exceeded_count"};
 
-constexpr folly::StringPiece kMetricMemoryReclaimExecTimeMs{
-    "velox.memory_reclaim_exec_ms"};
+constexpr folly::StringPiece kMetricQueryMemoryReclaimTimeMs{
+    "velox.query_memory_reclaim_time_ms"};
 
-constexpr folly::StringPiece kMetricMemoryReclaimedBytes{
-    "velox.memory_reclaim_bytes"};
+constexpr folly::StringPiece kMetricQueryMemoryReclaimedBytes{
+    "velox.query_memory_reclaim_bytes"};
 
-constexpr folly::StringPiece kMetricMemoryReclaimCount{
-    "velox.memory_reclaim_count"};
+constexpr folly::StringPiece kMetricQueryMemoryReclaimCount{
+    "velox.query_memory_reclaim_count"};
 
 constexpr folly::StringPiece kMetricTaskMemoryReclaimCount{
     "velox.task_memory_reclaim_count"};
@@ -54,6 +54,15 @@ constexpr folly::StringPiece kMetricTaskMemoryReclaimExecTimeMs{
 
 constexpr folly::StringPiece kMetricTaskMemoryReclaimWaitTimeoutCount{
     "velox.task_memory_reclaim_wait_timeout_count"};
+
+constexpr folly::StringPiece kMetricOpMemoryReclaimTimeMs{
+    "velox.op_memory_reclaim_ms"};
+
+constexpr folly::StringPiece kMetricOpMemoryReclaimedBytes{
+    "velox.op_memory_reclaim_bytes"};
+
+constexpr folly::StringPiece kMetricOpMemoryReclaimCount{
+    "velox.op_memory_reclaim_count"};
 
 constexpr folly::StringPiece kMetricMemoryNonReclaimableCount{
     "velox.memory_non_reclaimable_count"};
@@ -79,8 +88,17 @@ constexpr folly::StringPiece kMetricArbitratorLocalArbitrationCount{
 constexpr folly::StringPiece kMetricArbitratorGlobalArbitrationCount{
     "velox.arbitrator_global_arbitration_count"};
 
-constexpr folly::StringPiece kMetricArbitratorSlowGlobalArbitrationCount{
-    "velox.arbitrator_slow_global_arbitration_count"};
+constexpr folly::StringPiece kMetricArbitratorGlobalArbitrationBytes{
+    "velox.arbitrator_global_arbitration_bytes"};
+
+constexpr folly::StringPiece kMetricArbitratorGlobalArbitrationTimeMs{
+    "velox.arbitrator_global_arbitration_time_ms"};
+
+constexpr folly::StringPiece kMetricArbitratorGlobalArbitrationWaitCount{
+    "velox.arbitrator_global_arbitration_wait_count"};
+
+constexpr folly::StringPiece kMetricArbitratorGlobalArbitrationWaitTimeMs{
+    "velox.arbitrator_global_arbitration_wait_time_ms"};
 
 constexpr folly::StringPiece kMetricArbitratorAbortedCount{
     "velox.arbitrator_aborted_count"};
@@ -88,11 +106,8 @@ constexpr folly::StringPiece kMetricArbitratorAbortedCount{
 constexpr folly::StringPiece kMetricArbitratorFailuresCount{
     "velox.arbitrator_failures_count"};
 
-constexpr folly::StringPiece kMetricArbitratorArbitrationTimeMs{
-    "velox.arbitrator_arbitration_time_ms"};
-
-constexpr folly::StringPiece kMetricArbitratorWaitTimeMs{
-    "velox.arbitrator_wait_time_ms"};
+constexpr folly::StringPiece kMetricArbitratorOpExecTimeMs{
+    "velox.arbitrator_op_exec_time_ms"};
 
 constexpr folly::StringPiece kMetricArbitratorFreeCapacityBytes{
     "velox.arbitrator_free_capacity_bytes"};
@@ -123,6 +138,9 @@ constexpr folly::StringPiece kMetricSpillFillTimeMs{"velox.spill_fill_time_ms"};
 
 constexpr folly::StringPiece kMetricSpillSortTimeMs{"velox.spill_sort_time_ms"};
 
+constexpr folly::StringPiece kMetricSpillExtractVectorTimeMs{
+    "velox.spill_extract_vector_time_ms"};
+
 constexpr folly::StringPiece kMetricSpillSerializationTimeMs{
     "velox.spill_serialization_time_ms"};
 
@@ -143,6 +161,9 @@ constexpr folly::StringPiece kMetricSpillPeakMemoryBytes{
 
 constexpr folly::StringPiece kMetricFileWriterEarlyFlushedRawBytes{
     "velox.file_writer_early_flushed_raw_bytes"};
+
+constexpr folly::StringPiece kMetricHiveSortWriterFinishTimeMs{
+    "velox.hive_sort_writer_finish_time_ms"};
 
 constexpr folly::StringPiece kMetricArbitratorRequestsCount{
     "velox.arbitrator_requests_count"};

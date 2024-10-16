@@ -154,6 +154,14 @@ class TestStripeStreams : public StripeStreamsBase {
     return selector_;
   }
 
+  const tz::TimeZone* sessionTimezone() const override {
+    return context_.sessionTimezone();
+  }
+
+  bool adjustTimestampToTimezone() const override {
+    return context_.adjustTimestampToTimezone();
+  }
+
   const RowReaderOptions& rowReaderOptions() const override {
     return options_;
   }
@@ -997,7 +1005,7 @@ void testMapWriter(
       // values and iterate only until that number.
       // It does not support hasNext/next protocol.
       // Use a bigger number like 50, as some values may be bit packed.
-      EXPECT_THROW({ reader->next(50, out); }, exception::LoggedException);
+      VELOX_ASSERT_THROW(reader->next(50, out), "");
     };
 
     ASSERT_NO_FATAL_FAILURE(validate());
@@ -1129,7 +1137,7 @@ void testMapWriterRow(
       // values and iterate only until that number.
       // It does not support hasNext/next protocol.
       // Use a bigger number like 50, as some values may be bit packed.
-      EXPECT_THROW({ reader->next(50, out); }, exception::LoggedException);
+      VELOX_ASSERT_THROW(reader->next(50, out), "");
     };
 
     ASSERT_NO_FATAL_FAILURE(validate());

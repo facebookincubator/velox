@@ -168,6 +168,26 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
+   * - expression.max_array_size_in_reduce
+     - integer
+     - 100000
+     - ``Reduce`` function will throw an error if encountered an array of size greater than this.
+   * - debug_disable_expression_with_peeling
+     - bool
+     - false
+     - Disable optimization in expression evaluation to peel common dictionary layer from inputs. Should only be used for debugging.
+   * - debug_disable_common_sub_expressions
+     - bool
+     - false
+     - Disable optimization in expression evaluation to re-use cached results for common sub-expressions. Should only be used for debugging.
+   * - debug_disable_expression_with_memoization
+     - bool
+     - false
+     - Disable optimization in expression evaluation to re-use cached results between subsequent input batches that are dictionary encoded and have the same alphabet(underlying flat vector). Should only be used for debugging.
+   * - debug_disable_expression_with_lazy_inputs
+     - bool
+     - false
+     - Disable optimization in expression evaluation to delay loading of lazy inputs unless required. Should only be used for debugging.
 
 Memory Management
 -----------------
@@ -368,7 +388,7 @@ Table Writer
    * - task_partitioned_writer_count
      - integer
      - task_writer_count
-     - The number of parallel table writer threads per task for bucketed table writes. If not set, use 'task_writer_count' as default.
+     - The number of parallel table writer threads per task for partitioned table writes. If not set, use 'task_writer_count' as default.
 
 Hive Connector
 --------------
@@ -603,6 +623,7 @@ Each query can override the config by setting corresponding query session proper
        Legacy mode only enables throttled retry for transient errors.
        Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
        Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate.
+
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 .. list-table::
@@ -621,10 +642,10 @@ Each query can override the config by setting corresponding query session proper
      - string
      -
      - The GCS storage scheme, https for default credentials.
-   * - hive.gcs.credentials
+   * - hive.gcs.json-key-file-path
      - string
      -
-     - The GCS service account configuration as json string.
+     - The GCS service account configuration JSON key file.
    * - hive.gcs.max-retry-count
      - integer
      -
@@ -697,6 +718,13 @@ Spark-specific Configuration
      - integer
      -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.legacy_date_formatter
+     - bool
+     - false
+     - If true, `Simple <https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html>` date formatter is used for time formatting and parsing. Joda date formatter is used by default.
+     - Joda date formatter performs strict checking of its input and uses different pattern string.
+     - For example, the 2015-07-22 10:00:00 timestamp cannot be parse if pattern is yyyy-MM-dd because the parser does not consume whole input.
+     - Another example is that the 'W' pattern, which means week in month, is not supported. For more differences, see :issue:`10354`.
 
 Tracing
 --------
@@ -721,3 +749,11 @@ Tracing
      -
      - A comma-separated list of plan node ids whose input data will be trace. If it is empty, then we only trace the
        query metadata which includes the query plan and configs etc.
+   * - query_trace_task_reg_exp
+     - string
+     -
+     - The regexp of traced task id. We only enable trace on a task if its id matches.
+   * - query_trace_max_bytes
+     - integer
+     - 0
+     - The max trace bytes limit. Tracing is disabled if zero.

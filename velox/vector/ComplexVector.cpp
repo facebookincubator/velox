@@ -809,31 +809,79 @@ VectorPtr RowVector::pushDictionaryToRowVectorLeaves(const VectorPtr& input) {
       wrappers, input->size(), input, input->pool());
 }
 
-void ArrayVectorBase::checkRanges() const {
-  std::unordered_map<vector_size_t, vector_size_t> seenElements;
-  seenElements.reserve(size());
+namespace {
 
-  for (vector_size_t i = 0; i < size(); ++i) {
-    auto size = sizeAt(i);
-    auto offset = offsetAt(i);
+// Returns the next non-null non-empty array/map on or after `index'.
+template <bool kHasNulls>
+vector_size_t nextNonEmpty(
+    vector_size_t i,
+    vector_size_t size,
+    const uint64_t* nulls,
+    const vector_size_t* sizes) {
+  while (i < size &&
+         ((kHasNulls && bits::isBitNull(nulls, i)) || sizes[i] <= 0)) {
+    ++i;
+  }
+  return i;
+}
 
-    for (vector_size_t j = 0; j < size; ++j) {
-      auto it = seenElements.find(offset + j);
-      if (it != seenElements.end()) {
-        VELOX_FAIL(
-            "checkRanges() found overlap at idx {}: element {} has offset {} "
-            "and size {}, and element {} has offset {} and size {}.",
-            offset + j,
-            it->second,
-            offsetAt(it->second),
-            sizeAt(it->second),
-            i,
-            offset,
-            size);
-      }
-      seenElements.emplace(offset + j, i);
+template <bool kHasNulls>
+bool maybeHaveOverlappingRanges(
+    vector_size_t size,
+    const uint64_t* nulls,
+    const vector_size_t* offsets,
+    const vector_size_t* sizes) {
+  vector_size_t curr = 0;
+  curr = nextNonEmpty<kHasNulls>(curr, size, nulls, sizes);
+  if (curr >= size) {
+    return false;
+  }
+  for (;;) {
+    auto next = nextNonEmpty<kHasNulls>(curr + 1, size, nulls, sizes);
+    if (next >= size) {
+      return false;
+    }
+    // This also implicitly ensures offsets[curr] <= offsets[next].
+    if (offsets[curr] + sizes[curr] > offsets[next]) {
+      return true;
+    }
+    curr = next;
+  }
+}
+
+} // namespace
+
+// static
+bool ArrayVectorBase::hasOverlappingRanges(
+    vector_size_t size,
+    const uint64_t* nulls,
+    const vector_size_t* offsets,
+    const vector_size_t* sizes,
+    std::vector<vector_size_t>& indices) {
+  if (!(nulls
+            ? maybeHaveOverlappingRanges<true>(size, nulls, offsets, sizes)
+            : maybeHaveOverlappingRanges<false>(size, nulls, offsets, sizes))) {
+    return false;
+  }
+  indices.clear();
+  indices.reserve(size);
+  for (vector_size_t i = 0; i < size; ++i) {
+    const bool isNull = nulls && bits::isBitNull(nulls, i);
+    if (!isNull && sizes[i] > 0) {
+      indices.push_back(i);
     }
   }
+  std::sort(indices.begin(), indices.end(), [&](auto i, auto j) {
+    return offsets[i] < offsets[j];
+  });
+  for (vector_size_t i = 1; i < indices.size(); ++i) {
+    auto j = indices[i - 1];
+    auto k = indices[i];
+    if (offsets[j] + sizes[j] > offsets[k]) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void ArrayVectorBase::validateArrayVectorBase(
@@ -1139,8 +1187,10 @@ VectorPtr ArrayVector::slice(vector_size_t offset, vector_size_t length) const {
       type_,
       sliceNulls(offset, length),
       length,
-      sliceBuffer(*INTEGER(), offsets_, offset, length, pool_),
-      sliceBuffer(*INTEGER(), sizes_, offset, length, pool_),
+      offsets_ ? Buffer::slice<vector_size_t>(offsets_, offset, length, pool_)
+               : offsets_,
+      sizes_ ? Buffer::slice<vector_size_t>(sizes_, offset, length, pool_)
+             : sizes_,
       elements_);
 }
 
@@ -1438,8 +1488,10 @@ VectorPtr MapVector::slice(vector_size_t offset, vector_size_t length) const {
       type_,
       sliceNulls(offset, length),
       length,
-      sliceBuffer(*INTEGER(), offsets_, offset, length, pool_),
-      sliceBuffer(*INTEGER(), sizes_, offset, length, pool_),
+      offsets_ ? Buffer::slice<vector_size_t>(offsets_, offset, length, pool_)
+               : offsets_,
+      sizes_ ? Buffer::slice<vector_size_t>(sizes_, offset, length, pool_)
+             : sizes_,
       keys_,
       values_);
 }

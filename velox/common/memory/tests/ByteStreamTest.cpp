@@ -35,7 +35,6 @@ class ByteStreamTest : public testing::Test {
     options.useMmapAllocator = true;
     options.allocatorCapacity = kMaxMappedMemory;
     options.arbitratorCapacity = kMaxMappedMemory;
-    options.arbitratorReservedCapacity = 0;
     memoryManager_ = std::make_unique<MemoryManager>(options);
     mmapAllocator_ = static_cast<MmapAllocator*>(memoryManager_->allocator());
     pool_ = memoryManager_->addLeafPool("ByteStreamTest");
@@ -48,11 +47,49 @@ class ByteStreamTest : public testing::Test {
     return std::make_unique<StreamArena>(pool_.get());
   }
 
+  std::unique_ptr<folly::IOBuf> createIOBuf(uint64_t size) {
+    auto buf = folly::IOBuf::create(size);
+    auto* writableData = buf->writableData();
+    std::memset(writableData, '6', size);
+    buf->append(size);
+    return buf;
+  }
+
   folly::Random::DefaultGenerator rng_;
   std::unique_ptr<MemoryManager> memoryManager_;
   MmapAllocator* mmapAllocator_;
   std::shared_ptr<memory::MemoryPool> pool_;
 };
+
+TEST_F(ByteStreamTest, iobufConsume) {
+  // Empty buffer test
+  auto emptyBufList = byteRangesFromIOBuf(nullptr);
+  ASSERT_TRUE(emptyBufList.empty());
+
+  // Single buffer test
+  const uint64_t bufCapacity = 1024;
+  auto iobuf = createIOBuf(bufCapacity);
+  auto oneBufList = byteRangesFromIOBuf(iobuf.get());
+  ASSERT_EQ(oneBufList.size(), 1);
+  ASSERT_EQ(oneBufList[0].size, bufCapacity);
+
+  // Multiple buffer test
+  const uint64_t numChainedBuf = 64;
+  auto head = createIOBuf(bufCapacity);
+  uint32_t count{1};
+  folly::IOBuf* cur = head.get();
+  while (count < numChainedBuf) {
+    cur->insertAfterThisOne(createIOBuf(bufCapacity));
+    cur = cur->next();
+    count++;
+  }
+
+  auto rangeList = byteRangesFromIOBuf(head.get());
+  ASSERT_EQ(rangeList.size(), numChainedBuf);
+  for (const auto& range : rangeList) {
+    ASSERT_EQ(range.size, bufCapacity);
+  }
+}
 
 TEST_F(ByteStreamTest, outputStream) {
   auto out = std::make_unique<IOBufOutputStream>(*pool_, nullptr, 10000);
@@ -150,7 +187,7 @@ TEST_F(ByteStreamTest, newRangeAllocation) {
        {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3}},
       {{1023, 64, 64, kPageSize, 5 * kPageSize},
-       {1152, 1152, 1152, kPageSize + 1152, 7 * kPageSize},
+       {1024, 1536, 1536, kPageSize + 1536, 7 * kPageSize},
        {kPageSize * 2,
         kPageSize * 2,
         kPageSize * 2,

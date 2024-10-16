@@ -44,7 +44,7 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(hiveConfig.s3IAMRoleSessionName(), "velox-session");
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
   ASSERT_EQ(hiveConfig.gcsScheme(), "https");
-  ASSERT_EQ(hiveConfig.gcsCredentials(), "");
+  ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
   ASSERT_EQ(hiveConfig.isOrcUseColumnNames(emptySession.get()), false);
   ASSERT_EQ(
       hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()), false);
@@ -69,6 +69,8 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(hiveConfig.sortWriterMaxOutputRows(emptySession.get()), 1024);
   ASSERT_EQ(
       hiveConfig.sortWriterMaxOutputBytes(emptySession.get()), 10UL << 20);
+  ASSERT_EQ(
+      hiveConfig.sortWriterFinishTimeSliceLimitMs(emptySession.get()), 5'000);
   ASSERT_EQ(hiveConfig.isPartitionPathAsLowerCase(emptySession.get()), true);
   ASSERT_EQ(hiveConfig.allowNullPartitionKeys(emptySession.get()), true);
   ASSERT_EQ(hiveConfig.orcWriterMinCompressionSize(emptySession.get()), 1024);
@@ -95,7 +97,7 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kS3IamRoleSessionName, "velox"},
       {HiveConfig::kGCSEndpoint, "hey"},
       {HiveConfig::kGCSScheme, "http"},
-      {HiveConfig::kGCSCredentials, "hey"},
+      {HiveConfig::kGCSCredentialsPath, "hey"},
       {HiveConfig::kOrcUseColumnNames, "true"},
       {HiveConfig::kFileColumnNamesReadAsLowerCase, "true"},
       {HiveConfig::kAllowNullPartitionKeys, "false"},
@@ -109,6 +111,7 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kOrcWriterStringDictionaryEncodingEnabled, "false"},
       {HiveConfig::kSortWriterMaxOutputRows, "100"},
       {HiveConfig::kSortWriterMaxOutputBytes, "100MB"},
+      {HiveConfig::kSortWriterFinishTimeSliceLimitMs, "400"},
       {HiveConfig::kOrcWriterLinearStripeSizeHeuristics, "false"},
       {HiveConfig::kOrcWriterMinCompressionSize, "512"},
       {HiveConfig::kOrcWriterCompressionLevel, "1"},
@@ -134,7 +137,7 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_EQ(hiveConfig.s3IAMRoleSessionName(), "velox");
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "hey");
   ASSERT_EQ(hiveConfig.gcsScheme(), "http");
-  ASSERT_EQ(hiveConfig.gcsCredentials(), "hey");
+  ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "hey");
   ASSERT_EQ(hiveConfig.isOrcUseColumnNames(emptySession.get()), true);
   ASSERT_EQ(
       hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()), true);
@@ -159,6 +162,8 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_EQ(hiveConfig.sortWriterMaxOutputRows(emptySession.get()), 100);
   ASSERT_EQ(
       hiveConfig.sortWriterMaxOutputBytes(emptySession.get()), 100UL << 20);
+  ASSERT_EQ(
+      hiveConfig.sortWriterFinishTimeSliceLimitMs(emptySession.get()), 400);
   ASSERT_EQ(hiveConfig.orcWriterMinCompressionSize(emptySession.get()), 512);
   ASSERT_EQ(hiveConfig.orcWriterCompressionLevel(emptySession.get()), 1);
   ASSERT_EQ(
@@ -180,6 +185,7 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kOrcWriterStringDictionaryEncodingEnabledSession, "false"},
       {HiveConfig::kSortWriterMaxOutputRowsSession, "20"},
       {HiveConfig::kSortWriterMaxOutputBytesSession, "20MB"},
+      {HiveConfig::kSortWriterFinishTimeSliceLimitMsSession, "300"},
       {HiveConfig::kPartitionPathAsLowerCaseSession, "false"},
       {HiveConfig::kAllowNullPartitionKeysSession, "false"},
       {HiveConfig::kIgnoreMissingFilesSession, "true"},
@@ -206,7 +212,7 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(hiveConfig.s3IAMRoleSessionName(), "velox-session");
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
   ASSERT_EQ(hiveConfig.gcsScheme(), "https");
-  ASSERT_EQ(hiveConfig.gcsCredentials(), "");
+  ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
   ASSERT_EQ(hiveConfig.isOrcUseColumnNames(session.get()), true);
   ASSERT_EQ(hiveConfig.isFileColumnNamesReadAsLowerCase(session.get()), true);
 
@@ -227,6 +233,7 @@ TEST(HiveConfigTest, overrideSession) {
       false);
   ASSERT_EQ(hiveConfig.sortWriterMaxOutputRows(session.get()), 20);
   ASSERT_EQ(hiveConfig.sortWriterMaxOutputBytes(session.get()), 20UL << 20);
+  ASSERT_EQ(hiveConfig.sortWriterFinishTimeSliceLimitMs(session.get()), 300);
   ASSERT_EQ(hiveConfig.isPartitionPathAsLowerCase(session.get()), false);
   ASSERT_EQ(hiveConfig.allowNullPartitionKeys(session.get()), false);
   ASSERT_EQ(hiveConfig.ignoreMissingFiles(session.get()), true);

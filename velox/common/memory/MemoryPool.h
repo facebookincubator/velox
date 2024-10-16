@@ -40,6 +40,10 @@ class ParallelMemoryReclaimer;
 }
 
 namespace facebook::velox::memory {
+class TestArbitrator;
+}
+
+namespace facebook::velox::memory {
 #define VELOX_MEM_POOL_CAP_EXCEEDED(errorMessage)                   \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
@@ -558,7 +562,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   friend class velox::exec::ParallelMemoryReclaimer;
   friend class MemoryManager;
   friend class MemoryArbitrator;
-  friend class ScopedMemoryPoolArbitrationCtx;
+  friend class velox::memory::TestArbitrator;
+  friend class MemoryPoolArbitrationSection;
+  friend class ArbitrationParticipant;
 
   VELOX_FRIEND_TEST(MemoryPoolTest, shrinkAndGrowAPIs);
   VELOX_FRIEND_TEST(MemoryPoolTest, grow);
@@ -582,7 +588,6 @@ class MemoryPoolImpl : public MemoryPool {
       Kind kind,
       std::shared_ptr<MemoryPool> parent,
       std::unique_ptr<MemoryReclaimer> reclaimer,
-      DestructionCallback destructionCb,
       const Options& options = Options{});
 
   ~MemoryPoolImpl() override;
@@ -655,6 +660,8 @@ class MemoryPoolImpl : public MemoryPool {
       memory::MemoryReclaimer::Stats& stats) override;
 
   void abort(const std::exception_ptr& error) override;
+
+  void setDestructionCallback(const DestructionCallback& callback);
 
   std::string toString() const override {
     std::lock_guard<std::mutex> l(mutex_);
@@ -1001,7 +1008,6 @@ class MemoryPoolImpl : public MemoryPool {
   MemoryManager* const manager_;
   MemoryAllocator* const allocator_;
   MemoryArbitrator* const arbitrator_;
-  const DestructionCallback destructionCb_;
 
   // Regex for filtering on 'name_' when debug mode is enabled. This allows us
   // to only track the callsites of memory allocations for memory pools whose
@@ -1014,6 +1020,8 @@ class MemoryPoolImpl : public MemoryPool {
   // work based on atomic 'reservationBytes_' without mutex as children updating
   // the same parent do not have to be serialized.
   mutable std::mutex mutex_;
+
+  DestructionCallback destructionCb_;
 
   // Used by memory arbitration to reclaim memory from the associated query
   // object if not null. For example, a memory pool can reclaim the used memory
@@ -1107,9 +1115,8 @@ class StlAllocator {
 template <>
 struct fmt::formatter<facebook::velox::memory::MemoryPool::Kind>
     : formatter<std::string> {
-  auto format(
-      facebook::velox::memory::MemoryPool::Kind s,
-      format_context& ctx) {
+  auto format(facebook::velox::memory::MemoryPool::Kind s, format_context& ctx)
+      const {
     return formatter<std::string>::format(
         facebook::velox::memory::MemoryPool::kindString(s), ctx);
   }

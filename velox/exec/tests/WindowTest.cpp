@@ -81,6 +81,50 @@ TEST_F(WindowTest, spill) {
   ASSERT_GT(stats.spilledPartitions, 0);
 }
 
+TEST_F(WindowTest, spillUnsupported) {
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row % 11; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  core::PlanNodeId windowId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 10))
+                  .window({"row_number() over (order by s)"})
+                  .capturePlanNodeId(windowId)
+                  .planNode();
+
+  auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
+          .spillDirectory(spillDirectory->getPath())
+          .assertResults("SELECT *, row_number() over (order by s) FROM tmp");
+
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  const auto& stats = taskStats.at(windowId);
+
+  ASSERT_EQ(stats.spilledBytes, 0);
+  ASSERT_EQ(stats.spilledRows, 0);
+  ASSERT_EQ(stats.spilledFiles, 0);
+  ASSERT_EQ(stats.spilledPartitions, 0);
+  auto opStats = toOperatorStats(task->taskStats());
+  ASSERT_GT(
+      opStats.at("Window").runtimeStats[Operator::kSpillNotSupported].sum, 1);
+}
+
 TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   const vector_size_t size = 1'000'000;
   auto data = makeRowVector(
@@ -139,6 +183,40 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   testWindowBuild(true);
   // SortBasedWindow will OOM.
   testWindowBuild(false);
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, aggWindowResultMismatch) {
+  auto data = makeRowVector(
+      {"id", "order_num"},
+      {makeFlatVector<int64_t>(4500, [](auto row) { return row; }),
+       makeConstant(1, 4500)});
+
+  createDuckDbTable({data});
+
+  const std::vector<std::string> kClauses = {
+      "sum(order_num) over (order by order_num DESC)"};
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .orderBy({"order_num"}, false)
+                  .streamingWindow(kClauses)
+                  .planNode();
+
+  std::atomic_bool isStreamCreated{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(RowsStreamingWindowBuild*)>(
+          [&](RowsStreamingWindowBuild* windowBuild) {
+            isStreamCreated.store(true);
+          }));
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(
+          "SELECT *, sum(order_num) over (order by order_num DESC) FROM tmp");
+  ASSERT_TRUE(isStreamCreated.load());
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, rankRowStreamingWindowBuild) {
@@ -451,6 +529,42 @@ TEST_F(WindowTest, nagativeFrameArg) {
                 endOffset)),
         testData.debugString());
   }
+}
+
+DEBUG_ONLY_TEST_F(WindowTest, frameColumnNullCheck) {
+  auto makePlan = [&](const RowVectorPtr& input) {
+    return PlanBuilder()
+        .values({input})
+        .window(
+            {"sum(c0) OVER (PARTITION BY p0 ORDER BY s0 RANGE BETWEEN UNBOUNDED PRECEDING AND off0 FOLLOWING)"})
+        .planNode();
+  };
+
+  // Null values in order-by column 's0' and frame column 'off0' do not match,
+  // so exception is expected.
+  auto inputThrow = makeRowVector(
+      {"c0", "p0", "s0", "off0"},
+      {
+          makeNullableFlatVector<int64_t>({1, std::nullopt, 1, 2, 2}),
+          makeFlatVector<int64_t>({1, 2, 1, 2, 1}),
+          makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 5}),
+          makeNullableFlatVector<int64_t>({2, std::nullopt, 4, 5, 6}),
+      });
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(makePlan(inputThrow)).copyResults(pool()), "");
+
+  // Null values in order-by column 's0' and frame column 'off0' match, so no
+  // exception should be thrown.
+  auto inputNoThrow = makeRowVector(
+      {"c0", "p0", "s0", "off0"},
+      {
+          makeNullableFlatVector<int64_t>({1, 1, 2, std::nullopt, 2}),
+          makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+          makeNullableFlatVector<int64_t>({1, std::nullopt, 2, 3, 5}),
+          makeNullableFlatVector<int64_t>({2, std::nullopt, 3, 4, 6}),
+      });
+  ASSERT_NO_THROW(
+      AssertQueryBuilder(makePlan(inputNoThrow)).copyResults(pool()));
 }
 
 } // namespace

@@ -112,6 +112,11 @@ struct TableParameter {
 struct RowNumberColumnInfo {
   column_index_t insertPosition;
   std::string name;
+  // This flag is used to distinguish the explicit and implicit use cases. In
+  // explicit case, row index column is declared in the output type or used in
+  // subfield filters or remaining filter. In implicit case, it's not declared
+  // in the output columns but only in the split reader.
+  bool isExplicit;
 };
 
 class FormatSpecificOptions {
@@ -502,6 +507,11 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setAdjustTimestampToTimezone(bool adjustTimestampToTimezone) {
+    adjustTimestampToTimezone_ = adjustTimestampToTimezone;
+    return *this;
+  }
+
   /// Gets the desired tail location.
   uint64_t tailLocation() const {
     return tailLocation_;
@@ -541,8 +551,12 @@ class ReaderOptions : public io::ReaderOptions {
     return ioExecutor_;
   }
 
-  const tz::TimeZone* getSessionTimezone() const {
+  const tz::TimeZone* sessionTimezone() const {
     return sessionTimezone_;
+  }
+
+  bool adjustTimestampToTimezone() const {
+    return adjustTimestampToTimezone_;
   }
 
   bool fileColumnNamesReadAsLowerCase() const {
@@ -577,6 +591,14 @@ class ReaderOptions : public io::ReaderOptions {
     scanSpec_ = std::move(scanSpec);
   }
 
+  bool selectiveNimbleReaderEnabled() const {
+    return selectiveNimbleReaderEnabled_;
+  }
+
+  void setSelectiveNimbleReaderEnabled(bool value) {
+    selectiveNimbleReaderEnabled_ = value;
+  }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
@@ -591,6 +613,8 @@ class ReaderOptions : public io::ReaderOptions {
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};
+  bool adjustTimestampToTimezone_{false};
+  bool selectiveNimbleReaderEnabled_{false};
 };
 
 struct WriterOptions {
@@ -621,6 +645,9 @@ struct WriterOptions {
   std::function<std::unique_ptr<dwio::common::FlushPolicy>()>
       flushPolicyFactory;
 
+  const tz::TimeZone* sessionTimezone{nullptr};
+  bool adjustTimestampToTimezone{false};
+
   virtual ~WriterOptions() = default;
 };
 
@@ -630,9 +657,8 @@ template <>
 struct fmt::formatter<facebook::velox::dwio::common::FileFormat>
     : fmt::formatter<std::string_view> {
   template <typename FormatContext>
-  auto format(
-      facebook::velox::dwio::common::FileFormat fmt,
-      FormatContext& ctx) {
+  auto format(facebook::velox::dwio::common::FileFormat fmt, FormatContext& ctx)
+      const {
     return formatter<std::string_view>::format(
         facebook::velox::dwio::common::toString(fmt), ctx);
   }

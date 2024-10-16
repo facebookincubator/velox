@@ -21,6 +21,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/QueryTraceUtil.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
@@ -54,7 +55,7 @@ OperatorCtx::createConnectorQueryCtx(
     memory::MemoryPool* connectorPool,
     const common::SpillConfig* spillConfig) const {
   const auto& task = driverCtx_->task;
-  return std::make_shared<connector::ConnectorQueryCtx>(
+  auto connectorQueryCtx = std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
       connectorPool,
       task->queryCtx()->connectorSessionProperties(connectorId),
@@ -68,7 +69,11 @@ OperatorCtx::createConnectorQueryCtx(
       planNodeId,
       driverCtx_->driverId,
       driverCtx_->queryConfig().sessionTimezone(),
+      driverCtx_->queryConfig().adjustTimestampToTimezone(),
       task->getCancellationToken());
+  connectorQueryCtx->setSelectiveNimbleReaderEnabled(
+      driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
+  return connectorQueryCtx;
 }
 
 Operator::Operator(
@@ -99,6 +104,62 @@ void Operator::maybeSetReclaimer() {
   }
   pool()->setReclaimer(
       Operator::MemoryReclaimer::create(operatorCtx_->driverCtx(), this));
+}
+
+void Operator::maybeSetTracer() {
+  const auto& queryTraceConfig = operatorCtx_->driverCtx()->traceConfig();
+  if (!queryTraceConfig.has_value()) {
+    return;
+  }
+
+  if (operatorCtx_->driverCtx()->queryConfig().queryTraceMaxBytes() == 0) {
+    return;
+  }
+
+  const auto nodeId = planNodeId();
+  if (queryTraceConfig->queryNodes.count(nodeId) == 0) {
+    return;
+  }
+
+  auto& tracedOpMap = operatorCtx_->driverCtx()->tracedOperatorMap;
+  if (const auto iter = tracedOpMap.find(operatorId());
+      iter != tracedOpMap.end()) {
+    LOG(WARNING) << "Operator " << iter->first << " with type of "
+                 << operatorType() << ", plan node " << nodeId
+                 << " might be the auxiliary operator of " << iter->second
+                 << " which has the same operator id";
+    return;
+  }
+  tracedOpMap.emplace(operatorId(), operatorType());
+
+  const auto pipelineId = operatorCtx_->driverCtx()->pipelineId;
+  const auto driverId = operatorCtx_->driverCtx()->driverId;
+  LOG(INFO) << "Trace data for operator type: " << operatorType()
+            << ", operator id: " << operatorId() << ", pipeline: " << pipelineId
+            << ", driver: " << driverId << ", task: " << taskId();
+  const auto opTraceDirPath = fmt::format(
+      "{}/{}/{}/{}/data",
+      queryTraceConfig->queryTraceDir,
+      planNodeId(),
+      pipelineId,
+      driverId);
+  trace::createTraceDirectory(opTraceDirPath);
+  inputTracer_ = std::make_unique<trace::QueryDataWriter>(
+      opTraceDirPath,
+      memory::traceMemoryPool(),
+      queryTraceConfig->updateAndCheckTraceLimitCB);
+}
+
+void Operator::traceInput(const RowVectorPtr& input) {
+  if (FOLLY_UNLIKELY(inputTracer_ != nullptr)) {
+    inputTracer_->write(input);
+  }
+}
+
+void Operator::finishTrace() {
+  if (inputTracer_ != nullptr) {
+    inputTracer_->finish();
+  }
 }
 
 std::vector<std::unique_ptr<Operator::PlanNodeTranslator>>&
@@ -150,6 +211,7 @@ void Operator::initialize() {
       pool()->name());
   initialized_ = true;
   maybeSetReclaimer();
+  maybeSetTracer();
 }
 
 // static
@@ -315,6 +377,13 @@ void Operator::recordSpillStats() {
             static_cast<int64_t>(lockedSpillStats->spillSortTimeNanos),
             RuntimeCounter::Unit::kNanos});
   }
+  if (lockedSpillStats->spillExtractVectorTimeNanos != 0) {
+    lockedStats->addRuntimeStat(
+        kSpillExtractVectorTime,
+        RuntimeCounter{
+            static_cast<int64_t>(lockedSpillStats->spillExtractVectorTimeNanos),
+            RuntimeCounter::Unit::kNanos});
+  }
   if (lockedSpillStats->spillSerializationTimeNanos != 0) {
     lockedStats->addRuntimeStat(
         kSpillSerializationTime,
@@ -476,6 +545,8 @@ void OperatorStats::add(const OperatorStats& other) {
 
   finishTiming.add(other.finishTiming);
 
+  isBlockedTiming.add(other.isBlockedTiming);
+
   backgroundTiming.add(other.backgroundTiming);
 
   memoryStats.add(other.memoryStats);
@@ -633,11 +704,8 @@ uint64_t Operator::MemoryReclaimer::reclaim(
       "facebook::velox::exec::Operator::MemoryReclaimer::reclaim", pool);
 
   // NOTE: we can't reclaim memory from an operator which is under
-  // non-reclaimable section, except for HashBuild operator. If it is HashBuild
-  // operator, we allow it to enter HashBuild::reclaim because there is a good
-  // chance we can release some unused reserved memory even if it's in
   // non-reclaimable section.
-  if (op_->nonReclaimableSection_ && op_->operatorType() != "HashBuild") {
+  if (op_->nonReclaimableSection_) {
     // TODO: reduce the log frequency if it is too verbose.
     ++stats.numNonReclaimableAttempts;
     RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
@@ -656,12 +724,6 @@ uint64_t Operator::MemoryReclaimer::reclaim(
         {
           memory::ScopedReclaimedBytesRecorder recoder(pool, &reclaimedBytes);
           op_->reclaim(targetBytes, stats);
-        }
-        // NOTE: the parallel hash build is running at the background thread
-        // pool which won't stop during memory reclamation so the operator's
-        // memory usage might increase in such case. memory usage.
-        if (op_->operatorType() == "HashBuild") {
-          reclaimedBytes = std::max<int64_t>(0, reclaimedBytes);
         }
         VELOX_CHECK_GE(
             reclaimedBytes,

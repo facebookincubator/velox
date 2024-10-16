@@ -29,6 +29,7 @@
 #include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(
     seed,

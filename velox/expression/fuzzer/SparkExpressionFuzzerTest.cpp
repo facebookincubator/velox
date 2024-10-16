@@ -22,6 +22,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/functions/sparksql/Register.h"
 #include "velox/functions/sparksql/fuzzer/AddSubtractArgGenerator.h"
@@ -32,6 +33,7 @@
 
 using namespace facebook::velox::functions::sparksql::fuzzer;
 using facebook::velox::fuzzer::ArgGenerator;
+using facebook::velox::test::ReferenceQueryRunner;
 
 DEFINE_int64(
     seed,
@@ -62,7 +64,14 @@ int main(int argc, char** argv) {
       "chr",
       "replace",
       "might_contain",
-      "unix_timestamp"};
+      "unix_timestamp",
+      // from_unixtime throws VeloxRuntimeError when the timestamp is out of the
+      // supported range.
+      "from_unixtime",
+      // timestamp_millis(bigint) can generate timestamps out of the supported
+      // range that make other functions throw VeloxRuntimeErrors.
+      "timestamp_millis(bigint) -> timestamp",
+  };
 
   // Required by spark_partition_id function.
   std::unordered_map<std::string, std::string> queryConfigs = {
@@ -78,6 +87,11 @@ int main(int argc, char** argv) {
        {"unscaled_value", std::make_shared<UnscaledValueArgGenerator>()},
        {"make_timestamp", std::make_shared<MakeTimestampArgGenerator>()}};
 
+  std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
   return FuzzerRunner::run(
-      FLAGS_seed, skipFunctions, queryConfigs, argGenerators);
+      FLAGS_seed,
+      skipFunctions,
+      queryConfigs,
+      argGenerators,
+      referenceQueryRunner);
 }

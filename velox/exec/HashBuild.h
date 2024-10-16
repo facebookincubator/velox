@@ -29,7 +29,7 @@ namespace facebook::velox::exec {
 // Builds a hash table for use in HashProbe. This is the final
 // Operator in a build side Driver. The build side pipeline has
 // multiple Drivers, each with its own HashBuild. The build finishes
-// when the last Driver of the build pipeline finishes. Hence finish()
+// when the last Driver of the build pipeline finishes. Hence finishHashBuild()
 // has a barrier where the last one to enter gathers the data
 // accumulated by the other Drivers and makes the join hash
 // table. This table is then passed to the probe side pipeline via
@@ -88,6 +88,10 @@ class HashBuild final : public Operator {
 
   void close() override;
 
+  bool testingExceededMaxSpillLevelLimit() const {
+    return exceededMaxSpillLevelLimit_;
+  }
+
  private:
   void setState(State state);
   void checkStateTransition(State state);
@@ -113,9 +117,7 @@ class HashBuild final : public Operator {
   // process which will be set by the join probe side.
   void postHashBuildProcess();
 
-  bool spillEnabled() const {
-    return canReclaim();
-  }
+  bool canSpill() const override;
 
   // Indicates if the input is read from spill data or not.
   bool isInputFromSpill() const;
@@ -143,10 +145,7 @@ class HashBuild final : public Operator {
 
   // Invoked to ensure there is sufficient memory to build the join table. The
   // function throws to fail the query if the memory reservation fails.
-  void ensureTableFits(
-      const std::vector<HashBuild*>& otherBuilds,
-      const std::vector<std::unique_ptr<BaseHashTable>>& otherTables,
-      bool isParallelJoin);
+  void ensureTableFits(uint64_t numRows);
 
   // Invoked to compute spill partitions numbers for each row 'input' and spill
   // rows to spiller directly if the associated partition(s) is spilling. The
@@ -218,7 +217,7 @@ class HashBuild final : public Operator {
 
   std::shared_ptr<HashJoinBridge> joinBridge_;
 
-  bool exceededMaxSpillLevelLimit_{false};
+  tsan_atomic<bool> exceededMaxSpillLevelLimit_{false};
 
   State state_{State::kRunning};
 
@@ -317,7 +316,8 @@ inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
 template <>
 struct fmt::formatter<facebook::velox::exec::HashBuild::State>
     : formatter<std::string> {
-  auto format(facebook::velox::exec::HashBuild::State s, format_context& ctx) {
+  auto format(facebook::velox::exec::HashBuild::State s, format_context& ctx)
+      const {
     return formatter<std::string>::format(
         facebook::velox::exec::HashBuild::stateName(s), ctx);
   }

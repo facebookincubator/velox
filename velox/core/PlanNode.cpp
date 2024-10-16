@@ -301,13 +301,17 @@ std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
 // static
 const char* AggregationNode::stepName(AggregationNode::Step step) {
   static const auto kSteps = stepNames();
-  return kSteps.at(step).c_str();
+  auto it = kSteps.find(step);
+  VELOX_CHECK(it != kSteps.end(), "Invalid step {}", static_cast<int>(step));
+  return it->second.c_str();
 }
 
 // static
 AggregationNode::Step AggregationNode::stepFromName(const std::string& name) {
   static const auto kSteps = invertMap(stepNames());
-  return kSteps.at(name);
+  auto it = kSteps.find(name);
+  VELOX_CHECK(it != kSteps.end(), "Invalid step " + name);
+  return it->second;
 }
 
 folly::dynamic AggregationNode::serialize() const {
@@ -1044,12 +1048,19 @@ std::unordered_map<JoinType, std::string> joinTypeNames() {
 
 const char* joinTypeName(JoinType joinType) {
   static const auto kJoinTypes = joinTypeNames();
-  return kJoinTypes.at(joinType).c_str();
+  auto it = kJoinTypes.find(joinType);
+  VELOX_CHECK(
+      it != kJoinTypes.end(),
+      "Invalid join type {}",
+      static_cast<int>(joinType));
+  return it->second.c_str();
 }
 
 JoinType joinTypeFromName(const std::string& name) {
   static const auto kJoinTypes = invertMap(joinTypeNames());
-  return kJoinTypes.at(name);
+  auto it = kJoinTypes.find(name);
+  VELOX_CHECK(it != kJoinTypes.end(), "Invalid join type " + name);
+  return it->second;
 }
 
 void HashJoinNode::addDetails(std::stringstream& stream) const {
@@ -1130,6 +1141,7 @@ bool MergeJoinNode::isSupported(core::JoinType joinType) {
     case core::JoinType::kLeftSemiFilter:
     case core::JoinType::kRightSemiFilter:
     case core::JoinType::kAnti:
+    case core::JoinType::kFull:
       return true;
 
     default:
@@ -1452,13 +1464,20 @@ std::unordered_map<WindowNode::BoundType, std::string> boundTypeNames() {
 // static
 const char* WindowNode::boundTypeName(WindowNode::BoundType type) {
   static const auto kTypes = boundTypeNames();
-  return kTypes.at(type).c_str();
+  auto it = kTypes.find(type);
+  VELOX_CHECK(
+      it != kTypes.end(),
+      "Invalid window bound type {}",
+      static_cast<int>(type));
+  return it->second.c_str();
 }
 
 // static
 WindowNode::BoundType WindowNode::boundTypeFromName(const std::string& name) {
   static const auto kTypes = invertMap(boundTypeNames());
-  return kTypes.at(name);
+  auto it = kTypes.find(name);
+  VELOX_CHECK(it != kTypes.end(), "Invalid window bound type " + name);
+  return it->second;
 }
 
 namespace {
@@ -1473,13 +1492,18 @@ std::unordered_map<WindowNode::WindowType, std::string> windowTypeNames() {
 // static
 const char* WindowNode::windowTypeName(WindowNode::WindowType type) {
   static const auto kTypes = windowTypeNames();
-  return kTypes.at(type).c_str();
+  auto it = kTypes.find(type);
+  VELOX_CHECK(
+      it != kTypes.end(), "Invalid window type {}", static_cast<int>(type));
+  return it->second.c_str();
 }
 
 // static
 WindowNode::WindowType WindowNode::windowTypeFromName(const std::string& name) {
   static const auto kTypes = invertMap(windowTypeNames());
-  return kTypes.at(name);
+  auto it = kTypes.find(name);
+  VELOX_CHECK(it != kTypes.end(), "Invalid window type " + name);
+  return it->second;
 }
 
 folly::dynamic WindowNode::Frame::serialize() const {
@@ -1970,17 +1994,6 @@ PlanNodePtr LocalPartitionNode::create(
       deserializeSources(obj, context));
 }
 
-// static
-const char* LocalPartitionNode::typeName(Type type) {
-  switch (type) {
-    case Type::kGather:
-      return "GATHER";
-    case Type::kRepartition:
-      return "REPARTITION";
-  }
-  VELOX_UNREACHABLE();
-}
-
 namespace {
 std::unordered_map<LocalPartitionNode::Type, std::string>
 localPartitionTypeNames() {
@@ -1992,11 +2005,23 @@ localPartitionTypeNames() {
 } // namespace
 
 // static
+const char* LocalPartitionNode::typeName(Type type) {
+  static const auto kTypes = localPartitionTypeNames();
+  auto it = kTypes.find(type);
+  VELOX_CHECK(
+      it != kTypes.end(),
+      "Invalid LocalPartitionNode type {}",
+      static_cast<int>(type));
+  return it->second.c_str();
+}
+
+// static
 LocalPartitionNode::Type LocalPartitionNode::typeFromName(
     const std::string& name) {
   static const auto kTypes = invertMap(localPartitionTypeNames());
-
-  return kTypes.at(name);
+  auto it = kTypes.find(name);
+  VELOX_CHECK(it != kTypes.end(), "Invalid LocalPartitionNode type " + name);
+  return it->second;
 }
 
 void EnforceSingleRowNode::addDetails(std::stringstream& /* stream */) const {
@@ -2015,32 +2040,36 @@ PlanNodePtr EnforceSingleRowNode::create(
       deserializePlanNodeId(obj), deserializeSingleSource(obj, context));
 }
 
+namespace {
+std::unordered_map<PartitionedOutputNode::Kind, std::string>
+partitionKindNames() {
+  return {
+      {PartitionedOutputNode::Kind::kPartitioned, "PARTITIONED"},
+      {PartitionedOutputNode::Kind::kBroadcast, "BROADCAST"},
+      {PartitionedOutputNode::Kind::kArbitrary, "ARBITRARY"},
+  };
+}
+
+} // namespace
+
 // static
 std::string PartitionedOutputNode::kindString(Kind kind) {
-  switch (kind) {
-    case Kind::kPartitioned:
-      return "PARTITIONED";
-    case Kind::kBroadcast:
-      return "BROADCAST";
-    case Kind::kArbitrary:
-      return "ARBITRARY";
-    default:
-      return fmt::format("INVALID OUTPUT KIND {}", static_cast<int>(kind));
-  }
+  static const auto kPartitionNames = partitionKindNames();
+  auto it = kPartitionNames.find(kind);
+  VELOX_CHECK(
+      it != kPartitionNames.end(),
+      "Invalid Output Kind {}",
+      static_cast<int>(kind));
+  return it->second;
 }
 
 // static
 PartitionedOutputNode::Kind PartitionedOutputNode::stringToKind(
-    std::string str) {
-  if (str == "PARTITIONED") {
-    return Kind::kPartitioned;
-  } else if (str == "BROADCAST") {
-    return Kind::kBroadcast;
-  } else if (str == "ARBITRARY") {
-    return Kind::kArbitrary;
-  } else {
-    VELOX_FAIL("Unknown output buffer type: {}", str);
-  }
+    const std::string& name) {
+  static const auto kPartitionKinds = invertMap(partitionKindNames());
+  auto it = kPartitionKinds.find(name);
+  VELOX_CHECK(it != kPartitionKinds.end(), "Invalid Output Kind " + name);
+  return it->second;
 }
 
 void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
@@ -2324,6 +2353,18 @@ folly::dynamic PlanNode::serialize() const {
   }
 
   return obj;
+}
+
+const std::vector<PlanNodePtr>& QueryTraceScanNode::sources() const {
+  return kEmptySources;
+}
+
+std::string QueryTraceScanNode::traceDir() const {
+  return traceDir_;
+}
+
+void QueryTraceScanNode::addDetails(std::stringstream& stream) const {
+  stream << "Trace dir: " << traceDir_;
 }
 
 folly::dynamic FilterNode::serialize() const {

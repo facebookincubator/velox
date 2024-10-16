@@ -33,6 +33,13 @@ enum UTF8CharList {
   MATHEMATICAL_SYMBOLS = 3 // Mathematical Symbols.
 };
 
+struct DataSpec {
+  bool includeNaN;
+  bool includeInfinity;
+};
+
+const std::vector<TypePtr>& defaultScalarTypes();
+
 /// VectorFuzzer is a helper class that generates randomized vectors and their
 /// data for testing, with a high degree of entropy.
 ///
@@ -146,6 +153,9 @@ class VectorFuzzer {
     /// vectors. The generated lazy vectors can also have any number of
     /// dictionary layers on top of them.
     bool allowLazyVector{false};
+
+    /// Data spec for randomly generated data.
+    DataSpec dataSpec{false, false};
   };
 
   VectorFuzzer(
@@ -159,6 +169,10 @@ class VectorFuzzer {
   }
 
   const VectorFuzzer::Options& getOptions() {
+    return opts_;
+  }
+
+  VectorFuzzer::Options& getMutableOptions() {
     return opts_;
   }
 

@@ -79,9 +79,7 @@ class DwrfRowReader : public StrideIndexProvider,
     return selectedSchema_;
   }
 
-  uint64_t rowNumber() const {
-    return previousRow_;
-  }
+  uint64_t rowNumber();
 
   uint64_t seekToRow(uint64_t rowNumber);
 
@@ -346,7 +344,6 @@ class DwrfReader : public dwio::common::Reader {
 
  private:
   std::shared_ptr<ReaderBase> readerBase_;
-  const dwio::common::ReaderOptions options_;
 };
 
 class DwrfReaderFactory : public dwio::common::ReaderFactory {

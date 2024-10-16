@@ -96,37 +96,20 @@ void RowNumber::addInput(RowVectorPtr input) {
   input_ = std::move(input);
 }
 
-void RowNumber::addSpillInput() {
-  VELOX_CHECK_NOT_NULL(input_);
-  ensureInputFits(input_);
-  if (input_ == nullptr) {
-    // Memory arbitration might be triggered by ensureInputFits() which will
-    // spill 'input_'.
-    return;
-  }
-
-  const auto numInput = input_->size();
-  SelectivityVector rows(numInput);
-
-  VELOX_CHECK(spillConfig_.has_value());
-  table_->prepareForGroupProbe(
-      *lookup_, input_, rows, spillConfig_->startPartitionBit);
-  table_->groupProbe(*lookup_, spillConfig_->startPartitionBit);
-
-  // Initialize new partitions with zeros.
-  for (auto i : lookup_->newGroups) {
-    setNumRows(lookup_->hits[i], 0);
-  }
-}
-
 void RowNumber::noMoreInput() {
   Operator::noMoreInput();
 
   if (inputSpiller_ != nullptr) {
-    inputSpiller_->finishSpill(spillInputPartitionSet_);
-    removeEmptyPartitions(spillInputPartitionSet_);
-    restoreNextSpillPartition();
+    finishSpillInputAndRestoreNext();
   }
+}
+
+void RowNumber::finishSpillInputAndRestoreNext() {
+  VELOX_CHECK_NOT_NULL(inputSpiller_);
+  inputSpiller_->finishSpill(spillInputPartitionSet_);
+  inputSpiller_.reset();
+  removeEmptyPartitions(spillInputPartitionSet_);
+  restoreNextSpillPartition();
 }
 
 void RowNumber::restoreNextSpillPartition() {
@@ -178,14 +161,15 @@ void RowNumber::restoreNextSpillPartition() {
 
   spillInputPartitionSet_.erase(it);
 
-  spillInputReader_->nextBatch(input_);
-  VELOX_CHECK_NOT_NULL(input_);
+  RowVectorPtr unspilledInput;
+  spillInputReader_->nextBatch(unspilledInput);
+  VELOX_CHECK_NOT_NULL(unspilledInput);
   // NOTE: spillInputReader_ will at least produce one batch output.
-  addSpillInput();
+  addInput(std::move(unspilledInput));
 }
 
 void RowNumber::ensureInputFits(const RowVectorPtr& input) {
-  if (!spillEnabled()) {
+  if (!spillEnabled() || inputSpiller_ != nullptr) {
     // Spilling is disabled.
     return;
   }
@@ -242,6 +226,12 @@ void RowNumber::ensureInputFits(const RowVectorPtr& input) {
   {
     Operator::ReclaimableSectionGuard guard(this);
     if (pool()->maybeReserve(targetIncrementBytes)) {
+      // If reservation triggers the spilling of 'RowNumber' operator itself, we
+      // will no longer need the reserved memory for building hash table as the
+      // table is spilled.
+      if (inputSpiller_ != nullptr) {
+        pool()->release();
+      }
       return;
     }
   }
@@ -330,19 +320,17 @@ RowVectorPtr RowNumber::getOutput() {
     output = fillOutput(numInput, nullptr);
   }
 
+  input_ = nullptr;
   if (spillInputReader_ != nullptr) {
-    if (spillInputReader_->nextBatch(input_)) {
-      addSpillInput();
+    RowVectorPtr unspilledInput;
+    if (spillInputReader_->nextBatch(unspilledInput)) {
+      addInput(std::move(unspilledInput));
     } else {
-      input_ = nullptr;
       spillInputReader_ = nullptr;
-      table_->clear();
+      table_->clear(/*freeTable=*/true);
       restoreNextSpillPartition();
     }
-  } else {
-    input_ = nullptr;
   }
-
   return output;
 }
 
@@ -424,7 +412,7 @@ SpillPartitionNumSet RowNumber::spillHashTable() {
   hashTableSpiller->spill();
   hashTableSpiller->finishSpill(spillHashTablePartitionSet_);
 
-  table_->clear();
+  table_->clear(/*freeTable=*/true);
   pool()->release();
   return hashTableSpiller->state().spilledPartitionSet();
 }
@@ -466,6 +454,10 @@ void RowNumber::spill() {
   if (input_ != nullptr) {
     spillInput(input_, memory::spillMemoryPool());
     input_ = nullptr;
+  }
+  if (generateRowNumber_) {
+    results_.clear();
+    results_.resize(1);
   }
 }
 
@@ -513,9 +505,9 @@ void RowNumber::spillInput(
 }
 
 void RowNumber::recursiveSpillInput() {
-  RowVectorPtr input;
-  while (spillInputReader_->nextBatch(input)) {
-    spillInput(input, pool());
+  RowVectorPtr unspilledInput;
+  while (spillInputReader_->nextBatch(unspilledInput)) {
+    spillInput(unspilledInput, pool());
 
     if (operatorCtx_->driver()->shouldYield()) {
       yield_ = true;
@@ -523,11 +515,7 @@ void RowNumber::recursiveSpillInput() {
     }
   }
 
-  inputSpiller_->finishSpill(spillInputPartitionSet_);
-  spillInputReader_ = nullptr;
-
-  removeEmptyPartitions(spillInputPartitionSet_);
-  restoreNextSpillPartition();
+  finishSpillInputAndRestoreNext();
 }
 
 void RowNumber::setSpillPartitionBits(

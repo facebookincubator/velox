@@ -30,8 +30,8 @@
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/QueryTraceUtil.h"
 #include "velox/exec/Task.h"
-#include "velox/exec/trace/QueryTraceUtil.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -209,9 +209,6 @@ std::string taskStateString(TaskState state) {
   }
 }
 
-std::atomic<uint64_t> Task::numCreatedTasks_ = 0;
-std::atomic<uint64_t> Task::numDeletedTasks_ = 0;
-
 bool registerTaskListener(std::shared_ptr<TaskListener> listener) {
   return listeners().withWLock([&](auto& listeners) {
     for (const auto& existingListener : listeners) {
@@ -277,6 +274,7 @@ std::shared_ptr<Task> Task::create(
       std::move(consumerSupplier),
       std::move(onError)));
   task->initTaskPool();
+  task->addToTaskList();
   return task;
 }
 
@@ -290,11 +288,11 @@ Task::Task(
     std::function<void(std::exception_ptr)> onError)
     : uuid_{makeUuid()},
       taskId_(taskId),
-      planFragment_(std::move(planFragment)),
       destination_(destination),
-      queryCtx_(std::move(queryCtx)),
-      traceConfig_(maybeMakeTraceConfig()),
       mode_(mode),
+      queryCtx_(std::move(queryCtx)),
+      planFragment_(std::move(planFragment)),
+      traceConfig_(maybeMakeTraceConfig()),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
@@ -310,6 +308,9 @@ Task::Task(
 }
 
 Task::~Task() {
+  SCOPE_EXIT {
+    removeFromTaskList();
+  };
   // TODO(spershin): Temporary code designed to reveal what causes SIGABRT in
   // jemalloc when destroying some Tasks.
   std::string clearStage;
@@ -346,12 +347,55 @@ Task::~Task() {
   CLEAR(childPools_.clear());
   CLEAR(pool_.reset());
   CLEAR(planFragment_ = core::PlanFragment());
+  CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
 
   // Ful-fill the task deletion promises at the end.
   auto taskDeletionPromises = std::move(taskDeletionPromises_);
   for (auto& promise : taskDeletionPromises) {
     promise.setValue();
+  }
+}
+
+Task::TaskList& Task::taskList() {
+  static TaskList taskList;
+  return taskList;
+}
+
+folly::SharedMutex& Task::taskListLock() {
+  static folly::SharedMutex lock;
+  return lock;
+}
+
+size_t Task::numRunningTasks() {
+  std::shared_lock guard{taskListLock()};
+  return taskList().size();
+}
+
+std::vector<std::shared_ptr<Task>> Task::getRunningTasks() {
+  std::vector<std::shared_ptr<Task>> tasks;
+  std::shared_lock guard(taskListLock());
+  tasks.reserve(taskList().size());
+  for (auto taskEntry : taskList()) {
+    if (auto task = taskEntry.taskPtr.lock()) {
+      tasks.push_back(std::move(task));
+    }
+  }
+  return tasks;
+}
+
+void Task::addToTaskList() {
+  VELOX_CHECK(!taskListEntry_.listHook.is_linked());
+  taskListEntry_.taskPtr = shared_from_this();
+
+  std::unique_lock guard{taskListLock()};
+  taskList().push_back(taskListEntry_);
+}
+
+void Task::removeFromTaskList() {
+  std::unique_lock guard{taskListLock()};
+  if (taskListEntry_.listHook.is_linked()) {
+    taskListEntry_.listHook.unlink();
   }
 }
 
@@ -2703,18 +2747,19 @@ StopReason Task::leaveSuspended(ThreadState& state) {
           ++numThreads_;
         }
       });
-      if (state.isTerminated) {
-        return StopReason::kAlreadyTerminated;
-      }
-      if (terminateRequested_) {
-        state.isTerminated = true;
-        return StopReason::kTerminate;
-      }
       if (state.numSuspensions > 1 || !pauseRequested_) {
+        if (state.isTerminated) {
+          return StopReason::kAlreadyTerminated;
+        }
+        if (terminateRequested_) {
+          state.isTerminated = true;
+          return StopReason::kTerminate;
+        }
         // If we have more than one suspension requests on this driver thread or
         // the task has been resumed, then we return here.
         return StopReason::kNone;
       }
+
       VELOX_CHECK_GT(state.numSuspensions, 0);
       VELOX_CHECK_GE(numThreads_, 0);
       leaveGuard.dismiss();
@@ -2847,18 +2892,38 @@ std::optional<trace::QueryTraceConfig> Task::maybeMakeTraceConfig() const {
       !queryConfig.queryTraceDir().empty(),
       "Query trace enabled but the trace dir is not set");
 
+  VELOX_USER_CHECK(
+      !queryConfig.queryTraceTaskRegExp().empty(),
+      "Query trace enabled but the trace task regexp is not set");
+
+  if (!RE2::FullMatch(taskId_, queryConfig.queryTraceTaskRegExp())) {
+    return std::nullopt;
+  }
+
+  const auto traceDir =
+      fmt::format("{}/{}", queryConfig.queryTraceDir(), taskId_);
   const auto queryTraceNodes = queryConfig.queryTraceNodeIds();
   if (queryTraceNodes.empty()) {
-    return trace::QueryTraceConfig(queryConfig.queryTraceDir());
+    LOG(INFO) << "Trace metadata for task: " << taskId_;
+    return trace::QueryTraceConfig(traceDir);
   }
 
   std::vector<std::string> nodes;
   folly::split(',', queryTraceNodes, nodes);
   std::unordered_set<std::string> nodeSet(nodes.begin(), nodes.end());
   VELOX_CHECK_EQ(nodeSet.size(), nodes.size());
-  LOG(INFO) << "Query trace plan node ids: " << queryTraceNodes;
+  LOG(INFO) << "Trace data for task " << taskId_ << " with plan nodes "
+            << queryTraceNodes;
+
+  trace::UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB =
+      [this](uint64_t bytes) {
+        return queryCtx_->updateTracedBytesAndCheckLimit(bytes);
+      };
   return trace::QueryTraceConfig(
-      std::move(nodeSet), queryConfig.queryTraceDir());
+      std::move(nodeSet),
+      traceDir,
+      std::move(updateAndCheckTraceLimitCB),
+      queryConfig.queryTraceTaskRegExp());
 }
 
 void Task::maybeInitQueryTrace() {
@@ -2866,11 +2931,9 @@ void Task::maybeInitQueryTrace() {
     return;
   }
 
-  const auto traceTaskDir =
-      fmt::format("{}/{}", traceConfig_->queryTraceDir, taskId_);
-  trace::createTraceDirectory(traceTaskDir);
+  trace::createTraceDirectory(traceConfig_->queryTraceDir);
   const auto queryMetadatWriter = std::make_unique<trace::QueryMetadataWriter>(
-      traceTaskDir, memory::traceMemoryPool());
+      traceConfig_->queryTraceDir, memory::traceMemoryPool());
   queryMetadatWriter->write(queryCtx_, planFragment_.planNode);
 }
 

@@ -91,7 +91,6 @@ struct WriterOptions : public dwio::common::WriterOptions {
   bool enableDictionary = true;
   int64_t dataPageSize = 1'024 * 1'024;
   int64_t dictionaryPageSizeLimit = 1'024 * 1'024;
-
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
@@ -150,6 +149,10 @@ class Writer : public dwio::common::Writer {
 
   // Forces a row group boundary before the data added by next write().
   void newRowGroup(int32_t numRows);
+
+  bool finish() override {
+    return true;
+  }
 
   // Closes 'this', After close, data can no longer be added and the completed
   // Parquet file is flushed into 'sink' provided at construction. 'sink' stays

@@ -49,6 +49,8 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::common::hll;
 
+constexpr uint64_t kQueryMemoryCapacity = 512 * MB;
+
 enum class TestMode {
   kUnpartitioned,
   kPartitioned,
@@ -604,7 +606,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     partitionedBy,
                                     bucketProperty,
                                     compressionKind),
-                                bucketProperty != nullptr,
+                                false,
                                 outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_);
       if (aggregateResult) {
@@ -628,7 +630,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     partitionedBy,
                                     bucketProperty,
                                     compressionKind),
-                                bucketProperty != nullptr,
+                                false,
                                 outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_)
                             .localPartition(std::vector<std::string>{})
@@ -669,7 +671,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                       partitionedBy,
                       bucketProperty,
                       compressionKind),
-                  bucketProperty != nullptr,
+                  false,
                   outputCommitStrategy))
               .capturePlanNodeId(tableWriteNodeId_)
               .localPartition({})
@@ -1023,13 +1025,6 @@ class TableWriteTest : public HiveConnectorTestBase {
   const TestParam testParam_;
   const FileFormat fileFormat_;
   const TestMode testMode_;
-  // Returns all available table types to test insert without any
-  // partitions (used in "immutablePartitions" set of tests).
-  const std::vector<connector::hive::LocationHandle::TableType> tableTypes_ = {
-      // Velox does not currently support TEMPORARY table type.
-      // Once supported, it should be added to this list.
-      connector::hive::LocationHandle::TableType::kNew,
-      connector::hive::LocationHandle::TableType::kExisting};
   const int numTableWriterCount_;
   const int numPartitionedTableWriterCount_;
 
@@ -2957,8 +2952,9 @@ TEST_P(AllTableWriterTest, columnStats) {
   // null    partition2_update   x            null                null
   // null    partition3_update   x            null                null
   //
-  // Note that we can have multiple same partition_update, they're for different
-  // files, but for stats, we would only have one record for each partition
+  // Note that we can have multiple same partition_update, they're for
+  // different files, but for stats, we would only have one record for each
+  // partition
   //
   // For unpartitioned, expected result is:
   // Row     Fragment           Context       partition           c1_min_value
@@ -3066,8 +3062,9 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
   // null    partition2_update   x            null                null
   // null    partition3_update   x            null                null
   //
-  // Note that we can have multiple same partition_update, they're for different
-  // files, but for stats, we would only have one record for each partition
+  // Note that we can have multiple same partition_update, they're for
+  // different files, but for stats, we would only have one record for each
+  // partition
   //
   // For unpartitioned, expected result is:
   // Row     Fragment           Context       partition           c1_min_value
@@ -3313,6 +3310,7 @@ TEST_P(BucketSortOnlyTableWriterTest, sortWriterSpill) {
   ASSERT_GT(stats.customStats[Operator::kSpillRuns].sum, 0);
   ASSERT_GT(stats.customStats[Operator::kSpillFillTime].sum, 0);
   ASSERT_GT(stats.customStats[Operator::kSpillSortTime].sum, 0);
+  ASSERT_GT(stats.customStats[Operator::kSpillExtractVectorTime].sum, 0);
   ASSERT_GT(stats.customStats[Operator::kSpillSerializationTime].sum, 0);
   ASSERT_GT(stats.customStats[Operator::kSpillFlushTime].sum, 0);
   ASSERT_GT(stats.customStats[Operator::kSpillWrites].sum, 0);
@@ -3401,6 +3399,93 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
   }
 }
 
+DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, yield) {
+  auto rowType =
+      ROW({"c0", "p0", "c1", "c3", "c4", "c5"},
+          {VARCHAR(), BIGINT(), INTEGER(), REAL(), DOUBLE(), VARCHAR()});
+  std::vector<std::string> partitionKeys = {"p0"};
+
+  // Partition vector is constant vector.
+  std::vector<RowVectorPtr> vectors = makeBatches(1, [&](auto) {
+    return makeRowVector(
+        rowType->names(),
+        {makeFlatVector<StringView>(
+             1'000,
+             [&](auto row) {
+               return StringView::makeInline(fmt::format("str_{}", row));
+             }),
+         makeConstant((int64_t)365, 1'000),
+         makeConstant((int32_t)365, 1'000),
+         makeFlatVector<float>(1'000, [&](auto row) { return row + 33.23; }),
+         makeFlatVector<double>(1'000, [&](auto row) { return row + 33.23; }),
+         makeFlatVector<StringView>(1'000, [&](auto row) {
+           return StringView::makeInline(fmt::format("bucket_{}", row * 3));
+         })});
+  });
+  createDuckDbTable(vectors);
+
+  struct {
+    uint64_t flushTimeSliceLimitMs;
+    bool expectedYield;
+
+    std::string debugString() const {
+      return fmt::format(
+          "flushTimeSliceLimitMs: {}, expectedYield: {}",
+          flushTimeSliceLimitMs,
+          expectedYield);
+    }
+  } testSettings[] = {{0, false}, {1, true}, {10'000, false}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    std::atomic_bool injectDelayOnce{true};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::dwrf::Writer::write",
+        std::function<void(dwrf::Writer*)>([&](dwrf::Writer* /*unused*/) {
+          if (!injectDelayOnce.exchange(false)) {
+            return;
+          }
+          std::this_thread::sleep_for(std::chrono::seconds(2));
+        }));
+    createDuckDbTable(vectors);
+
+    auto outputDirectory = TempDirectoryPath::create();
+    auto plan = createInsertPlan(
+        PlanBuilder().values({vectors}),
+        rowType,
+        outputDirectory->getPath(),
+        partitionKeys,
+        bucketProperty_,
+        compressionKind_,
+        1,
+        connector::hive::LocationHandle::TableType::kNew,
+        commitStrategy_);
+    const int prevYieldCount = Driver::yieldCount();
+    const std::shared_ptr<Task> task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(QueryConfig::kTaskWriterCount, std::to_string(1))
+            .connectorSessionProperty(
+                kHiveConnectorId,
+                HiveConfig::kSortWriterFinishTimeSliceLimitMsSession,
+                folly::to<std::string>(testData.flushTimeSliceLimitMs))
+            .connectorSessionProperty(
+                kHiveConnectorId,
+                HiveConfig::kSortWriterMaxOutputRowsSession,
+                folly::to<std::string>(100))
+            .connectorSessionProperty(
+                kHiveConnectorId,
+                HiveConfig::kSortWriterMaxOutputBytesSession,
+                folly::to<std::string>("1KB"))
+            .assertResults("SELECT count(*) FROM tmp");
+    auto stats = task->taskStats().pipelineStats.front().operatorStats;
+    if (testData.expectedYield) {
+      ASSERT_GT(Driver::yieldCount(), prevYieldCount);
+    } else {
+      ASSERT_EQ(Driver::yieldCount(), prevYieldCount);
+    }
+  }
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     TableWriterTest,
     UnpartitionedTableWriterTest,
@@ -3477,13 +3562,17 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
   for (bool writerSpillEnabled : {false, true}) {
     {
       SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
-      auto memoryManager = createMemoryManager();
-      auto arbitrator = memoryManager->arbitrator();
-      auto queryCtx =
-          newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
-      ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
+      auto queryPool = memory::memoryManager()->addRootPool(
+          "reclaimFromTableWriter", kQueryMemoryCapacity);
+      auto* arbitrator = memory::memoryManager()->arbitrator();
+      const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
+      const int numPrevNonReclaimableAttempts =
+          arbitrator->stats().numNonReclaimableAttempts;
+      auto queryCtx = core::QueryCtx::create(
+          executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+      ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
-      std::atomic<int> numInputs{0};
+      std::atomic_int numInputs{0};
       SCOPED_TESTVALUE_SET(
           "facebook::velox::exec::Driver::runInternal::addInput",
           std::function<void(Operator*)>(([&](Operator* op) {
@@ -3498,8 +3587,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
             }
 
             const auto fakeAllocationSize =
-                arbitrator->stats().maxCapacityBytes -
-                op->pool()->parent()->reservedBytes();
+                kQueryMemoryCapacity - op->pool()->parent()->reservedBytes();
             if (writerSpillEnabled) {
               auto* buffer = op->pool()->allocate(fakeAllocationSize);
               op->pool()->free(buffer, fakeAllocationSize);
@@ -3533,8 +3621,8 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
                 .config(core::QueryConfig::kSpillEnabled, writerSpillEnabled)
                 .config(
                     core::QueryConfig::kWriterSpillEnabled, writerSpillEnabled)
-                // Set 0 file writer flush threshold to always trigger flush in
-                // test.
+                // Set 0 file writer flush threshold to always trigger flush
+                // in test.
                 .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
                 .plan(std::move(writerPlan))
                 .assertResults(fmt::format("SELECT {}", numRows));
@@ -3552,15 +3640,19 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
                   .at(HiveDataSink::kEarlyFlushedRawBytes)
                   .sum,
               0);
-          ASSERT_EQ(arbitrator->stats().numFailures, 0);
+          ASSERT_EQ(
+              arbitrator->stats().numFailures, numPrevArbitrationFailures);
         } else {
           ASSERT_EQ(
               tableWriteStats->customStats.count(
                   HiveDataSink::kEarlyFlushedRawBytes),
               0);
-          ASSERT_EQ(arbitrator->stats().numFailures, 1);
+          ASSERT_EQ(
+              arbitrator->stats().numFailures, numPrevArbitrationFailures + 1);
         }
-        ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 0);
+        ASSERT_EQ(
+            arbitrator->stats().numNonReclaimableAttempts,
+            numPrevNonReclaimableAttempts);
       }
       waitForAllTasksToBeDeleted(3'000'000);
     }
@@ -3589,11 +3681,15 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
   for (bool writerSpillEnabled : {false, true}) {
     {
       SCOPED_TRACE(fmt::format("writerSpillEnabled: {}", writerSpillEnabled));
-      auto memoryManager = createMemoryManager();
-      auto arbitrator = memoryManager->arbitrator();
-      auto queryCtx =
-          newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
-      ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
+      auto queryPool = memory::memoryManager()->addRootPool(
+          "reclaimFromSortTableWriter", kQueryMemoryCapacity);
+      auto* arbitrator = memory::memoryManager()->arbitrator();
+      const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
+      const int numPrevNonReclaimableAttempts =
+          arbitrator->stats().numNonReclaimableAttempts;
+      auto queryCtx = core::QueryCtx::create(
+          executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+      ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
       const auto spillStats = common::globalSpillStats();
       std::atomic<int> numInputs{0};
@@ -3611,8 +3707,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
             }
 
             const auto fakeAllocationSize =
-                arbitrator->stats().maxCapacityBytes -
-                op->pool()->parent()->reservedBytes();
+                kQueryMemoryCapacity - op->pool()->parent()->reservedBytes();
             if (writerSpillEnabled) {
               auto* buffer = op->pool()->allocate(fakeAllocationSize);
               op->pool()->free(buffer, fakeAllocationSize);
@@ -3650,13 +3745,18 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
           .spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, writerSpillEnabled)
           .config(core::QueryConfig::kWriterSpillEnabled, writerSpillEnabled)
-          // Set 0 file writer flush threshold to always trigger flush in test.
+          // Set 0 file writer flush threshold to always trigger flush in
+          // test.
           .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
           .plan(std::move(writerPlan))
           .assertResults(fmt::format("SELECT {}", numRows));
 
-      ASSERT_EQ(arbitrator->stats().numFailures, writerSpillEnabled ? 0 : 1);
-      ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 0);
+      ASSERT_EQ(
+          arbitrator->stats().numFailures,
+          numPrevArbitrationFailures + (writerSpillEnabled ? 0 : 1));
+      ASSERT_EQ(
+          arbitrator->stats().numNonReclaimableAttempts,
+          numPrevNonReclaimableAttempts);
 
       waitForAllTasksToBeDeleted(3'000'000);
       const auto updatedSpillStats = common::globalSpillStats();
@@ -3695,11 +3795,15 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
         succinctBytes(testParam.bytesToReserve),
         succinctBytes(testParam.writerFlushThreshold)));
 
-    auto memoryManager = createMemoryManager();
-    auto arbitrator = memoryManager->arbitrator();
-    auto queryCtx =
-        newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
-    ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
+    auto queryPool = memory::memoryManager()->addRootPool(
+        "writerFlushThreshold", kQueryMemoryCapacity);
+    auto* arbitrator = memory::memoryManager()->arbitrator();
+    const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
+    const int numPrevNonReclaimableAttempts =
+        arbitrator->stats().numNonReclaimableAttempts;
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+    ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
     memory::MemoryPool* compressionPool{nullptr};
     SCOPED_TESTVALUE_SET(
@@ -3728,8 +3832,8 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
             compressionPool->maybeReserve(testParam.bytesToReserve);
           }
 
-          const auto fakeAllocationSize = arbitrator->stats().maxCapacityBytes -
-              op->pool()->parent()->usedBytes();
+          const auto fakeAllocationSize =
+              kQueryMemoryCapacity - op->pool()->parent()->usedBytes();
           if (testParam.writerFlushThreshold == 0) {
             auto* buffer = op->pool()->allocate(fakeAllocationSize);
             op->pool()->free(buffer, fakeAllocationSize);
@@ -3767,14 +3871,16 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
 
     ASSERT_EQ(
         arbitrator->stats().numFailures,
-        testParam.writerFlushThreshold == 0 ? 0 : 1);
-    // We don't trigger reclaim on a writer if it doesn't meet the writer flush
-    // threshold.
-    ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 0);
-    ASSERT_GE(arbitrator->stats().numReclaimedBytes, testParam.bytesToReserve);
+        numPrevArbitrationFailures +
+            (testParam.writerFlushThreshold == 0 ? 0 : 1));
+    // We don't trigger reclaim on a writer if it doesn't meet the writer
+    // flush threshold.
+    ASSERT_EQ(
+        arbitrator->stats().numNonReclaimableAttempts,
+        numPrevNonReclaimableAttempts);
+    ASSERT_GE(arbitrator->stats().reclaimedUsedBytes, testParam.bytesToReserve);
     waitForAllTasksToBeDeleted(3'000'000);
     queryCtx.reset();
-    ASSERT_EQ(arbitrator->stats().numShrinks, 1);
   }
 }
 
@@ -3797,11 +3903,15 @@ DEBUG_ONLY_TEST_F(
 
   createDuckDbTable(vectors);
 
-  auto memoryManager = createMemoryManager();
-  auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx =
-      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
-  ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "reclaimFromNonReclaimableTableWriter", kQueryMemoryCapacity);
+  auto* arbitrator = memory::memoryManager()->arbitrator();
+  const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
+  const int numPrevNonReclaimableAttempts =
+      arbitrator->stats().numNonReclaimableAttempts;
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic<bool> injectFakeAllocationOnce{true};
   SCOPED_TESTVALUE_SET(
@@ -3813,7 +3923,7 @@ DEBUG_ONLY_TEST_F(
         auto& pool = writer->getContext().getMemoryPool(
             dwrf::MemoryUsageCategory::GENERAL);
         const auto fakeAllocationSize =
-            arbitrator->stats().maxCapacityBytes - pool.reservedBytes();
+            kQueryMemoryCapacity - pool.reservedBytes();
         VELOX_ASSERT_THROW(
             pool.allocate(fakeAllocationSize), "Exceeded memory pool");
       })));
@@ -3852,8 +3962,10 @@ DEBUG_ONLY_TEST_F(
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
 
-  ASSERT_EQ(arbitrator->stats().numFailures, 1);
-  ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 1);
+  ASSERT_EQ(arbitrator->stats().numFailures, numPrevArbitrationFailures + 1);
+  ASSERT_EQ(
+      arbitrator->stats().numNonReclaimableAttempts,
+      numPrevNonReclaimableAttempts + 1);
   waitForAllTasksToBeDeleted();
 }
 
@@ -3875,11 +3987,16 @@ DEBUG_ONLY_TEST_F(
   }
 
   createDuckDbTable(vectors);
-  auto memoryManager = createMemoryManager();
-  auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx =
-      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
-  ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "arbitrationFromTableWriterWithNoMoreInput", kQueryMemoryCapacity);
+  auto* arbitrator = memory::memoryManager()->arbitrator();
+  const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
+  const int numPrevNonReclaimableAttempts =
+      arbitrator->stats().numNonReclaimableAttempts;
+  const int numPrevReclaimedBytes = arbitrator->stats().reclaimedUsedBytes;
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic<bool> writerNoMoreInput{false};
   SCOPED_TESTVALUE_SET(
@@ -3904,8 +4021,8 @@ DEBUG_ONLY_TEST_F(
         if (!injectGetOutputOnce.exchange(false)) {
           return;
         }
-        const auto fakeAllocationSize = arbitrator->stats().maxCapacityBytes -
-            op->pool()->parent()->reservedBytes();
+        const auto fakeAllocationSize =
+            kQueryMemoryCapacity - op->pool()->parent()->reservedBytes();
         auto* buffer = op->pool()->allocate(fakeAllocationSize);
         op->pool()->free(buffer, fakeAllocationSize);
       })));
@@ -3943,9 +4060,11 @@ DEBUG_ONLY_TEST_F(
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
 
-  ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 0);
-  ASSERT_EQ(arbitrator->stats().numFailures, 0);
-  ASSERT_GT(arbitrator->stats().numReclaimedBytes, 0);
+  ASSERT_EQ(
+      arbitrator->stats().numNonReclaimableAttempts,
+      numPrevArbitrationFailures);
+  ASSERT_EQ(arbitrator->stats().numFailures, numPrevNonReclaimableAttempts);
+  ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, numPrevReclaimedBytes);
   waitForAllTasksToBeDeleted();
 }
 
@@ -3971,11 +4090,15 @@ DEBUG_ONLY_TEST_F(
 
   createDuckDbTable(vectors);
 
-  auto memoryManager = createMemoryManager();
-  auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx =
-      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
-  ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "reclaimFromNonReclaimableSortTableWriter", kQueryMemoryCapacity);
+  auto* arbitrator = memory::memoryManager()->arbitrator();
+  const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
+  const int numPrevNonReclaimableAttempts =
+      arbitrator->stats().numNonReclaimableAttempts;
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic<bool> injectFakeAllocationOnce{true};
   SCOPED_TESTVALUE_SET(
@@ -3992,8 +4115,8 @@ DEBUG_ONLY_TEST_F(
         if (!injectFakeAllocationOnce.exchange(false)) {
           return;
         }
-        const auto fakeAllocationSize = arbitrator->stats().maxCapacityBytes -
-            pool->parent()->reservedBytes();
+        const auto fakeAllocationSize =
+            kQueryMemoryCapacity - pool->parent()->reservedBytes();
         VELOX_ASSERT_THROW(
             pool->allocate(fakeAllocationSize), "Exceeded memory pool");
       })));
@@ -4041,8 +4164,10 @@ DEBUG_ONLY_TEST_F(
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
 
-  ASSERT_EQ(arbitrator->stats().numFailures, 1);
-  ASSERT_EQ(arbitrator->stats().numNonReclaimableAttempts, 1);
+  ASSERT_EQ(arbitrator->stats().numFailures, numPrevArbitrationFailures + 1);
+  ASSERT_EQ(
+      arbitrator->stats().numNonReclaimableAttempts,
+      numPrevNonReclaimableAttempts + 1);
   const auto updatedSpillStats = common::globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
   waitForAllTasksToBeDeleted();
@@ -4064,13 +4189,14 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
 
   createDuckDbTable(vectors);
 
-  auto memoryManager =
-      createMemoryManager(memoryCapacity, kMemoryPoolInitCapacity);
-  auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx =
-      newQueryCtx(memoryManager.get(), executor_.get(), memoryCapacity);
-  ASSERT_EQ(queryCtx->pool()->capacity(), kMemoryPoolInitCapacity);
-  std::atomic<bool> injectWriterErrorOnce{true};
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "tableFileWriteError", kQueryMemoryCapacity);
+  auto* arbitrator = memory::memoryManager()->arbitrator();
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
+
+  std::atomic_bool injectWriterErrorOnce{true};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::dwrf::Writer::write",
       std::function<void(dwrf::Writer*)>(([&](dwrf::Writer* writer) {
@@ -4103,8 +4229,8 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
           // Set 0 file writer flush threshold to always reclaim memory from
           // file writer.
           .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
-          // Set stripe size to extreme large to avoid writer internal triggered
-          // flush.
+          // Set stripe size to extreme large to avoid writer internal
+          // triggered flush.
           .connectorSessionProperty(
               kHiveConnectorId,
               connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
@@ -4133,20 +4259,19 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
     vectors.push_back(fuzzer.fuzzInputRow(rowType_));
   }
 
-  auto memoryManager =
-      createMemoryManager(memoryCapacity, kMemoryPoolInitCapacity);
-  auto arbitrator = memoryManager->arbitrator();
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity / 4);
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity / 4);
 
-  std::shared_ptr<core::QueryCtx> queryCtx =
-      newQueryCtx(memoryManager.get(), executor_.get(), memoryCapacity / 8);
-  std::shared_ptr<core::QueryCtx> fakeQueryCtx =
-      newQueryCtx(memoryManager.get(), executor_.get(), memoryCapacity);
-  auto fakePool = fakeQueryCtx->pool()->addLeafChild(
-      "fakePool", true, FakeMemoryReclaimer::create());
+  auto fakeLeafPool = queryCtx->pool()->addLeafChild(
+      "fakeLeaf", true, FakeMemoryReclaimer::create());
+  const int fakeAllocationSize = kQueryMemoryCapacity * 3 / 16;
   TestAllocation injectedFakeAllocation{
-      fakePool.get(),
-      fakePool->allocate(memoryCapacity * 3 / 4),
-      memoryCapacity * 3 / 4};
+      fakeLeafPool.get(),
+      fakeLeafPool->allocate(fakeAllocationSize),
+      fakeAllocationSize};
 
   void* allocatedBuffer;
   TestAllocation injectedWriterAllocation;
@@ -4158,21 +4283,21 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
         auto& pool = writer->getContext().getMemoryPool(
             dwrf::MemoryUsageCategory::GENERAL);
         injectedWriterAllocation.pool = &pool;
-        injectedWriterAllocation.size = memoryCapacity / 8;
+        injectedWriterAllocation.size = kQueryMemoryCapacity / 8;
         injectedWriterAllocation.buffer =
             pool.allocate(injectedWriterAllocation.size);
       })));
 
-  // Free the extra fake memory allocations to make memory pool state consistent
-  // at the end of test.
-  std::atomic<bool> clearAllocationOnce{true};
+  // Free the extra fake memory allocations to make memory pool state
+  // consistent at the end of test.
+  std::atomic_bool clearAllocationOnce{true};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Task::setError",
       std::function<void(Task*)>(([&](Task* task) {
         if (!clearAllocationOnce.exchange(false)) {
           return;
         }
-        ASSERT_EQ(injectedWriterAllocation.size, memoryCapacity / 8);
+        ASSERT_EQ(injectedWriterAllocation.size, kQueryMemoryCapacity / 8);
         injectedWriterAllocation.free();
       })));
 
@@ -4189,10 +4314,11 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
           .spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kWriterSpillEnabled, true)
-          // Set 0 file writer flush threshold to always trigger flush in test.
+          // Set 0 file writer flush threshold to always trigger flush in
+          // test.
           .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
-          // Set stripe size to extreme large to avoid writer internal triggered
-          // flush.
+          // Set stripe size to extreme large to avoid writer internal
+          // triggered flush.
           .connectorSessionProperty(
               kHiveConnectorId,
               connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
@@ -4221,16 +4347,23 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
     numRows += vectors.back()->size();
   }
 
-  auto memoryManager = createMemoryManager();
-  auto arbitrator = memoryManager->arbitrator();
-  auto queryCtx =
-      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
-  auto fakeQueryCtx =
-      newQueryCtx(memoryManager.get(), executor_.get(), kMemoryCapacity);
-  auto fakePool = fakeQueryCtx->pool()->addLeafChild(
-      "fakePool", true, FakeMemoryReclaimer::create());
+  auto* arbitrator = memory::memoryManager()->arbitrator();
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity);
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
-  std::atomic<bool> writerNoMoreInput{false};
+  auto fakeQueryPool =
+      memory::memoryManager()->addRootPool("fake", kQueryMemoryCapacity);
+  auto fakeQueryCtx = core::QueryCtx::create(
+      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(fakeQueryPool));
+  ASSERT_EQ(fakeQueryCtx->pool()->capacity(), kQueryMemoryCapacity);
+
+  auto fakeLeafPool = fakeQueryCtx->pool()->addLeafChild(
+      "fakeLeaf", true, FakeMemoryReclaimer::create());
+
+  std::atomic_bool writerNoMoreInput{false};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal::noMoreInput",
       std::function<void(Operator*)>(([&](Operator* op) {
@@ -4251,14 +4384,13 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
         if (!maybeReserveInjectOnce.exchange(false)) {
           return;
         }
-        // The injection memory allocation to cause maybeReserve on writer close
-        // to trigger memory arbitration. The latter tries to reclaim memory
-        // from this file writer.
-        const size_t injectAllocationSize =
-            pool->freeBytes() + arbitrator->stats().freeCapacityBytes;
+        // The injection memory allocation to cause maybeReserve on writer
+        // close to trigger memory arbitration. The latter tries to reclaim
+        // memory from this file writer.
+        const size_t injectAllocationSize = kQueryMemoryCapacity;
         fakeAllocation = TestAllocation{
-            .pool = fakePool.get(),
-            .buffer = fakePool->allocate(injectAllocationSize),
+            .pool = fakeLeafPool.get(),
+            .buffer = fakeLeafPool->allocate(injectAllocationSize),
             .size = injectAllocationSize};
       }));
 
@@ -4311,8 +4443,11 @@ DEBUG_ONLY_TEST_F(
   const auto expectedResult =
       runWriteTask(vectors, nullptr, false, 1, pool(), kHiveConnectorId, false)
           .data;
-  auto queryCtx =
-      newQueryCtx(memory::memoryManager(), executor_.get(), memoryCapacity);
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity);
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic_bool writerCloseWaitFlag{true};
   folly::EventCount writerCloseWait;

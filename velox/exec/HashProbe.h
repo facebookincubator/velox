@@ -72,6 +72,10 @@ class HashProbe : public Operator {
     return inputSpiller_ != nullptr;
   }
 
+  bool testingExceededMaxSpillLevelLimit() const {
+    return exceededMaxSpillLevelLimit_;
+  }
+
  private:
   // Indicates if the join type includes misses from the left side in the
   // output.
@@ -202,7 +206,7 @@ class HashProbe : public Operator {
   void prepareTableSpill(
       const std::optional<SpillPartitionId>& restoredPartitionId);
 
-  bool spillEnabled() const;
+  bool canSpill() const override;
 
   // Indicates if the probe input is read from spilled data or not.
   bool isSpillInput() const;
@@ -616,7 +620,7 @@ class HashProbe : public Operator {
   // Indicates if this hash probe has exceeded max spill limit which is not
   // allowed to spill. This is reset when hash probe operator starts to probe
   // the next previously spilled hash table partition.
-  bool exceededMaxSpillLevelLimit_{false};
+  tsan_atomic<bool> exceededMaxSpillLevelLimit_{false};
 
   // The partition bits used to spill the hash table.
   HashBitRange tableSpillHashBits_;

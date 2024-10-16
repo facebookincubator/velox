@@ -1423,33 +1423,37 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
   }
 
   // Convert the parsed date/time into a timestamp.
-  int64_t daysSinceEpoch;
-  Status status;
+  Expected<int64_t> daysSinceEpoch;
   if (date.weekDateFormat) {
-    status = util::daysSinceEpochFromWeekDate(
-        date.year, date.week, date.dayOfWeek, daysSinceEpoch);
+    daysSinceEpoch =
+        util::daysSinceEpochFromWeekDate(date.year, date.week, date.dayOfWeek);
   } else if (date.dayOfYearFormat) {
-    status = util::daysSinceEpochFromDayOfYear(
-        date.year, date.dayOfYear, daysSinceEpoch);
+    daysSinceEpoch =
+        util::daysSinceEpochFromDayOfYear(date.year, date.dayOfYear);
   } else {
-    status = util::daysSinceEpochFromDate(
-        date.year, date.month, date.day, daysSinceEpoch);
+    daysSinceEpoch =
+        util::daysSinceEpochFromDate(date.year, date.month, date.day);
   }
-  if (!status.ok()) {
-    VELOX_DCHECK(status.isUserError());
-    return folly::makeUnexpected(status);
+  if (daysSinceEpoch.hasError()) {
+    VELOX_DCHECK(daysSinceEpoch.error().isUserError());
+    return folly::makeUnexpected(daysSinceEpoch.error());
   }
 
   int64_t microsSinceMidnight =
       util::fromTime(date.hour, date.minute, date.second, date.microsecond);
   return DateTimeResult{
-      util::fromDatetime(daysSinceEpoch, microsSinceMidnight), date.timezoneId};
+      util::fromDatetime(daysSinceEpoch.value(), microsSinceMidnight),
+      date.timezoneId};
 }
 
-std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
+Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
     const std::string_view& format) {
   if (format.empty()) {
-    VELOX_USER_FAIL("Both printing and parsing not supported");
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    }
+    return folly::makeUnexpected(
+        Status::UserError("Both printing and parsing not supported"));
   }
 
   // For %r we should reserve 1 extra space because it has 3 literals ':' ':'
@@ -1557,8 +1561,11 @@ std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
         case 'V':
         case 'w':
         case 'X':
-          VELOX_UNSUPPORTED(
-              "Date format specifier is not supported: %{}", *tokenEnd);
+          if (threadSkipErrorDetails()) {
+            return folly::makeUnexpected(Status::UserError());
+          }
+          return folly::makeUnexpected(Status::UserError(
+              "Date format specifier is not supported: %{}", *tokenEnd));
         default:
           builder.appendLiteral(tokenEnd, 1);
           break;
@@ -1575,10 +1582,14 @@ std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
   return builder.setType(DateTimeFormatterType::MYSQL).build();
 }
 
-std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
+Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
     const std::string_view& format) {
   if (format.empty()) {
-    VELOX_USER_FAIL("Invalid pattern specification");
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    }
+    return folly::makeUnexpected(
+        Status::UserError("Invalid pattern specification"));
   }
 
   DateTimeFormatterBuilder builder(format.size());
@@ -1598,16 +1609,19 @@ std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
         // Case 2: find closing single quote
         int64_t count = numLiteralChars(startTokenPtr + 1, end);
         if (count == -1) {
-          VELOX_USER_FAIL("No closing single quote for literal");
-        } else {
-          for (int64_t i = 1; i <= count; i++) {
-            builder.appendLiteral(startTokenPtr + i, 1);
-            if (*(startTokenPtr + i) == '\'') {
-              i += 1;
-            }
+          if (threadSkipErrorDetails()) {
+            return folly::makeUnexpected(Status::UserError());
           }
-          cur += count + 2;
+          return folly::makeUnexpected(
+              Status::UserError("No closing single quote for literal"));
         }
+        for (int64_t i = 1; i <= count; i++) {
+          builder.appendLiteral(startTokenPtr + i, 1);
+          if (*(startTokenPtr + i) == '\'') {
+            i += 1;
+          }
+        }
+        cur += count + 2;
       }
     } else {
       int count = 1;
@@ -1686,7 +1700,11 @@ std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
           break;
         default:
           if (isalpha(*startTokenPtr)) {
-            VELOX_UNSUPPORTED("Specifier {} is not supported.", *startTokenPtr);
+            if (threadSkipErrorDetails()) {
+              return folly::makeUnexpected(Status::UserError());
+            }
+            return folly::makeUnexpected(Status::UserError(
+                "Specifier {} is not supported.", *startTokenPtr));
           } else {
             builder.appendLiteral(startTokenPtr, cur - startTokenPtr);
           }
@@ -1695,6 +1713,147 @@ std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
     }
   }
   return builder.setType(DateTimeFormatterType::JODA).build();
+}
+
+Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
+    const std::string_view& format,
+    bool lenient) {
+  if (format.empty()) {
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    }
+    return folly::makeUnexpected(
+        Status::UserError("Format pattern should not be empty"));
+  }
+
+  DateTimeFormatterBuilder builder(format.size());
+  const char* cur = format.data();
+  const char* end = cur + format.size();
+
+  while (cur < end) {
+    const char* startTokenPtr = cur;
+
+    // For literal case, literal should be quoted using single quotes ('). If
+    // there is no quotes, it is interpreted as pattern letters. If there is
+    // only single quote, a user error will be thrown.
+    if (*startTokenPtr == '\'') {
+      // Append single literal quote for 2 consecutive single quote.
+      if (cur + 1 < end && *(cur + 1) == '\'') {
+        builder.appendLiteral("'");
+        cur += 2;
+      } else {
+        // Append literal characters from the start until the next closing
+        // literal sequence single quote.
+        int64_t count = numLiteralChars(startTokenPtr + 1, end);
+        if (count == -1) {
+          if (threadSkipErrorDetails()) {
+            return folly::makeUnexpected(Status::UserError());
+          }
+          return folly::makeUnexpected(
+              Status::UserError("No closing single quote for literal"));
+        }
+        for (int64_t i = 1; i <= count; i++) {
+          builder.appendLiteral(startTokenPtr + i, 1);
+          if (*(startTokenPtr + i) == '\'') {
+            i += 1;
+          }
+        }
+        cur += count + 2;
+      }
+    } else {
+      // Append format specifier according to pattern letters. If pattern letter
+      // is not supported, a user error will be thrown.
+      int count = 1;
+      ++cur;
+      while (cur < end && *startTokenPtr == *cur) {
+        ++count;
+        ++cur;
+      }
+      switch (*startTokenPtr) {
+        case 'a':
+          builder.appendHalfDayOfDay();
+          break;
+        case 'C':
+          builder.appendCenturyOfEra(count);
+          break;
+        case 'd':
+          builder.appendDayOfMonth(count);
+          break;
+        case 'D':
+          builder.appendDayOfYear(count);
+          break;
+        case 'e':
+          builder.appendDayOfWeek1Based(count);
+          break;
+        case 'E':
+          builder.appendDayOfWeekText(count);
+          break;
+        case 'G':
+          builder.appendEra();
+          break;
+        case 'h':
+          builder.appendClockHourOfHalfDay(count);
+          break;
+        case 'H':
+          builder.appendHourOfDay(count);
+          break;
+        case 'K':
+          builder.appendHourOfHalfDay(count);
+          break;
+        case 'k':
+          builder.appendClockHourOfDay(count);
+          break;
+        case 'm':
+          builder.appendMinuteOfHour(count);
+          break;
+        case 'M':
+          if (count <= 2) {
+            builder.appendMonthOfYear(count);
+          } else {
+            builder.appendMonthOfYearText(count);
+          }
+          break;
+        case 's':
+          builder.appendSecondOfMinute(count);
+          break;
+        case 'S':
+          builder.appendFractionOfSecond(count);
+          break;
+        case 'w':
+          builder.appendWeekOfWeekYear(count);
+          break;
+        case 'x':
+          builder.appendWeekYear(count);
+          break;
+        case 'y':
+          builder.appendYear(count);
+          break;
+        case 'Y':
+          builder.appendYearOfEra(count);
+          break;
+        case 'z':
+          builder.appendTimeZone(count);
+          break;
+        case 'Z':
+          builder.appendTimeZoneOffsetId(count);
+          break;
+        default:
+          if (isalpha(*startTokenPtr)) {
+            if (threadSkipErrorDetails()) {
+              return folly::makeUnexpected(Status::UserError());
+            }
+            return folly::makeUnexpected(Status::UserError(
+                "Specifier {} is not supported.", *startTokenPtr));
+          } else {
+            builder.appendLiteral(startTokenPtr, cur - startTokenPtr);
+          }
+          break;
+      }
+    }
+  }
+  DateTimeFormatterType type = lenient ? DateTimeFormatterType::LENIENT_SIMPLE
+                                       : DateTimeFormatterType::STRICT_SIMPLE;
+  return builder.setType(type).build();
 }
 
 } // namespace facebook::velox::functions

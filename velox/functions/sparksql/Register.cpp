@@ -53,6 +53,7 @@
 #include "velox/functions/sparksql/StringToMap.h"
 #include "velox/functions/sparksql/UnscaledValueFunction.h"
 #include "velox/functions/sparksql/Uuid.h"
+#include "velox/functions/sparksql/specialforms/AtLeastNNonNulls.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
@@ -148,6 +149,9 @@ void registerAllSpecialFormGeneralFunctions() {
       "cast", std::make_unique<SparkCastCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       "try_cast", std::make_unique<SparkTryCastCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
+      std::make_unique<AtLeastNNonNullsCallToSpecialForm>());
 }
 
 namespace {
@@ -360,7 +364,6 @@ void registerFunctions(const std::string& prefix) {
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
-  registerFunction<WeekFunction, int32_t, Timestamp>({prefix + "week_of_year"});
   registerFunction<WeekFunction, int32_t, Date>({prefix + "week_of_year"});
   registerFunction<YearOfWeekFunction, int32_t, Date>(
       {prefix + "year_of_week"});
@@ -515,6 +518,23 @@ void registerFunctions(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar>({prefix + "mask"});
+}
+
+std::vector<std::string> listFunctionNames() {
+  std::vector<std::string> names =
+      exec::specialFormRegistry().getSpecialFormNames();
+
+  const auto& simpleFunctions = exec::simpleFunctions().getFunctionNames();
+  names.insert(names.end(), simpleFunctions.begin(), simpleFunctions.end());
+
+  exec::vectorFunctionFactories().withRLock([&](const auto& map) {
+    names.reserve(names.size() + map.size());
+    for (const auto& [name, _] : map) {
+      names.push_back(name);
+    }
+  });
+
+  return names;
 }
 
 } // namespace sparksql

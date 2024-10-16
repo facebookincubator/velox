@@ -59,18 +59,24 @@ struct ExprStats {
   /// size.
   uint64_t numProcessedVectors{0};
 
+  /// Whether default-null behavior of an expression resulted in skipping
+  /// evaluation of rows.
+  bool defaultNullRowsSkipped{false};
+
   void add(const ExprStats& other) {
     timing.add(other.timing);
     numProcessedRows += other.numProcessedRows;
     numProcessedVectors += other.numProcessedVectors;
+    defaultNullRowsSkipped |= other.defaultNullRowsSkipped;
   }
 
   std::string toString() const {
     return fmt::format(
-        "timing: {}, numProcessedRows: {}, numProcessedVectors: {}",
+        "timing: {}, numProcessedRows: {}, numProcessedVectors: {}, defaultNullRowsSkipped: {}",
         timing.toString(),
         numProcessedRows,
-        numProcessedVectors);
+        numProcessedVectors,
+        defaultNullRowsSkipped ? "true" : "false");
   }
 };
 
@@ -486,8 +492,9 @@ class Expr {
   /// Evaluation of such expression is optimized by memoizing and reusing
   /// the results of prior evaluations. That logic is implemented in
   /// 'evaluateSharedSubexpr'.
-  bool shouldEvaluateSharedSubexp() const {
-    return deterministic_ && isMultiplyReferenced_ && !inputs_.empty();
+  bool shouldEvaluateSharedSubexp(EvalCtx& context) const {
+    return deterministic_ && isMultiplyReferenced_ && !inputs_.empty() &&
+        context.sharedSubExpressionReuseEnabled();
   }
 
   /// Evaluate common sub-expression. Check if sharedSubexprValues_ already has

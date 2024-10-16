@@ -19,12 +19,15 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/random/uniform_int_distribution.hpp>
 
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/ReverseSignatureBinder.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/Type.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::fuzzer {
+
+using exec::test::sanitizeTryResolveType;
 
 std::string typeToBaseName(const TypePtr& type) {
   if (type->isDecimal()) {
@@ -183,7 +186,7 @@ bool ArgumentTypeFuzzer::fuzzArgumentTypes(uint32_t maxVariadicArgs) {
     if (formalArgs[i].baseName() == "any") {
       actualArg = randType();
     } else {
-      actualArg = exec::SignatureBinder::tryResolveType(
+      actualArg = sanitizeTryResolveType(
           formalArgs[i], variables(), bindings_, integerBindings_);
       VELOX_CHECK(actualArg != nullptr);
     }
@@ -218,7 +221,7 @@ TypePtr ArgumentTypeFuzzer::fuzzReturnType() {
   if (returnType.baseName() == "any") {
     returnType_ = randType();
   } else {
-    returnType_ = exec::SignatureBinder::tryResolveType(
+    returnType_ = sanitizeTryResolveType(
         returnType, variables(), bindings_, integerBindings_);
   }
 
@@ -238,7 +241,7 @@ std::optional<int> ArgumentTypeFuzzer::tryFixedBinding(
         isPositiveInteger(name),
         "Precision and scale of a decimal type must refer to a variable "
         "or specify a positive integer constant: {}",
-        name)
+        name);
     return std::stoi(name);
   }
 
@@ -259,7 +262,7 @@ std::pair<std::optional<int>, std::optional<int>>
 ArgumentTypeFuzzer::tryBindFixedPrecisionScale(
     const exec::TypeSignature& type) {
   VELOX_CHECK(isDecimalBaseName(type.baseName()));
-  VELOX_CHECK_EQ(2, type.parameters().size())
+  VELOX_CHECK_EQ(2, type.parameters().size());
 
   const auto& precisionName = type.parameters()[0].baseName();
   const auto& scaleName = type.parameters()[1].baseName();

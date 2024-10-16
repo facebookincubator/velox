@@ -17,6 +17,7 @@
 #include "velox/exec/Spiller.h"
 #include <folly/ScopeGuard.h>
 #include "velox/common/base/AsyncSource.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashJoinBridge.h"
@@ -305,22 +306,26 @@ int64_t Spiller::extractSpillVector(
     RowVectorPtr& spillVector,
     size_t& nextBatchIndex) {
   VELOX_CHECK_NE(type_, Type::kHashJoinProbe);
-
+  uint64_t extractNs{0};
   auto limit = std::min<size_t>(rows.size() - nextBatchIndex, maxRows);
   VELOX_CHECK(!rows.empty());
   int32_t numRows = 0;
   int64_t bytes = 0;
-  for (; numRows < limit; ++numRows) {
-    bytes += container_->rowSize(rows[nextBatchIndex + numRows]);
-    if (bytes > maxBytes) {
-      // Increment because the row that went over the limit is part
-      // of the result. We must spill at least one row.
-      ++numRows;
-      break;
+  {
+    NanosecondTimer timer(&extractNs);
+    for (; numRows < limit; ++numRows) {
+      bytes += container_->rowSize(rows[nextBatchIndex + numRows]);
+      if (bytes > maxBytes) {
+        // Increment because the row that went over the limit is part
+        // of the result. We must spill at least one row.
+        ++numRows;
+        break;
+      }
     }
+    extractSpill(folly::Range(&rows[nextBatchIndex], numRows), spillVector);
+    nextBatchIndex += numRows;
   }
-  extractSpill(folly::Range(&rows[nextBatchIndex], numRows), spillVector);
-  nextBatchIndex += numRows;
+  updateSpillExtractVectorTime(extractNs);
   return bytes;
 }
 
@@ -342,7 +347,7 @@ class RowContainerSpillMergeStream : public SpillMergeStream {
         rows_(std::move(rows)),
         spiller_(spiller) {
     if (!rows_.empty()) {
-      nextBatch();
+      RowContainerSpillMergeStream::nextBatch();
     }
   }
 
@@ -476,7 +481,7 @@ void Spiller::runSpill(bool lastRun) {
     if (spillRuns_[partition].rows.empty()) {
       continue;
     }
-    writes.push_back(std::make_shared<AsyncSource<SpillStatus>>(
+    writes.push_back(memory::createAsyncMemoryReclaimTask<SpillStatus>(
         [partition, this]() { return writeSpill(partition); }));
     if ((writes.size() > 1) && executor_ != nullptr) {
       executor_->add([source = writes.back()]() { source->prepare(); });
@@ -533,6 +538,11 @@ void Spiller::updateSpillFillTime(uint64_t timeNs) {
 void Spiller::updateSpillSortTime(uint64_t timeNs) {
   spillStats_->wlock()->spillSortTimeNanos += timeNs;
   common::updateGlobalSpillSortTime(timeNs);
+}
+
+void Spiller::updateSpillExtractVectorTime(uint64_t timeNs) {
+  spillStats_->wlock()->spillExtractVectorTimeNanos += timeNs;
+  common::updateGlobalSpillExtractVectorTime(timeNs);
 }
 
 bool Spiller::needSort() const {

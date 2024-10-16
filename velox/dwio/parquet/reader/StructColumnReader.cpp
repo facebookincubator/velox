@@ -35,7 +35,11 @@ StructColumnReader::StructColumnReader(
   auto& childSpecs = scanSpec_->stableChildren();
   for (auto i = 0; i < childSpecs.size(); ++i) {
     auto childSpec = childSpecs[i];
-    if (childSpecs[i]->isConstant()) {
+    if (childSpec->isConstant() || isChildMissing(*childSpec)) {
+      childSpec->setSubscript(kConstantChildSpecSubscript);
+      continue;
+    }
+    if (childSpecs[i]->isExplicitRowNumber()) {
       continue;
     }
     auto childFileType = fileType_->childByName(childSpec->fieldName());

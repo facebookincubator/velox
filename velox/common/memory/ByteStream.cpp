@@ -18,6 +18,20 @@
 
 namespace facebook::velox {
 
+std::vector<ByteRange> byteRangesFromIOBuf(folly::IOBuf* iobuf) {
+  if (iobuf == nullptr) {
+    return {};
+  }
+  std::vector<ByteRange> byteRanges;
+  auto* current = iobuf;
+  do {
+    byteRanges.push_back(
+        {current->writableData(), (int32_t)current->length(), 0});
+    current = current->next();
+  } while (current != iobuf);
+  return byteRanges;
+}
+
 uint32_t ByteRange::availableBytes() const {
   return std::max(0, size - position);
 }
@@ -336,6 +350,10 @@ void ByteOutputStream::extend(int32_t bytes) {
   ranges_.emplace_back();
   current_ = &ranges_.back();
   lastRangeEnd_ = 0;
+  if (bytes == 0) {
+    // Only initialize, do not allocate if bytes is 0.
+    return;
+  }
   arena_->newRange(
       newRangeSize(bytes),
       ranges_.size() == 1 ? nullptr : &ranges_[ranges_.size() - 2],

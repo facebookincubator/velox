@@ -66,54 +66,12 @@ std::unique_ptr<MemoryArbitrator> createArbitrator(
   //  non-reclaimable cache memory which are pinned by query accesses if
   //  enabled.
 
-  // TODO(jtan6): [Config Refactor] clean up the if condition after Prestissimo
-  //  switched to use extra configs map.
-  if (options.extraArbitratorConfigs.empty()) {
-    std::unordered_map<std::string, std::string> extraArbitratorConfigs;
-    try {
-      // The literal string is temporary in order to not depend on
-      // SharedArbitrator class. After Prestissimo switches, this part of the
-      // code will be removed.
-      extraArbitratorConfigs["reserved-capacity"] =
-          folly::to<std::string>(options.arbitratorReservedCapacity) + "B";
-      extraArbitratorConfigs["memory-pool-initial-capacity"] =
-          folly::to<std::string>(options.memoryPoolInitCapacity) + "B";
-      extraArbitratorConfigs["memory-pool-reserved-capacity"] =
-          folly::to<std::string>(options.memoryPoolReservedCapacity) + "B";
-      extraArbitratorConfigs["memory-pool-transfer-capacity"] =
-          folly::to<std::string>(options.memoryPoolTransferCapacity) + "B";
-      extraArbitratorConfigs["fast-exponential-growth-capacity-limit"] =
-          folly::to<std::string>(options.fastExponentialGrowthCapacityLimit) +
-          "B";
-      extraArbitratorConfigs["slow-capacity-grow-pct"] =
-          folly::to<std::string>(options.slowCapacityGrowPct);
-      extraArbitratorConfigs["memory-pool-min-free-capacity"] =
-          folly::to<std::string>(options.memoryPoolMinFreeCapacity) + "B";
-      extraArbitratorConfigs["memory-pool-min-free-capacity-pct"] =
-          folly::to<std::string>(options.memoryPoolMinFreeCapacityPct);
-      extraArbitratorConfigs["memory-reclaim-max-wait-time"] =
-          folly::to<std::string>(options.memoryReclaimWaitMs) + "ms";
-      extraArbitratorConfigs["global-arbitration-enabled"] =
-          folly::to<std::string>(options.globalArbitrationEnabled);
-      extraArbitratorConfigs["check-usage-leak"] =
-          folly::to<std::string>(options.checkUsageLeak);
-    } catch (const std::exception& e) {
-      VELOX_USER_FAIL("Failed to parse extra arbitrator configs: {}", e.what());
-    }
-    return MemoryArbitrator::create(
-        {.kind = options.arbitratorKind,
-         .capacity =
-             std::min(options.arbitratorCapacity, options.allocatorCapacity),
-         .arbitrationStateCheckCb = options.arbitrationStateCheckCb,
-         .extraConfigs = extraArbitratorConfigs});
-  } else {
-    return MemoryArbitrator::create(
-        {.kind = options.arbitratorKind,
-         .capacity =
-             std::min(options.arbitratorCapacity, options.allocatorCapacity),
-         .arbitrationStateCheckCb = options.arbitrationStateCheckCb,
-         .extraConfigs = options.extraArbitratorConfigs});
-  }
+  return MemoryArbitrator::create(
+      {.kind = options.arbitratorKind,
+       .capacity =
+           std::min(options.arbitratorCapacity, options.allocatorCapacity),
+       .arbitrationStateCheckCb = options.arbitrationStateCheckCb,
+       .extraConfigs = options.extraArbitratorConfigs});
 }
 
 std::vector<std::shared_ptr<MemoryPool>> createSharedLeafMemoryPools(
@@ -144,7 +102,6 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
           this,
           std::string(kSysRootName),
           MemoryPool::Kind::kAggregate,
-          nullptr,
           nullptr,
           nullptr,
           // NOTE: the default root memory pool has no capacity limit, and it is
@@ -230,6 +187,12 @@ MemoryManager* MemoryManager::getInstance() {
 }
 
 // static.
+bool MemoryManager::testInstance() {
+  auto* instance = singletonState().instance.load(std::memory_order_acquire);
+  return instance != nullptr;
+}
+
+// static.
 MemoryManager& MemoryManager::testingSetInstance(
     const MemoryManagerOptions& options) {
   auto& state = singletonState();
@@ -247,7 +210,7 @@ uint16_t MemoryManager::alignment() const {
   return alignment_;
 }
 
-std::shared_ptr<MemoryPool> MemoryManager::createRootPool(
+std::shared_ptr<MemoryPoolImpl> MemoryManager::createRootPool(
     std::string poolName,
     std::unique_ptr<MemoryReclaimer>& reclaimer,
     MemoryPool::Options& options) {
@@ -257,7 +220,6 @@ std::shared_ptr<MemoryPool> MemoryManager::createRootPool(
       MemoryPool::Kind::kAggregate,
       nullptr,
       std::move(reclaimer),
-      poolDestructionCb_,
       options);
   VELOX_CHECK_EQ(pool->capacity(), 0);
   arbitrator_->addPool(pool);
@@ -283,16 +245,23 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.debugEnabled = debugEnabled_;
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
 
-  if (disableMemoryPoolTracking_) {
-    return createRootPool(poolName, reclaimer, options);
-  }
-
-  std::unique_lock guard{mutex_};
-  if (pools_.find(poolName) != pools_.end()) {
-    VELOX_FAIL("Duplicate root pool name found: {}", poolName);
-  }
   auto pool = createRootPool(poolName, reclaimer, options);
-  pools_.emplace(poolName, pool);
+  if (!disableMemoryPoolTracking_) {
+    try {
+      std::unique_lock guard{mutex_};
+      if (pools_.find(poolName) != pools_.end()) {
+        VELOX_FAIL("Duplicate root pool name found: {}", poolName);
+      }
+      pools_.emplace(poolName, pool);
+    } catch (const VeloxRuntimeError& ex) {
+      arbitrator_->removePool(pool.get());
+      throw;
+    }
+  }
+  // NOTE: we need to set destruction callback at the end to avoid potential
+  // deadlock or failure because of duplicate memory pool name or unexpected
+  // failure to add memory pool to the arbitrator.
+  pool->setDestructionCallback(poolDestructionCb_);
   return pool;
 }
 
@@ -315,12 +284,12 @@ uint64_t MemoryManager::shrinkPools(
 }
 
 void MemoryManager::dropPool(MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(pool);
   VELOX_DCHECK_EQ(pool->reservedBytes(), 0);
   arbitrator_->removePool(pool);
   if (disableMemoryPoolTracking_) {
     return;
   }
-  VELOX_CHECK_NOT_NULL(pool);
   std::unique_lock guard{mutex_};
   auto it = pools_.find(pool->name());
   if (it == pools_.end()) {

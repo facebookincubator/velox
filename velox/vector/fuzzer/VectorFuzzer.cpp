@@ -64,72 +64,112 @@ struct ScopedOptions {
 
 // Generate random values for the different supported types.
 template <typename T>
-T rand(FuzzerGenerator&) {
+T rand(FuzzerGenerator& rng, DataSpec dataSpec = {false, false}) {
   VELOX_NYI();
 }
 
 template <>
-int8_t rand(FuzzerGenerator& rng) {
+int8_t rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
   return boost::random::uniform_int_distribution<int8_t>()(rng);
 }
 
 template <>
-int16_t rand(FuzzerGenerator& rng) {
+int16_t rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
   return boost::random::uniform_int_distribution<int16_t>()(rng);
 }
 
 template <>
-int32_t rand(FuzzerGenerator& rng) {
+int32_t rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
   return boost::random::uniform_int_distribution<int32_t>()(rng);
 }
 
 template <>
-int64_t rand(FuzzerGenerator& rng) {
+int64_t rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
   return boost::random::uniform_int_distribution<int64_t>()(rng);
 }
 
 template <>
-double rand(FuzzerGenerator& rng) {
+double rand(FuzzerGenerator& rng, DataSpec dataSpec) {
+  if (dataSpec.includeNaN && coinToss(rng, 0.05)) {
+    return std::nan("");
+  }
+
+  if (dataSpec.includeInfinity && coinToss(rng, 0.05)) {
+    return std::numeric_limits<double>::infinity();
+  }
+
   return boost::random::uniform_01<double>()(rng);
 }
 
 template <>
-float rand(FuzzerGenerator& rng) {
+float rand(FuzzerGenerator& rng, DataSpec dataSpec) {
+  if (dataSpec.includeNaN && coinToss(rng, 0.05)) {
+    return std::nanf("");
+  }
+
+  if (dataSpec.includeInfinity && coinToss(rng, 0.05)) {
+    return std::numeric_limits<float>::infinity();
+  }
+
   return boost::random::uniform_01<float>()(rng);
 }
 
 template <>
-bool rand(FuzzerGenerator& rng) {
+bool rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
   return boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng);
 }
 
 template <>
-uint32_t rand(FuzzerGenerator& rng) {
+uint32_t rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
   return boost::random::uniform_int_distribution<uint32_t>()(rng);
 }
 
 template <>
-uint64_t rand(FuzzerGenerator& rng) {
+uint64_t rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
   return boost::random::uniform_int_distribution<uint64_t>()(rng);
 }
 
 template <>
-int128_t rand(FuzzerGenerator& rng) {
+int128_t rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
   return HugeInt::build(rand<int64_t>(rng), rand<uint64_t>(rng));
 }
 
+template <typename T, typename std::enable_if_t<std::is_integral_v<T>, int> = 0>
+T rand(FuzzerGenerator& rng, T min, T max) {
+  return boost::random::uniform_int_distribution<T>(min, max)(rng);
+}
+
 Timestamp randTimestamp(FuzzerGenerator& rng, VectorFuzzer::Options opts) {
+  // Generate timestamps only in the valid range to avoid datetime functions,
+  // such as try_cast(varchar as timestamp), throwing VeloxRuntimeError in
+  // fuzzers.
+  constexpr int64_t min = -2'140'671'600;
+  constexpr int64_t max = 2'140'671'600;
+  constexpr int64_t microInSecond = 1'000'000;
+  constexpr int64_t millisInSecond = 1'000;
+
   switch (opts.timestampPrecision) {
     case VectorFuzzer::Options::TimestampPrecision::kNanoSeconds:
-      return Timestamp(rand<int32_t>(rng), (rand<int64_t>(rng) % MAX_NANOS));
+      return Timestamp(
+          rand<int64_t>(rng, min, max), (rand<int64_t>(rng) % MAX_NANOS));
     case VectorFuzzer::Options::TimestampPrecision::kMicroSeconds:
-      return Timestamp::fromMicros(rand<int64_t>(rng));
+      return Timestamp::fromMicros(
+          rand<int64_t>(rng, min, max) * microInSecond +
+          rand<int64_t>(rng, -microInSecond, microInSecond));
     case VectorFuzzer::Options::TimestampPrecision::kMilliSeconds:
-      return Timestamp::fromMillis(rand<int64_t>(rng));
+      return Timestamp::fromMillis(
+          rand<int64_t>(rng, min, max) * millisInSecond +
+          rand<int64_t>(rng, -millisInSecond, millisInSecond));
     case VectorFuzzer::Options::TimestampPrecision::kSeconds:
-      return Timestamp(rand<int32_t>(rng), 0);
+      return Timestamp(rand<int64_t>(rng, min, max), 0);
   }
   return {}; // no-op.
+}
+
+int32_t randDate(FuzzerGenerator& rng) {
+  constexpr int64_t min = -24'450;
+  constexpr int64_t max = 24'450;
+  return rand<int32_t>(rng, min, max);
 }
 
 size_t getElementsVectorLength(
@@ -251,6 +291,9 @@ VectorPtr fuzzConstantPrimitiveImpl(
   if constexpr (std::is_same_v<TCpp, Timestamp>) {
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, randTimestamp(rng, opts));
+  } else if (type->isDate()) {
+    return std::make_shared<ConstantVector<int32_t>>(
+        pool, size, false, type, randDate(rng));
   } else if (type->isShortDecimal()) {
     return std::make_shared<ConstantVector<int64_t>>(
         pool, size, false, type, randShortDecimal(type, rng));
@@ -259,7 +302,7 @@ VectorPtr fuzzConstantPrimitiveImpl(
         pool, size, false, type, randLongDecimal(type, rng));
   } else {
     return std::make_shared<ConstantVector<TCpp>>(
-        pool, size, false, type, rand<TCpp>(rng));
+        pool, size, false, type, rand<TCpp>(rng, opts.dataSpec));
   }
 }
 
@@ -284,18 +327,24 @@ void fuzzFlatPrimitiveImpl(
       if (vector->type()->isShortDecimal()) {
         flatVector->set(i, randShortDecimal(vector->type(), rng));
       } else {
-        flatVector->set(i, rand<TCpp>(rng));
+        flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
       }
     } else if constexpr (std::is_same_v<TCpp, int128_t>) {
       if (vector->type()->isLongDecimal()) {
         flatVector->set(i, randLongDecimal(vector->type(), rng));
       } else if (vector->type()->isHugeint()) {
-        flatVector->set(i, rand<int128_t>(rng));
+        flatVector->set(i, rand<int128_t>(rng, opts.dataSpec));
       } else {
         VELOX_NYI();
       }
+    } else if constexpr (std::is_same_v<TCpp, int32_t>) {
+      if (vector->type()->isDate()) {
+        flatVector->set(i, randDate(rng));
+      } else {
+        flatVector->set(i, rand<TCpp>(rng));
+      }
     } else {
-      flatVector->set(i, rand<TCpp>(rng));
+      flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
     }
   }
 }

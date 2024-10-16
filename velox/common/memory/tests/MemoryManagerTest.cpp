@@ -65,9 +65,7 @@ TEST_F(MemoryManagerTest, ctor) {
   {
     const auto kCapacity = 8L * 1024 * 1024;
     MemoryManager manager{
-        {.allocatorCapacity = kCapacity,
-         .arbitratorCapacity = kCapacity,
-         .arbitratorReservedCapacity = 0}};
+        {.allocatorCapacity = kCapacity, .arbitratorCapacity = kCapacity}};
     ASSERT_EQ(kCapacity, manager.capacity());
     ASSERT_EQ(manager.numPools(), 2);
     ASSERT_EQ(manager.testingDefaultRoot().alignment(), manager.alignment());
@@ -77,8 +75,7 @@ TEST_F(MemoryManagerTest, ctor) {
     MemoryManager manager{
         {.alignment = 0,
          .allocatorCapacity = kCapacity,
-         .arbitratorCapacity = kCapacity,
-         .arbitratorReservedCapacity = 0}};
+         .arbitratorCapacity = kCapacity}};
 
     ASSERT_EQ(manager.alignment(), MemoryAllocator::kMinAlignment);
     ASSERT_EQ(manager.testingDefaultRoot().alignment(), manager.alignment());
@@ -93,7 +90,6 @@ TEST_F(MemoryManagerTest, ctor) {
     const auto kCapacity = 4L << 30;
     options.allocatorCapacity = kCapacity;
     options.arbitratorCapacity = kCapacity;
-    options.arbitratorReservedCapacity = 0;
     std::string arbitratorKind = "SHARED";
     options.arbitratorKind = arbitratorKind;
     MemoryManager manager{options};
@@ -107,23 +103,26 @@ TEST_F(MemoryManagerTest, ctor) {
         "Memory Allocator[MALLOC capacity 4.00GB allocated bytes 0 "
         "allocated pages 0 mapped pages 0]\n"
         "ARBITRATOR[SHARED CAPACITY[4.00GB] PENDING[0] "
-        "STATS[numRequests 0 numAborted 0 numFailures 0 "
-        "numNonReclaimableAttempts 0 numShrinks 0 queueTime 0us "
-        "arbitrationTime 0us reclaimTime 0us shrunkMemory 0B "
-        "reclaimedMemory 0B maxCapacity 4.00GB freeCapacity 4.00GB freeReservedCapacity 0B]]]");
+        "numRequests 0 numRunning 0 numSucceded 0 numAborted 0 numFailures 0 numNonReclaimableAttempts 0 "
+        "reclaimedFreeCapacity 0B reclaimedUsedCapacity 0B maxCapacity 4.00GB freeCapacity 4.00GB freeReservedCapacity 0B]]");
   }
 }
 
 namespace {
 class FakeTestArbitrator : public MemoryArbitrator {
  public:
-  explicit FakeTestArbitrator(const Config& config)
+  explicit FakeTestArbitrator(
+      const Config& config,
+      bool injectAddPoolFailure = false)
       : MemoryArbitrator(
             {.kind = config.kind,
              .capacity = config.capacity,
-             .extraConfigs = config.extraConfigs}) {}
+             .extraConfigs = config.extraConfigs}),
+        injectAddPoolFailure_(injectAddPoolFailure) {}
 
-  void addPool(const std::shared_ptr<MemoryPool>& /*unused*/) override {}
+  void addPool(const std::shared_ptr<MemoryPool>& /*unused*/) override {
+    VELOX_CHECK(!injectAddPoolFailure_, "Failed to add pool");
+  }
 
   void removePool(MemoryPool* /*unused*/) override {}
 
@@ -152,6 +151,9 @@ class FakeTestArbitrator : public MemoryArbitrator {
   std::string kind() const override {
     return "FAKE";
   }
+
+ private:
+  const bool injectAddPoolFailure_{false};
 };
 } // namespace
 
@@ -171,6 +173,22 @@ TEST_F(MemoryManagerTest, createWithCustomArbitrator) {
   MemoryManager manager{options};
   ASSERT_EQ(manager.arbitrator()->capacity(), options.allocatorCapacity);
   ASSERT_EQ(manager.allocator()->capacity(), options.allocatorCapacity);
+}
+
+TEST_F(MemoryManagerTest, addPoolFailure) {
+  const std::string kindString = "FAKE";
+  MemoryArbitrator::Factory factory =
+      [](const MemoryArbitrator::Config& config) {
+        return std::make_unique<FakeTestArbitrator>(
+            config, /*injectAddPoolFailure*/ true);
+      };
+  MemoryArbitrator::registerFactory(kindString, factory);
+  auto guard = folly::makeGuard(
+      [&] { MemoryArbitrator::unregisterFactory(kindString); });
+  MemoryManagerOptions options;
+  options.arbitratorKind = kindString;
+  MemoryManager manager{options};
+  VELOX_ASSERT_THROW(manager.addRootPool(), "Failed to add pool");
 }
 
 TEST_F(MemoryManagerTest, addPool) {
@@ -208,7 +226,10 @@ TEST_F(MemoryManagerTest, addPoolWithArbitrator) {
   // The arbitrator capacity will be overridden by the memory manager's
   // capacity.
   const uint64_t initialPoolCapacity = options.allocatorCapacity / 32;
-  options.memoryPoolInitCapacity = initialPoolCapacity;
+  using ExtraConfig = SharedArbitrator::ExtraConfig;
+  options.extraArbitratorConfigs = {
+      {std::string(ExtraConfig::kMemoryPoolInitialCapacity),
+       folly::to<std::string>(initialPoolCapacity) + "B"}};
   MemoryManager manager{options};
 
   auto rootPool = manager.addRootPool(
@@ -584,7 +605,6 @@ TEST_F(MemoryManagerTest, quotaEnforcement) {
       options.alignment = alignment;
       options.allocatorCapacity = testData.memoryQuotaBytes;
       options.arbitratorCapacity = testData.memoryQuotaBytes;
-      options.arbitratorReservedCapacity = 0;
       MemoryManager manager{options};
       auto pool = manager.addLeafPool("quotaEnforcement");
       void* smallBuffer{nullptr};

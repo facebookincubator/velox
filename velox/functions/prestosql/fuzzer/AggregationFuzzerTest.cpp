@@ -34,6 +34,7 @@
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(
     seed,
@@ -196,6 +197,7 @@ int main(int argc, char** argv) {
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
+
   return Runner::run(
       initialSeed,
       setupReferenceQueryRunner(

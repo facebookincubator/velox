@@ -19,6 +19,7 @@
 #include "velox/common/base/RandomUtil.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/Reader.h"
 
 namespace facebook::velox {
 class BaseVector;
@@ -36,8 +37,6 @@ class ConnectorQueryCtx;
 } // namespace facebook::velox::connector
 
 namespace facebook::velox::dwio::common {
-class Reader;
-class RowReader;
 struct RuntimeStatistics;
 } // namespace facebook::velox::dwio::common
 
@@ -138,7 +137,8 @@ class SplitReader {
       const std::shared_ptr<const velox::RowType>& tableSchema);
 
   void setRowIndexColumn(
-      const std::shared_ptr<HiveColumnHandle>& rowIndexColumn);
+      const std::shared_ptr<HiveColumnHandle>& rowIndexColumn,
+      bool isExplicit);
 
   void setPartitionValue(
       common::ScanSpec* spec,

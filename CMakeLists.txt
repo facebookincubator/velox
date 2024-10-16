@@ -45,6 +45,11 @@ if(DEFINED ENV{CONDA_PREFIX})
   endif()
 endif()
 
+if(DEFINED ENV{INSTALL_PREFIX})
+  message(STATUS "Dependency install directory set to: $ENV{INSTALL_PREFIX}")
+  list(APPEND CMAKE_PREFIX_PATH "$ENV{INSTALL_PREFIX}")
+endif()
+
 list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
      "${PROJECT_SOURCE_DIR}/CMake/third-party")
 
@@ -182,6 +187,18 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(VELOX_ENABLE_EXEC ON)
   set(VELOX_ENABLE_AGGREGATES ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
+endif()
+
+if(${VELOX_ENABLE_DUCKDB})
+  set_source(DuckDB)
+  resolve_dependency(DuckDB)
+endif()
+
+if(DEFINED ENV{INSTALL_PREFIX})
+  # Allow installed package headers to be picked up before brew/system package
+  # headers. We set this after DuckDB bundling since DuckDB uses its own
+  # dependencies.
+  include_directories(BEFORE "$ENV{INSTALL_PREFIX}/include")
 endif()
 
 # We look for OpenSSL here to cache the result enforce the version across our
@@ -405,11 +422,6 @@ else()
 endif()
 resolve_dependency(glog)
 
-if(${VELOX_ENABLE_DUCKDB})
-  set_source(DuckDB)
-  resolve_dependency(DuckDB)
-endif()
-
 set_source(fmt)
 resolve_dependency(fmt 9.0.0)
 
@@ -569,7 +581,7 @@ endif()
 set_source(xsimd)
 resolve_dependency(xsimd 10.0.0)
 
-set(stemmer_SOURCE BUNDLED)
+set_source(stemmer)
 resolve_dependency(stemmer)
 
 if(VELOX_BUILD_TESTING)

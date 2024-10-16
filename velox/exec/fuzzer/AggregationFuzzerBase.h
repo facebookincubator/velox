@@ -17,6 +17,8 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
@@ -75,15 +77,11 @@ class AggregationFuzzerBase {
         referenceQueryRunner_{std::move(referenceQueryRunner)},
         vectorFuzzer_{getFuzzerOptions(timestampPrecision), pool_.get()} {
     filesystems::registerLocalFileSystem();
-    auto configs = hiveConfigs;
-    auto hiveConnector =
-        connector::getConnectorFactory(
-            connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(
-                kHiveConnectorId,
-                std::make_shared<config::ConfigBase>(std::move(configs)));
-    connector::registerConnector(hiveConnector);
-
+    connector::registerConnectorFactory(
+        std::make_shared<connector::hive::HiveConnectorFactory>());
+    registerHiveConnector(hiveConfigs);
+    dwrf::registerDwrfReaderFactory();
+    dwrf::registerDwrfWriterFactory();
     seed(initialSeed);
   }
 
@@ -183,11 +181,13 @@ class AggregationFuzzerBase {
       std::vector<TypePtr>& types);
 
   // Similar to generateKeys, but restricts types to orderable types (i.e. no
-  // maps).
+  // maps). For k-RANGE frame bounds, rangeFrame must be set to true so only
+  // one sorting key is generated.
   std::vector<std::string> generateSortingKeys(
       const std::string& prefix,
       std::vector<std::string>& names,
-      std::vector<TypePtr>& types);
+      std::vector<TypePtr>& types,
+      bool rangeFrame = false);
 
   std::pair<CallableSignature, SignatureStats&> pickSignature();
 

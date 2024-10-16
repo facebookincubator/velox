@@ -320,7 +320,7 @@ std::pair<std::string_view, std::string_view> extractColumnName(
     return std::make_pair(name, "");
   }
 
-  // special map column handling
+  // Special map column handling.
   const auto colName = name.substr(0, pos);
   const auto expr = name.substr(pos + 1);
   return std::make_pair(colName, expr);
@@ -344,7 +344,7 @@ std::shared_ptr<ColumnSelector> ColumnSelector::fromScanSpec(
     const RowTypePtr& rowType) {
   std::vector<std::string> columnNames;
   for (auto& child : spec.children()) {
-    if (child->isConstant()) {
+    if (child->isConstant() || child->isExplicitRowNumber()) {
       continue;
     }
     std::string name = child->fieldName();
