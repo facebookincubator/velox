@@ -30,6 +30,7 @@
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/QueryTraceUtil.h"
 #include "velox/tool/trace/AggregationReplayer.h"
+#include "velox/tool/trace/HashJoinReplayer.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
 #include "velox/tool/trace/TableWriterReplayer.h"
@@ -120,6 +121,13 @@ std::unique_ptr<tool::trace::OperatorReplayerBase> createReplayer() {
         FLAGS_operator_type);
   } else if (FLAGS_operator_type == "PartitionedOutput") {
     replayer = std::make_unique<tool::trace::PartitionedOutputReplayer>(
+        FLAGS_root_dir,
+        FLAGS_task_id,
+        FLAGS_node_id,
+        FLAGS_pipeline_id,
+        FLAGS_operator_type);
+  } else if (FLAGS_operator_type == "HashJoin") {
+    replayer = std::make_unique<tool::trace::HashJoinReplayer>(
         FLAGS_root_dir,
         FLAGS_task_id,
         FLAGS_node_id,
