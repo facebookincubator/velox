@@ -339,36 +339,34 @@ if("${MAX_LINK_JOBS}")
 endif()
 
 if(ENABLE_ALL_WARNINGS)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(KNOWN_COMPILER_SPECIFIC_WARNINGS
+        "-Wno-range-loop-analysis \
+         -Wno-mismatched-tags \
+         -Wno-nullability-completeness")
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(KNOWN_COMPILER_SPECIFIC_WARNINGS
+        "-Wno-implicit-fallthrough \
+         -Wno-class-memaccess \
+         -Wno-comment \
+         -Wno-int-in-bool-context \
+         -Wno-redundant-move \
+         -Wno-array-bounds \
+         -Wno-maybe-uninitialized \
+         -Wno-unused-result \
+         -Wno-format-overflow \
+         -Wno-strict-aliasing")
+  endif()
+
+  set(KNOWN_WARNINGS
+      "-Wno-unused \
+       -Wno-unused-parameter \
+       -Wno-sign-compare \
+       -Wno-ignored-qualifiers \
+       ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")
+
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang") # regular Clang or AppleClang
-  set(KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-range-loop-analysis \
-       -Wno-mismatched-tags \
-       -Wno-nullability-completeness")
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-  set(KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-implicit-fallthrough \
-       -Wno-class-memaccess \
-       -Wno-comment \
-       -Wno-int-in-bool-context \
-       -Wno-redundant-move \
-       -Wno-array-bounds \
-       -Wno-maybe-uninitialized \
-       -Wno-unused-result \
-       -Wno-format-overflow \
-       -Wno-strict-aliasing")
-endif()
-
-set(KNOWN_WARNINGS
-    "-Wno-unused \
-     -Wno-unused-parameter \
-     -Wno-sign-compare \
-     -Wno-ignored-qualifiers \
-     ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${KNOWN_WARNINGS}")
 
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
