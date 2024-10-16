@@ -2290,3 +2290,32 @@ TEST_F(RowContainerTest, customComparisonRow) {
             expectedOrder, BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
       });
 }
+
+TEST_F(RowContainerTest, varLengthColumnsMaxSize) {
+  const uint64_t kNumRows = 5;
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return row % 3; }, nullEvery(6)),
+      makeFlatVector<std::string>({"a", "ab", "abcdse", "as", "b"}),
+      makeFlatVector<std::string>(
+          kNumRows,
+          [](auto row) { return fmt::format("abcdefg1234_{}", row); },
+          nullEvery(3)),
+  });
+  auto rowContainer =
+      makeRowContainer({BIGINT(), VARCHAR(), VARCHAR()}, {}, false);
+  std::vector<char*> rows;
+  rows.reserve(kNumRows);
+  SelectivityVector allRows(kNumRows);
+  for (size_t i = 0; i < kNumRows; i++) {
+    auto row = rowContainer->newRow();
+    rows.push_back(row);
+  }
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    DecodedVector decoded(*rowVector->childAt(i), allRows);
+    rowContainer->store(decoded, folly::Range(rows.data(), kNumRows), i);
+  }
+  ASSERT_EQ(rowContainer->varLengthColumnsMaxSize(0), 0);
+  ASSERT_EQ(rowContainer->varLengthColumnsMaxSize(1), 6);
+  ASSERT_EQ(rowContainer->varLengthColumnsMaxSize(2), 13);
+}
