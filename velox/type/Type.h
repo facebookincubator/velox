@@ -2008,6 +2008,22 @@ bool registerCustomType(
     const std::string& name,
     std::unique_ptr<const CustomTypeFactories> factories);
 
+std::unordered_map<std::string, std::type_index>& getTypeIndexByOpaqueAlias();
+// Reverse of getTypeIndexByOpaqueAlias() when we need to look up the opaque
+// alias by its type index.
+std::unordered_map<std::type_index, std::string>& getOpaqueAliasByTypeIndex();
+
+std::type_index getTypeIdForOpaqueTypeAlias(const std::string& name);
+
+std::string getOpaqueAliasForTypeId(std::type_index typeIndex);
+
+template <typename Class>
+bool registerOpaqueType(const std::string& alias) {
+  auto typeIndex = std::type_index(typeid(Class));
+  return getTypeIndexByOpaqueAlias().emplace(alias, typeIndex).second &&
+      getOpaqueAliasByTypeIndex().emplace(typeIndex, alias).second;
+}
+
 /// Return true if a custom type with the specified name exists.
 bool customTypeExists(const std::string& name);
 

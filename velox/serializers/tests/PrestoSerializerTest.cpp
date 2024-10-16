@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/serializers/PrestoSerializer.h"
+#include <boost/random/uniform_int_distribution.hpp>
 #include <folly/Random.h>
 #include <gtest/gtest.h>
 #include <vector>
@@ -1511,6 +1512,39 @@ INSTANTIATE_TEST_SUITE_P(
         common::CompressionKind::CompressionKind_LZ4,
         common::CompressionKind::CompressionKind_GZIP));
 
+class Foo {
+ public:
+  explicit Foo(int64_t id) : id_(id) {}
+
+  int64_t id() const {
+    return id_;
+  }
+
+  static std::shared_ptr<Foo> create(int64_t id) {
+    // Return the same instance if the id is already in the map, to make
+    // the operator== work with the instance before and after serde.
+    if (instances_.contains(id)) {
+      return instances_[id];
+    }
+    instances_[id] = std::make_shared<Foo>(id);
+    return instances_[id];
+  }
+
+  static std::string serialize(const std::shared_ptr<Foo>& foo) {
+    return std::to_string(foo->id_);
+  }
+
+  static std::shared_ptr<Foo> deserialize(const std::string& serialized) {
+    return create(std::stoi(serialized));
+  }
+
+ private:
+  int64_t id_;
+  static std::unordered_map<int64_t, std::shared_ptr<Foo>> instances_;
+};
+
+std::unordered_map<int64_t, std::shared_ptr<Foo>> Foo::instances_;
+
 TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
   // Verify that deserializeSingleColumn API can handle all supported types.
   static const size_t kPrestoPageHeaderBytes = 21;
@@ -1555,6 +1589,7 @@ TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
       DOUBLE(),
       VARCHAR(),
       TIMESTAMP(),
+      OPAQUE<Foo>(),
       ROW({VARCHAR(), INTEGER()}),
       ARRAY(INTEGER()),
       ARRAY(INTEGER()),
@@ -1578,6 +1613,12 @@ TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
   LOG(ERROR) << "Seed: " << seed;
   SCOPED_TRACE(fmt::format("seed: {}", seed));
   VectorFuzzer fuzzer(opts, pool_.get(), seed);
+  fuzzer.registerOpaqueTypeGenerator<Foo>([](FuzzerGenerator& rng) {
+    int64_t id = boost::random::uniform_int_distribution<int64_t>(1, 10)(rng);
+    return Foo::create(id);
+  });
+  OpaqueType::registerSerialization<Foo>(
+      "Foo", Foo::serialize, Foo::deserialize);
 
   for (const auto& type : typesToTest) {
     SCOPED_TRACE(fmt::format("Type: {}", type->toString()));
