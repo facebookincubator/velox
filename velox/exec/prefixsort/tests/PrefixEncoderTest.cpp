@@ -114,43 +114,6 @@ class PrefixEncoderTest : public testing::Test,
     ASSERT_EQ(std::memcmp(encoded + 1, expectedDesc, sizeof(T)), 0);
   }
 
-  void testEncodeString(
-      StringView testValue,
-      char* expectedAsc,
-      char* expectedDesc) {
-    std::optional<StringView> nullValue = std::nullopt;
-    std::optional<StringView> value = testValue;
-    char encoded[16];
-    char nullFirst[16];
-    char nullLast[16];
-    auto encodeSize = testValue.size() + 1;
-    memset(nullFirst, 0, encodeSize);
-    memset(nullLast, 1, 1);
-    memset(nullLast + 1, 0, encodeSize - 1);
-
-    auto compare = [&](char* left, char* right) {
-      return std::memcmp(left, right, encodeSize);
-    };
-
-    ascNullsFirstEncoder_.encode(nullValue, encoded, encodeSize);
-    ASSERT_EQ(compare(nullFirst, encoded), 0);
-    ascNullsLastEncoder_.encode(nullValue, encoded, encodeSize);
-    ASSERT_EQ(compare(nullLast, encoded), 0);
-
-    ascNullsFirstEncoder_.encode(value, encoded, encodeSize);
-    ASSERT_EQ(encoded[0], 1);
-    ASSERT_EQ(std::memcmp(encoded + 1, expectedAsc, encodeSize - 1), 0);
-    ascNullsLastEncoder_.encode(value, encoded, encodeSize);
-    ASSERT_EQ(encoded[0], 0);
-    ASSERT_EQ(std::memcmp(encoded + 1, expectedAsc, encodeSize - 1), 0);
-    descNullsFirstEncoder_.encode(value, encoded, encodeSize);
-    ASSERT_EQ(encoded[0], 1);
-    ASSERT_EQ(std::memcmp(encoded + 1, expectedDesc, encodeSize - 1), 0);
-    descNullsLastEncoder_.encode(value, encoded, encodeSize);
-    ASSERT_EQ(encoded[0], 0);
-    ASSERT_EQ(std::memcmp(encoded + 1, expectedDesc, encodeSize - 1), 0);
-  }
-
   template <typename T>
   void testEncode(T value, char* expectedAsc, char* expectedDesc) {
     testEncodeNoNull<T>(value, expectedAsc, expectedDesc);
@@ -308,7 +271,23 @@ class PrefixEncoderTest : public testing::Test,
     test(ascNullsLastEncoder_);
     test(descNullsFirstEncoder_);
     test(descNullsLastEncoder_);
-  };
+  }
+
+  const PrefixSortEncoder& ascNullsFirstEncoder() const {
+    return ascNullsFirstEncoder_;
+  }
+
+  const PrefixSortEncoder ascNullsLastEncoder() const {
+    return ascNullsLastEncoder_;
+  }
+
+  const PrefixSortEncoder descNullsFirstEncoder() const {
+    return descNullsFirstEncoder_;
+  }
+
+  const PrefixSortEncoder descNullsLastEncoder() const {
+    return descNullsLastEncoder_;
+  }
 
  protected:
   static void SetUpTestCase() {
@@ -380,16 +359,46 @@ TEST_F(PrefixEncoderTest, encode) {
     descExpected[1] = 0xbbccddeeffffffff;
     testEncode<Timestamp>(value, (char*)ascExpected, (char*)descExpected);
   }
+}
 
-  {
-    StringView value = StringView("aaaaaabbbbbb");
-    char ascExpected[13] = "aaaaaabbbbbb";
-    char descExpected[13];
-    for (int i = 0; i < 12; ++i) {
-      descExpected[i] = ~ascExpected[i];
-    }
-    testEncodeString(value, ascExpected, descExpected);
+TEST_F(PrefixEncoderTest, encodeString) {
+  constexpr int32_t encodeSize = 13;
+  StringView testValue = StringView("aaaaaabbbbbb");
+  char expectedAsc[encodeSize] = "aaaaaabbbbbb";
+  char expectedDesc[encodeSize];
+  for (int i = 0; i < encodeSize - 1; ++i) {
+    expectedDesc[i] = ~expectedAsc[i];
   }
+  std::optional<StringView> nullValue = std::nullopt;
+  std::optional<StringView> value = testValue;
+  char encoded[encodeSize + 1];
+  char nullFirst[encodeSize + 1];
+  char nullLast[encodeSize + 1];
+  memset(nullFirst, 0, encodeSize);
+  memset(nullLast, 1, 1);
+  memset(nullLast + 1, 0, encodeSize - 1);
+
+  auto compare = [&](char* left, char* right) {
+    return std::memcmp(left, right, encodeSize);
+  };
+
+  ascNullsFirstEncoder().encode(nullValue, encoded, encodeSize);
+  ASSERT_EQ(compare(nullFirst, encoded), 0);
+  ascNullsLastEncoder().encode(nullValue, encoded, encodeSize);
+  ASSERT_EQ(compare(nullLast, encoded), 0);
+
+  ascNullsFirstEncoder().encode(value, encoded, encodeSize);
+  ASSERT_EQ(encoded[0], 1);
+  ASSERT_EQ(std::memcmp(encoded + 1, expectedAsc, encodeSize - 1), 0);
+  ascNullsLastEncoder().encode(value, encoded, encodeSize);
+  ASSERT_EQ(encoded[0], 0);
+  ASSERT_EQ(std::memcmp(encoded + 1, expectedAsc, encodeSize - 1), 0);
+  descNullsFirstEncoder().encode(value, encoded, encodeSize);
+  ASSERT_EQ(encoded[0], 1);
+  ASSERT_EQ(std::memcmp(encoded + 1, expectedDesc, encodeSize - 1), 0);
+  descNullsLastEncoder().encode(value, encoded, encodeSize);
+  ASSERT_EQ(encoded[0], 0);
+  ASSERT_EQ(std::memcmp(encoded + 1, expectedDesc, encodeSize - 1), 0);
 }
 
 TEST_F(PrefixEncoderTest, compare) {
