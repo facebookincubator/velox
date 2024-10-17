@@ -97,8 +97,8 @@ class UuidCastOperator : public exec::CastOperator {
 
       size_t offset = 0;
       for (auto i = 0; i < 16; ++i) {
-        result.data()[offset] = kHexTable[uuidBytes[i] * 2];
-        result.data()[offset + 1] = kHexTable[uuidBytes[i] * 2 + 1];
+        result.data()[offset] = kHexTable[uuidBytes[15 - i] * 2];
+        result.data()[offset + 1] = kHexTable[uuidBytes[15 - i] * 2 + 1];
 
         offset += 2;
         if (i == 3 || i == 5 || i == 7 || i == 9) {
@@ -125,7 +125,10 @@ class UuidCastOperator : public exec::CastOperator {
       auto uuid = boost::lexical_cast<boost::uuids::uuid>(uuidString);
 
       int128_t u;
-      memcpy(&u, &uuid, 16);
+      auto charPtr = reinterpret_cast<char*>(&u);
+      for (size_t i = 0; i < 16; ++i) {
+        charPtr[i] = uuid.data[15 - i];
+      }
 
       flatResult->set(row, u);
     });
