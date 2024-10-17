@@ -27,7 +27,8 @@ target_link_libraries(
   velox_exec
   GTest::gtest
   GTest::gtest_main
-  GTest::gmock)
+  GTest::gmock
+  CURL::libcurl)
 
 target_compile_options(velox_hdfs_file_test
                        PRIVATE -Wno-deprecated-declarations)

@@ -15,6 +15,7 @@
  */
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
 #include <boost/format.hpp>
+#include <curl/curl.h>
 #include <gmock/gmock-matchers.h>
 #include <atomic>
 #include <random>
@@ -135,6 +136,35 @@ void checkReadErrorMessages(
   }
 }
 
+bool checkMiniClusterStatus(const std::string& url) {
+  CURL* curl;
+  CURLcode res;
+  long http_code = 0;
+
+  curl_global_init(CURL_GLOBAL_DEFAULT);
+  curl = curl_easy_init();
+
+  if (curl) {
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
+    res = curl_easy_perform(curl);
+
+    if (res == CURLE_OK) {
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    } else {
+      std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res)
+                << std::endl;
+    }
+
+    curl_easy_cleanup(curl);
+  }
+
+  curl_global_cleanup();
+
+  return (http_code == 200);
+}
+
 void verifyFailures(LibHdfsShim* driver, hdfsFS hdfs) {
   HdfsReadFile readFile(driver, hdfs, destinationPath);
   HdfsReadFile readFile2(driver, hdfs, destinationPath);
@@ -156,16 +186,19 @@ void verifyFailures(LibHdfsShim* driver, hdfsFS hdfs) {
   checkReadErrorMessages(&readFile, offsetErrorMessage, kOneMB);
   HdfsFileSystemTest::miniCluster->stop();
 
-  const int max_retries = 10;
-  const int sleep_duration_ms = 1000;
+  constexpr auto kMaxRetries = 10;
   int retries = 0;
   while (true) {
-    if (retries >= max_retries) {
+    if (!checkMiniClusterStatus(fullDestinationPath)) {
       checkReadErrorMessages(&readFile2, readFailErrorMessage, 1);
       break;
     } else {
-      sleep(1);
-      retries++;
+      if (retries >= kMaxRetries) {
+        FAIL() << "expected VeloxException";
+      } else {
+        sleep(1);
+        retries++;
+      }
     }
   }
 }
