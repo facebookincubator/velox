@@ -162,3 +162,18 @@ target_link_libraries(
 add_executable(velox_atomics_benchmark AtomicsBench.cpp)
 
 target_link_libraries(velox_atomics_benchmark Folly::follybenchmark)
+  Folly::follybenchmark)
+
+add_executable(velox_window_krange_frame_benchmark
+               WindowKRangeFrameBenchmark.cpp)
+
+target_link_libraries(
+  velox_window_krange_frame_benchmark
+  velox_aggregates
+  velox_exec
+  velox_exec_test_lib
+  velox_hive_connector
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  velox_window
+  Folly::follybenchmark)
