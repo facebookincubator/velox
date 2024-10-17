@@ -52,6 +52,8 @@ void registerProbTrigFunctions(const std::string& prefix) {
       {prefix + "inverse_beta_cdf"});
   registerFunction<InverseNormalCDFFunction, double, double, double, double>(
       {prefix + "inverse_normal_cdf"});
+  registerFunction<InverseChiSquaredCDFFunction, double, double, double>(
+      {prefix + "inverse_chi_squared_cdf"});
   registerFunction<PoissonCDFFunction, double, double, int32_t>(
       {prefix + "poisson_cdf"});
   registerFunction<GammaCDFFunction, double, double, double, double>(
