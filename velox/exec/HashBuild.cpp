@@ -112,6 +112,9 @@ HashBuild::HashBuild(
   }
 
   tableType_ = ROW(std::move(names), std::move(types));
+  joinBridge_->maybeSetTableType(tableType_);
+  joinBridge_->maybeSetSpillConfig(spillConfig());
+  joinBridge_->maybeSetJoinNode(joinNode_);
   setupTable();
   setupSpiller();
   stateCleared_ = false;
@@ -780,6 +783,7 @@ bool HashBuild::finishHashBuild() {
   addRuntimeStats();
   joinBridge_->setHashTable(
       std::move(table_), std::move(spillPartitions), joinHasNullKeys_);
+  joinBridge_->setSpillStats(&spillStats_);
   if (canSpill()) {
     stateCleared_ = true;
   }

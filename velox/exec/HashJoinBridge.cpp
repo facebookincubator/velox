@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -31,6 +32,134 @@ void HashJoinBridge::addBuilder() {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(!started_);
   ++numBuilders_;
+}
+
+HashBitRange HashJoinBridge::tableSpillHashBitRange() const {
+  const auto* config = spillConfig();
+  uint8_t startPartitionBit = config->startPartitionBit;
+  if (buildResult_->restoredPartitionId.has_value()) {
+    startPartitionBit =
+        buildResult_->restoredPartitionId->partitionBitOffset() +
+        config->numPartitionBits;
+  }
+  return HashBitRange(
+      startPartitionBit, startPartitionBit + config->numPartitionBits);
+}
+
+std::unique_ptr<Spiller> HashJoinBridge::spillTable(RowContainer* subTableRows) {
+  VELOX_CHECK_NOT_NULL(tableType_);
+
+  auto tableSpiller = std::make_unique<Spiller>(
+      Spiller::Type::kHashJoinBuild,
+      joinNode_->joinType(),
+      subTableRows,
+      tableType_,
+      tableSpillHashBitRange(),
+      spillConfig(),
+      spillStats_);
+  tableSpiller->spill();
+  return tableSpiller;
+}
+
+SpillPartitionSet HashJoinBridge::spillTable() {
+  VELOX_CHECK(spillConfig_.has_value());
+  VELOX_CHECK(buildResult_.has_value());
+  VELOX_CHECK_NOT_NULL(buildResult_->table);
+  if (!buildResult_->spillPartitionIds.empty()) {
+    VELOX_CHECK_EQ(buildResult_->table->rows()->numRows(), 0);
+    // Nothing to spill because table has been spilled.
+    return {};
+  }
+  if (buildResult_->table->rows()->numRows() == 0) {
+    // Empty build side.
+    return {};
+  }
+
+  auto table = buildResult_->table.get();
+  const auto initialBytes = table->allRows();
+  struct SpillResult {
+    std::unique_ptr<Spiller> spiller{nullptr};
+    const std::exception_ptr error{nullptr};
+
+    explicit SpillResult(std::exception_ptr _error) : error(_error) {}
+    explicit SpillResult(std::unique_ptr<Spiller> _spiller)
+        : spiller(std::move(_spiller)) {}
+  };
+
+  auto* spillExecutor = spillConfig()->executor;
+  const std::vector<RowContainer*> rowContainers = table->allRows();
+  std::vector<std::shared_ptr<AsyncSource<SpillResult>>> spillTasks;
+  for (auto* rowContainer : rowContainers) {
+    if (rowContainer->numRows() == 0) {
+      continue;
+    }
+    spillTasks.push_back(memory::createAsyncMemoryReclaimTask<SpillResult>(
+        [this, rowContainer]() {
+          try {
+            return std::make_unique<SpillResult>(spillTable(rowContainer));
+          } catch (const std::exception& e) {
+            LOG(ERROR) << "Spill sub-table from hash join bridge failed: " << e.what();
+            // The exception is captured and thrown by the caller.
+            return std::make_unique<SpillResult>(std::current_exception());
+          }
+        }));
+    if ((spillTasks.size() > 1) && (spillExecutor != nullptr)) {
+      spillExecutor->add([source = spillTasks.back()]() { source->prepare(); });
+    }
+  }
+
+  auto syncGuard = folly::makeGuard([&]() {
+    for (auto& spillTask : spillTasks) {
+      // We consume the result for the pending tasks. This is a cleanup in the
+      // guard and must not throw. The first error is already captured before
+      // this runs.
+      try {
+        spillTask->move();
+      } catch (const std::exception&) {
+      }
+    }
+  });
+
+  SpillPartitionSet spillPartitions;
+  for (auto& spillTask : spillTasks) {
+    const auto result = spillTask->move();
+    if (result->error) {
+      std::rethrow_exception(result->error);
+    }
+    result->spiller->finishSpill(spillPartitions);
+  }
+
+  // Remove the spilled partitions which are empty so as we don't need to
+  // trigger unnecessary spilling at hash probe side.
+  removeEmptyPartitions(spillPartitions);
+  return spillPartitions;
+}
+
+uint64_t HashJoinBridge::reclaim() {
+  VELOX_CHECK(buildResult_.has_value());
+  VELOX_CHECK_NOT_NULL(buildResult_->table);
+  auto computeTableReservedBytes = [](std::vector<RowContainer*> allRows) {
+    uint64_t totalReservedBytes{0};
+    for (const auto* rowContainer : allRows) {
+      totalReservedBytes += rowContainer->pool()->reservedBytes();
+    }
+    return totalReservedBytes;
+  };
+  const auto oldMemUsage =
+      computeTableReservedBytes(buildResult_->table->allRows());
+
+  auto spillPartitionSet = spillTable();
+
+  auto table = std::move(buildResult_->table);
+  const auto hasNullKeys = buildResult_->hasNullKeys;
+  table->clear(true);
+  buildResult_.reset();
+
+  const auto reclaimedBytes =
+      oldMemUsage - computeTableReservedBytes(table->allRows());
+  setHashTable(std::move(table), std::move(spillPartitionSet), hasNullKeys);
+
+  return reclaimedBytes;
 }
 
 void HashJoinBridge::setHashTable(
@@ -105,7 +234,7 @@ void HashJoinBridge::setAntiJoinHasNullKeys() {
   notify(std::move(promises));
 }
 
-std::optional<HashJoinBridge::HashBuildResult> HashJoinBridge::tableOrFuture(
+const HashJoinBridge::HashBuildResult* HashJoinBridge::tableOrFuture(
     ContinueFuture* future) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(started_);
@@ -115,12 +244,13 @@ std::optional<HashJoinBridge::HashBuildResult> HashJoinBridge::tableOrFuture(
       (!restoringSpillPartitionId_.has_value() &&
        restoringSpillShards_.empty()));
 
+  probeStarted_ = true;
   if (buildResult_.has_value()) {
-    return buildResult_.value();
+    return &buildResult_.value();
   }
   promises_.emplace_back("HashJoinBridge::tableOrFuture");
   *future = promises_.back().getSemiFuture();
-  return std::nullopt;
+  return nullptr;
 }
 
 bool HashJoinBridge::probeFinished() {
@@ -139,6 +269,7 @@ bool HashJoinBridge::probeFinished() {
     // not needed anymore. We'll wait for the HashBuild operator to build a new
     // table from the next spill partition now.
     buildResult_.reset();
+    probeStarted_ = false;
 
     if (!spillPartitionSets_.empty()) {
       hasSpillInput = true;
@@ -222,6 +353,12 @@ uint64_t HashJoinMemoryReclaimer::reclaim(
     }
     return !hasReclaimedFromBuild;
   });
+  if (reclaimedBytes != 0) {
+    return reclaimedBytes;
+  }
+  if (joinBridge_->canReclaimFromBridge()) {
+    reclaimedBytes = joinBridge_->reclaim();
+  }
   return reclaimedBytes;
 }
 
