@@ -262,7 +262,9 @@ std::string variant::toJson(const TypePtr& type) const {
       return b;
     }
     case TypeKind::VARBINARY: {
-      auto& str = value<TypeKind::VARBINARY>();
+      const auto& binaryData = value<TypeKind::VARBINARY>();
+      std::string_view str(
+          reinterpret_cast<const char*>(binaryData.data()), binaryData.size());
       auto encoded = encoding::Base64::encode(str);
       return '"' + encoded + '"';
     }
@@ -388,7 +390,9 @@ std::string variant::toJsonUnsafe(const TypePtr& type) const {
       return b;
     }
     case TypeKind::VARBINARY: {
-      auto& str = value<TypeKind::VARBINARY>();
+      const auto& binaryData = value<TypeKind::VARBINARY>();
+      std::string_view str(
+          reinterpret_cast<const char*>(binaryData.data()), binaryData.size());
       auto encoded = encoding::Base64::encode(str);
       return '"' + encoded + '"';
     }
@@ -506,11 +510,12 @@ folly::dynamic variant::serialize() const {
       break;
     }
     case TypeKind::VARBINARY: {
-      auto& str = value<TypeKind::VARBINARY>();
+      const auto& binaryData = value<TypeKind::VARBINARY>();
+      std::string_view str(
+          reinterpret_cast<const char*>(binaryData.data()), binaryData.size());
       objValue = encoding::Base64::encode(str);
       break;
     }
-
     case TypeKind::TINYINT: {
       objValue = value<TypeKind::TINYINT>();
       break;
@@ -616,10 +621,10 @@ variant variant::create(const folly::dynamic& variantobj) {
       return kind == TypeKind::ARRAY ? variant::array(values)
                                      : variant::row(values);
     }
-
     case TypeKind::VARBINARY: {
       auto str = obj.asString();
-      auto result = encoding::Base64::decode(str);
+      std::string_view encodedView(str);
+      auto result = encoding::Base64::decode(encodedView);
       return variant::binary(std::move(result));
     }
     case TypeKind::VARCHAR:
