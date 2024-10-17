@@ -196,6 +196,12 @@ jobs:
         run: |
           ccache -sz
 
+      - name: Setup dependencies
+        run: |
+          # Install dependencies required by PR. They have not been installed in docker.
+          yum update -y
+          yum install -y ragel
+
       - name: Build
         env:
           EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"

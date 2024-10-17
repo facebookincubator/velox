@@ -40,7 +40,7 @@ NPROC=$(getconf _NPROCESSORS_ONLN)
 
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 snappy xz zstd"
+MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 snappy xz zstd libtool automake autoconf ragel"
 MACOS_BUILD_DEPS="ninja cmake"
 FB_OS_VERSION="v2024.07.01.00"
 FMT_VERSION="10.1.1"

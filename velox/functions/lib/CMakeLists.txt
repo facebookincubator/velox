@@ -31,6 +31,7 @@ velox_add_library(
   ArrayShuffle.cpp
   CheckDuplicateKeys.cpp
   CheckNestedNulls.cpp
+  HyperscanFunctions.cpp
   KllSketch.cpp
   MapConcat.cpp
   Re2Functions.cpp
@@ -47,7 +48,8 @@ velox_link_libraries(
   velox_vector
   velox_type_tz
   re2::re2
-  Folly::folly)
+  Folly::folly
+  hs)
 
 add_subdirectory(aggregates)
 add_subdirectory(string)
