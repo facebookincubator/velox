@@ -90,22 +90,23 @@ class RemoteFunction : public exec::VectorFunction {
   }
 
  private:
-    const std::string urlEncode(const std::string& value) const {
-      std::ostringstream escaped;
-      escaped.fill('0');
-      escaped << std::hex;
+  const std::string urlEncode(const std::string& value) const {
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
 
-      for (char c : value) {
-          // Keep alphanumeric characters and some reserved characters unchanged
-          if (isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
-              escaped << c;
-          } else {
-              // Convert non-alphanumeric characters to %hex representation
-              escaped << '%' << std::setw(2) << int(static_cast<unsigned char>(c));
-          }
+    for (char c : value) {
+      // Keep alphanumeric characters and some reserved characters unchanged
+      if (isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' ||
+          c == '.' || c == '~') {
+        escaped << c;
+      } else {
+        // Convert non-alphanumeric characters to %hex representation
+        escaped << '%' << std::setw(2) << int(static_cast<unsigned char>(c));
       }
+    }
 
-      return escaped.str();
+    return escaped.str();
   }
 
   void applyRestRemote(
@@ -117,42 +118,45 @@ class RemoteFunction : public exec::VectorFunction {
     try {
       std::string responseBody;
 
-      // Create a RowVector for the remote function call
+      // 1. Create a RowVector for the remote function call
       auto remoteRowVector = std::make_shared<RowVector>(
           context.pool(),
           remoteInputType_,
           BufferPtr{},
           rows.end(),
-          std::move(args));
+          args);
 
-      // Build the JSON request with function and input details
+      // 2. Serialize the input RowVector
+      auto serde = getSerde(metadata_.serdeFormat).get();
+      auto serializedInput =
+          rowVectorToIOBuf(remoteRowVector, rows.end(), *context.pool(), serde);
+
+      // Convert serialized input to a string (e.g., base64 encoding if binary)
+      std::string serializedInputStr =
+          serializedInput->moveToFbString().toStdString();
+
+      // 3. Build the JSON request with function and input details
       folly::dynamic remoteFunctionHandle = folly::dynamic::object;
       remoteFunctionHandle["functionName"] = functionName_;
       remoteFunctionHandle["returnType"] = serializeType(outputType);
-      remoteFunctionHandle["argumentTypes"] = folly::dynamic::array;
-      for (const auto& value : serializedInputTypes_) {
-        remoteFunctionHandle["argumentTypes"].push_back(value);
-      }
+      remoteFunctionHandle["argumentTypes"] = serializedInputTypes_;
 
       folly::dynamic inputs = folly::dynamic::object;
       inputs["pageFormat"] = static_cast<int>(metadata_.serdeFormat);
-      inputs["payload"] = iobufToString(rowVectorToIOBuf(
-          remoteRowVector,
-          rows.end(),
-          *context.pool(),
-          getSerde(metadata_.serdeFormat).get()));
+      inputs["payload"] = serializedInputStr;
       inputs["rowCount"] = remoteRowVector->size();
 
-      // Create the final JSON object to be sent
+      // 4. Create the final JSON object to be sent
       folly::dynamic jsonObject = folly::dynamic::object;
       jsonObject["remoteFunctionHandle"] = remoteFunctionHandle;
       jsonObject["inputs"] = inputs;
       jsonObject["throwOnError"] = context.throwOnError();
 
-      std::string functionid = metadata_.functionId.value_or("default_function_id");
-      std::string encodedFunctionId = urlEncode(functionid);
+      // 5. Construct the full URL for the REST request
+      std::string functionId =
+          metadata_.functionId.value_or("default_function_id");
+      std::string encodedFunctionId = urlEncode(functionId);
 
-      // Construct the full URL for the REST request
       std::string fullUrl = fmt::format(
           "{}/v1/functions/{}/{}/{}/{}",
           url_.getUrl(),
@@ -161,26 +165,29 @@ class RemoteFunction : public exec::VectorFunction {
           encodedFunctionId,
           metadata_.version.value_or("default_version"));
 
-      // Invoke the remote function using RestClient
-      RestClient restClient_(fullUrl);
-      restClient_.invoke_function(folly::toJson(jsonObject), responseBody);
-      LOG(INFO) << responseBody;
+      // 6. Send the request via RestClient
+      RestClient restClient(fullUrl);
+      restClient.invoke_function(folly::toJson(jsonObject), responseBody);
 
-      // Parse the JSON response
+      // 7. Parse the JSON response
       auto responseJsonObj = parseJson(responseBody);
       if (responseJsonObj.count("err") > 0) {
-        VELOX_NYI(responseJsonObj["err"].asString());
+        VELOX_FAIL(responseJsonObj["err"].asString());
       }
 
-      // Deserialize the result payload
-      auto payloadIObuf = folly::IOBuf::copyBuffer(
-          responseJsonObj["result"]["payload"].asString());
+      // 8. Deserialize the result payload
+      std::string resultPayloadStr =
+          responseJsonObj["result"]["payload"].asString();
+
+      // Convert the payload string back to IOBuf (e.g., if base64 encoded)
+      auto payloadIobuf = folly::IOBuf::copyBuffer(resultPayloadStr);
 
       auto outputRowVector = IOBufToRowVector(
-          *payloadIObuf,
+          *payloadIobuf,
           ROW({outputType}),
           *context.pool(),
-          getSerde(metadata_.serdeFormat).get());
+          serde);
+
       result = outputRowVector->childAt(0);
 
     } catch (const std::exception& e) {
@@ -247,7 +254,10 @@ class RemoteFunction : public exec::VectorFunction {
 
     if (auto errorPayload = remoteResponse.get_result().errorPayload()) {
       auto errorsRowVector = IOBufToRowVector(
-          *errorPayload, ROW({VARCHAR()}), *context.pool(), getSerde(metadata_.serdeFormat).get());
+          *errorPayload,
+          ROW({VARCHAR()}),
+          *context.pool(),
+          getSerde(metadata_.serdeFormat).get());
       auto errorsVector =
           errorsRowVector->childAt(0)->asFlatVector<StringView>();
       VELOX_CHECK(errorsVector, "Should be convertible to flat vector");
