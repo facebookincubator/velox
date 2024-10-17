@@ -42,6 +42,7 @@ enum class TokenType {
   String,
   Binary,
   Timestamp,
+  Opaque,
   List,
   Map,
   Struct,

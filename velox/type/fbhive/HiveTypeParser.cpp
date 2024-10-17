@@ -58,6 +58,7 @@ HiveTypeParser::HiveTypeParser() {
   setupMetadata<TokenType::Binary, TypeKind::VARBINARY>(
       {"binary", "varbinary"});
   setupMetadata<TokenType::Timestamp, TypeKind::TIMESTAMP>("timestamp");
+  setupMetadata<TokenType::Opaque, TypeKind::OPAQUE>("opaque");
   setupMetadata<TokenType::List, TypeKind::ARRAY>("array");
   setupMetadata<TokenType::Map, TypeKind::MAP>("map");
   setupMetadata<TokenType::Struct, TypeKind::ROW>({"struct", "row"});
@@ -87,7 +88,16 @@ std::shared_ptr<const Type> HiveTypeParser::parse(const std::string& ser) {
 Result HiveTypeParser::parseType() {
   Token nt = nextToken();
   VELOX_CHECK(!nt.isEOS(), "Unexpected end of stream parsing type!!!");
-  if (nt.isValidType() && nt.isPrimitiveType()) {
+
+  if (!nt.isValidType()) {
+    VELOX_FAIL(fmt::format(
+        "Unexpected token? {} at {}. typeKind = {}",
+        nt.value.toString(),
+        remaining_.toString(),
+        nt.typeKind()));
+  }
+
+  if (nt.isPrimitiveType()) {
     if (nt.metadata->tokenString[0] == "decimal") {
       eatToken(TokenType::LeftRoundBracket);
       Token precision = nextToken();
@@ -118,7 +128,16 @@ Result HiveTypeParser::parseType() {
       eatToken(TokenType::RightRoundBracket);
     }
     return Result{scalarType};
-  } else if (nt.isValidType()) {
+  } else if (nt.metadata->tokenString[0] == "opaque") {
+    eatToken(TokenType::StartSubType);
+    folly::StringPiece innerTypeName =
+        eatToken(TokenType::Identifier, true).value;
+    eatToken(TokenType::EndSubType);
+
+    auto typeIndex = getTypeIdForOpaqueTypeAlias(innerTypeName.str());
+    auto instance = std::make_shared<const OpaqueType>(typeIndex);
+    return Result{instance};
+  } else {
     ResultList resultList = parseTypeList(TypeKind::ROW == nt.typeKind());
     switch (nt.typeKind()) {
       case velox::TypeKind::ROW:
@@ -140,11 +159,6 @@ Result HiveTypeParser::parseType() {
       default:
         VELOX_FAIL("unsupported kind: " + std::to_string((int)nt.typeKind()));
     }
-  } else {
-    VELOX_FAIL(fmt::format(
-        "Unexpected token {} at {}",
-        nt.value.toString(),
-        remaining_.toString()));
   }
 }
 
