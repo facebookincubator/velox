@@ -32,12 +32,34 @@ class HashJoinBridgeTestHelper;
 /// the same name.
 class HashJoinBridge : public JoinBridge {
  public:
+  struct SpillResult {
+    Spiller* spiller{nullptr};
+    const std::exception_ptr error{nullptr};
+
+    explicit SpillResult(std::exception_ptr _error) : error(_error) {}
+    explicit SpillResult(Spiller* _spiller) : spiller(_spiller) {}
+  };
+
   void start() override;
 
   /// Invoked by HashBuild operator ctor to add to this bridge by incrementing
   /// 'numBuilders_'. The latter is used to split the spill partition data among
   /// HashBuild operators to parallelize the restoring operation.
   void addBuilder();
+
+  /// Invoked to spill 'table' and returns spilled partitions. This method
+  /// should only be invoked when the 'table' is a ready-to-use one, meaning it
+  /// should not be one in the middle of building. Hence it is normally invoked
+  /// by probe side.
+  SpillPartitionSet spillTable(
+      std::shared_ptr<BaseHashTable> table,
+      folly::Synchronized<common::SpillStats>* stats);
+
+  /// Triggers the parallel spilling directly from the provided 'spillers'. It
+  /// does not do other operations other than spill. Hence it can be invoked to
+  /// spill partially built table, and hence invoked by build side.
+  std::vector<std::unique_ptr<SpillResult>> spillTableFromSpillers(
+      const std::vector<Spiller*>& spillers);
 
   /// Invoked by the build operator to set the built hash table.
   /// 'spillPartitionSet' contains the spilled partitions while building
@@ -55,12 +77,10 @@ class HashJoinBridge : public JoinBridge {
 
   void setAntiJoinHasNullKeys();
 
-  /// Represents the result of HashBuild operators: a hash table, an optional
-  /// restored spill partition id associated with the table, and the spilled
-  /// partitions while building the table if not empty. In case of an anti join,
-  /// a build side entry with a null in a join key makes the join return
-  /// nothing. In this case, HashBuild operators finishes early without
-  /// processing all the input and without finishing building the hash table.
+  /// Represents the result of HashBuild operators. In case of an anti join, a
+  /// build side entry with a null in a join key makes the join return nothing.
+  /// In this case, HashBuild operators finishes early without processing all
+  /// the input and without finishing building the hash table.
   struct HashBuildResult {
     HashBuildResult(
         std::shared_ptr<BaseHashTable> _table,
@@ -76,7 +96,13 @@ class HashJoinBridge : public JoinBridge {
 
     bool hasNullKeys;
     std::shared_ptr<BaseHashTable> table;
+
+    /// Restored spill partition id associated with 'table', null if 'table' is
+    /// not built from restoration.
     std::optional<SpillPartitionId> restoredPartitionId;
+
+    /// Spilled partitions while building hash table. Either 'table' is empty or
+    /// 'spillPartitionIds' is empty.
     SpillPartitionIdSet spillPartitionIds;
   };
 
@@ -112,9 +138,36 @@ class HashJoinBridge : public JoinBridge {
   /// 'spillPartition' will be set to null in the returned SpillInput.
   std::optional<SpillInput> spillInputOrFuture(ContinueFuture* future);
 
+  /// Sets the build table type.
+  void maybeSetTableType(const RowTypePtr& tableType);
+
+  /// Sets the spill configs.
+  void maybeSetSpillConfig(const common::SpillConfig* spillConfig);
+
+  /// Sets the join plan node 'this' is responsible for.
+  void maybeSetJoinNode(
+      const std::shared_ptr<const core::HashJoinNode>& joinNode);
+
  private:
+  // Spills the row container from one of the sub-table from
+  // 'table' to parallelize the table spilling. The function
+  // spills all the rows from the row container and returns the spiller for the
+  // caller to collect the spilled partitions and stats.
+  std::unique_ptr<Spiller> createSpiller(
+      RowContainer* subTableRows,
+      folly::Synchronized<common::SpillStats>* stats);
+
+  // Returns the spill hash bit range for spilling the current
+  // 'buildResult_->table'.
+  HashBitRange tableSpillHashBitRange() const;
+
+  const common::SpillConfig* spillConfig() const;
+
   uint32_t numBuilders_{0};
 
+  // The result of the build side of the current processing unit. There could be
+  // multiple processing units in the case of spill. Each partition/recursive
+  // partition would be its own processing unit.
   std::optional<HashBuildResult> buildResult_;
 
   // restoringSpillPartitionXxx member variables are populated by the
@@ -123,7 +176,7 @@ class HashJoinBridge : public JoinBridge {
   // among the HashBuild operators and notifies these operators that they can
   // start building HashTables from these shards.
 
-  // If not null, set to the currently restoring spill partition id.
+  // If not null, set to the currently restoring table spill partition id.
   std::optional<SpillPartitionId> restoringSpillPartitionId_;
 
   // If 'restoringSpillPartitionId_' is not null, this set to the restoring
@@ -137,6 +190,10 @@ class HashJoinBridge : public JoinBridge {
   // memory and engages in recursive spilling.
   SpillPartitionSet spillPartitionSets_;
 
+  // The row type used for hash table spilling.
+  RowTypePtr tableType_;
+  std::shared_ptr<const core::HashJoinNode> joinNode_;
+  std::optional<common::SpillConfig> spillConfig_;
   friend test::HashJoinBridgeTestHelper;
 };
 
