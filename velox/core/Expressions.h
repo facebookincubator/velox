@@ -565,7 +565,11 @@ class LambdaTypedExpr : public ITypedExpr {
     if (*casted->type() != *this->type()) {
       return false;
     }
-    return *signature_ == *casted->signature_ && *body_ == *casted->body_;
+    return operator==(*casted);
+  }
+
+  bool operator==(const LambdaTypedExpr& other) const {
+    return *signature_ == *other.signature_ && *body_ == *other.body_;
   }
 
   folly::dynamic serialize() const override;
