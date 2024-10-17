@@ -372,6 +372,120 @@ inline int64_t findNthInstanceByteIndexFromEnd(
   return index;
 }
 
+template <bool ignoreEmptyReplaced = false>
+inline static size_t replaceFirst(
+    char* outputString,
+    const std::string_view& inputString,
+    const std::string_view& replaced,
+    const std::string_view& replacement,
+    bool inPlace = false) {
+  // Handle case of empty string
+  if (inputString.empty()) {
+    if (!ignoreEmptyReplaced && replaced.empty() && !replacement.empty()) {
+      std::memcpy(outputString, replacement.data(), replacement.size());
+      return replacement.size();
+    }
+    return 0;
+  }
+
+  // Handle case of ignoreEmptyReplaced=True and replaced is empty
+  if constexpr (ignoreEmptyReplaced) {
+    if (replaced.empty()) {
+      if (!inPlace) {
+        std::memcpy(outputString, inputString.data(), inputString.size());
+      }
+      return inputString.size();
+    }
+  }
+
+  // Handle case of when replaced is empty
+  if (replaced.empty()) {
+    if (replacement.empty()) {
+      if (!inPlace) {
+        std::memcpy(outputString, inputString.data(), inputString.size());
+      }
+      return inputString.size();
+    }
+
+    // inPlace cannot be true since replace is empty (replacement.size() must be
+    // > replaced.size())
+    assert(!inPlace && "wrong inplace replaceFirst usage");
+
+    // writes replacement to the beginning of outputString
+    std::memcpy(&outputString[0], replacement.data(), replacement.size());
+    // writes the original string
+    std::memcpy(
+        &outputString[replacement.size()],
+        inputString.data(),
+        inputString.size());
+    return replacement.size() + inputString.size();
+  }
+
+  // Find the first position of replaced in inputString
+  auto position = inputString.find(replaced, 0);
+
+  // Handle the case where replaced is not found
+  if (position == std::string_view::npos) {
+    if (!inPlace) {
+      std::memcpy(outputString, inputString.data(), inputString.size());
+    }
+    return inputString.size();
+  }
+
+  // Copy needed in out of place replace, and when replaced and replacement are
+  // of different sizes.
+  const bool doCopyUnreplaced =
+      !inPlace || (replaced.size() != replacement.size());
+  size_t writePosition = 0;
+  size_t readPosition = 0;
+
+  auto writeUnchanged = [&](ssize_t size) {
+    assert(size >= 0 && "Probable math error?");
+    if (size <= 0) {
+      return;
+    }
+
+    if (inPlace) {
+      if (doCopyUnreplaced) {
+        // memcpy does not allow overllapping
+        std::memmove(
+            &outputString[writePosition],
+            &inputString.data()[readPosition],
+            size);
+      }
+    } else {
+      std::memcpy(
+          &outputString[writePosition],
+          &inputString.data()[readPosition],
+          size);
+    }
+    writePosition += size;
+    readPosition += size;
+  };
+
+  auto writeReplacement = [&]() {
+    if (replacement.size() > 0) {
+      std::memcpy(
+          &outputString[writePosition], replacement.data(), replacement.size());
+      writePosition += replacement.size();
+    }
+    readPosition += replaced.size();
+  };
+
+  // Write the left sub-portion (if any) of the string that is unchanged
+  size_t unchangedSize = position;
+  writeUnchanged(unchangedSize);
+
+  // Write the replacement
+  writeReplacement();
+
+  // Write the right sub-portion (if any) of the string that is unchanged
+  unchangedSize = inputString.size() - readPosition;
+  writeUnchanged(unchangedSize);
+
+  return writePosition;
+}
+
 /// Replace replaced with replacement in inputString and write results in
 /// outputString. If inPlace=true inputString and outputString are assumed to
 /// be the same. When replaced is empty and ignoreEmptyReplaced is false,

@@ -318,6 +318,10 @@ class StringFunctionsTest : public FunctionBaseTest {
       const std::string& search,
       const std::string& replace,
       bool multiReferenced);
+
+  using replace_first_input_test_t = std::vector<std::pair<
+      std::tuple<std::string, std::string, std::string>,
+      std::string>>;
 };
 
 /**
@@ -1454,6 +1458,122 @@ void StringFunctionsTest::testReplaceFlatVector(
 
   for (int32_t i = 0; i < tests.size(); ++i) {
     ASSERT_EQ(result->valueAt(i), StringView(tests[i].second));
+  }
+}
+
+TEST_F(StringFunctionsTest, replaceFirst) {
+  auto testReplaceFirstFlatVector =
+      [this](const replace_first_input_test_t& tests) {
+        auto stringVector = makeFlatVector<StringView>(tests.size());
+        auto searchVector = makeFlatVector<StringView>(tests.size());
+        auto replaceVector = makeFlatVector<StringView>(tests.size());
+
+        for (int i = 0; i < tests.size(); i++) {
+          stringVector->set(i, StringView(std::get<0>(tests[i].first)));
+          searchVector->set(i, StringView(std::get<1>(tests[i].first)));
+          replaceVector->set(i, StringView(std::get<2>(tests[i].first)));
+        }
+
+        auto result = evaluate<FlatVector<StringView>>(
+            "replaceFirst(c0, c1, c2)",
+            makeRowVector({stringVector, searchVector, replaceVector}));
+
+        for (int32_t i = 0; i < tests.size(); ++i) {
+          ASSERT_EQ(result->valueAt(i), StringView(tests[i].second));
+        }
+      };
+
+  testReplaceFirstFlatVector(
+      {{{"hello_world", "e", "test"}, {"htestllo_world"}}});
+  testReplaceFirstFlatVector(
+      {{{"hello_world_foobar", "_", ""}, {"helloworld_foobar"}}});
+  testReplaceFirstFlatVector(
+      {{{"hello_world_foobar", "_", "__"}, {"hello__world_foobar"}}});
+  testReplaceFirstFlatVector(
+      {{{"Testcases test cases", "cases", ""}, {"Test test cases"}}});
+  testReplaceFirstFlatVector(
+      {{{"test cases", "", "Add "}, {"Add test cases"}}});
+  testReplaceFirstFlatVector({{{"", "", "not_empty"}, {"not_empty"}}});
+  testReplaceFirstFlatVector({{{"", "foo", "bar"}, {""}}});
+
+  auto testReplaceFirstInPlace =
+      [this](
+          const std::vector<std::pair<std::string, std::string>>& tests,
+          const std::string& search,
+          const std::string& replace,
+          bool multiReferenced) {
+        auto makeInput = [&]() {
+          auto stringVector = makeFlatVector<StringView>(tests.size());
+
+          for (int i = 0; i < tests.size(); i++) {
+            stringVector->set(i, StringView(tests[i].first));
+          }
+          auto crossRefVector = makeFlatVector<StringView>(1);
+
+          if (multiReferenced) {
+            crossRefVector->acquireSharedStringBuffers(stringVector.get());
+          }
+          return stringVector;
+        };
+
+        auto testResults = [&](const FlatVector<StringView>* results) {
+          for (int32_t i = 0; i < tests.size(); ++i) {
+            ASSERT_EQ(results->valueAt(i), StringView(tests[i].second));
+          }
+        };
+
+        auto result = evaluate<FlatVector<StringView>>(
+            fmt::format("replaceFirst(c0, '{}', '{}')", search, replace),
+            makeRowVector({makeInput()}));
+        testResults(result.get());
+
+        // Test in place optimization. If in-place is expected, make sure it
+        // happened. If its not expected make sure it did not happen.
+        auto applyReplaceFirstFunction =
+            [&](std::vector<VectorPtr>& functionInputs, VectorPtr& resultPtr) {
+              core::QueryConfig config({});
+              auto replaceFunction = exec::getVectorFunction(
+                  "replaceFirst",
+                  {VARCHAR(), VARCHAR(), VARCHAR()},
+                  {},
+                  config);
+              SelectivityVector rows(tests.size());
+              ExprSet exprSet({}, &execCtx_);
+              RowVectorPtr inputRows = makeRowVector({});
+              exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputRows.get());
+              replaceFunction->apply(
+                  rows, functionInputs, VARCHAR(), evalCtx, resultPtr);
+            };
+
+        std::vector<VectorPtr> functionInputs = {
+            makeInput(),
+            makeConstant(search.c_str(), tests.size()),
+            makeConstant(replace.c_str(), tests.size())};
+
+        VectorPtr resultPtr;
+        applyReplaceFirstFunction(functionInputs, resultPtr);
+        testResults(resultPtr->asFlatVector<StringView>());
+
+        if (!multiReferenced && search >= replace) {
+          // Expected in-place.
+          ASSERT_TRUE(resultPtr == functionInputs[0]);
+        } else {
+          ASSERT_FALSE(resultPtr == functionInputs[0]);
+        }
+      };
+
+  // Test in place path
+  std::vector<std::pair<std::string, std::string>> testsInplace = {
+      {"foobar", "fttbar"}, {"oooooo", "ttoooo"}};
+  testReplaceFirstInPlace(testsInplace, "oo", "tt", false);
+  testReplaceFirstInPlace(testsInplace, "oo", "tt", true);
+
+  // Test constant vectors
+  auto rows = makeRowVector(makeRowType({BIGINT()}), 10);
+  auto result = evaluate<SimpleVector<StringView>>(
+      "replace('hello_world', '_', '')", rows);
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(result->valueAt(i), StringView("helloworld"));
   }
 }
 

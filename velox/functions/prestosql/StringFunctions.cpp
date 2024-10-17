@@ -434,6 +434,126 @@ class Replace : public exec::VectorFunction {
     return {{0, 2}};
   }
 };
+
+/**
+ * replace_first(string, search, replace) -> varchar
+ * Replaces the first instances of ``search`` with ``replace`` in ``string``.
+ * If search is an empty string, it inserts replace at the beginning of the
+ * string.
+ **/
+class ReplaceFirst : public exec::VectorFunction {
+ private:
+  template <
+      typename StringReader,
+      typename SearchReader,
+      typename ReplaceReader>
+  void applyInternal(
+      StringReader stringReader,
+      SearchReader searchReader,
+      ReplaceReader replaceReader,
+      const SelectivityVector& rows,
+      FlatVector<StringView>* results) const {
+    rows.applyToSelected([&](int row) {
+      auto proxy = exec::StringWriter<>(results, row);
+      stringImpl::replaceFirst(
+          proxy, stringReader(row), searchReader(row), replaceReader(row));
+      proxy.finalize();
+    });
+  }
+
+  template <
+      typename StringReader,
+      typename SearchReader,
+      typename ReplaceReader>
+  void applyInPlace(
+      StringReader stringReader,
+      SearchReader searchReader,
+      ReplaceReader replaceReader,
+      const SelectivityVector& rows,
+      FlatVector<StringView>* results) const {
+    rows.applyToSelected([&](int row) {
+      auto proxy =
+          exec::StringWriter<true>(results, row, stringReader(row), true);
+      stringImpl::replaceFirstInPlace(
+          proxy, searchReader(row), replaceReader(row));
+      proxy.finalize();
+    });
+  }
+
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    // Read string input
+    exec::LocalDecodedVector decodedStringHolder(context, *args[0], rows);
+    auto decodedStringInput = decodedStringHolder.get();
+
+    // Read search argument
+    exec::LocalDecodedVector decodedSearchHolder(context, *args[1], rows);
+    auto decodedSearchInput = decodedSearchHolder.get();
+    auto searchArgValue = decodedSearchInput->isConstantMapping()
+        ? std::make_optional<StringView>(
+              decodedSearchInput->valueAt<StringView>(0))
+        : std::nullopt;
+
+    // Read replace argument
+    exec::LocalDecodedVector decodedReplaceHolder(context, *args[2], rows);
+    auto decodedReplaceInput = decodedReplaceHolder.get();
+    auto replaceArgValue = decodedReplaceInput->isConstantMapping()
+        ? std::make_optional<StringView>(
+              decodedReplaceInput->valueAt<StringView>(0))
+        : std::nullopt;
+
+    bool tryInplace = replaceArgValue.has_value() &&
+        searchArgValue.has_value() &&
+        (searchArgValue.value().size() >= replaceArgValue.value().size()) &&
+        (args.at(0)->encoding() == VectorEncoding::Simple::FLAT);
+
+    auto stringReader = [&](const vector_size_t row) {
+      return decodedStringInput->valueAt<StringView>(row);
+    };
+
+    auto searchReader = [&](const vector_size_t row) {
+      return decodedSearchInput->valueAt<StringView>(row);
+    };
+
+    auto replaceReader = [&](const vector_size_t row) {
+      return decodedReplaceInput->valueAt<StringView>(row);
+    };
+
+    if (tryInplace) {
+      if (prepareFlatResultsVector(result, rows, context, args.at(0))) {
+        auto* resultFlatVector = result->as<FlatVector<StringView>>();
+        applyInPlace(
+            stringReader, searchReader, replaceReader, rows, resultFlatVector);
+        return;
+      }
+    }
+
+    // Not in place path
+    VectorPtr emptyVectorPtr;
+    prepareFlatResultsVector(result, rows, context, emptyVectorPtr);
+    auto* resultFlatVector = result->as<FlatVector<StringView>>();
+
+    applyInternal(
+        stringReader, searchReader, replaceReader, rows, resultFlatVector);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {
+        // varchar, varchar, varchar -> varchar
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .argumentType("varchar")
+            .argumentType("varchar")
+            .argumentType("varchar")
+            .build(),
+    };
+  }
+};
 } // namespace
 
 VELOX_DECLARE_VECTOR_FUNCTION(
@@ -455,6 +575,11 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(
        const core::QueryConfig& /*config*/) {
       return std::make_unique<ConcatFunction>(name, inputs);
     });
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_replaceFirst,
+    ReplaceFirst::signatures(),
+    std::make_unique<ReplaceFirst>());
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_replace,
