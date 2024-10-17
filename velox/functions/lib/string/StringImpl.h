@@ -231,6 +231,41 @@ stringPosition(const T& string, const T& subString, int64_t instance = 0) {
   return length<isAscii>(std::string_view(string.data(), byteIndex)) + 1;
 }
 
+/// Replace the first occurence of replaced with replacement in inputString and
+/// write results to outputString.
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE void replaceFirst(
+    TOutString& outputString,
+    const TInString& inputString,
+    const TInString& replaced,
+    const TInString& replacement) {
+  outputString.reserve(inputString.size() + replacement.size());
+  auto outputSize = stringCore::replaceFirst(
+      outputString.data(),
+      std::string_view(inputString.data(), inputString.size()),
+      std::string_view(replaced.data(), replaced.size()),
+      std::string_view(replacement.data(), replacement.size()),
+      false);
+  outputString.resize(outputSize);
+}
+
+template <typename TInOutString, typename TInString>
+FOLLY_ALWAYS_INLINE void replaceFirstInPlace(
+    TInOutString& string,
+    const TInString& replaced,
+    const TInString& replacement) {
+  assert(
+      replacement.size() <= replaced.size() && "invalid inplace replaceFirst");
+
+  auto outputSize = stringCore::replaceFirst(
+      string.data(),
+      std::string_view(string.data(), string.size()),
+      std::string_view(replaced.data(), replaced.size()),
+      std::string_view(replacement.data(), replacement.size()),
+      true);
+  string.resize(outputSize);
+}
+
 /// Replace replaced with replacement in inputString and write results to
 /// outputString.
 template <typename TOutString, typename TInString>
