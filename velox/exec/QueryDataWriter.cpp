@@ -26,15 +26,16 @@
 namespace facebook::velox::exec::trace {
 
 QueryDataWriter::QueryDataWriter(
-    std::string path,
+    std::string traceDir,
     memory::MemoryPool* pool,
     UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB)
-    : dirPath_(std::move(path)),
-      fs_(filesystems::getFileSystem(dirPath_, nullptr)),
+    : traceDir_(std::move(traceDir)),
+      fs_(filesystems::getFileSystem(traceDir_, nullptr)),
       pool_(pool),
       updateAndCheckTraceLimitCB_(std::move(updateAndCheckTraceLimitCB)) {
+  VELOX_CHECK_NOT_NULL(fs_);
   dataFile_ = fs_->openFileForWrite(
-      fmt::format("{}/{}", dirPath_, QueryTraceTraits::kDataFileName));
+      fmt::format("{}/{}", traceDir_, QueryTraceTraits::kDataFileName));
   VELOX_CHECK_NOT_NULL(dataFile_);
 }
 
@@ -85,7 +86,7 @@ void QueryDataWriter::finish(bool limitExceeded) {
 
 void QueryDataWriter::writeSummary(bool limitExceeded) const {
   const auto summaryFilePath =
-      fmt::format("{}/{}", dirPath_, QueryTraceTraits::kDataSummaryFileName);
+      fmt::format("{}/{}", traceDir_, QueryTraceTraits::kDataSummaryFileName);
   const auto file = fs_->openFileForWrite(summaryFilePath);
   folly::dynamic obj = folly::dynamic::object;
   if (dataType_ != nullptr) {
