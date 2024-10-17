@@ -143,12 +143,10 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
   // Calculate encoders and prefix-offsets, and stop the loop if a key that
   // cannot be normalized is encountered.
   for (auto i = 0; i < numKeys; ++i) {
-    if (normalizedKeySize > maxNormalizedKeySize) {
-      break;
-    }
     std::optional<uint32_t> encodedSize =
         PrefixSortEncoder::encodedSize(types[i]->kind(), maxVarLengths[i]);
-    if (encodedSize.has_value()) {
+    if (encodedSize.has_value() &&
+        normalizedKeySize + encodedSize.value() <= maxNormalizedKeySize) {
       prefixOffsets.push_back(normalizedKeySize);
       encoders.push_back(
           {compareFlags[i].ascending, compareFlags[i].nullsFirst});
