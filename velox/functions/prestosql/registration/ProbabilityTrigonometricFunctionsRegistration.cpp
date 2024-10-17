@@ -50,6 +50,12 @@ void registerProbTrigFunctions(const std::string& prefix) {
       {prefix + "f_cdf"});
   registerFunction<InverseBetaCDFFunction, double, double, double, double>(
       {prefix + "inverse_beta_cdf"});
+  registerFunction<
+      InverseBinomialCDFFunction,
+      int64_t,
+      int64_t,
+      double,
+      double>({prefix + "inverse_binomial_cdf"});
   registerFunction<InverseNormalCDFFunction, double, double, double, double>(
       {prefix + "inverse_normal_cdf"});
   registerFunction<PoissonCDFFunction, double, double, int32_t>(
