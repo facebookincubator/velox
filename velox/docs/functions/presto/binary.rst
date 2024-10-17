@@ -8,9 +8,9 @@ Binary Functions
 
 .. function:: from_base64(string) -> varbinary
 
-    Decodes a Base64-encoded ``string`` back into its original binary form. 
-    This function is capable of handling both fully padded and non-padded Base64 encoded strings. 
-    Partially padded Base64 strings are not supported and will result in an error.
+    Decodes a Base64-encoded ``string`` back into its original binary form.
+    This function is capable of handling both fully padded and non-padded Base64 encoded strings.
+    Partially padded Base64 strings are not supported and will result in a "UserError" status being returned.
 
     Examples
     --------
@@ -24,10 +24,10 @@ Binary Functions
 
     Query with partial-padded Base64 string:
     ::
-        SELECT from_base64('SGVsbG8gV29ybGQgZm9yIHZlbG94IQ='); -- Error : Base64::decode() - invalid input string: string length is not a multiple of 4.
+        SELECT from_base64('SGVsbG8gV29ybGQgZm9yIHZlbG94IQ='); -- UserError: Base64::decode() - invalid input string: string length is not a multiple of 4.
 
     In the above examples, both the fully padded and non-padded Base64 strings ('SGVsbG8gV29ybGQ=' and 'SGVsbG8gV29ybGQ') decode to the binary representation of the text 'Hello World'.
-    While, partial-padded Base64 string 'SGVsbG8gV29ybGQgZm9yIHZlbG94IQ=' will lead to an velox error.
+    A partial-padded Base64 string 'SGVsbG8gV29ybGQgZm9yIHZlbG94IQ=' will result in a "UserError" status indicating the Base64 string is invalid.
 
 .. function:: from_base64url(string) -> varbinary
 
@@ -134,6 +134,24 @@ Binary Functions
  .. function:: to_big_endian_64(bigint) -> varbinary
 
      Encodes ``bigint`` in a 64-bit 2’s complement big endian format.
+
+.. function:: to_base32(varbinary) -> string
+
+     Encodes a binary ``varbinary`` value into its Base32 string representation.
+     This function generates padded Base32 strings by default. 
+
+     Examples
+     --------
+     Query to encode a binary value to a padded Base32 string:
+     ::
+        SELECT to_base32(ARRAY[72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]); -- 'JBSWY3DPEBLW64TMMQ======'
+
+     Query to encode a binary value with fewer bytes:
+     ::
+        SELECT to_base32(ARRAY[104, 101, 108, 108, 111]); -- 'NBSWY3DP'
+
+     In the above examples, the binary array `[72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]` is encoded to the padded Base32 string 'JBSWY3DPEBLW64TMMQ======'.
+     The binary array `[104, 101, 108, 108, 111]` is encoded to 'NBSWY3DP'.
 
 .. function:: to_hex(binary) -> varchar
 
