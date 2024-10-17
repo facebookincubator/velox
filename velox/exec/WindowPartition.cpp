@@ -357,7 +357,8 @@ void WindowPartition::updateKRangeFrameBounds(
     vector_size_t numRows,
     column_index_t frameColumn,
     const vector_size_t* rawPeerBounds,
-    vector_size_t* rawFrameBounds) const {
+    vector_size_t* rawFrameBounds,
+    SelectivityVector& validFrames) const {
   column_index_t orderByColumn = sortKeyInfo_[0].first;
   column_index_t mappedFrameColumn = inputMapping_[frameColumn];
 
@@ -382,6 +383,20 @@ void WindowPartition::updateKRangeFrameBounds(
             partitionRow,
             orderByRowColumn.nullByte(),
             orderByRowColumn.nullMask()));
+
+    // Mark the frame invalid if the frame bound is NaN.
+    auto frameType = data_->columnTypes()[mappedFrameColumn];
+    if (frameType->isReal()) {
+      if (data_->isNanAt<float>(partitionRow, mappedFrameColumn)) {
+        validFrames.setValid(currentRow, false);
+        continue;
+      }
+    } else if (frameType->isDouble()) {
+      if (data_->isNanAt<double>(partitionRow, mappedFrameColumn)) {
+        validFrames.setValid(currentRow, false);
+        continue;
+      }
+    }
 
     // If the frame is NULL or 0 preceding or 0 following then the current row
     // has same values for order by and frame column. In that case
@@ -423,7 +438,8 @@ void WindowPartition::computeKRangeFrameBounds(
     vector_size_t startRow,
     vector_size_t numRows,
     const vector_size_t* rawPeerBuffer,
-    vector_size_t* rawFrameBounds) const {
+    vector_size_t* rawFrameBounds,
+    SelectivityVector& validFrames) const {
   CompareFlags flags;
   flags.ascending = sortKeyInfo_[0].second.isAscending();
   flags.nullsFirst = sortKeyInfo_[0].second.isNullsFirst();
@@ -436,7 +452,8 @@ void WindowPartition::computeKRangeFrameBounds(
       numRows,
       frameColumn,
       rawPeerBuffer,
-      rawFrameBounds);
+      rawFrameBounds,
+      validFrames);
 }
 
 } // namespace facebook::velox::exec
