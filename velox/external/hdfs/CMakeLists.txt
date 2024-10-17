@@ -1,5 +1,3 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,25 +10,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# for generated headers
-
-velox_add_library(velox_hdfs RegisterHdfsFileSystem.cpp)
-
-if(VELOX_ENABLE_HDFS)
-  velox_sources(
-    velox_hdfs
-    PRIVATE
-    HdfsFileSystem.cpp
-    HdfsReadFile.cpp
-    HdfsWriteFile.cpp)
+if(${VELOX_ENABLE_HDFS})
+  velox_add_library(velox_external_hdfs ArrowHdfsInternal.cpp)
   velox_link_libraries(
-    velox_hdfs
-    velox_external_hdfs
-    velox_dwio_common
-    Folly::folly
-    xsimd)
-
-  if(${VELOX_BUILD_TESTING})
-    add_subdirectory(tests)
-  endif()
+        velox_external_hdfs
+        PRIVATE
+        arrow)
 endif()
