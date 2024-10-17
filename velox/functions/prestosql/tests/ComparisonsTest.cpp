@@ -534,17 +534,17 @@ TEST_F(ComparisonsTest, eqRow) {
 
 TEST_F(ComparisonsTest, gtLtRow) {
   auto test =
-      [&](const std::tuple<std::optional<int64_t>, std::optional<int64_t>>&
+      [&]<typename T>(const std::tuple<std::optional<T>, std::optional<T>>&
               row1,
-          const std::tuple<std::optional<int64_t>, std::optional<int64_t>>&
+          const std::tuple<std::optional<T>, std::optional<T>>&
               row2,
           std::optional<std::vector<std::optional<bool>>> expected) {
         auto vector1 = vectorMaker_.rowVector(
-            {vectorMaker_.flatVectorNullable<int64_t>({std::get<0>(row1)}),
-             vectorMaker_.flatVectorNullable<int64_t>({std::get<1>(row1)})});
+            {vectorMaker_.flatVectorNullable<T>({std::get<0>(row1)}),
+             vectorMaker_.flatVectorNullable<T>({std::get<1>(row1)})});
         auto vector2 = vectorMaker_.rowVector(
-            {vectorMaker_.flatVectorNullable<int64_t>({std::get<0>(row2)}),
-             vectorMaker_.flatVectorNullable<int64_t>({std::get<1>(row2)})});
+            {vectorMaker_.flatVectorNullable<T>({std::get<0>(row2)}),
+             vectorMaker_.flatVectorNullable<T>({std::get<1>(row2)})});
         std::string comparisonExpressions[4] = {">", ">=", "<", "<="};
 
         if (expected.has_value()) {
@@ -567,19 +567,32 @@ TEST_F(ComparisonsTest, gtLtRow) {
         }
       };
   std::vector<std::optional<bool>> expected = {false, false, true, true};
-  test({1, 2}, {2, 3}, expected);
+  test.template operator()<int64_t>({1, 2}, {2, 3}, expected);
+
   expected = {false, true, false, true};
-  test({1, 2}, {1, 2}, expected);
-  test({1, std::nullopt}, {1, 2}, std::nullopt);
+  test.template operator()<int64_t>({1, 2}, {1, 2}, expected);
+
+  test.template operator()<int64_t>({1, std::nullopt}, {1, 2}, std::nullopt);
+
+  expected = {false, false, true, true};
+  test.template operator()<double>({1.0, 2.0}, {1.0, 3.0}, expected);
+
+  // NaNs are considered larger than all other numbers
+  static const auto NaN = std::numeric_limits<double>::quiet_NaN();
+  expected = {true, true, false, false};
+  test.template operator()<double>({NaN, 0.0}, {2.0, 1.0}, expected);
+
+  expected = {false, false, true, true};
+  test.template operator()<double>({NaN, 0.0}, {NaN, 1.0}, expected);
 }
 
 TEST_F(ComparisonsTest, gtLtArray) {
-  auto test = [&](const std::vector<std::optional<int64_t>>& array1,
-                  const std::vector<std::optional<int64_t>>& array2,
+  auto test = [&]<typename T>(const std::vector<std::optional<T>>& array1,
+                  const std::vector<std::optional<T>>& array2,
                   std::optional<std::vector<std::optional<bool>>> expected) {
     auto input = makeRowVector(
-        {vectorMaker_.arrayVectorNullable<int64_t>({array1}),
-         vectorMaker_.arrayVectorNullable<int64_t>({array2})});
+        {vectorMaker_.arrayVectorNullable<T>({array1}),
+         vectorMaker_.arrayVectorNullable<T>({array2})});
     std::vector<std::optional<bool>> results;
     std::string comparisonExpressions[4] = {">", ">=", "<", "<="};
     if (expected.has_value()) {
@@ -598,27 +611,41 @@ TEST_F(ComparisonsTest, gtLtArray) {
     }
   };
   std::vector<std::optional<bool>> expected = {false, true, false, true};
-  test({1, 2}, {1, 2}, expected);
+  test.template operator()<int64_t>({1, 2}, {1, 2}, expected);
 
   expected = {false, false, true, true};
-  test({1, 2}, {1, 3}, expected);
+  test.template operator()<int64_t>({1, 2}, {1, 3}, expected);
 
   // Different sized arrays
   expected = {false, false, true, true};
-  test({1, 2}, {1, 2, 3}, expected);
+  test.template operator()<int64_t>({1, 2}, {1, 2, 3}, expected);
 
   expected = {true, true, false, false};
-  test({1, 3}, {1, 2, 3}, expected);
+  test.template operator()<int64_t>({1, 3}, {1, 2, 3}, expected);
 
   // When nulls present, compare based on CompareFlag rules.
   expected = {true, true, false, false};
-  test({1, std::nullopt}, {1}, expected);
+  test.template operator()<int64_t>({1, std::nullopt}, {1}, expected);
 
   expected = {false, false, true, true};
-  test({1, std::nullopt}, {2, std::nullopt}, expected);
+  test.template operator()<int64_t>({1, std::nullopt}, {2, std::nullopt}, expected);
+
+  expected = {false, false, true, true};
+  test.template operator()<double>({1.0, 2.0}, {1.1, 1.9}, expected);
+
+  static const auto NaN = std::numeric_limits<double>::quiet_NaN();
+  expected = {false, true, false, true};
+  test.template operator()<double>({NaN, NaN}, {NaN, NaN}, expected);
+
+  // NaNs are considered larger than all other numbers
+  expected = {true, true, false, false};
+  test.template operator()<double>({NaN}, { 3.0}, expected);
+
+  expected = {false, false, true, true};
+  test.template operator()<double>({NaN}, {NaN, 3.0}, expected);
 
   // User Exception thrown when nulls encountered before result is determined.
-  test({1, std::nullopt, std::nullopt}, {1, 2, 3}, std::nullopt);
+  test.template operator()<int64_t>({1, std::nullopt, std::nullopt}, {1, 2, 3}, std::nullopt);
 }
 
 TEST_F(ComparisonsTest, gtLtMap) {
@@ -639,6 +666,26 @@ TEST_F(ComparisonsTest, gtLtMap) {
   VELOX_ASSERT_THROW(
       evaluate<SimpleVector<bool>>(
           "c0 <= c1", makeRowVector({vector1, vector2})),
+      "Map is not orderable type");
+
+  static const auto NaN = std::numeric_limits<double>::quiet_NaN();
+  auto vector3 = makeNullableMapVector<double, double>({{{{1.0, 2.0}, {NaN, 4.0}}}});
+  auto vector4 = makeNullableMapVector<double, double>({{{{1.0, 2.0}, {3.0, 4.0}}}});
+  VELOX_ASSERT_THROW(
+    evaluate<SimpleVector<bool>>(
+        "c0 > c1", makeRowVector({vector3, vector4})),
+    "Map is not orderable type");
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "c0 >= c1", makeRowVector({vector3, vector4})),
+      "Map is not orderable type");
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "c0 < c1", makeRowVector({vector3, vector4})),
+      "Map is not orderable type");
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "c0 <= c1", makeRowVector({vector3, vector4})),
       "Map is not orderable type");
 }
 

@@ -1101,8 +1101,12 @@ class GenericView {
     static constexpr CompareFlags kFlags = {
         .nullHandlingMode =
             CompareFlags::NullHandlingMode::kNullAsIndeterminate};
+    std::optional<int64_t> result = this->compare(other, kFlags);
     // Will throw if it encounters null elements before result is determined.
-    return this->compare(other, kFlags).value();
+    VELOX_DCHECK(
+      result.has_value(),
+      "Compare should have thrown when null is encountered in child.");
+    return result.value();
   }
 
   bool operator<(const GenericView& other) const {
