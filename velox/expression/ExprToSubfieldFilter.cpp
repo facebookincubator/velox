@@ -512,6 +512,13 @@ std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
       }
       return isNull();
     }
+  } else if (call.name() == "isnotnull") {
+    if (toSubfield(leftSide, subfield)) {
+      if (negated) {
+        return isNull();
+      }
+      return isNotNull();
+    }
   }
   return nullptr;
 }
