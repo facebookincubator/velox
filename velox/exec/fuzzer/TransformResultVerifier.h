@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::exec::test {
 
@@ -65,7 +66,19 @@ class TransformResultVerifier : public ResultVerifier {
     return assertEqualResults({transform(result)}, {transform(altResult)});
   }
 
+  bool compare(const VectorPtr& result, const VectorPtr& altResult) override {
+    velox::test::VectorMaker resultVectorMaker(result->pool());
+    velox::test::VectorMaker altResultVectorMaker(altResult->pool());
+    return assertEqualResults(
+        {transform(resultVectorMaker.rowVector({result}))},
+        {transform(altResultVectorMaker.rowVector({altResult}))});
+  }
+
   bool verify(const RowVectorPtr& /*result*/) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  bool verify(const VectorPtr& /*result*/) override {
     VELOX_UNSUPPORTED();
   }
 

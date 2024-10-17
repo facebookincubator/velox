@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/prestosql/fuzzer/MinMaxByResultVerifier.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::exec::test {
 
@@ -321,6 +322,11 @@ bool MinMaxByResultVerifier::verify(const RowVectorPtr& result) {
     }
   }
   return true;
+}
+
+bool MinMaxByResultVerifier::verify(const VectorPtr& result) {
+  velox::test::VectorMaker resultVectorMaker(result->pool());
+  return MinMaxByResultVerifier::verify(resultVectorMaker.rowVector({result}));
 }
 
 std::vector<std::string> MinMaxByResultVerifier::combine(

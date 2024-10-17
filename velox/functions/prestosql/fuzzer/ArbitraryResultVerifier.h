@@ -73,6 +73,11 @@ class ArbitraryResultVerifier : public ResultVerifier {
     VELOX_UNSUPPORTED();
   }
 
+  bool compare(const VectorPtr& /*result*/, const VectorPtr& /*altResult*/)
+      override {
+    VELOX_UNSUPPORTED();
+  }
+
   bool verify(const RowVectorPtr& result) override {
     // Union 'result' with 'expected_', group by on 'groupingKeys_' and produce
     // pairs of actual and expected values per group. We cannot use join because
@@ -123,6 +128,11 @@ class ArbitraryResultVerifier : public ResultVerifier {
     auto expectedRow = vectorMaker.rowVector({expected});
 
     return assertEqualResults({expectedRow}, {contains});
+  }
+
+  bool verify(const VectorPtr& result) override {
+    velox::test::VectorMaker resultVectorMaker(result->pool());
+    return verify(resultVectorMaker.rowVector({result}));
   }
 
   void reset() override {
