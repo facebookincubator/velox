@@ -567,5 +567,62 @@ DEBUG_ONLY_TEST_F(WindowTest, frameColumnNullCheck) {
       AssertQueryBuilder(makePlan(inputNoThrow)).copyResults(pool()));
 }
 
+TEST_F(WindowTest, NaNFrameBound) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"c0", "s0", "off0", "off1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<double>({1.0, 1.0, 1.0}),
+          makeFlatVector<double>({1.0, 1.0, 1.0}),
+          makeFlatVector<double>({kNan, kNan, kNan}),
+      });
+
+  const auto makeFrames = [](const std::string& call) {
+    std::vector<std::string> frames;
+
+    std::vector<std::string> orders{"asc", "desc"};
+    std::vector<std::string> bounds{"preceding", "following"};
+    for (const std::string& order : orders) {
+      for (const std::string& startBound : bounds) {
+        for (const std::string& endBound : bounds) {
+          // Frames starting from following and ending at preceding are not
+          // allowed.
+          if (startBound == "following" && endBound == "preceding") {
+            continue;
+          }
+          frames.push_back(fmt::format(
+              "{} over (order by s0 {} range between off0 {} and off1 {})",
+              call,
+              order,
+              startBound,
+              endBound));
+          frames.push_back(fmt::format(
+              "{} over (order by s0 {} range between off1 {} and off0 {})",
+              call,
+              order,
+              startBound,
+              endBound));
+        }
+      }
+    }
+    return frames;
+  };
+
+  auto expected = makeRowVector({makeNullConstant(TypeKind::BIGINT, 3)});
+  for (const auto& frame : makeFrames("sum(c0)")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  expected = makeRowVector({makeFlatVector<int64_t>({1, 1, 1})});
+  for (const auto& frame : makeFrames("rank()")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::exec
