@@ -363,6 +363,7 @@ void WindowPartition::updateKRangeFrameBounds(
 
   vector_size_t start = 0;
   vector_size_t end;
+  vector_size_t lastFoundIndex = isPreceding ? 0 : -1;
   // frameColumn is a column index into the original input rows, while
   // orderByColumn is a column index into rows in data_ after the columns are
   // reordered as per inputMapping_.
@@ -398,10 +399,10 @@ void WindowPartition::updateKRangeFrameBounds(
       // [0, currentRow] are examined. For following bounds, rows between
       // [currentRow, numRows()) are checked.
       if (isPreceding) {
-        start = 0;
+        start = lastFoundIndex;
         end = currentRow + 1;
       } else {
-        start = currentRow;
+        start = lastFoundIndex == -1 ? currentRow : lastFoundIndex;
         end = partition_.size();
       }
       rawFrameBounds[i] = searchFrameValue(
@@ -412,6 +413,7 @@ void WindowPartition::updateKRangeFrameBounds(
           orderByColumn,
           mappedFrameColumn,
           flags);
+      lastFoundIndex = rawFrameBounds[i];
     }
   }
 }
