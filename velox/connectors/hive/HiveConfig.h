@@ -57,53 +57,6 @@ class HiveConfig {
   static constexpr const char* kImmutablePartitions =
       "hive.immutable-partitions";
 
-  /// Virtual addressing is used for AWS S3 and is the default
-  /// (path-style-access is false). Path access style is used for some on-prem
-  /// systems like Minio.
-  static constexpr const char* kS3PathStyleAccess = "hive.s3.path-style-access";
-
-  /// Log granularity of AWS C++ SDK.
-  static constexpr const char* kS3LogLevel = "hive.s3.log-level";
-
-  /// Use HTTPS to communicate with the S3 API.
-  static constexpr const char* kS3SSLEnabled = "hive.s3.ssl.enabled";
-
-  /// Use the EC2 metadata service to retrieve API credentials.
-  static constexpr const char* kS3UseInstanceCredentials =
-      "hive.s3.use-instance-credentials";
-
-  /// The S3 storage endpoint server. This can be used to connect to an
-  /// S3-compatible storage system instead of AWS.
-  static constexpr const char* kS3Endpoint = "hive.s3.endpoint";
-
-  /// Default AWS access key to use.
-  static constexpr const char* kS3AwsAccessKey = "hive.s3.aws-access-key";
-
-  /// Default AWS secret key to use.
-  static constexpr const char* kS3AwsSecretKey = "hive.s3.aws-secret-key";
-
-  /// IAM role to assume.
-  static constexpr const char* kS3IamRole = "hive.s3.iam-role";
-
-  /// Session name associated with the IAM role.
-  static constexpr const char* kS3IamRoleSessionName =
-      "hive.s3.iam-role-session-name";
-
-  /// Socket connect timeout.
-  static constexpr const char* kS3ConnectTimeout = "hive.s3.connect-timeout";
-
-  /// Socket read timeout.
-  static constexpr const char* kS3SocketTimeout = "hive.s3.socket-timeout";
-
-  /// Maximum concurrent TCP connections for a single http client.
-  static constexpr const char* kS3MaxConnections = "hive.s3.max-connections";
-
-  /// Maximum retry attempts for a single http client.
-  static constexpr const char* kS3MaxAttempts = "hive.s3.max-attempts";
-
-  /// Retry mode for a single http client.
-  static constexpr const char* kS3RetryMode = "hive.s3.retry-mode";
-
   /// The GCS storage endpoint server.
   static constexpr const char* kGCSEndpoint = "hive.gcs.endpoint";
 
@@ -244,9 +197,6 @@ class HiveConfig {
   static constexpr const char* kSortWriterFinishTimeSliceLimitMsSession =
       "sort_writer_finish_time_slice_limit_ms";
 
-  static constexpr const char* kS3UseProxyFromEnv =
-      "hive.s3.use-proxy-from-env";
-
   // The unit for reading timestamps from files.
   static constexpr const char* kReadTimestampUnit =
       "hive.reader.timestamp-unit";
@@ -262,34 +212,6 @@ class HiveConfig {
   uint32_t maxPartitionsPerWriters(const config::ConfigBase* session) const;
 
   bool immutablePartitions() const;
-
-  bool s3UseVirtualAddressing() const;
-
-  std::string s3GetLogLevel() const;
-
-  bool s3UseSSL() const;
-
-  bool s3UseInstanceCredentials() const;
-
-  std::string s3Endpoint() const;
-
-  std::optional<std::string> s3AccessKey() const;
-
-  std::optional<std::string> s3SecretKey() const;
-
-  std::optional<std::string> s3IAMRole() const;
-
-  std::string s3IAMRoleSessionName() const;
-
-  std::optional<std::string> s3ConnectTimeout() const;
-
-  std::optional<std::string> s3SocketTimeout() const;
-
-  std::optional<uint32_t> s3MaxConnections() const;
-
-  std::optional<int32_t> s3MaxAttempts() const;
-
-  std::optional<std::string> s3RetryMode() const;
 
   std::string gcsEndpoint() const;
 
@@ -364,8 +286,6 @@ class HiveConfig {
 
   uint64_t filePreloadThreshold() const;
 
-  bool s3UseProxyFromEnv() const;
-
   // Returns the timestamp unit used when reading timestamps from files.
   uint8_t readTimestampUnit(const config::ConfigBase* session) const;
 
@@ -389,6 +309,199 @@ class HiveConfig {
 
  private:
   std::shared_ptr<const config::ConfigBase> config_;
+};
+
+/// Build config required to initialize an S3FileSystem instance.
+/// All hive.s3 options can be set on a per-bucket basis.
+/// The bucket-specific option is set by replacing the hive.s3. prefix on an
+/// option with hive.s3.bucket.BUCKETNAME., where BUCKETNAME is the name of the
+/// bucket.
+/// When connecting to a bucket, all options explicitly set will override the
+/// base hive.s3. values.
+/// These semantics are similar to the Apache Hadoop-Aws module.
+/// https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html
+class S3Config {
+ public:
+  S3Config() = delete;
+
+  /// S3 config prefix.
+  static constexpr const char* kS3Prefix = "hive.s3.";
+
+  /// S3 bucket config prefix
+  static constexpr const char* kS3BucketPrefix = "hive.s3.bucket.";
+
+  /// Log granularity of AWS C++ SDK.
+  static constexpr const char* kS3LogLevel = "hive.s3.log-level";
+
+  /// S3FileSystem default identity.
+  static constexpr const char* kDefaultS3Identity = "s3-default-identity";
+
+  /// Keys to identify the config
+  enum class Keys {
+    kBegin,
+    kEndpoint = kBegin,
+    kAccessKey,
+    kSecretKey,
+    kPathStyleAccess,
+    kSSLEnabled,
+    kUseInstanceCredentials,
+    kIamRole,
+    kIamRoleSessionName,
+    kConnectTimeout,
+    kSocketTimeout,
+    kMaxConnections,
+    kMaxAttempts,
+    kRetryMode,
+    kUseProxyFromEnv,
+    kEnd
+  };
+
+  /// Map of keys -> <suffixString, optional defaultValue>.
+  /// New config must be added here along with a getter function below.
+  static const std::unordered_map<
+      Keys,
+      std::pair<std::string_view, std::optional<std::string_view>>>&
+  configTraits() {
+    static const std::unordered_map<
+        Keys,
+        std::pair<std::string_view, std::optional<std::string_view>>>
+        config = {
+            {Keys::kEndpoint, std::make_pair("endpoint", "")},
+            {Keys::kAccessKey, std::make_pair("aws-access-key", std::nullopt)},
+            {Keys::kSecretKey, std::make_pair("aws-secret-key", std::nullopt)},
+            {Keys::kPathStyleAccess,
+             std::make_pair("path-style-access", "false")},
+            {Keys::kSSLEnabled, std::make_pair("ssl.enabled", "true")},
+            {Keys::kUseInstanceCredentials,
+             std::make_pair("use-instance-credentials", "false")},
+            {Keys::kIamRole, std::make_pair("iam-role", std::nullopt)},
+            {Keys::kIamRoleSessionName,
+             std::make_pair("iam-role-session-name", "velox-session")},
+            {Keys::kConnectTimeout,
+             std::make_pair("connect-timeout", std::nullopt)},
+            {Keys::kSocketTimeout,
+             std::make_pair("socket-timeout", std::nullopt)},
+            {Keys::kMaxConnections,
+             std::make_pair("max-connections", std::nullopt)},
+            {Keys::kMaxAttempts, std::make_pair("max-attempts", std::nullopt)},
+            {Keys::kRetryMode, std::make_pair("retry-mode", std::nullopt)},
+            {Keys::kUseProxyFromEnv,
+             std::make_pair("use-proxy-from-env", "false")}};
+    return config;
+  }
+
+  S3Config(
+      std::string_view bucket,
+      std::shared_ptr<const config::ConfigBase> config);
+
+  /// Identity is used as a key for the S3FileSystem instance map.
+  /// This will be the bucket endpoint or the base endpoint or the
+  /// default identity in that order.
+  static std::string identity(
+      std::string_view bucket,
+      std::shared_ptr<const config::ConfigBase> config);
+
+  /// Return the base config for the input Key.
+  static std::string baseConfigKey(Keys key) {
+    std::stringstream buffer;
+    buffer << kS3Prefix << configTraits().find(key)->second.first;
+    return buffer.str();
+  }
+
+  /// Return the bucket config for the input key.
+  static std::string bucketConfigKey(Keys key, std::string_view bucket) {
+    std::stringstream buffer;
+    buffer << kS3BucketPrefix << bucket << "."
+           << configTraits().find(key)->second.first;
+    return buffer.str();
+  }
+
+  /// The S3 storage endpoint server. This can be used to connect to an
+  /// S3-compatible storage system instead of AWS.
+  std::string endpoint() const {
+    return config_.find(Keys::kEndpoint)->second.value();
+  }
+
+  /// Access key to use.
+  std::optional<std::string> accessKey() const {
+    return config_.find(Keys::kAccessKey)->second;
+  }
+
+  /// Secret key to use
+  std::optional<std::string> secretKey() const {
+    return config_.find(Keys::kSecretKey)->second;
+  }
+
+  /// Virtual addressing is used for AWS S3 and is the default
+  /// (path-style-access is false). Path access style is used for some on-prem
+  /// systems like Minio.
+  bool useVirtualAddressing() const {
+    auto value = config_.find(Keys::kPathStyleAccess)->second.value();
+    return !folly::to<bool>(value);
+  }
+
+  /// Use HTTPS to communicate with the S3 API.
+  bool useSSL() const {
+    auto value = config_.find(Keys::kSSLEnabled)->second.value();
+    return folly::to<bool>(value);
+  }
+
+  /// Use the EC2 metadata service to retrieve API credentials.
+  bool useInstanceCredentials() const {
+    auto value = config_.find(Keys::kUseInstanceCredentials)->second.value();
+    return folly::to<bool>(value);
+  }
+
+  /// IAM role to assume.
+  std::optional<std::string> iamRole() const {
+    return config_.find(Keys::kIamRole)->second;
+  }
+
+  /// Session name associated with the IAM role.
+  std::string iamRoleSessionName() const {
+    return config_.find(Keys::kIamRoleSessionName)->second.value();
+  }
+
+  /// Socket connect timeout.
+  std::optional<std::string> connectTimeout() const {
+    return config_.find(Keys::kConnectTimeout)->second;
+  }
+
+  /// Socket read timeout.
+  std::optional<std::string> socketTimeout() const {
+    return config_.find(Keys::kSocketTimeout)->second;
+  }
+
+  /// Maximum concurrent TCP connections for a single http client.
+  std::optional<uint32_t> maxConnections() const {
+    auto val = config_.find(Keys::kMaxConnections)->second;
+    if (val.has_value()) {
+      return folly::to<uint32_t>(val.value());
+    }
+    return std::optional<uint32_t>();
+  }
+
+  /// Maximum retry attempts for a single http client.
+  std::optional<int32_t> maxAttempts() const {
+    auto val = config_.find(Keys::kMaxAttempts)->second;
+    if (val.has_value()) {
+      return folly::to<int32_t>(val.value());
+    }
+    return std::optional<int32_t>();
+  }
+
+  /// Retry mode for a single http client.
+  std::optional<std::string> retryMode() const {
+    return config_.find(Keys::kRetryMode)->second;
+  }
+
+  bool useProxyFromEnv() const {
+    auto value = config_.find(Keys::kUseProxyFromEnv)->second.value();
+    return folly::to<bool>(value);
+  }
+
+ private:
+  std::unordered_map<Keys, std::optional<std::string>> config_;
 };
 
 } // namespace facebook::velox::connector::hive

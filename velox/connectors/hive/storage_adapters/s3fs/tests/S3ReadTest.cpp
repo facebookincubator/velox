@@ -27,7 +27,7 @@
 
 using namespace facebook::velox::exec::test;
 
-namespace facebook::velox {
+namespace facebook::velox::filesystems {
 namespace {
 
 class S3ReadTest : public S3Test {
@@ -93,7 +93,7 @@ TEST_F(S3ReadTest, s3ReadTest) {
            kExpectedRows, [](auto row) { return row + 1000; })});
   assertEqualResults({expectedResults}, {copy});
 }
-} // namespace facebook::velox
+} // namespace facebook::velox::filesystems
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

@@ -71,70 +71,6 @@ bool HiveConfig::immutablePartitions() const {
   return config_->get<bool>(kImmutablePartitions, false);
 }
 
-bool HiveConfig::s3UseVirtualAddressing() const {
-  return !config_->get(kS3PathStyleAccess, false);
-}
-
-std::string HiveConfig::s3GetLogLevel() const {
-  return config_->get(kS3LogLevel, std::string("FATAL"));
-}
-
-bool HiveConfig::s3UseSSL() const {
-  return config_->get(kS3SSLEnabled, true);
-}
-
-bool HiveConfig::s3UseInstanceCredentials() const {
-  return config_->get(kS3UseInstanceCredentials, false);
-}
-
-std::string HiveConfig::s3Endpoint() const {
-  return config_->get(kS3Endpoint, std::string(""));
-}
-
-std::optional<std::string> HiveConfig::s3AccessKey() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kS3AwsAccessKey));
-}
-
-std::optional<std::string> HiveConfig::s3SecretKey() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kS3AwsSecretKey));
-}
-
-std::optional<std::string> HiveConfig::s3IAMRole() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kS3IamRole));
-}
-
-std::string HiveConfig::s3IAMRoleSessionName() const {
-  return config_->get(kS3IamRoleSessionName, std::string("velox-session"));
-}
-
-std::optional<std::string> HiveConfig::s3ConnectTimeout() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kS3ConnectTimeout));
-}
-
-std::optional<std::string> HiveConfig::s3SocketTimeout() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kS3SocketTimeout));
-}
-
-std::optional<uint32_t> HiveConfig::s3MaxConnections() const {
-  return static_cast<std::optional<std::uint32_t>>(
-      config_->get<uint32_t>(kS3MaxConnections));
-}
-
-std::optional<int32_t> HiveConfig::s3MaxAttempts() const {
-  return static_cast<std::optional<std::int32_t>>(
-      config_->get<int32_t>(kS3MaxAttempts));
-}
-
-std::optional<std::string> HiveConfig::s3RetryMode() const {
-  return static_cast<std::optional<std::string>>(
-      config_->get<std::string>(kS3RetryMode));
-}
-
 std::string HiveConfig::gcsEndpoint() const {
   return config_->get<std::string>(kGCSEndpoint, std::string(""));
 }
@@ -325,10 +261,6 @@ uint64_t HiveConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
 }
 
-bool HiveConfig::s3UseProxyFromEnv() const {
-  return config_->get<bool>(kS3UseProxyFromEnv, false);
-}
-
 uint8_t HiveConfig::readTimestampUnit(const config::ConfigBase* session) const {
   const auto unit = session->get<uint8_t>(
       kReadTimestampUnitSession,
@@ -343,6 +275,60 @@ bool HiveConfig::cacheNoRetention(const config::ConfigBase* session) const {
   return session->get<bool>(
       kCacheNoRetentionSession,
       config_->get<bool>(kCacheNoRetention, /*defaultValue=*/false));
+}
+
+std::string S3Config::identity(
+    std::string_view bucket,
+    std::shared_ptr<const config::ConfigBase> config) {
+  auto bucketEndpoint = bucketConfigKey(Keys::kEndpoint, bucket);
+  if (config->valueExists(bucketEndpoint)) {
+    auto value = config->get<std::string>(bucketEndpoint);
+    if (value.has_value()) {
+      return value.value();
+    }
+  }
+  auto baseEndpoint = baseConfigKey(Keys::kEndpoint);
+  if (config->valueExists(baseEndpoint)) {
+    auto value = config->get<std::string>(baseEndpoint);
+    if (value.has_value()) {
+      return value.value();
+    }
+  }
+  return kDefaultS3Identity;
+}
+
+S3Config::S3Config(
+    std::string_view bucket,
+    const std::shared_ptr<const config::ConfigBase> properties) {
+  for (int key = static_cast<int>(Keys::kBegin);
+       key < static_cast<int>(Keys::kEnd);
+       key++) {
+    auto s3Key = static_cast<Keys>(key);
+    auto value = S3Config::configTraits().find(s3Key)->second;
+    auto configSuffix = value.first;
+    auto configDefault = value.second;
+
+    // Set bucket S3 config if present.
+    std::stringstream bucketConfig;
+    bucketConfig << kS3BucketPrefix << bucket << "." << configSuffix;
+    auto configVal = static_cast<std::optional<std::string>>(
+        properties->get<std::string>(bucketConfig.str()));
+    if (configVal.has_value()) {
+      config_[s3Key] = configVal.value();
+    } else {
+      // Set base value if present
+      std::stringstream baseConfig;
+      baseConfig << kS3Prefix << configSuffix;
+      configVal = static_cast<std::optional<std::string>>(
+          properties->get<std::string>(baseConfig.str()));
+      if (configVal.has_value()) {
+        config_[s3Key] = configVal.value();
+      } else {
+        // Set the default value.
+        config_[s3Key] = configDefault;
+      }
+    }
+  }
 }
 
 } // namespace facebook::velox::connector::hive

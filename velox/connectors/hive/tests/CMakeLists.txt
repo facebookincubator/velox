@@ -22,6 +22,7 @@ add_executable(
   HivePartitionFunctionTest.cpp
   HivePartitionUtilTest.cpp
   PartitionIdGeneratorTest.cpp
+  S3ConfigTest.cpp
   TableHandleTest.cpp)
 add_test(velox_hive_connector_test velox_hive_connector_test)
 
