@@ -80,40 +80,43 @@ inline constexpr auto kSchemaMismatch = "SCHEMA_MISMATCH"_fs;
 // An error raised when the current state of a component is invalid.
 inline constexpr auto kInvalidState = "INVALID_STATE"_fs;
 
-// An error raised when unreachable code point was executed.
+/// An error raised when unreachable code point was executed.
 inline constexpr auto kUnreachableCode = "UNREACHABLE_CODE"_fs;
 
-// An error raised when a requested operation is not yet supported.
+/// An error raised when a requested operation is not yet supported.
 inline constexpr auto kNotImplemented = "NOT_IMPLEMENTED"_fs;
 
-// An error raised when memory pool exceeds limits.
+/// An error raised when memory pool exceeds limits.
 inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
 
-// An error raised when memory pool is aborted.
+/// An error raised when memory pool is aborted.
 inline constexpr auto kMemAborted = "MEM_ABORTED"_fs;
 
-// Error caused by memory allocation failure (inclusive of allocator memory cap
-// exceeded).
+/// An error raised when memory arbitration is timed out.
+inline constexpr auto kMemArbitrationTimeout = "MEM_ARBITRATION_TIMEOUT"_fs;
+
+/// Error caused by memory allocation failure (inclusive of allocator memory cap
+/// exceeded).
 inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
 
-// Error caused by failing to allocate cache buffer space for IO.
+/// Error caused by failing to allocate cache buffer space for IO.
 inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
 
-// An error raised when spill bytes exceeds limits.
+/// An error raised when spill bytes exceeds limits.
 inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
 
-// Errors indicating file read corruptions.
+/// Errors indicating file read corruptions.
 inline constexpr auto kFileCorruption = "FILE_CORRUPTION"_fs;
 
-// Errors indicating file not found.
+/// Errors indicating file not found.
 inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
 
-// We do not know how to classify it yet.
+/// We do not know how to classify it yet.
 inline constexpr auto kUnknown = "UNKNOWN"_fs;
 
-// VeloxRuntimeErrors due to unsupported input values such as unicode input to
-// cast-varchar-to-integer and timestamps beyond the year 2037 to datetime
-// functions. This kind of errors is allowed in expression fuzzer.
+/// VeloxRuntimeErrors due to unsupported input values such as unicode input to
+/// cast-varchar-to-integer and timestamps beyond the year 2037 to datetime
+/// functions. This kind of errors is allowed in expression fuzzer.
 inline constexpr auto kUnsupportedInputUncatchable =
     "UNSUPPORTED_INPUT_UNCATCHABLE"_fs;
 } // namespace error_code
@@ -160,12 +163,12 @@ class VeloxException : public std::exception {
             exceptionType,
             exceptionName) {}
 
-  // Inherited
+  /// Inherited
   const char* what() const noexcept override {
     return state_->what();
   }
 
-  // Introduced nonvirtuals
+  /// Introduced nonvirtuals
   const process::StackTrace* stackTrace() const {
     return state_->stackTrace.get();
   }

@@ -156,6 +156,18 @@ Memory Management
        initiate the memory arbitration request. This indicates the velox runtime doesn't have
        enough memory to run all the queries at their peak memory usage. We have to trigger
        spilling to let them run through completion.
+   * - arbitrator_global_arbitration_num_reclaim_victims
+     - Histogram
+     - The distribution of the number of query memory pools selected to reclaim memory by one
+       global memory arbitration round in range of [0, 32] with 32 buckets. It is configured to
+       report latency at P50, P90, P99, and P100 percentiles.
+   * - arbitrator_global_arbitration_failed_victim_count
+     - Count
+     - The number of arbitration which ensures the total allocated query capacity won't exceed
+       the arbitrator capacity limit. It may or may not reclaim memory from the query which
+       initiate the memory arbitration request. This indicates the velox runtime doesn't have
+       enough memory to run all the queries at their peak memory usage. We have to trigger
+       spilling to let them run through completion.
    * - arbitrator_aborted_count
      - Count
      - The number of times a query level memory pool is aborted as a result of
