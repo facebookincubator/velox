@@ -699,6 +699,15 @@ void PageReader::makeDecoder() {
               "DELTA_BINARY_PACKED decoder only supports INT32 and INT64");
       }
       break;
+    case Encoding::RLE:
+      switch (parquetType) {
+        case thrift::Type::BOOLEAN:
+          rleBooleanDecoder_ = std::make_unique<RleBooleanDecoder>(pageData_ + 4, pageData_ + encodedDataSize_, decompressedData_, repetitionLevels_.data());
+          break;
+        default:
+          VELOX_UNSUPPORTED("RLE decoder only supports boolean");
+      }
+      break;
     default:
       VELOX_UNSUPPORTED("Encoding not supported yet: {}", encoding_);
   }
@@ -739,6 +748,8 @@ void PageReader::skip(int64_t numRows) {
     booleanDecoder_->skip(toSkip);
   } else if (deltaBpDecoder_) {
     deltaBpDecoder_->skip(toSkip);
+  } else if (rleBooleanDecoder_) {
+    rleBooleanDecoder_->skip(toSkip);
   } else {
     VELOX_FAIL("No decoder to skip");
   }
