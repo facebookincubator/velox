@@ -22,6 +22,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 
@@ -34,7 +35,7 @@ class PrefixSortEncoder {
       : ascending_(ascending), nullsFirst_(nullsFirst){};
 
   /// Encode native primitive types(such as uint64_t, int64_t, uint32_t,
-  /// int32_t, float, double, Timestamp). TODO: Add support for strings.
+  /// int32_t, float, double, Timestamp).
   /// 1. The first byte of the encoded result is null byte. The value is 0 if
   ///    (nulls first and value is null) or (nulls last and value is not null).
   ///    Otherwise, the value is 1.
@@ -50,6 +51,28 @@ class PrefixSortEncoder {
     } else {
       dest[0] = nullsFirst_ ? 0 : 1;
       simd::memset(dest + 1, 0, sizeof(T));
+    }
+  }
+
+  /// Encode String types.
+  FOLLY_ALWAYS_INLINE void encode(
+      std::optional<StringView> value,
+      char* dest,
+      int32_t encodeSize) const {
+    if (value.has_value()) {
+      dest[0] = nullsFirst_ ? 1 : 0;
+      std::string storage;
+      auto data = HashStringAllocator::contiguousString(value.value(), storage);
+      std::memcpy(dest + 1, data.data(), data.size());
+      std::memset(dest + 1 + data.size(), 0, encodeSize - 1 - data.size());
+      if (!ascending_) {
+        for (auto i = 1; i < encodeSize; ++i) {
+          dest[i] = ~dest[i];
+        }
+      }
+    } else {
+      dest[0] = nullsFirst_ ? 0 : 1;
+      std::memset(dest + 1, 0, encodeSize - 1);
     }
   }
 
@@ -69,7 +92,8 @@ class PrefixSortEncoder {
   /// @return For supported types, returns the encoded size, assume nullable.
   ///         For not supported types, returns 'std::nullopt'.
   FOLLY_ALWAYS_INLINE static std::optional<uint32_t> encodedSize(
-      TypeKind typeKind) {
+      TypeKind typeKind,
+      int32_t varLength) {
     switch ((typeKind)) {
       case ::facebook::velox::TypeKind::SMALLINT: {
         return 3;
@@ -88,6 +112,9 @@ class PrefixSortEncoder {
       }
       case ::facebook::velox::TypeKind::TIMESTAMP: {
         return 17;
+      }
+      case ::facebook::velox::TypeKind::VARCHAR: {
+        return 1 + varLength;
       }
       default:
         return std::nullopt;
@@ -248,6 +275,13 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     char* dest) const {
   encodeNoNulls(value.getSeconds(), dest);
   encodeNoNulls(value.getNanos(), dest + 8);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
+    StringView value,
+    char* dest) const {
+  VELOX_NYI();
 }
 
 } // namespace facebook::velox::exec::prefixsort
