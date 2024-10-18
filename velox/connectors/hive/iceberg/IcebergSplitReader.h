@@ -19,6 +19,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/SplitReader.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
+#include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -37,9 +38,12 @@ class IcebergSplitReader : public SplitReader {
       const std::shared_ptr<io::IoStatistics>& ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec);
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      std::shared_ptr<exec::ExprSet>& remainingFilterExprSet,
+      core::ExpressionEvaluator* expressionEvaluator,
+      std::atomic<uint64_t>& totalRemainingFilterTime);
 
-  ~IcebergSplitReader() override = default;
+  ~IcebergSplitReader() override;
 
   void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
@@ -49,6 +53,11 @@ class IcebergSplitReader : public SplitReader {
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
  private:
+  // The ScanSpec may need to be updated for different partitions if the split
+  // comes with single column equality delete files. So we need to keep a copy
+  // of the original ScanSpec.
+  std::shared_ptr<common::ScanSpec> originalScanSpec_;
+
   // The read offset to the beginning of the split in number of rows for the
   // current batch for the base data file
   uint64_t baseReadOffset_;
@@ -60,5 +69,14 @@ class IcebergSplitReader : public SplitReader {
   // The offset in bits of the deleteBitmap_ starting from where the bits shall
   // be consumed
   uint64_t deleteBitmapBitOffset_;
+
+  std::unique_ptr<exec::ExprSet> deleteExprSet_;
+  core::ExpressionEvaluator* expressionEvaluator_;
+  std::atomic<uint64_t>& totalRemainingFilterTime_;
+
+  // Reusable memory for remaining filter evaluation.
+  VectorPtr filterResult_;
+  SelectivityVector filterRows_;
+  exec::FilterEvalCtx filterEvalCtx_;
 };
 } // namespace facebook::velox::connector::hive::iceberg
