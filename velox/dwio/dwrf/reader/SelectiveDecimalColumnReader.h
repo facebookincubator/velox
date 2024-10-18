@@ -50,7 +50,17 @@ class SelectiveDecimalColumnReader : public SelectiveColumnReader {
 
  private:
   template <bool kDense>
-  void readHelper(RowSet rows);
+  void readHelper(common::Filter* filter, RowSet rows);
+
+  void
+  processNulls(const bool isNull, const RowSet rows, const uint64_t* rawNulls);
+
+  void processFilter(
+      const common::Filter* filter,
+      const RowSet rows,
+      const uint64_t* rawNulls);
+
+  void fillDecimals();
 
   std::unique_ptr<IntDecoder<true>> valueDecoder_;
   std::unique_ptr<IntDecoder<true>> scaleDecoder_;
