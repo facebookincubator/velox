@@ -36,7 +36,7 @@ class SimpleNumericAggregate : public exec::Aggregate {
 
  protected:
   template <typename T>
-  static constexpr bool kMayPushdown = !std::is_same_v<T, int128_t> &&
+  static constexpr bool kMayPushdown =
       !std::is_same_v<T, Timestamp> && !std::is_same_v<T, UnknownValue>;
 
   // TData is either TAccumulator or TResult, which in most cases are the same,
@@ -100,19 +100,21 @@ class SimpleNumericAggregate : public exec::Aggregate {
     DecodedVector decoded(*arg, rows, !mayPushdown);
     auto encoding = decoded.base()->encoding();
     if constexpr (kMayPushdown<TData>) {
-      if (encoding == VectorEncoding::Simple::LAZY) {
-        velox::aggregate::SimpleCallableHook<TData, UpdateSingleValue> hook(
-            exec::Aggregate::offset_,
-            exec::Aggregate::nullByte_,
-            exec::Aggregate::nullMask_,
-            groups,
-            &this->exec::Aggregate::numNulls_,
-            updateSingleValue);
+      if (!arg->type()->isDecimal()) {
+        if (encoding == VectorEncoding::Simple::LAZY) {
+          velox::aggregate::SimpleCallableHook<TData, UpdateSingleValue> hook(
+              exec::Aggregate::offset_,
+              exec::Aggregate::nullByte_,
+              exec::Aggregate::nullMask_,
+              groups,
+              &this->exec::Aggregate::numNulls_,
+              updateSingleValue);
 
-        auto indices = decoded.indices();
-        decoded.base()->as<const LazyVector>()->load(
-            RowSet(indices, arg->size()), &hook);
-        return;
+          auto indices = decoded.indices();
+          decoded.base()->as<const LazyVector>()->load(
+              RowSet(indices, arg->size()), &hook);
+          return;
+        }
       }
     }
 
