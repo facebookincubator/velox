@@ -17,7 +17,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/reader/StripeReaderBase.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
@@ -127,5 +126,12 @@ TEST_F(StripeLoadKeysTest, ThirdStripeHasKey) {
 }
 
 TEST_F(StripeLoadKeysTest, KeyMismatch) {
-  VELOX_ASSERT_THROW(runTest(3), "keys.size() == providers_.size()");
+  try {
+    static_cast<void>(runTest(3));
+    FAIL() << "Expected an exception";
+  } catch (const facebook::velox::VeloxException& e) {
+    ASSERT_TRUE(
+        e.failingExpression().find("keys.size() == providers_.size()") !=
+        std::string::npos);
+  }
 }
