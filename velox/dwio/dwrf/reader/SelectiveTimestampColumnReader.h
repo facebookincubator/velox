@@ -61,6 +61,9 @@ class SelectiveTimestampColumnReader
   // Values from copied from 'seconds_'. Nanos are in 'values_'.
   BufferPtr secondsValues_;
   RleVersion version_;
+
+  const tz::TimeZone* sessionTimezone_{nullptr};
+  bool adjustTimestampToTimezone_{false};
 };
 
 } // namespace facebook::velox::dwrf
