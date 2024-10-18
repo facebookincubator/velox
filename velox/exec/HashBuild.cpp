@@ -783,6 +783,7 @@ bool HashBuild::finishHashBuild() {
   addRuntimeStats();
   joinBridge_->setHashTable(
       std::move(table_), std::move(spillPartitions), joinHasNullKeys_);
+  joinBridge_->maybeSetSpillStatsRecorder(&spillStats_);
   if (canSpill()) {
     stateCleared_ = true;
   }
