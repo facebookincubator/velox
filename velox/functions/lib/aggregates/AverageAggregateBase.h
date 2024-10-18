@@ -392,8 +392,8 @@ class AverageAggregateBase : public exec::Aggregate {
 template <typename TUnscaledType>
 class DecimalAverageAggregateBase : public DecimalAggregate<TUnscaledType> {
  public:
-  explicit DecimalAverageAggregateBase(TypePtr resultType)
-      : DecimalAggregate<TUnscaledType>(resultType) {}
+  explicit DecimalAverageAggregateBase(TypePtr inputType, TypePtr resultType)
+      : DecimalAggregate<TUnscaledType>(inputType, resultType) {}
 
   virtual TUnscaledType computeFinalValue(
       functions::aggregate::LongDecimalWithOverflowState* accumulator) final {
