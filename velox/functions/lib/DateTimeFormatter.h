@@ -206,7 +206,8 @@ class DateTimeFormatter {
       const tz::TimeZone* timezone,
       const uint32_t maxResultSize,
       char* result,
-      bool allowOverflow = false) const;
+      bool allowOverflow = false,
+      const std::optional<std::string>& zeroOffsetText = std::nullopt) const;
 
  private:
   std::unique_ptr<char[]> literalBuf_;
