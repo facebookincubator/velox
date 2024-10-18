@@ -22,7 +22,9 @@
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h" // @manual
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h" // @manual
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/TableWriter.h"
@@ -92,8 +94,8 @@ class MemoryArbitrationFuzzer {
 
     void print() const {
       std::stringstream ss;
-      ss << "Success count = " << successCount << ". OOM count  = " << oomCount
-         << " Abort count = " << abortCount;
+      ss << "success count = " << successCount << ", oom count  = " << oomCount
+         << ", abort count = " << abortCount;
       LOG(INFO) << ss.str();
     }
   };
@@ -233,6 +235,7 @@ MemoryArbitrationFuzzer::MemoryArbitrationFuzzer(size_t initialSeed)
   connector::registerConnector(hiveConnector);
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
+
   seed(initialSeed);
 }
 
@@ -718,7 +721,7 @@ void MemoryArbitrationFuzzer::verify() {
           } else if (e.errorCode() == error_code::kMemAborted.c_str()) {
             ++lockedStats->abortCount;
           } else {
-            LOG(ERROR) << "Unexpected exception: " << e.what();
+            LOG(ERROR) << "Unexpected exception:\n" << e.what();
             std::rethrow_exception(std::current_exception());
           }
         }
