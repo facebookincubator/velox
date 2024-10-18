@@ -21,6 +21,7 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/encode/Base32.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/Udf.h"
@@ -278,11 +279,17 @@ template <typename T>
 struct ToBase64Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
-      const arg_type<Varbinary>& input) {
-    result.resize(encoding::Base64::calculateEncodedSize(input.size()));
-    encoding::Base64::encode(input.data(), input.size(), result.data());
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varchar>& result, const arg_type<Varbinary>& input) {
+    std::string_view inputView(input.data(), input.size());
+    std::string output;
+    auto status = encoding::Base64::encode(inputView, output);
+    if (!status.ok()) {
+      return status;
+    }
+    result.resize(output.size());
+    std::memcpy(result.data(), output.data(), output.size());
+    return Status::OK();
   }
 };
 
@@ -293,26 +300,33 @@ struct FromBase64Function {
   // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
   // same, but hard-coding one of them might be confusing.
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(out_type<Varbinary>& result, const T& input) {
-    auto inputSize = input.size();
-    result.resize(
-        encoding::Base64::calculateDecodedSize(input.data(), inputSize));
-    encoding::Base64::decode(
-        input.data(), inputSize, result.data(), result.size());
+  FOLLY_ALWAYS_INLINE Status call(out_type<Varbinary>& result, const T& input) {
+    std::string_view inputView(input.data(), input.size());
+    std::string output;
+    auto status = encoding::Base64::decode(inputView, output);
+    if (!status.ok()) {
+      return status;
+    }
+    result.resize(output.size());
+    std::memcpy(result.data(), output.data(), output.size());
+    return Status::OK();
   }
 };
 
 template <typename T>
 struct FromBase64UrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varbinary>& result,
-      const arg_type<Varchar>& input) {
-    auto inputSize = input.size();
-    result.resize(
-        encoding::Base64::calculateDecodedSize(input.data(), inputSize));
-    encoding::Base64::decodeUrl(
-        input.data(), inputSize, result.data(), result.size());
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
+    std::string_view inputView(input.data(), input.size());
+    std::string output;
+    auto status = encoding::Base64::decodeUrl(inputView, output);
+    if (!status.ok()) {
+      return status;
+    }
+    result.resize(output.size());
+    std::memcpy(result.data(), output.data(), output.size());
+    return Status::OK();
   }
 };
 
@@ -320,11 +334,55 @@ template <typename T>
 struct ToBase64UrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
-      const arg_type<Varbinary>& input) {
-    result.resize(encoding::Base64::calculateEncodedSize(input.size()));
-    encoding::Base64::encodeUrl(input.data(), input.size(), result.data());
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varchar>& result, const arg_type<Varbinary>& input) {
+    std::string_view inputView(input.data(), input.size());
+    std::string output;
+    auto status = encoding::Base64::encodeUrl(inputView, output);
+    if (!status.ok()) {
+      return status;
+    }
+    result.resize(output.size());
+    std::memcpy(result.data(), output.data(), output.size());
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct ToBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varchar>& result, const arg_type<Varbinary>& input) {
+    std::string_view inputView(input.data(), input.size());
+    std::string output;
+    auto status = encoding::Base32::encode(inputView, output);
+    if (!status.ok()) {
+      return status;
+    }
+    result.resize(output.size());
+    std::memcpy(result.data(), output.data(), output.size());
+    return Status::OK();
+  }
+};
+
+template <typename TExec>
+struct FromBase32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
+  // same, but hard-coding one of them might be confusing.
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
+    std::string_view inputView(input.data(), input.size());
+    std::string output;
+    auto status = encoding::Base32::decode(inputView, output);
+    if (!status.ok()) {
+      return status;
+    }
+    result.resize(output.size());
+    std::memcpy(result.data(), output.data(), output.size());
+    return Status::OK();
   }
 };
 
