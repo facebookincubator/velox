@@ -713,6 +713,20 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
   test(type, newType);
 }
 
+TEST_F(E2EFilterTest, booleanRle) {
+  options_.enableDictionary = false;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::RLE;
+
+  testWithTypes(
+      "boolean_val:boolean,"
+      "boolean_null:boolean",
+      [&]() { makeAllNulls("boolean_null"); },
+      true,
+      {"boolean_val"},
+      20);
+}
+
 // Define main so that gflags get processed.
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
