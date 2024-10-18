@@ -49,6 +49,19 @@ std::pair<Timestamp, const tz::TimeZone*> parseTimestampWithTimezone(
       });
 }
 
+void testSparkTzNormalization(std::string_view tz, std::string_view expected) {
+  auto result = fromTimestampWithTimezoneString(
+      StringView(tz), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone(expected));
+}
+
+void testInvalidSparkTzNormalization(std::string_view tz) {
+  auto result = fromTimestampWithTimezoneString(
+      StringView(tz), TimestampParseMode::kSparkCast);
+  EXPECT_TRUE(result.hasError());
+}
+
 TEST(DateTimeUtilTest, fromDate) {
   auto testDaysSinceEpochFromDate =
       [](int32_t year, int32_t month, int32_t day) {
@@ -588,6 +601,56 @@ TEST(DateTimeUtilTest, toTimezoneFromID) {
   ts = parseTimestamp("2021-03-15 00:00:00");
   ts.toTimezone(*tz::locateZone("America/Los_Angeles"));
   EXPECT_EQ(ts, parseTimestamp("2021-03-14 17:00:00"));
+}
+
+TEST(DateTimeUtilTest, normalizeSparkTimezone) {
+  // No timezone.
+  std::string tz = "2015-03-18T12:03:17";
+  auto result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, nullptr);
+
+  // Timezone with seconds offset.
+  tz = "1970-01-01 00:00:00 UTC-00:00:01";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("-00:00"));
+  EXPECT_EQ(result->first, Timestamp(1, 0));
+
+  tz = "1970-01-01 00:00:00 UTC+00:00:01";
+  result = fromTimestampWithTimezoneString(
+      StringView(tz.c_str()), TimestampParseMode::kSparkCast);
+  EXPECT_FALSE(result.hasError());
+  EXPECT_EQ(result->second, tz::locateZone("-00:00"));
+  EXPECT_EQ(result->first, Timestamp(-1, 0));
+
+  testSparkTzNormalization("1582-06-01 11:33:33.123UTC+08", "+08:00");
+  testSparkTzNormalization("1582-06-01 11:33:33.123UTC+8", "+08:00");
+  testSparkTzNormalization("1582-06-01 11:33:33.123UTC-12:12", "-12:12");
+  testSparkTzNormalization("1582-06-01 11:33:33.123UTC-1212", "-1212");
+  testSparkTzNormalization("1582-06-01 11:33:33.123GMT+081010", "+08:10");
+  testSparkTzNormalization("1582-06-01 11:33:33.123GMT+08:10:10", "+08:10");
+  testSparkTzNormalization("1582-06-01 11:33:33.123UT+120000", "+12:00");
+  testSparkTzNormalization("2015-03-18T12:03:17-1:0", "-01:00");
+  testSparkTzNormalization("2015-03-18T12:03:17-1:07", "-01:07");
+  testSparkTzNormalization("2015-03-18T12:03:17-10:7", "-10:07");
+  testSparkTzNormalization("2015-03-18T12:03:17EST", "-05:00");
+  testSparkTzNormalization("2015-03-18T12:03:17IST", "Asia/Kolkata");
+
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123UT+880000");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123UT+080061");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123UT+086100");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123UT+0800000");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123ut+080000");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123GMT+008");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123GMT+88");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123GMT+h8");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123GMT+00010");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123GMT+08:1010");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123GMT+08:10:");
+  testInvalidSparkTzNormalization("1582-06-01 11:33:33.123GMT+08:10:10:00");
 }
 
 } // namespace

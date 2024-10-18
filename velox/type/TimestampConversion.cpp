@@ -117,6 +117,20 @@ inline bool characterIsDigit(char c) {
   return c >= '0' && c <= '9';
 }
 
+inline bool
+allCharactersIsDigit(std::string_view str, size_t start, size_t end) {
+  for (auto i = start; i <= end; i++) {
+    if (!characterIsDigit(str[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool allCharactersIsDigit(std::string_view str) {
+  return allCharactersIsDigit(str, 0, str.length() - 1);
+}
+
 bool parseDoubleDigit(
     const char* buf,
     size_t len,
@@ -557,7 +571,8 @@ bool tryParseTimestampString(
                  len,
                  pos,
                  daysSinceEpoch,
-                 parseMode == TimestampParseMode::kIso8601
+                 parseMode == TimestampParseMode::kIso8601 ||
+                         parseMode == TimestampParseMode::kSparkCast
                      ? ParseMode::kSparkCast
                      : ParseMode::kNonStrict)) {
     return false;
@@ -826,6 +841,127 @@ Status parserError(const char* str, size_t len) {
       std::string(str, len));
 }
 
+// Spark support an id with one of the prefixes UTC+, UTC-, GMT+, GMT-, UT+ or
+// UT-, and a suffix in the following formats: h[h], hh[:]mm, hh:mm:ss, hhmmss.
+// This func will check that the suffix format is correct. Furthermore, this
+// function adds the seconds offset to the input timestamp because
+// IANA(https://www.iana.org/time-zones) does not support seconds in the offset.
+bool parseSparkTzWithPrefix(
+    std::string& timeZoneName,
+    Timestamp& ts,
+    size_t start) {
+  VELOX_DCHECK_GE(timeZoneName.length(), start + 2);
+  auto sign = timeZoneName[start];
+  std::string_view tzView = timeZoneName;
+  std::string_view offset = tzView.substr(start + 1);
+  std::string_view hm, s;
+  bool appendZeroMinutes = false;
+  if ((offset.length() == 1 && characterIsDigit(offset[0])) ||
+      (offset.length() == 2 && allCharactersIsDigit(offset))) {
+    // h[h]
+    hm = offset;
+    // Use appendZeroMinutes to indicate that we need to append :00 to the end
+    // of timeZoneName. By appending only when assigning to timeZoneName, hm can
+    // be defined as a string_view to minimize multiple string copies.
+    appendZeroMinutes = true;
+  } else if (
+      (offset.length() == 4 && allCharactersIsDigit(offset)) ||
+      (offset.length() == 5 && allCharactersIsDigit(offset, 0, 1) &&
+       allCharactersIsDigit(offset, 3, 4))) {
+    // hh[:]mm
+    // TimeZoneMap::normalizeTimeZoneOffset will normalize hhmm to hh:mm
+    hm = offset;
+  } else if (
+      (offset.length() == 6 && allCharactersIsDigit(offset)) ||
+      (offset.length() == 8 && allCharactersIsDigit(offset, 0, 1) &&
+       allCharactersIsDigit(offset, 3, 4) &&
+       allCharactersIsDigit(offset, 6, 7))) {
+    // hh:mm:ss, hhmmss
+    auto lastSep = offset.rfind(':');
+    if (lastSep == std::string::npos && offset.length() == 6) {
+      // hhmmss
+      // TimeZoneMap::normalizeTimeZoneOffset will normalize hhmm to hh:mm
+      hm = offset.substr(0, 4);
+      s = offset.substr(4);
+    } else if (lastSep == 5 && offset.find(':') == 2 && offset.length() == 8) {
+      // hh:mm:ss
+      hm = offset.substr(0, 5);
+      s = offset.substr(6);
+    } else {
+      return false;
+    }
+  } else {
+    return false;
+  }
+  int32_t sec = 0;
+  size_t pos = 0;
+  if (!s.empty() && !parseDoubleDigit(s.data(), s.length(), pos, sec)) {
+    return false;
+  }
+  if (sec < 0 || sec > 60) {
+    return false;
+  }
+  if (sec != 0) {
+    // Seconds timezone offset is not support, need to be applied to timestamp.
+    if (sign == '+') {
+      if (ts.getSeconds() - sec < Timestamp::kMinSeconds) {
+        return false;
+      }
+      ts = Timestamp(ts.getSeconds() - sec, ts.getNanos());
+    } else if (sign == '-') {
+      if (ts.getSeconds() + sec > Timestamp::kMaxSeconds) {
+        return false;
+      }
+      ts = Timestamp(ts.getSeconds() + sec, ts.getNanos());
+    } else {
+      return false;
+    }
+  }
+  timeZoneName = sign + std::string{hm} + (appendZeroMinutes ? ":00" : "");
+  return true;
+}
+
+bool normalizeSparkTimezone(std::string& timeZoneName, Timestamp& ts) {
+  auto startsWith = [](std::string_view str, const char* prefix) {
+    return str.rfind(prefix, 0) == 0;
+  };
+  // Spark supports a timezone id with one of the prefixes UTC+, UTC-, GMT+,
+  // GMT-, UT+ or UT-, and a suffix in the following formats: h[h], hh[:]mm,
+  // hh:mm:ss, hhmmss.
+  if (startsWith(timeZoneName, "UTC") || startsWith(timeZoneName, "GMT")) {
+    if (!parseSparkTzWithPrefix(timeZoneName, ts, 3)) {
+      return false;
+    }
+  }
+  if (startsWith(timeZoneName, "UT")) {
+    if (!parseSparkTzWithPrefix(timeZoneName, ts, 2)) {
+      return false;
+    }
+  }
+
+  // Only normalize the timezone offset in the format of (+|-)h[h]:m[m];
+  // for other cases, no processing will be done.
+  auto sign = timeZoneName[0];
+  if (sign == '+' || sign == '-') {
+    std::string_view timeZoneNameView{timeZoneName};
+    auto sep = timeZoneNameView.find(':');
+    if (sep != std::string::npos) {
+      auto hour = timeZoneNameView.substr(1, sep - 1);
+      auto minute = timeZoneNameView.substr(sep + 1);
+      if (allCharactersIsDigit(hour) && allCharactersIsDigit(minute) &&
+          (hour.length() == 1 || minute.length() == 1)) {
+        std::ostringstream oss;
+        oss << sign;
+        hour.length() == 1 ? oss << "0" << hour : oss << hour;
+        oss << ":";
+        minute.length() == 1 ? oss << "0" << minute : oss << minute;
+        timeZoneName = oss.str();
+      }
+    }
+  }
+
+  return true;
+}
 } // namespace
 
 Expected<Timestamp>
@@ -880,8 +1016,14 @@ fromTimestampWithTimezoneString(
     }
 
     std::string_view timeZoneName(str + pos, timezonePos - pos);
+    std::string normalizeTzName = std::string{timeZoneName};
+    if (parseMode == TimestampParseMode::kSparkCast &&
+        !normalizeSparkTimezone(normalizeTzName, resultTimestamp)) {
+      return folly::makeUnexpected(Status::UserError(
+          "Failed to normalize spark timezone value: \"{}\"", timeZoneName));
+    }
 
-    if ((timeZone = tz::locateZone(timeZoneName, false)) == nullptr) {
+    if ((timeZone = tz::locateZone(normalizeTzName, false)) == nullptr) {
       return folly::makeUnexpected(
           Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
     }
