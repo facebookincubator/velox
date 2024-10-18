@@ -8242,4 +8242,186 @@ TEST_F(HashJoinTest, nanKeys) {
        makeFlatVector<int64_t>({1, 2})});
   facebook::velox::test::assertEqualVectors(expected, result);
 }
+
+DEBUG_ONLY_TEST_F(HashJoinTest, spillOnBlockedProbe) {
+  class BlockedNode : public core::PlanNode {
+   public:
+    BlockedNode(const core::PlanNodeId& id, core::PlanNodePtr input)
+        : PlanNode(id), sources_{input} {}
+
+    const RowTypePtr& outputType() const override {
+      return sources_[0]->outputType();
+    }
+
+    const std::vector<std::shared_ptr<const PlanNode>>& sources() const override {
+      return sources_;
+    }
+
+    std::string_view name() const override {
+      return "BlockedNode";
+    }
+
+   private:
+    void addDetails(std::stringstream& /* stream */) const override {}
+
+    std::vector<core::PlanNodePtr> sources_;
+  };
+
+  using BlockedCb = std::function<void(
+      ContinuePromise && promise, std::shared_ptr<bool> shouldBlock)>;
+  // An operator that blocks until the blockedCb tells it not. blockedCb is
+  // responsible for notifying the unblock through the 'promise' parameter and
+  // setting subsequent blocks through 'shouldBlock' parameter.
+  class BlockedOperator : public Operator {
+   public:
+    BlockedOperator(
+        DriverCtx* ctx,
+        int32_t id,
+        core::PlanNodePtr node,
+        BlockedCb blockedCb)
+        : Operator(ctx, node->outputType(), id, node->id(), "BlockedOperator"),
+          blockedCb_(blockedCb) {}
+
+    BlockingReason isBlocked(ContinueFuture* future) override {
+      if (!*shouldBlock) {
+        return BlockingReason::kNotBlocked;
+      }
+      auto [p, f] = makeVeloxContinuePromiseContract("Blocked Operator");
+      blockedCb_(std::move(p), shouldBlock);
+      *future = std::move(f);
+      return BlockingReason::kWaitForConsumer;
+    }
+
+    bool needsInput() const override {
+      return !noMoreInput_;
+    }
+
+    void addInput(RowVectorPtr input) override {
+      input_ = std::move(input);
+    }
+
+    RowVectorPtr getOutput() override {
+      return std::move(input_);
+    }
+
+    void noMoreInput() override {
+      Operator::noMoreInput();
+    }
+
+    bool isFinished() override {
+      return noMoreInput_ && input_ == nullptr;
+    }
+
+    void close() override {
+      Operator::close();
+    }
+
+    bool canReclaim() const override {
+      return false;
+    }
+
+    std::shared_ptr<bool> shouldBlock{std::make_shared<bool>(true)};
+
+   private:
+    BlockedCb blockedCb_;
+  };
+
+  class BlockedOperatorFactory : public Operator::PlanNodeTranslator {
+   public:
+    BlockedOperatorFactory() = default;
+
+    std::unique_ptr<Operator> toOperator(
+        DriverCtx* ctx,
+        int32_t id,
+        const core::PlanNodePtr& node) override {
+      if (std::dynamic_pointer_cast<const BlockedNode>(node)) {
+        return std::make_unique<BlockedOperator>(
+            ctx, id, node, blockedCb_);
+      }
+      return nullptr;
+    }
+
+    void setBlockedCb(BlockedCb blockedCb) {
+      blockedCb_ = std::move(blockedCb);
+    }
+
+   private:
+    BlockedCb blockedCb_{nullptr};
+  };
+
+  auto blockedOperatorFactoryUniquePtr =
+      std::make_unique<BlockedOperatorFactory>();
+  auto blockedOperatorFactory = blockedOperatorFactoryUniquePtr.get();
+  Operator::registerOperator(std::move(blockedOperatorFactoryUniquePtr));
+
+  std::vector<ContinuePromise> unblockPromises;
+  std::vector<std::shared_ptr<bool>> shouldBlocks;
+  blockedOperatorFactory->setBlockedCb(
+      [&](ContinuePromise&& promise, std::shared_ptr<bool> shouldBlock) {
+        unblockPromises.push_back(std::move(promise));
+        shouldBlocks.push_back(shouldBlock);
+      });
+
+  folly::EventCount arbitrationWait;
+  std::atomic<bool> arbitrationWaitFlag{true};
+  ::facebook::velox::common::testutil::ScopedTestValue _scopedTestValue15(
+      "facebook::velox::exec::HashBuild::finishHashBuild",
+      std::function<void(exec::HashBuild*)>([&](Operator* /* unused */) {
+        arbitrationWaitFlag = false;
+        arbitrationWait.notifyAll();
+      }));
+  std::thread arbitrationThread([&](){
+    arbitrationWait.await([&](){return !arbitrationWaitFlag.load();});
+    memory::memoryManager()->shrinkPools();
+    for (auto& shouldBlock : shouldBlocks) {
+      *shouldBlock = false;
+    }
+    for (auto& unblockPromise : unblockPromises) {
+      unblockPromise.setValue();
+    }
+  });
+
+  auto rowType = ROW(
+      {{"c0", INTEGER()},
+       {"c1", INTEGER()}});
+  std::vector<RowVectorPtr> vectors = createVectors(1, rowType, fuzzerOpts_);
+  createDuckDbTable(vectors);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(vectors)
+                  .project({"c0 AS t0", "c1 AS t1"})
+                  .hashJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .project({"c0 AS u0", "c1 AS u1"})
+                          .planNode(),
+                      "",
+                      {"t1"},
+                      core::JoinType::kInner)
+                  .addNode([&](std::string id, core::PlanNodePtr input) {
+                    return std::make_shared<BlockedNode>(id, input);
+                  })
+                  .planNode();
+
+  std::shared_ptr<core::QueryCtx> joinQueryCtx =
+      newQueryCtx(memory::memoryManager(), executor_.get(), kMemoryCapacity);
+  {
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .plan(plan)
+            .queryCtx(joinQueryCtx)
+            .spillDirectory(spillDirectory->getPath())
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .maxDrivers(1)
+            .assertResults("SELECT a.c1 from tmp a join tmp b on a.c0 = b.c0");
+    auto joinSpillStats = taskSpilledStats(*task);
+    auto buildSpillStats = joinSpillStats.first;
+    ASSERT_GT(buildSpillStats.spilledBytes, 0);
+  }
+  arbitrationThread.join();
+  waitForAllTasksToBeDeleted(30'000'000);
+}
 } // namespace
