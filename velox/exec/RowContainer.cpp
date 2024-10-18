@@ -189,6 +189,7 @@ RowContainer::RowContainer(
       ++nullOffset;
     }
     columnHasNulls_.push_back(false);
+    varLengthColumnsMaxSize_.push_back(0);
   }
   // Make offset at least sizeof pointer so that there is space for a
   // free list next pointer below the bit at 'freeFlagOffset_'.
@@ -218,6 +219,7 @@ RowContainer::RowContainer(
     ++nullOffset;
     isVariableWidth |= !type->isFixedWidth();
     columnHasNulls_.push_back(false);
+    varLengthColumnsMaxSize_.push_back(0);
   }
   if (hasProbedFlag) {
     nullOffsets_.push_back(nullOffset);
@@ -506,7 +508,8 @@ void RowContainer::store(
         index,
         isKey,
         row,
-        offsets_[column]);
+        offsets_[column],
+        column);
   } else {
     VELOX_DCHECK(isKey || accumulators_.empty());
     auto rowColumn = rowColumns_[column];
@@ -537,7 +540,8 @@ void RowContainer::store(
         decoded,
         rows,
         isKey,
-        offsets_[column]);
+        offsets_[column],
+        column);
   } else {
     const auto rowColumn = rowColumns_[column];
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(

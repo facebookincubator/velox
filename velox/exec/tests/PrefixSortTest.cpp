@@ -155,7 +155,8 @@ TEST_F(PrefixSortTest, singleKey) {
            Timestamp(3, 3),
            Timestamp(2, 2),
            Timestamp(1, 1)}),
-      makeFlatVector<std::string_view>({"eee", "ddd", "ccc", "bbb", "aaa"})};
+      makeFlatVector<std::string_view>({"eee", "ddd", "ccc", "bbb", "aaa"}),
+      makeFlatVector<std::string_view>({"e", "dddddd", "ddddd", "bbb", "aaa"})};
   for (int i = 5; i < columnsSize; ++i) {
     const auto data = makeRowVector({testData[i]});
 
@@ -183,7 +184,9 @@ TEST_F(PrefixSortTest, singleKeyWithNulls) {
            Timestamp(2, 2),
            Timestamp(1, 1)}),
       makeNullableFlatVector<std::string_view>(
-          {"eee", "ddd", std::nullopt, "bbb", "aaa"})};
+          {"eee", "ddd", std::nullopt, "bbb", "aaa"}),
+      makeNullableFlatVector<std::string_view>(
+          {"ee", "aaa", std::nullopt, "d", "aaaaaaaaaaaaaa"})};
 
   for (int i = 5; i < columnsSize; ++i) {
     const auto data = makeRowVector({testData[i]});
@@ -210,12 +213,43 @@ TEST_F(PrefixSortTest, multipleKeys) {
     const auto data = makeRowVector({
         makeNullableFlatVector<int64_t>({5, 2, std::nullopt, 2, 1}),
         makeNullableFlatVector<std::string_view>(
-            {"eee", "ddd", std::nullopt, "bbb", "aaa"}),
+            {"eee", "aaa", std::nullopt, "bbb", "aaaa"}),
     });
 
     testPrefixSort({kAsc, kAsc}, data);
     testPrefixSort({kDesc, kDesc}, data);
   }
+}
+
+TEST_F(PrefixSortTest, checkMaxNormalizedKeySizeForMultipleKeys) {
+  std::vector<TypePtr> keyTypes = {VARCHAR(), BIGINT()};
+  std::vector<int32_t> varLengths = {16, 0};
+  std::vector<CompareFlags> compareFlags = {kAsc, kDesc};
+  auto sortLayout =
+      PrefixSortLayout::makeSortLayout(keyTypes, varLengths, compareFlags, 16);
+  ASSERT_TRUE(sortLayout.noNormalizedKeys);
+
+  auto sortLayoutOneKey =
+      PrefixSortLayout::makeSortLayout(keyTypes, varLengths, compareFlags, 17);
+  ASSERT_FALSE(sortLayoutOneKey.noNormalizedKeys);
+  ASSERT_TRUE(sortLayoutOneKey.hasNonNormalizedKey);
+  ASSERT_EQ(sortLayoutOneKey.encodeSizes.size(), 1);
+  ASSERT_EQ(sortLayoutOneKey.encodeSizes[0], 17);
+
+  auto sortLayoutOneKey1 =
+      PrefixSortLayout::makeSortLayout(keyTypes, varLengths, compareFlags, 18);
+  ASSERT_FALSE(sortLayoutOneKey1.noNormalizedKeys);
+  ASSERT_TRUE(sortLayoutOneKey1.hasNonNormalizedKey);
+  ASSERT_EQ(sortLayoutOneKey1.encodeSizes.size(), 1);
+  ASSERT_EQ(sortLayoutOneKey1.encodeSizes[0], 17);
+
+  auto sortLayoutTwoKeys =
+      PrefixSortLayout::makeSortLayout(keyTypes, varLengths, compareFlags, 26);
+  ASSERT_FALSE(sortLayoutTwoKeys.noNormalizedKeys);
+  ASSERT_FALSE(sortLayoutTwoKeys.hasNonNormalizedKey);
+  ASSERT_EQ(sortLayoutTwoKeys.encodeSizes.size(), 2);
+  ASSERT_EQ(sortLayoutTwoKeys.encodeSizes[0], 17);
+  ASSERT_EQ(sortLayoutTwoKeys.encodeSizes[1], 9);
 }
 
 TEST_F(PrefixSortTest, fuzz) {
