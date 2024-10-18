@@ -131,21 +131,27 @@ void Operator::maybeSetTracer() {
     return;
   }
   tracedOpMap.emplace(operatorId(), operatorType());
-
   const auto pipelineId = operatorCtx_->driverCtx()->pipelineId;
   const auto driverId = operatorCtx_->driverCtx()->driverId;
   LOG(INFO) << "Trace data for operator type: " << operatorType()
             << ", operator id: " << operatorId() << ", pipeline: " << pipelineId
             << ", driver: " << driverId << ", task: " << taskId();
   const auto opTraceDirPath = fmt::format(
-      "{}/{}/{}/{}/data",
+      "{}/{}/{}/{}",
       queryTraceConfig->queryTraceDir,
       planNodeId(),
       pipelineId,
       driverId);
-  trace::createTraceDirectory(opTraceDirPath);
+  setupTracer(opTraceDirPath);
+}
+
+void Operator::setupTracer(const std::string& traceDir) {
+  const auto& queryTraceConfig = operatorCtx_->driverCtx()->traceConfig();
+  const auto opTraceDataPath = fmt::format(
+      "{}/{}", traceDir, trace::QueryTraceTraits::kTraceDataDirName);
+  trace::createTraceDirectory(opTraceDataPath);
   inputTracer_ = std::make_unique<trace::QueryDataWriter>(
-      opTraceDirPath,
+      opTraceDataPath,
       memory::traceMemoryPool(),
       queryTraceConfig->updateAndCheckTraceLimitCB);
 }

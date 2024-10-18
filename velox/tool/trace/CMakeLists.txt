@@ -17,6 +17,7 @@ velox_add_library(
   AggregationReplayer.cpp
   OperatorReplayerBase.cpp
   PartitionedOutputReplayer.cpp
+  TableScanReplayer.cpp
   TableWriterReplayer.cpp)
 
 velox_link_libraries(
