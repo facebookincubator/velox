@@ -155,12 +155,6 @@ class S3FileSystem : public FileSystem {
   }
 
   std::string getLogLevelName() const;
-  
-  /// Returns the global S3 metrics.
-  const FileSystemMetrics& metrics() const override;
-
-  /// Reset metrics deltas after reporting.
-  void resetMetricsDeltas();
 
   S3Metrics& getMetrics();  // Expose the global metrics
   void resetMetricsDeltas();  // Reset deltas for SUM metrics

@@ -15,7 +15,9 @@
  */
 
 #pragma once
+#include <atomic>
 #include <cstdint>
+#include "velox/common/file/FileSystems.h"
 
 namespace facebook::velox::filesystems {
 
@@ -38,23 +40,44 @@ constexpr auto kMetricS3FailedUploads = "S3FailedUploads";
 constexpr auto kMetricS3SuccessfulUploads = "S3SuccessfulUploads";
 
 // Struct to hold S3-related metrics with delta tracking.
-struct S3Metrics {
-    uint64_t activeConnections{0};
-    uint64_t startedUploads{0}, prevStartedUploads{0};
-    uint64_t failedUploads{0}, prevFailedUploads{0};
-    uint64_t successfulUploads{0}, prevSuccessfulUploads{0};
-    uint64_t metadataCalls{0};
-    uint64_t listStatusCalls{0};
-    uint64_t listLocatedStatusCalls{0};
-    uint64_t listObjectsCalls{0};
-    uint64_t otherReadErrors{0};
-    uint64_t awsAbortedExceptions{0};
-    uint64_t socketExceptions{0};
-    uint64_t getObjectErrors{0};
-    uint64_t getMetadataErrors{0};
-    uint64_t getObjectRetries{0};
-    uint64_t getMetadataRetries{0};
-    uint64_t readRetries{0};
+struct S3Metrics : public FileSystemMetrics {
+  std::atomic<uint64_t> activeConnections{0};
+  std::atomic<uint64_t> startedUploads{0}, prevStartedUploads{0};
+  std::atomic<uint64_t> failedUploads{0}, prevFailedUploads{0};
+  std::atomic<uint64_t> successfulUploads{0}, prevSuccessfulUploads{0};
+  std::atomic<uint64_t> metadataCalls{0};
+  std::atomic<uint64_t> listStatusCalls{0};
+  std::atomic<uint64_t> listLocatedStatusCalls{0};
+  std::atomic<uint64_t> listObjectsCalls{0};
+  std::atomic<uint64_t> otherReadErrors{0};
+  std::atomic<uint64_t> awsAbortedExceptions{0};
+  std::atomic<uint64_t> socketExceptions{0};
+  std::atomic<uint64_t> getObjectErrors{0};
+  std::atomic<uint64_t> getMetadataErrors{0};
+  std::atomic<uint64_t> getObjectRetries{0};
+  std::atomic<uint64_t> getMetadataRetries{0};
+  std::atomic<uint64_t> readRetries{0};
+
+  // Implement pure virtual methods from FileSystemMetrics
+  uint64_t getActiveConnections() const override {
+    return activeConnections.load();
+  }
+
+  uint64_t getMetadataCalls() const override {
+    return metadataCalls.load();
+  }
+
+  uint64_t getStartedUploads() const override {
+    return startedUploads.load();
+  }
+
+  uint64_t getFailedUploads() const override {
+    return failedUploads.load();
+  }
+
+  uint64_t getSuccessfulUploads() const override {
+    return successfulUploads.load();
+  }
 
   // Method to increment each metric based on its name
   void incrementActiveConnections();

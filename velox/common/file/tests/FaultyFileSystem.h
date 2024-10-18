@@ -137,6 +137,11 @@ class FaultyFileSystem : public FileSystem {
   /// Clears the file fault injections.
   void clearFileFaultInjections();
 
+  /// Clears the filesystem fault injections.
+  void clearFileSystemInjections();
+  // Implement the metrics() method to resolve the build error.
+  const FileSystemMetrics& metrics() const override;
+
   // Implement the metrics() method to resolve the build error.
   const FileSystemMetrics& metrics() const override;
 
