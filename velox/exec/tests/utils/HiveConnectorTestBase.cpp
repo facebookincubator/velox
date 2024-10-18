@@ -15,8 +15,11 @@
  */
 
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/writer/Writer.h"
+#endif
 
-#include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
@@ -81,46 +84,71 @@ void HiveConnectorTestBase::resetHiveConnector(
 
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
-    RowVectorPtr vector) {
-  writeToFile(filePath, std::vector{vector});
-}
-
-void HiveConnectorTestBase::writeToFile(
-    const std::string& filePath,
-    const std::vector<RowVectorPtr>& vectors,
-    std::shared_ptr<dwrf::Config> config,
-    const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
-        flushPolicyFactory) {
+    const RowVectorPtr vector,
+    dwio::common::FileFormat fileFormat) {
+  // Default to using dwrf writer options if none were provided.
   writeToFile(
       filePath,
-      vectors,
-      std::move(config),
-      vectors[0]->type(),
-      flushPolicyFactory);
+      std::vector{vector},
+      std::make_shared<dwrf::WriterOptions>(),
+      fileFormat);
 }
 
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
-    std::shared_ptr<dwrf::Config> config,
+    dwio::common::FileFormat fileFormat) {
+  // Default to using dwrf writer options if none were provided.
+  writeToFile(
+      filePath, vectors, std::make_shared<dwrf::WriterOptions>(), fileFormat);
+}
+
+void HiveConnectorTestBase::writeToFile(
+    const std::string& filePath,
+    const std::vector<RowVectorPtr>& vectors,
+    std::shared_ptr<dwio::common::WriterOptions> options,
+    dwio::common::FileFormat fileFormat) {
+  writeToFile(filePath, vectors, options, vectors[0]->type(), fileFormat);
+}
+
+void HiveConnectorTestBase::writeToFile(
+    const std::string& filePath,
+    const std::vector<RowVectorPtr>& vectors,
+    std::shared_ptr<dwio::common::WriterOptions> options,
     const TypePtr& schema,
-    const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
-        flushPolicyFactory) {
-  velox::dwrf::WriterOptions options;
-  options.config = config;
-  options.schema = schema;
+    dwio::common::FileFormat fileFormat) {
   auto localWriteFile = std::make_unique<LocalWriteFile>(filePath, true, false);
   auto sink = std::make_unique<dwio::common::WriteFileSink>(
       std::move(localWriteFile), filePath);
   auto childPool = rootPool_->addAggregateChild("HiveConnectorTestBase.Writer");
-  options.memoryPool = childPool.get();
-  options.flushPolicyFactory = flushPolicyFactory;
-
-  facebook::velox::dwrf::Writer writer{std::move(sink), options};
-  for (size_t i = 0; i < vectors.size(); ++i) {
-    writer.write(vectors[i]);
+  options->memoryPool = childPool.get();
+  options->schema = schema;
+  std::shared_ptr<dwio::common::WriterOptions> writerOptions;
+  switch (fileFormat) {
+    case dwio::common::FileFormat::DWRF:
+      writerOptions = std::dynamic_pointer_cast<dwrf::WriterOptions>(options);
+      break;
+#ifdef VELOX_ENABLE_PARQUET
+    case dwio::common::FileFormat::PARQUET:
+      writerOptions =
+          std::dynamic_pointer_cast<parquet::WriterOptions>(options);
+      break;
+#endif
+    default:
+      VELOX_NYI(
+          "File format not supported: {}.", dwio::common::toString(fileFormat));
+      break;
   }
-  writer.close();
+  VELOX_CHECK_NOT_NULL(
+      writerOptions,
+      "Writer Factory expected a supported file format WriterOptions object.");
+  std::unique_ptr<dwio::common::Writer> writer =
+      dwio::common::getWriterFactory(fileFormat)
+          ->createWriter(std::move(sink), writerOptions);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    writer->write(vectors[i]);
+  }
+  writer->close();
 }
 
 std::vector<RowVectorPtr> HiveConnectorTestBase::makeVectors(
