@@ -683,10 +683,8 @@ folly::dynamic ValuesNode::serialize() const {
     saveVector(*vector, out);
   }
 
-  auto serializedData = out.str();
+  obj["data"] = encoding::Base64::encode(std::string_view(out.str()));
 
-  obj["data"] =
-      encoding::Base64::encode(serializedData.data(), serializedData.size());
   obj["parallelizable"] = parallelizable_;
   obj["repeatTimes"] = repeatTimes_;
   return obj;
@@ -698,7 +696,7 @@ PlanNodePtr ValuesNode::create(const folly::dynamic& obj, void* context) {
   VELOX_CHECK_EQ(0, sources.size());
 
   auto encodedData = obj["data"].asString();
-  auto serializedData = encoding::Base64::decode(encodedData);
+  std::string serializedData = encoding::Base64::decode(encodedData);
   std::istringstream dataStream(serializedData);
 
   auto* pool = static_cast<memory::MemoryPool*>(context);
