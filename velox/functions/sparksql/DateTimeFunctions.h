@@ -245,17 +245,24 @@ struct FromUnixtimeFunction {
     legacyFormatter_ = config.sparkLegacyDateFormatter();
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
-      setFormatter(*format);
+      if (!setFormatter(*format)) {
+        invalidFormat_ = true;
+      }
       isConstantTimeFormat_ = true;
     }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<int64_t>& second,
       const arg_type<Varchar>& format) {
+    if (invalidFormat_) {
+      return false;
+    }
     if (!isConstantTimeFormat_) {
-      setFormatter(format);
+      if (!setFormatter(format)) {
+        return false;
+      }
     }
     const Timestamp timestamp{second, 0};
     result.reserve(maxResultSize_);
@@ -263,18 +270,26 @@ struct FromUnixtimeFunction {
     resultSize = formatter_->format(
         timestamp, sessionTimeZone_, maxResultSize_, result.data(), true);
     result.resize(resultSize);
+    return true;
   }
 
  private:
-  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& format) {
-    formatter_ = detail::getDateTimeFormatter(
-                     std::string_view(format.data(), format.size()),
-                     legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                                      : DateTimeFormatterType::JODA)
-                     .thenOrThrow(folly::identity, [&](const Status& status) {
-                       VELOX_USER_FAIL("{}", status.message());
-                     });
+  FOLLY_ALWAYS_INLINE bool setFormatter(const arg_type<Varchar>& format) {
+    auto formatter = detail::getDateTimeFormatter(
+        std::string_view(format.data(), format.size()),
+        legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                         : DateTimeFormatterType::JODA);
+    // Legacy formatter returns null for invalid format but Joda formatter
+    // throws user error.
+    if (!legacyFormatter_ && formatter.hasError()) {
+      VELOX_USER_FAIL(formatter.error().message());
+    }
+    if (formatter.hasError()) {
+      return false;
+    }
+    formatter_ = formatter.value();
     maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
+    return true;
   }
 
   const tz::TimeZone* sessionTimeZone_{nullptr};
@@ -282,6 +297,7 @@ struct FromUnixtimeFunction {
   uint32_t maxResultSize_;
   bool isConstantTimeFormat_{false};
   bool legacyFormatter_{false};
+  bool invalidFormat_{false};
 };
 
 template <typename T>
@@ -361,14 +377,20 @@ struct GetTimestampFunction {
       sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
     }
     if (format != nullptr) {
-      formatter_ = detail::getDateTimeFormatter(
-                       std::string_view(*format),
-                       legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                                        : DateTimeFormatterType::JODA)
-                       .thenOrThrow(folly::identity, [&](const Status& status) {
-                         VELOX_USER_FAIL("{}", status.message());
-                       });
-      isConstantTimeFormat_ = true;
+      auto formatter = detail::getDateTimeFormatter(
+          std::string_view(*format),
+          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                           : DateTimeFormatterType::JODA);
+      // Legacy formatter returns null for invalid format but Joda formatter
+      // throws user error.
+      if (!legacyFormatter_ && formatter.hasError()) {
+        VELOX_USER_FAIL(formatter.error().message());
+      }
+      if (formatter.hasError()) {
+        invalidFormat_ = true;
+      } else {
+        formatter_ = formatter.value();
+      }
     }
   }
 
@@ -376,14 +398,23 @@ struct GetTimestampFunction {
       out_type<Timestamp>& result,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
+    if (invalidFormat_) {
+      return false;
+    }
     if (!isConstantTimeFormat_) {
-      formatter_ = detail::getDateTimeFormatter(
-                       std::string_view(format),
-                       legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                                        : DateTimeFormatterType::JODA)
-                       .thenOrThrow(folly::identity, [&](const Status& status) {
-                         VELOX_USER_FAIL("{}", status.message());
-                       });
+      auto formatter = detail::getDateTimeFormatter(
+          std::string_view(format),
+          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
+                           : DateTimeFormatterType::JODA);
+      // Legacy formatter returns null for invalid format but Joda formatter
+      // throws user error.
+      if (!legacyFormatter_ && formatter.hasError()) {
+        VELOX_USER_FAIL(formatter.error().message());
+      }
+      if (formatter.hasError()) {
+        return false;
+      }
+      formatter_ = formatter.value();
     }
     auto dateTimeResult = formatter_->parse(std::string_view(input));
     // Null as result for parsing error.
@@ -406,6 +437,7 @@ struct GetTimestampFunction {
   bool isConstantTimeFormat_{false};
   const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // default to GMT.
   bool legacyFormatter_{false};
+  bool invalidFormat_{false};
 };
 
 template <typename T>
