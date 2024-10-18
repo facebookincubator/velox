@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/dwio/pagefile/RegisterPageFileReader.h"
 
 #include <boost/lexical_cast.hpp>
 #include <memory>
@@ -106,6 +107,25 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
                                  : bucketToPartition_,
       channels_,
       constValues_);
+}
+
+  [[maybe_unused]] static bool once = []() {
+    dwio::common::registerFileSinks();
+    dwrf::registerDwrfReaderFactory();
+    dwrf::registerDwrfWriterFactory();
+    orc::registerOrcReaderFactory();
+
+    pagefile::registerPageFileReaderFactory();
+
+    parquet::registerParquetReaderFactory();
+    parquet::registerParquetWriterFactory();
+
+    filesystems::registerS3FileSystem();
+    filesystems::registerHdfsFileSystem();
+    filesystems::registerGCSFileSystem();
+    filesystems::abfs::registerAbfsFileSystem();
+    return true;
+  }();
 }
 
 std::string HivePartitionFunctionSpec::toString() const {
