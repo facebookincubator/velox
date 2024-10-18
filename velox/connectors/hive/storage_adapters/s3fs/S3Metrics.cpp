@@ -24,89 +24,95 @@ S3Metrics globalS3Metrics;
 
 // Method implementations for S3Metrics
 void S3Metrics::incrementActiveConnections() {
-  ++activeConnections;
+  activeConnections.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementStartedUploads() {
-  ++startedUploads;
+  startedUploads.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementFailedUploads() {
-  ++failedUploads;
+  failedUploads.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementSuccessfulUploads() {
-  ++successfulUploads;
+  successfulUploads.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementMetadataCalls() {
-  ++metadataCalls;
+  metadataCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementListStatusCalls() {
-  ++listStatusCalls;
+  listStatusCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementListLocatedStatusCalls() {
-  ++listLocatedStatusCalls;
+  listLocatedStatusCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementListObjectsCalls() {
-  ++listObjectsCalls;
+  listObjectsCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementOtherReadErrors() {
-  ++otherReadErrors;
+  otherReadErrors.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementAwsAbortedExceptions() {
-  ++awsAbortedExceptions;
+  awsAbortedExceptions.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementSocketExceptions() {
-  ++socketExceptions;
+  socketExceptions.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementGetObjectErrors() {
-  ++getObjectErrors;
+  getObjectErrors.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementGetMetadataErrors() {
-  ++getMetadataErrors;
+  getMetadataErrors.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementGetObjectRetries() {
-  ++getObjectRetries;
+  getObjectRetries.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementGetMetadataRetries() {
-  ++getMetadataRetries;
+  getMetadataRetries.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::incrementReadRetries() {
-  ++readRetries;
+  readRetries.fetch_add(1, std::memory_order_relaxed);
 }
 
 void S3Metrics::decrementActiveConnections() {
-  --activeConnections;
+  activeConnections.fetch_sub(1, std::memory_order_relaxed);
 }
 
 uint64_t S3Metrics::getDeltaStartedUploads() {
-  return startedUploads - prevStartedUploads;
+  uint64_t delta = startedUploads.load(std::memory_order_relaxed) - prevStartedUploads;
+  prevStartedUploads = startedUploads.load(std::memory_order_relaxed);
+  return delta;
 }
 
 uint64_t S3Metrics::getDeltaFailedUploads() {
-  return failedUploads - prevFailedUploads;
+  uint64_t delta = failedUploads.load(std::memory_order_relaxed) - prevFailedUploads;
+  prevFailedUploads = failedUploads.load(std::memory_order_relaxed);
+  return delta;
 }
 
 uint64_t S3Metrics::getDeltaSuccessfulUploads() {
-  return successfulUploads - prevSuccessfulUploads;
+  uint64_t delta = successfulUploads.load(std::memory_order_relaxed) - prevSuccessfulUploads;
+  prevSuccessfulUploads = successfulUploads.load(std::memory_order_relaxed);
+  return delta;
 }
 
 void S3Metrics::resetDeltas() {
-  prevStartedUploads = startedUploads;
-  prevFailedUploads = failedUploads;
-  prevSuccessfulUploads = successfulUploads;
+  prevStartedUploads = startedUploads.load(std::memory_order_relaxed);
+  prevFailedUploads = failedUploads.load(std::memory_order_relaxed);
+  prevSuccessfulUploads = successfulUploads.load(std::memory_order_relaxed);
 }
 
 } // namespace facebook::velox::filesystems

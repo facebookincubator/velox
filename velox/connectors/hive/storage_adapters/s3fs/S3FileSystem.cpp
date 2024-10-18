@@ -744,12 +744,12 @@ std::string S3FileSystem::getLogLevelName() const {
   return impl_->getLogLevelName();
 }
 
-S3Metrics& S3FileSystem::getMetrics() {
-    return globalS3Metrics;  // Return the global metrics.
+const FileSystemMetrics& S3FileSystem::metrics() const {
+  return globalS3Metrics;
 }
 
 void S3FileSystem::resetMetricsDeltas() {
-  globalS3Metrics.resetDeltas();  // Reset metrics deltas after reporting
+  globalS3Metrics.resetDeltas();
 }
 
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(
