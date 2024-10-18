@@ -34,21 +34,22 @@ add_library(
 
 target_link_libraries(
   velox_exec_test_lib
-  velox_vector_test_lib
-  velox_temp_path
+  velox_aggregates
   velox_core
-  velox_exception
-  velox_expression
-  velox_parse_parser
   velox_duckdb_conversion
   velox_dwio_common
+  velox_dwio_common_test_utils
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_writer
-  velox_dwio_common_test_utils
+  velox_dwio_parquet_writer
+  velox_exception
+  velox_expression
   velox_file_test_utils
-  velox_type_fbhive
-  velox_hive_connector
-  velox_tpch_connector
-  velox_presto_serializer
   velox_functions_prestosql
-  velox_aggregates)
+  velox_hive_connector
+  velox_parse_parser
+  velox_presto_serializer
+  velox_temp_path
+  velox_tpch_connector
+  velox_type_fbhive
+  velox_vector_test_lib)
