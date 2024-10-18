@@ -47,6 +47,10 @@ class HashJoinBridge : public JoinBridge {
   /// HashBuild operators to parallelize the restoring operation.
   void addBuilder();
 
+  bool canReclaim() const;
+
+  uint64_t reclaim();
+
   /// Invoked to spill 'table' and returns spilled partitions. This method
   /// should only be invoked when the 'table' is a ready-to-use one, meaning it
   /// should not be one in the middle of building. Hence it is normally invoked
@@ -148,6 +152,9 @@ class HashJoinBridge : public JoinBridge {
   void maybeSetJoinNode(
       const std::shared_ptr<const core::HashJoinNode>& joinNode);
 
+  void maybeSetSpillStatsRecorder(
+      folly::Synchronized<common::SpillStats>* stats);
+
  private:
   // Spills the row container from one of the sub-table from
   // 'table' to parallelize the table spilling. The function
@@ -194,6 +201,11 @@ class HashJoinBridge : public JoinBridge {
   RowTypePtr tableType_;
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::optional<common::SpillConfig> spillConfig_;
+
+  // A flag indicating if any probe operator has poked 'this' join bridge to
+  // attempt to get table. It is reset for each table partition processing.
+  std::atomic_bool probeStarted_;
+  folly::Synchronized<common::SpillStats>* spillStats_{nullptr};
   friend test::HashJoinBridgeTestHelper;
 };
 
@@ -204,9 +216,10 @@ bool isLeftNullAwareJoinWithFilter(
 
 class HashJoinMemoryReclaimer final : public MemoryReclaimer {
  public:
-  static std::unique_ptr<memory::MemoryReclaimer> create() {
+  static std::unique_ptr<memory::MemoryReclaimer> create(
+      std::shared_ptr<HashJoinBridge> joinBridge) {
     return std::unique_ptr<memory::MemoryReclaimer>(
-        new HashJoinMemoryReclaimer());
+        new HashJoinMemoryReclaimer(joinBridge));
   }
 
   uint64_t reclaim(
@@ -216,7 +229,9 @@ class HashJoinMemoryReclaimer final : public MemoryReclaimer {
       memory::MemoryReclaimer::Stats& stats) final;
 
  private:
-  HashJoinMemoryReclaimer() : MemoryReclaimer() {}
+  HashJoinMemoryReclaimer(std::shared_ptr<HashJoinBridge> joinBridge)
+      : MemoryReclaimer(), joinBridge_(joinBridge) {}
+  std::shared_ptr<HashJoinBridge> joinBridge_;
 };
 
 /// Returns true if 'pool' is a hash build operator's memory pool. The check is
