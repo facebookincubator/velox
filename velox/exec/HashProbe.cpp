@@ -1751,6 +1751,7 @@ void HashProbe::reclaim(
     // Only spill hash table if any hash probe operators still has input probe
     // data, otherwise we skip this step.
     spillPartitionSet = spillTable();
+    // target check
     VELOX_CHECK(!spillPartitionSet.empty());
   }
   const auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
