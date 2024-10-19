@@ -180,7 +180,7 @@ that require custom result verifiers are left unverified.</p>
 <h2>How to integrate<a class="headerlink" href="#how-to-integrate" title="Link to this heading">¶</a></h2>
 <p>To integrate with the Expression Fuzzer, create a test, register all scalar
 functions supported by the engine, and call <code class="docutils literal notranslate"><span class="pre">FuzzerRunner::run()</span></code> defined in
-<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/expression/tests/ExpressionFuzzer.h">FuzzerRunner.h</a>. See <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/expression/tests/ExpressionFuzzerTest.cpp">ExpressionFuzzerTest.cpp</a>.</p>
+<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/expression/fuzzer/ExpressionFuzzer.h">FuzzerRunner.h</a>. See <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/expression/fuzzer/ExpressionFuzzerTest.cpp">ExpressionFuzzerTest.cpp</a>.</p>
 <p>Functions with known bugs can be excluded from testing using a skip-list.</p>
 <p>Integration with Aggregation Fuzzer is similar. Create a test, register all
 aggregate functions supported by the engine, and call
