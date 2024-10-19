@@ -213,12 +213,22 @@ VectorPtr createBinary(
   size_t childSize = 0;
   std::vector<int64_t> lengths(size);
   size_t nullCount = 0;
+  size_t maxDataLength = 10;
+  if (type->kind() == TypeKind::VARCHAR &&
+      getVarcharLength(*type) != VarcharType::kUnboundedLength) {
+    maxDataLength = std::min(getVarcharLength(*type), maxDataLength);
+  }
   for (size_t i = 0; i < size; ++i) {
     auto notNull = isNotNull(gen, i, isNullAt);
     vector->setNull(i, !notNull);
     if (notNull) {
       // Make sure not all strings will be inlined
-      auto len = Random::rand32(0, 10, gen) + 1;
+      // CZ (remove later):
+      //    Wouldn't auto len = Random::rand32(0, 10, gen) + 1;
+      //    result in len values of 1 - 10 which means they would always be
+      //    inlined? len needs to be > 12 to be not created inline later in the
+      //    SringView constructor.
+      auto len = Random::rand32(0, maxDataLength, gen) + 1;
       lengths[i] = len;
       childSize += len;
     } else {
@@ -247,12 +257,15 @@ VectorPtr createBinary(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::VARCHAR>(
-    const TypePtr& /* unused */,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  return createBinary(VARCHAR(), size, gen, pool, isNullAt);
+  if (type == nullptr) {
+    return createBinary(VARCHAR(), size, gen, pool, isNullAt);
+  }
+  return createBinary(type, size, gen, pool, isNullAt);
 }
 
 template <>

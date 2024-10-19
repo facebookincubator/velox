@@ -109,6 +109,11 @@ void FlatVector<StringView>::set(vector_size_t idx, StringView value) {
   if (BaseVector::rawNulls_) {
     BaseVector::setNull(idx, false);
   }
+  if (type()->kind() == TypeKind::VARCHAR) {
+    VELOX_CHECK(
+        value.size() <= getVarcharLength(*type()),
+        "Value exceeds allowed Vector type size.");
+  }
   if (value.isInline()) {
     rawValues_[idx] = value;
   } else {
