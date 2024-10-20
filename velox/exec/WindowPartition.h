@@ -158,6 +158,9 @@ class WindowPartition {
   /// @param numRows number of rows to compute buffer for.
   /// @param rawPeerStarts buffer of peer row values for each row. If the frame
   /// column is null, then its peer row value is the frame boundary.
+  /// @param rawFrameBounds SelectivityVector to keep track of valid frames.
+  /// This function unselect rows in validFrames where the frame bounds are NaN
+  /// that are invalid.
   void computeKRangeFrameBounds(
       bool isStartBound,
       bool isPreceding,
@@ -165,7 +168,8 @@ class WindowPartition {
       vector_size_t startRow,
       vector_size_t numRows,
       const vector_size_t* rawPeerStarts,
-      vector_size_t* rawFrameBounds) const;
+      vector_size_t* rawFrameBounds,
+      SelectivityVector& validFrames) const;
 
  private:
   WindowPartition(
@@ -216,7 +220,8 @@ class WindowPartition {
       column_index_t frameColumn,
       const CompareFlags& flags) const;
 
-  // Iterates over 'numBlockRows' and searches frame value for each row.
+  // Iterates over 'numBlockRows' and searches frame value for each row. If the
+  // frame bound is NaN that is invalid, unselect the row from 'validFrames'.
   void updateKRangeFrameBounds(
       bool firstMatch,
       bool isPreceding,
@@ -225,7 +230,8 @@ class WindowPartition {
       vector_size_t numRows,
       column_index_t frameColumn,
       const vector_size_t* rawPeerBounds,
-      vector_size_t* rawFrameBounds) const;
+      vector_size_t* rawFrameBounds,
+      SelectivityVector& validFrames) const;
 
   // Indicates if this is a partial partition for RowStreamWindowBuild
   // processing.
