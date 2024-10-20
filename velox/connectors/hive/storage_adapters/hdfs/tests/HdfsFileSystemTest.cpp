@@ -188,8 +188,9 @@ void verifyFailures(LibHdfsShim* driver, hdfsFS hdfs) {
 
   constexpr auto kMaxRetries = 10;
   int retries = 0;
+  std::string hdfsPath = "http://localhost:7878/test_file.txt";
   while (true) {
-    if (!checkMiniClusterStatus(fullDestinationPath)) {
+    if (!checkMiniClusterStatus(hdfsPath)) {
       checkReadErrorMessages(&readFile2, readFailErrorMessage, 1);
       break;
     } else {
