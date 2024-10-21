@@ -136,34 +136,25 @@ void checkReadErrorMessages(
   }
 }
 
-bool checkMiniClusterStatus(const std::string& url) {
-  CURL* curl;
-  CURLcode res;
-  long http_code = 0;
-
-  curl_global_init(CURL_GLOBAL_DEFAULT);
-  curl = curl_easy_init();
-
-  if (curl) {
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-
-    res = curl_easy_perform(curl);
-
-    if (res == CURLE_OK) {
-      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    } else {
-      std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res)
-                << std::endl;
-    }
-
-    curl_easy_cleanup(curl);
+bool checkMiniClusterStop() {
+  filesystems::arrow::io::internal::LibHdfsShim* libhdfs_shim;
+  auto status = filesystems::arrow::io::internal::ConnectLibHdfs(&libhdfs_shim);
+  if (!status.ok()) {
+    LOG(ERROR) << "ConnectLibHdfs failed ";
   }
 
-  curl_global_cleanup();
+  // Connect to HDFS with the builder object
+  hdfsBuilder* builder = libhdfs_shim->NewBuilder();
+  libhdfs_shim->BuilderSetNameNode(builder, localhost.c_str());
+  libhdfs_shim->BuilderSetNameNodePort(builder, 7878);
+  libhdfs_shim->BuilderSetForceNewInstance(builder);
 
-  return (http_code == 200);
+  auto hdfs = libhdfs_shim->BuilderConnect(builder);
+  if (hdfs == nullptr) {
+    return true;
+  } else {
+    return false;
+  }
 }
 
 void verifyFailures(LibHdfsShim* driver, hdfsFS hdfs) {
@@ -191,7 +182,7 @@ void verifyFailures(LibHdfsShim* driver, hdfsFS hdfs) {
   int retries = 0;
   std::string hdfsPath = "http://localhost:7878/test_file.txt";
   while (true) {
-    if (!checkMiniClusterStatus(hdfsPath)) {
+    if (checkMiniClusterStop()) {
       checkReadErrorMessages(&readFile2, readFailErrorMessage, 1);
       break;
     } else {
