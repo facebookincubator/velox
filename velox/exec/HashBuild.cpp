@@ -112,6 +112,9 @@ HashBuild::HashBuild(
   }
 
   tableType_ = ROW(std::move(names), std::move(types));
+  joinBridge_->maybeSetTableType(tableType_);
+  joinBridge_->maybeSetSpillConfig(spillConfig());
+  joinBridge_->maybeSetJoinNode(joinNode_);
   setupTable();
   setupSpiller();
   stateCleared_ = false;
@@ -778,6 +781,7 @@ bool HashBuild::finishHashBuild() {
   addRuntimeStats();
   joinBridge_->setHashTable(
       std::move(table_), std::move(spillPartitions), joinHasNullKeys_);
+  joinBridge_->maybeSetSpillStatsRecorder(&spillStats_);
   if (canSpill()) {
     stateCleared_ = true;
   }
@@ -1089,6 +1093,7 @@ void HashBuild::reclaim(
   VELOX_CHECK(task->pauseRequested());
   const std::vector<Operator*> operators =
       task->findPeerOperators(operatorCtx_->driverCtx()->pipelineId, this);
+
   for (auto* op : operators) {
     HashBuild* buildOp = dynamic_cast<HashBuild*>(op);
     VELOX_CHECK_NOT_NULL(buildOp);
@@ -1106,53 +1111,18 @@ void HashBuild::reclaim(
     }
   }
 
-  struct SpillResult {
-    const std::exception_ptr error{nullptr};
-
-    explicit SpillResult(std::exception_ptr _error) : error(_error) {}
-  };
-
-  std::vector<std::shared_ptr<AsyncSource<SpillResult>>> spillTasks;
-  auto* spillExecutor = spillConfig()->executor;
+  std::vector<Spiller*> spillers;
   for (auto* op : operators) {
     HashBuild* buildOp = static_cast<HashBuild*>(op);
-    spillTasks.push_back(
-        memory::createAsyncMemoryReclaimTask<SpillResult>([buildOp]() {
-          try {
-            buildOp->spiller_->spill();
-            buildOp->table_->clear();
-            // Release the minimum reserved memory.
-            buildOp->pool()->release();
-            return std::make_unique<SpillResult>(nullptr);
-          } catch (const std::exception& e) {
-            LOG(ERROR) << "Spill from hash build pool "
-                       << buildOp->pool()->name() << " failed: " << e.what();
-            // The exception is captured and thrown by the caller.
-            return std::make_unique<SpillResult>(std::current_exception());
-          }
-        }));
-    if ((operators.size() > 1) && (spillExecutor != nullptr)) {
-      spillExecutor->add([source = spillTasks.back()]() { source->prepare(); });
-    }
+    spillers.push_back(buildOp->spiller_.get());
   }
 
-  auto syncGuard = folly::makeGuard([&]() {
-    for (auto& spillTask : spillTasks) {
-      // We consume the result for the pending tasks. This is a cleanup in the
-      // guard and must not throw. The first error is already captured before
-      // this runs.
-      try {
-        spillTask->move();
-      } catch (const std::exception&) {
-      }
-    }
-  });
+  joinBridge_->spillTableFromSpillers(spillers);
 
-  for (auto& spillTask : spillTasks) {
-    const auto result = spillTask->move();
-    if (result->error) {
-      std::rethrow_exception(result->error);
-    }
+  for (auto* op : operators) {
+    HashBuild* buildOp = static_cast<HashBuild*>(op);
+    buildOp->table_->clear();
+    buildOp->pool()->release();
   }
 }
 
