@@ -14,11 +14,17 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include <folly/IPAddress.h>
 #include <folly/small_vector.h>
+
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
+
+static constexpr int kIPAddressBytes = 16;
+static constexpr int kIPPrefixBytes = 17;
+static constexpr uint8_t kIPV4Bits = 32;
+static constexpr uint8_t kIPV6Bits = 128;
 
 namespace facebook::velox {
 
@@ -59,8 +65,14 @@ class IPPrefixCastOperator : public exec::CastOperator {
       const TypePtr& resultType,
       VectorPtr& result) const override {
     context.ensureWritable(rows, resultType, result);
-    VELOX_NYI(
-        "Cast from {} to IPPrefix not yet supported", input.type()->toString());
+
+    if (input.typeKind() == TypeKind::VARCHAR) {
+      castFromString(input, context, rows, *result);
+    } else {
+      VELOX_NYI(
+          "Cast from {} to IPPrefix not yet supported",
+          input.type()->toString());
+    }
   }
 
   void castFrom(
@@ -70,8 +82,122 @@ class IPPrefixCastOperator : public exec::CastOperator {
       const TypePtr& resultType,
       VectorPtr& result) const override {
     context.ensureWritable(rows, resultType, result);
-    VELOX_NYI(
-        "Cast from IPPrefix to {} not yet supported", resultType->toString());
+
+    if (resultType->kind() == TypeKind::VARCHAR) {
+      castToString(input, context, rows, *result);
+    } else {
+      VELOX_NYI(
+          "Cast from IPPrefix to {} not yet supported", resultType->toString());
+    }
+  }
+
+ private:
+  static void castToString(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* flatResult = result.as<FlatVector<StringView>>();
+    const auto* ipprefixes = input.as<RowVector>();
+    const auto* ip = ipprefixes->childAt(0)->as<SimpleVector<int128_t>>();
+    const auto* prefix = ipprefixes->childAt(1)->as<SimpleVector<int8_t>>();
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      const auto intAddr = ip->valueAt(row);
+      folly::ByteArray16 addrBytes;
+
+      memcpy(&addrBytes, &intAddr, kIPAddressBytes);
+      std::reverse(addrBytes.begin(), addrBytes.end());
+      folly::IPAddressV6 v6Addr(addrBytes);
+
+      exec::StringWriter<false> resultWriter(flatResult, row);
+      if (v6Addr.isIPv4Mapped()) {
+        resultWriter.append(fmt::format(
+            "{}/{}", v6Addr.createIPv4().str(), prefix->valueAt(row)));
+      } else {
+        resultWriter.append(
+            fmt::format("{}/{}", v6Addr.str(), (uint8_t)prefix->valueAt(row)));
+      }
+      resultWriter.finalize();
+    });
+  }
+
+  static folly::small_vector<folly::StringPiece, 2> splitIpSlashCidr(
+      const folly::StringPiece& ipSlashCidr) {
+    folly::small_vector<folly::StringPiece, 2> vec;
+    folly::split('/', ipSlashCidr, vec);
+    return vec;
+  }
+
+  static void setVarcharCastError(
+      exec::EvalCtx& context,
+      unsigned long row,
+      const folly::StringPiece& ipString) {
+    if (threadSkipErrorDetails()) {
+      context.setStatus(row, Status::UserError());
+    } else {
+      context.setStatus(
+          row,
+          threadSkipErrorDetails()
+              ? Status::UserError()
+              : Status::UserError(
+                    "Cannot cast value to IPPREFIX: {}", ipString.str()));
+      return;
+    }
+  }
+
+  static void castFromString(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    int128_t intAddr;
+    folly::ByteArray16 addrBytes;
+    auto* rowResult = result.as<RowVector>();
+    const auto* ipAddressStrings = input.as<SimpleVector<StringView>>();
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      auto ipAddressString = ipAddressStrings->valueAt(row);
+
+      // Folly allows for creation of networks without a "/" so check to make
+      // sure that we have one.
+      if (ipAddressString.str().find('/') == std::string::npos) {
+        setVarcharCastError(context, row, ipAddressString);
+        return;
+      }
+
+      auto const maybeNet =
+          folly::IPAddress::tryCreateNetwork(ipAddressString, -1, false);
+
+      if (maybeNet.hasError()) {
+        setVarcharCastError(context, row, ipAddressString);
+      }
+
+      auto net = maybeNet.value();
+      if (net.first.isIPv4Mapped() || net.first.isV4()) {
+        if (net.second > kIPV4Bits) {
+          setVarcharCastError(context, row, ipAddressString);
+          return;
+        }
+        addrBytes = folly::IPAddress::createIPv4(net.first)
+                        .mask(net.second)
+                        .createIPv6()
+                        .toByteArray();
+      } else {
+        if (net.second > kIPV6Bits) {
+          setVarcharCastError(context, row, ipAddressString);
+          return;
+        }
+        addrBytes = folly::IPAddress::createIPv6(net.first)
+                        .mask(net.second)
+                        .toByteArray();
+      }
+
+      std::reverse(addrBytes.begin(), addrBytes.end());
+      memcpy(&intAddr, &addrBytes, kIPAddressBytes);
+      rowResult->childAt(0)->as<FlatVector<int128_t>>()->set(row, intAddr);
+      rowResult->childAt(1)->as<FlatVector<int8_t>>()->set(row, net.second);
+    });
   }
 };
 

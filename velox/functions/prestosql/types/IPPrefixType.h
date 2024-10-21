@@ -21,7 +21,7 @@
 namespace facebook::velox {
 
 class IPPrefixType : public RowType {
-  IPPrefixType() : RowType({"ip", "prefix_len"}, {HUGEINT(), TINYINT()}) {}
+  IPPrefixType() : RowType({"ip", "prefix"}, {HUGEINT(), TINYINT()}) {}
 
  public:
   static const std::shared_ptr<const IPPrefixType>& get() {
