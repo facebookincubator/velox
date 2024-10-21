@@ -33,7 +33,7 @@ struct DateTimeFormatterProvider {
     minimalDaysInFirstWeek_ = config.sparkMinimalDaysInFirstWeek();
   }
 
-  FOLLY_ALWAYS_INLINE auto get(const std::string_view& format) {
+  FOLLY_ALWAYS_INLINE auto get(const std::string_view& format) const {
     if (legacyFormatter_) {
       return buildSimpleDateTimeFormatter(format, /*lenient=*/false)
           .then([this](std::shared_ptr<DateTimeFormatter> f) {
