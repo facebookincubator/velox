@@ -41,13 +41,12 @@ struct DateTimeFormatterProvider {
             f->setMinimalDaysInFirstWeek(minimalDaysInFirstWeek_);
             return f;
           });
-    } else {
-      return buildJodaDateTimeFormatter(
-          std::string_view(format.data(), format.size()));
     }
+
+    return buildJodaDateTimeFormatter(
+        std::string_view(format.data(), format.size()));
   }
 
-  std::shared_ptr<DateTimeFormatter> formatter_;
   bool legacyFormatter_{false};
   uint8_t firstDayOfWeek_ = 2;
   uint8_t minimalDaysInFirstWeek_ = 4;
@@ -140,8 +139,8 @@ struct UnixTimestampParseFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/) {
-    formatter_provider_.init(config);
-    auto formatter = formatter_provider_.get(kDefaultFormat_);
+    formatterProvider_.init(config);
+    auto formatter = formatterProvider_.get(kDefaultFormat_);
     VELOX_CHECK(!formatter.hasError(), "Default format should always be valid");
     format_ = formatter.value();
     setTimezone(config);
@@ -177,7 +176,7 @@ struct UnixTimestampParseFunction {
   // Default if format is not specified, as per Spark documentation.
   constexpr static std::string_view kDefaultFormat_{"yyyy-MM-dd HH:mm:ss"};
   std::shared_ptr<DateTimeFormatter> format_;
-  detail::DateTimeFormatterProvider formatter_provider_;
+  detail::DateTimeFormatterProvider formatterProvider_;
   const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // fallback to GMT.
 };
 
@@ -193,9 +192,9 @@ struct UnixTimestampParseWithFormatFunction
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    this->formatter_provider_.init(config);
+    this->formatterProvider_.init(config);
     if (format != nullptr) {
-      auto formatter = this->formatter_provider_.get(
+      auto formatter = this->formatterProvider_.get(
           std::string_view(format->data(), format->size()));
       if (formatter.hasError()) {
         invalidFormat_ = true;
@@ -217,7 +216,7 @@ struct UnixTimestampParseWithFormatFunction
 
     // Format error returns null.
     if (!isConstFormat_) {
-      auto formatter = this->formatter_provider_.get(
+      auto formatter = this->formatterProvider_.get(
           std::string_view(format.data(), format.size()));
       if (formatter.hasError()) {
         return false;
@@ -250,7 +249,7 @@ struct FromUnixtimeFunction {
       const core::QueryConfig& config,
       const arg_type<int64_t>* /*unixtime*/,
       const arg_type<Varchar>* format) {
-    formatter_provider_.init(config);
+    formatterProvider_.init(config);
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
       setFormatter(*format);
@@ -276,7 +275,7 @@ struct FromUnixtimeFunction {
  private:
   FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& format) {
     formatter_ =
-        formatter_provider_.get(std::string_view(format.data(), format.size()))
+        formatterProvider_.get(std::string_view(format.data(), format.size()))
             .thenOrThrow(folly::identity, [&](const Status& status) {
               VELOX_USER_FAIL("{}", status.message());
             });
@@ -287,7 +286,7 @@ struct FromUnixtimeFunction {
   std::shared_ptr<DateTimeFormatter> formatter_;
   uint32_t maxResultSize_;
   bool isConstantTimeFormat_{false};
-  detail::DateTimeFormatterProvider formatter_provider_;
+  detail::DateTimeFormatterProvider formatterProvider_;
 };
 
 template <typename T>
@@ -361,13 +360,13 @@ struct GetTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    formatter_provider_.init(config);
+    formatterProvider_.init(config);
     auto sessionTimezoneName = config.sessionTimezone();
     if (!sessionTimezoneName.empty()) {
       sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
     }
     if (format != nullptr) {
-      formatter_ = formatter_provider_
+      formatter_ = formatterProvider_
                        .get(std::string_view(format->data(), format->size()))
                        .thenOrThrow(folly::identity, [&](const Status& status) {
                          VELOX_USER_FAIL("{}", status.message());
@@ -381,7 +380,7 @@ struct GetTimestampFunction {
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
     if (!isConstantTimeFormat_) {
-      formatter_ = formatter_provider_
+      formatter_ = formatterProvider_
                        .get(std::string_view(format.data(), format.size()))
                        .thenOrThrow(folly::identity, [&](const Status& status) {
                          VELOX_USER_FAIL("{}", status.message());
@@ -408,7 +407,7 @@ struct GetTimestampFunction {
   std::shared_ptr<DateTimeFormatter> formatter_{nullptr};
   bool isConstantTimeFormat_{false};
   const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // default to GMT.
-  detail::DateTimeFormatterProvider formatter_provider_;
+  detail::DateTimeFormatterProvider formatterProvider_;
 };
 
 template <typename T>

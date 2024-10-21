@@ -298,7 +298,7 @@ class QueryConfig {
       "spark.legacy_date_formatter";
 
   /// The first day-of-week varies by culture.
-  /// firstDayOfWeek is is a 1-based weekday number starting with Sunday. It
+  /// firstDayOfWeek is a 1-based weekday number starting with Sunday. It
   /// determines how week-based calendar works. For example, the ISO-8601 use
   /// Monday (2) and the US uses Sunday (1). It should be set to match the
   /// 'Calender.getFirstDayOfWeek()' in Java. Sunday (1) is used by default.
