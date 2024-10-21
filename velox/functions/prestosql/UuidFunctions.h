@@ -20,9 +20,48 @@
 
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/Comparisons.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 
+namespace facebook::velox::detail {
+
+FOLLY_ALWAYS_INLINE static int compare64(uint64_t x, uint64_t y)
+{
+  return x < y ? -1 : (x == y ? 0 : 1);
+}
+
+static int compare128(const int128_t& lhs, const int128_t& rhs) {
+  int comp = compare64(HugeInt::upper(lhs), HugeInt::upper(rhs));
+  if (comp != 0) {
+    return comp;
+  }
+  return compare64(HugeInt::lower(lhs), HugeInt::lower(rhs));
+}
+
+} // namespace facebook::velox::detail
+
 namespace facebook::velox::functions {
+
+#define VELOX_GEN_BINARY_EXPR_UUID(Name, uuidCompExpr)                        \
+  template <typename T>                                                       \
+  struct Name##Uuid {                                                         \
+    VELOX_DEFINE_FUNCTION_TYPES(T);                                           \
+                                                                              \
+    FOLLY_ALWAYS_INLINE void call(                                            \
+        bool& result,                                                         \
+        const arg_type<Uuid>& lhs,                                            \
+        const arg_type<Uuid>& rhs) {                                          \
+      int compareResult = detail::compare128(lhs, rhs);                       \
+      result = (uuidCompExpr);                                                \
+    }                                                                         \
+  };
+
+VELOX_GEN_BINARY_EXPR_UUID(LtFunction, compareResult < 0);
+VELOX_GEN_BINARY_EXPR_UUID(GtFunction, compareResult > 0);
+VELOX_GEN_BINARY_EXPR_UUID(LteFunction, compareResult <= 0);
+VELOX_GEN_BINARY_EXPR_UUID(GteFunction, compareResult >= 0);
+
+#undef VELOX_GEN_BINARY_EXPR_UUID
 
 template <typename T>
 struct UuidFunction {
@@ -42,6 +81,10 @@ struct UuidFunction {
 inline void registerUuidFunctions(const std::string& prefix) {
   registerUuidType();
   registerFunction<UuidFunction, Uuid>({prefix + "uuid"});
+  registerFunction<LtFunctionUuid, bool, Uuid, Uuid>({prefix + "lt"});
+  registerFunction<GtFunctionUuid, bool, Uuid, Uuid>({prefix + "gt"});
+  registerFunction<LteFunctionUuid, bool, Uuid, Uuid>({prefix + "lte"});
+  registerFunction<GteFunctionUuid, bool, Uuid, Uuid>({prefix + "gte"});
 }
 
 } // namespace facebook::velox::functions
