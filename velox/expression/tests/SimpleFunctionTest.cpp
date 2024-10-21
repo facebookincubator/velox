@@ -999,7 +999,7 @@ VectorPtr testVariadicArgReuse(
 
   // Create a dummy EvalCtx.
   SelectivityVector rows(inputs[0]->size());
-  exec::ExprSet exprSet({}, execCtx);
+  exec::ExprSet exprSet(std::vector<core::TypedExprPtr>{}, execCtx);
   RowVectorPtr inputRows = vectorMaker.rowVector({});
   exec::EvalCtx evalCtx(execCtx, &exprSet, inputRows.get());
 
