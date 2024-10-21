@@ -18,6 +18,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::exec {
 class Task;
@@ -58,6 +59,9 @@ class OperatorReplayerBase {
   const std::string rootDir_;
   const std::string taskDir_;
   const std::string nodeDir_;
+
+  const std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_ =
+      std::make_shared<core::PlanNodeIdGenerator>();
 
   std::unordered_map<std::string, std::string> queryConfigs_;
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
