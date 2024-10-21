@@ -47,6 +47,7 @@ struct DateTimeFormatterProvider {
         std::string_view(format.data(), format.size()));
   }
 
+private:
   bool legacyFormatter_{false};
   uint8_t firstDayOfWeek_ = 2;
   uint8_t minimalDaysInFirstWeek_ = 4;
