@@ -335,6 +335,50 @@ class VectorTestBase {
         0);
   }
 
+  // Creates an ArrayVector<ArrayVector<ROW>> from a nested std::vectors of
+  // variants.
+  // Example:
+  //   std::vector<std::vector<std::vector<variant>>> nestedData = {
+  //       {{}},
+  //       {{variant::row({11, "a", true}),
+  //       variant::row({2, variant::null(TypeKind::VARCHAR), true})},
+  //       {variant::row({11, "a", true}), variant::row({31, "d", false})},
+  //       {variant::row({2, variant::null(TypeKind::VARCHAR), true}),
+  //       variant::row({31, "d", false})}},
+  //       {}};
+  //   auto arrayVector = makeArrayOfArrayOfRowVector(ROW({"a", "b", "c"},
+  //       {INTEGER(), VARCHAR(), BOOLEAN()}), nestedData);
+  //   EXPECT_EQ(3, arrayVector->size());
+  ArrayVectorPtr makeNullableNestedArrayVector(
+      const RowTypePtr& rowType,
+      const std::vector<std::vector<std::vector<variant>>>& data) {
+    vector_size_t size = data.size();
+    BufferPtr offsets = allocateOffsets(size, pool());
+    BufferPtr sizes = allocateSizes(size, pool());
+    auto rawOffsets = offsets->asMutable<vector_size_t>();
+    auto rawSizes = sizes->asMutable<vector_size_t>();
+
+    std::vector<std::vector<variant>> flattenedData;
+    vector_size_t i = 0;
+    for (const auto& vector : data) {
+      flattenedData.insert(flattenedData.end(), vector.begin(), vector.end());
+      rawSizes[i] = vector.size();
+      rawOffsets[i] = (i == 0) ? 0 : rawOffsets[i - 1] + rawSizes[i - 1];
+      ++i;
+    }
+    auto baseArrayVector =
+        vectorMaker_.arrayOfRowVector(rowType, flattenedData);
+    return std::make_shared<ArrayVector>(
+        pool(),
+        ARRAY(ARRAY(rowType)),
+        BufferPtr(nullptr),
+        size,
+        offsets,
+        sizes,
+        std::move(baseArrayVector),
+        0);
+  }
+
   // Create an ArrayVector<MapVector<TKey, TValue>> from nested std::vectors of
   // pairs. Example:
   //   using S = StringView;
