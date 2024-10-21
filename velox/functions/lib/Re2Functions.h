@@ -433,6 +433,8 @@ regexpReplaceWithLambdaSignatures();
 /// (?<name>regex), but in RE2, this is written as (?P<name>regex), so we need
 /// to convert the former format to the latter.
 /// Presto https://prestodb.io/docs/current/functions/regexp.html
+/// Spark
+/// https://archive.apache.org/dist/spark/docs/3.5.2/api/sql/index.html#regexp_replace
 FOLLY_ALWAYS_INLINE std::string prepareRegexpReplacePattern(
     const StringView& pattern) {
   static const RE2 kRegex("[(][?]<([^>]*)>");
@@ -443,8 +445,9 @@ FOLLY_ALWAYS_INLINE std::string prepareRegexpReplacePattern(
   return newPattern;
 }
 
-/// java.util.regex is used in regexp_replacement. This function preprocesses
-/// the replacement to ensure it is compatible with RE2.
+/// This function preprocesses an input replacement string to follow RE2 syntax
+/// for java.util.regex used by Presto and Spark. These are the replacements
+/// that are required.
 /// 1. RE2 replacement only supports group index capture, so we need to convert
 /// group name captures to group index captures.
 /// 2. Group index capture in java.util.regex replacement is '$N', while in RE2
