@@ -142,6 +142,8 @@ TEST_P(E2EReaderTest, SharedDictionaryFlatmapReadAsStruct) {
       std::move(sink),
       type,
       config,
+      /*sessionTimezone=*/nullptr,
+      /*adjustTimestampToTimezone=*/false,
       E2EWriterTestUtil::simpleFlushPolicyFactory(true));
 
   auto seed = folly::Random::secureRand32();
