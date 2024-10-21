@@ -70,12 +70,10 @@ struct RegexpReplaceFunction {
           "Invalid regular expression {}: {}.",
           processedPattern,
           re_->error());
-    }
 
-    if (replacement) {
-      // Constant 'replacement' with non-constant 'pattern' needs to be
-      // processed separately for each row.
-      if (pattern) {
+      if (replacement) {
+        // Constant 'replacement' with non-constant 'pattern' needs to be
+        // processed separately for each row.
         ensureProcessedReplacement(re_.value(), *replacement);
         constantReplacement_ = true;
       }
