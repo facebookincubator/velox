@@ -56,6 +56,7 @@ list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
 include(VeloxUtils)
+include(CMakeDependentOption)
 
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -75,6 +76,30 @@ option(
    This will override other build options."
   OFF)
 option(VELOX_MONO_LIBRARY "Build single unified library." OFF)
+option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
+# While it's possible to build both in one go we currently want to build either
+# static or shared.
+cmake_dependent_option(
+  VELOX_BUILD_STATIC
+  "Build Velox as static libraries."
+  ON
+  "NOT VELOX_BUILD_SHARED"
+  OFF)
+
+if(VELOX_BUILD_SHARED AND NOT VELOX_MONO_LIBRARY)
+  # The large number of targets currently in use within Velox make a shared
+  # build when not using the mono library brittle and labor intensive
+  message(
+    FATAL_ERROR
+      "Shared build is only possible when `VELOX_MONO_LIBRARY=ON` is set.")
+endif()
+
+if(VELOX_BUILD_SHARED)
+  message(
+    WARNING
+      "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags."
+      "This is currently NOT being enforced so user discretion is advised.")
+endif()
 
 # option() always creates a BOOL variable so we have to use a normal cache
 # variable with STRING type for this option.
@@ -237,7 +262,6 @@ endif()
 # At the moment we prefer static linking but by default cmake looks for shared
 # libs first. This will still fallback to shared libs when static ones are not
 # found
-list(INSERT CMAKE_FIND_LIBRARY_SUFFIXES 0 a)
 if(VELOX_ENABLE_S3)
   # Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
   if(AWSSDK_ROOT_DIR)
@@ -300,7 +324,8 @@ endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
+set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
 
 execute_process(
   COMMAND
@@ -380,7 +405,8 @@ if(${VELOX_ENABLE_GPU})
   if(CMAKE_BUILD_TYPE MATCHES Debug)
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
-  include_directories("${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}")
+  # Creates the imported targets 'CUDA::...'
+  include(FindCUDAToolkit)
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -397,9 +423,6 @@ set(BOOST_INCLUDE_LIBRARIES
 
 set_source(Boost)
 resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
-
-# Range-v3 will be enable when the codegen code actually lands keeping it here
-# for reference. find_package(range-v3)
 
 set_source(gflags)
 resolve_dependency(gflags COMPONENTS ${VELOX_GFLAGS_TYPE})
@@ -468,8 +491,6 @@ endif()
 set_source(simdjson)
 resolve_dependency(simdjson 3.9.3)
 
-# Locate or build folly.
-add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
 
@@ -495,12 +516,6 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(FBThrift CONFIG REQUIRED)
 endif()
 
-if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
-  set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
-else()
-  set(FOLLY_BENCHMARK Folly::follybenchmark)
-endif()
-
 if(VELOX_ENABLE_GCS)
   set_source(google_cloud_cpp_storage)
   resolve_dependency(google_cloud_cpp_storage CONFIG 2.22.0 REQUIRED)
@@ -509,7 +524,6 @@ endif()
 
 # GCC needs to link a library to enable std::filesystem.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-  set(FILESYSTEM "stdc++fs")
 
   # Ensure we have gcc at least 9+.
   if(CMAKE_CXX_COMPILER_VERSION LESS 9.0)
@@ -519,8 +533,6 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
 
   # Find Threads library
   find_package(Threads REQUIRED)
-else()
-  set(FILESYSTEM "")
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
@@ -569,9 +581,8 @@ find_package(double-conversion 3.1.5 REQUIRED)
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
 
-# these were previously vendored in third-party/
 if(NOT VELOX_DISABLE_GOOGLETEST)
-  set(GTest_SOURCE AUTO)
+  set_source(GTest)
   resolve_dependency(GTest)
   set(VELOX_GTEST_INCUDE_DIR
       "${gtest_SOURCE_DIR}/googletest/include"
@@ -606,4 +617,7 @@ if(VELOX_ENABLE_ARROW)
   resolve_dependency(Arrow)
 endif()
 
+if(VELOX_BUILD_SHARED)
+  set(BUILD_SHARED_LIBS ON)
+endif()
 add_subdirectory(velox)

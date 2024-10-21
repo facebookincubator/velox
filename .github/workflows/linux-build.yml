@@ -59,7 +59,9 @@ jobs:
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      GTest_SOURCE: BUNDLED # remove once images have it #10670
       simdjson_SOURCE: BUNDLED
+      folly_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
       CUDA_VERSION: "12.4"
     steps:
@@ -116,6 +118,7 @@ jobs:
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
             "-DVELOX_ENABLE_GPU=ON"
             "-DVELOX_MONO_LIBRARY=ON"
+            "-DVELOX_BUILD_SHARED=ON"
           )
           make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
 

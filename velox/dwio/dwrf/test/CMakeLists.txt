@@ -23,8 +23,7 @@ set(TEST_LINK_LIBS
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
-    glog::glog
-    ${FILESYSTEM})
+    glog::glog)
 
 add_executable(velox_dwio_dwrf_buffered_output_stream_test
                TestBufferedOutputStream.cpp)
@@ -543,7 +542,7 @@ target_link_libraries(
   velox_memory
   velox_dwio_common_exception
   Folly::folly
-  ${FOLLY_BENCHMARK})
+  Folly::follybenchmark)
 
 add_executable(velox_dwrf_float_column_writer_benchmark
                FloatColumnWriterBenchmark.cpp)
@@ -553,7 +552,7 @@ target_link_libraries(
   velox_dwio_common_exception
   velox_dwio_dwrf_writer
   Folly::folly
-  ${FOLLY_BENCHMARK}
+  Folly::follybenchmark
   fmt::fmt)
 
 add_executable(velox_dwio_cache_test CacheInputTest.cpp

@@ -41,7 +41,8 @@ velox_link_libraries(
   velox_wave_stream
   velox_exception
   velox_common_base
-  velox_exec)
+  velox_exec
+  CUDA::cudart)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
