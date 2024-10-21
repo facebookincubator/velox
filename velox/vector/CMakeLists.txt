@@ -32,7 +32,6 @@ velox_add_library(
 
 velox_link_libraries(
   velox_vector
-  velox_encode
   velox_memory
   velox_time
   velox_type
