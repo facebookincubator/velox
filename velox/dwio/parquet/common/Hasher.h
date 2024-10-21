@@ -47,31 +47,31 @@ class Hasher {
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(int32_t value) const = 0;
+  virtual uint64_t hashInt32(int32_t value) const = 0;
 
   /// Compute hash for 64 bits value by using its plain encoding result.
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(int64_t value) const = 0;
+  virtual uint64_t hashInt64(int64_t value) const = 0;
 
   /// Compute hash for float value by using its plain encoding result.
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(float value) const = 0;
+  virtual uint64_t hashFloat(float value) const = 0;
 
   /// Compute hash for double value by using its plain encoding result.
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(double value) const = 0;
+  virtual uint64_t hashDouble(double value) const = 0;
 
   /// Compute hash for ByteArray value by using its plain encoding result.
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(const ByteArray* value) const = 0;
+  virtual uint64_t hashByteArray(const ByteArray* value) const = 0;
 
   /// Batch compute hashes for 32 bits values by using its plain encoding
   /// result.
@@ -80,8 +80,10 @@ class Hasher {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const int32_t* values, int num_values, uint64_t* hashes)
-      const = 0;
+  virtual void hashesInt32(
+      const int32_t* values,
+      int num_values,
+      uint64_t* hashes) const = 0;
 
   /// Batch compute hashes for 64 bits values by using its plain encoding
   /// result.
@@ -90,8 +92,10 @@ class Hasher {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const int64_t* values, int num_values, uint64_t* hashes)
-      const = 0;
+  virtual void hashesInt64(
+      const int64_t* values,
+      int num_values,
+      uint64_t* hashes) const = 0;
 
   /// Batch compute hashes for float values by using its plain encoding result.
   ///
@@ -99,8 +103,8 @@ class Hasher {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const float* values, int num_values, uint64_t* hashes)
-      const = 0;
+  virtual void
+  hashesFloat(const float* values, int num_values, uint64_t* hashes) const = 0;
 
   /// Batch compute hashes for double values by using its plain encoding result.
   ///
@@ -108,8 +112,10 @@ class Hasher {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const double* values, int num_values, uint64_t* hashes)
-      const = 0;
+  virtual void hashesDouble(
+      const double* values,
+      int num_values,
+      uint64_t* hashes) const = 0;
 
   /// Batch compute hashes for ByteArray values by using its plain encoding
   /// result.
@@ -118,8 +124,10 @@ class Hasher {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const ByteArray* values, int num_values, uint64_t* hashes)
-      const = 0;
+  virtual void hashesByteArray(
+      const ByteArray* values,
+      int num_values,
+      uint64_t* hashes) const = 0;
 
   virtual ~Hasher() = default;
 };

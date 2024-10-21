@@ -595,6 +595,11 @@ void configureReaderOptions(
 
     readerOptions.setFileFormat(hiveSplit->fileFormat);
   }
+
+  if (readerOptions.fileFormat() == dwio::common::FileFormat::PARQUET) {
+    readerOptions.setReadBloomFilter(
+        hiveConfig->isParquetReadBloomFilter(sessionProperties));
+  }
 }
 
 void configureRowReaderOptions(

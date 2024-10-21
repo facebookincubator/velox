@@ -497,6 +497,11 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setReadBloomFilter(bool flag) {
+    readBloomFilter_ = flag;
+    return *this;
+  }
+
   ReaderOptions& setIOExecutor(std::shared_ptr<folly::Executor> executor) {
     ioExecutor_ = std::move(executor);
     return *this;
@@ -567,6 +572,10 @@ class ReaderOptions : public io::ReaderOptions {
     return useColumnNamesForColumnMapping_;
   }
 
+  bool readBloomFilter() const {
+    return readBloomFilter_;
+  }
+
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
     return randomSkip_;
   }
@@ -609,6 +618,7 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
   bool useColumnNamesForColumnMapping_{false};
+  bool readBloomFilter_{false};
   std::shared_ptr<folly::Executor> ioExecutor_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
