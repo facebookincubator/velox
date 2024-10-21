@@ -17,6 +17,7 @@
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/QuerySplitWriter.h"
 
 namespace facebook::velox::exec {
 
@@ -49,6 +50,8 @@ class TableScan : public SourceOperator {
       const core::PlanNodeId& producer,
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override;
+
+  void setupTracer(const std::string& traceDir) override;
 
  private:
   // Checks if this table scan operator needs to yield before processing the
@@ -120,5 +123,7 @@ class TableScan : public SourceOperator {
   // Holds the current status of the operator. Used when debugging to understand
   // what operator is doing.
   std::atomic<const char*> curStatus_{""};
+
+  std::unique_ptr<trace::QuerySplitWriter> splitTracer_;
 };
 } // namespace facebook::velox::exec
