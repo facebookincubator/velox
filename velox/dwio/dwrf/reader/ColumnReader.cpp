@@ -15,7 +15,6 @@
  */
 
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
-#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/ParallelFor.h"
@@ -36,7 +35,6 @@
 
 namespace facebook::velox::dwrf {
 
-using common::testutil::TestValue;
 using dwio::common::IntDecoder;
 using memory::MemoryPool;
 
@@ -57,8 +55,6 @@ void fillTimestamps(
     vector_size_t numValues,
     const tz::TimeZone* sessionTimezone,
     const bool adjustTimestampToTimezone) {
-  TestValue::adjust(
-      "facebook::velox::dwrf::detail::fillTimestamps", (void*)sessionTimezone);
   for (vector_size_t i = 0; i < numValues; i++) {
     if (!nullsPtr || !bits::isBitNull(nullsPtr, i)) {
       auto nanos = nanosPtr[i];

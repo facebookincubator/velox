@@ -15,7 +15,6 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveTimestampColumnReader.h"
-#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 
@@ -77,10 +76,6 @@ void SelectiveTimestampColumnReader::read(
   VELOX_CHECK(
       !scanSpec_->valueHook(),
       "Selective reader for TIMESTAMP doesn't support aggregation pushdown yet");
-  common::testutil::TestValue::adjust(
-      "facebook::velox::dwrf::SelectiveTimestampColumnReader::read",
-      (void*)sessionTimezone_);
-
   if (!resultNulls_ || !resultNulls_->unique() ||
       resultNulls_->capacity() * 8 < rows.size()) {
     // Make sure a dedicated resultNulls_ is allocated with enough capacity as
@@ -153,7 +148,7 @@ void SelectiveTimestampColumnReader::readHelper(
           nanos *= 10;
         }
       }
-      int64_t seconds = 0;
+      int64_t seconds;
       if (sessionTimezone_) {
         seconds = secondsData[i] + UTC_EPOCH_OFFSET;
       } else {

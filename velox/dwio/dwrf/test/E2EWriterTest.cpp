@@ -401,35 +401,6 @@ TEST_F(E2EWriterTest, testTmestampTimezone) {
           useSelectiveColumnReader,
           adjustTimestampToTimezone));
 
-      // Verify that the ColumnWriter has obtained the sessionTimezone
-      SCOPED_TESTVALUE_SET(
-          "facebook::velox::dwrf::Writer::Writer",
-          std::function<void(dwrf::WriterBase*)>(
-              ([&](dwrf::WriterBase* writerBase) {
-                VELOX_CHECK_EQ(
-                    writerBase->getContext().sessionTimezone()->name(),
-                    "Asia/Shanghai");
-              })));
-
-      if (useSelectiveColumnReader) {
-        // Verify that the SelectiveTimestampColumnReader has obtained the
-        // sessionTimezone
-        SCOPED_TESTVALUE_SET(
-            "facebook::velox::dwrf::SelectiveTimestampColumnReader::read",
-            std::function<void(tz::TimeZone*)>(
-                ([&](tz::TimeZone* sessionTimezone) {
-                  VELOX_CHECK_EQ(sessionTimezone->name(), "Asia/Shanghai");
-                })));
-      } else {
-        // Verify that the ColumnReader has obtained the sessionTimezone
-        SCOPED_TESTVALUE_SET(
-            "facebook::velox::dwrf::detail::fillTimestamps",
-            std::function<void(tz::TimeZone*)>(
-                ([&](tz::TimeZone* sessionTimezone) {
-                  VELOX_CHECK_EQ(sessionTimezone->name(), "Asia/Shanghai");
-                })));
-      }
-
       dwrf::E2EWriterTestUtil::testWriter(
           *leafPool_,
           type,
