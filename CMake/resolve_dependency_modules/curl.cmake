@@ -27,4 +27,6 @@ resolve_dependency_url(CURL)
 FetchContent_Declare(
   curl
   URL ${VELOX_CURL_SOURCE_URL}
-  URL_HASH ${VELOX_CURL_BUILD_SHA256_CHECKSUM})
+  URL_HASH ${VELOX_CURL_BUILD_SHA256_CHECKSUM}
+  CMAKE_ARGS -DCMAKE_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl
+  -DOPENSSL_LIBRARIES=/usr/local/opt/openssl/lib)
