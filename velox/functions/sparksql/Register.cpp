@@ -397,6 +397,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<AddMonthsFunction, Date, Date, int32_t>(
       {prefix + "add_months"});
 
+  registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
+      {prefix + "date_trunc"});
+
   registerFunction<DateAddFunction, Date, Date, int8_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int16_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});

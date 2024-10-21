@@ -333,3 +333,27 @@ These functions support TIMESTAMP and DATE input types.
     part of the 53rd week of year 2004, so the result is 2004. Only supports DATE type.
 
         SELECT year_of_week('2005-01-02'); -- 2004
+
+Truncation Function
+-------------------
+
+The ``date_trunc`` function supports the following units:
+
+=========== ===========================
+Unit        Example Truncated Value
+=========== ===========================
+``second``  ``2001-08-22 03:04:05.000``
+``minute``  ``2001-08-22 03:04:00.000``
+``hour``    ``2001-08-22 03:00:00.000``
+``day``     ``2001-08-22 00:00:00.000``
+``week``    ``2001-08-20 00:00:00.000``
+``month``   ``2001-08-01 00:00:00.000``
+``quarter`` ``2001-07-01 00:00:00.000``
+``year``    ``2001-01-01 00:00:00.000``
+=========== ===========================
+
+The above examples use the timestamp ``2001-08-22 03:04:05.321`` as the input.
+
+.. function:: date_trunc(unit, x) -> x
+
+    Returns ``x`` truncated to ``unit``. The supported types for ``x`` are TIMESTAMP.
