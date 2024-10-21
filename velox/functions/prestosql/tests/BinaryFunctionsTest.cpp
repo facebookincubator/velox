@@ -481,6 +481,27 @@ TEST_F(BinaryFunctionsTest, fromBase64Url) {
   EXPECT_THROW(fromBase64Url("YQ=/"), VeloxUserError);
 }
 
+TEST_F(BinaryFunctionsTest, toBase32) {
+  const auto toBase32 = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("to_base32(cast(c0 as varbinary))", value);
+  };
+
+  EXPECT_EQ(std::nullopt, toBase32(std::nullopt));
+  EXPECT_EQ("", toBase32(""));
+  EXPECT_EQ("ME======", toBase32("a"));
+  EXPECT_EQ("MFRGG===", toBase32("abc"));
+  EXPECT_EQ("NZXQ====", toBase32("no"));
+  EXPECT_EQ("O5SQ====", toBase32("we"));
+  EXPECT_EQ("MRRDE===", toBase32("db2"));
+  EXPECT_EQ("MNQWWZI=", toBase32("cake"));
+  EXPECT_EQ("NNSWK3Q=", toBase32("keen"));
+  EXPECT_EQ("GEZDGNA=", toBase32("1234"));
+  EXPECT_EQ("NBSWY3DPEB3W64TMMQ======", toBase32("hello world"));
+  EXPECT_EQ(
+      "JBSWY3DPEBLW64TMMQQGM4TPNUQFMZLMN54CC===",
+      toBase32("Hello World from Velox!"));
+}
+
 TEST_F(BinaryFunctionsTest, fromBigEndian32) {
   const auto fromBigEndian32 = [&](const std::optional<std::string>& arg) {
     return evaluateOnce<int32_t>("from_big_endian_32(c0)", VARBINARY(), arg);
