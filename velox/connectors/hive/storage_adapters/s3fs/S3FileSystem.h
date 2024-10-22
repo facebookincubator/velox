@@ -16,8 +16,10 @@
 
 #pragma once
 
+#include <memory>
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Metrics.h"
 
 namespace facebook::velox::filesystems {
 using namespace facebook::velox::connector::hive;
@@ -71,6 +73,12 @@ class S3FileSystem : public FileSystem {
   }
 
   std::string getLogLevelName() const;
+  
+  /// Returns the global S3 metrics.
+  const FileSystemMetrics& metrics() const override;
+
+  /// Reset metrics deltas after reporting.
+  void resetMetricsDeltas();
 
  protected:
   class Impl;
