@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(tests)
+# These files wrap the generated source and header files from
+# velox_dwio_dwrf_proto with pragamas to disable certain warnings TODO: transfer
+# disabling the warnings to CMake/Buck
+velox_add_library(velox_dwio_dwrf_proto orc-proto-wrapper.cpp
+                  dwrf-proto-wrapper.cpp)
+velox_link_libraries(velox_dwio_dwrf_proto protobuf::libprotobuf)
+velox_include_directories(velox_dwio_dwrf_proto PUBLIC ${PROJECT_BINARY_DIR})
 
-velox_add_library(velox_wave_decode GpuDecoder.cu)
-
-velox_link_libraries(velox_wave_decode velox_wave_common CUDA::cudart)
+if(NOT VELOX_MONO_LIBRARY)
+  add_dependencies(velox_dwio_dwrf_proto dwio_proto)
+endif()

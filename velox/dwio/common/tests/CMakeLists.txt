@@ -65,7 +65,7 @@ target_link_libraries(
   velox_memory
   velox_dwio_common_exception
   Folly::folly
-  ${FOLLY_BENCHMARK})
+  Folly::follybenchmark)
 
 add_executable(velox_dwio_common_int_decoder_benchmark IntDecoderBenchmark.cpp)
 target_link_libraries(
@@ -74,7 +74,7 @@ target_link_libraries(
   velox_exception
   velox_dwio_dwrf_common
   Folly::folly
-  ${FOLLY_BENCHMARK})
+  Folly::follybenchmark)
 
 if(VELOX_ENABLE_ARROW AND VELOX_ENABLE_BENCHMARKS)
   add_subdirectory(Lemire/FastPFor)
@@ -91,5 +91,5 @@ if(VELOX_ENABLE_ARROW AND VELOX_ENABLE_BENCHMARKS)
     velox_fastpforlib
     duckdb_static
     Folly::folly
-    ${FOLLY_BENCHMARK})
+    Folly::follybenchmark)
 endif()

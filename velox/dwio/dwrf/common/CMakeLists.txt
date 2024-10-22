@@ -24,13 +24,7 @@ velox_add_library(
   IntEncoder.cpp
   RLEv1.cpp
   RLEv2.cpp
-  Statistics.cpp
-  wrap/dwrf-proto-wrapper.cpp
-  wrap/orc-proto-wrapper.cpp)
-
-if(NOT VELOX_MONO_LIBRARY)
-  add_dependencies(velox_dwio_dwrf_common velox_dwio_dwrf_proto)
-endif()
+  Statistics.cpp)
 
 velox_link_libraries(
   velox_dwio_dwrf_common
@@ -43,3 +37,5 @@ velox_link_libraries(
   velox_caching
   Snappy::snappy
   zstd::zstd)
+
+add_subdirectory(wrap)
