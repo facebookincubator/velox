@@ -1,0 +1,133 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include <boost/process.hpp>
+#include <gmock/gmock-matchers.h>
+#include <gmock/gmock-more-matchers.h>
+#include <google/cloud/storage/client.h>
+#include "gtest/gtest.h"
+
+#include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h"
+#include "velox/exec/tests/utils/PortUtil.h"
+
+namespace bp = boost::process;
+namespace gc = google::cloud;
+namespace gcs = google::cloud::storage;
+
+namespace facebook::velox::filesystems {
+
+class GcsTestbench : public testing::Environment {
+ public:
+  GcsTestbench() {
+    auto port = facebook::velox::exec::test::getFreePorts(1);
+    port_ = std::to_string(port[0]);
+    std::vector<std::string> names{"python3", "python"};
+    // If the build script or application developer provides a value in the
+    // PYTHON environment variable, then just use that.
+    if (const auto* env = std::getenv("PYTHON")) {
+      names = {env};
+    }
+    auto error = std::string(
+        "Coud not start GCS emulator."
+        " Used the following list of python interpreter names:");
+    for (const auto& interpreter : names) {
+      auto exe_path = bp::search_path(interpreter);
+      error += " " + interpreter;
+      if (exe_path.empty()) {
+        error += " (exe not found)";
+        continue;
+      }
+
+      serverProcess_ = bp::child(
+          boost::this_process::environment(),
+          exe_path,
+          "-m",
+          "testbench",
+          "--port",
+          port_,
+          group_);
+      if (serverProcess_.valid() && serverProcess_.running())
+        break;
+      error += " (failed to start)";
+      serverProcess_.terminate();
+      serverProcess_.wait();
+    }
+    if (serverProcess_.valid() && serverProcess_.valid())
+      return;
+    error_ = std::move(error);
+  }
+
+  ~GcsTestbench() override {
+    // Brutal shutdown, kill the full process group because the GCS testbench
+    // may launch additional children.
+    group_.terminate();
+    if (serverProcess_.valid()) {
+      serverProcess_.wait();
+    }
+  }
+
+  const std::string& port() const {
+    return port_;
+  }
+
+  const std::string& error() const {
+    return error_;
+  }
+
+  std::string_view preexistingBucketName() {
+    return bucketName_;
+  }
+
+  std::string_view preexistingObjectName() {
+    return objectName_;
+  }
+
+  void bootstrap() {
+    ASSERT_THAT(this, ::testing::NotNull());
+    ASSERT_THAT(this->error(), ::testing::IsEmpty());
+
+    // Create a bucket and a small file in the testbench. This makes it easier
+    // to bootstrap GcsFileSystem and its tests.
+    auto client = gcs::Client(
+        google::cloud::Options{}
+            .set<gcs::RestEndpointOption>("http://localhost:" + this->port())
+            .set<gc::UnifiedCredentialsOption>(gc::MakeInsecureCredentials()));
+
+    bucketName_ = "test1-gcs";
+    google::cloud::StatusOr<gcs::BucketMetadata> bucket =
+        client.CreateBucketForProject(
+            bucketName_, "ignored-by-testbench", gcs::BucketMetadata{});
+    ASSERT_TRUE(bucket.ok()) << "Failed to create bucket <" << bucketName_
+                             << ">, status=" << bucket.status();
+
+    objectName_ = "test-object-name";
+    google::cloud::StatusOr<gcs::ObjectMetadata> object =
+        client.InsertObject(bucketName_, objectName_, kLoremIpsum);
+    ASSERT_TRUE(object.ok()) << "Failed to create object <" << objectName_
+                             << ">, status=" << object.status();
+  }
+
+ private:
+  std::string port_;
+  bp::child serverProcess_;
+  bp::group group_;
+  std::string error_;
+  std::string bucketName_;
+  std::string objectName_;
+};
+
+} // namespace facebook::velox::filesystems
