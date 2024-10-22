@@ -56,6 +56,10 @@ set(gRPC_INSTALL
     ON
     CACHE BOOL "Generate installation target")
 FetchContent_MakeAvailable(gRPC)
+# Suppress deprecated OpenSSL API usage warnings.
+target_compile_options(grpc PRIVATE -Wno-deprecated)
+target_compile_options(grpc++ PRIVATE -Wno-deprecated)
+
 add_library(gRPC::grpc ALIAS grpc)
 add_library(gRPC::grpc++ ALIAS grpc++)
 add_executable(gRPC::grpc_cpp_plugin ALIAS grpc_cpp_plugin)
