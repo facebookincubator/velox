@@ -74,6 +74,16 @@ target_link_libraries(
   velox_vector_test_lib
   ${FOLLY_BENCHMARK})
 
+add_executable(velox_hash_join_group_probe_benchmark
+               HashJoinGroupProbeBenchmark.cpp)
+
+target_link_libraries(
+  velox_hash_join_group_probe_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  ${FOLLY_BENCHMARK})
+
 if(${VELOX_ENABLE_PARQUET})
   add_executable(velox_sort_benchmark RowContainerSortBenchmark.cpp)
 

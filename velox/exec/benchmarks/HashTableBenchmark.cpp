@@ -238,49 +238,6 @@ class HashTableBenchmark : public VectorTestBase {
     return result;
   }
 
-  void insertGroups(
-      const RowVector& input,
-      HashLookup& lookup,
-      HashTable<false>& table) {
-    const SelectivityVector rows(input.size());
-    insertGroups(input, rows, lookup, table);
-  }
-
-  void insertGroups(
-      const RowVector& input,
-      const SelectivityVector& rows,
-      HashLookup& lookup,
-      HashTable<false>& table) {
-    lookup.reset(rows.end());
-    lookup.rows.clear();
-    rows.applyToSelected([&](auto row) { lookup.rows.push_back(row); });
-
-    auto& hashers = table.hashers();
-    auto mode = table.hashMode();
-    bool rehash = false;
-    for (int32_t i = 0; i < hashers.size(); ++i) {
-      auto key = input.childAt(hashers[i]->channel());
-      hashers[i]->decode(*key, rows);
-      if (mode != BaseHashTable::HashMode::kHash) {
-        if (!hashers[i]->computeValueIds(rows, lookup.hashes)) {
-          rehash = true;
-        }
-      } else {
-        hashers[i]->hash(rows, i > 0, lookup.hashes);
-      }
-    }
-
-    if (rehash) {
-      if (table.hashMode() != BaseHashTable::HashMode::kHash) {
-        table.decideHashMode(
-            input.size(), BaseHashTable::kNoSpillInputStartPartitionBit);
-      }
-      insertGroups(input, rows, lookup, table);
-      return;
-    }
-    table.groupProbe(lookup, BaseHashTable::kNoSpillInputStartPartitionBit);
-  }
-
   void copyVectorsToTable(
       const std::vector<RowVectorPtr>& batches,
       int32_t tableOffset,
