@@ -26,6 +26,14 @@ constexpr std::string_view kGCSScheme{"gs://"};
 
 } // namespace
 
+static std::string_view kLoremIpsum =
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor"
+    "incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis "
+    "nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
+    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu"
+    "fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in"
+    "culpa qui officia deserunt mollit anim id est laborum.";
+
 std::string getErrorStringFromGCSError(const google::cloud::StatusCode& error);
 
 inline bool isGCSFile(const std::string_view filename) {
@@ -40,12 +48,11 @@ inline void setBucketAndKeyFromGCSPath(
   bucket = path.substr(0, firstSep);
   key = path.substr(firstSep + 1);
 }
-inline std::string gcsURI(const std::string& bucket) {
-  return std::string(kGCSScheme) + bucket;
-}
 
-inline std::string gcsURI(const std::string& bucket, const std::string& key) {
-  return gcsURI(bucket) + kSep + key;
+inline std::string gcsURI(std::string_view bucket, std::string_view key) {
+  std::stringstream ss;
+  ss << kGCSScheme << bucket << kSep << key;
+  return ss.str();
 }
 
 inline std::string gcsPath(const std::string_view& path) {
