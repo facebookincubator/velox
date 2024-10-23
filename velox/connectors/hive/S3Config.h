@@ -50,7 +50,7 @@ class S3Config {
   /// S3FileSystem default identity.
   static constexpr const char* kDefaultS3Identity = "s3-default-identity";
 
-  /// Keys to identify the config
+  /// Keys to identify the config.
   enum class Keys {
     kBegin,
     kEndpoint = kBegin,

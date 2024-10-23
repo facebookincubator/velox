@@ -97,12 +97,10 @@ inline void getBucketAndKeyFromPath(
 //    regexp="(^[a-z0-9])([.-]?[a-z0-9]+){2,62}([/]?$)"
 // 3. Disallowed IPv4 notation - regexp:
 //    regexp="^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}[/]?$"
-inline std::string s3URI(const std::string& bucket) {
-  return std::string(kS3Scheme) + bucket;
-}
-
-inline std::string s3URI(const std::string& bucket, const std::string& key) {
-  return s3URI(bucket) + "/" + key;
+inline std::string s3URI(std::string_view bucket, std::string_view key) {
+  std::stringstream ss;
+  ss << kS3Scheme << bucket << kSep << key;
+  return ss.str();
 }
 
 inline std::string_view getPath(std::string_view path) {

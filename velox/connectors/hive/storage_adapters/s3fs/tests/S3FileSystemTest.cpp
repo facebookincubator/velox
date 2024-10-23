@@ -47,8 +47,8 @@ TEST_F(S3FileSystemTest, writeAndRead) {
   setenv("HTTP_PROXY", "http://test:test@127.0.0.1:8888", 1);
   const char* bucketName = "data";
   const char* file = "test.txt";
-  const std::string filename = localPath(bucketName) + "/" + file;
-  const std::string s3File = s3URI(bucketName, file);
+  const auto filename = localPath(bucketName) + "/" + file;
+  const auto s3File = s3URI(bucketName, file);
   addBucket(bucketName);
   {
     LocalWriteFile writeFile(filename);

@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/S3Config.h"
 #include "velox/common/config/Config.h"
-#include "velox/connectors/hive/HiveConfig.h"
 
-#include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox::connector::hive;
@@ -62,7 +61,7 @@ TEST(HiveConfigTest, overrideConfig) {
 }
 
 TEST(HiveConfigTest, overrideBucketConfig) {
-  const std::string_view bucket = "bucket";
+  std::string_view bucket = "bucket";
   std::unordered_map<std::string, std::string> bucketConfigFromFile = {
       {S3Config::baseConfigKey(S3Config::Keys::kPathStyleAccess), "true"},
       {S3Config::baseConfigKey(S3Config::Keys::kSSLEnabled), "false"},
