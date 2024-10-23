@@ -136,24 +136,11 @@ VectorPtr BatchMaker::createVector<TypeKind::INTEGER>(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::BIGINT>(
-    const TypePtr& type,
+    const TypePtr& /*type*/,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  // Generate proper bits of random value for ShortDecimalType tests.
-  if (type->isShortDecimal()) {
-    auto [precision, scale] = getDecimalPrecisionScale(*type);
-    // DuckDB's valid decimal range.
-    int64_t min = 1 - int64_t(std::pow(10, precision - scale));
-    int64_t max = int64_t(std::pow(10, precision - scale)) - 1;
-    return createScalar<int64_t>(
-        size,
-        gen,
-        [&gen, &min, &max]() { return Random::rand64(min, max, gen); },
-        pool,
-        isNullAt);
-  }
   return createScalar<int64_t>(
       size, gen, [&gen]() { return Random::rand64(gen); }, pool, isNullAt);
 }
