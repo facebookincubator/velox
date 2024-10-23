@@ -102,7 +102,8 @@ TEST_F(ExpressionVerifierUnitTest, persistReproInfo) {
     auto plan = parseExpression("always_throws(c0)", asRowType(data->type()));
 
     removeDirecrtoryIfExist(localFs, reproPath);
-    VELOX_ASSERT_THROW(verifier.verify({plan}, data, nullptr, false), "");
+    VELOX_ASSERT_THROW(
+        verifier.verify({plan}, data, std::nullopt, nullptr, false), "");
     EXPECT_TRUE(localFs->exists(reproPath));
     EXPECT_FALSE(localFs->list(reproPath).empty());
     removeDirecrtoryIfExist(localFs, reproPath);
