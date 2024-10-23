@@ -74,8 +74,8 @@ struct RegexpReplaceFunction {
       if (replacement) {
         // Constant 'replacement' with non-constant 'pattern' needs to be
         // processed separately for each row.
-        ensureProcessedReplacement(re_.value(), *replacement);
-        constantReplacement_ = true;
+        constantReplacement_ =
+            prepareRegexpReplaceReplacement(re_.value(), *replacement);
       }
     }
   }
@@ -154,7 +154,9 @@ struct RegexpReplaceFunction {
       const arg_type<Varchar>& replace,
       const arg_type<int64_t>& position) {
     auto& re = ensurePattern(pattern);
-    const auto& processedReplacement = ensureProcessedReplacement(re, replace);
+    const auto& processedReplacement = constantReplacement_.has_value()
+        ? constantReplacement_.value()
+        : prepareRegexpReplaceReplacement(re, replace);
 
     std::string prefix(stringInput.data(), position);
     std::string targetString(
@@ -172,25 +174,11 @@ struct RegexpReplaceFunction {
     return *cache_.findOrCompile(StringView(processedPattern));
   }
 
-  const std::string& ensureProcessedReplacement(
-      RE2& re,
-      const arg_type<Varchar>& replacement) {
-    if (!constantReplacement_) {
-      processedReplacement_ = prepareRegexpReplaceReplacement(re, replacement);
-    }
-
-    return processedReplacement_;
-  }
-
   // Used when pattern is constant.
   std::optional<RE2> re_;
 
-  // True if replacement is constant.
-  bool constantReplacement_{false};
-
-  // Constant replacement if 'constantReplacement_' is true, or 'current'
-  // replacement.
-  std::string processedReplacement_;
+  // Used when replacement is constant.
+  std::optional<std::string> constantReplacement_;
 
   // Used when pattern is not constant.
   detail::ReCache cache_;
