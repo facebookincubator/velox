@@ -24,6 +24,7 @@ target_link_libraries(
   velox_dwio_parquet_writer
   velox_dwio_common_test_utils
   velox_vector_fuzzer
+  velox_caching
   Boost::regex
   velox_link_libs
   Folly::folly
@@ -42,6 +43,7 @@ target_link_libraries(
   velox_parquet_writer_test
   velox_dwio_parquet_writer
   velox_dwio_common_test_utils
+  velox_caching
   velox_link_libs
   Boost::regex
   Folly::folly

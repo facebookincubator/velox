@@ -76,7 +76,8 @@ core::PlanNodePtr OperatorReplayerBase::createPlan() const {
 
 std::function<core::PlanNodePtr(std::string, core::PlanNodePtr)>
 OperatorReplayerBase::replayNodeFactory(const core::PlanNode* node) const {
-  return [=](const core::PlanNodeId& nodeId,
+  return [=, this](
+             const core::PlanNodeId& nodeId,
              const core::PlanNodePtr& source) -> core::PlanNodePtr {
     return createPlanNode(node, nodeId, source);
   };
