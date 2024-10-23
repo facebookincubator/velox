@@ -245,7 +245,7 @@ function install_cuda {
     $SUDO apt update
   fi
   local dashed="$(echo $1 | tr '.' '-')"
-  $SUDO apt install -y cuda-nvcc-$dashed cuda-cudart-dev-$dashed cuda-nvrtc-dev-$dashed
+  $SUDO apt install -y cuda-nvcc-$dashed cuda-cudart-dev-$dashed cuda-nvrtc-dev-$dashed cuda-driver-devel-$dashed
 }
 
 function install_velox_deps {
