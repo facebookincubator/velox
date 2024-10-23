@@ -281,11 +281,11 @@ struct FromUnixtimeFunction {
                          : DateTimeFormatterType::JODA);
     // Legacy formatter returns null for invalid format but Joda formatter
     // throws user error.
-    if (!legacyFormatter_ && formatter.hasError()) {
-      VELOX_USER_FAIL(formatter.error().message());
-    }
     if (formatter.hasError()) {
-      return false;
+      if (legacyFormatter_) {
+        return false;
+      }
+      VELOX_USER_FAIL(formatter.error().message());
     }
     formatter_ = formatter.value();
     maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
@@ -383,11 +383,12 @@ struct GetTimestampFunction {
                            : DateTimeFormatterType::JODA);
       // Legacy formatter returns null for invalid format but Joda formatter
       // throws user error.
-      if (!legacyFormatter_ && formatter.hasError()) {
-        VELOX_USER_FAIL(formatter.error().message());
-      }
       if (formatter.hasError()) {
-        invalidFormat_ = true;
+        if (legacyFormatter_) {
+          invalidFormat_ = true;
+        } else {
+          VELOX_USER_FAIL(formatter.error().message());
+        }
       } else {
         formatter_ = formatter.value();
       }
@@ -408,11 +409,11 @@ struct GetTimestampFunction {
                            : DateTimeFormatterType::JODA);
       // Legacy formatter returns null for invalid format but Joda formatter
       // throws user error.
-      if (!legacyFormatter_ && formatter.hasError()) {
-        VELOX_USER_FAIL(formatter.error().message());
-      }
       if (formatter.hasError()) {
-        return false;
+        if (legacyFormatter_) {
+          return false;
+        }
+        VELOX_USER_FAIL(formatter.error().message());
       }
       formatter_ = formatter.value();
     }
