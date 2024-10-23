@@ -68,6 +68,13 @@ core::PlanNodePtr OperatorReplayerBase::createPlan() const {
   const auto* replayNode = core::PlanNode::findFirstNode(
       planFragment_.get(),
       [this](const core::PlanNode* node) { return node->id() == nodeId_; });
+
+  if (replayNode->name() == "TableScan") {
+    return exec::test::PlanBuilder()
+        .addNode(replayNodeFactory(replayNode))
+        .planNode();
+  }
+
   return exec::test::PlanBuilder()
       .traceScan(nodeDir_, exec::trace::getDataType(planFragment_, nodeId_))
       .addNode(replayNodeFactory(replayNode))

@@ -30,6 +30,9 @@ struct QueryTraceTraits {
 
   static inline const std::string kQueryMetaFileName = "query_meta.json";
   static inline const std::string kDataSummaryFileName = "data_summary.json";
+  static inline const std::string kTraceDataDirName = "data";
+  static inline const std::string kTraceSplitDirName = "split";
   static inline const std::string kDataFileName = "trace.data";
+  static inline const std::string kSplitFileName = "trace.split";
 };
 } // namespace facebook::velox::exec::trace

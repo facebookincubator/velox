@@ -17,6 +17,7 @@
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/QuerySplitWriter.h"
 
 namespace facebook::velox::exec {
 

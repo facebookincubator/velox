@@ -105,7 +105,21 @@ uint8_t getNumDrivers(
 
 std::string
 getDataDir(const std::string& traceDir, int pipelineId, int driverId) {
-  return fmt::format("{}/{}/{}/data", traceDir, pipelineId, driverId);
+  return fmt::format(
+      "{}/{}/{}/{}",
+      traceDir,
+      pipelineId,
+      driverId,
+      trace::QueryTraceTraits::kTraceDataDirName);
 }
 
+std::string
+getSplitDir(const std::string& traceDir, int pipelineId, int driverId) {
+  return fmt::format(
+      "{}/{}/{}/{}",
+      traceDir,
+      pipelineId,
+      driverId,
+      trace::QueryTraceTraits::kTraceSplitDirName);
+}
 } // namespace facebook::velox::exec::trace
