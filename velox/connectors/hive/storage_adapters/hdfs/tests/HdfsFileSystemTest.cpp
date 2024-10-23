@@ -135,6 +135,15 @@ void checkReadErrorMessages(
   }
 }
 
+bool checkMiniClusterStop(ReadFile* readFile, const std::string& errorMessage) {
+  try {
+    readFile->pread(0, 1);
+    return false;
+  } catch (const VeloxException& error) {
+    return error.message().find(errorMessage) != std::string::npos;
+  }
+}
+
 void verifyFailures(LibHdfsShim* driver, hdfsFS hdfs) {
   HdfsReadFile readFile(driver, hdfs, destinationPath);
   HdfsReadFile readFile2(driver, hdfs, destinationPath);
@@ -156,16 +165,19 @@ void verifyFailures(LibHdfsShim* driver, hdfsFS hdfs) {
   checkReadErrorMessages(&readFile, offsetErrorMessage, kOneMB);
   HdfsFileSystemTest::miniCluster->stop();
 
-  const int max_retries = 10;
-  const int sleep_duration_ms = 1000;
+  constexpr auto kMaxRetries = 10;
   int retries = 0;
   while (true) {
-    if (retries >= max_retries) {
+    if (checkMiniClusterStop(&readFile2, readFailErrorMessage)) {
       checkReadErrorMessages(&readFile2, readFailErrorMessage, 1);
       break;
     } else {
-      sleep(1);
-      retries++;
+      if (retries >= kMaxRetries) {
+        FAIL() << "MiniCluster doesn't stop after kMaxRetries try";
+      } else {
+        sleep(1);
+        retries++;
+      }
     }
   }
 }

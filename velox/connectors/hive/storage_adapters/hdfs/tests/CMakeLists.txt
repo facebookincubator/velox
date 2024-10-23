@@ -39,12 +39,7 @@ add_test(velox_hdfs_insert_test velox_hdfs_insert_test)
 
 target_link_libraries(
   velox_hdfs_insert_test
-  velox_file
-  velox_hdfs
-  velox_core
   velox_exec_test_lib
-  velox_hive_connector
-  velox_dwio_common_exception
   velox_exec
   GTest::gtest
   GTest::gtest_main
