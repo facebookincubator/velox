@@ -39,5 +39,6 @@ target_link_libraries(
   velox_exec_test_lib
   velox_dwio_common_exception
   velox_exec
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main)

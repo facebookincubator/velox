@@ -39,6 +39,7 @@ namespace {
 class GCSInsertTest : public testing::Test, public test::VectorTestBase {
  protected:
   static void SetUpTestSuite() {
+    registerGCSFileSystem();
     memory::MemoryManager::testingSetInstance({});
     if (testbench_ == nullptr) {
       testbench_ = std::make_shared<GcsTestbench>();
