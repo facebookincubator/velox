@@ -29,6 +29,7 @@ velox_add_library(
   HiveDataSource.cpp
   HivePartitionUtil.cpp
   PartitionIdGenerator.cpp
+  S3Config.cpp
   SplitReader.cpp
   TableHandle.cpp)
 

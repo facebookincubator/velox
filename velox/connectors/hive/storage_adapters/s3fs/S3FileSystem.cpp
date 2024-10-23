@@ -17,10 +17,9 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
-#include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/S3Config.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
-#include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/DataBuffer.h"
 
 #include <fmt/format.h>

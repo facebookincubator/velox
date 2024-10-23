@@ -15,7 +15,7 @@
  */
 
 #ifdef VELOX_ENABLE_S3
-#include "velox/connectors/hive/HiveConfig.h" // @manual
+#include "velox/connectors/hive/S3Config.h" // @manual
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h" // @manual
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h" // @manual
 #include "velox/dwio/common/FileSink.h"
