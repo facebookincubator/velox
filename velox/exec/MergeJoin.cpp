@@ -17,6 +17,7 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
+#include <iostream>
 
 namespace facebook::velox::exec {
 
@@ -531,23 +532,34 @@ bool MergeJoin::addToOutputForLeftJoin() {
     auto leftStart = l == firstLeftBatch ? leftStartIndex : 0;
     auto leftEnd = l == numLefts - 1 ? leftMatch_->endIndex : left->size();
 
+    auto rightEnd = 0;
+    auto rightStart = 0;
+    auto firstRightBatch = 0;
+    auto rightStartIndex = 0;
+    auto numRights = 0;
+
+    auto matchedNumRows = 0;
+    std::unordered_map<int32_t, std::vector<int32_t>> hashMap;
+    std::unordered_map<int32_t, std::vector<int32_t>> ringthInputMap;
+    int index = 0;
+    auto flag = true;
     for (auto i = leftStart; i < leftEnd; ++i) {
-      auto firstRightBatch =
+      firstRightBatch =
           (l == firstLeftBatch && i == leftStart && rightMatch_->cursor)
           ? rightMatch_->cursor->batchIndex
           : 0;
 
-      auto rightStartIndex =
+      rightStartIndex =
           (l == firstLeftBatch && i == leftStart && rightMatch_->cursor)
           ? rightMatch_->cursor->index
           : rightMatch_->startIndex;
 
-      auto numRights = rightMatch_->inputs.size();
+      numRights = rightMatch_->inputs.size();
+
       for (size_t r = firstRightBatch; r < numRights; ++r) {
         auto right = rightMatch_->inputs[r];
-        auto rightStart = r == firstRightBatch ? rightStartIndex : 0;
-        auto rightEnd =
-            r == numRights - 1 ? rightMatch_->endIndex : right->size();
+        rightStart = r == firstRightBatch ? rightStartIndex : 0;
+        rightEnd = r == numRights - 1 ? rightMatch_->endIndex : right->size();
 
         if (prepareOutput(left, right)) {
           output_->resize(outputSize_);
@@ -565,6 +577,20 @@ bool MergeJoin::addToOutputForLeftJoin() {
           rightEnd = rightStart + 1;
         }
 
+        if (flag) {
+          for (auto j = rightStart; j < rightEnd; ++j) {
+            std::vector<int32_t> indexs;
+            indexs.reserve((leftEnd - leftStart));
+            for (auto kk = leftStart; kk < leftEnd; ++kk) {
+              auto rowIndex =
+                  (kk - leftStart) * (rightEnd - rightStart) + j - rightStart;
+              indexs.push_back(rowIndex);
+            }
+            hashMap[j] = indexs;
+          }
+          flag = false;
+        }
+
         for (auto j = rightStart; j < rightEnd; ++j) {
           if (outputSize_ == outputBatchSize_) {
             // If we run out of space in the current output_, we will need to
@@ -576,7 +602,52 @@ bool MergeJoin::addToOutputForLeftJoin() {
             rightMatch_->setCursor(r, j);
             return true;
           }
+          std::cout << "before copy is " << output_->toString(0, outputSize_) << "\n";
           addOutputRow(left, i, right, j);
+          std::cout << "after copy is " << output_->toString(0, outputSize_) << "\n";
+          
+          ++matchedNumRows;
+        }
+      }
+    }
+
+    if (isFullJoin(joinType_) && filter_) {
+      SelectivityVector matchingRows{outputSize_, false};
+      matchingRows.setValidRange(
+          (outputSize_ - matchedNumRows), outputSize_, true);
+      matchingRows.updateBounds();
+
+      evaluateFilter(matchingRows);
+
+      auto processedRowNums = (outputSize_ - matchedNumRows);
+
+      for (const auto& pair : hashMap) {
+        bool rightMatched = false;
+        auto index = 0;
+        for (auto rowIndex : pair.second) {
+          index = processedRowNums + rowIndex;
+          const bool passed = !decodedFilterResult_.isNullAt(index) &&
+              decodedFilterResult_.valueAt<bool>(index);
+          if (passed) {
+            rightMatched = true;
+          }
+        }
+
+        if (!rightMatched) {
+          if (!isRightFlattened_) {
+            rawRightIndices_[outputSize_] = index;
+          } else {
+            copyRow(rightInput_, pair.first, output_, outputSize_, rightProjections_);
+          }
+
+          for (const auto& projection : leftProjections_) {
+            const auto& target = output_->childAt(projection.outputChannel);
+            target->setNull(outputSize_, true);
+          }
+
+          joinTracker_->addMiss(outputSize_);
+
+          ++outputSize_;
         }
       }
     }
@@ -738,6 +809,7 @@ RowVectorPtr MergeJoin::getOutput() {
           for (const auto [channel, _] : filterInputToOutputChannel_) {
             filterInput_->childAt(channel).reset();
           }
+          std::cout << "the output is " << output->toString(0, output->size()) << "\n";
           return output;
         }
 
@@ -752,6 +824,7 @@ RowVectorPtr MergeJoin::getOutput() {
         // No rows survived the filter for anti join. Get more rows.
         continue;
       } else {
+        std::cout << "the output is " << output->toString(0, output->size()) << "\n";
         return output;
       }
     }
@@ -1126,9 +1199,8 @@ RowVectorPtr MergeJoin::doGetOutput() {
 }
 
 RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
+  std::cout << "before apply filter the output is " << output->toString(0, output->size()) << "\n";
   const auto numRows = output->size();
-
-  RowVectorPtr fullOuterOutput = nullptr;
 
   BufferPtr indices = allocateIndices(numRows, pool());
   auto rawIndices = indices->asMutable<vector_size_t>();
@@ -1150,61 +1222,7 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
       if (!isAntiJoin(joinType_)) {
         rawIndices[numPassed++] = row;
 
-        if (isFullJoin(joinType_)) {
-          // For filtered rows, it is necessary to insert additional data
-          // to ensure the result set is complete. Specifically, we
-          // need to generate two records: one record containing the
-          // columns from the left table along with nulls for the
-          // right table, and another record containing the columns
-          // from the right table along with nulls for the left table.
-          // For instance, the current output is filtered based on the condition
-          // t > 1.
-
-          // 1, 1
-          // 2, 2
-          // 3, 3
-
-          // In this scenario, we need to additionally insert a record 1, 1.
-          // Subsequently, we will set the values of the columns on the left to
-          // null and the values of the columns on the right to null as well. By
-          // doing so, we will obtain the final result set.
-
-          // 1,   null
-          // null,  1
-          // 2, 2
-          // 3, 3
-          fullOuterOutput = BaseVector::create<RowVector>(
-              output->type(), output->size() + 1, pool());
-
-          for (auto i = 0; i < row + 1; i++) {
-            for (auto j = 0; j < output->type()->size(); j++) {
-              fullOuterOutput->childAt(j)->copy(
-                  output->childAt(j).get(), i, i, 1);
-            }
-          }
-
-          for (auto j = 0; j < output->type()->size(); j++) {
-            fullOuterOutput->childAt(j)->copy(
-                output->childAt(j).get(), row + 1, row, 1);
-          }
-
-          for (auto i = row + 1; i < output->size(); i++) {
-            for (auto j = 0; j < output->type()->size(); j++) {
-              fullOuterOutput->childAt(j)->copy(
-                  output->childAt(j).get(), i + 1, i, 1);
-            }
-          }
-
-          for (auto& projection : leftProjections_) {
-            auto target = fullOuterOutput->childAt(projection.outputChannel);
-            target->setNull(row, true);
-          }
-
-          for (auto& projection : rightProjections_) {
-            auto target = fullOuterOutput->childAt(projection.outputChannel);
-            target->setNull(row + 1, true);
-          }
-        } else if (!isRightJoin(joinType_)) {
+        if (!isRightJoin(joinType_)) {
           for (auto& projection : rightProjections_) {
             auto target = output->childAt(projection.outputChannel);
             target->setNull(row, true);
@@ -1284,15 +1302,7 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
   if (numPassed == numRows) {
     // All rows passed.
-    if (fullOuterOutput) {
-      return fullOuterOutput;
-    }
     return output;
-  }
-
-  // Some, but not all rows passed.
-  if (fullOuterOutput) {
-    return wrap(numPassed, indices, fullOuterOutput);
   }
 
   return wrap(numPassed, indices, output);
