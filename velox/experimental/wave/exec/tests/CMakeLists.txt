@@ -40,23 +40,14 @@ target_link_libraries(
   velox_type
   velox_vector
   velox_vector_fuzzer
-  Boost::atomic
-  Boost::context
-  Boost::date_time
-  Boost::filesystem
-  Boost::program_options
-  Boost::regex
-  Boost::thread
-  Boost::system
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   Folly::folly
   gflags::gflags
   glog::glog
   fmt::fmt
-  ${FILESYSTEM}
-  CUDA::nvrtc)
+  CUDA::cudart)
 
 add_test(velox_wave_exec_test velox_wave_exec_test)
 
@@ -87,22 +78,13 @@ if(${VELOX_ENABLE_BENCHMARKS})
     velox_type
     velox_vector
     velox_vector_fuzzer
-    Boost::atomic
-    Boost::context
-    Boost::date_time
-    Boost::filesystem
-    Boost::program_options
-    Boost::regex
-    Boost::thread
-    Boost::system
-    gtest
-    gtest_main
-    gmock
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
     ${FOLLY_BENCHMARK}
     Folly::folly
     gflags::gflags
     glog::glog
     fmt::fmt
-    ${FILESYSTEM}
-    CUDA::nvrtc)
+    CUDA::cudart)
 endif()

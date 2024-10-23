@@ -28,6 +28,8 @@ velox_link_libraries(
   velox_exception
   velox_common_base
   velox_type
+  CUDA::cuda_driver
+  CUDA::cudart
   CUDA::nvrtc)
 
 if(${VELOX_BUILD_TESTING})

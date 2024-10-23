@@ -21,11 +21,7 @@ target_link_libraries(
   velox_wave_decode
   velox_wave_common
   velox_memory
-  velox_time
-  velox_exception
   GTest::gtest
   GTest::gtest_main
-  gflags::gflags
-  glog::glog
   Folly::folly
-  CUDA::nvrtc)
+  fmt::fmt)
