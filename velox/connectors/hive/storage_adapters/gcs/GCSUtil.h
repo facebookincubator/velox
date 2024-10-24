@@ -49,6 +49,12 @@ inline void setBucketAndKeyFromGCSPath(
   key = path.substr(firstSep + 1);
 }
 
+inline std::string gcsURI(std::string_view bucket) {
+  std::stringstream ss;
+  ss << kGCSScheme << bucket;
+  return ss.str();
+}
+
 inline std::string gcsURI(std::string_view bucket, std::string_view key) {
   std::stringstream ss;
   ss << kGCSScheme << bucket << kSep << key;
