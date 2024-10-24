@@ -479,6 +479,13 @@ class DecimalUtil {
   /// @return The length of out.
   static int32_t toByteArray(int128_t value, char* out);
 
+  /// Reverse byte order of an int128_t, if native byte-order is little endian.
+  /// If native byte-order is big endian, the value will be unchanged. This
+  /// is similar to folly::Endian::big(), which does not support int128_t.
+  ///
+  /// \return A value with reversed byte-order for little endian platforms.
+  static int128_t big(int128_t value);
+
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
 }; // DecimalUtil
 } // namespace facebook::velox
