@@ -50,6 +50,7 @@ target_link_libraries(
   CUDA::cudart)
 
 add_test(velox_wave_exec_test velox_wave_exec_test)
+set_tests_properties(velox_wave_exec_test PROPERTIES LABELS cuda_driver)
 
 if(${VELOX_ENABLE_BENCHMARKS})
   add_executable(velox_wave_benchmark WaveBenchmark.cpp)
