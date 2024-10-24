@@ -189,7 +189,7 @@ class ArraysIntersectSingleParam : public exec::VectorFunction {
 
     const auto elementCount =
         countElements<ArrayVector>(innerRows, *decodedInnerArray);
-    const auto rowCount = args[0]->size();
+    const auto rowCount = rows.end();
 
     // Allocate new vectors for indices, nulls, length and offsets.
     BufferPtr newIndices = allocateIndices(elementCount, pool);
