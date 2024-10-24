@@ -131,23 +131,36 @@ void Operator::maybeSetTracer() {
     return;
   }
   tracedOpMap.emplace(operatorId(), operatorType());
-
   const auto pipelineId = operatorCtx_->driverCtx()->pipelineId;
   const auto driverId = operatorCtx_->driverCtx()->driverId;
   LOG(INFO) << "Trace data for operator type: " << operatorType()
             << ", operator id: " << operatorId() << ", pipeline: " << pipelineId
             << ", driver: " << driverId << ", task: " << taskId();
   const auto opTraceDirPath = fmt::format(
-      "{}/{}/{}/{}/data",
+      "{}/{}/{}/{}",
       queryTraceConfig->queryTraceDir,
       planNodeId(),
       pipelineId,
       driverId);
-  trace::createTraceDirectory(opTraceDirPath);
+  setupTracerInternal(opTraceDirPath);
+}
+
+void Operator::setupTracerInternal(const std::string& traceDir) {
+  if (operatorType() == "TableScan") {
+    const auto opTraceSplitPath = fmt::format(
+        "{}/{}", traceDir, trace::QueryTraceTraits::kTraceSplitDirName);
+    trace::createTraceDirectory(opTraceSplitPath);
+    splitTracer_ = std::make_unique<trace::QuerySplitWriter>(opTraceSplitPath);
+    return;
+  }
+
+  const auto opTraceDataPath = fmt::format(
+      "{}/{}", traceDir, trace::QueryTraceTraits::kTraceDataDirName);
+  trace::createTraceDirectory(opTraceDataPath);
   inputTracer_ = std::make_unique<trace::QueryDataWriter>(
-      opTraceDirPath,
+      opTraceDataPath,
       memory::traceMemoryPool(),
-      queryTraceConfig->updateAndCheckTraceLimitCB);
+      operatorCtx_->driverCtx()->traceConfig()->updateAndCheckTraceLimitCB);
 }
 
 void Operator::traceInput(const RowVectorPtr& input) {

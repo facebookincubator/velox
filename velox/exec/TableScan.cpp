@@ -16,6 +16,7 @@
 #include "velox/exec/TableScan.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/QueryTraceUtil.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
@@ -117,6 +118,9 @@ RowVectorPtr TableScan::getOutput() {
       if (!split.hasConnectorSplit()) {
         noMoreSplits_ = true;
         dynamicFilters_.clear();
+        if (splitTracer_ != nullptr) {
+          splitTracer_->finish();
+        }
         if (dataSource_) {
           curStatus_ = "getOutput: noMoreSplits_=1, updating stats_";
           const auto connectorStats = dataSource_->runtimeStats();
@@ -135,6 +139,9 @@ RowVectorPtr TableScan::getOutput() {
         return nullptr;
       }
 
+      if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+        splitTracer_->write(split);
+      }
       const auto& connectorSplit = split.connectorSplit;
       currentSplitWeight_ = connectorSplit->splitWeight;
       needNewSplit_ = false;

@@ -22,6 +22,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/QueryDataWriter.h"
+#include "velox/exec/QuerySplitWriter.h"
 #include "velox/exec/Spiller.h"
 #include "velox/type/Filter.h"
 
@@ -740,9 +741,10 @@ class Operator : public BaseRuntimeStatWriter {
     return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   }
 
-  /// Invoked to setup query data writer for this operator if the associated
-  /// query plan node is configured to collect trace.
+  /// Invoked to setup query data or split writer for this operator if the
+  /// associated query plan node is configured to collect trace.
   void maybeSetTracer();
+  void setupTracerInternal(const std::string& traceDir);
 
   /// Creates output vector from 'input_' and 'results' according to
   /// 'identityProjections_' and 'resultProjections_'. If 'mapping' is set to
@@ -781,7 +783,8 @@ class Operator : public BaseRuntimeStatWriter {
 
   folly::Synchronized<OperatorStats> stats_;
   folly::Synchronized<common::SpillStats> spillStats_;
-  std::unique_ptr<trace::QueryDataWriter> inputTracer_;
+  std::unique_ptr<trace::QueryDataWriter> inputTracer_{nullptr};
+  std::unique_ptr<trace::QuerySplitWriter> splitTracer_{nullptr};
 
   /// Indicates if an operator is under a non-reclaimable execution section.
   /// This prevents the memory arbitrator from reclaiming memory from this
