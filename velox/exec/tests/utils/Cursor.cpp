@@ -275,6 +275,10 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   /// Starts the task if not started yet.
   bool moveNext() override {
     start();
+    if (error_) {
+      std::rethrow_exception(error_);
+    }
+
     current_ = queue_->dequeue();
     if (task_->error()) {
       // Wait for the task to finish (there's' a small period of time between
@@ -302,6 +306,16 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     return current_;
   }
 
+  void setError(std::exception_ptr e) override {
+    auto task = task_;
+    error_ = e;
+    if (task) {
+      task->setError(e);
+    }
+    // Wake up the consumer if blocked.
+    queue_->enqueue(nullptr, nullptr);
+  }
+
   const std::shared_ptr<Task>& task() override {
     return task_;
   }
@@ -316,6 +330,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   std::shared_ptr<exec::Task> task_;
   RowVectorPtr current_;
   bool atEnd_{false};
+  std::exception_ptr error_;
 };
 
 class SingleThreadedTaskCursor : public TaskCursorBase {
@@ -391,6 +406,14 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     return current_;
   }
 
+  void setError(std::exception_ptr e) override {
+    auto task = task_;
+    error_ = e;
+    if (task) {
+      task->setError(e);
+    }
+  }
+
   const std::shared_ptr<Task>& task() override {
     return task_;
   }
@@ -399,6 +422,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
   std::shared_ptr<exec::Task> task_;
   RowVectorPtr current_;
   RowVectorPtr next_;
+  std::exception_ptr error_;
 };
 
 std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
