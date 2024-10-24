@@ -17,12 +17,15 @@
 #pragma once
 
 #include "velox/expression/CastHooks.h"
+#include "velox/expression/EvalCtx.h"
 
 namespace facebook::velox::functions::sparksql {
 
 // This class provides cast hooks following Spark semantics.
 class SparkCastHooks : public exec::CastHooks {
  public:
+  explicit SparkCastHooks(const velox::core::QueryConfig& config);
+
   // TODO: Spark hook allows more string patterns than Presto.
   Expected<Timestamp> castStringToTimestamp(
       const StringView& view) const override;
@@ -55,5 +58,8 @@ class SparkCastHooks : public exec::CastHooks {
   }
 
   exec::PolicyType getPolicy() const override;
+
+ private:
+  TimestampToStringOptions options_ = {};
 };
 } // namespace facebook::velox::functions::sparksql
