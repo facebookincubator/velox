@@ -152,7 +152,6 @@ getSignaturesForCast() {
   addCastFromVarcharSignature("varchar", signatures);
   addCastFromDateSignature("varchar", signatures);
   addCastFromTimestampSignature("varchar", signatures);
-  addCastFromIPPrefixSignature("varchar", signatures);
 
   // To timestamp type.
   addCastFromVarcharSignature("timestamp", signatures);
