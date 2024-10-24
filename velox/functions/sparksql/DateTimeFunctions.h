@@ -27,10 +27,10 @@ namespace facebook::velox::functions::sparksql {
 
 namespace detail {
 struct DateTimeFormatterProvider {
-  DateTimeFormatterProvider(const core::QueryConfig& config) :
-    legacyFormatter_(config.sparkLegacyDateFormatter()),
-    firstDayOfWeek_(config.sparkFirstDayOfWeek()),
-    minimalDaysInFirstWeek_(config.sparkMinimalDaysInFirstWeek()) {}
+  DateTimeFormatterProvider(const core::QueryConfig& config)
+      : legacyFormatter_(config.sparkLegacyDateFormatter()),
+        firstDayOfWeek_(config.sparkFirstDayOfWeek()),
+        minimalDaysInFirstWeek_(config.sparkMinimalDaysInFirstWeek()) {}
 
   FOLLY_ALWAYS_INLINE auto get(const std::string_view& format) const {
     if (legacyFormatter_) {
@@ -46,7 +46,7 @@ struct DateTimeFormatterProvider {
         std::string_view(format.data(), format.size()));
   }
 
-private:
+ private:
   const bool legacyFormatter_;
   const uint8_t firstDayOfWeek_;
   const uint8_t minimalDaysInFirstWeek_;
@@ -139,7 +139,8 @@ struct UnixTimestampParseFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/) {
-    formatterProvider_ = std::make_shared<detail::DateTimeFormatterProvider>(config);
+    formatterProvider_ =
+        std::make_shared<detail::DateTimeFormatterProvider>(config);
     auto formatter = formatterProvider_->get(kDefaultFormat_);
     VELOX_CHECK(!formatter.hasError(), "Default format should always be valid");
     format_ = formatter.value();
@@ -192,7 +193,8 @@ struct UnixTimestampParseWithFormatFunction
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    this->formatterProvider_ = std::make_shared<detail::DateTimeFormatterProvider>(config);
+    this->formatterProvider_ =
+        std::make_shared<detail::DateTimeFormatterProvider>(config);
     if (format != nullptr) {
       auto formatter = this->formatterProvider_->get(
           std::string_view(format->data(), format->size()));
@@ -250,7 +252,8 @@ struct FromUnixtimeFunction {
       const core::QueryConfig& config,
       const arg_type<int64_t>* /*unixtime*/,
       const arg_type<Varchar>* format) {
-    formatterProvider_ = std::make_shared<detail::DateTimeFormatterProvider>(config);
+    formatterProvider_ =
+        std::make_shared<detail::DateTimeFormatterProvider>(config);
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
       setFormatter(*format);
@@ -362,13 +365,15 @@ struct GetTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    formatterProvider_ = std::make_shared<detail::DateTimeFormatterProvider>(config);
+    formatterProvider_ =
+        std::make_shared<detail::DateTimeFormatterProvider>(config);
     auto sessionTimezoneName = config.sessionTimezone();
     if (!sessionTimezoneName.empty()) {
       sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
     }
     if (format != nullptr) {
-      formatter_ = formatterProvider_->get(std::string_view(format->data(), format->size()))
+      formatter_ = formatterProvider_
+                       ->get(std::string_view(format->data(), format->size()))
                        .thenOrThrow(folly::identity, [&](const Status& status) {
                          VELOX_USER_FAIL("{}", status.message());
                        });
@@ -382,7 +387,8 @@ struct GetTimestampFunction {
       const arg_type<Varchar>& format) {
     if (!isConstantTimeFormat_) {
       VELOX_CHECK_NOT_NULL(formatterProvider_);
-      formatter_ = formatterProvider_->get(std::string_view(format.data(), format.size()))
+      formatter_ = formatterProvider_
+                       ->get(std::string_view(format.data(), format.size()))
                        .thenOrThrow(folly::identity, [&](const Status& status) {
                          VELOX_USER_FAIL("{}", status.message());
                        });
