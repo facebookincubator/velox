@@ -53,7 +53,7 @@ This report is generated manually with the help of the following commands and te
 
 Command to get the list of contributors and their contribution count in a specific month.
 ```
-git log --since='June 1 2024' --until='June 30 2024' --pretty=format:"%an" | sort | uniq -c
+git log --since='June 1 2024' --until='June 30 2024' --pretty=format:"%an (%ae)" | sort | uniq -c | sort -r
 ```
 Command to get the list of contributions in a specific month.
 ```
@@ -72,6 +72,8 @@ are as follows.
 - Credits
 
 Below are a few monthly update guidelines.
+- New monthly reports [must be added here](monthly-updates/). Each new report
+  must be linked to the [main document](monthly-updates.rst).
 - Each update should be in the imperative, present tense similar to a git commit.
 - In sections where applicable, start new additions with `Add` followed by
   the fixes using `Fix`, followed by other updates.
