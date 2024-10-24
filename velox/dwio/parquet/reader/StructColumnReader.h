@@ -35,7 +35,8 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
-      common::ScanSpec& scanSpec);
+      common::ScanSpec& scanSpec,
+      memory::MemoryPool& pool);
 
   void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
