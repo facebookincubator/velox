@@ -16,6 +16,7 @@
 
 #include "velox/exec/Unnest.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
@@ -153,6 +154,7 @@ void Unnest::generateRepeatedColumns(
     std::vector<VectorPtr>& outputs) {
   // Create "indices" buffer to repeat rows as many times as there are elements
   // in the array (or map) in unnestDecoded.
+  WrapState repeatedState;
   auto repeatedIndices = allocateIndices(numElements, pool());
   auto* rawRepeatedIndices = repeatedIndices->asMutable<vector_size_t>();
   vector_size_t index = 0;
@@ -164,11 +166,13 @@ void Unnest::generateRepeatedColumns(
 
   // Wrap "replicated" columns in a dictionary using 'repeatedIndices'.
   for (const auto& projection : identityProjections_) {
-    outputs.at(projection.outputChannel) = BaseVector::wrapInDictionary(
-        nullptr /*nulls*/,
-        repeatedIndices,
+    outputs.at(projection.outputChannel) = wrapOne(
         numElements,
-        input_->childAt(projection.inputChannel));
+        repeatedIndices,
+        input_->childAt(projection.inputChannel),
+        nullptr /*nulls*/,
+
+        repeatedState);
   }
 }
 

@@ -47,6 +47,8 @@
 #include "velox/exec/Values.h"
 #include "velox/exec/Window.h"
 
+DEFINE_bool(merge_project, true, "Merge consecutive filter and project nodes");
+
 namespace facebook::velox::exec {
 
 namespace detail {
@@ -431,8 +433,10 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::FilterNode>(planNode)) {
       if (i < planNodes.size() - 1) {
         auto next = planNodes[i + 1];
-        if (auto projectNode =
-                std::dynamic_pointer_cast<const core::ProjectNode>(next)) {
+        std::shared_ptr<const core::ProjectNode> projectNode;
+        if (FLAGS_merge_project &&
+            (projectNode =
+                 std::dynamic_pointer_cast<const core::ProjectNode>(next))) {
           operators.push_back(std::make_unique<FilterProject>(
               id, ctx.get(), filterNode, projectNode));
           i++;

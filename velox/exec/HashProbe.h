@@ -19,6 +19,7 @@
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/ProbeOperatorState.h"
 #include "velox/exec/VectorHasher.h"
 

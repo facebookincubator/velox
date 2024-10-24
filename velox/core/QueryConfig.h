@@ -801,7 +801,7 @@ class QueryConfig {
   }
 
   bool validateOutputFromOperators() const {
-    return get<bool>(kValidateOutputFromOperators, false);
+    return get<bool>(kValidateOutputFromOperators, true);
   }
 
   bool isExpressionEvaluationCacheEnabled() const {

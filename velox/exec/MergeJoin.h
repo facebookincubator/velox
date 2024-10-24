@@ -179,6 +179,12 @@ class MergeJoin : public Operator {
   /// in case it is ready to take records.
   bool prepareOutput(const RowVectorPtr& left, const RowVectorPtr& right);
 
+  /// Fills 'output_' based on 'leftIndices_' and 'rightIndices_' and nulls from
+  /// outer join misses. Wraps are made right before return, after the wrapping
+  /// indices are known so that we can merge with a possible dictionary on in
+  /// the input.
+  void wrapOutput();
+
   // Appends a cartesian product of the current set of matching rows, leftMatch_
   // x rightMatch_ for left join and rightMatch_ x leftMatch_ for right join, to
   // output_. Returns true if output_ is full. Sets leftMatchCursor_ and
@@ -246,6 +252,15 @@ class MergeJoin : public Operator {
   /// method. For an anti join without a filter, we must specifically exclude
   /// rows from the left side that have a match on the right.
   RowVectorPtr filterOutputForAntiJoin(const RowVectorPtr& output);
+
+  // Adds a null at 'outputSize_'. If 'nulls' is nullptr first creates 'nulls_'
+  // as output batch size  non-nulls.
+  void addNull(BufferPtr& nulls);
+
+  // Adds a row of nulls for right side columns. Uses 'rightNulls_' if
+  // '!isRightFlattened_', else sets the row to null in the flattened right
+  // side.
+  void addRightNulls();
 
   /// As we populate the results of the join, we track whether a given
   /// output row is a result of a match between left and right sides or a miss.
@@ -418,6 +433,10 @@ class MergeJoin : public Operator {
 
   vector_size_t* rawLeftIndices_;
   vector_size_t* rawRightIndices_;
+
+  // Null masks to mark nulls added to the optional side of an outer join.
+  BufferPtr leftNulls_;
+  BufferPtr rightNulls_;
 
   // Stores the current left and right vectors being used by the output
   // dictionaries.

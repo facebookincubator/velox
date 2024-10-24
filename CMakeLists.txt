@@ -484,8 +484,7 @@ if(${VELOX_BUILD_TESTING})
   set_source(c-ares)
   resolve_dependency(c-ares)
 
-  set_source(gRPC)
-  resolve_dependency(gRPC)
+  # set_source(gRPC) resolve_dependency(gRPC)
 endif()
 
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)

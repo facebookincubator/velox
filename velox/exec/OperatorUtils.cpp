@@ -258,6 +258,75 @@ vector_size_t processFilterResults(
   }
 }
 
+VectorPtr wrapOne(
+    vector_size_t size,
+    BufferPtr mapping,
+    const VectorPtr& vector,
+    BufferPtr extraNulls,
+    WrapState& state) {
+  if (!mapping) {
+    VELOX_CHECK_NULL(extraNulls);
+    return vector;
+  }
+  if (vector->encoding() != VectorEncoding::Simple::DICTIONARY) {
+    return BaseVector::wrapInDictionary(extraNulls, mapping, size, vector);
+  }
+  if (state.transposeResults.empty()) {
+    state.nulls = extraNulls.get();
+  } else {
+    VELOX_CHECK(
+        state.nulls == extraNulls.get(),
+        "Must have identical extra nulls for all wrapped columns");
+  }
+  auto indices = vector->wrapInfo();
+  auto base = vector->valueVector();
+  // The base will be wrapped again without loading any lazy. The
+  // rewrapping is permitted in this case.
+  base->clearContainingLazyAndWrapped();
+  auto rawNulls = vector->rawNulls();
+  if (!rawNulls) {
+    // if another column had the same indices as this one and this one does not
+    // add nulls, we use the same transposed wrapping.
+    for (auto& result : state.transposeResults) {
+      if (indices.get() == result.first) {
+        return BaseVector::wrapInDictionary(
+            extraNulls, BufferPtr(result.second), size, base);
+      }
+    }
+  }
+
+  if (rawNulls) {
+    // Dictionary adds nulls.
+    BufferPtr newIndices =
+        AlignedBuffer::allocate<vector_size_t>(size, vector->pool());
+    BufferPtr newNulls = AlignedBuffer::allocate<bool>(size, vector->pool());
+    const uint64_t* rawExtraNulls =
+        extraNulls ? extraNulls->as<uint64_t>() : nullptr;
+    BaseVector::transposeIndicesWithNulls(
+        indices->as<vector_size_t>(),
+        rawNulls,
+        size,
+        mapping->as<vector_size_t>(),
+        rawExtraNulls,
+        newIndices->asMutable<vector_size_t>(),
+        newNulls->asMutable<uint64_t>());
+
+    return BaseVector::wrapInDictionary(newNulls, newIndices, size, base);
+  }
+  auto newIndices =
+      AlignedBuffer::allocate<vector_size_t>(size, vector->pool());
+  BaseVector::transposeIndices(
+      indices->as<vector_size_t>(),
+      size,
+      mapping->as<vector_size_t>(),
+      newIndices->asMutable<vector_size_t>());
+  // If another column has the same wrapping and does not add nulls, we can use
+  // the same transposed indices.
+  state.transposeResults.push_back(
+      std::make_pair<Buffer*, Buffer*>(indices.get(), newIndices.get()));
+  return BaseVector::wrapInDictionary(extraNulls, newIndices, size, base);
+}
+
 VectorPtr wrapChild(
     vector_size_t size,
     BufferPtr mapping,
@@ -295,8 +364,9 @@ RowVectorPtr wrap(
   }
   std::vector<VectorPtr> wrappedChildren;
   wrappedChildren.reserve(childVectors.size());
+  WrapState state;
   for (auto& child : childVectors) {
-    wrappedChildren.emplace_back(wrapChild(size, mapping, child));
+    wrappedChildren.emplace_back(wrapOne(size, mapping, child, nullptr, state));
   }
   return std::make_shared<RowVector>(
       pool, rowType, nullptr, size, wrappedChildren);
@@ -405,9 +475,10 @@ void projectChildren(
     const RowVectorPtr& src,
     const std::vector<IdentityProjection>& projections,
     int32_t size,
-    const BufferPtr& mapping) {
+    const BufferPtr& mapping,
+    WrapState* state) {
   projectChildren(
-      projectedChildren, src->children(), projections, size, mapping);
+      projectedChildren, src->children(), projections, size, mapping, state);
 }
 
 void projectChildren(
@@ -415,13 +486,12 @@ void projectChildren(
     const std::vector<VectorPtr>& src,
     const std::vector<IdentityProjection>& projections,
     int32_t size,
-    const BufferPtr& mapping) {
-  for (auto [inputChannel, outputChannel] : projections) {
-    if (outputChannel >= projectedChildren.size()) {
-      projectedChildren.resize(outputChannel + 1);
-    }
-    projectedChildren[outputChannel] =
-        wrapChild(size, mapping, src[inputChannel]);
+    const BufferPtr& mapping,
+    WrapState* state) {
+  for (const auto& projection : projections) {
+    projectedChildren[projection.outputChannel] = state
+        ? wrapOne(size, mapping, src[projection.inputChannel], nullptr, *state)
+        : wrapChild(size, mapping, src[projection.inputChannel]);
   }
 }
 } // namespace facebook::velox::exec

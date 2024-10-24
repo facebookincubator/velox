@@ -139,6 +139,7 @@ void DecodedVector::combineWrappers(
     int numLevels) {
   auto topEncoding = vector->encoding();
   BaseVector* values = nullptr;
+  bool wasLazy = false;
   if (topEncoding == VectorEncoding::Simple::DICTIONARY) {
     indices_ = vector->wrapInfo()->as<vector_size_t>();
     values = vector->valueVector().get();
@@ -160,7 +161,8 @@ void DecodedVector::combineWrappers(
     }
 
     auto encoding = values->encoding();
-    if (isLazy(encoding) &&
+    wasLazy = isLazy(encoding);
+    if (wasLazy &&
         (loadLazy_ || values->asUnchecked<LazyVector>()->isLoaded())) {
       values = values->loadedVector();
       encoding = values->encoding();
@@ -177,6 +179,10 @@ void DecodedVector::combineWrappers(
         setBaseData(*values, rows);
         return;
       case VectorEncoding::Simple::DICTIONARY: {
+        if (!wasLazy) {
+          // LOG(ERROR) << "Multilevel dict ";
+          VELOX_FAIL("Limit to one level");
+        }
         applyDictionaryWrapper(*values, rows);
         values = values->valueVector().get();
         break;
