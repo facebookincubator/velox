@@ -87,8 +87,7 @@ std::shared_ptr<GcsTestbench> GCSInsertTest::testbench_ = nullptr;
 
 TEST_F(GCSInsertTest, gcsInsertTest) {
   const int64_t kExpectedRows = 1'000;
-  const std::string_view newFile = "insertFile.txt";
-  const auto gcsFile = gcsURI(testbench_->preexistingBucketName(), newFile);
+  const auto gcsBucket = gcsURI(testbench_->preexistingBucketName());
 
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
@@ -100,10 +99,11 @@ TEST_F(GCSInsertTest, gcsInsertTest) {
        makeFlatVector<double>(kExpectedRows, [](auto row) { return row; })});
 
   // Insert into GCS with one writer.
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .tableWrite(gcsFile.data(), dwio::common::FileFormat::PARQUET)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .tableWrite(gcsBucket.data(), dwio::common::FileFormat::PARQUET)
+          .planNode();
 
   // Execute the write plan.
   auto results = AssertQueryBuilder(plan).copyResults(pool());
@@ -132,7 +132,7 @@ TEST_F(GCSInsertTest, gcsInsertTest) {
   // Read from 'writeFileName' and verify the data matches the original.
   plan = PlanBuilder().tableScan(rowType).planNode();
 
-  auto filePath = fmt::format("{}{}", gcsFile, writeFileName);
+  auto filePath = fmt::format("{}/{}", gcsBucket, writeFileName);
   const int64_t fileSize = fileWriteInfos[0]["fileSize"].asInt();
   auto split = HiveConnectorSplitBuilder(filePath)
                    .fileFormat(dwio::common::FileFormat::PARQUET)
