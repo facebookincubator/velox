@@ -2006,7 +2006,7 @@ int32_t HashTable<false>::listNullKeyRows(
   if (!iter->initialized) {
     VELOX_CHECK_GT(nextOffset_, 0);
     VELOX_CHECK_EQ(hashers_.size(), 1);
-    HashLookup lookup(hashers_);
+    HashLookup lookup(hashers_, stringAllocatorShared());
     if (hashMode_ == HashMode::kHash) {
       lookup.hashes.push_back(VectorHasher::kNullHash);
     } else {
@@ -2160,7 +2160,7 @@ template class HashTable<false>;
 namespace {
 void populateLookupRows(
     const SelectivityVector& rows,
-    raw_vector<vector_size_t>& lookupRows) {
+    HsaRawVector<vector_size_t>& lookupRows) {
   if (rows.isAllSelected()) {
     std::iota(lookupRows.begin(), lookupRows.end(), 0);
   } else {

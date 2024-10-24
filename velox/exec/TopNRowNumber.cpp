@@ -164,7 +164,8 @@ TopNRowNumber::TopNRowNumber(
         0, // minTableSizeForParallelJoinBuild
         pool());
     partitionOffset_ = table_->rows()->columnAt(numKeys).offset();
-    lookup_ = std::make_unique<HashLookup>(table_->hashers());
+    lookup_ = std::make_unique<HashLookup>(
+        table_->hashers(), table_->stringAllocatorShared());
   } else {
     allocator_ = std::make_unique<HashStringAllocator>(pool());
     singlePartition_ = std::make_unique<TopRows>(allocator_.get(), comparator_);
