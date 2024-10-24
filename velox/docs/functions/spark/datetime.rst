@@ -280,7 +280,7 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_millis('1970-01-01 00:00:01'); -- 1000
 
 .. spark:function:: unix_seconds(timestamp) -> bigint
-    
+
     Returns the number of seconds since 1970-01-01 00:00:00 UTC. ::
 
         SELECT unix_seconds('1970-01-01 00:00:01'); -- 1
@@ -295,7 +295,7 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: unix_timestamp(string) -> integer
    :noindex:
 
-    Returns the UNIX timestamp of time specified by ``string``. Assumes the 
+    Returns the UNIX timestamp of time specified by ``string``. Assumes the
     format ``yyyy-MM-dd HH:mm:ss``. Returns null if ``string`` does not match
     ``format``.
 
@@ -333,3 +333,8 @@ These functions support TIMESTAMP and DATE input types.
     part of the 53rd week of year 2004, so the result is 2004. Only supports DATE type.
 
         SELECT year_of_week('2005-01-02'); -- 2004
+.. spark:function:: date_trunc(format, timestamp) -> timestamp
+
+    Returns timestamp ts truncated to the unit specified by the format model.
+
+        SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
