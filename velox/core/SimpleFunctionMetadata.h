@@ -414,7 +414,7 @@ class ISimpleFunctionMetadata {
         defaultNullBehavior());
   }
 
- private:
+ protected:
   template <typename T>
   static std::string argumentToString(
       const std::vector<T>& arguments,
