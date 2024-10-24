@@ -33,10 +33,10 @@ Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
       (Timestamp::kMicrosecondsInMillisecond *
        Timestamp::kMillisecondsInSecond);
   if (seconds > maxSeconds) {
-    return Timestamp::fromMicros(std::numeric_limits<int64_t>::max());
+    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::max());
   }
   if (seconds < -maxSeconds) {
-    return Timestamp::fromMicros(std::numeric_limits<int64_t>::min());
+    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::min());
   }
   return Timestamp(seconds, 0);
 }
