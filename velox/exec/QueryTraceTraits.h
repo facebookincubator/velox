@@ -31,5 +31,17 @@ struct QueryTraceTraits {
   static inline const std::string kQueryMetaFileName = "query_meta.json";
   static inline const std::string kDataSummaryFileName = "data_summary.json";
   static inline const std::string kDataFileName = "trace.data";
+
+  static inline const std::unordered_set<std::string> kSupportedOperatorTypes{
+      "TableWrite",
+      "Aggregation",
+      "PartialAggregation",
+      "PartitionedOutput",
+      "HashBuild",
+      "HashProbe"};
+
+  static bool canTrace(const std::string& operatorType) {
+    return kSupportedOperatorTypes.count(operatorType) > 0;
+  }
 };
 } // namespace facebook::velox::exec::trace
