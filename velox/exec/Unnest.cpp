@@ -184,7 +184,7 @@ const Unnest::RowRange Unnest::extractRowRange(
     }
   }
   // The end row is not partial and should take effect, set it to the maxSize.
-  if (lastRowEnd == -1 && numInput > 1) {
+  if (!lastRowEnd.has_value() && numInput > 1) {
     lastRowEnd = rawMaxSizes_[nextInputRow_ + numInput - 1];
   }
   return {nextInputRow_, numInput, firstRowEnd, lastRowEnd};
