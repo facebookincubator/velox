@@ -33,6 +33,7 @@ velox_link_libraries(
   velox_type
   velox_dwio_common
   velox_dwio_common_compression
+  velox_dwio_native_parquet_common
   fmt::fmt
   arrow
   Snappy::snappy
