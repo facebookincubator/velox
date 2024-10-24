@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include <unicode/locid.h>
+#include <unicode/timezone.h>
+#include <unicode/tzfmt.h>
+#include <unicode/unistr.h>
 #include <chrono>
 #include <string>
 #include "velox/common/base/Exceptions.h"
@@ -176,6 +180,36 @@ class TimeZone {
     validateRange(date::sys_time<TDuration>(timestamp));
 
     return getZonedTime(timePoint, choose).get_info().abbrev;
+  }
+
+  template <typename TDuration>
+  std::string getLongName(TDuration timestamp) const {
+    UErrorCode success = U_ZERO_ERROR;
+
+    static const icu::Locale locale("en", "US");
+    static const std::unique_ptr<icu::TimeZoneFormat> format(
+        icu::TimeZoneFormat::createInstance(locale, success));
+    VELOX_USER_CHECK_NOT_NULL(format);
+
+    // Get the ICU TimeZone by name
+    std::unique_ptr<icu::TimeZone> tz(icu::TimeZone::createTimeZone(
+        icu::UnicodeString(timeZoneName_.data(), timeZoneName_.length())));
+    VELOX_USER_CHECK_NOT_NULL(tz);
+
+    // Format the time zone to get the long name.
+    icu::UnicodeString longName;
+    format->format(
+        UTimeZoneFormatStyle::UTZFMT_STYLE_SPECIFIC_LONG,
+        *tz,
+        std::chrono::duration_cast<std::chrono::milliseconds>(timestamp)
+            .count(),
+        longName);
+
+    // Convert the UnicodeString back to a string and write it out
+    std::string longNameStr;
+    longName.toUTF8String(longNameStr);
+
+    return longNameStr;
   }
 
  private:
