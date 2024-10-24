@@ -18,11 +18,6 @@
 #include <folly/IPAddress.h>
 #include "velox/expression/CastExpr.h"
 
-static constexpr int kIPV4AddressBytes = 4;
-static constexpr int kIPV4ToV6FFIndex = 10;
-static constexpr int kIPV4ToV6Index = 12;
-static constexpr int kIPAddressBytes = 16;
-
 namespace facebook::velox {
 
 namespace {
@@ -123,9 +118,9 @@ class IPAddressCastOperator : public exec::CastOperator {
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto ipAddressString = ipAddressStrings->valueAt(row);
+      auto maybeIpAsInt128 = tryGetIPv6asInt128FromString(ipAddressString);
 
-      auto maybeIp = folly::IPAddress::tryFromString(ipAddressString);
-      if (maybeIp.hasError()) {
+      if (maybeIpAsInt128.hasError()) {
         if (threadSkipErrorDetails()) {
           context.setStatus(row, Status::UserError());
         } else {
@@ -135,13 +130,7 @@ class IPAddressCastOperator : public exec::CastOperator {
         }
         return;
       }
-      folly::IPAddress addr = maybeIp.value();
-      auto addrBytes = folly::IPAddress::createIPv6(addr).toByteArray();
-
-      std::reverse(addrBytes.begin(), addrBytes.end());
-      memcpy(&intAddr, &addrBytes, kIPAddressBytes);
-
-      flatResult->set(row, intAddr);
+      flatResult->set(row, maybeIpAsInt128.value());
     });
   }
 

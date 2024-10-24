@@ -19,6 +19,7 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -1180,6 +1181,235 @@ TEST_F(ComparisonsTest, TimestampWithTimezone) {
            true,
            false,
            false}));
+}
+
+TEST_F(ComparisonsTest, IpAddressType) {
+  auto makeIpAdressFromString = [](const std::string& ipAddr) -> int128_t {
+    auto ret = tryGetIPv6asInt128FromString(ipAddr);
+    return ret.value();
+  };
+
+  auto runAndCompare = [&](const std::string& expr,
+                           RowVectorPtr inputs,
+                           VectorPtr expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(expr, inputs);
+    test::assertEqualVectors(expectedResult, actual);
+  };
+
+  auto lhs = makeFlatVector<int128_t>(
+      std::vector<int128_t>{
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("255.255.255.255"),
+          makeIpAdressFromString("1.2.3.4"),
+          makeIpAdressFromString("1.1.1.2"),
+          makeIpAdressFromString("1.1.2.1"),
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("::1"),
+          makeIpAdressFromString("2001:0db8:0000:0000:0000:ff00:0042:8329"),
+          makeIpAdressFromString("::ffff:1.2.3.4"),
+          makeIpAdressFromString("::ffff:0.1.1.1"),
+          makeIpAdressFromString("::FFFF:FFFF:FFFF"),
+          makeIpAdressFromString("::0001:255.255.255.255"),
+          makeIpAdressFromString("::ffff:ffff:ffff"),
+      },
+      IPADDRESS());
+
+  auto rhs = makeFlatVector<int128_t>(
+      std::vector<int128_t>{
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("255.255.255.255"),
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("1.1.1.2"),
+          makeIpAdressFromString("1.1.2.1"),
+          makeIpAdressFromString("255.1.1.1"),
+          makeIpAdressFromString("::1"),
+          makeIpAdressFromString("2001:db8::ff00:42:8329"),
+          makeIpAdressFromString("1.2.3.4"),
+          makeIpAdressFromString("::ffff:1.1.1.0"),
+          makeIpAdressFromString("::0001:255.255.255.255"),
+          makeIpAdressFromString("255.255.255.255"),
+          makeIpAdressFromString("255.255.255.255"),
+      },
+      IPADDRESS());
+
+  auto input = makeRowVector({lhs, rhs});
+
+  runAndCompare(
+      "c0 = c1",
+      input,
+      makeFlatVector<bool>(
+          {true,
+           true,
+           false,
+           false,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true}));
+
+  runAndCompare(
+      "c0 <> c1",
+      input,
+      makeFlatVector<bool>(
+          {false,
+           false,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false}));
+
+  runAndCompare(
+      "c0 < c1",
+      input,
+      makeFlatVector<bool>(
+          {false,
+           false,
+           false,
+           false,
+           false,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           false,
+           true,
+           false}));
+
+  runAndCompare(
+      "c0 > c1",
+      input,
+      makeFlatVector<bool>(
+          {false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           false,
+           false,
+           false,
+           true,
+           false,
+           false}));
+
+  runAndCompare(
+      "c0 <= c1",
+      input,
+      makeFlatVector<bool>(
+          {true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           true,
+           true}));
+
+  runAndCompare(
+      "c0 >= c1",
+      input,
+      makeFlatVector<bool>(
+          {true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           true,
+           false,
+           true}));
+
+  runAndCompare(
+      "c0 is distinct from c1",
+      input,
+      makeFlatVector<bool>(
+          {false,
+           false,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false}));
+
+  auto betweenInput = makeRowVector({
+      makeFlatVector<int128_t>(
+          std::vector<int128_t>{
+              makeIpAdressFromString("2001:db8::ff00:42:8329"),
+              makeIpAdressFromString("1.1.1.1"),
+              makeIpAdressFromString("255.255.255.255"),
+              makeIpAdressFromString("::ffff:1.1.1.1"),
+              makeIpAdressFromString("1.1.1.1"),
+              makeIpAdressFromString("0.0.0.0"),
+              makeIpAdressFromString("::ffff"),
+              makeIpAdressFromString("0.0.0.0")},
+          IPADDRESS()),
+      makeFlatVector<int128_t>(
+          std::vector<int128_t>{
+              makeIpAdressFromString("::ffff"),
+              makeIpAdressFromString("1.1.1.1"),
+              makeIpAdressFromString("255.255.255.255"),
+              makeIpAdressFromString("::ffff:0.1.1.1"),
+              makeIpAdressFromString("0.1.1.1"),
+              makeIpAdressFromString("0.0.0.1"),
+              makeIpAdressFromString("::ffff:0.0.0.1"),
+              makeIpAdressFromString("2001:db8::0:0:0:1")},
+          IPADDRESS()),
+      makeFlatVector<int128_t>(
+          std::vector<int128_t>{
+              makeIpAdressFromString("2001:db8::ff00:42:8329"),
+              makeIpAdressFromString("1.1.1.1"),
+              makeIpAdressFromString("255.255.255.255"),
+              makeIpAdressFromString("2001:0db8:0000:0000:0000:ff00:0042:8329"),
+              makeIpAdressFromString("2001:0db8:0000:0000:0000:ff00:0042:8329"),
+              makeIpAdressFromString("0.0.0.2"),
+              makeIpAdressFromString("0.0.0.2"),
+              makeIpAdressFromString("2001:db8::1:0:0:1")},
+          IPADDRESS()),
+  });
+
+  runAndCompare(
+      "c0 between c1 and c2",
+      betweenInput,
+      makeFlatVector<bool>(
+          {true, true, true, true, true, false, false, false}));
 }
 
 TEST_F(ComparisonsTest, CustomComparisonWithGenerics) {

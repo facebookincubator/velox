@@ -66,6 +66,11 @@ struct ExtremeValueFunction {
     return wrapper;
   }
 
+  int128_t extractValue(
+      const exec::CustomTypeWithCustomComparisonView<int128_t>& wrapper) const {
+    return *wrapper;
+  }
+
   int64_t extractValue(
       const exec::CustomTypeWithCustomComparisonView<int64_t>& wrapper) const {
     return *wrapper;
