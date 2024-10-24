@@ -152,6 +152,11 @@ class HashJoinBridge : public JoinBridge {
 bool isLeftNullAwareJoinWithFilter(
     const std::shared_ptr<const core::HashJoinNode>& joinNode);
 
+// Indicates if 'joinNode' can drop duplicate rows with same join key. For left
+// semi and anti join, it is not necessary to store duplicate rows.
+bool canDropDuplicates(
+    const std::shared_ptr<const core::HashJoinNode>& joinNode);
+
 class HashJoinMemoryReclaimer final : public MemoryReclaimer {
  public:
   static std::unique_ptr<memory::MemoryReclaimer> create() {

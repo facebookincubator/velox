@@ -42,10 +42,14 @@ RowTypePtr hashJoinTableType(
     types.emplace_back(inputType->childAt(channel));
   }
 
-  for (auto i = 0; i < inputType->size(); ++i) {
-    if (keyChannelSet.find(i) == keyChannelSet.end()) {
-      names.emplace_back(inputType->nameOf(i));
-      types.emplace_back(inputType->childAt(i));
+  if (!canDropDuplicates(joinNode)) {
+    // For left semi and anti join with no extra filter, hash table does not
+    // store dependent columns.
+    for (auto i = 0; i < inputType->size(); ++i) {
+      if (keyChannelSet.find(i) == keyChannelSet.end()) {
+        names.emplace_back(inputType->nameOf(i));
+        types.emplace_back(inputType->childAt(i));
+      }
     }
   }
 
@@ -342,6 +346,15 @@ bool isLeftNullAwareJoinWithFilter(
   return (joinNode->isAntiJoin() || joinNode->isLeftSemiProjectJoin() ||
           joinNode->isLeftSemiFilterJoin()) &&
       joinNode->isNullAware() && (joinNode->filter() != nullptr);
+}
+
+bool canDropDuplicates(
+    const std::shared_ptr<const core::HashJoinNode>& joinNode) {
+  // Left semi and anti join with no extra filter only needs to know whether
+  // there is a match. Hence, no need to store entries with duplicate keys.
+  return !joinNode->filter() &&
+      (joinNode->isLeftSemiFilterJoin() || joinNode->isLeftSemiProjectJoin() ||
+       joinNode->isAntiJoin());
 }
 
 uint64_t HashJoinMemoryReclaimer::reclaim(

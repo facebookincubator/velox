@@ -146,6 +146,12 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
       "abandon_partial_topn_row_number_min_pct";
 
+  static constexpr const char* kAbandonBuildNoDupHashMinRows =
+      "abandon_build_no_dup_hash_min_rows";
+
+  static constexpr const char* kAbandonBuildNoDupHashMinPct =
+      "abandon_build_no_dup_hash_min_pct";
+
   static constexpr const char* kMaxPartitionedOutputBufferSize =
       "max_page_partitioning_buffer_size";
 
@@ -462,6 +468,14 @@ class QueryConfig {
 
   int32_t abandonPartialTopNRowNumberMinPct() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
+  }
+
+  int32_t abandonBuildNoDupHashMinRows() const {
+    return get<int32_t>(kAbandonBuildNoDupHashMinRows, 100'000);
+  }
+
+  int32_t abandonBuildNoDupHashMinPct() const {
+    return get<int32_t>(kAbandonBuildNoDupHashMinPct, 80);
   }
 
   uint64_t maxSpillRunRows() const {
