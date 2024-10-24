@@ -43,14 +43,15 @@ class WindowFunction {
     kRows,
   };
 
-  /// Indicates whether this is an aggregate window function and its process
-  /// unit.
+  /// Indicates whether this is an aggregate window function, whether it is a
+  /// companion function, and its process unit.
   struct Metadata {
     ProcessMode processMode;
     bool isAggregate;
+    bool isCompanionFunction;
 
     static Metadata defaultMetadata() {
-      static Metadata defaultValue{ProcessMode::kPartition, false};
+      static Metadata defaultValue{ProcessMode::kPartition, false, false};
       return defaultValue;
     }
   };

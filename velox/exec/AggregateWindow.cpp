@@ -397,7 +397,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
 
 } // namespace
 
-void registerAggregateWindowFunction(const std::string& name) {
+void registerAggregateWindowFunction(
+    const std::string& name,
+    const AggregateFunctionMetadata& metadata) {
   auto aggregateFunctionSignatures = exec::getAggregateFunctionSignatures(name);
   if (aggregateFunctionSignatures.has_value()) {
     // This copy is needed to obtain a vector of the base FunctionSignaturePtr
@@ -410,7 +412,9 @@ void registerAggregateWindowFunction(const std::string& name) {
     exec::registerWindowFunction(
         name,
         std::move(signatures),
-        {exec::WindowFunction::ProcessMode::kRows, true},
+        {exec::WindowFunction::ProcessMode::kRows,
+         true,
+         metadata.isCompanionFunction},
         [name](
             const std::vector<exec::WindowFunctionArg>& args,
             const TypePtr& resultType,
