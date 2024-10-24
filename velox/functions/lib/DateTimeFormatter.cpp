@@ -16,6 +16,10 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include <folly/String.h>
+#include <unicode/locid.h>
+#include <unicode/timezone.h>
+#include <unicode/tzfmt.h>
+#include <unicode/unistr.h>
 #include <charconv>
 #include <cstring>
 #include <stdexcept>
@@ -1173,10 +1177,10 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
           // https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
           size += 5;
         } else {
-          VELOX_NYI(
-              "Date format specifier is not yet implemented: {} ({})",
-              getSpecifierName(token.pattern.specifier),
-              token.pattern.minRepresentDigits);
+          // The longest time zone long name is 40, Australian Central Western
+          // Standard Time.
+          // https://www.timeanddate.com/time/zones/
+          size += 50;
         }
 
         break;
@@ -1432,8 +1436,33 @@ int32_t DateTimeFormatter::format(
             std::memcpy(result, abbrev.data(), abbrev.length());
             result += abbrev.length();
           } else {
-            // TODO: implement full name time zone
-            VELOX_NYI("full time zone name is not yet supported");
+            UErrorCode success = U_ZERO_ERROR;
+
+            static const icu::Locale locale("en", "US");
+            static const std::unique_ptr<icu::TimeZoneFormat> format(
+                icu::TimeZoneFormat::createInstance(locale, success));
+            VELOX_USER_CHECK_NOT_NULL(format);
+
+            // Get the ICU TimeZone by name
+            const std::string& timeZoneName = timezone->name();
+            std::unique_ptr<icu::TimeZone> tz(
+                icu::TimeZone::createTimeZone(icu::UnicodeString(
+                    timeZoneName.data(), timeZoneName.length())));
+            VELOX_USER_CHECK_NOT_NULL(tz);
+
+            // Format the time zone to get the long name.
+            icu::UnicodeString longName;
+            format->format(
+                UTimeZoneFormatStyle::UTZFMT_STYLE_SPECIFIC_LONG,
+                *tz,
+                (double)timestamp.getSeconds() * 1000.0, // ICU expects a double
+                longName);
+
+            // Convert the UnicodeString back to a string and write it out
+            std::string longNameStr;
+            longName.toUTF8String(longNameStr);
+            std::memcpy(result, longNameStr.data(), longNameStr.length());
+            result += longNameStr.length();
           }
         } break;
 

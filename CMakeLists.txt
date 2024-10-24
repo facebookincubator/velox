@@ -472,6 +472,18 @@ add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
 
+if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+  if(ON_APPLE_M1)
+    list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/icu4c")
+  else()
+    list(APPEND CMAKE_PREFIX_PATH "/usr/local/opt/icu4c")
+  endif()
+endif()
+
+# ICU is only needed with Boost build from source
+set_source(ICU)
+resolve_dependency(ICU COMPONENTS i18n)
+
 if(${VELOX_BUILD_TESTING})
   # Spark qury runner depends on absl, gRPC.
   set_source(absl)
