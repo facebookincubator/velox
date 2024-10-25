@@ -64,6 +64,24 @@ void HashJoinBridge::addBuilder() {
   ++numBuilders_;
 }
 
+void HashJoinBridge::reclaim() {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (tableSpillFunc_ == nullptr || probeStarted_.load() ||
+      !buildResult_.has_value() || buildResult_->table == nullptr ||
+      buildResult_->table->numDistinct() == 0) {
+    return;
+  }
+  VELOX_CHECK(buildResult_.has_value());
+  VELOX_CHECK_NOT_NULL(buildResult_->table);
+
+  auto spillPartitionSet = tableSpillFunc_(buildResult_->table);
+  buildResult_->table->clear(true);
+  setSpilledHashTableLocked(spillPartitionSet);
+  buildResult_->restoredPartitionId = restoringSpillPartitionId_;
+  buildResult_->spillPartitionIds = toSpillPartitionIdSet(spillPartitionSet);
+  restoringSpillPartitionId_.reset();
+}
+
 namespace {
 // Create spiller for spilling the row container from one of the sub-table from
 // 'table' to parallelize the table spilling. The function spills all the rows
@@ -188,10 +206,9 @@ SpillPartitionSet spillHashJoinTable(
 void HashJoinBridge::setHashTable(
     std::unique_ptr<BaseHashTable> table,
     SpillPartitionSet spillPartitionSet,
-    bool hasNullKeys) {
+    bool hasNullKeys,
+    HashJoinTableSpillFunc&& tableSpillFunc) {
   VELOX_CHECK_NOT_NULL(table, "setHashTable called with null table");
-
-  auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
 
   std::vector<ContinuePromise> promises;
   {
@@ -199,24 +216,12 @@ void HashJoinBridge::setHashTable(
     VELOX_CHECK(started_);
     VELOX_CHECK(!buildResult_.has_value());
     VELOX_CHECK(restoringSpillShards_.empty());
-
-    if (restoringSpillPartitionId_.has_value()) {
-      for (const auto& id : spillPartitionIdSet) {
-        VELOX_DCHECK_LT(
-            restoringSpillPartitionId_->partitionBitOffset(),
-            id.partitionBitOffset());
-      }
-    }
-
-    for (auto& partitionEntry : spillPartitionSet) {
-      const auto id = partitionEntry.first;
-      VELOX_CHECK_EQ(spillPartitionSets_.count(id), 0);
-      spillPartitionSets_.emplace(id, std::move(partitionEntry.second));
-    }
+    tableSpillFunc_ = tableSpillFunc;
+    setSpilledHashTableLocked(spillPartitionSet);
     buildResult_ = HashBuildResult(
         std::move(table),
         std::move(restoringSpillPartitionId_),
-        std::move(spillPartitionIdSet),
+        toSpillPartitionIdSet(spillPartitionSet),
         hasNullKeys);
     restoringSpillPartitionId_.reset();
     promises = std::move(promises_);
@@ -232,6 +237,21 @@ void HashJoinBridge::setSpilledHashTable(SpillPartitionSet spillPartitionSet) {
   VELOX_CHECK(buildResult_.has_value());
   VELOX_CHECK(restoringSpillShards_.empty());
   VELOX_CHECK(!restoringSpillPartitionId_.has_value());
+  setSpilledHashTableLocked(spillPartitionSet);
+}
+
+void HashJoinBridge::setSpilledHashTableLocked(
+    SpillPartitionSet& spillPartitionSet) {
+  VELOX_CHECK(
+      !spillPartitionSet.empty(), "Spilled table partitions can't be empty");
+  auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
+  if (restoringSpillPartitionId_.has_value()) {
+    for (const auto& id : spillPartitionIdSet) {
+      VELOX_DCHECK_LT(
+          restoringSpillPartitionId_->partitionBitOffset(),
+          id.partitionBitOffset());
+    }
+  }
 
   for (auto& partitionEntry : spillPartitionSet) {
     const auto id = partitionEntry.first;
@@ -266,7 +286,7 @@ std::optional<HashJoinBridge::HashBuildResult> HashJoinBridge::tableOrFuture(
       !buildResult_.has_value() ||
       (!restoringSpillPartitionId_.has_value() &&
        restoringSpillShards_.empty()));
-
+  probeStarted_ = true;
   if (buildResult_.has_value()) {
     return buildResult_.value();
   }
@@ -286,6 +306,7 @@ bool HashJoinBridge::probeFinished() {
         !restoringSpillPartitionId_.has_value() &&
         restoringSpillShards_.empty());
     VELOX_CHECK_GT(numBuilders_, 0);
+    probeStarted_ = false;
 
     // NOTE: we are clearing the hash table as it has been fully processed and
     // not needed anymore. We'll wait for the HashBuild operator to build a new
@@ -374,7 +395,18 @@ uint64_t HashJoinMemoryReclaimer::reclaim(
     }
     return !hasReclaimedFromBuild;
   });
-  return reclaimedBytes;
+  if (reclaimedBytes != 0) {
+    return reclaimedBytes;
+  }
+  auto joinBridge = joinBridge_.lock();
+  if (joinBridge == nullptr) {
+    return reclaimedBytes;
+  }
+  const auto oldNodeReservedMem = pool->reservedBytes();
+  joinBridge->reclaim();
+  const auto newNodeReservedMem = pool->reservedBytes();
+  VELOX_CHECK_LE(newNodeReservedMem, oldNodeReservedMem);
+  return oldNodeReservedMem - newNodeReservedMem;
 }
 
 bool isHashBuildMemoryPool(const memory::MemoryPool& pool) {

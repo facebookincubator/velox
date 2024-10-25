@@ -171,7 +171,8 @@ TEST_P(HashJoinBridgeTest, withoutSpill) {
     // Can't call any other APIs except addBuilder() before start a join bridge
     // first.
     VELOX_ASSERT_THROW(
-        joinBridge->setHashTable(createFakeHashTable(), {}, false), "");
+        joinBridge->setHashTable(createFakeHashTable(), {}, false, nullptr),
+        "");
     VELOX_ASSERT_THROW(joinBridge->setAntiJoinHasNullKeys(), "");
     VELOX_ASSERT_THROW(joinBridge->probeFinished(), "");
     VELOX_ASSERT_THROW(joinBridge->tableOrFuture(&futures[0]), "");
@@ -204,9 +205,10 @@ TEST_P(HashJoinBridgeTest, withoutSpill) {
     } else {
       auto table = createFakeHashTable();
       rawTable = table.get();
-      joinBridge->setHashTable(std::move(table), {}, false);
+      joinBridge->setHashTable(std::move(table), {}, false, nullptr);
       VELOX_ASSERT_THROW(
-          joinBridge->setHashTable(createFakeHashTable(), {}, false), "");
+          joinBridge->setHashTable(createFakeHashTable(), {}, false, nullptr),
+          "");
     }
     ASSERT_TRUE(helper.buildResult().has_value());
 
@@ -317,10 +319,13 @@ TEST_P(HashJoinBridgeTest, withSpill) {
         if (oneIn(2)) {
           spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
           joinBridge->setHashTable(
-              createFakeHashTable(), std::move(spillPartitionSet), false);
+              createFakeHashTable(),
+              std::move(spillPartitionSet),
+              false,
+              nullptr);
         } else {
           spillByProber = !spillPartitionSet.empty();
-          joinBridge->setHashTable(createFakeHashTable(), {}, false);
+          joinBridge->setHashTable(createFakeHashTable(), {}, false, nullptr);
         }
         hasMoreSpill = numSpilledPartitions > numRestoredPartitions;
       }
@@ -446,9 +451,13 @@ TEST_P(HashJoinBridgeTest, multiThreading) {
                 auto spillPartitionSet =
                     makeFakeSpillPartitionSet(partitionBitOffset);
                 joinBridge->setHashTable(
-                    createFakeHashTable(), std::move(spillPartitionSet), false);
+                    createFakeHashTable(),
+                    std::move(spillPartitionSet),
+                    false,
+                    nullptr);
               } else {
-                joinBridge->setHashTable(createFakeHashTable(), {}, false);
+                joinBridge->setHashTable(
+                    createFakeHashTable(), {}, false, nullptr);
               }
             }
             for (auto& promise : promises) {

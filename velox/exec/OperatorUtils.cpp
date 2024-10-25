@@ -424,4 +424,24 @@ void projectChildren(
         wrapChild(size, mapping, src[inputChannel]);
   }
 }
+
+BlockingReason BlockedOperator::isBlocked(ContinueFuture* future) {
+  if (!*shouldBlock) {
+    return BlockingReason::kNotBlocked;
+  }
+  auto [p, f] = makeVeloxContinuePromiseContract("Blocked Operator");
+  blockedCb_(std::move(p), shouldBlock);
+  *future = std::move(f);
+  return BlockingReason::kWaitForConsumer;
+}
+
+std::unique_ptr<Operator> BlockedOperatorFactory::toOperator(
+    DriverCtx* ctx,
+    int32_t id,
+    const core::PlanNodePtr& node) {
+  if (std::dynamic_pointer_cast<const BlockedNode>(node)) {
+    return std::make_unique<BlockedOperator>(ctx, id, node, blockedCb_);
+  }
+  return nullptr;
+}
 } // namespace facebook::velox::exec
