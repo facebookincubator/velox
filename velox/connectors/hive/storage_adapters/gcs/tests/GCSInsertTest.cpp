@@ -17,26 +17,16 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
-#include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/storage_adapters/gcs/RegisterGCSFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/gcs/tests/GcsTestbench.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
-#include "velox/exec/TableWriter.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-
-namespace bp = boost::process;
-namespace gc = google::cloud;
-namespace gcs = google::cloud::storage;
+#include "velox/connectors/hive/storage_adapters/test_common/InsertTest.h"
 
 using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::filesystems {
 namespace {
 
-class GCSInsertTest : public testing::Test, public test::VectorTestBase {
+class GCSInsertTest : public testing::Test, public test::InsertTest {
  protected:
   static void SetUpTestSuite() {
     registerGCSFileSystem();
@@ -88,58 +78,7 @@ std::shared_ptr<GcsTestbench> GCSInsertTest::testbench_ = nullptr;
 TEST_F(GCSInsertTest, gcsInsertTest) {
   const int64_t kExpectedRows = 1'000;
   const auto gcsBucket = gcsURI(testbench_->preexistingBucketName());
-
-  auto rowType = ROW(
-      {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
-
-  auto input = makeRowVector(
-      {makeFlatVector<int64_t>(kExpectedRows, [](auto row) { return row; }),
-       makeFlatVector<int32_t>(kExpectedRows, [](auto row) { return row; }),
-       makeFlatVector<int16_t>(kExpectedRows, [](auto row) { return row; }),
-       makeFlatVector<double>(kExpectedRows, [](auto row) { return row; })});
-
-  // Insert into GCS with one writer.
-  auto plan =
-      PlanBuilder()
-          .values({input})
-          .tableWrite(gcsBucket.data(), dwio::common::FileFormat::PARQUET)
-          .planNode();
-
-  // Execute the write plan.
-  auto results = AssertQueryBuilder(plan).copyResults(pool());
-
-  // First column has number of rows written in the first row and nulls in other
-  // rows.
-  auto rowCount = results->childAt(exec::TableWriteTraits::kRowCountChannel)
-                      ->as<FlatVector<int64_t>>();
-  ASSERT_FALSE(rowCount->isNullAt(0));
-  ASSERT_EQ(kExpectedRows, rowCount->valueAt(0));
-  ASSERT_TRUE(rowCount->isNullAt(1));
-
-  // Second column contains details about written files.
-  auto details = results->childAt(exec::TableWriteTraits::kFragmentChannel)
-                     ->as<FlatVector<StringView>>();
-  ASSERT_TRUE(details->isNullAt(0));
-  ASSERT_FALSE(details->isNullAt(1));
-  folly::dynamic obj = folly::parseJson(details->valueAt(1));
-
-  ASSERT_EQ(kExpectedRows, obj["rowCount"].asInt());
-  auto fileWriteInfos = obj["fileWriteInfos"];
-  ASSERT_EQ(1, fileWriteInfos.size());
-
-  auto writeFileName = fileWriteInfos[0]["writeFileName"].asString();
-
-  // Read from 'writeFileName' and verify the data matches the original.
-  plan = PlanBuilder().tableScan(rowType).planNode();
-
-  auto filePath = fmt::format("{}/{}", gcsBucket, writeFileName);
-  const int64_t fileSize = fileWriteInfos[0]["fileSize"].asInt();
-  auto split = HiveConnectorSplitBuilder(filePath)
-                   .fileFormat(dwio::common::FileFormat::PARQUET)
-                   .length(fileSize)
-                   .build();
-  auto copy = AssertQueryBuilder(plan).split(split).copyResults(pool());
-  assertEqualResults({input}, {copy});
+  runInsertTest(gcsBucket, kExpectedRows, pool());
 }
 } // namespace facebook::velox::filesystems
 

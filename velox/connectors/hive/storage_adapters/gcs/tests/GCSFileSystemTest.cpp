@@ -24,9 +24,6 @@
 
 #include "gtest/gtest.h"
 
-namespace gc = google::cloud;
-namespace gcs = google::cloud::storage;
-
 namespace facebook::velox::filesystems {
 namespace {
 class GCSFileSystemTest : public testing::Test {
