@@ -41,6 +41,78 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
 }
 } // namespace detail
 
+namespace {
+enum class DateTimeFormat {
+  kMicrosecond,
+  kMillisecond,
+  kSecond,
+  kMinute,
+  kHour,
+  kDay,
+  kWeek,
+  kMonth,
+  kQuarter,
+  kYear
+};
+
+inline std::optional<DateTimeFormat> fromDateTimeFormatString(
+    const StringView& formatString,
+    bool throwIfInvalid) {
+  static const StringView kMicrosecond("microsecond");
+  static const StringView kMillisecond("millisecond");
+  static const StringView kSecond("second");
+  static const StringView kMinute("minute");
+  static const StringView kHour("hour");
+  static const StringView kDay("day");
+  static const StringView kDd("dd");
+  static const StringView kWeek("week");
+  static const StringView kMonth("month");
+  static const StringView kMon("mon");
+  static const StringView kMm("mm");
+  static const StringView kQuarter("quarter");
+  static const StringView kYear("year");
+  static const StringView kYyyy("yyyy");
+  static const StringView kYy("yy");
+
+  const auto format = boost::algorithm::to_lower_copy(formatString.str());
+
+  if (format == kMicrosecond) {
+    return DateTimeFormat::kMicrosecond;
+  }
+  if (format == kMillisecond) {
+    return DateTimeFormat::kMillisecond;
+  }
+  if (format == kSecond) {
+    return DateTimeFormat::kSecond;
+  }
+  if (format == kMinute) {
+    return DateTimeFormat::kMinute;
+  }
+  if (format == kHour) {
+    return DateTimeFormat::kHour;
+  }
+  if (format == kDay || format == kDd) {
+    return DateTimeFormat::kDay;
+  }
+  if (format == kWeek) {
+    return DateTimeFormat::kWeek;
+  }
+  if (format == kMonth || format == kMm || format == kMon) {
+    return DateTimeFormat::kMonth;
+  }
+  if (format == kQuarter) {
+    return DateTimeFormat::kQuarter;
+  }
+  if (format == kYear || format == kYyyy || format == kYy) {
+    return DateTimeFormat::kYear;
+  }
+  if (throwIfInvalid) {
+    VELOX_UNSUPPORTED("Unsupported datetime format: {}", formatString);
+  }
+  return std::nullopt;
+}
+} // namespace
+
 template <typename T>
 struct YearFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -479,6 +551,161 @@ struct DateFromUnixDateFunction {
 
   FOLLY_ALWAYS_INLINE void call(out_type<Date>& result, const int32_t& value) {
     result = value;
+  }
+};
+
+template <typename T>
+struct DateTruncFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  const tz::TimeZone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* formatString,
+      const arg_type<Timestamp>* /*timestamp*/) {
+    timeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void adjustDateTime(
+      std::tm& dateTime,
+      const DateTimeFormat& format) {
+    switch (format) {
+      case DateTimeFormat::kYear:
+        dateTime.tm_mon = 0;
+        dateTime.tm_yday = 0;
+        FMT_FALLTHROUGH;
+      case DateTimeFormat::kQuarter:
+        dateTime.tm_mon = dateTime.tm_mon / 3 * 3;
+        FMT_FALLTHROUGH;
+      case DateTimeFormat::kMonth:
+        dateTime.tm_mday = 1;
+        dateTime.tm_hour = 0;
+        dateTime.tm_min = 0;
+        dateTime.tm_sec = 0;
+        break;
+      case DateTimeFormat::kWeek:
+        // Subtract the truncation
+        dateTime.tm_mday -= dateTime.tm_wday == 0 ? 6 : dateTime.tm_wday - 1;
+        // Setting the day of the week to Monday
+        dateTime.tm_wday = 1;
+
+        // If the adjusted day of the month falls in the previous month
+        // Move to the previous month
+        if (dateTime.tm_mday < 1) {
+          dateTime.tm_mon -= 1;
+
+          // If the adjusted month falls in the previous year
+          // Set to December and Move to the previous year
+          if (dateTime.tm_mon < 0) {
+            dateTime.tm_mon = 11;
+            dateTime.tm_year -= 1;
+          }
+
+          // Calculate the correct day of the month based on the number of days
+          // in the adjusted month
+          static const int daysInMonth[] = {
+              31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+          int daysInPrevMonth = daysInMonth[dateTime.tm_mon];
+
+          // Adjust for leap year if February
+          if (dateTime.tm_mon == 1 && (dateTime.tm_year + 1900) % 4 == 0 &&
+              ((dateTime.tm_year + 1900) % 100 != 0 ||
+               (dateTime.tm_year + 1900) % 400 == 0)) {
+            daysInPrevMonth = 29;
+          }
+          // Set to the correct day in the previous month
+          dateTime.tm_mday += daysInPrevMonth;
+        }
+        dateTime.tm_hour = 0;
+        dateTime.tm_min = 0;
+        dateTime.tm_sec = 0;
+        break;
+      default:
+        VELOX_UNREACHABLE();
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Timestamp>& result,
+      const arg_type<Varchar>& formatString,
+      const arg_type<Timestamp>& timestamp) {
+    std::optional<DateTimeFormat> formatOption =
+        fromDateTimeFormatString(formatString, false /*throwIfInvalid*/);
+    // Return null if format is illegal.
+    if (!formatOption.has_value()) {
+      return false;
+    }
+    DateTimeFormat format = formatOption.value();
+
+    switch (format) {
+      // For seconds ,millisecond, microsecond we just truncate the nanoseconds
+      // part of the timestamp; no timezone conversion required.
+      case DateTimeFormat::kMicrosecond:
+        result = Timestamp(
+            timestamp.getSeconds(), timestamp.getNanos() / 1000 * 1000);
+        return true;
+
+      case DateTimeFormat::kMillisecond:
+        result = Timestamp(
+            timestamp.getSeconds(), timestamp.getNanos() / 1000000 * 1000000);
+        return true;
+
+      case DateTimeFormat::kSecond:
+        result = Timestamp(timestamp.getSeconds(), 0);
+        return true;
+
+      // Same for minutes; timezones and daylight savings time are at least in
+      // the granularity of 30 mins, so we can just truncate the epoch directly.
+      case DateTimeFormat::kMinute:
+        result = adjustEpoch(timestamp.getSeconds(), 60);
+        return true;
+
+      // Hour truncation has to handle the corner case of daylight savings time
+      // boundaries. Since conversions from local timezone to UTC may be
+      // ambiguous, we need to be carefull about the roundtrip of converting to
+      // local time and back. So what we do is to calculate the truncation delta
+      // in UTC, then applying it to the input timestamp.
+      case DateTimeFormat::kHour: {
+        auto epochToAdjust = getSeconds(timestamp, timeZone_);
+        auto secondsDelta =
+            epochToAdjust - adjustEpoch(epochToAdjust, 60 * 60).getSeconds();
+        result = Timestamp(timestamp.getSeconds() - secondsDelta, 0);
+        return true;
+      }
+
+      // For the truncations below, we may first need to convert to the local
+      // timestamp, truncate, then convert back to GMT.
+      case DateTimeFormat::kDay:
+        result = adjustEpoch(getSeconds(timestamp, timeZone_), 24 * 60 * 60);
+        break;
+
+      default:
+        auto dateTime = getDateTime(timestamp, timeZone_);
+        adjustDateTime(dateTime, format);
+        result = Timestamp(Timestamp::calendarUtcToEpoch(dateTime), 0);
+        break;
+    }
+
+    if (timeZone_ != nullptr) {
+      result.toGMT(*timeZone_);
+    }
+    return true;
+  }
+
+ private:
+  /// For fixed interval like second, minute, hour, day and week
+  /// we can truncate date by a simple arithmetic expression:
+  /// floor(seconds / intervalSeconds) * intervalSeconds.
+  FOLLY_ALWAYS_INLINE Timestamp
+  adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
+    int64_t s = seconds / intervalSeconds;
+    if (seconds < 0 && seconds % intervalSeconds) {
+      s = s - 1;
+    }
+    int64_t truncedSeconds = s * intervalSeconds;
+    return Timestamp(truncedSeconds, 0);
   }
 };
 

@@ -518,6 +518,8 @@ void registerFunctions(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar>({prefix + "mask"});
+  registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
+      {prefix + "date_trunc"});
 }
 
 std::vector<std::string> listFunctionNames() {
