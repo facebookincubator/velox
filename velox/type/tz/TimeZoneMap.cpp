@@ -20,9 +20,7 @@
 #include <fmt/core.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
-#include "velox/common/base/Exceptions.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/external/date/tz.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -222,35 +220,7 @@ std::string normalizeTimeZone(const std::string& originalZoneId) {
   }
   return originalZoneId;
 }
-
-template <typename TDuration>
-void validateRangeImpl(time_point<TDuration> timePoint) {
-  using namespace velox::date;
-  static constexpr auto kMinYear = date::year::min();
-  static constexpr auto kMaxYear = date::year::max();
-
-  auto year = year_month_day(floor<days>(timePoint)).year();
-
-  if (year < kMinYear || year > kMaxYear) {
-    // This is a special case where we intentionally throw
-    // VeloxRuntimeError to avoid it being suppressed by TRY().
-    VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(
-        "Timepoint is outside of supported year range: [{}, {}], got {}",
-        (int)kMinYear,
-        (int)kMaxYear,
-        (int)year);
-  }
-}
-
 } // namespace
-
-void validateRange(time_point<std::chrono::seconds> timePoint) {
-  validateRangeImpl(timePoint);
-}
-
-void validateRange(time_point<std::chrono::milliseconds> timePoint) {
-  validateRangeImpl(timePoint);
-}
 
 std::string getTimeZoneName(int64_t timeZoneID) {
   return locateZone(timeZoneID, true)->name();
@@ -334,20 +304,10 @@ TimeZone::seconds TimeZone::to_sys(
 
   if (tz_ == nullptr) {
     // We can ignore `choose` as time offset conversions are always linear.
-    return (timePoint - offset_).time_since_epoch();
+    return (date::local_seconds(timestamp) - offset_).time_since_epoch();
   }
 
-  if (choose == TimeZone::TChoose::kFail) {
-    // By default, throws.
-    return date::zoned_time{tz_, timePoint}.get_sys_time().time_since_epoch();
-  }
-
-  auto dateChoose = (choose == TimeZone::TChoose::kEarliest)
-      ? date::choose::earliest
-      : date::choose::latest;
-  return date::zoned_time{tz_, timePoint, dateChoose}
-      .get_sys_time()
-      .time_since_epoch();
+  return getZonedTime(timePoint, choose).get_sys_time().time_since_epoch();
 }
 
 TimeZone::seconds TimeZone::to_local(TimeZone::seconds timestamp) const {
@@ -360,5 +320,4 @@ TimeZone::seconds TimeZone::to_local(TimeZone::seconds timestamp) const {
   }
   return date::zoned_time{tz_, timePoint}.get_local_time().time_since_epoch();
 }
-
 } // namespace facebook::velox::tz
