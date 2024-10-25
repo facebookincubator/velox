@@ -1,0 +1,60 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set(TEST_LINK_LIBS
+        velox_dwio_common_test_utils
+        velox_vector_test_lib
+        velox_exec_test_lib
+        velox_temp_path
+        GTest::gtest
+        GTest::gtest_main
+        GTest::gmock
+        gflags::gflags
+        ${GLOG}
+        ${FILESYSTEM})
+
+#add_subdirectory(reader)
+#add_subdirectory(writer)
+#add_subdirectory(thrift)
+#add_executable(velox_scan_pagefile PageFileReaderExample.cpp)
+#add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp)
+#add_test(
+#        NAME velox_dwio_parquet_tpch_test
+#        COMMAND velox_dwio_parquet_tpch_test
+#        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(velox_dwio_pagefile_test PageFileReaderTest.cpp)
+#add_test(
+#        NAME presto_pagefile_test
+#        COMMAND presto_pagefile_test
+#        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+
+target_link_libraries(
+        velox_dwio_pagefile_test
+        velox_dwio_pagefile_native_reader
+        velox_exec_test_lib
+        velox_exec
+        velox_hive_connector
+        velox_tpch_connector
+        velox_aggregates
+        velox_link_libs
+#        velox_tpch_gen
+        ${TEST_LINK_LIBS})
+
+add_test(NAME velox_dwio_pagefile_test COMMAND velox_dwio_pagefile_test)
+
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
+        DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
