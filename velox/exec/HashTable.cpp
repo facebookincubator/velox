@@ -466,75 +466,55 @@ void HashTable<ignoreNullKeys>::groupProbe(
     groupNormalizedKeyProbe(lookup);
     return;
   }
-  ProbeState state1;
-  ProbeState state2;
-  ProbeState state3;
-  ProbeState state4;
+  ProbeState states[kPrefetchSize];
   int32_t probeIndex = 0;
   int32_t numProbes = lookup.rows.size();
   auto rows = lookup.rows.data();
-  for (; probeIndex + 4 <= numProbes; probeIndex += 4) {
-    int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 1];
-    state2.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 2];
-    state3.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 3];
-    state4.preProbe(*this, lookup.hashes[row], row);
-
-    state1.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
-    state2.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
-    state3.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
-    state4.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
-
-    fullProbe<false>(lookup, state1, false);
-    fullProbe<false>(lookup, state2, true);
-    fullProbe<false>(lookup, state3, true);
-    fullProbe<false>(lookup, state4, true);
+  for (; probeIndex + kPrefetchSize <= numProbes; probeIndex += kPrefetchSize) {
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
+      int32_t row = rows[probeIndex + i];
+      states[i].preProbe(*this, lookup.hashes[row], row);
+    }
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
+      states[i].firstProbe<ProbeState::Operation::kInsert>(*this, 0);
+    }
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
+      fullProbe<false>(lookup, states[i], i != 0);
+    }
   }
   for (; probeIndex < numProbes; ++probeIndex) {
     int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    state1.firstProbe(*this, 0);
-    fullProbe<false>(lookup, state1, false);
+    states[0].preProbe(*this, lookup.hashes[row], row);
+    states[0].firstProbe(*this, 0);
+    fullProbe<false>(lookup, states[0], false);
   }
 }
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::groupNormalizedKeyProbe(HashLookup& lookup) {
-  ProbeState state1;
-  ProbeState state2;
-  ProbeState state3;
-  ProbeState state4;
+  ProbeState states[kPrefetchSize];
   int32_t probeIndex = 0;
   int32_t numProbes = lookup.rows.size();
   auto rows = lookup.rows.data();
   constexpr int32_t kKeyOffset =
       -static_cast<int32_t>(sizeof(normalized_key_t));
-  for (; probeIndex + 4 <= numProbes; probeIndex += 4) {
-    int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 1];
-    state2.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 2];
-    state3.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 3];
-    state4.preProbe(*this, lookup.hashes[row], row);
-    state1.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
-    state2.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
-    state3.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
-    state4.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
-    fullProbe<false, true>(lookup, state1, false);
-    fullProbe<false, true>(lookup, state2, true);
-    fullProbe<false, true>(lookup, state3, true);
-    fullProbe<false, true>(lookup, state4, true);
+  for (; probeIndex + kPrefetchSize <= numProbes; probeIndex += kPrefetchSize) {
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
+      int32_t row = rows[probeIndex + i];
+      states[i].preProbe(*this, lookup.hashes[row], row);
+    }
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
+      states[i].firstProbe(*this, kKeyOffset);
+    }
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
+      fullProbe<false, true>(lookup, states[i], i != 0);
+    }
   }
   for (; probeIndex < numProbes; ++probeIndex) {
     int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    state1.firstProbe(*this, kKeyOffset);
-    fullProbe<false, true>(lookup, state1, false);
+    states[0].preProbe(*this, lookup.hashes[row], row);
+    states[0].firstProbe(*this, kKeyOffset);
+    fullProbe<false, true>(lookup, states[0], false);
   }
 }
 
@@ -603,33 +583,24 @@ void HashTable<ignoreNullKeys>::joinProbe(HashLookup& lookup) {
   int32_t probeIndex = 0;
   int32_t numProbes = lookup.rows.size();
   const vector_size_t* rows = lookup.rows.data();
-  ProbeState state1;
-  ProbeState state2;
-  ProbeState state3;
-  ProbeState state4;
-  for (; probeIndex + 4 <= numProbes; probeIndex += 4) {
-    int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 1];
-    state2.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 2];
-    state3.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 3];
-    state4.preProbe(*this, lookup.hashes[row], row);
-    state1.firstProbe(*this, 0);
-    state2.firstProbe(*this, 0);
-    state3.firstProbe(*this, 0);
-    state4.firstProbe(*this, 0);
-    fullProbe<true>(lookup, state1, false);
-    fullProbe<true>(lookup, state2, false);
-    fullProbe<true>(lookup, state3, false);
-    fullProbe<true>(lookup, state4, false);
+  ProbeState states[kPrefetchSize];
+  for (; probeIndex + kPrefetchSize <= numProbes; probeIndex += kPrefetchSize) {
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
+      int32_t row = rows[probeIndex + i];
+      states[i].preProbe(*this, lookup.hashes[row], row);
+    }
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
+      states[i].firstProbe(*this, 0);
+    }
+    for (int32_t i = 0; i < kPrefetchSize; ++i) {
+      fullProbe<true>(lookup, states[i], false);
+    }
   }
   for (; probeIndex < numProbes; ++probeIndex) {
     int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    state1.firstProbe(*this, 0);
-    fullProbe<true>(lookup, state1, false);
+    states[0].preProbe(*this, lookup.hashes[row], row);
+    states[0].firstProbe(*this, 0);
+    fullProbe<true>(lookup, states[0], false);
   }
 }
 
