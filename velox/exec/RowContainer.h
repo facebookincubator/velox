@@ -773,6 +773,18 @@ class RowContainer {
     return (row[rowColumn.nullByte()] & rowColumn.nullMask()) != 0;
   }
 
+  /// Returns true if the column at columnIndex in row is NaN.
+  template <
+      typename T,
+      std::enable_if_t<std::is_floating_point_v<T>, int32_t> = 0>
+  bool isNanAt(const char* row, int32_t columnIndex) {
+    auto column = columnAt(columnIndex);
+    if (isNullAt(row, column.nullByte(), column.nullMask())) {
+      return false;
+    }
+    return std::isnan(valueAt<T>(row, column.offset()));
+  }
+
   /// Creates a container to store a partition number for each row in this row
   /// container. This is used by parallel join build which is responsible for
   /// filling this. This function also marks this row container as immutable
