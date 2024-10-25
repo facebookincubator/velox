@@ -306,10 +306,12 @@ void SortBuffer::ensureSortFits() {
     }
   }
 
-  LOG(WARNING) << "Failed to reserve " << succinctBytes(sortBufferToReserve)
-               << " for memory pool " << pool_->name()
-               << ", usage: " << succinctBytes(pool_->usedBytes())
-               << ", reservation: " << succinctBytes(pool_->reservedBytes());
+  LOG(WARNING) << fmt::format(
+      "Failed to reserve {} for memory pool {}, usage: {}, reservation: {}",
+      succinctBytes(sortBufferToReserve),
+      pool_->name(),
+      succinctBytes(pool_->usedBytes()),
+      succinctBytes(pool_->reservedBytes()));
 }
 
 void SortBuffer::updateEstimatedOutputRowSize() {

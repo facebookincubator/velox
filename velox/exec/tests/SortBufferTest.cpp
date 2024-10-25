@@ -620,37 +620,55 @@ DEBUG_ONLY_TEST_F(SortBufferTest, reserveMemorySortGetOutput) {
 }
 
 DEBUG_ONLY_TEST_F(SortBufferTest, reserveMemorySort) {
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
-  auto spillConfig = getSpillConfig(spillDirectory->getPath());
-  folly::Synchronized<common::SpillStats> spillStats;
-  auto sortBuffer = std::make_unique<SortBuffer>(
-      inputType_,
-      sortColumnIndices_,
-      sortCompareFlags_,
-      pool_.get(),
-      &nonReclaimableSection_,
-      prefixSortConfig_,
-      &spillConfig,
-      &spillStats);
+  for (bool usePrefixSort : {false, true}) {
+    for (bool spillEnabled : {false, true}) {
+      SCOPED_TRACE(fmt::format("spillEnabled {}", spillEnabled));
+      auto spillDirectory = exec::test::TempDirectoryPath::create();
+      auto spillConfig = getSpillConfig(spillDirectory->getPath());
+      folly::Synchronized<common::SpillStats> spillStats;
+      const RowTypePtr inputType = usePrefixSort ? inputType_
+                                                 : ROW(
+                                                       {{"c0", VARCHAR()},
+                                                        {"c1", VARCHAR()},
+                                                        {"c2", VARCHAR()},
+                                                        {"c3", VARCHAR()},
+                                                        {"c4", VARCHAR()},
+                                                        {"c5", VARCHAR()}});
+      auto sortBuffer = std::make_unique<SortBuffer>(
+          inputType,
+          sortColumnIndices_,
+          sortCompareFlags_,
+          pool_.get(),
+          &nonReclaimableSection_,
+          prefixSortConfig_,
+          spillEnabled ? &spillConfig : nullptr,
+          &spillStats);
 
-  const std::shared_ptr<memory::MemoryPool> fuzzerPool =
-      memory::memoryManager()->addLeafPool("spillSource");
-  VectorFuzzer fuzzer({.vectorSize = 100}, fuzzerPool.get());
+      const std::shared_ptr<memory::MemoryPool> spillSource =
+          memory::memoryManager()->addLeafPool("spillSource");
+      VectorFuzzer fuzzer({.vectorSize = 100}, spillSource.get());
 
-  TestScopedSpillInjection scopedSpillInjection(0);
-  sortBuffer->addInput(fuzzer.fuzzRow(inputType_));
+      TestScopedSpillInjection scopedSpillInjection(0);
+      sortBuffer->addInput(fuzzer.fuzzRow(inputType));
 
-  std::atomic_bool hasReserveMemory = false;
-  // Reserve memory for input and sort.
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
-      std::function<void(memory::MemoryPoolImpl*)>(
-          ([&](memory::MemoryPoolImpl* pool) {
-            hasReserveMemory.store(true);
-          })));
+      std::atomic_bool hasReserveMemory = false;
+      // Reserve memory for sort.
+      SCOPED_TESTVALUE_SET(
+          "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve",
+          std::function<void(memory::MemoryPoolImpl*)>(
+              ([&](memory::MemoryPoolImpl* pool) {
+                hasReserveMemory.store(true);
+              })));
 
-  sortBuffer->noMoreInput();
-  ASSERT_TRUE(hasReserveMemory);
+      sortBuffer->noMoreInput();
+      if (spillEnabled) {
+        // Reserve memory for sort.
+        ASSERT_TRUE(hasReserveMemory);
+      } else {
+        ASSERT_FALSE(hasReserveMemory);
+      }
+    }
+  }
 }
 
 TEST_F(SortBufferTest, emptySpill) {

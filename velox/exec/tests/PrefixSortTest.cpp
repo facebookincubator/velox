@@ -58,17 +58,29 @@ class PrefixSortTest : public exec::test::OperatorTestBase {
 
     RowContainer rowContainer(keyTypes, payloadTypes, pool_.get());
     auto rows = storeRows(numRows, data, &rowContainer);
-
-    // Use PrefixSort to sort rows.
-    PrefixSort::sort(
-        rows,
-        pool_.get(),
+    const std::shared_ptr<memory::MemoryPool> sortPool =
+        rootPool_->addLeafChild("prefixsort");
+    const auto maxBytes = PrefixSort::maxRequiredBytes(
+        sortPool.get(),
         &rowContainer,
         compareFlags,
         common::PrefixSortConfig{
             1024,
             // Set threshold to 0 to enable prefix-sort in small dataset.
             0});
+    const auto beforeBytes = sortPool->peakBytes();
+    ASSERT_EQ(sortPool->peakBytes(), 0);
+    // Use PrefixSort to sort rows.
+    PrefixSort::sort(
+        rows,
+        sortPool.get(),
+        &rowContainer,
+        compareFlags,
+        common::PrefixSortConfig{
+            1024,
+            // Set threshold to 0 to enable prefix-sort in small dataset.
+            0});
+    ASSERT_GE(maxBytes, sortPool->peakBytes() - beforeBytes);
 
     // Extract data from the RowContainer in order.
     const RowVectorPtr actual =

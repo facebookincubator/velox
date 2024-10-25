@@ -166,9 +166,10 @@ class PrefixSort {
   }
 
  private:
-  // The bytes to allocate in the prefix sort process such as prefix buffer and
+  // Estimates the memory required for prefix sort such as prefix buffer and
   // swap buffer.
   uint32_t maxRequiredBytes();
+
   void sortInternal(std::vector<char*, memory::StlAllocator<char*>>& rows);
 
   int compareAllNormalizedKeys(char* left, char* right);
