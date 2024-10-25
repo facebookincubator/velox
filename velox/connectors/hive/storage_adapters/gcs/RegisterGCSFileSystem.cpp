@@ -18,6 +18,7 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/gcs/GCSFileSystem.h" // @manual
 #include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h" // @manual
+#include "velox/dwio/common/FileSink.h"
 #endif
 
 namespace facebook::velox::filesystems {
@@ -52,11 +53,28 @@ gcsFileSystemGenerator() {
       };
   return filesystemGenerator;
 }
+
+std::unique_ptr<velox::dwio::common::FileSink> gcsWriteFileSinkGenerator(
+    const std::string& fileURI,
+    const velox::dwio::common::FileSink::Options& options) {
+  if (isGCSFile(fileURI)) {
+    auto fileSystem =
+        filesystems::getFileSystem(fileURI, options.connectorProperties);
+    return std::make_unique<dwio::common::WriteFileSink>(
+        fileSystem->openFileForWrite(fileURI, {{}, options.pool, std::nullopt}),
+        fileURI,
+        options.metricLogger,
+        options.stats);
+  }
+  return nullptr;
+}
 #endif
 
 void registerGCSFileSystem() {
 #ifdef VELOX_ENABLE_GCS
   registerFileSystem(isGCSFile, gcsFileSystemGenerator());
+  dwio::common::FileSink::registerFactory(
+      std::function(gcsWriteFileSinkGenerator));
 #endif
 }
 
