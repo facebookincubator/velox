@@ -16,8 +16,14 @@
 
 #pragma once
 
+#include <unicode/locid.h>
+#include <unicode/timezone.h>
+#include <unicode/tzfmt.h>
+#include <unicode/unistr.h>
 #include <chrono>
 #include <string>
+#include "velox/common/base/Exceptions.h"
+#include "velox/external/date/tz.h"
 
 namespace facebook::velox::date {
 class time_zone;
@@ -68,8 +74,24 @@ int16_t getTimeZoneID(int32_t offsetMinutes);
 template <typename T>
 using time_point = std::chrono::time_point<std::chrono::system_clock, T>;
 
-void validateRange(time_point<std::chrono::seconds> timePoint);
-void validateRange(time_point<std::chrono::milliseconds> timePoint);
+template <typename TDuration>
+void validateRange(time_point<TDuration> timePoint) {
+  using namespace velox::date;
+  static constexpr auto kMinYear = date::year::min();
+  static constexpr auto kMaxYear = date::year::max();
+
+  auto year = year_month_day(floor<days>(timePoint)).year();
+
+  if (year < kMinYear || year > kMaxYear) {
+    // This is a special case where we intentionally throw
+    // VeloxRuntimeError to avoid it being suppressed by TRY().
+    VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(
+        "Timepoint is outside of supported year range: [{}, {}], got {}",
+        (int)kMinYear,
+        (int)kMaxYear,
+        (int)year);
+  }
+}
 
 /// TimeZone is the proxy object for time zone management. It provides access to
 /// time zone names, their IDs (as defined in TimeZoneDatabase.cpp and
@@ -151,7 +173,60 @@ class TimeZone {
     return tz_;
   }
 
+  template <typename TDuration>
+  std::string getShortName(TDuration timestamp, TChoose choose = TChoose::kFail)
+      const {
+    date::local_time<TDuration> timePoint{timestamp};
+    validateRange(date::sys_time<TDuration>(timestamp));
+
+    return getZonedTime(timePoint, choose).get_info().abbrev;
+  }
+
+  template <typename TDuration>
+  std::string getLongName(TDuration timestamp) const {
+    UErrorCode success = U_ZERO_ERROR;
+
+    static const icu::Locale locale("en", "US");
+    static const std::unique_ptr<icu::TimeZoneFormat> format(
+        icu::TimeZoneFormat::createInstance(locale, success));
+    VELOX_USER_CHECK_NOT_NULL(format);
+
+    // Get the ICU TimeZone by name
+    std::unique_ptr<icu::TimeZone> tz(icu::TimeZone::createTimeZone(
+        icu::UnicodeString(timeZoneName_.data(), timeZoneName_.length())));
+    VELOX_USER_CHECK_NOT_NULL(tz);
+
+    // Format the time zone to get the long name.
+    icu::UnicodeString longName;
+    format->format(
+        UTimeZoneFormatStyle::UTZFMT_STYLE_SPECIFIC_LONG,
+        *tz,
+        std::chrono::duration_cast<std::chrono::milliseconds>(timestamp)
+            .count(),
+        longName);
+
+    // Convert the UnicodeString back to a string and write it out
+    std::string longNameStr;
+    longName.toUTF8String(longNameStr);
+
+    return longNameStr;
+  }
+
  private:
+  template <typename TDuration>
+  date::zoned_time<TDuration> getZonedTime(
+      date::local_time<TDuration> timestamp,
+      TChoose choose) const {
+    if (choose == TChoose::kFail) {
+      // By default, throws.
+      return date::zoned_time{tz_, timestamp};
+    }
+
+    auto dateChoose = (choose == TChoose::kEarliest) ? date::choose::earliest
+                                                     : date::choose::latest;
+    return date::zoned_time{tz_, timestamp, dateChoose};
+  }
+
   const date::time_zone* tz_{nullptr};
   const std::chrono::minutes offset_{0};
   const std::string timeZoneName_;
