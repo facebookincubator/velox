@@ -397,7 +397,8 @@ void GroupingSet::createHashTable() {
     }
   }
 
-  lookup_ = std::make_unique<HashLookup>(table_->hashers());
+  lookup_ = std::make_unique<HashLookup>(
+      table_->hashers(), table_->stringAllocatorShared());
   if (!isAdaptive_ && table_->hashMode() != BaseHashTable::HashMode::kHash) {
     table_->forceGenericHashMode(BaseHashTable::kNoSpillInputStartPartitionBit);
   }
@@ -408,7 +409,7 @@ void GroupingSet::initializeGlobalAggregation() {
     return;
   }
 
-  lookup_ = std::make_unique<HashLookup>(hashers_);
+  lookup_ = std::make_unique<HashLookup>(hashers_, table_->stringAllocatorShared());
   lookup_->reset(1);
 
   // Row layout is:

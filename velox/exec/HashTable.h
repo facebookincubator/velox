@@ -53,10 +53,21 @@ struct TableInsertPartitionInfo {
   }
 };
 
+template<typename T>
+using raw_vector<
+        T,
+        AlignedStlAllocator<T, simd::kPadding>> HsaRawVector;
+
 /// Contains input and output parameters for groupProbe and joinProbe APIs.
 struct HashLookup {
-  explicit HashLookup(const std::vector<std::unique_ptr<VectorHasher>>& h)
-      : hashers(h) {}
+  HashLookup(
+      const std::vector<std::unique_ptr<VectorHasher>>& h,
+      const std::shared_ptr<HashStringAllocator>& hsa)
+      : hashers(h),
+        hsa_(hsa),
+        rows(AlignedStlAllocator<vector_size_t, simd::kPadding>(hsa_.get())) {
+          std::cout << "HSA use count = " << hsa_.use_count() << std::endl;
+        }
 
   void reset(vector_size_t size) {
     rows.resize(size);
@@ -71,10 +82,13 @@ struct HashLookup {
   /// Scratch memory used to call VectorHasher::lookupValueIds.
   VectorHasher::ScratchMemory scratchMemory;
 
+  /// Keep a reference to the storage for the raw_vectors.
+  std::shared_ptr<HashStringAllocator> hsa_;
+
   /// Input to groupProbe and joinProbe APIs.
 
   /// Set of row numbers of row to probe.
-  raw_vector<vector_size_t> rows;
+  HsaRawVector<vector_size_t> rows;
 
   /// Hashes or value IDs for rows in 'rows'. Not aligned with 'rows'. Index is
   /// the row number.
@@ -163,7 +177,7 @@ class BaseHashTable {
     /// fixed sized.
     const uint64_t fixedSizeListColumnsSizeSum{0};
 
-    const raw_vector<vector_size_t>* rows{nullptr};
+    const HsaRawVector<vector_size_t>* rows{nullptr};
     const raw_vector<char*>* hits{nullptr};
 
     vector_size_t lastRowIndex{0};
@@ -198,6 +212,8 @@ class BaseHashTable {
   virtual ~BaseHashTable() = default;
 
   virtual HashStringAllocator* stringAllocator() = 0;
+
+  virtual const std::shared_ptr<HashStringAllocator>& stringAllocatorShared() = 0;
 
   /// Populates 'hashes' and 'rows' fields in 'lookup' in preparation for
   /// 'groupProbe' call. Rehashes the table if necessary. Uses lookup.hashes to
@@ -539,6 +555,10 @@ class HashTable : public BaseHashTable {
 
   HashStringAllocator* stringAllocator() override {
     return &rows_->stringAllocator();
+  }
+
+  const std::shared_ptr<HashStringAllocator>& stringAllocatorShared() override {
+    return rows_->stringAllocatorShared();
   }
 
   uint64_t capacity() const override {

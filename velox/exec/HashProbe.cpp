@@ -157,8 +157,6 @@ void HashProbe::initialize() {
     keyChannels_.push_back(hasher->channel());
   }
 
-  VELOX_CHECK_NULL(lookup_);
-  lookup_ = std::make_unique<HashLookup>(hashers_);
   auto buildType = joinNode_->sources()[1]->outputType();
   auto tableType = makeTableType(buildType.get(), joinNode_->rightKeys());
   if (joinNode_->filter()) {
@@ -349,6 +347,8 @@ void HashProbe::asyncWaitForHashTable() {
 
   VELOX_CHECK_NOT_NULL(table_);
 
+  VELOX_CHECK_NULL(lookup_);
+  lookup_ = std::make_unique<HashLookup>(hashers_, table_->stringAllocatorShared());
   maybeSetupSpillInputReader(hashBuildResult->restoredPartitionId);
   maybeSetupInputSpiller(hashBuildResult->spillPartitionIds);
   checkMaxSpillLevel(hashBuildResult->restoredPartitionId);

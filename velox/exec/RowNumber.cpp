@@ -48,7 +48,8 @@ RowNumber::RowNumber(
         false, // hasProbedFlag
         0, // minTableSizeForParallelJoinBuild
         pool());
-    lookup_ = std::make_unique<HashLookup>(table_->hashers());
+    lookup_ = std::make_unique<HashLookup>(
+        table_->hashers(), table_->stringAllocatorShared());
 
     const auto numRowsColumn = table_->rows()->columnAt(numKeys);
     numRowsOffset_ = numRowsColumn.offset();

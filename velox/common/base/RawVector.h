@@ -16,19 +16,35 @@
 
 #pragma once
 
+#include <iostream>
+
 #include <folly/Range.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/SimdUtil.h"
 
 namespace facebook::velox {
 
+template <typename T, uint8_t kAlignment>
+class StdAlignedAllocator {
+ public:
+  T* allocate(size_t n) {
+    return reinterpret_cast<T*>(aligned_alloc(kAlignment, n * sizeof(T)));
+  }
+
+  void deallocate(T* data, size_t /*n*/) {
+    ::free(data);
+  }
+};
+
 /// Class template similar to std::vector with no default construction and a
 /// SIMD load worth of padding below and above the data. The idea is that one
 /// can access the data at full SIMD width at both ends.
-template <typename T>
+template <
+    typename T,
+    typename Allocator = StdAlignedAllocator<T, simd::kPadding>>
 class raw_vector {
  public:
-  raw_vector() {
+  raw_vector(Allocator allocator = {}) : allocator_(std::move(allocator)) {
     static_assert(std::is_trivially_destructible<T>::value);
   }
 
@@ -42,35 +58,11 @@ class raw_vector {
     }
   }
 
-  // Constructs  a copy of 'other'. See operator=. 'data_' must be copied.
-  raw_vector(const raw_vector<T>& other) {
-    *this = other;
-  }
-
   raw_vector(raw_vector<T>&& other) noexcept {
     *this = std::move(other);
   }
 
-  // Moves 'other' to this, leaves 'other' empty, as after default
-  // construction.
-  void operator=(const raw_vector<T>& other) {
-    resize(other.size());
-    if (other.data_) {
-      memcpy(
-          data_,
-          other.data(),
-          bits::roundUp(size_ * sizeof(T), simd::kPadding));
-    }
-  }
-
-  void operator=(raw_vector<T>&& other) noexcept {
-    data_ = other.data_;
-    size_ = other.size_;
-    capacity_ = other.capacity_;
-    other.data_ = nullptr;
-    other.size_ = 0;
-    other.capacity_ = 0;
-  }
+  void operator=(raw_vector<T>&& other) noexcept = default;
 
   bool empty() const {
     return size_ == 0;
@@ -152,6 +144,9 @@ class raw_vector {
   }
 
  private:
+  // Constructs  a copy of 'other'. See operator=. 'data_' must be copied.
+  raw_vector(const raw_vector<T>& other) {}
+
   // Adds 'bytes' to the address 'pointer'.
   inline T* addBytes(T* pointer, int32_t bytes) {
     return reinterpret_cast<T*>(reinterpret_cast<uint64_t>(pointer) + bytes);
@@ -165,7 +160,11 @@ class raw_vector {
 
   T* allocateData(int32_t size, int32_t& capacity) {
     auto bytes = paddedSize(sizeof(T) * size);
-    auto ptr = reinterpret_cast<T*>(aligned_alloc(simd::kPadding, bytes));
+    auto numElementsOfT = std::ceil(bytes / sizeof(T));
+    // The allocate function takes in number of elements for the AlignedStlAllocator
+    // and not the number of bytes.
+    auto ptr = allocator_.allocate(numElementsOfT);
+    allocatedSize_ = numElementsOfT;
     // Clear the word below the pointer so that we do not get read of
     // uninitialized when reading a partial word that extends below
     // the pointer.
@@ -177,7 +176,7 @@ class raw_vector {
 
   void freeData(T* data) {
     if (data_) {
-      ::free(addBytes(data, -simd::kPadding));
+      allocator_.deallocate(addBytes(data, -simd::kPadding), allocatedSize_);
     }
   }
 
@@ -193,6 +192,8 @@ class raw_vector {
   T* data_{nullptr};
   int32_t size_{0};
   int32_t capacity_{0};
+  Allocator allocator_{};
+  size_t allocatedSize_{0};
 };
 
 // Returns a pointer to 'size' int32_t's with consecutive values
