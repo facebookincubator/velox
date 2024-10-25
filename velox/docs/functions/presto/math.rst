@@ -341,6 +341,13 @@ Probability Functions: inverse_cdf
     probability (p): P(N < n). The a, b parameters must be positive real values (all of type DOUBLE).
     The probability p must lie on the interval [0, 1].
 
+.. function:: inverse_binomial_cdf(numberOfTrials, successProbability, p) -> integer
+
+    Compute the inverse of the Binomial cdf with given numberOfTrials and successProbability (of a single trial) the
+    cumulative probability (p):  P(N <= n).
+    The successProbability and p must be real values in [0, 1] and the numberOfTrials must be
+    a positive integer.
+
 .. function:: inverse_weibull_cdf(a, b, p) -> double
 
     Compute the inverse of the Weibull cdf with given parameters ``a``, ``b`` for the probability ``p``.
