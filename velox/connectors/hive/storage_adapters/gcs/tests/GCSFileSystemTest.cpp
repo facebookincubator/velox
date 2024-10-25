@@ -16,10 +16,9 @@
 
 #include "velox/connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h"
-#include "velox/connectors/hive/storage_adapters/gcs/tests/GcsTestbench.h"
+#include "velox/connectors/hive/storage_adapters/gcs/tests/GCSTestbench.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
 #include "gtest/gtest.h"
@@ -27,33 +26,20 @@
 namespace facebook::velox::filesystems {
 namespace {
 class GCSFileSystemTest : public testing::Test {
- protected:
-  static void SetUpTestSuite() {
-    if (testbench_ == nullptr) {
-      testbench_ = std::make_shared<GcsTestbench>();
-      testbench_->bootstrap();
-    }
+ public:
+  void SetUp() {
+    testbench_ = std::make_shared<GCSTestbench>();
+    testbench_->bootstrap();
   }
 
-  std::shared_ptr<const config::ConfigBase> testGcsOptions() const {
-    std::unordered_map<std::string, std::string> configOverride = {};
-
-    configOverride["hive.gcs.scheme"] = "http";
-    configOverride["hive.gcs.endpoint"] = "localhost:" + testbench_->port();
-    return std::make_shared<const config::ConfigBase>(
-        std::move(configOverride));
-  }
-
-  static std::shared_ptr<GcsTestbench> testbench_;
+  std::shared_ptr<GCSTestbench> testbench_;
 };
-
-std::shared_ptr<GcsTestbench> GCSFileSystemTest::testbench_ = nullptr;
 
 TEST_F(GCSFileSystemTest, readFile) {
   const auto gcsFile = gcsURI(
       testbench_->preexistingBucketName(), testbench_->preexistingObjectName());
 
-  filesystems::GCSFileSystem gcfs(testGcsOptions());
+  filesystems::GCSFileSystem gcfs(testbench_->hiveConfig());
   gcfs.initializeClient();
   auto readFile = gcfs.openFileForRead(gcsFile);
   std::int64_t size = readFile->size();
@@ -90,7 +76,7 @@ TEST_F(GCSFileSystemTest, writeAndReadFile) {
   const std::string_view newFile = "readWriteFile.txt";
   const auto gcsFile = gcsURI(testbench_->preexistingBucketName(), newFile);
 
-  filesystems::GCSFileSystem gcfs(testGcsOptions());
+  filesystems::GCSFileSystem gcfs(testbench_->hiveConfig());
   gcfs.initializeClient();
   auto writeFile = gcfs.openFileForWrite(gcsFile);
   std::string dataContent =
@@ -114,15 +100,11 @@ TEST_F(GCSFileSystemTest, writeAndReadFile) {
   std::int64_t size = readFile->size();
   EXPECT_EQ(readFile->size(), contentSize);
   EXPECT_EQ(readFile->pread(0, size), dataContent);
-}
 
-TEST_F(GCSFileSystemTest, openExistingFileForWrite) {
-  const std::string_view newFile = "readWriteFile.txt";
-  const auto gcsFile = gcsURI(testbench_->preexistingBucketName(), newFile);
-
-  filesystems::GCSFileSystem gcfs(testGcsOptions());
-  gcfs.initializeClient();
-  VELOX_ASSERT_THROW(gcfs.openFileForWrite(gcsFile), "File already exists");
+  // Opening an existing file for write must be an error.
+  filesystems::GCSFileSystem newGcfs(testbench_->hiveConfig());
+  newGcfs.initializeClient();
+  VELOX_ASSERT_THROW(newGcfs.openFileForWrite(gcsFile), "File already exists");
 }
 
 TEST_F(GCSFileSystemTest, renameNotImplemented) {
@@ -130,7 +112,7 @@ TEST_F(GCSFileSystemTest, renameNotImplemented) {
   const auto gcsExistingFile = gcsURI(
       testbench_->preexistingBucketName(), testbench_->preexistingObjectName());
   const auto gcsNewFile = gcsURI(testbench_->preexistingBucketName(), file);
-  filesystems::GCSFileSystem gcfs(testGcsOptions());
+  filesystems::GCSFileSystem gcfs(testbench_->hiveConfig());
   gcfs.initializeClient();
   gcfs.openFileForRead(gcsExistingFile);
   VELOX_ASSERT_THROW(
@@ -141,7 +123,7 @@ TEST_F(GCSFileSystemTest, renameNotImplemented) {
 TEST_F(GCSFileSystemTest, mkdirNotImplemented) {
   const std::string_view dir = "newDirectory";
   const auto gcsNewDirectory = gcsURI(testbench_->preexistingBucketName(), dir);
-  filesystems::GCSFileSystem gcfs(testGcsOptions());
+  filesystems::GCSFileSystem gcfs(testbench_->hiveConfig());
   gcfs.initializeClient();
   VELOX_ASSERT_THROW(
       gcfs.mkdir(gcsNewDirectory), "mkdir for GCS not implemented");
@@ -150,7 +132,7 @@ TEST_F(GCSFileSystemTest, mkdirNotImplemented) {
 TEST_F(GCSFileSystemTest, rmdirNotImplemented) {
   const std::string_view dir = "Directory";
   const auto gcsDirectory = gcsURI(testbench_->preexistingBucketName(), dir);
-  filesystems::GCSFileSystem gcfs(testGcsOptions());
+  filesystems::GCSFileSystem gcfs(testbench_->hiveConfig());
   gcfs.initializeClient();
   VELOX_ASSERT_THROW(gcfs.rmdir(gcsDirectory), "rmdir for GCS not implemented");
 }
@@ -158,7 +140,7 @@ TEST_F(GCSFileSystemTest, rmdirNotImplemented) {
 TEST_F(GCSFileSystemTest, missingFile) {
   const std::string_view file = "newTest.txt";
   const auto gcsFile = gcsURI(testbench_->preexistingBucketName(), file);
-  filesystems::GCSFileSystem gcfs(testGcsOptions());
+  filesystems::GCSFileSystem gcfs(testbench_->hiveConfig());
   gcfs.initializeClient();
   VELOX_ASSERT_RUNTIME_THROW_CODE(
       gcfs.openFileForRead(gcsFile),
@@ -167,7 +149,7 @@ TEST_F(GCSFileSystemTest, missingFile) {
 }
 
 TEST_F(GCSFileSystemTest, missingBucket) {
-  filesystems::GCSFileSystem gcfs(testGcsOptions());
+  filesystems::GCSFileSystem gcfs(testbench_->hiveConfig());
   gcfs.initializeClient();
   const std::string_view gcsFile = "gs://dummy/foo.txt";
   VELOX_ASSERT_RUNTIME_THROW_CODE(
@@ -177,14 +159,12 @@ TEST_F(GCSFileSystemTest, missingBucket) {
 }
 
 TEST_F(GCSFileSystemTest, credentialsConfig) {
-  std::unordered_map<std::string, std::string> configOverride = {};
-
   // credentials from arrow gcsfs test case
   // While this service account key has the correct format, it cannot be used
   // for authentication because the key has been deactivated on the server-side,
   // *and* the account(s) involved are deleted *and* they are not the accounts
   // or projects do not match its contents.
-  auto creds = R"""({
+  const std::string_view kCreds = R"""({
       "type": "service_account",
       "project_id": "foo-project",
       "private_key_id": "a1a111aa1111a11a11a11aa111a111a1a1111111",
@@ -220,28 +200,19 @@ TEST_F(GCSFileSystemTest, credentialsConfig) {
   })""";
   auto jsonFile = exec::test::TempFilePath::create();
   std::ofstream credsOut(jsonFile->getPath());
-  credsOut << creds;
+  credsOut << kCreds;
   credsOut.close();
-  configOverride["hive.gcs.json-key-file-path"] = jsonFile->getPath();
-  configOverride["hive.gcs.scheme"] = "http";
-  configOverride["hive.gcs.endpoint"] = "localhost:" + testbench_->port();
-  std::shared_ptr<const config::ConfigBase> conf =
-      std::make_shared<const config::ConfigBase>(std::move(configOverride));
 
-  filesystems::GCSFileSystem gcfs(conf);
+  std::unordered_map<std::string, std::string> configOverride = {
+      {"hive.gcs.json-key-file-path", jsonFile->getPath()}};
+  auto hiveConfig = testbench_->hiveConfig(configOverride);
+
+  filesystems::GCSFileSystem gcfs(hiveConfig);
   gcfs.initializeClient();
-  try {
-    const std::string gcsFile = gcsURI(
-        testbench_->preexistingBucketName(),
-        testbench_->preexistingObjectName());
-    gcfs.openFileForRead(gcsFile);
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_THAT(
-        err.message(), testing::HasSubstr("gs://test1-gcs/test-object-name"));
-    EXPECT_THAT(
-        err.message(), testing::HasSubstr("Invalid ServiceAccountCredentials"));
-  }
+  const auto gcsFile = gcsURI(
+      testbench_->preexistingBucketName(), testbench_->preexistingObjectName());
+  VELOX_ASSERT_THROW(
+      gcfs.openFileForRead(gcsFile), "Invalid ServiceAccountCredentials");
 }
 } // namespace
 } // namespace facebook::velox::filesystems

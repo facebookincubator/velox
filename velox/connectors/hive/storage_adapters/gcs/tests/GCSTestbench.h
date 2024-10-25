@@ -21,6 +21,7 @@
 #include <google/cloud/storage/client.h>
 #include "gtest/gtest.h"
 
+#include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h"
 #include "velox/exec/tests/utils/PortUtil.h"
 
@@ -30,11 +31,11 @@ namespace gcs = google::cloud::storage;
 
 namespace facebook::velox::filesystems {
 
-class GcsTestbench : public testing::Environment {
+class GCSTestbench : public testing::Environment {
  public:
-  GcsTestbench() {
-    auto port = facebook::velox::exec::test::getFreePorts(1);
-    port_ = std::to_string(port[0]);
+  GCSTestbench() {
+    auto port = std::to_string(facebook::velox::exec::test::getFreePorts(1)[0]);
+    endpoint_ = "http://localhost:" + port;
     std::vector<std::string> names{"python3", "python"};
     // If the build script or application developer provides a value in the
     // PYTHON environment variable, then just use that.
@@ -58,7 +59,7 @@ class GcsTestbench : public testing::Environment {
           "-m",
           "testbench",
           "--port",
-          port_,
+          port,
           group_);
       if (serverProcess_.valid() && serverProcess_.running())
         break;
@@ -71,7 +72,7 @@ class GcsTestbench : public testing::Environment {
     error_ = std::move(error);
   }
 
-  ~GcsTestbench() override {
+  ~GCSTestbench() override {
     // Brutal shutdown, kill the full process group because the GCS testbench
     // may launch additional children.
     group_.terminate();
@@ -80,12 +81,18 @@ class GcsTestbench : public testing::Environment {
     }
   }
 
-  const std::string& port() const {
-    return port_;
-  }
+  std::shared_ptr<const config::ConfigBase> hiveConfig(
+      const std::unordered_map<std::string, std::string> configOverride = {})
+      const {
+    std::unordered_map<std::string, std::string> config(
+        {{"hive.gcs.endpoint", endpoint_}});
 
-  const std::string& error() const {
-    return error_;
+    // Update the default config map with the supplied configOverride map
+    for (const auto& [configName, configValue] : configOverride) {
+      config[configName] = configValue;
+    }
+
+    return std::make_shared<const config::ConfigBase>(std::move(config));
   }
 
   std::string_view preexistingBucketName() {
@@ -98,13 +105,13 @@ class GcsTestbench : public testing::Environment {
 
   void bootstrap() {
     ASSERT_THAT(this, ::testing::NotNull());
-    ASSERT_THAT(this->error(), ::testing::IsEmpty());
+    ASSERT_THAT(this->error_, ::testing::IsEmpty());
 
     // Create a bucket and a small file in the testbench. This makes it easier
     // to bootstrap GcsFileSystem and its tests.
     auto client = gcs::Client(
         google::cloud::Options{}
-            .set<gcs::RestEndpointOption>("http://localhost:" + this->port())
+            .set<gcs::RestEndpointOption>(this->endpoint_)
             .set<gc::UnifiedCredentialsOption>(gc::MakeInsecureCredentials()));
 
     bucketName_ = "test1-gcs";
@@ -122,7 +129,7 @@ class GcsTestbench : public testing::Environment {
   }
 
  private:
-  std::string port_;
+  std::string endpoint_;
   bp::child serverProcess_;
   bp::group group_;
   std::string error_;

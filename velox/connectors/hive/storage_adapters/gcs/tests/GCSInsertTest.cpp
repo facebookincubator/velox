@@ -18,7 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/connectors/hive/storage_adapters/gcs/RegisterGCSFileSystem.h"
-#include "velox/connectors/hive/storage_adapters/gcs/tests/GcsTestbench.h"
+#include "velox/connectors/hive/storage_adapters/gcs/tests/GCSTestbench.h"
 #include "velox/connectors/hive/storage_adapters/test_common/InsertTest.h"
 
 using namespace facebook::velox::exec::test;
@@ -31,20 +31,20 @@ class GCSInsertTest : public testing::Test, public test::InsertTest {
   static void SetUpTestSuite() {
     registerGCSFileSystem();
     memory::MemoryManager::testingSetInstance({});
-    if (testbench_ == nullptr) {
-      testbench_ = std::make_shared<GcsTestbench>();
-      testbench_->bootstrap();
-    }
   }
 
   void SetUp() override {
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
+    testbench_ = std::make_shared<GCSTestbench>();
+    testbench_->bootstrap();
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                exec::test::kHiveConnectorId, gcsOptions(), ioExecutor_.get());
+                exec::test::kHiveConnectorId,
+                testbench_->hiveConfig(),
+                ioExecutor_.get());
     connector::registerConnector(hiveConnector);
     parquet::registerParquetReaderFactory();
     parquet::registerParquetWriterFactory();
@@ -59,25 +59,14 @@ class GCSInsertTest : public testing::Test, public test::InsertTest {
     connector::unregisterConnector(exec::test::kHiveConnectorId);
   }
 
-  std::shared_ptr<const config::ConfigBase> gcsOptions() const {
-    static std::unordered_map<std::string, std::string> configOverride = {};
-
-    configOverride["hive.gcs.scheme"] = "http";
-    configOverride["hive.gcs.endpoint"] = "localhost:" + testbench_->port();
-    return std::make_shared<const config::ConfigBase>(
-        std::move(configOverride));
-  }
-
-  static std::shared_ptr<GcsTestbench> testbench_;
+  std::shared_ptr<GCSTestbench> testbench_;
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };
-
-std::shared_ptr<GcsTestbench> GCSInsertTest::testbench_ = nullptr;
 } // namespace
 
 TEST_F(GCSInsertTest, gcsInsertTest) {
   const int64_t kExpectedRows = 1'000;
-  const auto gcsBucket = gcsURI(testbench_->preexistingBucketName());
+  const auto gcsBucket = gcsURI(testbench_->preexistingBucketName(), "");
   runInsertTest(gcsBucket, kExpectedRows, pool());
 }
 } // namespace facebook::velox::filesystems
