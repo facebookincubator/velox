@@ -61,7 +61,7 @@ class ExchangeClientTest
     if (!isRegisteredVectorSerde()) {
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
-    bufferManager_ = OutputBufferManager::getInstance().lock();
+    bufferManager_ = OutputBufferManager::getInstanceRef();
 
     common::testutil::TestValue::enable();
   }

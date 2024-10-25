@@ -60,7 +60,7 @@ BlockingReason Destination::advance(
     if (serde_->kind() == VectorSerde::Kind::kPresto) {
       serializer::presto::PrestoVectorSerde::PrestoOptions options;
       options.compressionKind =
-          OutputBufferManager::getInstance().lock()->compressionKind();
+          OutputBufferManager::getInstanceRef()->compressionKind();
       options.minCompressionRatio = PartitionedOutput::minCompressionRatio();
       current_->createStreamTree(rowType, rowsInCurrent_, &options);
     } else {
@@ -165,7 +165,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(OutputBufferManager::getInstance()),
+      bufferManager_(OutputBufferManager::getInstanceRef()),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,
