@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_gcsfile_test GCSUtilTest.cpp GCSFileSystemTest.cpp)
+add_executable(velox_gcsfile_test GcsUtilTest.cpp GcsFileSystemTest.cpp)
 add_test(velox_gcsfile_test velox_gcsfile_test)
 target_link_libraries(
   velox_gcsfile_test
@@ -28,7 +28,7 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main)
 
-add_executable(velox_gcs_insert_test GCSInsertTest.cpp)
+add_executable(velox_gcs_insert_test GcsInsertTest.cpp)
 add_test(velox_gcs_insert_test velox_gcs_insert_test)
 target_link_libraries(
   velox_gcs_insert_test

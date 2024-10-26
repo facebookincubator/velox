@@ -22,25 +22,17 @@ namespace facebook::velox {
 
 namespace {
 constexpr const char* kSep{"/"};
-constexpr std::string_view kGCSScheme{"gs://"};
+constexpr std::string_view kGcsScheme{"gs://"};
 
 } // namespace
 
-static std::string_view kLoremIpsum =
-    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor"
-    "incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis "
-    "nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
-    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu"
-    "fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in"
-    "culpa qui officia deserunt mollit anim id est laborum.";
+std::string getErrorStringFromGcsError(const google::cloud::StatusCode& error);
 
-std::string getErrorStringFromGCSError(const google::cloud::StatusCode& error);
-
-inline bool isGCSFile(const std::string_view filename) {
-  return (filename.substr(0, kGCSScheme.size()) == kGCSScheme);
+inline bool isGcsFile(const std::string_view filename) {
+  return (filename.substr(0, kGcsScheme.size()) == kGcsScheme);
 }
 
-inline void setBucketAndKeyFromGCSPath(
+inline void setBucketAndKeyFromGcsPath(
     const std::string& path,
     std::string& bucket,
     std::string& key) {
@@ -51,19 +43,19 @@ inline void setBucketAndKeyFromGCSPath(
 
 inline std::string gcsURI(std::string_view bucket) {
   std::stringstream ss;
-  ss << kGCSScheme << bucket;
+  ss << kGcsScheme << bucket;
   return ss.str();
 }
 
 inline std::string gcsURI(std::string_view bucket, std::string_view key) {
   std::stringstream ss;
-  ss << kGCSScheme << bucket << kSep << key;
+  ss << kGcsScheme << bucket << kSep << key;
   return ss.str();
 }
 
 inline std::string gcsPath(const std::string_view& path) {
   // Remove the prefix gcs:// from the given path
-  return std::string(path.substr(kGCSScheme.length()));
+  return std::string(path.substr(kGcsScheme.length()));
 }
 
 } // namespace facebook::velox

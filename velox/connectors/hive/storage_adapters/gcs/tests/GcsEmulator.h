@@ -22,7 +22,7 @@
 #include "gtest/gtest.h"
 
 #include "velox/common/config/Config.h"
-#include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h"
+#include "velox/connectors/hive/storage_adapters/gcs/GcsUtil.h"
 #include "velox/exec/tests/utils/PortUtil.h"
 
 namespace bp = boost::process;
@@ -31,10 +31,18 @@ namespace gcs = google::cloud::storage;
 
 namespace facebook::velox::filesystems {
 
-class GCSTestbench : public testing::Environment {
+static std::string_view kLoremIpsum =
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor"
+    "incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis "
+    "nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
+    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu"
+    "fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in"
+    "culpa qui officia deserunt mollit anim id est laborum.";
+
+class GcsEmulator : public testing::Environment {
  public:
-  GCSTestbench() {
-    auto port = std::to_string(facebook::velox::exec::test::getFreePorts(1)[0]);
+  GcsEmulator() {
+    auto port = std::to_string(exec::test::getFreePort());
     endpoint_ = "http://localhost:" + port;
     std::vector<std::string> names{"python3", "python"};
     // If the build script or application developer provides a value in the
@@ -61,7 +69,7 @@ class GCSTestbench : public testing::Environment {
           "--port",
           port,
           group_);
-      if (serverProcess_.valid() && serverProcess_.running())
+      if (serverProcess_.valid())
         break;
       error += " (failed to start)";
       serverProcess_.terminate();
@@ -72,7 +80,7 @@ class GCSTestbench : public testing::Environment {
     error_ = std::move(error);
   }
 
-  ~GCSTestbench() override {
+  ~GcsEmulator() override {
     // Brutal shutdown, kill the full process group because the GCS testbench
     // may launch additional children.
     group_.terminate();

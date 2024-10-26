@@ -17,8 +17,8 @@
 #include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
-#include "velox/connectors/hive/storage_adapters/gcs/RegisterGCSFileSystem.h"
-#include "velox/connectors/hive/storage_adapters/gcs/tests/GCSTestbench.h"
+#include "velox/connectors/hive/storage_adapters/gcs/RegisterGcsFileSystem.h"
+#include "velox/connectors/hive/storage_adapters/gcs/tests/GcsEmulator.h"
 #include "velox/connectors/hive/storage_adapters/test_common/InsertTest.h"
 
 using namespace facebook::velox::exec::test;
@@ -26,17 +26,17 @@ using namespace facebook::velox::exec::test;
 namespace facebook::velox::filesystems {
 namespace {
 
-class GCSInsertTest : public testing::Test, public test::InsertTest {
+class GcsInsertTest : public testing::Test, public test::InsertTest {
  protected:
   static void SetUpTestSuite() {
-    registerGCSFileSystem();
+    registerGcsFileSystem();
     memory::MemoryManager::testingSetInstance({});
   }
 
   void SetUp() override {
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
-    testbench_ = std::make_shared<GCSTestbench>();
+    testbench_ = std::make_shared<GcsEmulator>();
     testbench_->bootstrap();
     auto hiveConnector =
         connector::getConnectorFactory(
@@ -59,12 +59,12 @@ class GCSInsertTest : public testing::Test, public test::InsertTest {
     connector::unregisterConnector(exec::test::kHiveConnectorId);
   }
 
-  std::shared_ptr<GCSTestbench> testbench_;
+  std::shared_ptr<GcsEmulator> testbench_;
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };
 } // namespace
 
-TEST_F(GCSInsertTest, gcsInsertTest) {
+TEST_F(GcsInsertTest, gcsInsertTest) {
   const int64_t kExpectedRows = 1'000;
   const auto gcsBucket = gcsURI(testbench_->preexistingBucketName(), "");
   runInsertTest(gcsBucket, kExpectedRows, pool());
