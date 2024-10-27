@@ -80,27 +80,27 @@ TEST_F(GcsFileSystemTest, writeAndReadFile) {
   filesystems::GcsFileSystem gcfs(testbench_->hiveConfig());
   gcfs.initializeClient();
   auto writeFile = gcfs.openFileForWrite(gcsFile);
-  std::string dataContent =
+  std::string_view kDataContent =
       "Dance me to your beauty with a burning violin"
       "Dance me through the panic till I'm gathered safely in"
       "Lift me like an olive branch and be my homeward dove"
       "Dance me to the end of love";
 
   EXPECT_EQ(writeFile->size(), 0);
-  std::int64_t contentSize = dataContent.length();
-  writeFile->append(dataContent.substr(0, 10));
+  std::int64_t contentSize = kDataContent.length();
+  writeFile->append(kDataContent.substr(0, 10));
   EXPECT_EQ(writeFile->size(), 10);
-  writeFile->append(dataContent.substr(10, contentSize - 10));
+  writeFile->append(kDataContent.substr(10, contentSize - 10));
   EXPECT_EQ(writeFile->size(), contentSize);
   writeFile->flush();
   writeFile->close();
   VELOX_ASSERT_THROW(
-      writeFile->append(dataContent.substr(0, 10)), "File is not open");
+      writeFile->append(kDataContent.substr(0, 10)), "File is not open");
 
   auto readFile = gcfs.openFileForRead(gcsFile);
   std::int64_t size = readFile->size();
   EXPECT_EQ(readFile->size(), contentSize);
-  EXPECT_EQ(readFile->pread(0, size), dataContent);
+  EXPECT_EQ(readFile->pread(0, size), kDataContent);
 
   // Opening an existing file for write must be an error.
   filesystems::GcsFileSystem newGcfs(testbench_->hiveConfig());

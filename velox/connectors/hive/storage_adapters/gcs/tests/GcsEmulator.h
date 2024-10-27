@@ -50,14 +50,14 @@ class GcsEmulator : public testing::Environment {
     if (const auto* env = std::getenv("PYTHON")) {
       names = {env};
     }
-    auto error = std::string(
-        "Coud not start GCS emulator."
-        " Used the following list of python interpreter names:");
+    std::stringstream error;
+    error << R"""({>>"Coud not start GCS emulator."
+        " The following list of python interpreter names were used:"})""";
     for (const auto& interpreter : names) {
       auto exe_path = bp::search_path(interpreter);
-      error += " " + interpreter;
+      error << " " << interpreter;
       if (exe_path.empty()) {
-        error += " (exe not found)";
+        error << " (exe not found)";
         continue;
       }
 
@@ -69,19 +69,18 @@ class GcsEmulator : public testing::Environment {
           "--port",
           port,
           group_);
-      if (serverProcess_.valid())
-        break;
-      error += " (failed to start)";
+      if (serverProcess_.valid()) {
+        return;
+      }
+      error << " (failed to start)";
       serverProcess_.terminate();
       serverProcess_.wait();
     }
-    if (serverProcess_.valid() && serverProcess_.valid())
-      return;
-    error_ = std::move(error);
+    VELOX_FAIL(error.str());
   }
 
   ~GcsEmulator() override {
-    // Brutal shutdown, kill the full process group because the GCS testbench
+    // Brutal shutdown, kill the full process group because the GCS emulator
     // may launch additional children.
     group_.terminate();
     if (serverProcess_.valid()) {
@@ -113,7 +112,6 @@ class GcsEmulator : public testing::Environment {
 
   void bootstrap() {
     ASSERT_THAT(this, ::testing::NotNull());
-    ASSERT_THAT(this->error_, ::testing::IsEmpty());
 
     // Create a bucket and a small file in the testbench. This makes it easier
     // to bootstrap GcsFileSystem and its tests.
@@ -122,16 +120,12 @@ class GcsEmulator : public testing::Environment {
             .set<gcs::RestEndpointOption>(this->endpoint_)
             .set<gc::UnifiedCredentialsOption>(gc::MakeInsecureCredentials()));
 
-    bucketName_ = "test1-gcs";
-    google::cloud::StatusOr<gcs::BucketMetadata> bucket =
-        client.CreateBucketForProject(
-            bucketName_, "ignored-by-testbench", gcs::BucketMetadata{});
+    auto bucket = client.CreateBucketForProject(
+        bucketName_, "ignored-by-testbench", gcs::BucketMetadata{});
     ASSERT_TRUE(bucket.ok()) << "Failed to create bucket <" << bucketName_
                              << ">, status=" << bucket.status();
 
-    objectName_ = "test-object-name";
-    google::cloud::StatusOr<gcs::ObjectMetadata> object =
-        client.InsertObject(bucketName_, objectName_, kLoremIpsum);
+    auto object = client.InsertObject(bucketName_, objectName_, kLoremIpsum);
     ASSERT_TRUE(object.ok()) << "Failed to create object <" << objectName_
                              << ">, status=" << object.status();
   }
@@ -140,9 +134,11 @@ class GcsEmulator : public testing::Environment {
   std::string endpoint_;
   bp::child serverProcess_;
   bp::group group_;
-  std::string error_;
-  std::string bucketName_;
-  std::string objectName_;
+  static std::string bucketName_;
+  static std::string objectName_;
 };
+
+std::string GcsEmulator::bucketName_{"test1-gcs"};
+std::string GcsEmulator::objectName_{"test-object-name"};
 
 } // namespace facebook::velox::filesystems
