@@ -627,13 +627,14 @@ DEBUG_ONLY_TEST_F(SortBufferTest, reserveMemorySortGetOutput) {
 }
 
 DEBUG_ONLY_TEST_F(SortBufferTest, reserveMemorySort) {
-  struct SortTestOption {
+  struct {
     bool usePrefixSort;
     bool spillEnabled;
-  };
-  for (const auto [usePrefixSort, spillEnabled] : std::vector<SortTestOption>{
-           {false, true}, {true, false}, {true, true}}) {
-    SCOPED_TRACE(fmt::format("spillEnabled {}", spillEnabled));
+  } testSettings[] = {{false, true}, {true, false}, {true, true}};
+
+  for (const auto [usePrefixSort, spillEnabled] : testSettings) {
+    SCOPED_TRACE(fmt::format(
+        "usePrefixSort: {}, spillEnabled: {}, ", usePrefixSort, spillEnabled));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = getSpillConfig(spillDirectory->getPath());
     folly::Synchronized<common::SpillStats> spillStats;

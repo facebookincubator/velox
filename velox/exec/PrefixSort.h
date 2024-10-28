@@ -150,20 +150,7 @@ class PrefixSort {
       memory::MemoryPool* pool,
       RowContainer* rowContainer,
       const std::vector<CompareFlags>& compareFlags,
-      const velox::common::PrefixSortConfig& config) {
-    if (rowContainer->numRows() < config.threshold) {
-      return 0;
-    }
-    VELOX_DCHECK_EQ(rowContainer->keyTypes().size(), compareFlags.size());
-    const auto sortLayout = PrefixSortLayout::makeSortLayout(
-        rowContainer->keyTypes(), compareFlags, config.maxNormalizedKeySize);
-    if (sortLayout.noNormalizedKeys) {
-      return 0;
-    }
-
-    PrefixSort prefixSort(pool, rowContainer, sortLayout);
-    return prefixSort.maxRequiredBytes();
-  }
+      const velox::common::PrefixSortConfig& config);
 
  private:
   // Estimates the memory required for prefix sort such as prefix buffer and
