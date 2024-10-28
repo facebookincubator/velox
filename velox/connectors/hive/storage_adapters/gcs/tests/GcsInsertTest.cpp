@@ -36,14 +36,14 @@ class GcsInsertTest : public testing::Test, public test::InsertTest {
   void SetUp() override {
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
-    testbench_ = std::make_shared<GcsEmulator>();
-    testbench_->bootstrap();
+    emulator_ = std::make_shared<GcsEmulator>();
+    emulator_->bootstrap();
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
                 exec::test::kHiveConnectorId,
-                testbench_->hiveConfig(),
+                emulator_->hiveConfig(),
                 ioExecutor_.get());
     connector::registerConnector(hiveConnector);
     parquet::registerParquetReaderFactory();
@@ -59,14 +59,14 @@ class GcsInsertTest : public testing::Test, public test::InsertTest {
     connector::unregisterConnector(exec::test::kHiveConnectorId);
   }
 
-  std::shared_ptr<GcsEmulator> testbench_;
+  std::shared_ptr<GcsEmulator> emulator_;
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };
 } // namespace
 
 TEST_F(GcsInsertTest, gcsInsertTest) {
   const int64_t kExpectedRows = 1'000;
-  const auto gcsBucket = gcsURI(testbench_->preexistingBucketName(), "");
+  const auto gcsBucket = gcsURI(emulator_->preexistingBucketName(), "");
   runInsertTest(gcsBucket, kExpectedRows, pool());
 }
 } // namespace facebook::velox::filesystems

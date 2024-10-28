@@ -29,18 +29,18 @@ namespace {
 class GcsFileSystemTest : public testing::Test {
  public:
   void SetUp() {
-    testbench_ = std::make_shared<GcsEmulator>();
-    testbench_->bootstrap();
+    emulator_ = std::make_shared<GcsEmulator>();
+    emulator_->bootstrap();
   }
 
-  std::shared_ptr<GcsEmulator> testbench_;
+  std::shared_ptr<GcsEmulator> emulator_;
 };
 
 TEST_F(GcsFileSystemTest, readFile) {
   const auto gcsFile = gcsURI(
-      testbench_->preexistingBucketName(), testbench_->preexistingObjectName());
+      emulator_->preexistingBucketName(), emulator_->preexistingObjectName());
 
-  filesystems::GcsFileSystem gcfs(testbench_->hiveConfig());
+  filesystems::GcsFileSystem gcfs(emulator_->hiveConfig());
   gcfs.initializeClient();
   auto readFile = gcfs.openFileForRead(gcsFile);
   std::int64_t size = readFile->size();
@@ -75,9 +75,9 @@ TEST_F(GcsFileSystemTest, readFile) {
 
 TEST_F(GcsFileSystemTest, writeAndReadFile) {
   const std::string_view newFile = "readWriteFile.txt";
-  const auto gcsFile = gcsURI(testbench_->preexistingBucketName(), newFile);
+  const auto gcsFile = gcsURI(emulator_->preexistingBucketName(), newFile);
 
-  filesystems::GcsFileSystem gcfs(testbench_->hiveConfig());
+  filesystems::GcsFileSystem gcfs(emulator_->hiveConfig());
   gcfs.initializeClient();
   auto writeFile = gcfs.openFileForWrite(gcsFile);
   std::string_view kDataContent =
@@ -103,7 +103,7 @@ TEST_F(GcsFileSystemTest, writeAndReadFile) {
   EXPECT_EQ(readFile->pread(0, size), kDataContent);
 
   // Opening an existing file for write must be an error.
-  filesystems::GcsFileSystem newGcfs(testbench_->hiveConfig());
+  filesystems::GcsFileSystem newGcfs(emulator_->hiveConfig());
   newGcfs.initializeClient();
   VELOX_ASSERT_THROW(newGcfs.openFileForWrite(gcsFile), "File already exists");
 }
@@ -111,9 +111,9 @@ TEST_F(GcsFileSystemTest, writeAndReadFile) {
 TEST_F(GcsFileSystemTest, renameNotImplemented) {
   const std::string_view file = "newTest.txt";
   const auto gcsExistingFile = gcsURI(
-      testbench_->preexistingBucketName(), testbench_->preexistingObjectName());
-  const auto gcsNewFile = gcsURI(testbench_->preexistingBucketName(), file);
-  filesystems::GcsFileSystem gcfs(testbench_->hiveConfig());
+      emulator_->preexistingBucketName(), emulator_->preexistingObjectName());
+  const auto gcsNewFile = gcsURI(emulator_->preexistingBucketName(), file);
+  filesystems::GcsFileSystem gcfs(emulator_->hiveConfig());
   gcfs.initializeClient();
   gcfs.openFileForRead(gcsExistingFile);
   VELOX_ASSERT_THROW(
@@ -123,8 +123,8 @@ TEST_F(GcsFileSystemTest, renameNotImplemented) {
 
 TEST_F(GcsFileSystemTest, mkdirNotImplemented) {
   const std::string_view dir = "newDirectory";
-  const auto gcsNewDirectory = gcsURI(testbench_->preexistingBucketName(), dir);
-  filesystems::GcsFileSystem gcfs(testbench_->hiveConfig());
+  const auto gcsNewDirectory = gcsURI(emulator_->preexistingBucketName(), dir);
+  filesystems::GcsFileSystem gcfs(emulator_->hiveConfig());
   gcfs.initializeClient();
   VELOX_ASSERT_THROW(
       gcfs.mkdir(gcsNewDirectory), "mkdir for GCS not implemented");
@@ -132,16 +132,16 @@ TEST_F(GcsFileSystemTest, mkdirNotImplemented) {
 
 TEST_F(GcsFileSystemTest, rmdirNotImplemented) {
   const std::string_view dir = "Directory";
-  const auto gcsDirectory = gcsURI(testbench_->preexistingBucketName(), dir);
-  filesystems::GcsFileSystem gcfs(testbench_->hiveConfig());
+  const auto gcsDirectory = gcsURI(emulator_->preexistingBucketName(), dir);
+  filesystems::GcsFileSystem gcfs(emulator_->hiveConfig());
   gcfs.initializeClient();
   VELOX_ASSERT_THROW(gcfs.rmdir(gcsDirectory), "rmdir for GCS not implemented");
 }
 
 TEST_F(GcsFileSystemTest, missingFile) {
   const std::string_view file = "newTest.txt";
-  const auto gcsFile = gcsURI(testbench_->preexistingBucketName(), file);
-  filesystems::GcsFileSystem gcfs(testbench_->hiveConfig());
+  const auto gcsFile = gcsURI(emulator_->preexistingBucketName(), file);
+  filesystems::GcsFileSystem gcfs(emulator_->hiveConfig());
   gcfs.initializeClient();
   VELOX_ASSERT_RUNTIME_THROW_CODE(
       gcfs.openFileForRead(gcsFile),
@@ -150,7 +150,7 @@ TEST_F(GcsFileSystemTest, missingFile) {
 }
 
 TEST_F(GcsFileSystemTest, missingBucket) {
-  filesystems::GcsFileSystem gcfs(testbench_->hiveConfig());
+  filesystems::GcsFileSystem gcfs(emulator_->hiveConfig());
   gcfs.initializeClient();
   const std::string_view gcsFile = "gs://dummy/foo.txt";
   VELOX_ASSERT_RUNTIME_THROW_CODE(
@@ -206,12 +206,12 @@ TEST_F(GcsFileSystemTest, credentialsConfig) {
 
   std::unordered_map<std::string, std::string> configOverride = {
       {"hive.gcs.json-key-file-path", jsonFile->getPath()}};
-  auto hiveConfig = testbench_->hiveConfig(configOverride);
+  auto hiveConfig = emulator_->hiveConfig(configOverride);
 
   filesystems::GcsFileSystem gcfs(hiveConfig);
   gcfs.initializeClient();
   const auto gcsFile = gcsURI(
-      testbench_->preexistingBucketName(), testbench_->preexistingObjectName());
+      emulator_->preexistingBucketName(), emulator_->preexistingObjectName());
   VELOX_ASSERT_THROW(
       gcfs.openFileForRead(gcsFile), "Invalid ServiceAccountCredentials");
 }
