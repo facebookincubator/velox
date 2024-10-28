@@ -333,8 +333,21 @@ These functions support TIMESTAMP and DATE input types.
     part of the 53rd week of year 2004, so the result is 2004. Only supports DATE type.
 
         SELECT year_of_week('2005-01-02'); -- 2004
-.. spark:function:: date_trunc(format, timestamp) -> timestamp
 
-    Returns timestamp ts truncated to the unit specified by the format model.
+.. spark:function:: date_trunc(fmt, ts) -> timestamp
+
+    Returns timestamp ts truncated to the unit specified by the format model fmt.
+    Returns null if ``fmt`` is invalid.
+    ``fmt`` is case insensitive and must be one of the following:
+        * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ts falls in, the time part will be zero out
+        * "QUARTER" - truncate to the first date of the quarter that the ts falls in, the time part will be zero out
+        * "MONTH", "MM", "MON" - truncate to the first date of the month that the ts falls in, the time part will be zero out
+        * "WEEK" - truncate to the Monday of the week that the ts falls in, the time part will be zero out
+        * "DAY", "DD" - zero out the time part
+        * "HOUR" - zero out the minute and second with fraction part
+        * "MINUTE"- zero out the second with fraction part
+        * "SECOND" - zero out the second fraction part
+        * "MILLISECOND" - zero out the microseconds
+        * "MICROSECOND" - everything remains
 
         SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00

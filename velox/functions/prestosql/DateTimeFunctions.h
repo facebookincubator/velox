@@ -878,54 +878,6 @@ struct MillisecondFromIntervalFunction {
 };
 
 namespace {
-inline std::optional<DateTimeUnit> fromDateTimeUnitString(
-    const StringView& unitString,
-    bool throwIfInvalid) {
-  static const StringView kMillisecond("millisecond");
-  static const StringView kSecond("second");
-  static const StringView kMinute("minute");
-  static const StringView kHour("hour");
-  static const StringView kDay("day");
-  static const StringView kWeek("week");
-  static const StringView kMonth("month");
-  static const StringView kQuarter("quarter");
-  static const StringView kYear("year");
-
-  const auto unit = boost::algorithm::to_lower_copy(unitString.str());
-
-  if (unit == kMillisecond) {
-    return DateTimeUnit::kMillisecond;
-  }
-  if (unit == kSecond) {
-    return DateTimeUnit::kSecond;
-  }
-  if (unit == kMinute) {
-    return DateTimeUnit::kMinute;
-  }
-  if (unit == kHour) {
-    return DateTimeUnit::kHour;
-  }
-  if (unit == kDay) {
-    return DateTimeUnit::kDay;
-  }
-  if (unit == kWeek) {
-    return DateTimeUnit::kWeek;
-  }
-  if (unit == kMonth) {
-    return DateTimeUnit::kMonth;
-  }
-  if (unit == kQuarter) {
-    return DateTimeUnit::kQuarter;
-  }
-  if (unit == kYear) {
-    return DateTimeUnit::kYear;
-  }
-  if (throwIfInvalid) {
-    VELOX_UNSUPPORTED("Unsupported datetime unit: {}", unitString);
-  }
-  return std::nullopt;
-}
-
 inline bool isTimeUnit(const DateTimeUnit unit) {
   return unit == DateTimeUnit::kMillisecond || unit == DateTimeUnit::kSecond ||
       unit == DateTimeUnit::kMinute || unit == DateTimeUnit::kHour;
@@ -1001,74 +953,6 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<TimestampWithTimezone>* /*timestamp*/) {
     if (unitString != nullptr) {
       unit_ = getTimestampUnit(*unitString);
-    }
-  }
-
-  FOLLY_ALWAYS_INLINE void adjustDateTime(
-      std::tm& dateTime,
-      const DateTimeUnit& unit) {
-    switch (unit) {
-      case DateTimeUnit::kYear:
-        dateTime.tm_mon = 0;
-        dateTime.tm_yday = 0;
-        FMT_FALLTHROUGH;
-      case DateTimeUnit::kQuarter:
-        dateTime.tm_mon = dateTime.tm_mon / 3 * 3;
-        FMT_FALLTHROUGH;
-      case DateTimeUnit::kMonth:
-        dateTime.tm_mday = 1;
-        dateTime.tm_hour = 0;
-        dateTime.tm_min = 0;
-        dateTime.tm_sec = 0;
-        break;
-      case DateTimeUnit::kWeek:
-        // Subtract the truncation
-        dateTime.tm_mday -= dateTime.tm_wday == 0 ? 6 : dateTime.tm_wday - 1;
-        // Setting the day of the week to Monday
-        dateTime.tm_wday = 1;
-
-        // If the adjusted day of the month falls in the previous month
-        // Move to the previous month
-        if (dateTime.tm_mday < 1) {
-          dateTime.tm_mon -= 1;
-
-          // If the adjusted month falls in the previous year
-          // Set to December and Move to the previous year
-          if (dateTime.tm_mon < 0) {
-            dateTime.tm_mon = 11;
-            dateTime.tm_year -= 1;
-          }
-
-          // Calculate the correct day of the month based on the number of days
-          // in the adjusted month
-          static const int daysInMonth[] = {
-              31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-          int daysInPrevMonth = daysInMonth[dateTime.tm_mon];
-
-          // Adjust for leap year if February
-          if (dateTime.tm_mon == 1 && (dateTime.tm_year + 1900) % 4 == 0 &&
-              ((dateTime.tm_year + 1900) % 100 != 0 ||
-               (dateTime.tm_year + 1900) % 400 == 0)) {
-            daysInPrevMonth = 29;
-          }
-          // Set to the correct day in the previous month
-          dateTime.tm_mday += daysInPrevMonth;
-        }
-        dateTime.tm_hour = 0;
-        dateTime.tm_min = 0;
-        dateTime.tm_sec = 0;
-        break;
-      case DateTimeUnit::kDay:
-        dateTime.tm_hour = 0;
-        FMT_FALLTHROUGH;
-      case DateTimeUnit::kHour:
-        dateTime.tm_min = 0;
-        FMT_FALLTHROUGH;
-      case DateTimeUnit::kMinute:
-        dateTime.tm_sec = 0;
-        break;
-      default:
-        VELOX_UNREACHABLE();
     }
   }
 
@@ -1173,20 +1057,6 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     timestamp.toGMT(*tz::locateZone(unpackZoneKeyId(*timestampWithTimezone)));
 
     result = pack(timestamp, unpackZoneKeyId(*timestampWithTimezone));
-  }
-
- private:
-  /// For fixed interval like second, minute, hour, day and week
-  /// we can truncate date by a simple arithmetic expression:
-  /// floor(seconds / intervalSeconds) * intervalSeconds.
-  FOLLY_ALWAYS_INLINE Timestamp
-  adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
-    int64_t s = seconds / intervalSeconds;
-    if (seconds < 0 && seconds % intervalSeconds) {
-      s = s - 1;
-    }
-    int64_t truncedSeconds = s * intervalSeconds;
-    return Timestamp(truncedSeconds, 0);
   }
 };
 
