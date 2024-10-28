@@ -103,9 +103,6 @@ class Exchange : public SourceOperator {
   /// there are more splits available or no-more-splits signal has arrived.
   ContinueFuture splitFuture_{ContinueFuture::makeEmpty()};
 
-  // Reusable result vector.
-  RowVectorPtr result_;
-
   std::shared_ptr<ExchangeClient> exchangeClient_;
   std::vector<std::unique_ptr<SerializedPage>> currentPages_;
   bool atEnd_{false};

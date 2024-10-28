@@ -114,6 +114,7 @@ RowVectorPtr Exchange::getOutput() {
     return nullptr;
   }
 
+  RowVectorPtr result;
   uint64_t rawInputBytes{0};
   vector_size_t resultOffset = 0;
   for (const auto& page : currentPages_) {
@@ -126,10 +127,10 @@ RowVectorPtr Exchange::getOutput() {
           inputStream.get(),
           pool(),
           outputType_,
-          &result_,
+          &result,
           resultOffset,
           &options_);
-      resultOffset = result_->size();
+      resultOffset = result->size();
     }
   }
 
@@ -138,17 +139,16 @@ RowVectorPtr Exchange::getOutput() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->rawInputBytes += rawInputBytes;
-    lockedStats->rawInputPositions += result_->size();
-    lockedStats->addInputVector(result_->estimateFlatSize(), result_->size());
+    lockedStats->rawInputPositions += result->size();
+    lockedStats->addInputVector(result->estimateFlatSize(), result->size());
   }
 
-  return result_;
+  return result;
 }
 
 void Exchange::close() {
   SourceOperator::close();
   currentPages_.clear();
-  result_ = nullptr;
   if (exchangeClient_) {
     recordExchangeClientStats();
     exchangeClient_->close();
