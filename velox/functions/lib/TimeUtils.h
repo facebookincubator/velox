@@ -17,12 +17,12 @@
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <velox/type/Timestamp.h>
-#include "velox/expression/ComplexViewTypes.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/expression/ComplexViewTypes.h"
 #include "velox/external/date/date.h"
 #include "velox/external/date/iso_week.h"
-#include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
