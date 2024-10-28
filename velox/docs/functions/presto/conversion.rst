@@ -30,7 +30,7 @@ are supported if the conversion of their element types are supported. In additio
 supported conversions to/from JSON are listed in :doc:`json`.
 
 .. list-table::
-   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25
+   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25
    :header-rows: 1
 
    * -
@@ -49,6 +49,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - interval day to second
      - decimal
      - ipaddress
+     - ipprefix
    * - tinyint
      - Y
      - Y
@@ -65,6 +66,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - 
+     -
    * - smallint
      - Y
      - Y
@@ -81,6 +83,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - 
+     -
    * - integer
      - Y
      - Y
@@ -97,6 +100,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - 
+     -
    * - bigint
      - Y
      - Y
@@ -113,6 +117,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - 
+     -
    * - boolean
      - Y
      - Y
@@ -129,6 +134,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - 
+     -
    * - real
      - Y
      - Y
@@ -145,6 +151,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - 
+     -
    * - double
      - Y
      - Y
@@ -161,6 +168,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - 
+     -
    * - varchar
      - Y
      - Y
@@ -175,6 +183,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      -
+     - Y
      - Y
      - Y
    * - varbinary
@@ -193,6 +202,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - 
      - Y
+     -
    * - timestamp
      -
      -
@@ -209,6 +219,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - 
+     -
    * - timestamp with time zone
      -
      -
@@ -222,6 +233,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
      - Y
+     -
      -
      -
      -
@@ -241,6 +253,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
    * - interval day to second
      -
      -
@@ -251,6 +264,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - 
+     -
      -
      -
      -
@@ -273,6 +287,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      -
+     -
    * - ipaddress
      - 
      - 
@@ -288,7 +303,25 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - 
+     - Y
      - 
+   * - ipprefix
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - 
+     - Y
+     - 
+     -
+     -
+     -
+     -
+     - 
+     - 
+     - Y
 
 Cast to Integral Types
 ----------------------
@@ -667,27 +700,54 @@ is the number of whole days in the interval, HH is then number of hours between 
 From IPADDRESS
 ^^^^^^^^^^^^^^
 
-Casting from IPADDRESS to VARCHAR returns a string formatted as x.x.x.x for IPV4 formatted IPV6 addresses.
-For all other IPV6 addresses it will be formatted in compressed alternate form IPV6 defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_
+Casting from IPADDRESS to VARCHAR returns a string formatted as x.x.x.x for IPv4 formatted IPv6 addresses.
+For all other IPv6 addresses it will be formatted in compressed alternate form IPv6 defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_.
 
-IPV4:
+IPv4:
 
 ::
 
   SELECT cast(ipaddress '1.2.3.4' as varchar); -- '1.2.3.4'
 
-IPV6:
+IPv6:
 
 ::
 
   SELECT cast(ipaddress '2001:0db8:0000:0000:0000:ff00:0042:8329' as varchar); -- '2001:db8::ff00:42:8329'
   SELECT cast(ipaddress '0:0:0:0:0:0:13.1.68.3' as varchar); -- '::13.1.68.3'
 
-IPV4 mapped IPV6:
+IPv4 mapped IPv6:
 
 ::
 
   SELECT cast(ipaddress '::ffff:ffff:ffff' as varchar); -- '255.255.255.255'
+
+From IPPREFIX
+^^^^^^^^^^^^^
+
+Casting from IPPREFIX to VARCHAR returns a string formatted as *x.x.x.x/<prefix-length>* for IPv4 formatted IPv6 addresses.
+
+For all other IPv6 addresses it will be formatted in compressed alternate form IPv6 defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_
+followed by */<prefix-length>*. [`RFC 4291#section-2.3 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.3>`_]
+
+IPv4:
+
+::
+
+  SELECT cast(ipprefix '1.2.0.0/16' as varchar); -- '1.2.0.0/16'
+
+IPv6:
+
+::
+
+  SELECT cast(ipprefix '2001:db8::ff00:42:8329/128' as varchar); -- '2001:db8::ff00:42:8329/128'
+  SELECT cast(ipprefix '0:0:0:0:0:0:13.1.68.3/32' as varchar); -- '::/32'
+
+IPv4 mapped IPv6:
+
+::
+
+  SELECT cast(ipaddress '::ffff:ffff:0000/16' as varchar); -- '255.255.0.0/16'
 
 Cast to VARBINARY
 -----------------
@@ -695,24 +755,24 @@ Cast to VARBINARY
 From IPADDRESS
 ^^^^^^^^^^^^^^
 
-Returns the IPV6 address as a 16 byte varbinary string in network byte order.
+Returns the IPv6 address as a 16 byte varbinary string in network byte order.
 
-Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range `(RFC 4291#section-2.5.5.2) <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
+Internally, the type is a pure IPv6 address. Support for IPv4 is handled using the IPv4-mapped IPv6 address range. [`RFC 4291#section-2.5.5.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_]
 When creating an IPADDRESS, IPv4 addresses will be mapped into that range.
 
-IPV6:
+IPv6:
 
 ::
 
   SELECT cast(ipaddress '2001:0db8:0000:0000:0000:ff00:0042:8329' as varbinary); -- 0x20010db8000000000000ff0000428329
 
-IPV4:
+IPv4:
 
 ::
 
   SELECT cast('1.2.3.4' as ipaddress); -- 0x00000000000000000000ffff01020304
 
-IPV4 mapped IPV6:
+IPv4 mapped IPv6:
 
 ::
 
@@ -1036,16 +1096,18 @@ Invalid example
 Cast to IPADDRESS
 -----------------
 
+.. _ipaddress-from-varchar:
+
 From VARCHAR
 ^^^^^^^^^^^^
 
 To cast a varchar to IPAddress input string must be in the form of either
-IPV4 or IPV6.
+IPv4 or IPv6.
 
-For IPV4 it must be in the form of:
+For IPv4 it must be in the form of:
 x.x.x.x where each x is an integer value between 0-255.
 
-For IPV6 it must follow any of the forms defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_.
+For IPv6 it must follow any of the forms defined in `RFC 4291#section-2.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.2>`_.
 
 Full form:
 
@@ -1087,16 +1149,16 @@ Invalid examples:
 From VARBINARY
 ^^^^^^^^^^^^^^
 
-To cast a varbinary to IPAddress it must be either IPV4(4 Bytes)
-or IPV6(16 Bytes) in network byte order.
+To cast a varbinary to IPAddress it must be either IPv4(4 Bytes)
+or IPv6(16 Bytes) in network byte order.
 
-IPV4:
+IPv4:
 
 ::
 
 [01, 02, 03, 04] -> 1.2.3.4
 
-IPV6:
+IPv6:
 
 ::
 
@@ -1108,7 +1170,7 @@ When creating an IPADDRESS, IPv4 addresses will be mapped into that range.
 When formatting an IPADDRESS, any address within the mapped range will be formatted as an IPv4 address.
 Other addresses will be formatted as IPv6 using the canonical format defined in `RFC 5952 <https://datatracker.ietf.org/doc/html/rfc5952.html>`_.
 
-IPV6 mapped IPV4 address:
+IPv6 mapped IPv4 address:
 
 ::
 
@@ -1127,6 +1189,41 @@ Invalid examples:
 ::
 
   SELECT cast(from_hex('f000001100') as ipaddress); -- Invalid IP address binary length: 5
+
+Cast to IPPREFIX
+----------------
+
+From VARCHAR
+^^^^^^^^^^^^
+
+The IPPREFIX string must be in the form of *<ip_address>/<ip_prefix>* as defined in `RFC 4291#section-2.3 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.3>`_.
+The IPADDRESS portion of the IPPREFIX follows the same rules as casting
+`IPADDRESS from VARCHAR <#ipaddress-from-varchar>`_.
+
+The prefix portion must be <= 32 if the IP is an IPv4 address or <= 128 for an IPv6 address.
+As with IPADDRESS, any IPv6 address in the form of an IPv4 mapped IPv6 address will be
+interpreted as an IPv4 address. Only the canonical(smallest) IP address will be stored
+in the IPPREFIX.
+
+Examples:
+
+Valid examples:
+
+::
+
+  SELECT cast('2001:0db8:0000:0000:0000:ff00:0042:8329/32' as ipprefix); -- ipprefix '2001:0db8::/32'
+  SELECT cast('1.2.3.4/24' as ipprefix); -- ipprefix '1.2.3.0/24'
+  SELECT cast('::ffff:ffff:ffff/16' as ipprefix); -- ipprefix '255.255.0.0/16'
+
+Invalid examples:
+
+::
+
+  SELECT cast('2001:db8::1::1/1' as ipprefix); -- Cannot cast value to IPPREFIX: 2001:db8::1::1/1
+  SELECT cast('2001:0db8:0000:0000:0000:ff00:0042:8329/129' as ipprefix); -- Cannot cast value to IPPREFIX: 2001:0db8:0000:0000:0000:ff00:0042:8329/129
+  SELECT cast('2001:0db8:0000:0000:0000:ff00:0042:8329/-1' as ipprefix); -- Cannot cast value to IPPREFIX: 2001:0db8:0000:0000:0000:ff00:0042:8329/-1
+  SELECT cast('255.2.3.4/33' as ipprefix); -- Cannot cast value to IPPREFIX: 255.2.3.4/33
+  SELECT cast('::ffff:ffff:ffff/33' as ipprefix); -- Cannot cast value to IPPREFIX: ::ffff:ffff:ffff/33
 
 Miscellaneous
 -------------

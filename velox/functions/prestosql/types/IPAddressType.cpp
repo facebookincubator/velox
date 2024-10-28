@@ -21,7 +21,6 @@
 static constexpr int kIPV4AddressBytes = 4;
 static constexpr int kIPV4ToV6FFIndex = 10;
 static constexpr int kIPV4ToV6Index = 12;
-static constexpr int kIPAddressBytes = 16;
 
 namespace facebook::velox {
 

@@ -18,6 +18,8 @@
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
+static constexpr int kIPAddressBytes = 16;
+
 namespace facebook::velox {
 
 class IPAddressType : public HugeintType {
