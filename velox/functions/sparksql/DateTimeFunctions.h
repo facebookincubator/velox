@@ -47,8 +47,9 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
 //
 // @param format The format string to be used for initializing the formatter.
 // @param legacyFormatter Determines formatter type.
-// @return True if the formatter was successfully set; false if using the
-// legacy formatter and an invalid format was provided.
+// @return An optional shared pointer to a DateTimeFormatter. If the formatter
+// initialization fails and the legacy formatter is used, std::nullopt is
+// returned.
 std::optional<std::shared_ptr<DateTimeFormatter>> initializeFormatter(
     const std::string_view& format,
     bool legacyFormatter) {
