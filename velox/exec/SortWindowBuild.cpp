@@ -170,7 +170,7 @@ void SortWindowBuild::ensureSortFits() {
   }
 
   LOG(WARNING) << fmt::format(
-      "Failed to reserve {} for memory pool {}, usage: {}, reservation: {}",
+      "Failed to reserve {} for sort window build from memory pool {}, usage: {}, reservation: {}",
       succinctBytes(sortBufferToReserve),
       pool_->name(),
       succinctBytes(pool_->usedBytes()),
@@ -289,6 +289,9 @@ void SortWindowBuild::noMoreInput() {
     // the partition. This will order the rows for getOutput().
     sortPartitions();
   }
+
+  // Releases the unused memory reservation after procesing input.
+  pool_->release();
 }
 
 void SortWindowBuild::loadNextPartitionFromSpill() {
