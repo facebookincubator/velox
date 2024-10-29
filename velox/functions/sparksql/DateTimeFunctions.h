@@ -507,59 +507,7 @@ struct DateTruncFunction {
       return false;
     }
     DateTimeUnit unit = unitOption.value();
-
-    switch (unit) {
-      // For seconds ,millisecond, microsecond we just truncate the nanoseconds
-      // part of the timestamp; no timezone conversion required.
-      case DateTimeUnit::kMicrosecond:
-        result = Timestamp(
-            timestamp.getSeconds(), timestamp.getNanos() / 1000 * 1000);
-        return true;
-
-      case DateTimeUnit::kMillisecond:
-        result = Timestamp(
-            timestamp.getSeconds(), timestamp.getNanos() / 1000000 * 1000000);
-        return true;
-
-      case DateTimeUnit::kSecond:
-        result = Timestamp(timestamp.getSeconds(), 0);
-        return true;
-
-      // Same for minutes; timezones and daylight savings time are at least in
-      // the granularity of 30 mins, so we can just truncate the epoch directly.
-      case DateTimeUnit::kMinute:
-        result = adjustEpoch(timestamp.getSeconds(), 60);
-        return true;
-
-      // Hour truncation has to handle the corner case of daylight savings time
-      // boundaries. Since conversions from local timezone to UTC may be
-      // ambiguous, we need to be carefull about the roundtrip of converting to
-      // local time and back. So what we do is to calculate the truncation delta
-      // in UTC, then applying it to the input timestamp.
-      case DateTimeUnit::kHour: {
-        auto epochToAdjust = getSeconds(timestamp, timeZone_);
-        auto secondsDelta =
-            epochToAdjust - adjustEpoch(epochToAdjust, 60 * 60).getSeconds();
-        result = Timestamp(timestamp.getSeconds() - secondsDelta, 0);
-        return true;
-      }
-
-      // For the truncations below, we may first need to convert to the local
-      // timestamp, truncate, then convert back to GMT.
-      case DateTimeUnit::kDay:
-        result = adjustEpoch(getSeconds(timestamp, timeZone_), 24 * 60 * 60);
-        break;
-
-      default:
-        auto dateTime = getDateTime(timestamp, timeZone_);
-        adjustDateTime(dateTime, unit);
-        result = Timestamp(Timestamp::calendarUtcToEpoch(dateTime), 0);
-        break;
-    }
-
-    if (timeZone_ != nullptr) {
-      result.toGMT(*timeZone_);
-    }
+    result = dateTrunc(unit, timestamp, timeZone_);
     return true;
   }
 };
