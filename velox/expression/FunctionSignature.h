@@ -514,4 +514,16 @@ struct hash<facebook::velox::exec::FunctionSignature> {
   }
 };
 
+template <>
+struct hash<std::vector<facebook::velox::exec::TypeSignature>> {
+  using argument_type = std::vector<facebook::velox::exec::TypeSignature>;
+  std::size_t operator()(const argument_type& key) const noexcept {
+    size_t val = 0;
+    for (const auto& arg : key) {
+      val = val * 31 + std::hash<std::string>{}(arg.baseName());
+    }
+    return val;
+  }
+};
+
 } // namespace std
