@@ -813,7 +813,8 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
       getTimestamp("2023-07-13 21:34", "yyyy-MM-dd HH:II"),
       "Specifier I is not supported");
 
-  // Invalid format returns null for legacy date formatter.
+  // Returns null for invalid datetime format when legacy date formatter is
+  // used.
   enableLegacyFormatter();
   // Empty format.
   EXPECT_EQ(getTimestamp("0", ""), std::nullopt);
@@ -943,7 +944,8 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
   VELOX_ASSERT_THROW(
       fromUnixTime(0, "yyyy-MM-dd HH:II"), "Specifier I is not supported");
 
-  // Invalid format returns null for legacy date formatter.
+  // Returns null for invalid datetime format when legacy date formatter is
+  // used.
   enableLegacyFormatter();
   // Empty format.
   EXPECT_EQ(fromUnixTime(0, ""), std::nullopt);
