@@ -50,7 +50,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
 // @return An optional shared pointer to a DateTimeFormatter. If the formatter
 // initialization fails and the legacy formatter is used, std::nullopt is
 // returned.
-std::optional<std::shared_ptr<DateTimeFormatter>> initializeFormatter(
+std::shared_ptr<DateTimeFormatter> initializeFormatter(
     const std::string_view& format,
     bool legacyFormatter) {
   auto formatter = detail::getDateTimeFormatter(
@@ -61,7 +61,7 @@ std::optional<std::shared_ptr<DateTimeFormatter>> initializeFormatter(
   // throws user error.
   if (formatter.hasError()) {
     if (legacyFormatter) {
-      return std::nullopt;
+      return nullptr;
     }
     VELOX_USER_FAIL(formatter.error().message());
   }
@@ -275,8 +275,8 @@ struct FromUnixtimeFunction {
     if (format != nullptr) {
       auto formatter = detail::initializeFormatter(
           std::string_view(*format), legacyFormatter_);
-      if (formatter.has_value()) {
-        formatter_ = formatter.value();
+      if (formatter) {
+        formatter_ = formatter;
         maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
       } else {
         invalidFormat_ = true;
@@ -295,8 +295,8 @@ struct FromUnixtimeFunction {
     if (!isConstantTimeFormat_) {
       auto formatter = detail::initializeFormatter(
           std::string_view(format), legacyFormatter_);
-      if (formatter.has_value()) {
-        formatter_ = formatter.value();
+      if (formatter) {
+        formatter_ = formatter;
         maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
       } else {
         return false;
@@ -399,8 +399,8 @@ struct GetTimestampFunction {
     if (format != nullptr) {
       auto formatter = detail::initializeFormatter(
           std::string_view(*format), legacyFormatter_);
-      if (formatter.has_value()) {
-        formatter_ = formatter.value();
+      if (formatter) {
+        formatter_ = formatter;
       } else {
         invalidFormat_ = true;
       }
@@ -417,8 +417,8 @@ struct GetTimestampFunction {
     if (!isConstantTimeFormat_) {
       auto formatter = detail::initializeFormatter(
           std::string_view(format), legacyFormatter_);
-      if (formatter.has_value()) {
-        formatter_ = formatter.value();
+      if (formatter) {
+        formatter_ = formatter;
       } else {
         return false;
       }
