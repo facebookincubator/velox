@@ -393,7 +393,7 @@ facebook::velox::RowVectorPtr to_velox_column(
     facebook::velox::memory::MemoryPool* pool,
     std::string name_prefix) {
   auto arrowDeviceArray = cudf::to_arrow_host(table);
-  auto arrowArray = arrowDeviceArray->array;
+  auto& arrowArray = arrowDeviceArray->array;
 
   std::vector<cudf::column_metadata> metadata;
   for (auto i = 0; i < table.num_columns(); i++) {
