@@ -393,21 +393,40 @@ facebook::velox::RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     std::string name_prefix) {
-      
+      // std::cout << "Table info:"<<std::endl;
+      // std::cout << "Number of columns: "<<table.num_columns()<<std::endl;
+      // std::cout << "Number of rows: "<<table.num_rows()<<std::endl;
+      auto stream  = cudf::get_default_stream();
+      stream.synchronize();
+    
      auto arrowDeviceArray =  cudf::to_arrow_host(table);
-     auto arrowArray = arrowDeviceArray->array;
+     auto& arrowArray = arrowDeviceArray->array;
 
      std::vector<cudf::column_metadata> metadata;
      for(auto i = 0; i < table.num_columns(); i++) {
        metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
      }
      auto arrowSchema = cudf::to_arrow_schema(table, metadata);
-     // TODO BaseVector or RowVector?
-  return std::dynamic_pointer_cast<facebook::velox::RowVector>(importFromArrowAsOwner(
+     // store below import call to variable
+     // TODO: use importFromArrowAsOwner after moving ownership of ArrowArray
+      stream.synchronize();
+
+    // if (arrowArray.release) {
+    //   arrowArray.release(&arrowArray);
+    // }
+    // if (arrowSchema->release) {
+    //   arrowSchema->release(arrowSchema.get());
+    // }
+
+    auto veloxTable = importFromArrowAsOwner(
     *arrowSchema,
     arrowArray,
-    pool));
+    pool);
+     // BaseVector to RowVector
+    auto casted_ptr = std::dynamic_pointer_cast<facebook::velox::RowVector>(veloxTable);
+    std::cout << "after cast"<<std::endl;
+    VELOX_CHECK_NOT_NULL(casted_ptr);
+    return casted_ptr;
     }
-}
-
+} // namespace with_arrow
 } // namespace facebook::velox::cudf_velox

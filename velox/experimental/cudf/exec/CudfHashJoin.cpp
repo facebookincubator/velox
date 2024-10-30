@@ -260,6 +260,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     return nullptr;
   }
   // TODO convert input to cudf table
+  // auto tbl = with_arrow::to_cudf_table(input_, input_->pool());
   auto tbl = to_cudf_table(input_);
   if (cudfDebugEnabled()) {
     std::cout << "Probe table number of columns: " << tbl->num_columns()
@@ -399,7 +400,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   if (cudf_output->num_columns() == 0 or cudf_output->num_rows() == 0) {
     output = nullptr;
   } else {
-    output = to_velox_column(cudf_output->view(), input_->pool());
+    output = with_arrow::to_velox_column(cudf_output->view(), input_->pool());
   }
 
   input_.reset();
