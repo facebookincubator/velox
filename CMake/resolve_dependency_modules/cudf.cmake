@@ -14,11 +14,11 @@
 
 include_guard(GLOBAL)
 
-set(VELOX_cudf_VERSION 24.06)
+set(VELOX_cudf_VERSION 24.10)
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
-    f318032d01d43e14214ed70b6013ee0581d0327be49b858c75644f4bfc5f694b)
+    daa270c1e9223f098823491606bad2d9b10577d4bea8e543ae80265f1cecc0ed)
 set(VELOX_cudf_SOURCE_URL
-    "https://github.com/rapidsai/cudf/archive/refs/tags/v24.06.01.tar.gz")
+    "https://github.com/rapidsai/cudf/archive/refs/tags/v24.10.01.tar.gz")
 resolve_dependency_url(cudf)
 
 # Use block so we don't leak variables
