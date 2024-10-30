@@ -20,7 +20,7 @@ string(CONCAT VELOX_PYBIND11_SOURCE_URL
               "https://github.com/pybind/pybind11/archive/refs/tags/"
               "v${VELOX_PYBIND11_BUILD_VERSION}.tar.gz")
 
-resolve_dependency_url(PYBIND11)
+velox_resolve_dependency_url(PYBIND11)
 
 message(STATUS "Building Pybind11 from source")
 

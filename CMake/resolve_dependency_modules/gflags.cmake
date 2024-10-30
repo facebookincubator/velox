@@ -20,7 +20,7 @@ string(CONCAT VELOX_GFLAGS_SOURCE_URL
               "https://github.com/gflags/gflags/archive/refs/tags/"
               "v${VELOX_GFLAGS_VERSION}.tar.gz")
 
-resolve_dependency_url(GFLAGS)
+velox_resolve_dependency_url(GFLAGS)
 
 message(STATUS "Building gflags from source")
 FetchContent_Declare(

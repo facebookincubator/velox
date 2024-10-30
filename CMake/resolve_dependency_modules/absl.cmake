@@ -20,7 +20,7 @@ string(CONCAT VELOX_ABSL_SOURCE_URL
               "https://github.com/abseil/abseil-cpp/archive/refs/tags/"
               "${VELOX_ABSL_BUILD_VERSION}.tar.gz")
 
-resolve_dependency_url(ABSL)
+velox_resolve_dependency_url(ABSL)
 
 message(STATUS "Building Abseil from source")
 
