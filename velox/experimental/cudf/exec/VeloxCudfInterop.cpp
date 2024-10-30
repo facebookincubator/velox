@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -26,11 +27,11 @@
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
+#include <cudf/interop.hpp>
 #include <cudf/strings/string_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
-#include <cudf/interop.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
@@ -46,7 +47,6 @@
 #include <functional>
 #include <numeric>
 
-#include "velox/dwio/parquet/writer/Writer.h"
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
@@ -370,21 +370,20 @@ RowVectorPtr to_velox_column(
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> to_cudf_table(
-const facebook::velox::RowVectorPtr& veloxTable, // BaseVector or RowVector?
-facebook::velox::memory::MemoryPool* pool)
-{
-ArrowOptions arrowOptions{false, true};
+    const facebook::velox::RowVectorPtr& veloxTable, // BaseVector or RowVector?
+    facebook::velox::memory::MemoryPool* pool) {
+  ArrowOptions arrowOptions{false, true};
   ArrowArray arrowArray;
   exportToArrow(
-    std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
-    arrowArray,
-    pool,
-    arrowOptions);
-  ArrowSchema  arrowSchema;
+      std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
+      arrowArray,
+      pool,
+      arrowOptions);
+  ArrowSchema arrowSchema;
   exportToArrow(
-    std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
-    arrowSchema,
-    arrowOptions);
+      std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
+      arrowSchema,
+      arrowOptions);
 
   return cudf::from_arrow(&arrowSchema, &arrowArray);
 }
@@ -393,40 +392,21 @@ facebook::velox::RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     std::string name_prefix) {
-      // std::cout << "Table info:"<<std::endl;
-      // std::cout << "Number of columns: "<<table.num_columns()<<std::endl;
-      // std::cout << "Number of rows: "<<table.num_rows()<<std::endl;
-      auto stream  = cudf::get_default_stream();
-      stream.synchronize();
-    
-     auto arrowDeviceArray =  cudf::to_arrow_host(table);
-     auto& arrowArray = arrowDeviceArray->array;
+  auto arrowDeviceArray = cudf::to_arrow_host(table);
+  auto arrowArray = arrowDeviceArray->array;
 
-     std::vector<cudf::column_metadata> metadata;
-     for(auto i = 0; i < table.num_columns(); i++) {
-       metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
-     }
-     auto arrowSchema = cudf::to_arrow_schema(table, metadata);
-     // store below import call to variable
-     // TODO: use importFromArrowAsOwner after moving ownership of ArrowArray
-      stream.synchronize();
-
-    // if (arrowArray.release) {
-    //   arrowArray.release(&arrowArray);
-    // }
-    // if (arrowSchema->release) {
-    //   arrowSchema->release(arrowSchema.get());
-    // }
-
-    auto veloxTable = importFromArrowAsOwner(
-    *arrowSchema,
-    arrowArray,
-    pool);
-     // BaseVector to RowVector
-    auto casted_ptr = std::dynamic_pointer_cast<facebook::velox::RowVector>(veloxTable);
-    std::cout << "after cast"<<std::endl;
-    VELOX_CHECK_NOT_NULL(casted_ptr);
-    return casted_ptr;
-    }
+  std::vector<cudf::column_metadata> metadata;
+  for (auto i = 0; i < table.num_columns(); i++) {
+    metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
+  }
+  auto arrowSchema = cudf::to_arrow_schema(table, metadata);
+  auto veloxTable = importFromArrowAsOwner(*arrowSchema, arrowArray, pool);
+  // BaseVector to RowVector
+  auto casted_ptr =
+      std::dynamic_pointer_cast<facebook::velox::RowVector>(veloxTable);
+  std::cout << "after cast" << std::endl;
+  VELOX_CHECK_NOT_NULL(casted_ptr);
+  return casted_ptr;
+}
 } // namespace with_arrow
 } // namespace facebook::velox::cudf_velox
