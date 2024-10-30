@@ -313,29 +313,24 @@ TEST_F(DateTimeFunctionsTest, unixTimestampCustomFormat) {
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestampTimestampInput) {
-  const auto unixTimestamp = [&](std::optional<Timestamp> timestamp,
-                                 std::optional<StringView> formatStr) {
-    return evaluateOnce<int64_t>(
-        "unix_timestamp(c0, c1)", timestamp, formatStr);
+  const auto unixTimestamp = [&](std::optional<Timestamp> timestamp) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0)", timestamp);
   };
-  EXPECT_EQ(0, unixTimestamp(Timestamp(0, 0), "yyyy-MM-dd"));
-  EXPECT_EQ(1, unixTimestamp(Timestamp(1, 990), "yyyy-MM-dd"));
-  EXPECT_EQ(61, unixTimestamp(Timestamp(61, 0), "yyyy-MM-dd"));
+  EXPECT_EQ(0, unixTimestamp(Timestamp(0, 0)));
+  EXPECT_EQ(1, unixTimestamp(Timestamp(1, 990)));
+  EXPECT_EQ(61, unixTimestamp(Timestamp(61, 0)));
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestampDateInput) {
-  const auto unixTimestamp = [&](std::optional<int32_t> date,
-                                 std::optional<StringView> formatStr) {
-    return evaluateOnce<int64_t>(
-        "unix_timestamp(c0, c1)", {DATE(), VARCHAR()}, date, formatStr);
+  const auto unixTimestamp = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0)", {DATE()}, date);
   };
-  EXPECT_EQ(0, unixTimestamp(parseDate("1970-01-01"), "yyyy-MM-dd"));
-  EXPECT_EQ(1727740800, unixTimestamp(parseDate("2024-10-01"), "yyyy-MM-dd"));
+  EXPECT_EQ(0, unixTimestamp(parseDate("1970-01-01")));
+  EXPECT_EQ(1727740800, unixTimestamp(parseDate("2024-10-01")));
   VELOX_ASSERT_THROW(
-      unixTimestamp(kMax, "yyyy-MM-dd"),
-      "Timepoint is outside of supported year range");
+      unixTimestamp(kMax), "Timepoint is outside of supported year range");
   setQueryTimeZone("America/Los_Angeles");
-  EXPECT_EQ(1727766000, unixTimestamp(parseDate("2024-10-01"), "yyyy-MM-dd"));
+  EXPECT_EQ(1727766000, unixTimestamp(parseDate("2024-10-01")));
 }
 
 // unix_timestamp and to_unix_timestamp are aliases.
