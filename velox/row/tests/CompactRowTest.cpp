@@ -71,24 +71,46 @@ class CompactRowTest : public ::testing::Test, public VectorTestBase {
 
     BufferPtr buffer = AlignedBuffer::allocate<char>(totalSize, pool(), 0);
     auto* rawBuffer = buffer->asMutable<char>();
-    std::vector<std::string_view> serialized;
+    {
+      // Test serialize row-by-row.
+      size_t offset = 0;
+      std::vector<std::string_view> serialized;
+      for (auto i = 0; i < numRows; ++i) {
+        auto size = row.serialize(i, rawBuffer + offset);
+        serialized.push_back(std::string_view(rawBuffer + offset, size));
+        offset += size;
 
-    vector_size_t offset = 0;
-    vector_size_t rangeSize = 1;
-    // Serialize with different range size.
-    while (offset < numRows) {
-      auto size = std::min<vector_size_t>(rangeSize, numRows - offset);
-      row.serialize(offset, size, rawBuffer, offsets.data() + offset);
-      offset += size;
-      rangeSize = checkedMultiply<vector_size_t>(rangeSize, 2);
-    }
+        VELOX_CHECK_EQ(
+            size, row.rowSize(i), "Row {}: {}", i, data->toString(i));
+      }
 
-    for (auto i = 0; i < numRows; ++i) {
-      serialized.push_back(
-          std::string_view(rawBuffer + offsets[i], rowSize[i]));
+      VELOX_CHECK_EQ(offset, totalSize);
+
+      auto copy = CompactRow::deserialize(serialized, rowType, pool());
+      assertEqualVectors(data, copy);
     }
-    auto copy = CompactRow::deserialize(serialized, rowType, pool());
-    assertEqualVectors(data, copy);
+    {
+      // Test serialize by range.
+      memset(rawBuffer, 0, totalSize);
+
+      std::vector<std::string_view> serialized;
+      vector_size_t offset = 0;
+      vector_size_t rangeSize = 1;
+      // Serialize with different range size.
+      while (offset < numRows) {
+        auto size = std::min<vector_size_t>(rangeSize, numRows - offset);
+        row.serialize(offset, size, rawBuffer, offsets.data() + offset);
+        offset += size;
+        rangeSize = checkedMultiply<vector_size_t>(rangeSize, 2);
+      }
+
+      for (auto i = 0; i < numRows; ++i) {
+        serialized.push_back(
+            std::string_view(rawBuffer + offsets[i], rowSize[i]));
+      }
+      auto copy = CompactRow::deserialize(serialized, rowType, pool());
+      assertEqualVectors(data, copy);
+    }
   }
 };
 
