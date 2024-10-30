@@ -143,7 +143,8 @@ void CudfHashJoinBuild::noMoreInput() {
   auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
     VELOX_CHECK_NOT_NULL(inputs_[i]);
-    cudf_tables[i] = to_cudf_table(inputs_[i]);
+    cudf_tables[i] = with_arrow::to_cudf_table(inputs_[i], inputs_[i]->pool());
+    // cudf_tables[i] = to_cudf_table(inputs_[i]);
     cudf_table_views[i] = cudf_tables[i]->view();
   }
   auto tbl = cudf::concatenate(cudf_table_views);
@@ -260,8 +261,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     return nullptr;
   }
   // TODO convert input to cudf table
-  // auto tbl = with_arrow::to_cudf_table(input_, input_->pool());
-  auto tbl = to_cudf_table(input_);
+  auto tbl = with_arrow::to_cudf_table(input_, input_->pool());
+  // auto tbl = to_cudf_table(input_);
   if (cudfDebugEnabled()) {
     std::cout << "Probe table number of columns: " << tbl->num_columns()
               << std::endl;

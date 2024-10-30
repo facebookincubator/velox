@@ -384,8 +384,16 @@ std::unique_ptr<cudf::table> to_cudf_table(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
       arrowSchema,
       arrowOptions);
+  auto tbl = cudf::from_arrow(&arrowSchema, &arrowArray);
 
-  return cudf::from_arrow(&arrowSchema, &arrowArray);
+  // Release Arrow resources
+  if (arrowArray.release) {
+    arrowArray.release(&arrowArray);
+  }
+  if (arrowSchema.release) {
+    arrowSchema.release(&arrowSchema);
+  }
+  return tbl;
 }
 
 facebook::velox::RowVectorPtr to_velox_column(
@@ -404,7 +412,6 @@ facebook::velox::RowVectorPtr to_velox_column(
   // BaseVector to RowVector
   auto casted_ptr =
       std::dynamic_pointer_cast<facebook::velox::RowVector>(veloxTable);
-  std::cout << "after cast" << std::endl;
   VELOX_CHECK_NOT_NULL(casted_ptr);
   return casted_ptr;
 }
