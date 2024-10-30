@@ -89,7 +89,7 @@ execution of the target operator.</p></li>
 </ol>
 <section id="query-trace-writer">
 <h3>Query Trace Writer<a class="headerlink" href="#query-trace-writer" title="Link to this heading">¶</a></h3>
-<p><strong>QueryMetadataWriter</strong> records the query metadata during task creation,
+<p><strong>TaskTraceMetadataWriter</strong> records the query metadata during task creation,
 serializes, and writes them into a file in JSON format. There are two kinds
 of metadata:</p>
 <ul class="simple">
@@ -98,17 +98,17 @@ They can be serialized as JSON map objects (key-value pairs).</p></li>
 <li><p>Plan fragment of the task (also known as a plan node tree). It can be serialized
 as a JSON object, which is already supported in Velox.</p></li>
 </ul>
-<p><strong>QueryDataWriter</strong> records the input vectors from the target operator, which are
+<p><strong>OperatorTraceWriter</strong> records the input vectors from the target operator, which are
 serialized and written as a binary file.</p>
 </section>
 <section id="query-trace-reader">
 <h3>Query Trace Reader<a class="headerlink" href="#query-trace-reader" title="Link to this heading">¶</a></h3>
-<p><strong>QueryMetadataReader</strong> can load the query metadata JSON file, and extract the query
+<p><strong>TaskTraceMetadataReader</strong> can load the query metadata JSON file, and extract the query
 configurations, connector properties, and the plan fragment.</p>
 <p><strong>QueryDataReader</strong> can read and deserialize the input vectors of the target operator.
 It is used as the utility to replay the input data as a source operator in the target
 operator replay.</p>
-<p><strong>NOTE</strong>: <cite>QueryDataWriter</cite> serializes and flushes the input vectors in batches,
+<p><strong>NOTE</strong>: <cite>OperatorTraceWriter</cite> serializes and flushes the input vectors in batches,
 allowing it to replay the input process using the same sequence of batches.</p>
 </section>
 <section id="query-trace-util">
