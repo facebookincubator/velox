@@ -40,16 +40,14 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
   }
 }
 
-// Initialize `formatter_` based on the provided format string. It determines
-// formatter type based on the `legacyFormatter` flag. The legacy formatter
-// returns false for an invalid format, while the Joda formatter throws a
-// Velox user error.
+// Creates datetime formatter based on the provided format string. When legacy
+// formatter is used, returns nullptr for invalid format; otherwise, throws a
+// user error.
 //
 // @param format The format string to be used for initializing the formatter.
-// @param legacyFormatter Determines formatter type.
-// @return An optional shared pointer to a DateTimeFormatter. If the formatter
-// initialization fails and the legacy formatter is used, std::nullopt is
-// returned.
+// @param legacyFormatter Whether legacy formatter is used.
+// @return A shared pointer to a DateTimeFormatter. If the formatter
+// initialization fails and the legacy formatter is used, nullptr is returned.
 std::shared_ptr<DateTimeFormatter> initializeFormatter(
     const std::string_view& format,
     bool legacyFormatter) {
@@ -57,8 +55,8 @@ std::shared_ptr<DateTimeFormatter> initializeFormatter(
       std::string_view(format),
       legacyFormatter ? DateTimeFormatterType::STRICT_SIMPLE
                       : DateTimeFormatterType::JODA);
-  // Legacy formatter returns null for invalid format but Joda formatter
-  // throws user error.
+  // When legacy formatter is used, returns nullptr for invalid format;
+  // otherwise, throws a user error.
   if (formatter.hasError()) {
     if (legacyFormatter) {
       return nullptr;
