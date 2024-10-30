@@ -463,6 +463,7 @@ endif()
 
 if(VELOX_ENABLE_GPU)
   if(VELOX_ENABLE_CUDF)
+    # Arrow is required for interop with libcudf
     set(VELOX_ENABLE_ARROW ON)
     set_source(cudf)
     resolve_dependency(cudf)
