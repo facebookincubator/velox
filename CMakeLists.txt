@@ -361,11 +361,6 @@ if(VELOX_ENABLE_GPU)
   endif()
   include_directories("${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}")
 
-  if(VELOX_ENABLE_CUDF)
-    set(VELOX_ENABLE_ARROW ON)
-    set_source(cudf)
-    resolve_dependency(cudf)
-  endif()
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -459,6 +454,20 @@ resolve_dependency(simdjson 3.9.3)
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
+
+if(NOT TARGET fmt::fmt)
+  # Needs to be after cudf
+  set_source(fmt)
+  resolve_dependency(fmt 9.0.0)
+endif()
+
+if(VELOX_ENABLE_GPU)
+  if(VELOX_ENABLE_CUDF)
+    set(VELOX_ENABLE_ARROW ON)
+    set_source(cudf)
+    resolve_dependency(cudf)
+  endif()
+endif()
 
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
@@ -575,12 +584,6 @@ endif()
 if(VELOX_ENABLE_ARROW)
   set_source(Arrow)
   resolve_dependency(Arrow)
-endif()
-
-if(NOT TARGET fmt::fmt)
-  # Needs to be after cudf
-  set_source(fmt)
-  resolve_dependency(fmt 9.0.0)
 endif()
 
 add_subdirectory(velox)
