@@ -45,10 +45,10 @@ endmacro()
 
 # * Macro to resolve third-party dependencies.
 #
-# Provides the macro velox_resolve_dependency(). This macro will allow us to find the
-# dependency via the usage of find_package or use the custom
-# velox_build_dependency(dependency_name) macro to download and build the third party
-# dependency.
+# Provides the macro velox_resolve_dependency(). This macro will allow us to
+# find the dependency via the usage of find_package or use the custom
+# velox_build_dependency(dependency_name) macro to download and build the third
+# party dependency.
 #
 # velox_resolve_dependency(dependency_name [...] )
 #
@@ -89,7 +89,7 @@ endmacro()
 # By using a macro we don't need to propagate the value into the parent scope.
 macro(velox_set_source dependency_name)
   velox_set_with_default(${dependency_name}_SOURCE ${dependency_name}_SOURCE
-                   ${VELOX_DEPENDENCY_SOURCE})
+                         ${VELOX_DEPENDENCY_SOURCE})
   message(
     STATUS "Setting ${dependency_name} source to ${${dependency_name}_SOURCE}")
 endmacro()
@@ -143,7 +143,7 @@ macro(velox_resolve_dependency_url dependency_name)
           "${VELOX_${dependency_name}_SOURCE_URL}")
   if(DEFINED ENV{VELOX_${dependency_name}_URL})
     velox_set_with_default(VELOX_${dependency_name}_BUILD_SHA256_CHECKSUM
-                     VELOX_${dependency_name}_SHA256 "")
+                           VELOX_${dependency_name}_SHA256 "")
     if(DEFINED ENV{VELOX_${dependency_name}_SHA256})
       string(PREPEND VELOX_${dependency_name}_BUILD_SHA256_CHECKSUM "SHA256=")
     endif()

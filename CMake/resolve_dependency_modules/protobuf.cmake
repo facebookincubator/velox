@@ -26,9 +26,10 @@ if(${VELOX_PROTOBUF_BUILD_VERSION} LESS 22.0)
 else()
   velox_set_source(absl)
   velox_resolve_dependency(absl CONFIG REQUIRED)
-  string(CONCAT VELOX_PROTOBUF_SOURCE_URL
-                "https://github.com/protocolbuffers/protobuf/archive/"
-                "v${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz")
+  string(
+    CONCAT VELOX_PROTOBUF_SOURCE_URL
+           "https://github.com/protocolbuffers/protobuf/archive/"
+           "v${VELOX_PROTOBUF_BUILD_VERSION}.tar.gz")
 endif()
 
 velox_resolve_dependency_url(PROTOBUF)

@@ -65,12 +65,22 @@ file(MAKE_DIRECTORY ${ICU_INCLUDE_DIRS})
 file(MAKE_DIRECTORY ${ICU_LIBRARIES})
 
 # Create a target for each component
-set(icu_components data i18n io uc tu test)
+set(icu_components
+    data
+    i18n
+    io
+    uc
+    tu
+    test)
 
 foreach(component ${icu_components})
   add_library(ICU::${component} SHARED IMPORTED)
-  string(CONCAT ICU_${component}_LIBRARY ${ICU_LIBRARIES} "/libicu"
-                ${component} ".so")
+  string(
+    CONCAT ICU_${component}_LIBRARY
+           ${ICU_LIBRARIES}
+           "/libicu"
+           ${component}
+           ".so")
   file(TOUCH ${ICU_${component}_LIBRARY})
   set_target_properties(
     ICU::${component}
