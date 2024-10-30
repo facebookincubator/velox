@@ -456,7 +456,7 @@ set_source(folly)
 resolve_dependency(folly)
 
 if(NOT TARGET fmt::fmt)
-  # Needs to be after cudf
+  # Needs to be before cudf
   set_source(fmt)
   resolve_dependency(fmt 9.0.0)
 endif()
