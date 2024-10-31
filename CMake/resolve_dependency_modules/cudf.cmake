@@ -43,7 +43,9 @@ FetchContent_Declare(
   cudf
   URL ${VELOX_cudf_SOURCE_URL}
   URL_HASH ${VELOX_cudf_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND ${fmt_scope_patch} SOURCE_SUBDIR cpp)
+  SOURCE_SUBDIR cpp
+  PATCH_COMMAND ${fmt_scope_patch}
+  UPDATE_DISCONNECTED 1)
 
 FetchContent_MakeAvailable(cudf)
 endblock()

@@ -7,7 +7,7 @@ index 083dd1d063..628588ccd9 100644
  
    include(${rapids-cmake-dir}/cpm/fmt.cmake)
 -  rapids_cpm_fmt(INSTALL_EXPORT_SET cudf-exports BUILD_EXPORT_SET cudf-exports)
-+  rapids_cpm_fmt(INSTALL_EXPORT_SET cudf-exports BUILD_EXPORT_SET cudf-exports EXCLUDE_FROM_ALL)
++  rapids_cpm_fmt(INSTALL_EXPORT_SET cudf-exports BUILD_EXPORT_SET cudf-exports EXCLUDE_FROM_ALL 1)
  endfunction()
  
  find_and_configure_fmt()
