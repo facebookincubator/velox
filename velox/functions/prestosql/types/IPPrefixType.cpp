@@ -21,9 +21,6 @@
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 
-static constexpr uint8_t kIPV4Bits = 32;
-static constexpr uint8_t kIPV6Bits = 128;
-
 namespace facebook::velox {
 
 namespace {
@@ -66,6 +63,8 @@ class IPPrefixCastOperator : public exec::CastOperator {
 
     if (input.typeKind() == TypeKind::VARCHAR) {
       castFromString(input, context, rows, *result);
+    } else if (isIPAddressType(input.type())) {
+      castFromIPAddress(input, context, rows, *result);
     } else {
       VELOX_NYI(
           "Cast from {} to IPPrefix not yet supported",
@@ -83,6 +82,8 @@ class IPPrefixCastOperator : public exec::CastOperator {
 
     if (resultType->kind() == TypeKind::VARCHAR) {
       castToString(input, context, rows, *result);
+    } else if (isIPAddressType(resultType)) {
+      VELOX_FAIL("We should be using IPADDRESS castTo function");
     } else {
       VELOX_NYI(
           "Cast from IPPrefix to {} not yet supported", resultType->toString());
@@ -187,6 +188,24 @@ class IPPrefixCastOperator : public exec::CastOperator {
       memcpy(&intAddr, &addrBytes, kIPAddressBytes);
       rowResult->childAt(0)->as<FlatVector<int128_t>>()->set(row, intAddr);
       rowResult->childAt(1)->as<FlatVector<int8_t>>()->set(row, prefix);
+    });
+  }
+
+  static void castFromIPAddress(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* rowResult = result.as<RowVector>();
+    const auto* ipAddresses = input.as<SimpleVector<int128_t>>();
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      rowResult->childAt(0)->as<FlatVector<int128_t>>()->set(
+          row, ipAddresses->valueAt(row));
+      rowResult->childAt(1)->as<FlatVector<int8_t>>()->set(
+          row,
+          isIPv4(ipAddresses->valueAt(row)) ? kIPV4Bits
+                                            : (unsigned char)kIPV6Bits);
     });
   }
 };

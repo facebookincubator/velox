@@ -29,7 +29,29 @@ class IPPrefixCastTest : public functions::test::FunctionBaseTest {
         "cast(cast(c0 as ipprefix) as varchar)", input);
     return result;
   }
+
+  std::optional<std::string> castFromIPAddress(
+      const std::optional<std::string>& input) {
+    auto result = evaluateOnce<std::string>(
+        "cast(cast(cast(c0 as ipaddress) as ipprefix) as varchar)", input);
+    return result;
+  }
+
+  std::optional<int128_t> castToIPAddress(
+      const std::optional<std::string>& input) {
+    auto result = evaluateOnce<int128_t>(
+        "cast(cast(c0 as ipprefix) as ipaddress)", input);
+    return result;
+  }
 };
+
+int128_t stringToInt128(const std::string& value) {
+  int128_t res = 0;
+  for (char c : value) {
+    res = res * 10 + c - '0';
+  }
+  return res;
+}
 
 TEST_F(IPPrefixCastTest, varcharCast) {
   EXPECT_EQ(castToVarchar("::ffff:1.2.3.4/24"), "1.2.3.0/24");
@@ -140,6 +162,27 @@ TEST_F(IPPrefixCastTest, invalidIPPrefix) {
       castToVarchar("::/129"), "Cannot cast value to IPPREFIX: ::/129");
   VELOX_ASSERT_THROW(
       castToVarchar("::/-1"), "Cannot cast value to IPPREFIX: ::/-1");
+}
+
+TEST_F(IPPrefixCastTest, fromIPAddressCast) {
+  EXPECT_EQ(castFromIPAddress("1.2.3.4"), "1.2.3.4/32");
+  EXPECT_EQ(castFromIPAddress("::ffff:102:304"), "1.2.3.4/32");
+  EXPECT_EQ(castFromIPAddress("::1"), "::1/128");
+  EXPECT_EQ(
+      castFromIPAddress("2001:db8::ff00:42:8329"),
+      "2001:db8::ff00:42:8329/128");
+}
+
+TEST_F(IPPrefixCastTest, toIPAddressCast) {
+  EXPECT_EQ(castToIPAddress("1.2.3.4/32"), stringToInt128("281470698652420"));
+  EXPECT_EQ(castToIPAddress("1.2.3.4/24"), stringToInt128("281470698652416"));
+  EXPECT_EQ(castToIPAddress("::1/128"), stringToInt128("1"));
+  EXPECT_EQ(
+      castToIPAddress("2001:db8::ff00:42:8329/128"),
+      stringToInt128("42540766411282592856904265327123268393"));
+  EXPECT_EQ(
+      castToIPAddress("2001:db8::ff00:42:8329/64"),
+      stringToInt128("42540766411282592856903984951653826560"));
 }
 
 } // namespace

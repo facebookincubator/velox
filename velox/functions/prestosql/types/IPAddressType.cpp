@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/types/IPAddressType.h"
 #include <folly/IPAddress.h>
+
 #include "velox/expression/CastExpr.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 
 static constexpr int kIPV4AddressBytes = 4;
 static constexpr int kIPV4ToV6FFIndex = 10;
@@ -33,6 +35,10 @@ class IPAddressCastOperator : public exec::CastOperator {
       case TypeKind::VARBINARY:
       case TypeKind::VARCHAR:
         return true;
+      case TypeKind::ROW:
+        if (isIPPrefixType(other)) {
+          return true;
+        }
       default:
         return false;
     }
@@ -43,6 +49,10 @@ class IPAddressCastOperator : public exec::CastOperator {
       case TypeKind::VARBINARY:
       case TypeKind::VARCHAR:
         return true;
+      case TypeKind::ROW:
+        if (isIPPrefixType(other)) {
+          return true;
+        }
       default:
         return false;
     }
@@ -60,9 +70,11 @@ class IPAddressCastOperator : public exec::CastOperator {
       castFromString(input, context, rows, *result);
     } else if (input.typeKind() == TypeKind::VARBINARY) {
       castFromVarbinary(input, context, rows, *result);
+    } else if (isIPPrefixType(input.type())) {
+      castFromIPPrefix(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
-          "Cast from {} to IPAddress not supported", resultType->toString());
+          "Cast from {} to IPAddress not supported", input.type()->toString());
     }
   }
 
@@ -78,6 +90,8 @@ class IPAddressCastOperator : public exec::CastOperator {
       castToString(input, context, rows, *result);
     } else if (resultType->kind() == TypeKind::VARBINARY) {
       castToVarbinary(input, context, rows, *result);
+    } else if (isIPPrefixType(resultType)) {
+      VELOX_FAIL("We should be using IPPREFIX castTo function");
     } else {
       VELOX_UNSUPPORTED(
           "Cast from IPAddress to {} not supported", resultType->toString());
@@ -204,6 +218,19 @@ class IPAddressCastOperator : public exec::CastOperator {
       memcpy(&intAddr, &addrBytes, kIPAddressBytes);
       flatResult->set(row, intAddr);
     });
+  }
+
+  static void castFromIPPrefix(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* flatResult = result.as<FlatVector<int128_t>>();
+    const auto* ipprefixes = input.as<RowVector>();
+    const auto* ip = ipprefixes->childAt(0)->as<SimpleVector<int128_t>>();
+
+    context.applyToSelectedNoThrow(
+        rows, [&](auto row) { flatResult->set(row, ip->valueAt(row)); });
   }
 };
 

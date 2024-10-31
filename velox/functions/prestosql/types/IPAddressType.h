@@ -19,8 +19,18 @@
 #include "velox/type/Type.h"
 
 static constexpr int kIPAddressBytes = 16;
+static constexpr int kIPV4Bits = 32;
+static constexpr int kIPV6HalfBits = 64;
+static constexpr int kIPV6Bits = 128;
 
 namespace facebook::velox {
+
+static inline bool isIPv4(int128_t ip) {
+  int128_t ipV4 = 0x0000FFFF00000000;
+  uint128_t mask = 0xFFFFFFFFFFFFFFFF;
+  mask = (mask << kIPV6HalfBits) | 0xFFFFFFFF00000000;
+  return (ip & mask) == ipV4;
+}
 
 class IPAddressType : public HugeintType {
   IPAddressType() = default;

@@ -304,7 +304,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - 
      - Y
-     - 
+     - Y
    * - ipprefix
      - 
      - 
@@ -320,7 +320,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - 
-     - 
+     - Y
      - Y
 
 Cast to Integral Types
@@ -1190,6 +1190,18 @@ Invalid examples:
 
   SELECT cast(from_hex('f000001100') as ipaddress); -- Invalid IP address binary length: 5
 
+From IPPREFIX
+^^^^^^^^^^^^^
+
+Returns the canonical(lowest) IPADDRESS in the subnet range.
+
+Examples:
+
+::
+
+  SELECT cast(ipprefix '1.2.3.4/24' as ipaddress) -- ipaddress '1.2.3.0'
+  SELECT cast(ipprefix '2001:db8::ff00:42:8329/64' as ipaddress) -- ipaddress '2001:db8::'
+
 Cast to IPPREFIX
 ----------------
 
@@ -1224,6 +1236,19 @@ Invalid examples:
   SELECT cast('2001:0db8:0000:0000:0000:ff00:0042:8329/-1' as ipprefix); -- Cannot cast value to IPPREFIX: 2001:0db8:0000:0000:0000:ff00:0042:8329/-1
   SELECT cast('255.2.3.4/33' as ipprefix); -- Cannot cast value to IPPREFIX: 255.2.3.4/33
   SELECT cast('::ffff:ffff:ffff/33' as ipprefix); -- Cannot cast value to IPPREFIX: ::ffff:ffff:ffff/33
+
+From IPADDRESS
+^^^^^^^^^^^^^^
+
+Returns an IPPREFIX where the prefix length is the length of the entire IP address.
+Prefix length for IPv4 is 32 and for IPv6 it is 128.
+
+Examples:
+
+::
+
+  SELECT cast(ipaddress '1.2.3.4' as ipprefix) -- ipprefix '1.2.3.4/32'
+  SELECT cast(ipaddress '2001:db8::ff00:42:8329' as ipprefix) -- ipprefix '2001:db8::ff00:42:8329/128'
 
 Miscellaneous
 -------------
