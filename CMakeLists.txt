@@ -410,6 +410,16 @@ resolve_dependency(fmt 9.0.0)
 # set_target_properties(fmt::fmt PROPERTIES IMPORTED_GLOBAL TRUE)
 # set_target_property(aliased_target ${target} ALIASED_TARGET) endif()
 
+if(NOT TARGET fmt::fmt)
+  # This is a bit convoluted, but we want to be able to use gflags::gflags as a
+  # target even when velox is built as a subproject which uses
+  # `find_package(gflags)` which does not create a globally imported target that
+  # we can ALIAS.
+  add_library(fmt_fmt INTERFACE)
+  target_link_libraries(fmt_fmt INTERFACE gflags)
+  add_library(fmt::fmt ALIAS fmt_fmt)
+endif()
+
 if(${VELOX_ENABLE_DUCKDB})
   set_source(DuckDB)
   resolve_dependency(DuckDB)
