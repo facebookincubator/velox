@@ -336,13 +336,13 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: date_trunc(fmt, ts) -> timestamp
 
-    Returns timestamp ts truncated to the unit specified by the format model fmt.
+    Returns timestamp ``ts`` truncated to the unit specified by the format model ``fmt``.
     Returns null if ``fmt`` is invalid.
     ``fmt`` is case insensitive and must be one of the following:
-        * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ts falls in, the time part will be zero out
-        * "QUARTER" - truncate to the first date of the quarter that the ts falls in, the time part will be zero out
-        * "MONTH", "MM", "MON" - truncate to the first date of the month that the ts falls in, the time part will be zero out
-        * "WEEK" - truncate to the Monday of the week that the ts falls in, the time part will be zero out
+        * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ``ts`` falls in, the time part will be zero out
+        * "QUARTER" - truncate to the first date of the quarter that the ``ts`` falls in, the time part will be zero out
+        * "MONTH", "MM", "MON" - truncate to the first date of the month that the ``ts`` falls in, the time part will be zero out
+        * "WEEK" - truncate to the Monday of the week that the ``ts`` falls in, the time part will be zero out
         * "DAY", "DD" - zero out the time part
         * "HOUR" - zero out the minute and second with fraction part
         * "MINUTE"- zero out the second with fraction part

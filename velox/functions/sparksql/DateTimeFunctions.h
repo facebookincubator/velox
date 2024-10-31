@@ -486,8 +486,6 @@ template <typename T>
 struct DateTruncFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  const tz::TimeZone* timeZone_ = nullptr;
-
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
@@ -506,10 +504,12 @@ struct DateTruncFunction {
     if (!unitOption.has_value()) {
       return false;
     }
-    DateTimeUnit unit = unitOption.value();
-    result = dateTrunc(unit, timestamp, timeZone_);
+    result = dateTrunc(unitOption.value(), timestamp, timeZone_);
     return true;
   }
+
+ private:
+  const tz::TimeZone* timeZone_ = nullptr;
 };
 
 template <typename T>

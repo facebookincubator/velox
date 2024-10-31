@@ -221,36 +221,36 @@ FOLLY_ALWAYS_INLINE void adjustDateTime(
       dateTime.tm_sec = 0;
       break;
     case DateTimeUnit::kWeek:
-      // Subtract the truncation
+      // Subtract the truncation.
       dateTime.tm_mday -= dateTime.tm_wday == 0 ? 6 : dateTime.tm_wday - 1;
-      // Setting the day of the week to Monday
+      // Setting the day of the week to Monday.
       dateTime.tm_wday = 1;
 
       // If the adjusted day of the month falls in the previous month
-      // Move to the previous month
+      // Move to the previous month.
       if (dateTime.tm_mday < 1) {
         dateTime.tm_mon -= 1;
 
         // If the adjusted month falls in the previous year
-        // Set to December and Move to the previous year
+        // Set to December and Move to the previous year.
         if (dateTime.tm_mon < 0) {
           dateTime.tm_mon = 11;
           dateTime.tm_year -= 1;
         }
 
         // Calculate the correct day of the month based on the number of days
-        // in the adjusted month
+        // in the adjusted month.
         static const int daysInMonth[] = {
             31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
         int daysInPrevMonth = daysInMonth[dateTime.tm_mon];
 
-        // Adjust for leap year if February
+        // Adjust for leap year if February.
         if (dateTime.tm_mon == 1 && (dateTime.tm_year + 1900) % 4 == 0 &&
             ((dateTime.tm_year + 1900) % 100 != 0 ||
              (dateTime.tm_year + 1900) % 400 == 0)) {
           daysInPrevMonth = 29;
         }
-        // Set to the correct day in the previous month
+        // Set to the correct day in the previous month.
         dateTime.tm_mday += daysInPrevMonth;
       }
       dateTime.tm_hour = 0;
