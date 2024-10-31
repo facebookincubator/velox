@@ -23,7 +23,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
 class UnnestTest : public OperatorTestBase,
-                   public testing::WithParamInterface<int32_t> {
+                   public testing::WithParamInterface<vector_size_t> {
   void SetUp() override {
     OperatorTestBase::SetUp();
   }
@@ -33,7 +33,6 @@ class UnnestTest : public OperatorTestBase,
   }
 
  protected:
-  const int32_t batchSize_{GetParam()};
   const CursorParameters makeCursorParameters(
       const core::PlanNodePtr planNode) const {
     CursorParameters params;
@@ -42,6 +41,8 @@ class UnnestTest : public OperatorTestBase,
         std::to_string(batchSize_);
     return params;
   }
+
+  const vector_size_t batchSize_{GetParam()};
 };
 
 TEST_P(UnnestTest, basicArray) {

@@ -115,7 +115,7 @@ RowVectorPtr Unnest::getOutput() {
   VELOX_DCHECK_LT(nextInputRow_, size);
 
   // Limit the number of input rows to keep output batch size within
-  // 'maxOutputSize' if possible. When the output exceeds 'maxOutputSize,' the
+  // 'maxOutputSize_'. When the output size is 'maxOutputSize_', the
   // first and last row might not be processed completely, and their output
   // might be split into multiple batches.
   vector_size_t numElements = 0;
@@ -128,7 +128,7 @@ RowVectorPtr Unnest::getOutput() {
     return nullptr;
   }
 
-  auto output = generateOutput(rowRange, numElements);
+  const auto output = generateOutput(rowRange, numElements);
   if (lastRowPartial) {
     firstRowStart_ = rowRange.lastRowEnd;
     nextInputRow_ += rowRange.size - 1;
@@ -137,7 +137,7 @@ RowVectorPtr Unnest::getOutput() {
     nextInputRow_ += rowRange.size;
   }
 
-  if (nextInputRow_ >= input_->size()) {
+  if (nextInputRow_ >= size) {
     input_ = nullptr;
     nextInputRow_ = 0;
   }
@@ -177,7 +177,7 @@ const Unnest::RowRange Unnest::extractRowRange(
       break;
     }
   }
-  // The last row is not partial and should take effect, set it to the maxSize.
+  // The last row is not partial, set it to the maxSize.
   if (!lastRowEnd.has_value()) {
     lastRowEnd = rawMaxSizes_[nextInputRow_ + numInput - 1];
   }
@@ -194,7 +194,7 @@ void Unnest::generateRepeatedColumns(
   auto* rawRepeatedIndices = repeatedIndices->asMutable<vector_size_t>();
   vector_size_t index = 0;
   VELOX_DCHECK_GT(range.size, 0);
-  // Record the process row number.
+  // Record the row number to process.
   // Process the first row.
   const auto firstRowEnd =
       range.size == 1 ? range.lastRowEnd : rawMaxSizes_[range.start];
@@ -211,8 +211,8 @@ void Unnest::generateRepeatedColumns(
     }
   }
 
-  // Process the last row if exists. Not set the `index` because it is the last
-  // row to process.
+  // Process the last row if exists. Not set the `index` because it is not
+  // needed after the last row is processed.
   if (range.size > 1) {
     std::fill(
         rawRepeatedIndices + index,
@@ -249,7 +249,7 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
   vector_size_t index = 0;
   bool identityMapping = true;
 
-  auto firstLastRowGenerator =
+  const auto firstLastRowGenerator =
       [&](vector_size_t row, vector_size_t start, vector_size_t end) {
         if (!currentDecoded.isNullAt(row)) {
           const auto offset = currentOffsets[currentIndices[row]];
@@ -275,6 +275,7 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
           }
         }
       };
+
   VELOX_DCHECK_GT(range.size, 0);
   const auto firstRowEnd =
       range.size == 1 ? range.lastRowEnd : rawMaxSizes_[range.start];

@@ -45,6 +45,13 @@ class Unnest : public Operator {
   /// single row to process, moreover, the row range for first row is
   /// firstRowStart_ to rawMaxSizes_[firstRow] and the row range for last row is
   /// 0 to lastRowEnd when there are several rows to process.
+  ///    firstRowStart_
+  ///---|------------------- start
+  ///-----------------------
+  ///-----------------------
+  ///-----------------|------ end
+  ///                 lastRowEnd
+  /// The size is end - start.
   struct RowRange {
     // First input row to be included in the output.
     const vector_size_t start;
@@ -59,6 +66,7 @@ class Unnest : public Operator {
   };
 
   /// Extract the range of rows to process.
+
   /// @param size The size of input RowVector.
   /// @param numElements Records the number of output rows.
   /// @param lastRowPartial True when processing last row partially, the
