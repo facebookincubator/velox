@@ -110,27 +110,6 @@ function(velox_set_with_default var_name envvar_name default)
   endif()
 endfunction()
 
-# List subdirectories of ${dir}
-function(velox_list_subdirs var dir)
-  if(NOT IS_DIRECTORY ${dir})
-    message(FATAL_ERROR "${dir} is not a directory!")
-  endif()
-
-  # finds files & dirs
-  file(GLOB children ${dir}/*)
-  set(dirs "")
-
-  foreach(child ${children})
-    if(IS_DIRECTORY ${child})
-      list(APPEND dirs ${child})
-    endif()
-  endforeach()
-
-  set(${var}
-      ${dirs}
-      PARENT_SCOPE)
-endfunction()
-
 # Set custom source url with a optional sha256 checksum.
 macro(velox_resolve_dependency_url dependency_name)
   # Prepend prefix for default checksum.
