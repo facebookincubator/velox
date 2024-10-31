@@ -26,7 +26,7 @@ FetchContent_Declare(
   fmt
   URL ${VELOX_FMT_SOURCE_URL}
   URL_HASH ${VELOX_FMT_BUILD_SHA256_CHECKSUM}
-  FIND_PACKAGE_ARGS GLOBAL)
+  EXCLUDE_FROM_ALL)
 # Force fmt to create fmt-config.cmake which can be found by other dependecies
 # (e.g. folly)
 set(FMT_INSTALL ON)
