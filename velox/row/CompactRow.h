@@ -46,8 +46,8 @@ class CompactRow {
   void serialize(
       vector_size_t offset,
       vector_size_t size,
-      char* buffer,
-      const size_t* bufferOffsets);
+      const size_t* bufferOffsets,
+      char* buffer);
 
   /// Deserializes multiple rows into a RowVector of specified type. The type
   /// must match the contents of the serialized rows.

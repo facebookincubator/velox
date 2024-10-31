@@ -93,7 +93,7 @@ class CompactRowVectorSerializer : public IterativeVectorSerializer {
           offset += rowSize[index] + sizeof(TRowSize);
         }
         // Write row data for all rows in range.
-        row.serialize(range.begin, range.size, rawBuffer, offsets.data());
+        row.serialize(range.begin, range.size, offsets.data(), rawBuffer);
       }
     }
   }

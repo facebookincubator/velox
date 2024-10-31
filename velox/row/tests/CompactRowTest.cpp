@@ -99,7 +99,7 @@ class CompactRowTest : public ::testing::Test, public VectorTestBase {
       // Serialize with different range size.
       while (offset < numRows) {
         auto size = std::min<vector_size_t>(rangeSize, numRows - offset);
-        row.serialize(offset, size, rawBuffer, offsets.data() + offset);
+        row.serialize(offset, size, offsets.data() + offset, rawBuffer);
         offset += size;
         rangeSize = checkedMultiply<vector_size_t>(rangeSize, 2);
       }

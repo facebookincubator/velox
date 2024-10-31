@@ -640,8 +640,8 @@ int32_t CompactRow::serialize(vector_size_t index, char* buffer) {
 void CompactRow::serialize(
     vector_size_t offset,
     vector_size_t size,
-    char* buffer,
-    const size_t* bufferOffsets) {
+    const size_t* bufferOffsets,
+    char* buffer) {
   serializeRow(offset, size, buffer, bufferOffsets);
 }
 

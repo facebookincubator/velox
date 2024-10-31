@@ -193,7 +193,7 @@ class SerializeBenchmark {
       const std::vector<size_t>& rowSize,
       const std::vector<size_t>& offsets) {
     auto rawBuffer = buffer->asMutable<char>();
-    compactRow.serialize(0, numRows, rawBuffer, offsets.data());
+    compactRow.serialize(0, numRows, offsets.data(), rawBuffer);
 
     std::vector<std::string_view> serialized;
     for (auto i = 0; i < numRows; ++i) {
