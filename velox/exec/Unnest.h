@@ -39,34 +39,34 @@ class Unnest : public Operator {
   bool isFinished() override;
 
  private:
-  // Represents the range of rows to process and indicates that first and last
-  // row may need to be processed partially.
+  /// Represents the range of rows to process and indicates that first and last
+  /// row may need to be processed partially to match the output batch size.
+  /// The row range is firstRowStart_ to lasRowEnd when there is
+  /// single row to process, moreover, the row range for first row is
+  /// firstRowStart_ to rawMaxSizes_[firstRow] and the row range for last row is
+  /// 0 to lastRowEnd when there are several rows to process.
   struct RowRange {
     // First input row to be included in the output.
-    vector_size_t start;
+    const vector_size_t start;
 
     // Number of input rows to be included in the output.
-    vector_size_t size;
+    const vector_size_t size;
 
-    // Processing of the first input row begins at index `firstRowStart_` and
-    // ends at 'firstRowEnd'.
-    vector_size_t firstRowEnd;
-
-    // Processing of the last input row begins at index 0 and ends at
-    // 'lastRowEnd'. It is nullopt when there is only one row to process.
-    std::optional<vector_size_t> lastRowEnd;
+    /// Processing of the last input row begins at index firstRowStart_ or 0
+    /// depending on whether the row to process is first row and ends at
+    /// 'lastRowEnd'.
+    const vector_size_t lastRowEnd;
   };
 
-  // Extract the range of rows to process.
-  // @param size The size of input RowVector.
-  // @param numElements Records the number of output rows.
-  // @param partialProcessRowStart Records the start index when processing the
-  // first row in the next iteration. It will not be changed when all the input
-  // rows can be fully processed.
+  /// Extract the range of rows to process.
+  /// @param size The size of input RowVector.
+  /// @param numElements Records the number of output rows.
+  /// @param lastRowPartial True when processing last row partially, the
+  /// firstRowStart_ is lastRowEnd, otherwise, the firstRowStart_ is 0.
   const RowRange extractRowRange(
       vector_size_t size,
       vector_size_t& numElements,
-      std::optional<vector_size_t>& partialProcessRowStart);
+      bool& lastRowPartial);
 
   // Generate output for 'rowRange' represented rows.
   // @param rowRange Range of rows to process.

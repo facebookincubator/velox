@@ -112,14 +112,15 @@ RowVectorPtr Unnest::getOutput() {
   }
 
   const auto size = input_->size();
+  VELOX_DCHECK_LT(nextInputRow_, size);
 
   // Limit the number of input rows to keep output batch size within
-  // 'maxOutputSize' if possible. the first and last row might not be processed
-  // fully when the output exceeds 'maxOutputSize'. The output of first and last
-  // row may be divided into multiple batches.
+  // 'maxOutputSize' if possible. When the output exceeds 'maxOutputSize,' the
+  // first and last row might not be processed completely, and their output
+  // might be split into multiple batches.
   vector_size_t numElements = 0;
-  std::optional<vector_size_t> partialProcessRowStart;
-  auto rowRange = extractRowRange(size, numElements, partialProcessRowStart);
+  bool lastRowPartial = false;
+  auto rowRange = extractRowRange(size, numElements, lastRowPartial);
   if (numElements == 0) {
     // All arrays/maps are null or empty.
     input_ = nullptr;
@@ -128,8 +129,8 @@ RowVectorPtr Unnest::getOutput() {
   }
 
   auto output = generateOutput(rowRange, numElements);
-  if (partialProcessRowStart.has_value()) {
-    firstRowStart_ = partialProcessRowStart.value();
+  if (lastRowPartial) {
+    firstRowStart_ = rowRange.lastRowEnd;
     nextInputRow_ += rowRange.size - 1;
   } else {
     firstRowStart_ = 0;
@@ -147,31 +148,24 @@ RowVectorPtr Unnest::getOutput() {
 const Unnest::RowRange Unnest::extractRowRange(
     vector_size_t size,
     vector_size_t& numElements,
-    std::optional<vector_size_t>& partialProcessRowStart) {
-  VELOX_DCHECK_LT(nextInputRow_, size);
-
+    bool& lastRowPartial) {
   vector_size_t numInput = 0;
-  vector_size_t firstRowEnd = rawMaxSizes_[nextInputRow_];
   std::optional<vector_size_t> lastRowEnd;
-  // May split the first row and the last row, not split middle rows.
-  // The end row related variables firstRowEnd and lastRowEnd will not be used
-  // if there is just one row, its start is always 0.
   for (auto row = nextInputRow_; row < size; ++row) {
     bool isFirstRow = (row == nextInputRow_);
     vector_size_t remainingSize =
-        isFirstRow ? firstRowEnd - firstRowStart_ : rawMaxSizes_[row];
+        isFirstRow ? rawMaxSizes_[row] - firstRowStart_ : rawMaxSizes_[row];
     ++numInput;
     if (numElements + remainingSize > maxOutputSize_) {
       // Single row's output is divided into multiple batches.
       // Computes the row range to process the first and last row
       // partially instead of 0 to rawMaxSizes_[row].
       if (isFirstRow) {
-        firstRowEnd = firstRowStart_ + maxOutputSize_ - numElements;
-        partialProcessRowStart = firstRowEnd;
+        lastRowEnd = firstRowStart_ + maxOutputSize_ - numElements;
       } else {
         lastRowEnd = maxOutputSize_ - numElements;
-        partialProcessRowStart = lastRowEnd;
       }
+      lastRowPartial = true;
       // Process maxOutputSize_ in this getOutput.
       numElements = maxOutputSize_;
       break;
@@ -183,11 +177,11 @@ const Unnest::RowRange Unnest::extractRowRange(
       break;
     }
   }
-  // The end row is not partial and should take effect, set it to the maxSize.
-  if (!lastRowEnd.has_value() && numInput > 1) {
+  // The last row is not partial and should take effect, set it to the maxSize.
+  if (!lastRowEnd.has_value()) {
     lastRowEnd = rawMaxSizes_[nextInputRow_ + numInput - 1];
   }
-  return {nextInputRow_, numInput, firstRowEnd, lastRowEnd};
+  return {nextInputRow_, numInput, lastRowEnd.value()};
 };
 
 void Unnest::generateRepeatedColumns(
@@ -202,11 +196,13 @@ void Unnest::generateRepeatedColumns(
   VELOX_DCHECK_GT(range.size, 0);
   // Record the process row number.
   // Process the first row.
+  const auto firstRowEnd =
+      range.size == 1 ? range.lastRowEnd : rawMaxSizes_[range.start];
   std::fill(
       rawRepeatedIndices + index,
-      rawRepeatedIndices + index + range.firstRowEnd - firstRowStart_,
+      rawRepeatedIndices + index + firstRowEnd - firstRowStart_,
       range.start);
-  index += range.firstRowEnd - firstRowStart_;
+  index += firstRowEnd - firstRowStart_;
 
   // Process the middle rows.
   for (auto row = range.start + 1; row < range.start + range.size - 1; ++row) {
@@ -218,10 +214,9 @@ void Unnest::generateRepeatedColumns(
   // Process the last row if exists. Not set the `index` because it is the last
   // row to process.
   if (range.size > 1) {
-    VELOX_DCHECK(range.lastRowEnd.has_value());
     std::fill(
         rawRepeatedIndices + index,
-        rawRepeatedIndices + index + range.lastRowEnd.value(),
+        rawRepeatedIndices + index + range.lastRowEnd,
         range.start + range.size - 1);
   }
 
@@ -280,10 +275,10 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
           }
         }
       };
-
-  if (range.size > 0) {
-    firstLastRowGenerator(range.start, firstRowStart_, range.firstRowEnd);
-  }
+  VELOX_DCHECK_GT(range.size, 0);
+  const auto firstRowEnd =
+      range.size == 1 ? range.lastRowEnd : rawMaxSizes_[range.start];
+  firstLastRowGenerator(range.start, firstRowStart_, firstRowEnd);
 
   for (auto row = range.start + 1; row < range.start + range.size - 1; ++row) {
     const auto maxSize = rawMaxSizes_[row];
@@ -313,9 +308,7 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
   }
 
   if (range.size > 1) {
-    VELOX_DCHECK(range.lastRowEnd.has_value());
-    firstLastRowGenerator(
-        range.start + range.size - 1, 0, range.lastRowEnd.value());
+    firstLastRowGenerator(range.start + range.size - 1, 0, range.lastRowEnd);
   }
 
   return {elementIndices, nulls, identityMapping};
@@ -330,20 +323,22 @@ VectorPtr Unnest::generateOrdinalityVector(
   // Set the ordinality at each result row to be the index of the element in
   // the original array (or map) plus one.
   auto* rawOrdinality = ordinalityVector->mutableRawValues();
-  if (range.size > 0) {
-    const auto maxSize = range.firstRowEnd - firstRowStart_;
-    std::iota(rawOrdinality, rawOrdinality + maxSize, firstRowStart_ + 1);
-    rawOrdinality += maxSize;
-  }
+
+  VELOX_DCHECK_GT(range.size, 0);
+  const auto firstRowEnd =
+      range.size == 1 ? range.lastRowEnd : rawMaxSizes_[range.start];
+  const auto maxSize = firstRowEnd - firstRowStart_;
+  std::iota(rawOrdinality, rawOrdinality + maxSize, firstRowStart_ + 1);
+  rawOrdinality += maxSize;
+
   for (auto row = range.start + 1; row < range.start + range.size - 1; ++row) {
     const auto maxSize = rawMaxSizes_[row];
     std::iota(rawOrdinality, rawOrdinality + maxSize, 1);
     rawOrdinality += maxSize;
   }
   if (range.size > 1) {
-    VELOX_DCHECK(range.lastRowEnd.has_value());
-    std::iota(rawOrdinality, rawOrdinality + range.lastRowEnd.value(), 1);
-    rawOrdinality += range.lastRowEnd.value();
+    std::iota(rawOrdinality, rawOrdinality + range.lastRowEnd, 1);
+    rawOrdinality += range.lastRowEnd;
   }
 
   return ordinalityVector;
