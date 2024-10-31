@@ -34,10 +34,13 @@ string(APPEND CMAKE_CXX_FLAGS
        " -Wno-non-virtual-dtor -Wno-missing-field-initializers")
 string(APPEND CMAKE_CXX_FLAGS " -Wno-deprecated-copy")
 
+set(fmt_scope_patch git apply ${CMAKE_CURRENT_SOURCE_DIR}/patches/fmt_scope.patch)
+
 FetchContent_Declare(
   cudf
   URL ${VELOX_cudf_SOURCE_URL}
   URL_HASH ${VELOX_cudf_BUILD_SHA256_CHECKSUM}
+  PATCH_COMMAND ${fmt_scope_patch}
   SOURCE_SUBDIR cpp)
 
 FetchContent_MakeAvailable(cudf)
