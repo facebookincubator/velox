@@ -402,6 +402,17 @@ else()
 endif()
 resolve_dependency(glog)
 
+# if(NOT TARGET fmt::fmt)
+#   # Needs to be after cudf
+set_source(fmt)
+resolve_dependency(fmt 9.0.0)
+# if(NOT TARGET fmt::fmt)
+add_library(fmt::fmt INTERFACE IMPORTED)
+# endif()
+# set_target_properties(fmt::fmt PROPERTIES IMPORTED_GLOBAL TRUE)
+# set_target_property(aliased_target ${target} ALIASED_TARGET)
+# endif()
+
 if(${VELOX_ENABLE_DUCKDB})
   set_source(DuckDB)
   resolve_dependency(DuckDB)
@@ -454,12 +465,6 @@ resolve_dependency(simdjson 3.9.3)
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
-
-if(NOT TARGET fmt::fmt)
-  # Needs to be before cudf
-  set_source(fmt)
-  resolve_dependency(fmt 9.0.0)
-endif()
 
 if(VELOX_ENABLE_GPU)
   if(VELOX_ENABLE_CUDF)
