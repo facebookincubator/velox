@@ -77,18 +77,11 @@ class DecimalAggregate : public exec::Aggregate {
     // for first skipOverflowCheckCount_ rows. For exmaple, Decimal(7, 2), the
     // max value is 99999.99, the overflow happens when there are more than
     // pow(10, 31) rows.
-    if (inputType->isShortDecimal()) {
-      auto precision = 38 - inputType->asShortDecimal().precision();
-      if (precision > 19) {
-        skipOverflowCheckCount_ = std::numeric_limits<uint64_t>::max();
-      } else {
-        skipOverflowCheckCount_ = std::pow(10L, precision);
-      }
-    } else if (inputType->isLongDecimal()) {
-      auto precision = 38 - inputType->asLongDecimal().precision();
-      if (precision > 0) {
-        skipOverflowCheckCount_ = std::pow(10L, precision);
-      }
+    int precision = 38 - getDecimalPrecisionScale(*inputType).first;
+    if (precision > 19) {
+      skipOverflowCheckCount_ = std::numeric_limits<int64_t>::max();
+    } else {
+      skipOverflowCheckCount_ = std::pow(10L, precision);
     }
   }
 
@@ -393,7 +386,7 @@ class DecimalAggregate : public exec::Aggregate {
     }
     auto accumulator = decimalAccumulator(group);
     if constexpr (skipOverflowCheck) {
-      accumulator->sum = value + accumulator->sum;
+      accumulator->sum += value;
     } else {
       accumulator->overflow += DecimalUtil::addWithOverflow(
           accumulator->sum, value, accumulator->sum);
@@ -418,8 +411,8 @@ class DecimalAggregate : public exec::Aggregate {
 
   DecodedVector decodedRaw_;
   DecodedVector decodedPartial_;
-  uint64_t accumlateRowCount_ = 0;
-  uint64_t skipOverflowCheckCount_ = 0;
+  int64_t accumlateRowCount_ = 0;
+  int64_t skipOverflowCheckCount_ = 0;
 };
 
 } // namespace facebook::velox::functions::aggregate
