@@ -402,17 +402,13 @@ else()
 endif()
 resolve_dependency(glog)
 
-# if(NOT TARGET fmt::fmt)
-#   # Needs to be after cudf
+# if(NOT TARGET fmt::fmt) # Needs to be after cudf
 set_source(fmt)
 resolve_dependency(fmt 9.0.0)
-# # if(NOT TARGET fmt::fmt)
-# add_library(fmt::fmt INTERFACE IMPORTED)
-# target_link_libraries(fmt::fmt INTERFACE fmt::fmt)
-# endif()
+# # if(NOT TARGET fmt::fmt) add_library(fmt::fmt INTERFACE IMPORTED)
+# target_link_libraries(fmt::fmt INTERFACE fmt::fmt) endif()
 # set_target_properties(fmt::fmt PROPERTIES IMPORTED_GLOBAL TRUE)
-# set_target_property(aliased_target ${target} ALIASED_TARGET)
-# endif()
+# set_target_property(aliased_target ${target} ALIASED_TARGET) endif()
 
 if(${VELOX_ENABLE_DUCKDB})
   set_source(DuckDB)
