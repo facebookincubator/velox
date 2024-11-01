@@ -772,7 +772,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   bool initialized_{false};
 
-  folly::Synchronized<OperatorStats> stats_;
+  folly::ImplicitSynchronized<OperatorStats> stats_;
   folly::Synchronized<common::SpillStats> spillStats_;
   std::unique_ptr<trace::OperatorTraceWriter> inputTracer_;
 
