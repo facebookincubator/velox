@@ -552,6 +552,40 @@ struct UnsafeRowPrimitiveBatchDeserializer {
  * a Vector.
  */
 struct UnsafeRowDeserializer {
+ public:
+  /// Deserialize the rows which is serialized in contiguous memory.
+  /// Deserialize fast when all the column types are primitive type, otherwise,
+  /// deserialize rows one by one, as previously. Fast deserialization
+  /// computes the start memoryAddress of one data by the column index and row
+  /// number, and set all the data of one column at once.
+  /// @param memoryAddress the start memory address of the serialized rows .
+  /// @param type the element type.
+  /// @param offsets offset of each row serialized data. It's size should be
+  /// equal to the deserialized rows. First offset is 0.
+  /// @param pool the memory pool to allocate Vector.
+  static VectorPtr deserialize(
+      const uint8_t* memoryAddress,
+      const RowTypePtr& type,
+      const std::vector<int64_t>& offsets,
+      memory::MemoryPool* pool);
+
+  /**
+   * Deserializes a complex element type to its Vector representation.
+   * @param data A vector of string_view over a given element in the
+   *UnsafeRow.
+   * @param type the element type.
+   * @param pool the memory pool to allocate Vectors from
+   *data to a array.
+   * @return a VectorPtr
+   */
+  static VectorPtr deserialize(
+      const std::vector<std::optional<std::string_view>>& data,
+      const TypePtr& type,
+      memory::MemoryPool* pool) {
+    return convertToVectors(getBatchIteratorPtr(data, type), pool);
+  }
+
+ private:
   /**
    * Allocate and populate the metadata Vectors in ArrayVector or MapVector.
    * @param dataIterator iterator that points to whole column batch of data.
@@ -822,38 +856,6 @@ struct UnsafeRowDeserializer {
     } else {
       VELOX_NYI("Unsupported data iterators type");
     }
-  }
-
-  /**
-   * Deserializes a complex element type to its Vector representation.
-   * @param data A string_view over a given element in the UnsafeRow.
-   * @param type the element type.
-   * @param pool the memory pool to allocate Vectors from
-   *data to a array.
-   * @return a VectorPtr
-   */
-  static VectorPtr deserializeOne(
-      std::optional<std::string_view> data,
-      const TypePtr& type,
-      memory::MemoryPool* pool) {
-    std::vector<std::optional<std::string_view>> vectors{data};
-    return deserialize(vectors, type, pool);
-  }
-
-  /**
-   * Deserializes a complex element type to its Vector representation.
-   * @param data A vector of string_view over a given element in the
-   *UnsafeRow.
-   * @param type the element type.
-   * @param pool the memory pool to allocate Vectors from
-   *data to a array.
-   * @return a VectorPtr
-   */
-  static VectorPtr deserialize(
-      const std::vector<std::optional<std::string_view>>& data,
-      const TypePtr& type,
-      memory::MemoryPool* pool) {
-    return convertToVectors(getBatchIteratorPtr(data, type), pool);
   }
 };
 
