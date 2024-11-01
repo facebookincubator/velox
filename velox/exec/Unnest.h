@@ -39,55 +39,65 @@ class Unnest : public Operator {
   bool isFinished() override;
 
  private:
-  /// Represents the range of rows to process and indicates that first and last
-  /// row may need to be processed partially to match the output batch size.
-  /// The row range is firstRowStart_ to lasRowEnd when there is
-  /// single row to process, moreover, the row range for first row is
-  /// firstRowStart_ to rawMaxSizes_[firstRow] and the row range for last row is
-  /// 0 to lastRowEnd when there are several rows to process.
-  ///    firstRowStart_
-  ///---|------------------- start
-  ///-----------------------
-  ///-----------------------
-  ///-----------------|------ end
-  ///                 lastRowEnd
-  /// The size is end - start.
+  // Represents the range of rows to process and indicates that first and last
+  // row may need to be processed partially to match the output batch size.
+  // The row range is firstRowStart_ to lasRowEnd when there is
+  // single row to process, moreover, the row range for first row is
+  // firstRowStart_ to rawMaxSizes_[firstRow] and the row range for last row is
+  // 0 to lastRowEnd when there are several rows to process unless the last row
+  // process fully, in that case, use rawMaxSizes_[lastRow] as end of the last
+  // row.
+  //
+  // Single row:
+  //    firstRowStart_  firstRowEnd = lastRowEnd
+  //---|----------------|--- start, size = 1
+  //
+  // Multiple rows:
+  //    firstRowStart_     firstRowEnd = rawMaxSizes_[start]
+  //---|-------------------| start
+  //-----------------------
+  //-----------------------
+  //-----------------|----- end - 1
+  //                 lastRowEnd
+  // The size is end - start, the range is [start, end).
   struct RowRange {
+    // Invokes a function on each row represent by the RowRange.
+    // @param func Call the function for each row.
+    // @param rawMaxSizes Used to compute the end of each row.
+    // @param firstRowStart Same with Unnest member firstRowStart_, start
+    // processing the first row input from `firstRowStart_`.
+    void forEachRow(
+        std::function<void(vector_size_t, vector_size_t, vector_size_t)> func,
+        const vector_size_t* const rawMaxSizes,
+        vector_size_t firstRowStart) const;
+
     // First input row to be included in the output.
     const vector_size_t start;
 
     // Number of input rows to be included in the output.
     const vector_size_t size;
 
-    /// Processing of the last input row begins at index firstRowStart_ or 0
-    /// depending on whether the row to process is first row and ends at
-    /// 'lastRowEnd'.
-    const vector_size_t lastRowEnd;
+    // Processing of the last input row begins at index firstRowStart_ or 0
+    // depending on whether the row to process is first row and ends at
+    // 'lastRowEnd'. It is nullopt when processing the last row fully.
+    const std::optional<vector_size_t> lastRowEnd;
+
+    // Records the number of output rows.
+    const vector_size_t numElements;
   };
 
-  /// Extract the range of rows to process.
-
-  /// @param size The size of input RowVector.
-  /// @param numElements Records the number of output rows.
-  /// @param lastRowPartial True when processing last row partially, the
-  /// firstRowStart_ is lastRowEnd, otherwise, the firstRowStart_ is 0.
-  const RowRange extractRowRange(
-      vector_size_t size,
-      vector_size_t& numElements,
-      bool& lastRowPartial);
+  // Extract the range of rows to process.
+  // @param size The size of input RowVector.
+  RowRange extractRowRange(vector_size_t size) const;
 
   // Generate output for 'rowRange' represented rows.
   // @param rowRange Range of rows to process.
-  // @param outputSize Pre-computed number of output rows.
-  RowVectorPtr generateOutput(
-      const RowRange& rowRange,
-      vector_size_t outputSize);
+  RowVectorPtr generateOutput(const RowRange& rowRange);
 
   // Invoked by generateOutput function above to generate the repeated output
   // columns.
   void generateRepeatedColumns(
       const RowRange& rowRange,
-      vector_size_t numElements,
       std::vector<VectorPtr>& outputs);
 
   struct UnnestChannelEncoding {
@@ -102,13 +112,10 @@ class Unnest : public Operator {
   // Array or Map.
   const UnnestChannelEncoding generateEncodingForChannel(
       column_index_t channel,
-      const RowRange& rowRange,
-      vector_size_t numElements);
+      const RowRange& rowRange);
 
   // Invoked by generateOutput for the ordinality column.
-  VectorPtr generateOrdinalityVector(
-      const RowRange& rowRange,
-      vector_size_t numElements);
+  VectorPtr generateOrdinalityVector(const RowRange& rowRange);
 
   const bool withOrdinality_;
   std::vector<column_index_t> unnestChannels_;

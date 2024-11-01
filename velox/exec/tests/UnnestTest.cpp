@@ -33,8 +33,8 @@ class UnnestTest : public OperatorTestBase,
   }
 
  protected:
-  const CursorParameters makeCursorParameters(
-      const core::PlanNodePtr planNode) const {
+  CursorParameters makeCursorParameters(
+      const core::PlanNodePtr& planNode) const {
     CursorParameters params;
     params.planNode = planNode;
     params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] =
@@ -60,9 +60,8 @@ TEST_P(UnnestTest, basicArray) {
   // TODO Add tests with empty arrays. This requires better support in DuckDB.
 
   auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
-  assertQuery(
-      makeCursorParameters(op),
-      "SELECT c0, UNNEST(c1) FROM tmp WHERE c0 % 7 > 0");
+  auto params = std::move(makeCursorParameters(op));
+  assertQuery(params, "SELECT c0, UNNEST(c1) FROM tmp WHERE c0 % 7 > 0");
 }
 
 TEST_P(UnnestTest, arrayWithOrdinality) {
@@ -97,7 +96,8 @@ TEST_P(UnnestTest, arrayWithOrdinality) {
        makeNullableFlatVector<int32_t>(
            {1, 2, std::nullopt, 4, 5, 6, std::nullopt, 7, 8, 9}),
        makeNullableFlatVector<int64_t>({1, 2, 3, 4, 1, 2, 1, 1, 2, 3})});
-  assertQuery(makeCursorParameters(op), expected);
+  auto params = std::move(makeCursorParameters(op));
+  assertQuery(params, expected);
 
   // Test with array wrapped in dictionary.
   auto reversedIndices = makeIndicesInReverse(6);
@@ -124,7 +124,8 @@ TEST_P(UnnestTest, arrayWithOrdinality) {
        makeNullableFlatVector<int32_t>(
            {7, 8, 9, std::nullopt, 5, 6, 1, 2, std::nullopt, 4}),
        makeNullableFlatVector<int64_t>({1, 2, 3, 1, 1, 2, 1, 2, 3, 4})});
-  assertQuery(makeCursorParameters(op), expectedInDict);
+  params = std::move(makeCursorParameters(op));
+  assertQuery(params, expectedInDict);
 }
 
 TEST_P(UnnestTest, basicMap) {
@@ -149,8 +150,8 @@ TEST_P(UnnestTest, basicMap) {
            [](auto /* row */) { return 2; },
            [](auto /* row */, auto index) { return index + 1; })});
   createDuckDbTable({duckDbVector});
-  assertQuery(
-      makeCursorParameters(op), "SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
+  auto params = std::move(makeCursorParameters(op));
+  assertQuery(params, "SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
 }
 
 TEST_P(UnnestTest, mapWithOrdinality) {
@@ -172,7 +173,8 @@ TEST_P(UnnestTest, mapWithOrdinality) {
        makeNullableFlatVector<double>(
            {1.1, std::nullopt, 3.3, 4.4, 5.5, std::nullopt}),
        makeNullableFlatVector<int64_t>({1, 2, 1, 2, 3, 1})});
-  assertQuery(makeCursorParameters(op), expected);
+  auto params = std::move(makeCursorParameters(op));
+  assertQuery(params, expected);
 
   // Test with map wrapped in dictionary.
   auto reversedIndices = makeIndicesInReverse(3);
@@ -190,7 +192,8 @@ TEST_P(UnnestTest, mapWithOrdinality) {
        makeNullableFlatVector<double>(
            {std::nullopt, 3.3, 4.4, 5.5, 1.1, std::nullopt}),
        makeNullableFlatVector<int64_t>({1, 1, 2, 3, 1, 2})});
-  assertQuery(makeCursorParameters(op), expectedInDict);
+  params = std::move(makeCursorParameters(op));
+  assertQuery(params, expectedInDict);
 }
 
 TEST_P(UnnestTest, multipleColumns) {
@@ -240,8 +243,9 @@ TEST_P(UnnestTest, multipleColumns) {
            nullEvery(7)),
        makeArrayVector(offsets, makeConstant<int32_t>(7, 700))});
   createDuckDbTable({duckDbVector});
+  auto params = std::move(makeCursorParameters(op));
   assertQuery(
-      makeCursorParameters(op),
+      params,
       "SELECT c0, UNNEST(c1), UNNEST(c2), UNNEST(c3), UNNEST(c4) FROM tmp");
 }
 
@@ -310,8 +314,9 @@ TEST_P(UnnestTest, multipleColumnsWithOrdinality) {
              return index + 1;
            })});
   createDuckDbTable({duckDbVector});
+  auto params = std::move(makeCursorParameters(op));
   assertQuery(
-      makeCursorParameters(op),
+      params,
       "SELECT c0, UNNEST(c1), UNNEST(c2), UNNEST(c3), UNNEST(c4), UNNEST(c5) FROM tmp");
 
   // Test with empty arrays and maps.
@@ -377,7 +382,8 @@ TEST_P(UnnestTest, multipleColumnsWithOrdinality) {
             std::nullopt,
             std::nullopt}),
        makeNullableFlatVector<int64_t>({1, 2, 3, 4, 1, 2, 3, 1, 2, 1})});
-  assertQuery(makeCursorParameters(op), expected);
+  params = std::move(makeCursorParameters(op));
+  assertQuery(params, expected);
 }
 
 TEST_P(UnnestTest, allEmptyOrNullArrays) {
@@ -396,13 +402,14 @@ TEST_P(UnnestTest, allEmptyOrNullArrays) {
 
   auto op =
       PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode();
-  assertQueryReturnsEmptyResult(makeCursorParameters(op));
+  auto params = std::move(makeCursorParameters(op));
+  assertQueryReturnsEmptyResult(params);
 
   op = PlanBuilder()
            .values({vector})
            .unnest({"c0"}, {"c1", "c2"}, "ordinal")
            .planNode();
-  assertQueryReturnsEmptyResult(makeCursorParameters(op));
+  assertQueryReturnsEmptyResult(params);
 }
 
 TEST_P(UnnestTest, allEmptyOrNullMaps) {
@@ -423,13 +430,15 @@ TEST_P(UnnestTest, allEmptyOrNullMaps) {
 
   auto op =
       PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode();
-  assertQueryReturnsEmptyResult(makeCursorParameters(op));
+  auto params = std::move(makeCursorParameters(op));
+  assertQueryReturnsEmptyResult(params);
 
   op = PlanBuilder()
            .values({vector})
            .unnest({"c0"}, {"c1", "c2"}, "ordinal")
            .planNode();
-  assertQueryReturnsEmptyResult(makeCursorParameters(op));
+  params = std::move(makeCursorParameters(op));
+  assertQueryReturnsEmptyResult(params);
 }
 
 TEST_P(UnnestTest, batchSize) {
@@ -468,4 +477,4 @@ TEST_P(UnnestTest, batchSize) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     UnnestTest,
     UnnestTest,
-    testing::ValuesIn({2, 17, 1024}));
+    testing::ValuesIn({2, 17, 33, 1024}));
