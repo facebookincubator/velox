@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <folly/IPAddress.h>
 #include <folly/small_vector.h>
 
 #include "velox/expression/CastExpr.h"

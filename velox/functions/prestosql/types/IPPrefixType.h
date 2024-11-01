@@ -18,6 +18,9 @@
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
+static constexpr int kIPV4Bits = 32;
+static constexpr int kIPV6Bits = 128;
+
 namespace facebook::velox {
 
 class IPPrefixType : public RowType {

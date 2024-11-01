@@ -150,7 +150,6 @@ class IPAddressCastOperator : public exec::CastOperator {
       }
       folly::IPAddress addr = maybeIp.value();
       auto addrBytes = folly::IPAddress::createIPv6(addr).toByteArray();
-
       std::reverse(addrBytes.begin(), addrBytes.end());
       memcpy(&intAddr, &addrBytes, kIPAddressBytes);
 

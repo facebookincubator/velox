@@ -15,13 +15,13 @@
  */
 #pragma once
 
+#include <folly/IPAddress.h>
+
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
 static constexpr int kIPAddressBytes = 16;
-static constexpr int kIPV4Bits = 32;
 static constexpr int kIPV6HalfBits = 64;
-static constexpr int kIPV6Bits = 128;
 
 namespace facebook::velox {
 
