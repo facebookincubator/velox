@@ -35,7 +35,7 @@ string(APPEND CMAKE_CXX_FLAGS
 string(APPEND CMAKE_CXX_FLAGS " -Wno-deprecated-copy")
 
 set(fmt_scope_patch
-    git apply
+    patch -p1 <
     ${CMAKE_CURRENT_SOURCE_DIR}/CMake/resolve_dependency_modules/fmt_scope.patch
 )
 

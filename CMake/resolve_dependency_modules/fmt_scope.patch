@@ -1,13 +1,26 @@
 diff --git a/cpp/cmake/thirdparty/get_fmt.cmake b/cpp/cmake/thirdparty/get_fmt.cmake
-index 083dd1d063..628588ccd9 100644
+index 083dd1d063..34ee3469b8 100644
 --- a/cpp/cmake/thirdparty/get_fmt.cmake
 +++ b/cpp/cmake/thirdparty/get_fmt.cmake
-@@ -16,7 +16,7 @@
+@@ -15,6 +15,8 @@
+ # Use CPM to find or clone fmt
  function(find_and_configure_fmt)
  
++  include(${rapids-cmake-dir}/cpm/package_override.cmake)
++  rapids_cpm_package_override(${CMAKE_CURRENT_SOURCE_DIR}/../../../../../override.json)
    include(${rapids-cmake-dir}/cpm/fmt.cmake)
--  rapids_cpm_fmt(INSTALL_EXPORT_SET cudf-exports BUILD_EXPORT_SET cudf-exports)
-+  rapids_cpm_fmt(INSTALL_EXPORT_SET cudf-exports BUILD_EXPORT_SET cudf-exports EXCLUDE_FROM_ALL 1)
+   rapids_cpm_fmt(INSTALL_EXPORT_SET cudf-exports BUILD_EXPORT_SET cudf-exports)
  endfunction()
+diff --git a/cpp/cmake/thirdparty/get_rmm.cmake b/cpp/cmake/thirdparty/get_rmm.cmake
+index 854bd3d114..6f029f87c3 100644
+--- a/cpp/cmake/thirdparty/get_rmm.cmake
++++ b/cpp/cmake/thirdparty/get_rmm.cmake
+@@ -14,6 +14,8 @@
  
- find_and_configure_fmt()
+ # This function finds rmm and sets any additional necessary environment variables.
+ function(find_and_configure_rmm)
++  include(${rapids-cmake-dir}/cpm/package_override.cmake)
++  rapids_cpm_package_override(${CMAKE_CURRENT_SOURCE_DIR}/../../../../../override.json)
+   include(${rapids-cmake-dir}/cpm/rmm.cmake)
+ 
+   # Find or install RMM
