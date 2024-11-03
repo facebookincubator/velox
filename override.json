@@ -1,9 +1,0 @@
-{
-  "packages": {
-    "fmt": {
-      "version": "10.1.1",
-      "git_url": "https://github.com/fmtlib/fmt.git",
-      "git_tag": "${version}"
-    }
-  }
-}
