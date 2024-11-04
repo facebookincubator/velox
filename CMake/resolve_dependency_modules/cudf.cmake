@@ -14,11 +14,11 @@
 
 include_guard(GLOBAL)
 
-set(VELOX_cudf_VERSION 24.06)
+set(VELOX_cudf_VERSION 24.10)
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
-    f318032d01d43e14214ed70b6013ee0581d0327be49b858c75644f4bfc5f694b)
+    daa270c1e9223f098823491606bad2d9b10577d4bea8e543ae80265f1cecc0ed)
 set(VELOX_cudf_SOURCE_URL
-    "https://github.com/rapidsai/cudf/archive/refs/tags/v24.06.01.tar.gz")
+    "https://github.com/rapidsai/cudf/archive/refs/tags/v24.10.01.tar.gz")
 resolve_dependency_url(cudf)
 
 # Use block so we don't leak variables
@@ -34,27 +34,18 @@ string(APPEND CMAKE_CXX_FLAGS
        " -Wno-non-virtual-dtor -Wno-missing-field-initializers")
 string(APPEND CMAKE_CXX_FLAGS " -Wno-deprecated-copy")
 
-# libcudf's `get_arrow.cmake` check for sentinal targets to determine if arrow
-# is already part of the build graph. Use that to early terminate and allow us
-# to use the existing external project arrow
-#
-# Check to make sure we didn't find an installed arrow
-if(NOT TARGET arrow_static)
-  set(CUDF_USE_ARROW_STATIC ON)
-  add_library(arrow_static INTERFACE IMPORTED GLOBAL)
-  target_link_libraries(arrow_static INTERFACE arrow)
-endif()
+set(fmt_scope_patch
+    patch -p1 <
+    ${CMAKE_CURRENT_SOURCE_DIR}/CMake/resolve_dependency_modules/fmt_scope.patch
+)
 
 FetchContent_Declare(
   cudf
   URL ${VELOX_cudf_SOURCE_URL}
   URL_HASH ${VELOX_cudf_BUILD_SHA256_CHECKSUM}
-  SOURCE_SUBDIR cpp)
+  SOURCE_SUBDIR cpp
+  PATCH_COMMAND ${fmt_scope_patch}
+  UPDATE_DISCONNECTED 1)
 
 FetchContent_MakeAvailable(cudf)
 endblock()
-
-# Make sure we don't build cudf till arrow external project is finished
-if(TARGET arrow_ep)
-  add_dependencies(cudf arrow_ep)
-endif()

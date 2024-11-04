@@ -412,6 +412,9 @@ if(${VELOX_ENABLE_DUCKDB})
   resolve_dependency(DuckDB)
 endif()
 
+set_source(fmt)
+resolve_dependency(fmt 9.0.0)
+
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   # DWIO needs all sorts of stream compression libraries.
   #
@@ -575,12 +578,6 @@ endif()
 if(VELOX_ENABLE_ARROW)
   set_source(Arrow)
   resolve_dependency(Arrow)
-endif()
-
-if(NOT TARGET fmt::fmt)
-  # Needs to be after cudf
-  set_source(fmt)
-  resolve_dependency(fmt 9.0.0)
 endif()
 
 add_subdirectory(velox)
