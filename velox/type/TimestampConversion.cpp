@@ -117,6 +117,10 @@ inline bool characterIsDigit(char c) {
   return c >= '0' && c <= '9';
 }
 
+inline bool allCharactersIsDigit(std::string_view str) {
+  return std::all_of(str.begin(), str.end(), characterIsDigit);
+}
+
 bool parseDoubleDigit(
     const char* buf,
     size_t len,
@@ -557,7 +561,8 @@ bool tryParseTimestampString(
                  len,
                  pos,
                  daysSinceEpoch,
-                 parseMode == TimestampParseMode::kIso8601
+                 parseMode == TimestampParseMode::kIso8601 ||
+                         parseMode == TimestampParseMode::kSparkCast
                      ? ParseMode::kSparkCast
                      : ParseMode::kNonStrict)) {
     return false;
@@ -826,6 +831,158 @@ Status parserError(const char* str, size_t len) {
       std::string(str, len));
 }
 
+// Spark supports an id with one of the prefixes UTC+, UTC-, GMT+, GMT-, UT+ or
+// UT-, and a suffix in the following formats: h[h], hh[:]mm, hh:mm:ss, hhmmss.
+// This function will check if the suffix format is correct. Furthermore, this
+// function adds the seconds offset to the input timestamp because
+// IANA(https://www.iana.org/time-zones) does not support seconds in the offset.
+bool parseSparkTzWithPrefix(std::string& timeZoneName, int32_t& secondsOffset) {
+  std::string_view suffix{timeZoneName};
+  if (suffix.length() < 2) {
+    return false;
+  }
+  auto sign = timeZoneName[0];
+  std::string_view offset = suffix.substr(1);
+  std::string_view hm, s;
+  bool appendZeroMinutes = false;
+  if ((offset.length() == 1 && characterIsDigit(offset[0])) ||
+      (offset.length() == 2 && allCharactersIsDigit(offset))) {
+    // h[h]
+    hm = offset;
+    // Use appendZeroMinutes to indicate that we need to append :00 to the end
+    // of timeZoneName. By appending only when assigning to timeZoneName, hm can
+    // be defined as a string_view to minimize multiple string copies.
+    appendZeroMinutes = true;
+  } else if (
+      (offset.length() == 4 && allCharactersIsDigit(offset)) ||
+      (offset.length() == 5 && allCharactersIsDigit(offset.substr(0, 2)) &&
+       allCharactersIsDigit(offset.substr(3, 2)))) {
+    // hh[:]mm
+    // TimeZoneMap::normalizeTimeZoneOffset will normalize hhmm to hh:mm
+    hm = offset;
+  } else if (
+      (offset.length() == 6 && allCharactersIsDigit(offset)) ||
+      (offset.length() == 8 && allCharactersIsDigit(offset.substr(0, 2)) &&
+       allCharactersIsDigit(offset.substr(3, 2)) &&
+       allCharactersIsDigit(offset.substr(6, 2)))) {
+    // hh:mm:ss, hhmmss
+    auto lastSep = offset.rfind(':');
+    if (lastSep == std::string::npos && offset.length() == 6) {
+      // hhmmss
+      // TimeZoneMap::normalizeTimeZoneOffset will normalize hhmm to hh:mm.
+      hm = offset.substr(0, 4);
+      s = offset.substr(4);
+    } else if (lastSep == 5 && offset.find(':') == 2 && offset.length() == 8) {
+      // hh:mm:ss
+      hm = offset.substr(0, 5);
+      s = offset.substr(6);
+    } else {
+      return false;
+    }
+  } else {
+    return false;
+  }
+  int32_t sec = 0;
+  size_t pos = 0;
+  if (!s.empty() && !parseDoubleDigit(s.data(), s.length(), pos, sec)) {
+    return false;
+  }
+  if (sec < 0 || sec > 60) {
+    return false;
+  }
+  if (sec != 0) {
+    // Get timezone seconds offset
+    if (sign == '+') {
+      secondsOffset = -sec;
+    } else if (sign == '-') {
+      secondsOffset = sec;
+    } else {
+      return false;
+    }
+  }
+  // If the length of hm is 1, it needs to be padded to 2 digits, if
+  // appendZeroMinutes is true, :00 needs to be added at the end.
+  std::ostringstream ss;
+  ss << sign;
+  if (hm.length() == 1) {
+    ss << '0';
+  }
+  ss << hm;
+  if (appendZeroMinutes) {
+    ss << ":00";
+  }
+  timeZoneName = ss.str();
+  return true;
+}
+
+// Normalize the Spark timezone id for processing by tz::locateZone, convert it
+// to the IANA timezone database format. For example, change +8:8 to +08:08 and
+// GMT-8:8 to -08:08. Spark also supports adding seconds information in the
+// timezone id. We need to adjust it into the input Timestamp.
+bool normalizeSparkTimezone(std::string& timeZoneName, int32_t& secondsOffset) {
+  auto startsWith = [](std::string_view str, const char* prefix) {
+    return str.rfind(prefix, 0) == 0;
+  };
+  size_t signIdx = 0;
+  // Spark supports a timezone id with one of the prefixes UTC+, UTC-, GMT+,
+  // GMT-, UT+ or UT-, and a suffix in the following formats: h[h], hh[:]mm,
+  // hh:mm:ss, hhmmss.
+  if (startsWith(timeZoneName, "UTC") || startsWith(timeZoneName, "GMT")) {
+    if (timeZoneName.length() >= 5) {
+      signIdx = 3;
+    }
+  } else if (startsWith(timeZoneName, "UT")) {
+    if (timeZoneName.length() == 2) {
+      // UT and UTC are equivalent in Spark.
+      timeZoneName = "UTC";
+    } else if (timeZoneName.length() >= 4) {
+      signIdx = 2;
+    }
+  }
+  std::string_view tzView{timeZoneName};
+  auto sign = tzView[signIdx];
+  auto tzChanged = false;
+  // Only normalize the timezone offset in the format of (+|-)h[h]:m[m];
+  // for other cases, no processing will be done.
+  if ((sign == '+' || sign == '-') && tzView.length() > signIdx + 1) {
+    // Pad the hour and minute in the timezone id to two digits. If the timezone
+    // id includes second, only pad the hour. It will ignore the prefix before
+    // the +/- sign, the signIdx indicates the index of the sign char.
+    // For example,
+    // - +8:1 -> +08:01
+    // - GMT+8:01:01 -> +08:01:01
+    // - UT-8:1 -> -08:01
+    auto hm = tzView.substr(signIdx + 1);
+    auto sep = hm.find(':');
+    if (sep != std::string::npos) {
+      auto hour = hm.substr(0, sep);
+      auto minute = hm.substr(sep + 1);
+      if ((allCharactersIsDigit(hour) && hour.length() == 1) ||
+          (allCharactersIsDigit(minute) && minute.length() == 1)) {
+        std::ostringstream ss;
+        ss << sign;
+        hour.length() == 1 ? ss << "0" << hour : ss << hour;
+        ss << ":";
+        minute.length() == 1 ? ss << "0" << minute : ss << minute;
+        timeZoneName = ss.str();
+        tzChanged = true;
+      }
+    }
+  }
+
+  if (signIdx != 0) {
+    if (!tzChanged) {
+      // Get the suffix of the input timezone id if it has not been normalized
+      // in the previous precess.
+      timeZoneName = std::string(tzView.substr(signIdx));
+    }
+    if (!parseSparkTzWithPrefix(timeZoneName, secondsOffset)) {
+      return false;
+    }
+  }
+
+  return true;
+}
 } // namespace
 
 Expected<Timestamp>
@@ -846,13 +1003,13 @@ fromTimestampString(const char* str, size_t len, TimestampParseMode parseMode) {
   return resultTimestamp;
 }
 
-Expected<std::pair<Timestamp, const tz::TimeZone*>>
-fromTimestampWithTimezoneString(
+Expected<TimestampConversionResult> fromTimestampWithTimezoneString(
     const char* str,
     size_t len,
     TimestampParseMode parseMode) {
   size_t pos = 0;
   Timestamp resultTimestamp;
+  int32_t secondsOffset{0};
 
   if (!tryParseTimestampString(str, len, pos, resultTimestamp, parseMode)) {
     return folly::makeUnexpected(parserError(str, len));
@@ -880,8 +1037,14 @@ fromTimestampWithTimezoneString(
     }
 
     std::string_view timeZoneName(str + pos, timezonePos - pos);
+    std::string normalizeTzName{timeZoneName};
+    if (parseMode == TimestampParseMode::kSparkCast &&
+        !normalizeSparkTimezone(normalizeTzName, secondsOffset)) {
+      return folly::makeUnexpected(Status::UserError(
+          "Failed to normalize spark timezone value: \"{}\"", timeZoneName));
+    }
 
-    if ((timeZone = tz::locateZone(timeZoneName, false)) == nullptr) {
+    if ((timeZone = tz::locateZone(normalizeTzName, false)) == nullptr) {
       return folly::makeUnexpected(
           Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
     }
@@ -896,7 +1059,7 @@ fromTimestampWithTimezoneString(
       return folly::makeUnexpected(parserError(str, len));
     }
   }
-  return std::make_pair(resultTimestamp, timeZone);
+  return TimestampConversionResult{resultTimestamp, timeZone, secondsOffset};
 }
 
 int32_t toDate(const Timestamp& timestamp, const tz::TimeZone* timeZone_) {

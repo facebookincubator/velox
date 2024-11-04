@@ -348,6 +348,9 @@ struct Timestamp {
   //  ts.toString(); // returns January 1, 1970 08:00:00
   void toGMT(const tz::TimeZone& zone);
 
+  // Converts the timestamp to the GMT time and add the seconds offset.
+  void toGMT(const tz::TimeZone& zone, int32_t secondsOffset);
+
   /// Assuming the timestamp represents a GMT time, converts it to the time at
   /// the same moment at zone. For example:
   ///
