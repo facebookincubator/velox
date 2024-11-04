@@ -18,6 +18,7 @@
 #include <cstdint>
 
 #include "velox/common/base/SimdUtil.h"
+#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 
@@ -30,7 +31,7 @@ class PrefixSortEncoder {
       : ascending_(ascending), nullsFirst_(nullsFirst){};
 
   /// Encode native primitive types(such as uint64_t, int64_t, uint32_t,
-  /// int32_t, float, double, Timestamp).
+  /// int32_t, uint16_t, int16_t, float, double, Timestamp).
   /// 1. The first byte of the encoded result is null byte. The value is 0 if
   ///    (nulls first and value is null) or (nulls last and value is not null).
   ///    Otherwise, the value is 1.
@@ -38,8 +39,6 @@ class PrefixSortEncoder {
   ///    -If value is null, we set the remaining sizeof(T) bytes to '0', they
   ///     do not affect the comparison results at all.
   ///    -If value is not null, the result is set by calling encodeNoNulls.
-  ///
-  /// TODO: add support for strings.
   template <typename T>
   FOLLY_ALWAYS_INLINE void encode(std::optional<T> value, char* dest) const {
     if (value.has_value()) {
@@ -48,6 +47,50 @@ class PrefixSortEncoder {
     } else {
       dest[0] = nullsFirst_ ? 0 : 1;
       simd::memset(dest + 1, 0, sizeof(T));
+    }
+  }
+
+  /// Encode String type.
+  /// The string prefix is formatted as 'null byte + string content + padding
+  /// zeros'. If `!ascending_`, the bits for both the content and padding zeros
+  /// need to be inverted.
+  FOLLY_ALWAYS_INLINE void encode(
+      std::optional<StringView> value,
+      char* dest,
+      uint32_t encodeSize) const {
+    auto* destDataPtr = dest + 1;
+    const auto stringPrefixSize = encodeSize - 1;
+    if (value.has_value()) {
+      dest[0] = nullsFirst_ ? 1 : 0;
+      auto data = value.value();
+      const uint32_t copySize =
+          std::min<uint32_t>(data.size(), stringPrefixSize);
+      if (data.isInline() ||
+          reinterpret_cast<const HashStringAllocator::Header*>(data.data())[-1]
+                  .size() >= data.size()) {
+        // The string is inline or all in one piece out of line.
+        std::memcpy(destDataPtr, data.data(), copySize);
+      } else {
+        // 'data' is stored in non-contiguous allocation pieces in the row
+        // container, we only read prefix size data out.
+        auto stream = HashStringAllocator::prepareRead(
+            HashStringAllocator::headerOf(data.data()));
+        stream->readBytes(destDataPtr, copySize);
+      }
+
+      if (data.size() < stringPrefixSize) {
+        std::memset(
+            destDataPtr + data.size(), 0, stringPrefixSize - data.size());
+      }
+
+      if (!ascending_) {
+        for (auto i = 1; i < encodeSize; ++i) {
+          dest[i] = ~dest[i];
+        }
+      }
+    } else {
+      dest[0] = nullsFirst_ ? 0 : 1;
+      std::memset(destDataPtr, 0, stringPrefixSize);
     }
   }
 
@@ -67,7 +110,8 @@ class PrefixSortEncoder {
   /// @return For supported types, returns the encoded size, assume nullable.
   ///         For not supported types, returns 'std::nullopt'.
   FOLLY_ALWAYS_INLINE static std::optional<uint32_t> encodedSize(
-      TypeKind typeKind) {
+      TypeKind typeKind,
+      uint32_t stringPrefixLength) {
     // NOTE: one byte is reserved for nullable comparison.
     switch ((typeKind)) {
       case ::facebook::velox::TypeKind::SMALLINT: {
@@ -90,6 +134,11 @@ class PrefixSortEncoder {
       }
       case ::facebook::velox::TypeKind::HUGEINT: {
         return 17;
+      }
+      case ::facebook::velox::TypeKind::VARBINARY:
+        [[fallthrough]];
+      case ::facebook::velox::TypeKind::VARCHAR: {
+        return 1 + stringPrefixLength;
       }
       default:
         return std::nullopt;
@@ -258,6 +307,13 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     char* dest) const {
   encodeNoNulls(value.getSeconds(), dest);
   encodeNoNulls(value.getNanos(), dest + 8);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
+    StringView value,
+    char* dest) const {
+  VELOX_UNREACHABLE();
 }
 
 } // namespace facebook::velox::exec::prefixsort
