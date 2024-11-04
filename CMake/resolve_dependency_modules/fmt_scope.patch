@@ -1,0 +1,41 @@
+diff --git a/cpp/cmake/thirdparty/get_fmt.cmake b/cpp/cmake/thirdparty/get_fmt.cmake
+index 083dd1d063..f754509433 100644
+--- a/cpp/cmake/thirdparty/get_fmt.cmake
++++ b/cpp/cmake/thirdparty/get_fmt.cmake
+@@ -15,6 +15,8 @@
+ # Use CPM to find or clone fmt
+ function(find_and_configure_fmt)
+ 
++  include(${rapids-cmake-dir}/cpm/package_override.cmake)
++  rapids_cpm_package_override(${CUDF_SOURCE_DIR}/cudf_version_override.json)
+   include(${rapids-cmake-dir}/cpm/fmt.cmake)
+   rapids_cpm_fmt(INSTALL_EXPORT_SET cudf-exports BUILD_EXPORT_SET cudf-exports)
+ endfunction()
+diff --git a/cpp/cmake/thirdparty/get_rmm.cmake b/cpp/cmake/thirdparty/get_rmm.cmake
+index 854bd3d114..035b2c74f0 100644
+--- a/cpp/cmake/thirdparty/get_rmm.cmake
++++ b/cpp/cmake/thirdparty/get_rmm.cmake
+@@ -14,6 +14,8 @@
+ 
+ # This function finds rmm and sets any additional necessary environment variables.
+ function(find_and_configure_rmm)
++  include(${rapids-cmake-dir}/cpm/package_override.cmake)
++  rapids_cpm_package_override(${CUDF_SOURCE_DIR}/cudf_version_override.json)
+   include(${rapids-cmake-dir}/cpm/rmm.cmake)
+ 
+   # Find or install RMM
+diff --git a/cpp/cudf_version_override.json b/cpp/cudf_version_override.json
+new file mode 100644
+index 0000000000..bb2ebf5dfe
+--- /dev/null
++++ b/cpp/cudf_version_override.json
+@@ -0,0 +1,9 @@
++{
++  "packages": {
++    "fmt": {
++      "version": "10.1.1",
++      "git_url": "https://github.com/fmtlib/fmt.git",
++      "git_tag": "${version}"
++    }
++  }
++}
