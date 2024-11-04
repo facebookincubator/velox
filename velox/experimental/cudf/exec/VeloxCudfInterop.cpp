@@ -15,7 +15,6 @@
  */
 
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -50,6 +49,7 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
+
 namespace facebook::velox::cudf_velox {
 
 namespace {
