@@ -23,11 +23,11 @@ namespace facebook::velox::exec {
 class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
  public:
   ExchangeSource(
-      const std::string& taskId,
+      const std::string& remoteTaskId,
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool)
-      : taskId_(taskId),
+      : remoteTaskId_(remoteTaskId),
         destination_(destination),
         queue_(std::move(queue)),
         pool_(pool->shared_from_this()) {}
@@ -35,13 +35,12 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   virtual ~ExchangeSource() = default;
 
   static std::shared_ptr<ExchangeSource> create(
-      const std::string& taskId,
+      const std::string& remoteTaskId,
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool);
 
-  /// Temporary API to indicate whether 'metrics()' API
-  /// is supported.
+  /// Temporary API to indicate whether 'metrics()' API is supported.
   virtual bool supportsMetrics() const {
     return false;
   }
@@ -113,14 +112,14 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
 
   virtual std::string toString() {
     std::stringstream out;
-    out << "[ExchangeSource " << taskId_ << ":" << destination_
+    out << "[ExchangeSource " << remoteTaskId_ << ":" << destination_
         << (requestPending_ ? " pending " : "") << (atEnd_ ? " at end" : "");
     return out.str();
   }
 
   virtual folly::dynamic toJson() {
     folly::dynamic obj = folly::dynamic::object;
-    obj["taskId"] = taskId_;
+    obj["remoteTaskId"] = remoteTaskId_;
     obj["destination"] = destination_;
     obj["sequence"] = sequence_;
     obj["requestPending"] = requestPending_.load();
@@ -129,7 +128,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   }
 
   using Factory = std::function<std::shared_ptr<ExchangeSource>(
-      const std::string& taskId,
+      const std::string& remoteTaskId,
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool)>;
@@ -146,9 +145,9 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   }
 
  protected:
-  // ID of the task producing data
-  const std::string taskId_;
-  // Destination number of 'this' on producer
+  // ID of the remote task producing data.
+  const std::string remoteTaskId_;
+  // Destination number of 'this' on producer.
   const int destination_;
   const std::shared_ptr<ExchangeQueue> queue_{nullptr};
   // Holds a shared reference on the memory pool as it might be still possible

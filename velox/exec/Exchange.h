@@ -27,8 +27,8 @@ namespace facebook::velox::exec {
 struct RemoteConnectorSplit : public connector::ConnectorSplit {
   const std::string taskId;
 
-  explicit RemoteConnectorSplit(const std::string& _taskId)
-      : ConnectorSplit(""), taskId(_taskId) {}
+  explicit RemoteConnectorSplit(const std::string& remoteTaskId)
+      : ConnectorSplit(""), taskId(remoteTaskId) {}
 
   std::string toString() const override {
     return fmt::format("Remote: {}", taskId);
@@ -62,9 +62,9 @@ class Exchange : public SourceOperator {
  private:
   // Invoked to create exchange client for remote tasks.
   // The function shuffles the source task ids first to randomize the source
-  // tasks we fetch data from. This helps to avoid different tasks fetching
-  // from the same source task in a distributed system.
-  void addTaskIds(std::vector<std::string>& taskIds);
+  // tasks we fetch data from. This helps to avoid different tasks fetching from
+  // the same source task in a distributed system.
+  void addRemoteTaskIds(std::vector<std::string>& remoteTaskIds);
 
   /// Fetches splits from the task until there are no more splits or task
   /// returns a future that will be complete when more splits arrive. Adds
