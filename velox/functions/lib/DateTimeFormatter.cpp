@@ -1588,7 +1588,8 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
     }
   }
 
-  // Ensure all input was consumed if type_ is not legacy datetime formatter.
+  // Ensure all input was consumed if type_ is not LENIENT_SIMPLE or
+  // STRICT_SIMPLE datetime formatter.
   if (type_ != DateTimeFormatterType::LENIENT_SIMPLE &&
       type_ != DateTimeFormatterType::STRICT_SIMPLE && cur < end) {
     return parseFail(input, cur, end);
