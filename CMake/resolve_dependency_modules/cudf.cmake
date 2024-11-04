@@ -34,7 +34,9 @@ string(APPEND CMAKE_CXX_FLAGS
        " -Wno-non-virtual-dtor -Wno-missing-field-initializers")
 string(APPEND CMAKE_CXX_FLAGS " -Wno-deprecated-copy")
 
-set(RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE ${CMAKE_CURRENT_SOURCE_DIR}/CMake/resolve_dependency_modules/cudf/cudf-version-override.json)
+set(RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE
+    ${CMAKE_CURRENT_SOURCE_DIR}/CMake/resolve_dependency_modules/cudf/cudf-version-override.json
+)
 
 FetchContent_Declare(
   cudf
