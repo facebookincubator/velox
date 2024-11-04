@@ -130,7 +130,8 @@ struct InitSessionTimezone {
 /// Converts string as date time unit. Throws for invalid input string.
 ///
 /// @param unitString The input string to represent date time unit.
-/// @param throwIfInvalid Whether to throw an exception for invalid input string.
+/// @param throwIfInvalid Whether to throw an exception for invalid input
+/// string.
 /// @param allowMirco Whether to allow microsecond.
 /// @param allowAbbreviated Whether to allow abbreviated unit string.
 FOLLY_ALWAYS_INLINE std::optional<DateTimeUnit> fromDateTimeUnitString(
