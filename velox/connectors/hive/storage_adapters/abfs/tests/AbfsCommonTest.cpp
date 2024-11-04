@@ -45,7 +45,7 @@ TEST(AbfsUtilsTest, abfsConfig) {
   EXPECT_EQ(abfsConfig.filePath(), "file");
   EXPECT_EQ(
       abfsConfig.connectionString(),
-      "DefaultEndpointsProtocol=https;AccountName=efg;AccountKey=123;EndpointSuffix=core.windows.net");
+      "DefaultEndpointsProtocol=http;AccountName=efg;AccountKey=123;EndpointSuffix=core.windows.net;");
 
   auto abfssConfig = AbfsConfig(
       "abfss://abc@foobar.dfs.core.windows.net/sf_1/store_sales/ss_sold_date_sk=2450816/part-00002-a29c25f1-4638-494e-8428-a84f51dcea41.c000.snappy.parquet",
@@ -56,7 +56,7 @@ TEST(AbfsUtilsTest, abfsConfig) {
       "sf_1/store_sales/ss_sold_date_sk=2450816/part-00002-a29c25f1-4638-494e-8428-a84f51dcea41.c000.snappy.parquet");
   EXPECT_EQ(
       abfssConfig.connectionString(),
-      "DefaultEndpointsProtocol=https;AccountName=foobar;AccountKey=456;EndpointSuffix=core.windows.net");
+      "DefaultEndpointsProtocol=https;AccountName=foobar;AccountKey=456;EndpointSuffix=core.windows.net;");
 
   // test with special characters
   auto abfssConfigWithSpecialCharacters = AbfsConfig(

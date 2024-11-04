@@ -48,13 +48,14 @@ AbfsConfig::AbfsConfig(
   std::stringstream ss;
   ss << "DefaultEndpointsProtocol=" << (isHttps ? "https" : "http");
   ss << ";AccountName=" << accountName;
-  ss << ";EndpointSuffix=" << endpointSuffix;
 
   if (config.valueExists(credKey)) {
     ss << ";AccountKey=" << config.get<std::string>(credKey).value();
   } else {
     VELOX_USER_FAIL("Config {} not found", credKey);
   }
+
+  ss << ";EndpointSuffix=" << endpointSuffix;
 
   if (config.valueExists(kAzureBlobEndpoint)) {
     ss << ";BlobEndpoint="
