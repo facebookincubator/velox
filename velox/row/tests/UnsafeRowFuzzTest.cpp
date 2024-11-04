@@ -88,7 +88,7 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
   std::array<char[kBufferSize], kNumBuffers> buffers_{};
   char buffer_[kBufferSize * kNumBuffers];
-  std::vector<size_t> offsets_;
+  std::vector<int64_t> offsets_;
 
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::memoryManager()->addLeafPool();
@@ -179,12 +179,13 @@ TEST_F(UnsafeRowFuzzTests, fast) {
     UnsafeRowFast fast(data);
     size_t offset = 0;
     const auto numRows = data->size();
-    offsets_.resize(numRows);
+    offsets_.resize(numRows + 1);
     for (auto i = 0; i < numRows; ++i) {
       auto rowSize = fast.serialize(i, (char*)buffer_ + offset);
       offsets_[i] = offset;
       offset += rowSize;
     }
+    offsets_[numRows] = offset;
     VELOX_CHECK_LE(offset, kBufferSize * kNumBuffers);
 
     // Deserialize previous bytes back to row vector.

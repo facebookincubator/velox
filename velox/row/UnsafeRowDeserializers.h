@@ -553,31 +553,41 @@ struct UnsafeRowPrimitiveBatchDeserializer {
  */
 struct UnsafeRowDeserializer {
  public:
-  /// Deserialize the rows which is serialized in contiguous memory.
-  /// Deserialize fast when all the column types are primitive type, otherwise,
-  /// deserialize rows one by one, as previously. Fast deserialization
-  /// computes the start memoryAddress of one data by the column index and row
-  /// number, and set all the data of one column at once.
-  /// @param memoryAddress the start memory address of the serialized rows .
-  /// @param type the element type.
-  /// @param offsets offset of each row serialized data. It's size should be
-  /// equal to the deserialized rows. First offset is 0.
-  /// @param pool the memory pool to allocate Vector.
+  /// Deserializes rows that are stored in contiguous memory.
+  /// If all column types are primitive, fast deserialization is used.
+  /// Otherwise, rows are deserialized one by one as before.
+  /// Fast deserialization calculates the starting memory address of data
+  /// based on the column index and row number, setting all data for one column
+  /// at once.
+  /// The null-tracking bit set is aligned to 8-byte word boundaries. It stores
+  /// one bit per field.
+  /// Each row has three parts: [null-tracking bit set] [values] [variable
+  /// length portion] In the `values` region, we store one 8-byte word per
+  /// field. For fields that hold fixed-length primitive types, such as long,
+  /// double, or int, we store the value directly in the word. For fields with
+  /// non-primitive or variable-length values, we store a relative offset
+  /// (w.r.t. the base address of the row) that points to the beginning of the
+  /// variable-length field, and length (they are combined into a long).
+  /// So we can get the starting memory address of each row by its offset, and
+  /// get the data of one column by field offset which is computed by fixed
+  /// width null bit set and fixed width column word.
+  /// @param memoryAddress The starting memory address of the serialized rows.
+  /// @param type The element type.
+  /// @param offsets Offset of each row serialized data. It's size should be
+  /// equal to the number of deserialized rows + 1. First offset is 0.
+  /// @param pool The memory pool used to allocate vector.
   static VectorPtr deserialize(
       const uint8_t* memoryAddress,
       const RowTypePtr& type,
       const std::vector<int64_t>& offsets,
       memory::MemoryPool* pool);
 
-  /**
-   * Deserializes a complex element type to its Vector representation.
-   * @param data A vector of string_view over a given element in the
-   *UnsafeRow.
-   * @param type the element type.
-   * @param pool the memory pool to allocate Vectors from
-   *data to a array.
-   * @return a VectorPtr
-   */
+  /// Deserializes a complex element type to its Vector representation.
+  /// @param data A vector of string_view over a given element in the
+  /// UnsafeRow.
+  /// @param type the element type.
+  /// @param pool the memory pool to allocate Vectors from data to a array.
+  /// @return a VectorPtr
   static VectorPtr deserialize(
       const std::vector<std::optional<std::string_view>>& data,
       const TypePtr& type,

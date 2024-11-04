@@ -17,13 +17,18 @@
 
 namespace facebook::velox::row {
 namespace {
-
-inline int64_t getFieldOffset(int64_t nullBitsetWidthInBytes, int32_t index) {
-  return nullBitsetWidthInBytes + UnsafeRow::kFieldWidthBytes * index;
+// Returns the offset of a column to starting memory address of one row.
+// @param nullBitsetWidthInBytes The null-tracking bit set is aligned to 8-byte
+// word boundaries. It stores one bit per field.
+// @param columnIdx column index.
+inline int64_t getFieldOffset(
+    int64_t nullBitsetWidthInBytes,
+    column_index_t columnIdx) {
+  return nullBitsetWidthInBytes + UnsafeRow::kFieldWidthBytes * columnIdx;
 }
 
-inline bool isNullAt(const uint8_t* memoryAddress, int32_t index) {
-  return bits::isBitSet(memoryAddress, index);
+inline bool isNullAt(const uint8_t* memoryAddress, vector_size_t row) {
+  return bits::isBitSet(memoryAddress, row);
 }
 
 size_t getTotalStringSize(
@@ -165,13 +170,12 @@ VectorPtr createFlatVectorFast<TypeKind::VARCHAR>(
           *(int64_t*)(memoryAddress + offsets[row] + fieldOffset);
       const int32_t length = static_cast<int32_t>(offsetAndSize);
       const int32_t wordOffset = static_cast<int32_t>(offsetAndSize >> 32);
-      auto valueSrcPtr = memoryAddress + offsets[row] + wordOffset;
+      auto* valueSrc = memoryAddress + offsets[row] + wordOffset;
       if (StringView::isInline(length)) {
         column->set(
-            row,
-            StringView(reinterpret_cast<const char*>(valueSrcPtr), length));
+            row, StringView(reinterpret_cast<const char*>(valueSrc), length));
       } else {
-        memcpy(rawBuffer, valueSrcPtr, length);
+        memcpy(rawBuffer, valueSrc, length);
         column->setNoCopy(row, StringView(rawBuffer, length));
         rawBuffer += length;
       }
@@ -227,11 +231,11 @@ VectorPtr deserializeFast(
     const uint8_t* memoryAddress,
     const RowTypePtr& type,
     const std::vector<int64_t>& offsets,
+    vector_size_t numRows,
     memory::MemoryPool* pool) {
   const auto numFields = type->size();
   const int64_t nullBitsetWidthInBytes = UnsafeRow::getNullLength(numFields);
   std::vector<VectorPtr> columns(numFields);
-  const vector_size_t numRows = offsets.size();
   for (auto i = 0; i < numFields; i++) {
     const auto fieldOffset = getFieldOffset(nullBitsetWidthInBytes, i);
     const auto& colType = type->childAt(i);
@@ -262,18 +266,16 @@ VectorPtr UnsafeRowDeserializer::deserialize(
     const RowTypePtr& type,
     const std::vector<int64_t>& offsets,
     memory::MemoryPool* pool) {
+  const vector_size_t numRows = offsets.size() - 1;
   if (fastSupported(type)) {
-    return deserializeFast(memoryAddress, type, offsets, pool);
-  } else {
-    std::vector<std::optional<std::string_view>> data;
-    const vector_size_t numRows = offsets.size();
-    for (auto i = 0; i < numRows; i++) {
-      const auto length =
-          (i == numRows - 1 ? offsets[i] : offsets[i + 1] - offsets[i]);
-      data.emplace_back(std::string_view(
-          reinterpret_cast<const char*>(memoryAddress + offsets[i]), length));
-    }
-    return deserialize(data, type, pool);
+    return deserializeFast(memoryAddress, type, offsets, numRows, pool);
   }
+  std::vector<std::optional<std::string_view>> data;
+  for (auto i = 0; i < numRows; i++) {
+    const auto length = offsets[i + 1] - offsets[i];
+    data.emplace_back(std::string_view(
+        reinterpret_cast<const char*>(memoryAddress + offsets[i]), length));
+  }
+  return deserialize(data, type, pool);
 }
 } // namespace facebook::velox::row

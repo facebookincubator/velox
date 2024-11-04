@@ -186,6 +186,7 @@ int deserializeFast(
     offsets.push_back(offset);
     offset += buffer->size();
   }
+  offsets[nRows] = offset;
   auto buffer = helper.copyBuffers(buffers, offset);
   suspender.dismiss();
   for (int i = 0; i < nIters; i++) {
