@@ -51,6 +51,39 @@ These functions support TIMESTAMP and DATE input types.
     ``num_days`` can be positive or negative.
     Supported types for ``num_days`` are: TINYINT, SMALLINT, INTEGER.
 
+.. spark:function:: date_trunc(fmt, ts) -> timestamp
+
+    ``fmt`` is case insensitive and must be one of the following:
+        * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ``ts`` falls in, the time part will be zero out
+        * "QUARTER" - truncate to the first date of the quarter that the ``ts`` falls in, the time part will be zero out
+        * "MONTH", "MM", "MON" - truncate to the first date of the month that the ``ts`` falls in, the time part will be zero out
+        * "WEEK" - truncate to the Monday of the week that the ``ts`` falls in, the time part will be zero out
+        * "DAY", "DD" - zero out the time part
+        * "HOUR" - zero out the minute and second with fraction part
+        * "MINUTE"- zero out the second with fraction part
+        * "SECOND" - zero out the second fraction part
+        * "MILLISECOND" - zero out the microseconds
+        * "MICROSECOND" - everything remains
+
+    Returns timestamp ``ts`` truncated to the unit specified by the format model ``fmt``.
+    Returns null if ``fmt`` is invalid. ::
+
+        SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
+        SELECT date_trunc('YYYY', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
+        SELECT date_trunc('YY', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
+        SELECT date_trunc('QUARTER', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
+        SELECT date_trunc('MONTH', '2015-03-05T09:32:05.359'); -- 2015-03-01 00:00:00
+        SELECT date_trunc('MM', '2015-03-05T09:32:05.359'); -- 2015-03-01 00:00:00
+        SELECT date_trunc('MON', '2015-03-05T09:32:05.359'); -- 2015-03-01 00:00:00
+        SELECT date_trunc('WEEK', '2015-03-05T09:32:05.359'); -- 2015-03-02 00:00:00
+        SELECT date_trunc('DAY', '2015-03-05T09:32:05.359'); -- 2015-03-05 00:00:00
+        SELECT date_trunc('DD', '2015-03-05T09:32:05.359'); -- 2015-03-05 00:00:00
+        SELECT date_trunc('HOUR', '2015-03-05T09:32:05.359'); -- 2015-03-05 09:00:00
+        SELECT date_trunc('MINUTE', '2015-03-05T09:32:05.359'); -- 2015-03-05 09:32:00
+        SELECT date_trunc('SECOND', '2015-03-05T09:32:05.359'); -- 2015-03-05 09:32:05
+        SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456'); -- 2015-03-05 09:32:05.123456
+        SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05..123456'); -- 2015-01-01 09:32:05.123456
+
 .. spark:function:: datediff(endDate, startDate) -> integer
 
     Returns the number of days from startDate to endDate. Only DATE type is allowed
@@ -333,21 +366,3 @@ These functions support TIMESTAMP and DATE input types.
     part of the 53rd week of year 2004, so the result is 2004. Only supports DATE type.
 
         SELECT year_of_week('2005-01-02'); -- 2004
-
-.. spark:function:: date_trunc(fmt, ts) -> timestamp
-
-    Returns timestamp ``ts`` truncated to the unit specified by the format model ``fmt``.
-    Returns null if ``fmt`` is invalid.
-    ``fmt`` is case insensitive and must be one of the following:
-        * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ``ts`` falls in, the time part will be zero out
-        * "QUARTER" - truncate to the first date of the quarter that the ``ts`` falls in, the time part will be zero out
-        * "MONTH", "MM", "MON" - truncate to the first date of the month that the ``ts`` falls in, the time part will be zero out
-        * "WEEK" - truncate to the Monday of the week that the ``ts`` falls in, the time part will be zero out
-        * "DAY", "DD" - zero out the time part
-        * "HOUR" - zero out the minute and second with fraction part
-        * "MINUTE"- zero out the second with fraction part
-        * "SECOND" - zero out the second fraction part
-        * "MILLISECOND" - zero out the microseconds
-        * "MICROSECOND" - everything remains
-
-        SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00

@@ -127,73 +127,57 @@ struct InitSessionTimezone {
   }
 };
 
-/// Datetime unit string legality verification and conversion.
+/// Converts string as date time unit. Throws for invalid input string.
 ///
-/// @param unitString Datetime unit string.
-/// @param throwIfInvalid Whether to throw an exception if invalid.
+/// @param unitString The input string to represent date time unit.
+/// @param throwIfInvalid Whether to throw an exception for invalid input string.
 /// @param allowMirco Whether to allow microsecond.
-/// @param allowAbbreviated Whether to allow abbreviated.
+/// @param allowAbbreviated Whether to allow abbreviated unit string.
 FOLLY_ALWAYS_INLINE std::optional<DateTimeUnit> fromDateTimeUnitString(
     const StringView& unitString,
     bool throwIfInvalid,
     bool allowMirco = false,
     bool allowAbbreviated = false) {
-  static const StringView kMicrosecond("microsecond");
-  static const StringView kMillisecond("millisecond");
-  static const StringView kSecond("second");
-  static const StringView kMinute("minute");
-  static const StringView kHour("hour");
-  static const StringView kDay("day");
-  static const StringView kDd("dd");
-  static const StringView kWeek("week");
-  static const StringView kMonth("month");
-  static const StringView kMon("mon");
-  static const StringView kMm("mm");
-  static const StringView kQuarter("quarter");
-  static const StringView kYear("year");
-  static const StringView kYyyy("yyyy");
-  static const StringView kYy("yy");
-
   const auto unit = boost::algorithm::to_lower_copy(unitString.str());
 
-  if (unit == kMicrosecond && allowMirco) {
+  if (unit == "microsecond" && allowMirco) {
     return DateTimeUnit::kMicrosecond;
   }
-  if (unit == kMillisecond) {
+  if (unit == "millisecond") {
     return DateTimeUnit::kMillisecond;
   }
-  if (unit == kSecond) {
+  if (unit == "second") {
     return DateTimeUnit::kSecond;
   }
-  if (unit == kMinute) {
+  if (unit == "minute") {
     return DateTimeUnit::kMinute;
   }
-  if (unit == kHour) {
+  if (unit == "hour") {
     return DateTimeUnit::kHour;
   }
-  if (unit == kDay) {
+  if (unit == "day") {
     return DateTimeUnit::kDay;
   }
-  if (unit == kWeek) {
+  if (unit == "week") {
     return DateTimeUnit::kWeek;
   }
-  if (unit == kMonth) {
+  if (unit == "month") {
     return DateTimeUnit::kMonth;
   }
-  if (unit == kQuarter) {
+  if (unit == "quarter") {
     return DateTimeUnit::kQuarter;
   }
-  if (unit == kYear) {
+  if (unit == "year") {
     return DateTimeUnit::kYear;
   }
   if (allowAbbreviated) {
-    if (unit == kDd) {
+    if (unit == "dd") {
       return DateTimeUnit::kDay;
     }
-    if (unit == kMm || unit == kMon) {
+    if (unit == "mon" || unit == "mm") {
       return DateTimeUnit::kMonth;
     }
-    if (unit == kYyyy || unit == kYy) {
+    if (unit == "yyyy" || unit == "yy") {
       return DateTimeUnit::kYear;
     }
   }
@@ -203,6 +187,7 @@ FOLLY_ALWAYS_INLINE std::optional<DateTimeUnit> fromDateTimeUnitString(
   return std::nullopt;
 }
 
+// Adjust datetime based on unit.
 FOLLY_ALWAYS_INLINE void adjustDateTime(
     std::tm& dateTime,
     const DateTimeUnit& unit) {
@@ -271,7 +256,7 @@ FOLLY_ALWAYS_INLINE void adjustDateTime(
   }
 }
 
-/// For fixed interval like second, minute, hour, day and week
+/// For fixed interval like minute, hour and day,
 /// we can truncate date by a simple arithmetic expression:
 /// floor(seconds / intervalSeconds) * intervalSeconds.
 FOLLY_ALWAYS_INLINE Timestamp
@@ -284,10 +269,10 @@ adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
   return Timestamp(truncedSeconds, 0);
 }
 
-// Returns timestamp truncated to the unit specified by the format.
-FOLLY_ALWAYS_INLINE Timestamp dateTrunc(
-    const DateTimeUnit unit,
+// Returns timestamp truncated to the specified unit.
+FOLLY_ALWAYS_INLINE Timestamp truncateTimestamp(
     const Timestamp& timestamp,
+    DateTimeUnit unit,
     const tz::TimeZone* timeZone) {
   Timestamp result;
   switch (unit) {

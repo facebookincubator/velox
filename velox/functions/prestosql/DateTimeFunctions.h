@@ -966,7 +966,7 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
     } else {
       unit = getTimestampUnit(unitString).value();
     }
-    result = dateTrunc(unit, timestamp, timeZone_);
+    result = truncateTimestamp(timestamp, unit, timeZone_);
   }
 
   FOLLY_ALWAYS_INLINE void call(

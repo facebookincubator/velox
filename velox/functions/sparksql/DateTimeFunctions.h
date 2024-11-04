@@ -504,7 +504,7 @@ struct DateTruncFunction {
     if (!unitOption.has_value()) {
       return false;
     }
-    result = dateTrunc(unitOption.value(), timestamp, timeZone_);
+    result = truncateTimestamp(timestamp, unitOption.value(), timeZone_);
     return true;
   }
 
