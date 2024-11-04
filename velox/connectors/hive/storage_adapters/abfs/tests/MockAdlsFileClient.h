@@ -14,19 +14,29 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
-
 #include "velox/exec/tests/utils/TempFilePath.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::filesystems::abfs;
+#include "velox/connectors/hive/storage_adapters/abfs/AdlsFileClient.h"
 
-namespace facebook::velox::filesystems::test {
+using namespace Azure::Storage::Files::DataLake::Models;
+
+namespace facebook::velox::filesystems {
+/*
+ * The Azurite Simulator does not yet support the DFS endpoint.
+ * (For more information, see https://github.com/Azure/Azurite/issues/553 and
+ * https://github.com/Azure/Azurite/issues/409).
+ * You can find a comparison between DFS and Blob endpoints here:
+ * https://github.com/Azure/Azurite/wiki/ADLS-Gen2-Implementation-Guidance
+ *
+ * To facilitate unit testing of file write scenarios, we define the
+ * IBlobStorageFileClient here, which can be mocked during testing.
+ */
+
 // A mocked blob storage file client backend with local file store.
-class MockBlobStorageFileClient : public IBlobStorageFileClient {
+class MockAdlsFileClient : public AdlsFileClient {
  public:
-  MockBlobStorageFileClient() {
-    auto tempFile = ::exec::test::TempFilePath::create();
+  MockAdlsFileClient() {
+    auto tempFile = velox::exec::test::TempFilePath::create();
     filePath_ = tempFile->getPath();
   }
 
@@ -53,4 +63,4 @@ class MockBlobStorageFileClient : public IBlobStorageFileClient {
   std::string filePath_;
   std::ofstream fileStream_;
 };
-} // namespace facebook::velox::filesystems::test
+} // namespace facebook::velox::filesystems
