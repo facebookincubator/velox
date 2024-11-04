@@ -40,8 +40,7 @@ FetchContent_Declare(
   cudf
   URL ${VELOX_cudf_SOURCE_URL}
   URL_HASH ${VELOX_cudf_BUILD_SHA256_CHECKSUM}
-  SOURCE_SUBDIR cpp
-  UPDATE_DISCONNECTED 1)
+  SOURCE_SUBDIR cpp)
 
 FetchContent_MakeAvailable(cudf)
 endblock()
