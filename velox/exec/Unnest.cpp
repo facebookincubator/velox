@@ -186,7 +186,7 @@ void Unnest::generateRepeatedColumns(
   VELOX_DCHECK_GT(range.size, 0);
   // Record the row number to process.
   range.forEachRow(
-      [&](vector_size_t row, vector_size_t start, vector_size_t size) {
+      [&](vector_size_t row, vector_size_t /*start*/, vector_size_t size) {
         std::fill(
             rawRepeatedIndices + index, rawRepeatedIndices + index + size, row);
         index += size;
@@ -350,7 +350,10 @@ bool Unnest::isFinished() {
 }
 
 void Unnest::RowRange::forEachRow(
-    std::function<void(vector_size_t, vector_size_t, vector_size_t)> func,
+    std::function<void(
+        vector_size_t /*row*/,
+        vector_size_t /*start*/,
+        vector_size_t /*size*/)> func,
     const vector_size_t* const rawMaxSizes,
     vector_size_t firstRowStart) const {
   // Process the first row.

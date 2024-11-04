@@ -62,12 +62,17 @@ class Unnest : public Operator {
   // The size is end - start, the range is [start, end).
   struct RowRange {
     // Invokes a function on each row represent by the RowRange.
-    // @param func Call the function for each row.
+    // @param func Call the function for each row, `row` means the current row
+    // number whose range is [start, start + size), `start` means the row number
+    // to start to process, `size` means the number of input rows to process.
     // @param rawMaxSizes Used to compute the end of each row.
     // @param firstRowStart Same with Unnest member firstRowStart_, start
     // processing the first row input from `firstRowStart_`.
     void forEachRow(
-        std::function<void(vector_size_t, vector_size_t, vector_size_t)> func,
+        std::function<void(
+            vector_size_t /*row*/,
+            vector_size_t /*start*/,
+            vector_size_t /*size*/)> func,
         const vector_size_t* const rawMaxSizes,
         vector_size_t firstRowStart) const;
 
@@ -82,7 +87,7 @@ class Unnest : public Operator {
     // 'lastRowEnd'. It is nullopt when processing the last row fully.
     const std::optional<vector_size_t> lastRowEnd;
 
-    // Records the number of output rows.
+    // Total number of inner rows in the range.
     const vector_size_t numElements;
   };
 
