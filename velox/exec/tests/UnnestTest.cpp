@@ -477,4 +477,4 @@ TEST_P(UnnestTest, batchSize) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     UnnestTest,
     UnnestTest,
-    testing::ValuesIn({2, 17, 33, 1024}));
+    testing::ValuesIn(/*batchSize*/ {2, 17, 33, 1024}));

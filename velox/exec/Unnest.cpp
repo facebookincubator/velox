@@ -128,6 +128,7 @@ RowVectorPtr Unnest::getOutput() {
 
   const auto output = generateOutput(rowRange);
   if (rowRange.lastRowEnd.has_value()) {
+    // The last row is not processed completely.
     firstRowStart_ = rowRange.lastRowEnd.value();
     nextInputRow_ += rowRange.size - 1;
   } else {
@@ -153,9 +154,9 @@ Unnest::RowRange Unnest::extractRowRange(vector_size_t size) const {
         isFirstRow ? rawMaxSizes_[row] - firstRowStart_ : rawMaxSizes_[row];
     ++numInput;
     if (numElements + remainingSize > maxOutputSize_) {
-      // Single row's output is divided into multiple batches.
-      // Computes the row range to process the first and last row
-      // partially instead of 0 to rawMaxSizes_[row].
+      // A single row's output needs to be split into multiple batches.
+      // Determines the range to process the first and last rows partially,
+      // rather than processing from 0 to 'rawMaxSizes_[row]'.
       if (isFirstRow) {
         lastRowEnd = firstRowStart_ + maxOutputSize_ - numElements;
       } else {
@@ -165,7 +166,7 @@ Unnest::RowRange Unnest::extractRowRange(vector_size_t size) const {
       numElements = maxOutputSize_;
       break;
     }
-    // Not split this row.
+    // Process this row completely.
     numElements += remainingSize;
     if (numElements == maxOutputSize_) {
       break;
@@ -229,7 +230,8 @@ const Unnest::UnnestChannelEncoding Unnest::generateEncodingForChannel(
         if (!currentDecoded.isNullAt(row)) {
           const auto offset = currentOffsets[currentIndices[row]];
           const auto unnestSize = currentSizes[currentIndices[row]];
-          // The identityMapping is false when exists partial processing row.
+          // The 'identityMapping' is false when there exists a partially
+          // processed row.
           if (index != offset || start != 0 || end != rawMaxSizes_[row] ||
               unnestSize < end) {
             identityMapping = false;

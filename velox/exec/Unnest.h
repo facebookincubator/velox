@@ -39,13 +39,14 @@ class Unnest : public Operator {
   bool isFinished() override;
 
  private:
-  // Represents the range of rows to process and indicates that first and last
-  // row may need to be processed partially to match the output batch size.
-  // The row range is firstRowStart_ to lasRowEnd when there is
-  // single row to process, moreover, the row range for first row is
-  // firstRowStart_ to rawMaxSizes_[firstRow] and the row range for last row is
-  // 0 to lastRowEnd when there are several rows to process unless the last row
-  // process fully, in that case, use rawMaxSizes_[lastRow] as end of the last
+  // Represents the range of rows to process and indicates that the first and
+  // last
+  // rows may need to be processed partially to match the configured output
+  // batch size. When processing a single row, the range is from
+  // 'firstRowStart_' to 'lastRowEnd'. For multiple rows, the range for the
+  // first row is from 'firstRowStart_' to 'rawMaxSizes_[firstRow]', and for the
+  // last row, it is from 0 to 'lastRowEnd', unless the last row is processed
+  // fully, in which case' rawMaxSizes_[lastRow]' is used as the end of the last
   // row.
   //
   // Single row:
@@ -61,13 +62,13 @@ class Unnest : public Operator {
   //                 lastRowEnd
   // The size is end - start, the range is [start, end).
   struct RowRange {
-    // Invokes a function on each row represent by the RowRange.
-    // @param func Call the function for each row, `row` means the current row
-    // number whose range is [start, start + size), `start` means the row number
-    // to start to process, `size` means the number of input rows to process.
+    // Invokes a function on each row represented by the RowRange.
+    // @param func The function to call for each row. 'row' is the current row
+    // number in the '[start, start + size)' range, 'start' is the row number to
+    // start processing, and 'size' is the number of rows to process..
     // @param rawMaxSizes Used to compute the end of each row.
-    // @param firstRowStart Same with Unnest member firstRowStart_, start
-    // processing the first row input from `firstRowStart_`.
+    // @param firstRowStart The index to start processing the first row. Same
+    // with Unnest member firstRowStart_.
     void forEachRow(
         std::function<void(
             vector_size_t /*row*/,
@@ -82,9 +83,9 @@ class Unnest : public Operator {
     // Number of input rows to be included in the output.
     const vector_size_t size;
 
-    // Processing of the last input row begins at index firstRowStart_ or 0
-    // depending on whether the row to process is first row and ends at
-    // 'lastRowEnd'. It is nullopt when processing the last row fully.
+    // The processing of the last input row starts at index 'firstRowStart_' or
+    // 0, depending on whether it is the first row being processed, and ends at
+    // 'lastRowEnd'. It is nullopt when the last row is processed completely.
     const std::optional<vector_size_t> lastRowEnd;
 
     // Total number of inner rows in the range.
@@ -132,7 +133,7 @@ class Unnest : public Operator {
   BufferPtr maxSizes_;
   vector_size_t* rawMaxSizes_{nullptr};
 
-  // Start processing the first row input from `firstRowStart_`.
+  // The index to start processing the first row.
   vector_size_t firstRowStart_ = 0;
 
   std::vector<const vector_size_t*> rawSizes_;
