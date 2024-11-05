@@ -67,7 +67,6 @@ FOLLY_ALWAYS_INLINE Timestamp fromUnixtime(double unixtime) {
   return Timestamp(seconds, milliseconds * kNanosecondsInMillisecond);
 }
 
-<<<<<<< HEAD
 FOLLY_ALWAYS_INLINE boost::int64_t fromUnixtime(
     double unixtime,
     int16_t timeZoneId) {
