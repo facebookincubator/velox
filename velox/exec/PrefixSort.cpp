@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/PrefixSort.h"
+#include "velox/external/timsort/TimSort.hpp"
 
 using namespace facebook::velox::exec::prefixsort;
 
@@ -217,10 +218,10 @@ void PrefixSort::extractRowToPrefix(char* row, char* prefix) {
 
 // static.
 uint32_t PrefixSort::maxRequiredBytes(
-    memory::MemoryPool* pool,
     RowContainer* rowContainer,
     const std::vector<CompareFlags>& compareFlags,
-    const velox::common::PrefixSortConfig& config) {
+    const velox::common::PrefixSortConfig& config,
+    memory::MemoryPool* pool) {
   if (rowContainer->numRows() < config.threshold) {
     return 0;
   }
@@ -233,6 +234,17 @@ uint32_t PrefixSort::maxRequiredBytes(
 
   PrefixSort prefixSort(pool, rowContainer, sortLayout);
   return prefixSort.maxRequiredBytes();
+}
+
+// static
+void PrefixSort::timSort(
+    std::vector<char*, memory::StlAllocator<char*>>& rows,
+    RowContainer* rowContainer,
+    const std::vector<CompareFlags>& compareFlags) {
+  gfx::timsort(
+      rows.begin(), rows.end(), [&](const char* left, const char* right) {
+        return rowContainer->compareRows(left, right, compareFlags) < 0;
+      });
 }
 
 uint32_t PrefixSort::maxRequiredBytes() {

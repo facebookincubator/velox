@@ -61,13 +61,13 @@ class PrefixSortTest : public exec::test::OperatorTestBase {
     const std::shared_ptr<memory::MemoryPool> sortPool =
         rootPool_->addLeafChild("prefixsort");
     const auto maxBytes = PrefixSort::maxRequiredBytes(
-        sortPool.get(),
         &rowContainer,
         compareFlags,
         common::PrefixSortConfig{
             1024,
             // Set threshold to 0 to enable prefix-sort in small dataset.
-            0});
+            0},
+        sortPool.get());
     const auto beforeBytes = sortPool->peakBytes();
     ASSERT_EQ(sortPool->peakBytes(), 0);
     // Use PrefixSort to sort rows.
@@ -91,6 +91,21 @@ class PrefixSortTest : public exec::test::OperatorTestBase {
     }
 
     velox::test::assertEqualVectors(actual, expectedResult);
+    // Test timsort.
+    {
+      RowContainer rowContainer(keyTypes, payloadTypes, pool_.get());
+      auto rows = storeRows(numRows, data, &rowContainer);
+      PrefixSort::timSort(rows, &rowContainer, compareFlags);
+      // Extract data from the RowContainer in order.
+      const RowVectorPtr actual =
+          BaseVector::create<RowVector>(rowType, numRows, pool_.get());
+      for (int column = 0; column < compareFlags.size(); ++column) {
+        rowContainer.extractColumn(
+            rows.data(), numRows, column, actual->childAt(column));
+      }
+
+      velox::test::assertEqualVectors(actual, expectedResult);
+    }
   }
 
  private:
