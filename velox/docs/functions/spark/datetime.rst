@@ -86,10 +86,10 @@ These functions support TIMESTAMP and DATE input types.
     date formatter in lenient mode that is align with Spark legacy date parser behavior or
     `Joda <https://www.joda.org/joda-time/>` date formatter depends on ``spark.legacy_date_formatter`` configuration.
     `Valid patterns for date format
-    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. Throws exception for
-    invalid ``format``. This function will convert input to milliseconds, and integer overflow is
-    allowed in the conversion, which aligns with Spark. See the below third example where INT64_MAX
-    is used, -1000 milliseconds are produced by INT64_MAX * 1000 due to integer overflow. ::
+    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. When `Simple` Date Formatter is used,
+    it returns null for invalid ``format``; if not, it throws exception. This function will convert input to
+    milliseconds, and integer overflow is allowed in the conversion, which aligns with Spark. See the below third
+    example where INT64_MAX is used, -1000 milliseconds are produced by INT64_MAX * 1000 due to integer overflow. ::
 
         SELECT from_unixtime(100, 'yyyy-MM-dd HH:mm:ss'); -- '1970-01-01 00:01:40'
         SELECT from_unixtime(3600, 'yyyy'); -- '1970'
