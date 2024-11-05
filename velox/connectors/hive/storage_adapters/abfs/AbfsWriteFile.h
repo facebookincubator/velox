@@ -16,7 +16,7 @@
 #pragma once
 
 #include "velox/common/file/File.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AdlsFileClient.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
 
 namespace facebook::velox::config {
 class ConfigBase;
@@ -43,7 +43,9 @@ class AbfsWriteFile : public WriteFile {
 
   /// @param path The file path to write.
   /// @param client The AdlsFileClient.
-  AbfsWriteFile(std::string_view path, std::shared_ptr<AdlsFileClient> client);
+  AbfsWriteFile(
+      std::string_view path,
+      std::shared_ptr<AzureDataLakeFileClient>& client);
 
   ~AbfsWriteFile();
 

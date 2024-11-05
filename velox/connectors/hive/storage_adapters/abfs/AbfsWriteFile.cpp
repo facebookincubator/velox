@@ -22,9 +22,9 @@
 using namespace Azure::Storage::Files::DataLake;
 
 namespace facebook::velox::filesystems {
-class AdlsFileClientWrapper final : public AdlsFileClient {
+class DataLakeFileClientWrapper final : public AzureDataLakeFileClient {
  public:
-  AdlsFileClientWrapper(std::unique_ptr<DataLakeFileClient> client)
+  DataLakeFileClientWrapper(std::unique_ptr<DataLakeFileClient> client)
       : client_(std::move(client)) {}
 
   void create() override {
@@ -56,7 +56,7 @@ class AbfsWriteFile::Impl {
  public:
   explicit Impl(
       std::string_view path,
-      const std::shared_ptr<AdlsFileClient>& client)
+      const std::shared_ptr<AzureDataLakeFileClient>& client)
       : path_(path), client_(client) {
     // Make it a no-op if invoked twice.
     if (position_ != -1) {
@@ -111,7 +111,7 @@ class AbfsWriteFile::Impl {
   }
 
   const std::string path_;
-  const std::shared_ptr<AdlsFileClient> client_;
+  const std::shared_ptr<AzureDataLakeFileClient> client_;
 
   uint64_t position_ = -1;
   bool closed_ = false;
@@ -121,8 +121,8 @@ AbfsWriteFile::AbfsWriteFile(
     std::string_view path,
     const config::ConfigBase& config) {
   auto abfsAccount = AbfsConfig(path, config);
-  std::shared_ptr<AdlsFileClient> client =
-      std::make_shared<AdlsFileClientWrapper>(
+  std::shared_ptr<AzureDataLakeFileClient> client =
+      std::make_shared<DataLakeFileClientWrapper>(
           std::make_unique<DataLakeFileClient>(
               DataLakeFileClient::CreateFromConnectionString(
                   abfsAccount.connectionString(),
@@ -134,7 +134,7 @@ AbfsWriteFile::AbfsWriteFile(
 
 AbfsWriteFile::AbfsWriteFile(
     std::string_view path,
-    std::shared_ptr<AdlsFileClient> client) {
+    std::shared_ptr<AzureDataLakeFileClient>& client) {
   impl_ = std::make_unique<Impl>(path, client);
 }
 

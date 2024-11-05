@@ -25,6 +25,7 @@ class ConfigBase;
 
 namespace facebook::velox::filesystems {
 
+// This is used to specify the Azurite endpoint in testing.
 static std::string kAzureBlobEndpoint{"fs.azure.blob-endpoint"};
 
 class AbfsConfig {

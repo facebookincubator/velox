@@ -16,26 +16,16 @@
 
 #include "velox/exec/tests/utils/TempFilePath.h"
 
-#include "velox/connectors/hive/storage_adapters/abfs/AdlsFileClient.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureDataLakeFileClient.h"
 
 using namespace Azure::Storage::Files::DataLake::Models;
 
 namespace facebook::velox::filesystems {
-/*
- * The Azurite Simulator does not yet support the DFS endpoint.
- * (For more information, see https://github.com/Azure/Azurite/issues/553 and
- * https://github.com/Azure/Azurite/issues/409).
- * You can find a comparison between DFS and Blob endpoints here:
- * https://github.com/Azure/Azurite/wiki/ADLS-Gen2-Implementation-Guidance
- *
- * To facilitate unit testing of file write scenarios, we define the
- * IBlobStorageFileClient here, which can be mocked during testing.
- */
 
-// A mocked blob storage file client backend with local file store.
-class MockAdlsFileClient : public AdlsFileClient {
+// A mock AzureDataLakeFileClient backend with local file store.
+class MockDataLakeFileClient : public AzureDataLakeFileClient {
  public:
-  MockAdlsFileClient() {
+  MockDataLakeFileClient() {
     auto tempFile = velox::exec::test::TempFilePath::create();
     filePath_ = tempFile->getPath();
   }

@@ -27,7 +27,7 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
-#include "velox/connectors/hive/storage_adapters/abfs/tests/MockAdlsFileClient.h"
+#include "velox/connectors/hive/storage_adapters/abfs/tests/MockDataLakeFileClient.h"
 #include "velox/exec/tests/utils/PortUtil.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
@@ -202,8 +202,8 @@ TEST_F(AbfsFileSystemTest, missingFile) {
 TEST(AbfsWriteFileTest, openFileForWriteTest) {
   std::string_view kAbfsFile =
       "abfs://test@test.dfs.core.windows.net/test/writetest.txt";
-  std::shared_ptr<AdlsFileClient> mockClient =
-      std::make_shared<MockAdlsFileClient>();
+  std::shared_ptr<AzureDataLakeFileClient> mockClient =
+      std::make_shared<MockDataLakeFileClient>();
   AbfsWriteFile abfsWriteFile(kAbfsFile, mockClient);
   EXPECT_EQ(abfsWriteFile.size(), 0);
   std::string dataContent = "";
@@ -235,7 +235,8 @@ TEST(AbfsWriteFileTest, openFileForWriteTest) {
   VELOX_ASSERT_THROW(
       AbfsWriteFile(kAbfsFile, mockClient), "File already exists");
   std::string fileContent =
-      reinterpret_cast<MockAdlsFileClient*>(mockClient.get())->readContent();
+      reinterpret_cast<MockDataLakeFileClient*>(mockClient.get())
+          ->readContent();
   ASSERT_EQ(fileContent.size(), dataContent.size());
   ASSERT_EQ(fileContent, dataContent);
 }
