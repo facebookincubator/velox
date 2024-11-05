@@ -61,6 +61,8 @@ Common code behavior
 * Don't use anonymous namespace in header file, use the ``namespace detail {`` instead, but don't use ``detail::func`` in other where.
 * Revise the included header files if you do some refactors.
 * Use ``vector_size_t`` for vector row number and ``column_index_t`` for column index.
+* Use ``/*unused*/`` for unused input argument and name it properly.
+* Remove ``else if`` or ``else`` branch if returning early.
 * Check the empty line between functions.
 * Add the empty line to the end of new file.
 
@@ -69,4 +71,5 @@ Unit test code behavior
 
 * Add the test if you move a function to public scope.
 * Cover all the code branch, pay attention to the exception test, use ``VELOX_ASSERT_THROW`` rather than ``ASSERT_THROW`` in most cases.
-* Use the ``const auto xx = lambda function`` to test, rather than add a function to class, unless the function will be reused. 
+* Use the ``const auto xx = lambda function`` to test, rather than add a function to class, unless the function will be reused.
+* Test body format: ``TEST_F(ColumnWriterTest, testDecimalWriter)``
