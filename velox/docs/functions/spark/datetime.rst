@@ -113,7 +113,11 @@ These functions support TIMESTAMP and DATE input types.
     The format follows Spark's
     `Datetime patterns
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
-    Returns NULL for parsing error or NULL input. Throws exception for invalid format. ::
+    Using `Simple <https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html>`
+    date formatter in lenient mode that is align with Spark legacy date parser behavior or
+    `Joda <https://www.joda.org/joda-time/>` date formatter depends on ``spark.legacy_date_formatter`` configuration.
+    Returns NULL for parsing error or NULL input. When `Simple` Date Formatter is used,
+    it returns null for invalid ``dateFormat``; if not, it throws exception. ::
 
         SELECT get_timestamp('1970-01-01', 'yyyy-MM-dd);  -- timestamp `1970-01-01`
         SELECT get_timestamp('1970-01-01', 'yyyy-MM');  -- NULL (parsing error)
