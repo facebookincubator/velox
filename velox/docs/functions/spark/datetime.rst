@@ -53,6 +53,9 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: date_trunc(fmt, ts) -> timestamp
 
+    Returns timestamp ``ts`` truncated to the unit specified by the format model ``fmt``.
+    Returns null if ``fmt`` is invalid.
+
     ``fmt`` is case insensitive and must be one of the following:
         * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ``ts`` falls in, the time part will be zero out
         * "QUARTER" - truncate to the first date of the quarter that the ``ts`` falls in, the time part will be zero out
@@ -63,10 +66,7 @@ These functions support TIMESTAMP and DATE input types.
         * "MINUTE"- zero out the second with fraction part
         * "SECOND" - zero out the second fraction part
         * "MILLISECOND" - zero out the microseconds
-        * "MICROSECOND" - everything remains
-
-    Returns timestamp ``ts`` truncated to the unit specified by the format model ``fmt``.
-    Returns null if ``fmt`` is invalid. ::
+        * "MICROSECOND" - everything remains. ::
 
         SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
         SELECT date_trunc('YYYY', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00

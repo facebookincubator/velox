@@ -13,16 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include "velox/functions/lib/TimeUtils.h"
 #include <gtest/gtest.h>
+
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/lib/TimeUtils.h"
 
 namespace facebook::velox::functions {
 namespace {
 
 TEST(TimeUtilsTest, fromDateTimeUnitString) {
+  // Return null when unit string is invalid and throwIfInvalid is false.
   ASSERT_EQ(std::nullopt, fromDateTimeUnitString("", false));
-
   ASSERT_EQ(std::nullopt, fromDateTimeUnitString("microsecond", false));
   ASSERT_EQ(std::nullopt, fromDateTimeUnitString("dd", false));
   ASSERT_EQ(std::nullopt, fromDateTimeUnitString("mon", false));
@@ -30,78 +31,69 @@ TEST(TimeUtilsTest, fromDateTimeUnitString) {
   ASSERT_EQ(std::nullopt, fromDateTimeUnitString("yyyy", false));
   ASSERT_EQ(std::nullopt, fromDateTimeUnitString("yy", false));
 
-  ASSERT_EQ(
-      std::optional(DateTimeUnit::kMillisecond),
-      fromDateTimeUnitString("millisecond", false));
-  ASSERT_EQ(
-      std::optional(DateTimeUnit::kSecond),
-      fromDateTimeUnitString("second", false));
-  ASSERT_EQ(
-      std::optional(DateTimeUnit::kMinute),
-      fromDateTimeUnitString("minute", false));
-  ASSERT_EQ(
-      std::optional(DateTimeUnit::kHour),
-      fromDateTimeUnitString("hour", false));
-  ASSERT_EQ(
-      std::optional(DateTimeUnit::kDay), fromDateTimeUnitString("day", false));
-  ASSERT_EQ(
-      std::optional(DateTimeUnit::kWeek),
-      fromDateTimeUnitString("week", false));
-  ASSERT_EQ(
-      std::optional(DateTimeUnit::kMonth),
-      fromDateTimeUnitString("month", false));
-  ASSERT_EQ(
-      std::optional(DateTimeUnit::kQuarter),
-      fromDateTimeUnitString("quarter", false));
-  ASSERT_EQ(
-      std::optional(DateTimeUnit::kYear),
-      fromDateTimeUnitString("year", false));
+  // Throw when unit string is invalid and throwIfInvalid is true.
+  VELOX_ASSERT_THROW(
+      fromDateTimeUnitString("", true), "Unsupported datetime unit:");
+  VELOX_ASSERT_THROW(
+      fromDateTimeUnitString("microsecond", true),
+      "Unsupported datetime unit:");
+  VELOX_ASSERT_THROW(
+      fromDateTimeUnitString("dd", true), "Unsupported datetime unit:");
+  VELOX_ASSERT_THROW(
+      fromDateTimeUnitString("mon", true), "Unsupported datetime unit:");
+  VELOX_ASSERT_THROW(
+      fromDateTimeUnitString("mm", true), "Unsupported datetime unit:");
+  VELOX_ASSERT_THROW(
+      fromDateTimeUnitString("yyyy", true), "Unsupported datetime unit:");
+  VELOX_ASSERT_THROW(
+      fromDateTimeUnitString("yy", true), "Unsupported datetime unit:");
 
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kMicrosecond),
+      DateTimeUnit::kMillisecond, fromDateTimeUnitString("millisecond", false));
+  ASSERT_EQ(DateTimeUnit::kSecond, fromDateTimeUnitString("second", false));
+  ASSERT_EQ(DateTimeUnit::kMinute, fromDateTimeUnitString("minute", false));
+  ASSERT_EQ(DateTimeUnit::kHour, fromDateTimeUnitString("hour", false));
+  ASSERT_EQ(DateTimeUnit::kDay, fromDateTimeUnitString("day", false));
+  ASSERT_EQ(DateTimeUnit::kWeek, fromDateTimeUnitString("week", false));
+  ASSERT_EQ(DateTimeUnit::kMonth, fromDateTimeUnitString("month", false));
+  ASSERT_EQ(DateTimeUnit::kQuarter, fromDateTimeUnitString("quarter", false));
+  ASSERT_EQ(DateTimeUnit::kYear, fromDateTimeUnitString("year", false));
+
+  ASSERT_EQ(
+      DateTimeUnit::kMicrosecond,
       fromDateTimeUnitString("microsecond", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kMillisecond),
+      DateTimeUnit::kMillisecond,
       fromDateTimeUnitString("millisecond", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kSecond),
+      DateTimeUnit::kSecond,
       fromDateTimeUnitString("second", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kMinute),
+      DateTimeUnit::kMinute,
       fromDateTimeUnitString("minute", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kHour),
-      fromDateTimeUnitString("hour", false, true, true));
+      DateTimeUnit::kHour, fromDateTimeUnitString("hour", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kDay),
-      fromDateTimeUnitString("day", false, true, true));
+      DateTimeUnit::kDay, fromDateTimeUnitString("day", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kDay),
-      fromDateTimeUnitString("dd", false, true, true));
+      DateTimeUnit::kDay, fromDateTimeUnitString("dd", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kWeek),
-      fromDateTimeUnitString("week", false, true, true));
+      DateTimeUnit::kWeek, fromDateTimeUnitString("week", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kMonth),
-      fromDateTimeUnitString("month", false, true, true));
+      DateTimeUnit::kMonth, fromDateTimeUnitString("month", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kMonth),
-      fromDateTimeUnitString("mon", false, true, true));
+      DateTimeUnit::kMonth, fromDateTimeUnitString("mon", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kMonth),
-      fromDateTimeUnitString("mm", false, true, true));
+      DateTimeUnit::kMonth, fromDateTimeUnitString("mm", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kQuarter),
+      DateTimeUnit::kQuarter,
       fromDateTimeUnitString("quarter", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kYear),
-      fromDateTimeUnitString("year", false, true, true));
+      DateTimeUnit::kYear, fromDateTimeUnitString("year", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kYear),
-      fromDateTimeUnitString("yyyy", false, true, true));
+      DateTimeUnit::kYear, fromDateTimeUnitString("yyyy", false, true, true));
   ASSERT_EQ(
-      std::optional(DateTimeUnit::kYear),
-      fromDateTimeUnitString("yy", false, true, true));
+      DateTimeUnit::kYear, fromDateTimeUnitString("yy", false, true, true));
 }
 
 } // namespace
