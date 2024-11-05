@@ -67,6 +67,7 @@ class SortBufferTest : public OperatorTestBase,
         spillPrefixSortConfig_);
   }
 
+  const bool enableSpillPrefixSort_{GetParam()};
   const velox::common::PrefixSortConfig prefixSortConfig_ =
       velox::common::PrefixSortConfig{std::numeric_limits<int32_t>::max(), 130};
   const std::optional<common::PrefixSortConfig> spillPrefixSortConfig_ =
@@ -100,7 +101,6 @@ class SortBufferTest : public OperatorTestBase,
 
   tsan_atomic<bool> nonReclaimableSection_{false};
   folly::Random::DefaultGenerator rng_;
-  const bool enableSpillPrefixSort_{GetParam()};
 };
 
 TEST_P(SortBufferTest, singleKey) {
