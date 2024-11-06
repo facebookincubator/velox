@@ -3387,13 +3387,14 @@ void estimateSerializedSizeInt(
       ScratchPtr<uint64_t, 1> nullsHolder(scratch);
       auto* innerRows = rows.data();
       auto* innerSizes = sizes;
-      const auto numRows = rows.size();
-      int32_t numInner = numRows;
+      const auto numRows_2 = rows.size();
+      int32_t numInner = numRows_2;
       if (vector->mayHaveNulls()) {
-        auto nulls = nullsHolder.get(bits::nwords(numRows));
+        auto nulls = nullsHolder.get(bits::nwords(numRows_2));
         simd::gatherBits(vector->rawNulls(), rows, nulls);
-        auto mutableInnerRows = innerRowsHolder.get(numRows);
-        numInner = simd::indicesOfSetBits(nulls, 0, numRows, mutableInnerRows);
+        auto mutableInnerRows = innerRowsHolder.get(numRows_2);
+        numInner =
+            simd::indicesOfSetBits(nulls, 0, numRows_2, mutableInnerRows);
         innerSizes = innerSizesHolder.get(numInner);
         for (auto i = 0; i < numInner; ++i) {
           innerSizes[i] = sizes[mutableInnerRows[i]];

@@ -362,7 +362,7 @@ void LocalPlanner::markMixedJoinBridges(
 
     // See if we have any join nodes.
     for (const auto& planNode : factory->planNodes) {
-      if (auto joinNode =
+      if (auto hashJoinNode =
               std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
         // See if the build source (2nd) belongs to an ungrouped execution.
         auto& buildSourceNode = planNode->sources()[1];
@@ -376,7 +376,7 @@ void LocalPlanner::markMixedJoinBridges(
           }
         }
       } else if (
-          auto joinNode =
+          auto nestedJoinNode =
               std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
                   planNode)) {
         // See if the build source (2nd) belongs to an ungrouped execution.
@@ -416,7 +416,7 @@ bool eagerFlush(const core::PlanNode& node) {
 std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,
     std::shared_ptr<ExchangeClient> exchangeClient,
-    std::function<int(int pipelineId)> numDrivers) {
+    std::function<int(int pipelineId)> /* numDrivers */) {
   auto driver = std::shared_ptr<Driver>(new Driver());
   ctx->driver = driver.get();
   std::vector<std::unique_ptr<Operator>> operators;
@@ -491,15 +491,16 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(std::make_unique<PartitionedOutput>(
           id, ctx.get(), partitionedOutputNode, eagerFlush(*planNode)));
     } else if (
-        auto joinNode =
+        auto hashJoinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
-      operators.push_back(std::make_unique<HashProbe>(id, ctx.get(), joinNode));
+      operators.push_back(
+          std::make_unique<HashProbe>(id, ctx.get(), hashJoinNode));
     } else if (
-        auto joinNode =
+        auto nestedJoinNode =
             std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
                 planNode)) {
       operators.push_back(
-          std::make_unique<NestedLoopJoinProbe>(id, ctx.get(), joinNode));
+          std::make_unique<NestedLoopJoinProbe>(id, ctx.get(), nestedJoinNode));
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
@@ -671,12 +672,12 @@ std::vector<core::PlanNodeId> DriverFactory::needsHashJoinBridges() const {
         mixedExecutionModeHashJoinNodeIds.end());
   }
   for (const auto& planNode : planNodes) {
-    if (auto joinNode =
+    if (auto hashJoinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
       // Grouped execution pipelines should not create cross-mode bridges.
       if (!groupedExecution ||
-          !mixedExecutionModeHashJoinNodeIds.contains(joinNode->id())) {
-        planNodeIds.emplace_back(joinNode->id());
+          !mixedExecutionModeHashJoinNodeIds.contains(hashJoinNode->id())) {
+        planNodeIds.emplace_back(hashJoinNode->id());
       }
     }
   }
