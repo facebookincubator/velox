@@ -49,7 +49,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
 // @return A shared pointer to a DateTimeFormatter. If the formatter
 // initialization fails and the legacy formatter is used, nullptr is returned.
 std::shared_ptr<DateTimeFormatter> initializeFormatter(
-    const std::string_view& format,
+    const std::string_view format,
     bool legacyFormatter) {
   auto formatter = detail::getDateTimeFormatter(
       std::string_view(format),
