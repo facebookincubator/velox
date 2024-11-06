@@ -45,7 +45,7 @@ class AbfsWriteFile : public WriteFile {
   /// @param client The AdlsFileClient.
   AbfsWriteFile(
       std::string_view path,
-      std::shared_ptr<AzureDataLakeFileClient>& client);
+      std::unique_ptr<AzureDataLakeFileClient>& client);
 
   ~AbfsWriteFile();
 

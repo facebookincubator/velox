@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include "velox/common/file/File.h"
 
 namespace facebook::velox::config {

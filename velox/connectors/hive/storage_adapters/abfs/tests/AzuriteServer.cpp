@@ -29,6 +29,8 @@ std::string AzuriteServer::fileURI() const {
       "abfs://{}@{}.dfs.core.windows.net/{}", container_, account_, file_);
 }
 
+// Return the hiveConfig for the Azurite instance.
+// Specify configOverride map to update the default config map.
 std::shared_ptr<const config::ConfigBase> AzuriteServer::hiveConfig(
     const std::unordered_map<std::string, std::string> configOverride) const {
   auto endpoint = fmt::format("http://127.0.0.1:{}/{}", port_, account_);
@@ -36,7 +38,6 @@ std::shared_ptr<const config::ConfigBase> AzuriteServer::hiveConfig(
       {{"fs.azure.account.key.test.dfs.core.windows.net", key_},
        {kAzureBlobEndpoint, endpoint}});
 
-  // Update the default config map with the supplied configOverride map
   for (const auto& [key, value] : configOverride) {
     config[key] = value;
   }

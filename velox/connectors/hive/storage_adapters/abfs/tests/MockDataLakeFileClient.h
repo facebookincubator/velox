@@ -30,10 +30,20 @@ class MockDataLakeFileClient : public AzureDataLakeFileClient {
     filePath_ = tempFile->getPath();
   }
 
+  MockDataLakeFileClient(std::string_view filePath) : filePath_(filePath) {}
+
+  std::string_view path() {
+    return filePath_;
+  }
+
   void create() override;
+
   PathProperties getProperties() override;
+
   void append(const uint8_t* buffer, size_t size, uint64_t offset) override;
+
   void flush(uint64_t position) override;
+
   void close() override;
 
   // for testing purpose to verify the written content if correct.

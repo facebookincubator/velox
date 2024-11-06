@@ -202,8 +202,10 @@ TEST_F(AbfsFileSystemTest, missingFile) {
 TEST(AbfsWriteFileTest, openFileForWriteTest) {
   std::string_view kAbfsFile =
       "abfs://test@test.dfs.core.windows.net/test/writetest.txt";
-  std::shared_ptr<AzureDataLakeFileClient> mockClient =
-      std::make_shared<MockDataLakeFileClient>();
+  std::unique_ptr<AzureDataLakeFileClient> mockClient =
+      std::make_unique<MockDataLakeFileClient>();
+  auto mockClientPath =
+      reinterpret_cast<MockDataLakeFileClient*>(mockClient.get())->path();
   AbfsWriteFile abfsWriteFile(kAbfsFile, mockClient);
   EXPECT_EQ(abfsWriteFile.size(), 0);
   std::string dataContent = "";
@@ -232,11 +234,12 @@ TEST(AbfsWriteFileTest, openFileForWriteTest) {
   abfsWriteFile.close();
   VELOX_ASSERT_THROW(abfsWriteFile.append("abc"), "File is not open");
 
+  std::unique_ptr<AzureDataLakeFileClient> mockClientCopy =
+      std::make_unique<MockDataLakeFileClient>(mockClientPath);
   VELOX_ASSERT_THROW(
-      AbfsWriteFile(kAbfsFile, mockClient), "File already exists");
-  std::string fileContent =
-      reinterpret_cast<MockDataLakeFileClient*>(mockClient.get())
-          ->readContent();
+      AbfsWriteFile(kAbfsFile, mockClientCopy), "File already exists");
+  MockDataLakeFileClient readClient(mockClientPath);
+  auto fileContent = readClient.readContent();
   ASSERT_EQ(fileContent.size(), dataContent.size());
   ASSERT_EQ(fileContent, dataContent);
 }

@@ -58,7 +58,7 @@ TEST(AbfsUtilsTest, abfsConfig) {
       abfssConfig.connectionString(),
       "DefaultEndpointsProtocol=https;AccountName=foobar;AccountKey=456;EndpointSuffix=core.windows.net;");
 
-  // test with special characters
+  // Test with special character space.
   auto abfssConfigWithSpecialCharacters = AbfsConfig(
       "abfss://foo@bar.dfs.core.windows.net/main@dir/sub dir/test.txt", config);
 

@@ -15,6 +15,7 @@
  */
 
 #pragma once
+
 #include <azure/storage/common/storage_exception.hpp>
 #include <fmt/format.h>
 #include "velox/common/file/File.h"

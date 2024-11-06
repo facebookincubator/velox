@@ -26,9 +26,11 @@
 #include "boost/process.hpp"
 
 namespace facebook::velox::filesystems {
+
 using namespace Azure::Storage::Blobs;
 static std::string_view kAzuriteServerExecutableName{"azurite-blob"};
 static std::string_view kAzuriteSearchPath{":/usr/bin/azurite"};
+
 class AzuriteServer {
  public:
   AzuriteServer(int64_t port);
@@ -63,10 +65,10 @@ class AzuriteServer {
 
  private:
   int64_t port_;
-  std::string account_{"test"};
-  std::string container_{"test"};
-  std::string file_{"test_file.txt"};
-  std::string key_{
+  const std::string account_{"test"};
+  const std::string container_{"test"};
+  const std::string file_{"test_file.txt"};
+  const std::string key_{
       "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="};
   std::vector<std::string> commandOptions_;
   std::unique_ptr<::boost::process::child> serverProcess_;

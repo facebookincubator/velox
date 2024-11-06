@@ -27,9 +27,9 @@ AbfsConfig::AbfsConfig(
   std::string_view file;
   bool isHttps = true;
   if (path.find(kAbfssScheme) == 0) {
-    file = path.substr(8);
+    file = path.substr(kAbfssScheme.size());
   } else if (path.find(kAbfsScheme) == 0) {
-    file = path.substr(7);
+    file = path.substr(kAbfsScheme.size());
     isHttps = false;
   } else {
     VELOX_FAIL("Invalid ABFS Path {}", path);
