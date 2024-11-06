@@ -120,6 +120,10 @@ Decimal Functions
     Return the unscaled bigint value of a short decimal ``x``.
     Supported type is: SHORT_DECIMAL.
 
+.. spark:function:: unaryminus(x: decimal(p, s)) -> r: decimal(p, s)
+
+    Returns negated value of x (r = -x). Corresponds to Spark's operator ``-``.
+
 Decimal Special Forms
 ---------------------
 

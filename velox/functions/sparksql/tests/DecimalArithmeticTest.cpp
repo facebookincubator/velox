@@ -49,6 +49,16 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
     assertEqualVectors(expected, evaluate(expr, makeRowVector(inputs)));
   }
 
+  template <TypeKind KIND>
+  void testDecimalUnaryminusFunction(
+      const VectorPtr& expected,
+      const std::vector<VectorPtr>& input) {
+    using EvalType = typename velox::TypeTraits<KIND>::NativeType;
+    auto result = evaluate<SimpleVector<EvalType>>(
+        "unaryminus(c0)", makeRowVector(input));
+    assertEqualVectors(expected, result);
+  }
+
   VectorPtr makeNullableLongDecimalVector(
       const std::vector<std::string>& values,
       const TypePtr& type) {
@@ -575,6 +585,28 @@ TEST_F(DecimalArithmeticTest, denyPrecisionLoss) {
           HugeInt::parse("5" + std::string(10, '0')), 1, DECIMAL(31, 10)),
       {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),
        makeConstant<int64_t>(1000, 1, DECIMAL(7, 3))});
+}
+
+TEST_F(DecimalArithmeticTest, unaryMinus) {
+  testDecimalUnaryminusFunction<TypeKind::BIGINT>(
+      {makeFlatVector<int64_t>({1111, -1112, 9999, 0}, DECIMAL(5, 1))},
+      {makeFlatVector<int64_t>({-1111, 1112, -9999, 0}, DECIMAL(5, 1))});
+
+  testDecimalUnaryminusFunction<TypeKind::HUGEINT>(
+      {makeFlatVector<int128_t>(
+          {11111111,
+           -11112112,
+           99999999,
+           -DecimalUtil::kLongDecimalMax,
+           -DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 19))},
+      {makeFlatVector<int128_t>(
+          {-11111111,
+           11112112,
+           -99999999,
+           DecimalUtil::kLongDecimalMax,
+           DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 19))});
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
