@@ -36,4 +36,15 @@ facebook::velox::RowVectorPtr to_velox_column(
     facebook::velox::memory::MemoryPool* pool,
     std::string name_prefix = "c");
 
+namespace with_arrow {
+std::unique_ptr<cudf::table> to_cudf_table(
+    const facebook::velox::RowVectorPtr& veloxTable,
+    facebook::velox::memory::MemoryPool* pool);
+
+facebook::velox::RowVectorPtr to_velox_column(
+    const cudf::table_view& table,
+    facebook::velox::memory::MemoryPool* pool,
+    std::string name_prefix);
+} // namespace with_arrow
+
 } // namespace facebook::velox::cudf_velox

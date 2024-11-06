@@ -19,12 +19,14 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/arrow/Bridge.h"
 
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
+#include <cudf/interop.hpp>
 #include <cudf/strings/string_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
@@ -43,6 +45,10 @@
 
 #include <functional>
 #include <numeric>
+
+#include <arrow/c/bridge.h>
+#include <arrow/io/interfaces.h>
+#include <arrow/table.h>
 
 namespace facebook::velox::cudf_velox {
 
@@ -361,4 +367,53 @@ RowVectorPtr to_velox_column(
   return vcol;
 }
 
+namespace with_arrow {
+
+std::unique_ptr<cudf::table> to_cudf_table(
+    const facebook::velox::RowVectorPtr& veloxTable, // BaseVector or RowVector?
+    facebook::velox::memory::MemoryPool* pool) {
+  ArrowOptions arrowOptions{false, true};
+  ArrowArray arrowArray;
+  exportToArrow(
+      std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
+      arrowArray,
+      pool,
+      arrowOptions);
+  ArrowSchema arrowSchema;
+  exportToArrow(
+      std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
+      arrowSchema,
+      arrowOptions);
+  auto tbl = cudf::from_arrow(&arrowSchema, &arrowArray);
+
+  // Release Arrow resources
+  if (arrowArray.release) {
+    arrowArray.release(&arrowArray);
+  }
+  if (arrowSchema.release) {
+    arrowSchema.release(&arrowSchema);
+  }
+  return tbl;
+}
+
+facebook::velox::RowVectorPtr to_velox_column(
+    const cudf::table_view& table,
+    facebook::velox::memory::MemoryPool* pool,
+    std::string name_prefix) {
+  auto arrowDeviceArray = cudf::to_arrow_host(table);
+  auto& arrowArray = arrowDeviceArray->array;
+
+  std::vector<cudf::column_metadata> metadata;
+  for (auto i = 0; i < table.num_columns(); i++) {
+    metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
+  }
+  auto arrowSchema = cudf::to_arrow_schema(table, metadata);
+  auto veloxTable = importFromArrowAsOwner(*arrowSchema, arrowArray, pool);
+  // BaseVector to RowVector
+  auto casted_ptr =
+      std::dynamic_pointer_cast<facebook::velox::RowVector>(veloxTable);
+  VELOX_CHECK_NOT_NULL(casted_ptr);
+  return casted_ptr;
+}
+} // namespace with_arrow
 } // namespace facebook::velox::cudf_velox
