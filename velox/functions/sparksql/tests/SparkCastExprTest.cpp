@@ -109,6 +109,24 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
              Timestamp(std::numeric_limits<T>::min(), 0),
              std::nullopt}));
   }
+
+  template <typename T>
+  void testTimestampToIntegralCast() {
+    testCast(
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0),
+             Timestamp(1, 0),
+             Timestamp(std::numeric_limits<T>::max(), 0),
+             Timestamp(std::numeric_limits<T>::min(), 0),
+             std::nullopt}),
+        makeNullableFlatVector<T>({
+            0,
+            1,
+            std::numeric_limits<T>::max(),
+            std::numeric_limits<T>::min(),
+            std::nullopt,
+        }));
+  }
 };
 
 TEST_F(SparkCastExprTest, date) {
@@ -307,6 +325,34 @@ TEST_F(SparkCastExprTest, intToTimestamp) {
   testIntegralToTimestampCast<int8_t>();
   testIntegralToTimestampCast<int16_t>();
   testIntegralToTimestampCast<int32_t>();
+}
+
+TEST_F(SparkCastExprTest, timestampToInt) {
+  // Cast timestamp as bigint.
+  testCast(
+      makeNullableFlatVector<Timestamp>({
+          Timestamp(0, 0),
+          Timestamp(1727181032, 0),
+          Timestamp(-1727181032, 0),
+          Timestamp(9223372036854, 775'807'000),
+          Timestamp(-9223372036855, 224'192'000),
+      }),
+      makeNullableFlatVector<int64_t>({
+          0,
+          1727181032,
+          -1727181032,
+          9223372036854,
+          -9223372036855,
+      }));
+  testInvalidCast<Timestamp>(
+      "bigint",
+      {Timestamp(9223372036856, 0)},
+      "Could not convert Timestamp(9223372036856, 0) to microseconds");
+
+  // Cast timestamp as tinyint/smallint/integer.
+  testTimestampToIntegralCast<int8_t>();
+  testTimestampToIntegralCast<int16_t>();
+  testTimestampToIntegralCast<int32_t>();
 }
 
 TEST_F(SparkCastExprTest, doubleToTimestamp) {
