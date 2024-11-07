@@ -3,19 +3,41 @@ Decimal Operators
 =================
 
 The result precision and scale computation of arithmetic operators contains two stages.
-In the first stage, the formulas follow Hive which is based on the SQL standard and MS SQL.
-In the second stage, caps p at 38 and reduces scale or not according to the allowing precision loss mode.
+First stage computes precision and scale using formulas based on the SQL standard, and Hive when allow-precision-loss is true.
+The result may exceed maximum allowed precision of 38.
+
+Second stage caps precision at 38 and either reduces the scale or not depending on allow-precision-loss flag.
+
+For example, addition of decimal(38, 7) and decimal(10, 0) requires precision of 39 and scale of 7.
+Since precision exceeds 38 it needs to be capped. When allow-precision-loss, precision is capped at 38 and scale is reduced by 1 to 6.
+When allow-precision-loss is false, precision is capped at 38 as well, but scale is kept at 7.
+With allow-precision-loss all additions will succeed, but accuracy (number of digits after period) of some operations will be reduced.
+Without allow-precision-loss, some additions will return NULL.
+
+For example,
+
+The following queries keep accuracy or returns NULL with allow-precision-loss is false:
+
+::
+
+    select cast('1.1232154' as decimal(38, 7)) + cast('1' as decimal(10, 0)); -- 2.123215
+    select cast('9999999999999999999999999999999.2345678' as decimal(38, 7)) + cast('1' as decimal(10, 0)); -- NULL
+
+And succeed with allow-precision-loss is true:
+
+::
+
+    select cast('1.1232154' as decimal(38, 7)) + cast('1' as decimal(10, 0)); -- 2.12321, lost the last digit
+    select cast('9999999999999999999999999999999.2345678' as decimal(38, 7)) + cast('1' as decimal(10, 0)); -- 10000000000000000000000000000000.234568
 
 Decimal Precision and Scale Computation Formulas
 ------------------------------------------------
 
-The SQL standard and MS SQL:
+The Hive SQL behavior:
 
 https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf
 
-https://msdn.microsoft.com/en-us/library/ms190476.aspx
-
-Additionally, the computation of decimal division adapts to the allowing precision loss mode,
+Additionally, the computation of decimal division adapts to the allow-precision-loss flag,
 while the decimal addition, subtraction, and multiplication do not.
 
 Addition and Subtraction
@@ -36,14 +58,14 @@ Multiplication
 
 Division
 ~~~~~~~~
-When allowing precision loss:
+When allow-precision-loss:
 
 ::
 
     p = p1 - s1 + s2 + max(6, s1 + p2 + 1)
     s = max(6, s1 + p2 + 1)
 
-When denying precision loss:
+When precision loss is not allowed:
 
 ::
 
@@ -55,16 +77,16 @@ When denying precision loss:
 Decimal Precision and Scale Adjustment
 --------------------------------------
 
-When allowing precision loss, rounding the decimal part of the result if an exact representation is not possible.
-Otherwise, NULL is returned in those cases, as previously.
-Notice: some operations success if precision loss is allowed and fail if not.
+When allow-precision-loss is true, rounds the decimal part of the result if an exact representation is not possible.
+Otherwise, returns NULL.
+Notice: some operations succeed if precision loss is allowed and returns NULL if not.
 
 For example,
 
 ::
 
     select cast(0.1234567891011 as decimal(38, 18)) * cast(1234.1 as decimal(38, 18));
-    -- Result is 152.358023 when allowing precision loss, otherwise, returns NULL.
+    -- 152.358023 if allow-precision-loss, NULL otherwise.
 
 Below formula illustrates how the result precision and scale are adjusted.
 
@@ -73,7 +95,7 @@ Below formula illustrates how the result precision and scale are adjusted.
     precision = 38
     scale = max(38 - (p - s), min(s, 6))
 
-When precision loss is denied, caps p at 38, and the scale should not be reduced.
+When precision loss is not allowed, caps p at 38, and keeps scale as is.
 The below formula shows how the precision and scale are adjusted for decimal addition, subtraction, and multiplication.
 
 ::
@@ -81,15 +103,14 @@ The below formula shows how the precision and scale are adjusted for decimal add
     precision = 38
     scale = min(38, s)
 
-Decimal division uses a different formula, which is as following:
+Decimal division uses a different formula:
 
 ::
 
     precision = 38
     scale = fractionalDigits - (wholeDigits + fractionalDigits - 38) / 2 - 1
 
-Users experience runtime errors when the actual result cannot be represented
-with the calculated decimal type.
+Returns NULL when the actual result cannot be represented with the calculated decimal type.
 
 Decimal Functions
 -----------------
