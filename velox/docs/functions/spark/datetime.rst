@@ -66,7 +66,9 @@ These functions support TIMESTAMP and DATE input types.
         * "MINUTE"- zero out the second with fraction part
         * "SECOND" - zero out the second fraction part
         * "MILLISECOND" - zero out the microseconds
-        * "MICROSECOND" - everything remains. ::
+        * "MICROSECOND" - everything remains.
+
+    ::
 
         SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
         SELECT date_trunc('YYYY', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
@@ -81,8 +83,8 @@ These functions support TIMESTAMP and DATE input types.
         SELECT date_trunc('HOUR', '2015-03-05T09:32:05.359'); -- 2015-03-05 09:00:00
         SELECT date_trunc('MINUTE', '2015-03-05T09:32:05.359'); -- 2015-03-05 09:32:00
         SELECT date_trunc('SECOND', '2015-03-05T09:32:05.359'); -- 2015-03-05 09:32:05
-        SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456'); -- 2015-03-05 09:32:05.123456
-        SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05..123456'); -- 2015-01-01 09:32:05.123456
+        SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456'); -- 2015-03-05 09:32:05.123
+        SELECT date_trunc('MICROSECOND', '2015-03-05T09:32:05.123456'); -- 2015-03-05 09:32:05.123456
 
 .. spark:function:: datediff(endDate, startDate) -> integer
 

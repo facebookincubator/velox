@@ -96,5 +96,140 @@ TEST(TimeUtilsTest, fromDateTimeUnitString) {
       DateTimeUnit::kYear, fromDateTimeUnitString("yy", false, true, true));
 }
 
+TEST(TimeUtilsTest, adjustEpoch) {
+  EXPECT_EQ(Timestamp(998474640, 0), adjustEpoch(998474645, 60));
+  EXPECT_EQ(Timestamp(998474400, 0), adjustEpoch(998474645, 60 * 60));
+  EXPECT_EQ(Timestamp(998438400, 0), adjustEpoch(998474645, 24 * 60 * 60));
+  EXPECT_EQ(Timestamp(-120, 0), adjustEpoch(-61, 60));
+}
+
+TEST(TimeUtilsTest, truncateTimestamp) {
+  auto* timezone = tz::locateZone("GMT");
+
+  EXPECT_EQ(
+      Timestamp(0, 0),
+      truncateTimestamp(Timestamp(0, 0), DateTimeUnit::kSecond, timezone));
+  EXPECT_EQ(
+      Timestamp(0, 0),
+      truncateTimestamp(Timestamp(0, 123), DateTimeUnit::kSecond, timezone));
+  EXPECT_EQ(
+      Timestamp(-1, 0),
+      truncateTimestamp(Timestamp(-1, 0), DateTimeUnit::kSecond, timezone));
+
+  EXPECT_EQ(
+      Timestamp(998474645, 321'001'000),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kMicrosecond,
+          timezone));
+  EXPECT_EQ(
+      Timestamp(998474645, 321'000'000),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kMillisecond,
+          timezone));
+  EXPECT_EQ(
+      Timestamp(998474645, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kSecond,
+          timezone));
+  EXPECT_EQ(
+      Timestamp(998474640, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kMinute,
+          timezone));
+  EXPECT_EQ(
+      Timestamp(998474400, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234), DateTimeUnit::kHour, timezone));
+  EXPECT_EQ(
+      Timestamp(998438400, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234), DateTimeUnit::kDay, timezone));
+  EXPECT_EQ(
+      Timestamp(998265600, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234), DateTimeUnit::kWeek, timezone));
+  EXPECT_EQ(
+      Timestamp(996624000, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234), DateTimeUnit::kMonth, timezone));
+  EXPECT_EQ(
+      Timestamp(993945600, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kQuarter,
+          timezone));
+  EXPECT_EQ(
+      Timestamp(978307200, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234), DateTimeUnit::kYear, timezone));
+
+  auto* timezone1 = tz::locateZone("America/Los_Angeles");
+  EXPECT_EQ(
+      Timestamp(0, 0),
+      truncateTimestamp(Timestamp(0, 0), DateTimeUnit::kSecond, timezone1));
+  EXPECT_EQ(
+      Timestamp(0, 0),
+      truncateTimestamp(Timestamp(0, 123), DateTimeUnit::kSecond, timezone1));
+  EXPECT_EQ(
+      Timestamp(-57600, 0),
+      truncateTimestamp(Timestamp(0, 0), DateTimeUnit::kDay, timezone1));
+
+  EXPECT_EQ(
+      Timestamp(998474645, 321'001'000),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kMicrosecond,
+          timezone1));
+  EXPECT_EQ(
+      Timestamp(998474645, 321'000'000),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kMillisecond,
+          timezone1));
+  EXPECT_EQ(
+      Timestamp(998474645, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kSecond,
+          timezone1));
+  EXPECT_EQ(
+      Timestamp(998474640, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kMinute,
+          timezone1));
+  EXPECT_EQ(
+      Timestamp(998474400, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234), DateTimeUnit::kHour, timezone1));
+  EXPECT_EQ(
+      Timestamp(998463600, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234), DateTimeUnit::kDay, timezone1));
+  EXPECT_EQ(
+      Timestamp(998290800, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234), DateTimeUnit::kWeek, timezone1));
+  EXPECT_EQ(
+      Timestamp(996649200, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kMonth,
+          timezone1));
+  EXPECT_EQ(
+      Timestamp(993970800, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234),
+          DateTimeUnit::kQuarter,
+          timezone1));
+  EXPECT_EQ(
+      Timestamp(978336000, 0),
+      truncateTimestamp(
+          Timestamp(998'474'645, 321'001'234), DateTimeUnit::kYear, timezone1));
+}
 } // namespace
 } // namespace facebook::velox::functions

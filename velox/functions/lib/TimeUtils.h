@@ -132,16 +132,16 @@ struct InitSessionTimezone {
 /// @param unitString The input string to represent date time unit.
 /// @param throwIfInvalid Whether to throw an exception for invalid input
 /// string.
-/// @param allowMirco Whether to allow microsecond.
+/// @param allowMicro Whether to allow microsecond.
 /// @param allowAbbreviated Whether to allow abbreviated unit string.
 FOLLY_ALWAYS_INLINE std::optional<DateTimeUnit> fromDateTimeUnitString(
     const StringView& unitString,
     bool throwIfInvalid,
-    bool allowMirco = false,
+    bool allowMicro = false,
     bool allowAbbreviated = false) {
   const auto unit = boost::algorithm::to_lower_copy(unitString.str());
 
-  if (unit == "microsecond" && allowMirco) {
+  if (unit == "microsecond" && allowMicro) {
     return DateTimeUnit::kMicrosecond;
   }
   if (unit == "millisecond") {
@@ -188,7 +188,8 @@ FOLLY_ALWAYS_INLINE std::optional<DateTimeUnit> fromDateTimeUnitString(
   return std::nullopt;
 }
 
-// Adjust datetime based on unit.
+/// Adjusts the given date time object to the start of the specified date time
+/// unit (e.g., year, quarter, month, week, day, hour, minute).
 FOLLY_ALWAYS_INLINE void adjustDateTime(
     std::tm& dateTime,
     const DateTimeUnit& unit) {
@@ -257,17 +258,17 @@ FOLLY_ALWAYS_INLINE void adjustDateTime(
   }
 }
 
-/// For fixed interval like minute, hour and day,
-/// we can truncate date by a simple arithmetic expression:
-/// floor(seconds / intervalSeconds) * intervalSeconds.
+/// Returns timestamp with seconds adjusted to the nearest lower multiple of the
+/// specified interval. If the given seconds is negative and not an exact
+/// multiple of the interval, it adjusts further down.
 FOLLY_ALWAYS_INLINE Timestamp
 adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
   int64_t s = seconds / intervalSeconds;
   if (seconds < 0 && seconds % intervalSeconds) {
     s = s - 1;
   }
-  int64_t truncedSeconds = s * intervalSeconds;
-  return Timestamp(truncedSeconds, 0);
+  int64_t truncatedSeconds = s * intervalSeconds;
+  return Timestamp(truncatedSeconds, 0);
 }
 
 // Returns timestamp truncated to the specified unit.
