@@ -286,6 +286,20 @@ void CastExpr::applyCastKernel(
     }
 
     if constexpr (
+        (ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
+         ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
+        FromKind == TypeKind::TIMESTAMP) {
+      using To = typename TypeTraits<ToKind>::NativeType;
+      const auto castResult = hooks_->castTimestampToInt(inputRowValue);
+      if (castResult.hasError()) {
+        setError(castResult.error().message());
+      } else {
+        result->set(row, static_cast<To>(castResult.value()));
+      }
+      return;
+    }
+
+    if constexpr (
         (FromKind == TypeKind::DOUBLE || FromKind == TypeKind::REAL) &&
         ToKind == TypeKind::TIMESTAMP) {
       const auto castResult =
