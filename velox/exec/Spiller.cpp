@@ -22,6 +22,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/PrefixSort.h"
+#include "velox/external/timsort/TimSort.hpp"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -431,7 +432,13 @@ void Spiller::ensureSorted(SpillRun& run) {
     NanosecondTimer timer(&sortTimeNs);
 
     if (!state_.prefixSortConfig().has_value()) {
-      PrefixSort::timSort(run.rows, container_, state_.sortCompareFlags());
+      gfx::timsort(
+          run.rows.begin(),
+          run.rows.end(),
+          [&](const char* left, const char* right) {
+            return container_->compareRows(
+                       left, right, state_.sortCompareFlags()) < 0;
+          });
     } else {
       PrefixSort::sort(
           run.rows,

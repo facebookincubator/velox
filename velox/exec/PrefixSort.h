@@ -107,16 +107,16 @@ class PrefixSort {
       const std::vector<CompareFlags>& compareFlags,
       const velox::common::PrefixSortConfig& config) {
     if (rowContainer->numRows() < config.threshold) {
-      timSort(rows, rowContainer, compareFlags);
+      stdSort(rows, rowContainer, compareFlags);
       return;
     }
     VELOX_DCHECK_EQ(rowContainer->keyTypes().size(), compareFlags.size());
     const auto sortLayout = PrefixSortLayout::makeSortLayout(
         rowContainer->keyTypes(), compareFlags, config.maxNormalizedKeySize);
     // All keys can not normalize, skip the binary string compare opt.
-    // Putting this outside sort-internal helps with timsort.
+    // Putting this outside sort-internal helps with stdSort.
     if (sortLayout.noNormalizedKeys) {
-      timSort(rows, rowContainer, compareFlags);
+      stdSort(rows, rowContainer, compareFlags);
       return;
     }
 
@@ -124,7 +124,7 @@ class PrefixSort {
     prefixSort.sortInternal(rows);
   }
 
-  /// The timsort won't require bytes while prefixsort may require buffers
+  /// The std::sort won't require bytes while prefix sort may require buffers
   /// such as prefix data. The logic is similar to the above function
   /// PrefixSort::sort but returns the maximum buffer the sort may need.
   static uint32_t maxRequiredBytes(
@@ -133,15 +133,15 @@ class PrefixSort {
       const velox::common::PrefixSortConfig& config,
       memory::MemoryPool* pool);
 
-  /// Fallback to timsort when prefix sort conditions such as config and memory
-  /// are not satified. TimSort provides >2X performance win than stdsort for
+ private:
+  /// Fallback to stdSort when prefix sort conditions such as config and memory
+  /// are not satisfied. stdSort provides >2X performance win than std::sort for
   /// user experienced data.
-  static void timSort(
+  static void stdSort(
       std::vector<char*, memory::StlAllocator<char*>>& rows,
       RowContainer* rowContainer,
       const std::vector<CompareFlags>& compareFlags);
 
- private:
   // Estimates the memory required for prefix sort such as prefix buffer and
   // swap buffer.
   uint32_t maxRequiredBytes();

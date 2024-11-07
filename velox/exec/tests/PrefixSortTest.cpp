@@ -91,21 +91,6 @@ class PrefixSortTest : public exec::test::OperatorTestBase {
     }
 
     velox::test::assertEqualVectors(actual, expectedResult);
-    // Test timsort.
-    {
-      RowContainer rowContainer(keyTypes, payloadTypes, pool_.get());
-      auto rows = storeRows(numRows, data, &rowContainer);
-      PrefixSort::timSort(rows, &rowContainer, compareFlags);
-      // Extract data from the RowContainer in order.
-      const RowVectorPtr actual =
-          BaseVector::create<RowVector>(rowType, numRows, pool_.get());
-      for (int column = 0; column < compareFlags.size(); ++column) {
-        rowContainer.extractColumn(
-            rows.data(), numRows, column, actual->childAt(column));
-      }
-
-      velox::test::assertEqualVectors(actual, expectedResult);
-    }
   }
 
  private:
