@@ -72,8 +72,9 @@ struct RegexpReplaceFunction {
           re_->error());
 
       if (replacement) {
-        // Constant 'replacement' with non-constant 'pattern' needs to be
-        // processed separately for each row.
+        // Only when both the 'replacement' and 'pattern' are constants can they
+        // be processed during initialization; otherwise, each row needs to be
+        // processed separately.
         constantReplacement_ =
             prepareRegexpReplaceReplacement(re_.value(), *replacement);
       }
