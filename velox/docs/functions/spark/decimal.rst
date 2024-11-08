@@ -3,7 +3,7 @@ Decimal Operators
 =================
 
 The result precision and scale computation of arithmetic operators contains two stages.
-First stage computes precision and scale using formulas based on the SQL standard, and Hive when allow-precision-loss is true.
+First stage computes precision and scale using formulas based on the SQL standard and Hive when allow-precision-loss is true.
 The result may exceed maximum allowed precision of 38.
 
 Second stage caps precision at 38 and either reduces the scale or not depending on allow-precision-loss flag.
@@ -16,14 +16,14 @@ Without allow-precision-loss, some additions will return NULL.
 
 For example,
 
-The following queries keep accuracy or returns NULL with allow-precision-loss is false:
+The following queries keep accuracy or return NULL when allow-precision-loss is false:
 
 ::
 
     select cast('1.1232154' as decimal(38, 7)) + cast('1' as decimal(10, 0)); -- 2.123215
     select cast('9999999999999999999999999999999.2345678' as decimal(38, 7)) + cast('1' as decimal(10, 0)); -- NULL
 
-And succeed with allow-precision-loss is true:
+These same operations succeed when allow-precision-loss is true:
 
 ::
 
@@ -33,7 +33,7 @@ And succeed with allow-precision-loss is true:
 Decimal Precision and Scale Computation Formulas
 ------------------------------------------------
 
-The Hive SQL behavior:
+The HiveQL behavior:
 
 https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf
 
@@ -58,14 +58,14 @@ Multiplication
 
 Division
 ~~~~~~~~
-When allow-precision-loss:
+When allow-precision-loss is true:
 
 ::
 
     p = p1 - s1 + s2 + max(6, s1 + p2 + 1)
     s = max(6, s1 + p2 + 1)
 
-When precision loss is not allowed:
+When allow-precision-loss is false:
 
 ::
 
@@ -79,7 +79,7 @@ Decimal Precision and Scale Adjustment
 
 When allow-precision-loss is true, rounds the decimal part of the result if an exact representation is not possible.
 Otherwise, returns NULL.
-Notice: some operations succeed if precision loss is allowed and returns NULL if not.
+Notice: some operations succeed if precision loss is allowed and return NULL if not.
 
 For example,
 
