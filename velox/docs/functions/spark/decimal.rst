@@ -124,6 +124,9 @@ Decimal Functions
 
     Returns negated value of x (r = -x). Corresponds to Spark's operator ``-``.
 
+    ::
+        SELECT unaryminus(cast(-9999999999999999999.9999999999999999999 as DECIMAL(38, 19))); -- 9999999999999999999.9999999999999999999
+
 Decimal Special Forms
 ---------------------
 

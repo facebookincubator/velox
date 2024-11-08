@@ -37,13 +37,15 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       const std::string& functionName,
       const VectorPtr& expected,
       const std::vector<VectorPtr>& inputs) {
-    VELOX_USER_CHECK_EQ(
+    VELOX_USER_CHECK_GE(
         inputs.size(),
-        2,
-        "Two input vectors are needed for arithmetic function test.");
-    std::vector<core::TypedExprPtr> inputExprs = {
-        std::make_shared<core::FieldAccessTypedExpr>(inputs[0]->type(), "c0"),
-        std::make_shared<core::FieldAccessTypedExpr>(inputs[1]->type(), "c1")};
+        1,
+        "At least one input vector is needed for arithmetic function test.");
+    std::vector<core::TypedExprPtr> inputExprs;
+    for (int i = 0; i < inputs.size(); ++i) {
+      inputExprs.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+          inputs[i]->type(), fmt::format("c{}", i)));
+    }
     auto expr = std::make_shared<const core::CallTypedExpr>(
         expected->type(), std::move(inputExprs), functionName);
     assertEqualVectors(expected, evaluate(expr, makeRowVector(inputs)));
@@ -588,18 +590,34 @@ TEST_F(DecimalArithmeticTest, denyPrecisionLoss) {
 }
 
 TEST_F(DecimalArithmeticTest, unaryMinus) {
-  testDecimalUnaryminusFunction<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({1111, -1112, 9999, 0}, DECIMAL(5, 1))},
-      {makeFlatVector<int64_t>({-1111, 1112, -9999, 0}, DECIMAL(5, 1))});
+  testArithmeticFunction(
+      "unaryminus",
+      makeFlatVector<int64_t>(
+          {1111,
+           -1112,
+           9999,
+           0,
+           -DecimalUtil::kShortDecimalMin,
+           -DecimalUtil::kShortDecimalMax},
+          DECIMAL(18, 9)),
+      {makeFlatVector<int64_t>(
+          {-1111,
+           1112,
+           -9999,
+           0,
+           DecimalUtil::kShortDecimalMin,
+           DecimalUtil::kShortDecimalMax},
+          DECIMAL(18, 9))});
 
-  testDecimalUnaryminusFunction<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
+  testArithmeticFunction(
+      "unaryminus",
+      makeFlatVector<int128_t>(
           {11111111,
            -11112112,
            99999999,
            -DecimalUtil::kLongDecimalMax,
            -DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 19))},
+          DECIMAL(38, 19)),
       {makeFlatVector<int128_t>(
           {-11111111,
            11112112,
