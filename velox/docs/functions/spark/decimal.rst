@@ -115,17 +115,17 @@ Returns NULL when the actual result cannot be represented with the calculated de
 Decimal Functions
 -----------------
 
-.. spark:function:: unscaled_value(x) -> bigint
-
-    Return the unscaled bigint value of a short decimal ``x``.
-    Supported type is: SHORT_DECIMAL.
-
 .. spark:function:: unaryminus(x: decimal(p, s)) -> r: decimal(p, s)
 
     Returns negated value of x (r = -x). Corresponds to Spark's operator ``-``.
 
     ::
         SELECT unaryminus(cast(-9999999999999999999.9999999999999999999 as DECIMAL(38, 19))); -- 9999999999999999999.9999999999999999999
+
+.. spark:function:: unscaled_value(x) -> bigint
+
+    Return the unscaled bigint value of a short decimal ``x``.
+    Supported type is: SHORT_DECIMAL.
 
 Decimal Special Forms
 ---------------------
