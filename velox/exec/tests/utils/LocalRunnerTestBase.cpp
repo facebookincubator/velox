@@ -57,7 +57,7 @@ void LocalRunnerTestBase::ensureTestData() {
 void LocalRunnerTestBase::makeSchema() {
   auto schemaQueryCtx = makeQueryCtx("schema", rootPool_.get());
   common::SpillConfig spillConfig;
-  common::PrefixSortConfig prefixSortConfig(100);
+  common::PrefixSortConfig prefixSortConfig;
   auto leafPool = schemaQueryCtx->pool()->addLeafChild("schemaReader");
   auto connectorQueryCtx = std::make_shared<connector::ConnectorQueryCtx>(
       leafPool.get(),

@@ -97,7 +97,7 @@ class LocalSchema : public Schema {
   }
 
   const std::shared_ptr<connector::ConnectorQueryCtx>& connectorQueryCtx()
-      const {
+      const override {
     return connectorQueryCtx_;
   }
 
