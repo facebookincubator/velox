@@ -32,7 +32,7 @@ class MockDataLakeFileClient : public AzureDataLakeFileClient {
 
   MockDataLakeFileClient(std::string_view filePath) : filePath_(filePath) {}
 
-  std::string_view path() {
+  std::string_view path() const {
     return filePath_;
   }
 
