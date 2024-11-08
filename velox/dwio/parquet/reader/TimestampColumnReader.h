@@ -101,16 +101,15 @@ class TimestampColumnReader : public IntegerColumnReader {
       typename TFilter,
       bool isDense,
       typename ExtractValues>
-  void readHelperTimestamp(
+  void readHelper(
       velox::common::Filter* filter,
       const RowSet& rows,
       ExtractValues extractValues) {
-    if constexpr (std::is_same_v<TFilter, velox::common::TimestampRange>) {
+    if (auto* range = dynamic_cast<common::TimestampRange*>(filter)) {
       // Convert TimestampRange to ParquetInt96TimestampRange.
-      auto* range = reinterpret_cast<common::TimestampRange*>(filter);
       ParquetInt96TimestampRange newRange = ParquetInt96TimestampRange(
           range->lower(), range->upper(), range->nullAllowed());
-      reinterpret_cast<Reader*>(this)->Reader::readWithVisitor(
+      this->readWithVisitor(
           rows,
           dwio::common::ColumnVisitor<
               int128_t,
@@ -118,7 +117,7 @@ class TimestampColumnReader : public IntegerColumnReader {
               ExtractValues,
               isDense>(newRange, this, rows, extractValues));
     } else {
-      reinterpret_cast<Reader*>(this)->Reader::readWithVisitor(
+      this->readWithVisitor(
           rows,
           dwio::common::
               ColumnVisitor<int128_t, TFilter, ExtractValues, isDense>(
@@ -130,89 +129,6 @@ class TimestampColumnReader : public IntegerColumnReader {
     return;
   }
 
-  template <
-      typename Reader,
-      bool isDense,
-      bool kEncodingHasNulls,
-      typename ExtractValues>
-  void processTimestampFilter(
-      velox::common::Filter* filter,
-      ExtractValues extractValues,
-      const RowSet& rows) {
-    if (filter == nullptr) {
-      readHelperTimestamp<Reader, velox::common::AlwaysTrue, isDense>(
-          &dwio::common::alwaysTrue(), rows, extractValues);
-      return;
-    }
-
-    switch (filter->kind()) {
-      case velox::common::FilterKind::kAlwaysTrue:
-        readHelperTimestamp<Reader, velox::common::AlwaysTrue, isDense>(
-            filter, rows, extractValues);
-        break;
-      case velox::common::FilterKind::kIsNull:
-        if constexpr (kEncodingHasNulls) {
-          filterNulls<int64_t>(
-              rows,
-              true,
-              !std::
-                  is_same_v<decltype(extractValues), dwio::common::DropValues>);
-        } else {
-          readHelperTimestamp<Reader, velox::common::IsNull, isDense>(
-              filter, rows, extractValues);
-        }
-        break;
-      case velox::common::FilterKind::kIsNotNull:
-        if constexpr (
-            kEncodingHasNulls &&
-            std::is_same_v<decltype(extractValues), dwio::common::DropValues>) {
-          filterNulls<int64_t>(rows, false, false);
-        } else {
-          readHelperTimestamp<Reader, velox::common::IsNotNull, isDense>(
-              filter, rows, extractValues);
-        }
-        break;
-      case velox::common::FilterKind::kTimestampRange:
-        readHelperTimestamp<Reader, velox::common::TimestampRange, isDense>(
-            filter, rows, extractValues);
-        break;
-      default:
-        VELOX_UNREACHABLE();
-    }
-  }
-
-  template <typename Reader, bool kEncodingHasNulls>
-  void readTimestamp(const RowSet& rows) {
-    const bool isDense = rows.back() == rows.size() - 1;
-    velox::common::Filter* filter =
-        scanSpec_->filter() ? scanSpec_->filter() : &dwio::common::alwaysTrue();
-    if (scanSpec_->keepValues()) {
-      if (scanSpec_->valueHook()) {
-        if (isDense) {
-          processValueHook<Reader, true>(rows, scanSpec_->valueHook());
-        } else {
-          processValueHook<Reader, false>(rows, scanSpec_->valueHook());
-        }
-      } else {
-        if (isDense) {
-          processTimestampFilter<Reader, true, kEncodingHasNulls>(
-              filter, dwio::common::ExtractToReader(this), rows);
-        } else {
-          processTimestampFilter<Reader, false, kEncodingHasNulls>(
-              filter, dwio::common::ExtractToReader(this), rows);
-        }
-      }
-    } else {
-      if (isDense) {
-        processTimestampFilter<Reader, true, kEncodingHasNulls>(
-            filter, dwio::common::DropValues(), rows);
-      } else {
-        processTimestampFilter<Reader, false, kEncodingHasNulls>(
-            filter, dwio::common::DropValues(), rows);
-      }
-    }
-  }
-
   void read(
       int64_t offset,
       const RowSet& rows,
@@ -220,7 +136,7 @@ class TimestampColumnReader : public IntegerColumnReader {
     auto& data = formatData_->as<ParquetData>();
     // Use int128_t as a workaround. Timestamp in Velox is of 16-byte length.
     prepareRead<int128_t>(offset, rows, nullptr);
-    readTimestamp<IntegerColumnReader, true>(rows);
+    readCommon<TimestampColumnReader, true>(rows);
     readOffset_ += rows.back() + 1;
   }
 
