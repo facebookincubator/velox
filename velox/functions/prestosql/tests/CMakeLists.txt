@@ -65,6 +65,7 @@ add_executable(
   HyperLogLogFunctionsTest.cpp
   InPredicateTest.cpp
   IPAddressCastTest.cpp
+  IPPrefixCastTest.cpp
   JsonCastTest.cpp
   JsonExtractScalarTest.cpp
   JsonFunctionsTest.cpp
@@ -105,7 +106,6 @@ add_executable(
   WordStemTest.cpp
   ZipTest.cpp
   ZipWithTest.cpp)
-
 add_test(velox_functions_test velox_functions_test)
 
 target_link_libraries(
