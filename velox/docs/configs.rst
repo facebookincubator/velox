@@ -638,9 +638,10 @@ Each query can override the config by setting corresponding query session proper
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
-All hive.s3 config (except hive.s3.log-level) can be set on a per-bucket basis. The bucket-specific option is set by
-replacing the hive.s3. prefix on an config with hive.s3.bucket.BUCKETNAME., where BUCKETNAME is the name of the
-bucket. When connecting to a bucket, all options explicitly set will override the base hive.s3. values.
+All "hive.s3.*" config (except "hive.s3.log-level") can be set on a per-bucket basis. The bucket-specific option is set by
+replacing the "hive.s3." prefix on a config with "hive.s3.bucket.BUCKETNAME.", where BUCKETNAME is the name of the
+bucket. e.g. The endpoint for a bucket named "velox" can be specified by the config "hive.s3.bucket.velox.endpoint".
+When connecting to a bucket, all options explicitly set will override the base "hive.s3." values.
 These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html>`_.
 
 ``Google Cloud Storage Configuration``
