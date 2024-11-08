@@ -51,16 +51,6 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
     assertEqualVectors(expected, evaluate(expr, makeRowVector(inputs)));
   }
 
-  template <TypeKind KIND>
-  void testDecimalUnaryminusFunction(
-      const VectorPtr& expected,
-      const std::vector<VectorPtr>& input) {
-    using EvalType = typename velox::TypeTraits<KIND>::NativeType;
-    auto result = evaluate<SimpleVector<EvalType>>(
-        "unaryminus(c0)", makeRowVector(input));
-    assertEqualVectors(expected, result);
-  }
-
   VectorPtr makeNullableLongDecimalVector(
       const std::vector<std::string>& values,
       const TypePtr& type) {
