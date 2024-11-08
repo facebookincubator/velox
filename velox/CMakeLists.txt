@@ -77,3 +77,7 @@ endif()
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tool)
 endif()
+
+if(${VELOX_ENABLE_SDK})
+  add_subdirectory(sdk)
+endif()
