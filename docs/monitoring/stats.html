@@ -257,6 +257,31 @@ underlying filesystem.</p></td>
 </tbody>
 </table>
 </section>
+<section id="shuffle">
+<h2>Shuffle<a class="headerlink" href="#shuffle" title="Link to this heading">¶</a></h2>
+<p>These stats are reported by shuffle operators.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40.0%" />
+<col style="width: 20.0%" />
+<col style="width: 40.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Stats</p></th>
+<th class="head"><p>Unit</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>shuffleSerdeKind</p></td>
+<td></td>
+<td><p>Indicates the vector serde kind used by an operator for shuffle with 1
+for Presto, 2 for CompactRow, 3 for UnsafeRow. It is reported by Exchange,
+MergeExchange and PartitionedOutput operators for now.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 </section>
 
 
@@ -274,6 +299,7 @@ underlying filesystem.</p></td>
 <li><a class="reference internal" href="#hashbuild-hashaggregation">HashBuild, HashAggregation</a></li>
 <li><a class="reference internal" href="#tablewriter">TableWriter</a></li>
 <li><a class="reference internal" href="#spilling">Spilling</a></li>
+<li><a class="reference internal" href="#shuffle">Shuffle</a></li>
 </ul>
 </li>
 </ul>
