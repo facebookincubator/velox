@@ -64,13 +64,6 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
-  <repositories>
-    <repository>
-      <id>nexus-repo</id>
-      <name>sp-repo</name>
-      <url>http://121.37.155.119:8081/repository/maven-public/</url>
-    </repository>
-  </repositories>
 
   <build>
     <resources>
