@@ -109,7 +109,6 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
     const std::string& queryId,
     const std::string& taskId,
     const std::string& nodeId,
-    int32_t pipelineId,
     VectorSerde::Kind serdeKind,
     const std::string& operatorType,
     const ConsumerCallBack& consumerCb)
@@ -118,7 +117,6 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
           queryId,
           taskId,
           nodeId,
-          pipelineId,
           operatorType),
       originalNode_(dynamic_cast<const core::PartitionedOutputNode*>(
           core::PlanNode::findFirstNode(

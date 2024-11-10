@@ -28,14 +28,12 @@ class AggregationReplayer : public OperatorReplayerBase {
       const std::string& queryId,
       const std::string& taskId,
       const std::string& nodeId,
-      const int32_t pipelineId,
       const std::string& operatorType)
       : OperatorReplayerBase(
             traceDir,
             queryId,
             taskId,
             nodeId,
-            pipelineId,
             operatorType) {}
 
  private:
