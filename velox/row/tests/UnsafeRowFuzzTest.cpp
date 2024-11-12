@@ -93,10 +93,10 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
   std::array<char[kBufferSize], kNumBuffers> buffers_{};
 
-  BufferPtr buffer_;
-
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::memoryManager()->addLeafPool();
+
+  BufferPtr buffer_;
 };
 
 TEST_F(UnsafeRowFuzzTests, fast) {
