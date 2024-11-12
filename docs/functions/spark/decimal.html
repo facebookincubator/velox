@@ -41,40 +41,89 @@
             
   <section id="decimal-operators">
 <h1>Decimal Operators<a class="headerlink" href="#decimal-operators" title="Link to this heading">¶</a></h1>
-<p>When calculating the result precision and scale of arithmetic operators,
-the formulas follow Hive which is based on the SQL standard and MS SQL:</p>
+<p>The result precision and scale computation of arithmetic operators contains two stages.
+First stage computes precision and scale using formulas based on the SQL standard and Hive when allow-precision-loss is true.
+The result may exceed maximum allowed precision of 38.</p>
+<p>Second stage caps precision at 38 and either reduces the scale or not depending on allow-precision-loss flag.</p>
+<p>For example, addition of decimal(38, 7) and decimal(10, 0) requires precision of 39 and scale of 7.
+Since precision exceeds 38 it needs to be capped. When allow-precision-loss, precision is capped at 38 and scale is reduced by 1 to 6.
+When allow-precision-loss is false, precision is capped at 38 as well, but scale is kept at 7.
+With allow-precision-loss all additions will succeed, but accuracy (number of digits after period) of some operations will be reduced.
+Without allow-precision-loss, some additions will return NULL.</p>
+<p>For example,</p>
+<p>The following queries keep accuracy or return NULL when allow-precision-loss is false:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">select</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.1232154&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">7</span><span class="p">))</span> <span class="o">+</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="mf">2.123215</span>
+<span class="n">select</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;9999999999999999999999999999999.2345678&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">7</span><span class="p">))</span> <span class="o">+</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+<p>These same operations succeed when allow-precision-loss is true:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">select</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.1232154&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">7</span><span class="p">))</span> <span class="o">+</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="mf">2.12321</span><span class="p">,</span> <span class="n">lost</span> <span class="n">the</span> <span class="n">last</span> <span class="n">digit</span>
+<span class="n">select</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;9999999999999999999999999999999.2345678&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">7</span><span class="p">))</span> <span class="o">+</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">0</span><span class="p">));</span> <span class="o">--</span> <span class="mf">10000000000000000000000000000000.234568</span>
+</pre></div>
+</div>
+<section id="decimal-precision-and-scale-computation-formulas">
+<h2>Decimal Precision and Scale Computation Formulas<a class="headerlink" href="#decimal-precision-and-scale-computation-formulas" title="Link to this heading">¶</a></h2>
+<p>The HiveQL behavior:</p>
 <p><a class="reference external" href="https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf">https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf</a></p>
-<p><a class="reference external" href="https://msdn.microsoft.com/en-us/library/ms190476.aspx">https://msdn.microsoft.com/en-us/library/ms190476.aspx</a></p>
+<p>Additionally, the computation of decimal division adapts to the allow-precision-loss flag,
+while the decimal addition, subtraction, and multiplication do not.</p>
 <section id="addition-and-subtraction">
-<h2>Addition and Subtraction<a class="headerlink" href="#addition-and-subtraction" title="Link to this heading">¶</a></h2>
+<h3>Addition and Subtraction<a class="headerlink" href="#addition-and-subtraction" title="Link to this heading">¶</a></h3>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span><span class="p">,</span> <span class="n">p2</span> <span class="o">-</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
 <span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
 <section id="multiplication">
-<h2>Multiplication<a class="headerlink" href="#multiplication" title="Link to this heading">¶</a></h2>
+<h3>Multiplication<a class="headerlink" href="#multiplication" title="Link to this heading">¶</a></h3>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="n">p1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span>
 <span class="n">s</span> <span class="o">=</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">s2</span>
 </pre></div>
 </div>
 </section>
 <section id="division">
-<h2>Division<a class="headerlink" href="#division" title="Link to this heading">¶</a></h2>
+<h3>Division<a class="headerlink" href="#division" title="Link to this heading">¶</a></h3>
+<p>When allow-precision-loss is true:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">p</span> <span class="o">=</span> <span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">s2</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
 <span class="n">s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>For above arithmetic operators, when the precision of result exceeds 38,
-caps p at 38 and reduces the scale, in order to prevent the truncation of
-the integer part of the decimals. Below formula illustrates how the result
-precision and scale are adjusted.</p>
+<p>When allow-precision-loss is false:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">wholeDigits</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="n">p1</span> <span class="o">-</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">s2</span><span class="p">);</span>
+<span class="n">fractionalDigits</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="n">s1</span> <span class="o">+</span> <span class="n">p2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">));</span>
+<span class="n">p</span> <span class="o">=</span> <span class="n">wholeDigits</span> <span class="o">+</span> <span class="n">fractionalDigits</span>
+<span class="n">s</span> <span class="o">=</span> <span class="n">fractionalDigits</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="decimal-precision-and-scale-adjustment">
+<h2>Decimal Precision and Scale Adjustment<a class="headerlink" href="#decimal-precision-and-scale-adjustment" title="Link to this heading">¶</a></h2>
+<p>When allow-precision-loss is true, rounds the decimal part of the result if an exact representation is not possible.
+Otherwise, returns NULL.
+Notice: some operations succeed if precision loss is allowed and return NULL if not.</p>
+<p>For example,</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">select</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.1234567891011</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">18</span><span class="p">))</span> <span class="o">*</span> <span class="n">cast</span><span class="p">(</span><span class="mf">1234.1</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="mi">18</span><span class="p">));</span>
+<span class="o">--</span> <span class="mf">152.358023</span> <span class="k">if</span> <span class="n">allow</span><span class="o">-</span><span class="n">precision</span><span class="o">-</span><span class="n">loss</span><span class="p">,</span> <span class="n">NULL</span> <span class="n">otherwise</span><span class="o">.</span>
+</pre></div>
+</div>
+<p>Below formula illustrates how the result precision and scale are adjusted.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">precision</span> <span class="o">=</span> <span class="mi">38</span>
 <span class="n">scale</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">38</span> <span class="o">-</span> <span class="p">(</span><span class="n">p</span> <span class="o">-</span> <span class="n">s</span><span class="p">),</span> <span class="nb">min</span><span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="mi">6</span><span class="p">))</span>
 </pre></div>
 </div>
-<p>Users experience runtime errors when the actual result cannot be represented
-with the calculated decimal type.</p>
+<p>When precision loss is not allowed, caps p at 38, and keeps scale as is.
+The below formula shows how the precision and scale are adjusted for decimal addition, subtraction, and multiplication.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">precision</span> <span class="o">=</span> <span class="mi">38</span>
+<span class="n">scale</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span> <span class="n">s</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Decimal division uses a different formula:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">precision</span> <span class="o">=</span> <span class="mi">38</span>
+<span class="n">scale</span> <span class="o">=</span> <span class="n">fractionalDigits</span> <span class="o">-</span> <span class="p">(</span><span class="n">wholeDigits</span> <span class="o">+</span> <span class="n">fractionalDigits</span> <span class="o">-</span> <span class="mi">38</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span> <span class="o">-</span> <span class="mi">1</span>
+</pre></div>
+</div>
+<p>Returns NULL when the actual result cannot be represented with the calculated decimal type.</p>
 </section>
 <section id="decimal-functions">
 <h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading">¶</a></h2>
@@ -146,9 +195,13 @@ The result precision is decided with the number of integral digits and the resul
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Decimal Operators</a><ul>
+<li><a class="reference internal" href="#decimal-precision-and-scale-computation-formulas">Decimal Precision and Scale Computation Formulas</a><ul>
 <li><a class="reference internal" href="#addition-and-subtraction">Addition and Subtraction</a></li>
 <li><a class="reference internal" href="#multiplication">Multiplication</a></li>
 <li><a class="reference internal" href="#division">Division</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#decimal-precision-and-scale-adjustment">Decimal Precision and Scale Adjustment</a></li>
 <li><a class="reference internal" href="#decimal-functions">Decimal Functions</a><ul>
 <li><a class="reference internal" href="#unscaled_value"><code class="docutils literal notranslate"><span class="pre">unscaled_value()</span></code></a></li>
 </ul>
