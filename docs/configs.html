@@ -308,11 +308,11 @@ spilled files.</p></td>
 efficiency. The supported compression codecs are: ZLIB, SNAPPY, LZO, ZSTD, LZ4 and GZIP.
 NONE means no compression.</p></td>
 </tr>
-<tr class="row-even"><td><p>spill_enable_prefix_sort</p></td>
+<tr class="row-even"><td><p>spill_prefixsort_enabled</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
-<td><p>Enable the prefix sort or fallback to timsort in spill. The prefix sort is faster than timsort but requires the
-memory to build prefix data, which might have potential risk of running out of server memory.</p></td>
+<td><p>Enable the prefix sort or fallback to timsort in spill. The prefix sort is faster than std::sort but requires the
+memory to build normalized prefix keys, which might have potential risk of running out of server memory.</p></td>
 </tr>
 <tr class="row-odd"><td><p>spiller_start_partition_bit</p></td>
 <td><p>integer</p></td>
