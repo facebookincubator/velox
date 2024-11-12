@@ -193,7 +193,7 @@ int PrefixSort::comparePartNormalizedKeys(char* left, char* right) {
 }
 
 PrefixSort::PrefixSort(
-    const RowContainer* const rowContainer,
+    const RowContainer* rowContainer,
     const PrefixSortLayout& sortLayout,
     memory::MemoryPool* pool)
     : rowContainer_(rowContainer), sortLayout_(sortLayout), pool_(pool) {}
@@ -229,7 +229,7 @@ void PrefixSort::extractRowAndEncodePrefixKeys(char* row, char* prefixBuffer) {
 
 // static.
 uint32_t PrefixSort::maxRequiredBytes(
-    const RowContainer* const rowContainer,
+    const RowContainer* rowContainer,
     const std::vector<CompareFlags>& compareFlags,
     const velox::common::PrefixSortConfig& config,
     memory::MemoryPool* pool) {
