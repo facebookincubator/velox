@@ -117,7 +117,8 @@ These functions support TIMESTAMP and DATE input types.
     date formatter in lenient mode that is align with Spark legacy date parser behavior or
     `Joda <https://www.joda.org/joda-time/>`_ date formatter depends on ``spark.legacy_date_formatter`` configuration.
     Returns NULL for parsing error or NULL input. When `Simple` date formatter is used, null is returned for invalid
-    ``dateFormat``; otherwise, exception is thrown. ::
+    ``dateFormat``; otherwise, exception is thrown. The `Simple` date formatter also permits partial date parsing;
+    otherwise, exception is thrown. ::
 
         SELECT get_timestamp('1970-01-01', 'yyyy-MM-dd);  -- timestamp `1970-01-01`
         SELECT get_timestamp('1970-01-01', 'yyyy-MM');  -- NULL (parsing error)
@@ -311,7 +312,8 @@ These functions support TIMESTAMP and DATE input types.
     `Datetime patterns for formatting and parsing
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
     Returns null if ``string`` does not match ``format`` or if ``format``
-    is invalid.
+    is invalid. When `Simple` date formatter is used, permit partial date
+    parsing; otherwise, exception is thrown.
 
 .. function:: week_of_year(x) -> integer
 
