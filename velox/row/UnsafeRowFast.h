@@ -52,8 +52,8 @@ class UnsafeRowFast {
   void serialize(
       vector_size_t offset,
       vector_size_t size,
-      char* buffer,
-      const size_t* bufferOffsets);
+      const size_t* bufferOffsets,
+      char* buffer) const;
 
  protected:
   explicit UnsafeRowFast(const VectorPtr& vector);
@@ -121,14 +121,6 @@ class UnsafeRowFast {
 
   /// Serializes struct value to buffer. Value must not be null.
   int32_t serializeRow(vector_size_t index, char* buffer) const;
-
-  /// Serializes struct values in range [offset, offset + size) to buffer.
-  /// Value must not be null.
-  void serializeRow(
-      vector_size_t offset,
-      vector_size_t size,
-      char* buffer,
-      const size_t* bufferOffsets);
 
   const TypeKind typeKind_;
   DecodedVector decoded_;

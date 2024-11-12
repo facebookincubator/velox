@@ -39,15 +39,15 @@ FOLLY_ALWAYS_INLINE void writeFixedWidth(
     const char* rawData,
     vector_size_t index,
     size_t valueBytes) {
-  memcpy(buffer, rawData + index * valueBytes, valueBytes);
+  ::memcpy(buffer, rawData + index * valueBytes, valueBytes);
 }
 
 FOLLY_ALWAYS_INLINE void writeTimestamp(
     char* buffer,
     const Timestamp& timestamp) {
   // Write micros(int64_t) for timestamp value.
-  const auto micros = timestamp.toMicros();
-  memcpy(buffer, &micros, sizeof(int64_t));
+  const auto timeUs = timestamp.toMicros();
+  ::memcpy(buffer, &timeUs, sizeof(int64_t));
 }
 
 FOLLY_ALWAYS_INLINE void writeString(
@@ -59,7 +59,7 @@ FOLLY_ALWAYS_INLINE void writeString(
   *reinterpret_cast<uint64_t*>(buffer) = sizeAndOffset;
 
   if (!value.empty()) {
-    memcpy(rowBase + variableWidthOffset, value.data(), value.size());
+    ::memcpy(rowBase + variableWidthOffset, value.data(), value.size());
     variableWidthOffset += alignBytes(value.size());
   }
 }
@@ -83,7 +83,7 @@ template <TypeKind kind>
 void serializeTyped(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
-    DecodedVector& decoded,
+    const DecodedVector& decoded,
     size_t valueBytes,
     const raw_vector<char*>& nulls,
     const raw_vector<char*>& data,
@@ -111,7 +111,7 @@ template <>
 void serializeTyped<TypeKind::UNKNOWN>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
-    DecodedVector& /* unused */,
+    const DecodedVector& /* unused */,
     size_t /* unused */,
     const raw_vector<char*>& nulls,
     const raw_vector<char*>& /*unused*/,
@@ -125,7 +125,7 @@ template <>
 void serializeTyped<TypeKind::BOOLEAN>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
-    DecodedVector& decoded,
+    const DecodedVector& decoded,
     size_t /* unused */,
     const raw_vector<char*>& nulls,
     const raw_vector<char*>& data,
@@ -153,7 +153,7 @@ template <>
 void serializeTyped<TypeKind::TIMESTAMP>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
-    DecodedVector& decoded,
+    const DecodedVector& decoded,
     size_t /* unused */,
     const raw_vector<char*>& nulls,
     const raw_vector<char*>& data,
@@ -181,7 +181,7 @@ template <>
 void serializeTyped<TypeKind::VARCHAR>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
-    DecodedVector& decoded,
+    const DecodedVector& decoded,
     size_t /*unused*/,
     const raw_vector<char*>& nulls,
     const raw_vector<char*>& data,
@@ -214,7 +214,7 @@ template <>
 void serializeTyped<TypeKind::VARBINARY>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
-    DecodedVector& decoded,
+    const DecodedVector& decoded,
     size_t valueBytes,
     const raw_vector<char*>& nulls,
     const raw_vector<char*>& data,
@@ -227,7 +227,7 @@ template <>
 void serializeTyped<TypeKind::HUGEINT>(
     const raw_vector<vector_size_t>& rows,
     uint32_t childIdx,
-    DecodedVector& decoded,
+    const DecodedVector& decoded,
     size_t /*unused*/,
     const raw_vector<char*>& nulls,
     const raw_vector<char*>& data,
@@ -402,13 +402,71 @@ int32_t UnsafeRowFast::serialize(vector_size_t index, char* buffer) const {
 void UnsafeRowFast::serialize(
     vector_size_t offset,
     vector_size_t size,
-    char* buffer,
-    const size_t* bufferOffsets) {
-  if (size == 1) {
-    (void)serializeRow(offset, buffer + *bufferOffsets);
-    return;
+    const size_t* bufferOffsets,
+    char* buffer) const {
+  raw_vector<vector_size_t> rows(size);
+  raw_vector<char*> nulls(size);
+  raw_vector<char*> data(size);
+  if (decoded_.isIdentityMapping()) {
+    std::iota(rows.begin(), rows.end(), offset);
+  } else {
+    for (auto i = 0; i < size; ++i) {
+      rows[i] = decoded_.index(offset + i);
+    }
   }
-  return serializeRow(offset, size, buffer, bufferOffsets);
+
+  // After serializing variable-width column, the 'variableWidthOffsets' are
+  // updated accordingly.
+  std::vector<size_t> variableWidthOffsets;
+  if (hasVariableWidth_) {
+    variableWidthOffsets.resize(size);
+  }
+
+  const size_t fixedFieldLength = kFieldWidth * children_.size();
+  for (auto i = 0; i < size; ++i) {
+    nulls[i] = buffer + bufferOffsets[i];
+    data[i] = buffer + bufferOffsets[i] + rowNullBytes_;
+    if (hasVariableWidth_) {
+      variableWidthOffsets[i] = rowNullBytes_ + fixedFieldLength;
+    }
+  }
+
+  // Fixed-width and varchar/varbinary types are serialized using the vectorized
+  // API 'serializedTyped'. Other data types are serialized row-by-row.
+  for (auto childIdx = 0; childIdx < children_.size(); ++childIdx) {
+    auto& child = children_[childIdx];
+    if (childIsFixedWidth_[childIdx] || child.typeKind_ == TypeKind::HUGEINT ||
+        child.typeKind_ == TypeKind::VARBINARY ||
+        child.typeKind_ == TypeKind::VARCHAR) {
+      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+          serializeTyped,
+          child.typeKind_,
+          rows,
+          childIdx,
+          child.decoded_,
+          child.valueBytes_,
+          nulls,
+          data,
+          variableWidthOffsets);
+    } else {
+      const bool mayHaveNulls = child.decoded_.mayHaveNulls();
+      const auto childOffset = childIdx * kFieldWidth;
+      for (auto i = 0; i < rows.size(); ++i) {
+        if (mayHaveNulls && child.isNullAt(rows[i])) {
+          bits::setBit(nulls[i], childIdx, true);
+        } else {
+          // Write non-null variable-width value.
+          auto bytes = child.serializeVariableWidth(
+              rows[i], nulls[i] + variableWidthOffsets[i]);
+          // Write size and offset.
+          uint64_t sizeAndOffset = variableWidthOffsets[i] << 32 | bytes;
+          *reinterpret_cast<uint64_t*>(data[i] + childOffset) = sizeAndOffset;
+
+          variableWidthOffsets[i] += alignBytes(bytes);
+        }
+      }
+    }
+  }
 }
 
 void UnsafeRowFast::serializeFixedWidth(vector_size_t index, char* buffer)
@@ -423,7 +481,7 @@ void UnsafeRowFast::serializeFixedWidth(vector_size_t index, char* buffer)
           decoded_.valueAt<Timestamp>(index).toMicros();
       break;
     default:
-      memcpy(
+      ::memcpy(
           buffer,
           decoded_.data<char>() + decoded_.index(index) * valueBytes_,
           valueBytes_);
@@ -437,7 +495,7 @@ void UnsafeRowFast::serializeFixedWidth(
   VELOX_DCHECK(supportsBulkCopy_);
   // decoded_.data<char>() can be null if all values are null.
   if (decoded_.data<char>()) {
-    memcpy(
+    ::memcpy(
         buffer,
         decoded_.data<char>() + decoded_.index(offset) * valueBytes_,
         valueBytes_ * size);
@@ -451,7 +509,7 @@ int32_t UnsafeRowFast::serializeVariableWidth(vector_size_t index, char* buffer)
       [[fallthrough]];
     case TypeKind::VARBINARY: {
       auto value = decoded_.valueAt<StringView>(index);
-      memcpy(buffer, value.data(), value.size());
+      ::memcpy(buffer, value.data(), value.size());
       return value.size();
     }
     case TypeKind::HUGEINT: {
@@ -664,75 +722,4 @@ int32_t UnsafeRowFast::serializeRow(vector_size_t index, char* buffer) const {
 
   return variableWidthOffset;
 }
-
-void UnsafeRowFast::serializeRow(
-    vector_size_t offset,
-    vector_size_t size,
-    char* buffer,
-    const size_t* bufferOffsets) {
-  raw_vector<vector_size_t> rows(size);
-  raw_vector<char*> nulls(size);
-  raw_vector<char*> data(size);
-  if (decoded_.isIdentityMapping()) {
-    std::iota(rows.begin(), rows.end(), offset);
-  } else {
-    for (auto i = 0; i < size; ++i) {
-      rows[i] = decoded_.index(offset + i);
-    }
-  }
-
-  // After serializing variable-width column, the 'variableWidthOffsets' are
-  // updated accordingly.
-  std::vector<size_t> variableWidthOffsets;
-  if (hasVariableWidth_) {
-    variableWidthOffsets.resize(size);
-  }
-
-  const size_t fixedFieldLength = kFieldWidth * children_.size();
-  for (auto i = 0; i < size; ++i) {
-    nulls[i] = buffer + bufferOffsets[i];
-    data[i] = buffer + bufferOffsets[i] + rowNullBytes_;
-    if (hasVariableWidth_) {
-      variableWidthOffsets[i] = rowNullBytes_ + fixedFieldLength;
-    }
-  }
-
-  // Fixed-width and varchar/varbinary types are serialized using the vectorized
-  // API 'serializedTyped'. Other data types are serialized row-by-row.
-  for (auto childIdx = 0; childIdx < children_.size(); ++childIdx) {
-    auto& child = children_[childIdx];
-    if (childIsFixedWidth_[childIdx] || child.typeKind_ == TypeKind::HUGEINT ||
-        child.typeKind_ == TypeKind::VARBINARY ||
-        child.typeKind_ == TypeKind::VARCHAR) {
-      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-          serializeTyped,
-          child.typeKind_,
-          rows,
-          childIdx,
-          child.decoded_,
-          child.valueBytes_,
-          nulls,
-          data,
-          variableWidthOffsets);
-    } else {
-      const auto mayHaveNulls = child.decoded_.mayHaveNulls();
-      const auto childOffset = childIdx * kFieldWidth;
-      for (auto i = 0; i < rows.size(); ++i) {
-        if (mayHaveNulls && child.isNullAt(rows[i])) {
-          bits::setBit(nulls[i], childIdx, true);
-        } else {
-          // Write non-null variable-width value.
-          auto size = child.serializeVariableWidth(
-              rows[i], nulls[i] + variableWidthOffsets[i]);
-          // Write size and offset.
-          uint64_t sizeAndOffset = variableWidthOffsets[i] << 32 | size;
-          *reinterpret_cast<uint64_t*>(data[i] + childOffset) = sizeAndOffset;
-
-          variableWidthOffsets[i] += alignBytes(size);
-        }
-      }
-    }
-  }
-}
-
 } // namespace facebook::velox::row
