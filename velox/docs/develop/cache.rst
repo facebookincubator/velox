@@ -15,6 +15,32 @@ The AsyncDataCache can be enabled by setting the following config:
     async-data-cache-enabled=true
 
 
+Other Properties
+----------------
+There is a ``cache.no_retention`` session property in Velox that can be set to control if a query's cached data is retained or not after its execution.
+
+.. list-table::
+   :widths: 30 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - cache.no_retention
+     - bool
+     - false
+     - If set to true, evicts out a query scanned data out of in-memory cache right after the access, and also skips staging to the SSD cache.​
+
+Set the ``hive.node_scheduler_affinity`` session property accordingly to turn ON/OFF cache.no_retention.​
+
+.. code-block:: bash
+
+    SET SESSION hive.node_selection_strategy='NO_PREFERENCE'; // To turn cache.no_retention ON.​
+    SET SESSION hive.node_selection_strategy='SOFT_AFFINITY'; // To turn cache.no_retention OFF.​
+    SET SESSION hive.node_selection_strategy='HARD_AFFINITY'; // To turn cache.no_retention OFF.​
+
+
 =========
 SSD Cache
 =========
