@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_cudf_hash_test HashJoinTest.cpp Main.cpp)
+add_executable(velox_cudf_hash_test HashJoinTest.cpp Main.cpp OrderByTest.cpp)
 
 add_test(
   NAME velox_cudf_hash_test

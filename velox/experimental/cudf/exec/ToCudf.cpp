@@ -14,14 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include <cuda.h>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OrderBy.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <iostream>
@@ -93,6 +95,17 @@ bool CompileState::compile() {
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
+      replace_op[0]->initialize();
+      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
+          driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+      replacements_made = true;
+    } else if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
+      auto id = orderByOp->operatorId();
+      auto plan_node = std::dynamic_pointer_cast<const core::OrderByNode>(
+          get_plan_node(orderByOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(
+          std::make_unique<CudfOrderBy>(id, ctx, plan_node));
       replace_op[0]->initialize();
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
