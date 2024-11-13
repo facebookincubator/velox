@@ -83,7 +83,7 @@ FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
     }
     case TypeKind::HUGEINT: {
       encodeRowColumn<int128_t>(
-          prefixSortLayout, index, rowColumn, row, prefix);
+          prefixSortLayout, index, rowColumn, row, prefixBuffer);
       return;
     }
     default:
