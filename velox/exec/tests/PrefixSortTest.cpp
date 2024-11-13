@@ -194,10 +194,10 @@ TEST_F(PrefixSortTest, singleKeyWithNulls) {
       makeNullableFlatVector<int16_t>({5, 4, std::nullopt, 2, 1}),
       makeNullableFlatVector<int128_t>(
           {5,
-           HugeInt::build(20, 400),
+           HugeInt::parse("1234567"),
            std::nullopt,
-           HugeInt::build(20, 401),
-           HugeInt::build(-20, 401)}),
+           HugeInt::parse("12345679"),
+           HugeInt::parse("-12345678901234567890")}),
       makeNullableFlatVector<float>({5.5, 4.4, std::nullopt, 2.2, 1.1}),
       makeNullableFlatVector<double>({5.5, 4.4, std::nullopt, 2.2, 1.1}),
       makeNullableFlatVector<Timestamp>(
