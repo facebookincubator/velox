@@ -30,7 +30,6 @@ concurrency:
 
 jobs:
   check-matrix:
-    if: ${{ github.event.action != 'edited' }}
     name: ${{ matrix.config.name }}
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:check
@@ -78,10 +77,8 @@ jobs:
           fi
 
   title-check:
-    name: CC Titel
+    name: CC PR Titel
     runs-on: ubuntu-latest
-    # Run this on every commit for now to notify existing PRs after they rebase
-    # if: ${{ github.event.action == 'opened' || github.event.action == 'edited' }}
     steps:
       - shell: python
         env:
