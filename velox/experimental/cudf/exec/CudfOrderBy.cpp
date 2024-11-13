@@ -30,16 +30,6 @@
 
 namespace facebook::velox::cudf_velox {
 
-namespace {
-CompareFlags fromSortOrderToCompareFlags(const core::SortOrder& sortOrder) {
-  return {
-      sortOrder.isNullsFirst(),
-      sortOrder.isAscending(),
-      false,
-      CompareFlags::NullHandlingMode::kNullAsValue};
-}
-} // namespace
-
 CudfOrderBy::CudfOrderBy(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
@@ -49,13 +39,9 @@ CudfOrderBy::CudfOrderBy(
           orderByNode->outputType(),
           operatorId,
           orderByNode->id(),
-          "CudfOrderBy",
-          orderByNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
-              : std::nullopt),
+          "CudfOrderBy"),
       orderByNode_(orderByNode) {
   maxOutputRows_ = outputBatchRows(std::nullopt);
-  VELOX_CHECK(pool()->trackUsage());
   sort_keys_.reserve(orderByNode->sortingKeys().size());
   column_order_.reserve(orderByNode->sortingKeys().size());
   null_order_.reserve(orderByNode->sortingKeys().size());
@@ -74,6 +60,9 @@ CudfOrderBy::CudfOrderBy(
         sorting_order.isNullsFirst() ? cudf::null_order::BEFORE
                                      : cudf::null_order::AFTER);
   }
+  if (cudfDebugEnabled()) {
+    std::cout << "Number of Sort keys: " << sort_keys_.size() << std::endl;
+  }
 }
 
 void CudfOrderBy::addInput(RowVectorPtr input) {
@@ -85,9 +74,8 @@ void CudfOrderBy::addInput(RowVectorPtr input) {
 
 void CudfOrderBy::noMoreInput() {
   exec::Operator::noMoreInput();
-  // TODO: Get total row count
-  auto total_row_count = 0;
-  maxOutputRows_ = outputBatchRows(total_row_count);
+  // TODO: Get total row count, batch output
+  // maxOutputRows_ = outputBatchRows(total_row_count);
 
   NVTX3_FUNC_RANGE();
 
@@ -104,7 +92,7 @@ void CudfOrderBy::noMoreInput() {
   cudf::get_default_stream().synchronize();
   cudf_table_views.clear();
   cudf_tables.clear();
-  inputs_.clear();
+  // inputs_.clear();
   VELOX_CHECK_NOT_NULL(tbl);
   if (cudfDebugEnabled()) {
     std::cout << "Sort input table number of columns: " << tbl->num_columns()
@@ -113,17 +101,10 @@ void CudfOrderBy::noMoreInput() {
               << std::endl;
   }
 
-  auto sourceType = orderByNode_->sources()[0]->outputType();
-  auto sortKeys = orderByNode_->sortingKeys();
-
-  // auto sort_key_indices = std::vector<cudf::size_type>(sortKeys.size());
-  // for (size_t i = 0; i < sort_key_indices.size(); i++) {
-  //   sort_key_indices[i] = static_cast<cudf::size_type>(
-  //       sourceType->getChildIdx(sortKeys[i]->name()));
-  // }
   auto keys = tbl->view().select(sort_keys_);
   auto values = tbl->view();
   sortedTable_ = cudf::sort_by_key(values, keys, column_order_, null_order_);
+  inputTable_ = std::move(tbl);
 }
 
 RowVectorPtr CudfOrderBy::getOutput() {
@@ -131,11 +112,12 @@ RowVectorPtr CudfOrderBy::getOutput() {
     return nullptr;
   }
 
+  cudf::get_default_stream().synchronize();
   // TODO : batching later
   // RowVectorPtr output = sortBuffer_->getOutput(maxOutputRows_);
   RowVectorPtr output =
-      with_arrow::to_velox_column(sortedTable_->view(), input_->pool(), "");
-  finished_ = (output == nullptr);
+      with_arrow::to_velox_column(inputTable_->view(), pool(), "");
+  finished_ = noMoreInput_; //(output == nullptr);
   return output;
 }
 
@@ -143,5 +125,6 @@ void CudfOrderBy::close() {
   exec::Operator::close();
   // TODO: Release stored inputs if needed
   // TODO: Release cudf memory resources
+  sortedTable_.reset();
 }
 } // namespace facebook::velox::cudf_velox
