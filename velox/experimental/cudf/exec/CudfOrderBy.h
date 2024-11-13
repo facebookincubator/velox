@@ -52,9 +52,6 @@ class CudfOrderBy : public exec::Operator {
     return finished_;
   }
 
-// skipped reclaim
-//   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
-//       override;
   void close() override;
 
  private:
