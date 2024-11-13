@@ -87,7 +87,7 @@ jobs:
           import re 
           import os
           title = os.environ["title"]
-          title_re = r"^(feat|fix|build|test|docs|refactor|misc)(\(.+\))?: (.+)"
+          title_re = r"^(feat|fix|build|test|docs|refactor|misc)(\(.+\))?!?: ([A-Z].+)[^.]$"
           match = re.search(title_re, title)
 
           if match is None:
