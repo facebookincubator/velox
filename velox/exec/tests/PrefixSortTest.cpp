@@ -161,10 +161,10 @@ TEST_F(PrefixSortTest, singleKey) {
       makeFlatVector<int16_t>({5, 4, 3, 2, 1}),
       makeFlatVector<int128_t>(
           {5,
-           HugeInt::build(20, 400),
-           HugeInt::build(20, 401),
-           HugeInt::build(20, 402),
-           HugeInt::build(-20, 401)}),
+           HugeInt::parse("1234567"),
+           HugeInt::parse("12345678901234567890"),
+           HugeInt::parse("12345679"),
+           HugeInt::parse("-12345678901234567890")}),
       makeFlatVector<float>({5.5, 4.4, 3.3, 2.2, 1.1}),
       makeFlatVector<double>({5.5, 4.4, 3.3, 2.2, 1.1}),
       makeFlatVector<Timestamp>(
