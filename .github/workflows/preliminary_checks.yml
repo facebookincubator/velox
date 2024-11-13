@@ -15,6 +15,11 @@ name: Run Checks
 
 on:
   pull_request:
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
 
 permissions:
   contents: read
@@ -25,6 +30,7 @@ concurrency:
 
 jobs:
   check-matrix:
+    if: ${{ github.event.action != 'edited' }}
     name: ${{ matrix.config.name }}
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:check
