@@ -128,6 +128,16 @@ The below formula shows how the precision and scale are adjusted for decimal add
 <section id="decimal-functions">
 <h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
+<dt class="sig sig-object spark" id="unaryminus">
+<span class="sig-name descname"><span class="pre">unaryminus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#unaryminus" title="Link to this definition">¶</a></dt>
+<dd><p>Returns negated value of x (r = -x). Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">-</span></code>.</p>
+<dl class="simple">
+<dt>::</dt><dd><p>SELECT unaryminus(cast(-9999999999999999999.9999999999999999999 as DECIMAL(38, 19))); – 9999999999999999999.9999999999999999999</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="unscaled_value">
 <span class="sig-name descname"><span class="pre">unscaled_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#unscaled_value" title="Link to this definition">¶</a></dt>
 <dd><p>Return the unscaled bigint value of a short decimal <code class="docutils literal notranslate"><span class="pre">x</span></code>.
@@ -203,6 +213,7 @@ The result precision is decided with the number of integral digits and the resul
 </li>
 <li><a class="reference internal" href="#decimal-precision-and-scale-adjustment">Decimal Precision and Scale Adjustment</a></li>
 <li><a class="reference internal" href="#decimal-functions">Decimal Functions</a><ul>
+<li><a class="reference internal" href="#unaryminus"><code class="docutils literal notranslate"><span class="pre">unaryminus()</span></code></a></li>
 <li><a class="reference internal" href="#unscaled_value"><code class="docutils literal notranslate"><span class="pre">unscaled_value()</span></code></a></li>
 </ul>
 </li>
