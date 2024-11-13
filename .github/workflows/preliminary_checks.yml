@@ -77,7 +77,7 @@ jobs:
           fi
 
   title-check:
-    name: CC PR Titel
+    name: CC PR Title
     runs-on: ubuntu-latest
     steps:
       - shell: python
