@@ -19,14 +19,11 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Driver.h"
-#include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
-#include <cudf/join.hpp>
-#include <cudf/table/table.hpp>
 
-#include <string>
+#include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -34,7 +31,7 @@ class CudfOrderBy : public exec::Operator {
  public:
   CudfOrderBy(
       int32_t operatorId,
-      DriverCtx* driverCtx,
+      exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::OrderByNode>& orderByNode);
 
   bool needsInput() const override {
@@ -47,8 +44,8 @@ class CudfOrderBy : public exec::Operator {
 
   RowVectorPtr getOutput() override;
 
-  BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return BlockingReason::kNotBlocked;
+  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+    return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override {
