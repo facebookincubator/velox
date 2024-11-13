@@ -85,7 +85,7 @@ The contribution process is outlined below:
      with the title prefixed with [WIP], and share with collaborators to get early feedback.
    * Ensure the PR follows the [title and description
      guidelines](#commit-messages) presented below.
-   * Make sure the PR passes **all CI tests**.
+   * Create/submit a Github PR and make sure it passes **all CI tests**.
      * Do not ignore red CI signals, even if they seem preexisting.
      * If you believe a red CI signal is unrelated to your change, please search for
      existing Issues reporting this particular test. They should contain the test name
@@ -93,8 +93,7 @@ The contribution process is outlined below:
      * If an Issue already exist, add a comment containing the link to your failed CI job.
      * If an Issue does not exist, please create one with the title "Broken CI \<test\_name\>",
      tagging the appropriate maintainers for that component.
-   * Once all CI signals are green, create/submit a Github PR and tag the reviewers
-   identified in Step 3.
+   * Once all CI signals are green, tag the reviewers identified in Step 3.
 
 5. Review is performed by one or more reviewers.
    * This normally happens within a few days, but may take longer if the change
