@@ -173,7 +173,8 @@ class OrderByTest : public OperatorTestBase {
     std::vector<RowVectorPtr> vectors;
     for (int32_t i = 0; i < numVectors; ++i) {
       auto vector = std::dynamic_pointer_cast<RowVector>(
-          facebook::velox::test::BatchMaker::createBatch(rowType, rowsPerVector, *pool_));
+          facebook::velox::test::BatchMaker::createBatch(
+              rowType, rowsPerVector, *pool_));
       vectors.push_back(vector);
     }
     return vectors;
@@ -360,9 +361,8 @@ TEST_F(OrderByTest, outputBatchRows) {
     // TODO: add output size check with spilling enabled
     std::string debugString() const {
       return fmt::format(
-          "numRowsPerBatch:{}, preferredOutBatchBytes:{}, maxOutBatchRows:{}, expectedOutputVectors:{}",
-          numRowsPerBatch,
-          preferredOutBatchBytes,
+          "numRowsPerBatch:{}, preferredOutBatchBytes:{}, maxOutBatchRows:{},
+expectedOutputVectors:{}", numRowsPerBatch, preferredOutBatchBytes,
           maxOutBatchRows,
           expectedOutputVectors);
     }
