@@ -117,13 +117,18 @@ These functions support TIMESTAMP and DATE input types.
     date formatter in lenient mode that is align with Spark legacy date parser behavior or
     `Joda <https://www.joda.org/joda-time/>`_ date formatter depends on ``spark.legacy_date_formatter`` configuration.
     Returns NULL for parsing error or NULL input. When `Simple` date formatter is used, null is returned for invalid
-    ``dateFormat``; otherwise, exception is thrown. The `Simple` date formatter also permits partial date parsing;
-    otherwise, exception is thrown. ::
+    ``dateFormat``; otherwise, exception is thrown. The `Simple` date formatter also permits partial date parsing
+    which means that ``dateFormat`` can match only a part of ``string``. For example, if ``string`` is
+    2015-07-22 10:00:00, it can be parsed using ``dateFormat`` is yyyy-MM-dd because the parser does not require entire
+    input to be consumed. In contrast, the `Joda` date formatter performs strict checks to ensure that the
+    ``dateFormat`` completely matches the ``string``. If there is any mismatch, exception is thrown. ::
 
         SELECT get_timestamp('1970-01-01', 'yyyy-MM-dd);  -- timestamp `1970-01-01`
         SELECT get_timestamp('1970-01-01', 'yyyy-MM');  -- NULL (parsing error)
         SELECT get_timestamp('1970-01-01', null);  -- NULL
         SELECT get_timestamp('2020-06-10', 'A');  -- (throws exception)
+        SELECT get_timestamp('2015-07-22 10:00:00', 'yyyy-MM-dd'); -- timestamp `2015-07-22` (for Simple date formatter)
+        SELECT get_timestamp('2015-07-22 10:00:00', 'yyyy-MM-dd'); -- (throws exception) (for Joda date formatter)
 
 .. spark:function:: hour(timestamp) -> integer
 
@@ -312,8 +317,13 @@ These functions support TIMESTAMP and DATE input types.
     `Datetime patterns for formatting and parsing
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
     Returns null if ``string`` does not match ``format`` or if ``format``
-    is invalid. When `Simple` date formatter is used, permit partial date
-    parsing; otherwise, exception is thrown.
+    is invalid. The `Simple` date formatter permits partial date parsing
+    which means that ``format`` can match only a part of ``string``. For example,
+    if ``string`` is 2015-07-22 10:00:00, it can be parsed using ``format`` is
+    yyyy-MM-dd because the parser does not require entire input to be consumed.
+    In contrast, the `Joda` date formatter performs strict checks to ensure that the
+    ``format`` completely matches the ``string``. If there is any mismatch,
+    exception is thrown.
 
 .. function:: week_of_year(x) -> integer
 
