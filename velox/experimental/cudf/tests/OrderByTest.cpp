@@ -46,8 +46,7 @@ class OrderByTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
-    // TODO: Enable cuDF
-    // cudf_velox::registerCudf();
+    cudf_velox::registerCudf();
     rng_.seed(123);
 
     rowType_ = ROW(
