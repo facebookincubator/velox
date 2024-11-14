@@ -114,10 +114,6 @@ class IcebergInsertTableHandle : public HiveInsertTableHandle {
 };
 
 class PartitionData {
- private:
-  std::vector<std::string> partitionValues;
-  const std::string PARTITION_VALUES_FIELD = "partitionValues";
-
  public:
   PartitionData(const std::vector<std::string>& partitionValues)
       : partitionValues(partitionValues) {
@@ -147,6 +143,10 @@ class PartitionData {
           "JSON conversion failed for PartitionData: " + std::string(e.what()));
     }
   }
+
+ private:
+  std::vector<std::string> partitionValues;
+  const std::string PARTITION_VALUES_FIELD = "partitionValues";
 };
 
 class IcebergDataSink : public HiveDataSink {
@@ -158,13 +158,9 @@ class IcebergDataSink : public HiveDataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
 
-  void appendData(RowVectorPtr input) override;
-
   std::vector<std::string> close() override;
 
  protected:
-  void write(size_t index, RowVectorPtr input) override;
-
   // Below are structures for partitions from all inputs. partitionData_
   // is indexed by partitionId.
   std::vector<std::shared_ptr<PartitionData>> partitionData_;
@@ -178,9 +174,7 @@ class IcebergDataSink : public HiveDataSink {
       const std::string& tableDirectory,
       const std::optional<std::string>& partitionSubdirectory) const override;
 
-  std::vector<column_index_t> getDataChannels(
-      const std::vector<column_index_t>& partitionChannels,
-      const column_index_t childrenSize) const override;
+  std::vector<column_index_t> getDataChannels() const override;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

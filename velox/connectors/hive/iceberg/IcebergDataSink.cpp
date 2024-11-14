@@ -18,7 +18,6 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -41,57 +40,6 @@ IcebergDataSink::IcebergDataSink(
           commitStrategy,
           hiveConfig) {}
 
-void IcebergDataSink::appendData(facebook::velox::RowVectorPtr input) {
-  checkRunning();
-
-  // Write to unpartitioned table.
-  if (!isPartitioned()) {
-    const auto index = ensureWriter(HiveWriterId::unpartitionedId());
-    write(index, input);
-    return;
-  }
-
-  dataChannels_ = getDataChannels(partitionChannels_, inputType_->size());
-
-  // Compute partition and bucket numbers.
-  computePartitionAndBucketIds(input);
-
-  // Lazy load all the input columns.
-  for (column_index_t i = 0; i < input->childrenSize(); ++i) {
-    input->childAt(i)->loadedVector();
-  }
-
-  // All inputs belong to a single non-bucketed partition. The partition id
-  // must be zero.
-  if (!isBucketed() && partitionIdGenerator_->numPartitions() == 1) {
-    const auto index = ensureWriter(HiveWriterId{0});
-    write(index, input);
-    return;
-  }
-
-  splitInputRowsAndEnsureWriters(input);
-
-  for (auto index = 0; index < writers_.size(); ++index) {
-    const vector_size_t partitionSize = partitionSizes_[index];
-    if (partitionSize == 0) {
-      continue;
-    }
-
-    RowVectorPtr writerInput = partitionSize == input->size()
-        ? input
-        : exec::wrap(partitionSize, partitionRows_[index], input);
-
-    write(index, writerInput);
-  }
-}
-
-void IcebergDataSink::write(size_t index, RowVectorPtr input) {
-  WRITER_NON_RECLAIMABLE_SECTION_GUARD(index);
-
-  writers_[index]->write(input);
-  writerInfo_[index]->numWrittenRows += input->size();
-}
-
 std::vector<std::string> IcebergDataSink::close() {
   checkRunning();
   state_ = State::kClosed;
@@ -103,7 +51,7 @@ std::vector<std::string> IcebergDataSink::close() {
 
   std::vector<std::string> commitTasks;
   commitTasks.reserve(writerInfo_.size());
-  auto fileFormat = toString(insertTableHandle_->tableStorageFormat());
+  auto fileFormat = toString(insertTableHandle_->storageFormat());
   std::string finalFileFormat(fileFormat);
   std::transform(
       finalFileFormat.begin(),
@@ -160,24 +108,18 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
       continue;
     }
 
-    std::vector<std::string> partitionValues;
-    partitionValues.reserve(partitionChannels_.size());
+    std::vector<std::string> partitionValues(partitionChannels_.size());
 
     auto icebergInsertTableHandle =
         std::dynamic_pointer_cast<const IcebergInsertTableHandle>(
             insertTableHandle_);
 
     for (auto i = 0; i < partitionChannels_.size(); ++i) {
-      auto type =
-          icebergInsertTableHandle->inputColumns()[partitionChannels_[i]]
-              ->dataType();
       auto block = input->childAt(partitionChannels_[i]);
-      partitionValues.insert(partitionValues.begin() + i, block->toString(row));
+      partitionValues[i] = block->toString(row);
     }
 
-    partitionData_.insert(
-        partitionData_.begin() + index,
-        std::make_shared<PartitionData>(partitionValues));
+    partitionData_[index] = std::make_shared<PartitionData>(partitionValues);
   }
 
   for (uint32_t i = 0; i < partitionSizes_.size(); ++i) {
@@ -189,10 +131,7 @@ void IcebergDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
 }
 
 void IcebergDataSink::extendBuffersForPartitionedTables() {
-  // Extends the buffer used for partition rows calculations.
-  partitionSizes_.emplace_back(0);
-  partitionRows_.emplace_back(nullptr);
-  rawPartitionRows_.emplace_back(nullptr);
+  HiveDataSink::extendBuffersForPartitionedTables();
 
   // Extend the buffer used for partitionData
   partitionData_.emplace_back(nullptr);
@@ -209,11 +148,9 @@ std::string IcebergDataSink::makePartitionDirectory(
 }
 
 // Returns the column indices of data columns.
-std::vector<column_index_t> IcebergDataSink::getDataChannels(
-    const std::vector<column_index_t>& partitionChannels,
-    const column_index_t childrenSize) const {
+std::vector<column_index_t> IcebergDataSink::getDataChannels() const {
   // Create a vector of all possible channels
-  std::vector<column_index_t> dataChannels(childrenSize);
+  std::vector<column_index_t> dataChannels(inputType_->size());
   std::iota(dataChannels.begin(), dataChannels.end(), 0);
 
   return dataChannels;

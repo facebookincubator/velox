@@ -467,7 +467,7 @@ class HiveDataSink : public DataSink {
 
   bool canReclaim() const;
 
- private:
+ protected:
   // Validates the state transition from 'oldState' to 'newState'.
   void checkStateTransition(State oldState, State newState);
   void setState(State newState);
@@ -568,9 +568,7 @@ class HiveDataSink : public DataSink {
       const std::optional<std::string>& partition,
       std::optional<uint32_t> bucketId) const;
 
-  virtual std::vector<column_index_t> getDataChannels(
-      const std::vector<column_index_t>& partitionChannels,
-      const column_index_t childrenSize) const;
+  virtual std::vector<column_index_t> getDataChannels() const;
 
   // Gets write and target file names for a writer based on the table commit
   // strategy as well as table partitioned type. If commit is not required, the
@@ -589,7 +587,7 @@ class HiveDataSink : public DataSink {
   }
 
   // Invoked to write 'input' to the specified file writer.
-  virtual void write(size_t index, RowVectorPtr input);
+  void write(size_t index, RowVectorPtr input);
 
   void closeInternal();
 

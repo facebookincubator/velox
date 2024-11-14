@@ -373,8 +373,7 @@ HiveDataSink::HiveDataSink(
       spillConfig_(connectorQueryCtx->spillConfig()),
       sortWriterFinishTimeSliceLimitMs_(getFinishTimeSliceLimitMsFromHiveConfig(
           hiveConfig_,
-          connectorQueryCtx->sessionProperties())),
-      dataChannels_(getDataChannels(partitionChannels_, inputType_->size())) {
+          connectorQueryCtx->sessionProperties())) {
   if (isBucketed()) {
     VELOX_USER_CHECK_LT(
         bucketCount_, maxBucketCount(), "bucketCount exceeds the limit");
@@ -422,6 +421,10 @@ void HiveDataSink::appendData(RowVectorPtr input) {
     const auto index = ensureWriter(HiveWriterId::unpartitionedId());
     write(index, input);
     return;
+  }
+
+  if (dataChannels_.empty()) {
+    dataChannels_ = getDataChannels();
   }
 
   // Compute partition and bucket numbers.
@@ -833,7 +836,7 @@ HiveWriterId HiveDataSink::getWriterId(size_t row) const {
   return HiveWriterId{partitionId, bucketId};
 }
 
-void HiveDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
+void HiveDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr /* input */) {
   VELOX_CHECK(isPartitioned() || isBucketed());
   if (isBucketed() && isPartitioned()) {
     VELOX_CHECK_EQ(bucketIds_.size(), partitionIds_.size());
@@ -870,15 +873,13 @@ void HiveDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr input) {
 }
 
 // Returns the column indices of non-partition data columns.
-std::vector<column_index_t> HiveDataSink::getDataChannels(
-    const std::vector<column_index_t>& partitionChannels,
-    const column_index_t childrenSize) const {
+std::vector<column_index_t> HiveDataSink::getDataChannels() const {
   std::vector<column_index_t> dataChannels;
-  dataChannels.reserve(childrenSize - partitionChannels.size());
+  dataChannels.reserve(inputType_->size() - partitionChannels_.size());
 
-  for (column_index_t i = 0; i < childrenSize; i++) {
-    if (std::find(partitionChannels.cbegin(), partitionChannels.cend(), i) ==
-        partitionChannels.cend()) {
+  for (column_index_t i = 0; i < inputType_->size(); i++) {
+    if (std::find(partitionChannels_.cbegin(), partitionChannels_.cend(), i) ==
+        partitionChannels_.cend()) {
       dataChannels.push_back(i);
     }
   }
