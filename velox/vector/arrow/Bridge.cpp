@@ -1078,6 +1078,10 @@ TypePtr importFromArrowImpl(
       return TINYINT();
     case 's':
       return SMALLINT();
+    case 'I':
+      printf(
+          "Warning: arrowSchema.format: %s, uint32_t is treated as int32_t\n",
+          arrowSchema.format);
     case 'i':
       return INTEGER();
     case 'l':
@@ -1172,6 +1176,7 @@ TypePtr importFromArrowImpl(
     default:
       break;
   }
+  printf("Arrow format: %s is unsupported\n", format);
   VELOX_USER_FAIL(
       "Unable to convert '{}' ArrowSchema format type to Velox.", format);
 }
