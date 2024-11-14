@@ -60,7 +60,7 @@ std::optional<CudfHashJoinBridge::hash_type> CudfHashJoinBridge::hashOrFuture(
   }
   std::lock_guard<std::mutex> l(mutex_);
   if (hashObject_.has_value()) {
-    return std::move(hashObject_);
+    return hashObject_;
   }
   if (cudfDebugEnabled()) {
     std::cout << "Calling CudfHashJoinBridge::hashOrFuture constructing promise"
@@ -193,7 +193,7 @@ void CudfHashJoinBuild::noMoreInput() {
   auto cudf_HashJoinBridge =
       std::dynamic_pointer_cast<CudfHashJoinBridge>(joinBridge);
   cudf_HashJoinBridge->setHashTable(std::make_optional(
-      std::make_pair(std::move(tbl), std::move(hashObject))));
+      std::make_pair(std::shared_ptr(std::move(tbl)), std::move(hashObject))));
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
