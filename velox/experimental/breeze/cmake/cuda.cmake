@@ -21,10 +21,6 @@ if(NOT DEFINED CMAKE_NVCC_FLAGS)
     set(CMAKE_NVCC_FLAGS
         "$ENV{NVCCFLAGS}"
         CACHE STRING "NVCC flags")
-  else()
-    set(CMAKE_NVCC_FLAGS
-        "-gencode;arch=compute_60,code=sm_60;-gencode;arch=compute_70,code=sm_70;-gencode;arch=compute_80,code=sm_80;-gencode;arch=compute_90,code=sm_90"
-        CACHE STRING "NVCC flags")
   endif()
 endif()
 if(BREEZE_BUILD_TYPE MATCHES Debug)
