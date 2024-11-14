@@ -61,32 +61,6 @@ function install_gcs-sdk-cpp {
   # Install gcs dependencies
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
-  # abseil-cpp
-  github_checkout abseil/abseil-cpp 20240116.2 --depth 1
-  cmake_install \
-    -DABSL_BUILD_TESTING=OFF \
-    -DCMAKE_CXX_STANDARD=17 \
-    -DABSL_PROPAGATE_CXX_STD=ON \
-    -DABSL_ENABLE_INSTALL=ON
-
-  # protobuf
-  github_checkout protocolbuffers/protobuf v21.8 --depth 1
-  cmake_install \
-    -Dprotobuf_BUILD_TESTS=OFF \
-    -Dprotobuf_ABSL_PROVIDER=package
-
-  # grpc
-  github_checkout grpc/grpc v1.48.1 --depth 1
-  cmake_install \
-    -DgRPC_BUILD_TESTS=OFF \
-    -DgRPC_ABSL_PROVIDER=package \
-    -DgRPC_ZLIB_PROVIDER=package \
-    -DgRPC_CARES_PROVIDER=package \
-    -DgRPC_RE2_PROVIDER=package \
-    -DgRPC_SSL_PROVIDER=package \
-    -DgRPC_PROTOBUF_PROVIDER=package \
-    -DgRPC_INSTALL=ON
-
   # crc32
   github_checkout google/crc32c 1.1.2 --depth 1
   cmake_install \
@@ -180,13 +154,13 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
    if [[ "$LINUX_DISTRIBUTION" == "ubuntu" || "$LINUX_DISTRIBUTION" == "debian" ]]; then
       apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev
       # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-      apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
+      apt install -y --no-install-recommends libcurl4-openssl-dev
       # Dependencies of Azure Storage Blob cpp
       apt install -y openssl
    else # Assume Fedora/CentOS
       dnf -y install libxml2-devel libgsasl-devel libuuid-devel krb5-devel
       # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-      dnf -y install npm curl-devel c-ares-devel
+      dnf -y install npm curl-devel
       # Dependencies of Azure Storage Blob Cpp
       dnf -y install perl-IPC-Cmd
       dnf -y install openssl

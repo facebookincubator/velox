@@ -35,6 +35,7 @@ export CXXFLAGS=$(get_cxx_flags) # Used by boost.
 export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
+BUILD_ARROW_FLIGHT="${BUILD_ARROW_FLIGHT:-false}"
 USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
@@ -75,7 +76,7 @@ function install_velox_deps_from_dnf {
   dnf_install libevent-devel \
     openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
     libdwarf-devel elfutils-libelf-devel curl-devel libicu-devel bison flex \
-    libsodium-devel zlib-devel
+    libsodium-devel zlib-devel c-ares-devel
 
   # install sphinx for doc gen
   pip install sphinx sphinx-tabs breathe sphinx_rtd_theme
@@ -142,7 +143,8 @@ function install_protobuf {
     ./configure CXXFLAGS="-fPIC" --prefix=${INSTALL_PREFIX}
     make "-j${NPROC}"
     make install
-    ldconfig
+    ldconfig -v 2>/dev/null | grep "${INSTALL_PREFIX}/lib" || \
+      echo "${INSTALL_PREFIX}/lib" > /etc/ld.so.conf.d/local-libraries.conf && ldconfig
   )
 }
 
@@ -190,7 +192,38 @@ function install_stemmer {
   )
 }
 
+function install_abseil {
+  # abseil-cpp
+  github_checkout abseil/abseil-cpp 20240116.2 --depth 1
+  cmake_install \
+    -DABSL_BUILD_TESTING=OFF \
+    -DCMAKE_CXX_STANDARD=17 \
+    -DABSL_PROPAGATE_CXX_STD=ON \
+    -DABSL_ENABLE_INSTALL=ON
+}
+
+function install_grpc {
+  # grpc
+  github_checkout grpc/grpc v1.48.1 --depth 1
+  cmake_install \
+    -DgRPC_BUILD_TESTS=OFF \
+    -DgRPC_ABSL_PROVIDER=package \
+    -DgRPC_ZLIB_PROVIDER=package \
+    -DgRPC_CARES_PROVIDER=package \
+    -DgRPC_RE2_PROVIDER=package \
+    -DgRPC_SSL_PROVIDER=package \
+    -DgRPC_PROTOBUF_PROVIDER=package \
+    -DgRPC_INSTALL=ON
+}
+
 function install_arrow {
+  if $BUILD_ARROW_FLIGHT; then
+    run_and_time install_grpc
+    ARROW_FLIGHT=ON
+  else
+    ARROW_FLIGHT=OFF
+  fi
+
   wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
@@ -204,6 +237,8 @@ function install_arrow {
     -DARROW_RUNTIME_SIMD_LEVEL=NONE \
     -DARROW_WITH_UTF8PROC=OFF \
     -DARROW_TESTING=ON \
+    -DARROW_FLIGHT=${ARROW_FLIGHT} \
+    -DARROW_BUILD_BENCHMARKS=${ARROW_FLIGHT} \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BUILD_STATIC=ON \
@@ -241,6 +276,7 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_duckdb
   run_and_time install_stemmer
+  run_and_time install_abseil
   run_and_time install_arrow
 }
 

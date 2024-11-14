@@ -36,6 +36,7 @@ COMPILER_FLAGS=$(get_cxx_flags)
 export COMPILER_FLAGS
 NPROC=$(getconf _NPROCESSORS_ONLN)
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
+BUILD_ARROW_FLIGHT="${BUILD_ARROW_FLIGHT:-false}"
 export CMAKE_BUILD_TYPE=Release
 SUDO="${SUDO:-"sudo --preserve-env"}"
 USE_CLANG="${USE_CLANG:-false}"
@@ -162,8 +163,10 @@ function install_protobuf {
     cd ${DEPENDENCY_DIR}/protobuf
     ./configure CXXFLAGS="-fPIC" --prefix=${INSTALL_PREFIX}
     make "-j${NPROC}"
-    make install
-    ldconfig
+    ${SUDO} make install
+    ${SUDO} ldconfig -v 2>/dev/null | grep "${INSTALL_PREFIX}/lib" || \
+      echo "${INSTALL_PREFIX}/lib" | ${SUDO} tee /etc/ld.so.conf.d/local-libraries.conf > /dev/null \
+      && ${SUDO} ldconfig
   )
 }
 
@@ -229,7 +232,38 @@ function install_stemmer {
   )
 }
 
+function install_abseil {
+  # abseil-cpp
+  github_checkout abseil/abseil-cpp 20240116.2 --depth 1
+  cmake_install \
+    -DABSL_BUILD_TESTING=OFF \
+    -DCMAKE_CXX_STANDARD=17 \
+    -DABSL_PROPAGATE_CXX_STD=ON \
+    -DABSL_ENABLE_INSTALL=ON
+}
+
+function install_grpc {
+  # grpc
+  github_checkout grpc/grpc v1.48.1 --depth 1
+  cmake_install \
+    -DgRPC_BUILD_TESTS=OFF \
+    -DgRPC_ABSL_PROVIDER=package \
+    -DgRPC_ZLIB_PROVIDER=package \
+    -DgRPC_CARES_PROVIDER=package \
+    -DgRPC_RE2_PROVIDER=package \
+    -DgRPC_SSL_PROVIDER=package \
+    -DgRPC_PROTOBUF_PROVIDER=package \
+    -DgRPC_INSTALL=ON
+}
+
 function install_arrow {
+  if $BUILD_ARROW_FLIGHT; then
+    run_and_time install_grpc
+    ARROW_FLIGHT=ON
+  else
+    ARROW_FLIGHT=OFF
+  fi
+
   wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
@@ -243,6 +277,8 @@ function install_arrow {
     -DARROW_RUNTIME_SIMD_LEVEL=NONE \
     -DARROW_WITH_UTF8PROC=OFF \
     -DARROW_TESTING=ON \
+    -DARROW_FLIGHT=${ARROW_FLIGHT} \
+    -DARROW_BUILD_BENCHMARKS=${ARROW_FLIGHT} \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BUILD_STATIC=ON \
@@ -281,6 +317,7 @@ function install_velox_deps {
   run_and_time install_conda
   run_and_time install_duckdb
   run_and_time install_stemmer
+  run_and_time install_abseil
   run_and_time install_arrow
 }
 
