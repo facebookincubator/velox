@@ -54,7 +54,6 @@ class CudfOrderBy : public exec::Operator {
   void close() override;
 
  private:
-  std::unique_ptr<cudf::table> inputTable_;
   std::unique_ptr<cudf::table> sortedTable_;
   std::shared_ptr<const core::OrderByNode> orderByNode_;
   std::vector<RowVectorPtr> inputs_;

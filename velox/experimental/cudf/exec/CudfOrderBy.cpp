@@ -92,7 +92,7 @@ void CudfOrderBy::noMoreInput() {
   cudf::get_default_stream().synchronize();
   cudf_table_views.clear();
   cudf_tables.clear();
-  // inputs_.clear();
+  inputs_.clear();
   VELOX_CHECK_NOT_NULL(tbl);
   if (cudfDebugEnabled()) {
     std::cout << "Sort input table number of columns: " << tbl->num_columns()
@@ -104,7 +104,6 @@ void CudfOrderBy::noMoreInput() {
   auto keys = tbl->view().select(sort_keys_);
   auto values = tbl->view();
   sortedTable_ = cudf::sort_by_key(values, keys, column_order_, null_order_);
-  inputTable_ = std::move(tbl);
 }
 
 RowVectorPtr CudfOrderBy::getOutput() {
@@ -116,8 +115,9 @@ RowVectorPtr CudfOrderBy::getOutput() {
   // TODO : batching later
   // RowVectorPtr output = sortBuffer_->getOutput(maxOutputRows_);
   RowVectorPtr output =
-      with_arrow::to_velox_column(inputTable_->view(), pool(), "");
+      with_arrow::to_velox_column(sortedTable_->view(), pool(), "");
   finished_ = noMoreInput_; //(output == nullptr);
+  sortedTable_.reset();
   return output;
 }
 
