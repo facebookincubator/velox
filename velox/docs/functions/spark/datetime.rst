@@ -326,8 +326,8 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT year_of_week('2005-01-02'); -- 2004
 
-Different Behaviors Between Simple vs. Joda Date Formatter
-----------------------------------------------------------
+Simple vs. Joda Date Formatter
+------------------------------
 
 To align with Spark, Velox supports both `Simple <https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html>`_
 and `Joda <https://www.joda.org/joda-time/>`_ date formmaters to parse/format timestamp/date strings
