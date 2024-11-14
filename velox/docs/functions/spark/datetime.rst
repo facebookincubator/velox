@@ -344,8 +344,8 @@ format completely matches the string. If there is any mismatch, exception is thr
 
         SELECT get_timestamp('2015-07-22 10:00:00', 'yyyy-MM-dd'); -- timestamp `2015-07-22` (for Simple date formatter)
         SELECT get_timestamp('2015-07-22 10:00:00', 'yyyy-MM-dd'); -- (throws exception) (for Joda date formatter)
-        SELECT unix_timestamp('2016-04-08', 'yyyy-MM-dd'); -- 1460041200 (for Simple date formatter)
-        SELECT unix_timestamp('2016-04-08', 'yyyy-MM-dd'); -- (throws exception) (for Joda date formatter)
+        SELECT unix_timestamp('2016-04-08 00:00:00', 'yyyy-MM-dd'); -- 1460041200 (for Simple date formatter)
+        SELECT unix_timestamp('2016-04-08 00:00:00', 'yyyy-MM-dd'); -- (throws exception) (for Joda date formatter)
 
 For `from_unixtime` and `get_timestamp`, when `Simple` date formatter is used, null is returned for invalid
 format; otherwise, exception is thrown. ::
