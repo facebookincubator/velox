@@ -8388,11 +8388,10 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillOnBlockedProbe) {
 }
 
 TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
-  // Verify low selectivity / small vectors are combined.
-  // Three build vectors and one probe vector are created. The duplication rate
-  // of keys in the build vector is 5. Half of the rows in the build vector can
-  // find a matching key row in the probe vector.
-  // The filter condition '(t1 + u1) % 3 = 0' can filter out most of the
+  // Verify that low-selectivity or small vectors are combined.
+  // Three build vectors and one probe vector are created with a 5x key
+  // duplication rate in the build vectors. Half of the build rows have matching
+  // keys in the probe vector. The filter '(t1 + u1) % 3 == 0' filters out most
   // matching rows.
   auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
     return makeRowVector(

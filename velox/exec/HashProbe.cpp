@@ -1016,8 +1016,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       ++outputTableRowsCapacity_;
     }
 
-    // Intialize 'leftSemiProjectIsNull_' for null aware lft semi join.
+    // Initialize 'leftSemiProjectIsNull_' for a null-aware left semi join.
     if (isLeftSemiProjectJoin(joinType_) && nullAware_) {
+      leftSemiProjectIsNull_.resize(outputTableRowsCapacity_);
       leftSemiProjectIsNull_.clearAll();
     }
   }
@@ -1108,10 +1109,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
          !emptyBuildSide)) {
       accumulatedNumOutput += numOut;
 
-      // To avoid generating low seletivity / small vectors, continue the
-      // current loop to populate more results to 'outputRowMapping_' and
-      // 'outputTableRows_' until all rows in the current input are processed or
-      // the preferred number of rows has been produced.
+      // Continue the loop to populate 'outputRowMapping_' and
+      // 'outputTableRows_' until either all input rows are processed or the
+      // desired row count is reached, avoiding low-selectivity vectors.
       if (!resultIter_->atEnd() &&
           accumulatedNumOutput < operatorCtx_->driverCtx()
                                      ->queryConfig()
@@ -1488,8 +1488,6 @@ int32_t HashProbe::evalFilter(int32_t numRows, int32_t offset) {
     static const char* kPassed = "passed";
 
     if (nullAware_) {
-      leftSemiProjectIsNull_.resize(numRows + offset, false);
-
       auto addLast = [&](auto row, std::optional<bool> passed) {
         if (passed.has_value()) {
           outputTableRows[numPassed] =
