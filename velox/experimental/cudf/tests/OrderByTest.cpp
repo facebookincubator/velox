@@ -56,6 +56,11 @@ class OrderByTest : public OperatorTestBase {
          {"c3", VARCHAR()}});
   }
 
+  void TearDown() override {
+    cudf_velox::unregisterCudf();
+    OperatorTestBase::TearDown();
+  }
+
   void testSingleKey(
       const std::vector<RowVectorPtr>& input,
       const std::string& key) {
