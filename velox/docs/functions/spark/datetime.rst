@@ -326,17 +326,18 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT year_of_week('2005-01-02'); -- 2004
 
-Different Behaviors Between Simple And Joda Date Formmaters
---------------------------------
+Different Behaviors Between Simple vs. Joda Date Formatter
+----------------------------------------------------------
 
 To align with Spark, Velox supports both `Simple <https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html>`_
-and `Joda <https://www.joda.org/joda-time/>`_ date formmater to parse/format timestamp/date strings
-on the functions `from_unixtime`, `unix_timestamp`, `make_date` and `to_unix_timestamp`.
+and `Joda <https://www.joda.org/joda-time/>`_ date formmaters to parse/format timestamp/date strings
+used in functions :spark:func:`from_unixtime`, :spark:func:`unix_timestamp`, :spark:func:`make_date`
+and :spark:func:`to_unix_timestamp`.
 If the configuration setting :doc:`spark.legacy_date_formatter <../../configs>` is true,
 `Simple` date formmater in lenient mode is used; otherwise, `Joda` is used. It is important
 to note that there are some different behaviors between these two formatters.
 
-For `unix_timestamp` and `get_timestamp`, the `Simple` date formatter permits partial date parsing
+For :spark:func:`unix_timestamp` and :spark:func:`get_timestamp`, the `Simple` date formatter permits partial date parsing
 which means that format can match only a part of input string. For example, if input string is
 2015-07-22 10:00:00, it can be parsed using format is yyyy-MM-dd because the parser does not require entire
 input to be consumed. In contrast, the `Joda` date formatter performs strict checks to ensure that the
@@ -347,8 +348,8 @@ format completely matches the string. If there is any mismatch, exception is thr
         SELECT unix_timestamp('2016-04-08 00:00:00', 'yyyy-MM-dd'); -- 1460041200 (for Simple date formatter)
         SELECT unix_timestamp('2016-04-08 00:00:00', 'yyyy-MM-dd'); -- (throws exception) (for Joda date formatter)
 
-For `from_unixtime` and `get_timestamp`, when `Simple` date formatter is used, null is returned for invalid
-format; otherwise, exception is thrown. ::
+For :spark:func:`from_unixtime` and :spark:func:`get_timestamp`, when `Simple` date formatter is used, null is
+returned for invalid format; otherwise, exception is thrown. ::
 
         SELECT from_unixtime(100, '!@#$%^&*'); -- NULL (parsing error) (for Simple date formatter)
         SELECT from_unixtime(100, '!@#$%^&*'); -- throws exception) (for Joda date formatter)
