@@ -108,3 +108,8 @@ target_link_libraries(
   velox_vector_test_lib
   velox_window
   ${FOLLY_BENCHMARK})
+
+add_executable(velox_crc32_benchmark Crc32Benchmark.cpp)
+
+target_link_libraries(
+  velox_crc32_benchmark velox_exec velox_vector_test_lib ${FOLLY_BENCHMARK})
