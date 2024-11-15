@@ -33,7 +33,7 @@ namespace facebook::velox::cudf_velox {
 class CudfHashJoinBridge : public exec::JoinBridge {
  public:
   using hash_type =
-      std::pair<std::unique_ptr<cudf::table>, std::shared_ptr<cudf::hash_join>>;
+      std::pair<std::shared_ptr<cudf::table>, std::shared_ptr<cudf::hash_join>>;
 
   void setHashTable(std::optional<hash_type> hashObject);
 
