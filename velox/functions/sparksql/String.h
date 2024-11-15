@@ -1396,11 +1396,11 @@ struct LevenshteinDistanceFunction {
       distances.push_back(INT32_MAX);
     }
 
-    for (auto i = 0; i < leftCodePointsSize; i++) {
-      auto lower = std::max<int32_t>(0, i - threshold);
+    for (auto i_2 = 0; i_2 < leftCodePointsSize; i_2++) {
+      auto lower = std::max<int32_t>(0, i_2 - threshold);
       int32_t maxValueWithThreshold;
       int32_t upper = rightCodePointsSize;
-      if (!__builtin_add_overflow(i + 1, threshold, &maxValueWithThreshold)) {
+      if (!__builtin_add_overflow(i_2 + 1, threshold, &maxValueWithThreshold)) {
         upper = std::min<int32_t>(rightCodePointsSize, maxValueWithThreshold);
       }
       if (lower > upper) {
@@ -1410,10 +1410,10 @@ struct LevenshteinDistanceFunction {
       int32_t leftUpDistance;
       if (lower == 0) {
         leftUpDistance = distances[lower];
-        if (leftCodePoints[i] == rightCodePoints[0]) {
-          distances[0] = i;
+        if (leftCodePoints[i_2] == rightCodePoints[0]) {
+          distances[0] = i_2;
         } else {
-          distances[0] = std::min(i, distances[0]) + 1;
+          distances[0] = std::min(i_2, distances[0]) + 1;
         }
         lower = 1;
       } else {
@@ -1423,7 +1423,7 @@ struct LevenshteinDistanceFunction {
       }
       for (int j = lower; j < upper; j++) {
         auto leftUpDistanceNext = distances[j];
-        if (leftCodePoints[i] == rightCodePoints[j]) {
+        if (leftCodePoints[i_2] == rightCodePoints[j]) {
           distances[j] = leftUpDistance;
         } else {
           distances[j] =
