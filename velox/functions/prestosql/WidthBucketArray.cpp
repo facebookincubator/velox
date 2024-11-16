@@ -22,6 +22,13 @@
 namespace facebook::velox::functions {
 namespace {
 
+// Presto Java seems implicitly treating null elements as zeros.
+// Adhere to this behavior for now.
+template <typename T>
+T valueOrZero(const DecodedVector& elementsHolder, vector_size_t idx) {
+  return elementsHolder.isNullAt(idx) ? T{0} : elementsHolder.valueAt<T>(idx);
+}
+
 template <typename T>
 int64_t widthBucket(
     double operand,
@@ -35,12 +42,12 @@ int64_t widthBucket(
   int upper = binCount;
   while (lower < upper) {
     VELOX_USER_CHECK_LE(
-        elementsHolder.valueAt<T>(offset + lower),
-        elementsHolder.valueAt<T>(offset + upper - 1),
+        valueOrZero<T>(elementsHolder, offset + lower),
+        valueOrZero<T>(elementsHolder, offset + upper - 1),
         "Bin values are not sorted in ascending order");
 
-    int index = (lower + upper) / 2;
-    auto bin = elementsHolder.valueAt<T>(offset + index);
+    const int index = (lower + upper) / 2;
+    const auto bin = valueOrZero<T>(elementsHolder, offset + index);
 
     VELOX_USER_CHECK(std::isfinite(bin), "Bin value must be finite");
 

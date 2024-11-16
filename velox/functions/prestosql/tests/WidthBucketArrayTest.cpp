@@ -30,6 +30,14 @@ class WidthBucketArrayTest : public FunctionBaseTest {
   static constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 };
 
+// Sets the specified value to the array vector's element vector at the given
+// position w/o changing null flag.
+template <typename T>
+void setArrayElementValue(VectorPtr arrayVector, vector_size_t idx, T value) {
+  auto elementsVector = arrayVector->as<ArrayVector>()->elements();
+  elementsVector->asFlatVector<T>()->mutableRawValues()[idx] = value;
+}
+
 TEST_F(WidthBucketArrayTest, success) {
   VectorPtr binsVector;
   auto testWidthBucketArray = [&](const double operand,
@@ -61,19 +69,44 @@ TEST_F(WidthBucketArrayTest, success) {
     assertEqualVectors(dictExpected, dictResult);
   };
 
-  {
-    binsVector = makeArrayVector<double>({{0.0, 2.0, 4.0}, {0.0}});
-    testWidthBucketArray(3.14, {2, 1});
-    testWidthBucketArray(kInf, {3, 1});
-    testWidthBucketArray(-1, {0, 0});
-  }
+  binsVector = makeArrayVector<double>({{0.0, 2.0, 4.0}, {0.0}});
+  testWidthBucketArray(3.14, {2, 1});
+  testWidthBucketArray(kInf, {3, 1});
+  testWidthBucketArray(-1, {0, 0});
 
-  {
-    binsVector = makeArrayVector<int64_t>({{0, 2, 4}, {0}});
-    testWidthBucketArray(3.14, {2, 1});
-    testWidthBucketArray(kInf, {3, 1});
-    testWidthBucketArray(-1, {0, 0});
-  }
+  binsVector = makeArrayVector<int64_t>({{0, 2, 4}, {0}});
+  testWidthBucketArray(3.14, {2, 1});
+  testWidthBucketArray(kInf, {3, 1});
+  testWidthBucketArray(-1, {0, 0});
+
+  binsVector = makeNullableArrayVector<double>(
+      {{0.0, 2.0, 4.0}, {std::nullopt}, {0.7}, {std::nullopt}});
+  testWidthBucketArray(3.14, {2, 1, 1, 1});
+  testWidthBucketArray(kInf, {3, 1, 1, 1});
+  testWidthBucketArray(-1, {0, 0, 0, 0});
+
+  binsVector =
+      makeNullableArrayVector<double>({{0.0, 2.0, 4.0}, {std::nullopt}});
+  setArrayElementValue(binsVector, 5, 11.0);
+  testWidthBucketArray(1, {1, 1});
+  testWidthBucketArray(0, {1, 1});
+  testWidthBucketArray(-1, {0, 0});
+  setArrayElementValue(binsVector, 5, -11.0);
+  testWidthBucketArray(1, {1, 1});
+  testWidthBucketArray(0, {1, 1});
+  testWidthBucketArray(-1, {0, 0});
+
+  // Ensure we have some unexpected value (7.0) at the null element.
+  binsVector = makeNullableArrayVector<double>(
+      {{0.0, 2.0, 4.0}, {-4, -3, std::nullopt, 1}});
+  setArrayElementValue(binsVector, 5, 7.0);
+  testWidthBucketArray(1, {1, 4});
+  testWidthBucketArray(0, {1, 3});
+  testWidthBucketArray(-1, {0, 2});
+  testWidthBucketArray(-2, {0, 2});
+  testWidthBucketArray(-3, {0, 2});
+  testWidthBucketArray(-4, {0, 1});
+  testWidthBucketArray(-5, {0, 0});
 }
 
 TEST_F(WidthBucketArrayTest, failure) {
