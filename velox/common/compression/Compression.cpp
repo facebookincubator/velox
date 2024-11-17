@@ -98,4 +98,24 @@ CompressionKind stringToCompressionKind(const std::string& kind) {
     VELOX_UNSUPPORTED("Not support compression kind {}", kind);
   }
 }
+
+std::string fileNameSuffix(CompressionKind kind) {
+  switch (static_cast<int32_t>(kind)) {
+    case CompressionKind_ZLIB:
+      return ".zlib";
+    case CompressionKind_SNAPPY:
+      return ".snappy";
+    case CompressionKind_LZO:
+      return ".lzo";
+    case CompressionKind_ZSTD:
+      return ".zstd";
+    case CompressionKind_LZ4:
+      return ".lz4";
+    case CompressionKind_GZIP:
+      return ".gz";
+    case CompressionKind_NONE:
+    default:
+      return "";
+  }
+}
 } // namespace facebook::velox::common

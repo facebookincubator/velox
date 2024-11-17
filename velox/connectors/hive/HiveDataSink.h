@@ -467,6 +467,9 @@ class HiveDataSink : public DataSink {
 
   bool canReclaim() const;
 
+  // For testing: check the write file name.
+  std::string writeFileName() const;
+
  private:
   // Validates the state transition from 'oldState' to 'newState'.
   void checkStateTransition(State oldState, State newState);

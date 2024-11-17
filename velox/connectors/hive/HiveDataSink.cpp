@@ -939,8 +939,16 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
       insertTableHandle_->storageFormat() ==
           dwio::common::FileFormat::PARQUET) {
     return {
-        fmt::format("{}{}", targetFileName, ".parquet"),
-        fmt::format("{}{}", writeFileName, ".parquet")};
+        fmt::format(
+            "{}{}{}",
+            targetFileName,
+            insertTableHandle_->compressionKind(),
+            ".parquet"),
+        fmt::format(
+            "{}{}{}",
+            writeFileName,
+            insertTableHandle_->compressionKind(),
+            ".parquet")};
   }
   return {targetFileName, writeFileName};
 }
@@ -1184,5 +1192,9 @@ uint64_t HiveDataSink::WriterReclaimer::reclaim(
         pool->treeMemoryUsage());
   }
   return reclaimedBytes;
+}
+
+std::string HiveDataSink::writeFileName() const {
+  return getWriterFileNames(std::nullopt).second;
 }
 } // namespace facebook::velox::connector::hive

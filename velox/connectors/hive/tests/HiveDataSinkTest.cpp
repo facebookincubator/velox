@@ -144,7 +144,9 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
           bucketProperty = nullptr,
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
-          nullptr) {
+          nullptr,
+      const CompressionKind compressionKind =
+          CompressionKind::CompressionKind_ZSTD) {
     return makeHiveInsertTableHandle(
         outputRowType->names(),
         outputRowType->children(),
@@ -155,7 +157,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             std::nullopt,
             connector::hive::LocationHandle::TableType::kNew),
         fileFormat,
-        CompressionKind::CompressionKind_ZSTD,
+        compressionKind,
         {},
         writerOptions);
   }
@@ -168,7 +170,9 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
           bucketProperty = nullptr,
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
-          nullptr) {
+          nullptr,
+      const CompressionKind compressionKind =
+          CompressionKind::CompressionKind_ZSTD) {
     return std::make_shared<HiveDataSink>(
         rowType,
         createHiveInsertTableHandle(
@@ -177,7 +181,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             fileFormat,
             partitionedBy,
             bucketProperty,
-            writerOptions),
+            writerOptions,
+            compressionKind),
         connectorQueryCtx_.get(),
         CommitStrategy::kNoCommit,
         connectorConfig_);
@@ -1168,6 +1173,43 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   EXPECT_EQ(fileMeta.numRowGroups(), 10);
   EXPECT_EQ(fileMeta.rowGroup(0).numRows(), 500);
 }
+
+TEST_F(HiveDataSinkTest, parquetCompressionFileName) {
+  auto checkFileSuffix = [this](
+                             const CompressionKind compression,
+                             std::string_view expectedSuffix) {
+    auto endsWith = [](std::string_view str, std::string_view suffix) {
+      if (str.length() < suffix.length()) {
+        return false;
+      }
+      return (
+          0 ==
+          str.compare(str.length() - suffix.length(), suffix.length(), suffix));
+    };
+    auto dataSink = createDataSink(
+        rowType_,
+        "/path/to/test",
+        dwio::common::FileFormat::PARQUET,
+        {},
+        nullptr,
+        nullptr,
+        compression);
+    auto writeFileName = dataSink->writeFileName();
+    VELOX_CHECK(
+        endsWith(writeFileName, expectedSuffix),
+        "{} not end with {}",
+        writeFileName,
+        expectedSuffix);
+  };
+  checkFileSuffix(CompressionKind::CompressionKind_NONE, ".parquet");
+  checkFileSuffix(CompressionKind::CompressionKind_ZLIB, ".zlib.parquet");
+  checkFileSuffix(CompressionKind::CompressionKind_SNAPPY, ".snappy.parquet");
+  checkFileSuffix(CompressionKind::CompressionKind_LZO, ".lzo.parquet");
+  checkFileSuffix(CompressionKind::CompressionKind_ZSTD, ".zstd.parquet");
+  checkFileSuffix(CompressionKind::CompressionKind_LZ4, ".lz4.parquet");
+  checkFileSuffix(CompressionKind::CompressionKind_GZIP, ".gz.parquet");
+}
+
 #endif
 
 TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {

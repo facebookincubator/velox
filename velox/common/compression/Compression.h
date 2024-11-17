@@ -42,6 +42,8 @@ std::string compressionKindToString(CompressionKind kind);
 
 CompressionKind stringToCompressionKind(const std::string& kind);
 
+std::string fileNameSuffix(CompressionKind kind);
+
 constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
 
 } // namespace facebook::velox::common
@@ -54,5 +56,18 @@ struct fmt::formatter<facebook::velox::common::CompressionKind>
       format_context& ctx) const {
     return formatter<std::string>::format(
         facebook::velox::common::compressionKindToString(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<std::optional<facebook::velox::common::CompressionKind>>
+    : fmt::formatter<std::string> {
+  auto format(
+      const std::optional<facebook::velox::common::CompressionKind>& s,
+      format_context& ctx) {
+    return formatter<std::string>::format(
+        facebook::velox::common::fileNameSuffix(s.value_or(
+            facebook::velox::common::CompressionKind::CompressionKind_NONE)),
+        ctx);
   }
 };
