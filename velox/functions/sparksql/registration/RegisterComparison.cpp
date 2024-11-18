@@ -13,10 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/sparksql/RegisterCompare.h"
-
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/sparksql/Comparisons.h"
+#include "velox/functions/sparksql/LeastGreatest.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -32,6 +31,11 @@ void registerCompareFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "lessthanorequal", comparisonSignatures(), makeLessThanOrEqual);
   exec::registerStatefulVectorFunction(
+      prefix + "least",
+      leastSignatures(),
+      makeLeast,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
+  exec::registerStatefulVectorFunction(
       prefix + "greaterthanorequal",
       comparisonSignatures(),
       makeGreaterThanOrEqual);
@@ -43,6 +47,11 @@ void registerCompareFunctions(const std::string& prefix) {
       exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
   registerFunction<EqualNullSafeFunction, bool, Generic<T1>, Generic<T1>>(
       {prefix + "equalnullsafe"});
+  exec::registerStatefulVectorFunction(
+      prefix + "greatest",
+      greatestSignatures(),
+      makeGreatest,
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>(
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, int16_t, int16_t, int16_t>(

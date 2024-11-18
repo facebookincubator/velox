@@ -13,17 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
-
-#include <string>
-#include <vector>
+#include "velox/expression/RegisterSpecialForm.h"
+#include "velox/expression/SpecialFormRegistry.h"
+#include "velox/functions/sparksql/specialforms/DecimalRound.h"
+#include "velox/functions/sparksql/specialforms/MakeDecimal.h"
+#include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
 namespace facebook::velox::functions::sparksql {
 
-void registerFunctions(const std::string& prefix);
-
-/// Return all the registered scalar function names include simple functions,
-/// vector functions and special forms.
-std::vector<std::string> listFunctionNames();
+void registerSpecialFormGeneralFunctions(const std::string& prefix) {
+  exec::registerFunctionCallToSpecialForms();
+  exec::registerFunctionCallToSpecialForm(
+      MakeDecimalCallToSpecialForm::kMakeDecimal,
+      std::make_unique<MakeDecimalCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      DecimalRoundCallToSpecialForm::kRoundDecimal,
+      std::make_unique<DecimalRoundCallToSpecialForm>());
+}
 
 } // namespace facebook::velox::functions::sparksql
