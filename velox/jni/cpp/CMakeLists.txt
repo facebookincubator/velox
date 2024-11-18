@@ -30,8 +30,7 @@ velox_add_library(jni SHARED
         memory/MemoryManager.cpp
         memory/NativeMemoryManger.cc
         common/Global.cc
-        functions/RegistrationAllFunctions.cc
-)
+        functions/RegistrationAllFunctions.cc)
 
 velox_link_libraries(jni 
         velox_type
