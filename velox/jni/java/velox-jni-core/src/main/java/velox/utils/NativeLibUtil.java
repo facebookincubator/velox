@@ -55,7 +55,7 @@ public class NativeLibUtil {
           .getCodeSource().getLocation().toURI().getPath();
 
       // Check if the JAR file contains the library
-      if (jarPath.endsWith("velox-sdk-core.jar")) {
+      if (jarPath.endsWith("velox-jni-core.jar")) {
         // Create a temporary directory to extract the .so file
         Path tempDir = Files.createTempDirectory("nativeLibs");
 
