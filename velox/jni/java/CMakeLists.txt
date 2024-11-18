@@ -17,15 +17,15 @@ set(ENV{CMAKE_BINARY_DIR} ${CMAKE_BINARY_DIR})
 find_program(MAVEN_EXECUTABLE NAMES mvn)
 
 if(NOT MAVEN_EXECUTABLE)
-    message(FATAL_ERROR "Could not find mvn executable")
+  message(FATAL_ERROR "Could not find mvn executable")
 endif()
 message("WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}")
 
 message(STATUS "Build directory: ${CMAKE_BINARY_DIR}")
 
-
-add_custom_target(velox-jni-build
-        COMMAND ${CMAKE_COMMAND} -E env CMAKE_BINARY_DIR=${CMAKE_BINARY_DIR} ${MAVEN_EXECUTABLE} -B clean package
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/velox/jni/java
-        COMMENT "Building Java project with Maven"
-)
+add_custom_target(
+  velox-jni-build
+  COMMAND ${CMAKE_COMMAND} -E env CMAKE_BINARY_DIR=${CMAKE_BINARY_DIR}
+          ${MAVEN_EXECUTABLE} -B clean package
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/velox/jni/java
+  COMMENT "Building Java project with Maven")

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,11 +23,11 @@
 #define JNI_METHOD_START try {
 // macro ended
 
-#define JNI_METHOD_END(fallback_expr)                                              \
-  }                                                                                \
-  catch (std::exception & e) {                                                     \
+#define JNI_METHOD_END(fallback_expr)                                      \
+  }                                                                        \
+  catch (std::exception & e) {                                             \
     env->ThrowNew(getJniErrorsState()->runtimeExceptionClass(), e.what()); \
-    return fallback_expr;                                                          \
+    return fallback_expr;                                                  \
   }
 // macro ended
 
@@ -42,8 +42,6 @@ static inline void throwPendingException(const std::string& message) {
   throw JniPendingException(message);
 }
 
-
-
 static inline void jniThrow(const std::string& message) {
   throwPendingException(message);
 }
@@ -54,17 +52,23 @@ struct JniErrorsGlobalState {
 
   void initialize(JNIEnv* env) {
     std::lock_guard<std::mutex> lockGuard(mtx_);
-    ioExceptionClass_ = createGlobalClassReference(env, "Ljava/io/IOException;");
-    runtimeExceptionClass_ = createGlobalClassReference(env, "Ljava/lang/RuntimeException;");
-    unsupportedoperationExceptionClass_ = createGlobalClassReference(env, "Ljava/lang/UnsupportedOperationException;");
-    illegalAccessExceptionClass_ = createGlobalClassReference(env, "Ljava/lang/IllegalAccessException;");
-    illegalArgumentExceptionClass_ = createGlobalClassReference(env, "Ljava/lang/IllegalArgumentException;");
+    ioExceptionClass_ =
+        createGlobalClassReference(env, "Ljava/io/IOException;");
+    runtimeExceptionClass_ =
+        createGlobalClassReference(env, "Ljava/lang/RuntimeException;");
+    unsupportedoperationExceptionClass_ = createGlobalClassReference(
+        env, "Ljava/lang/UnsupportedOperationException;");
+    illegalAccessExceptionClass_ =
+        createGlobalClassReference(env, "Ljava/lang/IllegalAccessException;");
+    illegalArgumentExceptionClass_ =
+        createGlobalClassReference(env, "Ljava/lang/IllegalArgumentException;");
   }
 
   jclass runtimeExceptionClass() {
     std::lock_guard<std::mutex> lockGuard(mtx_);
     if (runtimeExceptionClass_ == nullptr) {
-      VELOX_USER_FAIL("Fatal: JniGlobalState::Initialize(...) was not called before using the utility");
+      VELOX_USER_FAIL(
+          "Fatal: JniGlobalState::Initialize(...) was not called before using the utility");
     }
     return runtimeExceptionClass_;
   }
@@ -72,7 +76,8 @@ struct JniErrorsGlobalState {
   jclass illegalAccessExceptionClass() {
     std::lock_guard<std::mutex> lockGuard(mtx_);
     if (illegalAccessExceptionClass_ == nullptr) {
-      VELOX_USER_FAIL("Fatal: JniGlobalState::Initialize(...) was not called before using the utility");
+      VELOX_USER_FAIL(
+          "Fatal: JniGlobalState::Initialize(...) was not called before using the utility");
     }
     return illegalAccessExceptionClass_;
   }
@@ -84,8 +89,7 @@ struct JniErrorsGlobalState {
   jclass illegalAccessExceptionClass_ = nullptr;
   jclass illegalArgumentExceptionClass_ = nullptr;
   std::mutex mtx_;
-
-} ;
+};
 
 JniErrorsGlobalState* getJniErrorsState();
-}
+} // namespace facebook::velox::sdk

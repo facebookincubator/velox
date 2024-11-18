@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 #include "folly/json/dynamic.h"
 #include "velox/jni/cpp/common/Global.h"
 
-
 namespace facebook::velox::memory {
 class MemoryPool;
 }
@@ -30,7 +29,8 @@ class MemoryManager {
   std::shared_ptr<velox::memory::MemoryPool> rootVeloxMemoryPool();
   std::shared_ptr<velox::memory::MemoryPool> defaultLeafVeloxMemoryPool();
   std::shared_ptr<facebook::velox::memory::MemoryPool> createQueryPool(
-      const std::string& queryId, int64_t bytes);
+      const std::string& queryId,
+      int64_t bytes);
   std::shared_ptr<velox::memory::MemoryPool> planMemoryPool();
   folly::dynamic toJsonString(
       std::shared_ptr<velox::memory::MemoryPool> memoryPool);

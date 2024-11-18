@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,9 +17,7 @@
 #include "gflags/gflags.h"
 #ifndef GLOBAL_H
 #define GLOBAL_H
-DECLARE_int64(
-    max_root_memory_bytes);
+DECLARE_int64(max_root_memory_bytes);
 
-DECLARE_int64(
-    max_query_memory_bytes);
-#endif //GLOBAL_H
+DECLARE_int64(max_query_memory_bytes);
+#endif // GLOBAL_H

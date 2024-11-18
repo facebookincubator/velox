@@ -12,42 +12,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 find_package(JNI REQUIRED)
 
-if (VELOX_ENABLE_JNI_BINDINGS_REF_DEBUG)
-    add_definitions(-DVELOX_ENABLE_JNI_BINDINGS_REF_DEBUG)
-endif ()
+if(VELOX_ENABLE_JNI_BINDINGS_REF_DEBUG)
+  add_definitions(-DVELOX_ENABLE_JNI_BINDINGS_REF_DEBUG)
+endif()
 
 include_directories(${JNI_INCLUDE_DIRS})
 
-velox_add_library(jni SHARED
-        jni/VeloxJniWrapper.cc
-        jni/JniErrors.cc
-        jni/JniUtil.cc
-        native/NativePlanBuilder.cc
-        native/NativeClass.cc
-        memory/MemoryManager.cpp
-        memory/NativeMemoryManger.cc
-        common/Global.cc
-        functions/RegistrationAllFunctions.cc)
+velox_add_library(
+  jni
+  SHARED
+  jni/VeloxJniWrapper.cc
+  jni/JniErrors.cc
+  jni/JniUtil.cc
+  native/NativePlanBuilder.cc
+  native/NativeClass.cc
+  memory/MemoryManager.cpp
+  memory/NativeMemoryManger.cc
+  common/Global.cc
+  functions/RegistrationAllFunctions.cc)
 
-velox_link_libraries(jni 
-        velox_type
-        velox_vector
-        velox_exec
-        velox_exec_test_lib
-        velox_parse_expression
-        velox_hive_connector
-        velox_memory
-        velox_dwio_parquet_reader
-        velox_functions_prestosql_impl
-        velox_functions_spark
-        velox_aggregates
-        velox_functions_spark_aggregates
-        velox_window
-        velox_vector
-        velox_functions_spark_window
-        velox_exec_test_lib)
-
-
+velox_link_libraries(
+  jni
+  velox_type
+  velox_vector
+  velox_exec
+  velox_exec_test_lib
+  velox_parse_expression
+  velox_hive_connector
+  velox_memory
+  velox_dwio_parquet_reader
+  velox_functions_prestosql_impl
+  velox_functions_spark
+  velox_aggregates
+  velox_functions_spark_aggregates
+  velox_window
+  velox_vector
+  velox_functions_spark_window
+  velox_exec_test_lib)

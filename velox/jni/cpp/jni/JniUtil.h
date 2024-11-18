@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ class JniUtil {
       const std::string& methodName,
       const std::string& sig,
       bool isStatic = false);
-  
+
   static JNIEnv* GetJNIEnv() {
     int rc = g_vm->GetEnv(reinterpret_cast<void**>(&tls_env_), JNI_VERSION_1_8);
     VELOX_CHECK_EQ(rc, 0, "Unable to get JVM");
