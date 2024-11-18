@@ -1,0 +1,32 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set(ENV{CMAKE_BINARY_DIR} ${CMAKE_BINARY_DIR})
+
+find_program(MAVEN_EXECUTABLE NAMES mvn)
+
+if(NOT MAVEN_EXECUTABLE)
+    message(FATAL_ERROR "Could not find mvn executable")
+endif()
+message("WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}")
+
+message(STATUS "Build directory: ${CMAKE_BINARY_DIR}")
+
+
+# 添加一个自定义命令，它将依赖于自定义目标
+add_custom_target(velox-jni-build
+        COMMAND ${CMAKE_COMMAND} -E env CMAKE_BINARY_DIR=${CMAKE_BINARY_DIR} ${MAVEN_EXECUTABLE} -B clean package
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/velox/jni/java
+        COMMENT "Building Java project with Maven"
+)
