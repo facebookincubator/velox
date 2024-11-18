@@ -17,9 +17,9 @@
 #ifndef NATIVECLASS_HPP
 #define NATIVECLASS_HPP
 #include <jni.h>
-#include "velox/jni/cpp/jni/JniErrors.h"
-
 #include <string>
+
+#include "velox/jni/cpp/jni/JniErrors.h"
 #include "velox/jni/cpp/jni/JniUtil.h"
 
 namespace facebook::velox::sdk::jni {
@@ -33,7 +33,6 @@ static std::string GetObjectTypeSignature(std::string baseTypeSignature) {
   return basic_string;
 }
 
-// Java基本类型及其JNI签名
 static const char* kTypeBoolean = "Z";
 static const char* kTypeByte = "B";
 static const char* kTypeChar = "C";
