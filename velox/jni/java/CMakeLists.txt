@@ -24,7 +24,6 @@ message("WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}")
 message(STATUS "Build directory: ${CMAKE_BINARY_DIR}")
 
 
-# 添加一个自定义命令，它将依赖于自定义目标
 add_custom_target(velox-jni-build
         COMMAND ${CMAKE_COMMAND} -E env CMAKE_BINARY_DIR=${CMAKE_BINARY_DIR} ${MAVEN_EXECUTABLE} -B clean package
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/velox/jni/java
