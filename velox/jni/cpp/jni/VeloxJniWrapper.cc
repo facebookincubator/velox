@@ -1,12 +1,11 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,14 +14,14 @@
  * limitations under the License.
  */
 
-#include <core/ITypedExpr.h>
-#include <core/PlanNode.h>
-#include <exec/PartitionFunction.h>
 #include <jni.h>
+#include "velox/core/ITypedExpr.h"
+#include "velox/core/PlanNode.h"
+#include "velox/exec/PartitionFunction.h"
 
 #include <glog/logging.h>
-#include <velox/jni/cpp/memory/NativeMemoryManager.hpp>
 #include <serializers/PrestoSerializer.h>
+#include <velox/jni/cpp/memory/NativeMemoryManager.hpp>
 
 #include "JniCommon.h"
 #include "velox/jni/cpp/functions/RegistrationAllFunctions.h"

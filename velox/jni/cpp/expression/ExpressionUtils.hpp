@@ -1,12 +1,11 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+* Copyright (c) Facebook, Inc. and its affiliates.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,14 +18,13 @@
 #define EXPRESSIONUTILS_HPP
 
 #include <boost/type_index.hpp>
-#include <exec/WindowFunction.h>
-#include <expression/SignatureBinder.h>
+#include "velox/exec/WindowFunction.h"
+#include "velox/expression/SignatureBinder.h"
 #include "velox/jni/cpp/memory/MemoryManager.h"
 
 #include "velox/expression/Expr.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
-#include "velox/parse/TypeResolver.h"
 
 #include <jni.h>
 #include <type/fbhive/HiveTypeParser.h>
@@ -90,14 +88,12 @@ class ExprUtils {
         folly::parseJson(json, getSerializationOptions()));
   }
 
-  // 将Spark的字段类型转换为Velox的Type
   static TypePtr convertSparkFieldToVelox(const folly::dynamic& field) {
     if (field["type"].isObject()) {
       return convertSparkStructToVelox(field);
     }
     auto type = field["type"].asString();
 
-    // 这个例子没有处理nullable字段，实际使用时你可能需要考虑这个字段
 
     if (type == "integer") {
       return INTEGER();
@@ -116,7 +112,6 @@ class ExprUtils {
     }
   }
 
-  // 将Spark的StructType转换为Velox的Type
   static TypePtr convertSparkStructToVelox(const folly::dynamic& sparkStruct) {
     std::vector<TypePtr> fields;
     std::vector<std::string> names;
