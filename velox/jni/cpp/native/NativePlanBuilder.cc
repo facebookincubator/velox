@@ -16,11 +16,14 @@
 
 #include <iostream>
 
+#include "NativePlanBuilder.hpp"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/jni/cpp/jni/JniErrors.h"
 #include "velox/jni/cpp/jni/JniUtil.h"
-#include "NativePlanBuilder.hpp"
+
+#include "velox/parse/TypeResolver.h"
+
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/jni/cpp/utils/JsonUtils.h"
 
