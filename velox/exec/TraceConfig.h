@@ -16,10 +16,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_set>
-#include <cstdint>
 
 namespace facebook::velox::exec::trace {
 
