@@ -229,8 +229,7 @@ struct PowerFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void
   call(double& result, const TInput& a, const TInput& b) {
-    result =
-        std::isnan(b) ? std::numeric_limits<double>::quiet_NaN() : pow(a, b);
+    result = 0.0;
   }
 };
 
