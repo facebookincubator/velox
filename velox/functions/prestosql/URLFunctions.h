@@ -74,8 +74,9 @@ FOLLY_ALWAYS_INLINE void urlEscape(TOutString& output, const TInString& input) {
       outputBuffer[outIndex++] = '+';
       inputIndex++;
     } else {
-      const auto charLength =
-          tryGetCharLength(inputBuffer + inputIndex, inputSize - inputIndex);
+      int32_t codePoint;
+      const auto charLength = tryGetCharLength(
+          inputBuffer + inputIndex, inputSize - inputIndex, codePoint);
       if (charLength > 0) {
         for (int i = 0; i < charLength; ++i) {
           charEscape(inputBuffer[inputIndex + i], outputBuffer + outIndex);

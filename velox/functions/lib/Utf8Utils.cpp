@@ -61,7 +61,7 @@ int firstByteCharLength(const char* u_input) {
 
 } // namespace
 
-int32_t tryGetCharLength(const char* input, int64_t size) {
+int32_t tryGetCharLength(const char* input, int64_t size, int32_t& codePoint) {
   VELOX_DCHECK_NOT_NULL(input);
   VELOX_DCHECK_GT(size, 0);
 
@@ -72,6 +72,7 @@ int32_t tryGetCharLength(const char* input, int64_t size) {
 
   if (charLength == 1) {
     // Normal ASCII: 0xxx_xxxx.
+    codePoint = input[0];
     return 1;
   }
 
@@ -89,7 +90,7 @@ int32_t tryGetCharLength(const char* input, int64_t size) {
 
   if (charLength == 2) {
     // 110x_xxxx 10xx_xxxx
-    int codePoint = ((firstByte & 0b00011111) << 6) | (secondByte & 0b00111111);
+    codePoint = ((firstByte & 0b00011111) << 6) | (secondByte & 0b00111111);
     // Fail if overlong encoding.
     return codePoint < 0x80 ? -2 : 2;
   }
@@ -106,7 +107,7 @@ int32_t tryGetCharLength(const char* input, int64_t size) {
 
   if (charLength == 3) {
     // 1110_xxxx 10xx_xxxx 10xx_xxxx
-    int codePoint = ((firstByte & 0b00001111) << 12) |
+    codePoint = ((firstByte & 0b00001111) << 12) |
         ((secondByte & 0b00111111) << 6) | (thirdByte & 0b00111111);
 
     // Surrogates are invalid.
@@ -132,7 +133,7 @@ int32_t tryGetCharLength(const char* input, int64_t size) {
 
   if (charLength == 4) {
     // 1111_0xxx 10xx_xxxx 10xx_xxxx 10xx_xxxx
-    int codePoint = ((firstByte & 0b00000111) << 18) |
+    codePoint = ((firstByte & 0b00000111) << 18) |
         ((secondByte & 0b00111111) << 12) | ((thirdByte & 0b00111111) << 6) |
         (forthByte & 0b00111111);
     // Fail if overlong encoding or above upper bound of Unicode.
