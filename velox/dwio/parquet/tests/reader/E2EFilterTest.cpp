@@ -414,7 +414,7 @@ TEST_F(E2EFilterTest, longDecimalDictionary) {
               true);
         },
         true,
-        {},
+        {"longdecimal_val"},
         20);
   }
 }
