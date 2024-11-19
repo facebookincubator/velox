@@ -180,7 +180,7 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
       queryCtx->queryId(),
-      8'388'608 /* 8MB */,
+      4'194'304 /* 4MB */,
       exec::MemoryReclaimer::create()));
 
   params.queryCtx = queryCtx;
