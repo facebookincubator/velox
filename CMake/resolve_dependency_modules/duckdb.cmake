@@ -13,9 +13,9 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_DUCKDB_VERSION 0.8.1)
+set(VELOX_DUCKDB_VERSION 1.1.1)
 set(VELOX_DUCKDB_BUILD_SHA256_CHECKSUM
-    a0674f7e320dc7ebcf51990d7fc1c0e7f7b2c335c08f5953702b5285e6c30694)
+    a764cef80287ccfd8555884d8facbe962154e7c747043c0842cd07873b4d6752)
 set(VELOX_DUCKDB_SOURCE_URL
     "https://github.com/duckdb/duckdb/archive/refs/tags/v${VELOX_DUCKDB_VERSION}.tar.gz"
 )

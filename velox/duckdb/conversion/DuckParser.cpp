@@ -195,22 +195,47 @@ std::shared_ptr<const core::IExpr> parseColumnRefExpr(
               colRefExpr.GetTableName(), std::nullopt)});
 }
 
+// DuckDB parses intervals such as "INTERVAL 5 HOURS" as the following
+// expression:
+//
+// > "to_hours(CAST(trunc(CAST(5 AS DOUBLE)) AS BIGINT))"
+//
+// This format is also valid:
+//
+// > "to_seconds(CAST(7 AS DOUBLE))"
+//
+// So we need to unpack the tree to fetch the right interval value. `input`
+// represents the only parameter to the top level function `functionName`.
 std::shared_ptr<const core::ConstantExpr> tryParseInterval(
     const std::string& functionName,
     const std::shared_ptr<const core::IExpr>& input,
     std::optional<std::string> alias) {
   std::optional<int64_t> value;
-  if (auto constInput = dynamic_cast<const core::ConstantExpr*>(input.get())) {
-    if (constInput->type()->isBigint() && !constInput->value().isNull()) {
-      value = constInput->value().value<int64_t>();
-    }
-  } else if (
-      auto castInput = dynamic_cast<const core::CastExpr*>(input.get())) {
-    if (castInput->type()->isBigint()) {
+
+  // Extracts the literal from inside the intermediate innocuous cast.
+  auto tryExtractFromCast =
+      [](const core::IExpr* input) -> std::optional<int64_t> {
+    if (auto castInput = dynamic_cast<const core::CastExpr*>(input)) {
       if (auto constInput = dynamic_cast<const core::ConstantExpr*>(
               castInput->getInput().get())) {
-        if (constInput->type()->isBigint() && !constInput->value().isNull()) {
-          value = constInput->value().value<int64_t>();
+        if (!constInput->value().isNull() && constInput->type()->isBigint()) {
+          return constInput->value().value<int64_t>();
+        }
+      }
+    }
+    return std::nullopt;
+  };
+
+  // Try to extract the format "CAST(7 AS DOUBLE)".
+  value = tryExtractFromCast(input.get());
+
+  // Try to extracts the format "CAST(trunc(CAST(5 AS DOUBLE)) AS BIGINT))".
+  if (!value.has_value()) {
+    if (auto castInput = dynamic_cast<const core::CastExpr*>(input.get())) {
+      if (auto callInput = dynamic_cast<const core::CallExpr*>(
+              castInput->getInput().get())) {
+        if (callInput->getFunctionName() == "trunc") {
+          value = tryExtractFromCast(callInput->getInput().get());
         }
       }
     }
@@ -289,9 +314,11 @@ std::shared_ptr<const core::IExpr> parseBetweenExpr(
   const auto& betweenExpr = dynamic_cast<BetweenExpression&>(expr);
   return callExpr(
       "between",
-      {parseExpr(*betweenExpr.input, options),
-       parseExpr(*betweenExpr.lower, options),
-       parseExpr(*betweenExpr.upper, options)},
+      {
+          parseExpr(*betweenExpr.input, options),
+          parseExpr(*betweenExpr.lower, options),
+          parseExpr(*betweenExpr.upper, options),
+      },
       getAlias(expr),
       options);
 }
