@@ -17,6 +17,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 
 namespace facebook::velox::exec::trace {
 /// Defines the shared constants used by query trace implementation.
