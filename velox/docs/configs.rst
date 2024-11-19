@@ -787,22 +787,18 @@ Cache
      - double
      - 0.7
      - The max ratio of the number of in-memory cache entries being written to SSD cache over the total number of cache entries. This is to control SSD cache write rate, and once the ratio exceeds this threshold, then we stop writing to SSD cache.
-   * - async-cache-max-ssd-savable-ratio
+   * - async-cache-ssd-savable-ratio
      - double
      - 0.125
      - The min ratio of SSD savable (in-memory) cache space over the total cache space. Once the ratio exceeds this limit, we start writing SSD savable cache entries into SSD cache.
-   * - async-cache-max-ssd-savable-bytes
+   * - async-cache-min-ssd-savable-bytes
      - integer
-     - 1 << 24 (16 MB)
-     - Min SSD savable (in-memory) cache space to start writing SSD savable cache entries into SSD cache. NOTE: we only write to SSD cache when both above conditions are satisfied.
+     - 16777216 (16 MB)
+     - Min SSD savable (in-memory) cache space to start writing SSD savable cache entries into SSD cache. NOTE: we only write to SSD cache when both async-cache-max-ssd-write-ratio and async-cache-ssd-savable-ratio conditions are satisfied.
    * - async-cache-persistence-interval
      - string
      - 0s
-     - The interval for persisting in-memory cache to SSD. Setting this config to a non-zero value will activate periodic cache persistence.
-   * - async-cache-ssd-disable-file-cow
-     - bool
-     - false
-     - In file systems, such as btrfs, supporting cow (copy on write), the ssd cache can use all ssd space and stop working. To prevent that, use this option to disable cow for cache files.
+     - The interval for persisting in-memory cache to SSD. Setting this config to a non-zero value will activate periodic cache persistence. Unit is in seconds.
    * - async-cache-ssd-disable-file-cow
      - bool
      - false
@@ -815,10 +811,6 @@ Cache
      - bool
      - false
      - When enabled, the checksum is recalculated and verified against the stored value when cache data is loaded from the SSD.
-   * - enable-serialized-page-checksum
-     - bool
-     - true
-     - 
    * - cache.velox.ttl-enabled
      - bool
      - false

@@ -4,7 +4,12 @@ AsyncDataCache (File Cache)
 
 Background
 ----------
-Velox provides transparent file cache (AsyncDataCache) to accelerate table scan through the hot data reuse and prefetch. The file cache is integrated with the memory system to achieve dynamic memory sharing between file cache and query memory. When a query fails to allocate memory, we retry the allocation by shrinking the file cache. Therefore, the file cache size is automatically adjusted in response to the query memory usage change. See `Memory Management - Velox Documentation <https://facebookincubator.github.io/velox/develop/memory.html>`_  for more information about Velox's file cache.
+Velox provides a transparent file cache (AsyncDataCache) to accelerate table scans operators through hot data reuse and prefetch algorithms. 
+The file cache is integrated with the memory system to achieve dynamic memory sharing between the file cache and query memory. 
+When a query fails to allocate memory, we retry the allocation by shrinking the file cache. 
+Therefore, the file cache size is automatically adjusted in response to the query memory usage change. 
+See `Memory Management - Velox Documentation <https://facebookincubator.github.io/velox/develop/memory.html>`_  
+for more information about Velox's file cache.
 
 Configuration Properties
 ------------------------
@@ -30,9 +35,9 @@ There is a ``cache.no_retention`` session property in Velox that can be set to c
    * - cache.no_retention
      - bool
      - false
-     - If set to true, evicts out a query scanned data out of in-memory cache right after the access, and also skips staging to the SSD cache.​
+     - If set to true, evicts data read by a query (using a table scan) from the in-memory cache right after the access and also skips staging to the SSD cache.
 
-Set the ``hive.node_scheduler_affinity`` session property accordingly to turn ON/OFF cache.no_retention.​
+Set the ``hive.node_scheduler_affinity`` session property accordingly to turn ON/OFF ``cache.no_retention``.​
 
 .. code-block:: bash
 
@@ -47,7 +52,7 @@ SSD Cache
 
 Background
 ----------
-The AsyncDataCache is configured to use SSD when provided.
+The in-memory file cache (AsyncDataCache) is configured to use SSD when provided.
 The SSD serves as an extension for the async data cache (file cache).
 This helps mitigate the number of reads from slower storage.
 
@@ -94,6 +99,12 @@ See `Debugging Metrics <./debugging/metrics.rst>`_ and `Monitoring Metrics <../m
 
 Setup with btrfs filesystem on worker machines (Linux only)
 -----------------------------------------------------------
+Multiple factors contribute to utilizing the SSD cache effectively. 
+One of them is choosing the best file system that allows direct writes for best performance.
+Btrfs was found to be a good file system to use due to its built-in data compression, 
+support for O_DIRECT writes, and the ability to perform asynchronous discard operations. 
+These features combine to enhance storage efficiency, improve performance, and optimize disk management.
+
 NOTE: Commands below were ran successfully for worker machines of Amazon EC2 r6 instances with CentOS.
 
 
