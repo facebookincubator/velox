@@ -118,7 +118,7 @@ Status returnNotOk(Status s) {
   return Status::Invalid("invalid");
 }
 
-TEST(StatusTest, stausMacros) {
+TEST(StatusTest, statusMacros) {
   ASSERT_EQ(returnIf(true), Status::Invalid("error"));
   ASSERT_EQ(returnIf(false), Status::OK());
 
