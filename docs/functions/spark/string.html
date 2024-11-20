@@ -182,6 +182,37 @@ If the provided <code class="docutils literal notranslate"><span class="pre">thr
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="locate">
+<span class="sig-name descname"><span class="pre">locate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#locate" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the 1-based position of the first occurrence of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in given <code class="docutils literal notranslate"><span class="pre">string</span></code>
+after position <code class="docutils literal notranslate"><span class="pre">start</span></code>. The search is from the beginning of <code class="docutils literal notranslate"><span class="pre">string</span></code> to the end.
+<code class="docutils literal notranslate"><span class="pre">start</span></code> is the starting character position in <code class="docutils literal notranslate"><span class="pre">string</span></code> to search for the <code class="docutils literal notranslate"><span class="pre">substring</span></code>.
+<code class="docutils literal notranslate"><span class="pre">start</span></code> is 1-based and must be at least 1 and at most the characters number of <code class="docutils literal notranslate"><span class="pre">string</span></code>.
+The following rules on special values are applied to follow Spark’s implementation.
+They are listed in order of priority:</p>
+<p>Returns 0 if <code class="docutils literal notranslate"><span class="pre">start</span></code> is NULL. Returns NULL if <code class="docutils literal notranslate"><span class="pre">substring</span></code> or <code class="docutils literal notranslate"><span class="pre">string</span></code> is NULL.
+Returns 0 if <code class="docutils literal notranslate"><span class="pre">start</span></code> is less than 1.
+Returns 1 if <code class="docutils literal notranslate"><span class="pre">substring</span></code> is empty.
+Returns 0 if <code class="docutils literal notranslate"><span class="pre">start</span></code> is greater than the characters number of <code class="docutils literal notranslate"><span class="pre">string</span></code>.
+Returns 0 if <code class="docutils literal notranslate"><span class="pre">substring</span></code> is not found in <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;aa&#39;</span><span class="p">,</span> <span class="s1">&#39;aaads&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;aa&#39;</span><span class="p">,</span> <span class="s1">&#39;aaads&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;aa&#39;</span><span class="p">,</span> <span class="s1">&#39;aaads&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;aa&#39;</span><span class="p">,</span> <span class="s1">&#39;aaads&#39;</span><span class="p">,</span> <span class="mi">6</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;aa&#39;</span><span class="p">,</span> <span class="s1">&#39;aaads&#39;</span><span class="p">,</span> <span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;aaads&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;aaads&#39;</span><span class="p">,</span> <span class="mi">9</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;aaads&#39;</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;aa&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">locate</span><span class="p">(</span><span class="s1">&#39;</span><span class="se">\u4FE1</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="se">\u4FE1\u5FF5</span><span class="s1">,</span><span class="se">\u4FE1\u7231</span><span class="s1">,</span><span class="se">\u4FE1\u5E0C\u671B</span><span class="s1">&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mi">4</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="lower">
 <span class="sig-name descname"><span class="pre">lower</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#lower" title="Link to this definition">¶</a></dt>
 <dd><p>Returns string with all characters changed to lowercase.</p>
@@ -547,6 +578,7 @@ The specified character is any character contained in <code class="docutils lite
 <li><a class="reference internal" href="#left"><code class="docutils literal notranslate"><span class="pre">left()</span></code></a></li>
 <li><a class="reference internal" href="#length"><code class="docutils literal notranslate"><span class="pre">length()</span></code></a></li>
 <li><a class="reference internal" href="#levenshtein"><code class="docutils literal notranslate"><span class="pre">levenshtein()</span></code></a></li>
+<li><a class="reference internal" href="#locate"><code class="docutils literal notranslate"><span class="pre">locate()</span></code></a></li>
 <li><a class="reference internal" href="#lower"><code class="docutils literal notranslate"><span class="pre">lower()</span></code></a></li>
 <li><a class="reference internal" href="#lpad"><code class="docutils literal notranslate"><span class="pre">lpad()</span></code></a></li>
 <li><a class="reference internal" href="#ltrim"><code class="docutils literal notranslate"><span class="pre">ltrim()</span></code></a></li>
