@@ -36,10 +36,11 @@ for query_number in ${queries}; do
     for device in ${devices}; do
         case "${device}" in
             "cpu")
-                num_drivers=40
+                num_drivers=4
                 export VELOX_CUDF_DISABLED=1;;
             "gpu")
-                num_drivers=1
+                num_drivers=4
+                export VELOX_CUDF_MEMORY_RESOURCE="async"
                 export VELOX_CUDF_DISABLED=0;;
         esac
         echo "Running query ${query_number} on ${device} with ${num_drivers} drivers."
