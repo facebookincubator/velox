@@ -927,9 +927,6 @@ TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
   auto arrayVector = makeArrayVector(offsets, valuesVector);
   auto primitiveVector = makeFlatVector(offsets);
 
-  std::shared_ptr<memory::MemoryPool> leafPool =
-      rootPool_->addLeafChild("ParquetTableScanTest");
-  VectorMaker vectorMaker{leafPool.get()};
   RowVectorPtr dataFileVectors = makeRowVector(
       {"p", "m", "a"},
       {primitiveVector, mapVector, arrayVector}); // columns in data file
