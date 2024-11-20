@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include <cuda.h>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include "velox/exec/Driver.h"
@@ -22,6 +21,7 @@
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <iostream>
@@ -103,52 +103,57 @@ bool CompileState::compile() {
 }
 
 struct cudfDriverAdapter {
-  std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>> planNodes;
-  cudfDriverAdapter() {
+  std::shared_ptr<rmm::mr::device_memory_resource> mr_;
+  std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>> planNodes_;
+
+  cudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr) : mr_(mr) {
     if (cudfDebugEnabled()) {
       std::cout << "cudfDriverAdapter constructor" << std::endl;
     }
-    planNodes =
+    planNodes_ =
         std::make_shared<std::vector<std::shared_ptr<core::PlanNode const>>>();
   }
+
   ~cudfDriverAdapter() {
     if (cudfDebugEnabled()) {
       std::cout << "cudfDriverAdapter destructor" << std::endl;
       printf(
-          "cached planNodes %p, %ld\n", planNodes.get(), planNodes.use_count());
+          "cached planNodes_ %p, %ld\n", planNodes_.get(), planNodes_.use_count());
     }
   }
-  // driveradapter
+
+  // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
-    auto state = CompileState(factory, driver, *planNodes);
-    // Stored planNodes from inspect.
+    auto state = CompileState(factory, driver, *planNodes_);
+    // Stored planNodes_ from inspect.
     if (cudfDebugEnabled()) {
-      printf("driver.planNodes=%p\n", planNodes.get());
-      for (auto planNode : *planNodes) {
+      printf("driver.planNodes_=%p\n", planNodes_.get());
+      for (auto planNode : *planNodes_) {
         std::cout << "PlanNode: " << (*planNode).toString() << std::endl;
       }
     }
     auto res = state.compile();
     return res;
   }
-  // Iterate recursively and store them in the planNodes_ptr.
+
+  // Iterate recursively and store them in the planNodes_.
   void storePlanNodes(const std::shared_ptr<const core::PlanNode>& planNode) {
     const auto& sources = planNode->sources();
     for (int32_t i = 0; i < sources.size(); ++i) {
       storePlanNodes(sources[i]);
     }
-    planNodes->push_back(planNode);
+    planNodes_->push_back(planNode);
   }
 
-  // inspect
+  // Call operator needed by plan inspection
   void operator()(const core::PlanFragment& planFragment) {
     // signature: std::function<void(const core::PlanFragment&)> inspect;
     // call: adapter.inspect(planFragment);
-    planNodes->clear();
+    planNodes_->clear();
     if (cudfDebugEnabled()) {
       std::cout << "Inspecting PlanFragment" << std::endl;
     }
-    if (planNodes) {
+    if (planNodes_) {
       storePlanNodes(planFragment.planNode);
     }
   }
@@ -162,6 +167,7 @@ void registerCudf() {
 
   CUDF_FUNC_RANGE();
   cudaFree(0); // to init context.
+
   if (cudfDebugEnabled()) {
     std::cout << "Registering CudfHashJoinBridgeTranslator" << std::endl;
   }
@@ -170,7 +176,15 @@ void registerCudf() {
   if (cudfDebugEnabled()) {
     std::cout << "Registering cudfDriverAdapter" << std::endl;
   }
-  cudfDriverAdapter cda{};
+
+  const char* env_cudf_mr = std::getenv("VELOX_CUDF_MEMORY_RESOURCE");
+  auto mr_mode = env_cudf_mr != nullptr ? env_cudf_mr : "cuda";
+  if (cudfDebugEnabled()) {
+    std::cout << "Setting cuDF memory resource to " << mr_mode << std::endl;
+  }
+  auto mr = cudf_velox::create_memory_resource(mr_mode);
+  cudf::set_current_device_resource(mr.get());
+  cudfDriverAdapter cda{mr};
   exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
   _cudfIsRegistered = true;
