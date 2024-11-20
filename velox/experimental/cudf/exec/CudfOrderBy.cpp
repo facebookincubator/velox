@@ -57,8 +57,9 @@ CudfOrderBy::CudfOrderBy(
         sorting_order.isAscending() ? cudf::order::ASCENDING
                                     : cudf::order::DESCENDING);
     null_order_.push_back(
-        (sorting_order.isNullsFirst() ^ !sorting_order.isAscending()) ? cudf::null_order::BEFORE
-                                     : cudf::null_order::AFTER);
+        (sorting_order.isNullsFirst() ^ !sorting_order.isAscending())
+            ? cudf::null_order::BEFORE
+            : cudf::null_order::AFTER);
   }
   if (cudfDebugEnabled()) {
     std::cout << "Number of Sort keys: " << sort_keys_.size() << std::endl;
