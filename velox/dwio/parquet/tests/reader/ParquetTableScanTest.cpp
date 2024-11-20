@@ -963,8 +963,7 @@ TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
   ASSERT_TRUE(rows);
   ASSERT_EQ(rows->childrenSize(), 5);
 
-  auto column = rows->childAt(0);
-  assertEqualVectors(column, primitiveVector);
+  assertEqualVectors(rows->childAt(0), primitiveVector);
 
   auto expected1 =
       makeFlatVector<int64_t>(kSize, [](auto row) { return row * 4; });

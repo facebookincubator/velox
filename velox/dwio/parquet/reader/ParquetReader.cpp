@@ -333,18 +333,18 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       TypePtr childRequestedType = nullptr;
       bool followChild = true;
       if (requestedType && requestedType->isRow()) {
-        auto rowType =
+        auto requestedRowType =
             std::dynamic_pointer_cast<const velox::RowType>(requestedType);
         if (options_.useColumnNamesForColumnMapping()) {
-          auto fileTypeIdx = rowType->getChildIdxIfExists(childName);
+          auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
           if (fileTypeIdx.has_value()) {
-            childRequestedType = rowType->childAt(*fileTypeIdx);
+            childRequestedType = requestedRowType->childAt(*fileTypeIdx);
           }
         } else {
-          // Schema Evolution check
-          if (i < rowType->size()) {
-            columnNames.push_back(rowType->nameOf(i));
-            childRequestedType = requestedType->asRow().childAt(i);
+          // Handle schema evolution.
+          if (i < requestedRowType->size()) {
+            columnNames.push_back(requestedRowType->nameOf(i));
+            childRequestedType = requestedRowType->childAt(i);
           } else {
             followChild = false;
           }
