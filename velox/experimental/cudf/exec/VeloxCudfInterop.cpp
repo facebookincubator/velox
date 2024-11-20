@@ -372,7 +372,8 @@ namespace with_arrow {
 std::unique_ptr<cudf::table> to_cudf_table(
     const facebook::velox::RowVectorPtr& veloxTable, // BaseVector or RowVector?
     facebook::velox::memory::MemoryPool* pool) {
-  ArrowOptions arrowOptions{false, true};
+  // Need to flattenDictionary and FlattenConstant, otherwise issues in nullmask comes up
+  ArrowOptions arrowOptions{true, true};
   ArrowArray arrowArray;
   exportToArrow(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
