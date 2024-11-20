@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include <cuda.h>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include "velox/exec/Driver.h"
@@ -21,7 +22,6 @@
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <iostream>
@@ -104,9 +104,11 @@ bool CompileState::compile() {
 
 struct cudfDriverAdapter {
   std::shared_ptr<rmm::mr::device_memory_resource> mr_;
-  std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>> planNodes_;
+  std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>>
+      planNodes_;
 
-  cudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr) : mr_(mr) {
+  cudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr)
+      : mr_(mr) {
     if (cudfDebugEnabled()) {
       std::cout << "cudfDriverAdapter constructor" << std::endl;
     }
@@ -118,7 +120,9 @@ struct cudfDriverAdapter {
     if (cudfDebugEnabled()) {
       std::cout << "cudfDriverAdapter destructor" << std::endl;
       printf(
-          "cached planNodes_ %p, %ld\n", planNodes_.get(), planNodes_.use_count());
+          "cached planNodes_ %p, %ld\n",
+          planNodes_.get(),
+          planNodes_.use_count());
     }
   }
 

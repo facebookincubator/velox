@@ -23,7 +23,8 @@
 
 namespace facebook::velox::cudf_velox {
 
-std::shared_ptr<rmm::mr::device_memory_resource> create_memory_resource(std::string_view mode);
+std::shared_ptr<rmm::mr::device_memory_resource> create_memory_resource(
+    std::string_view mode);
 
 bool cudfDebugEnabled();
 
