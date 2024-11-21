@@ -321,7 +321,7 @@ TEST_F(OrderByTest, varfields) {
   testSingleKey(vectors, "c2");
 }
 
-/*
+#if 0
 // flattening for scalar types unsupported in arrow!
 TEST_F(OrderByTest, unknown) {
   vector_size_t size = 1'000;
@@ -412,6 +412,6 @@ TEST_F(OrderByTest, outputBatchRows) {
         toPlanStats(task->taskStats()).at(orderById).outputVectors);
   }
 }
-*/
+#endif
 
 } // namespace
