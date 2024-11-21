@@ -399,6 +399,42 @@ std::unique_ptr<cudf::table> to_cudf_table(
   return tbl;
 }
 
+void to_signed_int_format(char* format) {
+  VELOX_CHECK_NOT_NULL(format);
+  switch (format[0]) {
+    case 'C':
+      format[0] = 'c';
+      break;
+    case 'S':
+      format[0] = 's';
+      break;
+    case 'I':
+      format[0] = 'i';
+      break;
+    case 'L':
+      format[0] = 'l';
+      break;
+    default:
+      return;
+  }
+  printf(
+      "Warning: arrowSchema.format: %s, unsigned is treated as signed indices\n",
+      format);
+}
+
+// Changes all unsigned indices to signed indices for dictionary columns from
+// cudf which uses unsigned indices, but velox uses signed indices.
+void fix_dictionary_indices(ArrowSchema& arrowSchema) {
+  if (arrowSchema.dictionary != nullptr) {
+    to_signed_int_format(const_cast<char*>(arrowSchema.format));
+    fix_dictionary_indices(*arrowSchema.dictionary);
+  }
+  for (size_t i = 0; i < arrowSchema.n_children; ++i) {
+    VELOX_CHECK_NOT_NULL(arrowSchema.children[i]);
+    fix_dictionary_indices(*arrowSchema.children[i]);
+  }
+}
+
 facebook::velox::RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
@@ -411,6 +447,9 @@ facebook::velox::RowVectorPtr to_velox_column(
     metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
   }
   auto arrowSchema = cudf::to_arrow_schema(table, metadata);
+  // Hack to convert unsigned indices to signed indices for dictionary columns
+  fix_dictionary_indices(*arrowSchema);
+
   auto veloxTable = importFromArrowAsOwner(*arrowSchema, arrowArray, pool);
   // BaseVector to RowVector
   auto casted_ptr =
