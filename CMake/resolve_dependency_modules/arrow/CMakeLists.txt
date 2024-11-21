@@ -14,7 +14,7 @@
 project(Arrow)
 
 if(VELOX_ENABLE_ARROW)
-  set_source(Thrift)
+  velox_set_source(Thrift)
 
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
   set(ARROW_CMAKE_ARGS

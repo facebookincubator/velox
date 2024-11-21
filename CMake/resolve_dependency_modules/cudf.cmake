@@ -19,7 +19,7 @@ set(VELOX_cudf_BUILD_SHA256_CHECKSUM
     daa270c1e9223f098823491606bad2d9b10577d4bea8e543ae80265f1cecc0ed)
 set(VELOX_cudf_SOURCE_URL
     "https://github.com/rapidsai/cudf/archive/refs/tags/v24.10.01.tar.gz")
-resolve_dependency_url(cudf)
+velox_resolve_dependency_url(cudf)
 
 # Use block so we don't leak variables
 block(SCOPE_FOR VARIABLES)
