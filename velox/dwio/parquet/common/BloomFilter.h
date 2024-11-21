@@ -69,31 +69,31 @@ class BloomFilter {
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(int32_t value) const = 0;
+  virtual uint64_t hashInt32(int32_t value) const = 0;
 
   /// Compute hash for 64 bits value by using its plain encoding result.
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(int64_t value) const = 0;
+  virtual uint64_t hashInt64(int64_t value) const = 0;
 
   /// Compute hash for float value by using its plain encoding result.
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(float value) const = 0;
+  virtual uint64_t hashFloat(float value) const = 0;
 
   /// Compute hash for double value by using its plain encoding result.
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(double value) const = 0;
+  virtual uint64_t hashDouble(double value) const = 0;
 
   /// Compute hash for bytearray by using its plain encoding result.
   ///
   /// @param value the value to hash.
   /// @return hash result.
-  virtual uint64_t hash(const ByteArray* value) const = 0;
+  virtual uint64_t hashByteArray(const ByteArray* value) const = 0;
 
   /// Batch compute hashes for 32 bits values by using its plain encoding
   /// result.
@@ -102,8 +102,8 @@ class BloomFilter {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const int32_t* values, int numValues, uint64_t* hashes)
-      const = 0;
+  virtual void
+  hashesInt32(const int32_t* values, int numValues, uint64_t* hashes) const = 0;
 
   /// Batch compute hashes for 64 bits values by using its plain encoding
   /// result.
@@ -112,8 +112,8 @@ class BloomFilter {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const int64_t* values, int numValues, uint64_t* hashes)
-      const = 0;
+  virtual void
+  hashesInt64(const int64_t* values, int numValues, uint64_t* hashes) const = 0;
 
   /// Batch compute hashes for float values by using its plain encoding result.
   ///
@@ -121,7 +121,7 @@ class BloomFilter {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const float* values, int numValues, uint64_t* hashes)
+  virtual void hashesFloat(const float* values, int numValues, uint64_t* hashes)
       const = 0;
 
   /// Batch compute hashes for double values by using its plain encoding result.
@@ -130,8 +130,8 @@ class BloomFilter {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const double* values, int numValues, uint64_t* hashes)
-      const = 0;
+  virtual void
+  hashesDouble(const double* values, int numValues, uint64_t* hashes) const = 0;
 
   /// Batch compute hashes for bytearray values by using its plain encoding
   /// result.
@@ -140,8 +140,10 @@ class BloomFilter {
   /// @param num_values the number of values to hash.
   /// @param hashes a pointer to the output hash values, its length should be
   /// equal to num_values.
-  virtual void hashes(const ByteArray* values, int numValues, uint64_t* hashes)
-      const = 0;
+  virtual void hashesByteArray(
+      const ByteArray* values,
+      int numValues,
+      uint64_t* hashes) const = 0;
 
   virtual ~BloomFilter() = default;
 
@@ -249,54 +251,41 @@ class BlockSplitBloomFilter : public BloomFilter {
     return numBytes_;
   }
 
-  uint64_t hash(int32_t value) const override {
-    return hasher_->hash(value);
+  uint64_t hashInt32(int32_t value) const override {
+    return hasher_->hashInt32(value);
   }
-  uint64_t hash(int64_t value) const override {
-    return hasher_->hash(value);
+  uint64_t hashInt64(int64_t value) const override {
+    return hasher_->hashInt64(value);
   }
-  uint64_t hash(float value) const override {
-    return hasher_->hash(value);
+  uint64_t hashFloat(float value) const override {
+    return hasher_->hashFloat(value);
   }
-  uint64_t hash(double value) const override {
-    return hasher_->hash(value);
+  uint64_t hashDouble(double value) const override {
+    return hasher_->hashDouble(value);
   }
-  uint64_t hash(const ByteArray* value) const override {
-    return hasher_->hash(value);
-  }
-
-  void hashes(const int32_t* values, int numValues, uint64_t* hashes)
-      const override {
-    hasher_->hashes(values, numValues, hashes);
-  }
-  void hashes(const int64_t* values, int numValues, uint64_t* hashes)
-      const override {
-    hasher_->hashes(values, numValues, hashes);
-  }
-  void hashes(const float* values, int numValues, uint64_t* hashes)
-      const override {
-    hasher_->hashes(values, numValues, hashes);
-  }
-  void hashes(const double* values, int numValues, uint64_t* hashes)
-      const override {
-    hasher_->hashes(values, numValues, hashes);
-  }
-  void hashes(const ByteArray* values, int numValues, uint64_t* hashes)
-      const override {
-    hasher_->hashes(values, numValues, hashes);
+  uint64_t hashByteArray(const ByteArray* value) const override {
+    return hasher_->hashByteArray(value);
   }
 
-  uint64_t hash(const int32_t* value) const {
-    return hasher_->hash(*value);
+  void hashesInt32(const int32_t* values, int numValues, uint64_t* hashes)
+      const override {
+    hasher_->hashesInt32(values, numValues, hashes);
   }
-  uint64_t hash(const int64_t* value) const {
-    return hasher_->hash(*value);
+  void hashesInt64(const int64_t* values, int numValues, uint64_t* hashes)
+      const override {
+    hasher_->hashesInt64(values, numValues, hashes);
   }
-  uint64_t hash(const float* value) const {
-    return hasher_->hash(*value);
+  void hashesFloat(const float* values, int numValues, uint64_t* hashes)
+      const override {
+    hasher_->hashesFloat(values, numValues, hashes);
   }
-  uint64_t hash(const double* value) const {
-    return hasher_->hash(*value);
+  void hashesDouble(const double* values, int numValues, uint64_t* hashes)
+      const override {
+    hasher_->hashesDouble(values, numValues, hashes);
+  }
+  void hashesByteArray(const ByteArray* values, int numValues, uint64_t* hashes)
+      const override {
+    hasher_->hashesByteArray(values, numValues, hashes);
   }
 
   /// Deserialize the Bloom filter from an input stream. It is used when
