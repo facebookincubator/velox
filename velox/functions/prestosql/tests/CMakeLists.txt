@@ -135,3 +135,12 @@ target_link_libraries(
   GTest::gtest_main
   GTest::gmock
   GTest::gmock_main)
+
+add_executable(velox_presto_functions_test PrestoStringCastTest.cpp)
+add_test(velox_presto_functions_test velox_presto_functions_test)
+target_link_libraries(
+  velox_presto_functions_test
+  velox_functions_test_lib
+  velox_fuzzer_util
+  GTest::gtest
+  GTest::gtest_main)
