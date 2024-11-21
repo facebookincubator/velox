@@ -46,8 +46,6 @@ target_link_libraries(
   velox_exec
   velox_exec_test_lib
   velox_test_util
-  velox_vector_fuzzer
   gtest
   gtest_main
-  Folly::folly
   fmt::fmt)

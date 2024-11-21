@@ -13,25 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include <re2/re2.h>
 
 #include <fmt/format.h>
-#include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/memory/SharedArbitrator.h"
-#include "velox/common/testutil/TestValue.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/Cursor.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/exec/tests/utils/VectorTestUtil.h"
+#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -245,7 +238,6 @@ TEST_F(OrderByTest, singleKey) {
   runTest(plan, orderById, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST", {0});
 }
 
-/*
 TEST_F(OrderByTest, multipleKeys) {
   vector_size_t batchSize = 1000;
   std::vector<RowVectorPtr> vectors;
@@ -365,8 +357,9 @@ TEST_F(OrderByTest, outputBatchRows) {
     // TODO: add output size check with spilling enabled
     std::string debugString() const {
       return fmt::format(
-          "numRowsPerBatch:{}, preferredOutBatchBytes:{}, maxOutBatchRows:{},
-expectedOutputVectors:{}", numRowsPerBatch, preferredOutBatchBytes,
+          "numRowsPerBatch:{}, preferredOutBatchBytes:{}, maxOutBatchRows:{}, expectedOutputVectors:{}",
+          numRowsPerBatch,
+          preferredOutBatchBytes,
           maxOutBatchRows,
           expectedOutputVectors);
     }
@@ -417,7 +410,5 @@ expectedOutputVectors:{}", numRowsPerBatch, preferredOutBatchBytes,
         toPlanStats(task->taskStats()).at(orderById).outputVectors);
   }
 }
-
-*/
 
 } // namespace
