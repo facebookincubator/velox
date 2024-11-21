@@ -90,7 +90,6 @@ void CudfOrderBy::noMoreInput() {
   auto tbl = cudf::concatenate(cudf_table_views);
 
   // Release input data
-  cudf::get_default_stream().synchronize();
   cudf_table_views.clear();
   cudf_tables.clear();
   inputs_.clear();
@@ -124,8 +123,9 @@ RowVectorPtr CudfOrderBy::getOutput() {
 
 void CudfOrderBy::close() {
   exec::Operator::close();
-  // TODO: Release stored inputs if needed
-  // TODO: Release cudf memory resources
+  // Release stored inputs
+  // Release cudf memory resources
+  inputs_.clear();
   sortedTable_.reset();
 }
 } // namespace facebook::velox::cudf_velox
