@@ -208,6 +208,11 @@ bool SignatureBinderBase::tryBind(
   const auto& params = typeSignature.parameters();
   // Type Parameters can recurse.
   if (params.size() != actualType->parameters().size()) {
+    // Type match on binding from parameterized varchar/varbinary
+    // to "unparameterized" (unlimited length) varchar/varbinary signature.
+    if (isVaryingLengthScalarType(actualType)) {
+      return true;
+    }
     return false;
   }
 

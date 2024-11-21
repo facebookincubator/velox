@@ -84,6 +84,9 @@ class FlatVector final : public SimpleVector<T> {
     VELOX_CHECK(
         values_ || BaseVector::nulls_,
         "FlatVector needs to either have values or nulls");
+    if (isVaryingLengthScalarType(type)) {
+      varyingTypeDataLengthMax_ = getVaryingLengthScalarTypeLength(*type);
+    }
     if (!values_) {
       // Make sure that all rows are null.
       auto cnt =
@@ -596,6 +599,11 @@ class FlatVector final : public SimpleVector<T> {
   // NOTE: we need to ensure 'stringBuffers_' and 'stringBufferSet_' are
   // always consistent.
   folly::F14FastSet<const Buffer*> stringBufferSet_;
+
+  // If this vector contains values of type length bounded VARCHAR or VARBINARY
+  // it contains the maximum allowed size of the data stored. Varchar and
+  // varbinary have the same kUnboundedLength.
+  size_t varyingTypeDataLengthMax_{VarcharType::kUnboundedLength};
 };
 
 template <>

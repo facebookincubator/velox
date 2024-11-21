@@ -252,21 +252,33 @@ VectorPtr createBinary(
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::VARCHAR>(
-    const TypePtr& /* unused */,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
+  // Disallow BatchMaker vector creation for bounded VARCHAR because
+  // it is deprecated. Use VectorMaker instead.
+  VELOX_CHECK_NE(
+      getVarcharLength(*type),
+      VarcharType::kUnboundedLength,
+      "Use VectorMaker to test length bound types.");
   return createBinary(VARCHAR(), size, gen, pool, isNullAt);
 }
 
 template <>
 VectorPtr BatchMaker::createVector<TypeKind::VARBINARY>(
-    const TypePtr& /* unused */,
+    const TypePtr& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
+  // Disallow BatchMaker vector creation for bounded VARBINARY because
+  // it is deprecated. Use VectorMaker instead.
+  VELOX_CHECK_NE(
+      getVarbinaryLength(*type),
+      VarbinaryType::kUnboundedLength,
+      "Use VectorMaker to test length bound types.");
   return createBinary(VARBINARY(), size, gen, pool, isNullAt);
 }
 
