@@ -110,7 +110,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
           deleteReader.get(),
           deleteSplit_->filePath,
           deleteSplit_->partitionKeys,
-          {})) {
+          {},
+          deleteSplit_->fileFormat)) {
     // We only count the number of base splits skipped as skippedSplits runtime
     // statistics in Velox.  Skipped delta split is only counted as skipped
     // bytes.
