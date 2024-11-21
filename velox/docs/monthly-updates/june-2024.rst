@@ -30,13 +30,13 @@ Presto Functions
 * Add support for CAST(TIMESTAMP WITH TIMEZONE AS VARCHAR).
 * Add support for CAST(DATE AS TIMESTAMP WITH TIMEZONE).
 * Add support for CAST(TIMESTAMP WITH TIMEZONE AS DATE).
-* Add support for DECIMAL :func:`modulus` function.
-* Add support for trailing spaces in cast(VARCHAR as DATE).
+* Add support for trailing spaces in CAST(VARCHAR as DATE).
 * Add support for negative array index, single-quoted keys, paths without leading "$"
   JsonPath argument in JSON functions such as :func:`json_extract`.
-* Add support for DATETIME unit 'week' in :func:`date_add` and :func:`date_diff`.
-* Add support for TIMESTAMP input in :func:`to_iso8601`.
-* Add support for variable pattern and replacement in :func:`regexp_replace`.
+* Add support for DECIMAL in :func:`modulus` function.
+* Add support for DATETIME unit 'week' in :func:`date_add` and :func:`date_diff` functions.
+* Add support for TIMESTAMP input in :func:`to_iso8601` function.
+* Add support for variable pattern and replacement in :func:`regexp_replace` function.
 * Add support for INTERVAL and TIMESTAMP WITH TIMEZONE to between function.
 * Fix parsing of 'March' and 'MARCH' input in :func:`date_parse` function.
 * Add support for complex types to :func:`distinct_from`, :func:`array_distinct`,
@@ -55,14 +55,14 @@ Spark Functions
 * Add :spark:func:`log` function.
 * Add support for DECIMAL input to :spark:func:`greatest` and :spark:func:`least` functions.
 * Add support for complex types to :spark:func:`equalto` and :spark:func:`equalnullsafe` functions.
-* Fix :spark:func:`in` for NaN inputs.
 * Add support for FLOAT and DOUBLE types to :spark:func:`mod` function.
+* Fix :spark:func:`in` for NaN inputs.
 
 Hive Connector
 ==============
 
-* Add "cache.no_retention" session config to allow a query to not retain data in the
-  AsyncDataCache and skip SSD Cache.
+* Add "cache.no_retention" session config to allow a query not retain data in the AsyncDataCache
+  and skip SSD Cache.
 * Add retry for S3 filesystem.
 * Add support for ORC file-format Reader.
 
