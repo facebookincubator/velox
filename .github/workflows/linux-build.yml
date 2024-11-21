@@ -38,7 +38,7 @@ jobs:
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
-      Protobuf_SOURCE: BUNDLED # can be removed after #10134 is merged
+      GTest_SOURCE: BUNDLED
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
       Arrow_SOURCE: BUNDLED
