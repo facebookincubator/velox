@@ -39,6 +39,27 @@ Array Functions
         SELECT array_except(ARRAY [1, 2, 2], ARRAY [1, 3, 4]); -- [2]
         SELECT array_except(ARRAY [1, NULL, NULL], ARRAY [1, 1, NULL]); -- []
 
+.. spark:function:: array_insert(array(E), pos, E, legacyNegativeIndex) -> array(E)
+
+    Places new element into index ``pos`` of the input ``array``. Returns NULL if the input ``array`` or
+    ``pos`` is NULL. Array indices are 1-based and exception is thrown when ``pos`` is 0. The maximum
+    negative index is -1. When ``legacyNegativeIndex`` is true, -1 points to the last but one position.
+    Otherwise, -1 points to the last position. Index above array size appends the array or prepends the
+    array if index is negative, with 'null' elements. ::
+
+        SELECT array_insert(NULL, 1, 0, false); -- NULL
+        SELECT array_insert(NULL, 1, 0, true); -- NULL
+        SELECT array_insert(array(1, 2), NULL, 0, false); -- NULL
+        SELECT array_insert(array(1, 2), NULL, 0, true); -- NULL
+        SELECT array_insert(array(1, 2), 1, 0, false); -- [0, 1, 2]
+        SELECT array_insert(array(1, 2), 1, 0, true); -- [0, 1, 2]
+        SELECT array_insert(array(1, 2), 4, 0, false); -- [1, 2, NULL, 0]
+        SELECT array_insert(array(1, 2), 4, 0, true); -- [1, 2, NULL, 0]
+        SELECT array_insert(array(1, 2), -1, 0, false); -- [1, 2, 0]
+        SELECT array_insert(array(1, 2), -1, 0, true); -- [1, 0, 2]
+        SELECT array_insert(array(1, 2), -4, 0, false); -- [0, NULL, 1, 2]
+        SELECT array_insert(array(1, 2), -4, 0, true); -- [0, NULL, NULL, 1, 2]
+
 .. spark:function:: array_intersect(array(E), array(E1)) -> array(E2)
 
     Returns an array of the elements in the intersection of array1 and array2, without duplicates. ::
@@ -195,6 +216,21 @@ Array Functions
         SELECT size(array(1, 2, 3), true); -- 3
         SELECT size(NULL, true); -- -1
         SELECT size(NULL, false); -- NULL
+
+.. spark:function:: slice(array(E), start, length) -> array(E)
+
+    Returns a subarray starting at 1-based index ``start`` or from end if negative, with ``length`` elements.
+    Returns elements between ``start`` and the end of the array if ``start + length`` is outside of the array.
+    Returns empty array if ``start`` point outside of the array or ``length`` is 0.
+    Throws exception if ``start`` is 0 or ``length`` is negative. ::
+
+        SELECT slice(array(1, 2, 3, 4), 2, 2); -- [2, 3]
+        SELECT slice(array(1, 2, 3, 4), -2, 2); -- [3, 4]
+        SELECT slice(array(1, 2, 3, 4), 5, 1); -- []
+        SELECT slice(array(1, 2, 3, 4), 2, 5); -- [2, 3, 4]
+        SELECT slice(array(1, 2, 3, 4), 2, 0); -- []
+        SELECT slice(array(1, 2, 3, 4), 1, -1); -- error: The value of length argument of slice() function should not be negative
+        SELECT slice(array(1, 2, 3, 4), 0, 1); -- error: SQL array indices start at 1
 
 .. spark:function:: sort_array(array(E)) -> array(E)
 

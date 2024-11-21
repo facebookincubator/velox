@@ -84,12 +84,18 @@ int main(int argc, char** argv) {
   // We need a connector id string to identify the connector.
   const std::string kHiveConnectorId = "test-hive";
 
+  // Register the Hive Connector Factory.
+  connector::registerConnectorFactory(
+      std::make_shared<connector::hive::HiveConnectorFactory>());
   // Create a new connector instance from the connector factory and register
   // it:
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kHiveConnectorId, std::make_shared<core::MemConfig>());
+          ->newConnector(
+              kHiveConnectorId,
+              std::make_shared<config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>()));
   connector::registerConnector(hiveConnector);
 
   // To be able to read local files, we need to register the local file

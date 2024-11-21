@@ -20,35 +20,39 @@
 namespace facebook::velox::functions {
 namespace {
 
-// TODO: Fix this class to follow the same behavior as InPredicate.h.
+// This implements InPredicate using a set over VectorValues (pairs of
+// BaseVector, index). Can be used in place of Filters for Types not supported
+// by Filters or when custom comparisons are needed.
 // Returns NULL if
-// - input value is NULL or contains NULL;
-// - input value doesn't match any of the in-list values, but some of in-list
-// values are NULL or contain NULL.
-class ComplexTypeInPredicate : public exec::VectorFunction {
+// - input value is NULL
+// - in-list is NULL or empty
+// - input value doesn't have an exact match, but has an indeterminate match in
+// the in-list. E.g., 'array[null] in (array[1])' or 'array[1] in
+// (array[null])'.
+class VectorSetInPredicate : public exec::VectorFunction {
  public:
-  struct ComplexValue {
+  struct VectorValue {
     BaseVector* vector;
     vector_size_t index;
   };
 
-  struct ComplexValueHash {
-    size_t operator()(ComplexValue value) const {
+  struct VectorValueHash {
+    size_t operator()(VectorValue value) const {
       return value.vector->hashValueAt(value.index);
     }
   };
 
-  struct ComplexValueEqualTo {
-    bool operator()(ComplexValue left, ComplexValue right) const {
+  struct VectorValueEqualTo {
+    bool operator()(VectorValue left, VectorValue right) const {
       return left.vector->equalValueAt(right.vector, left.index, right.index);
     }
   };
 
-  using ComplexSet =
-      folly::F14FastSet<ComplexValue, ComplexValueHash, ComplexValueEqualTo>;
+  using VectorSet =
+      folly::F14FastSet<VectorValue, VectorValueHash, VectorValueEqualTo>;
 
-  ComplexTypeInPredicate(
-      ComplexSet uniqueValues,
+  VectorSetInPredicate(
+      VectorSet uniqueValues,
       bool hasNull,
       VectorPtr originalValues)
       : uniqueValues_{std::move(uniqueValues)},
@@ -57,18 +61,17 @@ class ComplexTypeInPredicate : public exec::VectorFunction {
 
   static std::shared_ptr<exec::VectorFunction>
   create(const VectorPtr& values, vector_size_t offset, vector_size_t size) {
-    ComplexSet uniqueValues;
+    VectorSet uniqueValues;
     bool hasNull = false;
 
     for (auto i = offset; i < offset + size; i++) {
       if (values->containsNullAt(i)) {
         hasNull = true;
-      } else {
-        uniqueValues.insert({values.get(), i});
       }
+      uniqueValues.insert({values.get(), i});
     }
 
-    return std::make_shared<ComplexTypeInPredicate>(
+    return std::make_shared<VectorSetInPredicate>(
         std::move(uniqueValues), hasNull, values);
   }
 
@@ -85,23 +88,49 @@ class ComplexTypeInPredicate : public exec::VectorFunction {
     auto* boolResult = result->asUnchecked<FlatVector<bool>>();
 
     rows.applyToSelected([&](vector_size_t row) {
-      if (arg->containsNullAt(row)) {
+      if (arg->isNullAt(row)) {
         boolResult->setNull(row, true);
       } else {
-        const bool found = uniqueValues_.contains({arg.get(), row});
-        if (!found && hasNull_) {
-          boolResult->setNull(row, true);
+        const bool found =
+            uniqueValues_.contains(VectorValue({arg.get(), row}));
+        if (found) {
+          if (arg->containsNullAt(row)) {
+            boolResult->setNull(row, true);
+          } else {
+            boolResult->set(row, true);
+          }
         } else {
-          boolResult->set(row, found);
+          if ((arg->containsNullAt(row) || hasNull_) &&
+              hasIndeterminateMatch(arg, row)) {
+            boolResult->setNull(row, true);
+          } else {
+            boolResult->set(row, false);
+          }
         }
       }
     });
   }
 
  private:
+  bool hasIndeterminateMatch(const VectorPtr& vector, vector_size_t index)
+      const {
+    for (const auto& value : uniqueValues_) {
+      if (!vector
+               ->equalValueAt(
+                   value.vector,
+                   index,
+                   value.index,
+                   CompareFlags::NullHandlingMode::kNullAsIndeterminate)
+               .has_value()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Set of unique values to check against. This set doesn't include any value
   // that is null or contains null.
-  const ComplexSet uniqueValues_;
+  const VectorSet uniqueValues_;
 
   // Boolean indicating whether one of the value was null or contained null.
   const bool hasNull_;
@@ -282,11 +311,10 @@ class InPredicate : public exec::VectorFunction {
       const std::string& /*name*/,
       const std::vector<exec::VectorFunctionArg>& inputArgs,
       const core::QueryConfig& /*config*/) {
-    VELOX_CHECK_GE(inputArgs.size(), 2);
+    VELOX_CHECK_EQ(inputArgs.size(), 2);
     auto inListType = inputArgs[1].type;
 
     VELOX_CHECK_EQ(inListType->kind(), TypeKind::ARRAY);
-    VELOX_CHECK_EQ(2, inputArgs.size());
 
     const auto& values = inputArgs[1].constantValue;
     VELOX_USER_CHECK_NOT_NULL(
@@ -315,10 +343,15 @@ class InPredicate : public exec::VectorFunction {
     }
 
     const auto& elements = arrayVector->elements();
+    const auto& elementType = elements->type();
+
+    if (elementType->providesCustomComparison()) {
+      return VectorSetInPredicate::create(elements, offset, size);
+    }
 
     std::pair<std::unique_ptr<common::Filter>, bool> filter;
 
-    switch (inListType->childAt(0)->kind()) {
+    switch (elementType->kind()) {
       case TypeKind::HUGEINT:
         filter = createHugeintValuesFilter<int128_t>(elements, offset, size);
         break;
@@ -360,7 +393,7 @@ class InPredicate : public exec::VectorFunction {
       case TypeKind::MAP:
         [[fallthrough]];
       case TypeKind::ROW:
-        return ComplexTypeInPredicate::create(elements, offset, size);
+        return VectorSetInPredicate::create(elements, offset, size);
       default:
         VELOX_UNSUPPORTED(
             "Unsupported in-list type for IN predicate: {}",

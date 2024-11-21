@@ -99,7 +99,7 @@ FaultyWriteFile::FaultyWriteFile(
 
 void FaultyWriteFile::append(std::string_view data) {
   if (injectionHook_ != nullptr) {
-    FaultFileWriteOperation op(path_, data);
+    FaultFileAppendOperation op(path_, data);
     injectionHook_(&op);
     if (!op.delegate) {
       return;
@@ -112,8 +112,36 @@ void FaultyWriteFile::append(std::unique_ptr<folly::IOBuf> data) {
   delegatedFile_->append(std::move(data));
 }
 
+void FaultyWriteFile::write(
+    const std::vector<iovec>& iovecs,
+    int64_t offset,
+    int64_t length) {
+  if (injectionHook_ != nullptr) {
+    FaultFileWriteOperation op(path_, iovecs, offset, length);
+    injectionHook_(&op);
+    if (!op.delegate) {
+      return;
+    }
+  }
+  delegatedFile_->write(iovecs, offset, length);
+}
+
+void FaultyWriteFile::truncate(int64_t newSize) {
+  delegatedFile_->truncate(newSize);
+}
+
 void FaultyWriteFile::flush() {
   delegatedFile_->flush();
+}
+
+void FaultyWriteFile::setAttributes(
+    const std::unordered_map<std::string, std::string>& attributes) {
+  delegatedFile_->setAttributes(attributes);
+}
+
+std::unordered_map<std::string, std::string> FaultyWriteFile::getAttributes()
+    const {
+  return delegatedFile_->getAttributes();
 }
 
 void FaultyWriteFile::close() {

@@ -13,6 +13,24 @@
 # limitations under the License.
 
 add_subdirectory(utils)
+velox_add_library(velox_dwio_faulty_file_sink FaultyFileSink.cpp)
+velox_link_libraries(velox_dwio_faulty_file_sink velox_file_test_utils
+                     velox_dwio_common)
+
+# There is an issue with the VTT symbol for the InlineExecutor from folly when
+# building on Linux with Clang15. It is not created and results in a SEGV when
+# attempting to construct the InlineExecutor. nm output shows no address for the
+# "v VTT for folly::InlineExecutor" symbol while for a debug build it shows
+# "000000000185d3e0 V VTT for folly::InlineExecutor" symbol. It seems to have
+# been optimized away by Clang15 and may be some kind of bug. Changing the
+# optimization level to 0 results in proper creation/linkage and successful
+# execution of the test. Review if this is still necessary when upgrading Clang.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set_property(
+    SOURCE ParallelForTest.cpp
+    APPEND
+    PROPERTY COMPILE_OPTIONS -O0)
+endif()
 
 add_executable(
   velox_dwio_common_test
@@ -50,9 +68,9 @@ target_link_libraries(
   Folly::folly
   ${TEST_LINK_LIBS}
   gflags::gflags
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   glog::glog
   fmt::fmt
   protobuf::libprotobuf)

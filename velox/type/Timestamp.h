@@ -117,6 +117,9 @@ struct Timestamp {
   /// and the number of nanoseconds.
   static Timestamp fromDaysAndNanos(int32_t days, int64_t nanos);
 
+  // date is the number of days since unix epoch.
+  static Timestamp fromDate(int32_t date);
+
   // Returns the current unix timestamp (ms precision).
   static Timestamp now();
 
@@ -505,7 +508,7 @@ struct formatter<facebook::velox::TimestampToStringOptions::Precision>
     : formatter<int> {
   auto format(
       facebook::velox::TimestampToStringOptions::Precision s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };
@@ -514,7 +517,7 @@ struct formatter<facebook::velox::TimestampToStringOptions::Mode>
     : formatter<int> {
   auto format(
       facebook::velox::TimestampToStringOptions::Mode s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

@@ -40,19 +40,19 @@ class SelectiveStructColumnReaderBase
     VELOX_CHECK_EQ(fileType_->id(), fileType->id(), "working on the same node");
   }
 
-  void seekTo(vector_size_t offset, bool readsNullsOnly) override;
+  void seekTo(int64_t offset, bool readsNullsOnly) override;
 
-  void seekToRowGroup(uint32_t index) override {
+  void seekToRowGroup(int64_t index) override {
     dwio::common::SelectiveStructColumnReaderBase::seekToRowGroup(index);
     if (isTopLevel_ && !formatData_->hasNulls()) {
       readOffset_ = index * rowsPerRowGroup_;
       return;
     }
+
     // There may be a nulls stream but no other streams for the struct.
     formatData_->seekToRowGroup(index);
-    // Set the read offset recursively. Do this before seeking the
-    // children because list/map children will reset the offsets for
-    // their children.
+    // Set the read offset recursively. Do this before seeking the children
+    // because list/map children will reset the offsets for their children.
     setReadOffsetRecursive(index * rowsPerRowGroup_);
     for (auto& child : children_) {
       child->seekToRowGroup(index);
@@ -61,13 +61,13 @@ class SelectiveStructColumnReaderBase
 
   /// Advance field reader to the row group closest to specified offset by
   /// calling seekToRowGroup.
-  void advanceFieldReader(SelectiveColumnReader* reader, vector_size_t offset)
+  void advanceFieldReader(SelectiveColumnReader* reader, int64_t offset)
       override {
     if (!reader->isTopLevel()) {
       return;
     }
-    auto rowGroup = reader->readOffset() / rowsPerRowGroup_;
-    auto nextRowGroup = offset / rowsPerRowGroup_;
+    const auto rowGroup = reader->readOffset() / rowsPerRowGroup_;
+    const auto nextRowGroup = offset / rowsPerRowGroup_;
     if (nextRowGroup > rowGroup) {
       reader->seekToRowGroup(nextRowGroup);
       reader->setReadOffset(nextRowGroup * rowsPerRowGroup_);
@@ -78,7 +78,8 @@ class SelectiveStructColumnReaderBase
   const int32_t rowsPerRowGroup_;
 };
 
-struct SelectiveStructColumnReader : SelectiveStructColumnReaderBase {
+class SelectiveStructColumnReader : public SelectiveStructColumnReaderBase {
+ public:
   SelectiveStructColumnReader(
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,

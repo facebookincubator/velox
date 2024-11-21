@@ -23,16 +23,37 @@
 #include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox {
-
 namespace {
-void writeIOTiming(const CpuWallTiming& delta) {
-  addThreadLocalRuntimeStat(
-      LazyVector::kWallNanos,
-      RuntimeCounter(delta.wallNanos, RuntimeCounter::Unit::kNanos));
-  addThreadLocalRuntimeStat(
-      LazyVector::kCpuNanos,
-      RuntimeCounter(delta.cpuNanos, RuntimeCounter::Unit::kNanos));
-}
+
+// Convenience class to record cpu and wall time from construction, updating
+// thread local stats at destruction, including input bytes of the vector passed
+// as parameter.
+class LazyIoStatsRecorder {
+ public:
+  LazyIoStatsRecorder(VectorPtr* vector) : vector_(vector) {}
+
+  ~LazyIoStatsRecorder() {
+    auto cpuDelta = timer_.elapsed();
+    addThreadLocalRuntimeStat(
+        LazyVector::kWallNanos,
+        RuntimeCounter(cpuDelta.wallNanos, RuntimeCounter::Unit::kNanos));
+    addThreadLocalRuntimeStat(
+        LazyVector::kCpuNanos,
+        RuntimeCounter(cpuDelta.cpuNanos, RuntimeCounter::Unit::kNanos));
+
+    if (*vector_) {
+      addThreadLocalRuntimeStat(
+          LazyVector::kInputBytes,
+          RuntimeCounter(
+              (*vector_)->estimateFlatSize(), RuntimeCounter::Unit::kBytes));
+    }
+  }
+
+ private:
+  DeltaCpuWallTimeStopWatch timer_;
+  VectorPtr* vector_;
+};
+
 } // namespace
 
 void VectorLoader::load(
@@ -41,7 +62,7 @@ void VectorLoader::load(
     vector_size_t resultSize,
     VectorPtr* result) {
   {
-    DeltaCpuWallTimer timer([&](auto& delta) { writeIOTiming(delta); });
+    LazyIoStatsRecorder recorder(result);
     loadInternal(rows, hook, resultSize, result);
   }
   if (hook) {
@@ -69,7 +90,7 @@ void VectorLoader::load(
       return;
     }
   }
-  std::vector<vector_size_t> positions(rows.countSelected());
+  raw_vector<vector_size_t> positions(rows.countSelected());
   simd::indicesOfSetBits(
       rows.allBits(), rows.begin(), rows.end(), positions.data());
   load(positions, hook, resultSize, result);
@@ -260,7 +281,7 @@ void LazyVector::loadVectorInternal() const {
     }
     SelectivityVector allRows(BaseVector::length_);
     loader_->load(allRows, nullptr, size(), &vector_);
-    VELOX_CHECK(vector_);
+    VELOX_CHECK_NOT_NULL(vector_);
     if (vector_->encoding() == VectorEncoding::Simple::LAZY) {
       vector_ = vector_->asUnchecked<LazyVector>()->loadedVectorShared();
     } else {
@@ -274,7 +295,7 @@ void LazyVector::loadVectorInternal() const {
           BaseVector::nulls_->as<uint64_t>();
     }
   } else {
-    VELOX_CHECK(vector_);
+    VELOX_CHECK_NOT_NULL(vector_);
   }
 }
 } // namespace facebook::velox

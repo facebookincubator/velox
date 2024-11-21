@@ -21,9 +21,19 @@
 #include "velox/experimental/wave/common/CudaUtil.cuh"
 #include "velox/experimental/wave/common/Exception.h"
 
+#include <assert.h>
+#include <mutex>
 #include <sstream>
 
 namespace facebook::velox::wave {
+
+void cuCheck(CUresult result, const char* file, int32_t line) {
+  if (result != CUDA_SUCCESS) {
+    const char* str;
+    cuGetErrorString(result, &str);
+    waveError(fmt::format("Cuda error: {}:{} {}", file, line, str));
+  }
+}
 
 void cudaCheck(cudaError_t err, const char* file, int line) {
   if (err == cudaSuccess) {
@@ -41,6 +51,91 @@ void cudaCheckFatal(cudaError_t err, const char* file, int line) {
       fmt::format("Cuda error: {}:{} {}", file, line, cudaGetErrorString(err));
   std::cerr << err << std::endl;
   exit(1);
+}
+
+namespace {
+std::mutex ctxMutex;
+bool driverInited = false;
+
+// A context for each device. Each is initialized on first use and made the
+// primary context for the device.
+std::vector<CUcontext> contexts;
+// Device structs to 1:1 to contexts.
+std::vector<std::unique_ptr<Device>> devices;
+
+Device* setDriverDevice(int32_t deviceId) {
+  if (!driverInited) {
+    std::lock_guard<std::mutex> l(ctxMutex);
+    CU_CHECK(cuInit(0));
+    int32_t cnt;
+    CU_CHECK(cuDeviceGetCount(&cnt));
+    contexts.resize(cnt);
+    devices.resize(cnt);
+    if (cnt == 0) {
+      waveError("No Cuda devices found");
+    }
+  }
+  if (deviceId >= contexts.size()) {
+    waveError(fmt::format("Bad device id {}", deviceId));
+  }
+  if (contexts[deviceId] != nullptr) {
+    cuCtxSetCurrent(contexts[deviceId]);
+    return devices[deviceId].get();
+  }
+  {
+    std::lock_guard<std::mutex> l(ctxMutex);
+    CUdevice dev;
+    CU_CHECK(cuDeviceGet(&dev, deviceId));
+    CU_CHECK(cuDevicePrimaryCtxRetain(&contexts[deviceId], dev));
+    devices[deviceId] = std::make_unique<Device>(deviceId);
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, deviceId));
+    auto& device = devices[deviceId];
+    device->model = prop.name;
+    device->major = prop.major;
+    device->minor = prop.minor;
+    device->globalMB = prop.totalGlobalMem >> 20;
+    device->numSM = prop.multiProcessorCount;
+    device->sharedMemPerSM = prop.sharedMemPerMultiprocessor;
+    device->L2Size = prop.l2CacheSize;
+    device->persistingL2MaxSize = prop.persistingL2CacheMaxSize;
+  }
+  CU_CHECK(cuCtxSetCurrent(contexts[deviceId]));
+  return devices[deviceId].get();
+}
+
+} // namespace
+
+Device* currentDevice() {
+  CUcontext ctx;
+  CU_CHECK(cuCtxGetCurrent(&ctx));
+  if (!ctx) {
+    return nullptr;
+  }
+  for (auto i = 0; i < contexts.size(); ++i) {
+    if (contexts[i] == ctx) {
+      return devices[i].get();
+    }
+  }
+  waveError("Device context not found. Inconsistent state.");
+  return nullptr;
+}
+
+Device* getDevice(int32_t deviceId) {
+  Device* save = nullptr;
+  if (driverInited) {
+    save = currentDevice();
+  }
+  auto* dev = setDriverDevice(deviceId);
+  if (save) {
+    setDevice(save);
+  }
+  return dev;
+}
+
+void setDevice(Device* device) {
+  setDriverDevice(device->deviceId);
+  CUDA_CHECK(cudaSetDevice(device->deviceId));
 }
 
 namespace {
@@ -68,6 +163,9 @@ class CudaDeviceAllocator : public GpuAllocator {
   void free(void* ptr, size_t /*size*/) override {
     cudaFree(ptr);
   }
+  bool isDevice() const override {
+    return true;
+  }
 };
 
 class CudaHostAllocator : public GpuAllocator {
@@ -81,6 +179,10 @@ class CudaHostAllocator : public GpuAllocator {
   void free(void* ptr, size_t /*size*/) override {
     cudaFreeHost(ptr);
   };
+
+  bool isHost() const override {
+    return true;
+  }
 };
 
 } // namespace
@@ -99,15 +201,7 @@ GpuAllocator* getHostAllocator(Device* /*device*/) {
   return allocator;
 }
 
-// Always returns device 0.
-Device* getDevice(int32_t /*preferredDevice*/) {
-  static Device device(0);
-  return &device;
-}
-
-void setDevice(Device* device) {
-  CUDA_CHECK(cudaSetDevice(device->deviceId));
-}
+Stream::Stream(std::unique_ptr<StreamImpl> impl) : stream_(std::move(impl)) {}
 
 Stream::Stream() {
   stream_ = std::make_unique<StreamImpl>();
@@ -115,7 +209,9 @@ Stream::Stream() {
 }
 
 Stream::~Stream() {
-  cudaStreamDestroy(stream_->stream);
+  if (stream_->stream) {
+    cudaStreamDestroy(stream_->stream);
+  }
 }
 
 void Stream::wait() {
@@ -125,6 +221,10 @@ void Stream::wait() {
 void Stream::prefetch(Device* device, void* ptr, size_t size) {
   CUDA_CHECK(cudaMemPrefetchAsync(
       ptr, size, device ? device->deviceId : cudaCpuDeviceId, stream_->stream));
+}
+
+void Stream::memset(void* ptr, int32_t value, size_t size) {
+  CUDA_CHECK(cudaMemsetAsync(ptr, value, size, stream_->stream));
 }
 
 void Stream::hostToDeviceAsync(
@@ -137,6 +237,7 @@ void Stream::hostToDeviceAsync(
       size,
       cudaMemcpyHostToDevice,
       stream_->stream));
+  isTransfer_ = true;
 }
 
 void Stream::deviceToHostAsync(
@@ -281,6 +382,39 @@ void printKernels() {
     std::cout << kernelEntries[i].name << " - "
               << getRegisteredKernelInfo(kernelEntries[i].name).toString()
               << std::endl;
+  }
+}
+
+int32_t numRegisteredHeaders{0};
+const char* registeredHeaders[100];
+const char* registeredHeaderNames[100];
+char nameString[5000];
+int32_t nameStringFill{0};
+
+bool registerHeader(const char* header) {
+  assert(
+      numRegisteredHeaders + 1 <
+      sizeof(registeredHeaders) / sizeof(registeredHeaders[0]));
+  auto newline = strchr(header, '\n');
+  assert(newline != nullptr);
+  registeredHeaderNames[numRegisteredHeaders] = &nameString[0] + nameStringFill;
+  int32_t nameLength = newline - header;
+  assert(sizeof(nameString) > nameLength + nameStringFill);
+  memcpy(&nameString[0] + nameStringFill, header, nameLength);
+  nameStringFill += nameLength + 1;
+
+  registeredHeaders[numRegisteredHeaders++] = newline + 1;
+  return true;
+}
+
+void getRegisteredHeaders(
+    std::vector<const char*>& names,
+    std::vector<const char*>& headers) {
+  names.resize(numRegisteredHeaders);
+  headers.resize(numRegisteredHeaders);
+  for (auto i = 0; i < names.size(); ++i) {
+    names[i] = registeredHeaderNames[i];
+    headers[i] = registeredHeaders[i];
   }
 }
 

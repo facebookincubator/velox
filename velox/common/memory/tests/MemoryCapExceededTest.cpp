@@ -70,8 +70,8 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
   std::vector<std::string> expectedTexts = {
       "Exceeded memory pool capacity after attempt to grow capacity through "
       "arbitration. Requestor pool name 'op.2.0.0.Aggregation', request size "
-      "2.00MB, memory pool capacity 5.00MB, memory pool max capacity 5.00MB, "
-      "memory manager capacity 8.00GB, current usage 3.70MB"};
+      "2.00MB, current usage 3.70MB, memory pool capacity 5.00MB, memory pool "
+      "max capacity 5.00MB, memory manager capacity 8.00GB"};
   std::vector<std::string> expectedDetailedTexts = {
       "node.1 usage 12.00KB reserved 1.00MB peak 1.00MB",
       "op.1.0.0.FilterProject usage 12.00KB reserved 1.00MB peak 12.00KB",
@@ -206,8 +206,7 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
     memory::MemoryManager manager(
         {.allocatorCapacity = (int64_t)testData.allocatorCapacity,
          .useMmapAllocator = testData.useMmap,
-         .arbitratorCapacity = (int64_t)testData.allocatorCapacity,
-         .arbitratorReservedCapacity = 0});
+         .arbitratorCapacity = (int64_t)testData.allocatorCapacity});
 
     vector_size_t size = 1'024;
     // This limit ensures that only the Aggregation Operator fails.

@@ -33,7 +33,6 @@ constexpr int64_t MB = 1024L * KB;
 
 constexpr uint64_t kMemoryCapacity = 512 * MB;
 constexpr uint64_t kMemoryPoolInitCapacity = 16 * MB;
-constexpr uint64_t kMemoryPoolTransferCapacity = 8 * MB;
 
 class FakeMemoryReclaimer : public exec::MemoryReclaimer {
  public:
@@ -48,7 +47,7 @@ class FakeMemoryReclaimer : public exec::MemoryReclaimer {
     if (driverThreadCtx == nullptr) {
       return;
     }
-    auto* driver = driverThreadCtx->driverCtx.driver;
+    auto* driver = driverThreadCtx->driverCtx()->driver;
     ASSERT_TRUE(driver != nullptr);
     if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
       VELOX_FAIL("Terminate detected when entering suspension");
@@ -60,7 +59,7 @@ class FakeMemoryReclaimer : public exec::MemoryReclaimer {
     if (driverThreadCtx == nullptr) {
       return;
     }
-    auto* driver = driverThreadCtx->driverCtx.driver;
+    auto* driver = driverThreadCtx->driverCtx()->driver;
     ASSERT_TRUE(driver != nullptr);
     driver->task()->leaveSuspended(driver->state());
   }
@@ -95,8 +94,9 @@ std::shared_ptr<core::QueryCtx> newQueryCtx(
 std::unique_ptr<memory::MemoryManager> createMemoryManager(
     int64_t arbitratorCapacity = kMemoryCapacity,
     uint64_t memoryPoolInitCapacity = kMemoryPoolInitCapacity,
-    uint64_t memoryPoolTransferCapacity = kMemoryPoolTransferCapacity,
-    uint64_t maxReclaimWaitMs = 0);
+    uint64_t maxReclaimWaitMs = 5 * 60 * 1'000,
+    uint64_t fastExponentialGrowthCapacityLimit = 0,
+    double slowCapacityGrowPct = 0);
 
 // Contains the query result.
 struct QueryTestResult {
@@ -112,6 +112,7 @@ core::PlanNodePtr hashJoinPlan(
 QueryTestResult runHashJoinTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     bool enableSpilling,
@@ -124,6 +125,7 @@ core::PlanNodePtr aggregationPlan(
 QueryTestResult runAggregateTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     bool enableSpilling,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
@@ -136,6 +138,7 @@ core::PlanNodePtr orderByPlan(
 QueryTestResult runOrderByTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     bool enableSpilling,
@@ -148,6 +151,7 @@ core::PlanNodePtr rowNumberPlan(
 QueryTestResult runRowNumberTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     bool enableSpilling,
@@ -160,6 +164,7 @@ core::PlanNodePtr topNPlan(
 QueryTestResult runTopNTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     bool enableSpilling,
@@ -173,6 +178,7 @@ core::PlanNodePtr writePlan(
 QueryTestResult runWriteTask(
     const std::vector<RowVectorPtr>& vectors,
     const std::shared_ptr<core::QueryCtx>& queryCtx,
+    bool serialExecution,
     uint32_t numDrivers,
     memory::MemoryPool* pool,
     const std::string& kHiveConnectorId,

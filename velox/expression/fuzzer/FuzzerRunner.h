@@ -22,10 +22,14 @@
 #include <unordered_set>
 #include <vector>
 
+#include "velox/exec/fuzzer/ExprTransformer.h"
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/expression/fuzzer/ExpressionFuzzerVerifier.h"
 #include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::velox::fuzzer {
+
+using facebook::velox::exec::test::ExprTransformer;
 
 /// FuzzerRunner leverages ExpressionFuzzerVerifier to create a gtest unit test.
 class FuzzerRunner {
@@ -33,12 +37,22 @@ class FuzzerRunner {
   static int run(
       size_t seed,
       const std::unordered_set<std::string>& skipFunctions,
-      const std::unordered_map<std::string, std::string>& queryConfigs);
+      const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
+          exprTransformers,
+      const std::unordered_map<std::string, std::string>& queryConfigs,
+      const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
+          argGenerators,
+      std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner);
 
   static void runFromGtest(
       size_t seed,
       const std::unordered_set<std::string>& skipFunctions,
-      const std::unordered_map<std::string, std::string>& queryConfigs);
+      const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
+          exprTransformers,
+      const std::unordered_map<std::string, std::string>& queryConfigs,
+      const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
+          argGenerators,
+      std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner);
 };
 
 } // namespace facebook::velox::fuzzer

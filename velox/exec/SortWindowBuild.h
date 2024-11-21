@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/exec/PrefixSort.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/WindowBuild.h"
 
@@ -29,9 +30,14 @@ class SortWindowBuild : public WindowBuild {
   SortWindowBuild(
       const std::shared_ptr<const core::WindowNode>& node,
       velox::memory::MemoryPool* pool,
+      common::PrefixSortConfig&& prefixSortConfig,
       const common::SpillConfig* spillConfig,
       tsan_atomic<bool>* nonReclaimableSection,
       folly::Synchronized<common::SpillStats>* spillStats);
+
+  ~SortWindowBuild() override {
+    pool_->release();
+  }
 
   bool needsInput() override {
     // No partitions are available yet, so can consume input rows.
@@ -53,10 +59,12 @@ class SortWindowBuild : public WindowBuild {
 
   bool hasNextPartition() override;
 
-  std::unique_ptr<WindowPartition> nextPartition() override;
+  std::shared_ptr<WindowPartition> nextPartition() override;
 
  private:
   void ensureInputFits(const RowVectorPtr& input);
+
+  void ensureSortFits();
 
   void setupSpiller();
 
@@ -82,10 +90,14 @@ class SortWindowBuild : public WindowBuild {
   // keys are set to default values. Compare flags for sorting keys match
   // sorting order specified in the plan node.
   //
-  // Used to sort 'data_' while spilling.
-  const std::vector<CompareFlags> spillCompareFlags_;
+  // Used to sort 'data_' while spilling and in Prefix sort.
+  const std::vector<CompareFlags> compareFlags_;
 
   memory::MemoryPool* const pool_;
+
+  // Config for Prefix-sort.
+  const common::PrefixSortConfig prefixSortConfig_;
+
   folly::Synchronized<common::SpillStats>* const spillStats_;
 
   // allKeyInfo_ is a combination of (partitionKeyInfo_ and sortKeyInfo_).
@@ -98,12 +110,13 @@ class SortWindowBuild : public WindowBuild {
   // The rows are sorted by partitionKeys + sortKeys. This total
   // ordering can be used to split partitions (with the correct
   // order by) for the processing.
-  std::vector<char*> sortedRows_;
+  std::vector<char*, memory::StlAllocator<char*>> sortedRows_;
 
   // This is a vector that gives the index of the start row
   // (in sortedRows_) of each partition in the RowContainer data_.
   // This auxiliary structure helps demarcate partitions.
-  std::vector<vector_size_t> partitionStartRows_;
+  std::vector<vector_size_t, memory::StlAllocator<vector_size_t>>
+      partitionStartRows_;
 
   // Current partition being output. Used to construct WindowPartitions
   // during resetPartition.

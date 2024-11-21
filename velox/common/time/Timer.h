@@ -44,6 +44,24 @@ class MicrosecondTimer {
   uint64_t* timer_;
 };
 
+class NanosecondTimer {
+ public:
+  explicit NanosecondTimer(uint64_t* timer) : timer_(timer) {
+    start_ = std::chrono::steady_clock::now();
+  }
+
+  ~NanosecondTimer() {
+    auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start_);
+
+    (*timer_) += duration.count();
+  }
+
+ private:
+  std::chrono::steady_clock::time_point start_;
+  uint64_t* timer_;
+};
+
 /// Measures the time between construction and destruction with CPU clock
 /// counter (rdtsc on X86) and increments a user-supplied counter with the cycle
 /// count.
@@ -70,13 +88,15 @@ class ClockTimer {
   uint64_t start_;
 };
 
-// Returns the current epoch time in seconds.
-size_t getCurrentTimeSec();
+/// Returns the current epoch time in seconds.
+uint64_t getCurrentTimeSec();
 
 /// Returns the current epoch time in milliseconds.
-size_t getCurrentTimeMs();
+uint64_t getCurrentTimeMs();
 
 /// Returns the current epoch time in microseconds.
-size_t getCurrentTimeMicro();
+uint64_t getCurrentTimeMicro();
 
+/// Returns the current epoch time in nanoseconds.
+uint64_t getCurrentTimeNano();
 } // namespace facebook::velox

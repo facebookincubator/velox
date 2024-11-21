@@ -343,6 +343,7 @@ class SpillState {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
+      const std::optional<common::PrefixSortConfig>& prefixSortConfig,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats,
       const std::string& fileCreateConfig = {});
@@ -367,6 +368,10 @@ class SpillState {
 
   common::CompressionKind compressionKind() const {
     return compressionKind_;
+  }
+
+  const std::optional<common::PrefixSortConfig>& prefixSortConfig() const {
+    return prefixSortConfig_;
   }
 
   const std::vector<CompareFlags>& sortCompareFlags() const {
@@ -439,6 +444,7 @@ class SpillState {
   const uint64_t targetFileSize_;
   const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
+  const std::optional<common::PrefixSortConfig> prefixSortConfig_;
   const std::string fileCreateConfig_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<common::SpillStats>* const stats_;
@@ -500,7 +506,8 @@ struct hash<::facebook::velox::exec::SpillPartitionId> {
 template <>
 struct fmt::formatter<facebook::velox::exec::SpillPartitionId>
     : formatter<std::string> {
-  auto format(facebook::velox::exec::SpillPartitionId s, format_context& ctx) {
+  auto format(facebook::velox::exec::SpillPartitionId s, format_context& ctx)
+      const {
     return formatter<std::string>::format(s.toString(), ctx);
   }
 };

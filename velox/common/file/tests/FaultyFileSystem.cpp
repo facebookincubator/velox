@@ -38,9 +38,9 @@ std::function<bool(std::string_view)> schemeMatcher() {
 folly::once_flag faultFilesystemInitOnceFlag;
 
 std::function<std::shared_ptr<
-    FileSystem>(std::shared_ptr<const Config>, std::string_view)>
+    FileSystem>(std::shared_ptr<const config::ConfigBase>, std::string_view)>
 fileSystemGenerator() {
-  return [](std::shared_ptr<const Config> properties,
+  return [](std::shared_ptr<const config::ConfigBase> properties,
             std::string_view /*unused*/) {
     // One instance of faulty FileSystem is sufficient. Initializes on first
     // access and reuse after that.
@@ -112,9 +112,11 @@ std::vector<std::string> FaultyFileSystem::list(std::string_view path) {
   return files;
 }
 
-void FaultyFileSystem::mkdir(std::string_view path) {
+void FaultyFileSystem::mkdir(
+    std::string_view path,
+    const DirectoryOptions& options) {
   const auto delegatedDirPath = extractPath(path);
-  getFileSystem(delegatedDirPath, config_)->mkdir(delegatedDirPath);
+  getFileSystem(delegatedDirPath, config_)->mkdir(delegatedDirPath, options);
 }
 
 void FaultyFileSystem::rmdir(std::string_view path) {

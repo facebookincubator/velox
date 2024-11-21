@@ -19,8 +19,7 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/TypeAliases.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 template <typename T>
 void DictionaryVector<T>::setInternalState() {
@@ -185,8 +184,9 @@ VectorPtr DictionaryVector<T>::slice(vector_size_t offset, vector_size_t length)
       this->sliceNulls(offset, length),
       length,
       valueVector(),
-      BaseVector::sliceBuffer(
-          *INTEGER(), indices_, offset, length, this->pool_));
+      indices_
+          ? Buffer::slice<vector_size_t>(indices_, offset, length, this->pool_)
+          : indices_);
 }
 
 template <typename T>
@@ -217,5 +217,4 @@ void DictionaryVector<T>::validate(const VectorValidateOptions& options) const {
   dictionaryValues_->validate(options);
 }
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox

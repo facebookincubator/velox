@@ -62,8 +62,14 @@ AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
   return *this;
 }
 
-AssertQueryBuilder& AssertQueryBuilder::singleThreaded(bool singleThreaded) {
-  params_.singleThreaded = singleThreaded;
+AssertQueryBuilder& AssertQueryBuilder::serialExecution(bool serial) {
+  if (serial) {
+    params_.serialExecution = true;
+    executor_ = nullptr;
+    return *this;
+  }
+  params_.serialExecution = false;
+  executor_ = newExecutor();
   return *this;
 }
 
@@ -87,6 +93,18 @@ AssertQueryBuilder& AssertQueryBuilder::connectorSessionProperty(
     const std::string& key,
     const std::string& value) {
   connectorSessionProperties_[connectorId][key] = value;
+  return *this;
+}
+
+AssertQueryBuilder& AssertQueryBuilder::connectorSessionProperties(
+    const std::unordered_map<
+        std::string,
+        std::unordered_map<std::string, std::string>>& properties) {
+  for (const auto& [connectorId, values] : properties) {
+    for (const auto& [key, value] : values) {
+      connectorSessionProperty(connectorId, key, value);
+    }
+  }
   return *this;
 }
 
@@ -241,7 +259,8 @@ AssertQueryBuilder::readCursor() {
       params_.queryCtx = core::QueryCtx::create(
           executor_.get(),
           core::QueryConfig({}),
-          std::unordered_map<std::string, std::shared_ptr<Config>>{},
+          std::
+              unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
           cache::AsyncDataCache::getInstance(),
           nullptr,
           nullptr,

@@ -21,7 +21,7 @@
 
 namespace facebook::velox {
 
-uint64_t DecodedVector::constantNullMask_;
+uint64_t DecodedVector::constantNullMask_{0};
 
 namespace {
 std::vector<vector_size_t> makeConsecutiveIndices(size_t size) {
@@ -51,14 +51,14 @@ void DecodedVector::decode(
   reset(end(vector.size(), rows));
   partialRowsDecoded_ = rows != nullptr;
   loadLazy_ = loadLazy;
-  bool isTopLevelLazyAndLoaded =
+  const bool isTopLevelLazyAndLoaded =
       vector.isLazy() && vector.asUnchecked<LazyVector>()->isLoaded();
   if (isTopLevelLazyAndLoaded || (loadLazy_ && isLazyNotLoaded(vector))) {
     decode(*vector.loadedVector(), rows, loadLazy);
     return;
   }
 
-  auto encoding = vector.encoding();
+  const auto encoding = vector.encoding();
   switch (encoding) {
     case VectorEncoding::Simple::FLAT:
     case VectorEncoding::Simple::BIASED:

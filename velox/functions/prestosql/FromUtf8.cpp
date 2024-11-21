@@ -16,8 +16,8 @@
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/Utf8Utils.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/functions/prestosql/Utf8Utils.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -172,7 +172,7 @@ class FromUtf8Function : public exec::VectorFunction {
       VELOX_USER_CHECK_EQ(
           charLength,
           replacement.size(),
-          "Replacement string must be empty or a single character")
+          "Replacement string must be empty or a single character");
     }
     return replacement;
   }

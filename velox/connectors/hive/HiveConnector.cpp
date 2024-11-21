@@ -21,18 +21,6 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
-#include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
-
-#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h" // @manual
-#include "velox/connectors/hive/storage_adapters/gcs/RegisterGCSFileSystem.h" // @manual
-#include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h" // @manual
-#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h" // @manual
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/orc/reader/OrcReader.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
-#include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/expression/FieldReference.h"
 
 #include <boost/lexical_cast.hpp>
@@ -45,7 +33,7 @@ namespace facebook::velox::connector::hive {
 
 HiveConnector::HiveConnector(
     const std::string& id,
-    std::shared_ptr<const Config> config,
+    std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* executor)
     : Connector(id),
       hiveConfig_(std::make_shared<HiveConfig>(config)),
@@ -101,7 +89,8 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
 }
 
 std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
-    int numPartitions) const {
+    int numPartitions,
+    bool localExchange) const {
   std::vector<int> bucketToPartitions;
   if (bucketToPartition_.empty()) {
     // NOTE: if hive partition function spec doesn't specify bucket to partition
@@ -111,6 +100,14 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
     for (int bucket = 0; bucket < numBuckets_; ++bucket) {
       bucketToPartitions[bucket] = bucket % numPartitions;
     }
+    if (localExchange) {
+      // Shuffle the map from bucket to partition for local exchange so we don't
+      // use the same map for remote shuffle.
+      std::shuffle(
+          bucketToPartitions.begin(),
+          bucketToPartitions.end(),
+          std::mt19937{0});
+    }
   }
   return std::make_unique<velox::connector::hive::HivePartitionFunction>(
       numBuckets_,
@@ -118,24 +115,6 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
                                  : bucketToPartition_,
       channels_,
       constValues_);
-}
-
-void HiveConnectorFactory::initialize() {
-  [[maybe_unused]] static bool once = []() {
-    dwio::common::registerFileSinks();
-    dwrf::registerDwrfReaderFactory();
-    dwrf::registerDwrfWriterFactory();
-    orc::registerOrcReaderFactory();
-
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
-
-    filesystems::registerS3FileSystem();
-    filesystems::registerHdfsFileSystem();
-    filesystems::registerGCSFileSystem();
-    filesystems::abfs::registerAbfsFileSystem();
-    return true;
-  }();
 }
 
 std::string HivePartitionFunctionSpec::toString() const {
@@ -201,7 +180,4 @@ void registerHivePartitionFunctionSerDe() {
       "HivePartitionFunctionSpec", HivePartitionFunctionSpec::deserialize);
 }
 
-VELOX_REGISTER_CONNECTOR_FACTORY(std::make_shared<HiveConnectorFactory>())
-VELOX_REGISTER_CONNECTOR_FACTORY(
-    std::make_shared<HiveHadoop2ConnectorFactory>())
 } // namespace facebook::velox::connector::hive

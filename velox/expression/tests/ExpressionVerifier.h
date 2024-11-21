@@ -18,14 +18,19 @@
 
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::test {
+
+using exec::test::ReferenceQueryRunner;
+using facebook::velox::fuzzer::InputRowMetadata;
 
 struct ExpressionVerifierOptions {
   bool disableConstantFolding{false};
@@ -38,25 +43,33 @@ class ExpressionVerifier {
   // File names used to persist data required for reproducing a failed test
   // case.
   static constexpr const std::string_view kInputVectorFileName = "input_vector";
-  static constexpr const std::string_view kIndicesOfLazyColumnsFileName =
-      "indices_of_lazy_columns";
+  static constexpr const std::string_view kInputRowMetadataFileName =
+      "input_row_metadata";
   static constexpr const std::string_view kResultVectorFileName =
       "result_vector";
   static constexpr const std::string_view kExpressionSqlFileName = "sql";
   static constexpr const std::string_view kComplexConstantsFileName =
       "complex_constants";
 
-  ExpressionVerifier(core::ExecCtx* execCtx, ExpressionVerifierOptions options)
-      : execCtx_(execCtx), options_(options) {}
+  ExpressionVerifier(
+      core::ExecCtx* execCtx,
+      ExpressionVerifierOptions options,
+      std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner)
+      : execCtx_(execCtx),
+        options_(options),
+        referenceQueryRunner_{referenceQueryRunner} {}
 
-  // Executes expressions both using common path (all evaluation
-  // optimizations) and simplified path. Additionally, a list of column
-  // indices can be passed via 'columnsToWrapInLazy' which specify the
-  // columns/children in the input row vector that should be wrapped in a lazy
-  // layer before running it through the common evaluation path. The list can
-  // contain negative column indices that represent lazy vectors that should be
-  // preloaded before being fed to the evaluator. This list is sorted on the
-  // absolute value of the entries.
+  // Executes expressions using common path (all evaluation
+  // optimizations) and compares the result with either the simplified path or a
+  // reference query runner. An optional selectivity vector 'rowsToVerify' can
+  // be passed which specifies which rows to evaluate and verify. If its not
+  // provided (by passing std::nullopt) then all rows will be verified.
+  // Additionally, a list of column indices can be passed via
+  // 'columnsToWrapInLazy' which specify the columns/children in the input row
+  // vector that should be wrapped in a lazy layer before running it through the
+  // common evaluation path. The list can contain negative column indices that
+  // represent lazy vectors that should be preloaded before being fed to the
+  // evaluator. This list is sorted on the absolute value of the entries.
   // Returns:
   //  - result of evaluating the expressions if both paths succeeded and
   //  returned the exact same vectors.
@@ -66,16 +79,17 @@ class ExpressionVerifier {
   fuzzer::ResultOrError verify(
       const std::vector<core::TypedExprPtr>& plans,
       const RowVectorPtr& rowVector,
+      const std::optional<SelectivityVector>& rowsToVerify,
       VectorPtr&& resultVector,
       bool canThrow,
-      std::vector<int> columnsToWarpInLazy = {});
+      const InputRowMetadata& inputRowMetadata = {});
 
  private:
   // Utility method used to serialize the relevant data required to repro a
   // crash.
   void persistReproInfo(
       const VectorPtr& inputVector,
-      std::vector<int> columnsToWarpInLazy,
+      const InputRowMetadata& inputRowMetadata,
       const VectorPtr& resultVector,
       const std::string& sql,
       const std::vector<VectorPtr>& complexConstants);
@@ -85,7 +99,7 @@ class ExpressionVerifier {
   // otherwise.
   void persistReproInfoIfNeeded(
       const VectorPtr& inputVector,
-      const std::vector<int>& columnsToWarpInLazy,
+      const InputRowMetadata& inputRowMetadata,
       const VectorPtr& resultVector,
       const std::string& sql,
       const std::vector<VectorPtr>& complexConstants);
@@ -93,6 +107,8 @@ class ExpressionVerifier {
  private:
   core::ExecCtx* execCtx_;
   const ExpressionVerifierOptions options_;
+
+  std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner_;
 };
 
 // Finds the minimum common subexpression which fails for a plan should it
@@ -102,5 +118,6 @@ void computeMinimumSubExpression(
     VectorFuzzer& fuzzer,
     const std::vector<core::TypedExprPtr>& plans,
     const RowVectorPtr& rowVector,
-    const std::vector<int>& columnsToWrapInLazy);
+    const std::optional<SelectivityVector>& rowsToVerify,
+    const InputRowMetadata& inputRowMetadata);
 } // namespace facebook::velox::test

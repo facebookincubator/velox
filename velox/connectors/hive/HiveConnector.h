@@ -31,10 +31,11 @@ class HiveConnector : public Connector {
  public:
   HiveConnector(
       const std::string& id,
-      std::shared_ptr<const Config> config,
+      std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* executor);
 
-  const std::shared_ptr<const Config>& connectorConfig() const override {
+  const std::shared_ptr<const config::ConfigBase>& connectorConfig()
+      const override {
     return hiveConfig_->config();
   }
 
@@ -83,29 +84,18 @@ class HiveConnector : public Connector {
 class HiveConnectorFactory : public ConnectorFactory {
  public:
   static constexpr const char* kHiveConnectorName = "hive";
-  static constexpr const char* kHiveHadoop2ConnectorName = "hive-hadoop2";
 
   HiveConnectorFactory() : ConnectorFactory(kHiveConnectorName) {}
 
   explicit HiveConnectorFactory(const char* connectorName)
       : ConnectorFactory(connectorName) {}
 
-  /// Register HiveConnector components such as Dwrf, Parquet readers and
-  /// writers and FileSystems.
-  void initialize() override;
-
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> config,
+      std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* executor = nullptr) override {
     return std::make_shared<HiveConnector>(id, config, executor);
   }
-};
-
-class HiveHadoop2ConnectorFactory : public HiveConnectorFactory {
- public:
-  HiveHadoop2ConnectorFactory()
-      : HiveConnectorFactory(kHiveHadoop2ConnectorName) {}
 };
 
 class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
@@ -139,7 +129,8 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
             std::move(constValues)) {}
 
   std::unique_ptr<core::PartitionFunction> create(
-      int numPartitions) const override;
+      int numPartitions,
+      bool localExchange) const override;
 
   std::string toString() const override;
 

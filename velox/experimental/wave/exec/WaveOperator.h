@@ -78,8 +78,8 @@ class WaveOperator {
   /// Returns how many rows of output are available from 'this'. Source
   /// operators and cardinality increasing operators must return a correct
   /// answer if they are ready to produce data. Others should return 0.
-  virtual AdvanceResult canAdvance(WaveStream& stream) {
-    return {.numRows = 0};
+  virtual std::vector<AdvanceResult> canAdvance(WaveStream& stream) {
+    return {};
   }
 
   /// Adds processing for 'this' to 'stream'. If 'maxRows' is given,
@@ -99,6 +99,10 @@ class WaveOperator {
 
   virtual bool isSink() const {
     return false;
+  }
+
+  virtual void callUpdateStatus(WaveStream& stream, AdvanceResult& advance) {
+    VELOX_FAIL("Only Project supports callUpdateStatus()");
   }
 
   virtual std::string toString() const;
@@ -126,13 +130,6 @@ class WaveOperator {
   void setDriver(WaveDriver* driver) {
     driver_ = driver;
   }
-
-  // Returns the number of non-filtered out result rows in the invocation inside
-  // 'stream'. 'this' must have had schedule() called with the same stream and
-  // the stream must have arrived. The actual result rows may be non-contiguous
-  // in the result vectors and may need indirection to access, as seen in output
-  // operands of the corresponding executables.
-  virtual vector_size_t outputSize(WaveStream& stream) const = 0;
 
   const OperandSet& outputIds() const {
     return outputIds_;
@@ -171,7 +168,7 @@ class WaveOperator {
  protected:
   folly::Synchronized<exec::OperatorStats>& stats();
 
-  // Sequence number in WaveOperator sequence inside WaveDriver. IUsed to label
+  // Sequence number in WaveOperator sequence inside WaveDriver. Used to label
   // states of different oprators in WaveStream.
   int32_t id_;
 

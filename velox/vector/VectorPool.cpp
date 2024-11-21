@@ -61,7 +61,7 @@ bool VectorPool::release(VectorPtr& vector) {
   if (FOLLY_UNLIKELY(vector == nullptr)) {
     return false;
   }
-  if (!vector.unique() || vector->size() > kMaxRecycleSize) {
+  if (vector.use_count() != 1 || vector->size() > kMaxRecycleSize) {
     return false;
   }
 
@@ -82,6 +82,12 @@ size_t VectorPool::release(std::vector<VectorPtr>& vectors) {
     }
   }
   return numReleased;
+}
+
+void VectorPool::clear() {
+  for (auto& vectorPool : vectors_) {
+    vectorPool.clear();
+  }
 }
 
 bool VectorPool::TypePool::maybePushBack(VectorPtr& vector) {
@@ -126,5 +132,10 @@ VectorPtr VectorPool::TypePool::pop(
     return result;
   }
   return BaseVector::create(type, vectorSize, &pool);
+}
+
+void VectorPool::TypePool::clear() {
+  std::fill_n(vectors.begin(), kNumPerType, nullptr);
+  size = 0;
 }
 } // namespace facebook::velox

@@ -24,6 +24,7 @@ add_subdirectory(row)
 add_subdirectory(flag_definitions)
 add_subdirectory(external/date)
 add_subdirectory(external/md5)
+add_subdirectory(external/hdfs)
 #
 
 # examples depend on expression
@@ -57,6 +58,10 @@ add_subdirectory(connectors)
 
 if(${VELOX_ENABLE_EXEC})
   add_subdirectory(exec)
+  # Disable runner from pyvelox builds
+  if(${VELOX_BUILD_RUNNER})
+    add_subdirectory(runner)
+  endif()
 endif()
 
 if(${VELOX_ENABLE_DUCKDB})
@@ -69,9 +74,14 @@ if(${VELOX_ENABLE_GPU})
   endif()
   add_subdirectory(experimental/gpu)
   add_subdirectory(experimental/wave)
+  add_subdirectory(external/jitify)
 endif()
 
 # substrait converter
 if(${VELOX_ENABLE_SUBSTRAIT})
   add_subdirectory(substrait)
+endif()
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tool)
 endif()

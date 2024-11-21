@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <charconv>
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/CountBits.h"
@@ -309,6 +310,71 @@ class DecimalUtil {
     return remainder * resultSign;
   }
 
+  /// Returns the max required size to convert the decimal of this precision and
+  /// scale to varchar. A varchar's size is estimated with unscaled value
+  /// digits, dot, leading zero, and possible minus sign.
+  static int32_t maxStringViewSize(int precision, int scale);
+
+  /// @brief Convert the unscaled value of a decimal to string and write to raw
+  /// string buffer from start position.
+  /// @tparam T The type of input value.
+  /// @param unscaledValue The input unscaled value.
+  /// @param scale The scale of decimal.
+  /// @param maxSize The estimated max size of string.
+  /// @param startPosition The start position to write from.
+  /// @return The actual size of the string.
+  template <typename T>
+  static size_t castToString(
+      T unscaledValue,
+      int32_t scale,
+      int32_t maxSize,
+      char* const startPosition) {
+    char* writePosition = startPosition;
+    if (unscaledValue == 0) {
+      *writePosition++ = '0';
+      if (scale > 0) {
+        *writePosition++ = '.';
+        // Append trailing zeros.
+        std::memset(writePosition, '0', scale);
+        writePosition += scale;
+      }
+    } else {
+      if (unscaledValue < 0) {
+        *writePosition++ = '-';
+        unscaledValue = -unscaledValue;
+      }
+      auto [position, errorCode] = std::to_chars(
+          writePosition,
+          writePosition + maxSize,
+          unscaledValue / DecimalUtil::kPowersOfTen[scale]);
+      VELOX_DCHECK_EQ(
+          errorCode,
+          std::errc(),
+          "Failed to cast decimal to varchar: {}",
+          std::make_error_code(errorCode).message());
+      writePosition = position;
+
+      if (scale > 0) {
+        *writePosition++ = '.';
+        uint128_t fraction = unscaledValue % DecimalUtil::kPowersOfTen[scale];
+        // Append leading zeros.
+        int numLeadingZeros = std::max(scale - countDigits(fraction), 0);
+        std::memset(writePosition, '0', numLeadingZeros);
+        writePosition += numLeadingZeros;
+        // Append remaining fraction digits.
+        auto result =
+            std::to_chars(writePosition, writePosition + maxSize, fraction);
+        VELOX_DCHECK_EQ(
+            result.ec,
+            std::errc(),
+            "Failed to cast decimal to varchar: {}",
+            std::make_error_code(result.ec).message());
+        writePosition = result.ptr;
+      }
+    }
+    return writePosition - startPosition;
+  }
+
   /*
    * sum up and return overflow/underflow.
    */
@@ -412,6 +478,21 @@ class DecimalUtil {
   ///
   /// @return The length of out.
   static int32_t toByteArray(int128_t value, char* out);
+
+  /// Reverse byte order of an int128_t if native byte-order is little endian.
+  /// If native byte-order is big endian, the value will be unchanged. This
+  /// is similar to folly::Endian::big(), which does not support int128_t.
+  ///
+  /// \return A value with reversed byte-order for little endian platforms.
+  inline static int128_t bigEndian(int128_t value) {
+    if (folly::kIsLittleEndian) {
+      auto upper = folly::Endian::big(HugeInt::upper(value));
+      auto lower = folly::Endian::big(HugeInt::lower(value));
+      return HugeInt::build(lower, upper);
+    } else {
+      return value;
+    }
+  }
 
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
 }; // DecimalUtil

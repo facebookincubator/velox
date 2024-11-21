@@ -57,11 +57,21 @@ velox_add_library(
   OrderBy.cpp
   OutputBuffer.cpp
   OutputBufferManager.cpp
+  OperatorTraceReader.cpp
+  OperatorTraceScan.cpp
+  OperatorTraceWriter.cpp
+  TaskTraceReader.cpp
+  TaskTraceWriter.cpp
+  Trace.cpp
+  TraceConfig.cpp
+  TraceUtil.cpp
   PartitionedOutput.cpp
   PartitionFunction.cpp
+  PartitionStreamingWindowBuild.cpp
   PlanNodeStats.cpp
   PrefixSort.cpp
   ProbeOperatorState.cpp
+  RowsStreamingWindowBuild.cpp
   RowContainer.cpp
   RowNumber.cpp
   SortBuffer.cpp
@@ -71,7 +81,6 @@ velox_add_library(
   SpillFile.cpp
   Spiller.cpp
   StreamingAggregation.cpp
-  StreamingWindowBuild.cpp
   Strings.cpp
   TableScan.cpp
   TableWriteMerge.cpp

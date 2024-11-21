@@ -24,7 +24,7 @@ namespace {
 
 class PrefixSortTest : public exec::test::OperatorTestBase {
  protected:
-  std::vector<char*>
+  std::vector<char*, memory::StlAllocator<char*>>
   storeRows(int numRows, const RowVectorPtr& sortedRows, RowContainer* data);
 
   static constexpr CompareFlags kAsc{
@@ -57,18 +57,30 @@ class PrefixSortTest : public exec::test::OperatorTestBase {
         rowType->children().end()};
 
     RowContainer rowContainer(keyTypes, payloadTypes, pool_.get());
-    std::vector<char*> rows = storeRows(numRows, data, &rowContainer);
-
-    // Use PrefixSort to sort rows.
-    PrefixSort::sort(
-        rows,
-        pool_.get(),
+    auto rows = storeRows(numRows, data, &rowContainer);
+    const std::shared_ptr<memory::MemoryPool> sortPool =
+        rootPool_->addLeafChild("prefixsort");
+    const auto maxBytes = PrefixSort::maxRequiredBytes(
         &rowContainer,
         compareFlags,
         common::PrefixSortConfig{
             1024,
             // Set threshold to 0 to enable prefix-sort in small dataset.
-            0});
+            0},
+        sortPool.get());
+    const auto beforeBytes = sortPool->peakBytes();
+    ASSERT_EQ(sortPool->peakBytes(), 0);
+    // Use PrefixSort to sort rows.
+    PrefixSort::sort(
+        &rowContainer,
+        compareFlags,
+        common::PrefixSortConfig{
+            1024,
+            // Set threshold to 0 to enable prefix-sort in small dataset.
+            0},
+        sortPool.get(),
+        rows);
+    ASSERT_GE(maxBytes, sortPool->peakBytes() - beforeBytes);
 
     // Extract data from the RowContainer in order.
     const RowVectorPtr actual =
@@ -89,11 +101,11 @@ class PrefixSortTest : public exec::test::OperatorTestBase {
       const RowVectorPtr& sortedRows);
 };
 
-std::vector<char*> PrefixSortTest::storeRows(
+std::vector<char*, memory::StlAllocator<char*>> PrefixSortTest::storeRows(
     int numRows,
     const RowVectorPtr& sortedRows,
     RowContainer* data) {
-  std::vector<char*> rows;
+  std::vector<char*, memory::StlAllocator<char*>> rows(*pool());
   SelectivityVector allRows(numRows);
   rows.resize(numRows);
   for (int row = 0; row < numRows; ++row) {
@@ -116,7 +128,7 @@ const RowVectorPtr PrefixSortTest::generateExpectedResult(
   const auto rowType = asRowType(sortedRows->type());
   const int numKeys = compareFlags.size();
   RowContainer rowContainer(rowType->children(), pool_.get());
-  std::vector<char*> rows = storeRows(numRows, sortedRows, &rowContainer);
+  auto rows = storeRows(numRows, sortedRows, &rowContainer);
 
   std::sort(
       rows.begin(), rows.end(), [&](const char* leftRow, const char* rightRow) {
@@ -147,6 +159,12 @@ TEST_F(PrefixSortTest, singleKey) {
       makeFlatVector<int64_t>({5, 4, 3, 2, 1}),
       makeFlatVector<int32_t>({5, 4, 3, 2, 1}),
       makeFlatVector<int16_t>({5, 4, 3, 2, 1}),
+      makeFlatVector<int128_t>(
+          {5,
+           HugeInt::parse("1234567"),
+           HugeInt::parse("12345678901234567890"),
+           HugeInt::parse("12345679"),
+           HugeInt::parse("-12345678901234567890")}),
       makeFlatVector<float>({5.5, 4.4, 3.3, 2.2, 1.1}),
       makeFlatVector<double>({5.5, 4.4, 3.3, 2.2, 1.1}),
       makeFlatVector<Timestamp>(
@@ -174,6 +192,12 @@ TEST_F(PrefixSortTest, singleKeyWithNulls) {
       makeNullableFlatVector<int64_t>({5, 4, std::nullopt, 2, 1}),
       makeNullableFlatVector<int32_t>({5, 4, std::nullopt, 2, 1}),
       makeNullableFlatVector<int16_t>({5, 4, std::nullopt, 2, 1}),
+      makeNullableFlatVector<int128_t>(
+          {5,
+           HugeInt::parse("1234567"),
+           std::nullopt,
+           HugeInt::parse("12345679"),
+           HugeInt::parse("-12345678901234567890")}),
       makeNullableFlatVector<float>({5.5, 4.4, std::nullopt, 2.2, 1.1}),
       makeNullableFlatVector<double>({5.5, 4.4, std::nullopt, 2.2, 1.1}),
       makeNullableFlatVector<Timestamp>(
@@ -225,7 +249,8 @@ TEST_F(PrefixSortTest, fuzz) {
       TINYINT(),
       SMALLINT(),
       BIGINT(),
-      HUGEINT(),
+      DECIMAL(12, 2),
+      DECIMAL(25, 6),
       REAL(),
       DOUBLE(),
       TIMESTAMP(),
@@ -248,7 +273,8 @@ TEST_F(PrefixSortTest, fuzzMulti) {
       TINYINT(),
       SMALLINT(),
       BIGINT(),
-      HUGEINT(),
+      DECIMAL(12, 2),
+      DECIMAL(25, 6),
       REAL(),
       DOUBLE(),
       TIMESTAMP(),
@@ -267,6 +293,37 @@ TEST_F(PrefixSortTest, fuzzMulti) {
     testPrefixSort({kAsc, kAsc}, data);
     testPrefixSort({kDesc, kDesc}, data);
   }
+}
+
+TEST_F(PrefixSortTest, checkMaxNormalizedKeySizeForMultipleKeys) {
+  // Test the normalizedKeySize doesn't exceed the MaxNormalizedKeySize.
+  // The normalizedKeySize for BIGINT should be 8 + 1.
+  std::vector<TypePtr> keyTypes = {BIGINT(), BIGINT()};
+  std::vector<CompareFlags> compareFlags = {kAsc, kDesc};
+  auto sortLayout = PrefixSortLayout::makeSortLayout(keyTypes, compareFlags, 8);
+  ASSERT_FALSE(sortLayout.hasNormalizedKeys);
+
+  auto sortLayoutOneKey =
+      PrefixSortLayout::makeSortLayout(keyTypes, compareFlags, 9);
+  ASSERT_TRUE(sortLayoutOneKey.hasNormalizedKeys);
+  ASSERT_TRUE(sortLayoutOneKey.hasNonNormalizedKey);
+  ASSERT_EQ(sortLayoutOneKey.prefixOffsets.size(), 1);
+  ASSERT_EQ(sortLayoutOneKey.prefixOffsets[0], 0);
+
+  auto sortLayoutOneKey1 =
+      PrefixSortLayout::makeSortLayout(keyTypes, compareFlags, 17);
+  ASSERT_TRUE(sortLayoutOneKey1.hasNormalizedKeys);
+  ASSERT_TRUE(sortLayoutOneKey1.hasNonNormalizedKey);
+  ASSERT_EQ(sortLayoutOneKey1.prefixOffsets.size(), 1);
+  ASSERT_EQ(sortLayoutOneKey1.prefixOffsets[0], 0);
+
+  auto sortLayoutTwoKeys =
+      PrefixSortLayout::makeSortLayout(keyTypes, compareFlags, 18);
+  ASSERT_TRUE(sortLayoutTwoKeys.hasNormalizedKeys);
+  ASSERT_FALSE(sortLayoutTwoKeys.hasNonNormalizedKey);
+  ASSERT_EQ(sortLayoutTwoKeys.prefixOffsets.size(), 2);
+  ASSERT_EQ(sortLayoutTwoKeys.prefixOffsets[0], 0);
+  ASSERT_EQ(sortLayoutTwoKeys.prefixOffsets[1], 9);
 }
 } // namespace
 } // namespace facebook::velox::exec::prefixsort::test

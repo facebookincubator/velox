@@ -14,14 +14,14 @@
 project(Folly)
 cmake_minimum_required(VERSION 3.14)
 
-set(VELOX_FOLLY_BUILD_VERSION v2024.05.20.00)
+set(VELOX_FOLLY_BUILD_VERSION v2024.07.01.00)
 set(VELOX_FOLLY_BUILD_SHA256_CHECKSUM
-    f4a450e59f0b74d1b0b4e5c55ae38e820166c95d02f8a8a298e54a49a90aa057)
+    e78584ab7ba9a687285f2849bc0141e2422a5c808ad6ab3558c83d85975e25ed)
 set(VELOX_FOLLY_SOURCE_URL
     "https://github.com/facebook/folly/releases/download/${VELOX_FOLLY_BUILD_VERSION}/folly-${VELOX_FOLLY_BUILD_VERSION}.tar.gz"
 )
 
-resolve_dependency_url(FOLLY)
+velox_resolve_dependency_url(FOLLY)
 
 message(STATUS "Building Folly from source")
 
@@ -36,10 +36,6 @@ FetchContent_Declare(
   PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch
                 ${glog_patch})
 
-if(ON_APPLE_M1)
-  # folly will wrongly assume x86_64 if this is not set
-  set(CMAKE_LIBRARY_ARCHITECTURE aarch64)
-endif()
 # Suppress all warnings
 set(FOLLY_CXX_FLAGS -w)
 # Enable INT128 support

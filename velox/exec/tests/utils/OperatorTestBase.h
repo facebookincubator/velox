@@ -24,8 +24,6 @@
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/parse/ExpressionsParser.h"
-#include "velox/type/Variant.h"
-#include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -49,7 +47,9 @@ class OperatorTestBase : public testing::Test,
       int64_t arbitratorCapacity,
       int64_t arbitratorReservedCapacity,
       int64_t memoryPoolInitCapacity,
-      int64_t memoryPoolReservedCapacity);
+      int64_t memoryPoolReservedCapacity,
+      int64_t memoryPoolMinReclaimBytes,
+      int64_t memoryPoolAbortCapacityLimit);
 
   static void resetMemory();
 
@@ -116,6 +116,12 @@ class OperatorTestBase : public testing::Test,
       const core::PlanNodePtr& plan,
       const RowVectorPtr& expectedResults) {
     return test::assertQuery(plan, {expectedResults});
+  }
+
+  std::shared_ptr<Task> assertQuery(
+      const CursorParameters& params,
+      const RowVectorPtr& expectedResults) {
+    return test::assertQuery(params, {expectedResults});
   }
 
   /// Assumes plan has a single leaf node. All splits are added to that node.

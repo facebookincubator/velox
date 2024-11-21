@@ -60,8 +60,8 @@ General Aggregate Functions
 
 .. spark:function:: collect_set(x) -> array<[same as x]>
 
-    Returns an array consisting of all unique values from the input ``x`` elements. 
-    Null values are excluded, and returns an empty array when all inputs are null.
+    Returns an array consisting of all unique values from the input ``x`` elements excluding NULLs.
+    Returns empty array if input is empty or all NULL.
 
     Example::
 
@@ -146,6 +146,24 @@ General Aggregate Functions
         ) AS t(x, y);
 
     Returns b
+
+.. spark:function:: mode(x) -> [same as x]
+
+    Returns the most frequent value for the values within ``x``.
+    NULL values are ignored. If all the values are NULL, or
+    there are 0 rows, returns NULL.
+    If multiple values have the same greatest frequency, the 
+    return value could be any one of them.
+
+    Example::
+    
+        SELECT mode(x)
+        FROM (
+            VALUES
+                (0), (10), (10), (null), (null), (null)
+        ) AS t(x);
+
+    Returns 10
 
 .. spark:function:: regr_replacement(x) -> double
 

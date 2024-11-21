@@ -33,9 +33,6 @@ struct HiveConnectorSplit;
 using SubfieldFilters =
     std::unordered_map<common::Subfield, std::unique_ptr<common::Filter>>;
 
-constexpr const char* kPath = "$path";
-constexpr const char* kBucket = "$bucket";
-
 const std::string& getColumnName(const common::Subfield& subfield);
 
 void checkColumnNameLowerCase(const std::shared_ptr<const Type>& type);
@@ -47,6 +44,11 @@ void checkColumnNameLowerCase(
 
 void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr);
 
+struct SpecialColumnNames {
+  std::optional<std::string> rowIndex;
+  std::optional<std::string> rowId;
+};
+
 std::shared_ptr<common::ScanSpec> makeScanSpec(
     const RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
@@ -57,7 +59,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
         partitionKeys,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         infoColumns,
-    const std::shared_ptr<HiveColumnHandle>& rowIndexColumn,
+    const SpecialColumnNames& specialColumns,
     memory::MemoryPool* pool);
 
 void configureReaderOptions(
@@ -76,14 +78,14 @@ void configureReaderOptions(
     const std::unordered_map<std::string, std::string>& tableParameters = {});
 
 void configureRowReaderOptions(
-    dwio::common::RowReaderOptions& rowReaderOptions,
     const std::unordered_map<std::string, std::string>& tableParameters,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
-    const std::shared_ptr<const HiveConfig>& hiveConfig = nullptr,
-    const Config* sessionProperties = nullptr);
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const config::ConfigBase* sessionProperties,
+    dwio::common::RowReaderOptions& rowReaderOptions);
 
 bool testFilters(
     const common::ScanSpec* scanSpec,
@@ -107,5 +109,12 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     bool negated,
     SubfieldFilters& filters,
     double& sampleRate);
+
+/// Updates the file format's WriteOptions based on the HiveConfig.
+void updateWriterOptionsFromHiveConfig(
+    dwio::common::FileFormat fileFormat,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const config::ConfigBase* sessionProperties,
+    std::shared_ptr<dwio::common::WriterOptions>& writerOptions);
 
 } // namespace facebook::velox::connector::hive

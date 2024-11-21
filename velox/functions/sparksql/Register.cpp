@@ -23,12 +23,14 @@
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/Repeat.h"
+#include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/BinaryFunctions.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
+#include "velox/functions/sparksql/ArrayInsert.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
@@ -46,10 +48,12 @@
 #include "velox/functions/sparksql/RegisterCompare.h"
 #include "velox/functions/sparksql/Size.h"
 #include "velox/functions/sparksql/SparkPartitionId.h"
+#include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
 #include "velox/functions/sparksql/UnscaledValueFunction.h"
 #include "velox/functions/sparksql/Uuid.h"
+#include "velox/functions/sparksql/specialforms/AtLeastNNonNulls.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
@@ -145,6 +149,9 @@ void registerAllSpecialFormGeneralFunctions() {
       "cast", std::make_unique<SparkCastCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       "try_cast", std::make_unique<SparkTryCastCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
+      std::make_unique<AtLeastNNonNullsCallToSpecialForm>());
 }
 
 namespace {
@@ -255,7 +262,6 @@ void registerFunctions(const std::string& prefix) {
       prefix + "rlike", re2SearchSignatures(), makeRLike);
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
 
   exec::registerStatefulVectorFunction(
       prefix + "least",
@@ -297,13 +303,15 @@ void registerFunctions(const std::string& prefix) {
   registerCompareFunctions(prefix);
   registerBitwiseFunctions(prefix);
 
-  // String sreach function
+  // String search function
   registerFunction<StartsWithFunction, bool, Varchar, Varchar>(
       {prefix + "startswith"});
   registerFunction<EndsWithFunction, bool, Varchar, Varchar>(
       {prefix + "endswith"});
   registerFunction<ContainsFunction, bool, Varchar, Varchar>(
       {prefix + "contains"});
+  registerFunction<LocateFunction, int32_t, Varchar, Varchar, int32_t>(
+      {prefix + "locate"});
 
   registerFunction<TrimSpaceFunction, Varchar, Varchar>({prefix + "trim"});
   registerFunction<TrimFunction, Varchar, Varchar, Varchar>({prefix + "trim"});
@@ -345,6 +353,8 @@ void registerFunctions(const std::string& prefix) {
       makeRepeatAllowNegativeCount,
       repeatMetadata());
 
+  registerIntegerSliceFunction(prefix);
+
   exec::registerStatefulVectorFunction(
       prefix + "shuffle",
       arrayShuffleWithCustomSeedSignatures(),
@@ -356,7 +366,6 @@ void registerFunctions(const std::string& prefix) {
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
-  registerFunction<WeekFunction, int32_t, Timestamp>({prefix + "week_of_year"});
   registerFunction<WeekFunction, int32_t, Date>({prefix + "week_of_year"});
   registerFunction<YearOfWeekFunction, int32_t, Date>(
       {prefix + "year_of_week"});
@@ -485,6 +494,18 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<LevenshteinDistanceFunction, int32_t, Varchar, Varchar>(
       {prefix + "levenshtein"});
 
+  registerFunction<
+      ArrayInsert,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      int32_t,
+      Generic<T1>,
+      bool>({prefix + "array_insert"});
+
+  registerFunction<Split, Array<Varchar>, Varchar, Varchar>({prefix + "split"});
+  registerFunction<Split, Array<Varchar>, Varchar, Varchar, int32_t>(
+      {prefix + "split"});
+
   registerFunction<MaskFunction, Varchar, Varchar>({prefix + "mask"});
   registerFunction<MaskFunction, Varchar, Varchar, Varchar>({prefix + "mask"});
   registerFunction<MaskFunction, Varchar, Varchar, Varchar, Varchar>(
@@ -499,6 +520,23 @@ void registerFunctions(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar>({prefix + "mask"});
+}
+
+std::vector<std::string> listFunctionNames() {
+  std::vector<std::string> names =
+      exec::specialFormRegistry().getSpecialFormNames();
+
+  const auto& simpleFunctions = exec::simpleFunctions().getFunctionNames();
+  names.insert(names.end(), simpleFunctions.begin(), simpleFunctions.end());
+
+  exec::vectorFunctionFactories().withRLock([&](const auto& map) {
+    names.reserve(names.size() + map.size());
+    for (const auto& [name, _] : map) {
+      names.push_back(name);
+    }
+  });
+
+  return names;
 }
 
 } // namespace sparksql

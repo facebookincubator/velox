@@ -36,7 +36,7 @@ AssignUniqueId::AssignUniqueId(
   VELOX_USER_CHECK_LT(
       uniqueTaskId,
       kTaskUniqueIdLimit,
-      "Unique 24-bit ID specified for AssignUniqueId exceeds the limit")
+      "Unique 24-bit ID specified for AssignUniqueId exceeds the limit");
   uniqueValueMask_ = ((int64_t)uniqueTaskId) << 40;
 
   const auto numColumns = planNode->outputType()->size();
@@ -55,7 +55,7 @@ AssignUniqueId::AssignUniqueId(
 void AssignUniqueId::addInput(RowVectorPtr input) {
   auto numInput = input->size();
   VELOX_CHECK_NE(
-      numInput, 0, "AssignUniqueId::addInput received empty set of rows")
+      numInput, 0, "AssignUniqueId::addInput received empty set of rows");
   input_ = std::move(input);
 }
 
@@ -76,7 +76,7 @@ bool AssignUniqueId::isFinished() {
 void AssignUniqueId::generateIdColumn(vector_size_t size) {
   // Re-use memory for the ID vector if possible.
   VectorPtr& result = results_[0];
-  if (result && result.unique()) {
+  if (result && result.use_count() == 1) {
     BaseVector::prepareForReuse(result, size);
   } else {
     result = BaseVector::create(BIGINT(), size, pool());

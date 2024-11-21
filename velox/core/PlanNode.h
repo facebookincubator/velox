@@ -17,9 +17,12 @@
 
 #include <fmt/format.h>
 
+#include <utility>
+
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/vector/VectorStream.h"
 
 struct ArrowArrayStream;
 
@@ -27,9 +30,7 @@ namespace facebook::velox::core {
 
 typedef std::string PlanNodeId;
 
-/**
- * Generic representation of InsertTable
- */
+/// Generic representation of InsertTable
 struct InsertTableHandle {
  public:
   InsertTableHandle(
@@ -312,6 +313,48 @@ class ArrowStreamNode : public PlanNode {
 
   const RowTypePtr outputType_;
   std::shared_ptr<ArrowArrayStream> arrowStream_;
+};
+
+class TraceScanNode final : public PlanNode {
+ public:
+  TraceScanNode(
+      const PlanNodeId& id,
+      const std::string& traceDir,
+      uint32_t pipelineId,
+      const RowTypePtr& outputType)
+      : PlanNode(id),
+        traceDir_(traceDir),
+        pipelineId_(pipelineId),
+        outputType_(outputType) {}
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override;
+
+  std::string_view name() const override {
+    return "QueryReplayScan";
+  }
+
+  folly::dynamic serialize() const override {
+    VELOX_UNSUPPORTED("TraceScanNode is not serializable");
+    return nullptr;
+  }
+
+  std::string traceDir() const;
+
+  uint32_t pipelineId() const {
+    return pipelineId_;
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  // Directory of traced data, which is $traceRoot/$taskId/$nodeId.
+  const std::string traceDir_;
+  const uint32_t pipelineId_;
+  const RowTypePtr outputType_;
 };
 
 class FilterNode : public PlanNode {
@@ -709,8 +752,8 @@ class TableWriteNode : public PlanNode {
     return columns_;
   }
 
-  /// Column names to use when writing the table. This vector is aligned with
-  /// 'columns' vector.
+  /// Column names to use when writing the table. This vector is aligned
+  /// with 'columns' vector.
   const std::vector<std::string>& columnNames() const {
     return columnNames_;
   }
@@ -719,11 +762,11 @@ class TableWriteNode : public PlanNode {
     return insertTableHandle_;
   }
 
-  /// Indicates if this table write has specified partitioning scheme. If true,
-  /// the task creates a number of table write operators based on the query
-  /// config 'task_partitioned_writer_count', otherwise based on
-  /// 'task__writer_count'. As for now, this is only true for hive bucketed
-  /// table write.
+  /// Indicates if this table write plan node has specified partitioning
+  /// scheme for remote and local shuffles. If true, the task creates a
+  /// number of table write operators based on the query config
+  /// 'task_partitioned_writer_count', otherwise based on
+  /// x'task_writer_count'.
   bool hasPartitioningScheme() const {
     return hasPartitioningScheme_;
   }
@@ -765,8 +808,8 @@ class TableWriteNode : public PlanNode {
 class TableWriteMergeNode : public PlanNode {
  public:
   /// 'outputType' specifies the type to store the metadata of table write
-  /// output which contains the following columns: 'numWrittenRows', 'fragment'
-  /// and 'tableCommitContext'.
+  /// output which contains the following columns: 'numWrittenRows',
+  /// 'fragment' and 'tableCommitContext'.
   TableWriteMergeNode(
       const PlanNodeId& id,
       RowTypePtr outputType,
@@ -807,11 +850,11 @@ class TableWriteMergeNode : public PlanNode {
 };
 
 /// For each input row, generates N rows with M columns according to
-/// specified 'projections'. 'projections' is an N x M matrix of expressions: a
-/// vector of N rows each having M columns. Each expression is either a column
-/// reference or a constant. Both null and non-null constants are allowed.
-/// 'names' is a list of M new column names. The semantic of this operator
-/// matches Spark.
+/// specified 'projections'. 'projections' is an N x M matrix of expressions:
+/// a vector of N rows each having M columns. Each expression is either a
+/// column reference or a constant. Both null and non-null constants are
+/// allowed. 'names' is a list of M new column names. The semantic of this
+/// operator matches Spark.
 class ExpandNode : public PlanNode {
  public:
   ExpandNode(
@@ -856,10 +899,10 @@ class ExpandNode : public PlanNode {
   const std::vector<std::vector<TypedExprPtr>> projections_;
 };
 
-/// Plan node used to implement aggregations over grouping sets. Duplicates the
-/// aggregation input for each set of grouping keys. The output contains one
-/// column for each grouping key, followed by aggregation inputs, followed by a
-/// column containing grouping set ID. For a given grouping set, a subset
+/// Plan node used to implement aggregations over grouping sets. Duplicates
+/// the aggregation input for each set of grouping keys. The output contains
+/// one column for each grouping key, followed by aggregation inputs, followed
+/// by a column containing grouping set ID. For a given grouping set, a subset
 /// of the grouping key columns present in the set are populated with values.
 /// The rest of the grouping key columns are filled in with nulls.
 class GroupIdNode : public PlanNode {
@@ -874,9 +917,9 @@ class GroupIdNode : public PlanNode {
   };
 
   /// @param id Plan node ID.
-  /// @param groupingSets A list of grouping key sets. Grouping keys within the
-  /// set must be unique, but grouping keys across sets may repeat.
-  /// Note: groupingSets are specified using output column names.
+  /// @param groupingSets A list of grouping key sets. Grouping keys within
+  /// the set must be unique, but grouping keys across sets may repeat. Note:
+  /// groupingSets are specified using output column names.
   /// @param groupingKeyInfos The names and order of the grouping keys in the
   /// output.
   /// @param aggregationInputs Columns that contain inputs to the aggregate
@@ -946,8 +989,11 @@ class GroupIdNode : public PlanNode {
 
 class ExchangeNode : public PlanNode {
  public:
-  ExchangeNode(const PlanNodeId& id, RowTypePtr type)
-      : PlanNode(id), outputType_(type) {}
+  ExchangeNode(
+      const PlanNodeId& id,
+      RowTypePtr type,
+      VectorSerde::Kind serdeKind)
+      : PlanNode(id), outputType_(type), serdeKind_(serdeKind) {}
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -967,6 +1013,10 @@ class ExchangeNode : public PlanNode {
     return "Exchange";
   }
 
+  VectorSerde::Kind serdeKind() const {
+    return serdeKind_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -974,19 +1024,18 @@ class ExchangeNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  RowTypePtr outputType_;
+  const RowTypePtr outputType_;
+  const VectorSerde::Kind serdeKind_;
 };
 
 class MergeExchangeNode : public ExchangeNode {
  public:
-  explicit MergeExchangeNode(
+  MergeExchangeNode(
       const PlanNodeId& id,
       const RowTypePtr& type,
       const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
-      const std::vector<SortOrder>& sortingOrders)
-      : ExchangeNode(id, type),
-        sortingKeys_(sortingKeys),
-        sortingOrders_(sortingOrders) {}
+      const std::vector<SortOrder>& sortingOrders,
+      VectorSerde::Kind serdeKind);
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
@@ -1063,9 +1112,9 @@ class PartitionFunction {
   /// @param input RowVector to split into partitions.
   /// @param [out] partitions Computed partition numbers for each row in
   /// 'input'.
-  /// @return Returns partition number in case all rows of 'input' are assigned
-  /// to the same partition. In this case 'partitions' vector is left unchanged.
-  /// Used to optimize round-robin partitioning in local exchange.
+  /// @return Returns partition number in case all rows of 'input' are
+  /// assigned to the same partition. In this case 'partitions' vector is left
+  /// unchanged. Used to optimize round-robin partitioning in local exchange.
   virtual std::optional<uint32_t> partition(
       const RowVector& input,
       std::vector<uint32_t>& partitions) = 0;
@@ -1074,8 +1123,11 @@ class PartitionFunction {
 /// Factory class for creating PartitionFunction instances.
 class PartitionFunctionSpec : public ISerializable {
  public:
+  /// If 'localExchange' is true, the partition function is used for local
+  /// exchange within a velox task.
   virtual std::unique_ptr<PartitionFunction> create(
-      int numPartitions) const = 0;
+      int numPartitions,
+      bool localExchange = false) const = 0;
 
   virtual ~PartitionFunctionSpec() = default;
 
@@ -1087,7 +1139,8 @@ using PartitionFunctionSpecPtr = std::shared_ptr<const PartitionFunctionSpec>;
 class GatherPartitionFunctionSpec : public PartitionFunctionSpec {
  public:
   std::unique_ptr<PartitionFunction> create(
-      int /* numPartitions */) const override {
+      int /*numPartitions*/,
+      bool /*localExchange*/) const override {
     VELOX_UNREACHABLE();
   }
 
@@ -1108,9 +1161,9 @@ class GatherPartitionFunctionSpec : public PartitionFunctionSpec {
   }
 };
 
-/// Partitions data using specified partition function. The number of partitions
-/// is determined by the parallelism of the upstream pipeline. Can be used to
-/// gather data from multiple sources.
+/// Partitions data using specified partition function. The number of
+/// partitions is determined by the parallelism of the upstream pipeline. Can
+/// be used to gather data from multiple sources.
 class LocalPartitionNode : public PlanNode {
  public:
   enum class Type {
@@ -1199,7 +1252,7 @@ class PartitionedOutputNode : public PlanNode {
     kArbitrary,
   };
   static std::string kindString(Kind kind);
-  static Kind stringToKind(std::string str);
+  static Kind stringToKind(const std::string& str);
 
   PartitionedOutputNode(
       const PlanNodeId& id,
@@ -1209,73 +1262,27 @@ class PartitionedOutputNode : public PlanNode {
       bool replicateNullsAndAny,
       PartitionFunctionSpecPtr partitionFunctionSpec,
       RowTypePtr outputType,
-      PlanNodePtr source)
-      : PlanNode(id),
-        kind_(kind),
-        sources_{{std::move(source)}},
-        keys_(keys),
-        numPartitions_(numPartitions),
-        replicateNullsAndAny_(replicateNullsAndAny),
-        partitionFunctionSpec_(std::move(partitionFunctionSpec)),
-        outputType_(std::move(outputType)) {
-    VELOX_USER_CHECK_GT(numPartitions, 0);
-    if (numPartitions == 1) {
-      VELOX_USER_CHECK(
-          keys_.empty(),
-          "Non-empty partitioning keys require more than one partition");
-    }
-    if (!isPartitioned()) {
-      VELOX_USER_CHECK(
-          keys_.empty(),
-          "{} partitioning doesn't allow for partitioning keys",
-          kindString(kind_));
-    }
-  }
+      VectorSerde::Kind serdeKind,
+      PlanNodePtr source);
 
   static std::shared_ptr<PartitionedOutputNode> broadcast(
       const PlanNodeId& id,
       int numPartitions,
       RowTypePtr outputType,
-      PlanNodePtr source) {
-    std::vector<TypedExprPtr> noKeys;
-    return std::make_shared<PartitionedOutputNode>(
-        id,
-        Kind::kBroadcast,
-        noKeys,
-        numPartitions,
-        false,
-        std::make_shared<GatherPartitionFunctionSpec>(),
-        std::move(outputType),
-        std::move(source));
-  }
+      VectorSerde::Kind serdeKind,
+      PlanNodePtr source);
 
-  static std::shared_ptr<PartitionedOutputNode>
-  arbitrary(const PlanNodeId& id, RowTypePtr outputType, PlanNodePtr source) {
-    std::vector<TypedExprPtr> noKeys;
-    return std::make_shared<PartitionedOutputNode>(
-        id,
-        Kind::kArbitrary,
-        noKeys,
-        1,
-        false,
-        std::make_shared<GatherPartitionFunctionSpec>(),
-        std::move(outputType),
-        std::move(source));
-  }
+  static std::shared_ptr<PartitionedOutputNode> arbitrary(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      VectorSerde::Kind serdeKind,
+      PlanNodePtr source);
 
-  static std::shared_ptr<PartitionedOutputNode>
-  single(const PlanNodeId& id, RowTypePtr outputType, PlanNodePtr source) {
-    std::vector<TypedExprPtr> noKeys;
-    return std::make_shared<PartitionedOutputNode>(
-        id,
-        Kind::kPartitioned,
-        noKeys,
-        1,
-        false,
-        std::make_shared<GatherPartitionFunctionSpec>(),
-        std::move(outputType),
-        std::move(source));
-  }
+  static std::shared_ptr<PartitionedOutputNode> single(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      VectorSerde::Kind VectorSerde,
+      PlanNodePtr source);
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -1313,10 +1320,14 @@ class PartitionedOutputNode : public PlanNode {
     return kind_;
   }
 
+  VectorSerde::Kind serdeKind() const {
+    return serdeKind_;
+  }
+
   /// Returns true if an arbitrary row and all rows with null keys must be
-  /// replicated to all destinations. This is used to ensure correct results for
-  /// anti-join which requires all nodes to know whether combined build side is
-  /// empty and whether it has any entry with null join key.
+  /// replicated to all destinations. This is used to ensure correct results
+  /// for anti-join which requires all nodes to know whether combined build
+  /// side is empty and whether it has any entry with null join key.
   bool isReplicateNullsAndAny() const {
     return replicateNullsAndAny_;
   }
@@ -1346,13 +1357,15 @@ class PartitionedOutputNode : public PlanNode {
   const int numPartitions_;
   const bool replicateNullsAndAny_;
   const PartitionFunctionSpecPtr partitionFunctionSpec_;
+  const VectorSerde::Kind serdeKind_;
   const RowTypePtr outputType_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
     std::ostream& out,
     const PartitionedOutputNode::Kind kind) {
-  return out << PartitionedOutputNode::kindString(kind);
+  out << PartitionedOutputNode::kindString(kind);
+  return out;
 }
 
 enum class JoinType {
@@ -1363,52 +1376,63 @@ enum class JoinType {
   // all combinations. In addition, return all rows from the left that have no
   // match on the right with right-side columns filled with nulls.
   kLeft = 1,
-  // Opposite of kLeft. For each row on the right, find all matching rows on the
+  // Opposite of kLeft. For each row on the right, find all matching rows on
+  // the
   // left and return all combinations. In addition, return all rows from the
   // right that have no match on the left with left-side columns filled with
   // nulls.
   kRight = 2,
-  // A "union" of kLeft and kRight. For each row on the left, find all matching
-  // rows on the right and return all combinations. In addition, return all rows
+  // A "union" of kLeft and kRight. For each row on the left, find all
+  // matching
+  // rows on the right and return all combinations. In addition, return all
+  // rows
   // from the left that have no
-  // match on the right with right-side columns filled with nulls. Also, return
+  // match on the right with right-side columns filled with nulls. Also,
+  // return
   // all rows from the
   // right that have no match on the left with left-side columns filled with
   // nulls.
   kFull = 3,
-  // Return a subset of rows from the left side which have a match on the right
+  // Return a subset of rows from the left side which have a match on the
+  // right
   // side. For this join type, cardinality of the output is less than or equal
   // to the cardinality of the left side.
   kLeftSemiFilter = 4,
   // Return each row from the left side with a boolean flag indicating whether
-  // there exists a match on the right side. For this join type, cardinality of
+  // there exists a match on the right side. For this join type, cardinality
+  // of
   // the output equals the cardinality of the left side.
   //
   // The handling of the rows with nulls in the join key depends on the
   // 'nullAware' boolean specified separately.
   //
-  // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
+  // Null-aware join follows IN semantic. Regular join follows EXISTS
+  // semantic.
   kLeftSemiProject = 5,
   // Opposite of kLeftSemiFilter. Return a subset of rows from the right side
-  // which have a match on the left side. For this join type, cardinality of the
+  // which have a match on the left side. For this join type, cardinality of
+  // the
   // output is less than or equal to the cardinality of the right side.
   kRightSemiFilter = 6,
   // Opposite of kLeftSemiProject. Return each row from the right side with a
-  // boolean flag indicating whether there exists a match on the left side. For
+  // boolean flag indicating whether there exists a match on the left side.
+  // For
   // this join type, cardinality of the output equals the cardinality of the
   // right side.
   //
   // The handling of the rows with nulls in the join key depends on the
   // 'nullAware' boolean specified separately.
   //
-  // Null-aware join follows IN semantic. Regular join follows EXISTS semantic.
+  // Null-aware join follows IN semantic. Regular join follows EXISTS
+  // semantic.
   kRightSemiProject = 7,
   // Return each row from the left side which has no match on the right side.
   // The handling of the rows with nulls in the join key depends on the
   // 'nullAware' boolean specified separately.
   //
   // Null-aware join follows NOT IN semantic:
-  // (1) return empty result if the right side contains a record with a null in
+  // (1) return empty result if the right side contains a record with a null
+  // in
   // the join key;
   // (2) return left-side row with null in the join key only when
   // the right side is empty.
@@ -1460,7 +1484,7 @@ inline bool isAntiJoin(JoinType joinType) {
   return joinType == JoinType::kAnti;
 }
 
-inline bool isNullAwareSupported(core::JoinType joinType) {
+inline bool isNullAwareSupported(JoinType joinType) {
   return joinType == JoinType::kAnti ||
       joinType == JoinType::kLeftSemiProject ||
       joinType == JoinType::kRightSemiProject;
@@ -1528,6 +1552,10 @@ class AbstractJoinNode : public PlanNode {
     return joinType_ == JoinType::kAnti;
   }
 
+  bool isPreservingProbeOrder() const {
+    return isInnerJoin() || isLeftJoin() || isAntiJoin();
+  }
+
   const std::vector<FieldAccessTypedExprPtr>& leftKeys() const {
     return leftKeys_;
   }
@@ -1558,8 +1586,8 @@ class AbstractJoinNode : public PlanNode {
 };
 
 /// Represents inner/outer/semi/anti hash joins. Translates to an
-/// exec::HashBuild and exec::HashProbe. A separate pipeline is produced for the
-/// build side when generating exec::Operators.
+/// exec::HashBuild and exec::HashProbe. A separate pipeline is produced for
+/// the build side when generating exec::Operators.
 ///
 /// 'nullAware' boolean applies to semi and anti joins. When true, the join
 /// semantic is IN / NOT IN. When false, the join semantic is EXISTS / NOT
@@ -1643,16 +1671,7 @@ class MergeJoinNode : public AbstractJoinNode {
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
-      RowTypePtr outputType)
-      : AbstractJoinNode(
-            id,
-            joinType,
-            leftKeys,
-            rightKeys,
-            std::move(filter),
-            std::move(left),
-            std::move(right),
-            std::move(outputType)) {}
+      RowTypePtr outputType);
 
   std::string_view name() const override {
     return "MergeJoin";
@@ -1660,20 +1679,24 @@ class MergeJoinNode : public AbstractJoinNode {
 
   folly::dynamic serialize() const override;
 
+  /// If merge join supports this join type.
+  static bool isSupported(JoinType joinType);
+
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 };
 
 /// Represents inner/outer nested loop joins. Translates to an
-/// exec::NestedLoopJoinProbe and exec::NestedLoopJoinBuild. A separate pipeline
-/// is produced for the build side when generating exec::Operators.
+/// exec::NestedLoopJoinProbe and exec::NestedLoopJoinBuild. A separate
+/// pipeline is produced for the build side when generating exec::Operators.
 ///
-/// Nested loop join supports both equal and non-equal joins. Expressions
-/// specified in joinCondition are evaluated on every combination of left/right
-/// tuple, to emit result. Results are emitted following the same input order of
-/// probe rows for inner and left joins, for each thread of execution.
+/// Nested loop join (NLJ) supports both equal and non-equal joins.
+/// Expressions specified in joinCondition are evaluated on every combination
+/// of left/right tuple, to emit result. Results are emitted following the
+/// same input order of probe rows for inner and left joins, for each thread
+/// of execution.
 ///
-/// To create Cartesian product of the left/right's output, use the constructor
-/// without `joinType` and `joinCondition` parameter.
+/// To create Cartesian product of the left/right's output, use the
+/// constructor without `joinType` and `joinCondition` parameter.
 class NestedLoopJoinNode : public PlanNode {
  public:
   NestedLoopJoinNode(
@@ -1711,6 +1734,9 @@ class NestedLoopJoinNode : public PlanNode {
   }
 
   folly::dynamic serialize() const override;
+
+  /// If nested loop join supports this join type.
+  static bool isSupported(JoinType joinType);
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
@@ -1917,11 +1943,11 @@ class LimitNode : public PlanNode {
 class UnnestNode : public PlanNode {
  public:
   /// @param replicateVariables Inputs that are projected as is
-  /// @param unnestVariables Inputs that are unnested. Must be of type ARRAY or
-  /// MAP.
+  /// @param unnestVariables Inputs that are unnested. Must be of type ARRAY
+  /// or MAP.
   /// @param unnestNames Names to use for unnested outputs: one name for each
-  /// array (element); two names for each map (key and value). The output names
-  /// must appear in the same order as unnestVariables.
+  /// array (element); two names for each map (key and value). The output
+  /// names must appear in the same order as unnestVariables.
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
   UnnestNode(
@@ -1933,8 +1959,8 @@ class UnnestNode : public PlanNode {
       const PlanNodePtr& source);
 
   /// The order of columns in the output is: replicated columns (in the order
-  /// specified), unnested columns (in the order specified, for maps: key comes
-  /// before value), optional ordinality column.
+  /// specified), unnested columns (in the order specified, for maps: key
+  /// comes before value), optional ordinality column.
   const RowTypePtr& outputType() const override {
     return outputType_;
   }
@@ -1973,8 +1999,8 @@ class UnnestNode : public PlanNode {
   RowTypePtr outputType_;
 };
 
-/// Checks that input contains at most one row. Return that row as is. If input
-/// is empty, returns a single row with all values set to null. If input
+/// Checks that input contains at most one row. Return that row as is. If
+/// input is empty, returns a single row with all values set to null. If input
 /// contains more than one row raises an exception.
 ///
 /// This plan node is used in query plans that use non-correlated sub-queries.
@@ -2142,9 +2168,9 @@ class WindowNode : public PlanNode {
   }
 
   bool canSpill(const QueryConfig& queryConfig) const override {
-    // No partitioning keys means the whole input is one big partition. In this
-    // case, spilling is not helpful because we need to have a full partition in
-    // memory to produce results.
+    // No partitioning keys means the whole input is one big partition. In
+    // this case, spilling is not helpful because we need to have a full
+    // partition in memory to produce results.
     return !partitionKeys_.empty() && !inputsSorted_ &&
         queryConfig.windowSpillEnabled();
   }
@@ -2206,8 +2232,8 @@ class RowNumberNode : public PlanNode {
  public:
   /// @param partitionKeys Partitioning keys. May be empty.
   /// @param rowNumberColumnName Optional name of the column containing row
-  /// numbers. If not specified, the output doesn't include 'row number' column.
-  /// This is used when computing partial results.
+  /// numbers. If not specified, the output doesn't include 'row number'
+  /// column. This is used when computing partial results.
   /// @param limit Optional per-partition limit. If specified, the number of
   /// rows produced by this node will not exceed this value for any given
   /// partition. Extra rows will be dropped.
@@ -2279,7 +2305,8 @@ class MarkDistinctNode : public PlanNode {
     return sources_;
   }
 
-  /// The outputType is the concatenation of the input columns and mask column.
+  /// The outputType is the concatenation of the input columns and mask
+  /// column.
   const RowTypePtr& outputType() const override {
     return outputType_;
   }
@@ -2323,8 +2350,8 @@ class TopNRowNumberNode : public PlanNode {
   /// with 'partitionKeys'.
   /// @param sortingOrders Sorting orders, one per sorting key.
   /// @param rowNumberColumnName Optional name of the column containing row
-  /// numbers. If not specified, the output doesn't include 'row number' column.
-  /// This is used when computing partial results.
+  /// numbers. If not specified, the output doesn't include 'row number'
+  /// column. This is used when computing partial results.
   /// @param limit Per-partition limit. The number of
   /// rows produced by this node will not exceed this value for any given
   /// partition. Extra rows will be dropped.
@@ -2403,7 +2430,7 @@ struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
     : formatter<std::string> {
   auto format(
       facebook::velox::core::PartitionedOutputNode::Kind s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<std::string>::format(
         facebook::velox::core::PartitionedOutputNode::kindString(s), ctx);
   }
@@ -2411,7 +2438,7 @@ struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
 
 template <>
 struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
-  auto format(facebook::velox::core::JoinType s, format_context& ctx) {
+  auto format(facebook::velox::core::JoinType s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

@@ -23,7 +23,19 @@
 
 namespace facebook::velox::functions {
 
-enum class DateTimeFormatterType { JODA, MYSQL, UNKNOWN };
+enum class DateTimeFormatterType {
+  JODA,
+  MYSQL,
+  // Corresponding to java.text.SimpleDateFormat in lenient mode. It is used by
+  // the 'date_format', 'from_unixtime', 'unix_timestamp' and
+  // 'to_unix_timestamp' Spark functions.
+  // TODO: this is currently no different from STRICT_SIMPLE.
+  LENIENT_SIMPLE,
+  // Corresponding to java.text.SimpleDateFormat in strict(lenient=false) mode.
+  // It is used by Spark 'cast date to string'.
+  STRICT_SIMPLE,
+  UNKNOWN
+};
 
 enum class DateTimeFormatSpecifier : uint8_t {
   // Era, e.g: "AD"
@@ -100,7 +112,10 @@ enum class DateTimeFormatSpecifier : uint8_t {
   TIMEZONE_OFFSET_ID = 22,
 
   // A literal % character
-  LITERAL_PERCENT = 23
+  LITERAL_PERCENT = 23,
+
+  // Week of month based on java.text.SimpleDateFormat, e.g: 2
+  WEEK_OF_MONTH = 24
 };
 
 struct FormatPattern {
@@ -142,7 +157,7 @@ struct DateTimeToken {
 
 struct DateTimeResult {
   Timestamp timestamp;
-  int64_t timezoneId{-1};
+  const tz::TimeZone* timezone = nullptr;
 };
 
 /// A user defined formatter that formats/parses time to/from user provided
@@ -188,13 +203,17 @@ class DateTimeFormatter {
   ///
   /// The timestamp will be firstly converted to millisecond then to
   /// std::chrono::time_point. If allowOverflow is true, integer overflow is
-  /// allowed in converting to milliseconds.
+  /// allowed in converting to milliseconds. If zeroOffsetText is set, that
+  /// string will be used to represent the zero offset timezone, other time
+  /// zones will still be represented based on the pattern this was initialized
+  /// with.
   int32_t format(
       const Timestamp& timestamp,
       const tz::TimeZone* timezone,
       const uint32_t maxResultSize,
       char* result,
-      bool allowOverflow = false) const;
+      bool allowOverflow = false,
+      const std::optional<std::string>& zeroOffsetText = std::nullopt) const;
 
  private:
   std::unique_ptr<char[]> literalBuf_;
@@ -203,11 +222,15 @@ class DateTimeFormatter {
   DateTimeFormatterType type_;
 };
 
-std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
+Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
     const std::string_view& format);
 
-std::shared_ptr<DateTimeFormatter> buildJodaDateTimeFormatter(
+Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
     const std::string_view& format);
+
+Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
+    const std::string_view& format,
+    bool lenient);
 
 } // namespace facebook::velox::functions
 
@@ -216,7 +239,7 @@ struct fmt::formatter<facebook::velox::functions::DateTimeFormatterType>
     : formatter<int> {
   auto format(
       facebook::velox::functions::DateTimeFormatterType s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };
@@ -226,7 +249,7 @@ struct fmt::formatter<facebook::velox::functions::DateTimeFormatSpecifier>
     : formatter<int> {
   auto format(
       facebook::velox::functions::DateTimeFormatSpecifier s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

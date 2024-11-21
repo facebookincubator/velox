@@ -17,11 +17,13 @@ add_executable(
   ArithmeticTest.cpp
   ArrayFlattenTest.cpp
   ArrayGetTest.cpp
+  ArrayInsertTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
   ArgGeneratorTest.cpp
+  AtLeastNNonNullsTest.cpp
   BitwiseTest.cpp
   ComparisonsTest.cpp
   DateTimeFunctionsTest.cpp
@@ -43,11 +45,12 @@ add_executable(
   RaiseErrorTest.cpp
   RandTest.cpp
   RegexFunctionsTest.cpp
+  SliceTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp
   SparkCastExprTest.cpp
   SparkPartitionIdTest.cpp
-  SplitFunctionsTest.cpp
+  SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
   UnscaledValueFunctionTest.cpp
@@ -64,7 +67,18 @@ target_link_libraries(
   velox_expression_fuzzer_test_utility
   velox_expression_fuzzer
   fmt::fmt
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   gflags::gflags)
+
+add_executable(velox_spark_function_registry_test RegisterTest.cpp)
+
+add_test(velox_spark_function_registry_test velox_spark_function_registry_test)
+
+target_link_libraries(
+  velox_spark_function_registry_test
+  velox_expression
+  velox_functions_spark
+  GTest::gtest
+  GTest::gtest_main)

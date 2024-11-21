@@ -35,11 +35,12 @@ struct MultimapFromEntriesFunction {
     uniqueKeys_.clear();
     uniqueKeys_.reserve(inputArray.size());
 
-    for (const auto& entry : inputArray.skipNulls()) {
-      const auto& key = entry.template at<0>();
-      const auto& value = entry.template at<1>();
+    for (const auto& entry : inputArray) {
+      VELOX_USER_CHECK(entry.has_value(), "map entry cannot be null");
+      const auto& key = entry.value().template at<0>();
+      const auto& value = entry.value().template at<1>();
 
-      VELOX_USER_CHECK(key.has_value(), "map key cannot be null")
+      VELOX_USER_CHECK(key.has_value(), "map key cannot be null");
 
       auto result = keyValuesMap_.insert({key.value(), {}});
       result.first->second.push_back(value);

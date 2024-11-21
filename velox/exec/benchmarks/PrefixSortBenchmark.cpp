@@ -84,10 +84,8 @@ class TestCase {
     }
     for (auto column = 0; column < data->childrenSize(); ++column) {
       DecodedVector decoded(*data->childAt(column));
-      for (int i = 0; i < numRows; ++i) {
-        char* row = rows_[i];
-        rowContainer()->store(decoded, i, row, column);
-      }
+      rowContainer()->store(
+          decoded, folly::Range(rows_.data(), numRows), column);
     }
   }
 
@@ -146,18 +144,20 @@ class PrefixSortBenchmark {
       RowContainer* rowContainer,
       const std::vector<CompareFlags>& compareFlags) {
     // Copy rows to avoid sort rows already sorted.
-    std::vector<char*> sortedRows = rows;
+    auto sortedRows = std::vector<char*, memory::StlAllocator<char*>>(
+        rows.begin(), rows.end(), *pool_);
     PrefixSort::sort(
-        sortedRows, pool_, rowContainer, compareFlags, kDefaultSortConfig);
+        rowContainer, compareFlags, kDefaultSortConfig, pool_, sortedRows);
   }
 
   void runStdSort(
       const std::vector<char*>& rows,
       RowContainer* rowContainer,
       const std::vector<CompareFlags>& compareFlags) {
-    std::vector<char*> sortedRows = rows;
+    auto sortedRows = std::vector<char*, memory::StlAllocator<char*>>(
+        rows.begin(), rows.end(), *pool_);
     PrefixSort::sort(
-        sortedRows, pool_, rowContainer, compareFlags, kStdSortConfig);
+        rowContainer, compareFlags, kStdSortConfig, pool_, sortedRows);
   }
 
   // Add benchmark manually to avoid writing a lot of BENCHMARK.
@@ -240,6 +240,30 @@ class PrefixSortBenchmark {
     }
   }
 
+  std::vector<RowTypePtr> smallintRowTypes(bool noPayload) {
+    if (noPayload) {
+      return {
+          ROW({SMALLINT()}),
+          ROW({SMALLINT(), SMALLINT()}),
+          ROW({SMALLINT(), SMALLINT(), SMALLINT()}),
+          ROW({SMALLINT(), SMALLINT(), SMALLINT(), SMALLINT()}),
+      };
+    } else {
+      return {
+          ROW({SMALLINT(), VARCHAR(), VARCHAR()}),
+          ROW({SMALLINT(), SMALLINT(), VARCHAR(), VARCHAR()}),
+          ROW({SMALLINT(), SMALLINT(), SMALLINT(), VARCHAR(), VARCHAR()}),
+          ROW(
+              {SMALLINT(),
+               SMALLINT(),
+               SMALLINT(),
+               SMALLINT(),
+               VARCHAR(),
+               VARCHAR()}),
+      };
+    }
+  }
+
   void bigint(
       bool noPayload,
       int numIterations,
@@ -283,6 +307,21 @@ class PrefixSortBenchmark {
     bigint(false, iterations, batchSizes);
   }
 
+  void hugeInt() {
+    const auto iterations = 10;
+    const std::vector<vector_size_t> batchSizes = {
+        1'000, 10'000, 100'000, 1'000'000};
+    std::vector<RowTypePtr> rowTypes = {
+        ROW({DECIMAL(23, 2)}),
+        ROW({DECIMAL(30, 2), DECIMAL(32, 5)}),
+        ROW({DECIMAL(19, 5), DECIMAL(34, 8), DECIMAL(38, 2)}),
+        ROW({DECIMAL(30, 2), DECIMAL(24, 3), DECIMAL(32, 5), DECIMAL(34, 3)}),
+    };
+    std::vector<int> numKeys = {1, 2, 3, 4};
+    benchmark(
+        "no-payloads", "hugeint", batchSizes, rowTypes, numKeys, iterations);
+  }
+
   void largeVarchar() {
     const auto iterations = 10;
     const std::vector<vector_size_t> batchSizes = {
@@ -296,6 +335,49 @@ class PrefixSortBenchmark {
     std::vector<int> numKeys = {1, 2, 3, 4};
     benchmark(
         "no-payloads", "varchar", batchSizes, rowTypes, numKeys, iterations);
+  }
+
+  void smallint(
+      bool noPayload,
+      int numIterations,
+      const std::vector<vector_size_t>& batchSizes) {
+    std::vector<RowTypePtr> rowTypes = smallintRowTypes(noPayload);
+    std::vector<int> numKeys = {1, 2, 3, 4};
+    benchmark(
+        noPayload ? "no-payload" : "payload",
+        "smallint",
+        batchSizes,
+        rowTypes,
+        numKeys,
+        numIterations);
+  }
+
+  void smallSmallint() {
+    // For small dateset, iterations need to be large enough to ensure that the
+    // benchmark runs for enough time.
+    const auto iterations = 100'000;
+    const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
+    smallint(true, iterations, batchSizes);
+  }
+
+  void smallSmallintWithPayload() {
+    const auto iterations = 100'000;
+    const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
+    smallint(false, iterations, batchSizes);
+  }
+
+  void largeSmallint() {
+    const auto iterations = 10;
+    const std::vector<vector_size_t> batchSizes = {
+        1'000, 10'000, 100'000, 1'000'000};
+    smallint(true, iterations, batchSizes);
+  }
+
+  void largeSmallintWithPayloads() {
+    const auto iterations = 10;
+    const std::vector<vector_size_t> batchSizes = {
+        1'000, 10'000, 100'000, 1'000'000};
+    smallint(false, iterations, batchSizes);
   }
 
  private:
@@ -315,10 +397,15 @@ int main(int argc, char** argv) {
 
   bm.smallBigint();
   bm.largeBigint();
+  bm.hugeInt();
   bm.largeBigintWithPayloads();
   bm.smallBigintWithPayload();
   bm.largeVarchar();
-  folly::runBenchmarks();
+  bm.smallSmallint();
+  bm.largeSmallint();
+  bm.smallSmallintWithPayload();
+  bm.largeSmallintWithPayloads();
 
+  folly::runBenchmarks();
   return 0;
 }

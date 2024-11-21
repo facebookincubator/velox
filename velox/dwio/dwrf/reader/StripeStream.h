@@ -33,16 +33,8 @@ class StrideIndexProvider {
   virtual uint64_t getStrideIndex() const = 0;
 };
 
-/**
- * StreamInformation Implementation
- */
+/// StreamInformation Implementation
 class StreamInformationImpl : public StreamInformation {
- private:
-  DwrfStreamIdentifier streamId_;
-  uint64_t offset_;
-  uint64_t length_;
-  bool useVInts_;
-
  public:
   static const StreamInformationImpl& getNotFound() {
     static const StreamInformationImpl NOT_FOUND;
@@ -54,9 +46,7 @@ class StreamInformationImpl : public StreamInformation {
       : streamId_(stream),
         offset_(offset),
         length_(stream.length()),
-        useVInts_(stream.usevints()) {
-    // PASS
-  }
+        useVInts_(stream.usevints()) {}
 
   ~StreamInformationImpl() override = default;
 
@@ -87,45 +77,54 @@ class StreamInformationImpl : public StreamInformation {
   bool valid() const override {
     return streamId_.encodingKey().valid();
   }
+
+ private:
+  DwrfStreamIdentifier streamId_;
+  uint64_t offset_;
+  uint64_t length_;
+  bool useVInts_;
 };
 
 class StripeStreams {
  public:
   virtual ~StripeStreams() = default;
 
-  /**
-   * Get the DwrfFormat for the stream
-   * @return DwrfFormat
-   */
+  /// Get the DwrfFormat for the stream
+  ///
+  /// @return DwrfFormat
   virtual DwrfFormat format() const = 0;
 
-  /**
-   * get column selector for current stripe reading session
-   * @return column selector will hold column projection info
-   */
+  /// get column selector for current stripe reading session
+  ///
+  /// @return column selector will hold column projection info
   virtual const dwio::common::ColumnSelector& getColumnSelector() const = 0;
 
-  // Get row reader options
-  virtual const dwio::common::RowReaderOptions& getRowReaderOptions() const = 0;
+  /// Session timezone used for reading Timestamp.
+  virtual const tz::TimeZone* sessionTimezone() const = 0;
 
-  /**
-   * Get the encoding for the given column for this stripe.
-   */
+  /// Whether to adjust Timestamp to the timeZone obtained via
+  /// sessionTimezone(). This is used to be compatible with the
+  /// old logic of Presto.
+  virtual bool adjustTimestampToTimezone() const = 0;
+
+  /// Get row reader options
+  virtual const dwio::common::RowReaderOptions& rowReaderOptions() const = 0;
+
+  /// Get the encoding for the given column for this stripe.
   virtual const proto::ColumnEncoding& getEncoding(
       const EncodingKey&) const = 0;
 
-  /**
-   * Get the stream for the given column/kind in this stripe.
-   * @param streamId stream identifier object
-   * @param throwIfNotFound fail if a stream is required and not found
-   * @return the new stream
-   */
+  /// Get the stream for the given column/kind in this stripe.
+  ///
+  /// @param streamId stream identifier object
+  /// @param throwIfNotFound fail if a stream is required and not found
+  /// @return the new stream
   virtual std::unique_ptr<dwio::common::SeekableInputStream> getStream(
       const DwrfStreamIdentifier& si,
       std::string_view label,
       bool throwIfNotFound) const = 0;
 
-  /// Get the integer dictionary data for the given node and sequence.
+  /// Gets the integer dictionary data for the given node and sequence.
   ///
   /// 'elementWidth' is the width of the data type of the column.
   /// 'dictionaryWidth' is *the width at which this is stored  in the reader.
@@ -139,35 +138,27 @@ class StripeStreams {
 
   virtual std::shared_ptr<StripeDictionaryCache> getStripeDictionaryCache() = 0;
 
-  /**
-   * visit all streams of given node and execute visitor logic
-   * return number of streams visited
-   */
+  /// visit all streams of given node and execute visitor logic
+  /// return number of streams visited
   virtual uint32_t visitStreamsOfNode(
       uint32_t node,
       std::function<void(const StreamInformation&)> visitor) const = 0;
 
-  /**
-   * Get the value of useVInts for the given column in this stripe.
-   * Defaults to true.
-   * @param streamId stream identifier
-   */
+  /// Get the value of useVInts for the given column in this stripe.
+  /// Defaults to true.
+  /// @param streamId stream identifier
   virtual bool getUseVInts(const DwrfStreamIdentifier& streamId) const = 0;
 
-  /**
-   * Get the memory pool for this reader.
-   */
+  /// Get the memory pool for this reader.
   virtual memory::MemoryPool& getMemoryPool() const = 0;
 
-  /**
-   * Get stride index provider which is used by string dictionary reader to
-   * get the row index stride index where next() happens
-   */
+  /// Get stride index provider which is used by string dictionary reader to
+  /// get the row index stride index where next() happens
   virtual const StrideIndexProvider& getStrideIndexProvider() const = 0;
 
   virtual int64_t stripeRows() const = 0;
 
-  // Number of rows per row group. Last row group may have fewer rows.
+  /// Number of rows per row group. Last row group may have fewer rows.
   virtual uint32_t rowsPerRowGroup() const = 0;
 };
 
@@ -183,7 +174,7 @@ class StripeStreamsBase : public StripeStreams {
     return *pool_;
   }
 
-  // For now just return DWRF, will refine when ORC has better support
+  /// For now just return DWRF, will refine when ORC has better support
   virtual DwrfFormat format() const override {
     return DwrfFormat::kDwrf;
   }
@@ -199,8 +190,8 @@ class StripeStreamsBase : public StripeStreams {
   }
 
  protected:
-  memory::MemoryPool* pool_;
-  std::shared_ptr<StripeDictionaryCache> stripeDictionaryCache_;
+  memory::MemoryPool* const pool_;
+  const std::shared_ptr<StripeDictionaryCache> stripeDictionaryCache_;
 };
 
 struct StripeReadState {
@@ -208,15 +199,13 @@ struct StripeReadState {
   std::unique_ptr<const StripeMetadata> stripeMetadata;
 
   StripeReadState(
-      std::shared_ptr<ReaderBase> readerBase,
-      std::unique_ptr<const StripeMetadata> stripeMetadata)
-      : readerBase{std::move(readerBase)},
-        stripeMetadata{std::move(stripeMetadata)} {}
+      std::shared_ptr<ReaderBase> _readerBase,
+      std::unique_ptr<const StripeMetadata> _stripeMetadata)
+      : readerBase{std::move(_readerBase)},
+        stripeMetadata{std::move(_stripeMetadata)} {}
 };
 
-/**
- * StripeStream Implementation
- */
+/// StripeStream Implementation
 class StripeStreamsImpl : public StripeStreamsBase {
  public:
   static constexpr int64_t kUnknownStripeRows = -1;
@@ -230,7 +219,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
       int64_t stripeNumberOfRows,
       const StrideIndexProvider& provider,
       uint32_t stripeIndex)
-      : StripeStreamsBase{&readState->readerBase->getMemoryPool()},
+      : StripeStreamsBase{&readState->readerBase->memoryPool()},
         readState_(std::move(readState)),
         selector_{selector},
         opts_{opts},
@@ -238,8 +227,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
         stripeStart_{stripeStart},
         stripeNumberOfRows_{stripeNumberOfRows},
         provider_(provider),
-        stripeIndex_{stripeIndex},
-        readPlanLoaded_{false} {
+        stripeIndex_{stripeIndex} {
     loadStreams();
   }
 
@@ -253,25 +241,33 @@ class StripeStreamsImpl : public StripeStreamsBase {
     return *selector_;
   }
 
-  const dwio::common::RowReaderOptions& getRowReaderOptions() const override {
+  const tz::TimeZone* sessionTimezone() const override {
+    return readState_->readerBase->readerOptions().sessionTimezone();
+  }
+
+  bool adjustTimestampToTimezone() const override {
+    return readState_->readerBase->readerOptions().adjustTimestampToTimezone();
+  }
+
+  const dwio::common::RowReaderOptions& rowReaderOptions() const override {
     return opts_;
   }
 
   const proto::ColumnEncoding& getEncoding(
-      const EncodingKey& ek) const override {
-    auto index = encodings_.find(ek);
+      const EncodingKey& encodingKey) const override {
+    auto index = encodings_.find(encodingKey);
     if (index != encodings_.end()) {
       return readState_->stripeMetadata->footer->encoding(index->second);
     }
-    auto enc = decryptedEncodings_.find(ek);
-    DWIO_ENSURE(
-        enc != decryptedEncodings_.end(),
+    auto encodingKeyIt = decryptedEncodings_.find(encodingKey);
+    VELOX_CHECK(
+        encodingKeyIt != decryptedEncodings_.end(),
         "encoding not found: ",
-        ek.toString());
-    return enc->second;
+        encodingKey.toString());
+    return encodingKeyIt->second;
   }
 
-  // load data into buffer according to read plan
+  /// load data into buffer according to read plan
   void loadReadPlan();
 
   std::unique_ptr<dwio::common::SeekableInputStream> getCompressedStream(
@@ -312,20 +308,20 @@ class StripeStreamsImpl : public StripeStreamsBase {
   }
 
   uint32_t rowsPerRowGroup() const override {
-    return readState_->readerBase->getFooter().rowIndexStride();
+    return readState_->readerBase->footer().rowIndexStride();
   }
 
  private:
   const StreamInformation& getStreamInfo(
       const DwrfStreamIdentifier& si,
       const bool throwIfNotFound = true) const {
-    auto index = streams_.find(si);
-    if (index == streams_.end()) {
+    const auto it = streams_.find(si);
+    if (it == streams_.end()) {
       VELOX_CHECK(!throwIfNotFound, "stream info not found: ", si.toString());
       return StreamInformationImpl::getNotFound();
     }
 
-    return index->second;
+    return it->second;
   }
 
   std::unique_ptr<dwio::common::SeekableInputStream> getIndexStreamFromCache(
@@ -333,7 +329,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
 
   const dwio::common::encryption::Decrypter* getDecrypter(
       uint32_t nodeId) const {
-    auto& handler = *readState_->stripeMetadata->handler;
+    auto& handler = *readState_->stripeMetadata->decryptionHandler;
     return handler.isEncrypted(nodeId)
         ? std::addressof(handler.getEncryptionProvider(nodeId))
         : nullptr;
@@ -352,7 +348,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
   const StrideIndexProvider& provider_;
   const uint32_t stripeIndex_;
 
-  bool readPlanLoaded_;
+  bool readPlanLoaded_{false};
 
   // map of stream id -> stream information
   folly::F14FastMap<
@@ -365,9 +361,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
       decryptedEncodings_;
 };
 
-/**
- * StripeInformation Implementation
- */
+/// StripeInformation Implementation
 class StripeInformationImpl : public StripeInformation {
   uint64_t offset;
   uint64_t indexLength;

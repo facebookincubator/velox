@@ -166,15 +166,18 @@ struct HashTableBenchmarkResult {
 
   double eraseClock{0};
 
+  uint64_t peakMemoryBytes{0};
+
   // The mode of the table.
   BaseHashTable::HashMode hashMode;
 
-  void merge(HashTableBenchmarkResult other) {
-    numIter++;
+  void merge(const HashTableBenchmarkResult& other) {
+    ++numIter;
     buildClocks += other.buildClocks;
     listJoinResultClocks += other.listJoinResultClocks;
     totalClock += other.totalClock;
     eraseClock += other.eraseClock;
+    peakMemoryBytes += other.peakMemoryBytes;
   }
 
   std::string toString() const {
@@ -186,7 +189,8 @@ struct HashTableBenchmarkResult {
         << " listJoinResultClocks=" << listJoinResultClocks << "("
         << (listJoinResultClocks / totalClock * 100)
         << "%) buildClocks=" << buildClocks << "("
-        << (buildClocks / totalClock * 100) << "%)";
+        << (buildClocks / totalClock * 100) << "%)"
+        << " peakMemoryBytes=" << succinctBytes(peakMemoryBytes);
     if (params.runErase) {
       out << " eraseClock=" << eraseClock << "("
           << (eraseClock / totalClock * 100) << "%)";
@@ -201,13 +205,21 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       : randomEngine_((std::random_device{}())) {}
 
   HashTableBenchmarkResult run(HashTableBenchmarkParams params) {
+    std::shared_ptr<memory::MemoryPool> tableAggregatePool =
+        rootPool_->addAggregateChild("tableAggregate");
+    std::vector<std::shared_ptr<memory::MemoryPool>> tablePools;
+    tablePools.reserve(params.numTables);
+    for (int i = 0; i < params_.numTables; ++i) {
+      tablePools.push_back(
+          tableAggregatePool->addLeafChild(fmt::format("table{}", i)));
+    }
     params_ = params;
     HashTableBenchmarkResult result;
     result.params = params_;
-    SelectivityInfo totalClock;
+    uint64_t totalClocks{0};
     {
-      SelectivityTimer timer(totalClock, 0);
-      buildTable();
+      ClockTimer timer(totalClocks);
+      buildTable(tablePools);
       result.numOutput = probeTableAndListResult();
       result.hashMode = topTable_->hashMode();
       VELOX_CHECK_EQ(result.hashMode, params_.mode);
@@ -219,8 +231,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     }
     result.buildClocks += buildTime_;
     result.listJoinResultClocks += listJoinResultTime_;
-    result.totalClock += totalClock.timeToDropValue();
-
+    result.totalClock = totalClocks;
+    result.peakMemoryBytes = tableAggregatePool->peakBytes();
     return result;
   }
 
@@ -348,7 +360,8 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
   }
 
   // Prepare join table.
-  void buildTable() {
+  void buildTable(
+      const std::vector<std::shared_ptr<memory::MemoryPool>>& tablePools) {
     std::vector<TypePtr> dependentTypes;
     std::vector<std::unique_ptr<BaseHashTable>> otherTables;
     std::vector<RowVectorPtr> batches;
@@ -363,7 +376,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
           true,
           false,
           1'000,
-          pool_.get());
+          tablePools[i].get());
 
       copyVectorsToTable(batches[i], table.get());
       if (i == 0) {
@@ -372,15 +385,15 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
         otherTables.push_back(std::move(table));
       }
     }
-    SelectivityInfo buildClocks;
+    uint64_t buildClocks{0};
     {
-      SelectivityTimer timer(buildClocks, 0);
+      ClockTimer timer(buildClocks);
       topTable_->prepareJoinTable(
           std::move(otherTables),
           BaseHashTable::kNoSpillInputStartPartitionBit,
           executor_.get());
     }
-    buildTime_ = buildClocks.timeToDropValue();
+    buildTime_ = buildClocks;
   }
 
   void probeTable(
@@ -406,37 +419,57 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     topTable_->joinProbe(lookup);
   }
 
-  // Hash probe andd list join result.
+  BaseHashTable::JoinResultIterator createResultIterator() {
+    std::vector<vector_size_t> listColumns{};
+    for (int32_t i = 0; i < topTable_->rows()->columnTypes().size(); i++) {
+      listColumns.push_back(i);
+    }
+    std::vector<vector_size_t> varSizeListColumns;
+    uint64_t fixedSizeListColumnsSizeSum{0};
+    varSizeListColumns.reserve(listColumns.size());
+    for (const auto column : listColumns) {
+      if (topTable_->rows()->columnTypes()[column]->isFixedWidth()) {
+        fixedSizeListColumnsSizeSum += topTable_->rows()->fixedSizeAt(column);
+      } else {
+        varSizeListColumns.push_back(column);
+      }
+    }
+    return BaseHashTable::JoinResultIterator(
+        std::move(varSizeListColumns), fixedSizeListColumnsSizeSum);
+  }
+
+  // Hash probe and list join result.
   int64_t probeTableAndListResult() {
     auto lookup = std::make_unique<HashLookup>(topTable_->hashers());
-    auto numBatch = params_.probeSize / params_.hashTableSize;
-    auto batchSize = params_.hashTableSize;
-    SelectivityInfo listJoinResultClocks;
-    BaseHashTable::JoinResultIterator results;
+    const auto numBatch = params_.probeSize / params_.hashTableSize;
+    const auto batchSize = params_.hashTableSize;
     BufferPtr outputRowMapping;
     auto outputBatchSize = batchSize;
     std::vector<char*> outputTableRows;
     int64_t sequence = 0;
     int64_t numJoinListResult = 0;
+    BaseHashTable::JoinResultIterator resultsIter = createResultIterator();
     for (auto i = 0; i < numBatch; ++i) {
       auto batch = makeProbeVector(batchSize, params_.hashTableSize, sequence);
       probeTable(*lookup, batch, batchSize);
-      results.reset(*lookup);
+      resultsIter.reset(*lookup);
       auto mapping = initializeRowNumberMapping(
           outputRowMapping, outputBatchSize, pool_.get());
       outputTableRows.resize(outputBatchSize);
+      uint64_t listJoinResultClocks{0};
       {
-        SelectivityTimer timer(listJoinResultClocks, 0);
-        while (!results.atEnd()) {
+        ClockTimer timer(listJoinResultClocks);
+        while (!resultsIter.atEnd()) {
           numJoinListResult += topTable_->listJoinResults(
-              results,
+              resultsIter,
               false,
               mapping,
-              folly::Range(outputTableRows.data(), outputTableRows.size()));
+              folly::Range(outputTableRows.data(), outputTableRows.size()),
+              std::numeric_limits<uint64_t>::max());
         }
       }
+      listJoinResultTime_ += listJoinResultClocks;
     }
-    listJoinResultTime_ = listJoinResultClocks.timeToDropValue();
     return numJoinListResult;
   }
 
@@ -444,29 +477,30 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
     auto lookup = std::make_unique<HashLookup>(topTable_->hashers());
     auto batchSize = 10000;
     auto mode = topTable_->hashMode();
-    SelectivityInfo eraseClock;
-    BaseHashTable::JoinResultIterator results;
     BufferPtr outputRowMapping;
     auto outputBatchSize = topTable_->rows()->numRows() + 2;
     std::vector<char*> outputTableRows;
     int64_t sequence = 0;
     auto batch = makeProbeVector(batchSize, batchSize, sequence);
     probeTable(*lookup, batch, batchSize);
-    results.reset(*lookup);
     auto mapping = initializeRowNumberMapping(
         outputRowMapping, outputBatchSize, pool_.get());
     outputTableRows.resize(outputBatchSize);
+    BaseHashTable::JoinResultIterator resultIter = createResultIterator();
+    resultIter.reset(*lookup);
     auto num = topTable_->listJoinResults(
-        results,
+        resultIter,
         false,
         mapping,
-        folly::Range(outputTableRows.data(), outputTableRows.size()));
+        folly::Range(outputTableRows.data(), outputTableRows.size()),
+        std::numeric_limits<uint64_t>::max());
+    uint64_t eraseClocks{0};
     {
-      SelectivityTimer timer(eraseClock, 0);
+      ClockTimer timer(eraseClocks);
       topTable_->rows()->eraseRows(
           folly::Range<char**>(outputTableRows.data(), num));
     }
-    eraseTime_ += eraseClock.timeToDropValue();
+    eraseTime_ = eraseClocks;
   }
 
   std::default_random_engine randomEngine_;

@@ -25,6 +25,9 @@
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/serializers/CompactRowSerializer.h"
+#include "velox/serializers/PrestoSerializer.h"
+#include "velox/serializers/UnsafeRowSerializer.h"
 
 DEFINE_int64(
     seed,
@@ -51,6 +54,21 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
 
   facebook::velox::functions::prestosql::registerInternalFunctions();
+  if (!isRegisteredNamedVectorSerde(
+          facebook::velox::VectorSerde::Kind::kPresto)) {
+    facebook::velox::serializer::presto::PrestoVectorSerde::
+        registerNamedVectorSerde();
+  }
+  if (!isRegisteredNamedVectorSerde(
+          facebook::velox::VectorSerde::Kind::kCompactRow)) {
+    facebook::velox::serializer::CompactRowVectorSerde::
+        registerNamedVectorSerde();
+  }
+  if (!isRegisteredNamedVectorSerde(
+          facebook::velox::VectorSerde::Kind::kUnsafeRow)) {
+    facebook::velox::serializer::spark::UnsafeRowVectorSerde::
+        registerNamedVectorSerde();
+  }
   facebook::velox::memory::MemoryManager::initialize({});
 
   // TODO: List of the functions that at some point crash or fail and need to
@@ -79,6 +97,9 @@ int main(int argc, char** argv) {
           {"first_ignore_null", nullptr},
           {"max_by", nullptr},
           {"min_by", nullptr},
+          // If multiple values have the same greatest frequency, the return
+          // value is indeterminate.
+          {"mode", nullptr},
           {"skewness", nullptr},
           {"kurtosis", nullptr},
           {"collect_list", makeArrayVerifier()},
@@ -90,21 +111,23 @@ int main(int argc, char** argv) {
       };
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
+      facebook::velox::memory::memoryManager()->addRootPool()};
   auto duckQueryRunner =
-      std::make_unique<facebook::velox::exec::test::DuckQueryRunner>();
-  duckQueryRunner->disableAggregateFunctions({
-      // https://github.com/facebookincubator/velox/issues/7677
-      "max_by",
-      "min_by",
-      // The skewness functions of Velox and DuckDB use different
-      // algorithms.
-      // https://github.com/facebookincubator/velox/issues/4845
-      "skewness",
-      // Spark's kurtosis uses Pearson's formula for calculating the kurtosis
-      // coefficient. Meanwhile, DuckDB employs the sample kurtosis calculation
-      // formula. The results from the two methods are completely different.
-      "kurtosis",
-  });
+      std::make_unique<facebook::velox::exec::test::DuckQueryRunner>(
+          rootPool.get());
+  duckQueryRunner->disableAggregateFunctions(
+      {// https://github.com/facebookincubator/velox/issues/7677
+       "max_by",
+       "min_by",
+       // The skewness functions of Velox and DuckDB use different
+       // algorithms.
+       // https://github.com/facebookincubator/velox/issues/4845
+       "skewness",
+       // Spark's kurtosis uses Pearson's formula for calculating the kurtosis
+       // coefficient. Meanwhile, DuckDB employs the sample kurtosis calculation
+       // formula. The results from the two methods are completely different.
+       "kurtosis"});
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
   using Options = facebook::velox::exec::test::AggregationFuzzerOptions;

@@ -256,6 +256,20 @@ TEST_F(E2EFilterTest, integerDictionary) {
       20);
 }
 
+TEST_F(E2EFilterTest, timestampDirect) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+  options_.writeInt96AsTimestamp = true;
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {},
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      20);
+}
+
 TEST_F(E2EFilterTest, timestampDictionary) {
   options_.dataPageSize = 4 * 1024;
   options_.writeInt96AsTimestamp = true;
@@ -400,7 +414,7 @@ TEST_F(E2EFilterTest, longDecimalDictionary) {
               true);
         },
         true,
-        {},
+        {"longdecimal_val"},
         20);
   }
 }
@@ -429,7 +443,7 @@ TEST_F(E2EFilterTest, longDecimalDirect) {
               true);
         },
         true,
-        {},
+        {"longdecimal_val"},
         20);
   }
 
@@ -442,7 +456,7 @@ TEST_F(E2EFilterTest, longDecimalDirect) {
             {-479, HugeInt::build(1546093991, 4054979645)});
       },
       false,
-      {},
+      {"longdecimal_val"},
       20);
 }
 
@@ -471,6 +485,23 @@ TEST_F(E2EFilterTest, stringDictionary) {
         makeStringDistribution("string_val", 100, true, false);
         makeStringDistribution("string_val_2", 170, false, true);
         makeStringDistribution("string_const", 1, true, false);
+      },
+      true,
+      {"string_val", "string_val_2"},
+      20);
+}
+
+TEST_F(E2EFilterTest, stringDeltaByteArray) {
+  options_.enableDictionary = false;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::DELTA_BYTE_ARRAY;
+
+  testWithTypes(
+      "string_val:string,"
+      "string_val_2:string",
+      [&]() {
+        makeStringUnique("string_val");
+        makeStringUnique("string_val_2");
       },
       true,
       {"string_val", "string_val_2"},

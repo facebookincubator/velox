@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 #pragma once
+
 #include <stdint.h>
 #include <string.h>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
+
 #include "velox/common/compression/Compression.h"
 
 namespace facebook::velox::common {
@@ -39,19 +41,21 @@ struct SpillStats {
   /// The number of spilled files.
   uint64_t spilledFiles{0};
   /// The time spent on filling rows for spilling.
-  uint64_t spillFillTimeUs{0};
+  uint64_t spillFillTimeNanos{0};
   /// The time spent on sorting rows for spilling.
-  uint64_t spillSortTimeUs{0};
+  uint64_t spillSortTimeNanos{0};
+  /// The time spent on extracting vector from RowContainer for spilling.
+  uint64_t spillExtractVectorTimeNanos{0};
   /// The time spent on serializing rows for spilling.
-  uint64_t spillSerializationTimeUs{0};
+  uint64_t spillSerializationTimeNanos{0};
   /// The number of spill writer flushes, equivalent to number of write calls to
   /// underlying filesystem.
   uint64_t spillWrites{0};
   /// The time spent on copy out serialized rows for disk write. If compression
   /// is enabled, this includes the compression time.
-  uint64_t spillFlushTimeUs{0};
+  uint64_t spillFlushTimeNanos{0};
   /// The time spent on writing spilled rows to disk.
-  uint64_t spillWriteTimeUs{0};
+  uint64_t spillWriteTimeNanos{0};
   /// The number of times that an hash build operator exceeds the max spill
   /// limit.
   uint64_t spillMaxLevelExceededCount{0};
@@ -61,9 +65,9 @@ struct SpillStats {
   /// to the underlying filesystem.
   uint64_t spillReads{0};
   /// The time spent on read data from spilled files.
-  uint64_t spillReadTimeUs{0};
+  uint64_t spillReadTimeNanos{0};
   /// The time spent on deserializing rows read from spilled files.
-  uint64_t spillDeserializationTimeUs{0};
+  uint64_t spillDeserializationTimeNanos{0};
 
   SpillStats(
       uint64_t _spillRuns,
@@ -72,17 +76,18 @@ struct SpillStats {
       uint64_t _spilledRows,
       uint32_t _spilledPartitions,
       uint64_t _spilledFiles,
-      uint64_t _spillFillTimeUs,
-      uint64_t _spillSortTimeUs,
-      uint64_t _spillSerializationTimeUs,
+      uint64_t _spillFillTimeNanos,
+      uint64_t _spillSortTimeNanos,
+      uint64_t _spillExtractVectorTimeNanos,
+      uint64_t _spillSerializationTimeNanos,
       uint64_t _spillWrites,
-      uint64_t _spillFlushTimeUs,
-      uint64_t _spillWriteTimeUs,
+      uint64_t _spillFlushTimeNanos,
+      uint64_t _spillWriteTimeNanos,
       uint64_t _spillMaxLevelExceededCount,
       uint64_t _spillReadBytes,
       uint64_t _spillReads,
-      uint64_t _spillReadTimeUs,
-      uint64_t _spillDeserializationTimeUs);
+      uint64_t _spillReadTimeNanos,
+      uint64_t _spillDeserializationTimeNanos);
 
   SpillStats() = default;
 
@@ -120,30 +125,34 @@ void updateGlobalSpillRunStats(uint64_t numRuns);
 /// rows and the serializaion time.
 void updateGlobalSpillAppendStats(
     uint64_t numRows,
-    uint64_t serializaionTimeUs);
+    uint64_t serializaionTimeNs);
 
 /// Increments the number of spilled partitions.
 void incrementGlobalSpilledPartitionStats();
 
 /// Updates the time spent on filling rows to spill.
-void updateGlobalSpillFillTime(uint64_t timeUs);
+void updateGlobalSpillFillTime(uint64_t timeNs);
 
 /// Updates the time spent on sorting rows to spill.
-void updateGlobalSpillSortTime(uint64_t timeUs);
+void updateGlobalSpillSortTime(uint64_t timeNs);
+
+/// Updates the time spent on extracting vector from RowContainer to spill.
+void updateGlobalSpillExtractVectorTime(uint64_t timeNs);
 
 /// Updates the stats for disk write including the number of disk writes,
 /// the written bytes, the time spent on copying out (compression) for disk
 /// writes, the time spent on disk writes.
 void updateGlobalSpillWriteStats(
     uint64_t spilledBytes,
-    uint64_t flushTimeUs,
-    uint64_t writeTimeUs);
+    uint64_t flushTimeNs,
+    uint64_t writeTimeNs);
 
 /// Updates the stats for disk read including the number of disk reads, the
 /// amount of data read in bytes, and the time it takes to read from the disk.
 void updateGlobalSpillReadStats(
+    uint64_t spillReads,
     uint64_t spillReadBytes,
-    uint64_t spillRadTimeUs);
+    uint64_t spillRadTimeNs);
 
 /// Increments the spill memory bytes.
 void updateGlobalSpillMemoryBytes(uint64_t spilledInputBytes);
@@ -156,7 +165,7 @@ void updateGlobalMaxSpillLevelExceededCount(
     uint64_t maxSpillLevelExceededCount);
 
 /// Increments the spill read deserialization time.
-void updateGlobalSpillDeserializationTimeUs(uint64_t timeUs);
+void updateGlobalSpillDeserializationTimeNs(uint64_t timeNs);
 
 /// Gets the cumulative global spill stats.
 SpillStats globalSpillStats();
@@ -165,9 +174,8 @@ SpillStats globalSpillStats();
 template <>
 struct fmt::formatter<facebook::velox::common::SpillStats>
     : fmt::formatter<std::string> {
-  auto format(
-      const facebook::velox::common::SpillStats& s,
-      format_context& ctx) {
+  auto format(const facebook::velox::common::SpillStats& s, format_context& ctx)
+      const {
     return formatter<std::string>::format(s.toString(), ctx);
   }
 };

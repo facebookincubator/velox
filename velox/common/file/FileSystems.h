@@ -23,7 +23,9 @@
 #include <string_view>
 
 namespace facebook::velox {
-class Config;
+namespace config {
+class ConfigBase;
+}
 class ReadFile;
 class WriteFile;
 } // namespace facebook::velox
@@ -45,12 +47,36 @@ struct FileOptions {
   memory::MemoryPool* pool{nullptr};
   /// If specified then can be trusted to be the file size.
   std::optional<int64_t> fileSize;
+
+  /// Whether to create parent directories if they don't exist.
+  ///
+  /// NOTE: this only applies for write open file.
+  bool shouldCreateParentDirectories{false};
+
+  /// Whether to throw an error if a file already exists.
+  ///
+  /// NOTE: this only applies for write open file.
+  bool shouldThrowOnFileAlreadyExists{true};
+
+  /// Whether to buffer the write data in file system client or not. For local
+  /// filesystem on Unix-like operating system, this corresponds to the direct
+  /// IO mode if set.
+  ///
+  /// NOTE: this only applies for write open file.
+  bool bufferWrite{true};
+};
+
+/// Defines directory options
+struct DirectoryOptions : FileOptions {
+  /// This is similar to kFileCreateConfig
+  static constexpr folly::StringPiece kMakeDirectoryConfig{
+      "make-directory-config"};
 };
 
 /// An abstract FileSystem
 class FileSystem {
  public:
-  FileSystem(std::shared_ptr<const Config> config)
+  FileSystem(std::shared_ptr<const config::ConfigBase> config)
       : config_(std::move(config)) {}
   virtual ~FileSystem() = default;
 
@@ -94,19 +120,21 @@ class FileSystem {
   virtual std::vector<std::string> list(std::string_view path) = 0;
 
   /// Create a directory (recursively). Throws velox exception on failure.
-  virtual void mkdir(std::string_view path) = 0;
+  virtual void mkdir(
+      std::string_view path,
+      const DirectoryOptions& options = {}) = 0;
 
   /// Remove a directory (all the files and sub-directories underneath
   /// recursively). Throws velox exception on failure.
   virtual void rmdir(std::string_view path) = 0;
 
  protected:
-  std::shared_ptr<const Config> config_;
+  std::shared_ptr<const config::ConfigBase> config_;
 };
 
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filename,
-    std::shared_ptr<const Config> config);
+    std::shared_ptr<const config::ConfigBase> config);
 
 /// Returns true if filePath is supported by any registered file system,
 /// otherwise false.
@@ -120,7 +148,7 @@ bool isPathSupportedByRegisteredFileSystems(const std::string_view& filePath);
 void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
     std::function<std::shared_ptr<FileSystem>(
-        std::shared_ptr<const Config>,
+        std::shared_ptr<const config::ConfigBase>,
         std::string_view)> fileSystemGenerator);
 
 /// Register the local filesystem.

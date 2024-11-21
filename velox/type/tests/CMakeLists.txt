@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_subdirectory(utils)
+
 add_executable(
   velox_type_test
   ConversionsTest.cpp
@@ -31,11 +33,12 @@ add_test(velox_type_test velox_type_test)
 target_link_libraries(
   velox_type_test
   velox_type
+  velox_type_test_lib
   velox_common_base
   Folly::folly
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   gflags::gflags
   glog::glog)
 
@@ -47,8 +50,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -61,8 +64,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -75,8 +78,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -89,8 +92,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -103,8 +106,8 @@ target_link_libraries(
   velox_serialization
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)
 
@@ -115,7 +118,7 @@ target_link_libraries(
   velox_type
   Folly::folly
   ${FOLLY_BENCHMARK}
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
   glog::glog)

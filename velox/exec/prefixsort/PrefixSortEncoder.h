@@ -16,11 +16,7 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
-#include <memory>
 
-#include "velox/common/base/BitUtil.h"
-#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
@@ -34,7 +30,7 @@ class PrefixSortEncoder {
       : ascending_(ascending), nullsFirst_(nullsFirst){};
 
   /// Encode native primitive types(such as uint64_t, int64_t, uint32_t,
-  /// int32_t, float, double, Timestamp). TODO: Add support for strings.
+  /// int32_t, float, double, Timestamp).
   /// 1. The first byte of the encoded result is null byte. The value is 0 if
   ///    (nulls first and value is null) or (nulls last and value is not null).
   ///    Otherwise, the value is 1.
@@ -42,6 +38,8 @@ class PrefixSortEncoder {
   ///    -If value is null, we set the remaining sizeof(T) bytes to '0', they
   ///     do not affect the comparison results at all.
   ///    -If value is not null, the result is set by calling encodeNoNulls.
+  ///
+  /// TODO: add support for strings.
   template <typename T>
   FOLLY_ALWAYS_INLINE void encode(std::optional<T> value, char* dest) const {
     if (value.has_value()) {
@@ -54,7 +52,7 @@ class PrefixSortEncoder {
   }
 
   /// @tparam T Type of value. Supported type are: uint64_t, int64_t, uint32_t,
-  /// int32_t, float, double, Timestamp. TODO Add support for int16_t, uint16_t.
+  /// int32_t, int16_t, uint16_t, float, double, Timestamp.
   template <typename T>
   FOLLY_ALWAYS_INLINE void encodeNoNulls(T value, char* dest) const;
 
@@ -70,7 +68,11 @@ class PrefixSortEncoder {
   ///         For not supported types, returns 'std::nullopt'.
   FOLLY_ALWAYS_INLINE static std::optional<uint32_t> encodedSize(
       TypeKind typeKind) {
+    // NOTE: one byte is reserved for nullable comparison.
     switch ((typeKind)) {
+      case ::facebook::velox::TypeKind::SMALLINT: {
+        return 3;
+      }
       case ::facebook::velox::TypeKind::INTEGER: {
         return 5;
       }
@@ -84,6 +86,9 @@ class PrefixSortEncoder {
         return 9;
       }
       case ::facebook::velox::TypeKind::TIMESTAMP: {
+        return 17;
+      }
+      case ::facebook::velox::TypeKind::HUGEINT: {
         return 17;
       }
       default:
@@ -145,6 +150,33 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     int64_t value,
     char* dest) const {
   encodeNoNulls((uint64_t)(value ^ (1ull << 63)), dest);
+}
+
+/// Logic is as same as int32_t.
+template <>
+FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
+    uint16_t value,
+    char* dest) const {
+  auto& v = *reinterpret_cast<uint16_t*>(dest);
+  v = __builtin_bswap16(value);
+  if (!ascending_) {
+    v = ~v;
+  }
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
+    int16_t value,
+    char* dest) const {
+  encodeNoNulls(static_cast<uint16_t>(value ^ (1u << 15)), dest);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
+    int128_t value,
+    char* dest) const {
+  encodeNoNulls<int64_t>(HugeInt::upper(value), dest);
+  encodeNoNulls<uint64_t>(HugeInt::lower(value), dest + sizeof(int64_t));
 }
 
 namespace detail {

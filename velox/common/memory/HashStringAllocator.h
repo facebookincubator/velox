@@ -237,7 +237,7 @@ class HashStringAllocator : public StreamArena {
   /// possible continuation ranges.
   /// @param maxBytes If provided, the returned stream will cover at most that
   /// many bytes.
-  static ByteInputStream prepareRead(
+  static std::unique_ptr<ByteInputStream> prepareRead(
       const Header* header,
       size_t maxBytes = std::numeric_limits<size_t>::max());
 
@@ -340,12 +340,6 @@ class HashStringAllocator : public StreamArena {
   /// Returns 'true' if this is empty. The implementation includes a call to
   /// checkConsistency() which makes it slow. Do not use in hot paths.
   bool isEmpty() const;
-
-  /// Throws if 'this' is not empty. Checks consistency of
-  /// 'this'. This is a fast check for RowContainer users freeing the
-  /// variable length data they store. Can be used in non-debug
-  /// builds.
-  void checkEmpty() const;
 
   std::string toString() const;
 

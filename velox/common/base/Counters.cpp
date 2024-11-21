@@ -265,6 +265,13 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricSsdCacheRecoveredEntries, facebook::velox::StatType::SUM);
 
+  // Total number of local file space allocation failures.
+  //
+  // NOTE: space allocation is attempted by fallocate wherever it is supported.
+  DEFINE_METRIC(
+      kMetricLocalFileSpaceAllocationFailuresCount,
+      facebook::velox::StatType::COUNT);
+
   /// ================== Memory Arbitration Counters =================
 
   // The number of arbitration requests.
@@ -285,18 +292,18 @@ void registerVeloxMetrics() {
   DEFINE_METRIC(
       kMetricArbitratorFailuresCount, facebook::velox::StatType::COUNT);
 
-  // Tracks the memory reclaim count on an operator.
-  DEFINE_METRIC(kMetricMemoryReclaimCount, facebook::velox::StatType::COUNT);
+  // Tracks the op memory reclaim count on an operator.
+  DEFINE_METRIC(kMetricOpMemoryReclaimCount, facebook::velox::StatType::COUNT);
 
   // Tracks op memory reclaim exec time in range of [0, 600s] with 20 buckets
   // and reports P50, P90, P99, and P100.
   DEFINE_HISTOGRAM_METRIC(
-      kMetricMemoryReclaimExecTimeMs, 30'000, 0, 600'000, 50, 90, 99, 100);
+      kMetricOpMemoryReclaimTimeMs, 30'000, 0, 600'000, 50, 90, 99, 100);
 
   // Tracks op memory reclaim bytes distribution in range of [0, 4GB] with 64
   // buckets and reports P50, P90, P99, and P100
   DEFINE_HISTOGRAM_METRIC(
-      kMetricMemoryReclaimedBytes,
+      kMetricOpMemoryReclaimedBytes,
       67'108'864,
       0,
       4'294'967'296,
@@ -305,9 +312,30 @@ void registerVeloxMetrics() {
       99,
       100);
 
-  // Tracks the memory reclaim count on an operator.
+  // Tracks the memory reclaim count on a query task.
   DEFINE_METRIC(
       kMetricTaskMemoryReclaimCount, facebook::velox::StatType::COUNT);
+
+  // Tracks query memory reclaim time in range of [0, 600s] with 20 buckets
+  // and reports P50, P90, P99, and P100.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricQueryMemoryReclaimTimeMs, 30'000, 0, 600'000, 50, 90, 99, 100);
+
+  // Tracks query memory reclaim bytes distribution in range of [0, 4GB] with 64
+  // buckets and reports P50, P90, P99, and P100
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricQueryMemoryReclaimedBytes,
+      67'108'864,
+      0,
+      4'294'967'296,
+      50,
+      90,
+      99,
+      100);
+
+  // Tracks the memory reclaim count on a query.
+  DEFINE_METRIC(
+      kMetricQueryMemoryReclaimCount, facebook::velox::StatType::COUNT);
 
   // Tracks memory reclaim task wait time in range of [0, 60s] with 60 buckets
   // and reports P50, P90, P99, and P100.
@@ -350,25 +378,74 @@ void registerVeloxMetrics() {
       kMetricArbitratorGlobalArbitrationCount,
       facebook::velox::StatType::COUNT);
 
-  // The number of global arbitration that reclaims used memory by slow disk
-  // spilling.
-  DEFINE_METRIC(
-      kMetricArbitratorSlowGlobalArbitrationCount,
-      facebook::velox::StatType::COUNT);
-
-  // The distribution of the amount of time an arbitration operation stays in
-  // arbitration queues and waits the arbitration r/w locks in range of [0,
-  // 600s] with 20 buckets. It is configured to report the latency at P50, P90,
+  // The number of victims distribution of a global arbitration run [0, 32] with
+  // 32 buckets. It is configured to report the number of victims at P50, P90,
   // P99, and P100 percentiles.
   DEFINE_HISTOGRAM_METRIC(
-      kMetricArbitratorWaitTimeMs, 30'000, 0, 600'000, 50, 90, 99, 100);
+      kMetricArbitratorGlobalArbitrationNumReclaimVictims,
+      1,
+      0,
+      32,
+      50,
+      90,
+      99,
+      100);
+
+  // The number of victim query memory pool having nothing to spill.
+  DEFINE_METRIC(
+      kMetricArbitratorGlobalArbitrationFailedVictimCount,
+      facebook::velox::StatType::COUNT);
+
+  // The time distribution of a global arbitration run [0, 600s] with 20
+  // buckets. It is configured to report the latency at P50, P90, P99, and P100
+  // percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricArbitratorGlobalArbitrationTimeMs,
+      30'000,
+      0,
+      600'000,
+      50,
+      90,
+      99,
+      100);
+
+  // The reclaimed bytes distribution of a global arbitration run in range of
+  // [0, 32GB] with 64 buckets. It is configured to report the reclaimed bytes
+  // at P50, P90, P99, and P100 percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricArbitratorGlobalArbitrationBytes,
+      512L << 20,
+      0,
+      32L << 30,
+      50,
+      90,
+      99,
+      100);
+
+  // The number of times that an arbitration operation wait for global
+  // arbitration to free up memory.
+  DEFINE_METRIC(
+      kMetricArbitratorGlobalArbitrationWaitCount,
+      facebook::velox::StatType::COUNT);
+
+  // The time distribution of a global arbitration wait [0, 300s] with 20
+  // buckets. It is configured to report the latency at P50, P90, P99, and P100
+  // percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricArbitratorGlobalArbitrationWaitTimeMs,
+      15'000,
+      0,
+      300'000,
+      50,
+      90,
+      99,
+      100);
 
   // The distribution of the amount of time it takes to complete a single
-  // arbitration request stays queued in range of [0, 600s] with 20
-  // buckets. It is configured to report the latency at P50, P90, P99,
-  // and P100 percentiles.
+  // arbitration operation in range of [0, 600s] with 20 buckets. It is
+  // configured to report the latency at P50, P90, P99, and P100 percentiles.
   DEFINE_HISTOGRAM_METRIC(
-      kMetricArbitratorArbitrationTimeMs, 30'000, 0, 600'000, 50, 90, 99, 100);
+      kMetricArbitratorOpExecTimeMs, 30'000, 0, 600'000, 50, 90, 99, 100);
 
   // Tracks the average of free memory capacity managed by the arbitrator in
   // bytes.
@@ -470,6 +547,12 @@ void registerVeloxMetrics() {
   // flushed due to memory reclaiming.
   DEFINE_METRIC(
       kMetricFileWriterEarlyFlushedRawBytes, facebook::velox::StatType::SUM);
+
+  // The distribution of the amount of time spent on hive sort writer finish
+  // call in range of [0, 120s] with 60 buckets. It is configured to report the
+  // latency at P50, P90, P99, and P100 percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricHiveSortWriterFinishTimeMs, 2'000, 0, 120'000, 50, 90, 99, 100);
 
   // The current spilling memory usage in bytes.
   DEFINE_METRIC(kMetricSpillMemoryBytes, facebook::velox::StatType::AVG);

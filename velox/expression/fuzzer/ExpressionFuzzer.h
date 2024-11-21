@@ -18,7 +18,10 @@
 
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/fuzzer/ExprTransformer.h"
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/fuzzer/ArgGenerator.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/expression/tests/ExpressionVerifier.h"
 #include "velox/functions/FunctionRegistry.h"
@@ -26,6 +29,9 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::fuzzer {
+
+using exec::test::ReferenceQueryRunner;
+using facebook::velox::exec::test::ExprTransformer;
 
 // A tool that can be used to generate random expressions.
 class ExpressionFuzzer {
@@ -48,6 +54,10 @@ class ExpressionFuzzer {
     // types.
     bool enableComplexTypes = false;
 
+    // Enable testing of function signatures with decimal argument or return
+    // types.
+    bool enableDecimalType = false;
+
     // Enable generation of expressions where one input column can be used by
     // multiple subexpressions.
     bool enableColumnReuse = false;
@@ -55,6 +65,8 @@ class ExpressionFuzzer {
     // Enable generation of expressions that re-uses already generated
     // subexpressions.
     bool enableExpressionReuse = false;
+
+    std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
 
     int32_t maxLevelOfNesting = 10;
 
@@ -91,6 +103,9 @@ class ExpressionFuzzer {
     //   "array_sort(array(T),constant function(T,T,bigint)) -> array(T)"}
     std::unordered_set<std::string> skipFunctions;
 
+    std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>
+        exprTransformers;
+
     // When set, when the input size of the generated expressions reaches
     // maxInputsThreshold, fuzzing input columns will reuse one of the existing
     // columns if any is already generated with the same type.
@@ -103,7 +118,9 @@ class ExpressionFuzzer {
       FunctionSignatureMap signatureMap,
       size_t initialSeed,
       const std::shared_ptr<VectorFuzzer>& vectorFuzzer,
-      const std::optional<ExpressionFuzzer::Options>& options = std::nullopt);
+      const std::optional<ExpressionFuzzer::Options>& options = std::nullopt,
+      const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
+          argGenerators = {});
 
   template <typename TFunc>
   void registerFuncOverride(TFunc func, const std::string& name);
@@ -192,6 +209,8 @@ class ExpressionFuzzer {
   RowTypePtr fuzzRowReturnType(size_t size, char prefix = 'p');
 
  private:
+  bool isSupportedSignature(const exec::FunctionSignature& signature);
+
   // Either generates a new expression of the required return type or if
   // already generated expressions of the same return type exist then there is
   // a 30% chance that it will re-use one of them.
@@ -226,8 +245,7 @@ class ExpressionFuzzer {
   // method finds all matching signatures and signature templates, picks one
   // randomly and generates LambdaTypedExpr. If no matching signatures or
   // signature templates found, this method returns LambdaTypedExpr that
-  // represents a constant lambda, i.e lambda that returns the same value for
-  // all input. The constant value is generated using 'generateArgConstant'.
+  // returns a constant literal or a column.
   core::TypedExprPtr generateArgFunction(const TypePtr& arg);
 
   std::vector<core::TypedExprPtr> generateArgs(const CallableSignature& input);
@@ -416,6 +434,9 @@ class ExpressionFuzzer {
 
   } state;
   friend class ExpressionFuzzerUnitTest;
+
+  // Maps from function name to a specific generator of argument types.
+  std::unordered_map<std::string, std::shared_ptr<ArgGenerator>> argGenerators_;
 };
 
 } // namespace facebook::velox::fuzzer

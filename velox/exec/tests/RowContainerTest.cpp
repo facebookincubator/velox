@@ -19,6 +19,7 @@
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
 #include "velox/expression/VectorReaders.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -1230,6 +1231,53 @@ TEST_F(RowContainerTest, rowSize) {
   EXPECT_EQ(rows, rowsFromContainer);
 }
 
+TEST_F(RowContainerTest, columnSize) {
+  const uint64_t kNumRows = 1000;
+  auto rowContainer =
+      makeRowContainer({BIGINT(), VARCHAR()}, {BIGINT(), VARCHAR()});
+
+  VectorFuzzer fuzzer(
+      {
+          .vectorSize = kNumRows,
+          .stringLength = 100,
+          .stringVariableLength = true,
+      },
+      pool());
+
+  auto rowVector =
+      fuzzer.fuzzInputFlatRow(ROW({BIGINT(), VARCHAR(), BIGINT(), VARCHAR()}));
+
+  std::vector<char*> rows;
+  rows.reserve(kNumRows);
+
+  ASSERT_EQ(rowContainer->numRows(), 0);
+  SelectivityVector allRows(kNumRows);
+  DecodedVector decodedKey1(*rowVector->childAt(0), allRows);
+  DecodedVector decodedKey2(*rowVector->childAt(1), allRows);
+  DecodedVector decodedDep1(*rowVector->childAt(2), allRows);
+  DecodedVector decodedDep2(*rowVector->childAt(3), allRows);
+  for (size_t i = 0; i < kNumRows; i++) {
+    auto row = rowContainer->newRow();
+    rowContainer->store(decodedKey1, i, row, 0);
+    rowContainer->store(decodedKey2, i, row, 1);
+    rowContainer->store(decodedDep1, i, row, 2);
+    rowContainer->store(decodedDep2, i, row, 3);
+    rows.push_back(row);
+  }
+  ASSERT_EQ(rowContainer->fixedSizeAt(0), 8);
+  ASSERT_EQ(rowContainer->fixedSizeAt(2), 8);
+  const auto key2Vector = rowVector->childAt(1)->asFlatVector<StringView>();
+  const auto dep2Vector = rowVector->childAt(3)->asFlatVector<StringView>();
+  for (size_t i = 0; i < kNumRows; i++) {
+    ASSERT_EQ(
+        rowContainer->variableSizeAt(rows[i], 1),
+        key2Vector->valueAt(i).size());
+    ASSERT_EQ(
+        rowContainer->variableSizeAt(rows[i], 3),
+        dep2Vector->valueAt(i).size());
+  }
+}
+
 TEST_F(RowContainerTest, rowSizeWithNormalizedKey) {
   auto data = makeRowContainer({SMALLINT()}, {VARCHAR()});
   data->newRow();
@@ -1904,15 +1952,15 @@ TEST_F(RowContainerTest, nextRowVector) {
   };
 
   auto validateNextRowVector = [&]() {
-    for (int i = 0; i < rows.size(); i++) {
+    for (int i = 0; i < rows.size(); ++i) {
       auto vector = data->getNextRowVector(rows[i]);
       if (vector) {
         auto iter = std::find(vector->begin(), vector->end(), rows[i]);
-        EXPECT_NE(iter, vector->end());
-        EXPECT_TRUE(vector->size() <= 2 && vector->size() > 0);
+        ASSERT_NE(iter, vector->end());
+        ASSERT_TRUE(vector->size() <= 2 && vector->size() > 0);
         for (auto next : *vector) {
-          EXPECT_EQ(data->getNextRowVector(next), vector);
-          EXPECT_TRUE(std::find(rows.begin(), rows.end(), next) != rows.end());
+          ASSERT_EQ(data->getNextRowVector(next), vector);
+          ASSERT_TRUE(std::find(rows.begin(), rows.end(), next) != rows.end());
         }
       }
     }
@@ -1922,18 +1970,18 @@ TEST_F(RowContainerTest, nextRowVector) {
     for (int i = 0; i < numRows; ++i) {
       rows.push_back(data->newRow());
       rowSet.insert(rows.back());
-      EXPECT_EQ(data->getNextRowVector(rows.back()), nullptr);
+      ASSERT_EQ(data->getNextRowVector(rows.back()), nullptr);
     }
-    EXPECT_EQ(numRows, data->numRows());
+    ASSERT_EQ(numRows, data->numRows());
     std::vector<char*> rowsFromContainer(numRows);
     RowContainerIterator iter;
-    EXPECT_EQ(
+    ASSERT_EQ(
         data->listRows(&iter, numRows, rowsFromContainer.data()), numRows);
-    EXPECT_EQ(0, data->listRows(&iter, numRows, rows.data()));
-    EXPECT_EQ(rows, rowsFromContainer);
+    ASSERT_EQ(0, data->listRows(&iter, numRows, rows.data()));
+    ASSERT_EQ(rows, rowsFromContainer);
 
     for (int i = 0; i + 2 <= numRows; i += 2) {
-      data->appendNextRow(rows[i], rows[i + 1]);
+      data->appendNextRow(rows[i], rows[i + 1], &data->stringAllocator());
     }
     validateNextRowVector();
   };
@@ -1961,7 +2009,6 @@ TEST_F(RowContainerTest, nextRowVector) {
   std::vector<int> eraseRows(numRows);
   std::iota(eraseRows.begin(), eraseRows.end(), 0);
   nextRowVectorEraseValidation(eraseRows);
-
   VELOX_ASSERT_THROW(
       nextRowVectorEraseValidation({1}),
       "All rows with the same keys must be present in 'rows'");
@@ -2015,4 +2062,281 @@ TEST_F(RowContainerTest, hugeIntStoreWithNulls) {
   auto extracted = BaseVector::copy(*source);
   data->extractColumn(rows.data(), kNumRows, kColumnIndex, extracted);
   assertEqualVectors(source, extracted);
+}
+
+TEST_F(RowContainerTest, columnHasNulls) {
+  auto rowContainer =
+      makeRowContainer({BIGINT(), BIGINT()}, {BIGINT(), BIGINT()}, false);
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    ASSERT_TRUE(!rowContainer->columnHasNulls(i));
+  }
+
+  const uint64_t kNumRows = 1000;
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 5; }),
+       makeFlatVector<int64_t>(
+           kNumRows, [](auto row) { return row % 5; }, nullEvery(3)),
+       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 7; }),
+       makeFlatVector<int64_t>(
+           kNumRows, [](auto row) { return row % 7; }, nullEvery(999))});
+
+  std::vector<char*> rows;
+  rows.reserve(kNumRows);
+
+  ASSERT_EQ(rowContainer->numRows(), 0);
+  SelectivityVector allRows(kNumRows);
+  for (size_t i = 0; i < kNumRows; i++) {
+    auto row = rowContainer->newRow();
+    rows.push_back(row);
+  }
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    DecodedVector decoded(*rowVector->childAt(i), allRows);
+    for (int j = 0; j < kNumRows; ++j) {
+      char* row = rows[i];
+      rowContainer->store(decoded, j, row, i);
+    }
+  }
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    if (i % 2 == 0) {
+      ASSERT_TRUE(!rowContainer->columnHasNulls(i));
+    } else {
+      ASSERT_TRUE(rowContainer->columnHasNulls(i));
+    }
+  }
+  // If the column's mayHaveNulls is false, the extracted vector's mayHaveNulls
+  // should be false.
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    auto vector =
+        BaseVector::create(rowVector->childAt(i)->type(), kNumRows, pool());
+    rowContainer->extractColumn(rows.data(), kNumRows, i, vector);
+    if (i % 2 == 0) {
+      ASSERT_TRUE(!vector->mayHaveNulls());
+    } else {
+      ASSERT_TRUE(vector->mayHaveNulls());
+    }
+  }
+}
+
+TEST_F(RowContainerTest, store) {
+  const uint64_t kNumRows = 1000;
+  auto rowVectorWithNulls = makeRowVector({
+      makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(6)),
+      makeFlatVector<std::string>(
+          kNumRows,
+          [](auto row) { return fmt::format("abcdefg123_{}", row); },
+          nullEvery(7)),
+      makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return row; }, nullEvery(8)),
+      makeArrayVector<int32_t>(
+          kNumRows,
+          [](auto i) { return i % 5; },
+          [](auto i) { return i % 10; },
+          nullEvery(10)),
+  });
+
+  auto rowVectorNoNulls = makeRowVector({
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 5; }),
+      makeFlatVector<std::string>(
+          kNumRows, [](auto row) { return fmt::format("abcdefg12_{}", row); }),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+      makeArrayVector<int64_t>(
+          kNumRows,
+          [](auto i) { return i % 3; },
+          [](auto i) { return i % 10; }),
+  });
+  for (auto& rowVector : {rowVectorWithNulls, rowVectorNoNulls}) {
+    auto rowContainer = makeRowContainer(
+        {BIGINT(), VARCHAR()}, {BIGINT(), ARRAY(BIGINT())}, false);
+    std::vector<char*> rows;
+    rows.reserve(kNumRows);
+
+    ASSERT_EQ(rowContainer->numRows(), 0);
+    SelectivityVector allRows(kNumRows);
+    for (size_t i = 0; i < kNumRows; i++) {
+      auto row = rowContainer->newRow();
+      rows.push_back(row);
+    }
+    for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+      DecodedVector decoded(*rowVector->childAt(i), allRows);
+      rowContainer->store(decoded, folly::Range(rows.data(), kNumRows), i);
+    }
+    ASSERT_EQ(rowContainer->numRows(), kNumRows);
+    for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+      auto vector =
+          BaseVector::create(rowVector->childAt(i)->type(), kNumRows, pool());
+      rowContainer->extractColumn(rows.data(), kNumRows, i, vector);
+      assertEqualVectors(rowVector->childAt(i), vector);
+    }
+  }
+}
+
+TEST_F(RowContainerTest, customComparison) {
+  auto values = makeNullableFlatVector<int64_t>(
+      {std::nullopt,
+       256 * 4 + 3,
+       256 * 2 + 4,
+       256 + 2,
+       5,
+       256 * 5,
+       256 * 2 + 1},
+      BIGINT_TYPE_WITH_CUSTOM_COMPARISON());
+
+  // The custom comparison compares the values mod 256.
+  std::vector<std::optional<int64_t>> ascNullsFirstOrder = {
+      std::nullopt, 256 * 5, 256 * 2 + 1, 256 + 2, 256 * 4 + 3, 256 * 2 + 4, 5};
+
+  testOrderAndEqualsWithNullsFirstVariations<int64_t>(
+      BIGINT_TYPE_WITH_CUSTOM_COMPARISON(),
+      values,
+      ascNullsFirstOrder,
+      [&](const auto& expectedOrder) {
+        return makeNullableFlatVector<int64_t>(
+            expectedOrder, BIGINT_TYPE_WITH_CUSTOM_COMPARISON());
+      });
+}
+
+TEST_F(RowContainerTest, customComparisonArray) {
+  auto values = makeNullableArrayVector<int64_t>(
+      {std::nullopt,
+       {{std::nullopt}},
+       {{256 * 4 + 3}},
+       {{256 * 2 + 4}},
+       {{256 + 2}},
+       {{5}},
+       {{256 * 5}},
+       {{256 * 2 + 1}}},
+      ARRAY(BIGINT_TYPE_WITH_CUSTOM_COMPARISON()));
+
+  // The custom comparison compares the values mod 256.
+  std::vector<std::optional<std::vector<std::optional<int64_t>>>>
+      ascNullsFirstOrder = {
+          std::nullopt,
+          {{std::nullopt}},
+          {{256 * 5}},
+          {{256 * 2 + 1}},
+          {{256 + 2}},
+          {{256 * 4 + 3}},
+          {{256 * 2 + 4}},
+          {{5}}};
+
+  testOrderAndEqualsWithNullsFirstVariations<
+      std::vector<std::optional<int64_t>>>(
+      ARRAY(BIGINT_TYPE_WITH_CUSTOM_COMPARISON()),
+      values,
+      ascNullsFirstOrder,
+      [&](const auto& expectedOrder) {
+        return makeNullableArrayVector<int64_t>(
+            expectedOrder, ARRAY(BIGINT_TYPE_WITH_CUSTOM_COMPARISON()));
+      });
+}
+
+TEST_F(RowContainerTest, customComparisonMap) {
+  auto values = makeNullableMapVector<int64_t, int32_t>(
+      {{{std::nullopt}},
+       {{{256 * 4 + 3, 1}}},
+       {{{256 * 2 + 4, 2}}},
+       {{{256 + 2, 3}}},
+       {{{5, 4}}},
+       {{{256 * 5, 5}}},
+       {{{256 * 2 + 1, 6}}}},
+      MAP(BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), INTEGER()));
+
+  // The custom comparison compares the values mod 256.
+  std::vector<
+      std::optional<std::vector<std::pair<int64_t, std::optional<int32_t>>>>>
+      ascNullsFirstOrder = {
+          {{std::nullopt}},
+          {{{256 * 5, 5}}},
+          {{{256 * 2 + 1, 6}}},
+          {{{256 + 2, 3}}},
+          {{{256 * 4 + 3, 1}}},
+          {{{256 * 2 + 4, 2}}},
+          {{{5, 4}}}};
+
+  testOrderAndEqualsWithNullsFirstVariations<
+      std::vector<std::pair<int64_t, std::optional<int32_t>>>>(
+      MAP(BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), INTEGER()),
+      values,
+      ascNullsFirstOrder,
+      [&](const auto& expectedOrder) {
+        return makeNullableMapVector<int64_t, int32_t>(
+            expectedOrder,
+            MAP(BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), INTEGER()));
+      });
+}
+
+TEST_F(RowContainerTest, customComparisonRow) {
+  auto values = makeRowVector({makeNullableFlatVector<int64_t>(
+      {std::nullopt,
+       256 * 4 + 3,
+       256 * 2 + 4,
+       256 + 2,
+       5,
+       256 * 5,
+       256 * 2 + 1},
+      BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
+
+  // The custom comparison compares the values mod 256.
+  std::vector<std::optional<int64_t>> ascNullsFirstOrder = {
+      std::nullopt, 256 * 5, 256 * 2 + 1, 256 + 2, 256 * 4 + 3, 256 * 2 + 4, 5};
+
+  testOrderAndEqualsWithNullsFirstVariations<int64_t>(
+      ROW({BIGINT_TYPE_WITH_CUSTOM_COMPARISON()}),
+      values,
+      ascNullsFirstOrder,
+      [&](const auto& expectedOrder) {
+        return makeRowVector({makeNullableFlatVector<int64_t>(
+            expectedOrder, BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
+      });
+}
+
+TEST_F(RowContainerTest, isNanAt) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  const auto kNanF = std::numeric_limits<float>::quiet_NaN();
+  auto rowVector = makeRowVector({
+      makeFlatVector<float>({kNanF, 0.2, 0.3, 0.4}),
+      makeFlatVector<double>({0.1, kNan, 0.3, 0.4}),
+      makeFlatVector<float>({0.1, 0.2, kNanF, 0.4}),
+      makeFlatVector<double>({0.1, 0.2, 0.3, kNan}),
+  });
+  const auto kNumRows = rowVector->size();
+
+  auto rowContainer =
+      makeRowContainer({REAL(), DOUBLE()}, {REAL(), DOUBLE()}, false);
+  std::vector<char*> rows;
+  rows.reserve(kNumRows);
+
+  SelectivityVector allRows(kNumRows);
+  for (size_t i = 0; i < kNumRows; i++) {
+    auto row = rowContainer->newRow();
+    rows.push_back(row);
+  }
+  for (int j = 0; j < rowContainer->columnTypes().size(); ++j) {
+    DecodedVector decoded(*rowVector->childAt(j), allRows);
+    rowContainer->store(decoded, folly::Range(rows.data(), kNumRows), j);
+  }
+
+  for (int i = 0; i < kNumRows; ++i) {
+    const auto* row = rows[i];
+    for (int j = 0; j < 4; ++j) {
+      if (i % 2 == 0) {
+        if (i == j) {
+          EXPECT_TRUE(
+              rowContainer->isNanAt<float>(row, rowContainer->columnAt(j)));
+        } else {
+          EXPECT_FALSE(
+              rowContainer->isNanAt<float>(row, rowContainer->columnAt(j)));
+        }
+      } else {
+        if (i == j) {
+          EXPECT_TRUE(
+              rowContainer->isNanAt<double>(row, rowContainer->columnAt(j)));
+        } else {
+          EXPECT_FALSE(
+              rowContainer->isNanAt<double>(row, rowContainer->columnAt(j)));
+        }
+      }
+    }
+  }
 }

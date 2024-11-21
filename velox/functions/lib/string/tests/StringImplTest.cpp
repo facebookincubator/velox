@@ -396,38 +396,38 @@ TEST_F(StringImplTest, stringToCodePoints) {
 }
 
 TEST_F(StringImplTest, overlappedStringPosition) {
-  auto testValidInputAsciiLpos = [](const std::string& string,
-                                    const std::string& substr,
+  auto testValidInputAsciiLpos = [](std::string_view string,
+                                    std::string_view substr,
                                     const int64_t instance,
                                     const int64_t expectedPosition) {
-    auto result = stringPosition</*isAscii*/ true, true>(
-        StringView(string), StringView(substr), instance);
+    auto result =
+        stringPosition</*isAscii*/ true, true>(string, substr, instance);
     ASSERT_EQ(result, expectedPosition);
   };
-  auto testValidInputAsciiRpos = [](const std::string& string,
-                                    const std::string& substr,
+  auto testValidInputAsciiRpos = [](std::string_view string,
+                                    std::string_view substr,
                                     const int64_t instance,
                                     const int64_t expectedPosition) {
-    auto result = stringPosition</*isAscii*/ true, false>(
-        StringView(string), StringView(substr), instance);
+    auto result =
+        stringPosition</*isAscii*/ true, false>(string, substr, instance);
     ASSERT_EQ(result, expectedPosition);
   };
 
-  auto testValidInputUnicodeLpos = [](const std::string& string,
-                                      const std::string& substr,
+  auto testValidInputUnicodeLpos = [](std::string_view string,
+                                      std::string_view substr,
                                       const int64_t instance,
                                       const int64_t expectedPosition) {
-    auto result = stringPosition</*isAscii*/ false, true>(
-        StringView(string), StringView(substr), instance);
+    auto result =
+        stringPosition</*isAscii*/ false, true>(string, substr, instance);
     ASSERT_EQ(result, expectedPosition);
   };
 
-  auto testValidInputUnicodeRpos = [](const std::string& string,
-                                      const std::string& substr,
+  auto testValidInputUnicodeRpos = [](std::string_view string,
+                                      std::string_view substr,
                                       const int64_t instance,
                                       const int64_t expectedPosition) {
-    auto result = stringPosition</*isAscii*/ false, false>(
-        StringView(string), StringView(substr), instance);
+    auto result =
+        stringPosition</*isAscii*/ false, false>(string, substr, instance);
     ASSERT_EQ(result, expectedPosition);
   };
 
@@ -445,31 +445,27 @@ TEST_F(StringImplTest, overlappedStringPosition) {
 }
 
 TEST_F(StringImplTest, stringPosition) {
-  auto testValidInputAscii = [](const std::string& string,
-                                const std::string& substr,
+  auto testValidInputAscii = [](std::string_view string,
+                                std::string_view substr,
                                 const int64_t instance,
                                 const int64_t expectedPosition) {
     ASSERT_EQ(
-        stringPosition</*isAscii*/ true>(
-            StringView(string), StringView(substr), instance),
+        stringPosition</*isAscii*/ true>(string, substr, instance),
         expectedPosition);
     ASSERT_EQ(
-        stringPosition</*isAscii*/ false>(
-            StringView(string), StringView(substr), instance),
+        stringPosition</*isAscii*/ false>(string, substr, instance),
         expectedPosition);
   };
 
-  auto testValidInputUnicode = [](const std::string& string,
-                                  const std::string& substr,
+  auto testValidInputUnicode = [](std::string_view string,
+                                  std::string_view substr,
                                   const int64_t instance,
                                   const int64_t expectedPosition) {
     ASSERT_EQ(
-        stringPosition</*isAscii*/ false>(
-            StringView(string), StringView(substr), instance),
+        stringPosition</*isAscii*/ false>(string, substr, instance),
         expectedPosition);
     ASSERT_EQ(
-        stringPosition</*isAscii*/ false>(
-            StringView(string), StringView(substr), instance),
+        stringPosition</*isAscii*/ false>(string, substr, instance),
         expectedPosition);
   };
 
@@ -494,9 +490,73 @@ TEST_F(StringImplTest, stringPosition) {
   testValidInputUnicode("abc/xyz/foo/bar", "/", 4, 0L);
 
   EXPECT_THROW(
-      stringPosition</*isAscii*/ false>(
-          StringView("foobar"), StringView("foobar"), 0),
-      VeloxUserError);
+      stringPosition</*isAscii*/ false>("foobar", "foobar", 0), VeloxUserError);
+}
+
+TEST_F(StringImplTest, replaceFirst) {
+  auto runTest = [](const std::string& string,
+                    const std::string& replaced,
+                    const std::string& replacement,
+                    const std::string& expectedResults) {
+    // Test out of place
+    core::StringWriter output;
+    replace(
+        output,
+        StringView(string),
+        StringView(replaced),
+        StringView(replacement),
+        true);
+
+    ASSERT_EQ(
+        StringView(output.data(), output.size()), StringView(expectedResults));
+
+    // Test in place
+    if (replacement.size() <= replaced.size()) {
+      core::StringWriter inOutString;
+      inOutString.resize(string.size());
+      if (string.size()) {
+        std::memcpy(inOutString.data(), string.data(), string.size());
+      }
+
+      replaceInPlace(
+          inOutString, StringView(replaced), StringView(replacement), true);
+      ASSERT_EQ(
+          StringView(inOutString.data(), inOutString.size()),
+          StringView(expectedResults));
+    }
+  };
+
+  runTest("hello_world", "e", "test", "htestllo_world");
+  runTest("hello_world", "l", "test", "hetestlo_world");
+  runTest("hello_world", "_", "", "helloworld");
+  runTest("hello_world", "hello", "", "_world");
+  runTest("aaa", "a", "b", "baa");
+  runTest("replace_all", "all", "first", "replace_first");
+  runTest(
+      "The quick brown dog jumps over a lazy dog",
+      "dog",
+      "fox",
+      "The quick brown fox jumps over a lazy dog");
+  runTest("John  Doe", " ", "", "John Doe");
+  runTest(
+      "We will fight for our rights, for our rights.",
+      ", for our rights",
+      "",
+      "We will fight for our rights.");
+  runTest("Testcases test cases", "cases", "", "Test test cases");
+  runTest("test cases", "", "Add ", "Add test cases");
+  runTest("test cases", "not_found", "Add ", "test cases");
+  runTest("", "a", "b", "");
+  runTest("", "", "test", "test");
+  runTest("", "a", ")", "");
+
+  // Unicode tests
+  runTest(
+      "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+      ",",
+      "\u2014",
+      "\u4FE1\u5FF5\u2014\u7231,\u5E0C\u671B");
+  runTest("\u00D6_hello_world", "", "prepend", "prepend\u00D6_hello_world");
 }
 
 TEST_F(StringImplTest, replace) {
@@ -542,7 +602,7 @@ TEST_F(StringImplTest, replace) {
   runTest("foo", "", "", "foo");
   runTest("foo", "foo", "", "");
   runTest("abc", "", "xx", "xxaxxbxxcxx");
-  runTest("", "", "xx", "");
+  runTest("", "", "xx", "xx");
   runTest("", "", "", "");
 
   runTest(

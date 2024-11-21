@@ -118,12 +118,6 @@ struct alignas(16) GpuDecode {
 
   NullMode nullMode;
 
-  // Ordinal number of TB in TBs working on the same column. Each TB does a
-  // multiple of TB width rows. The TBs for different ranges of rows are
-  // launched in the same grid but are independent. The ordinal for non-first
-  // TBs gets the base index for values.
-  uint8_t nthBlock{0};
-
   /// Number of chunks (e.g. Parquet pages). If > 1, different rows row ranges
   /// have different encodings. The first chunk's encoding is in 'data'. The
   /// next chunk's encoding is in the next GpuDecode's 'data'. Each chunk has
@@ -131,7 +125,18 @@ struct alignas(16) GpuDecode {
   /// given by the first GpuDecode.
   uint8_t numChunks{1};
 
+  // Ordinal number of TB in TBs working on the same column. Each TB does a
+  // multiple of TB width rows. The TBs for different ranges of rows are
+  // launched in the same grid but are independent. The ordinal for non-first
+  // TBs gets the base index for values.
+  uint16_t nthBlock{0};
+  /// Number of rows to process per thread of this block. This is equal across
+  /// the grid, except for last block.
   uint16_t numRowsPerThread{1};
+
+  /// Number of rows per thread in the grid, same for all blocks including the
+  /// last one.
+  uint16_t gridNumRowsPerThread{1};
 
   /// Number of rows to decode. if kFilterHits, the previous GpuDecode gives
   /// this number in BlockStatus. If 'rows' is set, this is the number of valid
@@ -325,6 +330,8 @@ struct alignas(16) GpuDecode {
   struct RowCountNoFilter {
     int32_t numRows;
     BlockStatus* status;
+    int32_t gridStatusSize;
+    bool gridOnly;
   };
 
   struct CountBits {
@@ -400,8 +407,7 @@ struct DecodePrograms {
 
 void launchDecode(
     const DecodePrograms& programs,
-    GpuArena* arena,
-    WaveBufferPtr& extra,
+    LaunchParams& params,
     Stream* stream);
 
 } // namespace facebook::velox::wave

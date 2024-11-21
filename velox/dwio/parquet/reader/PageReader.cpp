@@ -42,7 +42,6 @@ void PageReader::seekToPage(int64_t row) {
   // 'rowOfPage_' is the row number of the first row of the next page.
   rowOfPage_ += numRowsInPage_;
   for (;;) {
-    auto dataStart = pageStart_;
     if (chunkSize_ <= pageStart_) {
       // This may happen if seeking to exactly end of row group.
       numRepDefsInPage_ = 0;
@@ -223,7 +222,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   auto pageEnd = pageData_ + pageHeader.uncompressed_page_size;
   if (maxRepeat_ > 0) {
     uint32_t repeatLength = readField<int32_t>(pageData_);
-    repeatDecoder_ = std::make_unique<::arrow::util::RleDecoder>(
+    repeatDecoder_ = std::make_unique<arrow::util::RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
         ::arrow::bit_util::NumRequiredBits(maxRepeat_));
@@ -239,7 +238,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
           pageData_ + defineLength,
           ::arrow::bit_util::NumRequiredBits(maxDefine_));
     }
-    wideDefineDecoder_ = std::make_unique<::arrow::util::RleDecoder>(
+    wideDefineDecoder_ = std::make_unique<arrow::util::RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         defineLength,
         ::arrow::bit_util::NumRequiredBits(maxDefine_));
@@ -280,7 +279,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   pageData_ = readBytes(bytes, pageBuffer_);
 
   if (repeatLength) {
-    repeatDecoder_ = std::make_unique<::arrow::util::RleDecoder>(
+    repeatDecoder_ = std::make_unique<arrow::util::RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
         ::arrow::bit_util::NumRequiredBits(maxRepeat_));
@@ -377,7 +376,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       break;
     }
     case thrift::Type::INT96: {
-      auto numVeloxBytes = dictionary_.numValues * sizeof(Timestamp);
+      auto numVeloxBytes = dictionary_.numValues * sizeof(int128_t);
       dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
       auto numBytes = dictionary_.numValues * sizeof(Int96Timestamp);
       if (pageData_) {
@@ -392,23 +391,16 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       }
       // Expand the Parquet type length values to Velox type length.
       // We start from the end to allow in-place expansion.
-      auto values = dictionary_.values->asMutable<Timestamp>();
+      auto values = dictionary_.values->asMutable<int128_t>();
       auto parquetValues = dictionary_.values->asMutable<char>();
 
       for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
-        // Convert the timestamp into seconds and nanos since the Unix epoch,
-        // 00:00:00.000000 on 1 January 1970.
-        int64_t nanos;
+        int128_t result = 0;
         memcpy(
-            &nanos,
+            &result,
             parquetValues + i * sizeof(Int96Timestamp),
-            sizeof(int64_t));
-        int32_t days;
-        memcpy(
-            &days,
-            parquetValues + i * sizeof(Int96Timestamp) + sizeof(int64_t),
-            sizeof(int32_t));
-        values[i] = Timestamp::fromDaysAndNanos(days, nanos);
+            sizeof(Int96Timestamp));
+        values[i] = result;
       }
       break;
     }
@@ -699,6 +691,13 @@ void PageReader::makeDecoder() {
               "DELTA_BINARY_PACKED decoder only supports INT32 and INT64");
       }
       break;
+    case Encoding::DELTA_BYTE_ARRAY:
+      if (parquetType == thrift::Type::BYTE_ARRAY) {
+        deltaByteArrDecoder_ =
+            std::make_unique<DeltaByteArrayDecoder>(pageData_);
+        break;
+      }
+      FMT_FALLTHROUGH;
     default:
       VELOX_UNSUPPORTED("Encoding not supported yet: {}", encoding_);
   }
@@ -719,8 +718,14 @@ void PageReader::skip(int64_t numRows) {
   }
   firstUnvisited_ += numRows;
 
+  if (toSkip == 0) {
+    return;
+  }
   // Skip nulls
   toSkip = skipNulls(toSkip);
+  if (toSkip == 0) {
+    return;
+  }
 
   // Skip the decoder
   if (isDictionary()) {
@@ -733,6 +738,8 @@ void PageReader::skip(int64_t numRows) {
     booleanDecoder_->skip(toSkip);
   } else if (deltaBpDecoder_) {
     deltaBpDecoder_->skip(toSkip);
+  } else if (deltaByteArrDecoder_) {
+    deltaByteArrDecoder_->skip(toSkip);
   } else {
     VELOX_FAIL("No decoder to skip");
   }

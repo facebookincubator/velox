@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/aggregates/ApproxPercentileAggregate.h"
 #include "velox/common/base/IOUtils.h"
 #include "velox/common/base/Macros.h"
 #include "velox/common/base/RandomUtil.h"
@@ -28,8 +29,45 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
-template <typename T>
-using KllSketch = functions::kll::KllSketch<T, StlAllocator<T>>;
+template <typename T, typename Allocator>
+struct KllSketchTypeTraits {
+  using KllSketchType = functions::kll::KllSketch<T, Allocator, std::less<T>>;
+};
+
+template <>
+struct KllSketchTypeTraits<float, StlAllocator<float>> {
+  using KllSketchType = functions::kll::KllSketch<
+      float,
+      StlAllocator<float>,
+      util::floating_point::NaNAwareLessThan<float>>;
+};
+
+template <>
+struct KllSketchTypeTraits<double, StlAllocator<double>> {
+  using KllSketchType = functions::kll::KllSketch<
+      double,
+      StlAllocator<double>,
+      util::floating_point::NaNAwareLessThan<double>>;
+};
+
+template <>
+struct KllSketchTypeTraits<float, std::allocator<float>> {
+  using KllSketchType = functions::kll::KllSketch<
+      float,
+      std::allocator<float>,
+      util::floating_point::NaNAwareLessThan<float>>;
+};
+
+template <>
+struct KllSketchTypeTraits<double, std::allocator<double>> {
+  using KllSketchType = functions::kll::KllSketch<
+      double,
+      std::allocator<double>,
+      util::floating_point::NaNAwareLessThan<double>>;
+};
+
+template <typename T, typename Allocator = StlAllocator<T>>
+using KllSketch = typename KllSketchTypeTraits<T, Allocator>::KllSketchType;
 template <typename T>
 using KllView = functions::kll::detail::View<T>;
 
@@ -83,9 +121,9 @@ struct KllSketchAccumulator {
   // during spilling which may run in parallel.  HashStringAllocator is not
   // thread safe, so merging into/compacting the original KllSketch which
   // depends on it can lead to concurrency bugs.
-  functions::kll::KllSketch<T> compact() const {
-    functions::kll::KllSketch<T> newSketch =
-        functions::kll::KllSketch<T>::fromView(
+  KllSketch<T, std::allocator<T>> compact() const {
+    KllSketch<T, std::allocator<T>> newSketch =
+        KllSketch<T, std::allocator<T>>::fromView(
             sketch_.toView(), std::allocator<T>(), random::getSeed());
 
     mergeLargeCountValuesIntoSketch(std::allocator<T>(), newSketch);
@@ -109,16 +147,16 @@ struct KllSketchAccumulator {
   }
 
  private:
-  template <typename Allocator>
+  template <typename Allocator, typename Compare>
   void mergeLargeCountValuesIntoSketch(
       const Allocator& allocator,
-      functions::kll::KllSketch<T, Allocator>& sketch) const {
+      functions::kll::KllSketch<T, Allocator, Compare>& sketch) const {
     if (!largeCountValues_.empty()) {
-      std::vector<functions::kll::KllSketch<T, Allocator>> sketches;
+      std::vector<functions::kll::KllSketch<T, Allocator, Compare>> sketches;
       sketches.reserve(largeCountValues_.size());
       for (auto [x, n] : largeCountValues_) {
         sketches.push_back(
-            functions::kll::KllSketch<T, Allocator>::fromRepeatedValue(
+            functions::kll::KllSketch<T, Allocator, Compare>::fromRepeatedValue(
                 x, n, k_, allocator, random::getSeed()));
       }
       sketch.merge(folly::Range(sketches.begin(), sketches.end()));
@@ -130,18 +168,6 @@ struct KllSketchAccumulator {
   KllSketch<T> sketch_;
   std::vector<std::pair<T, int64_t>, StlAllocator<std::pair<T, int64_t>>>
       largeCountValues_;
-};
-
-enum IntermediateTypeChildIndex {
-  kPercentiles = 0,
-  kPercentilesIsArray = 1,
-  kAccuracy = 2,
-  kK = 3,
-  kN = 4,
-  kMinValue = 5,
-  kMaxValue = 6,
-  kItems = 7,
-  kLevels = 8,
 };
 
 void checkWeight(int64_t weight) {
@@ -233,7 +259,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    std::vector<functions::kll::KllSketch<T>> sketches;
+    std::vector<KllSketch<T, std::allocator<T>>> sketches;
     sketches.reserve(numGroups);
     for (auto i = 0; i < numGroups; ++i) {
       sketches.push_back(value<KllSketchAccumulator<T>>(groups[i])->compact());
@@ -508,7 +534,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto baseFirstRow = decoded.index(rows.begin());
     if (!decoded.isConstantMapping()) {
       rows.applyToSelected([&](vector_size_t row) {
-        VELOX_USER_CHECK(!decoded.isNullAt(row), "Percentile cannot be null")
+        VELOX_USER_CHECK(!decoded.isNullAt(row), "Percentile cannot be null");
         auto baseRow = decoded.index(row);
         VELOX_USER_CHECK(
             base->equalValueAt(base, baseRow, baseFirstRow),

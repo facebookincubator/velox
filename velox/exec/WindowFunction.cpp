@@ -41,11 +41,22 @@ std::optional<const WindowFunctionEntry*> getWindowFunctionEntry(
 bool registerWindowFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
+    WindowFunction::Metadata metadata,
     WindowFunctionFactory factory) {
   auto sanitizedName = sanitizeName(name);
   windowFunctions()[sanitizedName] = {
-      std::move(signatures), std::move(factory)};
+      std::move(signatures), std::move(factory), std::move(metadata)};
   return true;
+}
+
+WindowFunction::Metadata getWindowFunctionMetadata(const std::string& name) {
+  const auto sanitizedName = sanitizeName(name);
+  if (auto func = getWindowFunctionEntry(sanitizedName)) {
+    return func.value()->metadata;
+  } else {
+    VELOX_USER_FAIL(
+        "Window function metadata not found for function: {}", name);
+  }
 }
 
 std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
@@ -83,7 +94,7 @@ std::unique_ptr<WindowFunction> WindowFunction::create(
             "Unexpected return type for window function {}. Expected {}. Got {}.",
             toString(name, argTypes),
             type->toString(),
-            resultType->toString())
+            resultType->toString());
         return func.value()->factory(
             args, resultType, ignoreNulls, pool, stringAllocator, config);
       }

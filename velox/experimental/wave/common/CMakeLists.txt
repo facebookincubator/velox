@@ -12,17 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
+add_library(
   velox_wave_common
   GpuArena.cpp
   Buffer.cpp
+  Compile.cu
   Cuda.cu
   Exception.cpp
+  KernelCache.cpp
   Type.cpp
   ResultStaging.cpp)
 
-velox_link_libraries(velox_wave_common velox_exception velox_common_base
-                     velox_type)
+target_link_libraries(
+  velox_wave_common
+  velox_exception
+  velox_common_base
+  velox_type
+  CUDA::cuda_driver
+  CUDA::cudart
+  CUDA::nvrtc)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

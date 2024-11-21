@@ -34,7 +34,7 @@ struct BitCountFunction {
     VELOX_USER_CHECK(
         bits >= 2 && bits <= kMaxBits,
         "Bits specified in bit_count must be between 2 and 64, got {}",
-        bits)
+        bits);
     // Check if input "num" falls within the limits of max and min that
     // can be represented with "bits".
     const uint64_t lowBitsMask = 1L << (bits - 1);
@@ -82,7 +82,7 @@ struct BitwiseArithmeticShiftRightFunction {
   // Only support bigint inputs.
   FOLLY_ALWAYS_INLINE void
   call(int64_t& result, int64_t number, int64_t shift) {
-    VELOX_USER_CHECK_GE(shift, 0, "Shift must be non-negative")
+    VELOX_USER_CHECK_GE(shift, 0, "Shift must be non-negative");
     if (shift >= 63) {
       if (number >= 0) {
         result = 0;

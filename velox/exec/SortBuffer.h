@@ -41,6 +41,8 @@ class SortBuffer {
       const common::SpillConfig* spillConfig = nullptr,
       folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 
+  ~SortBuffer();
+
   void addInput(const VectorPtr& input);
 
   /// Indicates no more input and triggers either of:
@@ -50,7 +52,7 @@ class SortBuffer {
   void noMoreInput();
 
   /// Returns the sorted output rows in batch.
-  RowVectorPtr getOutput(uint32_t maxOutputRows);
+  RowVectorPtr getOutput(vector_size_t maxOutputRows);
 
   /// Indicates if this sort buffer can spill or not.
   bool canSpill() const {
@@ -69,9 +71,18 @@ class SortBuffer {
  private:
   // Ensures there is sufficient memory reserved to process 'input'.
   void ensureInputFits(const VectorPtr& input);
+  // Reserves memory for output processing. If reservation cannot be increased,
+  // spills enough to make output fit.
+  void ensureOutputFits(vector_size_t outputBatchSize);
+  // Reserves memory for sort. If reservation cannot be increased,
+  // spills enough to make output fit.
+  void ensureSortFits();
   void updateEstimatedOutputRowSize();
   // Invoked to initialize or reset the reusable output buffer to get output.
-  void prepareOutput(uint32_t maxOutputRows);
+  void prepareOutput(vector_size_t outputBatchSize);
+  // Invoked to initialize reader to read the spilled data from storage for
+  // output processing.
+  void prepareOutputWithSpill();
   void getOutputWithoutSpill();
   void getOutputWithSpill();
   // Spill during input stage.
@@ -102,15 +113,16 @@ class SortBuffer {
   // sort buffer object.
   bool noMoreInput_ = false;
   // The number of received input rows.
-  size_t numInputRows_ = 0;
+  uint64_t numInputRows_ = 0;
   // Used to store the input data in row format.
   std::unique_ptr<RowContainer> data_;
-  std::vector<char*> sortedRows_;
+  std::vector<char*, memory::StlAllocator<char*>> sortedRows_;
 
   // The data type of the rows stored in 'data_' and spilled on disk. The
   // sort key columns are stored first then the non-sorted data columns.
   RowTypePtr spillerStoreType_;
   std::unique_ptr<Spiller> spiller_;
+  SpillPartitionSet spillPartitionSet_;
   // Used to merge the sorted runs from in-memory rows and spilled rows on disk.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> spillMerger_;
   // Records the source rows to copy to 'output_' in order.
@@ -123,7 +135,7 @@ class SortBuffer {
   // 'data_->estimateRowSize()' across all accumulated data set.
   std::optional<uint64_t> estimatedOutputRowSize_{};
   // The number of rows that has been returned.
-  size_t numOutputRows_{0};
+  uint64_t numOutputRows_{0};
 };
 
 } // namespace facebook::velox::exec

@@ -15,19 +15,56 @@
  */
 #pragma once
 
+#include <set>
 #include "velox/core/PlanNode.h"
+#include "velox/expression/FunctionSignature.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec::test {
 
 /// Query runner that uses reference database, i.e. DuckDB, Presto, Spark.
 class ReferenceQueryRunner {
  public:
+  enum class RunnerType {
+    kPrestoQueryRunner,
+    kDuckQueryRunner,
+    kSparkQueryRunner
+  };
+
+  // @param aggregatePool Used to allocate memory needed for vectors produced by
+  // 'execute' methods.
+  explicit ReferenceQueryRunner(memory::MemoryPool* aggregatePool)
+      : aggregatePool_(aggregatePool) {}
+
   virtual ~ReferenceQueryRunner() = default;
+
+  virtual RunnerType runnerType() const = 0;
+
+  // Scalar types supported by the reference database, to be used to restrict
+  // candidates when generating random types for fuzzers.
+  virtual const std::vector<TypePtr>& supportedScalarTypes() const {
+    return defaultScalarTypes();
+  }
+
+  virtual const std::unordered_map<std::string, DataSpec>&
+  aggregationFunctionDataSpecs() const = 0;
 
   /// Converts Velox plan into SQL accepted by the reference database.
   /// @return std::nullopt if the plan uses features not supported by the
   /// reference database.
   virtual std::optional<std::string> toSql(const core::PlanNodePtr& plan) = 0;
+
+  /// Returns whether a constant expression is supported by the reference
+  /// database.
+  virtual bool isConstantExprSupported(const core::TypedExprPtr& /*expr*/) {
+    return true;
+  }
+
+  /// Returns whether types contained in a function signature are all supported
+  /// by the reference database.
+  virtual bool isSupported(const exec::FunctionSignature& /*signature*/) {
+    return true;
+  }
 
   /// Executes SQL query returned by the 'toSql' method using 'input' data.
   /// Converts results using 'resultType' schema.
@@ -78,6 +115,14 @@ class ReferenceQueryRunner {
       const std::string& sessionProperty) {
     VELOX_UNSUPPORTED();
   }
+
+ protected:
+  memory::MemoryPool* aggregatePool() {
+    return aggregatePool_;
+  }
+
+ private:
+  memory::MemoryPool* aggregatePool_;
 };
 
 } // namespace facebook::velox::exec::test

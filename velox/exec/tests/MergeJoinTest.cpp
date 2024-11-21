@@ -218,6 +218,37 @@ class MergeJoinTest : public HiveConnectorTestBase {
     // Test right join and left join with same result.
     auto expectedResult = AssertQueryBuilder(leftPlan).copyResults(pool_.get());
     AssertQueryBuilder(rightPlan).assertResults(expectedResult);
+
+    // Test FULL join.
+    planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto fullPlan = PlanBuilder(planNodeIdGenerator)
+                        .values(right)
+                        .mergeJoin(
+                            {"c0"},
+                            {"u_c0"},
+                            PlanBuilder(planNodeIdGenerator)
+                                .values(left)
+                                .project({"c1 as u_c1", "c0 as u_c0"})
+                                .planNode(),
+                            "",
+                            {"u_c0", "u_c1", "c1"},
+                            core::JoinType::kFull)
+                        .planNode();
+
+    // Use very small output batch size.
+    assertQuery(
+        makeCursorParameters(fullPlan, 16),
+        "SELECT t.c0, t.c1, u.c1 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
+
+    // Use regular output batch size.
+    assertQuery(
+        makeCursorParameters(fullPlan, 1024),
+        "SELECT t.c0, t.c1, u.c1 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
+
+    // Use very large output batch size.
+    assertQuery(
+        makeCursorParameters(fullPlan, 10'000),
+        "SELECT t.c0, t.c1, u.c1 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
   }
 };
 
@@ -475,6 +506,82 @@ TEST_F(MergeJoinTest, leftAndRightJoinFilter) {
               filter));
     }
   }
+}
+
+TEST_F(MergeJoinTest, rightJoinWithDuplicateMatch) {
+  // Each row on the left side has at most one match on the right side.
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({1, 2, 2, 2, 3, 5, 6, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {2.0, 100.0, 1.0, 1.0, 3.0, 1.0, 6.0, std::nullopt}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>(
+              {0, 2, 2, 2, 2, 3, 4, 5, 7, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {0.0, 3.0, -1.0, -1.0, 3.0, 2.0, 1.0, 3.0, 7.0, std::nullopt}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kRight)
+          .planNode();
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .assertResults("SELECT * from t RIGHT JOIN u ON a = c AND b < d");
+}
+
+TEST_F(MergeJoinTest, rightJoinFilterWithNull) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+          makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>(
+              {std::nullopt, std::nullopt, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {std::nullopt, std::nullopt, std::nullopt}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kRight)
+          .planNode();
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .assertResults("SELECT * from t RIGHT JOIN u ON a = c AND b < d");
 }
 
 // Verify that both left-side and right-side pipelines feeding the merge join
@@ -770,6 +877,38 @@ TEST_F(MergeJoinTest, antiJoinWithFilter) {
           "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0 AND t.t0 > 2 ) ");
 }
 
+TEST_F(MergeJoinTest, antiJoinFailed) {
+  auto size = 1'00;
+  auto left = makeRowVector(
+      {"t0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+
+  auto right = makeRowVector(
+      {"u0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Anti join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(split(left, 10))
+          .orderBy({"t0"}, false)
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t0"},
+              core::JoinType::kAnti)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kMaxOutputBatchRows, "10")
+      .assertResults(
+          "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0) ");
+}
+
 TEST_F(MergeJoinTest, antiJoinWithTwoJoinKeys) {
   auto left = makeRowVector(
       {"a", "b"},
@@ -873,6 +1012,131 @@ TEST_F(MergeJoinTest, antiJoinNoFilter) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults(
           "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0)");
+}
+
+TEST_F(MergeJoinTest, fullOuterJoin) {
+  auto left = makeRowVector(
+      {"t0"},
+      {makeNullableFlatVector<int64_t>(
+          {1, 2, std::nullopt, 5, 6, std::nullopt})});
+
+  auto right = makeRowVector(
+      {"u0"},
+      {makeNullableFlatVector<int64_t>(
+          {1, 5, 6, 8, std::nullopt, std::nullopt})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Full outer join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "t0 > 2",
+              {"t0", "u0"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT * FROM t FULL OUTER JOIN u ON t.t0 = u.u0 AND t.t0 > 2");
+}
+
+TEST_F(MergeJoinTest, fullOuterJoinNoFilter) {
+  auto left = makeRowVector(
+      {"t0", "t1", "t2", "t3"},
+      {makeNullableFlatVector<int64_t>(
+           {7854252584298216695,
+            5874550437257860379,
+            6694700278390749883,
+            6952978413716179087,
+            2785313305792069690,
+            5306984336093303849,
+            2249699434807719017,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            8814597374860168988}),
+       makeNullableFlatVector<int64_t>(
+           {1, 2, 3, 4, 5, 6, 7, std::nullopt, 8, 9, 10}),
+       makeNullableFlatVector<bool>(
+           {false,
+            true,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+            true,
+            false,
+            false}),
+       makeNullableFlatVector<int64_t>(
+           {58, 112, 125, 52, 69, 39, 73, 29, 101, std::nullopt, 51})});
+
+  auto right = makeRowVector(
+      {"u0", "u1", "u2", "u3"},
+      {makeNullableFlatVector<int64_t>({std::nullopt}),
+       makeNullableFlatVector<int64_t>({11}),
+       makeNullableFlatVector<bool>({false}),
+       makeNullableFlatVector<int64_t>({77})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Full outer join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0", "t1", "t2", "t3"},
+              {"u0", "u1", "u2", "u3"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t0", "t1"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT t0, t1 FROM t FULL OUTER JOIN u ON t3 = u3 and t2 = u2 and t1 = u1 and t.t0 = u.u0");
+}
+
+TEST_F(MergeJoinTest, fullOuterJoinWithNullCompare) {
+  auto right = makeRowVector(
+      {"u0", "u1"},
+      {makeNullableFlatVector<bool>({false, true}),
+       makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})});
+
+  auto left = makeRowVector(
+      {"t0", "t1"},
+      {makeNullableFlatVector<bool>({false, false, std::nullopt}),
+       makeNullableFlatVector<int64_t>(
+           {std::nullopt, 1195665568, std::nullopt})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Full outer join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0", "t1"},
+              {"u0", "u1"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t0", "t1", "u0", "u1"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT t0, t1, u0, u1 FROM t FULL OUTER JOIN u ON t.t0 = u.u0 and t1 = u1");
 }
 
 TEST_F(MergeJoinTest, complexTypedFilter) {

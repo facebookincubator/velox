@@ -59,8 +59,10 @@ class AggregationFuzzer : public AggregationFuzzerBase {
           customVerificationFunctions,
       const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
           customInputGenerators,
+      const std::unordered_map<std::string, DataSpec>& functionDataSpec,
       VectorFuzzer::Options::TimestampPrecision timestampPrecision,
       const std::unordered_map<std::string, std::string>& queryConfigs,
+      const std::unordered_map<std::string, std::string>& hiveConfigs,
       bool orderableGroupKeys,
       std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner);
 
@@ -200,6 +202,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
   }
 
   Stats stats_;
+  const std::unordered_map<std::string, DataSpec> functionDataSpec_;
 };
 } // namespace
 
@@ -210,8 +213,10 @@ void aggregateFuzzer(
         customVerificationFunctions,
     const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
         customInputGenerators,
+    const std::unordered_map<std::string, DataSpec>& functionDataSpec,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::string>& hiveConfigs,
     bool orderableGroupKeys,
     const std::optional<std::string>& planPath,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner) {
@@ -220,8 +225,10 @@ void aggregateFuzzer(
       seed,
       customVerificationFunctions,
       customInputGenerators,
+      functionDataSpec,
       timestampPrecision,
       queryConfigs,
+      hiveConfigs,
       orderableGroupKeys,
       std::move(referenceQueryRunner));
   planPath.has_value() ? aggregationFuzzer.go(planPath.value())
@@ -237,18 +244,14 @@ AggregationFuzzer::AggregationFuzzer(
         customVerificationFunctions,
     const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
         customInputGenerators,
+    const std::unordered_map<std::string, DataSpec>& functionDataSpec,
     VectorFuzzer::Options::TimestampPrecision timestampPrecision,
     const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::string>& hiveConfigs,
     bool orderableGroupKeys,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
-    : AggregationFuzzerBase{
-          seed,
-          customVerificationFunctions,
-          customInputGenerators,
-          timestampPrecision,
-          queryConfigs,
-          orderableGroupKeys,
-          std::move(referenceQueryRunner)} {
+    : AggregationFuzzerBase{seed, customVerificationFunctions, customInputGenerators, timestampPrecision, queryConfigs, hiveConfigs, orderableGroupKeys, std::move(referenceQueryRunner)},
+      functionDataSpec_{functionDataSpec} {
   VELOX_CHECK(!signatureMap.empty(), "No function signatures available.");
 
   if (persistAndRunOnce_ && reproPersistPath_.empty()) {
@@ -327,11 +330,12 @@ bool supportsDistinctInputs(
 void AggregationFuzzer::go() {
   VELOX_CHECK(
       FLAGS_steps > 0 || FLAGS_duration_sec > 0,
-      "Either --steps or --duration_sec needs to be greater than zero.")
+      "Either --steps or --duration_sec needs to be greater than zero.");
 
   auto startTime = std::chrono::system_clock::now();
   size_t iteration = 0;
 
+  auto vectorOptions = vectorFuzzer_.getOptions();
   while (!isDone(iteration, startTime)) {
     LOG(INFO) << "==============================> Started iteration "
               << iteration << " (seed: " << currentSeed_ << ")";
@@ -352,6 +356,15 @@ void AggregationFuzzer::go() {
     } else {
       // Pick a random signature.
       auto signatureWithStats = pickSignature();
+
+      if (functionDataSpec_.count(signatureWithStats.first.name) > 0) {
+        vectorOptions.dataSpec =
+            functionDataSpec_.at(signatureWithStats.first.name);
+
+      } else {
+        vectorOptions.dataSpec = {true, true};
+      }
+      vectorFuzzer_.setOptions(vectorOptions);
       signatureWithStats.second.numRuns++;
 
       auto signature = signatureWithStats.first;
