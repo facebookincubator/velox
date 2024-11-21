@@ -1172,7 +1172,6 @@ TypePtr importFromArrowImpl(
     default:
       break;
   }
-  printf("Arrow format: %s is unsupported\n", format);
   VELOX_USER_FAIL(
       "Unable to convert '{}' ArrowSchema format type to Velox.", format);
 }
