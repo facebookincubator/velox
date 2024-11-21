@@ -53,7 +53,7 @@ SSD Cache
 Background
 ----------
 The in-memory file cache (AsyncDataCache) is configured to use SSD when provided.
-The SSD serves as an extension for the async data cache (file cache).
+The SSD serves as an extension for the AsyncDataCache.
 This helps mitigate the number of reads from slower storage.
 
 Configuration Properties
@@ -105,7 +105,7 @@ Btrfs was found to be a good file system to use due to its built-in data compres
 support for O_DIRECT writes, and the ability to perform asynchronous discard operations. 
 These features combine to enhance storage efficiency, improve performance, and optimize disk management.
 
-NOTE: Commands below were ran successfully for worker machines of Amazon EC2 r6 instances with CentOS.
+NOTE: Commands below were ran successfully for worker machines of Amazon EC2 r6 instances with CentOS Stream 9.
 
 
 .. code-block:: bash

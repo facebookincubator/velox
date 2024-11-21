@@ -798,7 +798,7 @@ Cache
    * - async-cache-persistence-interval
      - string
      - 0s
-     - The interval for persisting in-memory cache to SSD. Setting this config to a non-zero value will activate periodic cache persistence. Unit is in seconds.
+     - The interval for persisting in-memory cache to SSD. Setting this config to a non-zero value will activate periodic cache persistence. The following time units are supported: ns, us, ms, s, m, h, d.
    * - async-cache-ssd-disable-file-cow
      - bool
      - false
