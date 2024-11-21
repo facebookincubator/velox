@@ -37,6 +37,22 @@ TypePtr typeFromString(
   return inferredType;
 }
 
+TypePtr variableTypeFromString(
+    const std::string& type,
+    int32_t length,
+    bool failIfNotRegistered = true) {
+  auto upper = type;
+  std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+
+  TypeParameter parameter{length};
+  auto inferredType = getType(upper, {parameter});
+  if (failIfNotRegistered) {
+    VELOX_CHECK(
+        inferredType, "Failed to parse type [{}]. Type not registered.", type);
+  }
+  return inferredType;
+}
+
 std::pair<std::string, std::shared_ptr<const Type>> inferTypeWithSpaces(
     std::vector<std::string>& words,
     bool cannotHaveFieldName = false) {
