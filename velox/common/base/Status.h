@@ -87,7 +87,7 @@ namespace facebook::velox {
 /// folly::Expected<T, Status> holds either a result or an error status and is
 /// aliased as Expected<T> to simplify usage.
 ///
-/// For operations return a value if successful, or error status if not,
+/// For operations that return a value if successful, or error status if not,
 /// use Expected<T>:
 ///
 /// Simple usage:
