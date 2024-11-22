@@ -467,7 +467,7 @@ void SharedArbitrator::addPool(const std::shared_ptr<MemoryPool>& pool) {
 }
 
 void SharedArbitrator::removePool(MemoryPool* pool) {
-  VELOX_CHECK_EQ(pool->reservedBytes(), 0);
+  VELOX_DCHECK_EQ(pool->reservedBytes(), 0);
   const uint64_t freedBytes = shrinkPool(pool, 0);
   VELOX_CHECK_EQ(pool->capacity(), 0);
   freeCapacity(freedBytes);
