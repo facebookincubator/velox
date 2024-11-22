@@ -120,16 +120,24 @@ class AbfsWriteFile::Impl {
 AbfsWriteFile::AbfsWriteFile(
     std::string_view path,
     const config::ConfigBase& config) {
-  auto abfsAccount = AbfsConfig(path, config);
-  std::unique_ptr<AzureDataLakeFileClient> client =
-      std::make_unique<DataLakeFileClientWrapper>(
-          std::make_unique<DataLakeFileClient>(
-              DataLakeFileClient::CreateFromConnectionString(
-                  abfsAccount.connectionString(),
-                  abfsAccount.fileSystem(),
-                  abfsAccount.filePath())));
-
-  impl_ = std::make_unique<Impl>(path, client);
+  auto abfsConfig = AbfsConfig(path, config, true);
+  std::unique_ptr<AzureDataLakeFileClient> clientWrapper;
+  if (abfsConfig.authType() == "SAS") {
+    clientWrapper = std::make_unique<DataLakeFileClientWrapper>(
+        std::make_unique<DataLakeFileClient>(abfsConfig.urlWithSasToken()));
+  } else if (abfsConfig.authType() == "OAuth") {
+    clientWrapper = std::make_unique<DataLakeFileClientWrapper>(
+        std::make_unique<DataLakeFileClient>(
+            abfsConfig.url(), abfsConfig.tokenCredential()));
+  } else {
+    clientWrapper = std::make_unique<DataLakeFileClientWrapper>(
+        std::make_unique<DataLakeFileClient>(
+            DataLakeFileClient::CreateFromConnectionString(
+                abfsConfig.connectionString(),
+                abfsConfig.fileSystem(),
+                abfsConfig.filePath())));
+  }
+  impl_ = std::make_unique<Impl>(path, clientWrapper);
 }
 
 AbfsWriteFile::AbfsWriteFile(

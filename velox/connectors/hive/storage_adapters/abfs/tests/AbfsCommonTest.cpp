@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
@@ -32,15 +33,81 @@ TEST(AbfsUtilsTest, isAbfsFile) {
   EXPECT_TRUE(isAbfsFile("abfss://test@test.dfs.core.windows.net/test"));
 }
 
-TEST(AbfsUtilsTest, abfsConfig) {
+TEST(AbfsConfigTest, authType) {
+  const config::ConfigBase config(
+      {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "Custom"},
+       {"fs.azure.account.key.efg.dfs.core.windows.net", "456"}},
+      false);
+  VELOX_ASSERT_USER_THROW(
+      std::make_unique<AbfsConfig>(
+          "abfss://foo@efg.dfs.core.windows.net/test.txt", config, false),
+      "Unsupported auth type Custom, supported auth types are SharedKey, OAuth and SAS.");
+}
+
+TEST(AbfsConfigTest, clientSecretOAuth) {
+  const config::ConfigBase config(
+      {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "OAuth"},
+       {"fs.azure.account.auth.type.bar1.dfs.core.windows.net", "OAuth"},
+       {"fs.azure.account.auth.type.bar2.dfs.core.windows.net", "OAuth"},
+       {"fs.azure.account.auth.type.bar3.dfs.core.windows.net", "OAuth"},
+       {"fs.azure.account.oauth2.client.id.efg.dfs.core.windows.net", "test"},
+       {"fs.azure.account.oauth2.client.secret.efg.dfs.core.windows.net",
+        "test"},
+       {"fs.azure.account.oauth2.client.endpoint.efg.dfs.core.windows.net",
+        "https://login.microsoftonline.com/{TENANTID}/oauth2/token"},
+       {"fs.azure.account.oauth2.client.id.bar2.dfs.core.windows.net", "test"},
+       {"fs.azure.account.oauth2.client.id.bar3.dfs.core.windows.net", "test"},
+       {"fs.azure.account.oauth2.client.secret.bar3.dfs.core.windows.net",
+        "test"}},
+      false);
+  VELOX_ASSERT_USER_THROW(
+      std::make_unique<AbfsConfig>(
+          "abfss://foo@bar1.dfs.core.windows.net/test.txt", config, false),
+      "Config fs.azure.account.oauth2.client.id.bar1.dfs.core.windows.net not found");
+  VELOX_ASSERT_USER_THROW(
+      std::make_unique<AbfsConfig>(
+          "abfss://foo@bar2.dfs.core.windows.net/test.txt", config, false),
+      "Config fs.azure.account.oauth2.client.secret.bar2.dfs.core.windows.net not found");
+  VELOX_ASSERT_USER_THROW(
+      std::make_unique<AbfsConfig>(
+          "abfss://foo@bar3.dfs.core.windows.net/test.txt", config, false),
+      "Config fs.azure.account.oauth2.client.endpoint.bar3.dfs.core.windows.net not found");
+  auto abfsConfig = AbfsConfig(
+      "abfss://abc@efg.dfs.core.windows.net/file/test.txt", config, true);
+  EXPECT_EQ(abfsConfig.tenentId(), "{TENANTID}");
+  EXPECT_EQ(abfsConfig.authorityHost(), "https://login.microsoftonline.com/");
+  EXPECT_EQ(
+      abfsConfig.url(), "https://efg.dfs.core.windows.net/abc/file/test.txt");
+  EXPECT_TRUE(abfsConfig.tokenCredential() != nullptr);
+}
+
+TEST(AbfsConfigTest, sasToken) {
+  const config::ConfigBase config(
+      {{"fs.azure.account.auth.type.efg.dfs.core.windows.net", "SAS"},
+       {"fs.azure.account.auth.type.bar.dfs.core.windows.net", "SAS"},
+       {"fs.azure.sas.fixed.token.bar.dfs.core.windows.net", "sas=test"}},
+      false);
+  VELOX_ASSERT_USER_THROW(
+      std::make_unique<AbfsConfig>(
+          "abfss://foo@efg.dfs.core.windows.net/test.txt", config, false),
+      "Config fs.azure.sas.fixed.token.efg.dfs.core.windows.net not found");
+  auto abfsConfig =
+      AbfsConfig("abfs://abc@bar.dfs.core.windows.net/file", config, false);
+  EXPECT_EQ(
+      abfsConfig.urlWithSasToken(),
+      "http://bar.blob.core.windows.net/abc/file?sas=test");
+}
+
+TEST(AbfsConfigTest, sharedKey) {
   const config::ConfigBase config(
       {{"fs.azure.account.key.efg.dfs.core.windows.net", "123"},
+       {"fs.azure.account.auth.type.efg.dfs.core.windows.net", "SharedKey"},
        {"fs.azure.account.key.foobar.dfs.core.windows.net", "456"},
        {"fs.azure.account.key.bar.dfs.core.windows.net", "789"}},
       false);
 
   auto abfsConfig =
-      AbfsConfig("abfs://abc@efg.dfs.core.windows.net/file", config);
+      AbfsConfig("abfs://abc@efg.dfs.core.windows.net/file", config, false);
   EXPECT_EQ(abfsConfig.fileSystem(), "abc");
   EXPECT_EQ(abfsConfig.filePath(), "file");
   EXPECT_EQ(
@@ -49,7 +116,8 @@ TEST(AbfsUtilsTest, abfsConfig) {
 
   auto abfssConfig = AbfsConfig(
       "abfss://abc@foobar.dfs.core.windows.net/sf_1/store_sales/ss_sold_date_sk=2450816/part-00002-a29c25f1-4638-494e-8428-a84f51dcea41.c000.snappy.parquet",
-      config);
+      config,
+      false);
   EXPECT_EQ(abfssConfig.fileSystem(), "abc");
   EXPECT_EQ(
       abfssConfig.filePath(),
@@ -60,9 +128,18 @@ TEST(AbfsUtilsTest, abfsConfig) {
 
   // Test with special character space.
   auto abfssConfigWithSpecialCharacters = AbfsConfig(
-      "abfss://foo@bar.dfs.core.windows.net/main@dir/sub dir/test.txt", config);
+      "abfss://foo@bar.dfs.core.windows.net/main@dir/sub dir/test.txt",
+      config,
+      false);
 
   EXPECT_EQ(abfssConfigWithSpecialCharacters.fileSystem(), "foo");
   EXPECT_EQ(
       abfssConfigWithSpecialCharacters.filePath(), "main@dir/sub dir/test.txt");
+
+  VELOX_ASSERT_USER_THROW(
+      std::make_unique<AbfsConfig>(
+          "abfss://foo@otheraccount.dfs.core.windows.net/test.txt",
+          config,
+          false),
+      "Config fs.azure.account.key.otheraccount.dfs.core.windows.net not found");
 }

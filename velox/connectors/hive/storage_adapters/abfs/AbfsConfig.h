@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <azure/core/credentials/credentials.hpp>
 #include <folly/hash/Hash.h>
 #include <string>
 
@@ -28,17 +29,33 @@ namespace facebook::velox::filesystems {
 // This is used to specify the Azurite endpoint in testing.
 static std::string kAzureBlobEndpoint{"fs.azure.blob-endpoint"};
 
+// The authentication mechanism is set in `fs.azure.account.auth.type` (or the
+// account specific variant). The supported values are SharedKey, OAuth and SAS.
+static std::string kAzureAccountAuthType{"fs.azure.account.auth.type"};
+
+static std::string kAzureAccountKey{"fs.azure.account.key"};
+
+static std::string kAzureSASKey{"fs.azure.sas.fixed.token"};
+
+static std::string kAzureAccountOAuth2ClientId{
+    "fs.azure.account.oauth2.client.id"};
+static std::string kAzureAccountOAuth2ClientSecret{
+    "fs.azure.account.oauth2.client.secret"};
+
+// Token end point, this can be found through Azure portal. For example:
+// https://login.microsoftonline.com/{TENANTID}/oauth2/token
+static std::string kAzureAccountOAuth2ClientEndpoint{
+    "fs.azure.account.oauth2.client.endpoint"};
+
 class AbfsConfig {
  public:
-  explicit AbfsConfig(std::string_view path, const config::ConfigBase& config);
+  explicit AbfsConfig(
+      std::string_view path,
+      const config::ConfigBase& config,
+      bool initDfsClient);
 
-  std::string identity() const {
-    const auto hash = folly::Hash();
-    return std::to_string(hash(connectionString_));
-  }
-
-  std::string connectionString() const {
-    return connectionString_;
+  std::string authType() const {
+    return authType_;
   }
 
   std::string fileSystem() const {
@@ -49,11 +66,42 @@ class AbfsConfig {
     return filePath_;
   }
 
+  std::string connectionString() const {
+    return connectionString_;
+  }
+
+  std::string url() const {
+    return url_;
+  }
+
+  std::string urlWithSasToken() const {
+    return urlWithSasToken_;
+  }
+
+  std::shared_ptr<Azure::Core::Credentials::TokenCredential> tokenCredential()
+      const {
+    return tokenCredential_;
+  }
+
+  std::string tenentId() const {
+    return tenentId_;
+  }
+
+  std::string authorityHost() const {
+    return authorityHost_;
+  }
+
  private:
   // Container name is called FileSystem in some Azure API.
   std::string fileSystem_;
   std::string filePath_;
+  std::string authType_;
   std::string connectionString_;
+  std::string urlWithSasToken_;
+  std::string url_;
+  std::string tenentId_;
+  std::string authorityHost_;
+  std::shared_ptr<Azure::Core::Credentials::TokenCredential> tokenCredential_;
 };
 
 } // namespace facebook::velox::filesystems
