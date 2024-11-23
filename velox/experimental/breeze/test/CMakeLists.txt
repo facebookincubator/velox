@@ -18,7 +18,7 @@
 
 include_directories(${CMAKE_SOURCE_DIR})
 
-cxx_library(test_main "${cxx_strict}" test_main.cpp)
+add_library(test_main test_main.cpp)
 target_link_libraries(
   test_main
   PUBLIC gtest $<$<BOOL:${BUILD_TRACING}>:perfetto>)
