@@ -27,15 +27,21 @@ namespace facebook::velox::parquet {
 namespace {
 
 bool isParquetReservedKeyword(
-    std::string name,
+    const std::string& name,
     uint32_t parentSchemaIdx,
     uint32_t curSchemaIdx) {
-  return ((parentSchemaIdx == 0 && curSchemaIdx == 0) || name == "key_value" ||
-          name == "key" || name == "value" || name == "list" ||
-          name == "element")
-      ? true
-      : false;
+  return (parentSchemaIdx == 0 && curSchemaIdx == 0) || name == "key_value" ||
+      name == "key" || name == "value" || name == "list" || name == "element";
 }
+
+bool isRequiredField(const thrift::SchemaElement& schemaElement) {
+  return schemaElement.repetition_type == thrift::FieldRepetitionType::REQUIRED;
+};
+
+bool isRepeatedField(const thrift::SchemaElement& schemaElement) {
+  return schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;
+};
+
 } // namespace
 
 /// Metadata and options for reading Parquet.
@@ -227,9 +233,8 @@ void ReaderBase::initializeSchema() {
       fileMetaData_->schema.size(),
       1,
       "Invalid Parquet schema: Need at least one non-root column in the file");
-  VELOX_CHECK_EQ(
-      fileMetaData_->schema[0].repetition_type,
-      thrift::FieldRepetitionType::REQUIRED,
+  VELOX_CHECK(
+      isRequiredField(fileMetaData_->schema[0]),
       "Invalid Parquet schema: root element must be REQUIRED");
   VELOX_CHECK_GT(
       fileMetaData_->schema[0].num_children,
@@ -276,23 +281,21 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   VELOX_CHECK(fileMetaData_ != nullptr);
   VELOX_CHECK_LT(schemaIdx, fileMetaData_->schema.size());
 
-  auto& schema = fileMetaData_->schema;
-  uint32_t curSchemaIdx = schemaIdx;
-  auto& schemaElement = schema[curSchemaIdx];
+  const auto& schema = fileMetaData_->schema;
+  const uint32_t curSchemaIdx = schemaIdx;
+  const auto& schemaElement = schema[curSchemaIdx];
   bool isRepeated = false;
   bool isOptional = false;
 
-  if (schemaElement.__isset.repetition_type) {
-    if (schemaElement.repetition_type !=
-        thrift::FieldRepetitionType::REQUIRED) {
-      maxDefine++;
-    }
-    if (schemaElement.repetition_type ==
-        thrift::FieldRepetitionType::REPEATED) {
+  if (schemaElement.__isset.repetition_type &&
+      !isRequiredField(schemaElement)) {
+    maxDefine++;
+
+    if (isRepeatedField(schemaElement)) {
       maxRepeat++;
       isRepeated = true;
-    }
-    if (schemaElement.repetition_type ==
+    } else if (
+        schemaElement.repetition_type ==
         thrift::FieldRepetitionType::OPTIONAL) {
       isOptional = true;
     }
@@ -303,343 +306,22 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     folly::toLowerAscii(name);
   }
 
-  if ((!options_.useColumnNamesForColumnMapping()) &&
-      (options_.fileSchema() != nullptr)) {
-    if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
-      columnNames.push_back(name);
-    }
-  } else {
+  if (options_.useColumnNamesForColumnMapping() ||
+      (options_.fileSchema() == nullptr) ||
+      isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
     columnNames.push_back(name);
   }
 
-  if (!schemaElement.__isset.type) { // inner node
-    VELOX_CHECK(
-        schemaElement.__isset.num_children && schemaElement.num_children > 0,
-        "Node has no children but should");
-    VELOX_CHECK(
-        !requestedType || requestedType->isRow() || requestedType->isArray() ||
-        requestedType->isMap());
-
-    std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> children;
-
-    auto curSchemaIdx = schemaIdx;
-    for (int32_t i = 0; i < schemaElement.num_children; i++) {
-      ++schemaIdx;
-      auto childName = schema[schemaIdx].name;
-      if (isFileColumnNamesReadAsLowerCase()) {
-        folly::toLowerAscii(childName);
-      }
-
-      TypePtr childRequestedType = nullptr;
-      bool followChild = true;
-      if (requestedType && requestedType->isRow()) {
-        auto requestedRowType =
-            std::dynamic_pointer_cast<const velox::RowType>(requestedType);
-        if (options_.useColumnNamesForColumnMapping()) {
-          auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
-          if (fileTypeIdx.has_value()) {
-            childRequestedType = requestedRowType->childAt(*fileTypeIdx);
-          }
-        } else {
-          // Handle schema evolution.
-          if (i < requestedRowType->size()) {
-            columnNames.push_back(requestedRowType->nameOf(i));
-            childRequestedType = requestedRowType->childAt(i);
-          } else {
-            followChild = false;
-          }
-        }
-      }
-
-      // Handling elements of ARRAY/MAP
-      if (!requestedType && parentRequestedType) {
-        if (parentRequestedType->isArray()) {
-          childRequestedType = parentRequestedType->asArray().elementType();
-        } else if (parentRequestedType->isMap()) {
-          auto mapType = parentRequestedType->asMap();
-          // Processing map keys
-          if (i == 0) {
-            childRequestedType = mapType.keyType();
-          } else {
-            childRequestedType = mapType.valueType();
-          }
-        }
-      }
-
-      if (followChild) {
-        auto child = getParquetColumnInfo(
-            maxSchemaElementIdx,
-            maxRepeat,
-            maxDefine,
-            curSchemaIdx,
-            schemaIdx,
-            columnIdx,
-            childRequestedType,
-            requestedType,
-            columnNames);
-        children.push_back(std::move(child));
-      }
-    }
-    VELOX_CHECK(!children.empty());
-    name = columnNames.at(curSchemaIdx);
-
-    if (schemaElement.__isset.converted_type) {
-      switch (schemaElement.converted_type) {
-        case thrift::ConvertedType::LIST: {
-          VELOX_CHECK_EQ(children.size(), 1);
-          const auto& child = children[0];
-          isRepeated = true;
-          // In case the child is a MAP or current element is repeated then
-          // wrap child around additional ARRAY
-          if (child->type()->kind() == TypeKind::MAP ||
-              schemaElement.repetition_type ==
-                  thrift::FieldRepetitionType::REPEATED) {
-            return std::make_unique<ParquetTypeWithId>(
-                TypeFactory<TypeKind::ARRAY>::create(child->type()),
-                std::move(children),
-                curSchemaIdx,
-                maxSchemaElementIdx,
-                ParquetTypeWithId::kNonLeaf,
-                std::move(name),
-                std::nullopt,
-                std::nullopt,
-                maxRepeat + 1,
-                maxDefine,
-                isOptional,
-                isRepeated);
-          }
-          // Only special case list of map and list of list is handled here,
-          // other generic case is handled with case MAP
-          [[fallthrough]];
-        }
-        case thrift::ConvertedType::MAP_KEY_VALUE:
-          // If the MAP_KEY_VALUE annotated group's parent is a MAP, it should
-          // be the repeated key_value group that directly contains the key and
-          // value children.
-          if (schema[parentSchemaIdx].converted_type ==
-              thrift::ConvertedType::MAP) {
-            // TODO: the group names need to be checked. According to the spec,
-            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
-            // the name of the schema element being 'key_value' is
-            // also an indication of this is a map type
-            VELOX_CHECK_EQ(
-                schemaElement.repetition_type,
-                thrift::FieldRepetitionType::REPEATED);
-            VELOX_CHECK_EQ(children.size(), 2);
-
-            auto type = TypeFactory<TypeKind::MAP>::create(
-                children[0]->type(), children[1]->type());
-            return std::make_unique<ParquetTypeWithId>(
-                std::move(type),
-                std::move(children),
-                curSchemaIdx, // TODO: there are holes in the ids
-                maxSchemaElementIdx,
-                ParquetTypeWithId::kNonLeaf, // columnIdx,
-                std::move(name),
-                std::nullopt,
-                std::nullopt,
-                maxRepeat,
-                maxDefine,
-                isOptional,
-                isRepeated);
-          }
-
-          // For backward-compatibility, a group annotated with MAP_KEY_VALUE
-          // that is not contained by a MAP-annotated group should be handled as
-          // a MAP-annotated group.
-          [[fallthrough]];
-
-        case thrift::ConvertedType::MAP: {
-          VELOX_CHECK_EQ(children.size(), 1);
-          const auto& child = children[0];
-          auto type = child->type();
-          isRepeated = true;
-          // This level will not have the "isRepeated" info in the parquet
-          // schema since parquet schema will have a child layer which will have
-          // the "repeated info" which we are ignoring here, hence we set the
-          // isRepeated to true eg
-          // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-          return std::make_unique<ParquetTypeWithId>(
-              std::move(type),
-              std::move(*(ParquetTypeWithId*)child.get()).moveChildren(),
-              curSchemaIdx, // TODO: there are holes in the ids
-              maxSchemaElementIdx,
-              ParquetTypeWithId::kNonLeaf, // columnIdx,
-              std::move(name),
-              std::nullopt,
-              std::nullopt,
-              maxRepeat + 1,
-              maxDefine,
-              isOptional,
-              isRepeated);
-        }
-
-        default:
-          VELOX_UNREACHABLE(
-              "Invalid SchemaElement converted_type: {}, name: {}",
-              schemaElement.converted_type,
-              name);
-      }
-    } else {
-      if (schemaElement.repetition_type ==
-          thrift::FieldRepetitionType::REPEATED) {
-        if (schema[parentSchemaIdx].converted_type ==
-            thrift::ConvertedType::LIST) {
-          // TODO: the group names need to be checked. According to spec,
-          // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-          // the name of the schema element being 'array' is
-          // also an indication of this is a list type
-          // child of LIST
-          VELOX_CHECK_GE(children.size(), 1);
-          if (children.size() == 1 && name != "array" &&
-              name != schema[parentSchemaIdx].name + "_tuple") {
-            auto type =
-                TypeFactory<TypeKind::ARRAY>::create(children[0]->type());
-            return std::make_unique<ParquetTypeWithId>(
-                std::move(type),
-                std::move(children),
-                curSchemaIdx,
-                maxSchemaElementIdx,
-                ParquetTypeWithId::kNonLeaf, // columnIdx,
-                std::move(name),
-                std::nullopt,
-                std::nullopt,
-                maxRepeat,
-                maxDefine,
-                isOptional,
-                isRepeated);
-          } else {
-            // According to the spec of list backward compatibility
-            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-            // "If the repeated field is a group with multiple fields, then its
-            // type is the element type and elements are required." when there
-            // are multiple fields, creating a new row type instance which has
-            // all the fields as its children.
-            // TODO: since this is newly created node, its schemaIdx actually
-            // doesn't exist from the footer schema. Reusing the curSchemaIdx
-            // but potentially could have issue.
-            auto childrenRowType =
-                createRowType(children, isFileColumnNamesReadAsLowerCase());
-            std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>>
-                rowChildren;
-            // In this legacy case, there is no middle layer between "array"
-            // node and the children nodes. Below creates this dummy middle
-            // layer to mimic the non-legacy case and fill the gap.
-            rowChildren.emplace_back(std::make_unique<ParquetTypeWithId>(
-                childrenRowType,
-                std::move(children),
-                curSchemaIdx,
-                maxSchemaElementIdx,
-                ParquetTypeWithId::kNonLeaf,
-                "dummy",
-                std::nullopt,
-                std::nullopt,
-                maxRepeat,
-                maxDefine,
-                isOptional,
-                isRepeated));
-            auto res = std::make_unique<ParquetTypeWithId>(
-                TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
-                std::move(rowChildren),
-                curSchemaIdx,
-                maxSchemaElementIdx,
-                ParquetTypeWithId::kNonLeaf, // columnIdx,
-                std::move(name),
-                std::nullopt,
-                std::nullopt,
-                maxRepeat,
-                maxDefine,
-                isOptional,
-                isRepeated);
-            return res;
-          }
-        } else if (
-            schema[parentSchemaIdx].converted_type ==
-                thrift::ConvertedType::MAP ||
-            schema[parentSchemaIdx].converted_type ==
-                thrift::ConvertedType::MAP_KEY_VALUE) {
-          // children  of MAP
-          VELOX_CHECK_EQ(children.size(), 2);
-          auto type = TypeFactory<TypeKind::MAP>::create(
-              children[0]->type(), children[1]->type());
-          return std::make_unique<ParquetTypeWithId>(
-              std::move(type),
-              std::move(children),
-              curSchemaIdx, // TODO: there are holes in the ids
-              maxSchemaElementIdx,
-              ParquetTypeWithId::kNonLeaf, // columnIdx,
-              std::move(name),
-              std::nullopt,
-              std::nullopt,
-              maxRepeat,
-              maxDefine,
-              isOptional,
-              isRepeated);
-        } else {
-          // Row type
-          // To support list backward compatibility, need create a new row type
-          // instance and set all the fields as its children.
-          auto childrenRowType =
-              createRowType(children, isFileColumnNamesReadAsLowerCase());
-          std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>>
-              rowChildren;
-          // In this legacy case, there is no middle layer between "array"
-          // node and the children nodes. Below creates this dummy middle
-          // layer to mimic the non-legacy case and fill the gap.
-          rowChildren.emplace_back(std::make_unique<ParquetTypeWithId>(
-              childrenRowType,
-              std::move(children),
-              curSchemaIdx,
-              maxSchemaElementIdx,
-              ParquetTypeWithId::kNonLeaf,
-              "dummy",
-              std::nullopt,
-              std::nullopt,
-              maxRepeat,
-              maxDefine,
-              isOptional,
-              isRepeated));
-          return std::make_unique<ParquetTypeWithId>(
-              TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
-              std::move(rowChildren),
-              curSchemaIdx,
-              maxSchemaElementIdx,
-              ParquetTypeWithId::kNonLeaf, // columnIdx,
-              std::move(name),
-              std::nullopt,
-              std::nullopt,
-              maxRepeat,
-              maxDefine,
-              isOptional,
-              isRepeated);
-        }
-      } else {
-        // Row type
-        auto type = createRowType(children, isFileColumnNamesReadAsLowerCase());
-        return std::make_unique<ParquetTypeWithId>(
-            std::move(type),
-            std::move(children),
-            curSchemaIdx,
-            maxSchemaElementIdx,
-            ParquetTypeWithId::kNonLeaf, // columnIdx,
-            std::move(name),
-            std::nullopt,
-            std::nullopt,
-            maxRepeat,
-            maxDefine,
-            isOptional,
-            isRepeated);
-      }
-    }
-  } else { // leaf node
+  std::vector<std::unique_ptr<dwio::common::TypeWithId>> children;
+  if (schemaElement.__isset.type) {
+    // leaf node
     name = columnNames.at(curSchemaIdx);
     const auto veloxType = convertType(schemaElement, requestedType);
-    int32_t precision =
+    const int32_t precision =
         schemaElement.__isset.precision ? schemaElement.precision : 0;
-    int32_t scale = schemaElement.__isset.scale ? schemaElement.scale : 0;
-    int32_t type_length =
+    const int32_t scale = schemaElement.__isset.scale ? schemaElement.scale : 0;
+    const int32_t type_length =
         schemaElement.__isset.type_length ? schemaElement.type_length : 0;
-    std::vector<std::unique_ptr<dwio::common::TypeWithId>> children;
     const std::optional<thrift::LogicalType> logicalType_ =
         schemaElement.__isset.logicalType
         ? std::optional<thrift::LogicalType>(schemaElement.logicalType)
@@ -661,31 +343,294 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         scale,
         type_length);
 
-    if (schemaElement.repetition_type ==
-        thrift::FieldRepetitionType::REPEATED) {
-      // Array
-      children.clear();
-      children.reserve(1);
-      children.push_back(std::move(leafTypePtr));
-      return std::make_unique<ParquetTypeWithId>(
-          TypeFactory<TypeKind::ARRAY>::create(veloxType),
-          std::move(children),
-          curSchemaIdx,
-          maxSchemaElementIdx,
-          columnIdx - 1, // was already incremented for leafTypePtr
-          std::move(name),
-          std::nullopt,
-          std::nullopt,
-          maxRepeat,
-          maxDefine - 1,
-          isOptional,
-          isRepeated);
+    if (!isRepeatedField(schemaElement)) {
+      return leafTypePtr;
     }
-    return leafTypePtr;
+
+    // Array
+    children.push_back(std::move(leafTypePtr));
+    return std::make_unique<ParquetTypeWithId>(
+        TypeFactory<TypeKind::ARRAY>::create(veloxType),
+        std::move(children),
+        curSchemaIdx,
+        maxSchemaElementIdx,
+        columnIdx - 1, // was already incremented for leafTypePtr
+        std::move(name),
+        std::nullopt,
+        std::nullopt,
+        maxRepeat,
+        maxDefine - 1,
+        isOptional,
+        isRepeated);
   }
 
-  VELOX_FAIL("Unable to extract Parquet column info.");
-  return nullptr;
+  // inner node
+  VELOX_CHECK(
+      schemaElement.__isset.num_children && schemaElement.num_children > 0,
+      "Node has no children but should");
+  VELOX_CHECK(
+      !requestedType || requestedType->isRow() || requestedType->isArray() ||
+      requestedType->isMap());
+
+  for (int32_t i = 0; i < schemaElement.num_children; i++) {
+    ++schemaIdx;
+    auto childName = schema[schemaIdx].name;
+    if (isFileColumnNamesReadAsLowerCase()) {
+      folly::toLowerAscii(childName);
+    }
+
+    TypePtr childRequestedType = nullptr;
+    if (requestedType) {
+      if (requestedType->isRow()) {
+        auto requestedRowType =
+            std::dynamic_pointer_cast<const RowType>(requestedType);
+        if (options_.useColumnNamesForColumnMapping()) {
+          const auto fileTypeIdx =
+              requestedRowType->getChildIdxIfExists(childName);
+          if (fileTypeIdx.has_value()) {
+            childRequestedType = requestedRowType->childAt(*fileTypeIdx);
+          }
+        } else if (i < requestedRowType->size()) {
+          // Handle schema evolution.
+          columnNames.push_back(requestedRowType->nameOf(i));
+          childRequestedType = requestedRowType->childAt(i);
+        } else {
+          continue;
+        }
+      }
+    } else if (parentRequestedType) {
+      // Handling elements of ARRAY / MAP
+      if (parentRequestedType->isArray()) {
+        childRequestedType = parentRequestedType->asArray().elementType();
+      } else if (parentRequestedType->isMap()) {
+        auto mapType = parentRequestedType->asMap();
+        // Processing map keys
+        if (i == 0) {
+          childRequestedType = mapType.keyType();
+        } else {
+          childRequestedType = mapType.valueType();
+        }
+      }
+    }
+
+    auto child = getParquetColumnInfo(
+        maxSchemaElementIdx,
+        maxRepeat,
+        maxDefine,
+        curSchemaIdx,
+        schemaIdx,
+        columnIdx,
+        childRequestedType,
+        requestedType,
+        columnNames);
+    children.push_back(std::move(child));
+  }
+  VELOX_CHECK(!children.empty());
+
+  name = columnNames.at(curSchemaIdx);
+  if (schemaElement.__isset.converted_type) {
+    switch (schemaElement.converted_type) {
+      case thrift::ConvertedType::LIST: {
+        VELOX_CHECK_EQ(children.size(), 1);
+        isRepeated = true;
+        const auto& type = children[0]->type();
+        // In case the child is a MAP or current element is repeated then
+        // wrap child around additional ARRAY
+        if (type->kind() == TypeKind::MAP || isRepeatedField(schemaElement)) {
+          return std::make_unique<ParquetTypeWithId>(
+              TypeFactory<TypeKind::ARRAY>::create(type),
+              std::move(children),
+              curSchemaIdx,
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf,
+              std::move(name),
+              std::nullopt,
+              std::nullopt,
+              maxRepeat + 1,
+              maxDefine,
+              isOptional,
+              isRepeated);
+        }
+        // Only special case list of map and list of list is handled here,
+        // other generic case is handled with case MAP
+        [[fallthrough]];
+      }
+      case thrift::ConvertedType::MAP_KEY_VALUE:
+        // If the MAP_KEY_VALUE annotated group's parent is a MAP, it should
+        // be the repeated key_value group that directly contains the key and
+        // value children.
+        if (schema[parentSchemaIdx].converted_type ==
+            thrift::ConvertedType::MAP) {
+          // TODO: the group names need to be checked. According to the spec,
+          // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
+          // the name of the schema element being 'key_value' is
+          // also an indication of this is a map type
+          VELOX_CHECK(isRepeatedField(schemaElement));
+          VELOX_CHECK_EQ(children.size(), 2);
+
+          auto type = TypeFactory<TypeKind::MAP>::create(
+              children[0]->type(), children[1]->type());
+          return std::make_unique<ParquetTypeWithId>(
+              std::move(type),
+              std::move(children),
+              curSchemaIdx, // TODO: there are holes in the ids
+              maxSchemaElementIdx,
+              ParquetTypeWithId::kNonLeaf, // columnIdx,
+              std::move(name),
+              std::nullopt,
+              std::nullopt,
+              maxRepeat,
+              maxDefine,
+              isOptional,
+              isRepeated);
+        }
+
+        // For backward-compatibility, a group annotated with MAP_KEY_VALUE
+        // that is not contained by a MAP-annotated group should be handled as
+        // a MAP-annotated group.
+        [[fallthrough]];
+
+      case thrift::ConvertedType::MAP: {
+        VELOX_CHECK_EQ(children.size(), 1);
+        const auto& child = children[0];
+        auto type = child->type();
+        isRepeated = true;
+        // This level will not have the "isRepeated" info in the parquet
+        // schema since parquet schema will have a child layer which will have
+        // the "repeated info" which we are ignoring here, hence we set the
+        // isRepeated to true eg
+        // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+        return std::make_unique<ParquetTypeWithId>(
+            std::move(type),
+            std::move(*(ParquetTypeWithId*)child.get()).moveChildren(),
+            curSchemaIdx, // TODO: there are holes in the ids
+            maxSchemaElementIdx,
+            ParquetTypeWithId::kNonLeaf, // columnIdx,
+            std::move(name),
+            std::nullopt,
+            std::nullopt,
+            maxRepeat + 1,
+            maxDefine,
+            isOptional,
+            isRepeated);
+      }
+
+      default:
+        VELOX_UNREACHABLE(
+            "Invalid SchemaElement converted_type: {}, name: {}",
+            schemaElement.converted_type,
+            name);
+    }
+  }
+
+  if (!isRepeatedField(schemaElement)) {
+    // Row type
+    auto type = createRowType(children, isFileColumnNamesReadAsLowerCase());
+    return std::make_unique<ParquetTypeWithId>(
+        std::move(type),
+        std::move(children),
+        curSchemaIdx,
+        maxSchemaElementIdx,
+        ParquetTypeWithId::kNonLeaf, // columnIdx,
+        std::move(name),
+        std::nullopt,
+        std::nullopt,
+        maxRepeat,
+        maxDefine,
+        isOptional,
+        isRepeated);
+  }
+
+  const auto parentConvertedType = schema[parentSchemaIdx].converted_type;
+  if (parentConvertedType == thrift::ConvertedType::MAP ||
+      parentConvertedType == thrift::ConvertedType::MAP_KEY_VALUE) {
+    // children of MAP
+    VELOX_CHECK_EQ(children.size(), 2);
+    auto type = TypeFactory<TypeKind::MAP>::create(
+        children[0]->type(), children[1]->type());
+    return std::make_unique<ParquetTypeWithId>(
+        std::move(type),
+        std::move(children),
+        curSchemaIdx, // TODO: there are holes in the ids
+        maxSchemaElementIdx,
+        ParquetTypeWithId::kNonLeaf, // columnIdx,
+        std::move(name),
+        std::nullopt,
+        std::nullopt,
+        maxRepeat,
+        maxDefine,
+        isOptional,
+        isRepeated);
+  }
+
+  if (parentConvertedType == thrift::ConvertedType::LIST &&
+      children.size() == 1 && name != "array" &&
+      name != schema[parentSchemaIdx].name + "_tuple") {
+    // TODO: the group names need to be checked. According to spec,
+    // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+    // the name of the schema element being 'array' is
+    // also an indication of this is a list type
+    // child of LIST
+    auto type = TypeFactory<TypeKind::ARRAY>::create(children[0]->type());
+    return std::make_unique<ParquetTypeWithId>(
+        std::move(type),
+        std::move(children),
+        curSchemaIdx,
+        maxSchemaElementIdx,
+        ParquetTypeWithId::kNonLeaf, // columnIdx,
+        std::move(name),
+        std::nullopt,
+        std::nullopt,
+        maxRepeat,
+        maxDefine,
+        isOptional,
+        isRepeated);
+  }
+
+  // Row type
+  // To support list backward compatibility, need create a new row type
+  // instance and set all the fields as its children.
+  // According to the spec of list backward compatibility
+  // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+  // "If the repeated field is a group with multiple fields, then its
+  // type is the element type and elements are required." when there
+  // are multiple fields, creating a new row type instance which has
+  // all the fields as its children.
+  // TODO: since this is newly created node, its schemaIdx actually
+  // doesn't exist from the footer schema. Reusing the curSchemaIdx
+  // but potentially could have issue.
+  auto childrenRowType =
+      createRowType(children, isFileColumnNamesReadAsLowerCase());
+  std::vector<std::unique_ptr<dwio::common::TypeWithId>> rowChildren;
+  // In this legacy case, there is no middle layer between "array"
+  // node and the children nodes. Below creates this dummy middle
+  // layer to mimic the non-legacy case and fill the gap.
+  rowChildren.emplace_back(std::make_unique<ParquetTypeWithId>(
+      childrenRowType,
+      std::move(children),
+      curSchemaIdx,
+      maxSchemaElementIdx,
+      ParquetTypeWithId::kNonLeaf,
+      "dummy",
+      std::nullopt,
+      std::nullopt,
+      maxRepeat,
+      maxDefine,
+      isOptional,
+      isRepeated));
+  return std::make_unique<ParquetTypeWithId>(
+      TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
+      std::move(rowChildren),
+      curSchemaIdx,
+      maxSchemaElementIdx,
+      ParquetTypeWithId::kNonLeaf, // columnIdx,
+      std::move(name),
+      std::nullopt,
+      std::nullopt,
+      maxRepeat,
+      maxDefine,
+      isOptional,
+      isRepeated);
 }
 
 TypePtr ReaderBase::convertType(
@@ -806,37 +751,34 @@ TypePtr ReaderBase::convertType(
             "Unsupported Parquet SchemaElement converted type: {}",
             schemaElement.converted_type);
     }
-  } else {
-    switch (schemaElement.type) {
-      case thrift::Type::type::BOOLEAN:
-        return BOOLEAN();
-      case thrift::Type::type::INT32:
-        return INTEGER();
-      case thrift::Type::type::INT64:
-        // For Int64 Timestamp in nano precision
-        if (schemaElement.__isset.logicalType &&
-            schemaElement.logicalType.__isset.TIMESTAMP) {
-          return TIMESTAMP();
-        }
-        return BIGINT();
-      case thrift::Type::type::INT96:
-        return TIMESTAMP(); // INT96 only maps to a timestamp
-      case thrift::Type::type::FLOAT:
-        return REAL();
-      case thrift::Type::type::DOUBLE:
-        return DOUBLE();
-      case thrift::Type::type::BYTE_ARRAY:
-      case thrift::Type::type::FIXED_LEN_BYTE_ARRAY:
-        if (requestedType && requestedType->isVarchar()) {
-          return VARCHAR();
-        } else {
-          return VARBINARY();
-        }
+  }
 
-      default:
-        VELOX_FAIL(
-            "Unknown Parquet SchemaElement type: {}", schemaElement.type);
-    }
+  switch (schemaElement.type) {
+    case thrift::Type::type::BOOLEAN:
+      return BOOLEAN();
+    case thrift::Type::type::INT32:
+      return INTEGER();
+    case thrift::Type::type::INT64:
+      // For Int64 Timestamp in nano precision
+      if (schemaElement.__isset.logicalType &&
+          schemaElement.logicalType.__isset.TIMESTAMP) {
+        return TIMESTAMP();
+      }
+      return BIGINT();
+    case thrift::Type::type::INT96:
+      return TIMESTAMP(); // INT96 only maps to a timestamp
+    case thrift::Type::type::FLOAT:
+      return REAL();
+    case thrift::Type::type::DOUBLE:
+      return DOUBLE();
+    case thrift::Type::type::BYTE_ARRAY:
+    case thrift::Type::type::FIXED_LEN_BYTE_ARRAY:
+      if (requestedType && requestedType->isVarchar()) {
+        return VARCHAR();
+      }
+      return VARBINARY();
+    default:
+      VELOX_FAIL("Unknown Parquet SchemaElement type: {}", schemaElement.type);
   }
 }
 
