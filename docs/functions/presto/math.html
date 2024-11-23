@@ -308,10 +308,13 @@ specified <code class="docutils literal notranslate"><span class="pre">bound1</s
 <span class="sig-name descname"><span class="pre">width_bucket</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bins</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><blockquote>
 <div><p>Returns the zero-based bin number of <code class="docutils literal notranslate"><span class="pre">x</span></code> according to the bins specified
-by the array <code class="docutils literal notranslate"><span class="pre">bins</span></code>. The <code class="docutils literal notranslate"><span class="pre">bins</span></code> parameter must be an array of doubles and
-is assumed to be in sorted ascending order.</p>
+by the array <code class="docutils literal notranslate"><span class="pre">bins</span></code>. The <code class="docutils literal notranslate"><span class="pre">bins</span></code> parameter must be an array of doubles, should not
+contain <code class="docutils literal notranslate"><span class="pre">null</span></code> or non-finite elements, and is assumed to be in sorted ascending order.</p>
 <p>For example, if <code class="docutils literal notranslate"><span class="pre">bins</span></code> is <code class="docutils literal notranslate"><span class="pre">ARRAY[0,</span> <span class="pre">2,</span> <span class="pre">4]</span></code>, then we have four bins:
 <code class="docutils literal notranslate"><span class="pre">(-infinity(),</span> <span class="pre">0)</span></code>, <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">2)</span></code>, <code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">4)</span></code> and <code class="docutils literal notranslate"><span class="pre">[4,</span> <span class="pre">infinity())</span></code>.</p>
+<p>Note: The function returns an error if it encounters a <code class="docutils literal notranslate"><span class="pre">null</span></code> or non-finite
+element in <code class="docutils literal notranslate"><span class="pre">bins</span></code>, but due to the binary search algorithm some such elements
+might go unnoticed and the function will return a result.</p>
 </div></blockquote>
 </dd></dl>
 
