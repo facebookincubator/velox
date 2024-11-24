@@ -193,6 +193,7 @@ class DwrfStreamIdentifier : public dwio::common::StreamIdentifier {
 
   ~DwrfStreamIdentifier() = default;
 
+  using facebook::velox::dwio::common::StreamIdentifier::operator==;
   bool operator==(const DwrfStreamIdentifier& other) const {
     // column == other.column may be join the expression if all files
     // share the same new version that has column field filled
