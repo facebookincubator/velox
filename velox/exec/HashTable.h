@@ -310,7 +310,19 @@ class BaseHashTable {
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
-      folly::Executor* executor = nullptr) = 0;
+      folly::Executor* executor = nullptr,
+      bool dropDuplicates = false) = 0;
+
+  /// The hash table used for join build in left semi and anti join does not
+  /// retain duplicate join keys by default. This is achieved by constructing
+  /// the hash table in the addInput phase to eliminate duplicate join keys.
+  /// When the percentage of duplicate data is small, it will adaptively adjust
+  /// to not build the hash table in the addInput phase. Instead, it operates
+  /// like other join types by reading all the data before building the hash
+  /// table. This function is used to indicate that the join hash table will not
+  /// be built during the addInput phase, and the input data will also not be
+  /// deduplicated.
+  virtual void joinTableMayHaveDuplicates() = 0;
 
   /// Returns the memory footprint in bytes for any data structures
   /// owned by 'this'.
@@ -586,6 +598,10 @@ class HashTable : public BaseHashTable {
     return hasDuplicates_.check();
   }
 
+  void joinTableMayHaveDuplicates() override {
+    joinBuildNoDuplicates_ = false;
+  }
+
   HashMode hashMode() const override {
     return hashMode_;
   }
@@ -610,7 +626,8 @@ class HashTable : public BaseHashTable {
   void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
-      folly::Executor* executor = nullptr) override;
+      folly::Executor* executor = nullptr,
+      bool dropDuplicates = false) override;
 
   void prepareForJoinProbe(
       HashLookup& lookup,
@@ -966,7 +983,7 @@ class HashTable : public BaseHashTable {
   // or distinct mode VectorHashers in a group by hash table. 0 for
   // join build sides.
   int32_t reservePct() const {
-    return isJoinBuild_ ? 0 : 50;
+    return (isJoinBuild_ && !joinBuildNoDuplicates_) ? 0 : 50;
   }
 
   // Returns the byte offset of the bucket for 'hash' starting from 'table_'.
@@ -1036,6 +1053,7 @@ class HashTable : public BaseHashTable {
 
   int8_t sizeBits_;
   bool isJoinBuild_ = false;
+  bool joinBuildNoDuplicates_ = false;
 
   // Set at join build time if the table has duplicates, meaning that
   // the join can be cardinality increasing. Atomic for tsan because
