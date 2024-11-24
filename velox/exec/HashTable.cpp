@@ -57,6 +57,7 @@ HashTable<ignoreNullKeys>::HashTable(
       pool_(pool),
       minTableSizeForParallelJoinBuild_(minTableSizeForParallelJoinBuild),
       isJoinBuild_(isJoinBuild),
+      joinBuildNoDuplicates_(!allowDuplicates),
       buildPartitionBounds_(raw_vector<PartitionBoundIndexType>(pool)) {
   std::vector<TypePtr> keys;
   for (auto& hasher : hashers_) {
@@ -1494,7 +1495,9 @@ void HashTable<ignoreNullKeys>::decideHashMode(
     return;
   }
   disableRangeArrayHash_ |= disableRangeArrayHash;
-  if (numDistinct_ && !isJoinBuild_) {
+  if (numDistinct_ && (!isJoinBuild_ || joinBuildNoDuplicates_)) {
+    // If the join type is left semi and anti, allowDuplicates_ will be false,
+    // and join build is building hash table while adding input rows.
     if (!analyze()) {
       setHashMode(HashMode::kHash, numNew, spillInputStartPartitionBit);
       return;
@@ -1716,8 +1719,20 @@ template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::prepareJoinTable(
     std::vector<std::unique_ptr<BaseHashTable>> tables,
     int8_t spillInputStartPartitionBit,
-    folly::Executor* executor) {
+    folly::Executor* executor,
+    bool dropDuplicates) {
   buildExecutor_ = executor;
+  if (dropDuplicates) {
+    if (table_ != nullptr) {
+      // Reset table_ and capacity_ to trigger rehash.
+      rows_->pool()->freeContiguous(tableAllocation_);
+      table_ = nullptr;
+      capacity_ = 0;
+    }
+    // Call analyze to insert all unique values in row container to the
+    // table hashers' uniqueValues_;
+    analyze();
+  }
   otherTables_.reserve(tables.size());
   for (auto& table : tables) {
     otherTables_.emplace_back(
@@ -1748,6 +1763,11 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
     }
     if (useValueIds) {
       for (auto& other : otherTables_) {
+        if (dropDuplicates) {
+          // Before merging with the current hashers, all values in the row
+          // containers of other table need to be inserted into uniqueValues_.
+          other->analyze();
+        }
         for (auto i = 0; i < hashers_.size(); ++i) {
           hashers_[i]->merge(*other->hashers_[i]);
           if (!hashers_[i]->mayUseValueIds()) {
