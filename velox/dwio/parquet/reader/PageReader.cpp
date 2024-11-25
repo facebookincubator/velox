@@ -20,6 +20,7 @@
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
+#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 #include "velox/vector/FlatVector.h"
 
 #include <thrift/protocol/TCompactProtocol.h> // @manual
