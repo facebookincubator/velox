@@ -105,6 +105,14 @@ function install_build_prerequisites {
 
 }
 
+# Install packages required to fix format
+function install_format_prerequisites {
+  pip3 install regex
+  ${SUDO} apt install -y \
+    clang-format \
+    cmake-format
+}
+
 # Install packages required for build.
 function install_velox_deps_from_apt {
   ${SUDO} apt update
@@ -286,6 +294,7 @@ function install_velox_deps {
 
 function install_apt_deps {
   install_build_prerequisites
+  install_format_prerequisites
   install_velox_deps_from_apt
 }
 
