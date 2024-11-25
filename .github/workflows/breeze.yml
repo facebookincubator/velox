@@ -77,3 +77,38 @@ jobs:
       - name: Run Tests
         run: |
           cd _build-breeze/debug && ctest -j 8 --output-on-failure --no-tests=error
+
+  ubuntu-gpu-relwithdebinfo:
+    runs-on: 4-core-ubuntu-gpu-t4
+    # prevent errors when forks ff their main branch
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    name: "Ubuntu GPU debug"
+    env:
+      CUDA_VERSION: "12.2"
+    defaults:
+      run:
+        shell: bash
+        working-directory: velox
+    steps:
+
+      - uses: actions/checkout@v4
+        with:
+          path: velox
+
+      - name: Install Dependencies
+        run: |
+          source scripts/setup-ubuntu.sh && install_apt_deps && install_cuda ${CUDA_VERSION}
+          sudo chmod 755 -R /usr/local/lib/python3.10/dist-packages
+
+      - name: Make RelWithDebInfo Build
+        run: |
+          cmake -S velox/experimental/breeze -B _build-breeze/relwithdebinfo \
+                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+                -DBUILD_GENERATE_TEST_FIXTURES=OFF \
+                -DBUILD_CUDA=ON \
+                -DCMAKE_NVCC_FLAGS="-arch=native"
+          cmake --build _build-breeze/relwithdebinfo -j 8
+
+      - name: Run Tests
+        run: |
+          cd _build-breeze/relwithdebinfo && ctest -j 8 --output-on-failure --no-tests=error
