@@ -180,7 +180,7 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
       queryCtx->queryId(),
-      4'194'304 /* 4MB */,
+      8'388'608 /* 8MB */,
       exec::MemoryReclaimer::create()));
 
   params.queryCtx = queryCtx;
@@ -215,6 +215,64 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   testWindowBuild(true);
   // SortBasedWindow will OOM.
   testWindowBuild(false);
+}
+
+TEST_F(WindowTest, windowOOMWithHugeWindowPartition) {
+  const vector_size_t size = 1'000'000'00;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  // Abstract the common values vector split.
+  auto valuesSplit = split(data, 10);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(),
+      838860800 /* 800MB */,
+      exec::MemoryReclaimer::create()));
+
+  params.queryCtx = queryCtx;
+
+  auto testWindowBuild = [&](bool useStreamingWindow) {
+    if (useStreamingWindow) {
+      params.planNode =
+          PlanBuilder(planNodeIdGenerator)
+              .values(valuesSplit)
+              .streamingWindow(
+                  {"row_number() over (partition by p order by s)"})
+              .project({"d"})
+              .singleAggregation({}, {"sum(d)"})
+              .planNode();
+
+      readCursor(params, [](Task*) {});
+    } else {
+      params.planNode =
+          PlanBuilder(planNodeIdGenerator)
+              .values(valuesSplit)
+              .window({"row_number() over (partition by p order by s)"})
+              .project({"d"})
+              .singleAggregation({}, {"sum(d)"})
+              .planNode();
+
+      VELOX_ASSERT_THROW(
+          readCursor(params, [](Task*) {}),
+          "Exceeded memory pool capacity after attempt to grow capacity through arbitration.");
+    }
+  };
+  // RowStreamingWindow will not OOM even with huge window partition.
+  testWindowBuild(true);
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, aggWindowResultMismatch) {
