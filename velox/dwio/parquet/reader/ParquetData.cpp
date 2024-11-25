@@ -132,16 +132,15 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
 
 std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
     uint32_t index) const {
-  auto rowGroup = fileMetaDataPtr_.rowGroup(index);
+  const auto rowGroup = fileMetaDataPtr_.rowGroup(index);
 
   VELOX_CHECK_GT(rowGroup.numColumns(), 0);
-  auto fileOffset = rowGroup.hasFileOffset() ? rowGroup.fileOffset()
+  const auto fileOffset = rowGroup.hasFileOffset() ? rowGroup.fileOffset()
       : rowGroup.columnChunk(0).hasDictionaryPageOffset()
       ? rowGroup.columnChunk(0).dictionaryPageOffset()
       : rowGroup.columnChunk(0).dataPageOffset();
-  VELOX_CHECK_GT(fileOffset, 0);
 
-  auto length = rowGroup.hasTotalCompressedSize()
+  const auto length = rowGroup.hasTotalCompressedSize()
       ? rowGroup.totalCompressedSize()
       : rowGroup.totalByteSize();
 

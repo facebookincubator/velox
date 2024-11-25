@@ -960,27 +960,30 @@ class ParquetRowReader::Impl {
 
     uint64_t rowNumber = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
+      if (rowGroups_[i].num_rows == 0) {
+        // The row group is empty
+        continue;
+      }
+
+      rowNumber += rowGroups_[i].num_rows;
+
+      if (i < res.totalCount && bits::isBitSet(res.filterResult.data(), i)) {
+        // The row group is in the excluded list.
+        continue;
+      }
+
       VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
-      auto fileOffset = rowGroups_[i].__isset.file_offset
+      const auto fileOffset = rowGroups_[i].__isset.file_offset
           ? rowGroups_[i].file_offset
           : rowGroups_[i].columns[0].meta_data.__isset.dictionary_page_offset
           ? rowGroups_[i].columns[0].meta_data.dictionary_page_offset
           : rowGroups_[i].columns[0].meta_data.data_page_offset;
-      VELOX_CHECK_GT(fileOffset, 0);
-      auto rowGroupInRange =
-          (fileOffset >= options_.offset() && fileOffset < options_.limit());
 
-      auto isExcluded =
-          (i < res.totalCount && bits::isBitSet(res.filterResult.data(), i));
-      auto isEmpty = rowGroups_[i].num_rows == 0;
-
-      // Add a row group to read if it is within range and not empty and not in
-      // the excluded list.
-      if (rowGroupInRange && !isExcluded && !isEmpty) {
+      // Add a row group to read if it is within range
+      if (fileOffset >= options_.offset() && fileOffset < options_.limit()) {
         rowGroupIds_.push_back(i);
         firstRowOfRowGroup_.push_back(rowNumber);
       }
-      rowNumber += rowGroups_[i].num_rows;
     }
   }
 

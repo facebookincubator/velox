@@ -1560,3 +1560,12 @@ TEST_F(ParquetReaderTest, parquet251) {
   assertReadWithFilters(
       "parquet-251.parquet", rowType, std::move(filters), expected);
 }
+
+TEST_F(ParquetReaderTest, dictPageOffsetZero) {
+  const auto expected =
+      makeRowVector({makeFlatVector(std::vector(39ULL, 1552))});
+  assertReadWithExpected(
+      "dict-page-offset-zero.parquet",
+      ROW({"l_partkey"}, {INTEGER()}),
+      expected);
+}
