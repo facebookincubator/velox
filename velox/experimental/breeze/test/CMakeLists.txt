@@ -199,7 +199,7 @@ function(breeze_add_unittests dir type)
         ${dir}
         ${type}
         "cuda"
-        "generated/${dir}/kernels.cuh")
+        "generated/${dir}/kernels-cuda.cuh")
       generate_test_fixture(
         ${type}_cuda_test_fixture_src
         ${dir}
