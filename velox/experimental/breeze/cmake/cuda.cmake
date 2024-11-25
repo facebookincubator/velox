@@ -96,7 +96,7 @@ function(breeze_add_cuda_test target source)
     OUTPUT ${target}
     COMMAND
       ${NVCC_EXECUTABLE} -o ${target} ${target}.o ${arg_LIBS}
-      $<TARGET_FILE_DIR:gtest>/libgtest.a
+      $<TARGET_FILE_DIR:GTest::gtest>/libgtest.a
       $<TARGET_FILE_DIR:test_main>/libtest_main.a
       $<$<BOOL:${BUILD_TRACING}>:$<TARGET_FILE_DIR:perfetto>/libperfetto.a>
       ${ARCH_LINK_FLAGS}

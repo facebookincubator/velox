@@ -40,7 +40,7 @@ function(breeze_add_sycl_test target source)
     OUTPUT ${target}
     COMMAND
       ${SYCLCC_EXECUTABLE} -o ${target} ${target}.o
-      $<TARGET_FILE_DIR:gtest>/libgtest.a
+      $<TARGET_FILE_DIR:GTest::gtest>/libgtest.a
       $<TARGET_FILE_DIR:test_main>/libtest_main.a ${CMAKE_THREAD_LIBS_INIT}
       ${ARCH_LINK_FLAGS}
       $<$<BOOL:${BUILD_TRACING}>:$<TARGET_FILE_DIR:perfetto>/libperfetto.a>
