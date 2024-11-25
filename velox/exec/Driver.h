@@ -13,22 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
+
+#include <memory>
+
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
-#include <memory>
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
-#include "velox/common/future/VeloxPromise.h"
-#include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/time/CpuWallTimer.h"
-#include "velox/connectors/Connector.h"
 #include "velox/core/PlanFragment.h"
-#include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/exec/Spiller.h"
+#include "velox/exec/TraceConfig.h"
 
 namespace facebook::velox::exec {
 
@@ -241,7 +240,7 @@ class BlockingState {
   }
 
   /// Moves out the blocking future stored inside. Can be called only once.
-  /// Used in single-threaded execution.
+  /// Used in serial execution mode.
   ContinueFuture future() {
     return std::move(future_);
   }
@@ -278,6 +277,10 @@ struct DriverCtx {
   std::shared_ptr<Task> task;
   Driver* driver{nullptr};
   facebook::velox::process::ThreadDebugInfo threadDebugInfo;
+  /// Tracks the traced operator ids. It is also used to avoid tracing the
+  /// auxiliary operator such as the aggregation operator used by the table
+  /// writer to generate the columns stats.
+  std::unordered_map<int32_t, std::string> tracedOperatorMap;
 
   DriverCtx(
       std::shared_ptr<Task> _task,
@@ -287,6 +290,8 @@ struct DriverCtx {
       uint32_t _partitionId);
 
   const core::QueryConfig& queryConfig() const;
+
+  const std::optional<trace::TraceConfig>& traceConfig() const;
 
   velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,
@@ -359,7 +364,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   /// Run the pipeline until it produces a batch of data or gets blocked.
   /// Return the data produced or nullptr if pipeline finished processing and
-  /// will not produce more data. Return nullptr and set 'blockingState' if
+  /// will not produce more data. Return nullptr and set 'future' if
   /// pipeline got blocked.
   ///
   /// This API supports execution of a Task synchronously in the caller's
@@ -367,7 +372,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// When using 'enqueue', the last operator in the pipeline (sink) must not
   /// return any data from Operator::getOutput(). When using 'next', the last
   /// operator must produce data that will be returned to caller.
-  RowVectorPtr next(std::shared_ptr<BlockingState>& blockingState);
+  RowVectorPtr next(ContinueFuture* future);
 
   /// Invoked to initialize the operators from this driver once on its first
   /// execution.
@@ -470,6 +475,34 @@ class Driver : public std::enable_shared_from_this<Driver> {
   }
 
  private:
+  // Ensures that the thread is removed from its Task's thread count on exit.
+  class CancelGuard {
+   public:
+    CancelGuard(
+        const std::shared_ptr<Driver>& driver,
+        Task* task,
+        ThreadState* state,
+        std::function<void(StopReason)> onTerminate)
+        : driver_(driver),
+          task_(task),
+          state_(state),
+          onTerminate_(std::move(onTerminate)) {}
+
+    void notThrown() {
+      isThrow_ = false;
+    }
+
+    ~CancelGuard();
+
+   private:
+    std::shared_ptr<Driver> const driver_;
+    Task* const task_;
+    ThreadState* const state_;
+    const std::function<void(StopReason reason)> onTerminate_;
+
+    bool isThrow_{true};
+  };
+
   Driver() = default;
 
   // Invoked to record the driver cpu yield count.
@@ -496,24 +529,30 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // position in the pipeline.
   void pushdownFilters(int operatorIndex);
 
-  // If 'trackOperatorCpuUsage_' is true, returns initialized timer object to
-  // track cpu and wall time of an operation. Returns null otherwise.
-  // The delta CpuWallTiming object would be passes to 'func' upon
-  // destruction of the timer.
-  template <typename F>
-  std::unique_ptr<DeltaCpuWallTimer<F>> createDeltaCpuWallTimer(F&& func) {
-    return trackOperatorCpuUsage_
-        ? std::make_unique<DeltaCpuWallTimer<F>>(std::move(func))
-        : nullptr;
-  }
+  using TimingMemberPtr = CpuWallTiming OperatorStats::*;
+  template <typename Func>
+  void withDeltaCpuWallTimer(
+      Operator* op,
+      TimingMemberPtr opTimingMember,
+      Func&& opFunction);
 
-  // Adjusts 'timing' by removing the lazy load wall and CPU times
-  // accrued since last time timing information was recorded for
-  // 'op'. The accrued lazy load times are credited to the source
-  // operator of 'this'. The per-operator runtimeStats for lazy load
-  // are left in place to reflect which operator triggered the load
-  // but these do not bias the op's timing.
-  CpuWallTiming processLazyTiming(Operator& op, const CpuWallTiming& timing);
+  // Adjusts 'timing' by removing the lazy load wall time, CPU time, and input
+  // bytes accrued since last time timing information was recorded for 'op'. The
+  // accrued lazy load times are credited to the source operator of 'this'. The
+  // per-operator runtimeStats for lazy load are left in place to reflect which
+  // operator triggered the load but these do not bias the op's timing.
+  CpuWallTiming processLazyIoStats(Operator& op, const CpuWallTiming& timing);
+
+  inline void validateOperatorOutputResult(
+      const RowVectorPtr& result,
+      const Operator& op);
+
+  inline StopReason blockDriver(
+      const std::shared_ptr<Driver>& self,
+      size_t blockedOperatorId,
+      ContinueFuture&& future,
+      std::shared_ptr<BlockingState>& blockingState,
+      CancelGuard& guard);
 
   std::unique_ptr<DriverCtx> ctx_;
 
@@ -616,9 +655,8 @@ struct DriverFactory {
 
   static void registerAdapter(DriverAdapter adapter);
 
-  bool supportsSingleThreadedExecution() const {
-    return !needsPartitionedOutput() && !needsExchangeClient() &&
-        !needsLocalExchange();
+  bool supportsSerialExecution() const {
+    return !needsPartitionedOutput() && !needsExchangeClient();
   }
 
   const core::PlanNodeId& leafNodeId() const {
@@ -696,15 +734,27 @@ class SuspendedSection {
 
 /// Provides the execution context of a driver thread. This is set to a
 /// per-thread local variable if the running thread is a driver thread.
-struct DriverThreadContext {
-  const DriverCtx& driverCtx;
+class DriverThreadContext {
+ public:
+  explicit DriverThreadContext(const DriverCtx* driverCtx)
+      : driverCtx_(driverCtx) {}
+
+  const DriverCtx* driverCtx() const {
+    VELOX_CHECK_NOT_NULL(driverCtx_);
+    return driverCtx_;
+  }
+
+ private:
+  const DriverCtx* driverCtx_;
 };
 
 /// Object used to set/restore the driver thread context when driver execution
 /// starts/leaves the driver thread.
 class ScopedDriverThreadContext {
  public:
-  explicit ScopedDriverThreadContext(const DriverCtx& driverCtx);
+  explicit ScopedDriverThreadContext(const DriverCtx* driverCtx);
+  explicit ScopedDriverThreadContext(
+      const DriverThreadContext* _driverThreadCtx);
   ~ScopedDriverThreadContext();
 
  private:
@@ -719,9 +769,19 @@ DriverThreadContext* driverThreadContext();
 } // namespace facebook::velox::exec
 
 template <>
+struct fmt::formatter<facebook::velox::exec::BlockingReason>
+    : formatter<std::string> {
+  auto format(facebook::velox::exec::BlockingReason b, format_context& ctx)
+      const {
+    return formatter<std::string>::format(
+        facebook::velox::exec::blockingReasonToString(b), ctx);
+  }
+};
+
+template <>
 struct fmt::formatter<facebook::velox::exec::StopReason>
     : formatter<std::string> {
-  auto format(facebook::velox::exec::StopReason s, format_context& ctx) {
+  auto format(facebook::velox::exec::StopReason s, format_context& ctx) const {
     return formatter<std::string>::format(
         facebook::velox::exec::stopReasonString(s), ctx);
   }

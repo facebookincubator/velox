@@ -19,10 +19,11 @@ set(TEST_LINK_LIBS
     velox_dwio_dwrf_proto
     velox_dwio_dwrf_reader
     velox_dwio_dwrf_writer
+    velox_row_fast
     gflags::gflags
-    gtest
-    gtest_main
-    gmock
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
     glog::glog
     ${FILESYSTEM})
 
@@ -289,7 +290,11 @@ add_executable(velox_dwio_dwrf_config_test ConfigTests.cpp)
 add_test(velox_dwio_dwrf_config_test velox_dwio_dwrf_config_test)
 
 target_link_libraries(
-  velox_dwio_dwrf_config_test velox_link_libs Folly::folly ${TEST_LINK_LIBS})
+  velox_dwio_dwrf_config_test
+  velox_link_libs
+  velox_row_fast
+  Folly::folly
+  ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_ratio_checker_test RatioTrackerTest.cpp)
 add_test(velox_dwio_dwrf_ratio_checker_test velox_dwio_dwrf_ratio_checker_test)

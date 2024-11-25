@@ -20,6 +20,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/functions/lib/SubscriptUtil.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SelectivityVector.h"
 
@@ -143,7 +144,8 @@ class ElementAtTest : public FunctionBaseTest {
     auto keys = makeFlatVector<T>(std::vector<T>({kSNaN}));
     std::vector<VectorPtr> args = {inputMap, keys};
 
-    facebook::velox::functions::MapSubscript mapSubscriptWithCaching(true);
+    facebook::velox::functions::detail::MapSubscript mapSubscriptWithCaching(
+        true);
 
     auto checkStatus = [&](bool cachingEnabled,
                            bool materializedMapIsNull,
@@ -1030,7 +1032,7 @@ TEST_F(ElementAtTest, errorStatesArray) {
       [](auto row) { return row == 40; });
 }
 
-TEST_F(ElementAtTest, testCachingOptimzation) {
+TEST_F(ElementAtTest, testCachingOptimization) {
   std::vector<std::vector<std::pair<int64_t, std::optional<int64_t>>>>
       inputMapVectorData;
   inputMapVectorData.push_back({});
@@ -1068,7 +1070,8 @@ TEST_F(ElementAtTest, testCachingOptimzation) {
   auto keys = makeFlatVector<int64_t>({0, 0, 0});
   std::vector<VectorPtr> args = {inputMap, keys};
 
-  facebook::velox::functions::MapSubscript mapSubscriptWithCaching(true);
+  facebook::velox::functions::detail::MapSubscript mapSubscriptWithCaching(
+      true);
 
   auto checkStatus = [&](bool cachingEnabled,
                          bool materializedMapIsNull,
@@ -1100,8 +1103,7 @@ TEST_F(ElementAtTest, testCachingOptimzation) {
   // Test the cached map content.
   auto verfyCachedContent = [&]() {
     auto& cachedMapTyped =
-        *static_cast<
-             facebook::velox::functions::LookupTable<TypeKind::BIGINT>*>(
+        *static_cast<facebook::velox::functions::detail::LookupTable<int64_t>*>(
              mapSubscriptWithCaching.lookupTable().get())
              ->map();
 
@@ -1181,4 +1183,295 @@ TEST_F(ElementAtTest, floatingPointCornerCases) {
   // considered equal.
   testFloatingPointCornerCases<float>();
   testFloatingPointCornerCases<double>();
+}
+
+TEST_F(ElementAtTest, testCachingOptimizationComplexKey) {
+  std::vector<std::vector<int64_t>> keys;
+  std::vector<int64_t> values;
+  for (int i = 0; i < 999; i += 3) {
+    // [0, 1, 2] -> 1000
+    // [3, 4, 5] -> 1003
+    // ...
+    keys.push_back({i, i + 1, i + 2});
+    values.push_back(i + 1000);
+  }
+
+  // Make a dummy eval context.
+  exec::ExprSet exprSet({}, &execCtx_);
+  auto inputs = makeRowVector({});
+  exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputs.get());
+
+  SelectivityVector rows(1);
+  auto keysVector = makeArrayVector<int64_t>(keys);
+  auto valuesVector = makeFlatVector<int64_t>(values);
+  auto inputMap = makeMapVector({0}, keysVector, valuesVector);
+
+  auto inputKeys = makeArrayVector<int64_t>({{0, 1, 2}});
+  std::vector<VectorPtr> args{inputMap, inputKeys};
+
+  facebook::velox::functions::detail::MapSubscript mapSubscriptWithCaching(
+      true);
+
+  auto checkStatus = [&](bool cachingEnabled,
+                         bool materializedMapIsNull,
+                         const VectorPtr& firtSeen) {
+    EXPECT_EQ(cachingEnabled, mapSubscriptWithCaching.cachingEnabled());
+    EXPECT_EQ(firtSeen, mapSubscriptWithCaching.firstSeenMap());
+    EXPECT_EQ(
+        materializedMapIsNull,
+        nullptr == mapSubscriptWithCaching.lookupTable());
+  };
+
+  // Initial state.
+  checkStatus(true, true, nullptr);
+
+  auto result1 = mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+  // Nothing has been materialized yet since the input is seen only once.
+  checkStatus(true, true, args[0]);
+
+  auto result2 = mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+  checkStatus(true, false, args[0]);
+
+  auto result3 = mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+  checkStatus(true, false, args[0]);
+
+  // all the result should be the same.
+  test::assertEqualVectors(result1, result2);
+  test::assertEqualVectors(result2, result3);
+
+  // Test the cached map content.
+  auto verfyCachedContent = [&]() {
+    auto& cachedMap = mapSubscriptWithCaching.lookupTable()
+                          ->typedTable<void>()
+                          ->getMapAtIndex(0);
+
+    for (int i = 0; i < keysVector->size(); i += 3) {
+      EXPECT_NE(
+          cachedMap.end(),
+          cachedMap.find(facebook::velox::functions::detail::MapKey{
+              keysVector.get(), 0, 0}));
+    }
+  };
+
+  verfyCachedContent();
+  // Pass different map with same base.
+  {
+    auto dictInput = BaseVector::wrapInDictionary(
+        nullptr, makeIndices({0, 0, 0}), 1, inputMap);
+
+    SelectivityVector rows(3);
+    std::vector<VectorPtr> args{
+        dictInput, makeArrayVector<int64_t>({{0, 1, 2}, {0, 1, 2}, {0, 1, 2}})};
+    auto result = mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+    // Last seen map will keep pointing to the original map since both have
+    // the same base.
+    checkStatus(true, false, inputMap);
+
+    auto expectedResult = makeFlatVector<int64_t>({1000, 1000, 1000});
+    test::assertEqualVectors(expectedResult, result);
+    verfyCachedContent();
+  }
+
+  {
+    auto constantInput = BaseVector::wrapInConstant(3, 0, inputMap);
+
+    SelectivityVector rows(3);
+    std::vector<VectorPtr> args{
+        constantInput,
+        makeArrayVector<int64_t>({{0, 1, 2}, {0, 1, 2}, {0, 1, 2}})};
+    auto result = mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+    // Last seen map will keep pointing to the original map since both have
+    // the same base.
+    checkStatus(true, false, inputMap);
+
+    auto expectedResult = makeFlatVector<int64_t>({1000, 1000, 1000});
+    test::assertEqualVectors(expectedResult, result);
+    verfyCachedContent();
+  }
+
+  // Pass a different map, caching will be disabled.
+  {
+    args[0] = makeMapVector({0}, keysVector, valuesVector);
+    auto result = mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+    checkStatus(false, true, nullptr);
+    test::assertEqualVectors(result, result1);
+  }
+
+  {
+    args[0] = makeMapVector({0}, keysVector, valuesVector);
+    auto result = mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+    checkStatus(false, true, nullptr);
+    test::assertEqualVectors(result, result1);
+  }
+
+  for (int i = 0; i < 999; i += 3) {
+    // [0, 1, 2] -> 0
+    // [2, 3, 4] -> 1
+    // ...
+    keys.push_back({i * 2, i * 2 + 1, i * 2 + 2});
+    values.push_back(i);
+  }
+
+  for (int i = 0; i < 30; i += 3) {
+    // [0, 1, 2] -> 0
+    // [3, 4, 5] -> 3
+    // ...
+    keys.push_back({i, i + 1, i + 2});
+    values.push_back(i);
+  }
+
+  args[0] = makeMapVector({0, 333, 666}, keysVector, valuesVector);
+  auto resultWithMoreVectors =
+      mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+  checkStatus(false, true, nullptr);
+
+  auto resultWithMoreVectors1 =
+      mapSubscriptWithCaching.applyMap(rows, args, evalCtx);
+  checkStatus(false, true, nullptr);
+  test::assertEqualVectors(resultWithMoreVectors, resultWithMoreVectors1);
+}
+
+TEST_F(ElementAtTest, timestampWithTimeZone) {
+  const auto values = makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6});
+  VectorPtr expected = makeNullableFlatVector<int32_t>({3, std::nullopt});
+
+  auto elementAt = [&](const VectorPtr& map, const VectorPtr& search) {
+    return evaluate("element_at(C0, C1)", makeRowVector({map, search}));
+  };
+
+  // Test elementAt with scalar values.
+  const auto keys = makeFlatVector<int64_t>(
+      {pack(1, 1), pack(2, 2), pack(3, 3), pack(4, 4), pack(5, 5), pack(6, 6)},
+      TIMESTAMP_WITH_TIME_ZONE());
+  const auto mapVector = makeMapVector({0, 3}, keys, values);
+  test::assertEqualVectors(
+      expected,
+      elementAt(
+          mapVector,
+          makeFlatVector<int64_t>(
+              {pack(3, 3), pack(7, 7)}, TIMESTAMP_WITH_TIME_ZONE())));
+  test::assertEqualVectors(
+      expected,
+      elementAt(
+          mapVector,
+          makeFlatVector<int64_t>(
+              {pack(3, 10), pack(8, 5)}, TIMESTAMP_WITH_TIME_ZONE())));
+
+  // Test elementAt with TimestampWithTimeZone values embedded in a complex
+  // type.
+  const auto rowKeys = makeRowVector({keys});
+  const auto mapOfRowKeys = makeMapVector({0, 3}, rowKeys, values);
+  const auto element = makeRowVector({makeFlatVector<int64_t>(
+      {pack(-1, 1), pack(5, 10)}, TIMESTAMP_WITH_TIME_ZONE())});
+  expected = makeNullableFlatVector<int32_t>({std::nullopt, 5});
+  test::assertEqualVectors(expected, elementAt(mapOfRowKeys, element));
+}
+
+TEST_F(ElementAtTest, timestampWithTimeZoneWithCaching) {
+  auto testCaching = [&](std::vector<VectorPtr>&& args,
+                         const VectorPtr& expected) {
+    exec::ExprSet exprSet({}, &execCtx_);
+    const auto inputs = makeRowVector({});
+    exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputs.get());
+
+    const SelectivityVector rows(1);
+
+    facebook::velox::functions::detail::MapSubscript mapSubscriptWithCaching(
+        true);
+
+    auto checkStatus = [&](bool cachingEnabled,
+                           bool materializedMapIsNull,
+                           const VectorPtr& firstSeen) {
+      EXPECT_EQ(cachingEnabled, mapSubscriptWithCaching.cachingEnabled());
+      EXPECT_EQ(firstSeen, mapSubscriptWithCaching.firstSeenMap());
+      EXPECT_EQ(
+          materializedMapIsNull,
+          nullptr == mapSubscriptWithCaching.lookupTable());
+    };
+
+    // Initial state.
+    checkStatus(true, true, nullptr);
+
+    test::assertEqualVectors(
+        expected, mapSubscriptWithCaching.applyMap(rows, args, evalCtx));
+    // Nothing has been materialized yet since the input is seen only once.
+    checkStatus(true, true, args[0]);
+
+    test::assertEqualVectors(
+        expected, mapSubscriptWithCaching.applyMap(rows, args, evalCtx));
+    // The argument from the previous call should be cached.
+    checkStatus(true, false, args[0]);
+
+    test::assertEqualVectors(
+        expected, mapSubscriptWithCaching.applyMap(rows, args, evalCtx));
+    // The map should still be cached because we called it with the same
+    // argument.
+    checkStatus(true, false, args[0]);
+  };
+
+  // Test elementAt with scalar values and caching.
+  const auto keys = makeFlatVector<int64_t>(
+      {pack(1, 1), pack(2, 2), pack(3, 3), pack(4, 4), pack(5, 5), pack(6, 6)},
+      TIMESTAMP_WITH_TIME_ZONE());
+  const auto values = makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6});
+  const auto inputMap = makeMapVector({0}, keys, values);
+  VectorPtr lookup = makeFlatVector(
+      std::vector<int64_t>{pack(3, 5)}, TIMESTAMP_WITH_TIME_ZONE());
+  testCaching({inputMap, lookup}, makeConstant<int32_t>(3, 1));
+
+  // Test elementAt with TimestampWithTimeZone values embedded in a complex type
+  // with caching.
+  const auto rowKeys = makeRowVector({keys});
+  const auto mapOfRowKeys = makeMapVector({0}, rowKeys, values);
+  lookup = makeRowVector({makeFlatVector(
+      std::vector<int64_t>{pack(5, 10)}, TIMESTAMP_WITH_TIME_ZONE())});
+  testCaching({mapOfRowKeys, lookup}, makeConstant<int32_t>(5, 1));
+}
+
+TEST_F(ElementAtTest, highlySelective) {
+  // Verify that selecting a single element from a large array/map will ensure
+  // the underlying elements vector is flattened before generating the result
+  // which is otherwise wrapped in a dictionary with indices pointing to the
+  // selected subscript. This ensures large element vectors are not passed
+  // along.
+  vector_size_t vectorSize = 100;
+  auto sizeAtLarge = [](vector_size_t /* row */) { return 10; };
+  auto sizeAtSmall = [](vector_size_t /* row */) { return 5; };
+  auto keyAt = [](vector_size_t idx) { return idx; };
+  auto valueAt = [](vector_size_t /* idx */) { return 10; };
+  {
+    auto mapVector = makeMapVector<int64_t, int64_t>(
+        vectorSize, sizeAtLarge, keyAt, valueAt);
+    auto result = evaluate<SimpleVector<int64_t>>(
+        "element_at(C0, 3)", makeRowVector({mapVector}));
+    EXPECT_EQ(result->encoding(), VectorEncoding::Simple::FLAT);
+  }
+
+  {
+    auto mapVector = makeMapVector<int64_t, int64_t>(
+        vectorSize, sizeAtSmall, keyAt, valueAt);
+    auto result = evaluate<SimpleVector<int64_t>>(
+        "element_at(C0, 3)", makeRowVector({mapVector}));
+    EXPECT_EQ(result->encoding(), VectorEncoding::Simple::DICTIONARY);
+  }
+
+  auto valueAtArray = [](vector_size_t /* row */, vector_size_t /* idx */) {
+    return 10;
+  };
+
+  {
+    auto arrayVector =
+        makeArrayVector<int64_t>(vectorSize, sizeAtLarge, valueAtArray);
+    auto result = evaluate<SimpleVector<int64_t>>(
+        "element_at(C0, 3)", makeRowVector({arrayVector}));
+    EXPECT_EQ(result->encoding(), VectorEncoding::Simple::FLAT);
+  }
+
+  {
+    auto arrayVector =
+        makeArrayVector<int64_t>(vectorSize, sizeAtSmall, valueAtArray);
+    auto result = evaluate<SimpleVector<int64_t>>(
+        "element_at(C0, 3)", makeRowVector({arrayVector}));
+    EXPECT_EQ(result->encoding(), VectorEncoding::Simple::DICTIONARY);
+  }
 }

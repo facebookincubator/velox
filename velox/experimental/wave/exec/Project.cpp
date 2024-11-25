@@ -15,9 +15,12 @@
  */
 
 #include "velox/experimental/wave/exec/Project.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/experimental/wave/exec/ToWave.h"
 #include "velox/experimental/wave/exec/Wave.h"
 #include "velox/experimental/wave/exec/WaveDriver.h"
+
+#include <iostream>
 
 namespace facebook::velox::wave {
 
@@ -25,7 +28,7 @@ AbstractWrap* Project::findWrap() const {
   return filterWrap_;
 }
 
-AdvanceResult Project::canAdvance(WaveStream& stream) {
+std::vector<AdvanceResult> Project::canAdvance(WaveStream& stream) {
   auto& controls = stream.launchControls(id_);
   if (controls.empty()) {
     /// No previous execution on the stream. If the first program starts with a
@@ -37,31 +40,38 @@ AdvanceResult Project::canAdvance(WaveStream& stream) {
     auto advance = program->canAdvance(stream, nullptr, 0);
     if (!advance.empty()) {
       advance.programIdx = 0;
+      return {advance};
     }
-    return advance;
+    return {};
   }
+  std::vector<AdvanceResult> result;
   for (int32_t i = levels_.size() - 1; i >= 0; --i) {
     auto& level = levels_[i];
-    AdvanceResult first;
     VELOX_CHECK_EQ(controls[i]->programInfo.size(), level.size());
     for (auto j = 0; j < level.size(); ++j) {
-      auto* program = level[i].get();
+      auto* program = level[j].get();
       auto advance = program->canAdvance(stream, controls[i].get(), j);
       if (!advance.empty()) {
-        if (first.empty()) {
-          first = advance;
-        }
+        advance.nthLaunch = i;
+        result.push_back(advance);
         controls[i]->programInfo[j].advance = advance;
       } else {
         controls[i]->programInfo[j].advance = {};
       }
-      if (!first.empty()) {
-        return first;
-      }
+    }
+    if (!result.empty()) {
+      return result;
     }
   }
 
   return {};
+}
+
+void Project::callUpdateStatus(WaveStream& stream, AdvanceResult& advance) {
+  if (advance.updateStatus) {
+    levels_[advance.nthLaunch][advance.programIdx]->callUpdateStatus(
+        stream, advance);
+  }
 }
 
 namespace {
@@ -106,7 +116,7 @@ void Project::schedule(WaveStream& stream, int32_t maxRows) {
     stream.installExecutables(
         range, [&](Stream* out, folly::Range<Executable**> exes) {
           LaunchControl* inputControl = nullptr;
-          if (!isContinue && !isSource()) {
+          if (!isSource()) {
             inputControl = driver_->inputControl(stream, id_);
           }
           auto control = stream.prepareProgramLaunch(
@@ -117,16 +127,18 @@ void Project::schedule(WaveStream& stream, int32_t maxRows) {
               blocksPerExe,
               inputControl,
               out);
+          out->prefetch(
+              getDevice(),
+              control->deviceData->as<char>(),
+              control->deviceData->size());
           stream.setState(WaveStream::State::kParallel);
-          reinterpret_cast<WaveKernelStream*>(out)->call(
-              out,
-              exes.size() * blocksPerExe,
-              control->sharedMemorySize,
-              control->params);
-          // A sink at the end has no output params but need to wait for host
-          // return event before reusing the stream.
-          if (exes.size() == 1 && exes[0]->programShared->isSink()) {
-            stream.resultToHost();
+          {
+            PrintTime c("expr");
+            reinterpret_cast<WaveKernelStream*>(out)->call(
+                out,
+                exes.size() * blocksPerExe,
+                control->sharedMemorySize,
+                control->params);
           }
         });
     isContinue = false;
@@ -144,12 +156,6 @@ void Project::finalize(CompileState& state) {
       }
     }
   }
-}
-
-vector_size_t Project::outputSize(WaveStream& stream) const {
-  auto& control = stream.launchControls(id_);
-  VELOX_CHECK(!control.empty());
-  return control[0]->inputRows;
 }
 
 } // namespace facebook::velox::wave

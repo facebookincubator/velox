@@ -18,8 +18,11 @@
 #include <type_traits>
 
 #include "velox/expression/ComplexViewTypes.h"
+#include "velox/expression/PrestoCastHooks.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/CheckedArithmetic.h"
+#include "velox/functions/prestosql/json/SIMDJsonUtil.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/FloatingPointUtil.h"
 
@@ -160,10 +163,64 @@ template <typename TExecCtx, typename T>
 struct ArrayJoinFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<velox::Array<T>>* /*arr*/,
+      const arg_type<Varchar>* /*delimiter*/) {
+    initialize(inputTypes, config, nullptr, nullptr, nullptr);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<velox::Array<T>>* /*arr*/,
+      const arg_type<Varchar>* /*delimiter*/,
+      const arg_type<Varchar>* /*nullReplacement*/) {
+    const exec::PrestoCastHooks hooks{config};
+    options_ = hooks.timestampToStringOptions();
+    VELOX_CHECK(
+        inputTypes[0]->isArray(),
+        "Array join's first parameter type has to be array");
+    arrayElementType_ = inputTypes[0]->asArray().elementType();
+  }
+
   template <typename C>
   void writeValue(out_type<velox::Varchar>& result, const C& value) {
     // To VARCHAR converter never throws.
     result += util::Converter<TypeKind::VARCHAR>::tryCast(value).value();
+  }
+
+  void writeValue(out_type<velox::Varchar>& result, const StringView& value) {
+    // To VARCHAR converter never throws.
+    if (isJsonType(arrayElementType_)) {
+      if (value.size() >= 2 && *value.begin() == '"' &&
+          *(value.end() - 1) == '"') {
+        result += util::Converter<TypeKind::VARCHAR>::tryCast(
+                      std::string_view(value.data() + 1, value.size() - 2))
+                      .value();
+        return;
+      }
+    }
+    result += util::Converter<TypeKind::VARCHAR>::tryCast(value).value();
+  }
+
+  void writeValue(out_type<velox::Varchar>& result, const int32_t& value) {
+    if (arrayElementType_->isDate()) {
+      result += util::Converter<TypeKind::VARCHAR>::tryCast(
+                    DateType::get()->toString(value))
+                    .value();
+      return;
+    }
+    result += util::Converter<TypeKind::VARCHAR>::tryCast(value).value();
+  }
+
+  void writeValue(out_type<velox::Varchar>& result, const Timestamp& value) {
+    Timestamp inputValue{value};
+    if (options_.timeZone) {
+      inputValue.toTimezone(*(options_.timeZone));
+    }
+    result += inputValue.toString(options_);
   }
 
   template <typename C>
@@ -214,6 +271,10 @@ struct ArrayJoinFunction {
     createOutputString(result, inputArray, delim, nullReplacement.getString());
     return true;
   }
+
+ private:
+  TimestampToStringOptions options_;
+  TypePtr arrayElementType_;
 };
 
 /// Function Signature: combinations(array(T), n) -> array(array(T))
@@ -547,6 +608,21 @@ struct ArrayNormalizeFunction {
       const null_free_arg_type<T>& p) {
     VELOX_USER_CHECK_GE(
         p, 0, "array_normalize only supports non-negative p: {}", p);
+
+    // Ideally, we should not register this function with int types. However,
+    // in Presto, during plan conversion it's possible to create this function
+    // with int types. In that case, we want to have default NULL behavior for
+    // int types, which can be achieved by registering the function and failing
+    // it for non-null int values. Example: SELECT array_normalize(x, 2) from
+    // (VALUES NULL) t(x) creates a plan with `array_normalize :=
+    // array_normalize(CAST(field AS array(integer)), INTEGER'2') (1:37)` which
+    // ideally should fail saying the function is not registered with int types.
+    // But it falls back to default NULL behavior and returns NULL in Presto.
+    if constexpr (
+        std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> ||
+        std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t>) {
+      VELOX_UNSUPPORTED("array_normalize only supports double and float types");
+    }
 
     // If the input array is empty, then the empty result should be returned,
     // same as Presto.
@@ -946,7 +1022,7 @@ struct ArrayRemoveFunction {
       auto result = element.compare(item.value(), kFlags);
       VELOX_USER_CHECK(
           result.has_value(),
-          "array_remove does not support arrays with elements that are null or contain null")
+          "array_remove does not support arrays with elements that are null or contain null");
       if (result.value()) {
         toCopyItems.push_back(item.value());
       }

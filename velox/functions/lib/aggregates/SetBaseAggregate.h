@@ -21,13 +21,18 @@
 
 namespace facebook::velox::functions::aggregate {
 
-template <typename T, bool ignoreNulls = false>
+/// @tparam ignoreNulls Whether null inputs are ignored.
+/// @tparam nullForEmpty When true, nulls are returned for empty groups.
+/// Otherwise, empty arrays.
+template <
+    typename T,
+    bool ignoreNulls = false,
+    bool nullForEmpty = true,
+    typename AccumulatorType = velox::aggregate::prestosql::SetAccumulator<T>>
 class SetBaseAggregate : public exec::Aggregate {
  public:
   explicit SetBaseAggregate(const TypePtr& resultType)
       : exec::Aggregate(resultType) {}
-
-  using AccumulatorType = velox::aggregate::prestosql::SetAccumulator<T>;
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
@@ -50,7 +55,15 @@ class SetBaseAggregate : public exec::Aggregate {
     for (auto i = 0; i < numGroups; ++i) {
       auto* group = groups[i];
       if (isNull(group)) {
-        arrayVector->setNull(i, true);
+        if constexpr (nullForEmpty) {
+          arrayVector->setNull(i, true);
+        } else {
+          // If the group's accumulator is null, the corresponding result is an
+          // empty array.
+          clearNull(rawNulls, i);
+          rawOffsets[i] = 0;
+          rawSizes[i] = 0;
+        }
       } else {
         clearNull(rawNulls, i);
 
@@ -205,16 +218,20 @@ class SetBaseAggregate : public exec::Aggregate {
   DecodedVector decodedElements_;
 };
 
-template <typename T, bool ignoreNulls = false>
-class SetAggAggregate : public SetBaseAggregate<T, ignoreNulls> {
+template <
+    typename T,
+    bool ignoreNulls = false,
+    bool nullForEmpty = true,
+    typename AccumulatorType = velox::aggregate::prestosql::SetAccumulator<T>>
+class SetAggAggregate
+    : public SetBaseAggregate<T, ignoreNulls, nullForEmpty, AccumulatorType> {
  public:
+  using Base = SetBaseAggregate<T, ignoreNulls, nullForEmpty, AccumulatorType>;
+
   explicit SetAggAggregate(
       const TypePtr& resultType,
       const bool throwOnNestedNulls = false)
-      : SetBaseAggregate<T, ignoreNulls>(resultType),
-        throwOnNestedNulls_(throwOnNestedNulls) {}
-
-  using Base = SetBaseAggregate<T, ignoreNulls>;
+      : Base(resultType), throwOnNestedNulls_(throwOnNestedNulls) {}
 
   bool supportsToIntermediate() const override {
     return true;

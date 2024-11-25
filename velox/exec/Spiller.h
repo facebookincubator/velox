@@ -127,7 +127,7 @@ class Spiller {
   /// 'kOrderByOutput' spiller type to spill during the order by
   /// output processing. Similarly, the spilled rows still stays in the row
   /// container. The caller needs to erase them from the row container.
-  void spill(std::vector<char*>& rows);
+  void spill(SpillRows& rows);
 
   /// Append 'spillVector' into the spill file of given 'partition'. It is now
   /// only used by the spilling operator which doesn't need data sort, such as
@@ -215,6 +215,7 @@ class Spiller {
       uint64_t targetFileSize,
       uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
+      const std::optional<common::PrefixSortConfig>& prefixSortConfig,
       folly::Executor* executor,
       uint64_t maxSpillRunRows,
       const std::string& fileCreateConfig,
@@ -297,7 +298,7 @@ class Spiller {
 
   // Prepares spill run of a single partition for the spillable data from the
   // rows.
-  void fillSpillRun(std::vector<char*>& rows);
+  void fillSpillRun(SpillRows& rows);
 
   // Writes out all the rows collected in spillRuns_.
   void runSpill(bool lastRun);
@@ -319,6 +320,8 @@ class Spiller {
   void updateSpillFillTime(uint64_t timeUs);
 
   void updateSpillSortTime(uint64_t timeUs);
+
+  void updateSpillExtractVectorTime(uint64_t timeUs);
 
   const Type type_;
   // NOTE: for hash join probe type, there is no associated row container for
@@ -347,7 +350,8 @@ class Spiller {
 
 template <>
 struct fmt::formatter<facebook::velox::exec::Spiller::Type> : formatter<int> {
-  auto format(facebook::velox::exec::Spiller::Type s, format_context& ctx) {
+  auto format(facebook::velox::exec::Spiller::Type s, format_context& ctx)
+      const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

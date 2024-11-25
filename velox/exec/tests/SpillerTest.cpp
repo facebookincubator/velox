@@ -57,16 +57,19 @@ struct TestParam {
   // write path is executed inline with spiller control code path.
   int poolSize;
   common::CompressionKind compressionKind;
+  bool enablePrefixSort;
   core::JoinType joinType;
 
   TestParam(
       Spiller::Type _type,
       int _poolSize,
       common::CompressionKind _compressionKind,
+      bool _enablePrefixSort,
       core::JoinType _joinType)
       : type(_type),
         poolSize(_poolSize),
         compressionKind(_compressionKind),
+        enablePrefixSort(_enablePrefixSort),
         joinType(_joinType) {}
 
   std::string toString() const {
@@ -75,6 +78,7 @@ struct TestParam {
         Spiller::typeName(type),
         poolSize,
         compressionKindToString(compressionKind),
+        std::to_string(enablePrefixSort),
         joinTypeName(joinType));
   }
 };
@@ -90,10 +94,18 @@ struct TestParamsBuilder {
             static_cast<common::CompressionKind>(numSpillerTypes % 6);
         for (int poolSize : {0, 8}) {
           params.emplace_back(
-              type, poolSize, compressionKind, core::JoinType::kRight);
+              type,
+              poolSize,
+              compressionKind,
+              poolSize % 2,
+              core::JoinType::kRight);
           if (type == Spiller::Type::kHashJoinBuild) {
             params.emplace_back(
-                type, poolSize, compressionKind, core::JoinType::kLeft);
+                type,
+                poolSize,
+                compressionKind,
+                poolSize % 2,
+                core::JoinType::kLeft);
           }
         }
       }
@@ -137,6 +149,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         type_(param.type),
         executorPoolSize_(param.poolSize),
         compressionKind_(param.compressionKind),
+        enablePrefixSort_(param.enablePrefixSort),
         joinType_(param.joinType),
         spillProbedFlag_(
             type_ == Spiller::Type::kHashJoinBuild &&
@@ -287,17 +300,19 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     ASSERT_EQ(stats.spilledFiles, spilledFileSet.size());
     ASSERT_EQ(stats.spilledPartitions, numPartitions_);
     ASSERT_EQ(stats.spilledRows, kNumRows);
+
     ASSERT_EQ(stats.spilledBytes, totalSpilledBytes);
     ASSERT_EQ(stats.spillReadBytes, totalSpilledBytes);
-    ASSERT_GT(stats.spillWriteTimeUs, 0);
+    ASSERT_GT(stats.spillWriteTimeNanos, 0);
     if (type_ == Spiller::Type::kAggregateOutput) {
-      ASSERT_EQ(stats.spillSortTimeUs, 0);
+      ASSERT_EQ(stats.spillSortTimeNanos, 0);
     } else {
-      ASSERT_GT(stats.spillSortTimeUs, 0);
+      ASSERT_GT(stats.spillSortTimeNanos, 0);
     }
-    ASSERT_GT(stats.spillFlushTimeUs, 0);
-    ASSERT_GT(stats.spillFillTimeUs, 0);
-    ASSERT_GT(stats.spillSerializationTimeUs, 0);
+    ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
+    ASSERT_GT(stats.spillFlushTimeNanos, 0);
+    ASSERT_GT(stats.spillFillTimeNanos, 0);
+    ASSERT_GT(stats.spillSerializationTimeNanos, 0);
     ASSERT_GT(stats.spillWrites, 0);
 
     const auto newGStats = common::globalSpillStats();
@@ -315,29 +330,34 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         newGStats.spillReadBytes);
     ASSERT_EQ(prevGStats.spillReads + stats.spillReads, newGStats.spillReads);
     ASSERT_EQ(
-        prevGStats.spillReadTimeUs + stats.spillReadTimeUs,
-        newGStats.spillReadTimeUs);
+        prevGStats.spillReadTimeNanos + stats.spillReadTimeNanos,
+        newGStats.spillReadTimeNanos);
     ASSERT_EQ(
-        prevGStats.spillDeserializationTimeUs +
-            stats.spillDeserializationTimeUs,
-        newGStats.spillDeserializationTimeUs);
+        prevGStats.spillDeserializationTimeNanos +
+            stats.spillDeserializationTimeNanos,
+        newGStats.spillDeserializationTimeNanos);
     ASSERT_EQ(
-        prevGStats.spillWriteTimeUs + stats.spillWriteTimeUs,
-        newGStats.spillWriteTimeUs);
+        prevGStats.spillWriteTimeNanos + stats.spillWriteTimeNanos,
+        newGStats.spillWriteTimeNanos);
     ASSERT_EQ(
-        prevGStats.spillSortTimeUs + stats.spillSortTimeUs,
-        newGStats.spillSortTimeUs);
+        prevGStats.spillSortTimeNanos + stats.spillSortTimeNanos,
+        newGStats.spillSortTimeNanos);
     ASSERT_EQ(
-        prevGStats.spillFlushTimeUs + stats.spillFlushTimeUs,
-        newGStats.spillFlushTimeUs)
-        << prevGStats.spillFlushTimeUs << " " << stats.spillFlushTimeUs << " "
-        << newGStats.spillFlushTimeUs;
+        prevGStats.spillExtractVectorTimeNanos +
+            stats.spillExtractVectorTimeNanos,
+        newGStats.spillExtractVectorTimeNanos);
     ASSERT_EQ(
-        prevGStats.spillFillTimeUs + stats.spillFillTimeUs,
-        newGStats.spillFillTimeUs);
+        prevGStats.spillFlushTimeNanos + stats.spillFlushTimeNanos,
+        newGStats.spillFlushTimeNanos)
+        << prevGStats.spillFlushTimeNanos << " " << stats.spillFlushTimeNanos
+        << " " << newGStats.spillFlushTimeNanos;
     ASSERT_EQ(
-        prevGStats.spillSerializationTimeUs + stats.spillSerializationTimeUs,
-        newGStats.spillSerializationTimeUs);
+        prevGStats.spillFillTimeNanos + stats.spillFillTimeNanos,
+        newGStats.spillFillTimeNanos);
+    ASSERT_EQ(
+        prevGStats.spillSerializationTimeNanos +
+            stats.spillSerializationTimeNanos,
+        newGStats.spillSerializationTimeNanos);
     ASSERT_EQ(
         prevGStats.spillWrites + stats.spillWrites, newGStats.spillWrites);
 
@@ -550,6 +570,10 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     spillConfig_.readBufferSize = readBufferSize;
     spillConfig_.executor = executor();
     spillConfig_.compressionKind = compressionKind_;
+    enablePrefixSort_ ? spillConfig_.prefixSortConfig =
+                            std::optional<common::PrefixSortConfig>(
+                                common::PrefixSortConfig())
+                      : spillConfig_.prefixSortConfig = std::nullopt;
     spillConfig_.maxSpillRunRows = maxSpillRunRows;
     spillConfig_.maxFileSize = targetFileSize;
     spillConfig_.fileCreateConfig = {};
@@ -845,33 +869,36 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         if (numAppendBatches == 0) {
           ASSERT_EQ(stats.spilledRows, 0);
           ASSERT_EQ(stats.spilledBytes, 0);
-          ASSERT_EQ(stats.spillWriteTimeUs, 0);
-          ASSERT_EQ(stats.spillFlushTimeUs, 0);
-          ASSERT_EQ(stats.spillSerializationTimeUs, 0);
+          ASSERT_EQ(stats.spillWriteTimeNanos, 0);
+          ASSERT_EQ(stats.spillFlushTimeNanos, 0);
+          ASSERT_EQ(stats.spillSerializationTimeNanos, 0);
           ASSERT_EQ(stats.spillWrites, 0);
         } else {
           ASSERT_GT(stats.spilledRows, 0);
           ASSERT_GT(stats.spilledBytes, 0);
-          ASSERT_GT(stats.spillWriteTimeUs, 0);
-          ASSERT_GT(stats.spillFlushTimeUs, 0);
-          ASSERT_GT(stats.spillSerializationTimeUs, 0);
+          ASSERT_GT(stats.spillWriteTimeNanos, 0);
+          ASSERT_GT(stats.spillFlushTimeNanos, 0);
+          ASSERT_GT(stats.spillSerializationTimeNanos, 0);
           ASSERT_GT(stats.spillWrites, 0);
         }
+        // kHashJoinProbe throws before extract vector.
+        ASSERT_EQ(stats.spillExtractVectorTimeNanos, 0);
       } else {
         ASSERT_GT(stats.spilledRows, 0);
         ASSERT_GT(stats.spilledBytes, 0);
-        ASSERT_GT(stats.spillWriteTimeUs, 0);
-        ASSERT_GT(stats.spillFlushTimeUs, 0);
-        ASSERT_GT(stats.spillSerializationTimeUs, 0);
+        ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
+        ASSERT_GT(stats.spillWriteTimeNanos, 0);
+        ASSERT_GT(stats.spillFlushTimeNanos, 0);
+        ASSERT_GT(stats.spillSerializationTimeNanos, 0);
         ASSERT_GT(stats.spillWrites, 0);
       }
       ASSERT_GT(stats.spilledPartitions, 0);
-      ASSERT_EQ(stats.spillSortTimeUs, 0);
+      ASSERT_EQ(stats.spillSortTimeNanos, 0);
       if (type_ == Spiller::Type::kHashJoinBuild ||
           type_ == Spiller::Type::kRowNumber) {
-        ASSERT_GT(stats.spillFillTimeUs, 0);
+        ASSERT_GT(stats.spillFillTimeNanos, 0);
       } else {
-        ASSERT_EQ(stats.spillFillTimeUs, 0);
+        ASSERT_EQ(stats.spillFillTimeNanos, 0);
       }
 
       const auto newGStats = common::globalSpillStats();
@@ -885,22 +912,27 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       ASSERT_EQ(
           prevGStats.spilledBytes + stats.spilledBytes, newGStats.spilledBytes);
       ASSERT_EQ(
-          prevGStats.spillWriteTimeUs + stats.spillWriteTimeUs,
-          newGStats.spillWriteTimeUs);
+          prevGStats.spillWriteTimeNanos + stats.spillWriteTimeNanos,
+          newGStats.spillWriteTimeNanos);
       ASSERT_EQ(
-          prevGStats.spillSortTimeUs + stats.spillSortTimeUs,
-          newGStats.spillSortTimeUs);
+          prevGStats.spillSortTimeNanos + stats.spillSortTimeNanos,
+          newGStats.spillSortTimeNanos);
       ASSERT_EQ(
-          prevGStats.spillFlushTimeUs + stats.spillFlushTimeUs,
-          newGStats.spillFlushTimeUs)
-          << prevGStats.spillFlushTimeUs << " " << stats.spillFlushTimeUs << " "
-          << newGStats.spillFlushTimeUs;
+          prevGStats.spillExtractVectorTimeNanos +
+              stats.spillExtractVectorTimeNanos,
+          newGStats.spillExtractVectorTimeNanos);
       ASSERT_EQ(
-          prevGStats.spillFillTimeUs + stats.spillFillTimeUs,
-          newGStats.spillFillTimeUs);
+          prevGStats.spillFlushTimeNanos + stats.spillFlushTimeNanos,
+          newGStats.spillFlushTimeNanos)
+          << prevGStats.spillFlushTimeNanos << " " << stats.spillFlushTimeNanos
+          << " " << newGStats.spillFlushTimeNanos;
       ASSERT_EQ(
-          prevGStats.spillSerializationTimeUs + stats.spillSerializationTimeUs,
-          newGStats.spillSerializationTimeUs);
+          prevGStats.spillFillTimeNanos + stats.spillFillTimeNanos,
+          newGStats.spillFillTimeNanos);
+      ASSERT_EQ(
+          prevGStats.spillSerializationTimeNanos +
+              stats.spillSerializationTimeNanos,
+          newGStats.spillSerializationTimeNanos);
       ASSERT_EQ(
           prevGStats.spillWrites + stats.spillWrites, newGStats.spillWrites);
 
@@ -912,7 +944,9 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         std::move(spillers), spillPartitionNumSet, inputsByPartition);
 
     // Spilled file stats should be updated after finalizing spiller.
-    ASSERT_GT(common::globalSpillStats().spilledFiles, 0);
+    if (numAppendBatches > 0) {
+      ASSERT_GT(common::globalSpillStats().spilledFiles, 0);
+    }
   }
 
   void verifyNonSortedSpillData(
@@ -1084,6 +1118,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
   const Spiller::Type type_;
   const int32_t executorPoolSize_;
   const common::CompressionKind compressionKind_;
+  const bool enablePrefixSort_;
   const core::JoinType joinType_;
   const bool spillProbedFlag_;
   const HashBitRange hashBits_;
@@ -1159,7 +1194,7 @@ TEST_P(AllTypes, nonSortedSpillFunctions) {
 
     if (type_ == Spiller::Type::kOrderByOutput) {
       RowContainerIterator rowIter;
-      std::vector<char*> rows(5'000);
+      std::vector<char*, memory::StlAllocator<char*>> rows(5'000, *pool_);
       int numListedRows{0};
       numListedRows = rowContainer_->listRows(&rowIter, 5000, rows.data());
       ASSERT_EQ(numListedRows, 5000);
@@ -1190,13 +1225,8 @@ TEST_P(AllTypes, readaheadTest) {
   if (type_ == Spiller::Type::kOrderByInput ||
       type_ == Spiller::Type::kAggregateInput) {
     testSortedSpill(10, 10, false, false, 512);
-    VELOX_ASSERT_THROW(
-        testSortedSpill(10, 1, false, false, 1), "Buffer size is too small");
     return;
   }
-  VELOX_ASSERT_THROW(
-      testNonSortedSpill(1, 100, 3, 1'000'000'000, maxSpillRunRows_, 1),
-      "Buffer size is too small");
   testNonSortedSpill(1, 5'000, 0, 1'000'000'000, maxSpillRunRows_, 512);
 }
 
@@ -1462,11 +1492,13 @@ TEST_P(AggregationOutputOnly, basic) {
     if (expectedNumSpilledRows == 0) {
       ASSERT_EQ(stats.spilledFiles, 0) << stats.toString();
       ASSERT_EQ(stats.spilledRows, 0) << stats.toString();
+      ASSERT_EQ(stats.spillExtractVectorTimeNanos, 0);
     } else {
       ASSERT_EQ(stats.spilledFiles, 1) << stats.toString();
       ASSERT_EQ(stats.spilledRows, expectedNumSpilledRows) << stats.toString();
+      ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
     }
-    ASSERT_EQ(stats.spillSortTimeUs, 0);
+    ASSERT_EQ(stats.spillSortTimeNanos, 0);
   }
 }
 
@@ -1534,11 +1566,11 @@ TEST_P(OrderByOutputOnly, basic) {
           "Unexpected spiller type: ORDER_BY_OUTPUT");
     }
     {
-      std::vector<char*> emptyRows;
+      Spiller::SpillRows emptyRows(*pool_);
       VELOX_ASSERT_THROW(spiller_->spill(emptyRows), "");
     }
     auto spillRows =
-        std::vector<char*>(rows.begin(), rows.begin() + numListedRows);
+        Spiller::SpillRows(rows.begin(), rows.begin() + numListedRows, *pool_);
     spiller_->spill(spillRows);
     ASSERT_EQ(rowContainer_->numRows(), numRows);
     rowContainer_->clear();
@@ -1569,11 +1601,13 @@ TEST_P(OrderByOutputOnly, basic) {
     if (expectedNumSpilledRows == 0) {
       ASSERT_EQ(stats.spilledFiles, 0) << stats.toString();
       ASSERT_EQ(stats.spilledRows, 0) << stats.toString();
+      ASSERT_EQ(stats.spillExtractVectorTimeNanos, 0);
     } else {
       ASSERT_EQ(stats.spilledFiles, 1) << stats.toString();
       ASSERT_EQ(stats.spilledRows, expectedNumSpilledRows) << stats.toString();
+      ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
     }
-    ASSERT_EQ(stats.spillSortTimeUs, 0);
+    ASSERT_EQ(stats.spillSortTimeNanos, 0);
   }
 }
 
@@ -1614,7 +1648,7 @@ TEST_P(MaxSpillRunTest, basic) {
         testData.maxSpillRunRows);
     if (type_ == Spiller::Type::kOrderByOutput) {
       RowContainerIterator rowIter;
-      std::vector<char*> rows(numRows);
+      Spiller::SpillRows rows(numRows, *pool_);
       int numListedRows{0};
       numListedRows = rowContainer_->listRows(&rowIter, numRows, rows.data());
       ASSERT_EQ(numListedRows, numRows);

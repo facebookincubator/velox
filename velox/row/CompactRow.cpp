@@ -14,9 +14,189 @@
  * limitations under the License.
  */
 #include "velox/row/CompactRow.h"
+
+#include "velox/common/base/RawVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::row {
+namespace {
+constexpr size_t kSizeBytes = sizeof(int32_t);
+using TRowSize = uint32_t;
+
+void writeInt32(char* buffer, int32_t n) {
+  ::memcpy(buffer, &n, kSizeBytes);
+}
+
+int32_t readInt32(const char* buffer) {
+  int32_t n;
+  ::memcpy(&n, buffer, kSizeBytes);
+  return n;
+}
+
+FOLLY_ALWAYS_INLINE void writeFixedWidth(
+    const char* rawData,
+    vector_size_t index,
+    size_t valueBytes,
+    char* buffer,
+    size_t& offset) {
+  ::memcpy(buffer + offset, rawData + index * valueBytes, valueBytes);
+  offset += valueBytes;
+}
+
+FOLLY_ALWAYS_INLINE void
+writeTimestamp(const Timestamp& timestamp, char* buffer, size_t& offset) {
+  // Write micros(int64_t) for timestamp value.
+  const auto timeUs = timestamp.toMicros();
+  ::memcpy(buffer + offset, &timeUs, sizeof(int64_t));
+  offset += sizeof(int64_t);
+}
+
+FOLLY_ALWAYS_INLINE void
+writeString(const StringView& value, char* buffer, size_t& offset) {
+  writeInt32(buffer + offset, value.size());
+  if (!value.empty()) {
+    ::memcpy(buffer + offset + kSizeBytes, value.data(), value.size());
+  }
+  offset += kSizeBytes + value.size();
+}
+
+// Serialize the child vector of a row type within a range of consecutive rows.
+// Write the serialized data at offsets of buffer row by row.
+// Update offsets with the actual serialized size.
+template <TypeKind kind>
+void serializeTyped(
+    const raw_vector<vector_size_t>& rows,
+    uint32_t childIdx,
+    const DecodedVector& decoded,
+    size_t valueBytes,
+    const raw_vector<uint8_t*>& nulls,
+    char* buffer,
+    std::vector<size_t>& offsets) {
+  const auto* rawData = decoded.data<char>();
+  if (!decoded.mayHaveNulls()) {
+    for (auto i = 0; i < rows.size(); ++i) {
+      writeFixedWidth(
+          rawData, decoded.index(rows[i]), valueBytes, buffer, offsets[i]);
+    }
+  } else {
+    for (auto i = 0; i < rows.size(); ++i) {
+      if (decoded.isNullAt(rows[i])) {
+        bits::setBit(nulls[i], childIdx, true);
+        offsets[i] += valueBytes;
+      } else {
+        writeFixedWidth(
+            rawData, decoded.index(rows[i]), valueBytes, buffer, offsets[i]);
+      }
+    }
+  }
+}
+
+template <>
+void serializeTyped<TypeKind::UNKNOWN>(
+    const raw_vector<vector_size_t>& rows,
+    uint32_t childIdx,
+    const DecodedVector& /* unused */,
+    size_t /* unused */,
+    const raw_vector<uint8_t*>& nulls,
+    char* /* unused */,
+    std::vector<size_t>& /* unused */) {
+  for (auto i = 0; i < rows.size(); ++i) {
+    bits::setBit(nulls[i], childIdx, true);
+  }
+}
+
+template <>
+void serializeTyped<TypeKind::BOOLEAN>(
+    const raw_vector<vector_size_t>& rows,
+    uint32_t childIdx,
+    const DecodedVector& decoded,
+    size_t /* unused */,
+    const raw_vector<uint8_t*>& nulls,
+    char* buffer,
+    std::vector<size_t>& offsets) {
+  auto* byte = reinterpret_cast<bool*>(buffer);
+  if (!decoded.mayHaveNulls()) {
+    for (auto i = 0; i < rows.size(); ++i) {
+      byte[offsets[i]++] = decoded.valueAt<bool>(rows[i]);
+    }
+  } else {
+    for (auto i = 0; i < rows.size(); ++i) {
+      if (decoded.isNullAt(rows[i])) {
+        bits::setBit(nulls[i], childIdx, true);
+        offsets[i] += 1;
+      } else {
+        // Write 1 byte for bool type.
+        byte[offsets[i]++] = decoded.valueAt<bool>(rows[i]);
+      }
+    }
+  }
+}
+
+template <>
+void serializeTyped<TypeKind::TIMESTAMP>(
+    const raw_vector<vector_size_t>& rows,
+    uint32_t childIdx,
+    const DecodedVector& decoded,
+    size_t /* unused */,
+    const raw_vector<uint8_t*>& nulls,
+    char* buffer,
+    std::vector<size_t>& offsets) {
+  const auto* rawData = decoded.data<Timestamp>();
+  if (!decoded.mayHaveNulls()) {
+    for (auto i = 0; i < rows.size(); ++i) {
+      const auto index = decoded.index(rows[i]);
+      writeTimestamp(rawData[index], buffer, offsets[i]);
+    }
+  } else {
+    for (auto i = 0; i < rows.size(); ++i) {
+      if (decoded.isNullAt(rows[i])) {
+        bits::setBit(nulls[i], childIdx, true);
+        offsets[i] += sizeof(int64_t);
+      } else {
+        const auto index = decoded.index(rows[i]);
+        writeTimestamp(rawData[index], buffer, offsets[i]);
+      }
+    }
+  }
+}
+
+template <>
+void serializeTyped<TypeKind::VARCHAR>(
+    const raw_vector<vector_size_t>& rows,
+    uint32_t childIdx,
+    const DecodedVector& decoded,
+    size_t valueBytes,
+    const raw_vector<uint8_t*>& nulls,
+    char* buffer,
+    std::vector<size_t>& offsets) {
+  if (!decoded.mayHaveNulls()) {
+    for (auto i = 0; i < rows.size(); ++i) {
+      writeString(decoded.valueAt<StringView>(rows[i]), buffer, offsets[i]);
+    }
+  } else {
+    for (auto i = 0; i < rows.size(); ++i) {
+      if (decoded.isNullAt(rows[i])) {
+        bits::setBit(nulls[i], childIdx, true);
+      } else {
+        writeString(decoded.valueAt<StringView>(rows[i]), buffer, offsets[i]);
+      }
+    }
+  }
+}
+
+template <>
+void serializeTyped<TypeKind::VARBINARY>(
+    const raw_vector<vector_size_t>& rows,
+    uint32_t childIdx,
+    const DecodedVector& decoded,
+    size_t valueBytes,
+    const raw_vector<uint8_t*>& nulls,
+    char* buffer,
+    std::vector<size_t>& offsets) {
+  serializeTyped<TypeKind::VARCHAR>(
+      rows, childIdx, decoded, valueBytes, nulls, buffer, offsets);
+}
+} // namespace
 
 CompactRow::CompactRow(const RowVectorPtr& vector)
     : typeKind_{vector->typeKind()}, decoded_{*vector} {
@@ -32,14 +212,14 @@ void CompactRow::initialize(const TypePtr& type) {
   auto base = decoded_.base();
   switch (typeKind_) {
     case TypeKind::ARRAY: {
-      auto arrayBase = base->as<ArrayVector>();
+      auto* arrayBase = base->as<ArrayVector>();
       children_.push_back(CompactRow(arrayBase->elements()));
       childIsFixedWidth_.push_back(
           arrayBase->elements()->type()->isFixedWidth());
       break;
     }
     case TypeKind::MAP: {
-      auto mapBase = base->as<MapVector>();
+      auto* mapBase = base->as<MapVector>();
       children_.push_back(CompactRow(mapBase->mapKeys()));
       children_.push_back(CompactRow(mapBase->mapValues()));
       childIsFixedWidth_.push_back(mapBase->mapKeys()->type()->isFixedWidth());
@@ -48,7 +228,7 @@ void CompactRow::initialize(const TypePtr& type) {
       break;
     }
     case TypeKind::ROW: {
-      auto rowBase = base->as<RowVector>();
+      auto* rowBase = base->as<RowVector>();
       for (const auto& child : rowBase->children()) {
         children_.push_back(CompactRow(child));
         childIsFixedWidth_.push_back(child->type()->isFixedWidth());
@@ -127,12 +307,12 @@ std::optional<int32_t> CompactRow::fixedRowSize(const RowTypePtr& rowType) {
   return size;
 }
 
-int32_t CompactRow::rowSize(vector_size_t index) {
+int32_t CompactRow::rowSize(vector_size_t index) const {
   return rowRowSize(index);
 }
 
-int32_t CompactRow::rowRowSize(vector_size_t index) {
-  auto childIndex = decoded_.index(index);
+int32_t CompactRow::rowRowSize(vector_size_t index) const {
+  const auto childIndex = decoded_.index(index);
 
   const auto numFields = children_.size();
   int32_t size = rowNullBytes_;
@@ -148,7 +328,23 @@ int32_t CompactRow::rowRowSize(vector_size_t index) {
   return size;
 }
 
-int32_t CompactRow::serializeRow(vector_size_t index, char* buffer) {
+void CompactRow::serializedRowSizes(
+    const folly::Range<const vector_size_t*>& rows,
+    vector_size_t** sizes) const {
+  if (const auto fixedRowSize =
+          row::CompactRow::fixedRowSize(asRowType(decoded_.base()->type()))) {
+    for (const auto row : rows) {
+      *sizes[row] = fixedRowSize.value() + sizeof(TRowSize);
+    }
+    return;
+  }
+
+  for (const auto& row : rows) {
+    *sizes[row] = rowSize(row) + sizeof(TRowSize);
+  }
+}
+
+int32_t CompactRow::serializeRow(vector_size_t index, char* buffer) const {
   auto childIndex = decoded_.index(index);
 
   int64_t valuesOffset = rowNullBytes_;
@@ -184,16 +380,71 @@ int32_t CompactRow::serializeRow(vector_size_t index, char* buffer) {
   return valuesOffset;
 }
 
-bool CompactRow::isNullAt(vector_size_t index) {
+void CompactRow::serializeRow(
+    vector_size_t offset,
+    vector_size_t size,
+    char* buffer,
+    const size_t* bufferOffsets) const {
+  raw_vector<vector_size_t> rows(size);
+  raw_vector<uint8_t*> nulls(size);
+  if (decoded_.isIdentityMapping()) {
+    std::iota(rows.begin(), rows.end(), offset);
+  } else {
+    for (auto i = 0; i < size; ++i) {
+      rows[i] = decoded_.index(offset + i);
+    }
+  }
+
+  // After serializing each column, the 'offsets' are updated accordingly.
+  std::vector<size_t> offsets(size);
+  auto* const base = reinterpret_cast<uint8_t*>(buffer);
+  for (auto i = 0; i < size; ++i) {
+    nulls[i] = base + bufferOffsets[i];
+    offsets[i] = bufferOffsets[i] + rowNullBytes_;
+  }
+
+  // Fixed-width and varchar/varbinary types are serialized using the vectorized
+  // API 'serializedTyped'. Other data types are serialized row-by-row.
+  for (auto childIdx = 0; childIdx < children_.size(); ++childIdx) {
+    auto& child = children_[childIdx];
+    if (childIsFixedWidth_[childIdx] ||
+        child.typeKind_ == TypeKind::VARBINARY ||
+        child.typeKind_ == TypeKind::VARCHAR) {
+      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+          serializeTyped,
+          child.typeKind_,
+          rows,
+          childIdx,
+          child.decoded_,
+          child.valueBytes_,
+          nulls,
+          buffer,
+          offsets);
+    } else {
+      const bool mayHaveNulls = child.decoded_.mayHaveNulls();
+      for (auto i = 0; i < rows.size(); ++i) {
+        if (mayHaveNulls && child.isNullAt(rows[i])) {
+          bits::setBit(nulls[i], childIdx, true);
+        } else {
+          // Write non-null variable-width value.
+          offsets[i] +=
+              child.serializeVariableWidth(rows[i], buffer + offsets[i]);
+        }
+      }
+    }
+  }
+}
+
+bool CompactRow::isNullAt(vector_size_t index) const {
   return decoded_.isNullAt(index);
 }
 
-int32_t CompactRow::variableWidthRowSize(vector_size_t index) {
+int32_t CompactRow::variableWidthRowSize(vector_size_t index) const {
   switch (typeKind_) {
     case TypeKind::VARCHAR:
       [[fallthrough]];
     case TypeKind::VARBINARY: {
-      auto value = decoded_.valueAt<StringView>(index);
+      const auto value = decoded_.valueAt<StringView>(index);
       return sizeof(int32_t) + value.size();
     }
     case TypeKind::ARRAY:
@@ -208,21 +459,21 @@ int32_t CompactRow::variableWidthRowSize(vector_size_t index) {
   };
 }
 
-int32_t CompactRow::arrayRowSize(vector_size_t index) {
-  auto baseIndex = decoded_.index(index);
+int32_t CompactRow::arrayRowSize(vector_size_t index) const {
+  const auto baseIndex = decoded_.index(index);
 
-  auto arrayBase = decoded_.base()->asUnchecked<ArrayVector>();
-  auto offset = arrayBase->offsetAt(baseIndex);
-  auto size = arrayBase->sizeAt(baseIndex);
+  auto* arrayBase = decoded_.base()->asUnchecked<ArrayVector>();
+  const auto offset = arrayBase->offsetAt(baseIndex);
+  const auto size = arrayBase->sizeAt(baseIndex);
 
   return arrayRowSize(children_[0], offset, size, childIsFixedWidth_[0]);
 }
 
 int32_t CompactRow::arrayRowSize(
-    CompactRow& elements,
+    const CompactRow& elements,
     vector_size_t offset,
     vector_size_t size,
-    bool fixedWidth) {
+    bool fixedWidth) const {
   const int32_t nullBytes = bits::nbytes(size);
 
   // array size | null bits | elements
@@ -259,7 +510,7 @@ int32_t CompactRow::arrayRowSize(
   return rowSize;
 }
 
-int32_t CompactRow::serializeArray(vector_size_t index, char* buffer) {
+int32_t CompactRow::serializeArray(vector_size_t index, char* buffer) const {
   auto baseIndex = decoded_.index(index);
 
   // For complex-type elements:
@@ -281,27 +532,12 @@ int32_t CompactRow::serializeArray(vector_size_t index, char* buffer) {
       children_[0], offset, size, childIsFixedWidth_[0], buffer);
 }
 
-namespace {
-
-constexpr size_t kSizeBytes = sizeof(int32_t);
-
-void writeInt32(char* buffer, int32_t n) {
-  memcpy(buffer, &n, sizeof(int32_t));
-}
-
-int32_t readInt32(const char* buffer) {
-  int32_t n;
-  memcpy(&n, buffer, sizeof(int32_t));
-  return n;
-}
-} // namespace
-
 int32_t CompactRow::serializeAsArray(
-    CompactRow& elements,
+    const CompactRow& elements,
     vector_size_t offset,
     vector_size_t size,
     bool fixedWidth,
-    char* buffer) {
+    char* buffer) const {
   // For complex-type elements:
   // array size | null bits | serialized size | offset e1 | offset e2 |... | e1
   // | e2 |...
@@ -381,20 +617,20 @@ int32_t CompactRow::serializeAsArray(
   return elementsOffset;
 }
 
-int32_t CompactRow::mapRowSize(vector_size_t index) {
+int32_t CompactRow::mapRowSize(vector_size_t index) const {
   auto baseIndex = decoded_.index(index);
 
   //  <keys array> | <values array>
 
-  auto mapBase = decoded_.base()->asUnchecked<MapVector>();
-  auto offset = mapBase->offsetAt(baseIndex);
-  auto size = mapBase->sizeAt(baseIndex);
+  auto* mapBase = decoded_.base()->asUnchecked<MapVector>();
+  const auto offset = mapBase->offsetAt(baseIndex);
+  const auto size = mapBase->sizeAt(baseIndex);
 
   return arrayRowSize(children_[0], offset, size, childIsFixedWidth_[0]) +
       arrayRowSize(children_[1], offset, size, childIsFixedWidth_[1]);
 }
 
-int32_t CompactRow::serializeMap(vector_size_t index, char* buffer) {
+int32_t CompactRow::serializeMap(vector_size_t index, char* buffer) const {
   auto baseIndex = decoded_.index(index);
 
   //  <keys array> | <values array>
@@ -416,11 +652,19 @@ int32_t CompactRow::serializeMap(vector_size_t index, char* buffer) {
   return keysSerializedBytes + valuesSerializedBytes;
 }
 
-int32_t CompactRow::serialize(vector_size_t index, char* buffer) {
+int32_t CompactRow::serialize(vector_size_t index, char* buffer) const {
   return serializeRow(index, buffer);
 }
 
-void CompactRow::serializeFixedWidth(vector_size_t index, char* buffer) {
+void CompactRow::serialize(
+    vector_size_t offset,
+    vector_size_t size,
+    const size_t* bufferOffsets,
+    char* buffer) const {
+  serializeRow(offset, size, buffer, bufferOffsets);
+}
+
+void CompactRow::serializeFixedWidth(vector_size_t index, char* buffer) const {
   VELOX_DCHECK(fixedWidthTypeKind_);
   switch (typeKind_) {
     case TypeKind::BOOLEAN:
@@ -428,11 +672,11 @@ void CompactRow::serializeFixedWidth(vector_size_t index, char* buffer) {
       break;
     case TypeKind::TIMESTAMP: {
       auto micros = decoded_.valueAt<Timestamp>(index).toMicros();
-      memcpy(buffer, &micros, sizeof(int64_t));
+      ::memcpy(buffer, &micros, sizeof(int64_t));
       break;
     }
     default:
-      memcpy(
+      ::memcpy(
           buffer,
           decoded_.data<char>() + decoded_.index(index) * valueBytes_,
           valueBytes_);
@@ -442,18 +686,19 @@ void CompactRow::serializeFixedWidth(vector_size_t index, char* buffer) {
 void CompactRow::serializeFixedWidth(
     vector_size_t offset,
     vector_size_t size,
-    char* buffer) {
+    char* buffer) const {
   VELOX_DCHECK(supportsBulkCopy_);
   // decoded_.data<char>() can be null if all values are null.
   if (decoded_.data<char>()) {
-    memcpy(
+    ::memcpy(
         buffer,
         decoded_.data<char>() + decoded_.index(offset) * valueBytes_,
         valueBytes_ * size);
   }
 }
 
-int32_t CompactRow::serializeVariableWidth(vector_size_t index, char* buffer) {
+int32_t CompactRow::serializeVariableWidth(vector_size_t index, char* buffer)
+    const {
   switch (typeKind_) {
     case TypeKind::VARCHAR:
       [[fallthrough]];
@@ -461,7 +706,7 @@ int32_t CompactRow::serializeVariableWidth(vector_size_t index, char* buffer) {
       auto value = decoded_.valueAt<StringView>(index);
       writeInt32(buffer, value.size());
       if (!value.empty()) {
-        memcpy(buffer + kSizeBytes, value.data(), value.size());
+        ::memcpy(buffer + kSizeBytes, value.data(), value.size());
       }
       return kSizeBytes + value.size();
     }
@@ -490,11 +735,11 @@ void readFixedWidthValue(
     flatVector->setNull(index, true);
   } else if constexpr (std::is_same_v<T, Timestamp>) {
     int64_t micros;
-    memcpy(&micros, buffer, sizeof(int64_t));
+    ::memcpy(&micros, buffer, sizeof(int64_t));
     flatVector->set(index, Timestamp::fromMicros(micros));
   } else {
     T value;
-    memcpy(&value, buffer, sizeof(T));
+    ::memcpy(&value, buffer, sizeof(T));
     flatVector->set(index, value);
   }
 }

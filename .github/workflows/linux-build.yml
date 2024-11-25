@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Linux Build
+name: Linux Build using GCC
 
 on:
   push:
@@ -38,7 +38,7 @@ jobs:
     env:
       CCACHE_DIR: "${{ github.workspace }}/.ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
-      Protobuf_SOURCE: BUNDLED # can be removed after #10134 is merged
+      GTest_SOURCE: BUNDLED
       simdjson_SOURCE: BUNDLED
       xsimd_SOURCE: BUNDLED
       Arrow_SOURCE: BUNDLED
@@ -110,7 +110,8 @@ jobs:
           LIBHDFS3_CONF: "${{ github.workspace }}/scripts/hdfs-client.xml"
         working-directory: _build/release
         run: |
-          ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3|cudf"
+          export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
+          ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3"
 
 # ubuntu-debug:
 #   runs-on: linux-amd64-cpu16
@@ -166,4 +167,4 @@ jobs:
 
 #     - name: Run Tests
 #       run: |
-#         cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|cudf"
+#         cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test"

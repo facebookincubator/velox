@@ -18,6 +18,8 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
+#include "velox/common/base/Pointers.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
@@ -155,7 +157,7 @@ void validateSchemaRecursive(const RowTypePtr& schema) {
 
   folly::F14FastSet<std::string> uniqueNames;
   for (const auto& name : fieldNames) {
-    VELOX_USER_CHECK(!name.empty(), "Field name must not be empty.")
+    VELOX_USER_CHECK(!name.empty(), "Field name must not be empty.");
     auto result = uniqueNames.insert(name);
     VELOX_USER_CHECK(
         result.second,
@@ -232,7 +234,7 @@ Writer::Writer(
   validateSchemaRecursive(schema_);
 
   if (options.flushPolicyFactory) {
-    flushPolicy_ = options.flushPolicyFactory();
+    castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
   } else {
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
@@ -405,57 +407,6 @@ void Writer::setMemoryReclaimers() {
   // TODO https://github.com/facebookincubator/velox/issues/8190
   pool_->setReclaimer(exec::MemoryReclaimer::create());
   generalPool_->setReclaimer(exec::MemoryReclaimer::create());
-}
-
-namespace {
-
-std::optional<TimestampUnit> getTimestampUnit(
-    const Config& config,
-    const char* configKey) {
-  if (const auto unit = config.get<uint8_t>(configKey)) {
-    VELOX_CHECK(
-        unit == 0 /*second*/ || unit == 3 /*milli*/ || unit == 6 /*micro*/ ||
-            unit == 9 /*nano*/,
-        "Invalid timestamp unit: {}",
-        unit.value());
-    return std::optional(static_cast<TimestampUnit>(unit.value()));
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> getTimestampTimeZone(
-    const Config& config,
-    const char* configKey) {
-  if (const auto timezone = config.get<std::string>(configKey)) {
-    return timezone.value();
-  }
-  return std::nullopt;
-}
-
-} // namespace
-
-void WriterOptions::processSessionConfigs(const Config& config) {
-  if (!parquetWriteTimestampUnit) {
-    parquetWriteTimestampUnit =
-        getTimestampUnit(config, kParquetSessionWriteTimestampUnit);
-  }
-
-  if (!parquetWriteTimestampTimeZone) {
-    parquetWriteTimestampTimeZone =
-        getTimestampTimeZone(config, core::QueryConfig::kSessionTimezone);
-  }
-}
-
-void WriterOptions::processHiveConnectorConfigs(const Config& config) {
-  if (!parquetWriteTimestampUnit) {
-    parquetWriteTimestampUnit =
-        getTimestampUnit(config, kParquetHiveConnectorWriteTimestampUnit);
-  }
-
-  if (!parquetWriteTimestampTimeZone) {
-    parquetWriteTimestampTimeZone =
-        getTimestampTimeZone(config, core::QueryConfig::kSessionTimezone);
-  }
 }
 
 std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(

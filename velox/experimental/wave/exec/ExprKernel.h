@@ -17,7 +17,6 @@
 #pragma once
 
 #include <cstdint>
-#include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/HashTable.h"
 #include "velox/experimental/wave/exec/ErrorCode.h"
 #include "velox/experimental/wave/vector/Operand.h"
@@ -100,30 +99,32 @@ struct DeviceAggregation {
   RowAllocator* allocator{nullptr};
 
   char* singleRow{nullptr};
+
+  /// Number of int64_t* in groupResultRows. One for each potential
+  /// streamIdx of reading kernel.
+  int32_t numReadStreams{0};
+
+  /// Pointers to group by result row arrays. Subscripts is
+  /// '[streamIdx][row + 1]'. Element 0 is the row count.
+  uintptr_t** resultRowPointers{nullptr};
 };
 
 /// Parameters for creating/updating a group by.
 struct AggregationControl {
-  /// Pointer to uninitialized first buffer in the case of initializing and to
-  /// the previous head in the case of rehashing. Must always be set.
-  void* head;
+  /// Pointer to page-aligned DeviceAggregation.
+  DeviceAggregation* head;
+
   /// Size of block starting at 'head'. Must be set on first setup.
   int64_t headSize{0};
-  /// For a rehashing request, space for a new head and a new HashTable.
-  void* newHead{nullptr};
-  int64_t newHeadSize{0};
-  /// Size of single row allocation. Required on first init.
+
+  /// For a rehashing command, old bucket array.
+  void* oldBuckets{nullptr};
+
+  /// Count of buckets starting at oldBuckets for rehash.
+  int64_t numOldBuckets{0};
+
+  /// Size of single row allocation.
   int32_t rowSize{0};
-  //// Number of slots in HashTable, must be a powr of two. 0 means no hash
-  /// table (aggregation without grouping keys).
-  int32_t maxTableEntries{0};
-  /// Number of allocators for the hash table, if any. Must be a powr of two.
-  int32_t numPartitions{1};
-  /// Uninitialized space to be added to the allocators of an existing
-  /// HashTable.
-  char* extraSpace{nullptr};
-  /// Usable bytes starting at extraSpace.
-  int64_t extraSpaceSize{0};
 };
 
 struct IUpdateAgg {
@@ -140,9 +141,19 @@ struct IUpdateAgg {
 struct IAggregate {
   uint16_t numKeys;
   uint16_t numAggregates;
+  // Serial is used in BlockStatus to identify 'this' for continue.
+  uint8_t serial;
+  /// Index of the state in operator states.
   uint8_t stateIndex;
-  //  'numAggre gates' Updates followed by key 'numKeys' key operand indices.
+  /// Position of status return block in operator status returned to host.
+  InstructionStatus status;
+  //  'numAggregates' Updates followed by key 'numKeys' key operand indices.
   IUpdateAgg* aggregates;
+};
+
+struct AggregateReturn {
+  /// Count of rows in the table. Triggers rehash when high enough.
+  int64_t numDistinct;
 };
 
 struct Instruction {
@@ -172,10 +183,36 @@ struct WaveShared {
   BlockStatus* status;
   Operand** operands;
   void** states;
+
+  /// Every wrap in the kernel will also wrap these otherwise not accessed
+  /// Operands.
+  OperandIndex extraWraps;
+  int16_t numExtraWraps;
+
+  /// True if continuing the first instruction. The instruction will
+  /// pick up its lane status from blockStatus or an
+  /// instruction-specific source. The instruction must clear this
+  /// before executing the next instruction.
+  bool isContinue;
+
+  /// True if some lane needs a continue. Used inside a kernel to
+  /// indicate that the grid level status should be set to indicate
+  /// continue. Reset before end of instruction.
+  bool hasContinue;
+
   /// If true, all threads in block return before starting next instruction.
   bool stop;
   int32_t blockBase;
   int32_t numRows;
+  /// Number of blocks for the program. Return statuses are at
+  /// '&blockStatus[numBlocks']
+  int32_t numBlocks;
+
+  /// Number of items in blockStatus covered by each TB.
+  int16_t numRowsPerThread;
+
+  int16_t streamIdx;
+
   // Scratch data area. Size depends on shared memory size for instructions.
   // Align 8.
   int64_t data;
@@ -186,7 +223,8 @@ struct KernelParams {
   /// The first thread block with the program. Subscript is blockIdx.x.
   int32_t* blockBase{nullptr};
   // The ordinal of the program. All blocks with the same program have the same
-  // number here. Subscript is blockIdx.x.
+  // number here. Subscript is blockIdx.x. For compiled kernels, this gives the
+  // branch to follow for the TB at blockIdx.x.
   int32_t* programIdx{nullptr};
 
   // The TB program for each exe. The subscript is programIdx[blockIdx.x].
@@ -201,47 +239,32 @@ struct KernelParams {
 
   // For each exe, the start of the array of Operand*. Instructions reference
   // operands via offset in this array. The subscript is
-  // programIndx[blockIdx.x].
+  // programIdx[blockIdx.x].
   Operand*** operands{nullptr};
 
   // the status return block for each TB. The subscript is blockIdx.x -
   // (blockBase[blockIdx.x] / kBlockSize). Shared between all programs.
   BlockStatus* status{nullptr};
+
   // Address of global states like hash tables. Subscript is 'programIdx' and
   // next subscript is state id in the instruction.
   void*** operatorStates;
-};
 
-/// Returns the shared memory size for instruction for kBlockSize.
-int32_t instructionSharedMemory(const Instruction& instruction);
+  /// first operand index for extra wraps. 'numExtraWraps' next
+  /// operands get wrapped by all wraps in the kernel.
+  OperandIndex extraWraps{0};
+  int16_t numExtraWraps{0};
 
-/// A stream for invoking ExprKernel.
-class WaveKernelStream : public Stream {
- public:
-  /// Enqueus an invocation of ExprKernel for 'numBlocks' b
-  /// tBs. 'blockBase' is the ordinal of the TB within the TBs with
-  /// the same program.  'programIdx[blockIndx.x]' is the index into
-  /// 'programs' for the program of the TB. 'operands[i]' is the start
-  /// of the Operand array for 'programs[i]'. status[blockIdx.x] is
-  /// the return status for each TB. 'sharedSize' is the per TB bytes
-  /// shared memory to be reserved at launch.
-  void call(
-      Stream* alias,
-      int32_t numBlocks,
-      int32_t sharedSize,
-      KernelParams& params);
+  /// Number of blocks in each program. gridDim.x can be a multiple if many
+  /// programs in launch.
+  int32_t numBlocks{0};
 
-  /// Sets up or updates an aggregation.
-  void setupAggregation(AggregationControl& op);
+  /// Number of elements of blockStatus covered by each TB.
+  int16_t numRowsPerThread{1};
 
- private:
-  // Debug implementation of call() where each instruction is a separate kernel
-  // launch.
-  void callOne(
-      Stream* alias,
-      int32_t numBlocks,
-      int32_t sharedSize,
-      KernelParams& params);
+  /// Id of stream <stream ordinal within WaveDriver> + (<driverId of
+  /// WaveDriver> * <number of Drivers>.
+  int16_t streamIdx{0};
 };
 
 } // namespace facebook::velox::wave

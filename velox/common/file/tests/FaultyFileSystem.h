@@ -26,13 +26,12 @@
 namespace facebook::velox::tests::utils {
 
 using namespace filesystems;
-
 /// Implements faulty filesystem for io fault injection in unit test. It is a
 /// wrapper on top of a real file system, and by default it delegates the the
 /// file operation to the real file system underneath.
 class FaultyFileSystem : public FileSystem {
  public:
-  explicit FaultyFileSystem(std::shared_ptr<const Config> config)
+  explicit FaultyFileSystem(std::shared_ptr<const config::ConfigBase> config)
       : FileSystem(std::move(config)) {}
 
   ~FaultyFileSystem() override {}
@@ -55,11 +54,11 @@ class FaultyFileSystem : public FileSystem {
 
   std::unique_ptr<ReadFile> openFileForRead(
       std::string_view path,
-      const FileOptions& options) override;
+      const FileOptions& options = {}) override;
 
   std::unique_ptr<WriteFile> openFileForWrite(
       std::string_view path,
-      const FileOptions& options) override;
+      const FileOptions& options = {}) override;
 
   void remove(std::string_view path) override;
 
@@ -72,7 +71,7 @@ class FaultyFileSystem : public FileSystem {
 
   std::vector<std::string> list(std::string_view path) override;
 
-  void mkdir(std::string_view path) override;
+  void mkdir(std::string_view path, const DirectoryOptions& options) override;
 
   void rmdir(std::string_view path) override;
 

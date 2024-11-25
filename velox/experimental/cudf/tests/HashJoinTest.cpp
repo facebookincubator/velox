@@ -615,7 +615,7 @@ class HashJoinBuilder {
     auto queryCtx = core::QueryCtx::create(
         executor_,
         core::QueryConfig{{}},
-        std::unordered_map<std::string, std::shared_ptr<Config>>{},
+        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
         cache::AsyncDataCache::getInstance(),
         memory::MemoryManager::getInstance()->addRootPool(
             "query_pool",

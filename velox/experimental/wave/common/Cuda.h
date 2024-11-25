@@ -28,25 +28,45 @@ namespace facebook::velox::wave {
 struct Device {
   explicit Device(int32_t id) : deviceId(id) {}
 
+  std::string toString() const;
+
   int32_t deviceId;
+
+  /// Excerpt from device properties.
+  std::string model;
+  int32_t major;
+  int32_t minor;
+  int32_t globalMB;
+  int32_t numSM;
+  int32_t sharedMemPerSM;
+  int32_t L2Size;
+  int32_t persistingL2MaxSize;
 };
 
-/// Checks that the machine has the right capability and returns a Device
-/// struct. If 'preferredId' is given tries to return  a Device on that device
-/// id.
-Device* getDevice(int32_t preferredId = -1);
+/// Checks that the machine has the right capability and returns the device for
+/// 'id'
+Device* getDevice(int32_t id = 0);
+
 /// Binds subsequent Cuda operations of the calling thread to 'device'.
 void setDevice(Device* device);
+
+/// Returns the device bound to te calling thread or nullptr if none.
+Device* currentDevice();
 
 struct StreamImpl;
 
 class Stream {
  public:
+  Stream(std::unique_ptr<StreamImpl> impl);
+
   Stream();
   virtual ~Stream();
 
   /// Waits  until the stream is completed.
   void wait();
+
+  /// Enqueus a memset on 'device'.
+  void memset(void* address, int32_t value, size_t size);
 
   /// Enqueus a prefetch. Prefetches to host if 'device' is nullptr, otherwise
   /// to 'device'.
@@ -72,10 +92,16 @@ class Stream {
   void*& userData() {
     return userData_;
   }
+  bool getAndClearIsTransfer() {
+    auto flag = isTransfer_;
+    isTransfer_ = false;
+    return flag;
+  }
 
  protected:
   std::unique_ptr<StreamImpl> stream_;
   void* userData_{nullptr};
+  bool isTransfer_{false};
 
   friend class Event;
 };
@@ -127,6 +153,16 @@ class GpuAllocator {
   /// Frees a pointer from allocate(). 'size' must correspond to the size given
   /// to allocate(). A Memory must be freed to the same allocator it came from.
   virtual void free(void* ptr, size_t bytes) = 0;
+
+  /// True if allocates host pinned memory.
+  virtual bool isHost() const {
+    return false;
+  }
+
+  /// True if allocates device side memory.
+  virtual bool isDevice() const {
+    return false;
+  }
 
   class Deleter;
 
@@ -196,6 +232,61 @@ struct KernelInfo {
   std::string toString() const;
 };
 
+/// Specification of code to compile.
+struct KernelSpec {
+  std::string code;
+  std::vector<std::string> entryPoints;
+  std::string filePath;
+  int32_t numHeaders{0};
+  const char** headers;
+  const char** headerNames{nullptr};
+};
+
+/// Represents the result of compilation. Wrapped accessed through
+/// CompiledKernel.
+struct CompiledModule {
+  virtual ~CompiledModule() = default;
+  /// Compiles 'spec' and returns the result.
+  static std::shared_ptr<CompiledModule> create(const KernelSpec& spec);
+
+  virtual void launch(
+      int32_t kernelIdx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) = 0;
+
+  /// Returns resource utilization for 'kernelIdx'th entry point.
+  virtual KernelInfo info(int32_t kernelIdx) = 0;
+};
+
+using KernelGenFunc = std::function<KernelSpec()>;
+
+/// Represents a run-time compiled kernel. These are returned
+/// immediately from a kernel cache. The compilation takes place
+/// in the background. The member functions block until a possibly
+/// pending compilation completes.
+class CompiledKernel {
+ public:
+  virtual ~CompiledKernel() = default;
+
+  /// Returns the compiled kernel for 'key'. Starts background compilation if
+  /// 'key's kernel is not compiled. Returns lightweight reference to state
+  /// owned by compiled kernel cache.
+  static std::unique_ptr<CompiledKernel> getKernel(
+      const std::string& key,
+      KernelGenFunc func);
+
+  virtual void launch(
+      int32_t idx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) = 0;
+};
+
 KernelInfo getRegisteredKernelInfo(const char* name);
 
 KernelInfo kernelInfo(const void* func);
@@ -203,5 +294,15 @@ KernelInfo kernelInfo(const void* func);
 std::unordered_map<std::string, KernelInfo>& kernelRegistry();
 /// Prints summary of registered kernels.
 void printKernels();
+
+/// Registers an inline string as a header for use with KernelSpec and
+/// CompiledModule. The first line is the header path, the rest is the text of
+/// the header.
+bool registerHeader(const char* text);
+
+/// Returns the names and contents of headers registered with registerHeader().
+void getRegisteredHeaders(
+    std::vector<const char*>& names,
+    std::vector<const char*>& text);
 
 } // namespace facebook::velox::wave

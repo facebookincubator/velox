@@ -52,6 +52,9 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<EndsWithFunction, bool, Varchar, Varchar>(
       {prefix + "ends_with"});
 
+  registerFunction<TrailFunction, Varchar, Varchar, int32_t>(
+      {prefix + "trail"});
+
   registerFunction<SubstrFunction, Varchar, Varchar, int64_t>(
       {prefix + "substr"});
   registerFunction<SubstrFunction, Varchar, Varchar, int64_t, int64_t>(
@@ -150,6 +153,7 @@ void registerStringFunctions(const std::string& prefix) {
   registerSplitToMap(prefix);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, prefix + "concat");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_replaceFirst, prefix + "replace_first");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reverse, prefix + "reverse");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_to_utf8, prefix + "to_utf8");

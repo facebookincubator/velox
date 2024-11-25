@@ -50,13 +50,9 @@ class TableScan : public WaveSourceOperator {
     connector_ = connector::getConnector(tableHandle_->connectorId());
   }
 
-  AdvanceResult canAdvance(WaveStream& stream) override;
+  std::vector<AdvanceResult> canAdvance(WaveStream& stream) override;
 
   void schedule(WaveStream& stream, int32_t maxRows = 0) override;
-
-  vector_size_t outputSize(WaveStream& stream) const {
-    return waveDataSource_->outputSize(stream);
-  }
 
   bool isStreaming() const override {
     return true;
@@ -97,6 +93,15 @@ class TableScan : public WaveSourceOperator {
   // background on the executor of the connector. If the DataSource is
   // needed before prepare is done, it will be made when needed.
   void preload(std::shared_ptr<connector::ConnectorSplit> split);
+
+  // Adds 'stats' to operator stats of the containing WaveDriver. Some
+  // stats come from DataSource, others from SplitReader. If
+  // 'splitReader' is given, the completed rows/bytes from
+  // 'splitReader' are added. These do not come in the runtimeStats()
+  // map.
+  void updateStats(
+      std::unordered_map<std::string, RuntimeCounter> stats,
+      WaveSplitReader* splitReader = nullptr);
 
   // Process-wide IO wait time.
   static std::atomic<uint64_t> ioWaitNanos_;
@@ -140,8 +145,8 @@ class TableScan : public WaveSourceOperator {
   // Count of splits that finished preloading before being read.
   int32_t numReadyPreloadedSplits_{0};
 
-  int32_t readBatchSize_;
-  int32_t maxReadBatchSize_;
+  vector_size_t readBatchSize_;
+  vector_size_t maxReadBatchSize_;
 
   // Exits getOutput() method after this many milliseconds.
   // Zero means 'no limit'.

@@ -40,6 +40,7 @@ std::unique_ptr<RowContainer> makeRowContainer(
       false, // isJoinBuild
       false, // hasProbedFlag
       false, // hasNormalizedKey
+      false, // collectColumnStats
       pool.get());
 }
 
@@ -91,7 +92,6 @@ void AggregateSpillBenchmarkBase::printStats() const {
   // List files under file path.
   SpillPartitionSet partitionSet;
   spiller_->finishSpill(partitionSet);
-  VELOX_CHECK_EQ(partitionSet.size(), 1);
   const auto files = fs_->list(spillDir_);
   for (const auto& file : files) {
     auto rfile = fs_->openFileForRead(file);
@@ -137,6 +137,10 @@ std::unique_ptr<Spiller> AggregateSpillBenchmarkBase::makeSpiller() {
       stringToCompressionKind(FLAGS_spiller_benchmark_compression_kind);
   spillConfig.maxSpillRunRows = 0;
   spillConfig.fileCreateConfig = {};
+  // The default value of QueryConfig kSpillStartPartitionBit.
+  spillConfig.startPartitionBit = 48;
+  // The default value of QueryConfig spillNumPartitionBits.
+  spillConfig.numPartitionBits = 3;
 
   if (spillerType_ == Spiller::Type::kAggregateInput) {
     return std::make_unique<Spiller>(
@@ -144,7 +148,9 @@ std::unique_ptr<Spiller> AggregateSpillBenchmarkBase::makeSpiller() {
         rowContainer_.get(),
         rowType_,
         HashBitRange{
-            spillConfig.startPartitionBit, spillConfig.numPartitionBits},
+            spillConfig.startPartitionBit,
+            static_cast<uint8_t>(
+                spillConfig.startPartitionBit + spillConfig.numPartitionBits)},
         rowContainer_->keyTypes().size(),
         std::vector<CompareFlags>{},
         &spillConfig,

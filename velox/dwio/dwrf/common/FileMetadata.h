@@ -31,13 +31,6 @@ enum class DwrfFormat : uint8_t {
 };
 
 class ProtoWrapperBase {
- protected:
-  ProtoWrapperBase(DwrfFormat format, const void* impl)
-      : format_{format}, impl_{impl} {}
-
-  DwrfFormat format_;
-  const void* impl_;
-
  public:
   DwrfFormat format() const {
     return format_;
@@ -46,6 +39,13 @@ class ProtoWrapperBase {
   inline const void* rawProtoPtr() const {
     return impl_;
   }
+
+ protected:
+  ProtoWrapperBase(DwrfFormat format, const void* impl)
+      : format_{format}, impl_{impl} {}
+
+  const DwrfFormat format_;
+  const void* const impl_;
 };
 
 /***
@@ -832,7 +832,7 @@ class FooterWrapper : public ProtoWrapperBase {
 
 template <>
 struct fmt::formatter<facebook::velox::dwrf::DwrfFormat> : formatter<int> {
-  auto format(facebook::velox::dwrf::DwrfFormat s, format_context& ctx) {
+  auto format(facebook::velox::dwrf::DwrfFormat s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

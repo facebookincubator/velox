@@ -30,7 +30,7 @@ class SelectiveStringDirectColumnReader
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
-  void seekToRowGroup(uint32_t index) override {
+  void seekToRowGroup(int64_t index) override {
     SelectiveColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->seekToRowGroup(index);
     blobStream_->seekToPosition(positionsProvider);
@@ -44,10 +44,10 @@ class SelectiveStringDirectColumnReader
 
   uint64_t skip(uint64_t numValues) override;
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
-  void getValues(RowSet rows, VectorPtr* result) override {
+  void getValues(const RowSet& rows, VectorPtr* result) override {
     rawStringBuffer_ = nullptr;
     rawStringSize_ = 0;
     rawStringUsed_ = 0;
@@ -68,7 +68,7 @@ class SelectiveStringDirectColumnReader
 
   void extractCrossBuffers(
       const int32_t* lengths,
-      const int32_t* starts,
+      const int64_t* starts,
       int32_t rowIndex,
       int32_t numValues);
 
@@ -76,14 +76,14 @@ class SelectiveStringDirectColumnReader
       int32_t startRow,
       const int32_t* rows,
       int32_t numRows,
-      int32_t* starts);
+      int64_t* starts);
 
   inline void extractNSparse(const int32_t* rows, int32_t row, int numRows);
 
   void extractSparse(const int32_t* rows, int32_t numRows);
 
   template <bool scatter, bool skip>
-  bool try8Consecutive(int32_t start, const int32_t* rows, int32_t row);
+  bool try8Consecutive(int64_t start, const int32_t* rows, int32_t row);
 
   template <bool kScatter, bool kGreaterThan4>
   bool

@@ -81,10 +81,8 @@ void HashAggregation::initialize() {
         core::AggregationNode::stepName(aggregationNode_->step()));
   }
 
-  if (isDistinct_) {
-    for (auto i = 0; i < hashers.size(); ++i) {
-      identityProjections_.emplace_back(hashers[i]->channel(), i);
-    }
+  for (auto i = 0; i < hashers.size(); ++i) {
+    identityProjections_.emplace_back(hashers[i]->channel(), i);
   }
 
   std::optional<column_index_t> groupIdChannel;
@@ -163,8 +161,8 @@ void HashAggregation::addInput(RowVectorPtr input) {
 void HashAggregation::updateRuntimeStats() {
   // Report range sizes and number of distinct values for the group-by keys.
   const auto& hashers = groupingSet_->hashLookup().hashers;
-  uint64_t asRange;
-  uint64_t asDistinct;
+  uint64_t asRange{0};
+  uint64_t asDistinct{0};
   const auto hashTableStats = groupingSet_->hashTableStats();
 
   auto lockedStats = stats_.wlock();
@@ -216,7 +214,7 @@ void HashAggregation::resetPartialOutputIfNeed() {
     lockedStats->addRuntimeStat(
         "partialAggregationPct", RuntimeCounter(aggregationPct));
   }
-  groupingSet_->resetTable();
+  groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;
   if (!finished_) {
     maybeIncreasePartialAggregationMemoryUsage(aggregationPct);
@@ -414,7 +412,7 @@ void HashAggregation::reclaim(
     }
     if (isDistinct_) {
       // Since we have seen all the input, we can safely reset the hash table.
-      groupingSet_->resetTable();
+      groupingSet_->resetTable(/*freeTable=*/true);
       // Release the minimum reserved memory.
       pool()->release();
       return;

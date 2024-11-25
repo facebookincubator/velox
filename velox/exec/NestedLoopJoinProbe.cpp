@@ -207,9 +207,6 @@ bool NestedLoopJoinProbe::getBuildData(ContinueFuture* future) {
   }
 
   buildVectors_ = std::move(buildData);
-  if (buildVectors_->empty()) {
-    buildSideEmpty_ = true;
-  }
   return true;
 }
 
@@ -261,7 +258,8 @@ RowVectorPtr NestedLoopJoinProbe::generateOutput() {
     return std::move(output_);
   }
 
-  if (advanceProbeRow()) {
+  // Try to advance the probe cursor; call finish if no more probe input.
+  if (advanceProbe()) {
     finishProbeInput();
   }
 
@@ -271,9 +269,9 @@ RowVectorPtr NestedLoopJoinProbe::generateOutput() {
   return std::move(output_);
 }
 
-bool NestedLoopJoinProbe::advanceProbeRow() {
+bool NestedLoopJoinProbe::advanceProbe() {
   if (hasProbedAllBuildData()) {
-    ++probeRow_;
+    probeRow_ += probeRowCount_;
     probeRowHasMatch_ = false;
     buildIndex_ = 0;
 
@@ -292,7 +290,12 @@ bool NestedLoopJoinProbe::addToOutput() {
   // First, create a new output vector. By default, allocate space for
   // outputBatchSize_ rows. The output always generates dictionaries wrapped
   // around the probe vector being processed.
-  prepareOutput();
+  //
+  // Since cross join batches can be returned without filter evaluation, no need
+  // to prepare output here.
+  if (!isCrossJoin()) {
+    prepareOutput();
+  }
 
   while (!hasProbedAllBuildData()) {
     const auto& currentBuild = buildVectors_.value()[buildIndex_];
@@ -305,10 +308,9 @@ bool NestedLoopJoinProbe::addToOutput() {
     }
 
     // If this is a cross join, there is no filter to evaluate. We can just
-    // return the output vector directly, which is composed of the build
-    // projections at `probeRow_` (as constants), and current vector of the
-    // build side. Also don't need to bother about adding mismatched rows.
-    if (joinCondition_ == nullptr) {
+    // return the output vector directly. Also don't need to bother about adding
+    // mismatched rows.
+    if (isCrossJoin()) {
       output_ = getNextCrossProductBatch(
           currentBuild, outputType_, identityProjections_, buildProjections_);
       numOutputRows_ = output_->size();
@@ -355,7 +357,9 @@ bool NestedLoopJoinProbe::addToOutput() {
   // Check if the current probed row needs to be added as a mismatch (for left
   // and full outer joins).
   checkProbeMismatchRow();
-  output_->resize(numOutputRows_);
+  if (output_ != nullptr) {
+    output_->resize(numOutputRows_);
+  }
 
   // Signals that all input has been generated for the probeRow and build
   // vectors; safe to move to the next probe record.
@@ -368,13 +372,13 @@ void NestedLoopJoinProbe::prepareOutput() {
   }
   std::vector<VectorPtr> localColumns(outputType_->size());
 
-  probeIndices_ = allocateIndices(outputBatchSize_, pool());
-  rawProbeIndices_ = probeIndices_->asMutable<vector_size_t>();
+  probeOutputIndices_ = allocateIndices(outputBatchSize_, pool());
+  rawProbeOutputIndices_ = probeOutputIndices_->asMutable<vector_size_t>();
 
   for (const auto& projection : identityProjections_) {
     localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
         {},
-        probeIndices_,
+        probeOutputIndices_,
         outputBatchSize_,
         input_->childAt(projection.inputChannel));
   }
@@ -418,15 +422,118 @@ RowVectorPtr NestedLoopJoinProbe::getNextCrossProductBatch(
     const RowTypePtr& outputType,
     const std::vector<IdentityProjection>& probeProjections,
     const std::vector<IdentityProjection>& buildProjections) {
+  VELOX_CHECK_GT(buildVector->size(), 0);
+
+  // TODO: For now we only enable the build optimizations in cross-joins, but we
+  // should allow it for other join types as well.
+  if (isCrossJoin() && isSingleBuildRow()) {
+    return genCrossProductSingleBuildRow(
+        buildVector, outputType, probeProjections, buildProjections);
+  } else if (isCrossJoin() && isSingleBuildVector()) {
+    return genCrossProductSingleBuildVector(
+        buildVector, outputType, probeProjections, buildProjections);
+  } else {
+    return genCrossProductMultipleBuildVectors(
+        buildVector, outputType, probeProjections, buildProjections);
+  }
+}
+
+RowVectorPtr NestedLoopJoinProbe::genCrossProductSingleBuildRow(
+    const RowVectorPtr& buildVector,
+    const RowTypePtr& outputType,
+    const std::vector<IdentityProjection>& probeProjections,
+    const std::vector<IdentityProjection>& buildProjections) {
+  VELOX_CHECK(isSingleBuildRow());
+
   std::vector<VectorPtr> projectedChildren(outputType->size());
-  const auto numOutputRows = buildVector->size();
+  size_t numOutputRows = input_->size();
+  probeRowCount_ = input_->size();
+
+  // Project columns from the probe side.
+  projectChildren(
+      projectedChildren, input_, probeProjections, numOutputRows, nullptr);
+
+  // Wrap projections from the build side as constants.
+  for (const auto [inputChannel, outputChannel] : buildProjections) {
+    projectedChildren[outputChannel] = BaseVector::wrapInConstant(
+        numOutputRows, 0, buildVector->childAt(inputChannel));
+  }
+  return std::make_shared<RowVector>(
+      pool(), outputType, nullptr, numOutputRows, std::move(projectedChildren));
+}
+
+RowVectorPtr NestedLoopJoinProbe::genCrossProductSingleBuildVector(
+    const RowVectorPtr& buildVector,
+    const RowTypePtr& outputType,
+    const std::vector<IdentityProjection>& probeProjections,
+    const std::vector<IdentityProjection>& buildProjections) {
+  VELOX_CHECK(isSingleBuildVector());
+  std::vector<VectorPtr> projectedChildren(outputType->size());
+  vector_size_t buildRowCount = buildVector->size();
+
+  // Calculate how many probe rows we can cover without exceeding
+  // outputBatchSize_.
+  if (buildRowCount > outputBatchSize_) {
+    probeRowCount_ = 1;
+  } else {
+    probeRowCount_ = std::min(
+        (vector_size_t)outputBatchSize_ / buildRowCount,
+        input_->size() - probeRow_);
+  }
+  size_t numOutputRows = probeRowCount_ * buildRowCount;
+
+  // Generate probe dictionary indices.
+  auto rawProbeIndices =
+      initializeRowNumberMapping(probeIndices_, numOutputRows, pool());
+  for (auto i = 0; i < probeRowCount_; ++i) {
+    std::fill(
+        rawProbeIndices.begin() + i * buildRowCount,
+        rawProbeIndices.begin() + (i + 1) * buildRowCount,
+        probeRow_ + i);
+  }
+
+  // Generate build dictionary indices.
+  auto rawBuildIndices_ =
+      initializeRowNumberMapping(buildIndices_, numOutputRows, pool());
+  for (auto i = 0; i < probeRowCount_; ++i) {
+    std::iota(
+        rawBuildIndices_.begin() + i * buildRowCount,
+        rawBuildIndices_.begin() + (i + 1) * buildRowCount,
+        0);
+  }
+
+  projectChildren(
+      projectedChildren,
+      input_,
+      probeProjections,
+      numOutputRows,
+      probeIndices_);
+  projectChildren(
+      projectedChildren,
+      buildVector,
+      buildProjections,
+      numOutputRows,
+      buildIndices_);
+
+  return std::make_shared<RowVector>(
+      pool(), outputType, nullptr, numOutputRows, std::move(projectedChildren));
+}
+
+RowVectorPtr NestedLoopJoinProbe::genCrossProductMultipleBuildVectors(
+    const RowVectorPtr& buildVector,
+    const RowTypePtr& outputType,
+    const std::vector<IdentityProjection>& probeProjections,
+    const std::vector<IdentityProjection>& buildProjections) {
+  std::vector<VectorPtr> projectedChildren(outputType->size());
+  size_t numOutputRows = buildVector->size();
+  probeRowCount_ = 1;
 
   // Project columns from the build side.
   projectChildren(
       projectedChildren, buildVector, buildProjections, numOutputRows, nullptr);
 
   // Wrap projections from the probe side as constants.
-  for (auto [inputChannel, outputChannel] : probeProjections) {
+  for (const auto [inputChannel, outputChannel] : probeProjections) {
     projectedChildren[outputChannel] = BaseVector::wrapInConstant(
         numOutputRows, probeRow_, input_->childAt(inputChannel));
   }
@@ -437,7 +544,7 @@ RowVectorPtr NestedLoopJoinProbe::getNextCrossProductBatch(
 
 void NestedLoopJoinProbe::addOutputRow(vector_size_t buildRow) {
   // Probe side is always a dictionary; just populate the index.
-  rawProbeIndices_[numOutputRows_] = probeRow_;
+  rawProbeOutputIndices_[numOutputRows_] = probeRow_;
 
   // For the build side, we accumulate the ranges to copy, then copy all of them
   // at once. If records are consecutive and can have a single copy range run.
@@ -463,7 +570,7 @@ void NestedLoopJoinProbe::copyBuildValues(const RowVectorPtr& buildVector) {
 
 void NestedLoopJoinProbe::addProbeMismatchRow() {
   // Probe side is always a dictionary; just populate the index.
-  rawProbeIndices_[numOutputRows_] = probeRow_;
+  rawProbeOutputIndices_[numOutputRows_] = probeRow_;
 
   // Null out build projections.
   for (const auto& projection : buildProjections_) {
@@ -477,6 +584,7 @@ void NestedLoopJoinProbe::checkProbeMismatchRow() {
   // to add a probe mismatch record.
   if (needsProbeMismatch(joinType_) && hasProbedAllBuildData() &&
       !probeRowHasMatch_) {
+    prepareOutput();
     addProbeMismatchRow();
     ++numOutputRows_;
   }
@@ -495,7 +603,7 @@ void NestedLoopJoinProbe::finishProbeInput() {
   // From now one we finished processing the probe side. Check now if this is a
   // right or full outer join, and hence we may need to start emitting buid
   // mismatch records.
-  if (!needsBuildMismatch(joinType_) || buildSideEmpty_) {
+  if (!needsBuildMismatch(joinType_) || isBuildSideEmpty()) {
     setState(ProbeOperatorState::kFinish);
     return;
   }
@@ -551,7 +659,7 @@ RowVectorPtr NestedLoopJoinProbe::getBuildMismatchedOutput(
   // product but the build or probe side is empty, there could still be
   // mismatched rows from the other side.
   if (matched.isAllSelected() ||
-      (joinCondition_ == nullptr && !probeSideEmpty_ && !buildSideEmpty_)) {
+      (isCrossJoin() && !probeSideEmpty_ && !isBuildSideEmpty())) {
     return nullptr;
   }
 

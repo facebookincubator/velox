@@ -303,7 +303,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
     return out.str();
   }
 
-  void copyVectorsToTable(
+  std::vector<char*> copyVectorsToTable(
       const std::vector<RowVectorPtr>& batches,
       int32_t tableOffset,
       BaseHashTable* table) {
@@ -316,7 +316,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
     auto numKeys = hashers.size();
     // We init a DecodedVector for each member of the RowVectors in 'batches'.
     std::vector<std::vector<DecodedVector>> decoded;
-    SelectivityVector rows(batchSize);
+    SelectivityVector allRows(batchSize);
     SelectivityVector insertedRows(batchSize);
     for (auto& batch : batches) {
       // If we are only inserting a fraction of the rows, we set insertedRows to
@@ -335,7 +335,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
       VELOX_CHECK_EQ(batch->size(), batchSize);
       auto& decoders = decoded.back();
       for (auto i = 0; i < batch->childrenSize(); ++i) {
-        decoders[i].decode(*batch->childAt(i), rows);
+        decoders[i].decode(*batch->childAt(i), allRows);
         if (i < numKeys) {
           auto hasher = table->hashers()[i].get();
           hasher->decode(*batch->childAt(i), insertedRows);
@@ -355,6 +355,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
     int32_t delta = 1;
     const auto nextOffset = rowContainer->nextOffset();
 
+    std::vector<char*> rows;
     // We insert values in a geometric skip order. 1, 2, 4, 7,
     // 11,... where the skip increments by one. We wrap around at the
     // power of two boundary. This sequence hits every place in the
@@ -374,10 +375,12 @@ class HashTableTest : public testing::TestWithParam<bool>,
         for (auto i = 0; i < batches[batchIndex]->type()->size(); ++i) {
           rowContainer->store(decoded[batchIndex][i], rowIndex, newRow, i);
         }
+        rows.push_back(newRow);
       }
       position = (position + delta) & mask;
       ++delta;
     }
+    return rows;
   }
 
   // Makes a vector of 'type' with 'size' unique elements, initialized
@@ -396,7 +399,8 @@ class HashTableTest : public testing::TestWithParam<bool>,
         auto strings =
             BaseVector::create<FlatVector<StringView>>(VARCHAR(), size, pool());
         for (auto row = 0; row < size; ++row) {
-          auto string = fmt::format("{}", keySpacing_ * (sequence + row));
+          auto string =
+              fmt::format("{}{}", baseString_, keySpacing_ * (sequence + row));
           // Make strings that overflow the inline limit for 1/10 of
           // the values after 10K,000. Datasets with only
           // range-encodable small strings can be made within the
@@ -573,6 +577,8 @@ class HashTableTest : public testing::TestWithParam<bool>,
   // Spacing between consecutive generated keys. Affects whether
   // Vectorhashers make ranges or ids of distinct values.
   int64_t keySpacing_ = 1;
+  // Base string for varchar fields when making string vector.
+  std::string baseString_;
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
 };
 
@@ -626,7 +632,7 @@ TEST_P(HashTableTest, mixed6Sparse) {
 }
 
 // It should be safe to call clear() before we insert any data into HashTable
-TEST_P(HashTableTest, clear) {
+TEST_P(HashTableTest, clearBeforeInsert) {
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0 /*channel*/));
   core::QueryConfig config({});
@@ -638,9 +644,46 @@ TEST_P(HashTableTest, clear) {
       config);
 
   for (const bool clearTable : {false, true}) {
-    auto table = HashTable<true>::createForAggregation(
+    const auto table = HashTable<true>::createForAggregation(
         std::move(keyHashers), {Accumulator{aggregate.get(), nullptr}}, pool());
     ASSERT_NO_THROW(table->clear(clearTable));
+    if (clearTable) {
+      ASSERT_EQ(reinterpret_cast<uint64_t>(table->testingTable()), 0);
+      ASSERT_EQ(table->capacity(), 0);
+    } else {
+      ASSERT_EQ(reinterpret_cast<uint64_t>(table->testingTable()), 0);
+      ASSERT_EQ(table->capacity(), 0);
+    }
+  }
+}
+
+TEST_P(HashTableTest, clearAfterInsert) {
+  const auto rowType =
+      ROW({"a", "b", "c", "d"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
+  const auto numKeys = 4;
+
+  const int numBatches = 5;
+  std::vector<RowVectorPtr> inputBatches;
+  for (int i = 0; i < numBatches; ++i) {
+    VectorFuzzer fuzzer({}, pool());
+    inputBatches.push_back(fuzzer.fuzzRow(rowType));
+  }
+  for (const bool clearTable : {false, true}) {
+    const auto table = createHashTableForAggregation(rowType, numKeys);
+    auto lookup = std::make_unique<HashLookup>(table->hashers());
+    for (const auto& batch : inputBatches) {
+      lookup->reset(batch->size());
+      insertGroups(*batch, *lookup, *table);
+    }
+    const uint64_t capacityBeforeInsert = table->capacity();
+    ASSERT_NO_THROW(table->clear(clearTable));
+    if (clearTable) {
+      ASSERT_EQ(reinterpret_cast<uint64_t>(table->testingTable()), 0);
+      ASSERT_EQ(table->capacity(), 0);
+    } else {
+      ASSERT_NE(reinterpret_cast<uint64_t>(table->testingTable()), 0);
+      ASSERT_EQ(table->capacity(), capacityBeforeInsert);
+    }
   }
 }
 
@@ -800,6 +843,111 @@ TEST_P(HashTableTest, regularHashingTableSize) {
   {
     auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
     checkTableSize(BaseHashTable::HashMode::kNormalizedKey, type);
+  }
+}
+
+TEST_P(HashTableTest, listJoinResultsSize) {
+  baseString_ =
+      "If you count carefully, you will notice there are exactly 105 characters"
+      " in this string including space.";
+  const size_t kNumRows = 1024;
+  auto buildType = ROW(
+      {"f0", "v0", "v1"}, {BIGINT(), VARCHAR(), ROW({BIGINT(), VARCHAR()})});
+  std::vector<std::unique_ptr<VectorHasher>> keyHashers;
+  for (auto i = 0; i < buildType->size(); ++i) {
+    keyHashers.emplace_back(
+        std::make_unique<VectorHasher>(buildType->childAt(i), i));
+  }
+
+  auto table = HashTable<true>::createForJoin(
+      std::move(keyHashers),
+      {BIGINT(), VARCHAR()},
+      true,
+      false,
+      kNumRows,
+      pool());
+  std::vector<RowVectorPtr> batches;
+  makeRows(kNumRows, 1, 0, buildType, batches);
+  auto rows = copyVectorsToTable(batches, 0, table.get());
+
+  std::vector<vector_size_t> inputRowsBuf;
+  inputRowsBuf.resize(kNumRows);
+  auto inputRows =
+      folly::Range(static_cast<vector_size_t*>(inputRowsBuf.data()), kNumRows);
+  std::vector<char*> outputRowsBuf;
+  outputRowsBuf.resize(kNumRows);
+  auto outputRows = folly::Range(outputRowsBuf.data(), kNumRows);
+
+  HashLookup lookup(table->hashers());
+  lookup.rows.reserve(kNumRows);
+  lookup.hits.reserve(kNumRows);
+  for (auto i = 0; i < kNumRows; i++) {
+    lookup.rows.push_back(i);
+    lookup.hits.push_back(rows[i]);
+  }
+
+  struct TestParam {
+    std::optional<int64_t> estimatedRowSize;
+    std::vector<vector_size_t> varSizeListColumns;
+    std::vector<vector_size_t> fixedSizeListColumns;
+    uint64_t maxBytes;
+    int64_t expectedRows;
+
+    std::string debugString() const {
+      std::stringstream ss;
+      ss << "estimatedRowSize "
+         << (estimatedRowSize.has_value()
+                 ? std::to_string(estimatedRowSize.value())
+                 : "null");
+      ss << "varSizeListColumns ";
+      ss << "[";
+      for (auto i = 0; i < varSizeListColumns.size(); i++) {
+        ss << varSizeListColumns[i];
+        if (i != varSizeListColumns.size() - 1) {
+          ss << ", ";
+        }
+      }
+      ss << "] fixedSizeListColumns [";
+      for (auto i = 0; i < fixedSizeListColumns.size(); i++) {
+        ss << fixedSizeListColumns[i];
+        if (i != fixedSizeListColumns.size() - 1) {
+          ss << ", ";
+        }
+      }
+      ss << "] maxBytes " << maxBytes;
+
+      return ss.str();
+    }
+  };
+
+  // Key types: BIGINT, VARCHAR, ROW(BIGINT, VARCHAR)
+  // Dependent types: BIGINT, VARCHAR
+  std::vector<TestParam> testParams{
+      {std::nullopt, {}, {0}, 1024, 128},
+      {std::nullopt, {1}, {}, 2048, 20},
+      {std::nullopt, {1}, {}, 1 << 20, 1024},
+      {std::nullopt, {1}, {}, 1 << 14, 154},
+      {std::nullopt, {1}, {0}, 2048, 18},
+      {std::nullopt, {}, {0, 3}, 1024, 64},
+      {std::nullopt, {2}, {}, 2048, 17},
+      {std::nullopt, {1, 2, 4}, {0, 3}, 1 << 14, 66},
+      {std::nullopt, {2}, {}, 2048, 17},
+      {std::make_optional(128), {}, {0}, 1024, 8},
+      {std::make_optional(0), {1}, {0}, 1024, 1024}};
+  for (const auto& testParam : testParams) {
+    SCOPED_TRACE(testParam.debugString());
+    uint64_t fixedColumnSizeSum{0};
+    for (const auto column : testParam.fixedSizeListColumns) {
+      fixedColumnSizeSum += table->rows()->fixedSizeAt(column);
+    }
+    BaseHashTable::JoinResultIterator iter(
+        std::vector<vector_size_t>(testParam.varSizeListColumns),
+        fixedColumnSizeSum,
+        testParam.estimatedRowSize);
+    iter.reset(lookup);
+    auto numRows = table->listJoinResults(
+        iter, true, inputRows, outputRows, testParam.maxBytes);
+    ASSERT_EQ(numRows, testParam.expectedRows);
   }
 }
 

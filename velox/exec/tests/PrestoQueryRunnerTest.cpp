@@ -26,6 +26,7 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+using namespace facebook;
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
@@ -49,7 +50,9 @@ class PrestoQueryRunnerTest : public ::testing::Test,
 // This test requires a Presto Coordinator running at localhost, so disable it
 // by default.
 TEST_F(PrestoQueryRunnerTest, DISABLED_basic) {
+  auto aggregatePool = rootPool_->addAggregateChild("basic");
   auto queryRunner = std::make_unique<PrestoQueryRunner>(
+      aggregatePool.get(),
       "http://127.0.0.1:8080",
       "hive",
       static_cast<std::chrono::milliseconds>(1000));
@@ -89,7 +92,9 @@ TEST_F(PrestoQueryRunnerTest, DISABLED_fuzzer) {
                   .project({"a0", "a1", "array_sort(a2)"})
                   .planNode();
 
+  auto aggregatePool = rootPool_->addAggregateChild("fuzzer");
   auto queryRunner = std::make_unique<PrestoQueryRunner>(
+      aggregatePool.get(),
       "http://127.0.0.1:8080",
       "hive",
       static_cast<std::chrono::milliseconds>(1000));
@@ -108,8 +113,12 @@ TEST_F(PrestoQueryRunnerTest, DISABLED_fuzzer) {
 }
 
 TEST_F(PrestoQueryRunnerTest, sortedAggregation) {
+  auto aggregatePool = rootPool_->addAggregateChild("sortedAggregation");
   auto queryRunner = std::make_unique<PrestoQueryRunner>(
-      "http://unused", "hive", static_cast<std::chrono::milliseconds>(1000));
+      aggregatePool.get(),
+      "http://unused",
+      "hive",
+      static_cast<std::chrono::milliseconds>(1000));
 
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 1, 2, 1}),
@@ -148,8 +157,12 @@ TEST_F(PrestoQueryRunnerTest, sortedAggregation) {
 }
 
 TEST_F(PrestoQueryRunnerTest, distinctAggregation) {
+  auto aggregatePool = rootPool_->addAggregateChild("distinctAggregation");
   auto queryRunner = std::make_unique<PrestoQueryRunner>(
-      "http://unused", "hive", static_cast<std::chrono::milliseconds>(1000));
+      aggregatePool.get(),
+      "http://unused",
+      "hive",
+      static_cast<std::chrono::milliseconds>(1000));
 
   auto data =
       makeRowVector({makeFlatVector<int64_t>({}), makeFlatVector<int64_t>({})});
@@ -165,31 +178,52 @@ TEST_F(PrestoQueryRunnerTest, distinctAggregation) {
 }
 
 TEST_F(PrestoQueryRunnerTest, toSql) {
+  auto aggregatePool = rootPool_->addAggregateChild("toSql");
   auto queryRunner = std::make_unique<PrestoQueryRunner>(
-      "http://unused", "hive", static_cast<std::chrono::milliseconds>(1000));
+      aggregatePool.get(),
+      "http://unused",
+      "hive",
+      static_cast<std::chrono::milliseconds>(1000));
   auto dataType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BOOLEAN()});
 
   // Test window queries.
   {
+    auto queryRunnerContext = queryRunner->queryRunnerContext();
+    core::PlanNodeId id;
+    const auto frameClause =
+        "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW";
     auto plan =
         PlanBuilder()
             .tableScan("tmp", dataType)
             .window({"first_value(c0) over (partition by c1 order by c2)"})
+            .capturePlanNodeId(id)
             .planNode();
+    queryRunnerContext->windowFrames_[id] = {frameClause};
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM tmp");
+        fmt::format(
+            "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 ASC NULLS LAST {}) FROM tmp",
+            frameClause));
 
+    const auto firstValueFrame =
+        "ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING";
+    const auto lastValueFrame =
+        "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW";
     plan =
         PlanBuilder()
             .tableScan("tmp", dataType)
             .window(
                 {"first_value(c0) over (partition by c1 order by c2 desc nulls first rows between 1 following and unbounded following)",
                  "last_value(c0) over (partition by c1 order by c2 desc nulls first)"})
+            .capturePlanNodeId(id)
             .planNode();
+    queryRunnerContext->windowFrames_[id] = {firstValueFrame, lastValueFrame};
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING), last_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM tmp");
+        fmt::format(
+            "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST {}), last_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST {}) FROM tmp",
+            firstValueFrame,
+            lastValueFrame));
   }
 
   // Test aggregation queries.
@@ -209,7 +243,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
                .planNode();
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        "SELECT plus(a0, c1) as p0 FROM (SELECT c1, sum(c0) as a0 FROM tmp GROUP BY c1)");
+        "SELECT (a0 + c1) as p0 FROM (SELECT c1, sum(c0) as a0 FROM tmp GROUP BY c1)");
 
     plan = PlanBuilder()
                .tableScan("tmp", dataType)

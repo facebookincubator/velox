@@ -241,14 +241,37 @@ std::vector<std::string> AggregationFuzzerBase::generateKeys(
 std::vector<std::string> AggregationFuzzerBase::generateSortingKeys(
     const std::string& prefix,
     std::vector<std::string>& names,
-    std::vector<TypePtr>& types) {
+    std::vector<TypePtr>& types,
+    bool rangeFrame,
+    std::optional<uint32_t> numKeys) {
   std::vector<std::string> keys;
-  auto numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
-  for (auto i = 0; i < numKeys; ++i) {
-    keys.push_back(fmt::format("{}{}", prefix, i));
+  vector_size_t maxDepth;
+  std::vector<TypePtr> sortingKeyTypes = defaultScalarTypes();
 
+  // If frame has k-RANGE bound, only one sorting key should be present, and it
+  // should be a scalar type which supports '+', '-' arithmetic operations.
+  if (rangeFrame) {
+    numKeys = 1;
+    sortingKeyTypes = {
+        TINYINT(),
+        SMALLINT(),
+        INTEGER(),
+        BIGINT(),
+        HUGEINT(),
+        REAL(),
+        DOUBLE()};
+    maxDepth = 0;
+  } else {
+    if (!numKeys.has_value()) {
+      numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
+    }
     // Pick random, possibly complex, type.
-    types.push_back(vectorFuzzer_.randOrderableType(2));
+    maxDepth = 2;
+  }
+
+  for (auto i = 0; i < numKeys.value(); ++i) {
+    keys.push_back(fmt::format("{}{}", prefix, i));
+    types.push_back(vectorFuzzer_.randOrderableType(sortingKeyTypes, maxDepth));
     names.push_back(keys.back());
   }
 
@@ -731,11 +754,12 @@ void persistReproInfo(
 }
 
 std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
+    memory::MemoryPool* aggregatePool,
     const std::string& prestoUrl,
     const std::string& runnerName,
     const uint32_t& reqTimeoutMs) {
   if (prestoUrl.empty()) {
-    auto duckQueryRunner = std::make_unique<DuckQueryRunner>();
+    auto duckQueryRunner = std::make_unique<DuckQueryRunner>(aggregatePool);
     duckQueryRunner->disableAggregateFunctions({
         "skewness",
         // DuckDB results on constant inputs are incorrect. Should be NaN,
@@ -749,6 +773,7 @@ std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
     return duckQueryRunner;
   } else {
     return std::make_unique<PrestoQueryRunner>(
+        aggregatePool,
         prestoUrl,
         runnerName,
         static_cast<std::chrono::milliseconds>(reqTimeoutMs));

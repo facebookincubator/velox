@@ -34,13 +34,11 @@
 #include "arrow/status.h"
 #include "arrow/type.h"
 #include "arrow/type_traits.h"
-#include "arrow/util/bit_stream_utils.h"
 #include "arrow/util/bit_util.h"
 #include "arrow/util/bitmap_ops.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/endian.h"
 #include "arrow/util/logging.h"
-#include "arrow/util/rle_encoding.h"
 #include "arrow/util/type_traits.h"
 
 #include "velox/dwio/parquet/writer/arrow/ColumnPage.h"
@@ -59,6 +57,7 @@
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/dwio/parquet/writer/arrow/util/Crc32.h"
+#include "velox/dwio/parquet/writer/arrow/util/RleEncodingInternal.h"
 #include "velox/dwio/parquet/writer/arrow/util/VisitArrayInline.h"
 
 using arrow::Array;
@@ -67,14 +66,14 @@ using arrow::Datum;
 using arrow::ResizableBuffer;
 using arrow::Result;
 using arrow::Status;
-using arrow::bit_util::BitWriter;
 using arrow::internal::checked_cast;
 using arrow::internal::checked_pointer_cast;
-using arrow::util::RleEncoder;
 
 namespace bit_util = arrow::bit_util;
 
 namespace facebook::velox::parquet::arrow {
+using bit_util::BitWriter;
+using util::RleEncoder;
 
 using util::CodecOptions;
 
@@ -126,11 +125,11 @@ struct ValueBufferSlicer {
       const ::arrow::BooleanArray& array,
       std::shared_ptr<Buffer>* buffer) {
     auto data = array.data();
-    if (bit_util::IsMultipleOf8(data->offset)) {
+    if (::arrow::bit_util::IsMultipleOf8(data->offset)) {
       *buffer = SliceBuffer(
           data->buffers[1],
-          bit_util::BytesForBits(data->offset),
-          bit_util::BytesForBits(data->length));
+          ::arrow::bit_util::BytesForBits(data->offset),
+          ::arrow::bit_util::BytesForBits(data->length));
       return Status::OK();
     }
     PARQUET_ASSIGN_OR_THROW(
@@ -202,7 +201,7 @@ void LevelEncoder::Init(
     int num_buffered_values,
     uint8_t* data,
     int data_size) {
-  bit_width_ = bit_util::Log2(max_level + 1);
+  bit_width_ = ::arrow::bit_util::Log2(max_level + 1);
   encoding_ = encoding;
   switch (encoding) {
     case Encoding::RLE: {
@@ -211,7 +210,7 @@ void LevelEncoder::Init(
     }
     case Encoding::BIT_PACKED: {
       int num_bytes = static_cast<int>(
-          bit_util::BytesForBits(num_buffered_values * bit_width_));
+          ::arrow::bit_util::BytesForBits(num_buffered_values * bit_width_));
       bit_packed_encoder_ = std::make_unique<BitWriter>(data, num_bytes);
       break;
     }
@@ -224,7 +223,7 @@ int LevelEncoder::MaxBufferSize(
     Encoding::type encoding,
     int16_t max_level,
     int num_buffered_values) {
-  int bit_width = bit_util::Log2(max_level + 1);
+  int bit_width = ::arrow::bit_util::Log2(max_level + 1);
   int num_bytes = 0;
   switch (encoding) {
     case Encoding::RLE: {
@@ -236,7 +235,7 @@ int LevelEncoder::MaxBufferSize(
     }
     case Encoding::BIT_PACKED: {
       num_bytes = static_cast<int>(
-          bit_util::BytesForBits(num_buffered_values * bit_width));
+          ::arrow::bit_util::BytesForBits(num_buffered_values * bit_width));
       break;
     }
     default:
@@ -276,8 +275,8 @@ int LevelEncoder::Encode(int batch_size, const int16_t* levels) {
 // PageWriter implementation
 
 // This subclass delimits pages appearing in a serialized stream, each preceded
-// by a serialized Thrift format::PageHeader indicating the type of each page
-// and the page metadata.
+// by a serialized Thrift facebook::velox::parquet::thrift::PageHeader
+// indicating the type of each page and the page metadata.
 class SerializedPageWriter : public PageWriter {
  public:
   SerializedPageWriter(
@@ -329,7 +328,7 @@ class SerializedPageWriter : public PageWriter {
       compressed_data = page.buffer();
     }
 
-    format::DictionaryPageHeader dict_page_header;
+    facebook::velox::parquet::thrift::DictionaryPageHeader dict_page_header;
     dict_page_header.__set_num_values(page.num_values());
     dict_page_header.__set_encoding(ToThrift(page.encoding()));
     dict_page_header.__set_is_sorted(page.is_sorted());
@@ -348,8 +347,9 @@ class SerializedPageWriter : public PageWriter {
       output_data_buffer = encryption_buffer_->data();
     }
 
-    format::PageHeader page_header;
-    page_header.__set_type(format::PageType::DICTIONARY_PAGE);
+    facebook::velox::parquet::thrift::PageHeader page_header;
+    page_header.__set_type(
+        facebook::velox::parquet::thrift::PageType::DICTIONARY_PAGE);
     page_header.__set_uncompressed_page_size(
         static_cast<int32_t>(uncompressed_size));
     page_header.__set_compressed_page_size(
@@ -448,7 +448,7 @@ class SerializedPageWriter : public PageWriter {
       output_data_buffer = encryption_buffer_->data();
     }
 
-    format::PageHeader page_header;
+    facebook::velox::parquet::thrift::PageHeader page_header;
     page_header.__set_uncompressed_page_size(
         static_cast<int32_t>(uncompressed_size));
     page_header.__set_compressed_page_size(
@@ -512,9 +512,9 @@ class SerializedPageWriter : public PageWriter {
   }
 
   void SetDataPageHeader(
-      format::PageHeader& page_header,
+      facebook::velox::parquet::thrift::PageHeader& page_header,
       const DataPageV1& page) {
-    format::DataPageHeader data_page_header;
+    facebook::velox::parquet::thrift::DataPageHeader data_page_header;
     data_page_header.__set_num_values(page.num_values());
     data_page_header.__set_encoding(ToThrift(page.encoding()));
     data_page_header.__set_definition_level_encoding(
@@ -527,14 +527,15 @@ class SerializedPageWriter : public PageWriter {
       data_page_header.__set_statistics(ToThrift(page.statistics()));
     }
 
-    page_header.__set_type(format::PageType::DATA_PAGE);
+    page_header.__set_type(
+        facebook::velox::parquet::thrift::PageType::DATA_PAGE);
     page_header.__set_data_page_header(data_page_header);
   }
 
   void SetDataPageV2Header(
-      format::PageHeader& page_header,
+      facebook::velox::parquet::thrift::PageHeader& page_header,
       const DataPageV2& page) {
-    format::DataPageHeaderV2 data_page_header;
+    facebook::velox::parquet::thrift::DataPageHeaderV2 data_page_header;
     data_page_header.__set_num_values(page.num_values());
     data_page_header.__set_num_nulls(page.num_nulls());
     data_page_header.__set_num_rows(page.num_rows());
@@ -552,7 +553,8 @@ class SerializedPageWriter : public PageWriter {
       data_page_header.__set_statistics(ToThrift(page.statistics()));
     }
 
-    page_header.__set_type(format::PageType::DATA_PAGE_V2);
+    page_header.__set_type(
+        facebook::velox::parquet::thrift::PageType::DATA_PAGE_V2);
     page_header.__set_data_page_header_v2(data_page_header);
   }
 
@@ -1212,7 +1214,8 @@ void ColumnWriterImpl::BuildDataPageV1(
         uncompressed_size,
         page_stats,
         first_row_index);
-    total_compressed_bytes_ += page_ptr->size() + sizeof(format::PageHeader);
+    total_compressed_bytes_ +=
+        page_ptr->size() + sizeof(facebook::velox::parquet::thrift::PageHeader);
 
     data_pages_.push_back(std::move(page_ptr));
   } else { // Eagerly write pages
@@ -1293,7 +1296,8 @@ void ColumnWriterImpl::BuildDataPageV2(
         pager_->has_compressor(),
         page_stats,
         first_row_index);
-    total_compressed_bytes_ += page_ptr->size() + sizeof(format::PageHeader);
+    total_compressed_bytes_ +=
+        page_ptr->size() + sizeof(facebook::velox::parquet::thrift::PageHeader);
     data_pages_.push_back(std::move(page_ptr));
   } else {
     DataPageV2 page(
@@ -1620,7 +1624,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       ARROW_ASSIGN_OR_RAISE(
           bits_buffer_,
           ::arrow::AllocateResizableBuffer(
-              bit_util::BytesForBits(properties_->write_batch_size()),
+              ::arrow::bit_util::BytesForBits(properties_->write_batch_size()),
               ctx->memory_pool));
       bits_buffer_->ZeroPadding();
     }
@@ -1831,7 +1835,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     }
     // Shrink to fit possible causes another allocation, and would only be
     // necessary on the last batch.
-    int64_t new_bitmap_size = bit_util::BytesForBits(batch_size);
+    int64_t new_bitmap_size = ::arrow::bit_util::BytesForBits(batch_size);
     if (new_bitmap_size != bits_buffer_->size()) {
       PARQUET_THROW_NOT_OK(
           bits_buffer_->Resize(new_bitmap_size, /*shrink_to_fit=*/false));

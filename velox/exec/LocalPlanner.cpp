@@ -32,6 +32,7 @@
 #include "velox/exec/MergeJoin.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/NestedLoopJoinProbe.h"
+#include "velox/exec/OperatorTraceScan.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/RowNumber.h"
@@ -212,8 +213,14 @@ uint32_t maxDrivers(
         auto localExchange =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(node)) {
       // Local gather must run single-threaded.
-      if (localExchange->type() == core::LocalPartitionNode::Type::kGather) {
-        return 1;
+      switch (localExchange->type()) {
+        case core::LocalPartitionNode::Type::kGather:
+          return 1;
+        case core::LocalPartitionNode::Type::kRepartition:
+          count = std::min(queryConfig.maxLocalExchangePartitionCount(), count);
+          break;
+        default:
+          VELOX_UNREACHABLE("Unexpected local exchange type");
       }
     } else if (std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
       // Local merge must run single-threaded.
@@ -251,7 +258,7 @@ uint32_t maxDrivers(
             *result,
             0,
             "maxDrivers must be greater than 0. Plan node: {}",
-            node->toString())
+            node->toString());
         if (*result == 1) {
           return 1;
         }
@@ -587,6 +594,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
           assignUniqueIdNode,
           assignUniqueIdNode->taskUniqueId(),
           assignUniqueIdNode->uniqueIdCounter()));
+    } else if (
+        const auto traceScanNode =
+            std::dynamic_pointer_cast<const core::TraceScanNode>(planNode)) {
+      operators.push_back(std::make_unique<trace::OperatorTraceScan>(
+          id, ctx.get(), traceScanNode));
     } else {
       std::unique_ptr<Operator> extended;
       if (planNode->requiresExchangeClient()) {

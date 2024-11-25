@@ -18,12 +18,13 @@
 
 #pragma once
 
+#include <string>
+#include <utility>
+
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <folly/Expected.h>
 #include <folly/Likely.h>
-#include <string>
-#include <utility>
 
 namespace facebook::velox {
 
@@ -81,6 +82,49 @@ namespace facebook::velox {
 ///  VELOX_RETURN_NOT_OK(operation1());
 ///  VELOX_RETURN_NOT_OK(operation2());
 ///  VELOX_RETURN_NOT_OK(operation3());
+///  ...
+///
+/// folly::Expected<T, Status> holds either a result or an error status and is
+/// aliased as Expected<T> to simplify usage.
+///
+/// For operations return a value if successful, or error status if not,
+/// use Expected<T>:
+///
+/// Simple usage:
+///
+///  Expected<bool> operation() {
+///    if (noMoreMemory) {
+///      return folly::makeUnexpected(
+///        Status::OutOfMemory("Not enough memory to run 'operation'!"));
+///    }
+///    return true;
+///  }
+///
+/// Call site:
+///
+///  auto expected = operation();
+///  if (expected.hasError()) {
+///    auto error = expected.error();
+///    (handle error status)
+///  } else {
+///    auto value = expected.value();
+///    (handle value on success)
+///  }
+///
+/// The same logic above can be implemented using helper macros:
+///
+///  Expected<bool> operation() {
+///    VELOX_RETURN_UNEXPECTED_IF(noMoreMemory,
+///      Status::OutOfMemory("Not enough memory to run 'operation'!"));
+///    return true;
+///  }
+///
+/// To ensure operations succeed (or if not, return the same status wrapped in
+/// folly::Unexpected from the current function):
+///
+///  ...
+///  VELOX_RETURN_UNEXPECTED(operationReturnExpected());
+///  VELOX_RETURN_UNEXPECTED_NOT_OK(operationReturnStatus());
 ///  ...
 
 /// This enum represents common categories of errors found in the library. These
@@ -515,11 +559,34 @@ inline Status genericToStatus(Status&& st) {
 template <typename T>
 using Expected = folly::Expected<T, Status>;
 
+/// Return with given status wrapped in folly::Unexpected if condition is met.
+#define VELOX_RETURN_UNEXPECTED_IF(condition, status) \
+  do {                                                \
+    if (FOLLY_UNLIKELY(condition)) {                  \
+      return (::folly::makeUnexpected(status));       \
+    }                                                 \
+  } while (false)
+
+/// Propagate any non-successful Status wrapped in folly::Unexpected to the
+/// caller.
+#define VELOX_RETURN_UNEXPECTED_NOT_OK(status)                \
+  do {                                                        \
+    ::facebook::velox::Status __s =                           \
+        ::facebook::velox::internal::genericToStatus(status); \
+    VELOX_RETURN_IF(!__s.ok(), ::folly::makeUnexpected(__s)); \
+  } while (false)
+
+#define VELOX_RETURN_UNEXPECTED(expected)                    \
+  do {                                                       \
+    auto res = (expected);                                   \
+    VELOX_RETURN_UNEXPECTED_IF(res.hasError(), res.error()); \
+  } while (false)
+
 } // namespace facebook::velox
 
 template <>
 struct fmt::formatter<facebook::velox::Status> : fmt::formatter<std::string> {
-  auto format(const facebook::velox::Status& s, format_context& ctx) {
+  auto format(const facebook::velox::Status& s, format_context& ctx) const {
     return formatter<std::string>::format(s.toString(), ctx);
   }
 };
@@ -527,7 +594,7 @@ struct fmt::formatter<facebook::velox::Status> : fmt::formatter<std::string> {
 template <>
 struct fmt::formatter<facebook::velox::StatusCode>
     : fmt::formatter<std::string_view> {
-  auto format(facebook::velox::StatusCode code, format_context& ctx) {
+  auto format(facebook::velox::StatusCode code, format_context& ctx) const {
     return formatter<std::string_view>::format(
         facebook::velox::toString(code), ctx);
   }

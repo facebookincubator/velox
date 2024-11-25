@@ -41,6 +41,10 @@ namespace facebook::velox::serializer::presto {
 /// 2. To serialize a single RowVector, one can use the BatchVectorSerializer
 /// returned by createBatchSerializer(). Since it serializes a single RowVector,
 /// it tries to preserve the encodings of the input data.
+///
+/// 3. To serialize data from a vector into a single column, adhering to
+/// PrestoPage's column format and excluding the PrestoPage header, one can use
+/// serializeSingleColumn() directly.
 class PrestoVectorSerde : public VectorSerde {
  public:
   // Input options that the serializer recognizes.
@@ -50,10 +54,12 @@ class PrestoVectorSerde : public VectorSerde {
     PrestoOptions(
         bool _useLosslessTimestamp,
         common::CompressionKind _compressionKind,
-        bool _nullsFirst = false)
+        bool _nullsFirst = false,
+        bool _preserveEncodings = false)
         : VectorSerde::Options(_compressionKind),
           useLosslessTimestamp(_useLosslessTimestamp),
-          nullsFirst(_nullsFirst) {}
+          nullsFirst(_nullsFirst),
+          preserveEncodings(_preserveEncodings) {}
 
     /// Currently presto only supports millisecond precision and the serializer
     /// converts velox native timestamp to that resulting in loss of precision.
@@ -72,7 +78,14 @@ class PrestoVectorSerde : public VectorSerde {
     /// than this causes subsequent compression attempts to be skipped. The more
     /// times compression misses the target the less frequently it is tried.
     float minCompressionRatio{0.8};
+
+    /// If true, the serializer will not employ any optimizations that can
+    /// affect the encoding of the input vectors. This is only relevant when
+    /// using BatchVectorSerializer.
+    bool preserveEncodings{false};
   };
+
+  PrestoVectorSerde() : VectorSerde(Kind::kPresto) {}
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
@@ -82,9 +95,11 @@ class PrestoVectorSerde : public VectorSerde {
       vector_size_t** sizes,
       Scratch& scratch) override;
 
+  /// Adds the serialized sizes of the rows of 'vector' in 'rows[i]' to
+  /// '*sizes[i]'.
   void estimateSerializedSize(
       const BaseVector* vector,
-      const folly::Range<const vector_size_t*> rows,
+      const folly::Range<const vector_size_t*>& rows,
       vector_size_t** sizes,
       Scratch& scratch) override;
 
@@ -133,6 +148,18 @@ class PrestoVectorSerde : public VectorSerde {
       TypePtr type,
       VectorPtr* result,
       const Options* options);
+
+  /// This function is used to serialize data from input vector into a single
+  /// column that conforms to PrestoPage's column format. The serialized binary
+  /// data is uncompressed and starts at the column header since the PrestoPage
+  /// header is not included. The deserializeSingleColumn function can be used
+  /// to deserialize the serialized binary data returned by this function back
+  /// to the input vector.
+  void serializeSingleColumn(
+      const VectorPtr& vector,
+      const Options* opts,
+      memory::MemoryPool* pool,
+      std::ostream* output);
 
   enum class TokenType {
     HEADER,
@@ -188,6 +215,7 @@ class PrestoVectorSerde : public VectorSerde {
       const Options* options = nullptr);
 
   static void registerVectorSerde();
+  static void registerNamedVectorSerde();
 };
 
 class PrestoOutputStreamListener : public OutputStreamListener {

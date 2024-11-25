@@ -37,7 +37,7 @@ class SelectiveFloatingPointColumnReader
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
-  void seekToRowGroup(uint32_t index) override {
+  void seekToRowGroup(int64_t index) override {
     base::seekToRowGroup(index);
     auto positionsProvider = this->formatData_->seekToRowGroup(index);
     decoder_.seekToRowGroup(positionsProvider);
@@ -46,7 +46,7 @@ class SelectiveFloatingPointColumnReader
 
   uint64_t skip(uint64_t numValues) override;
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override {
     using T = SelectiveFloatingPointColumnReader<TFile, TRequested>;
     this->template readCommon<T, true>(offset, rows, incomingNulls);
@@ -54,7 +54,7 @@ class SelectiveFloatingPointColumnReader
   }
 
   template <typename TVisitor>
-  void readWithVisitor(RowSet rows, TVisitor visitor);
+  void readWithVisitor(const RowSet& rows, TVisitor visitor);
 
   FloatingPointDecoder<TFile, TRequested> decoder_;
 };
@@ -88,7 +88,7 @@ uint64_t SelectiveFloatingPointColumnReader<TFile, TRequested>::skip(
 template <typename TFile, typename TRequested>
 template <typename TVisitor>
 void SelectiveFloatingPointColumnReader<TFile, TRequested>::readWithVisitor(
-    RowSet rows,
+    const RowSet& /*rows*/,
     TVisitor visitor) {
   if (this->nullsInReadRange_) {
     decoder_.template readWithVisitor<true, TVisitor>(

@@ -36,7 +36,6 @@ struct LoadRequest {
 
   velox::common::Region region;
   cache::TrackingId trackingId;
-  bool processed{false};
 
   const SeekableInputStream* stream;
 
@@ -63,6 +62,10 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
         input_(std::move(input)),
         loadQuantum_(loadQuantum),
         pool_(pool) {
+    VELOX_DCHECK(
+        std::is_sorted(requests.begin(), requests.end(), [](auto* x, auto* y) {
+          return x->region.offset < y->region.offset;
+        }));
     requests_.reserve(requests.size());
     for (auto i = 0; i < requests.size(); ++i) {
       requests_.push_back(std::move(*requests[i]));
@@ -156,12 +159,11 @@ class DirectBufferedInput : public BufferedInput {
   }
 
   virtual std::unique_ptr<BufferedInput> clone() const override {
-    std::unique_ptr<DirectBufferedInput> input(new DirectBufferedInput(
+    return std::unique_ptr<DirectBufferedInput>(new DirectBufferedInput(
         input_, fileNum_, tracker_, groupId_, ioStats_, executor_, options_));
-    return input;
   }
 
-  memory::MemoryPool* pool() {
+  memory::MemoryPool* pool() const {
     return pool_;
   }
 

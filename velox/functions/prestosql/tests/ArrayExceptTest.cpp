@@ -16,6 +16,7 @@
 
 #include <optional>
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/tests/TestingDictionaryArrayElementsFunction.h"
 
 using namespace facebook::velox;
@@ -23,6 +24,9 @@ using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
 
 namespace {
+
+template <typename TKey, typename TValue>
+using Pair = std::pair<TKey, std::optional<TValue>>;
 
 class ArrayExceptTest : public FunctionBaseTest {
  protected:
@@ -278,6 +282,67 @@ TEST_F(ArrayExceptTest, varbinary) {
   testExpr(expected, "array_except(c0, c1)", {right, left});
 }
 
+TEST_F(ArrayExceptTest, complexTypeArray) {
+  auto left = makeNestedArrayVectorFromJson<int32_t>({
+      "[null, [1, 2, 3], [null, null]]",
+      "[[1], [2], []]",
+      "[[1, null, 3]]",
+      "[[1, null, 3]]",
+  });
+
+  auto right = makeNestedArrayVectorFromJson<int32_t>({
+      "[[1, 2, 3]]",
+      "[[1]]",
+      "[[1, null, 3], [1, 2]]",
+      "[[1, null, 3, null]]",
+  });
+
+  auto expected = makeNestedArrayVectorFromJson<int32_t>({
+      "[null, [null, null]]",
+      "[[2], []]",
+      "[]",
+      "[[1, null, 3]]",
+  });
+  testExpr(expected, "array_except(c0, c1)", {left, right});
+}
+
+TEST_F(ArrayExceptTest, complexTypeMap) {
+  std::vector<Pair<StringView, int64_t>> a{{"blue", 1}, {"red", 2}};
+  std::vector<Pair<StringView, int64_t>> b{{"blue", 2}, {"red", 2}};
+  std::vector<Pair<StringView, int64_t>> c{{"green", std::nullopt}};
+  std::vector<Pair<StringView, int64_t>> d{{"yellow", 4}, {"purple", 5}};
+  std::vector<std::vector<std::vector<Pair<StringView, int64_t>>>> leftData{
+      {b, a}, {b}, {c, a}};
+  std::vector<std::vector<std::vector<Pair<StringView, int64_t>>>> rightData{
+      {a, b}, {}, {a}};
+  std::vector<std::vector<std::vector<Pair<StringView, int64_t>>>> expectedData{
+      {}, {b}, {c}};
+
+  auto left = makeArrayOfMapVector<StringView, int64_t>(leftData);
+  auto right = makeArrayOfMapVector<StringView, int64_t>(rightData);
+  auto expected = makeArrayOfMapVector<StringView, int64_t>(expectedData);
+
+  testExpr(expected, "array_except(c0, c1)", {left, right});
+}
+
+TEST_F(ArrayExceptTest, complexTypeRow) {
+  RowTypePtr rowType = ROW({INTEGER(), VARCHAR()});
+
+  using ArrayOfRow = std::vector<std::optional<std::tuple<int, std::string>>>;
+  std::vector<ArrayOfRow> leftData = {
+      {{{1, "red"}}, {{2, "blue"}}, {{3, "green"}}},
+      {{{1, "red"}}, {{2, "blue"}}, {}},
+      {{{1, "red"}}, std::nullopt, std::nullopt}};
+  std::vector<ArrayOfRow> rightData = {
+      {{{2, "blue"}}, {{1, "red"}}}, {{}, {{1, "green"}}}, {{{1, "red"}}}};
+  std::vector<ArrayOfRow> expectedData = {
+      {{{3, "green"}}}, {{{1, "red"}}, {{2, "blue"}}}, {std::nullopt}};
+  auto left = makeArrayOfRowVector(leftData, rowType);
+  auto right = makeArrayOfRowVector(rightData, rowType);
+  auto expected = makeArrayOfRowVector(expectedData, rowType);
+  testExpr(expected, "array_except(c0, c1)", {left, right});
+}
+
 // When one of the arrays is constant.
 TEST_F(ArrayExceptTest, constant) {
   auto array1 = makeNullableArrayVector<int32_t>({
@@ -329,4 +394,104 @@ TEST_F(ArrayExceptTest, dictionaryEncodedElementsInConstant) {
       expected,
       "array_except(c0, testing_dictionary_array_elements(ARRAY [0, 1, 3, 2, 2, 3, 2]))",
       {array});
+}
+
+TEST_F(ArrayExceptTest, timestampWithTimezone) {
+  auto testArrayExcept =
+      [this](
+          const std::vector<std::optional<int64_t>>& inputArray1,
+          const std::vector<std::optional<int64_t>>& inputArray2,
+          const std::vector<std::optional<int64_t>>& expectedArrayForward,
+          const std::vector<std::optional<int64_t>>& expectedArrayBackward) {
+        const auto input1 = makeArrayVector(
+            {0},
+            makeNullableFlatVector(inputArray1, TIMESTAMP_WITH_TIME_ZONE()));
+        const auto input2 = makeArrayVector(
+            {0},
+            makeNullableFlatVector(inputArray2, TIMESTAMP_WITH_TIME_ZONE()));
+        const auto expectedForward = makeArrayVector(
+            {0},
+            makeNullableFlatVector(
+                expectedArrayForward, TIMESTAMP_WITH_TIME_ZONE()));
+        const auto expectedBackward = makeArrayVector(
+            {0},
+            makeNullableFlatVector(
+                expectedArrayBackward, TIMESTAMP_WITH_TIME_ZONE()));
+
+        testExpr(expectedForward, "array_except(c0, c1)", {input1, input2});
+        testExpr(expectedBackward, "array_except(c1, c0)", {input1, input2});
+      };
+
+  testArrayExcept(
+      {pack(1, 0),
+       pack(-2, 1),
+       pack(3, 2),
+       std::nullopt,
+       pack(4, 3),
+       pack(5, 4),
+       pack(6, 5),
+       std::nullopt},
+      {pack(1, 10), pack(-2, 11), pack(4, 12)},
+      {pack(3, 2), std::nullopt, pack(5, 4), pack(6, 5)},
+      {});
+  testArrayExcept(
+      {pack(1, 0), pack(2, 1), pack(-2, 2), pack(1, 3)},
+      {pack(1, 10), pack(-2, 11), pack(4, 12)},
+      {pack(2, 1)},
+      {pack(4, 12)});
+  testArrayExcept(
+      {pack(3, 0), pack(8, 1), std::nullopt},
+      {pack(1, 10), pack(-2, 11), pack(4, 12)},
+      {pack(3, 0), pack(8, 1), std::nullopt},
+      {pack(1, 10), pack(-2, 11), pack(4, 12)});
+  testArrayExcept(
+      {pack(1, 0),
+       pack(1, 1),
+       pack(-2, 2),
+       pack(-2, 3),
+       pack(-2, 4),
+       pack(4, 5),
+       pack(8, 6)},
+      {pack(1, 10), pack(-2, 11), pack(4, 12)},
+      {pack(8, 6)},
+      {});
+  testArrayExcept(
+      {pack(1, 0),
+       pack(-2, 1),
+       pack(3, 2),
+       std::nullopt,
+       pack(4, 3),
+       pack(5, 4),
+       pack(6, 5),
+       std::nullopt},
+      {pack(10, 10), pack(-24, 11), pack(43, 12)},
+      {pack(1, 0),
+       pack(-2, 1),
+       pack(3, 2),
+       std::nullopt,
+       pack(4, 3),
+       pack(5, 4),
+       pack(6, 5)},
+      {pack(10, 10), pack(-24, 11), pack(43, 12)});
+  testArrayExcept(
+      {pack(1, 0), pack(2, 1), pack(-2, 2), pack(1, 3)},
+      {std::nullopt, pack(-2, 10), pack(2, 11)},
+      {pack(1, 0)},
+      {std::nullopt});
+  testArrayExcept(
+      {pack(3, 0), pack(8, 1), std::nullopt},
+      {std::nullopt, std::nullopt, std::nullopt},
+      {pack(3, 0), pack(8, 1)},
+      {});
+  testArrayExcept(
+      {pack(1, 0),
+       pack(1, 1),
+       pack(-2, 2),
+       pack(-2, 3),
+       pack(-2, 4),
+       pack(4, 5),
+       pack(8, 6)},
+      {pack(8, 10), pack(1, 11), pack(8, 12), pack(1, 13)},
+      {pack(-2, 2), pack(4, 5)},
+      {});
 }

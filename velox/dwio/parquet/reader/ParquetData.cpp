@@ -17,6 +17,7 @@
 #include "velox/dwio/parquet/reader/ParquetData.h"
 
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 
 namespace facebook::velox::parquet {
 
@@ -30,8 +31,15 @@ std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
 void ParquetData::filterRowGroups(
     const common::ScanSpec& scanSpec,
     uint64_t /*rowsPerRowGroup*/,
-    const dwio::common::StatsContext& /*writerContext*/,
+    const dwio::common::StatsContext& writerContext,
     FilterRowGroupsResult& result) {
+  auto parquetStatsContext =
+      reinterpret_cast<const ParquetStatsContext*>(&writerContext);
+  if (type_->parquetType_.has_value() &&
+      parquetStatsContext->shouldIgnoreStatistics(
+          type_->parquetType_.value())) {
+    return;
+  }
   result.totalCount =
       std::max<int>(result.totalCount, fileMetaDataPtr_.numRowGroups());
   auto nwords = bits::nwords(result.totalCount);
@@ -107,7 +115,7 @@ void ParquetData::enqueueRowGroup(
   streams_[index] = input.enqueue({chunkReadOffset, readSize}, &id);
 }
 
-dwio::common::PositionProvider ParquetData::seekToRowGroup(uint32_t index) {
+dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
   static std::vector<uint64_t> empty;
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");

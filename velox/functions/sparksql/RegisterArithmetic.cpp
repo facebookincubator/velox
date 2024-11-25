@@ -17,6 +17,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/sparksql/Arithmetic.h"
+#include "velox/functions/sparksql/DecimalArithmetic.h"
 #include "velox/functions/sparksql/Rand.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -37,6 +38,14 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<DivideFunction, double, double, double>({prefix + "divide"});
   registerBinaryNumeric<RemainderFunction>({prefix + "remainder"});
   registerUnaryNumeric<UnaryMinusFunction>({prefix + "unaryminus"});
+  registerFunction<
+      UnaryMinusFunction,
+      LongDecimal<P1, S1>,
+      LongDecimal<P1, S1>>({prefix + "unaryminus"});
+  registerFunction<
+      UnaryMinusFunction,
+      ShortDecimal<P1, S1>,
+      ShortDecimal<P1, S1>>({prefix + "unaryminus"});
   // Math functions.
   registerUnaryNumeric<AbsFunction>({prefix + "abs"});
   registerFunction<
@@ -105,10 +114,10 @@ void registerArithmeticFunctions(const std::string& prefix) {
       int64_t>({prefix + "width_bucket"});
   registerRandFunctions(prefix);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_add, prefix + "add");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_sub, prefix + "subtract");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_mul, prefix + "multiply");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
+  registerDecimalAdd(prefix);
+  registerDecimalSubtract(prefix);
+  registerDecimalMultiply(prefix);
+  registerDecimalDivide(prefix);
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
 

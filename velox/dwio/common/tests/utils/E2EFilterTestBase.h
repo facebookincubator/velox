@@ -39,21 +39,41 @@ class TestingHook : public ValueHook {
  public:
   explicit TestingHook(FlatVector<T>* result) : result_(result) {}
 
-  void addValue(vector_size_t row, const void* value) override {
-    result_->set(row, *reinterpret_cast<const T*>(value));
+  void addValue(vector_size_t row, int64_t value) override {
+    if constexpr (std::is_integral_v<T>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
+  void addValue(vector_size_t row, float value) override {
+    if constexpr (std::is_same_v<T, float>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
+  void addValue(vector_size_t row, double value) override {
+    if constexpr (std::is_same_v<T, double>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
+  void addValue(vector_size_t row, folly::StringPiece value) override {
+    if constexpr (std::is_same_v<T, StringView>) {
+      result_->set(row, StringView(value));
+    } else {
+      VELOX_FAIL();
+    }
   }
 
  private:
   FlatVector<T>* result_;
 };
-
-template <>
-inline void TestingHook<StringView>::addValue(
-    vector_size_t row,
-    const void* value) {
-  result_->set(
-      row, StringView(*reinterpret_cast<const folly::StringPiece*>(value)));
-}
 
 // Utility for checking that a subsequent batch of output does not
 // overwrite internals of a possibly retained previous batch.
@@ -100,7 +120,8 @@ class E2EFilterTestBase : public testing::Test {
 
   static bool typeKindSupportsValueHook(TypeKind kind) {
     return kind != TypeKind::TIMESTAMP && kind != TypeKind::ARRAY &&
-        kind != TypeKind::ROW && kind != TypeKind::MAP;
+        kind != TypeKind::ROW && kind != TypeKind::MAP &&
+        kind != TypeKind::HUGEINT;
   }
 
   std::vector<RowVectorPtr> makeDataset(
@@ -237,7 +258,7 @@ class E2EFilterTestBase : public testing::Test {
     for (int32_t i = 0; i < 5 && i < batch->size(); ++i) {
       rows.push_back(i);
     }
-    for (int32_t i = 5; i < 5 && i < batch->size(); i += 2) {
+    for (int32_t i = 5; i < batch->size(); i += 2) {
       rows.push_back(i);
     }
     auto result = std::static_pointer_cast<FlatVector<T>>(
@@ -300,6 +321,16 @@ class E2EFilterTestBase : public testing::Test {
       const std::vector<std::string>& filterable,
       int32_t numCombinations,
       bool withRecursiveNulls = true);
+
+  void testRunLengthDictionaryScenario(
+      const std::string& columns,
+      std::function<void()> customize,
+      bool wrapInStruct,
+      const std::vector<std::string>& filterable,
+      int32_t numCombinations,
+      int32_t maxRunLength,
+      bool withRecursiveNulls = true,
+      int64_t seed = time(nullptr));
 
  private:
   void testMetadataFilterImpl(

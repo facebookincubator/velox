@@ -40,8 +40,8 @@ using DataAvailableCallback = std::function<void(
 using DataConsumerActiveCheckCallback = std::function<bool()>;
 
 struct DataAvailable {
-  DataAvailableCallback callback;
-  int64_t sequence;
+  DataAvailableCallback callback{nullptr};
+  int64_t sequence{0};
   std::vector<std::unique_ptr<folly::IOBuf>> data;
   std::vector<int64_t> remainingBytes;
 
@@ -140,7 +140,7 @@ class DestinationBuffer {
 
     /// Whether the result is returned immediately without invoking the `notify'
     /// callback.
-    bool immediate;
+    bool immediate{false};
   };
 
   /// Returns a shallow copy (folly::IOBuf::clone) of the data starting at
@@ -306,8 +306,8 @@ class OutputBuffer {
       DataAvailableCallback notify,
       DataConsumerActiveCheckCallback activeCheck);
 
-  // Continues any possibly waiting producers. Called when the
-  // producer task has an error or cancellation.
+  /// Continues any possibly waiting producers. Called when the producer task
+  /// has an error or cancellation.
   void terminate();
 
   std::string toString();
@@ -381,10 +381,10 @@ class OutputBuffer {
 
   const std::shared_ptr<Task> task_;
   const core::PartitionedOutputNode::Kind kind_;
-  /// If 'totalSize_' > 'maxSize_', each producer is blocked after adding
+  /// If 'bufferedBytes_' > 'maxSize_', each producer is blocked after adding
   /// data.
   const uint64_t maxSize_;
-  // When 'totalSize_' goes below 'continueSize_', blocked producers are
+  // When 'bufferedBytes_' goes below 'continueSize_', blocked producers are
   // resumed.
   const uint64_t continueSize_;
   const std::unique_ptr<ArbitraryBuffer> arbitraryBuffer_;

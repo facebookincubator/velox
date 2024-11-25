@@ -28,6 +28,7 @@
 #include "velox/type/Timestamp.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+using namespace facebook;
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::filesystems;
@@ -53,7 +54,31 @@ class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
 };
 } // namespace
 
-class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
+struct TestParam {
+  const common::CompressionKind compressionKind;
+  const bool enablePrefixSort;
+
+  TestParam(common::CompressionKind _compressionKind, bool _enablePrefixSort)
+      : compressionKind(_compressionKind),
+        enablePrefixSort(_enablePrefixSort) {}
+
+  TestParam(uint32_t value)
+      : compressionKind(static_cast<common::CompressionKind>(value >> 1)),
+        enablePrefixSort(!!(value & 1)) {}
+
+  uint32_t value() const {
+    return static_cast<uint32_t>(compressionKind) << 1 | enablePrefixSort;
+  }
+
+  std::string toString() const {
+    return fmt::format(
+        "compressionKind: {}, enablePrefixSort: {}",
+        compressionKind,
+        enablePrefixSort);
+  }
+};
+
+class SpillTest : public ::testing::TestWithParam<uint32_t>,
                   public facebook::velox::test::VectorTestBase {
  public:
   explicit SpillTest()
@@ -66,21 +91,56 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     setThreadLocalRunTimeStatWriter(nullptr);
   }
 
+  static std::vector<uint32_t> getTestParams() {
+    std::vector<uint32_t> testParams;
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_NONE, false}
+            .value());
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_ZLIB, false}
+            .value());
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_SNAPPY, false}
+            .value());
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_ZSTD, false}
+            .value());
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_LZ4, false}.value());
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_NONE, true}.value());
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_ZLIB, true}.value());
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_SNAPPY, true}
+            .value());
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_ZSTD, true}.value());
+    testParams.emplace_back(
+        TestParam{common::CompressionKind::CompressionKind_LZ4, true}.value());
+    return testParams;
+  }
+
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
+    if (!isRegisteredVectorSerde()) {
+      facebook::velox::serializer::presto::PrestoVectorSerde::
+          registerVectorSerde();
+    }
+    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+      facebook::velox::serializer::presto::PrestoVectorSerde::
+          registerNamedVectorSerde();
+    }
   }
 
   void SetUp() override {
     allocator_ = memory::memoryManager()->allocator();
     tempDir_ = exec::test::TempDirectoryPath::create();
-    if (!isRegisteredVectorSerde()) {
-      facebook::velox::serializer::presto::PrestoVectorSerde::
-          registerVectorSerde();
-    }
     filesystems::registerLocalFileSystem();
     rng_.seed(1);
-    compressionKind_ = GetParam();
+    compressionKind_ = TestParam{GetParam()}.compressionKind;
+    enablePrefixSort_ = TestParam{GetParam()}.enablePrefixSort;
   }
 
   uint8_t randPartitionBitOffset() {
@@ -156,16 +216,22 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     // the batch number of the vector in the partition. When read back, both
     // partitions produce an ascending sequence of integers without gaps.
     spillStats_.wlock()->reset();
+    const std::optional<common::PrefixSortConfig> prefixSortConfig =
+        enablePrefixSort_
+        ? std::optional<common::PrefixSortConfig>(common::PrefixSortConfig())
+        : std::nullopt;
+    const int32_t numSortKeys = 1;
     state_ = std::make_unique<SpillState>(
         [&]() -> const std::string& { return tempDir_->getPath(); },
         updateSpilledBytesCb_,
         fileNamePrefix_,
         numPartitions,
-        1,
+        numSortKeys,
         compareFlags,
         targetFileSize,
         writeBufferSize,
         compressionKind_,
+        prefixSortConfig,
         pool(),
         &spillStats_);
     ASSERT_EQ(targetFileSize, state_->targetFileSize());
@@ -174,6 +240,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(spillStats_.rlock()->spilledPartitions, 0);
     ASSERT_TRUE(state_->spilledPartitionSet().empty());
     ASSERT_EQ(compressionKind_, state_->compressionKind());
+    ASSERT_EQ(state_->sortCompareFlags().size(), numSortKeys);
 
     for (auto partition = 0; partition < state_->maxPartitions(); ++partition) {
       ASSERT_FALSE(state_->isPartitionSpilled(partition));
@@ -293,12 +360,12 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_GT(stats.spillWrites, 0);
     // NOTE: On fast machines we might have sub-microsecond in each write,
     // resulting in 0us total write time.
-    ASSERT_GE(stats.spillWriteTimeUs, 0);
-    ASSERT_GE(stats.spillFlushTimeUs, 0);
+    ASSERT_GE(stats.spillWriteTimeNanos, 0);
+    ASSERT_GE(stats.spillFlushTimeNanos, 0);
     ASSERT_GT(stats.spilledRows, 0);
     // NOTE: the following stats are not collected by spill state.
-    ASSERT_EQ(stats.spillFillTimeUs, 0);
-    ASSERT_EQ(stats.spillSortTimeUs, 0);
+    ASSERT_EQ(stats.spillFillTimeNanos, 0);
+    ASSERT_EQ(stats.spillSortTimeNanos, 0);
     const auto newGStats = common::globalSpillStats();
     ASSERT_EQ(
         prevGStats.spilledPartitions + stats.spilledPartitions,
@@ -310,19 +377,19 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(
         prevGStats.spillWrites + stats.spillWrites, newGStats.spillWrites);
     ASSERT_EQ(
-        prevGStats.spillWriteTimeUs + stats.spillWriteTimeUs,
-        newGStats.spillWriteTimeUs);
+        prevGStats.spillWriteTimeNanos + stats.spillWriteTimeNanos,
+        newGStats.spillWriteTimeNanos);
     ASSERT_EQ(
-        prevGStats.spillFlushTimeUs + stats.spillFlushTimeUs,
-        newGStats.spillFlushTimeUs);
+        prevGStats.spillFlushTimeNanos + stats.spillFlushTimeNanos,
+        newGStats.spillFlushTimeNanos);
     ASSERT_EQ(
         prevGStats.spilledRows + stats.spilledRows, newGStats.spilledRows);
     ASSERT_EQ(
-        prevGStats.spillFillTimeUs + stats.spillFillTimeUs,
-        newGStats.spillFillTimeUs);
+        prevGStats.spillFillTimeNanos + stats.spillFillTimeNanos,
+        newGStats.spillFillTimeNanos);
     ASSERT_EQ(
-        prevGStats.spillSortTimeUs + stats.spillSortTimeUs,
-        newGStats.spillSortTimeUs);
+        prevGStats.spillSortTimeNanos + stats.spillSortTimeNanos,
+        newGStats.spillSortTimeNanos);
 
     // Verifies the spill file id
     for (auto& partitionNum : state_->spilledPartitionSet()) {
@@ -395,35 +462,34 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     const auto finalStats = spillStats_.copy();
     ASSERT_EQ(finalStats.spillReadBytes, finalStats.spilledBytes);
     ASSERT_GT(finalStats.spillReads, 0);
-    ASSERT_GT(finalStats.spillReadTimeUs, 0);
-    ASSERT_GT(finalStats.spillDeserializationTimeUs, 0);
-
+    ASSERT_GT(finalStats.spillReadTimeNanos, 0);
+    ASSERT_GT(finalStats.spillDeserializationTimeNanos, 0);
     ASSERT_EQ(
         finalStats.toString(),
         fmt::format(
-            "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] "
-            "spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] "
-            "spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] "
-            "spillWrites[{}] spillFlushTime[{}] spillWriteTime[{}] "
-            "maxSpillExceededLimitCount[0] spillReadBytes[{}] spillReads[{}] "
-            "spillReadTime[{}] spillReadDeserializationTime[{}]",
+            "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] spilledRows[{}] "
+            "spilledPartitions[{}] spilledFiles[{}] spillFillTimeNanos[{}] "
+            "spillSortTimeNanos[{}] spillExtractVectorTime[{}] spillSerializationTimeNanos[{}] spillWrites[{}] "
+            "spillFlushTimeNanos[{}] spillWriteTimeNanos[{}] maxSpillExceededLimitCount[0] "
+            "spillReadBytes[{}] spillReads[{}] spillReadTimeNanos[{}] "
+            "spillReadDeserializationTimeNanos[{}]",
             finalStats.spillRuns,
             succinctBytes(finalStats.spilledInputBytes),
             succinctBytes(finalStats.spilledBytes),
             finalStats.spilledRows,
             finalStats.spilledPartitions,
             finalStats.spilledFiles,
-            succinctMicros(finalStats.spillFillTimeUs),
-            succinctMicros(finalStats.spillSortTimeUs),
-            succinctMicros(finalStats.spillSerializationTimeUs),
+            succinctNanos(finalStats.spillFillTimeNanos),
+            succinctNanos(finalStats.spillSortTimeNanos),
+            succinctNanos(finalStats.spillExtractVectorTimeNanos),
+            succinctNanos(finalStats.spillSerializationTimeNanos),
             finalStats.spillWrites,
-            succinctMicros(finalStats.spillFlushTimeUs),
-            succinctMicros(finalStats.spillWriteTimeUs),
+            succinctNanos(finalStats.spillFlushTimeNanos),
+            succinctNanos(finalStats.spillWriteTimeNanos),
             succinctBytes(finalStats.spillReadBytes),
             finalStats.spillReads,
-            succinctMicros(finalStats.spillReadTimeUs),
-            succinctMicros(finalStats.spillDeserializationTimeUs)));
-
+            succinctNanos(finalStats.spillReadTimeNanos),
+            succinctNanos(finalStats.spillDeserializationTimeNanos)));
     // Verify the spilled files are still there after spill state destruction.
     for (const auto& spilledFile : spilledFileSet) {
       ASSERT_TRUE(fs->exists(spilledFile));
@@ -436,6 +502,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
   std::shared_ptr<TempDirectoryPath> tempDir_;
   memory::MemoryAllocator* allocator_;
   common::CompressionKind compressionKind_;
+  bool enablePrefixSort_;
   std::vector<std::optional<int64_t>> values_;
   std::vector<std::vector<RowVectorPtr>> batchesByPartition_;
   std::string fileNamePrefix_;
@@ -479,7 +546,10 @@ TEST_P(SpillTest, spillTimestamp) {
       Timestamp{-1, 17'123'456},
       Timestamp{Timestamp::kMaxSeconds, Timestamp::kMaxNanos},
       Timestamp{Timestamp::kMinSeconds, 0}};
-
+  const std::optional<common::PrefixSortConfig> prefixSortConfig =
+      enablePrefixSort_
+      ? std::optional<common::PrefixSortConfig>(common::PrefixSortConfig())
+      : std::nullopt;
   SpillState state(
       [&]() -> const std::string& { return tempDirectory->getPath(); },
       updateSpilledBytesCb_,
@@ -490,6 +560,7 @@ TEST_P(SpillTest, spillTimestamp) {
       1024,
       0,
       compressionKind_,
+      prefixSortConfig,
       pool(),
       &spillStats_);
   int partitionIndex = 0;
@@ -866,13 +937,7 @@ TEST(SpillTest, scopedSpillInjectionRegex) {
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(
+VELOX_INSTANTIATE_TEST_SUITE_P(
     SpillTestSuite,
     SpillTest,
-    ::testing::Values(
-        common::CompressionKind::CompressionKind_NONE,
-        common::CompressionKind::CompressionKind_ZLIB,
-        common::CompressionKind::CompressionKind_SNAPPY,
-        common::CompressionKind::CompressionKind_ZSTD,
-        common::CompressionKind::CompressionKind_LZ4,
-        common::CompressionKind::CompressionKind_GZIP));
+    ::testing::ValuesIn(SpillTest::getTestParams()));

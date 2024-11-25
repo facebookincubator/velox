@@ -16,16 +16,23 @@
 
 #pragma once
 
+#include <gflags/gflags.h>
+#include <shared_mutex>
+
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/SsdFileTracker.h"
 #include "velox/common/file/File.h"
-
-#include <gflags/gflags.h>
+#include "velox/common/file/FileSystems.h"
 
 DECLARE_bool(ssd_odirect);
 DECLARE_bool(ssd_verify_write);
 
 namespace facebook::velox::cache {
+
+namespace test {
+class SsdFileTestHelper;
+class SsdCacheTestHelper;
+} // namespace test
 
 /// A 64 bit word describing a SSD cache entry in an SsdFile. The low 23 bits
 /// are the size, for a maximum entry size of 8MB. The high bits are the offset.
@@ -52,6 +59,7 @@ class SsdRun {
     fileBits_ = other.fileBits_;
     checksum_ = other.checksum_;
   }
+
   void operator=(SsdRun&& other) {
     fileBits_ = other.fileBits_;
     checksum_ = other.checksum_;
@@ -199,6 +207,10 @@ struct SsdCacheStats {
     return result;
   }
 
+  void clear() {
+    *this = SsdCacheStats();
+  }
+
   /// Snapshot stats
   tsan_atomic<uint64_t> entriesCached{0};
   tsan_atomic<uint64_t> regionsCached{0};
@@ -300,7 +312,6 @@ class SsdFile {
 
   /// Erases 'key'
   bool erase(RawFileCacheKey key);
-
   /// Copies the data in 'ssdPins' into 'pins'. Coalesces IO for nearby
   /// entries if they are in ascending order and near enough.
   CoalesceIoStats load(
@@ -319,16 +330,6 @@ class SsdFile {
   void checkPinned(uint64_t offset) const {
     tsan_lock_guard<std::shared_mutex> l(mutex_);
     VELOX_CHECK_GT(regionPins_[regionIndex(offset)], 0);
-  }
-
-  /// Returns the region number corresponding to offset.
-  static int32_t regionIndex(uint64_t offset) {
-    return offset / kRegionSize;
-  }
-
-  /// Updates the read count of a region.
-  void regionRead(int32_t region, int32_t size) {
-    tracker_.regionRead(region, size);
   }
 
   int32_t maxRegions() const {
@@ -372,39 +373,19 @@ class SsdFile {
 
   /// Returns the checkpoint file path.
   std::string getCheckpointFilePath() const {
-    return fileName_ + kCheckpointExtension;
+    // Faulty file path needs to be handled manually before we switch checkpoint
+    // file to Velox filesystem.
+    const std::string faultyPrefix = "faulty:";
+    std::string checkpointPath = fileName_ + kCheckpointExtension;
+    return checkpointPath.find(faultyPrefix) == 0
+        ? checkpointPath.substr(faultyPrefix.size())
+        : checkpointPath;
   }
-
-  /// Deletes the backing file. Used in testing.
-  void testingDeleteFile();
 
   /// Resets this' to a post-construction empty state. See SsdCache::clear().
   ///
   /// NOTE: this is only used by test and Prestissimo worker operation.
   void clear();
-
-  /// Returns true if copy on write is disabled for this file. Used in testing.
-  bool testingIsCowDisabled() const;
-
-  std::vector<double> testingCopyScores() {
-    return tracker_.copyScores();
-  }
-
-  int32_t testingNumWritableRegions() const {
-    return writableRegions_.size();
-  }
-
-  const folly::F14FastMap<FileCacheKey, SsdRun>& testingEntries() {
-    return entries_;
-  }
-
-  SsdCacheStats testingStats() const {
-    return stats_;
-  }
-
-  bool testingChecksumReadVerificationEnabled() const {
-    return checksumReadVerificationEnabled_;
-  }
 
  private:
   // Magic number separating file names from cache entry data in checkpoint
@@ -414,6 +395,21 @@ class SsdFile {
   static constexpr int64_t kCheckpointEndMarker = 0xcbedf11e;
 
   static constexpr int kMaxErasedSizePct = 50;
+
+  // Updates the read count of a region.
+  void regionRead(int32_t region, int32_t size) {
+    tracker_.regionRead(region, size);
+  }
+
+  // Returns the region number corresponding to 'offset'.
+  static int32_t regionIndex(uint64_t offset) {
+    return offset / kRegionSize;
+  }
+
+  // Returns the offset within a region corresponding to 'offset'.
+  static int32_t regionOffset(uint64_t offset) {
+    return offset % kRegionSize;
+  }
 
   // The first 4 bytes of a checkpoint file contains version string to indicate
   // if checksum write is enabled or not.
@@ -467,12 +463,11 @@ class SsdFile {
 
   // Writes 'iovecs' to the SSD file at the 'offset'. Returns true if the write
   // succeeds; otherwise, log the error and return false.
-  bool
-  write(uint64_t offset, uint64_t length, const std::vector<iovec>& iovecs);
+  bool write(int64_t offset, int64_t length, const std::vector<iovec>& iovecs);
 
   // Synchronously logs that 'regions' are no longer valid in a possibly
   // existing checkpoint.
-  void logEviction(const std::vector<int32_t>& regions);
+  void logEviction(std::vector<int32_t>& regions);
 
   // Computes the checksum of data in cache 'entry'.
   uint32_t checksumEntry(const AsyncDataCacheEntry& entry) const;
@@ -493,6 +488,10 @@ class SsdFile {
   void maybeVerifyChecksum(
       const AsyncDataCacheEntry& entry,
       const SsdRun& ssdRun);
+
+  // Disable 'copy on write'. Will throw if failed for any reason, including
+  // file system not supporting cow feature.
+  void disableFileCow();
 
   // Returns true if checksum write is enabled for the given version.
   static bool isChecksumEnabledOnCheckpointVersion(
@@ -551,14 +550,20 @@ class SsdFile {
   // Map of file number and offset to location in file.
   folly::F14FastMap<FileCacheKey, SsdRun> entries_;
 
-  // File descriptor. 0 (stdin) means file not open.
-  int32_t fd_{0};
+  // File system.
+  std::shared_ptr<filesystems::FileSystem> fs_;
 
-  // Size of the backing file in bytes. Must be multiple of kRegionSize.
-  uint64_t fileSize_{0};
+  // The size of actual cached data in bytes. Must be multiple of kRegionSize.
+  uint64_t dataSize_{0};
 
-  // ReadFile made from 'fd_'.
+  // ReadFile for cache data file.
   std::unique_ptr<ReadFile> readFile_;
+
+  // WriteFile for cache data file.
+  std::unique_ptr<WriteFile> writeFile_;
+
+  // WriteFile for evict log file.
+  std::unique_ptr<WriteFile> evictLogWriteFile_;
 
   // Counters.
   SsdCacheStats stats_;
@@ -573,11 +578,11 @@ class SsdFile {
   // Count of bytes written after last checkpoint.
   std::atomic<uint64_t> bytesAfterCheckpoint_{0};
 
-  // fd for logging evictions.
-  int32_t evictLogFd_{-1};
-
   // True if there was an error with checkpoint and the checkpoint was deleted.
   bool checkpointDeleted_{false};
+
+  friend class test::SsdFileTestHelper;
+  friend class test::SsdCacheTestHelper;
 };
 
 } // namespace facebook::velox::cache

@@ -27,8 +27,9 @@ target_link_libraries(
   aggregate_companion_functions_test
   velox_exec
   velox_function_registry
-  gtest
-  gtest_main)
+  velox_exec_test_lib
+  GTest::gtest
+  GTest::gtest_main)
 
 add_executable(
   velox_exec_test
@@ -60,6 +61,7 @@ add_executable(
   MultiFragmentTest.cpp
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
+  OperatorTraceTest.cpp
   OutputBufferManagerTest.cpp
   PartitionedOutputTest.cpp
   PlanNodeSerdeTest.cpp
@@ -67,6 +69,7 @@ add_executable(
   PrefixSortTest.cpp
   PrintPlanWithStatsTest.cpp
   ProbeOperatorStateTest.cpp
+  TraceUtilTest.cpp
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
   RowNumberTest.cpp
@@ -136,6 +139,7 @@ target_link_libraries(
   velox_serialization
   velox_test_util
   velox_type
+  velox_type_test_lib
   velox_vector
   velox_vector_fuzzer
   velox_writer_fuzzer
@@ -148,9 +152,9 @@ target_link_libraries(
   Boost::regex
   Boost::thread
   Boost::system
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   Folly::folly
   gflags::gflags
   glog::glog
@@ -186,9 +190,9 @@ target_link_libraries(
   Boost::regex
   Boost::thread
   Boost::system
-  gtest
-  gtest_main
-  gmock
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
   Folly::folly
   gflags::gflags
   glog::glog
@@ -212,21 +216,22 @@ target_link_libraries(
 add_executable(velox_row_number_fuzzer_test RowNumberFuzzerTest.cpp)
 
 target_link_libraries(
-  velox_row_number_fuzzer_test velox_row_number_fuzzer gtest gtest_main)
+  velox_row_number_fuzzer_test velox_row_number_fuzzer GTest::gtest
+  GTest::gtest_main)
 
 # Join Fuzzer.
 add_executable(velox_join_fuzzer_test JoinFuzzerTest.cpp)
 
 target_link_libraries(
-  velox_join_fuzzer_test velox_join_fuzzer gtest gtest_main)
+  velox_join_fuzzer_test velox_join_fuzzer GTest::gtest GTest::gtest_main)
 
 # Arbitration Fuzzer.
 add_executable(velox_memory_arbitration_fuzzer_test
                MemoryArbitrationFuzzerTest.cpp)
 
 target_link_libraries(
-  velox_memory_arbitration_fuzzer_test velox_memory_arbitration_fuzzer gtest
-  gtest_main)
+  velox_memory_arbitration_fuzzer_test velox_memory_arbitration_fuzzer
+  GTest::gtest GTest::gtest_main)
 
 # Cache Fuzzer
 add_executable(velox_cache_fuzzer_test CacheFuzzerTest.cpp)
@@ -235,8 +240,8 @@ target_link_libraries(
   velox_cache_fuzzer_test
   velox_cache_fuzzer
   velox_fuzzer_util
-  gtest
-  gtest_main)
+  GTest::gtest
+  GTest::gtest_main)
 
 add_executable(velox_exchange_fuzzer_test ExchangeFuzzer.cpp)
 
@@ -246,9 +251,9 @@ target_link_libraries(
   velox_aggregates
   velox_vector_test_lib
   velox_vector_fuzzer
-  gtest
-  gtest
-  gtest_main)
+  GTest::gtest
+  GTest::gtest
+  GTest::gtest_main)
 
 add_executable(velox_aggregation_runner_test AggregationRunnerTest.cpp)
 
@@ -258,8 +263,8 @@ target_link_libraries(
   velox_fuzzer_util
   velox_aggregates
   velox_vector_test_lib
-  gtest
-  gtest_main)
+  GTest::gtest
+  GTest::gtest_main)
 
 add_library(velox_simple_aggregate SimpleAverageAggregate.cpp
                                    SimpleArrayAggAggregate.cpp)
@@ -279,8 +284,8 @@ target_link_libraries(
   velox_simple_aggregate
   velox_exec
   velox_functions_aggregates_test_lib
-  gtest
-  gtest_main)
+  GTest::gtest
+  GTest::gtest_main)
 
 add_library(velox_spiller_join_benchmark_base JoinSpillInputBenchmarkBase.cpp
                                               SpillerBenchmarkBase.cpp)
@@ -325,7 +330,7 @@ add_test(
   COMMAND cpr_http_client_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
-  cpr_http_client_test cpr::cpr gtest gtest_main)
+  cpr_http_client_test cpr::cpr GTest::gtest GTest::gtest_main)
 
 add_executable(velox_driver_test OperatorReplacement.cpp Main.cpp)
 add_test(
@@ -334,4 +339,4 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(
-  velox_driver_test velox_exec velox_exec_test_lib gtest)
+  velox_driver_test velox_exec velox_exec_test_lib GTest::gtest)

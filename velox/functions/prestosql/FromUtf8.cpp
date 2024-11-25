@@ -16,8 +16,8 @@
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/Utf8Utils.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/functions/prestosql/Utf8Utils.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -165,14 +165,15 @@ class FromUtf8Function : public exec::VectorFunction {
 
     auto replacement = decoded.valueAt<StringView>(row);
     if (!replacement.empty()) {
-      auto charLength =
-          tryGetCharLength(replacement.data(), replacement.size());
+      int32_t codePoint;
+      auto charLength = tryGetUtf8CharLength(
+          replacement.data(), replacement.size(), codePoint);
       VELOX_USER_CHECK_GT(
           charLength, 0, "Replacement is not a valid UTF-8 character");
       VELOX_USER_CHECK_EQ(
           charLength,
           replacement.size(),
-          "Replacement string must be empty or a single character")
+          "Replacement string must be empty or a single character");
     }
     return replacement;
   }
@@ -188,8 +189,9 @@ class FromUtf8Function : public exec::VectorFunction {
 
       int32_t pos = 0;
       while (pos < value.size()) {
-        auto charLength =
-            tryGetCharLength(value.data() + pos, value.size() - pos);
+        int32_t codePoint;
+        auto charLength = tryGetUtf8CharLength(
+            value.data() + pos, value.size() - pos, codePoint);
         if (charLength < 0) {
           firstInvalidRow = row;
           return false;
@@ -267,8 +269,9 @@ class FromUtf8Function : public exec::VectorFunction {
 
     int32_t pos = 0;
     while (pos < input.size()) {
-      auto charLength =
-          tryGetCharLength(input.data() + pos, input.size() - pos);
+      int32_t codePoint;
+      auto charLength = tryGetUtf8CharLength(
+          input.data() + pos, input.size() - pos, codePoint);
       if (charLength > 0) {
         fixedWriter.append(std::string_view(input.data() + pos, charLength));
         pos += charLength;

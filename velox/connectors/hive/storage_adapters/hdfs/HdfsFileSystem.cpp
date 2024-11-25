@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
-#include <hdfs/hdfs.h>
 #include <mutex>
+#include "velox/common/config/Config.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsWriteFile.h"
-#include "velox/core/Config.h"
+#include "velox/external/hdfs/ArrowHdfsInternal.h"
 
 namespace facebook::velox::filesystems {
 std::string_view HdfsFileSystem::kScheme("hdfs://");
@@ -26,22 +26,30 @@ std::string_view HdfsFileSystem::kScheme("hdfs://");
 class HdfsFileSystem::Impl {
  public:
   // Keep config here for possible use in the future.
-  explicit Impl(const Config* config, const HdfsServiceEndpoint& endpoint) {
-    auto builder = hdfsNewBuilder();
-    hdfsBuilderSetNameNode(builder, endpoint.host.c_str());
-    hdfsBuilderSetNameNodePort(builder, atoi(endpoint.port.data()));
-    hdfsClient_ = hdfsBuilderConnect(builder);
-    hdfsFreeBuilder(builder);
+  explicit Impl(
+      const config::ConfigBase* config,
+      const HdfsServiceEndpoint& endpoint) {
+    auto status = filesystems::arrow::io::internal::ConnectLibHdfs(&driver_);
+    if (!status.ok()) {
+      LOG(ERROR) << "ConnectLibHdfs failed due to: " << status.ToString();
+    }
+
+    // connect to HDFS with the builder object
+    hdfsBuilder* builder = driver_->NewBuilder();
+    driver_->BuilderSetNameNode(builder, endpoint.host.c_str());
+    driver_->BuilderSetNameNodePort(builder, atoi(endpoint.port.data()));
+    driver_->BuilderSetForceNewInstance(builder);
+    hdfsClient_ = driver_->BuilderConnect(builder);
     VELOX_CHECK_NOT_NULL(
         hdfsClient_,
         "Unable to connect to HDFS: {}, got error: {}.",
         endpoint.identity(),
-        hdfsGetLastError())
+        driver_->GetLastExceptionRootCause());
   }
 
   ~Impl() {
     LOG(INFO) << "Disconnecting HDFS file system";
-    int disconnectResult = hdfsDisconnect(hdfsClient_);
+    int disconnectResult = driver_->Disconnect(hdfsClient_);
     if (disconnectResult != 0) {
       LOG(WARNING) << "hdfs disconnect failure in HdfsReadFile close: "
                    << errno;
@@ -52,12 +60,17 @@ class HdfsFileSystem::Impl {
     return hdfsClient_;
   }
 
+  filesystems::arrow::io::internal::LibHdfsShim* hdfsShim() {
+    return driver_;
+  }
+
  private:
   hdfsFS hdfsClient_;
+  filesystems::arrow::io::internal::LibHdfsShim* driver_;
 };
 
 HdfsFileSystem::HdfsFileSystem(
-    const std::shared_ptr<const Config>& config,
+    const std::shared_ptr<const config::ConfigBase>& config,
     const HdfsServiceEndpoint& endpoint)
     : FileSystem(config) {
   impl_ = std::make_shared<Impl>(config.get(), endpoint);
@@ -77,13 +90,15 @@ std::unique_ptr<ReadFile> HdfsFileSystem::openFileForRead(
     path.remove_prefix(index);
   }
 
-  return std::make_unique<HdfsReadFile>(impl_->hdfsClient(), path);
+  return std::make_unique<HdfsReadFile>(
+      impl_->hdfsShim(), impl_->hdfsClient(), path);
 }
 
 std::unique_ptr<WriteFile> HdfsFileSystem::openFileForWrite(
     std::string_view path,
     const FileOptions& /*unused*/) {
-  return std::make_unique<HdfsWriteFile>(impl_->hdfsClient(), path);
+  return std::make_unique<HdfsWriteFile>(
+      impl_->hdfsShim(), impl_->hdfsClient(), path);
 }
 
 bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
@@ -94,17 +109,17 @@ bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
 /// fixed one from configuration.
 HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
     const std::string_view filePath,
-    const Config* config) {
+    const config::ConfigBase* config) {
   auto endOfIdentityInfo = filePath.find('/', kScheme.size());
   std::string hdfsIdentity{
       filePath.data(), kScheme.size(), endOfIdentityInfo - kScheme.size()};
   if (hdfsIdentity.empty()) {
     // Fall back to get a fixed endpoint from config.
-    auto hdfsHost = config->get("hive.hdfs.host");
+    auto hdfsHost = config->get<std::string>("hive.hdfs.host");
     VELOX_CHECK(
         hdfsHost.hasValue(),
         "hdfsHost is empty, configuration missing for hdfs host");
-    auto hdfsPort = config->get("hive.hdfs.port");
+    auto hdfsPort = config->get<std::string>("hive.hdfs.port");
     VELOX_CHECK(
         hdfsPort.hasValue(),
         "hdfsPort is empty, configuration missing for hdfs port");

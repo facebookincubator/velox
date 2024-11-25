@@ -19,3 +19,7 @@ velox_link_libraries(velox_presto_serializer velox_vector velox_row_fast)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_subdirectory(benchmarks)
+endif()

@@ -50,21 +50,19 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
   }
 
   // Year, month, day will be checked in utils::daysSinceEpochFromDate.
-  int64_t daysSinceEpoch;
-  auto status = util::daysSinceEpochFromDate(
+  Expected<int64_t> daysSinceEpoch = util::daysSinceEpochFromDate(
       yearVector->valueAt<int32_t>(row),
       monthVector->valueAt<int32_t>(row),
-      dayVector->valueAt<int32_t>(row),
-      daysSinceEpoch);
-  if (!status.ok()) {
-    VELOX_DCHECK(status.isUserError());
+      dayVector->valueAt<int32_t>(row));
+  if (daysSinceEpoch.hasError()) {
+    VELOX_DCHECK(daysSinceEpoch.error().isUserError());
     return std::nullopt;
   }
 
   // Micros has at most 8 digits (2 for seconds + 6 for microseconds),
   // thus it's safe to cast micros from int64_t to int32_t.
   auto localMicros = util::fromTime(hour, minute, 0, (int32_t)micros);
-  return util::fromDatetime(daysSinceEpoch, localMicros);
+  return util::fromDatetime(daysSinceEpoch.value(), localMicros);
 }
 
 void setTimestampOrNull(
@@ -157,7 +155,8 @@ class MakeTimestampFunction : public exec::VectorFunction {
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     return {
         exec::FunctionSignatureBuilder()
-            .integerVariable("precision")
+            // precision <= 18.
+            .integerVariable("precision", "min(precision, 18)")
             .returnType("timestamp")
             .argumentType("integer")
             .argumentType("integer")
@@ -167,7 +166,8 @@ class MakeTimestampFunction : public exec::VectorFunction {
             .argumentType("decimal(precision, 6)")
             .build(),
         exec::FunctionSignatureBuilder()
-            .integerVariable("precision")
+            // precision <= 18.
+            .integerVariable("precision", "min(precision, 18)")
             .returnType("timestamp")
             .argumentType("integer")
             .argumentType("integer")
@@ -191,7 +191,7 @@ std::shared_ptr<exec::VectorFunction> createMakeTimestampFunction(
   const auto sessionTzName = config.sessionTimezone();
   VELOX_USER_CHECK(
       !sessionTzName.empty(),
-      "make_timestamp requires session time zone to be set.")
+      "make_timestamp requires session time zone to be set.");
   const auto* sessionTimeZone = tz::locateZone(sessionTzName);
 
   const auto& secondsType = inputArgs[5].type;

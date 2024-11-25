@@ -48,6 +48,7 @@ target_link_libraries(
   velox_presto_serializer
   velox_presto_types
   velox_temp_path
+  velox_type_test_lib
   velox_vector_fuzzer
   Boost::atomic
   Boost::context
@@ -57,8 +58,8 @@ target_link_libraries(
   Boost::regex
   Boost::thread
   Boost::system
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   Folly::folly
   gflags::gflags
   glog::glog
@@ -75,8 +76,8 @@ target_link_libraries(
   velox_buffer
   velox_type
   velox_vector_test_lib
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   Folly::folly
   gflags::gflags
   glog::glog
@@ -90,8 +91,8 @@ target_link_libraries(
   bias_vector_test
   velox_vector
   Boost::filesystem
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   Folly::folly
   gflags::gflags
   glog::glog

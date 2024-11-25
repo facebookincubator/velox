@@ -65,6 +65,20 @@ class DateTimeFormatterTest : public testing::Test {
         });
   }
 
+  std::shared_ptr<DateTimeFormatter> getJodaDateTimeFormatter(
+      const std::string_view& format) const {
+    return buildJodaDateTimeFormatter(format).thenOrThrow(
+        folly::identity,
+        [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
+  }
+
+  std::shared_ptr<DateTimeFormatter> getMysqlDateTimeFormatter(
+      const std::string_view& format) const {
+    return buildMysqlDateTimeFormatter(format).thenOrThrow(
+        folly::identity,
+        [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
+  }
+
   void testTokenRange(
       char specifier,
       int numTokenStart,
@@ -74,7 +88,7 @@ class DateTimeFormatterTest : public testing::Test {
       std::string pattern(i, specifier);
       std::vector<DateTimeToken> expected;
       expected = {DateTimeToken(FormatPattern{token, i})};
-      EXPECT_EQ(expected, buildJodaDateTimeFormatter(pattern)->tokens());
+      EXPECT_EQ(expected, getJodaDateTimeFormatter(pattern)->tokens());
     }
   }
 
@@ -88,8 +102,8 @@ class DateTimeFormatterTest : public testing::Test {
   DateTimeResult parseJoda(
       const std::string_view& input,
       const std::string_view& format) {
-    auto dateTimeResultExpected =
-        buildJodaDateTimeFormatter(format)->parse(input);
+    auto formatter = getJodaDateTimeFormatter(format);
+    auto dateTimeResultExpected = formatter->parse(input);
     return dateTimeResult(dateTimeResultExpected);
   }
 
@@ -97,7 +111,7 @@ class DateTimeFormatterTest : public testing::Test {
       const std::string_view& input,
       const std::string_view& format) {
     auto dateTimeResultExpected =
-        buildMysqlDateTimeFormatter(format)->parse(input);
+        getMysqlDateTimeFormatter(format)->parse(input);
     return dateTimeResult(dateTimeResultExpected).timestamp;
   }
 
@@ -107,19 +121,19 @@ class DateTimeFormatterTest : public testing::Test {
       const std::string_view& input,
       const std::string_view& format) {
     auto dateTimeResultExpected =
-        buildJodaDateTimeFormatter(format)->parse(input);
+        getJodaDateTimeFormatter(format)->parse(input);
     auto result = dateTimeResult(dateTimeResultExpected);
-    if (result.timezoneId == 0) {
+    if (result.timezone->id() == 0) {
       return "+00:00";
     }
-    return tz::getTimeZoneName(result.timezoneId);
+    return result.timezone->name();
   }
 
   std::string formatMysqlDateTime(
       const std::string& format,
       const Timestamp& timestamp,
       const tz::TimeZone* timezone) const {
-    auto formatter = buildMysqlDateTimeFormatter(format);
+    auto formatter = getMysqlDateTimeFormatter(format);
     const auto maxSize = formatter->maxResultSize(timezone);
     std::string result(maxSize, '\0');
     auto resultSize =
@@ -241,11 +255,11 @@ TEST_F(JodaDateTimeFormatterTest, validJodaBuild) {
 
   // G specifier case
   expected = {DateTimeToken(FormatPattern{DateTimeFormatSpecifier::ERA, 2})};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("G")->tokens());
+  EXPECT_EQ(expected, getJodaDateTimeFormatter("G")->tokens());
   // minRepresentDigits should be unchanged with higher number of specifier for
   // ERA
   expected = {DateTimeToken(FormatPattern{DateTimeFormatSpecifier::ERA, 2})};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("GGGG")->tokens());
+  EXPECT_EQ(expected, getJodaDateTimeFormatter("GGGG")->tokens());
 
   // C specifier case
   testTokenRange('C', 1, 3, DateTimeFormatSpecifier::CENTURY_OF_ERA);
@@ -281,12 +295,12 @@ TEST_F(JodaDateTimeFormatterTest, validJodaBuild) {
   // a specifier case
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::HALFDAY_OF_DAY, 2})};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("a")->tokens());
+  EXPECT_EQ(expected, getJodaDateTimeFormatter("a")->tokens());
   // minRepresentDigits should be unchanged with higher number of specifier for
   // HALFDAY_OF_DAY
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::HALFDAY_OF_DAY, 2})};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("aa")->tokens());
+  EXPECT_EQ(expected, getJodaDateTimeFormatter("aa")->tokens());
 
   // K specifier case
   testTokenRange('K', 1, 4, DateTimeFormatSpecifier::HOUR_OF_HALFDAY);
@@ -317,22 +331,22 @@ TEST_F(JodaDateTimeFormatterTest, validJodaBuild) {
 
   // Literal case
   expected = {DateTimeToken(" ")};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter(" ")->tokens());
+  EXPECT_EQ(expected, getJodaDateTimeFormatter(" ")->tokens());
   expected = {DateTimeToken("1234567890")};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("1234567890")->tokens());
+  EXPECT_EQ(expected, getJodaDateTimeFormatter("1234567890")->tokens());
   expected = {DateTimeToken("'")};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("''")->tokens());
+  EXPECT_EQ(expected, getJodaDateTimeFormatter("''")->tokens());
   expected = {DateTimeToken("abcdefghijklmnopqrstuvwxyz")};
   EXPECT_EQ(
       expected,
-      buildJodaDateTimeFormatter("'abcdefghijklmnopqrstuvwxyz'")->tokens());
+      getJodaDateTimeFormatter("'abcdefghijklmnopqrstuvwxyz'")->tokens());
   expected = {DateTimeToken("'abcdefg'hijklmnop'qrstuv'wxyz'")};
   EXPECT_EQ(
       expected,
-      buildJodaDateTimeFormatter("'''abcdefg''hijklmnop''qrstuv''wxyz'''")
+      getJodaDateTimeFormatter("'''abcdefg''hijklmnop''qrstuv''wxyz'''")
           ->tokens());
   expected = {DateTimeToken("'1234abcd")};
-  EXPECT_EQ(expected, buildJodaDateTimeFormatter("''1234'abcd'")->tokens());
+  EXPECT_EQ(expected, getJodaDateTimeFormatter("''1234'abcd'")->tokens());
 
   // Specifier combinations
   expected = {
@@ -381,22 +395,22 @@ TEST_F(JodaDateTimeFormatterTest, validJodaBuild) {
 
   EXPECT_EQ(
       expected,
-      buildJodaDateTimeFormatter(
+      getJodaDateTimeFormatter(
           "''CCC-YYYY/xxx//www-00-eeee--EEEEEE---yyyyy///DDDDMM-MMMMddddKKhhhkkHHmmsSSSSSSzzzZZZGGGG'abcdefghijklmnopqrstuvwxyz'aaa")
           ->tokens());
 }
 
 TEST_F(JodaDateTimeFormatterTest, invalidJodaBuild) {
   // Invalid specifiers
-  EXPECT_THROW(buildJodaDateTimeFormatter("q"), VeloxUserError);
-  EXPECT_THROW(buildJodaDateTimeFormatter("r"), VeloxUserError);
-  EXPECT_THROW(buildJodaDateTimeFormatter("g"), VeloxUserError);
+  EXPECT_TRUE(buildJodaDateTimeFormatter("q").hasError());
+  EXPECT_TRUE(buildJodaDateTimeFormatter("r").hasError());
+  EXPECT_TRUE(buildJodaDateTimeFormatter("g").hasError());
 
   // Unclosed literal sequence
-  EXPECT_THROW(buildJodaDateTimeFormatter("'abcd"), VeloxUserError);
+  EXPECT_TRUE(buildJodaDateTimeFormatter("'abcd").hasError());
 
   // Empty format string
-  EXPECT_THROW(buildJodaDateTimeFormatter(""), VeloxUserError);
+  EXPECT_TRUE(buildJodaDateTimeFormatter("").hasError());
 }
 
 TEST_F(JodaDateTimeFormatterTest, invalid) {
@@ -1082,17 +1096,17 @@ TEST_F(JodaDateTimeFormatterTest, parseMixedYMDFormat) {
   // Include timezone.
   auto result = parseJoda("2021-11-05+01:00+09:00", "YYYY-MM-dd+HH:mmZZ");
   EXPECT_EQ(fromTimestampString("2021-11-05 01:00:00"), result.timestamp);
-  EXPECT_EQ("+09:00", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+09:00", result.timezone->name());
 
   // Timezone offset in -hh:mm format.
   result = parseJoda("-07:232021-11-05+01:00", "ZZYYYY-MM-dd+HH:mm");
   EXPECT_EQ(fromTimestampString("2021-11-05 01:00:00"), result.timestamp);
-  EXPECT_EQ("-07:23", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("-07:23", result.timezone->name());
 
   // Timezone offset in +hhmm format.
   result = parseJoda("+01332022-03-08+13:00", "ZZYYYY-MM-dd+HH:mm");
   EXPECT_EQ(fromTimestampString("2022-03-08 13:00:00"), result.timestamp);
-  EXPECT_EQ("+01:33", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+01:33", result.timezone->name());
 
   // Z in the input means GMT in Joda.
   EXPECT_EQ(
@@ -1103,7 +1117,7 @@ TEST_F(JodaDateTimeFormatterTest, parseMixedYMDFormat) {
   // Timezone in string format.
   result = parseJoda("2021-11-05+01:00 PST", "YYYY-MM-dd+HH:mm zz");
   EXPECT_EQ(fromTimestampString("2021-11-05 01:00:00"), result.timestamp);
-  EXPECT_EQ("America/Los_Angeles", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("America/Los_Angeles", result.timezone->name());
 }
 
 TEST_F(JodaDateTimeFormatterTest, parseMixedWeekFormat) {
@@ -1225,17 +1239,17 @@ TEST_F(JodaDateTimeFormatterTest, parseMixedWeekFormat) {
   auto result =
       parseJoda("2021 22 1 13:29:21.213+09:00", "x w e HH:mm:ss.SSSZZ");
   EXPECT_EQ(fromTimestampString("2021-05-31 13:29:21.213"), result.timestamp);
-  EXPECT_EQ("+09:00", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+09:00", result.timezone->name());
 
   // Timezone offset in -hh:mm format.
   result = parseJoda("-07:232021 22 1 13:29:21.213", "ZZx w e HH:mm:ss.SSS");
   EXPECT_EQ(fromTimestampString("2021-05-31 13:29:21.213"), result.timestamp);
-  EXPECT_EQ("-07:23", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("-07:23", result.timezone->name());
 
   // Timezone offset in +hhmm format.
   result = parseJoda("+01332021 22 1 13:29:21.213", "ZZx w e HH:mm:ss.SSS");
   EXPECT_EQ(fromTimestampString("2021-05-31 13:29:21.213"), result.timestamp);
-  EXPECT_EQ("+01:33", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+01:33", result.timezone->name());
 }
 
 TEST_F(JodaDateTimeFormatterTest, parseFractionOfSecond) {
@@ -1243,13 +1257,13 @@ TEST_F(JodaDateTimeFormatterTest, parseFractionOfSecond) {
   auto result =
       parseJoda("2022-02-23T12:15:00.364+04:00", "yyyy-MM-dd'T'HH:mm:ss.SSSZ");
   EXPECT_EQ(fromTimestampString("2022-02-23 12:15:00.364"), result.timestamp);
-  EXPECT_EQ("+04:00", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("+04:00", result.timezone->name());
 
   // Valid milliseconds and timezone with negative offset.
   result =
       parseJoda("2022-02-23T12:15:00.776-14:00", "yyyy-MM-dd'T'HH:mm:ss.SSSZ");
   EXPECT_EQ(fromTimestampString("2022-02-23 12:15:00.776"), result.timestamp);
-  EXPECT_EQ("-14:00", tz::getTimeZoneName(result.timezoneId));
+  EXPECT_EQ("-14:00", result.timezone->name());
 
   // Valid milliseconds.
   EXPECT_EQ(
@@ -1317,20 +1331,20 @@ TEST_F(JodaDateTimeFormatterTest, formatResultSize) {
   auto* timezone = tz::locateZone("GMT");
 
   EXPECT_EQ(
-      buildJodaDateTimeFormatter("yyyy-MM-dd")->maxResultSize(timezone), 12);
-  EXPECT_EQ(buildJodaDateTimeFormatter("yyyy-MM")->maxResultSize(timezone), 9);
-  EXPECT_EQ(buildJodaDateTimeFormatter("y")->maxResultSize(timezone), 6);
+      getJodaDateTimeFormatter("yyyy-MM-dd")->maxResultSize(timezone), 12);
+  EXPECT_EQ(getJodaDateTimeFormatter("yyyy-MM")->maxResultSize(timezone), 9);
+  EXPECT_EQ(getJodaDateTimeFormatter("y")->maxResultSize(timezone), 6);
   EXPECT_EQ(
-      buildJodaDateTimeFormatter("yyyy////MM////dd")->maxResultSize(timezone),
+      getJodaDateTimeFormatter("yyyy////MM////dd")->maxResultSize(timezone),
       18);
   EXPECT_EQ(
-      buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS")
+      getJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS")
           ->maxResultSize(timezone),
       31);
   // No padding. CENTURY_OF_ERA can be at most 3 digits.
-  EXPECT_EQ(buildJodaDateTimeFormatter("C")->maxResultSize(timezone), 3);
+  EXPECT_EQ(getJodaDateTimeFormatter("C")->maxResultSize(timezone), 3);
   // Needs to pad to make result contain 4 digits.
-  EXPECT_EQ(buildJodaDateTimeFormatter("CCCC")->maxResultSize(timezone), 4);
+  EXPECT_EQ(getJodaDateTimeFormatter("CCCC")->maxResultSize(timezone), 4);
 }
 
 TEST_F(JodaDateTimeFormatterTest, betterErrorMessaging) {
@@ -1349,31 +1363,31 @@ TEST_F(MysqlDateTimeTest, validBuild) {
   std::vector<DateTimeToken> expected;
 
   expected = {DateTimeToken(" ")};
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter(" ")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter(" ")->tokens());
 
   expected = {
       DateTimeToken(" "),
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter(" %Y")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter(" %Y")->tokens());
 
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 2}),
       DateTimeToken(" "),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("%y ")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("%y ")->tokens());
 
   expected = {DateTimeToken(" 132&2618*673 *--+= }{[]\\:")};
   EXPECT_EQ(
       expected,
-      buildMysqlDateTimeFormatter(" 132&2618*673 *--+= }{[]\\:")->tokens());
+      getMysqlDateTimeFormatter(" 132&2618*673 *--+= }{[]\\:")->tokens());
 
   expected = {
       DateTimeToken("   "),
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
       DateTimeToken(" &^  "),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("   %Y &^  ")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("   %Y &^  ")->tokens());
 
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 2}),
@@ -1382,16 +1396,16 @@ TEST_F(MysqlDateTimeTest, validBuild) {
       DateTimeToken(" "),
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("%y  % & %Y %Y%")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("%y  % & %Y %Y%")->tokens());
 
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
       DateTimeToken(" 'T'"),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("%Y 'T'")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("%Y 'T'")->tokens());
 
   expected = {DateTimeToken("1''2")};
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("1''2")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("1''2")->tokens());
 
   expected = {
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 4}),
@@ -1404,19 +1418,19 @@ TEST_F(MysqlDateTimeTest, validBuild) {
       DateTimeToken(" "),
       DateTimeToken(FormatPattern{DateTimeFormatSpecifier::YEAR, 2}),
   };
-  EXPECT_EQ(expected, buildMysqlDateTimeFormatter("%Y-%m-%d %i %y")->tokens());
+  EXPECT_EQ(expected, getMysqlDateTimeFormatter("%Y-%m-%d %i %y")->tokens());
 }
 
 TEST_F(MysqlDateTimeTest, invalidBuild) {
   // Unsupported specifiers
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%D"), VeloxUserError);
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%U"), VeloxUserError);
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%u"), VeloxUserError);
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%V"), VeloxUserError);
-  EXPECT_THROW(buildMysqlDateTimeFormatter("%w"), VeloxUserError);
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%D").hasError());
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%U").hasError());
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%u").hasError());
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%V").hasError());
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("%w").hasError());
 
   // Empty format string
-  EXPECT_THROW(buildMysqlDateTimeFormatter(""), VeloxUserError);
+  EXPECT_TRUE(buildMysqlDateTimeFormatter("").hasError());
 }
 
 TEST_F(MysqlDateTimeTest, formatYear) {
@@ -1447,10 +1461,10 @@ TEST_F(MysqlDateTimeTest, formatYear) {
       "-0001");
   EXPECT_THROW(
       formatMysqlDateTime("%Y", fromTimestampString("-99999-01-01"), timezone),
-      VeloxUserError);
+      VeloxRuntimeError);
   EXPECT_THROW(
       formatMysqlDateTime("%Y", fromTimestampString("99999-01-01"), timezone),
-      VeloxUserError);
+      VeloxRuntimeError);
 }
 
 TEST_F(MysqlDateTimeTest, formatMonthDay) {
@@ -2301,6 +2315,139 @@ TEST_F(MysqlDateTimeTest, parseConsecutiveSpecifiers) {
   EXPECT_EQ(
       fromTimestampString("0012-01-01 12:00:00"), parseMysql("1212", "%H%Y"));
   EXPECT_THROW(parseMysql("1212", "%Y%H"), VeloxUserError);
+}
+
+class SimpleDateTimeFormatterTest : public DateTimeFormatterTest {
+ protected:
+  DateTimeResult parseSimple(
+      const std::string_view& input,
+      const std::string_view& format,
+      bool lenient) {
+    auto dateTimeResultExpected =
+        (*buildSimpleDateTimeFormatter(format, lenient))->parse(input);
+    return dateTimeResult(dateTimeResultExpected);
+  }
+
+  std::string formatSimpleDateTime(
+      const std::string& format,
+      const Timestamp& timestamp,
+      const tz::TimeZone* timezone,
+      bool lenient) const {
+    auto formatter = buildSimpleDateTimeFormatter(format, lenient).value();
+    const auto maxSize = formatter->maxResultSize(timezone);
+    std::string result(maxSize, '\0');
+    auto resultSize =
+        formatter->format(timestamp, timezone, maxSize, result.data());
+    result.resize(resultSize);
+    return result;
+  }
+};
+
+TEST_F(SimpleDateTimeFormatterTest, validSimpleBuild) {
+  // W specifier case.
+  std::vector<DateTimeToken> expected = {
+      DateTimeToken(FormatPattern{DateTimeFormatSpecifier::WEEK_OF_MONTH, 1})};
+  EXPECT_EQ(expected, (*buildSimpleDateTimeFormatter("W", true))->tokens());
+  EXPECT_EQ(expected, (*buildSimpleDateTimeFormatter("W", false))->tokens());
+}
+
+TEST_F(SimpleDateTimeFormatterTest, parseSimpleWeekOfMonth) {
+  // Common cases for lenient and strict mode.
+  for (bool lenient : {true, false}) {
+    // Format contains year, month, weekOfMonth and dayOfWeek.
+    EXPECT_EQ(
+        fromTimestampString("2024-08-02"),
+        parseSimple("2024 08 01 5", "yyyy MM WW e", lenient).timestamp);
+    EXPECT_EQ(
+        fromTimestampString("2024-08-03"),
+        parseSimple("2024 08 01 6", "yyyy MM WW e", lenient).timestamp);
+    EXPECT_EQ(
+        fromTimestampString("2024-08-09"),
+        parseSimple("2024 08 02 5", "yyyy MM WW e", lenient).timestamp);
+    EXPECT_EQ(
+        fromTimestampString("2024-08-12"),
+        parseSimple("2024 08 03 1", "yyyy MM WW e", lenient).timestamp);
+
+    // Format contains year, month and weekOfMonth.
+    EXPECT_EQ(
+        fromTimestampString("2024-07-28"),
+        parseSimple("2024 08 01", "yyyy MM WW", lenient).timestamp);
+
+    // Format contains year and weekOfMonth.
+    EXPECT_EQ(
+        fromTimestampString("2023-12-31"),
+        parseSimple("2024 01", "yyyy WW", lenient).timestamp);
+
+    // Format contains weekOfMonth.
+    EXPECT_EQ(
+        fromTimestampString("1969-12-28"),
+        parseSimple("1", "W", lenient).timestamp);
+  }
+
+  // Field out of range for lenient mode.
+  EXPECT_EQ(
+      fromTimestampString("2024-09-30"),
+      parseSimple("2024 08 10 1", "yyyy MM WW e", true).timestamp);
+  EXPECT_EQ(
+      fromTimestampString("2024-07-28"),
+      parseSimple("2024 08 01", "yyyy MM WW", true).timestamp);
+  EXPECT_EQ(
+      fromTimestampString("2025-02-24"),
+      parseSimple("2024 15 01 1", "yyyy MM WW e", true).timestamp);
+  EXPECT_EQ(
+      fromTimestampString("2024-07-29"),
+      parseSimple("2024 08 01 9", "yyyy MM WW e", true).timestamp);
+
+  // Field out of range for strict mode.
+  EXPECT_THROW(
+      parseSimple("2024 08 10 1", "yyyy MM WW e", false), VeloxUserError);
+  EXPECT_THROW(parseSimple("2024 08 10", "yyyy MM WW", false), VeloxUserError);
+  EXPECT_THROW(
+      parseSimple("2024 15 01 1", "yyyy MM WW e", false), VeloxUserError);
+  EXPECT_THROW(
+      parseSimple("2024 08 01 9", "yyyy MM WW e", false), VeloxUserError);
+}
+
+TEST_F(SimpleDateTimeFormatterTest, formatResultSize) {
+  EXPECT_EQ(
+      (*buildSimpleDateTimeFormatter("WW", false))->maxResultSize(nullptr), 2);
+  EXPECT_EQ(
+      (*buildSimpleDateTimeFormatter("WW", true))->maxResultSize(nullptr), 2);
+}
+
+TEST_F(SimpleDateTimeFormatterTest, formatWeekOfMonth) {
+  auto* timezone = tz::locateZone("GMT");
+  for (bool lenient : {true, false}) {
+    EXPECT_EQ(
+        formatSimpleDateTime(
+            "W", fromTimestampString("2024-08-01"), timezone, lenient),
+        "1");
+    EXPECT_EQ(
+        formatSimpleDateTime(
+            "W", fromTimestampString("2024-08-10"), timezone, lenient),
+        "2");
+    EXPECT_EQ(
+        formatSimpleDateTime(
+            "W", fromTimestampString("2024-08-11"), timezone, lenient),
+        "3");
+    EXPECT_EQ(
+        formatSimpleDateTime(
+            "W", fromTimestampString("2024-08-15"), timezone, lenient),
+        "3");
+    EXPECT_EQ(
+        formatSimpleDateTime(
+            "W", fromTimestampString("2024-08-30"), timezone, lenient),
+        "5");
+  }
+}
+
+TEST_F(SimpleDateTimeFormatterTest, parseUsingPartialInput) {
+  EXPECT_EQ(
+      fromTimestampString("2024-08-01"),
+      parseSimple("2024 08 01 5", "yyyy MM", true).timestamp);
+  EXPECT_EQ(
+      fromTimestampString("2024-08-01"),
+      parseSimple("2024 08 01 5", "yyyy MM", false).timestamp);
 }
 
 } // namespace facebook::velox::functions

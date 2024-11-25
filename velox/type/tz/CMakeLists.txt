@@ -14,8 +14,14 @@
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
-velox_add_library(velox_type_tz TimeZoneMap.h TimeZoneDatabase.cpp
-                  TimeZoneMap.cpp)
+velox_add_library(
+  velox_type_tz
+  TimeZoneMap.h
+  TimeZoneDatabase.cpp
+  TimeZoneLinks.cpp
+  TimeZoneMap.cpp
+  TimeZoneNames.h
+  TimeZoneNames.cpp)
 
 velox_link_libraries(
   velox_type_tz

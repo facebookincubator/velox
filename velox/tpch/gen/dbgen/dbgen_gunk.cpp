@@ -1,4 +1,19 @@
 /*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+/*
  * Copyright owned by the Transaction Processing Performance Council.
  *
  * A copy of the license is included under extension/tpch/dbgen/LICENSE
@@ -11,6 +26,8 @@
 #include "dbgen/dbgen_gunk.hpp" // @manual
 
 #include "dbgen/dss.h" // @manual
+
+namespace facebook::velox::tpch::dbgen {
 
 void load_dists(long textBufferSize, DBGenContext* ctx) {
   read_dist(tpch_env_config(DIST_TAG, DIST_DFLT), "p_cntr", &p_cntr_set);
@@ -55,6 +72,10 @@ static void cleanup_dist(distribution* target) {
     }
     free(target->list);
   }
+  /* Allocated from permute_dist */
+  if (target->permute) {
+    free(target->permute);
+  }
 }
 
 void cleanup_dists(void) {
@@ -83,3 +104,5 @@ void cleanup_dists(void) {
 
   free_text_pool();
 }
+
+} // namespace facebook::velox::tpch::dbgen

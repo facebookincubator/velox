@@ -46,6 +46,9 @@ struct SignatureTemplate {
 struct ResultOrError {
   RowVectorPtr result;
   std::exception_ptr exceptionPtr;
+  /// Whether the exception is UNSUPPORTED_INPUT_UNCATCHABLE error. This flag
+  /// should only be set to true when exceptionPtr is not a nullptr.
+  bool unsupportedInputUncatchableError{false};
 };
 
 /// Sort callable function signatures.
@@ -111,4 +114,35 @@ void compareVectors(
     const std::string& leftName = "left",
     const std::string& rightName = "right",
     const std::optional<SelectivityVector>& rows = std::nullopt);
+
+struct InputRowMetadata {
+  // Column indices to wrap in LazyVector (in a strictly increasing order)
+  std::vector<int> columnsToWrapInLazy;
+
+  // Column indices to wrap in a common dictionary layer (in a strictly
+  // increasing order)
+  std::vector<int> columnsToWrapInCommonDictionary;
+
+  // Dictionary indices and nulls for the common dictionary layer. Buffers are
+  // null if no columns are specified in `columnsToWrapInCommonDictionary`.
+  BufferPtr commonDictionaryIndices;
+  BufferPtr commonDictionaryNulls;
+
+  bool empty() const {
+    return columnsToWrapInLazy.empty() &&
+        columnsToWrapInCommonDictionary.empty();
+  }
+
+  void saveToFile(const char* filePath) const;
+  static InputRowMetadata restoreFromFile(
+      const char* filePath,
+      memory::MemoryPool* pool);
+};
+
+// Wraps the columns in the row vector with a common dictionary layer. The
+// column indices to wrap and the wrap itself is specified in
+// `inputRowMetadata`.
+RowVectorPtr applyCommonDictionaryLayer(
+    const RowVectorPtr& rowVector,
+    const InputRowMetadata& inputRowMetadata);
 } // namespace facebook::velox::fuzzer

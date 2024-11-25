@@ -35,6 +35,12 @@ Timestamp Timestamp::fromDaysAndNanos(int32_t days, int64_t nanos) {
 }
 
 // static
+Timestamp Timestamp::fromDate(int32_t date) {
+  int64_t seconds = (int64_t)date * kSecondsInDay;
+  return Timestamp(seconds, 0);
+}
+
+// static
 Timestamp Timestamp::now() {
   auto now = std::chrono::system_clock::now();
   auto epochMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -56,6 +62,11 @@ void Timestamp::toGMT(const tz::TimeZone& zone) {
   } catch (const date::nonexistent_local_time& error) {
     // If the time does not exist, fail the conversion.
     VELOX_USER_FAIL(error.what());
+  } catch (const std::invalid_argument& e) {
+    // Invalid argument means we hit a conversion not supported by
+    // external/date. Need to throw a RuntimeError so that try() statements do
+    // not suppress it.
+    VELOX_FAIL(e.what());
   }
   seconds_ = sysSeconds.count();
 }
@@ -74,9 +85,9 @@ void Timestamp::toTimezone(const tz::TimeZone& zone) {
     seconds_ = zone.to_local(std::chrono::seconds(seconds_)).count();
   } catch (const std::invalid_argument& e) {
     // Invalid argument means we hit a conversion not supported by
-    // external/date. Need to throw a RuntimeError so that try() statements do
-    // not suppress it.
-    VELOX_FAIL(e.what());
+    // external/date. This is a special case where we intentionally throw
+    // VeloxRuntimeError to avoid it being suppressed by TRY().
+    VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(e.what());
   }
 }
 

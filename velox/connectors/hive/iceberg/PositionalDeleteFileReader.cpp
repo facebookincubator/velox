@@ -59,8 +59,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // Create the ScanSpec for this delete file
   auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
   scanSpec->addField(posColumn_->name, 0);
-  auto* pathSpec =
-      scanSpec->getOrCreateChild(common::Subfield(filePathColumn_->name));
+  auto* pathSpec = scanSpec->getOrCreateChild(filePathColumn_->name);
   pathSpec->setFilter(std::make_unique<common::BytesValues>(
       std::vector<std::string>({baseFilePath_}), false));
 
@@ -122,12 +121,14 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
   configureRowReaderOptions(
-      deleteRowReaderOpts,
       {},
       scanSpec,
       nullptr,
       deleteFileSchema,
-      deleteSplit_);
+      deleteSplit_,
+      nullptr,
+      nullptr,
+      deleteRowReaderOpts);
 
   deleteRowReader_.reset();
   deleteRowReader_ = deleteReader->createRowReader(deleteRowReaderOpts);

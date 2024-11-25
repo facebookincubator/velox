@@ -27,7 +27,8 @@ namespace facebook::velox::exec {
 ///
 /// This class is generally useful to evaluate non-equi-joins (e.g. "k1 >= k2"),
 /// when join conditions may need to be evaluated against a full cross product
-/// of the input.
+/// of the input. It can also implement cross-join semantics if joinCondition is
+/// nullptr.
 ///
 /// The output follows the order of the probe side rows (for inner and left
 /// joins). All build vectors are materialized upfront (check buildVectors_),
@@ -36,8 +37,7 @@ namespace facebook::velox::exec {
 /// To produce output, the operator processes each probe record from probe
 /// input, using the following steps:
 ///
-/// 1. Materialize a cross product by wrapping each probe record (as a constant)
-///    to each build vector.
+/// 1. Materialize a cross-product batch across probe and build.
 /// 2. Evaluate the join condition.
 /// 3. Add key matches to the output.
 /// 4. Once all build vectors are processed for a particular probe row, check if
@@ -48,11 +48,23 @@ namespace facebook::velox::exec {
 ///    collect all build matches at the end, and emit any records that haven't
 ///    been matched by any of the peers.
 ///
-/// The output always contains dictionaries wrapped around probe columns, and
-/// copies for build columns. The buid-side copies are done lazily; it first
-/// accumulates the ranges to be copied, then performs the copies in batch,
-/// column-by-column. It produces at most `outputBatchSize_` records, but it may
-/// produce fewer since the output needs to follow the probe vector boundaries.
+/// There are three different cases for the generation of cross-product across
+/// probe and build (#1 above):
+///
+/// a) If build side has a single row, simply wrap that row as a constant and
+/// produce it along with probe batches.
+///
+/// b) If build side has a single batch, produce a dictionary wrapped across
+/// probe and build rows, covering as many probe rows as allowed by
+/// `outputBatchSize_` (maximum record to produce per batch).
+///
+/// c) If build side has multiple vectors, take one probe row are at a time,
+/// wrapping it as a constant, and produce it along with build batches.
+///
+/// If needed, buid-side copies are done lazily; it first accumulates the ranges
+/// to be copied, then performs the copies in batch, column-by-column. It
+/// produces at most `outputBatchSize_` records, but it may produce fewer since
+/// the output needs to follow the probe vector boundaries.
 class NestedLoopJoinProbe : public Operator {
  public:
   NestedLoopJoinProbe(
@@ -116,7 +128,7 @@ class NestedLoopJoinProbe : public Operator {
   // Advances 'probeRow_' and resets required state information. Returns true
   // if there is not more probe data to be processed in the current `input_`
   // (and hence a new probe input is required). False otherwise.
-  bool advanceProbeRow();
+  bool advanceProbe();
 
   // Ensures a new batch of records is available at `output_` and ready to
   // receive rows. Batches have space for `outputBatchSize_`.
@@ -135,14 +147,37 @@ class NestedLoopJoinProbe : public Operator {
   }
 
   // Generates the next batch of a cross product between probe and build. It
-  // uses the current probe record being processed (`probeRow_` from `intput_`)
-  // for probe projections, and the columns from buildVector for build
-  // projections.
+  // should be used as the entry point, and will internally delegate to one of
+  // the three functions below.
   //
   // Output projections can be specified so that this function can be used to
   // generate both filter input and actual output (in case there is no join
   // filter - cross join).
   RowVectorPtr getNextCrossProductBatch(
+      const RowVectorPtr& buildVector,
+      const RowTypePtr& outputType,
+      const std::vector<IdentityProjection>& probeProjections,
+      const std::vector<IdentityProjection>& buildProjections);
+
+  // Generates a cross product batch when there is a single build row (probe
+  // batch plus build row as a constant).
+  RowVectorPtr genCrossProductSingleBuildRow(
+      const RowVectorPtr& buildVector,
+      const RowTypePtr& outputType,
+      const std::vector<IdentityProjection>& probeProjections,
+      const std::vector<IdentityProjection>& buildProjections);
+
+  // Generates a cross product batch when there is a single build vector (probe
+  // and build batch wrapped in a dictionary).
+  RowVectorPtr genCrossProductSingleBuildVector(
+      const RowVectorPtr& buildVector,
+      const RowTypePtr& outputType,
+      const std::vector<IdentityProjection>& probeProjections,
+      const std::vector<IdentityProjection>& buildProjections);
+
+  // As a fallback, process the current probe row to as much build data as
+  // possible (probe row as constant, and flat copied data for build records).
+  RowVectorPtr genCrossProductMultipleBuildVectors(
       const RowVectorPtr& buildVector,
       const RowTypePtr& outputType,
       const std::vector<IdentityProjection>& probeProjections,
@@ -194,6 +229,29 @@ class NestedLoopJoinProbe : public Operator {
     return (buildIndex_ >= buildVectors_.value().size());
   }
 
+  /// Cross joins are translated into NLJ's without a join conditition.
+  bool isCrossJoin() const {
+    return joinCondition_ == nullptr;
+  }
+
+  // If build has a single vector, we can wrap probe and build batches into
+  // dictionaries and produce as many combinations of probe and build rows,
+  // until `numOutputRows_` is filled.
+  bool isSingleBuildVector() const {
+    return buildVectors_->size() == 1;
+  }
+
+  // If there are no incoming records in the build side.
+  bool isBuildSideEmpty() const {
+    return buildVectors_->empty();
+  }
+
+  // If build has a single row, we can simply add it as a constant to probe
+  // batches.
+  bool isSingleBuildRow() const {
+    return isSingleBuildVector() && buildVectors_->front()->size() == 1;
+  }
+
   // Wraps rows of 'data' that are not selected in 'matched' and projects
   // to the output according to 'projections'. 'nullProjections' is used to
   // create null column vectors in output for outer join. 'unmatchedMapping' is
@@ -215,7 +273,7 @@ class NestedLoopJoinProbe : public Operator {
   // Output buffer members.
 
   // Maximum number of rows in the output batch.
-  const uint32_t outputBatchSize_;
+  const vector_size_t outputBatchSize_;
 
   // The current output batch being populated.
   RowVectorPtr output_;
@@ -223,9 +281,15 @@ class NestedLoopJoinProbe : public Operator {
   // Number of output rows in the current output batch.
   vector_size_t numOutputRows_{0};
 
-  // Dictionary indices for probe columns.
+  // Dictionary indices for probe columns used to generate cross-product.
   BufferPtr probeIndices_;
-  vector_size_t* rawProbeIndices_;
+
+  // Dictionary indices for probe columns for output vector.
+  BufferPtr probeOutputIndices_;
+  vector_size_t* rawProbeOutputIndices_;
+
+  // Dictionary indices for build columns.
+  BufferPtr buildIndices_;
 
   // Join condition expression.
 
@@ -253,6 +317,9 @@ class NestedLoopJoinProbe : public Operator {
   // Probe row being currently processed (related to `input_`).
   vector_size_t probeRow_{0};
 
+  // How many probe rows are being processed by the current batch.
+  vector_size_t probeRowCount_{1};
+
   // Whether the current probeRow_ has produces a match. Used for left and full
   // outer joins.
   bool probeRowHasMatch_{false};
@@ -272,7 +339,6 @@ class NestedLoopJoinProbe : public Operator {
 
   // Stores the data for build vectors (right side of the join).
   std::optional<std::vector<RowVectorPtr>> buildVectors_;
-  bool buildSideEmpty_{false};
 
   // Index into `buildVectors_` for the build vector being currently processed.
   size_t buildIndex_{0};

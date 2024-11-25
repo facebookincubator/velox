@@ -130,8 +130,8 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key) {
       // No memory to cover 'this'.
       release();
       VELOX_CACHE_ERROR(fmt::format(
-          "Failed to allocate {} bytes for cache: {}",
-          size_,
+          "Failed to allocate {} pages for cache: {}",
+          sizePages,
           cache->allocator()->getAndClearFailureMessage()));
     }
   }
@@ -983,18 +983,6 @@ std::string AsyncDataCache::toString(bool details) const {
   return out.str();
 }
 
-std::vector<AsyncDataCacheEntry*> AsyncDataCache::testingCacheEntries() const {
-  std::vector<AsyncDataCacheEntry*> totalEntries;
-  for (const auto& shard : shards_) {
-    const auto shardEntries = shard->testingCacheEntries();
-    std::copy(
-        shardEntries.begin(),
-        shardEntries.end(),
-        std::back_inserter(totalEntries));
-  }
-  return totalEntries;
-}
-
 std::string CacheStats::toString() const {
   std::stringstream out;
   // Cache size stats.
@@ -1075,15 +1063,4 @@ CoalesceIoStats readPins(
       },
       std::move(readFunc));
 }
-
-std::vector<AsyncDataCacheEntry*> CacheShard::testingCacheEntries() const {
-  std::vector<AsyncDataCacheEntry*> entries;
-  std::lock_guard<std::mutex> l(mutex_);
-  entries.reserve(entries_.size());
-  for (const auto& entry : entries_) {
-    entries.push_back(entry.get());
-  }
-  return entries;
-}
-
 } // namespace facebook::velox::cache

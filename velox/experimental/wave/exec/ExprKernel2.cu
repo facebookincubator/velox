@@ -16,7 +16,6 @@
 
 #include "velox/experimental/wave/exec/ExprKernel.h"
 
-#include <gflags/gflags.h>
 #include "velox/experimental/wave/common/Block.cuh"
 #include "velox/experimental/wave/common/CudaUtil.cuh"
 #include "velox/experimental/wave/exec/Aggregate.cuh"
@@ -29,7 +28,7 @@ namespace facebook::velox::wave {
 __global__ void
 oneReadAggregate(KernelParams params, int32_t pc, int32_t base) {
   PROGRAM_PREAMBLE(base);
-  readAggregateKernel(instruction[pc]._.aggregate, shared);
+  readAggregateKernel(&instruction[pc]._.aggregate, shared);
   PROGRAM_EPILOGUE();
 }
 

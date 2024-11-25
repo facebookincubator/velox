@@ -242,6 +242,8 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
     return "test";
   }
 
+  void shutdown() override {}
+
   void addPool(const std::shared_ptr<memory::MemoryPool>& /*unused*/) override {
   }
 
@@ -541,7 +543,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
        .sumEvictScore = 10,
        .ssdStats = newSsdStats});
   arbitrator.updateStats(memory::MemoryArbitrator::Stats(
-      10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10));
+      10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10));
   std::this_thread::sleep_for(std::chrono::milliseconds(4'000));
 
   // Stop right after sufficient wait to ensure the following reads from main

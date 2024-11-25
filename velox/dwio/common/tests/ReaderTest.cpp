@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/common/Reader.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -24,12 +25,40 @@ namespace {
 
 using namespace facebook::velox::common;
 
-class ReaderTest : public testing::Test, public test::VectorTestBase {
+class ReaderTest : public testing::Test, public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
   }
 };
+
+TEST_F(ReaderTest, getOrCreateChild) {
+  auto input = makeRowVector(
+      {"c.0", "c.1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({2, 4, 6, 7, 8}),
+      });
+
+  common::ScanSpec spec("<root>");
+  spec.addField("c.0", 0);
+  // Create child from name.
+  spec.getOrCreateChild("c.1")->setFilter(
+      common::createBigintValues({2, 4, 6}, false));
+
+  auto actual = RowReader::projectColumns(input, spec, nullptr);
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+  });
+  test::assertEqualVectors(expected, actual);
+
+  // Create child from subfield.
+  spec.getOrCreateChild(common::Subfield("c.1"))
+      ->setFilter(common::createBigintValues({2, 4, 6}, false));
+  VELOX_ASSERT_USER_THROW(
+      RowReader::projectColumns(input, spec, nullptr),
+      "Field not found: c. Available fields are: c.0, c.1.");
+}
 
 TEST_F(ReaderTest, projectColumnsFilterStruct) {
   constexpr int kSize = 10;

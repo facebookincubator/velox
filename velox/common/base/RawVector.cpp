@@ -21,22 +21,24 @@
 namespace facebook::velox {
 
 namespace {
-std::vector<int32_t> iotaData;
+raw_vector<int32_t> iotaData;
 
 bool initializeIota() {
   iotaData.resize(10000);
+  iotaData.resize(iotaData.capacity());
   std::iota(iotaData.begin(), iotaData.end(), 0);
   return true;
 }
 } // namespace
 
-const int32_t* iota(int32_t size, raw_vector<int32_t>& storage) {
-  if (iotaData.size() < size) {
+const int32_t*
+iota(int32_t size, raw_vector<int32_t>& storage, int32_t offset) {
+  if (iotaData.size() < offset + size) {
     storage.resize(size);
-    std::iota(&storage[0], &storage[storage.size()], 0);
+    std::iota(storage.begin(), storage.end(), offset);
     return storage.data();
   }
-  return iotaData.data();
+  return iotaData.data() + offset;
 }
 
 static bool FB_ANONYMOUS_VARIABLE(g_iotaConstants) = initializeIota();
