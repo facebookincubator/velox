@@ -347,7 +347,7 @@ TEST_F(URLFunctionsTest, extractHostRegName) {
 
   // Test minimal.
   EXPECT_EQ("a", extractHost("http://a"));
-  // Test all valid characters.
+  // Test all valid ASCII characters.
   EXPECT_EQ(
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=",
       extractHost(
@@ -357,9 +357,31 @@ TEST_F(URLFunctionsTest, extractHostRegName) {
       "123.456.789.012.abcdefg", extractHost("http://123.456.789.012.abcdefg"));
   // Test percent encoded.
   EXPECT_EQ("a b", extractHost("http://a%20b"));
+  // Valid UTF-8 in host reg name.
+  EXPECT_EQ("你好", extractHost("https://你好"));
+  // Valid UTF-8 in userinfo.
+  EXPECT_EQ("foo", extractHost("https://你好@foo"));
 
-  // Invalid character.
+  // Invalid ASCII character.
   EXPECT_EQ(std::nullopt, extractHost("http://a b"));
+  // Inalid UTF-8 in host reg name (it should be a 3 byte character but there's
+  // only 2 bytes).
+  EXPECT_EQ(std::nullopt, extractHost("https://\xe0\xb8"));
+  // Inalid UTF-8 in userinfo (it should be a 3 byte character but there's only
+  // 2 bytes).
+  EXPECT_EQ(std::nullopt, extractHost("https://\xe0\xb8@foo"));
+  // Valid UTF-8 in host reg name but character is not allowed (it's a control
+  // character).
+  EXPECT_EQ(std::nullopt, extractHost("https://\x82"));
+  // Valid UTF-8 in userinfo but character is not allowed (it's a control
+  // character).
+  EXPECT_EQ(std::nullopt, extractHost("https://\x82@foo"));
+  // Valid UTF-8 in host reg name but character is not allowed (it's white
+  // space: THREE-PER-EM SPACE).
+  EXPECT_EQ(std::nullopt, extractHost("https://\xe2\x80\x84"));
+  // Valid UTF-8 in userinfo but character is not allowed (it's white space:
+  // THREE-PER-EM SPACE).
+  EXPECT_EQ(std::nullopt, extractHost("https://\xe2\x80\x84@foo"));
 }
 
 TEST_F(URLFunctionsTest, extractPath) {
@@ -380,11 +402,21 @@ TEST_F(URLFunctionsTest, extractPath) {
   EXPECT_EQ("foo", extractPath("foo"));
   EXPECT_EQ(std::nullopt, extractPath("BAD URL!"));
   EXPECT_EQ("", extractPath("http://www.yahoo.com"));
-  // All valid characters.
+  // All valid ASCII characters.
   EXPECT_EQ(
       "/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@",
       extractPath(
           "/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@"));
+  // Valid UTF-8 in path.
+  EXPECT_EQ("/你好", extractPath("https://foo.com/你好"));
+  // Inalid UTF-8 in path (it should be a 3 byte character but there's only 2
+  // bytes).
+  EXPECT_EQ(std::nullopt, extractPath("https://foo.com/\xe0\xb8"));
+  // Valid UTF-8 but character is not allowed (it's a control character).
+  EXPECT_EQ(std::nullopt, extractPath("https://foo.com/\xc2\x82"));
+  // Valid UTF-8 but character is not allowed (it's white space: THREE-PER-EM
+  // SPACE).
+  EXPECT_EQ(std::nullopt, extractPath("https://foo.com/\xe2\x80\x84"));
 }
 
 TEST_F(URLFunctionsTest, extractPort) {
@@ -430,11 +462,21 @@ TEST_F(URLFunctionsTest, extractQuery) {
   EXPECT_EQ("", extractQuery("http://www.yahoo.com?"));
   // Test non-empty query.
   EXPECT_EQ("a", extractQuery("http://www.yahoo.com?a"));
-  // Test all valid characters.
+  // Test all valid ASCII characters.
   EXPECT_EQ(
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@ []",
       extractQuery(
           "http://www.yahoo.com?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@%20[]"));
+  // Valid UTF-8 in query.
+  EXPECT_EQ("你好", extractQuery("https://foo.com?你好"));
+  // Inalid UTF-8 in query (it should be a 3 byte character but there's only 2
+  // bytes).
+  EXPECT_EQ(std::nullopt, extractQuery("https://foo.com?\xe0\xb8"));
+  // Valid UTF-8 but character is not allowed (it's a control character).
+  EXPECT_EQ(std::nullopt, extractQuery("https://foo.com?\xc2\x82"));
+  // Valid UTF-8 but character is not allowed (it's white space: THREE-PER-EM
+  // SPACE).
+  EXPECT_EQ(std::nullopt, extractQuery("https://foo.com?\xe2\x80\x84"));
 }
 
 TEST_F(URLFunctionsTest, extractFragment) {
@@ -442,15 +484,25 @@ TEST_F(URLFunctionsTest, extractFragment) {
     return evaluateOnce<std::string>("url_extract_fragment(c0)", url);
   };
 
-  // Test empty query.
+  // Test empty fragment.
   EXPECT_EQ("", extractFragment("http://www.yahoo.com#"));
-  // Test non-empty query.
+  // Test non-empty fragment.
   EXPECT_EQ("a", extractFragment("http://www.yahoo.com#a"));
-  // Test all valid characters.
+  // Test all valid ASCII characters.
   EXPECT_EQ(
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@ []",
       extractFragment(
           "http://www.yahoo.com#abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@%20[]"));
+  // Valid UTF-8 in fgrament.
+  EXPECT_EQ("你好", extractFragment("https://foo.com#你好"));
+  // Inalid UTF-8 in fragment (it should be a 3 byte character but there's only
+  // 2 bytes).
+  EXPECT_EQ(std::nullopt, extractFragment("https://foo.com#\xe0\xb8"));
+  // Valid UTF-8 but character is not allowed (it's a control character).
+  EXPECT_EQ(std::nullopt, extractFragment("https://foo.com#\xc2\x82"));
+  // Valid UTF-8 but character is not allowed (it's white space: THREE-PER-EM
+  // SPACE).
+  EXPECT_EQ(std::nullopt, extractFragment("https://foo.com#\xe2\x80\x84"));
 }
 
 TEST_F(URLFunctionsTest, extractParameter) {
@@ -479,6 +531,24 @@ TEST_F(URLFunctionsTest, extractParameter) {
           "http://example.com/path1/p.php?k1=v1&k2=v2&k3&k4#Ref1", "k6"),
       std::nullopt);
   EXPECT_EQ(extractParam("foo", ""), std::nullopt);
+  EXPECT_EQ(
+      "",
+      extractParam(
+          "http://example.com/path1/p.php?k1=v1&k2=v2&k3%26k4=v4", "k3"));
+  EXPECT_EQ(
+      "v3",
+      extractParam(
+          "http://example.com/path1/p.php?k1=v1&k2=v2&k3=v3%26k4=v4", "k3"));
+  EXPECT_EQ(
+      "v3",
+      extractParam(
+          "http://example.com/path1/p.php?k1=v1&k2=v2&k3%3Dv3%26k4=v4", "k3"));
+  // Test "=" inside a parameter value.
+  EXPECT_EQ(
+      "v3.1=v3.2",
+      extractParam(
+          "http://example.com/path1/p.php?k1=v1&k2=v2&k3%3Dv3.1%3Dv3.2%26k4=v4",
+          "k3"));
 }
 
 TEST_F(URLFunctionsTest, urlEncode) {
@@ -542,6 +612,38 @@ TEST_F(URLFunctionsTest, urlDecode) {
       urlDecode("http%3A%2F%2F%E3%83%86%E3%82%B9%E3%83%88"));
   EXPECT_EQ("~@:.-*_+ \u2603", urlDecode("%7E%40%3A.-*_%2B+%E2%98%83"));
   EXPECT_EQ("test", urlDecode("test"));
+  // Test a single byte invalid UTF-8 character.
+  EXPECT_EQ("te\xef\xbf\xbdst", urlDecode("te%88st"));
+  // Test a multi-byte invalid UTF-8 character. (If the first byte is between
+  // 0xe0 and 0xef, it should be a 3 byte character, but we only have 2 bytes
+  // here.)
+  EXPECT_EQ("te\xef\xbf\xbdst", urlDecode("te%e0%b8st"));
+  // Test an overlong 3 byte UTF-8 character
+  EXPECT_EQ("\xef\xbf\xbd\xef\xbf\xbd", urlDecode("%e0%94"));
+  // Test an overlong 3 byte UTF-8 character with a continuation byte.
+  EXPECT_EQ("\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd", urlDecode("%e0%94%83"));
+  // Test an overlong 4 byte UTF-8 character
+  EXPECT_EQ("\xef\xbf\xbd\xef\xbf\xbd", urlDecode("%f0%84"));
+  // Test an overlong 4 byte UTF-8 character with continuation bytes.
+  EXPECT_EQ(
+      "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd",
+      urlDecode("%f0%84%90%90"));
+  // Test a 4 byte UTF-8 character outside the range of valid values.
+  EXPECT_EQ(
+      "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd",
+      urlDecode("%fa%80%80%80"));
+  // Test the beginning of a 4 byte UTF-8 character followed by a
+  // non-continuation byte.
+  EXPECT_EQ("\xef\xbf\xbd\xef\xbf\xbd", urlDecode("%f0%e0"));
+  // Test the invalid byte 0xc0.
+  EXPECT_EQ("\xef\xbf\xbd\xef\xbf\xbd", urlDecode("%c0%83"));
+  // Test the invalid byte 0xc1.
+  EXPECT_EQ("\xef\xbf\xbd\xef\xbf\xbd", urlDecode("%c1%83"));
+  // Test a 4 byte UTF-8 character that looks valid, but is actually outside the
+  // range of valid values.
+  EXPECT_EQ(
+      "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd",
+      urlDecode("%f4%92%83%83"));
 
   EXPECT_THROW(urlDecode("http%3A%2F%2"), VeloxUserError);
   EXPECT_THROW(urlDecode("http%3A%2F%"), VeloxUserError);
