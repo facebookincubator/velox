@@ -194,7 +194,7 @@ void registerCudf() {
   }
 
   const char* env_cudf_mr = std::getenv("VELOX_CUDF_MEMORY_RESOURCE");
-  auto mr_mode = env_cudf_mr != nullptr ? env_cudf_mr : "cuda";
+  auto mr_mode = env_cudf_mr != nullptr ? env_cudf_mr : "async";
   if (cudfDebugEnabled()) {
     std::cout << "Setting cuDF memory resource to " << mr_mode << std::endl;
   }
