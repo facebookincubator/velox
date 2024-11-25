@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
-#include "velox/functions/lib/Re2Functions.h"
 
 namespace facebook::velox::functions::sparksql {
 
