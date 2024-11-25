@@ -51,6 +51,4 @@ function(breeze_add_sycl_test target source)
                PROPERTY IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/${target})
   gtest_discover_tests(${target}_TESTS TEST_PREFIX sycl: DISCOVERY_MODE
                                                          PRE_TEST)
-  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/${target}
-          DESTINATION ${CMAKE_INSTALL_BINDIR})
 endfunction()

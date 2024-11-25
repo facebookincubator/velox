@@ -49,6 +49,4 @@ function(breeze_add_hip_test target source)
   set_property(TARGET ${target}_TESTS
                PROPERTY IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/${target})
   gtest_discover_tests(${target}_TESTS TEST_PREFIX hip: DISCOVERY_MODE PRE_TEST)
-  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/${target}
-          DESTINATION ${CMAKE_INSTALL_BINDIR})
 endfunction()
