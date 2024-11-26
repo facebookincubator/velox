@@ -22,7 +22,9 @@
 #include "velox/connectors/hive/HiveConnector.h" // @manual
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
+#include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -75,6 +77,26 @@ class ParquetWriterTest : public ParquetTestBase {
             std::make_shared<InMemoryReadFile>(std::move(data)),
             opts.memoryPool()),
         opts);
+  };
+
+  facebook::velox::parquet::thrift::PageType::type getDataPageVersion(
+      const dwio::common::MemorySink* sinkPtr,
+      const facebook::velox::parquet::ColumnChunkMetaDataPtr& colChunkPtr) {
+    std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+    auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
+    auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
+    auto inputStream = std::make_unique<SeekableFileInputStream>(
+        std::move(file),
+        colChunkPtr.dataPageOffset(),
+        150,
+        *leafPool_,
+        LogType::TEST);
+    auto pageReader = std::make_unique<PageReader>(
+        std::move(inputStream),
+        *leafPool_,
+        colChunkPtr.compression(),
+        colChunkPtr.totalCompressedSize());
+    return pageReader->readPageHeader().type;
   };
 
   inline static const std::string kHiveConnectorId = "test-hive";
@@ -144,6 +166,43 @@ TEST_F(ParquetWriterTest, compression) {
 
   auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+};
+
+TEST_F(ParquetWriterTest, datapageVersion) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  const int64_t kRows = 1;
+  const auto data = makeRowVector({
+      makeFlatVector<int32_t>(kRows, [](auto row) { return 987; }),
+  });
+
+  // Set parquet datapage version and write data - then read to ensure the
+  // property took effect.
+  const auto testDataPageVersion =
+      [&](std::optional<std::string> dataPageVersion) {
+        // Create an in-memory writer.
+        auto sink = std::make_unique<MemorySink>(
+            200 * 1024 * 1024,
+            dwio::common::FileSink::Options{.pool = leafPool_.get()});
+        auto sinkPtr = sink.get();
+        facebook::velox::parquet::WriterOptions writerOptions;
+        writerOptions.memoryPool = leafPool_.get();
+        writerOptions.parquetDataPageVersion = dataPageVersion;
+
+        auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+            std::move(sink), writerOptions, rootPool_, schema);
+        writer->write(data);
+        writer->close();
+
+        dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+        auto readDataPageVersion = getDataPageVersion(
+            sinkPtr, reader->fileMetaData().rowGroup(0).columnChunk(0));
+        return readDataPageVersion;
+      };
+
+  ASSERT_EQ(testDataPageVersion("V1"), thrift::PageType::type::DATA_PAGE);
+
+  ASSERT_EQ(testDataPageVersion("V2"), thrift::PageType::type::DATA_PAGE_V2);
 };
 
 DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {

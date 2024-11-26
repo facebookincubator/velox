@@ -921,6 +921,21 @@ std::optional<std::string> getTimestampTimeZone(
   return std::nullopt;
 }
 
+std::optional<std::string> getParquetDataPageVersion(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto version = config.get<std::string>(configKey)) {
+    if (version == "PARQUET_1_0") {
+      return "V1";
+    } else if (version == "PARQUET_2_0") {
+      return "V2";
+    } else {
+      VELOX_FAIL("Unsupported parquet datapage version {}", version.value());
+    }
+  }
+  return std::nullopt;
+}
+
 void updateParquetWriterOptions(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const config::ConfigBase* sessionProperties,
@@ -954,6 +969,19 @@ void updateParquetWriterOptions(
               *sessionProperties, core::QueryConfig::kSessionTimezone)
         : getTimestampTimeZone(
               *hiveConfig->config(), core::QueryConfig::kSessionTimezone);
+  }
+
+  auto sessionParquetDataPageVersion = getParquetDataPageVersion(
+      *sessionProperties,
+      parquet::WriterOptions::kParquetSessionDataPageVersion);
+
+  if (sessionParquetDataPageVersion.has_value()) {
+    parquetWriterOptions->parquetDataPageVersion =
+        sessionParquetDataPageVersion;
+  } else {
+    parquetWriterOptions->parquetDataPageVersion = getParquetDataPageVersion(
+        *hiveConfig->config(),
+        parquet::WriterOptions::kParquetSessionDataPageVersion);
   }
 
   writerOptions = std::move(parquetWriterOptions);
