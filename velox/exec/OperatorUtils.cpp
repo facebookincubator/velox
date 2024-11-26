@@ -28,8 +28,10 @@ void scalarGatherCopy(
     BaseVector* target,
     vector_size_t targetIndex,
     vector_size_t count,
-    const std::vector<const RowVector*>& sources,
-    const std::vector<vector_size_t>& sourceIndices,
+    const std::vector<const RowVector*, memory::StlAllocator<const RowVector*>>&
+        sources,
+    const std::vector<vector_size_t, memory::StlAllocator<vector_size_t>>&
+        sourceIndices,
     column_index_t sourceColumnChannel) {
   VELOX_DCHECK(target->isFlatEncoding());
 
@@ -81,8 +83,10 @@ void complexGatherCopy(
     BaseVector* target,
     vector_size_t targetIndex,
     vector_size_t count,
-    const std::vector<const RowVector*>& sources,
-    const std::vector<vector_size_t>& sourceIndices,
+    const std::vector<const RowVector*, memory::StlAllocator<const RowVector*>>&
+        sources,
+    const std::vector<vector_size_t, memory::StlAllocator<vector_size_t>>&
+        sourceIndices,
     column_index_t sourceChannel) {
   for (int i = 0; i < count; ++i) {
     target->copy(
@@ -97,8 +101,10 @@ void gatherCopy(
     BaseVector* target,
     vector_size_t targetIndex,
     vector_size_t count,
-    const std::vector<const RowVector*>& sources,
-    const std::vector<vector_size_t>& sourceIndices,
+    const std::vector<const RowVector*, memory::StlAllocator<const RowVector*>>&
+        sources,
+    const std::vector<vector_size_t, memory::StlAllocator<vector_size_t>>&
+        sourceIndices,
     column_index_t sourceChannel) {
   if (target->isScalar()) {
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
@@ -326,8 +332,10 @@ void gatherCopy(
     RowVector* target,
     vector_size_t targetIndex,
     vector_size_t count,
-    const std::vector<const RowVector*>& sources,
-    const std::vector<vector_size_t>& sourceIndices,
+    const std::vector<const RowVector*, memory::StlAllocator<const RowVector*>>&
+        sources,
+    const std::vector<vector_size_t, memory::StlAllocator<vector_size_t>>&
+        sourceIndices,
     const std::vector<IdentityProjection>& columnMap) {
   VELOX_DCHECK_GE(count, 0);
   if (FOLLY_UNLIKELY(count <= 0)) {

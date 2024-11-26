@@ -126,8 +126,10 @@ class SortBuffer {
   // Used to merge the sorted runs from in-memory rows and spilled rows on disk.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> spillMerger_;
   // Records the source rows to copy to 'output_' in order.
-  std::vector<const RowVector*> spillSources_;
-  std::vector<vector_size_t> spillSourceRows_;
+  std::vector<const RowVector*, memory::StlAllocator<const RowVector*>>
+      spillSources_;
+  std::vector<vector_size_t, memory::StlAllocator<vector_size_t>>
+      spillSourceRows_;
 
   // Reusable output vector.
   RowVectorPtr output_;

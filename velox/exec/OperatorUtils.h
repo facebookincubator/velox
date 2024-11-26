@@ -100,8 +100,10 @@ void gatherCopy(
     RowVector* target,
     vector_size_t targetIndex,
     vector_size_t count,
-    const std::vector<const RowVector*>& sources,
-    const std::vector<vector_size_t>& sourceIndices,
+    const std::vector<const RowVector*, memory::StlAllocator<const RowVector*>>&
+        sources,
+    const std::vector<vector_size_t, memory::StlAllocator<vector_size_t>>&
+        sourceIndices,
     const std::vector<IdentityProjection>& columnMap = {});
 
 /// Generates the system-wide unique disk spill file path for an operator. It

@@ -89,8 +89,10 @@ class OperatorUtilsTest : public OperatorTestBase {
       }
     }
 
-    std::vector<const RowVector*> sourcesVectors(kNumRows);
-    std::vector<vector_size_t> sourceIndices(kNumRows);
+    std::vector<const RowVector*, memory::StlAllocator<const RowVector*>>
+        sourcesVectors(kNumRows, *pool_);
+    std::vector<vector_size_t, memory::StlAllocator<vector_size_t>>
+        sourceIndices(kNumRows, *pool_);
     for (int iter = 0; iter < 5; ++iter) {
       const int count =
           folly::Random::oneIn(10) ? 0 : folly::Random::rand32() % kNumRows;
@@ -259,8 +261,10 @@ TEST_F(OperatorUtilsTest, gatherCopy) {
       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 7; }),
       BaseVector::createNullConstant(UNKNOWN(), kNumRows, pool()),
   });
-  std::vector<const RowVector*> sourceVectors(kNumRows);
-  std::vector<vector_size_t> sourceIndices(kNumRows);
+  std::vector<const RowVector*, memory::StlAllocator<const RowVector*>>
+      sourceVectors(kNumRows, *pool_);
+  std::vector<vector_size_t, memory::StlAllocator<vector_size_t>> sourceIndices(
+      kNumRows, *pool_);
   for (int i = 0; i < kNumRows; ++i) {
     sourceVectors[i] = sourceVector.get();
     sourceIndices[i] = kNumRows - i - 1;

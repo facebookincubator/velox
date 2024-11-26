@@ -687,8 +687,10 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         int i = 0;
         int outputRow = 0;
         int outputSize = 0;
-        std::vector<const RowVector*> sourceVectors(outputBatchSize);
-        std::vector<vector_size_t> sourceIndices(outputBatchSize);
+        std::vector<const RowVector*, memory::StlAllocator<const RowVector*>>
+            sourceVectors(outputBatchSize, *pool_);
+        std::vector<vector_size_t, memory::StlAllocator<vector_size_t>>
+            sourceIndices(outputBatchSize, *pool_);
         for (;;) {
           auto stream = merge->next();
           if (stream == nullptr) {
