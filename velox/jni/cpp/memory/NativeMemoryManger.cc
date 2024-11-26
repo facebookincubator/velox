@@ -16,7 +16,7 @@
 
 #include <core/PlanNode.h>
 #include <exec/AggregateFunctionRegistry.h>
-#include "velox/jni/cpp/expression/ExpressionUtils.hpp"
+#include "velox/jni/cpp/expression/ExpressionUtils.h"
 #include "velox/jni/cpp/jni/JniErrors.h"
 #include "velox/jni/cpp/jni/JniUtil.h"
 

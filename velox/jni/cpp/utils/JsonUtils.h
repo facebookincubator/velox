@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef JSONUTILS_H
-#define JSONUTILS_H
+#pragma once
+
 #include "folly/json/json.h"
 namespace facebook::velox::sdk::utils {
 class JsonUtils {
@@ -33,4 +33,3 @@ class JsonUtils {
   }
 };
 } // namespace facebook::velox::sdk::utils
-#endif // JSONUTILS_H

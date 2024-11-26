@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef NATIVEPLANBUILDER_HPP
-#define NATIVEPLANBUILDER_HPP
+#pragma once
+
 #include <jni.h>
 
 #include "NativeClass.hpp"
@@ -55,5 +55,3 @@ class NativePlanBuilder : public jni::NativeClass {
 
 };
 } // namespace facebook::velox::sdk
-
-#endif // NATIVEPLANBUILDER_HPP

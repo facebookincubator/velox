@@ -27,7 +27,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/jni/cpp/utils/JsonUtils.h"
 
-#include "velox/jni/cpp/expression/ExpressionUtils.hpp"
+#include "velox/jni/cpp/expression/ExpressionUtils.h"
 
 namespace facebook::velox::sdk {
 

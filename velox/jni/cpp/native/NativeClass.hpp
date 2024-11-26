@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef NATIVECLASS_HPP
-#define NATIVECLASS_HPP
+#pragma once
+
 #include <jni.h>
 #include <string>
 
@@ -114,5 +114,3 @@ void NativeClass::RegisterNatives() {
 }
 
 } // namespace facebook::velox::sdk::jni
-
-#endif // NATIVECLASS_HPP

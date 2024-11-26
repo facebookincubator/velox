@@ -47,7 +47,6 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
   if (vm->GetEnv(reinterpret_cast<void**>(&env), jniVersion) != JNI_OK) {
     return JNI_ERR;
   }
-  // logging
   velox::sdk::registerAllFunctions();
   google::InitGoogleLogging("velox");
   FLAGS_logtostderr = true;

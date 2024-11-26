@@ -16,8 +16,8 @@
  * limitations under the License.
  */
 
-#ifndef NativeMemoryManager_HPP
-#define NativeMemoryManager_HPP
+#pragma once
+
 #include <jni.h>
 
 #include "velox/jni/cpp/native/NativeClass.hpp"
@@ -37,5 +37,3 @@ class NativeMemoryManager : public jni::NativeClass {
 
 };
 } // namespace facebook::velox::sdk
-
-#endif // NativeMemoryManager_HPP

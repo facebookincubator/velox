@@ -20,6 +20,16 @@
 
 #include "velox/jni/cpp/utils/JsonUtils.h"
 
+DEFINE_int64(
+    max_root_memory_bytes,
+    10L * 1024L * 1024L * 1024L ,
+    "root memory size");
+
+DEFINE_int64(
+    max_query_memory_bytes,
+    1L * 1024L * 1024L * 1024L,
+    "query memory size");
+
 namespace facebook::velox::sdk::memory {
 
 std::shared_ptr<MemoryManager> MemoryManager::get() {

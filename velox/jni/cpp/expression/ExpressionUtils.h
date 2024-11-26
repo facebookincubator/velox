@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef EXPRESSIONUTILS_HPP
-#define EXPRESSIONUTILS_HPP
+#pragma once
 
 #include <boost/type_index.hpp>
 #include "velox/exec/WindowFunction.h"
@@ -177,4 +176,3 @@ class ExprUtils {
 };
 
 } // namespace facebook::velox::expression
-#endif // EXPRESSIONUTILS_HPP

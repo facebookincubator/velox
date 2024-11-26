@@ -23,17 +23,17 @@
 #include "glog/logging.h"
 
 namespace facebook::velox::sdk {
-bool JniUtil::jvm_inited_ = false;
-JavaVM* JniUtil::g_vm = nullptr;
-__thread JNIEnv* JniUtil::tls_env_ = nullptr;
+bool JniUtil::jvmInited_ = false;
+JavaVM* JniUtil::vm_ = nullptr;
+__thread JNIEnv* JniUtil::tls_env = nullptr;
 
 
 void JniUtil::Init(JavaVM* vm) {
-  if (jvm_inited_) {
+  if (jvmInited_) {
     return;
   }
-  g_vm = vm;
-  jvm_inited_ = true;
+  vm_ = vm;
+  jvmInited_ = true;
 }
 
 jmethodID JniUtil::getMethodID(

@@ -32,13 +32,12 @@ static jint jniVersion = JNI_VERSION_1_8;
       reinterpret_cast<void*>(name)})
 
 struct SharedPtrHandle {
-  static std::atomic<int> global_instance_count; // 全局实例计数器，原子操作
+  static std::atomic<int> global_instance_count;
 
   std::shared_ptr<void> plan_node;
 
   SharedPtrHandle() {
 #ifdef VELOX_ENABLE_JNI_BINDINGS_REF_DEBUG
-    // 默认构造函数，增加全局实例计数器
     global_instance_count.fetch_add(1, std::memory_order_relaxed);
     print_instance_count("Default constructor");
 #endif VELOX_ENABLE_JNI_BINDINGS_REF_DEBUG

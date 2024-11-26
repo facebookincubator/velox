@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#ifndef MEMORYMANAGER_H
-#define MEMORYMANAGER_H
+#pragma once
+
 #include "folly/json/dynamic.h"
-#include "velox/jni/cpp/common/Global.h"
+
 
 namespace facebook::velox::memory {
 class MemoryPool;
@@ -39,4 +39,3 @@ class MemoryManager {
 };
 } // namespace facebook::velox::sdk::memory
 
-#endif // MEMORYMANAGER_H

@@ -13,8 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef VELOX_SDK_JNI_UTIL_H
-#define VELOX_SDK_JNI_UTIL_H
+#pragma once
 
 #include <glog/logging.h>
 #include <jni.h>
@@ -40,20 +39,18 @@ class JniUtil {
       bool isStatic = false);
 
   static JNIEnv* GetJNIEnv() {
-    int rc = g_vm->GetEnv(reinterpret_cast<void**>(&tls_env_), JNI_VERSION_1_8);
+    int rc = vm_->GetEnv(reinterpret_cast<void**>(&tls_env), JNI_VERSION_1_8);
     VELOX_CHECK_EQ(rc, 0, "Unable to get JVM");
-    return tls_env_;
+    return tls_env;
   }
 
  private:
   // Set in Init() once the JVM is initialized.
-  static bool jvm_inited_;
+  static bool jvmInited_;
 
   // Thread-local cache of the JNIEnv for this thread.
-  static __thread JNIEnv* tls_env_;
+  static __thread JNIEnv* tls_env;
 
-  static JavaVM* g_vm;
+  static JavaVM* vm_;
 };
 } // namespace facebook::velox::sdk
-
-#endif
