@@ -81,6 +81,8 @@ class SpillMergeStream : public MergeStream {
 
   virtual void nextBatch() = 0;
 
+  virtual void close();
+
   // loads the next 'rowVector' and sets 'decoded_' if this is initialized.
   void setNextBatch() {
     nextBatch();
@@ -125,6 +127,9 @@ class SpillMergeStream : public MergeStream {
 
   // Covers all rows inn 'rowVector_' Set if 'decoded_' is non-empty.
   SelectivityVector rows_;
+
+  // True if the stream is closed.
+  bool closed_;
 };
 
 // A source of spilled RowVectors coming from a file.
@@ -156,6 +161,8 @@ class FileSpillMergeStream : public SpillMergeStream {
 
   void nextBatch() override;
 
+  void close() override;
+
   std::unique_ptr<SpillReadFile> spillFile_;
 };
 
@@ -172,7 +179,10 @@ class FileSpillBatchStream : public BatchStream {
   }
 
   bool nextBatch(RowVectorPtr& batch) override {
-    return spillFile_->nextBatch(batch);
+    if (spillFile_->nextBatch(batch)) {
+      return true;
+    }
+    return false;
   }
 
  private:

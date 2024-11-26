@@ -78,6 +78,14 @@ int32_t SpillMergeStream::compare(const MergeStream& other) const {
   return 0;
 }
 
+void SpillMergeStream::close() {
+  rowVector_.reset();
+  decoded_.clear();
+  rows_.resize(0);
+  index_ = 0;
+  size_ = 0;
+}
+
 SpillState::SpillState(
     const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
     const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
@@ -299,9 +307,15 @@ void FileSpillMergeStream::nextBatch() {
   index_ = 0;
   if (!spillFile_->nextBatch(rowVector_)) {
     size_ = 0;
+    close();
     return;
   }
   size_ = rowVector_->size();
+}
+
+void FileSpillMergeStream::close() {
+  SpillMergeStream::close();
+  spillFile_.reset();
 }
 
 SpillPartitionIdSet toSpillPartitionIdSet(
