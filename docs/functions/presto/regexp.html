@@ -145,8 +145,11 @@ the entire string by anchoring the pattern using <code class="docutils literal n
 <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code> with <code class="docutils literal notranslate"><span class="pre">replacement</span></code>. Capturing groups can be referenced in
 <code class="docutils literal notranslate"><span class="pre">replacement</span></code> using <code class="docutils literal notranslate"><span class="pre">$g</span></code> for a numbered group or <code class="docutils literal notranslate"><span class="pre">${name}</span></code> for a named group. A
 dollar sign (<code class="docutils literal notranslate"><span class="pre">$</span></code>) may be included in the replacement by escaping it with a
-backslash (<code class="docutils literal notranslate"><span class="pre">\$</span></code>):</p>
+backslash (<code class="docutils literal notranslate"><span class="pre">\$</span></code>). If a backslash(<code class="docutils literal notranslate"><span class="pre">\</span></code>) is followed by any character other
+than a digit or another backslash(<code class="docutils literal notranslate"><span class="pre">\</span></code>) in the replacement, the preceding
+backslash(<code class="docutils literal notranslate"><span class="pre">\</span></code>) will be ignored:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([ab]) &#39;</span><span class="p">,</span> <span class="s1">&#39;3c$2 &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;3ca 3cb 14m&#39;</span>
+<span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;[</span><span class="si">{}</span><span class="s1">]&#39;</span><span class="p">,</span> <span class="s1">&#39;\}\]&#39;</span><span class="p">,</span> <span class="s1">&#39;\}&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;[</span><span class="si">{}</span><span class="s1">&#39;</span>
 </pre></div>
 </div>
 </dd></dl>
