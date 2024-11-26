@@ -24,4 +24,5 @@ target_link_libraries(
   velox_dwio_dwrf_proto
   velox_parse_parser
   velox_parse_expression
-  GTest::gtest)
+  GTest::gtest
+  GTest::gtest_main)
