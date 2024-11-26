@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@
 
 #include "MemoryManager.h"
 
-
 #include "velox/jni/cpp/memory/NativeMemoryManager.hpp"
 
 namespace facebook::velox::sdk::memory {
@@ -38,7 +37,10 @@ void NativeMemoryManager::initInternal() {
   addNativeMethod(
       "nativeCreate", reinterpret_cast<void*>(nativeCreate), kTypeLong, NULL);
   addNativeMethod(
-    "nativeMemoryStatics", reinterpret_cast<void*>(nativeMemoryStatics), kTypeString, NULL);
+      "nativeMemoryStatics",
+      reinterpret_cast<void*>(nativeMemoryStatics),
+      kTypeString,
+      NULL);
 }
 
 jlong NativeMemoryManager::nativeCreate(JNIEnv* env, jobject obj) {
@@ -49,9 +51,9 @@ jlong NativeMemoryManager::nativeCreate(JNIEnv* env, jobject obj) {
 }
 jstring NativeMemoryManager::nativeMemoryStatics(JNIEnv* env, jobject obj) {
   JNI_METHOD_START
-   std::shared_ptr<MemoryManager> memoryManager =  as<MemoryManager>(obj);
+  std::shared_ptr<MemoryManager> memoryManager = as<MemoryManager>(obj);
   return env->NewStringUTF(memoryManager->memoryStatics().c_str());
   JNI_METHOD_END(env->NewStringUTF(""))
 }
 
-} // namespace facebook::velox::sdk
+} // namespace facebook::velox::sdk::memory

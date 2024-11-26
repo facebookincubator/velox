@@ -22,7 +22,7 @@
 
 DEFINE_int64(
     max_root_memory_bytes,
-    10L * 1024L * 1024L * 1024L ,
+    10L * 1024L * 1024L * 1024L,
     "root memory size");
 
 DEFINE_int64(

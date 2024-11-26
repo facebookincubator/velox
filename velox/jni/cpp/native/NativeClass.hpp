@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ static std::string GetArrayTypeSignature(const char* baseTypeSignature) {
 }
 
 static std::string GetObjectTypeSignature(std::string baseTypeSignature) {
-  auto basic_string = std::string("L") + baseTypeSignature +  std::string(";");
+  auto basic_string = std::string("L") + baseTypeSignature + std::string(";");
   return basic_string;
 }
 

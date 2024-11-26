@@ -117,17 +117,12 @@ static inline jmethodID getStaticMethodId(
 
 static std::string jbyteArrayToString(JNIEnv* env, jbyteArray array) {
   jsize length = env->GetArrayLength(array);
-
   if (length == 0) {
     return std::string();
   }
-
   jbyte* bytes = env->GetByteArrayElements(array, nullptr);
-
   std::string str(reinterpret_cast<char*>(bytes), length);
-
   env->ReleaseByteArrayElements(array, bytes, JNI_ABORT);
-
   return str;
 }
 
@@ -148,24 +143,17 @@ static inline std::vector<std::string> ConvertJStringArrayToVector(
     return {};
   }
   jsize arrayLength = env->GetArrayLength(jStringArray);
-
   std::vector<std::string> result;
   result.reserve(arrayLength);
-
   for (jsize i = 0; i < arrayLength; i++) {
     jstring jStr = (jstring)env->GetObjectArrayElement(jStringArray, i);
-
     if (jStr) {
       const char* rawStr = env->GetStringUTFChars(jStr, nullptr);
       std::string str(rawStr);
-
       env->ReleaseStringUTFChars(jStr, rawStr);
-
       result.push_back(str);
-
       env->DeleteLocalRef(jStr);
     }
   }
-
   return result;
 }

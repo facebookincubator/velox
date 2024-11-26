@@ -34,6 +34,5 @@ class NativeMemoryManager : public jni::NativeClass {
   static jlong nativeCreate(JNIEnv* env, jobject obj);
 
   static jstring nativeMemoryStatics(JNIEnv* env, jobject obj);
-
 };
-} // namespace facebook::velox::sdk
+} // namespace facebook::velox::sdk::memory

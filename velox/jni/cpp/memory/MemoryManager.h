@@ -18,7 +18,6 @@
 
 #include "folly/json/dynamic.h"
 
-
 namespace facebook::velox::memory {
 class MemoryPool;
 }
@@ -38,4 +37,3 @@ class MemoryManager {
   std::string memoryStatics();
 };
 } // namespace facebook::velox::sdk::memory
-
