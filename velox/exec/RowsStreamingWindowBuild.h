@@ -61,6 +61,9 @@ class RowsStreamingWindowBuild : public WindowBuild {
   // Returns the current input partition.
   std::shared_ptr<WindowPartition> inputPartition();
 
+  // Returns the current output partition.
+  std::shared_ptr<WindowPartition> outputPartition();
+
   // Sets to true if this window node has range frames.
   const bool hasRangeFrame_;
 
