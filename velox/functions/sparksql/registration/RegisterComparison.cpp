@@ -13,13 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/sparksql/Comparisons.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::functions {
+void registerSparkCompareFunctions(const std::string& prefix) {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_not, prefix + "not");
+  registerIsNullFunction(prefix + "isnull");
+  registerIsNotNullFunction(prefix + "isnotnull");
+}
 
+namespace sparksql {
 void registerCompareFunctions(const std::string& prefix) {
+  registerSparkCompareFunctions(prefix);
   exec::registerStatefulVectorFunction(
       prefix + "equalto", comparisonSignatures(), makeEqualTo);
   registerFunction<EqualToFunction, bool, Generic<T1>, Generic<T1>>(
@@ -78,5 +86,5 @@ void registerCompareFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_decimal_neq, prefix + "decimal_notequalto");
 }
-
-} // namespace facebook::velox::functions::sparksql
+} // namespace sparksql
+} // namespace facebook::velox::functions

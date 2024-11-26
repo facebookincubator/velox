@@ -14,13 +14,20 @@
  * limitations under the License.
  */
 #include "velox/expression/RegisterSpecialForm.h"
+#include "velox/expression/RowConstructor.h"
 #include "velox/expression/SpecialFormRegistry.h"
+#include "velox/functions/sparksql/specialforms/AtLeastNNonNulls.h"
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::functions {
+void registerSparkSpecialFormFunctions() {
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_concat_row, exec::RowConstructorCallToSpecialForm::kRowConstructor);
+}
 
+namespace sparksql {
 void registerSpecialFormGeneralFunctions(const std::string& prefix) {
   exec::registerFunctionCallToSpecialForms();
   exec::registerFunctionCallToSpecialForm(
@@ -29,6 +36,14 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
   exec::registerFunctionCallToSpecialForm(
       DecimalRoundCallToSpecialForm::kRoundDecimal,
       std::make_unique<DecimalRoundCallToSpecialForm>());
+  exec::registerFunctionCallToSpecialForm(
+      AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
+      std::make_unique<AtLeastNNonNullsCallToSpecialForm>());
+  registerSparkSpecialFormFunctions();
+  registerFunctionCallToSpecialForm(
+      "cast", std::make_unique<SparkCastCallToSpecialForm>());
+  registerFunctionCallToSpecialForm(
+      "try_cast", std::make_unique<SparkTryCastCallToSpecialForm>());
 }
-
-} // namespace facebook::velox::functions::sparksql
+} // namespace sparksql
+} // namespace facebook::velox::functions
