@@ -17,7 +17,7 @@
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/MemoryPool.h"
-#include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
 #include "velox/vector/TypeAliases.h"
 
 #include <cudf/table/table.hpp>
@@ -29,19 +29,20 @@
 namespace facebook::velox::cudf_velox {
 
 // Vector class which holds GPU data from cuDF. This also owns the stream.
-class CudfVector : public BaseVector {
+class CudfVector : public RowVector {
  public:
   CudfVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,
       vector_size_t size,
       std::unique_ptr<cudf::table>&& table)
-      : BaseVector(
+      : RowVector(
             pool,
             std::move(type),
-            VectorEncoding::Simple::FLAT,
             BufferPtr(nullptr),
-            size), table_{std::move(table)} {}
+            size,
+            std::vector<VectorPtr>(),
+            std::nullopt), table_{std::move(table)} {}
 
  private:
   std::unique_ptr<cudf::table> table_;
