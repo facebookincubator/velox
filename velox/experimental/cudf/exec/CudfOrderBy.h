@@ -20,6 +20,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/table/table.hpp>
@@ -54,9 +55,9 @@ class CudfOrderBy : public exec::Operator {
   void close() override;
 
  private:
-  std::shared_ptr<cudf::table> sortedTable_;
+  CudfVectorPtr outputTable_;
   std::shared_ptr<const core::OrderByNode> orderByNode_;
-  std::vector<RowVectorPtr> inputs_;
+  std::vector<CudfVectorPtr> inputs_;
   std::vector<cudf::size_type> sort_keys_;
   std::vector<cudf::order> column_order_;
   std::vector<cudf::null_order> null_order_;

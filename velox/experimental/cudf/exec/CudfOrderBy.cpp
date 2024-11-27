@@ -69,7 +69,9 @@ CudfOrderBy::CudfOrderBy(
 void CudfOrderBy::addInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
-    inputs_.push_back(std::move(input));
+    auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input);
+    VELOX_CHECK_NOT_NULL(cudf_input);
+    inputs_.push_back(std::move(cudf_input));
   }
 }
 
@@ -84,7 +86,7 @@ void CudfOrderBy::noMoreInput() {
   auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
     VELOX_CHECK_NOT_NULL(inputs_[i]);
-    cudf_tables[i] = with_arrow::to_cudf_table(inputs_[i], inputs_[i]->pool());
+    cudf_tables[i] = inputs_[i]->release();
     cudf_table_views[i] = cudf_tables[i]->view();
   }
   auto tbl = cudf::concatenate(cudf_table_views);
@@ -103,22 +105,17 @@ void CudfOrderBy::noMoreInput() {
 
   auto keys = tbl->view().select(sort_keys_);
   auto values = tbl->view();
-  sortedTable_ = cudf::sort_by_key(values, keys, column_order_, null_order_);
+  auto result = cudf::sort_by_key(values, keys, column_order_, null_order_);
+  auto const size = result->num_rows();
+  outputTable_ = std::make_shared<CudfVector>(pool(), outputType_, size, std::move(result));
 }
 
 RowVectorPtr CudfOrderBy::getOutput() {
   if (finished_ || !noMoreInput_) {
     return nullptr;
   }
-
-  cudf::get_default_stream().synchronize();
-  // TODO : batching later
-  // RowVectorPtr output = sortBuffer_->getOutput(maxOutputRows_);
-  RowVectorPtr output =
-      with_arrow::to_velox_column(sortedTable_->view(), pool(), "");
-  finished_ = noMoreInput_; //(output == nullptr);
-  sortedTable_.reset();
-  return output;
+  finished_ = noMoreInput_;
+  return outputTable_;
 }
 
 void CudfOrderBy::close() {
@@ -126,6 +123,6 @@ void CudfOrderBy::close() {
   // Release stored inputs
   // Release cudf memory resources
   inputs_.clear();
-  sortedTable_.reset();
+  outputTable_.reset();
 }
 } // namespace facebook::velox::cudf_velox

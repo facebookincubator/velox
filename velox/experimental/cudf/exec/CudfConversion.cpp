@@ -111,7 +111,7 @@ void CudfToVelox::addInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
     auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input);
-    VELOX_CHECK(cudf_input != nullptr);
+    VELOX_CHECK_NOT_NULL(cudf_input);
     inputs_.push_back(std::move(cudf_input));
   }
 }
