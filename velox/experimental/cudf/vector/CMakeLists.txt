@@ -12,9 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(exec)
-add_subdirectory(vector)
+add_library(velox_cudf_vector CudfVector.cpp)
 
-if(VELOX_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
+set_target_properties(
+  velox_cudf_vector
+  PROPERTIES CUDA_ARCHITECTURES native)
+
+target_link_libraries(
+  velox_cudf_vector
+  cudf::cudf
+  velox_exception
+  velox_common_base
+  velox_vector)
