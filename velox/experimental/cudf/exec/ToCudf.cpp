@@ -96,9 +96,13 @@ bool CompileState::compile() {
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
           get_plan_node(joinProbeOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(std::make_unique<CudfFromVelox>(id, plan_node->outputType(), ctx, plan_node->id()));
+      replace_op[0]->initialize();
       replace_op.push_back(
           std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
-      replace_op[0]->initialize();
+      replace_op[1]->initialize();
+      replace_op.push_back(std::make_unique<CudfToVelox>(id, plan_node->outputType(), ctx, plan_node->id()));
+      replace_op[2]->initialize();
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
       replacements_made = true;
