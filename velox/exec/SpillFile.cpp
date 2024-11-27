@@ -263,6 +263,7 @@ std::vector<uint32_t> SpillWriter::testingSpilledFileIds() const {
 
 std::unique_ptr<SpillReadFile> SpillReadFile::create(
     const SpillFileInfo& fileInfo,
+    bool readAheadEnabled,
     uint64_t bufferSize,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats) {
@@ -270,6 +271,7 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
       fileInfo.id,
       fileInfo.path,
       fileInfo.size,
+      readAheadEnabled,
       bufferSize,
       fileInfo.type,
       fileInfo.numSortKeys,
@@ -283,6 +285,7 @@ SpillReadFile::SpillReadFile(
     uint32_t id,
     const std::string& path,
     uint64_t size,
+    bool readAheadEnabled,
     uint64_t bufferSize,
     const RowTypePtr& type,
     uint32_t numSortKeys,
@@ -306,8 +309,12 @@ SpillReadFile::SpillReadFile(
       stats_(stats) {
   auto fs = filesystems::getFileSystem(path_, nullptr);
   auto file = fs->openFileForRead(path_);
-  input_ = std::make_unique<common::FileInputStream>(
-      std::move(file), bufferSize, pool_);
+  if (readAheadEnabled) {
+    input_ = std::make_unique<common::FileInputStream>(
+        std::move(file), bufferSize, pool_);
+  } else {
+    input_ = std::make_unique<common::FileReadStream>(std::move(file), pool_);
+  }
 }
 
 bool SpillReadFile::nextBatch(RowVectorPtr& rowVector) {

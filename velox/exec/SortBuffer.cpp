@@ -474,7 +474,10 @@ void SortBuffer::prepareOutputWithSpill() {
 
   VELOX_CHECK_EQ(spillPartitionSet_.size(), 1);
   spillMerger_ = spillPartitionSet_.begin()->second->createOrderedReader(
-      spillConfig_->readBufferSize, pool(), spillStats_);
+      spillConfig_->readAheadEnabled,
+      spillConfig_->readBufferSize,
+      pool(),
+      spillStats_);
   spillPartitionSet_.clear();
 }
 

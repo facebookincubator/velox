@@ -264,8 +264,8 @@ SpillPartition::createUnorderedReader(
   std::vector<std::unique_ptr<BatchStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
-    streams.push_back(FileSpillBatchStream::create(
-        SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
+    streams.push_back(FileSpillBatchStream::create(SpillReadFile::create(
+        fileInfo, false /*readAheadEnabled*/, bufferSize, pool, spillStats)));
   }
   files_.clear();
   return std::make_unique<UnorderedStreamReader<BatchStream>>(
@@ -274,14 +274,15 @@ SpillPartition::createUnorderedReader(
 
 std::unique_ptr<TreeOfLosers<SpillMergeStream>>
 SpillPartition::createOrderedReader(
+    bool readAheadEnabled,
     uint64_t bufferSize,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* spillStats) {
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
-    streams.push_back(FileSpillMergeStream::create(
-        SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
+    streams.push_back(FileSpillMergeStream::create(SpillReadFile::create(
+        fileInfo, readAheadEnabled, bufferSize, pool, spillStats)));
   }
   files_.clear();
   // Check if the partition is empty or not.

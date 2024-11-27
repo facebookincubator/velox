@@ -19,7 +19,7 @@ target_link_libraries(
   velox_file_test_utils
   PUBLIC velox_file)
 
-add_executable(velox_file_test FileTest.cpp FileInputStreamTest.cpp
+add_executable(velox_file_test FileTest.cpp FileStreamTest.cpp
                                UtilsTest.cpp)
 add_test(velox_file_test velox_file_test)
 target_link_libraries(

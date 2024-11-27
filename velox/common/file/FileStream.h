@@ -24,8 +24,67 @@
 
 namespace facebook::velox::common {
 
-/// Readonly byte input stream backed by file.
-class FileInputStream : public ByteInputStream {
+// Read the file directly into the buffer.
+class FileReadStream : public ByteInputStream {
+ public:
+  FileReadStream(std::unique_ptr<ReadFile>&& file, memory::MemoryPool* pool);
+
+  virtual ~FileReadStream() = default;
+
+  FileReadStream(const FileReadStream&) = delete;
+  FileReadStream& operator=(const FileReadStream& other) = delete;
+  FileReadStream(FileReadStream&& other) noexcept = delete;
+  FileReadStream& operator=(FileReadStream&& other) noexcept = delete;
+
+  virtual size_t size() const override;
+
+  virtual bool atEnd() const override;
+
+  virtual std::streampos tellp() const override;
+
+  virtual void seekp(std::streampos pos) override;
+
+  virtual void skip(int32_t size) override;
+
+  virtual size_t remainingSize() const override;
+
+  virtual uint8_t readByte() override;
+
+  virtual void readBytes(uint8_t* bytes, int32_t size) override;
+
+  virtual std::string_view nextView(int32_t size) override;
+
+  virtual std::string toString() const override;
+
+  /// Records the file read stats.
+  struct Stats {
+    uint32_t numReads{0};
+    uint64_t readBytes{0};
+    uint64_t readTimeNs{0};
+
+    bool operator==(const Stats& other) const;
+
+    std::string toString() const;
+  };
+
+  Stats stats() const;
+
+ protected:
+  virtual void updateStats(uint64_t readBytes, uint64_t readTimeNs);
+
+  const std::unique_ptr<ReadFile> file_;
+  const uint64_t fileSize_;
+  memory::MemoryPool* const pool_;
+
+  // Offset of the next byte to read from file.
+  uint64_t fileOffset_ = 0;
+
+  Stats stats_;
+};
+
+/// Readonly byte input stream backed by file, read the file to buffer and then
+/// read bytes from the buffer.
+class FileInputStream : public FileReadStream {
  public:
   FileInputStream(
       std::unique_ptr<ReadFile>&& file,
@@ -58,18 +117,6 @@ class FileInputStream : public ByteInputStream {
   std::string_view nextView(int32_t size) override;
 
   std::string toString() const override;
-
-  /// Records the file read stats.
-  struct Stats {
-    uint32_t numReads{0};
-    uint64_t readBytes{0};
-    uint64_t readTimeNs{0};
-
-    bool operator==(const Stats& other) const;
-
-    std::string toString() const;
-  };
-  Stats stats() const;
 
  private:
   void doSeek(int64_t skipBytes);
@@ -106,23 +153,14 @@ class FileInputStream : public ByteInputStream {
     return buffers_[nextBufferIndex()].get();
   }
 
-  void updateStats(uint64_t readBytes, uint64_t readTimeNs);
-
-  const std::unique_ptr<ReadFile> file_;
-  const uint64_t fileSize_;
   const uint64_t bufferSize_;
-  memory::MemoryPool* const pool_;
   const bool readAheadEnabled_;
-
-  // Offset of the next byte to read from file.
-  uint64_t fileOffset_ = 0;
 
   std::vector<BufferPtr> buffers_;
   uint32_t bufferIndex_{0};
   // Sets to read-ahead future if valid.
   folly::SemiFuture<uint64_t> readAheadWait_{
       folly::SemiFuture<uint64_t>::makeEmpty()};
-
-  Stats stats_;
 };
+
 } // namespace facebook::velox::common

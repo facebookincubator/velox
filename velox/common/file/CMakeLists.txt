@@ -17,7 +17,7 @@ include_directories(.)
 velox_add_library(
   velox_file
   File.cpp
-  FileInputStream.cpp
+  FileStream.cpp
   FileSystems.cpp
   Utils.cpp)
 velox_link_libraries(

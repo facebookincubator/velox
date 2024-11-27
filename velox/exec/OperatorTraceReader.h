@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/common/file/FileInputStream.h"
+#include "velox/common/file/FileStream.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/Trace.h"

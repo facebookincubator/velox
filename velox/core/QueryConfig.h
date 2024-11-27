@@ -246,6 +246,11 @@ class QueryConfig {
   static constexpr const char* kSpillWriteBufferSize =
       "spill_write_buffer_size";
 
+  /// Enable read the buffer of size kSpillReadBufferSize from one spilled
+  /// file. Otherwise, read bytes from the file directly.
+  static constexpr const char* kSpillOrderedReadAheadEnabled =
+      "spill_ordered_read_ahead_enabled";
+
   /// Specifies the buffer size in bytes to read from one spilled file. If the
   /// underlying filesystem supports async read, we do read-ahead with double
   /// buffering, which doubles the buffer used to read from each spill file.
@@ -654,6 +659,10 @@ class QueryConfig {
   uint64_t spillWriteBufferSize() const {
     // The default write buffer size set to 1MB.
     return get<uint64_t>(kSpillWriteBufferSize, 1L << 20);
+  }
+
+  bool spillReadAheadEnabled() const {
+    return get<bool>(kSpillOrderedReadAheadEnabled, true);
   }
 
   uint64_t spillReadBufferSize() const {

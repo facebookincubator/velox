@@ -16,7 +16,7 @@
 #include "velox/common/memory/ByteStream.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/file/FileInputStream.h"
+#include "velox/common/file/FileStream.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"

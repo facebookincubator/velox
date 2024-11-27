@@ -22,7 +22,7 @@
 #include "velox/common/base/SpillStats.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/file/File.h"
-#include "velox/common/file/FileInputStream.h"
+#include "velox/common/file/FileStream.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/TreeOfLosers.h"
 #include "velox/exec/UnorderedStreamReader.h"
@@ -212,6 +212,7 @@ class SpillReadFile {
  public:
   static std::unique_ptr<SpillReadFile> create(
       const SpillFileInfo& fileInfo,
+      bool readAheadEnabled,
       uint64_t bufferSize,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats);
@@ -244,6 +245,7 @@ class SpillReadFile {
       uint32_t id,
       const std::string& path,
       uint64_t size,
+      bool readAheadEnabled,
       uint64_t bufferSize,
       const RowTypePtr& type,
       uint32_t numSortKeys,
@@ -271,6 +273,6 @@ class SpillReadFile {
   VectorSerde* const serde_;
   folly::Synchronized<common::SpillStats>* const stats_;
 
-  std::unique_ptr<common::FileInputStream> input_;
+  std::unique_ptr<common::FileReadStream> input_;
 };
 } // namespace facebook::velox::exec

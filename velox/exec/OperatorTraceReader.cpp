@@ -17,7 +17,6 @@
 #include <utility>
 
 #include <folly/hash/Checksum.h>
-#include "velox/common/file/FileInputStream.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/TraceUtil.h"
 

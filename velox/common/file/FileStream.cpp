@@ -14,18 +14,116 @@
  * limitations under the License.
  */
 
-#include "velox/common/file/FileInputStream.h"
+#include "velox/common/file/FileStream.h"
 
 namespace facebook::velox::common {
+
+FileReadStream::FileReadStream(
+    std::unique_ptr<ReadFile>&& file,
+    memory::MemoryPool* pool)
+    : file_(std::move(file)), fileSize_(file_->size()), pool_(pool) {
+  VELOX_CHECK_NOT_NULL(pool_);
+  VELOX_CHECK_GT(fileSize_, 0, "Empty FileInputStream");
+}
+
+size_t FileReadStream::size() const {
+  return fileSize_;
+}
+
+bool FileReadStream::atEnd() const {
+  return tellp() >= fileSize_;
+}
+
+std::streampos FileReadStream::tellp() const {
+  return fileOffset_;
+}
+
+void FileReadStream::seekp(std::streampos position) {
+  static_assert(sizeof(std::streamsize) <= sizeof(uint64_t));
+  VELOX_CHECK_GE(
+      fileSize_,
+      static_cast<uint64_t>(position),
+      "Seek past the end of input file");
+  fileOffset_ = position;
+}
+
+void FileReadStream::skip(int32_t size) {
+  VELOX_CHECK_GE(size, 0, "Attempting to skip negative number of bytes");
+  VELOX_CHECK_LE(
+      size,
+      remainingSize(),
+      "Skip past the end of FileReadStream: {}",
+      fileSize_);
+  fileOffset_ += size;
+}
+
+size_t FileReadStream::remainingSize() const {
+  VELOX_CHECK_LE(fileSize_ - fileOffset_, std::numeric_limits<size_t>::max());
+  return fileSize_ - fileOffset_;
+}
+
+uint8_t FileReadStream::readByte() {
+  VELOX_CHECK_GT(
+      remainingSize(), 0, "Read past the end of input file {}", fileSize_);
+  uint8_t byte;
+  readBytes(&byte, 1);
+  return byte;
+}
+
+void FileReadStream::readBytes(uint8_t* bytes, int32_t size) {
+  VELOX_CHECK_GE(size, 0, "Attempting to read negative number of bytes");
+  VELOX_CHECK_LE(
+      size, remainingSize(), "Read past the end of input file {}", fileSize_);
+  uint64_t readTimeNs{0};
+  {
+    NanosecondTimer timer{&readTimeNs};
+    file_->pread(fileOffset_, size, bytes);
+  }
+  updateStats(size, readTimeNs);
+  fileOffset_ += size;
+}
+
+std::string_view FileReadStream::nextView(int32_t /*size*/) {
+  VELOX_UNSUPPORTED("nextView is not supported by FileReadStream");
+}
+
+std::string FileReadStream::toString() const {
+  return fmt::format(
+      "file (offset {}/size {})",
+      succinctBytes(fileOffset_),
+      succinctBytes(fileSize_));
+}
+
+FileReadStream::Stats FileReadStream::stats() const {
+  return stats_;
+}
+
+void FileReadStream::updateStats(uint64_t readBytes, uint64_t readTimeNs) {
+  stats_.readBytes += readBytes;
+  stats_.readTimeNs += readTimeNs;
+  ++stats_.numReads;
+}
+
+bool FileReadStream::Stats::operator==(
+    const FileReadStream::Stats& other) const {
+  return std::tie(numReads, readBytes, readTimeNs) ==
+      std::tie(other.numReads, other.readBytes, other.readTimeNs);
+}
+
+std::string FileReadStream::Stats::toString() const {
+  return fmt::format(
+      "numReads: {}, readBytes: {}, readTimeNs: {}",
+      numReads,
+      succinctBytes(readBytes),
+      succinctMicros(readTimeNs));
+}
 
 FileInputStream::FileInputStream(
     std::unique_ptr<ReadFile>&& file,
     uint64_t bufferSize,
     memory::MemoryPool* pool)
-    : file_(std::move(file)),
-      fileSize_(file_->size()),
+    : FileReadStream(std::move(file), pool),
       bufferSize_(std::min(fileSize_, bufferSize)),
-      pool_(pool),
       readAheadEnabled_((bufferSize_ < fileSize_) && file_->hasPreadvAsync()) {
   VELOX_CHECK_NOT_NULL(pool_);
   VELOX_CHECK_GT(fileSize_, 0, "Empty FileInputStream");
@@ -222,12 +320,6 @@ void FileInputStream::maybeIssueReadahead() {
   VELOX_CHECK(readAheadWait_.valid());
 }
 
-void FileInputStream::updateStats(uint64_t readBytes, uint64_t readTimeNs) {
-  stats_.readBytes += readBytes;
-  stats_.readTimeNs += readTimeNs;
-  ++stats_.numReads;
-}
-
 std::string FileInputStream::toString() const {
   return fmt::format(
       "file (offset {}/size {}) current (position {}/ size {})",
@@ -235,23 +327,5 @@ std::string FileInputStream::toString() const {
       succinctBytes(fileSize_),
       current_ == nullptr ? "NULL" : succinctBytes(current_->position),
       current_ == nullptr ? "NULL" : succinctBytes(current_->size));
-}
-
-FileInputStream::Stats FileInputStream::stats() const {
-  return stats_;
-}
-
-bool FileInputStream::Stats::operator==(
-    const FileInputStream::Stats& other) const {
-  return std::tie(numReads, readBytes, readTimeNs) ==
-      std::tie(other.numReads, other.readBytes, other.readTimeNs);
-}
-
-std::string FileInputStream::Stats::toString() const {
-  return fmt::format(
-      "numReads: {}, readBytes: {}, readTimeNs: {}",
-      numReads,
-      succinctBytes(readBytes),
-      succinctMicros(readTimeNs));
 }
 } // namespace facebook::velox::common

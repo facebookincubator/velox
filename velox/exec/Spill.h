@@ -306,6 +306,7 @@ class SpillPartition {
   /// buffer prefetch ahead. 'spillStats' is provided to collect the spill stats
   /// when reading data from spilled files.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
+      bool readAheadEnabled,
       uint64_t bufferSize,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* spillStats);

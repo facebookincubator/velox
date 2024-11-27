@@ -330,6 +330,12 @@ Spilling
      - 4MB
      - The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
        If set to zero, buffering is disabled.
+   * - spill_ordered_read_ahead_enabled
+     - boolean
+     - true
+     - Enable read buffer of size `spill_read_buffer_size` from one spilled file, otherwise, read from file directly.
+       Read-ahead is fast but requires extra memory, which might have potential risk of running out of server memory
+       especially read the sorted data from many spilled files.
    * - spill_read_buffer_size
      - integer
      - 1MB

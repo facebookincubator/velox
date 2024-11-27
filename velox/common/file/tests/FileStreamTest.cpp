@@ -16,18 +16,18 @@
 #include "velox/common/memory/ByteStream.h"
 
 #include "velox/common/base/BitUtil.h"
-#include "velox/common/file/FileInputStream.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileStream.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gflags/gflags.h>
-#include <gtest/gtest.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::memory;
 
-class FileInputStreamTest : public testing::Test {
+class FileStreamTest : public testing::TestWithParam<bool> {
  protected:
   static void SetUpTestCase() {
     filesystems::registerLocalFileSystem();
@@ -49,7 +49,7 @@ class FileInputStreamTest : public testing::Test {
 
   void TearDown() override {}
 
-  std::unique_ptr<common::FileInputStream> createStream(
+  std::unique_ptr<common::FileReadStream> createStream(
       uint64_t streamSize,
       uint32_t bufferSize = 1024) {
     const auto filePath =
@@ -62,9 +62,16 @@ class FileInputStreamTest : public testing::Test {
     writeFile->append(
         std::string_view(reinterpret_cast<char*>(buffer), streamSize));
     writeFile->close();
-    return std::make_unique<common::FileInputStream>(
-        fs_->openFileForRead(filePath), bufferSize, pool_.get());
+    if (useFileInputStream_) {
+      return std::make_unique<common::FileInputStream>(
+          fs_->openFileForRead(filePath), bufferSize, pool_.get());
+    } else {
+      return std::make_unique<common::FileReadStream>(
+          fs_->openFileForRead(filePath), pool_.get());
+    }
   }
+
+  const bool useFileInputStream_{GetParam()};
 
   folly::Random::DefaultGenerator rng_;
   std::unique_ptr<MemoryManager> memoryManager_;
@@ -75,7 +82,7 @@ class FileInputStreamTest : public testing::Test {
   std::shared_ptr<filesystems::FileSystem> fs_;
 };
 
-TEST_F(FileInputStreamTest, stats) {
+TEST_P(FileStreamTest, stats) {
   struct {
     size_t streamSize;
     size_t bufferSize;
@@ -91,24 +98,41 @@ TEST_F(FileInputStreamTest, stats) {
     SCOPED_TRACE(testData.debugString());
 
     auto byteStream = createStream(testData.streamSize, testData.bufferSize);
-    ASSERT_EQ(byteStream->stats().numReads, 1);
-    ASSERT_EQ(
-        byteStream->stats().readBytes,
-        std::min(testData.streamSize, testData.bufferSize));
-    ASSERT_GT(byteStream->stats().readTimeNs, 0);
+    if (useFileInputStream_) {
+      ASSERT_EQ(byteStream->stats().numReads, 1);
+      ASSERT_EQ(
+          byteStream->stats().readBytes,
+          std::min(testData.streamSize, testData.bufferSize));
+      ASSERT_GT(byteStream->stats().readTimeNs, 0);
+    } else {
+      ASSERT_EQ(byteStream->stats().numReads, 0);
+      ASSERT_EQ(byteStream->stats().readBytes, 0);
+      ASSERT_EQ(byteStream->stats().readTimeNs, 0);
+    }
     uint8_t buffer[testData.streamSize / 8];
     for (int offset = 0; offset < testData.streamSize;) {
       byteStream->readBytes(buffer, testData.streamSize / 8);
       for (int i = 0; i < testData.streamSize / 8; ++i, ++offset) {
-        ASSERT_EQ(buffer[i], offset % 256);
+        if (useFileInputStream_) {
+          ASSERT_EQ(buffer[i], offset % 256);
+        }
       }
     }
     ASSERT_TRUE(byteStream->atEnd());
-    ASSERT_EQ(
-        byteStream->stats().numReads,
-        bits::roundUp(testData.streamSize, testData.bufferSize) /
-            testData.bufferSize);
+    if (useFileInputStream_) {
+      ASSERT_EQ(
+          byteStream->stats().numReads,
+          bits::roundUp(testData.streamSize, testData.bufferSize) /
+              testData.bufferSize);
+    } else {
+      ASSERT_EQ(byteStream->stats().numReads, 8);
+    }
     ASSERT_EQ(byteStream->stats().readBytes, testData.streamSize);
     ASSERT_GT(byteStream->stats().readTimeNs, 0);
   }
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    FileStreamTest,
+    FileStreamTest,
+    testing::ValuesIn({false, true}));
