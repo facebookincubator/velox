@@ -16,7 +16,6 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 
-#include <azure/storage/blobs/blob_client.hpp>
 #include <fmt/format.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <glog/logging.h>
@@ -27,7 +26,6 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 
 namespace facebook::velox::filesystems {
-using namespace Azure::Storage::Blobs;
 
 class AbfsReadFile::Impl {
   constexpr static uint64_t kNaturalReadSize = 4 << 20; // 4M
@@ -35,20 +33,9 @@ class AbfsReadFile::Impl {
 
  public:
   explicit Impl(std::string_view path, const config::ConfigBase& config) {
-    auto abfsConfig = AbfsConfig(path, config, false);
+    auto abfsConfig = AbfsConfig(path, config);
     filePath_ = abfsConfig.filePath();
-    if (abfsConfig.authType() == "SAS") {
-      fileClient_ = std::make_unique<BlobClient>(abfsConfig.urlWithSasToken());
-    } else if (abfsConfig.authType() == "OAuth") {
-      fileClient_ = std::make_unique<BlobClient>(
-          abfsConfig.url(), abfsConfig.tokenCredential());
-    } else {
-      fileClient_ =
-          std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
-              abfsConfig.connectionString(),
-              abfsConfig.fileSystem(),
-              filePath_));
-    }
+    fileClient_ = abfsConfig.getReadFileClient();
   }
 
   void initialize(const FileOptions& options) {

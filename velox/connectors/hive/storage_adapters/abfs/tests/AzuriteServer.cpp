@@ -108,7 +108,7 @@ AzuriteServer::AzuriteServer(int64_t port) : port_(port) {
 }
 
 void AzuriteServer::addFile(std::string source) {
-  AbfsConfig conf(fileURI(), *hiveConfig(), false);
+  AbfsConfig conf(fileURI(), *hiveConfig());
   auto containerClient = BlobContainerClient::CreateFromConnectionString(
       conf.connectionString(), container_);
   containerClient.CreateIfNotExists();

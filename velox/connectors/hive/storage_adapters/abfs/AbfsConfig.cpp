@@ -25,15 +25,14 @@ namespace facebook::velox::filesystems {
 
 AbfsConfig::AbfsConfig(
     std::string_view path,
-    const config::ConfigBase& config,
-    bool initDfsClient) {
+    const config::ConfigBase& config) {
   std::string_view file;
-  bool isHttps = true;
+  isHttps_ = true;
   if (path.find(kAbfssScheme) == 0) {
     file = path.substr(kAbfssScheme.size());
   } else if (path.find(kAbfsScheme) == 0) {
     file = path.substr(kAbfsScheme.size());
-    isHttps = false;
+    isHttps_ = false;
   } else {
     VELOX_FAIL("Invalid ABFS Path {}", path);
   }
@@ -42,39 +41,24 @@ AbfsConfig::AbfsConfig(
   fileSystem_ = file.substr(0, firstAt);
   auto firstSep = file.find_first_of("/");
   filePath_ = file.substr(firstSep + 1);
-  auto accountNameWithSuffix = file.substr(firstAt + 1, firstSep - firstAt - 1);
-  std::string accountNameWithSuffixForUrl(accountNameWithSuffix);
-  if (!initDfsClient) {
-    // We should use correct suffix for blob client.
-    size_t start_pos = accountNameWithSuffixForUrl.find("dfs");
-    if (start_pos != std::string::npos) {
-      accountNameWithSuffixForUrl.replace(start_pos, 3, "blob");
-    }
-  }
-
-  url_ = fmt::format(
-      "{}{}/{}/{}",
-      isHttps ? "https://" : "http://",
-      accountNameWithSuffixForUrl,
-      fileSystem_,
-      filePath_);
+  accountNameWithSuffix_ = file.substr(firstAt + 1, firstSep - firstAt - 1);
 
   auto authTypeKey =
-      fmt::format("{}.{}", kAzureAccountAuthType, accountNameWithSuffix);
+      fmt::format("{}.{}", kAzureAccountAuthType, accountNameWithSuffix_);
   authType_ = "SharedKey";
   if (config.valueExists(authTypeKey)) {
     authType_ = config.get<std::string>(authTypeKey).value();
   }
   if (authType_ == "SharedKey") {
     auto credKey =
-        fmt::format("{}.{}", kAzureAccountKey, accountNameWithSuffix);
+        fmt::format("{}.{}", kAzureAccountKey, accountNameWithSuffix_);
     VELOX_USER_CHECK(
         config.valueExists(credKey), "Config {} not found", credKey);
-    auto firstDot = accountNameWithSuffix.find_first_of(".");
-    auto accountName = accountNameWithSuffix.substr(0, firstDot);
-    auto endpointSuffix = accountNameWithSuffix.substr(firstDot + 5);
+    auto firstDot = accountNameWithSuffix_.find_first_of(".");
+    auto accountName = accountNameWithSuffix_.substr(0, firstDot);
+    auto endpointSuffix = accountNameWithSuffix_.substr(firstDot + 5);
     std::stringstream ss;
-    ss << "DefaultEndpointsProtocol=" << (isHttps ? "https" : "http");
+    ss << "DefaultEndpointsProtocol=" << (isHttps_ ? "https" : "http");
     ss << ";AccountName=" << accountName;
     ss << ";AccountKey=" << config.get<std::string>(credKey).value();
     ss << ";EndpointSuffix=" << endpointSuffix;
@@ -87,11 +71,11 @@ AbfsConfig::AbfsConfig(
     connectionString_ = ss.str();
   } else if (authType_ == "OAuth") {
     auto clientIdKey = fmt::format(
-        "{}.{}", kAzureAccountOAuth2ClientId, accountNameWithSuffix);
+        "{}.{}", kAzureAccountOAuth2ClientId, accountNameWithSuffix_);
     auto clientSecretKey = fmt::format(
-        "{}.{}", kAzureAccountOAuth2ClientSecret, accountNameWithSuffix);
+        "{}.{}", kAzureAccountOAuth2ClientSecret, accountNameWithSuffix_);
     auto clientEndpointKey = fmt::format(
-        "{}.{}", kAzureAccountOAuth2ClientEndpoint, accountNameWithSuffix);
+        "{}.{}", kAzureAccountOAuth2ClientEndpoint, accountNameWithSuffix_);
     VELOX_USER_CHECK(
         config.valueExists(clientIdKey), "Config {} not found", clientIdKey);
     VELOX_USER_CHECK(
@@ -116,15 +100,59 @@ AbfsConfig::AbfsConfig(
             config.get<std::string>(clientSecretKey).value(),
             options);
   } else if (authType_ == "SAS") {
-    auto sasKey = fmt::format("{}.{}", kAzureSASKey, accountNameWithSuffix);
+    auto sasKey = fmt::format("{}.{}", kAzureSASKey, accountNameWithSuffix_);
     VELOX_USER_CHECK(config.valueExists(sasKey), "Config {} not found", sasKey);
-    urlWithSasToken_ =
-        fmt::format("{}?{}", url_, config.get<std::string>(sasKey).value());
+    sas_ = config.get<std::string>(sasKey).value();
   } else {
     VELOX_USER_FAIL(
         "Unsupported auth type {}, supported auth types are SharedKey, OAuth and SAS.",
         authType_);
   }
+}
+
+std::unique_ptr<BlobClient> AbfsConfig::getReadFileClient() {
+  if (authType_ == "SAS") {
+    auto url = getUrl(true);
+    return std::make_unique<BlobClient>(fmt::format("{}?{}", url, sas_));
+  } else if (authType_ == "OAuth") {
+    auto url = getUrl(true);
+    return std::make_unique<BlobClient>(url, tokenCredential_);
+  } else {
+    return std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
+        connectionString_, fileSystem_, filePath_));
+  }
+}
+
+std::unique_ptr<DataLakeFileClient> AbfsConfig::getWriteFileClient() {
+  if (authType_ == "SAS") {
+    auto url = getUrl(false);
+    return std::make_unique<DataLakeFileClient>(
+        fmt::format("{}?{}", url, sas_));
+  } else if (authType_ == "OAuth") {
+    auto url = getUrl(false);
+    return std::make_unique<DataLakeFileClient>(url, tokenCredential_);
+  } else {
+    return std::make_unique<DataLakeFileClient>(
+        DataLakeFileClient::CreateFromConnectionString(
+            connectionString_, fileSystem_, filePath_));
+  }
+}
+
+std::string AbfsConfig::getUrl(bool withblobSuffix) {
+  std::string accountNameWithSuffixForUrl(accountNameWithSuffix_);
+  if (withblobSuffix) {
+    // We should use correct suffix for blob client.
+    size_t start_pos = accountNameWithSuffixForUrl.find("dfs");
+    if (start_pos != std::string::npos) {
+      accountNameWithSuffixForUrl.replace(start_pos, 3, "blob");
+    }
+  }
+  return fmt::format(
+      "{}{}/{}/{}",
+      isHttps_ ? "https://" : "http://",
+      accountNameWithSuffixForUrl,
+      fileSystem_,
+      filePath_);
 }
 
 } // namespace facebook::velox::filesystems
