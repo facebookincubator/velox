@@ -107,21 +107,16 @@ bool CompileState::compile() {
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
       replace_op[0]->initialize();
+
+      // TEMPORARY: Insert extra CudfConversion operator after CudfOrderBy operator.
+      replace_op.push_back(std::make_unique<CudfConversion>(id, plan_node->outputType(), ctx, orderByOp->planNodeId()));
+      replace_op[1]->initialize();
+
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
       replacements_made = true;
     }
   }
-  // Insert conversion node at the end of the plan
-  auto last_op = operators.back();
-  auto id = last_op->operatorId() + 1;
-  auto plan_node = std::make_unique<CudfConversion>(
-    id, last_node->outputType(), last_node);
-      auto replace_op = std::make_unique<CudfConversion>(id, ctx, plan_node);
-      replace_op->initialize();
-      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_, operators.size(), operators.size(), {std::move(replace_op)});
-    }
   return replacements_made;
 }
 

@@ -32,12 +32,13 @@ namespace facebook::velox::cudf_velox {
 CudfConversion::CudfConversion(
     int32_t operatorId,
     RowTypePtr outputType,
-    exec::DriverCtx* driverCtx)
+    exec::DriverCtx* driverCtx,
+    std::string planNodeId)
     : exec::Operator(
           driverCtx,
           outputType,
           operatorId,
-          orderByNode->id(),
+          planNodeId,
           "CudfConversion") {
 }
 

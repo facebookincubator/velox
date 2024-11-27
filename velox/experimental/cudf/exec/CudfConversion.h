@@ -31,7 +31,8 @@ class CudfConversion : public exec::Operator {
   CudfConversion(
       int32_t operatorId,
       RowTypePtr outputType,
-      exec::DriverCtx* driverCtx);
+      exec::DriverCtx* driverCtx,
+      std::string planNodeId);
 
   bool needsInput() const override {
     return !finished_;
