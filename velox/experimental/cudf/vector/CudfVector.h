@@ -44,6 +44,10 @@ class CudfVector : public RowVector {
             std::vector<VectorPtr>(),
             std::nullopt), table_{std::move(table)} {}
 
+  std::unique_ptr<cudf::table>&& release() {
+    return std::move(table_);
+  }
+
  private:
   std::unique_ptr<cudf::table> table_;
 };

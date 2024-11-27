@@ -26,10 +26,11 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 namespace facebook::velox::cudf_velox {
 
-CudfConversion::CudfConversion(
+CudfFromVelox::CudfFromVelox(
     int32_t operatorId,
     RowTypePtr outputType,
     exec::DriverCtx* driverCtx,
@@ -39,17 +40,17 @@ CudfConversion::CudfConversion(
           outputType,
           operatorId,
           planNodeId,
-          "CudfConversion") {
+          "CudfFromVelox") {
 }
 
-void CudfConversion::addInput(RowVectorPtr input) {
+void CudfFromVelox::addInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
     inputs_.push_back(std::move(input));
   }
 }
 
-void CudfConversion::noMoreInput() {
+void CudfFromVelox::noMoreInput() {
   exec::Operator::noMoreInput();
   NVTX3_FUNC_RANGE();
 
@@ -69,32 +70,86 @@ void CudfConversion::noMoreInput() {
   inputs_.clear();
   VELOX_CHECK_NOT_NULL(tbl);
   if (cudfDebugEnabled()) {
-    std::cout << "CudfConversion table number of columns: " << tbl->num_columns()
+    std::cout << "CudfFromVelox table number of columns: " << tbl->num_columns()
               << std::endl;
-    std::cout << "CudfConversion table number of rows: " << tbl->num_rows()
+    std::cout << "CudfFromVelox table number of rows: " << tbl->num_rows()
               << std::endl;
   }
 
-  outputTable_ = std::move(tbl);
+  auto const size = tbl->num_rows();
+  outputTable_ = std::make_shared<CudfVector>(pool(), outputType_, size, std::move(tbl));
 }
 
-RowVectorPtr CudfConversion::getOutput() {
+RowVectorPtr CudfFromVelox::getOutput() {
   if (finished_ || !noMoreInput_) {
     return nullptr;
+  }
+  finished_ = noMoreInput_;
+  return outputTable_;
+}
+
+void CudfFromVelox::close() {
+  cudf::get_default_stream().synchronize();
+  outputTable_.reset();
+  exec::Operator::close();
+}
+
+CudfToVelox::CudfToVelox(
+    int32_t operatorId,
+    RowTypePtr outputType,
+    exec::DriverCtx* driverCtx,
+    std::string planNodeId)
+    : exec::Operator(
+          driverCtx,
+          outputType,
+          operatorId,
+          planNodeId,
+          "CudfToVelox") {
+}
+
+void CudfToVelox::addInput(RowVectorPtr input) {
+  // Accumulate inputs
+  if (input->size() > 0) {
+    auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input);
+    VELOX_CHECK(cudf_input != nullptr);
+    inputs_.push_back(std::move(cudf_input));
+  }
+}
+
+void CudfToVelox::noMoreInput() {
+  exec::Operator::noMoreInput();
+}
+
+RowVectorPtr CudfToVelox::getOutput() {
+  if (finished_ || inputs_.empty()) {
+    finished_ = noMoreInput_ && inputs_.empty();
+    return nullptr;
+  }
+
+  NVTX3_FUNC_RANGE();
+
+  std::unique_ptr<cudf::table> tbl = inputs_.front()->release();
+  inputs_.pop_front();
+
+  VELOX_CHECK_NOT_NULL(tbl);
+  if (cudfDebugEnabled()) {
+    std::cout << "CudfToVelox table number of columns: " << tbl->num_columns()
+              << std::endl;
+    std::cout << "CudfToVelox table number of rows: " << tbl->num_rows()
+              << std::endl;
   }
 
   cudf::get_default_stream().synchronize();
   RowVectorPtr output =
-      with_arrow::to_velox_column(outputTable_->view(), pool(), "");
-  finished_ = noMoreInput_;
-  outputTable_.reset();
+      with_arrow::to_velox_column(tbl->view(), pool(), "");
+  finished_ = noMoreInput_ && inputs_.empty();
   return output;
 }
 
-void CudfConversion::close() {
+void CudfToVelox::close() {
   exec::Operator::close();
   // TODO: Release stored inputs if needed
   // TODO: Release cudf memory resources
-  outputTable_.reset();
 }
+
 } // namespace facebook::velox::cudf_velox

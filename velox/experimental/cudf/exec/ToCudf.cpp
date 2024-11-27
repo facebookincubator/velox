@@ -109,8 +109,10 @@ bool CompileState::compile() {
       replace_op[0]->initialize();
 
       // TEMPORARY: Insert extra CudfConversion operator after CudfOrderBy operator.
-      replace_op.push_back(std::make_unique<CudfConversion>(id, plan_node->outputType(), ctx, orderByOp->planNodeId()));
+      replace_op.push_back(std::make_unique<CudfFromVelox>(id, plan_node->outputType(), ctx, orderByOp->planNodeId()));
       replace_op[1]->initialize();
+      replace_op.push_back(std::make_unique<CudfToVelox>(id, plan_node->outputType(), ctx, orderByOp->planNodeId()));
+      replace_op[2]->initialize();
 
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));

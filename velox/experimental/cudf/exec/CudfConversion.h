@@ -24,11 +24,17 @@
 
 #include <cudf/table/table.hpp>
 
+#include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include <deque>
+#include <memory>
+#include <vector>
+
 namespace facebook::velox::cudf_velox {
 
-class CudfConversion : public exec::Operator {
+class CudfFromVelox : public exec::Operator {
  public:
-  CudfConversion(
+  CudfFromVelox(
       int32_t operatorId,
       RowTypePtr outputType,
       exec::DriverCtx* driverCtx,
@@ -55,9 +61,43 @@ class CudfConversion : public exec::Operator {
   void close() override;
 
  private:
-  std::shared_ptr<cudf::table> outputTable_;
+  CudfVectorPtr outputTable_;
   std::vector<RowVectorPtr> inputs_;
   bool finished_ = false;
 };
+
+class CudfToVelox : public exec::Operator {
+ public:
+  CudfToVelox(
+      int32_t operatorId,
+      RowTypePtr outputType,
+      exec::DriverCtx* driverCtx,
+      std::string planNodeId);
+
+  bool needsInput() const override {
+    return !finished_;
+  }
+
+  void addInput(RowVectorPtr input) override;
+
+  void noMoreInput() override;
+
+  RowVectorPtr getOutput() override;
+
+  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+    return exec::BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return finished_;
+  }
+
+  void close() override;
+
+ private:
+  std::deque<CudfVectorPtr> inputs_;
+  bool finished_ = false;
+};
+
 
 } // namespace facebook::velox::cudf_velox
