@@ -99,5 +99,4 @@ class CudfToVelox : public exec::Operator {
   bool finished_ = false;
 };
 
-
 } // namespace facebook::velox::cudf_velox

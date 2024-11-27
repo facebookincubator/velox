@@ -40,8 +40,7 @@ CudfFromVelox::CudfFromVelox(
           outputType,
           operatorId,
           planNodeId,
-          "CudfFromVelox") {
-}
+          "CudfFromVelox") {}
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
   // Accumulate inputs
@@ -77,7 +76,8 @@ void CudfFromVelox::noMoreInput() {
   }
 
   auto const size = tbl->num_rows();
-  outputTable_ = std::make_shared<CudfVector>(pool(), outputType_, size, std::move(tbl));
+  outputTable_ =
+      std::make_shared<CudfVector>(pool(), outputType_, size, std::move(tbl));
 }
 
 RowVectorPtr CudfFromVelox::getOutput() {
@@ -104,8 +104,7 @@ CudfToVelox::CudfToVelox(
           outputType,
           operatorId,
           planNodeId,
-          "CudfToVelox") {
-}
+          "CudfToVelox") {}
 
 void CudfToVelox::addInput(RowVectorPtr input) {
   // Accumulate inputs
@@ -140,8 +139,7 @@ RowVectorPtr CudfToVelox::getOutput() {
   }
 
   cudf::get_default_stream().synchronize();
-  RowVectorPtr output =
-      with_arrow::to_velox_column(tbl->view(), pool(), "");
+  RowVectorPtr output = with_arrow::to_velox_column(tbl->view(), pool(), "");
   finished_ = noMoreInput_ && inputs_.empty();
   return output;
 }

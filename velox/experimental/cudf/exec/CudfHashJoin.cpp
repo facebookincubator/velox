@@ -404,7 +404,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   if (cudf_output->num_columns() == 0 or size == 0) {
     return nullptr;
   }
-  return std::make_shared<CudfVector>(pool(), outputType, size, std::move(cudf_output));
+  return std::make_shared<CudfVector>(
+      pool(), outputType, size, std::move(cudf_output));
 }
 
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {

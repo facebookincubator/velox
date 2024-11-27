@@ -107,7 +107,8 @@ void CudfOrderBy::noMoreInput() {
   auto values = tbl->view();
   auto result = cudf::sort_by_key(values, keys, column_order_, null_order_);
   auto const size = result->num_rows();
-  outputTable_ = std::make_shared<CudfVector>(pool(), outputType_, size, std::move(result));
+  outputTable_ = std::make_shared<CudfVector>(
+      pool(), outputType_, size, std::move(result));
 }
 
 RowVectorPtr CudfOrderBy::getOutput() {

@@ -42,7 +42,8 @@ class CudfVector : public RowVector {
             BufferPtr(nullptr),
             size,
             std::vector<VectorPtr>(),
-            std::nullopt), table_{std::move(table)} {}
+            std::nullopt),
+        table_{std::move(table)} {}
 
   std::unique_ptr<cudf::table>&& release() {
     return std::move(table_);
