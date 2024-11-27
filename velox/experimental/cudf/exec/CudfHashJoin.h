@@ -26,6 +26,8 @@
 #include <cudf/join.hpp>
 #include <cudf/table/table.hpp>
 
+#include "velox/experimental/cudf/vector/CudfVector.h"
+
 #include <string>
 
 namespace facebook::velox::cudf_velox {
@@ -64,7 +66,7 @@ class CudfHashJoinBuild : public exec::Operator {
 
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
-  std::vector<RowVectorPtr> inputs_;
+  std::vector<CudfVectorPtr> inputs_;
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
 
