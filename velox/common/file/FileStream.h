@@ -24,7 +24,7 @@
 
 namespace facebook::velox::common {
 
-// Read the file directly into the buffer.
+// Read the file directly into the readBytes without buffer.
 class FileReadStream : public ByteInputStream {
  public:
   FileReadStream(std::unique_ptr<ReadFile>&& file, memory::MemoryPool* pool);
@@ -70,7 +70,7 @@ class FileReadStream : public ByteInputStream {
   Stats stats() const;
 
  protected:
-  virtual void updateStats(uint64_t readBytes, uint64_t readTimeNs);
+  void updateStats(uint64_t readBytes, uint64_t readTimeNs);
 
   const std::unique_ptr<ReadFile> file_;
   const uint64_t fileSize_;

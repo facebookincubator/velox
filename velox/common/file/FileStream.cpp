@@ -18,6 +18,18 @@
 
 namespace facebook::velox::common {
 
+namespace {
+#ifdef __APPLE__
+// Due to macOS bug, we need to set read/write max.
+constexpr int32_t kMaxIOChunkSize = INT32_MAX;
+#else
+// See notes on Linux read/write manpage. On Linux, write() (and similar system
+// calls) will transfer at most 0x7ffff000(2, 147, 479, 552)bytes, returning the
+// number of bytes actually transferred.
+constexpr int32_t kMaxIOChunkSize = 0x7ffff000;
+#endif
+} // namespace
+
 FileReadStream::FileReadStream(
     std::unique_ptr<ReadFile>&& file,
     memory::MemoryPool* pool)
@@ -74,6 +86,7 @@ void FileReadStream::readBytes(uint8_t* bytes, int32_t size) {
   VELOX_CHECK_GE(size, 0, "Attempting to read negative number of bytes");
   VELOX_CHECK_LE(
       size, remainingSize(), "Read past the end of input file {}", fileSize_);
+  VELOX_CHECK_LE(size, kMaxIOChunkSize, "Read size exceeds max IO chunk size");
   uint64_t readTimeNs{0};
   {
     NanosecondTimer timer{&readTimeNs};
