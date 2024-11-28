@@ -36,12 +36,8 @@ SortBuffer::SortBuffer(
       spillConfig_(spillConfig),
       spillStats_(spillStats),
       sortedRows_(0, memory::StlAllocator<char*>(*pool)),
-      spillSources_(
-          0,
-          memory::StlAllocator<const RowVector*>(*memory::spillMemoryPool())),
-      spillSourceRows_(
-          0,
-          memory::StlAllocator<vector_size_t>(*memory::spillMemoryPool())) {
+      spillSources_(0, memory::StlAllocator<const RowVector*>(*pool_)),
+      spillSourceRows_(0, memory::StlAllocator<vector_size_t>(*pool_)) {
   VELOX_CHECK_GE(input_->size(), sortCompareFlags_.size());
   VELOX_CHECK_GT(sortCompareFlags_.size(), 0);
   VELOX_CHECK_EQ(sortColumnIndices.size(), sortCompareFlags_.size());
