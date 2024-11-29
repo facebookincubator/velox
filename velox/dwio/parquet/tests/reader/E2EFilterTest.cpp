@@ -352,7 +352,7 @@ TEST_F(E2EFilterTest, shortDecimalDictionary) {
               true);
         },
         false,
-        {"shortdecimal_val"},
+        {},
         20);
   }
 }
@@ -381,7 +381,7 @@ TEST_F(E2EFilterTest, shortDecimalDirect) {
               true);
         },
         false,
-        {"shortdecimal_val"},
+        {},
         20);
   }
 
@@ -391,7 +391,7 @@ TEST_F(E2EFilterTest, shortDecimalDirect) {
         useSuppliedValues<int64_t>("shortdecimal_val", 0, {-479, 40000000});
       },
       false,
-      {"shortdecimal_val"},
+      {},
       20);
 }
 

@@ -68,6 +68,10 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
       int64_t offset,
       const RowSet& rows,
       const uint64_t* /*incomingNulls*/) override {
+    if (fileType_->type()->isDecimal()) {
+      VELOX_CHECK(!scanSpec_->filter());
+      VELOX_CHECK(!scanSpec_->valueHook());
+    }
     auto& data = formatData_->as<ParquetData>();
     VELOX_WIDTH_DISPATCH(
         parquetSizeOfIntKind(fileType_->type()->kind()),
