@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 
 #include "JniUtil.h"
 
-#include "velox/vector/BaseVector.h"
 #include "velox/jni/cpp/jni/JniCommon.h"
+#include "velox/vector/BaseVector.h"
 
 #include <sstream>
 #include "glog/logging.h"
@@ -26,7 +26,6 @@ namespace facebook::velox::sdk {
 bool JniUtil::jvmInited_ = false;
 JavaVM* JniUtil::vm_ = nullptr;
 __thread JNIEnv* JniUtil::tls_env = nullptr;
-
 
 void JniUtil::Init(JavaVM* vm) {
   if (jvmInited_) {
@@ -43,8 +42,7 @@ jmethodID JniUtil::getMethodID(
     const std::string& sig,
     bool isStatic) {
   jmethodID methodId;
-  jclass localCls =
-      env->FindClass(className.c_str());
+  jclass localCls = env->FindClass(className.c_str());
   //
   if (localCls == nullptr) {
     if (env->ExceptionOccurred())
@@ -52,8 +50,7 @@ jmethodID JniUtil::getMethodID(
   }
   VELOX_CHECK_NOT_NULL(localCls, "Failed to find JniUtil class.");
   //
-  auto gloableCls =
-      reinterpret_cast<jclass>(env->NewGlobalRef(localCls));
+  auto gloableCls = reinterpret_cast<jclass>(env->NewGlobalRef(localCls));
   if (gloableCls == nullptr) {
     if (env->ExceptionOccurred())
       env->ExceptionDescribe();
