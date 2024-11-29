@@ -302,9 +302,8 @@ if(VELOX_ENABLE_BENCHMARKS)
     pthread)
 
   add_executable(velox_spiller_join_benchmark SpillerJoinInputBenchmarkTest.cpp)
-  target_link_libraries(
-    velox_spiller_join_benchmark velox_exec velox_exec_test_lib
-    velox_spiller_join_benchmark_base)
+  target_link_libraries(velox_spiller_join_benchmark velox_exec
+                        velox_exec_test_lib velox_spiller_join_benchmark_base)
 
   add_library(velox_spiller_aggregate_benchmark_base
               AggregateSpillBenchmarkBase.cpp SpillerBenchmarkBase.cpp)

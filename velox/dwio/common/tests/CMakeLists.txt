@@ -76,7 +76,8 @@ target_link_libraries(
   protobuf::libprotobuf)
 
 if(VELOX_ENABLE_BENCHMARKS)
-  add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
+  add_executable(velox_dwio_common_data_buffer_benchmark
+                 DataBufferBenchmark.cpp)
 
   target_link_libraries(
     velox_dwio_common_data_buffer_benchmark
@@ -86,7 +87,8 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::folly
     ${FOLLY_BENCHMARK})
 
-  add_executable(velox_dwio_common_int_decoder_benchmark IntDecoderBenchmark.cpp)
+  add_executable(velox_dwio_common_int_decoder_benchmark
+                 IntDecoderBenchmark.cpp)
   target_link_libraries(
     velox_dwio_common_int_decoder_benchmark
     velox_dwio_common_exception
