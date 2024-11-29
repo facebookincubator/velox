@@ -38,12 +38,14 @@ const std::vector<CompareFlags> getCompareFlagsOrDefault(
 } // namespace
 
 void SpillMergeStream::pop() {
+  VELOX_CHECK(!closed_);
   if (++index_ >= size_) {
     setNextBatch();
   }
 }
 
 int32_t SpillMergeStream::compare(const MergeStream& other) const {
+  VELOX_CHECK(!closed_);
   auto& otherStream = static_cast<const SpillMergeStream&>(other);
   auto& children = rowVector_->children();
   auto& otherChildren = otherStream.current().children();
@@ -79,6 +81,8 @@ int32_t SpillMergeStream::compare(const MergeStream& other) const {
 }
 
 void SpillMergeStream::close() {
+  VELOX_CHECK(!closed_);
+  closed_ = true;
   rowVector_.reset();
   decoded_.clear();
   rows_.resize(0);
@@ -300,10 +304,12 @@ SpillPartition::createOrderedReader(
 }
 
 uint32_t FileSpillMergeStream::id() const {
+  VELOX_CHECK(!closed_);
   return spillFile_->id();
 }
 
 void FileSpillMergeStream::nextBatch() {
+  VELOX_CHECK(!closed_);
   index_ = 0;
   if (!spillFile_->nextBatch(rowVector_)) {
     size_ = 0;
@@ -314,6 +320,7 @@ void FileSpillMergeStream::nextBatch() {
 }
 
 void FileSpillMergeStream::close() {
+  VELOX_CHECK(!closed_);
   SpillMergeStream::close();
   spillFile_.reset();
 }

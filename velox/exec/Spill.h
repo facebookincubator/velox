@@ -46,6 +46,7 @@ class SpillMergeStream : public MergeStream {
   }
 
   bool operator<(const MergeStream& other) const final {
+    VELOX_CHECK(!closed_);
     return compare(other) < 0;
   }
 
@@ -54,6 +55,7 @@ class SpillMergeStream : public MergeStream {
   void pop();
 
   const RowVector& current() const {
+    VELOX_CHECK(!closed_);
     return *rowVector_;
   }
 
@@ -62,6 +64,7 @@ class SpillMergeStream : public MergeStream {
   /// batch, in which case the caller must call copy out current batch data if
   /// required before calling pop().
   vector_size_t currentIndex(bool* isLastRow = nullptr) const {
+    VELOX_CHECK(!closed_);
     if (isLastRow != nullptr) {
       *isLastRow = (index_ == (rowVector_->size() - 1));
     }
@@ -70,6 +73,7 @@ class SpillMergeStream : public MergeStream {
 
   /// Returns a DecodedVector set decoding the 'index'th child of 'rowVector_'
   DecodedVector& decoded(int32_t index) {
+    VELOX_CHECK(!closed_);
     ensureDecodedValid(index);
     return decoded_[index];
   }
@@ -112,6 +116,9 @@ class SpillMergeStream : public MergeStream {
     }
   }
 
+  // True if the stream is closed.
+  bool closed_{false};
+
   // Current batch of rows.
   RowVectorPtr rowVector_;
 
@@ -127,9 +134,6 @@ class SpillMergeStream : public MergeStream {
 
   // Covers all rows inn 'rowVector_' Set if 'decoded_' is non-empty.
   SelectivityVector rows_;
-
-  // True if the stream is closed.
-  bool closed_;
 };
 
 // A source of spilled RowVectors coming from a file.
@@ -152,10 +156,12 @@ class FileSpillMergeStream : public SpillMergeStream {
   }
 
   int32_t numSortKeys() const override {
+    VELOX_CHECK(!closed_);
     return spillFile_->numSortKeys();
   }
 
   const std::vector<CompareFlags>& sortCompareFlags() const override {
+    VELOX_CHECK(!closed_);
     return spillFile_->sortCompareFlags();
   }
 
@@ -179,10 +185,7 @@ class FileSpillBatchStream : public BatchStream {
   }
 
   bool nextBatch(RowVectorPtr& batch) override {
-    if (spillFile_->nextBatch(batch)) {
-      return true;
-    }
-    return false;
+    return spillFile_->nextBatch(batch);
   }
 
  private:
@@ -195,10 +198,10 @@ class FileSpillBatchStream : public BatchStream {
 };
 
 /// Identifies a spill partition generated from a given spilling operator. It
-/// consists of partition start bit offset and the actual partition number. The
-/// start bit offset is used to calculate the partition number of spill data. It
-/// is required for the recursive spilling handling as we advance the start bit
-/// offset when we go to the next level of recursive spilling.
+/// consists of partition start bit offset and the actual partition number.
+/// The start bit offset is used to calculate the partition number of spill
+/// data. It is required for the recursive spilling handling as we advance the
+/// start bit offset when we go to the next level of recursive spilling.
 ///
 /// NOTE: multiple shards created from the same SpillPartition by split()
 /// will share the same id.
@@ -217,13 +220,13 @@ class SpillPartitionId {
     return !(*this == other);
   }
 
-  /// Customize the compare operator for recursive spilling control. It ensures
-  /// the partition with higher partition bit is handled prior than one with
-  /// lower partition bit. With the same partition bit, the one with smaller
-  /// partition number is handled first. We put all spill partitions in an
-  /// ordered map sorted based on the partition id. The recursive spilling will
-  /// advance the partition start bit when go to the next level of recursive
-  /// spilling.
+  /// Customize the compare operator for recursive spilling control. It
+  /// ensures the partition with higher partition bit is handled prior than
+  /// one with lower partition bit. With the same partition bit, the one with
+  /// smaller partition number is handled first. We put all spill partitions
+  /// in an ordered map sorted based on the partition id. The recursive
+  /// spilling will advance the partition start bit when go to the next level
+  /// of recursive spilling.
   bool operator<(const SpillPartitionId& other) const {
     if (partitionBitOffset_ != other.partitionBitOffset_) {
       return partitionBitOffset_ > other.partitionBitOffset_;
@@ -300,10 +303,10 @@ class SpillPartition {
 
   /// Invoked to create an unordered stream reader from this spill partition.
   /// The created reader will take the ownership of the spill files.
-  /// 'bufferSize' specifies the read size from the storage. If the file system
-  /// supports async read mode, then reader allocates two buffers with one
-  /// buffer prefetch ahead. 'spillStats' is provided to collect the spill stats
-  /// when reading data from spilled files.
+  /// 'bufferSize' specifies the read size from the storage. If the file
+  /// system supports async read mode, then reader allocates two buffers with
+  /// one buffer prefetch ahead. 'spillStats' is provided to collect the spill
+  /// stats when reading data from spilled files.
   std::unique_ptr<UnorderedStreamReader<BatchStream>> createUnorderedReader(
       uint64_t bufferSize,
       memory::MemoryPool* pool,
@@ -311,10 +314,10 @@ class SpillPartition {
 
   /// Invoked to create an ordered stream reader from this spill partition.
   /// The created reader will take the ownership of the spill files.
-  /// 'bufferSize' specifies the read size from the storage. If the file system
-  /// supports async read mode, then reader allocates two buffers with one
-  /// buffer prefetch ahead. 'spillStats' is provided to collect the spill stats
-  /// when reading data from spilled files.
+  /// 'bufferSize' specifies the read size from the storage. If the file
+  /// system supports async read mode, then reader allocates two buffers with
+  /// one buffer prefetch ahead. 'spillStats' is provided to collect the spill
+  /// stats when reading data from spilled files.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
       uint64_t bufferSize,
       memory::MemoryPool* pool,
@@ -336,9 +339,9 @@ using SpillPartitionSet =
 /// by. This has one SpillFileList per partition of spill data.
 class SpillState {
  public:
-  /// Constructs a SpillState. 'type' is the content RowType. 'path' is the file
-  /// system path prefix. 'bits' is the hash bit field for partitioning data
-  /// between files. This also gives the maximum number of partitions.
+  /// Constructs a SpillState. 'type' is the content RowType. 'path' is the
+  /// file system path prefix. 'bits' is the hash bit field for partitioning
+  /// data between files. This also gives the maximum number of partitions.
   /// 'numSortKeys' is the number of leading columns on which the data is
   /// sorted, 0 if only hash partitioning is used. 'targetFileSize' is the
   /// target size of a single file.  'pool' owns the memory for state and
@@ -399,24 +402,24 @@ class SpillState {
 
   /// Appends data to 'partition'. The rows given by 'indices' must be sorted
   /// for a sorted spill and must hash to 'partition'. It is safe to call this
-  /// on multiple threads if all threads specify a different partition. Returns
-  /// the size to append to partition.
+  /// on multiple threads if all threads specify a different partition.
+  /// Returns the size to append to partition.
   uint64_t appendToPartition(uint32_t partition, const RowVectorPtr& rows);
 
-  /// Finishes a sorted run for 'partition'. If write is called for 'partition'
-  /// again, the data does not have to be sorted relative to the data written so
-  /// far.
+  /// Finishes a sorted run for 'partition'. If write is called for
+  /// 'partition' again, the data does not have to be sorted relative to the
+  /// data written so far.
   void finishFile(uint32_t partition);
 
   /// Returns the current number of finished files from a given partition.
   ///
-  /// NOTE: the fucntion returns zero if the state has finished or the partition
-  /// is not spilled yet.
+  /// NOTE: the fucntion returns zero if the state has finished or the
+  /// partition is not spilled yet.
   size_t numFinishedFiles(uint32_t partition) const;
 
   /// Returns the spill file objects from a given 'partition'. The function
-  /// returns an empty list if either the partition has not been spilled or has
-  /// no spilled data.
+  /// returns an empty list if either the partition has not been spilled or
+  /// has no spilled data.
   SpillFiles finish(uint32_t partition);
 
   /// Returns the spilled partition number set.
@@ -438,8 +441,8 @@ class SpillState {
 
   const RowTypePtr type_;
 
-  // A callback function that returns the spill directory path. Implementations
-  // can use it to ensure the path exists before returning.
+  // A callback function that returns the spill directory path.
+  // Implementations can use it to ensure the path exists before returning.
   common::GetSpillDirectoryPathCB getSpillDirPathCb_;
 
   // Updates the aggregated spill bytes of this query, and throws if exceeds
