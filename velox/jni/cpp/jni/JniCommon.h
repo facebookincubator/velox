@@ -23,6 +23,27 @@
 #include <memory>
 #include "common/base/Exceptions.h"
 
+/*
+ * This header provides a collection of utility functions and classes to
+ * facilitate Java Native Interface (JNI) operations in C++. It includes
+ * mechanisms to manage global references to Java classes, convert Java types to
+ * C++ types, and manage shared pointers in conjunction with JNI calls.
+ *
+ * The `SharedPtrHandle` struct is a utility to wrap `std::shared_ptr` handling
+ * within JNI code, with optional reference counting and debug output to track
+ * object lifetimes and instance counts.
+ *
+ * Additionally, the file provides functions to:
+ * - Create global references to Java classes from their names.
+ * - Retrieve method IDs for instance and static methods from a class.
+ * - Convert Java byte arrays and strings to their C++ equivalents.
+ * - Convert Java string arrays to a vector of C++ strings.
+ *
+ * Debugging support is conditionally included to trace the creation and
+ * destruction of `SharedPtrHandle` instances, which can aid in identifying
+ * memory management issues.
+ */
+
 static jint jniVersion = JNI_VERSION_1_8;
 
 #define JNI_METHOD_SIG(name, signature) \
