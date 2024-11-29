@@ -16,7 +16,6 @@
 
 #pragma once
 
-
 #include "JniErrors.h"
 
 namespace facebook::velox::sdk {

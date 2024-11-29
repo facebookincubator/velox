@@ -17,6 +17,7 @@
 #pragma once
 
 #include "folly/json/json.h"
+
 namespace facebook::velox::sdk::utils {
 class JsonUtils {
  public:
