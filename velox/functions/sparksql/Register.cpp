@@ -452,6 +452,9 @@ void registerFunctions(const std::string& prefix) {
   registerUnaryIntegralWithTReturn<MillisToTimestampFunction, Timestamp>(
       {prefix + "timestamp_millis"});
 
+  registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
+      {prefix + "date_trunc"});
+
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
       {prefix + "might_contain"});
