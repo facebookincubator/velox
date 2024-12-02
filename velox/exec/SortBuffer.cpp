@@ -43,20 +43,28 @@ SortBuffer::SortBuffer(
 
   std::vector<TypePtr> sortedColumnTypes;
   std::vector<TypePtr> nonSortedColumnTypes;
-  std::vector<std::string> sortedSpillColumnNames;
-  std::vector<TypePtr> sortedSpillColumnTypes;
   sortedColumnTypes.reserve(sortColumnIndices.size());
   nonSortedColumnTypes.reserve(input->size() - sortColumnIndices.size());
-  sortedSpillColumnNames.reserve(input->size());
-  sortedSpillColumnTypes.reserve(input->size());
+
+  // Only initialize spill-related variables when enable spill
+  std::vector<std::string> sortedSpillColumnNames;
+  std::vector<TypePtr> sortedSpillColumnTypes;
+  if (spillConfig) {
+    sortedSpillColumnNames.reserve(input->size());
+    sortedSpillColumnTypes.reserve(input->size());
+  }
+
   std::unordered_set<column_index_t> sortedChannelSet;
   // Sorted key columns.
   for (column_index_t i = 0; i < sortColumnIndices.size(); ++i) {
-    columnMap_.emplace_back(IdentityProjection(i, sortColumnIndices.at(i)));
+    columnMap_.emplace_back(i, sortColumnIndices.at(i));
     sortedColumnTypes.emplace_back(input_->childAt(sortColumnIndices.at(i)));
-    sortedSpillColumnTypes.emplace_back(
-        input_->childAt(sortColumnIndices.at(i)));
-    sortedSpillColumnNames.emplace_back(input->nameOf(sortColumnIndices.at(i)));
+    if (spillConfig) {
+      sortedSpillColumnTypes.emplace_back(
+          input_->childAt(sortColumnIndices.at(i)));
+      sortedSpillColumnNames.emplace_back(
+          input->nameOf(sortColumnIndices.at(i)));
+    }
     sortedChannelSet.emplace(sortColumnIndices.at(i));
   }
   // Non-sorted key columns.
@@ -68,14 +76,19 @@ SortBuffer::SortBuffer(
     }
     columnMap_.emplace_back(nonSortedIndex++, i);
     nonSortedColumnTypes.emplace_back(input_->childAt(i));
-    sortedSpillColumnTypes.emplace_back(input_->childAt(i));
-    sortedSpillColumnNames.emplace_back(input->nameOf(i));
+    if (spillConfig) {
+      sortedSpillColumnTypes.emplace_back(input_->childAt(i));
+      sortedSpillColumnNames.emplace_back(input->nameOf(i));
+    }
   }
-
   data_ = std::make_unique<RowContainer>(
       sortedColumnTypes, nonSortedColumnTypes, pool_);
-  spillerStoreType_ =
-      ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
+
+  // Only set spillerStoreType_ when enable spill
+  if (spillConfig) {
+    spillerStoreType_ = ROW(
+        std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
+  }
 }
 
 SortBuffer::~SortBuffer() {
