@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_dwio_parquet_thrift_test ThriftTransportTest.cpp)
+add_executable(velox_dwio_parquet_common_test ThriftTransportTest.cpp
+                                              LevelConversionTest.cpp)
 
-add_test(velox_dwio_parquet_thrift_test velox_dwio_parquet_thrift_test)
+add_test(velox_dwio_parquet_common_test velox_dwio_parquet_common_test)
 target_link_libraries(
-  velox_dwio_parquet_thrift_test
+  velox_dwio_parquet_common_test
   arrow
   thrift
   velox_link_libs

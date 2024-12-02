@@ -41,12 +41,12 @@
 #include "arrow/util/logging.h"
 #include "arrow/util/type_traits.h"
 
+#include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnPage.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
 #include "velox/dwio/parquet/writer/arrow/Encryption.h"
 #include "velox/dwio/parquet/writer/arrow/EncryptionInternal.h"
 #include "velox/dwio/parquet/writer/arrow/FileEncryptorInternal.h"
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/PageIndex.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"

@@ -16,9 +16,9 @@
 
 // Adapted from Apache Arrow.
 
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
+#include "velox/dwio/parquet/common/LevelConversion.h"
 
-#include "velox/dwio/parquet/writer/arrow/LevelComparison.h"
+#include "velox/dwio/parquet/common/LevelComparison.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 #include <gmock/gmock.h>

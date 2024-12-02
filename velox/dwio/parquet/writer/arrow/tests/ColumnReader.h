@@ -24,13 +24,13 @@
 #include <vector>
 
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/BitStreamUtilsInternal.h"
 #include "velox/dwio/parquet/writer/arrow/util/RleEncodingInternal.h"
+#include "velox/dwio/parquet/common/LevelConversion.h"
 
 namespace arrow {
 

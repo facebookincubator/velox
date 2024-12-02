@@ -26,7 +26,7 @@ set(TEST_LINK_LIBS
 
 add_subdirectory(reader)
 add_subdirectory(writer)
-add_subdirectory(thrift)
+add_subdirectory(common)
 
 add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp)
 add_test(

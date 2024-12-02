@@ -18,7 +18,7 @@
 
 #pragma once
 
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
+#include "velox/dwio/parquet/common/LevelConversion.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -29,14 +29,11 @@
 #include "arrow/util/bitmap_writer.h"
 #include "arrow/util/logging.h"
 #include "arrow/util/simd.h"
-#include "velox/dwio/parquet/writer/arrow/Exception.h"
-#include "velox/dwio/parquet/writer/arrow/LevelComparison.h"
 
-#ifndef PARQUET_IMPL_NAMESPACE
-#error "PARQUET_IMPL_NAMESPACE must be defined"
-#endif
+#include "velox/common/base/Exceptions.h"
+#include "velox/dwio/parquet/common/LevelComparison.h"
 
-namespace facebook::velox::parquet::arrow::internal::PARQUET_IMPL_NAMESPACE {
+namespace facebook::velox::parquet {
 
 // clang-format off
 /* Python code to generate lookup table:
@@ -261,31 +258,6 @@ inline uint64_t ExtractBitsSoftware(uint64_t bitmap, uint64_t select_bitmap) {
   return bit_value;
 }
 
-#ifdef ARROW_HAVE_BMI2
-
-// Use _pext_u64 on 64-bit builds, _pext_u32 on 32-bit builds,
-#if UINTPTR_MAX == 0xFFFFFFFF
-
-using extract_bitmap_t = uint32_t;
-inline extract_bitmap_t ExtractBits(
-    extract_bitmap_t bitmap,
-    extract_bitmap_t select_bitmap) {
-  return _pext_u32(bitmap, select_bitmap);
-}
-
-#else
-
-using extract_bitmap_t = uint64_t;
-inline extract_bitmap_t ExtractBits(
-    extract_bitmap_t bitmap,
-    extract_bitmap_t select_bitmap) {
-  return _pext_u64(bitmap, select_bitmap);
-}
-
-#endif
-
-#else // !defined(ARROW_HAVE_BMI2)
-
 // Use 64-bit pext emulation when BMI2 isn't available.
 using extract_bitmap_t = uint64_t;
 inline extract_bitmap_t ExtractBits(
@@ -293,8 +265,6 @@ inline extract_bitmap_t ExtractBits(
     extract_bitmap_t select_bitmap) {
   return ExtractBitsSoftware(bitmap, select_bitmap);
 }
-
-#endif
 
 static constexpr int64_t kExtractBitsSize = 8 * sizeof(extract_bitmap_t);
 
@@ -309,29 +279,27 @@ int64_t DefLevelsBatchToBitmap(
 
   // Greater than level_info.def_level - 1 implies >= the def_level
   auto defined_bitmap =
-      static_cast<extract_bitmap_t>(internal::GreaterThanBitmap(
+      static_cast<extract_bitmap_t>(GreaterThanBitmap(
           def_levels, batch_size, level_info.def_level - 1));
 
   if (has_repeated_parent) {
     // Greater than level_info.repeated_ancestor_def_level - 1 implies >= the
     // repeated_ancestor_def_level
     auto present_bitmap =
-        static_cast<extract_bitmap_t>(internal::GreaterThanBitmap(
+        static_cast<extract_bitmap_t>(GreaterThanBitmap(
             def_levels,
             batch_size,
             level_info.repeated_ancestor_def_level - 1));
     auto selected_bits = ExtractBits(defined_bitmap, present_bitmap);
     int64_t selected_count = ::arrow::bit_util::PopCount(present_bitmap);
     if (ARROW_PREDICT_FALSE(selected_count > upper_bound_remaining)) {
-      throw ParquetException("Values read exceeded upper bound");
+      VELOX_FAIL("Values read exceeded upper bound");
     }
     writer->AppendWord(selected_bits, selected_count);
     return ::arrow::bit_util::PopCount(selected_bits);
   } else {
     if (ARROW_PREDICT_FALSE(batch_size > upper_bound_remaining)) {
-      std::stringstream ss;
-      ss << "Values read exceeded upper bound";
-      throw ParquetException(ss.str());
+      VELOX_FAIL("Values read exceeded upper bound");
     }
 
     writer->AppendWord(defined_bitmap, batch_size);
@@ -371,4 +339,4 @@ void DefLevelsToBitmapSimd(
   writer.Finish();
 }
 
-} // namespace facebook::velox::parquet::arrow::internal::PARQUET_IMPL_NAMESPACE
+} // namespace facebook::velox::parquet

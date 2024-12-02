@@ -42,12 +42,12 @@
 #include "arrow/util/crc32.h"
 #include "arrow/util/int_util_overflow.h"
 #include "arrow/util/logging.h"
+#include "velox/dwio/parquet/common/LevelComparison.h"
+#include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnPage.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
 #include "velox/dwio/parquet/writer/arrow/EncryptionInternal.h"
 #include "velox/dwio/parquet/writer/arrow/FileDecryptorInternal.h"
-#include "velox/dwio/parquet/writer/arrow/LevelComparison.h"
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
@@ -193,7 +193,7 @@ int LevelDecoder::Decode(int batch_size, int16_t* levels) {
     num_decoded = bit_packed_decoder_->GetBatch(bit_width_, levels, num_values);
   }
   if (num_decoded > 0) {
-    internal::MinMax min_max = internal::FindMinMax(levels, num_decoded);
+    MinMax min_max = FindMinMax(levels, num_decoded);
     if (ARROW_PREDICT_FALSE(min_max.min < 0 || min_max.max > max_level_)) {
       std::stringstream ss;
       ss << "Malformed levels. min: " << min_max.min << " max: " << min_max.max

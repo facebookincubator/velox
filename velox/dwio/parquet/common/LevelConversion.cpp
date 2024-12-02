@@ -16,7 +16,8 @@
 
 // Adapted from Apache Arrow.
 
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
+#include "velox/dwio/parquet/common/LevelConversion.h"
+#include "velox/dwio/parquet/common/LevelConversionUtil.h"
 
 #include <algorithm>
 #include <limits>
@@ -24,16 +25,13 @@
 
 #include "arrow/util/bit_run_reader.h"
 #include "arrow/util/bit_util.h"
+#include "arrow/util/bitmap_writer.h"
 #include "arrow/util/cpu_info.h"
 #include "arrow/util/logging.h"
-#include "velox/dwio/parquet/writer/arrow/Exception.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/dwio/parquet/common/LevelComparison.h"
 
-#include "velox/dwio/parquet/writer/arrow/LevelComparison.h"
-#define PARQUET_IMPL_NAMESPACE standard
-#include "velox/dwio/parquet/writer/arrow/LevelConversionInc.h"
-#undef PARQUET_IMPL_NAMESPACE
-
-namespace facebook::velox::parquet::arrow {
+namespace facebook::velox::parquet {
 namespace {
 
 using ::arrow::internal::CpuInfo;
@@ -70,7 +68,7 @@ void DefRepLevelsToListInfo(
       if (offsets != nullptr) {
         if (ARROW_PREDICT_FALSE(
                 *offsets == std::numeric_limits<OffsetType>::max())) {
-          throw ParquetException("List index overflow.");
+          VELOX_FAIL("List index overflow.");
         }
         *offsets += 1;
       }
@@ -80,10 +78,7 @@ void DefRepLevelsToListInfo(
                valid_bits_writer->position() >=
                    output->values_read_upper_bound) ||
               (offsets - orig_pos) >= output->values_read_upper_bound)) {
-        std::stringstream ss;
-        ss << "Definition levels exceeded upper bound: "
-           << output->values_read_upper_bound;
-        throw ParquetException(ss.str());
+        VELOX_FAIL("Definition levels exceeded upper bound: {}", output->values_read_upper_bound);
       }
 
       // current_rep < list rep_level i.e. start of a list (ancestor empty lists
@@ -98,7 +93,7 @@ void DefRepLevelsToListInfo(
         if (def_levels[x] >= level_info.def_level) {
           if (ARROW_PREDICT_FALSE(
                   *offsets == std::numeric_limits<OffsetType>::max())) {
-            throw ParquetException("List index overflow.");
+            VELOX_FAIL("List index overflow.");
           }
           *offsets += 1;
         }
@@ -126,22 +121,13 @@ void DefRepLevelsToListInfo(
     output->values_read = valid_bits_writer->position();
   }
   if (output->null_count > 0 && level_info.null_slot_usage > 1) {
-    throw ParquetException(
+    VELOX_FAIL(
         "Null values with null_slot_usage > 1 not supported."
         "(i.e. FixedSizeLists with null values are not supported)");
   }
 }
 
 } // namespace
-
-#if defined(ARROW_HAVE_RUNTIME_BMI2)
-// defined in level_conversion_bmi2.cc for dynamic dispatch.
-void DefLevelsToBitmapBmi2WithRepeatedParent(
-    const int16_t* def_levels,
-    int64_t num_def_levels,
-    LevelInfo level_info,
-    ValidityBitmapInputOutput* output);
-#endif
 
 void DefLevelsToBitmap(
     const int16_t* def_levels,
@@ -151,22 +137,16 @@ void DefLevelsToBitmap(
   // It is simpler to rely on rep_level here until PARQUET-1899 is done and the
   // code is deleted in a follow-up release.
   if (level_info.rep_level > 0) {
-#if defined(ARROW_HAVE_RUNTIME_BMI2)
-    if (CpuInfo::GetInstance()->HasEfficientBmi2()) {
-      return DefLevelsToBitmapBmi2WithRepeatedParent(
-          def_levels, num_def_levels, level_info, output);
-    }
-#endif
-    internal::standard::DefLevelsToBitmapSimd</*has_repeated_parent=*/true>(
+    DefLevelsToBitmapSimd</*has_repeated_parent=*/true>(
         def_levels, num_def_levels, level_info, output);
   } else {
-    internal::standard::DefLevelsToBitmapSimd</*has_repeated_parent=*/false>(
+    DefLevelsToBitmapSimd</*has_repeated_parent=*/false>(
         def_levels, num_def_levels, level_info, output);
   }
 }
 
 uint64_t TestOnlyExtractBitsSoftware(uint64_t bitmap, uint64_t select_bitmap) {
-  return internal::standard::ExtractBitsSoftware(bitmap, select_bitmap);
+  return ExtractBitsSoftware(bitmap, select_bitmap);
 }
 
 void DefRepLevelsToList(

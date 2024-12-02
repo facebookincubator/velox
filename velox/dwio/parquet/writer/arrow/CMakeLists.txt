@@ -30,9 +30,6 @@ velox_add_library(
   FileEncryptorInternal.cpp
   FileDecryptorInternal.cpp
   FileWriter.cpp
-  LevelComparison.cpp
-  LevelComparisonAvx2.cpp
-  LevelConversion.cpp
   Metadata.cpp
   PageIndex.cpp
   PathInternal.cpp

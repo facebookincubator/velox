@@ -20,13 +20,9 @@
 
 #include <cstdint>
 
-#include "arrow/util/endian.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
+namespace facebook::velox::parquet {
 
-namespace facebook::velox::parquet::arrow {
-
-struct PARQUET_EXPORT LevelInfo {
+struct LevelInfo {
   LevelInfo()
       : null_slot_usage(1),
         def_level(0),
@@ -97,19 +93,7 @@ struct PARQUET_EXPORT LevelInfo {
   //
   int16_t repeated_ancestor_def_level = 0;
 
-  /// Increments levels according to the cardinality of node.
-  void Increment(const schema::Node& node) {
-    if (node.is_repeated()) {
-      IncrementRepeated();
-      return;
-    }
-    if (node.is_optional()) {
-      IncrementOptional();
-      return;
-    }
-  }
-
-  /// Incremetns level for a optional node.
+  /// Increments level for a optional node.
   void IncrementOptional() {
     def_level++;
   }
@@ -131,7 +115,7 @@ struct PARQUET_EXPORT LevelInfo {
     repeated_ancestor_def_level = def_level;
     return last_repeated_ancestor;
   }
-
+/*
   friend std::ostream& operator<<(std::ostream& os, const LevelInfo& levels) {
     // This print method is to silence valgrind issues.  What's printed
     // is not important because all asserts happen directly on
@@ -143,11 +127,11 @@ struct PARQUET_EXPORT LevelInfo {
     }
     os << "}";
     return os;
-  }
+  }*/
 };
 
 // Input/Output structure for reconstructed validity bitmaps.
-struct PARQUET_EXPORT ValidityBitmapInputOutput {
+struct ValidityBitmapInputOutput {
   // Input only.
   // The maximum number of values_read expected (actual
   // values read must be less than or equal to this value).
@@ -163,7 +147,7 @@ struct PARQUET_EXPORT ValidityBitmapInputOutput {
   int64_t null_count = 0;
   // Output only. The validity bitmap to populate. Maybe be null only
   // for DefRepLevelsToListInfo (if all that is needed is list offsets).
-  uint8_t* valid_bits = NULLPTR;
+  uint8_t* valid_bits = nullptr;
   // Input only, offset into valid_bits to start at.
   int64_t valid_bits_offset = 0;
 };
@@ -172,7 +156,7 @@ struct PARQUET_EXPORT ValidityBitmapInputOutput {
 //  have at least one member that is not a list and has no list descendents. For
 //  lists use DefRepLevelsToList and structs where all descendants contain a
 //  list use DefRepLevelsToBitmap.
-void PARQUET_EXPORT DefLevelsToBitmap(
+void DefLevelsToBitmap(
     const int16_t* def_levels,
     int64_t num_def_levels,
     LevelInfo level_info,
@@ -186,14 +170,14 @@ void PARQUET_EXPORT DefLevelsToBitmap(
 // reconstruction.
 //
 // Offsets must be sized to 1 + values_read_upper_bound.
-void PARQUET_EXPORT DefRepLevelsToList(
+void DefRepLevelsToList(
     const int16_t* def_levels,
     const int16_t* rep_levels,
     int64_t num_def_levels,
     LevelInfo level_info,
     ValidityBitmapInputOutput* output,
     int32_t* offsets);
-void PARQUET_EXPORT DefRepLevelsToList(
+void DefRepLevelsToList(
     const int16_t* def_levels,
     const int16_t* rep_levels,
     int64_t num_def_levels,
@@ -204,16 +188,10 @@ void PARQUET_EXPORT DefRepLevelsToList(
 // Reconstructs a validity bitmap for a struct every member is a list or has
 // a list descendant.  See documentation on DefLevelsToBitmap for when more
 // details on this method compared to the other ones defined above.
-void PARQUET_EXPORT DefRepLevelsToBitmap(
+void DefRepLevelsToBitmap(
     const int16_t* def_levels,
     const int16_t* rep_levels,
     int64_t num_def_levels,
     LevelInfo level_info,
     ValidityBitmapInputOutput* output);
-
-// This is exposed to ensure we can properly test a software simulated pext
-// function (i.e. it isn't hidden by runtime dispatch).
-uint64_t PARQUET_EXPORT
-TestOnlyExtractBitsSoftware(uint64_t bitmap, uint64_t selection);
-
-} // namespace facebook::velox::parquet::arrow
+} // namespace facebook::velox::parquet
