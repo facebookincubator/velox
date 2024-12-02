@@ -46,7 +46,6 @@ class SpillMergeStream : public MergeStream {
   }
 
   bool operator<(const MergeStream& other) const final {
-    VELOX_CHECK(!closed_);
     return compare(other) < 0;
   }
 
