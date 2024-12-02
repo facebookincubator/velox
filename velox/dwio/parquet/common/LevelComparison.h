@@ -18,6 +18,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace facebook::velox::parquet {
 
 /// Builds a  bitmap where each set bit indicates the corresponding level is

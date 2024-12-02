@@ -37,8 +37,8 @@ target_link_libraries(
   GTest::gmock
   GTest::gtest
   GTest::gtest_main
-  arrow
-  arrow_testing)
+  arrow_testing
+  arrow)
 
 add_library(
   velox_dwio_arrow_parquet_writer_test_lib

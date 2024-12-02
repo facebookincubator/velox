@@ -18,6 +18,7 @@
 
 #include "velox/dwio/parquet/common/LevelConversion.h"
 
+#include <cassert> // Required for bitmap_writer.h below.
 #include <limits>
 #include <optional>
 
