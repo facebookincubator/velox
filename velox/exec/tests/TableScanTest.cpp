@@ -4770,39 +4770,63 @@ TEST_F(TableScanTest, varbinaryPartitionKey) {
 
 TEST_F(TableScanTest, timestampPartitionKey) {
   const char* inputs[] = {"2023-10-14 07:00:00.0", "2024-01-06 04:00:00.0"};
-  auto expected = makeRowVector(
-      {"t"},
-      {
-          makeFlatVector<Timestamp>(
-              std::end(inputs) - std::begin(inputs),
-              [&](auto i) {
-                auto t = util::fromTimestampString(
-                             inputs[i], util::TimestampParseMode::kPrestoCast)
-                             .thenOrThrow(
-                                 folly::identity, [&](const Status& status) {
-                                   VELOX_USER_FAIL("{}", status.message());
-                                 });
-                t.toGMT(Timestamp::defaultTimezone());
-                return t;
-              }),
-      });
-  auto vectors = makeVectors(1, 1);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
-  ColumnHandleMap assignments = {{"t", partitionKey("t", TIMESTAMP())}};
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
-  for (auto& t : inputs) {
-    splits.push_back(exec::test::HiveConnectorSplitBuilder(filePath->getPath())
-                         .partitionKey("t", t)
-                         .build());
+
+  for (std::string sessionTimezone :
+       {"", "Asia/Shanghai", "America/Los_Angeles", "UTC"}) {
+    SCOPED_TRACE(fmt::format("sessionTimezone {}", sessionTimezone));
+
+    auto expected = makeRowVector(
+        {"t"},
+        {
+            makeFlatVector<Timestamp>(
+                std::end(inputs) - std::begin(inputs),
+                [&](auto i) {
+                  auto t = util::fromTimestampString(
+                               inputs[i], util::TimestampParseMode::kPrestoCast)
+                               .thenOrThrow(
+                                   folly::identity, [&](const Status& status) {
+                                     VELOX_USER_FAIL("{}", status.message());
+                                   });
+
+                  if (sessionTimezone.empty()) {
+                    t.toGMT(Timestamp::defaultTimezone());
+                  } else {
+                    const auto timezone = tz::locateZone(sessionTimezone);
+                    t.toGMT(*timezone);
+                  }
+
+                  return t;
+                }),
+        });
+    auto vectors = makeVectors(1, 1);
+    auto filePath = TempFilePath::create();
+    writeToFile(filePath->getPath(), vectors);
+    ColumnHandleMap assignments = {{"t", partitionKey("t", TIMESTAMP())}};
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    for (auto& t : inputs) {
+      splits.push_back(
+          exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+              .partitionKey("t", t)
+              .build());
+    }
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .outputType(ROW({"t"}, {TIMESTAMP()}))
+                    .assignments(assignments)
+                    .endTableScan()
+                    .planNode();
+
+    if (!sessionTimezone.empty()) {
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kSessionTimezone, sessionTimezone)
+          .splits(std::move(splits))
+          .assertResults(expected);
+    } else {
+      AssertQueryBuilder(plan)
+          .splits(std::move(splits))
+          .assertResults(expected);
+    }
   }
-  auto plan = PlanBuilder()
-                  .startTableScan()
-                  .outputType(ROW({"t"}, {TIMESTAMP()}))
-                  .assignments(assignments)
-                  .endTableScan()
-                  .planNode();
-  AssertQueryBuilder(plan).splits(std::move(splits)).assertResults(expected);
 }
 
 TEST_F(TableScanTest, partitionKeyNotMatchPartitionKeysHandle) {
@@ -4914,8 +4938,8 @@ TEST_F(TableScanTest, dynamicFilters) {
 }
 
 TEST_F(TableScanTest, dynamicFilterWithRowIndexColumn) {
-  // This test ensures dynamic filters can be mapped to correct field when there
-  // is row_index column.
+  // This test ensures dynamic filters can be mapped to correct field when
+  // there is row_index column.
   auto aVector =
       makeRowVector({"a"}, {makeFlatVector<int64_t>(10, folly::identity)});
   auto bVector = makeRowVector({"b"}, {makeFlatVector<int64_t>(10, [](auto i) {
@@ -5000,8 +5024,8 @@ TEST_F(TableScanTest, DISABLED_memoryArbitrationWithSlowTableScan) {
   auto faultyFs = faultyFileSystem();
   std::atomic_bool injectOnce{true};
   faultyFs->setFileInjectionHook([&](FaultFileOperation* readOp) {
-    // Inject memory arbitration at the second read file so as to make sure the
-    // aggregation has accumulated state to spill.
+    // Inject memory arbitration at the second read file so as to make sure
+    // the aggregation has accumulated state to spill.
     if (readOp->path != filePaths.back()->getPath()) {
       return;
     }

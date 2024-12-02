@@ -28,7 +28,9 @@ SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
     common::ScanSpec& scanSpec)
     : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
       precision_(
-          params.stripeStreams().rowReaderOptions().timestampPrecision()) {
+          params.stripeStreams().rowReaderOptions().timestampPrecision()),
+      sessionTimezone_(params.sessionTimezone()),
+      adjustTimestampToTimezone_(params.adjustTimestampToTimezone()) {
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   version_ = convertRleVersion(stripe.getEncoding(encodingKey).kind());
@@ -146,7 +148,13 @@ void SelectiveTimestampColumnReader::readHelper(
           nanos *= 10;
         }
       }
-      auto seconds = secondsData[i] + EPOCH_OFFSET;
+      int64_t seconds;
+      if (sessionTimezone_) {
+        seconds = secondsData[i] + UTC_EPOCH_OFFSET;
+      } else {
+        // Compatible with meta internal use cases.
+        seconds = secondsData[i] + EPOCH_OFFSET;
+      }
       if (seconds < 0 && nanos != 0) {
         seconds -= 1;
       }
@@ -161,6 +169,9 @@ void SelectiveTimestampColumnReader::readHelper(
           break;
       }
       rawTs[i] = Timestamp(seconds, nanos);
+      if (adjustTimestampToTimezone_ && sessionTimezone_) {
+        rawTs[i].toGMT(*sessionTimezone_);
+      }
     }
   }
   values_ = tsValues;
