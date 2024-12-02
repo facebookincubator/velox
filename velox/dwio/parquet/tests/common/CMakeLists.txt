@@ -23,4 +23,5 @@ target_link_libraries(
   thrift
   velox_link_libs
   GTest::gtest
+  GTest::gmock
   GTest::gtest_main)

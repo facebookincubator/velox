@@ -22,11 +22,8 @@
 #include <cstdint>
 #include <limits>
 
-#include "arrow/util/bit_run_reader.h"
 #include "arrow/util/bit_util.h"
 #include "arrow/util/bitmap_writer.h"
-#include "arrow/util/logging.h"
-#include "arrow/util/simd.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/parquet/common/LevelComparison.h"
@@ -285,13 +282,13 @@ int64_t DefLevelsBatchToBitmap(
         defLevels, batchSize, levelInfo.repeatedAncestorDefLevel - 1));
     auto selectedBits = ExtractBits(definedBitmap, presentBitmap);
     int64_t selectedCount = ::arrow::bit_util::PopCount(presentBitmap);
-    if (ARROW_PREDICT_FALSE(selectedCount > upperBoundRemaining)) {
+    if (FOLLY_UNLIKELY(selectedCount > upperBoundRemaining)) {
       VELOX_FAIL("Values read exceeded upper bound");
     }
     writer->AppendWord(selectedBits, selectedCount);
     return ::arrow::bit_util::PopCount(selectedBits);
   } else {
-    if (ARROW_PREDICT_FALSE(batchSize > upperBoundRemaining)) {
+    if (FOLLY_UNLIKELY(batchSize > upperBoundRemaining)) {
       VELOX_FAIL("Values read exceeded upper bound");
     }
 

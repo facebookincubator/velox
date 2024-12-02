@@ -21,8 +21,6 @@
 #include <limits>
 #include <optional>
 
-#include "arrow/util/bit_run_reader.h"
-#include "arrow/util/bit_util.h"
 #include "arrow/util/bitmap_writer.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -60,14 +58,14 @@ void DefRepLevelsToListInfo(
       // offsets can be null for structs with repeated children (we don't need
       // to know offsets until we get to the children).
       if (offsets != nullptr) {
-        if (ARROW_PREDICT_FALSE(
+        if (FOLLY_UNLIKELY(
                 *offsets == std::numeric_limits<OffsetType>::max())) {
           VELOX_FAIL("List index overflow.");
         }
         *offsets += 1;
       }
     } else {
-      if (ARROW_PREDICT_FALSE(
+      if (FOLLY_UNLIKELY(
               (validBitsWriter.has_value() &&
                validBitsWriter->position() >= output->valuesReadUpperBound) ||
               (offsets - orig_pos) >= output->valuesReadUpperBound)) {
@@ -86,7 +84,7 @@ void DefRepLevelsToListInfo(
         // cumulative and subtract when validating fixed size lists.
         *offsets = *(offsets - 1);
         if (defLevels[x] >= levelInfo.defLevel) {
-          if (ARROW_PREDICT_FALSE(
+          if (FOLLY_UNLIKELY(
                   *offsets == std::numeric_limits<OffsetType>::max())) {
             VELOX_FAIL("List index overflow.");
           }

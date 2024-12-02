@@ -20,7 +20,7 @@
 
 #include <limits>
 
-#include "arrow/util/endian.h"
+#include "folly/lang/Bits.h"
 
 namespace facebook::velox::parquet {
 namespace {
@@ -32,7 +32,7 @@ LevelsToBitmap(const int16_t* levels, int64_t numLevels, Predicate predicate) {
   for (int x = 0; x < numLevels; x++) {
     mask |= static_cast<uint64_t>(predicate(levels[x]) ? 1 : 0) << x;
   }
-  return ::arrow::bit_util::ToLittleEndian(mask);
+  return folly::Endian::little(mask);
 }
 
 } // namespace

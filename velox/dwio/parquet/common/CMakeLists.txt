@@ -21,8 +21,9 @@ target_link_libraries(
   velox_type
   velox_dwio_common
   velox_dwio_common_compression
-  fmt::fmt
   arrow
+  fmt::fmt
+  Folly::folly
   Snappy::snappy
   thrift
   zstd::zstd)
