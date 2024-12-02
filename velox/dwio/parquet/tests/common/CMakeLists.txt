@@ -18,6 +18,7 @@ add_executable(velox_dwio_parquet_common_test ThriftTransportTest.cpp
 add_test(velox_dwio_parquet_common_test velox_dwio_parquet_common_test)
 target_link_libraries(
   velox_dwio_parquet_common_test
+  velox_dwio_parquet_common
   arrow
   thrift
   velox_link_libs

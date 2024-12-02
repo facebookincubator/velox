@@ -33,7 +33,7 @@ add_test(velox_dwio_arrow_parquet_writer_test
 target_link_libraries(
   velox_dwio_arrow_parquet_writer_test
   velox_dwio_arrow_parquet_writer_test_lib
-  velox_dwio_native_parquet_common
+  velox_dwio_parquet_common
   GTest::gmock
   GTest::gtest
   GTest::gtest_main

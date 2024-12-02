@@ -718,8 +718,8 @@ class ColumnReaderImplBase {
 
   ColumnReaderImplBase(const ColumnDescriptor* descr, ::arrow::MemoryPool* pool)
       : descr_(descr),
-        max_def_level_(descr->max_definition_level()),
-        max_rep_level_(descr->max_repetition_level()),
+        max_defLevel_(descr->max_definition_level()),
+        max_repLevel_(descr->max_repetition_level()),
         num_buffered_values_(0),
         num_decoded_values_(0),
         pool_(pool),
@@ -741,28 +741,28 @@ class ColumnReaderImplBase {
 
   // Read up to batch_size values from the current data page into the
   // pre-allocated memory T*, leaving spaces for null entries according
-  // to the def_levels.
+  // to the defLevels.
   //
   // @returns: the number of values read into the out buffer
   int64_t ReadValuesSpaced(
       int64_t batch_size,
       T* out,
-      int64_t null_count,
-      uint8_t* valid_bits,
-      int64_t valid_bits_offset) {
+      int64_t nullCount,
+      uint8_t* validBits,
+      int64_t validBitsOffset) {
     return current_decoder_->DecodeSpaced(
         out,
         static_cast<int>(batch_size),
-        static_cast<int>(null_count),
-        valid_bits,
-        valid_bits_offset);
+        static_cast<int>(nullCount),
+        validBits,
+        validBitsOffset);
   }
 
   // Read multiple definition levels into preallocated memory
   //
   // Returns the number of decoded definition levels
   int64_t ReadDefinitionLevels(int64_t batch_size, int16_t* levels) {
-    if (max_def_level_ == 0) {
+    if (max_defLevel_ == 0) {
       return 0;
     }
     return definition_level_decoder_.Decode(
@@ -784,7 +784,7 @@ class ColumnReaderImplBase {
   // Read multiple repetition levels into preallocated memory
   // Returns the number of decoded repetition levels
   int64_t ReadRepetitionLevels(int64_t batch_size, int16_t* levels) {
-    if (max_rep_level_ == 0) {
+    if (max_repLevel_ == 0) {
       return 0;
     }
     return repetition_level_decoder_.Decode(
@@ -887,30 +887,30 @@ class ColumnReaderImplBase {
     // Data page Layout: Repetition Levels - Definition Levels - encoded values.
     // Levels are encoded as rle or bit-packed.
     // Init repetition levels
-    if (max_rep_level_ > 0) {
-      int32_t rep_levels_bytes = repetition_level_decoder_.SetData(
+    if (max_repLevel_ > 0) {
+      int32_t repLevels_bytes = repetition_level_decoder_.SetData(
           repetition_level_encoding,
-          max_rep_level_,
+          max_repLevel_,
           static_cast<int>(num_buffered_values_),
           buffer,
           max_size);
-      buffer += rep_levels_bytes;
-      levels_byte_size += rep_levels_bytes;
-      max_size -= rep_levels_bytes;
+      buffer += repLevels_bytes;
+      levels_byte_size += repLevels_bytes;
+      max_size -= repLevels_bytes;
     }
-    // TODO figure a way to set max_def_level_ to 0
+    // TODO figure a way to set max_defLevel_ to 0
     // if the initial value is invalid
 
     // Init definition levels
-    if (max_def_level_ > 0) {
-      int32_t def_levels_bytes = definition_level_decoder_.SetData(
+    if (max_defLevel_ > 0) {
+      int32_t defLevels_bytes = definition_level_decoder_.SetData(
           definition_level_encoding,
-          max_def_level_,
+          max_defLevel_,
           static_cast<int>(num_buffered_values_),
           buffer,
           max_size);
-      levels_byte_size += def_levels_bytes;
-      max_size -= def_levels_bytes;
+      levels_byte_size += defLevels_bytes;
+      max_size -= defLevels_bytes;
     }
 
     return levels_byte_size;
@@ -933,22 +933,22 @@ class ColumnReaderImplBase {
           "Data page too small for levels (corrupt header?)");
     }
 
-    if (max_rep_level_ > 0) {
+    if (max_repLevel_ > 0) {
       repetition_level_decoder_.SetDataV2(
           page.repetition_levels_byte_length(),
-          max_rep_level_,
+          max_repLevel_,
           static_cast<int>(num_buffered_values_),
           buffer);
     }
-    // ARROW-17453: Even if max_rep_level_ is 0, there may still be
+    // ARROW-17453: Even if max_repLevel_ is 0, there may still be
     // repetition level bytes written and/or reported in the header by
     // some writers (e.g. Athena)
     buffer += page.repetition_levels_byte_length();
 
-    if (max_def_level_ > 0) {
+    if (max_defLevel_ > 0) {
       definition_level_decoder_.SetDataV2(
           page.definition_levels_byte_length(),
-          max_def_level_,
+          max_defLevel_,
           static_cast<int>(num_buffered_values_),
           buffer);
     }
@@ -1038,8 +1038,8 @@ class ColumnReaderImplBase {
   }
 
   const ColumnDescriptor* descr_;
-  const int16_t max_def_level_;
-  const int16_t max_rep_level_;
+  const int16_t max_defLevel_;
+  const int16_t max_repLevel_;
 
   std::unique_ptr<PageReader> pager_;
   std::shared_ptr<Page> current_page_;
@@ -1108,21 +1108,21 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
 
   int64_t ReadBatch(
       int64_t batch_size,
-      int16_t* def_levels,
-      int16_t* rep_levels,
+      int16_t* defLevels,
+      int16_t* repLevels,
       T* values,
-      int64_t* values_read) override;
+      int64_t* valuesRead) override;
 
   int64_t ReadBatchSpaced(
       int64_t batch_size,
-      int16_t* def_levels,
-      int16_t* rep_levels,
+      int16_t* defLevels,
+      int16_t* repLevels,
       T* values,
-      uint8_t* valid_bits,
-      int64_t valid_bits_offset,
+      uint8_t* validBits,
+      int64_t validBitsOffset,
       int64_t* levels_read,
-      int64_t* values_read,
-      int64_t* null_count) override;
+      int64_t* valuesRead,
+      int64_t* nullCount) override;
 
   int64_t Skip(int64_t num_values_to_skip) override;
 
@@ -1140,8 +1140,8 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
 
   int64_t ReadBatchWithDictionary(
       int64_t batch_size,
-      int16_t* def_levels,
-      int16_t* rep_levels,
+      int16_t* defLevels,
+      int16_t* repLevels,
       int32_t* indices,
       int64_t* indices_read,
       const T** dict,
@@ -1183,20 +1183,20 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
   // values.
   void ReadLevels(
       int64_t batch_size,
-      int16_t* def_levels,
-      int16_t* rep_levels,
-      int64_t* num_def_levels,
+      int16_t* defLevels,
+      int16_t* repLevels,
+      int64_t* num_defLevels,
       int64_t* values_to_read) {
     batch_size = std::min(
         batch_size, this->num_buffered_values_ - this->num_decoded_values_);
 
     // If the field is required and non-repeated, there are no definition levels
-    if (this->max_def_level_ > 0 && def_levels != nullptr) {
-      *num_def_levels = this->ReadDefinitionLevels(batch_size, def_levels);
+    if (this->max_defLevel_ > 0 && defLevels != nullptr) {
+      *num_defLevels = this->ReadDefinitionLevels(batch_size, defLevels);
       // TODO(wesm): this tallying of values-to-decode can be performed with
       // better cache-efficiency if fused with the level decoding.
-      for (int64_t i = 0; i < *num_def_levels; ++i) {
-        if (def_levels[i] == this->max_def_level_) {
+      for (int64_t i = 0; i < *num_defLevels; ++i) {
+        if (defLevels[i] == this->max_defLevel_) {
           ++(*values_to_read);
         }
       }
@@ -1206,10 +1206,9 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
     }
 
     // Not present for non-repeated fields
-    if (this->max_rep_level_ > 0 && rep_levels != nullptr) {
-      int64_t num_rep_levels =
-          this->ReadRepetitionLevels(batch_size, rep_levels);
-      if (def_levels != nullptr && *num_def_levels != num_rep_levels) {
+    if (this->max_repLevel_ > 0 && repLevels != nullptr) {
+      int64_t num_repLevels = this->ReadRepetitionLevels(batch_size, repLevels);
+      if (defLevels != nullptr && *num_defLevels != num_repLevels) {
         throw ParquetException(
             "Number of decoded rep / def levels did not match");
       }
@@ -1220,8 +1219,8 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
 template <typename DType>
 int64_t TypedColumnReaderImpl<DType>::ReadBatchWithDictionary(
     int64_t batch_size,
-    int16_t* def_levels,
-    int16_t* rep_levels,
+    int16_t* defLevels,
+    int16_t* repLevels,
     int32_t* indices,
     int64_t* indices_read,
     const T** dict,
@@ -1251,14 +1250,14 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatchWithDictionary(
   }
 
   // Similar logic as ReadValues to get def levels and rep levels.
-  int64_t num_def_levels = 0;
+  int64_t num_defLevels = 0;
   int64_t indices_to_read = 0;
   ReadLevels(
-      batch_size, def_levels, rep_levels, &num_def_levels, &indices_to_read);
+      batch_size, defLevels, repLevels, &num_defLevels, &indices_to_read);
 
   // Read dictionary indices.
   *indices_read = ReadDictionaryIndices(indices_to_read, indices);
-  int64_t total_indices = std::max<int64_t>(num_def_levels, *indices_read);
+  int64_t total_indices = std::max<int64_t>(num_defLevels, *indices_read);
   // Some callers use a batch size of 0 just to get the dictionary.
   int64_t expected_values = std::min(
       batch_size, this->num_buffered_values_ - this->num_decoded_values_);
@@ -1275,25 +1274,24 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatchWithDictionary(
 template <typename DType>
 int64_t TypedColumnReaderImpl<DType>::ReadBatch(
     int64_t batch_size,
-    int16_t* def_levels,
-    int16_t* rep_levels,
+    int16_t* defLevels,
+    int16_t* repLevels,
     T* values,
-    int64_t* values_read) {
+    int64_t* valuesRead) {
   // HasNext invokes ReadNewPage
   if (!HasNext()) {
-    *values_read = 0;
+    *valuesRead = 0;
     return 0;
   }
 
   // TODO(wesm): keep reading data pages until batch_size is reached, or the
   // row group is finished
-  int64_t num_def_levels = 0;
+  int64_t num_defLevels = 0;
   int64_t values_to_read = 0;
-  ReadLevels(
-      batch_size, def_levels, rep_levels, &num_def_levels, &values_to_read);
+  ReadLevels(batch_size, defLevels, repLevels, &num_defLevels, &values_to_read);
 
-  *values_read = this->ReadValues(values_to_read, values);
-  int64_t total_values = std::max<int64_t>(num_def_levels, *values_read);
+  *valuesRead = this->ReadValues(values_to_read, values);
+  int64_t total_values = std::max<int64_t>(num_defLevels, *valuesRead);
   int64_t expected_values = std::min(
       batch_size, this->num_buffered_values_ - this->num_decoded_values_);
   if (total_values == 0 && expected_values > 0) {
@@ -1309,19 +1307,19 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatch(
 template <typename DType>
 int64_t TypedColumnReaderImpl<DType>::ReadBatchSpaced(
     int64_t batch_size,
-    int16_t* def_levels,
-    int16_t* rep_levels,
+    int16_t* defLevels,
+    int16_t* repLevels,
     T* values,
-    uint8_t* valid_bits,
-    int64_t valid_bits_offset,
+    uint8_t* validBits,
+    int64_t validBitsOffset,
     int64_t* levels_read,
-    int64_t* values_read,
-    int64_t* null_count_out) {
+    int64_t* valuesRead,
+    int64_t* nullCount_out) {
   // HasNext invokes ReadNewPage
   if (!HasNext()) {
     *levels_read = 0;
-    *values_read = 0;
-    *null_count_out = 0;
+    *valuesRead = 0;
+    *nullCount_out = 0;
     return 0;
   }
 
@@ -1332,71 +1330,70 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatchSpaced(
       batch_size, this->num_buffered_values_ - this->num_decoded_values_);
 
   // If the field is required and non-repeated, there are no definition levels
-  if (this->max_def_level_ > 0) {
-    int64_t num_def_levels = this->ReadDefinitionLevels(batch_size, def_levels);
+  if (this->max_defLevel_ > 0) {
+    int64_t num_defLevels = this->ReadDefinitionLevels(batch_size, defLevels);
 
     // Not present for non-repeated fields
-    if (this->max_rep_level_ > 0) {
-      int64_t num_rep_levels =
-          this->ReadRepetitionLevels(batch_size, rep_levels);
-      if (num_def_levels != num_rep_levels) {
+    if (this->max_repLevel_ > 0) {
+      int64_t num_repLevels = this->ReadRepetitionLevels(batch_size, repLevels);
+      if (num_defLevels != num_repLevels) {
         throw ParquetException(
             "Number of decoded rep / def levels did not match");
       }
     }
 
     const bool has_spaced_values = HasSpacedValues(this->descr_);
-    int64_t null_count = 0;
+    int64_t nullCount = 0;
     if (!has_spaced_values) {
       int values_to_read = 0;
-      for (int64_t i = 0; i < num_def_levels; ++i) {
-        if (def_levels[i] == this->max_def_level_) {
+      for (int64_t i = 0; i < num_defLevels; ++i) {
+        if (defLevels[i] == this->max_defLevel_) {
           ++values_to_read;
         }
       }
       total_values = this->ReadValues(values_to_read, values);
       ::arrow::bit_util::SetBitsTo(
-          valid_bits,
-          valid_bits_offset,
+          validBits,
+          validBitsOffset,
           /*length=*/total_values,
           /*bits_are_set=*/true);
-      *values_read = total_values;
+      *valuesRead = total_values;
     } else {
       LevelInfo info;
-      info.repeated_ancestor_def_level = this->max_def_level_ - 1;
-      info.def_level = this->max_def_level_;
-      info.rep_level = this->max_rep_level_;
+      info.repeatedAncestorDefLevel = this->max_defLevel_ - 1;
+      info.defLevel = this->max_defLevel_;
+      info.repLevel = this->max_repLevel_;
       ValidityBitmapInputOutput validity_io;
-      validity_io.values_read_upper_bound = num_def_levels;
-      validity_io.valid_bits = valid_bits;
-      validity_io.valid_bits_offset = valid_bits_offset;
-      validity_io.null_count = null_count;
-      validity_io.values_read = *values_read;
+      validity_io.valuesReadUpperBound = num_defLevels;
+      validity_io.validBits = validBits;
+      validity_io.validBitsOffset = validBitsOffset;
+      validity_io.nullCount = nullCount;
+      validity_io.valuesRead = *valuesRead;
 
-      DefLevelsToBitmap(def_levels, num_def_levels, info, &validity_io);
-      null_count = validity_io.null_count;
-      *values_read = validity_io.values_read;
+      DefLevelsToBitmap(defLevels, num_defLevels, info, &validity_io);
+      nullCount = validity_io.nullCount;
+      *valuesRead = validity_io.valuesRead;
 
       total_values = this->ReadValuesSpaced(
-          *values_read,
+          *valuesRead,
           values,
-          static_cast<int>(null_count),
-          valid_bits,
-          valid_bits_offset);
+          static_cast<int>(nullCount),
+          validBits,
+          validBitsOffset);
     }
-    *levels_read = num_def_levels;
-    *null_count_out = null_count;
+    *levels_read = num_defLevels;
+    *nullCount_out = nullCount;
 
   } else {
     // Required field, read all values
     total_values = this->ReadValues(batch_size, values);
     ::arrow::bit_util::SetBitsTo(
-        valid_bits,
-        valid_bits_offset,
+        validBits,
+        validBitsOffset,
         /*length=*/total_values,
         /*bits_are_set=*/true);
-    *null_count_out = 0;
-    *values_read = total_values;
+    *nullCount_out = 0;
+    *valuesRead = total_values;
     *levels_read = total_values;
   }
 
@@ -1428,19 +1425,19 @@ int64_t TypedColumnReaderImpl<DType>::Skip(int64_t num_values_to_skip) {
     } else {
       // We need to read this Page
       // Jump to the right offset in the Page
-      int64_t values_read = 0;
+      int64_t valuesRead = 0;
       InitScratchForSkip();
       ARROW_DCHECK_NE(this->scratch_for_skip_, nullptr);
       do {
         int64_t batch_size = std::min(kSkipScratchBatchSize, values_to_skip);
-        values_read = ReadBatch(
+        valuesRead = ReadBatch(
             static_cast<int>(batch_size),
             reinterpret_cast<int16_t*>(this->scratch_for_skip_->mutable_data()),
             reinterpret_cast<int16_t*>(this->scratch_for_skip_->mutable_data()),
             reinterpret_cast<T*>(this->scratch_for_skip_->mutable_data()),
-            &values_read);
-        values_to_skip -= values_read;
-      } while (values_read > 0 && values_to_skip > 0);
+            &valuesRead);
+        values_to_skip -= valuesRead;
+      } while (valuesRead > 0 && values_to_skip > 0);
     }
   }
   return num_values_to_skip - values_to_skip;
@@ -1577,23 +1574,23 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
         break;
       }
 
-      if (this->max_def_level_ > 0) {
+      if (this->max_defLevel_ > 0) {
         ReserveLevels(batch_size);
 
-        int16_t* def_levels = this->def_levels() + levels_written_;
-        int16_t* rep_levels = this->rep_levels() + levels_written_;
+        int16_t* defLevels = this->def_levels() + levels_written_;
+        int16_t* repLevels = this->rep_levels() + levels_written_;
 
         // Not present for non-repeated fields
         int64_t levels_read = 0;
-        if (this->max_rep_level_ > 0) {
-          levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
-          if (this->ReadRepetitionLevels(batch_size, rep_levels) !=
+        if (this->max_repLevel_ > 0) {
+          levels_read = this->ReadDefinitionLevels(batch_size, defLevels);
+          if (this->ReadRepetitionLevels(batch_size, repLevels) !=
               levels_read) {
             throw ParquetException(
                 "Number of decoded rep / def levels did not match");
           }
-        } else if (this->max_def_level_ > 0) {
-          levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
+        } else if (this->max_defLevel_ > 0) {
+          levels_read = this->ReadDefinitionLevels(batch_size, defLevels);
         }
 
         // Exhausted column chunk
@@ -1620,7 +1617,7 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
   void ThrowAwayLevels(int64_t start_levels_position) {
     ARROW_DCHECK_LE(levels_position_, levels_written_);
     ARROW_DCHECK_LE(start_levels_position, levels_position_);
-    ARROW_DCHECK_GT(this->max_def_level_, 0);
+    ARROW_DCHECK_GT(this->max_defLevel_, 0);
     ARROW_DCHECK_NE(def_levels_, nullptr);
 
     int64_t gap = levels_position_ - start_levels_position;
@@ -1642,7 +1639,7 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
 
     left_shift(def_levels_.get());
 
-    if (this->max_rep_level_ > 0) {
+    if (this->max_repLevel_ > 0) {
       ARROW_DCHECK_NE(rep_levels_, nullptr);
       left_shift(rep_levels_.get());
     }
@@ -1655,7 +1652,7 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
   // Skip records that we have in our buffer. This function is only for
   // non-repeated fields.
   int64_t SkipRecordsInBufferNonRepeated(int64_t num_records) {
-    ARROW_DCHECK_EQ(this->max_rep_level_, 0);
+    ARROW_DCHECK_EQ(this->max_repLevel_, 0);
     if (!this->has_values_to_process() || num_records == 0)
       return 0;
 
@@ -1668,21 +1665,21 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
     // We skipped the levels by incrementing 'levels_position_'. For values
     // we do not have a buffer, so we need to read them and throw them away.
     // First we need to figure out how many present/not-null values there are.
-    std::shared_ptr<::arrow::ResizableBuffer> valid_bits;
-    valid_bits = AllocateBuffer(this->pool_);
-    PARQUET_THROW_NOT_OK(valid_bits->Resize(
+    std::shared_ptr<::arrow::ResizableBuffer> validBits;
+    validBits = AllocateBuffer(this->pool_);
+    PARQUET_THROW_NOT_OK(validBits->Resize(
         ::arrow::bit_util::BytesForBits(skipped_records),
         /*shrink_to_fit=*/true));
     ValidityBitmapInputOutput validity_io;
-    validity_io.values_read_upper_bound = skipped_records;
-    validity_io.valid_bits = valid_bits->mutable_data();
-    validity_io.valid_bits_offset = 0;
+    validity_io.valuesReadUpperBound = skipped_records;
+    validity_io.validBits = validBits->mutable_data();
+    validity_io.validBitsOffset = 0;
     DefLevelsToBitmap(
         def_levels() + start_levels_position,
         skipped_records,
         this->leaf_info_,
         &validity_io);
-    int64_t values_to_read = validity_io.values_read - validity_io.null_count;
+    int64_t values_to_read = validity_io.valuesRead - validity_io.nullCount;
 
     // Now that we have figured out number of values to read, we do not need
     // these levels anymore. We will remove these values from the buffer.
@@ -1708,8 +1705,8 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
     if (num_records == 0)
       return 0;
     // Look at the buffered levels, delimit them based on
-    // (rep_level == 0), report back how many records are in there, and
-    // fill in how many not-null values (def_level == max_def_level_).
+    // (repLevel == 0), report back how many records are in there, and
+    // fill in how many not-null values (defLevel == max_defLevel_).
     // DelimitRecords updates levels_position_.
     int64_t start_levels_position = levels_position_;
     int64_t values_seen = 0;
@@ -1730,7 +1727,7 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
   // reach the desired number of records or we run out of values in the column
   // chunk. Returns number of skipped records.
   int64_t SkipRecordsRepeated(int64_t num_records) {
-    ARROW_DCHECK_GT(this->max_rep_level_, 0);
+    ARROW_DCHECK_GT(this->max_repLevel_, 0);
     int64_t skipped_records = 0;
 
     // First consume what is in the buffer.
@@ -1770,15 +1767,15 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
       }
 
       // For skipping we will read the levels and append them to the end
-      // of the def_levels and rep_levels just like for read.
+      // of the defLevels and repLevels just like for read.
       ReserveLevels(batch_size);
 
-      int16_t* def_levels = this->def_levels() + levels_written_;
-      int16_t* rep_levels = this->rep_levels() + levels_written_;
+      int16_t* defLevels = this->def_levels() + levels_written_;
+      int16_t* repLevels = this->rep_levels() + levels_written_;
 
       int64_t levels_read = 0;
-      levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
-      if (this->ReadRepetitionLevels(batch_size, rep_levels) != levels_read) {
+      levels_read = this->ReadDefinitionLevels(batch_size, defLevels);
+      if (this->ReadRepetitionLevels(batch_size, repLevels) != levels_read) {
         throw ParquetException(
             "Number of decoded rep / def levels did not match");
       }
@@ -1796,7 +1793,7 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
   // Throws an error if it could not read 'num_values'.
   void ReadAndThrowAwayValues(int64_t num_values) {
     int64_t values_left = num_values;
-    int64_t values_read = 0;
+    int64_t valuesRead = 0;
 
     // Allocate enough scratch space to accommodate 16-bit levels or any
     // value type
@@ -1805,11 +1802,11 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
     do {
       int64_t batch_size =
           std::min<int64_t>(kSkipScratchBatchSize, values_left);
-      values_read = this->ReadValues(
+      valuesRead = this->ReadValues(
           batch_size,
           reinterpret_cast<T*>(this->scratch_for_skip_->mutable_data()));
-      values_left -= values_read;
-    } while (values_read > 0 && values_left > 0);
+      values_left -= valuesRead;
+    } while (valuesRead > 0 && values_left > 0);
     if (values_left > 0) {
       std::stringstream ss;
       ss << "Could not read and throw away " << num_values << " values";
@@ -1823,11 +1820,11 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
 
     // Top level required field. Number of records equals to number of levels,
     // and there is not read-ahead for levels.
-    if (this->max_rep_level_ == 0 && this->max_def_level_ == 0) {
+    if (this->max_repLevel_ == 0 && this->max_defLevel_ == 0) {
       return this->Skip(num_records);
     }
     int64_t skipped_records = 0;
-    if (this->max_rep_level_ == 0) {
+    if (this->max_repLevel_ == 0) {
       // Non-repeated optional field.
       // First consume whatever is in the buffer.
       skipped_records = SkipRecordsInBufferNonRepeated(num_records);
@@ -1887,15 +1884,15 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
     int64_t values_to_read = 0;
     int64_t records_read = 0;
 
-    const int16_t* def_levels = this->def_levels() + levels_position_;
-    const int16_t* rep_levels = this->rep_levels() + levels_position_;
+    const int16_t* defLevels = this->def_levels() + levels_position_;
+    const int16_t* repLevels = this->rep_levels() + levels_position_;
 
-    ARROW_DCHECK_GT(this->max_rep_level_, 0);
+    ARROW_DCHECK_GT(this->max_repLevel_, 0);
 
     // Count logical records and number of values to read
     while (levels_position_ < levels_written_) {
-      const int16_t rep_level = *rep_levels++;
-      if (rep_level == 0) {
+      const int16_t repLevel = *repLevels++;
+      if (repLevel == 0) {
         // If at_record_start_ is true, we are seeing the start of a record
         // for the second time, such as after repeated calls to
         // DelimitRecords. In this case we must continue until we find
@@ -1915,8 +1912,8 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
       // must advance until we find another record boundary
       at_record_start_ = false;
 
-      const int16_t def_level = *def_levels++;
-      if (def_level == this->max_def_level_) {
+      const int16_t defLevel = *defLevels++;
+      if (defLevel == this->max_defLevel_) {
         ++values_to_read;
       }
       ++levels_position_;
@@ -1948,7 +1945,7 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
   }
 
   void ReserveLevels(int64_t extra_levels) {
-    if (this->max_def_level_ > 0) {
+    if (this->max_defLevel_ > 0) {
       const int64_t new_levels_capacity =
           UpdateCapacity(levels_capacity_, levels_written_, extra_levels);
       if (new_levels_capacity > levels_capacity_) {
@@ -1960,7 +1957,7 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
         }
         PARQUET_THROW_NOT_OK(
             def_levels_->Resize(capacity_in_bytes, /*shrink_to_fit=*/false));
-        if (this->max_rep_level_ > 0) {
+        if (this->max_repLevel_ > 0) {
           PARQUET_THROW_NOT_OK(
               rep_levels_->Resize(capacity_in_bytes, /*shrink_to_fit=*/false));
         }
@@ -2030,16 +2027,16 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
     this->decoders_.clear();
   }
 
-  virtual void ReadValuesSpaced(int64_t values_with_nulls, int64_t null_count) {
-    uint8_t* valid_bits = valid_bits_->mutable_data();
-    const int64_t valid_bits_offset = values_written_;
+  virtual void ReadValuesSpaced(int64_t values_with_nulls, int64_t nullCount) {
+    uint8_t* validBits = valid_bits_->mutable_data();
+    const int64_t validBitsOffset = values_written_;
 
     int64_t num_decoded = this->current_decoder_->DecodeSpaced(
         ValuesHead<T>(),
         static_cast<int>(values_with_nulls),
-        static_cast<int>(null_count),
-        valid_bits,
-        valid_bits_offset);
+        static_cast<int>(nullCount),
+        validBits,
+        validBitsOffset);
     CheckNumberDecoded(num_decoded, values_with_nulls);
   }
 
@@ -2050,37 +2047,37 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
   }
 
   // Reads repeated records and returns number of records read. Fills in
-  // values_to_read and null_count.
+  // values_to_read and nullCount.
   int64_t ReadRepeatedRecords(
       int64_t num_records,
       int64_t* values_to_read,
-      int64_t* null_count) {
+      int64_t* nullCount) {
     const int64_t start_levels_position = levels_position_;
     // Note that repeated records may be required or nullable. If they have
     // an optional parent in the path, they will be nullable, otherwise,
     // they are required. We use leaf_info_->HasNullableValues() that looks
-    // at repeated_ancestor_def_level to determine if it is required or
+    // at repeatedAncestorDefLevel to determine if it is required or
     // nullable. Even if they are required, we may have to read ahead and
     // delimit the records to get the right number of values and they will
     // have associated levels.
     int64_t records_read = DelimitRecords(num_records, values_to_read);
     if (!nullable_values() || read_dense_for_nullable_) {
       ReadValuesDense(*values_to_read);
-      // null_count is always 0 for required.
-      ARROW_DCHECK_EQ(*null_count, 0);
+      // nullCount is always 0 for required.
+      ARROW_DCHECK_EQ(*nullCount, 0);
     } else {
       ReadSpacedForOptionalOrRepeated(
-          start_levels_position, values_to_read, null_count);
+          start_levels_position, values_to_read, nullCount);
     }
     return records_read;
   }
 
   // Reads optional records and returns number of records read. Fills in
-  // values_to_read and null_count.
+  // values_to_read and nullCount.
   int64_t ReadOptionalRecords(
       int64_t num_records,
       int64_t* values_to_read,
-      int64_t* null_count) {
+      int64_t* nullCount) {
     const int64_t start_levels_position = levels_position_;
     // No repetition levels, skip delimiting logic. Each level represents a
     // null or not null entry
@@ -2092,12 +2089,12 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
     // Optional fields are always nullable.
     if (read_dense_for_nullable_) {
       ReadDenseForOptional(start_levels_position, values_to_read);
-      // We don't need to update null_count when reading dense. It should be
+      // We don't need to update nullCount when reading dense. It should be
       // already set to 0.
-      ARROW_DCHECK_EQ(*null_count, 0);
+      ARROW_DCHECK_EQ(*nullCount, 0);
     } else {
       ReadSpacedForOptionalOrRepeated(
-          start_levels_position, values_to_read, null_count);
+          start_levels_position, values_to_read, nullCount);
     }
     return records_read;
   }
@@ -2120,9 +2117,9 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
     ARROW_DCHECK_GE(levels_position_, start_levels_position);
 
     // When reading dense we need to figure out number of values to read.
-    const int16_t* def_levels = this->def_levels();
+    const int16_t* defLevels = this->def_levels();
     for (int64_t i = start_levels_position; i < levels_position_; ++i) {
-      if (def_levels[i] == this->max_def_level_) {
+      if (defLevels[i] == this->max_defLevel_) {
         ++(*values_to_read);
       }
     }
@@ -2133,30 +2130,29 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
   void ReadSpacedForOptionalOrRepeated(
       int64_t start_levels_position,
       int64_t* values_to_read,
-      int64_t* null_count) {
+      int64_t* nullCount) {
     // levels_position_ must already be incremented based on number of records
     // read.
     ARROW_DCHECK_GE(levels_position_, start_levels_position);
     ValidityBitmapInputOutput validity_io;
-    validity_io.values_read_upper_bound =
-        levels_position_ - start_levels_position;
-    validity_io.valid_bits = valid_bits_->mutable_data();
-    validity_io.valid_bits_offset = values_written_;
+    validity_io.valuesReadUpperBound = levels_position_ - start_levels_position;
+    validity_io.validBits = valid_bits_->mutable_data();
+    validity_io.validBitsOffset = values_written_;
 
     DefLevelsToBitmap(
         def_levels() + start_levels_position,
         levels_position_ - start_levels_position,
         leaf_info_,
         &validity_io);
-    *values_to_read = validity_io.values_read - validity_io.null_count;
-    *null_count = validity_io.null_count;
+    *values_to_read = validity_io.valuesRead - validity_io.nullCount;
+    *nullCount = validity_io.nullCount;
     ARROW_DCHECK_GE(*values_to_read, 0);
-    ARROW_DCHECK_GE(*null_count, 0);
-    ReadValuesSpaced(validity_io.values_read, *null_count);
+    ARROW_DCHECK_GE(*nullCount, 0);
+    ReadValuesSpaced(validity_io.valuesRead, *nullCount);
   }
 
   // Return number of logical records read.
-  // Updates levels_position_, values_written_, and null_count_.
+  // Updates levels_position_, values_written_, and nullCount_.
   int64_t ReadRecordData(int64_t num_records) {
     // Conservative upper bound
     const int64_t possible_num_values =
@@ -2169,37 +2165,37 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
     // types.
     int64_t records_read = 0;
     int64_t values_to_read = 0;
-    int64_t null_count = 0;
-    if (this->max_rep_level_ > 0) {
+    int64_t nullCount = 0;
+    if (this->max_repLevel_ > 0) {
       // Repeated fields may be nullable or not.
       // This call updates levels_position_.
       records_read =
-          ReadRepeatedRecords(num_records, &values_to_read, &null_count);
-    } else if (this->max_def_level_ > 0) {
+          ReadRepeatedRecords(num_records, &values_to_read, &nullCount);
+    } else if (this->max_defLevel_ > 0) {
       // Non-repeated optional values are always nullable.
       // This call updates levels_position_.
       ARROW_DCHECK(nullable_values());
       records_read =
-          ReadOptionalRecords(num_records, &values_to_read, &null_count);
+          ReadOptionalRecords(num_records, &values_to_read, &nullCount);
     } else {
       ARROW_DCHECK(!nullable_values());
       records_read = ReadRequiredRecords(num_records, &values_to_read);
-      // We don't need to update null_count, since it is 0.
+      // We don't need to update nullCount, since it is 0.
     }
 
     ARROW_DCHECK_GE(records_read, 0);
     ARROW_DCHECK_GE(values_to_read, 0);
-    ARROW_DCHECK_GE(null_count, 0);
+    ARROW_DCHECK_GE(nullCount, 0);
 
     if (read_dense_for_nullable_) {
       values_written_ += values_to_read;
-      ARROW_DCHECK_EQ(null_count, 0);
+      ARROW_DCHECK_EQ(nullCount, 0);
     } else {
-      values_written_ += values_to_read + null_count;
-      null_count_ += null_count;
+      values_written_ += values_to_read + nullCount;
+      null_count_ += nullCount;
     }
     // Total values, including null spaces, if any
-    if (this->max_def_level_ > 0) {
+    if (this->max_defLevel_ > 0) {
       // Optional, repeated, or some mix thereof
       this->ConsumeBufferedValues(levels_position_ - start_levels_position);
     } else {
@@ -2211,24 +2207,24 @@ class TypedRecordReader : public TypedColumnReaderImpl<DType>,
   }
 
   void DebugPrintState() override {
-    const int16_t* def_levels = this->def_levels();
-    const int16_t* rep_levels = this->rep_levels();
+    const int16_t* defLevels = this->def_levels();
+    const int16_t* repLevels = this->rep_levels();
     const int64_t total_levels_read = levels_position_;
 
     const T* vals = reinterpret_cast<const T*>(this->values());
 
-    if (leaf_info_.def_level > 0) {
+    if (leaf_info_.defLevel > 0) {
       std::cout << "def levels: ";
       for (int64_t i = 0; i < total_levels_read; ++i) {
-        std::cout << def_levels[i] << " ";
+        std::cout << defLevels[i] << " ";
       }
       std::cout << std::endl;
     }
 
-    if (leaf_info_.rep_level > 0) {
+    if (leaf_info_.repLevel > 0) {
       std::cout << "rep levels: ";
       for (int64_t i = 0; i < total_levels_read; ++i) {
-        std::cout << rep_levels[i] << " ";
+        std::cout << repLevels[i] << " ";
       }
       std::cout << std::endl;
     }
@@ -2301,21 +2297,21 @@ class FLBARecordReader : public TypedRecordReader<FLBAType>,
     ResetValues();
   }
 
-  void ReadValuesSpaced(int64_t values_to_read, int64_t null_count) override {
-    uint8_t* valid_bits = valid_bits_->mutable_data();
-    const int64_t valid_bits_offset = values_written_;
+  void ReadValuesSpaced(int64_t values_to_read, int64_t nullCount) override {
+    uint8_t* validBits = valid_bits_->mutable_data();
+    const int64_t validBitsOffset = values_written_;
     auto values = ValuesHead<FLBA>();
 
     int64_t num_decoded = this->current_decoder_->DecodeSpaced(
         values,
         static_cast<int>(values_to_read),
-        static_cast<int>(null_count),
-        valid_bits,
-        valid_bits_offset);
+        static_cast<int>(nullCount),
+        validBits,
+        validBitsOffset);
     ARROW_DCHECK_EQ(num_decoded, values_to_read);
 
     for (int64_t i = 0; i < num_decoded; i++) {
-      if (::arrow::bit_util::GetBit(valid_bits, valid_bits_offset + i)) {
+      if (::arrow::bit_util::GetBit(validBits, validBitsOffset + i)) {
         PARQUET_THROW_NOT_OK(builder_->Append(values[i].ptr));
       } else {
         PARQUET_THROW_NOT_OK(builder_->AppendNull());
@@ -2363,14 +2359,14 @@ class ByteArrayChunkedRecordReader : public TypedRecordReader<ByteArrayType>,
     ResetValues();
   }
 
-  void ReadValuesSpaced(int64_t values_to_read, int64_t null_count) override {
+  void ReadValuesSpaced(int64_t values_to_read, int64_t nullCount) override {
     int64_t num_decoded = this->current_decoder_->DecodeArrow(
         static_cast<int>(values_to_read),
-        static_cast<int>(null_count),
+        static_cast<int>(nullCount),
         valid_bits_->mutable_data(),
         values_written_,
         &accumulator_);
-    CheckNumberDecoded(num_decoded, values_to_read - null_count);
+    CheckNumberDecoded(num_decoded, values_to_read - nullCount);
     ResetValues();
   }
 
@@ -2444,21 +2440,21 @@ class ByteArrayDictionaryRecordReader : public TypedRecordReader<ByteArrayType>,
     CheckNumberDecoded(num_decoded, values_to_read);
   }
 
-  void ReadValuesSpaced(int64_t values_to_read, int64_t null_count) override {
+  void ReadValuesSpaced(int64_t values_to_read, int64_t nullCount) override {
     int64_t num_decoded = 0;
     if (current_encoding_ == Encoding::RLE_DICTIONARY) {
       MaybeWriteNewDictionary();
       auto decoder = dynamic_cast<BinaryDictDecoder*>(this->current_decoder_);
       num_decoded = decoder->DecodeIndicesSpaced(
           static_cast<int>(values_to_read),
-          static_cast<int>(null_count),
+          static_cast<int>(nullCount),
           valid_bits_->mutable_data(),
           values_written_,
           &builder_);
     } else {
       num_decoded = this->current_decoder_->DecodeArrow(
           static_cast<int>(values_to_read),
-          static_cast<int>(null_count),
+          static_cast<int>(nullCount),
           valid_bits_->mutable_data(),
           values_written_,
           &builder_);
@@ -2466,7 +2462,7 @@ class ByteArrayDictionaryRecordReader : public TypedRecordReader<ByteArrayType>,
       /// Flush values since they have been copied into the builder
       ResetValues();
     }
-    ARROW_DCHECK_EQ(num_decoded, values_to_read - null_count);
+    ARROW_DCHECK_EQ(num_decoded, values_to_read - nullCount);
   }
 
  private:

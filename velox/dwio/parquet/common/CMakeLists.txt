@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_dwio_native_parquet_common BloomFilter.cpp XxHasher.cpp
-                                   LevelComparison.cpp LevelConversion.cpp)
+add_library(velox_dwio_parquet_common BloomFilter.cpp XxHasher.cpp
+                                      LevelComparison.cpp LevelConversion.cpp)
 
 target_link_libraries(
-  velox_dwio_native_parquet_common
+  velox_dwio_parquet_common
   velox_dwio_parquet_thrift
   velox_type
   velox_dwio_common

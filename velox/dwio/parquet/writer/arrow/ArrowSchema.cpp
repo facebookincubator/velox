@@ -64,7 +64,6 @@ using ParquetType = Type;
 
 namespace {
 
-
 /// Increments levels according to the cardinality of node.
 void IncrementLevels(LevelInfo& current_levels, const schema::Node& node) {
   if (node.is_repeated()) {
@@ -773,7 +772,7 @@ Status MapToSchemaField(
   out->level_info = current_levels;
   // At this point current levels contains the def level for this list,
   // we need to reset to the prior parent.
-  out->level_info.repeated_ancestor_def_level = repeated_ancestor_def_level;
+  out->level_info.repeatedAncestorDefLevel = repeated_ancestor_def_level;
   return Status::OK();
 }
 
@@ -867,7 +866,7 @@ Status ListToSchemaField(
   out->level_info = current_levels;
   // At this point current levels contains the def level for this list,
   // we need to reset to the prior parent.
-  out->level_info.repeated_ancestor_def_level = repeated_ancestor_def_level;
+  out->level_info.repeatedAncestorDefLevel = repeated_ancestor_def_level;
   return Status::OK();
 }
 
@@ -905,7 +904,7 @@ Status GroupToSchemaField(
     out->level_info = current_levels;
     // At this point current_levels contains this list as the def level, we need
     // to use the previous ancestor of this list.
-    out->level_info.repeated_ancestor_def_level = repeated_ancestor_def_level;
+    out->level_info.repeatedAncestorDefLevel = repeated_ancestor_def_level;
     return Status::OK();
   } else {
     IncrementLevels(current_levels, node);
@@ -966,7 +965,7 @@ Status NodeToSchemaField(
       out->level_info = current_levels;
       // At this point current_levels has consider this list the ancestor so
       // restore the actual ancestor.
-      out->level_info.repeated_ancestor_def_level = repeated_ancestor_def_level;
+      out->level_info.repeatedAncestorDefLevel = repeated_ancestor_def_level;
       return Status::OK();
     } else {
       IncrementLevels(current_levels, node);

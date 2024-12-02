@@ -17,51 +17,45 @@
 // Adapted from Apache Arrow.
 
 #include "velox/dwio/parquet/common/LevelConversion.h"
-#include "velox/dwio/parquet/common/LevelConversionUtil.h"
 
-#include <algorithm>
 #include <limits>
 #include <optional>
 
 #include "arrow/util/bit_run_reader.h"
 #include "arrow/util/bit_util.h"
 #include "arrow/util/bitmap_writer.h"
-#include "arrow/util/cpu_info.h"
-#include "arrow/util/logging.h"
+
 #include "velox/common/base/Exceptions.h"
-#include "velox/dwio/parquet/common/LevelComparison.h"
+#include "velox/dwio/parquet/common/LevelConversionUtil.h"
 
 namespace facebook::velox::parquet {
 namespace {
 
-using ::arrow::internal::CpuInfo;
-using ::std::optional;
-
 template <typename OffsetType>
 void DefRepLevelsToListInfo(
-    const int16_t* def_levels,
-    const int16_t* rep_levels,
-    int64_t num_def_levels,
-    LevelInfo level_info,
+    const int16_t* defLevels,
+    const int16_t* repLevels,
+    int64_t numDefLevels,
+    LevelInfo levelInfo,
     ValidityBitmapInputOutput* output,
     OffsetType* offsets) {
   OffsetType* orig_pos = offsets;
-  optional<::arrow::internal::FirstTimeBitmapWriter> valid_bits_writer;
-  if (output->valid_bits) {
-    valid_bits_writer.emplace(
-        output->valid_bits,
-        output->valid_bits_offset,
-        output->values_read_upper_bound);
+  std::optional<::arrow::internal::FirstTimeBitmapWriter> validBitsWriter;
+  if (output->validBits) {
+    validBitsWriter.emplace(
+        output->validBits,
+        output->validBitsOffset,
+        output->valuesReadUpperBound);
   }
-  for (int x = 0; x < num_def_levels; x++) {
+  for (int x = 0; x < numDefLevels; x++) {
     // Skip items that belong to empty or null ancestor lists and further nested
     // lists.
-    if (def_levels[x] < level_info.repeated_ancestor_def_level ||
-        rep_levels[x] > level_info.rep_level) {
+    if (defLevels[x] < levelInfo.repeatedAncestorDefLevel ||
+        repLevels[x] > levelInfo.repLevel) {
       continue;
     }
 
-    if (rep_levels[x] == level_info.rep_level) {
+    if (repLevels[x] == levelInfo.repLevel) {
       // A continuation of an existing list.
       // offsets can be null for structs with repeated children (we don't need
       // to know offsets until we get to the children).
@@ -74,14 +68,15 @@ void DefRepLevelsToListInfo(
       }
     } else {
       if (ARROW_PREDICT_FALSE(
-              (valid_bits_writer.has_value() &&
-               valid_bits_writer->position() >=
-                   output->values_read_upper_bound) ||
-              (offsets - orig_pos) >= output->values_read_upper_bound)) {
-        VELOX_FAIL("Definition levels exceeded upper bound: {}", output->values_read_upper_bound);
+              (validBitsWriter.has_value() &&
+               validBitsWriter->position() >= output->valuesReadUpperBound) ||
+              (offsets - orig_pos) >= output->valuesReadUpperBound)) {
+        VELOX_FAIL(
+            "Definition levels exceeded upper bound: {}",
+            output->valuesReadUpperBound);
       }
 
-      // current_rep < list rep_level i.e. start of a list (ancestor empty lists
+      // current_rep < list repLevel i.e. start of a list (ancestor empty lists
       // are filtered out above). offsets can be null for structs with repeated
       // children (we don't need to know offsets until we get to the children).
       if (offsets != nullptr) {
@@ -90,7 +85,7 @@ void DefRepLevelsToListInfo(
         // than fixed size lists so it should be cheaper to make these
         // cumulative and subtract when validating fixed size lists.
         *offsets = *(offsets - 1);
-        if (def_levels[x] >= level_info.def_level) {
+        if (defLevels[x] >= levelInfo.defLevel) {
           if (ARROW_PREDICT_FALSE(
                   *offsets == std::numeric_limits<OffsetType>::max())) {
             VELOX_FAIL("List index overflow.");
@@ -99,30 +94,30 @@ void DefRepLevelsToListInfo(
         }
       }
 
-      if (valid_bits_writer.has_value()) {
-        // the level_info def level for lists reflects element present level.
+      if (validBitsWriter.has_value()) {
+        // the levelInfo def level for lists reflects element present level.
         // the prior level distinguishes between empty lists.
-        if (def_levels[x] >= level_info.def_level - 1) {
-          valid_bits_writer->Set();
+        if (defLevels[x] >= levelInfo.defLevel - 1) {
+          validBitsWriter->Set();
         } else {
-          output->null_count++;
-          valid_bits_writer->Clear();
+          output->nullCount++;
+          validBitsWriter->Clear();
         }
-        valid_bits_writer->Next();
+        validBitsWriter->Next();
       }
     }
   }
-  if (valid_bits_writer.has_value()) {
-    valid_bits_writer->Finish();
+  if (validBitsWriter.has_value()) {
+    validBitsWriter->Finish();
   }
   if (offsets != nullptr) {
-    output->values_read = offsets - orig_pos;
-  } else if (valid_bits_writer.has_value()) {
-    output->values_read = valid_bits_writer->position();
+    output->valuesRead = offsets - orig_pos;
+  } else if (validBitsWriter.has_value()) {
+    output->valuesRead = validBitsWriter->position();
   }
-  if (output->null_count > 0 && level_info.null_slot_usage > 1) {
+  if (output->nullCount > 0 && levelInfo.nullSlotUsage > 1) {
     VELOX_FAIL(
-        "Null values with null_slot_usage > 1 not supported."
+        "Null values with nullSlotUsage > 1 not supported."
         "(i.e. FixedSizeLists with null values are not supported)");
   }
 }
@@ -130,18 +125,18 @@ void DefRepLevelsToListInfo(
 } // namespace
 
 void DefLevelsToBitmap(
-    const int16_t* def_levels,
-    int64_t num_def_levels,
-    LevelInfo level_info,
+    const int16_t* defLevels,
+    int64_t numDefLevels,
+    LevelInfo levelInfo,
     ValidityBitmapInputOutput* output) {
-  // It is simpler to rely on rep_level here until PARQUET-1899 is done and the
+  // It is simpler to rely on repLevel here until PARQUET-1899 is done and the
   // code is deleted in a follow-up release.
-  if (level_info.rep_level > 0) {
+  if (levelInfo.repLevel > 0) {
     DefLevelsToBitmapSimd</*has_repeated_parent=*/true>(
-        def_levels, num_def_levels, level_info, output);
+        defLevels, numDefLevels, levelInfo, output);
   } else {
     DefLevelsToBitmapSimd</*has_repeated_parent=*/false>(
-        def_levels, num_def_levels, level_info, output);
+        defLevels, numDefLevels, levelInfo, output);
   }
 }
 
@@ -150,44 +145,44 @@ uint64_t TestOnlyExtractBitsSoftware(uint64_t bitmap, uint64_t select_bitmap) {
 }
 
 void DefRepLevelsToList(
-    const int16_t* def_levels,
-    const int16_t* rep_levels,
-    int64_t num_def_levels,
-    LevelInfo level_info,
+    const int16_t* defLevels,
+    const int16_t* repLevels,
+    int64_t numDefLevels,
+    LevelInfo levelInfo,
     ValidityBitmapInputOutput* output,
     int32_t* offsets) {
   DefRepLevelsToListInfo<int32_t>(
-      def_levels, rep_levels, num_def_levels, level_info, output, offsets);
+      defLevels, repLevels, numDefLevels, levelInfo, output, offsets);
 }
 
 void DefRepLevelsToList(
-    const int16_t* def_levels,
-    const int16_t* rep_levels,
-    int64_t num_def_levels,
-    LevelInfo level_info,
+    const int16_t* defLevels,
+    const int16_t* repLevels,
+    int64_t numDefLevels,
+    LevelInfo levelInfo,
     ValidityBitmapInputOutput* output,
     int64_t* offsets) {
   DefRepLevelsToListInfo<int64_t>(
-      def_levels, rep_levels, num_def_levels, level_info, output, offsets);
+      defLevels, repLevels, numDefLevels, levelInfo, output, offsets);
 }
 
 void DefRepLevelsToBitmap(
-    const int16_t* def_levels,
-    const int16_t* rep_levels,
-    int64_t num_def_levels,
-    LevelInfo level_info,
+    const int16_t* defLevels,
+    const int16_t* repLevels,
+    int64_t numDefLevels,
+    LevelInfo levelInfo,
     ValidityBitmapInputOutput* output) {
   // DefRepLevelsToListInfo assumes it for the actual list method and this
   // method is for parent structs, so we need to bump def and ref level.
-  level_info.rep_level += 1;
-  level_info.def_level += 1;
+  levelInfo.repLevel += 1;
+  levelInfo.defLevel += 1;
   DefRepLevelsToListInfo<int32_t>(
-      def_levels,
-      rep_levels,
-      num_def_levels,
-      level_info,
+      defLevels,
+      repLevels,
+      numDefLevels,
+      levelInfo,
       output,
       /*offsets=*/nullptr);
 }
 
-} // namespace facebook::velox::parquet::arrow
+} // namespace facebook::velox::parquet

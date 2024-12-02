@@ -603,11 +603,11 @@ int32_t PageReader::getLengthsAndNulls(
     uint64_t* nulls,
     int32_t nullsStartIndex) const {
   ValidityBitmapInputOutput bits;
-  bits.values_read_upper_bound = maxItems;
-  bits.values_read = 0;
-  bits.null_count = 0;
-  bits.valid_bits = reinterpret_cast<uint8_t*>(nulls);
-  bits.valid_bits_offset = nullsStartIndex;
+  bits.valuesReadUpperBound = maxItems;
+  bits.valuesRead = 0;
+  bits.nullCount = 0;
+  bits.validBits = reinterpret_cast<uint8_t*>(nulls);
+  bits.validBitsOffset = nullsStartIndex;
 
   switch (mode) {
     case LevelMode::kNulls:
@@ -623,7 +623,7 @@ int32_t PageReader::getLengthsAndNulls(
           &bits,
           lengths);
       // Convert offsets to lengths.
-      for (auto i = 0; i < bits.values_read; ++i) {
+      for (auto i = 0; i < bits.valuesRead; ++i) {
         lengths[i] = lengths[i + 1] - lengths[i];
       }
       break;
@@ -638,7 +638,7 @@ int32_t PageReader::getLengthsAndNulls(
       break;
     }
   }
-  return bits.values_read;
+  return bits.valuesRead;
 }
 
 void PageReader::makeDecoder() {

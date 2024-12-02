@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +17,9 @@
 // Adapted from Apache Arrow.
 
 #include "velox/dwio/parquet/common/LevelComparison.h"
+
+#include <limits>
+
 #include "arrow/util/endian.h"
 
 namespace facebook::velox::parquet {
@@ -32,16 +35,6 @@ LevelsToBitmap(const int16_t* levels, int64_t numLevels, Predicate predicate) {
   return ::arrow::bit_util::ToLittleEndian(mask);
 }
 
-inline MinMax FindMinMaxImpl(const int16_t* levels, int64_t numLevels) {
-  MinMax out{
-      std::numeric_limits<int16_t>::max(), std::numeric_limits<int16_t>::min()};
-  for (int x = 0; x < numLevels; x++) {
-    out.min = std::min(levels[x], out.min);
-    out.max = std::max(levels[x], out.max);
-  }
-  return out;
-}
-
 } // namespace
 
 uint64_t
@@ -51,7 +44,13 @@ GreaterThanBitmap(const int16_t* levels, int64_t numLevels, int16_t rhs) {
 }
 
 MinMax FindMinMax(const int16_t* levels, int64_t numLevels) {
-  return FindMinMaxImpl(levels, numLevels);
+  MinMax out{
+      std::numeric_limits<int16_t>::max(), std::numeric_limits<int16_t>::min()};
+  for (int x = 0; x < numLevels; x++) {
+    out.min = std::min(levels[x], out.min);
+    out.max = std::max(levels[x], out.max);
+  }
+  return out;
 }
 
 } // namespace facebook::velox::parquet
