@@ -33,6 +33,7 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -101,9 +102,10 @@ void CudfHashJoinBuild::addInput(RowVectorPtr input) {
     std::cout << "Calling CudfHashJoinBuild::addInput" << std::endl;
   }
   // Queue inputs, process all at once.
-  // TODO distribute work equally.
   if (input->size() > 0) {
-    inputs_.push_back(std::move(input));
+    auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input);
+    VELOX_CHECK_NOT_NULL(cudf_input);
+    inputs_.push_back(std::move(cudf_input));
   }
 }
 
@@ -135,7 +137,7 @@ void CudfHashJoinBuild::noMoreInput() {
   for (auto& peer : peers) {
     auto op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfHashJoinBuild*>(op);
-    VELOX_CHECK(build);
+    VELOX_CHECK_NOT_NULL(build);
     inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
   }
 
@@ -143,7 +145,7 @@ void CudfHashJoinBuild::noMoreInput() {
   auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
     VELOX_CHECK_NOT_NULL(inputs_[i]);
-    cudf_tables[i] = with_arrow::to_cudf_table(inputs_[i], inputs_[i]->pool());
+    cudf_tables[i] = inputs_[i]->release();
     cudf_table_views[i] = cudf_tables[i]->view();
   }
   auto tbl = cudf::concatenate(cudf_table_views);
@@ -255,12 +257,12 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   if (!input_) {
     return nullptr;
   }
-  const auto inputSize = input_->size();
   if (!hashObject_.has_value()) {
     return nullptr;
   }
-  // convert input to cudf table with arrow interop
-  auto tbl = with_arrow::to_cudf_table(input_, input_->pool());
+  auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input_);
+  VELOX_CHECK_NOT_NULL(cudf_input);
+  auto tbl = cudf_input->release();
   if (cudfDebugEnabled()) {
     std::cout << "Probe table number of columns: " << tbl->num_columns()
               << std::endl;
@@ -395,18 +397,15 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   }
   auto cudf_output = std::make_unique<cudf::table>(std::move(joined_cols));
 
-  RowVectorPtr output;
-  if (cudf_output->num_columns() == 0 or cudf_output->num_rows() == 0) {
-    output = nullptr;
-  } else {
-    output =
-        with_arrow::to_velox_column(cudf_output->view(), input_->pool(), "c");
-  }
-
   input_.reset();
   finished_ = noMoreInput_;
 
-  return output;
+  auto const size = cudf_output->num_rows();
+  if (cudf_output->num_columns() == 0 or size == 0) {
+    return nullptr;
+  }
+  return std::make_shared<CudfVector>(
+      pool(), outputType, size, std::move(cudf_output));
 }
 
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
