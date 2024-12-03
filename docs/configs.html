@@ -918,12 +918,47 @@ These semantics are similar to the <a class="reference external" href="https://h
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>fs.azure.account.key.&lt;storage-account&gt;.dfs.core.windows.net</p></td>
+<tr class="row-even"><td><p>fs.azure.account.auth.type.&lt;storage-account&gt;.dfs.core.windows.net</p></td>
+<td><p>string</p></td>
+<td><p>SharedKey</p></td>
+<td><p>Specifies the authentication mechanism to use for Azure storage accounts.
+<strong>Allowed values:</strong> “SharedKey”, “OAuth”, “SAS”.
+“SharedKey”: Uses the storage account name and key for authentication.
+“OAuth”: Utilizes OAuth tokens for secure authentication.
+“SAS”: Employs Shared Access Signatures for granular access control.</p></td>
+</tr>
+<tr class="row-odd"><td><p>fs.azure.account.key.&lt;storage-account&gt;.dfs.core.windows.net</p></td>
 <td><p>string</p></td>
 <td></td>
 <td><p>The credentials to access the specific Azure Blob Storage account, replace &lt;storage-account&gt; with the name of your Azure Storage account.
 This property aligns with how Spark configures Azure account key credentials for accessing Azure storage, by setting this property multiple
 times with different storage account names, you can access multiple Azure storage accounts.</p></td>
+</tr>
+<tr class="row-even"><td><p>fs.azure.sas.fixed.token.&lt;storage-account&gt;.dfs.core.windows.net</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>Specifies a fixed SAS (Shared Access Signature) token for accessing Azure storage.
+This token provides scoped and time-limited access to specific resources.
+Use this property when a pre-generated SAS token is used for authentication.</p></td>
+</tr>
+<tr class="row-odd"><td><p>fs.azure.account.oauth2.client.id.&lt;storage-account&gt;.dfs.core.windows.net</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>Specifies the client ID of the Azure AD application used for OAuth 2.0 authentication.
+This client ID is required when using OAuth as the authentication type.</p></td>
+</tr>
+<tr class="row-even"><td><p>fs.azure.account.oauth2.client.secret.&lt;storage-account&gt;.dfs.core.windows.net</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>Specifies the client secret of the Azure AD application used for OAuth 2.0 authentication.
+This secret is required in conjunction with the client ID to authenticate the application.</p></td>
+</tr>
+<tr class="row-odd"><td><p>fs.azure.account.oauth2.client.endpoint.&lt;storage-account&gt;.dfs.core.windows.net</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>Specifies the OAuth 2.0 token endpoint URL for the Azure AD application.
+This endpoint is used to acquire access tokens for authenticating with Azure storage.
+The URL follows the format: <cite>https://login.microsoftonline.com/&lt;tenant-id&gt;/oauth2/token</cite>.</p></td>
 </tr>
 </tbody>
 </table>
