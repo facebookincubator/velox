@@ -180,8 +180,7 @@ TEST_F(LocalPartitionTest, gatherPreserveInputOrderWithSerialExecutionMode) {
   AssertQueryBuilder(op, duckDbQueryRunner_)
       .serialExecution(true)
       .assertResults(
-          "VALUES (10, 1), (20, 2), (30, 3), (40, 4), (50, 5), (60, 6), (70, 7), (80, 8), (90, 9), (100, 10), (110, 11), (120, 12)",
-          {});
+          "VALUES (10, 1), (20, 2), (30, 3), (40, 4), (50, 5), (60, 6), (70, 7), (80, 8), (90, 9), (100, 10), (110, 11), (120, 12)");
 }
 
 TEST_F(LocalPartitionTest, partition) {
