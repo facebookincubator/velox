@@ -45,11 +45,11 @@ AbfsConfig::AbfsConfig(
 
   auto authTypeKey =
       fmt::format("{}.{}", kAzureAccountAuthType, accountNameWithSuffix_);
-  authType_ = "SharedKey";
+  authType_ = kAzureSharedKeyAuthType;
   if (config.valueExists(authTypeKey)) {
     authType_ = config.get<std::string>(authTypeKey).value();
   }
-  if (authType_ == "SharedKey") {
+  if (authType_ == kAzureSharedKeyAuthType) {
     auto credKey =
         fmt::format("{}.{}", kAzureAccountKey, accountNameWithSuffix_);
     VELOX_USER_CHECK(
@@ -69,7 +69,7 @@ AbfsConfig::AbfsConfig(
     }
     ss << ";";
     connectionString_ = ss.str();
-  } else if (authType_ == "OAuth") {
+  } else if (authType_ == kAzureOAuthAuthType) {
     auto clientIdKey = fmt::format(
         "{}.{}", kAzureAccountOAuth2ClientId, accountNameWithSuffix_);
     auto clientSecretKey = fmt::format(
@@ -99,7 +99,7 @@ AbfsConfig::AbfsConfig(
             config.get<std::string>(clientIdKey).value(),
             config.get<std::string>(clientSecretKey).value(),
             options);
-  } else if (authType_ == "SAS") {
+  } else if (authType_ == kAzureSASAuthType) {
     auto sasKey = fmt::format("{}.{}", kAzureSASKey, accountNameWithSuffix_);
     VELOX_USER_CHECK(config.valueExists(sasKey), "Config {} not found", sasKey);
     sas_ = config.get<std::string>(sasKey).value();
@@ -111,10 +111,10 @@ AbfsConfig::AbfsConfig(
 }
 
 std::unique_ptr<BlobClient> AbfsConfig::getReadFileClient() {
-  if (authType_ == "SAS") {
+  if (authType_ == kAzureSASAuthType) {
     auto url = getUrl(true);
     return std::make_unique<BlobClient>(fmt::format("{}?{}", url, sas_));
-  } else if (authType_ == "OAuth") {
+  } else if (authType_ == kAzureOAuthAuthType) {
     auto url = getUrl(true);
     return std::make_unique<BlobClient>(url, tokenCredential_);
   } else {
@@ -124,11 +124,11 @@ std::unique_ptr<BlobClient> AbfsConfig::getReadFileClient() {
 }
 
 std::unique_ptr<DataLakeFileClient> AbfsConfig::getWriteFileClient() {
-  if (authType_ == "SAS") {
+  if (authType_ == kAzureSASAuthType) {
     auto url = getUrl(false);
     return std::make_unique<DataLakeFileClient>(
         fmt::format("{}?{}", url, sas_));
-  } else if (authType_ == "OAuth") {
+  } else if (authType_ == kAzureOAuthAuthType) {
     auto url = getUrl(false);
     return std::make_unique<DataLakeFileClient>(url, tokenCredential_);
   } else {

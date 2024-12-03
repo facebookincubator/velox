@@ -45,6 +45,7 @@ static constexpr const char* kAzureSASKey = "fs.azure.sas.fixed.token";
 
 static constexpr const char* kAzureAccountOAuth2ClientId =
     "fs.azure.account.oauth2.client.id";
+
 static constexpr const char* kAzureAccountOAuth2ClientSecret =
     "fs.azure.account.oauth2.client.secret";
 
@@ -52,6 +53,12 @@ static constexpr const char* kAzureAccountOAuth2ClientSecret =
 // https://login.microsoftonline.com/{TENANTID}/oauth2/token
 static constexpr const char* kAzureAccountOAuth2ClientEndpoint =
     "fs.azure.account.oauth2.client.endpoint";
+
+static constexpr const char* kAzureSharedKeyAuthType = "SharedKey";
+
+static constexpr const char* kAzureOAuthAuthType = "OAuth";
+
+static constexpr const char* kAzureSASAuthType = "SAS";
 
 class AbfsConfig {
  public:
