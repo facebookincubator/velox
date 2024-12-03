@@ -22,3 +22,14 @@ target_link_libraries(
     velox_vector_fuzzer
     Folly::folly
     ${FOLLY_BENCHMARK})
+
+add_executable(velox_row_deserialize_benchmark
+               DynamicRowVectorDeserializeBenchmark.cpp)
+target_link_libraries(
+  velox_row_deserialize_benchmark
+  PRIVATE
+    velox_exec
+    velox_row_fast
+    velox_vector_fuzzer
+    Folly::folly
+    ${FOLLY_BENCHMARK})

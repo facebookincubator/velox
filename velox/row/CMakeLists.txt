@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_row_fast CompactRow.cpp UnsafeRowFast.cpp)
+velox_add_library(velox_row_fast CompactRow.cpp UnsafeRowDeserializers.cpp
+                  UnsafeRowFast.cpp)
 
 velox_link_libraries(velox_row_fast PUBLIC velox_vector)
 
