@@ -38,7 +38,7 @@ void DefRepLevelsToListInfo(
     LevelInfo levelInfo,
     ValidityBitmapInputOutput* output,
     OffsetType* offsets) {
-  OffsetType* orig_pos = offsets;
+  OffsetType* origPos = offsets;
   std::optional<::arrow::internal::FirstTimeBitmapWriter> validBitsWriter;
   if (output->validBits) {
     validBitsWriter.emplace(
@@ -69,7 +69,7 @@ void DefRepLevelsToListInfo(
       if (FOLLY_UNLIKELY(
               (validBitsWriter.has_value() &&
                validBitsWriter->position() >= output->valuesReadUpperBound) ||
-              (offsets - orig_pos) >= output->valuesReadUpperBound)) {
+              (offsets - origPos) >= output->valuesReadUpperBound)) {
         VELOX_FAIL(
             "Definition levels exceeded upper bound: {}",
             output->valuesReadUpperBound);
@@ -110,7 +110,7 @@ void DefRepLevelsToListInfo(
     validBitsWriter->Finish();
   }
   if (offsets != nullptr) {
-    output->valuesRead = offsets - orig_pos;
+    output->valuesRead = offsets - origPos;
   } else if (validBitsWriter.has_value()) {
     output->valuesRead = validBitsWriter->position();
   }
@@ -139,8 +139,8 @@ void DefLevelsToBitmap(
   }
 }
 
-uint64_t TestOnlyExtractBitsSoftware(uint64_t bitmap, uint64_t select_bitmap) {
-  return ExtractBitsSoftware(bitmap, select_bitmap);
+uint64_t TestOnlyExtractBitsSoftware(uint64_t bitmap, uint64_t selectBitmap) {
+  return ExtractBitsSoftware(bitmap, selectBitmap);
 }
 
 void DefRepLevelsToList(
