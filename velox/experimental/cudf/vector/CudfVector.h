@@ -28,7 +28,8 @@
 
 namespace facebook::velox::cudf_velox {
 
-// Vector class which holds GPU data from cuDF. This also owns the stream.
+// Vector class which holds GPU data from cuDF.
+// TODO: This should own a stream.
 class CudfVector : public RowVector {
  public:
   CudfVector(

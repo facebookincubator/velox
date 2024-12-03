@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include "velox/core/Expressions.h"
-#include "velox/core/PlanNode.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"

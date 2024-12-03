@@ -97,6 +97,9 @@ bool CompileState::compile() {
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
           get_plan_node(joinProbeOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
+      // Each cudf operator is wrapped by CudfFromVelox, and CudfToVelox
+      // operators
+      // CudfFromVelox -> CudfHashJoinProbe -> CudfToVelox
       replace_op.push_back(std::make_unique<CudfFromVelox>(
           id, plan_node->outputType(), ctx, plan_node->id()));
       replace_op[0]->initialize();
