@@ -291,7 +291,8 @@ bool SplitReader::checkIfSplitIsEmpty(
             baseReader_.get(),
             hiveSplit_->filePath,
             hiveSplit_->partitionKeys,
-            *partitionKeys_)) {
+            *partitionKeys_,
+            hiveSplit_->fileFormat)) {
       ++runtimeStats.skippedSplits;
       runtimeStats.skippedSplitBytes += hiveSplit_->length;
       emptySplit_ = true;

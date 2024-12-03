@@ -683,7 +683,8 @@ bool testFilters(
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKeys,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
-        partitionKeysHandle) {
+        partitionKeysHandle,
+    dwio::common::FileFormat fileFormat) {
   const auto totalRows = reader->numberOfRows();
   const auto& fileTypeWithId = reader->typeWithId();
   const auto& rowType = reader->rowType();
@@ -722,7 +723,8 @@ bool testFilters(
                 child->filter(),
                 columnStats.get(),
                 totalRows.value(),
-                typeWithId->type())) {
+                typeWithId->type(),
+                fileFormat)) {
           VLOG(1) << "Skipping " << filePath
                   << " based on stats and filter for column "
                   << child->fieldName();
