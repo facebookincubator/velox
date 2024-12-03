@@ -46,6 +46,18 @@ Set the ``hive.node_scheduler_affinity`` session property accordingly to turn ON
     SET SESSION hive.node_selection_strategy='HARD_AFFINITY'; // To turn cache.no_retention OFF.​
 
 
+
+``query-data-cache-enabled-default``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type** ``bool``
+* **Default value:** ``true``
+
+If ``true``, SSD cache is enabled by default and is disabled only if
+``node_selection_strategy`` is present and set to ``NO_PREFERENCE``.
+Otherwise, SSD cache is disabled by default and is enabled if
+``node_selection_strategy`` is present and set to ``SOFT_AFFINITY`` or ``HARD_AFFINITY``.
+
 =========
 SSD Cache
 =========
