@@ -152,7 +152,7 @@ TEST_F(LocalPartitionTest, gather) {
 }
 
 TEST_F(LocalPartitionTest, gatherPreserveInputOrderWithSerialExecutionMode) {
-  std::vector<RowVectorPtr> vectors = {
+  const std::vector<RowVectorPtr> vectors = {
       makeRowVector({makeFlatVector<int64_t>({10, 20})}),
       makeRowVector({makeFlatVector<int64_t>({30, 40})}),
       makeRowVector({makeFlatVector<int64_t>({50, 60})}),
