@@ -971,7 +971,7 @@ std::string MemoryPoolImpl::treeMemoryUsage(bool skipEmptyPool) const {
   if (parent_ != nullptr) {
     return parent_->treeMemoryUsage(skipEmptyPool);
   }
-  if (FLAGS_velox_suppress_memory_capacity_exceeding_error_message) {
+  if (config::globalConfig().suppressMemoryCapacityExceedingErrorMessage) {
     return "";
   }
   std::stringstream out;
