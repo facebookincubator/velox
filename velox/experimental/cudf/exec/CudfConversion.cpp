@@ -53,6 +53,11 @@ void CudfFromVelox::noMoreInput() {
   exec::Operator::noMoreInput();
   NVTX3_FUNC_RANGE();
 
+  if (inputs_.empty()) {
+    outputTable_ = nullptr;
+    return;
+  }
+
   auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
   auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
@@ -76,6 +81,10 @@ void CudfFromVelox::noMoreInput() {
   }
 
   auto const size = tbl->num_rows();
+  if (size == 0) {
+    outputTable_ = nullptr;
+    return;
+  }
   outputTable_ =
       std::make_shared<CudfVector>(pool(), outputType_, size, std::move(tbl));
 }
@@ -139,6 +148,9 @@ RowVectorPtr CudfToVelox::getOutput() {
   }
 
   cudf::get_default_stream().synchronize();
+  if (tbl->num_rows() == 0) {
+    return nullptr;
+  }
   RowVectorPtr output = with_arrow::to_velox_column(tbl->view(), pool(), "");
   finished_ = noMoreInput_ && inputs_.empty();
   return output;
