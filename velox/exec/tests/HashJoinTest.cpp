@@ -8771,13 +8771,14 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
   // duplication rate in the build vectors. Half of the build rows have matching
   // keys in the probe vector. The filter '(t1 + u1) % 3 == 0' filters out most
   // matching rows.
-  auto probeVectors = makeBatches(1, [&](auto /*unused*/) {
+  auto probeVectors = makeBatches(3, [&](auto /*unused*/) {
     return makeRowVector(
         {"t0", "t1"},
         {
             makeFlatVector<int32_t>(
                 1'000, [](auto row) { return row; }, nullEvery(400)),
-            makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10; }),
+            makeFlatVector<int64_t>(
+                1'000, [](auto row) { return row * 10; }, nullEvery(400)),
         });
   });
 
@@ -8790,7 +8791,9 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
                 [](auto row) { return -100 + (row / 5); },
                 nullEvery(300)),
             makeFlatVector<int64_t>(
-                1'000, [](auto row) { return -1000 + (row / 5) * 10; }),
+                1'000,
+                [](auto row) { return -1000 + (row / 5) * 10; },
+                nullEvery(300)),
         });
   });
 
@@ -8846,6 +8849,8 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
         .planNode(plan)
         .inputSplits(splitInput)
         .checkSpillStats(false)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "1000")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, "6000")
         .referenceQuery(refQuery)
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
           ASSERT_EQ(
@@ -8857,28 +8862,28 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
   {
     SCOPED_TRACE("inner join");
     verifyJoinOutputVectorCount(
-        1, // 2 output vectors are merged to 1 vector.
+        3,
         core::JoinType::kInner,
         "SELECT t0, t1, FROM t, u WHERE t0 = u0 AND (t1 + u1) % 3 = 0");
   }
   {
     SCOPED_TRACE("full join");
     verifyJoinOutputVectorCount(
-        5, // 6 output vectors are merged to 5 vector.
+        16,
         core::JoinType::kFull,
         "SELECT t0, t1, FROM t FULL OUTER JOIN u ON t0 = u0 AND (t1 + u1) % 3 = 0");
   }
   {
     SCOPED_TRACE("left join");
     verifyJoinOutputVectorCount(
-        2, // 3 output vectors are merged to 2 vectors.
+        13,
         core::JoinType::kLeft,
         "SELECT t0, t1 FROM t LEFT JOIN u ON t0 = u0 AND (t1 + u1) % 3 = 0");
   }
   {
     SCOPED_TRACE("right join");
     verifyJoinOutputVectorCount(
-        2, // 3 output vectors are merged to 2 vectors.
+        15,
         core::JoinType::kLeft, // Flip join side.
         "SELECT t0, t1 FROM t LEFT JOIN u ON t0 = u0 AND (t1 + u1) % 3 = 0",
         false,
@@ -8887,16 +8892,16 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
   {
     SCOPED_TRACE("semi project join");
     verifyJoinOutputVectorCount(
-        1, // 3 output vectors are merged to 1 vector.
+        10,
         core::JoinType::kLeftSemiProject,
         "SELECT t0, t1, EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0) FROM t");
     verifyJoinOutputVectorCount(
-        1, // 3 output vectors are merged to 1 vector.
+        10,
         core::JoinType::kLeftSemiProject,
         "SELECT t0, t1, t0 IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0) FROM t",
         true);
     verifyJoinOutputVectorCount(
-        1, // 3 output vectors are merged to 1 vector.
+        3,
         core::JoinType::kLeftSemiProject, // Flip join side.
         "SELECT t0, t1, EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0) FROM t",
         false,
@@ -8905,11 +8910,11 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
   {
     SCOPED_TRACE("semi filter join");
     verifyJoinOutputVectorCount(
-        1, // 2 output vectors are merged to 1 vector.
+        3,
         core::JoinType::kLeftSemiFilter,
         "SELECT t0, t1, FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)");
     verifyJoinOutputVectorCount(
-        1, // 2 output vectors are merged to 1 vector.
+        1,
         core::JoinType::kLeftSemiFilter, // Flip join side.
         "SELECT t0, t1, FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)",
         false,
@@ -8918,11 +8923,11 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
   {
     SCOPED_TRACE("anti join");
     verifyJoinOutputVectorCount(
-        1, // 3 output vectors are merged to 1 vector.
+        10,
         core::JoinType::kAnti,
         "SELECT t0, t1 FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND (t1 + u1) % 3 = 0)");
     verifyJoinOutputVectorCount(
-        1, // 2 output vectors are merged to 1 vector.
+        10,
         core::JoinType::kAnti,
         "SELECT t0, t1 FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE (t1 + u1) % 3 = 0)",
         true);

@@ -153,6 +153,7 @@ class BaseHashTable {
       hits = &lookup.hits;
       lastRowIndex = 0;
       lastDuplicateRowIndex = 0;
+      outputBatchBytes = 0;
     }
 
     bool atEnd() const {
@@ -172,6 +173,7 @@ class BaseHashTable {
 
     vector_size_t lastRowIndex{0};
     vector_size_t lastDuplicateRowIndex{0};
+    uint64_t outputBatchBytes{0};
   };
 
   struct RowsIterator {
