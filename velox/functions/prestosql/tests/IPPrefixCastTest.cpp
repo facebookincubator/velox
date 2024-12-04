@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 namespace facebook::velox::functions::prestosql {
 
-class IPPrefixTypeTest : public functions::test::FunctionBaseTest {
+namespace {
+
+class IPPrefixCastTest : public functions::test::FunctionBaseTest {
  protected:
   std::optional<std::string> castToVarchar(
       const std::optional<std::string>& input) {
@@ -28,7 +31,7 @@ class IPPrefixTypeTest : public functions::test::FunctionBaseTest {
   }
 };
 
-TEST_F(IPPrefixTypeTest, castToVarchar) {
+TEST_F(IPPrefixCastTest, varcharCast) {
   EXPECT_EQ(castToVarchar("::ffff:1.2.3.4/24"), "1.2.3.0/24");
   EXPECT_EQ(castToVarchar("192.168.0.0/24"), "192.168.0.0/24");
   EXPECT_EQ(castToVarchar("255.2.3.4/0"), "0.0.0.0/0");
@@ -99,12 +102,46 @@ TEST_F(IPPrefixTypeTest, castToVarchar) {
   EXPECT_EQ(
       castToVarchar("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128"),
       "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128");
-  EXPECT_THROW(castToVarchar("facebook.com/32"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("localhost/32"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("2001:db8::1::1/128"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("2001:zxy::1::1/128"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("789.1.1.1/32"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("192.1.1.1"), VeloxUserError);
-  EXPECT_THROW(castToVarchar("192.1.1.1/128"), VeloxUserError);
+  EXPECT_EQ(castToVarchar("10.0.0.0/32"), "10.0.0.0/32");
+  EXPECT_EQ(castToVarchar("64:ff9b::10.0.0.0/128"), "64:ff9b::a00:0/128");
 }
+
+TEST_F(IPPrefixCastTest, invalidIPPrefix) {
+  VELOX_ASSERT_THROW(
+      castToVarchar("facebook.com/32"),
+      "Cannot cast value to IPPREFIX: facebook.com");
+  VELOX_ASSERT_THROW(
+      castToVarchar("localhost/32"),
+      "Cannot cast value to IPPREFIX: localhost");
+  VELOX_ASSERT_THROW(
+      castToVarchar("2001:db8::1::1/128"),
+      "Cannot cast value to IPPREFIX: 2001:db8::1::1");
+  VELOX_ASSERT_THROW(
+      castToVarchar("2001:zxy::1::1/128"),
+      "Cannot cast value to IPPREFIX: 2001:zxy::1::1");
+  VELOX_ASSERT_THROW(
+      castToVarchar("789.1.1.1/32"),
+      "Cannot cast value to IPPREFIX: 789.1.1.1");
+  VELOX_ASSERT_THROW(
+      castToVarchar("192.1.1.1"), "Cannot cast value to IPPREFIX: 192.1.1.1");
+  VELOX_ASSERT_THROW(
+      castToVarchar("192.1.1.1/128"),
+      "Cannot cast value to IPPREFIX: 192.1.1.1/128");
+  VELOX_ASSERT_THROW(
+      castToVarchar("192.1.1.1/-1"),
+      "Cannot cast value to IPPREFIX: 192.1.1.1/-1");
+  VELOX_ASSERT_THROW(
+      castToVarchar("::ffff:ffff:ffff/33"),
+      "Cannot cast value to IPPREFIX: ::ffff:ffff:ffff/33");
+  VELOX_ASSERT_THROW(
+      castToVarchar("::ffff:ffff:ffff/-1"),
+      "Cannot cast value to IPPREFIX: ::ffff:ffff:ffff/-1");
+  VELOX_ASSERT_THROW(
+      castToVarchar("::/129"), "Cannot cast value to IPPREFIX: ::/129");
+  VELOX_ASSERT_THROW(
+      castToVarchar("::/-1"), "Cannot cast value to IPPREFIX: ::/-1");
+}
+
+} // namespace
+
 } // namespace facebook::velox::functions::prestosql
