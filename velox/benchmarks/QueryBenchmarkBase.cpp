@@ -195,6 +195,9 @@ void QueryBenchmarkBase::initialize() {
   connector::registerConnector(hiveConnector);
   parquet::registerParquetReaderFactory();
   dwrf::registerDwrfReaderFactory();
+
+  // Enable cuDF operators
+  cudf_velox::registerCudf();
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>
@@ -212,6 +215,7 @@ QueryBenchmarkBase::listSplits(
 }
 
 void QueryBenchmarkBase::shutdown() {
+  cudf_velox::unregisterCudf();
   if (cache_) {
     cache_->shutdown();
   }
