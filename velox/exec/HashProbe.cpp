@@ -1086,7 +1086,8 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       initBuffer<char*>(outputTableRows_, outputTableRowsCapacity_, pool());
 
   int accumulatedNumOutput = 0;
-
+  uint64_t maxOutputBatchBytes =
+      operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes();
   for (;;) {
     // If the task owning this operator has been cancelled, there is no point
     // to continue executing this procedure, which may be long in degenerate
@@ -1125,12 +1126,13 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
         }
       }
     } else {
+      resultIter_->outputBatchBytes = 0;
       numOut = table_->listJoinResults(
           *resultIter_,
           joinIncludesMissesFromLeft(joinType_),
           folly::Range(mapping.data(), outputBatchSize),
           folly::Range(outputTableRows, outputBatchSize),
-          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
+          maxOutputBatchBytes);
     }
 
     // We are done processing the input batch if there are no more joined rows
@@ -1175,12 +1177,11 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
 
       // Continue the loop to populate 'outputRowMapping_' and
       // 'outputTableRows_' until either all input rows are processed or the
-      // desired row count is reached, avoiding low-selectivity vectors.
-      if (!resultIter_->atEnd() &&
-          accumulatedNumOutput < operatorCtx_->driverCtx()
-                                     ->queryConfig()
-                                     .preferredOutputBatchBytes() &&
-          outputBatchSize > numOut) {
+      // desired row count / max bytes is reached, avoiding low-selectivity
+      // vectors.
+      if (!resultIter_->atEnd() && accumulatedNumOutput < outputBatchSize &&
+          outputBatchSize > numOut &&
+          maxOutputBatchBytes > resultIter_->outputBatchBytes) {
         mapping = folly::Range(
             outputRowMapping_->asMutable<vector_size_t>() +
                 accumulatedNumOutput,
@@ -1188,6 +1189,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
         outputTableRows =
             outputTableRows_->asMutable<char*>() + accumulatedNumOutput;
         outputBatchSize -= numOut;
+        maxOutputBatchBytes -= resultIter_->outputBatchBytes;
         continue;
       }
     }
