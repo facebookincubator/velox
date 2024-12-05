@@ -19,7 +19,7 @@ target_link_libraries(
   velox_exec
   velox_hive_connector
   Folly::folly
-  ${FOLLY_BENCHMARK}
+  Folly::follybenchmark
   ${TEST_LINK_LIBS})
 
 if(VELOX_ENABLE_BENCHMARKS)
@@ -33,7 +33,7 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_exec
     velox_hive_connector
     Folly::folly
-    ${FOLLY_BENCHMARK}
+    Folly::follybenchmark
     ${TEST_LINK_LIBS})
 endif()
 
@@ -56,7 +56,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_exec
     velox_exec_test_lib
     Folly::folly
-    ${FOLLY_BENCHMARK}
+    Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main)
 

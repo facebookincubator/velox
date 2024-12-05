@@ -549,7 +549,7 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_memory
     velox_dwio_common_exception
     Folly::folly
-    ${FOLLY_BENCHMARK})
+    Folly::follybenchmark)
 
   add_executable(velox_dwrf_float_column_writer_benchmark
                  FloatColumnWriterBenchmark.cpp)
@@ -559,7 +559,7 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_dwio_common_exception
     velox_dwio_dwrf_writer
     Folly::folly
-    ${FOLLY_BENCHMARK}
+    Folly::follybenchmark
     fmt::fmt)
 endif()
 
