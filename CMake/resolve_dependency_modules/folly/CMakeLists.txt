@@ -44,6 +44,7 @@ FetchContent_MakeAvailable(folly)
 
 # Folly::folly is not valid for FC but we want to match FindFolly
 add_library(Folly::folly ALIAS folly)
+add_library(Folly::follybenchmark ALIAS follybenchmark)
 
 # The folly target does not contain any include directories, they are propagated
 # from folly_base. This marks them as system headers which should suppress
