@@ -70,8 +70,12 @@ function(velox_add_library TARGET)
       # Target already exists, append sources to it.
       target_sources(velox PRIVATE ${ARGN})
     else()
+      set(_type STATIC)
+      if(VELOX_BUILD_SHARED)
+        set(_type SHARED)
+      endif()
       # Create the target if this is the first invocation.
-      add_library(velox ${ARGN})
+      add_library(velox ${_type} ${ARGN})
       set_target_properties(velox PROPERTIES LIBRARY_OUTPUT_DIRECTORY
                                              ${CMAKE_BINARY_DIR}/lib)
       set_target_properties(velox PROPERTIES ARCHIVE_OUTPUT_DIRECTORY
