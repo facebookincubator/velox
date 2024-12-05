@@ -77,9 +77,9 @@ DEFINE_int64(
     128 << 20,
     "Maximum size of single coalesced IO");
 
-DEFINE_int32(
+DEFINE_string(
     max_coalesced_distance_bytes,
-    512 << 10,
+    "512kB",
     "Maximum distance in bytes in which coalesce will combine requests");
 
 DEFINE_int32(
