@@ -25,8 +25,6 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 
-DECLARE_bool(velox_memory_use_hugepages);
-
 namespace facebook::velox::memory {
 
 // static

@@ -16,6 +16,7 @@
 #include "velox/common/memory/MemoryAllocator.h"
 #include <thread>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/MmapAllocator.h"
@@ -33,8 +34,6 @@
 #ifdef linux
 #include <fstream>
 #endif // linux
-
-DECLARE_bool(velox_memory_leak_check_enabled);
 
 using namespace facebook::velox::common::testutil;
 
@@ -55,7 +54,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
  protected:
   static void SetUpTestCase() {
     TestValue::enable();
-    FLAGS_velox_memory_leak_check_enabled = true;
+    config::globalConfig().memoryLeakCheckEnabled = true;
   }
 
   void SetUp() override {
@@ -650,7 +649,7 @@ TEST_P(MemoryAllocatorTest, stats) {
   }
 
   gflags::FlagSaver flagSaver;
-  FLAGS_velox_time_allocations = true;
+  config::globalConfig().timeAllocations = true;
   for (auto i = 0; i < sizes.size(); ++i) {
     std::unique_ptr<Allocation> allocation = std::make_unique<Allocation>();
     auto size = sizes[i];
@@ -669,7 +668,7 @@ TEST_P(MemoryAllocatorTest, singleAllocation) {
     return;
   }
   gflags::FlagSaver flagSaver;
-  FLAGS_velox_time_allocations = true;
+  config::globalConfig().timeAllocations = true;
   const std::vector<MachinePageCount>& sizes = instance_->sizeClasses();
   MachinePageCount capacity = kCapacityPages;
   for (auto i = 0; i < sizes.size(); ++i) {

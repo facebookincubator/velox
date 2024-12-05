@@ -40,6 +40,9 @@ struct GlobalConfig {
   /// exception. This is only used by test to control the test error output
   /// size.
   bool suppressMemoryCapacityExceedingErrorMessage{false};
+  /// Whether allow to memory capacity transfer between memory pools from
+  /// different tasks, which might happen in use case like Spark-Gluten
+  bool memoryPoolCapacityTransferAcrossTasks{false};
 };
 
 GlobalConfig& globalConfig();
