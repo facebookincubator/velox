@@ -21,7 +21,7 @@ set(TEST_LINK_LIBS
     GTest::gtest_main
     GTest::gmock
     gflags::gflags
-    ${GLOG})
+    glog::glog)
 
 add_subdirectory(reader)
 add_subdirectory(writer)
