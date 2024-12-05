@@ -551,18 +551,9 @@ TEST_F(MemoryManagerTest, concurrentPoolAccess) {
     }));
   }
 
-  std::atomic<bool> stopCheck{false};
-  std::thread checkThread([&]() {
-    while (!stopCheck) {
-      std::this_thread::sleep_for(std::chrono::microseconds(1));
-    }
-  });
-
   for (int32_t i = 0; i < allocThreads.size(); ++i) {
     allocThreads[i].join();
   }
-  stopCheck = true;
-  checkThread.join();
   ASSERT_EQ(manager.numPools(), pools.size() + 2);
   pools.clear();
   ASSERT_EQ(manager.numPools(), 2);
